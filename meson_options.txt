@@ -1,1 +1,8 @@
 option('tests', type : 'boolean', value : true, description : 'Build and run tests')
+option(
+  'multicall_install_mode',
+  type : 'combo',
+  choices : ['shebang', 'symlink'],
+  value : 'shebang',
+  description : 'Install multicall applets as shebang wrappers or symlinks'
+)

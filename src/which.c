@@ -75,7 +75,7 @@ static int usage_error_unknown_short_option(const char *progname, int opt) {
 }
 
 static int usage_error_unknown_long_option(const char *progname, const char *option) {
-    fprintf(stderr, "%s: unrecognized option '%s'\n", progname, option);
+    fprintf(stderr, "%s: unrecognized option `%s'\n", progname, option);
     print_help(stderr, progname);
     return 255;
 }
@@ -85,7 +85,7 @@ static void warn_unknown_short_option(const char *progname, int opt) {
 }
 
 static void warn_unknown_long_option(const char *progname, const char *option) {
-    fprintf(stderr, "%s: unrecognized option '%s'\n", progname, option);
+    fprintf(stderr, "%s: unrecognized option `%s'\n", progname, option);
 }
 
 static void print_missing_search_space(FILE *stream, const char *cmd) {

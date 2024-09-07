@@ -1,5 +1,6 @@
 project('bx', 'c',
   version : '0.1',
+  meson_version : '>=1.6.0',
   default_options : ['warning_level=3', 'c_std=c11', 'werror=true']
 )
 
@@ -22,26 +23,41 @@ sources = [
   'src/libbx.c',
 ]
 
+applet_names = ['which', 'true', 'false']
+
 bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
   install : true
 )
 
-install_symlink('which',
-  pointing_to : 'bx',
-  install_dir : get_option('bindir')
-)
+multicall_install_mode = get_option('multicall_install_mode')
+install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
+install_bx_path = join_paths(install_bindir, 'bx')
 
-install_symlink('true',
-  pointing_to : 'bx',
-  install_dir : get_option('bindir')
-)
-
-install_symlink('false',
-  pointing_to : 'bx',
-  install_dir : get_option('bindir')
-)
+if multicall_install_mode == 'symlink'
+  foreach applet : applet_names
+    install_symlink(applet,
+      pointing_to : 'bx',
+      install_dir : get_option('bindir')
+    )
+  endforeach
+else
+  foreach applet : applet_names
+    wrapper_conf = configuration_data()
+    wrapper_conf.set('BX_PATH', install_bx_path)
+    wrapper_conf.set('APPLET', applet)
+    wrapper = configure_file(
+      input : 'scripts/applet-shebang.in',
+      output : applet,
+      configuration : wrapper_conf,
+    )
+    install_data(wrapper,
+      install_dir : get_option('bindir'),
+      install_mode : 'rwxr-xr-x'
+    )
+  endforeach
+endif
 
 if get_option('tests')
   python3 = find_program('python3')
@@ -53,6 +69,13 @@ if get_option('tests')
   
   test_multicall = find_program('tests/test_multicall.sh')
   test('multicall test', test_multicall, args : [bx_exe])
+
+  test_install_applets = find_program('tests/test_install_applets.sh')
+  test(
+    'install applet wrappers',
+    test_install_applets,
+    args : [meson.current_build_dir(), install_bindir]
+  )
 
   test_parity_cli = files('tests/test_parity_cli.py')
   test('which parity cli', python3, args : [test_parity_cli, which_ref, bx_exe, meson.current_build_dir()])
