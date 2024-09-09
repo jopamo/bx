@@ -17,13 +17,17 @@ warn_flags = [
 add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
 sources = [
+  'src/common/path_ops.c',
+  'src/common/same_file.c',
+  'src/common/stat_ops.c',
   'src/main.c',
+  'src/cp.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'true', 'false']
+applet_names = ['which', 'cp', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -62,10 +66,14 @@ endif
 if get_option('tests')
   python3 = find_program('python3')
   which_ref = find_program('which')
+  cp_ref = find_program('cp')
   unshare = find_program('unshare', required : false)
 
   test_which = find_program('tests/test_which.sh')
   test('which unit test', test_which, args : [bx_exe])
+
+  test_cp_differential = files('tests/cp/test_cp_differential.py')
+  test('cp differential', python3, args : [test_cp_differential, cp_ref, bx_exe, meson.current_build_dir()])
   
   test_multicall = find_program('tests/test_multicall.sh')
   test('multicall test', test_multicall, args : [bx_exe])

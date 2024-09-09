@@ -16,6 +16,7 @@ struct applet {
 
 static const struct applet applets[] = {
     {"which", bx_which_main},
+    {"cp", bx_cp_main},
     {"true", bx_true_main},
     {"false", bx_false_main},
 };
