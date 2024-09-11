@@ -604,6 +604,23 @@ static bool bx_cp_apply_path_attrs(const struct bx_cp_context *ctx,
     return true;
 }
 
+static mode_t bx_cp_directory_create_mode(const struct bx_cp_context *ctx,
+                                          const struct stat *src_stat,
+                                          mode_t *final_mode_out,
+                                          bool *restore_mode_out) {
+    mode_t source_mode = src_stat->st_mode & 0777u;
+
+    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) != 0u) {
+        *final_mode_out = 0;
+        *restore_mode_out = false;
+        return source_mode | S_IRWXU;
+    }
+
+    *final_mode_out = source_mode & ~ctx->umask_value;
+    *restore_mode_out = (*final_mode_out | S_IRWXU) != *final_mode_out;
+    return *final_mode_out | S_IRWXU;
+}
+
 static void bx_cp_print_verbose(const struct bx_cp_context *ctx,
                                 const char *src_path,
                                 const char *dest_path) {
@@ -930,6 +947,8 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
                                  bool top_level) {
     struct bx_dest_state dest_state;
     bool created = false;
+    bool restore_mode = false;
+    mode_t final_mode = 0;
     bool prev_dest_root_active = ctx->dest_root_active;
     dev_t prev_dest_root_dev = ctx->dest_root_dev;
     ino_t prev_dest_root_ino = ctx->dest_root_ino;
@@ -945,9 +964,7 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
             return false;
         }
     } else {
-        mode_t mkdir_mode = ((ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) != 0u)
-                            ? (src_stat->st_mode & 0777u)
-                            : (src_stat->st_mode & 0777u & ~ctx->umask_value);
+        mode_t mkdir_mode = bx_cp_directory_create_mode(ctx, src_stat, &final_mode, &restore_mode);
         if (mkdir(dest_path, mkdir_mode) != 0) {
             bx_cp_perror_path(ctx->options, dest_path);
             return false;
@@ -1020,6 +1037,12 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         ok = false;
     }
 
+    if (ok && created && restore_mode) {
+        if (chmod(dest_path, final_mode) != 0) {
+            bx_cp_perror_path(ctx->options, dest_path);
+            ok = false;
+        }
+    }
     if (ok && !bx_cp_apply_path_attrs(ctx, dest_path, src_stat, false, true)) {
         ok = false;
     }
