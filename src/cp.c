@@ -92,6 +92,9 @@ struct bx_cp_context {
     bool dest_root_active;
     dev_t dest_root_dev;
     ino_t dest_root_ino;
+    bool stop_current_source;
+    const char *current_source_root;
+    const char *current_dest_root;
 };
 
 static const char *bx_cp_progname(const char *argv0) {
@@ -629,6 +632,19 @@ static void bx_cp_print_verbose(const struct bx_cp_context *ctx,
     }
 }
 
+static void bx_cp_diag_self_recursive_copy(struct bx_cp_context *ctx,
+                                           const char *src_path,
+                                           const char *dest_path) {
+    const char *diag_src = ctx->current_source_root ? ctx->current_source_root : src_path;
+    const char *diag_dest = ctx->current_dest_root ? ctx->current_dest_root : dest_path;
+
+    bx_cp_diag(ctx->options,
+               "cannot copy a directory, '%s', into itself, '%s'",
+               diag_src,
+               diag_dest);
+    ctx->stop_current_source = true;
+}
+
 static bool bx_cp_copy_data(int src_fd, int dest_fd, const struct bx_cp_options *options) {
     char buffer[65536];
 
@@ -1018,15 +1034,21 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
             S_ISDIR(child_lstat.st_mode) &&
             child_lstat.st_dev == ctx->dest_root_dev &&
             child_lstat.st_ino == ctx->dest_root_ino) {
-            bx_cp_diag(ctx->options, "cannot copy a directory, '%s', into itself, '%s'", src_path, dest_path);
+            bx_cp_diag_self_recursive_copy(ctx, src_path, dest_path);
             free(src_child);
             ok = false;
-            continue;
+            break;
         }
 
         char *dest_child = bx_path_join(dest_path, entry->d_name);
         if (!bx_cp_copy_path(ctx, src_child, src_child, dest_child, false)) {
             ok = false;
+            free(dest_child);
+            free(src_child);
+            if (ctx->stop_current_source) {
+                break;
+            }
+            continue;
         }
         free(dest_child);
         free(src_child);
@@ -1224,11 +1246,16 @@ int bx_cp_main(int argc, char **argv) {
                                ? bx_path_strip_trailing_slashes_dup(source_operands[i])
                                : xstrdup(source_operands[i]);
         char *dest_path = bx_cp_build_dest_path(&options, source_operand, destination_root, destination_is_directory);
+        ctx.stop_current_source = false;
+        ctx.current_source_root = lookup_path;
+        ctx.current_dest_root = dest_path;
 
         if (!bx_cp_copy_path(&ctx, lookup_path, source_operand, dest_path, true)) {
             rc = 1;
         }
 
+        ctx.current_dest_root = NULL;
+        ctx.current_source_root = NULL;
         free(dest_path);
         free(source_operand);
         free(lookup_path);
