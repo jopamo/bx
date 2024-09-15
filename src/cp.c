@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@
 #include "common/stat_ops.h"
 #include "diag.h"
 #include "libbx.h"
+
+char *realpath(const char *restrict path, char *restrict resolved_path);
 
 enum bx_cp_deref_mode {
     BX_CP_DEREF_DEFAULT = 0,
@@ -95,6 +98,7 @@ struct bx_cp_context {
     bool stop_current_source;
     const char *current_source_root;
     const char *current_dest_root;
+    char *current_dest_root_realpath;
 };
 
 static const char *bx_cp_progname(const char *argv0) {
@@ -645,6 +649,47 @@ static void bx_cp_diag_self_recursive_copy(struct bx_cp_context *ctx,
     ctx->stop_current_source = true;
 }
 
+static char *bx_cp_realpath_dup(const char *path) {
+    char resolved[PATH_MAX];
+
+    if (realpath(path, resolved) == NULL) {
+        return NULL;
+    }
+    return xstrdup(resolved);
+}
+
+static char *bx_cp_required_self_copy_child(const struct bx_cp_context *ctx,
+                                            const char *src_path) {
+    if (ctx->current_dest_root_realpath == NULL) {
+        return NULL;
+    }
+
+    char *src_realpath = bx_cp_realpath_dup(src_path);
+    if (src_realpath == NULL) {
+        return NULL;
+    }
+
+    size_t src_len = strlen(src_realpath);
+    const char *dest_realpath = ctx->current_dest_root_realpath;
+    if (strncmp(dest_realpath, src_realpath, src_len) != 0 || dest_realpath[src_len] != '/') {
+        free(src_realpath);
+        return NULL;
+    }
+
+    const char *suffix = dest_realpath + src_len + 1;
+    if (strchr(suffix, '/') == NULL) {
+        free(src_realpath);
+        return NULL;
+    }
+    size_t component_len = strcspn(suffix, "/");
+    char *component = xmalloc(component_len + 1u);
+
+    memcpy(component, suffix, component_len);
+    component[component_len] = '\0';
+    free(src_realpath);
+    return component;
+}
+
 static bool bx_cp_copy_data(int src_fd, int dest_fd, const struct bx_cp_options *options) {
     char buffer[65536];
 
@@ -996,6 +1041,8 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         ctx->dest_root_active = true;
         ctx->dest_root_dev = dest_state.lst.st_dev;
         ctx->dest_root_ino = dest_state.lst.st_ino;
+        free(ctx->current_dest_root_realpath);
+        ctx->current_dest_root_realpath = bx_cp_realpath_dup(dest_path);
     }
 
     DIR *dir = opendir(src_path);
@@ -1008,6 +1055,7 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
     }
 
     bool ok = true;
+    char *required_child = bx_cp_required_self_copy_child(ctx, src_path);
     for (;;) {
         errno = 0;
         struct dirent *entry = readdir(dir);
@@ -1019,6 +1067,9 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
             break;
         }
         if (bx_path_is_dot_or_dotdot(entry->d_name)) {
+            continue;
+        }
+        if (required_child != NULL && strcmp(entry->d_name, required_child) != 0) {
             continue;
         }
 
@@ -1037,7 +1088,7 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
             bx_cp_diag_self_recursive_copy(ctx, src_path, dest_path);
             free(src_child);
             ok = false;
-            break;
+            continue;
         }
 
         char *dest_child = bx_path_join(dest_path, entry->d_name);
@@ -1053,6 +1104,7 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         free(dest_child);
         free(src_child);
     }
+    free(required_child);
 
     if (closedir(dir) != 0) {
         bx_cp_perror_path(ctx->options, src_path);
@@ -1254,6 +1306,8 @@ int bx_cp_main(int argc, char **argv) {
             rc = 1;
         }
 
+        free(ctx.current_dest_root_realpath);
+        ctx.current_dest_root_realpath = NULL;
         ctx.current_dest_root = NULL;
         ctx.current_source_root = NULL;
         free(dest_path);
