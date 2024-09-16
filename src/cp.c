@@ -88,10 +88,17 @@ struct bx_cp_link_entry {
     struct bx_cp_link_entry *next;
 };
 
+struct bx_cp_dir_entry {
+    dev_t dev;
+    ino_t ino;
+    struct bx_cp_dir_entry *next;
+};
+
 struct bx_cp_context {
     const struct bx_cp_options *options;
     mode_t umask_value;
     struct bx_cp_link_entry *links;
+    struct bx_cp_dir_entry *source_dirs;
     bool dest_root_active;
     dev_t dest_root_dev;
     ino_t dest_root_ino;
@@ -497,6 +504,40 @@ static void bx_cp_free_links(struct bx_cp_context *ctx) {
     ctx->links = NULL;
 }
 
+static bool bx_cp_source_dir_in_stack(const struct bx_cp_context *ctx,
+                                      dev_t dev,
+                                      ino_t ino) {
+    for (struct bx_cp_dir_entry *entry = ctx->source_dirs; entry != NULL; entry = entry->next) {
+        if (entry->dev == dev && entry->ino == ino) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void bx_cp_push_source_dir(struct bx_cp_context *ctx, const struct stat *st) {
+    struct bx_cp_dir_entry *entry = xmalloc(sizeof(*entry));
+    entry->dev = st->st_dev;
+    entry->ino = st->st_ino;
+    entry->next = ctx->source_dirs;
+    ctx->source_dirs = entry;
+}
+
+static void bx_cp_pop_source_dir(struct bx_cp_context *ctx) {
+    struct bx_cp_dir_entry *entry = ctx->source_dirs;
+    if (entry == NULL) {
+        return;
+    }
+    ctx->source_dirs = entry->next;
+    free(entry);
+}
+
+static void bx_cp_free_source_dirs(struct bx_cp_context *ctx) {
+    while (ctx->source_dirs != NULL) {
+        bx_cp_pop_source_dir(ctx);
+    }
+}
+
 static bool bx_cp_should_skip_existing(const struct bx_cp_options *options,
                                        const char *dest_path,
                                        const struct stat *src_stat,
@@ -665,6 +706,10 @@ static void bx_cp_diag_self_recursive_copy(struct bx_cp_context *ctx,
                diag_src,
                diag_dest);
     ctx->stop_current_source = true;
+}
+
+static void bx_cp_diag_cyclic_symlink(struct bx_cp_context *ctx, const char *src_path) {
+    bx_cp_diag(ctx->options, "cannot copy cyclic symbolic link '%s'", src_path);
 }
 
 static char *bx_cp_realpath_dup(const char *path) {
@@ -1068,9 +1113,12 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         ctx->current_dest_root_realpath = bx_cp_realpath_dup(dest_path);
     }
 
+    bx_cp_push_source_dir(ctx, src_stat);
+
     DIR *dir = opendir(src_path);
     if (dir == NULL) {
         bx_cp_perror_path(ctx->options, src_path);
+        bx_cp_pop_source_dir(ctx);
         ctx->dest_root_active = prev_dest_root_active;
         ctx->dest_root_dev = prev_dest_root_dev;
         ctx->dest_root_ino = prev_dest_root_ino;
@@ -1147,6 +1195,7 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         bx_cp_print_verbose(ctx, src_path, dest_path);
     }
 
+    bx_cp_pop_source_dir(ctx);
     ctx->dest_root_active = prev_dest_root_active;
     ctx->dest_root_dev = prev_dest_root_dev;
     ctx->dest_root_ino = prev_dest_root_ino;
@@ -1178,6 +1227,14 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
         }
     } else {
         src_stat = src_lstat;
+    }
+
+    if (follow_source &&
+        source_is_symlink &&
+        S_ISDIR(src_stat.st_mode) &&
+        bx_cp_source_dir_in_stack(ctx, src_stat.st_dev, src_stat.st_ino)) {
+        bx_cp_diag_cyclic_symlink(ctx, src_path);
+        return false;
     }
 
     if (ctx->options->parents && !bx_cp_prepare_parents(ctx, dest_path)) {
@@ -1352,5 +1409,6 @@ int bx_cp_main(int argc, char **argv) {
     }
 
     bx_cp_free_links(&ctx);
+    bx_cp_free_source_dirs(&ctx);
     return rc;
 }
