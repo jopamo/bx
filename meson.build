@@ -74,6 +74,9 @@ if get_option('tests')
 
   test_cp_differential = files('tests/cp/test_cp_differential.py')
   test('cp differential', python3, args : [test_cp_differential, cp_ref, bx_exe, meson.current_build_dir()])
+
+  test_cp_cli_differential = files('tests/cp/test_cp_cli_differential.py')
+  test('cp cli differential', python3, args : [test_cp_cli_differential, cp_ref, bx_exe, meson.current_build_dir()])
   
   test_multicall = find_program('tests/test_multicall.sh')
   test('multicall test', test_multicall, args : [bx_exe])

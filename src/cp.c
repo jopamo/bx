@@ -286,7 +286,7 @@ static bool bx_cp_parse_options(int argc,
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
     };
-    char short_buf[] = "abdfHiLPlnpRrsS:t:TuvxZ";
+    char short_buf[] = ":abdfHiLPlnpRrsS:t:TuvxZ";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cp_progname(argv[0]);
@@ -411,8 +411,26 @@ static bool bx_cp_parse_options(int argc,
         case 'v':
             options->verbose = true;
             break;
+        case ':':
+            if (optopt != 0) {
+                const char *arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
+                if (arg != NULL && strncmp(arg, "--", 2) == 0) {
+                    bx_cp_diag(options, "option '%s' requires an argument", arg);
+                } else {
+                    bx_cp_diag(options, "option requires an argument -- '%c'", optopt);
+                }
+            } else {
+                bx_cp_diag(options, "option requires an argument");
+            }
+            return false;
         case '?':
-            bx_cp_diag(options, "unrecognized option '%s'", argv[optind - 1]);
+            if (optopt != 0) {
+                bx_cp_diag(options, "invalid option -- '%c'", optopt);
+            } else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                bx_cp_diag(options, "unrecognized option '%s'", argv[optind - 1]);
+            } else {
+                bx_cp_diag(options, "unrecognized option");
+            }
             return false;
         default:
             bx_cp_diag(options, "internal option parsing error");
@@ -779,10 +797,15 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         memset(&dest_state, 0, sizeof(dest_state));
     }
 
-    dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, create_mode);
+    int dest_open_flags = O_WRONLY | O_CREAT;
+    if (!ctx->options->attributes_only) {
+        dest_open_flags |= O_TRUNC;
+    }
+
+    dest_fd = open(dest_path, dest_open_flags, create_mode);
     if (dest_fd < 0 && ctx->options->force && dest_state.exists_lstat) {
         if (bx_cp_unlink_existing_file(ctx, dest_path)) {
-            dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, create_mode);
+            dest_fd = open(dest_path, dest_open_flags, create_mode);
         }
     }
     if (dest_fd < 0) {
@@ -1256,6 +1279,19 @@ int bx_cp_main(int argc, char **argv) {
             return 1;
         }
         destination_is_directory = true;
+    } else if (options.no_target_directory) {
+        if (operand_count < 2) {
+            bx_cp_diag(&options, "missing destination file operand after '%s'", argv[first_operand]);
+            return 1;
+        }
+        if (operand_count > 2) {
+            bx_cp_diag(&options, "extra operand '%s'", argv[first_operand + 2]);
+            return 1;
+        }
+
+        destination_root = argv[first_operand + 1];
+        source_operands = argv + first_operand;
+        source_count = 1;
     } else {
         if (operand_count < 2) {
             bx_cp_diag(&options, "missing destination file operand after '%s'", argv[first_operand]);
