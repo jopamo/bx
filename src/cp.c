@@ -37,6 +37,12 @@ enum bx_cp_update_mode {
     BX_CP_UPDATE_OLDER,
 };
 
+enum bx_cp_mode_policy {
+    BX_CP_MODE_POLICY_DEFAULT = 0,
+    BX_CP_MODE_POLICY_PRESERVE,
+    BX_CP_MODE_POLICY_NO_PRESERVE,
+};
+
 enum {
     BX_CP_PRESERVE_MODE = 1u << 0,
     BX_CP_PRESERVE_OWNERSHIP = 1u << 1,
@@ -76,6 +82,7 @@ struct bx_cp_options {
     bool show_help;
     bool show_version;
     enum bx_cp_deref_mode deref_mode;
+    enum bx_cp_mode_policy mode_policy;
     enum bx_cp_update_mode update_mode;
     unsigned preserve_mask;
     const char *target_directory;
@@ -193,9 +200,11 @@ static bool bx_cp_should_follow_source(const struct bx_cp_options *options,
 static bool bx_cp_parse_preserve_list(const struct bx_cp_options *options,
                                       const char *arg,
                                       unsigned *mask,
-                                      bool set_bits) {
+                                      bool set_bits,
+                                      bool *mode_mentioned_out) {
     char *copy = xstrdup(arg);
     char *saveptr = NULL;
+    bool mode_mentioned = false;
 
     for (char *token = strtok_r(copy, ",", &saveptr);
          token != NULL;
@@ -204,6 +213,7 @@ static bool bx_cp_parse_preserve_list(const struct bx_cp_options *options,
 
         if (strcmp(token, "mode") == 0) {
             bits = BX_CP_PRESERVE_MODE;
+            mode_mentioned = true;
         } else if (strcmp(token, "ownership") == 0) {
             bits = BX_CP_PRESERVE_OWNERSHIP;
         } else if (strcmp(token, "timestamps") == 0) {
@@ -213,6 +223,7 @@ static bool bx_cp_parse_preserve_list(const struct bx_cp_options *options,
         } else if (strcmp(token, "all") == 0) {
             bits = BX_CP_PRESERVE_MODE | BX_CP_PRESERVE_OWNERSHIP |
                    BX_CP_PRESERVE_TIMESTAMPS | BX_CP_PRESERVE_LINKS;
+            mode_mentioned = true;
         } else if (strcmp(token, "context") == 0 || strcmp(token, "xattr") == 0) {
             bits = 0;
         } else {
@@ -229,6 +240,9 @@ static bool bx_cp_parse_preserve_list(const struct bx_cp_options *options,
     }
 
     free(copy);
+    if (mode_mentioned_out != NULL) {
+        *mode_mentioned_out = mode_mentioned;
+    }
     return true;
 }
 
@@ -298,6 +312,7 @@ static bool bx_cp_parse_options(int argc,
     memset(options, 0, sizeof(*options));
     options->progname = bx_cp_progname(argv[0]);
     options->deref_mode = BX_CP_DEREF_DEFAULT;
+    options->mode_policy = BX_CP_MODE_POLICY_DEFAULT;
     options->update_mode = BX_CP_UPDATE_ALL;
 
     opterr = 0;
@@ -320,6 +335,7 @@ static bool bx_cp_parse_options(int argc,
         case 'a':
             options->recursive = true;
             options->deref_mode = BX_CP_DEREF_NEVER;
+            options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
             options->preserve_mask |= BX_CP_PRESERVE_MODE |
                                       BX_CP_PRESERVE_OWNERSHIP |
                                       BX_CP_PRESERVE_TIMESTAMPS |
@@ -367,24 +383,45 @@ static bool bx_cp_parse_options(int argc,
             options->update_mode = BX_CP_UPDATE_NONE;
             break;
         case 'p':
+            options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
             options->preserve_mask |= BX_CP_PRESERVE_MODE |
                                       BX_CP_PRESERVE_OWNERSHIP |
                                       BX_CP_PRESERVE_TIMESTAMPS;
             break;
         case BX_CP_OPT_PRESERVE:
             if (optarg == NULL) {
+                options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
                 options->preserve_mask |= BX_CP_PRESERVE_MODE |
                                           BX_CP_PRESERVE_OWNERSHIP |
                                           BX_CP_PRESERVE_TIMESTAMPS;
-            } else if (!bx_cp_parse_preserve_list(options, optarg, &options->preserve_mask, true)) {
-                return false;
+            } else {
+                bool mode_mentioned = false;
+                if (!bx_cp_parse_preserve_list(options,
+                                               optarg,
+                                               &options->preserve_mask,
+                                               true,
+                                               &mode_mentioned)) {
+                    return false;
+                }
+                if (mode_mentioned) {
+                    options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
+                }
             }
             break;
-        case BX_CP_OPT_NO_PRESERVE:
-            if (!bx_cp_parse_preserve_list(options, optarg, &options->preserve_mask, false)) {
+        case BX_CP_OPT_NO_PRESERVE: {
+            bool mode_mentioned = false;
+            if (!bx_cp_parse_preserve_list(options,
+                                           optarg,
+                                           &options->preserve_mask,
+                                           false,
+                                           &mode_mentioned)) {
                 return false;
             }
+            if (mode_mentioned) {
+                options->mode_policy = BX_CP_MODE_POLICY_NO_PRESERVE;
+            }
             break;
+        }
         case BX_CP_OPT_PARENTS:
             options->parents = true;
             break;
@@ -676,15 +713,27 @@ static mode_t bx_cp_directory_create_mode(const struct bx_cp_context *ctx,
                                           bool *restore_mode_out) {
     mode_t source_mode = src_stat->st_mode & 0777u;
 
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) != 0u) {
+    if (ctx->options->mode_policy == BX_CP_MODE_POLICY_PRESERVE) {
         *final_mode_out = 0;
         *restore_mode_out = false;
         return source_mode | S_IRWXU;
     }
 
-    *final_mode_out = source_mode & ~ctx->umask_value;
+    if (ctx->options->mode_policy == BX_CP_MODE_POLICY_NO_PRESERVE) {
+        *final_mode_out = 0777u & ~ctx->umask_value;
+    } else {
+        *final_mode_out = source_mode & ~ctx->umask_value;
+    }
     *restore_mode_out = (*final_mode_out | S_IRWXU) != *final_mode_out;
     return *final_mode_out | S_IRWXU;
+}
+
+static mode_t bx_cp_regular_file_create_mode(const struct bx_cp_context *ctx,
+                                             const struct stat *src_stat) {
+    if (ctx->options->mode_policy == BX_CP_MODE_POLICY_NO_PRESERVE) {
+        return 0666;
+    }
+    return src_stat->st_mode & 0777u;
 }
 
 static void bx_cp_print_verbose(const struct bx_cp_context *ctx,
@@ -796,7 +845,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
     bool skip = false;
     int src_fd = -1;
     int dest_fd = -1;
-    mode_t create_mode = src_stat->st_mode & 0777u;
+    mode_t create_mode = bx_cp_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_cp_perror_path(ctx->options, dest_path);
@@ -1081,6 +1130,8 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
     bool prev_dest_root_active = ctx->dest_root_active;
     dev_t prev_dest_root_dev = ctx->dest_root_dev;
     ino_t prev_dest_root_ino = ctx->dest_root_ino;
+    DIR *dir = NULL;
+    bool ok = true;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_cp_perror_path(ctx->options, dest_path);
@@ -1115,17 +1166,13 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
 
     bx_cp_push_source_dir(ctx, src_stat);
 
-    DIR *dir = opendir(src_path);
+    dir = opendir(src_path);
     if (dir == NULL) {
         bx_cp_perror_path(ctx->options, src_path);
-        bx_cp_pop_source_dir(ctx);
-        ctx->dest_root_active = prev_dest_root_active;
-        ctx->dest_root_dev = prev_dest_root_dev;
-        ctx->dest_root_ino = prev_dest_root_ino;
-        return false;
+        ok = false;
+        goto finish;
     }
 
-    bool ok = true;
     char *required_child = bx_cp_required_self_copy_child(ctx, src_path);
     for (;;) {
         errno = 0;
@@ -1181,14 +1228,16 @@ static bool bx_cp_copy_directory(struct bx_cp_context *ctx,
         bx_cp_perror_path(ctx->options, src_path);
         ok = false;
     }
+    dir = NULL;
 
-    if (ok && created && restore_mode) {
+finish:
+    if (created && restore_mode) {
         if (chmod(dest_path, final_mode) != 0) {
             bx_cp_perror_path(ctx->options, dest_path);
             ok = false;
         }
     }
-    if (ok && !bx_cp_apply_path_attrs(ctx, dest_path, src_stat, false, true)) {
+    if (!bx_cp_apply_path_attrs(ctx, dest_path, src_stat, false, true)) {
         ok = false;
     }
     if (ok && created) {
