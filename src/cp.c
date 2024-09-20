@@ -1065,7 +1065,8 @@ static bool bx_cp_create_symbolic_link(struct bx_cp_context *ctx,
 static bool bx_cp_create_hard_link(struct bx_cp_context *ctx,
                                    const char *src_path,
                                    const char *dest_path,
-                                   const struct stat *src_stat) {
+                                   const struct stat *src_stat,
+                                   bool follow_source) {
     struct bx_dest_state dest_state;
     bool skip = false;
 
@@ -1103,7 +1104,11 @@ static bool bx_cp_create_hard_link(struct bx_cp_context *ctx,
         }
     }
 
-    if (link(src_path, dest_path) != 0) {
+    if (linkat(AT_FDCWD,
+               src_path,
+               AT_FDCWD,
+               dest_path,
+               follow_source ? AT_SYMLINK_FOLLOW : 0) != 0) {
         bx_cp_perror_path(ctx->options, dest_path);
         return false;
     }
@@ -1298,24 +1303,24 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
         return bx_cp_copy_directory(ctx, src_path, dest_path, &src_stat, top_level);
     }
 
+    if (ctx->options->symbolic_link) {
+        return bx_cp_create_symbolic_link(ctx, source_operand, dest_path, &src_stat);
+    }
+    if (ctx->options->hard_link) {
+        return bx_cp_create_hard_link(ctx, src_path, dest_path, &src_stat, follow_source);
+    }
+
     if ((ctx->options->preserve_mask & BX_CP_PRESERVE_LINKS) != 0u &&
         !ctx->options->hard_link &&
         !ctx->options->symbolic_link) {
         struct bx_cp_link_entry *entry = bx_cp_find_link_entry(ctx, src_stat.st_dev, src_stat.st_ino);
         if (entry != NULL) {
-            return bx_cp_create_hard_link(ctx, entry->dest_path, dest_path, &src_stat);
+            return bx_cp_create_hard_link(ctx, entry->dest_path, dest_path, &src_stat, false);
         }
     }
 
     if (!follow_source && S_ISLNK(src_lstat.st_mode)) {
         return bx_cp_copy_symlink_object(ctx, src_path, dest_path, &src_lstat);
-    }
-
-    if (ctx->options->symbolic_link) {
-        return bx_cp_create_symbolic_link(ctx, source_operand, dest_path, &src_stat);
-    }
-    if (ctx->options->hard_link) {
-        return bx_cp_create_hard_link(ctx, src_path, dest_path, &src_stat);
     }
     if (S_ISREG(src_stat.st_mode)) {
         return bx_cp_copy_regular_file(ctx, src_path, dest_path, &src_stat);
