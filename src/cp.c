@@ -169,7 +169,7 @@ static void bx_cp_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "      --version              output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "Not yet implemented: backup, interactive, copy-contents, reflink, sparse,\n");
-    fprintf(stream, "keep-directory-symlink, one-file-system, SELinux/SMACK context handling.\n");
+    fprintf(stream, "one-file-system, SELinux/SMACK context handling.\n");
 }
 
 static void bx_cp_print_version(void) {
@@ -354,7 +354,6 @@ static bool bx_cp_parse_options(int argc,
         case BX_CP_OPT_BACKUP:
         case BX_CP_OPT_COPY_CONTENTS:
         case BX_CP_OPT_DEBUG:
-        case BX_CP_OPT_KEEP_DIRECTORY_SYMLINK:
         case BX_CP_OPT_REFLINK:
         case BX_CP_OPT_SPARSE:
         case BX_CP_OPT_CONTEXT:
@@ -375,6 +374,13 @@ static bool bx_cp_parse_options(int argc,
             break;
         case 'P':
             options->deref_mode = BX_CP_DEREF_NEVER;
+            break;
+        case BX_CP_OPT_KEEP_DIRECTORY_SYMLINK:
+            /*
+             * Current destination handling already follows existing
+             * symlinks-to-directories in the covered GNU parity cases, so
+             * this option is accepted as the corresponding no-op selector.
+             */
             break;
         case 'l':
             options->hard_link = true;
