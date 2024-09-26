@@ -952,6 +952,57 @@ fail:
     return false;
 }
 
+static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
+                            const char *src_path,
+                            const char *dest_path,
+                            const struct stat *src_stat) {
+    struct bx_dest_state dest_state;
+    bool skip = false;
+    mode_t create_mode = bx_cp_regular_file_create_mode(ctx, src_stat);
+
+    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat && bx_same_file(src_stat, &dest_state.lst)) {
+        bx_cp_diag(ctx->options, "'%s' and '%s' are the same file", src_path, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat) {
+        if (!bx_cp_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.lst, &skip)) {
+            return false;
+        }
+        if (skip) {
+            return true;
+        }
+        if (S_ISDIR(dest_state.lst.st_mode)) {
+            bx_cp_diag(ctx->options,
+                       "cannot overwrite directory '%s' with non-directory '%s'",
+                       dest_path,
+                       src_path);
+            return false;
+        }
+        if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
+            return false;
+        }
+    }
+
+    if (mkfifo(dest_path, create_mode) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+
+    if (!bx_cp_apply_path_attrs(ctx, dest_path, src_stat, false, false)) {
+        return false;
+    }
+
+    bx_cp_add_link_entry(ctx, src_stat, dest_path);
+    bx_cp_print_verbose(ctx, src_path, dest_path);
+    return true;
+}
+
 static bool bx_cp_copy_symlink_object(struct bx_cp_context *ctx,
                                       const char *src_path,
                                       const char *dest_path,
@@ -1327,6 +1378,9 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
 
     if (!follow_source && S_ISLNK(src_lstat.st_mode)) {
         return bx_cp_copy_symlink_object(ctx, src_path, dest_path, &src_lstat);
+    }
+    if (S_ISFIFO(src_stat.st_mode) && ctx->options->recursive) {
+        return bx_cp_copy_fifo(ctx, src_path, dest_path, &src_stat);
     }
     if (S_ISREG(src_stat.st_mode)) {
         return bx_cp_copy_regular_file(ctx, src_path, dest_path, &src_stat);
