@@ -71,6 +71,7 @@ struct bx_cp_options {
     const char *progname;
     bool recursive;
     bool attributes_only;
+    bool copy_contents;
     bool force;
     bool hard_link;
     bool symbolic_link;
@@ -145,6 +146,7 @@ static void bx_cp_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "Supported options:\n");
     fprintf(stream, "  -a, --archive              same as -dR --preserve=all\n");
     fprintf(stream, "      --attributes-only      don't copy file data, only create destination objects\n");
+    fprintf(stream, "      --copy-contents        copy contents of special files when requested\n");
     fprintf(stream, "  -d                         same as --no-dereference --preserve=links\n");
     fprintf(stream, "  -f, --force                remove destination and retry on open/link failures\n");
     fprintf(stream, "  -H                         follow command-line symbolic links in SOURCE\n");
@@ -168,8 +170,9 @@ static void bx_cp_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "      --help                 display this help and exit\n");
     fprintf(stream, "      --version              output version information and exit\n");
     fprintf(stream, "\n");
-    fprintf(stream, "Not yet implemented: backup, interactive, copy-contents, reflink, sparse,\n");
+    fprintf(stream, "Not yet implemented: backup, interactive, reflink, sparse,\n");
     fprintf(stream, "one-file-system, SELinux/SMACK context handling.\n");
+    fprintf(stream, "Current limitation: --copy-contents only affects FIFOs; other special files remain unsupported.\n");
 }
 
 static void bx_cp_print_version(void) {
@@ -344,6 +347,9 @@ static bool bx_cp_parse_options(int argc,
         case BX_CP_OPT_ATTRIBUTES_ONLY:
             options->attributes_only = true;
             break;
+        case BX_CP_OPT_COPY_CONTENTS:
+            options->copy_contents = true;
+            break;
         case 'b':
         case 'i':
         case 'S':
@@ -352,7 +358,6 @@ static bool bx_cp_parse_options(int argc,
             bx_cp_diag(options, "option '%s' is not implemented", argv[optind - 1]);
             return false;
         case BX_CP_OPT_BACKUP:
-        case BX_CP_OPT_COPY_CONTENTS:
         case BX_CP_OPT_DEBUG:
         case BX_CP_OPT_REFLINK:
         case BX_CP_OPT_SPARSE:
@@ -846,7 +851,8 @@ static bool bx_cp_unlink_existing_file(const struct bx_cp_context *ctx, const ch
 static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
                                     const char *src_path,
                                     const char *dest_path,
-                                    const struct stat *src_stat) {
+                                    const struct stat *src_stat,
+                                    bool open_source_for_attributes_only) {
     struct bx_dest_state dest_state;
     bool skip = false;
     int src_fd = -1;
@@ -882,7 +888,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         return false;
     }
 
-    if (!ctx->options->attributes_only) {
+    if (!ctx->options->attributes_only || open_source_for_attributes_only) {
         src_fd = open(src_path, O_RDONLY);
         if (src_fd < 0) {
             bx_cp_perror_path(ctx->options, src_path);
@@ -950,6 +956,20 @@ fail:
         close(src_fd);
     }
     return false;
+}
+
+static bool bx_cp_copy_regular_file_path(struct bx_cp_context *ctx,
+                                         const char *src_path,
+                                         const char *dest_path,
+                                         const struct stat *src_stat) {
+    return bx_cp_copy_regular_file(ctx, src_path, dest_path, src_stat, false);
+}
+
+static bool bx_cp_copy_fifo_contents(struct bx_cp_context *ctx,
+                                     const char *src_path,
+                                     const char *dest_path,
+                                     const struct stat *src_stat) {
+    return bx_cp_copy_regular_file(ctx, src_path, dest_path, src_stat, true);
 }
 
 static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
@@ -1379,11 +1399,14 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
     if (!follow_source && S_ISLNK(src_lstat.st_mode)) {
         return bx_cp_copy_symlink_object(ctx, src_path, dest_path, &src_lstat);
     }
-    if (S_ISFIFO(src_stat.st_mode) && ctx->options->recursive) {
+    if (S_ISFIFO(src_stat.st_mode)) {
+        if (!ctx->options->recursive || ctx->options->copy_contents) {
+            return bx_cp_copy_fifo_contents(ctx, src_path, dest_path, &src_stat);
+        }
         return bx_cp_copy_fifo(ctx, src_path, dest_path, &src_stat);
     }
     if (S_ISREG(src_stat.st_mode)) {
-        return bx_cp_copy_regular_file(ctx, src_path, dest_path, &src_stat);
+        return bx_cp_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
     }
 
     bx_cp_diag(ctx->options, "unsupported file type for '%s'", src_path);
