@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,7 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -172,7 +175,7 @@ static void bx_cp_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "\n");
     fprintf(stream, "Not yet implemented: backup, interactive, reflink, sparse,\n");
     fprintf(stream, "one-file-system, SELinux/SMACK context handling.\n");
-    fprintf(stream, "Current limitation: --copy-contents only affects FIFOs; other special files remain unsupported.\n");
+    fprintf(stream, "Current limitation: --copy-contents only affects FIFOs and sockets; other special files remain unsupported.\n");
 }
 
 static void bx_cp_print_version(void) {
@@ -972,10 +975,67 @@ static bool bx_cp_copy_fifo_contents(struct bx_cp_context *ctx,
     return bx_cp_copy_regular_file(ctx, src_path, dest_path, src_stat, true);
 }
 
-static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
-                            const char *src_path,
-                            const char *dest_path,
-                            const struct stat *src_stat) {
+static bool bx_cp_create_fifo_node(struct bx_cp_context *ctx,
+                                   const char *dest_path,
+                                   mode_t create_mode) {
+    if (mkfifo(dest_path, create_mode) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_cp_create_socket_node(struct bx_cp_context *ctx,
+                                     const char *dest_path,
+                                     mode_t create_mode) {
+    size_t path_len = strlen(dest_path);
+    struct sockaddr_un addr;
+    int fd;
+
+    if (path_len >= sizeof(addr.sun_path)) {
+        errno = ENAMETOOLONG;
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, dest_path, path_len + 1u);
+
+    socklen_t addr_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + path_len + 1u);
+    if (bind(fd, (const struct sockaddr *)&addr, addr_len) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        close(fd);
+        return false;
+    }
+
+    if (chmod(dest_path, create_mode) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        close(fd);
+        return false;
+    }
+
+    if (close(fd) != 0) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool bx_cp_copy_special_node(struct bx_cp_context *ctx,
+                                    const char *src_path,
+                                    const char *dest_path,
+                                    const struct stat *src_stat,
+                                    bool (*create_node)(struct bx_cp_context *ctx,
+                                                        const char *dest_path,
+                                                        mode_t create_mode)) {
     struct bx_dest_state dest_state;
     bool skip = false;
     mode_t create_mode = bx_cp_regular_file_create_mode(ctx, src_stat);
@@ -1009,8 +1069,7 @@ static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
         }
     }
 
-    if (mkfifo(dest_path, create_mode) != 0) {
-        bx_cp_perror_path(ctx->options, dest_path);
+    if (!create_node(ctx, dest_path, create_mode)) {
         return false;
     }
 
@@ -1021,6 +1080,27 @@ static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
     bx_cp_add_link_entry(ctx, src_stat, dest_path);
     bx_cp_print_verbose(ctx, src_path, dest_path);
     return true;
+}
+
+static bool bx_cp_copy_fifo(struct bx_cp_context *ctx,
+                            const char *src_path,
+                            const char *dest_path,
+                            const struct stat *src_stat) {
+    return bx_cp_copy_special_node(ctx, src_path, dest_path, src_stat, bx_cp_create_fifo_node);
+}
+
+static bool bx_cp_copy_socket_contents(struct bx_cp_context *ctx,
+                                       const char *src_path,
+                                       const char *dest_path,
+                                       const struct stat *src_stat) {
+    return bx_cp_copy_regular_file(ctx, src_path, dest_path, src_stat, true);
+}
+
+static bool bx_cp_copy_socket(struct bx_cp_context *ctx,
+                              const char *src_path,
+                              const char *dest_path,
+                              const struct stat *src_stat) {
+    return bx_cp_copy_special_node(ctx, src_path, dest_path, src_stat, bx_cp_create_socket_node);
 }
 
 static bool bx_cp_copy_symlink_object(struct bx_cp_context *ctx,
@@ -1404,6 +1484,12 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
             return bx_cp_copy_fifo_contents(ctx, src_path, dest_path, &src_stat);
         }
         return bx_cp_copy_fifo(ctx, src_path, dest_path, &src_stat);
+    }
+    if (S_ISSOCK(src_stat.st_mode)) {
+        if (!ctx->options->recursive || ctx->options->copy_contents) {
+            return bx_cp_copy_socket_contents(ctx, src_path, dest_path, &src_stat);
+        }
+        return bx_cp_copy_socket(ctx, src_path, dest_path, &src_stat);
     }
     if (S_ISREG(src_stat.st_mode)) {
         return bx_cp_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
