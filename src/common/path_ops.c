@@ -102,5 +102,26 @@ char *bx_path_parents_layout_dup(const char *source_operand) {
 }
 
 bool bx_path_is_dot_or_dotdot(const char *name) {
-    return strcmp(name, ".") == 0 || strcmp(name, "..") == 0;
+    return (strcmp(name, ".") == 0 || strcmp(name, "..") == 0);
+}
+
+char *bx_path_build_dest(const char *source_operand,
+                         const char *destination_root,
+                         bool destination_is_directory,
+                         bool parents) {
+    if (parents) {
+        char *parents_path = bx_path_parents_layout_dup(source_operand);
+        char *res = bx_path_join(destination_root, parents_path);
+        free(parents_path);
+        return res;
+    }
+
+    if (destination_is_directory) {
+        char *base = bx_path_basename_dup(source_operand);
+        char *res = bx_path_join(destination_root, base);
+        free(base);
+        return res;
+    }
+
+    return xstrdup(destination_root);
 }

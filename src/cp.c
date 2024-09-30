@@ -18,6 +18,12 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "common/copy_data.h"
+#include "common/copy_metadata.h"
+#include "common/update_policy.h"
+#include "common/args_common.h"
+#include "common/overwrite_policy.h"
+#include "common/prompt_ops.h"
 #include "common/path_ops.h"
 #include "common/same_file.h"
 #include "common/stat_ops.h"
@@ -33,24 +39,10 @@ enum bx_cp_deref_mode {
     BX_CP_DEREF_COMMAND_LINE,
 };
 
-enum bx_cp_update_mode {
-    BX_CP_UPDATE_ALL = 0,
-    BX_CP_UPDATE_NONE,
-    BX_CP_UPDATE_NONE_FAIL,
-    BX_CP_UPDATE_OLDER,
-};
-
 enum bx_cp_mode_policy {
     BX_CP_MODE_POLICY_DEFAULT = 0,
     BX_CP_MODE_POLICY_PRESERVE,
     BX_CP_MODE_POLICY_NO_PRESERVE,
-};
-
-enum {
-    BX_CP_PRESERVE_MODE = 1u << 0,
-    BX_CP_PRESERVE_OWNERSHIP = 1u << 1,
-    BX_CP_PRESERVE_TIMESTAMPS = 1u << 2,
-    BX_CP_PRESERVE_LINKS = 1u << 3,
 };
 
 enum bx_cp_longopt {
@@ -75,11 +67,10 @@ struct bx_cp_options {
     bool recursive;
     bool attributes_only;
     bool copy_contents;
-    bool force;
+    struct bx_overwrite_policy overwrite;
     bool hard_link;
     bool symbolic_link;
     bool parents;
-    bool remove_destination;
     bool no_target_directory;
     bool verbose;
     bool strip_trailing_slashes;
@@ -87,7 +78,7 @@ struct bx_cp_options {
     bool show_version;
     enum bx_cp_deref_mode deref_mode;
     enum bx_cp_mode_policy mode_policy;
-    enum bx_cp_update_mode update_mode;
+    enum bx_update_mode update_mode;
     unsigned preserve_mask;
     const char *target_directory;
 };
@@ -208,72 +199,23 @@ static bool bx_cp_parse_preserve_list(const struct bx_cp_options *options,
                                       unsigned *mask,
                                       bool set_bits,
                                       bool *mode_mentioned_out) {
-    char *copy = xstrdup(arg);
-    char *saveptr = NULL;
-    bool mode_mentioned = false;
-
-    for (char *token = strtok_r(copy, ",", &saveptr);
-         token != NULL;
-         token = strtok_r(NULL, ",", &saveptr)) {
-        unsigned bits = 0;
-
-        if (strcmp(token, "mode") == 0) {
-            bits = BX_CP_PRESERVE_MODE;
-            mode_mentioned = true;
-        } else if (strcmp(token, "ownership") == 0) {
-            bits = BX_CP_PRESERVE_OWNERSHIP;
-        } else if (strcmp(token, "timestamps") == 0) {
-            bits = BX_CP_PRESERVE_TIMESTAMPS;
-        } else if (strcmp(token, "links") == 0) {
-            bits = BX_CP_PRESERVE_LINKS;
-        } else if (strcmp(token, "all") == 0) {
-            bits = BX_CP_PRESERVE_MODE | BX_CP_PRESERVE_OWNERSHIP |
-                   BX_CP_PRESERVE_TIMESTAMPS | BX_CP_PRESERVE_LINKS;
-            mode_mentioned = true;
-        } else if (strcmp(token, "context") == 0 || strcmp(token, "xattr") == 0) {
-            bits = 0;
-        } else {
-            bx_cp_diag(options, "invalid attribute '%s'", token);
-            free(copy);
-            return false;
-        }
-
-        if (set_bits) {
-            *mask |= bits;
-        } else {
-            *mask &= ~bits;
-        }
-    }
-
-    free(copy);
-    if (mode_mentioned_out != NULL) {
-        *mode_mentioned_out = mode_mentioned;
+    char *invalid_token = NULL;
+    if (!bx_args_parse_preserve_list(arg, mask, set_bits, mode_mentioned_out, &invalid_token)) {
+        bx_cp_diag(options, "invalid attribute '%s'", invalid_token);
+        free(invalid_token);
+        return false;
     }
     return true;
 }
 
 static bool bx_cp_parse_update_mode(const struct bx_cp_options *options,
                                     const char *arg,
-                                    enum bx_cp_update_mode *mode_out) {
-    if (arg == NULL || strcmp(arg, "older") == 0) {
-        *mode_out = BX_CP_UPDATE_OLDER;
-        return true;
+                                    enum bx_update_mode *mode_out) {
+    if (!bx_args_parse_update_mode(arg, mode_out)) {
+        bx_cp_diag(options, "invalid --update mode '%s'", arg);
+        return false;
     }
-    if (strcmp(arg, "all") == 0) {
-        *mode_out = BX_CP_UPDATE_ALL;
-        return true;
-    }
-    if (strcmp(arg, "none") == 0) {
-        *mode_out = BX_CP_UPDATE_NONE;
-        return true;
-    }
-    if (strcmp(arg, "none-fail") == 0) {
-        *mode_out = BX_CP_UPDATE_NONE_FAIL;
-        return true;
-    }
-
-    bx_cp_diag(options, "invalid --update mode '%s'", arg);
-    return false;
+    return true;
 }
 
 static bool bx_cp_parse_options(int argc,
@@ -319,7 +261,7 @@ static bool bx_cp_parse_options(int argc,
     options->progname = bx_cp_progname(argv[0]);
     options->deref_mode = BX_CP_DEREF_DEFAULT;
     options->mode_policy = BX_CP_MODE_POLICY_DEFAULT;
-    options->update_mode = BX_CP_UPDATE_ALL;
+    options->update_mode = BX_UPDATE_ALL;
 
     opterr = 0;
     optind = 1;
@@ -342,10 +284,10 @@ static bool bx_cp_parse_options(int argc,
             options->recursive = true;
             options->deref_mode = BX_CP_DEREF_NEVER;
             options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
-            options->preserve_mask |= BX_CP_PRESERVE_MODE |
-                                      BX_CP_PRESERVE_OWNERSHIP |
-                                      BX_CP_PRESERVE_TIMESTAMPS |
-                                      BX_CP_PRESERVE_LINKS;
+            options->preserve_mask |= BX_PRESERVE_MODE |
+                                      BX_PRESERVE_OWNERSHIP |
+                                      BX_PRESERVE_TIMESTAMPS |
+                                      BX_PRESERVE_LINKS;
             break;
         case BX_CP_OPT_ATTRIBUTES_ONLY:
             options->attributes_only = true;
@@ -354,7 +296,6 @@ static bool bx_cp_parse_options(int argc,
             options->copy_contents = true;
             break;
         case 'b':
-        case 'i':
         case 'S':
         case 'x':
         case 'Z':
@@ -369,10 +310,13 @@ static bool bx_cp_parse_options(int argc,
             return false;
         case 'd':
             options->deref_mode = BX_CP_DEREF_NEVER;
-            options->preserve_mask |= BX_CP_PRESERVE_LINKS;
+            options->preserve_mask |= BX_PRESERVE_LINKS;
             break;
         case 'f':
-            options->force = true;
+            options->overwrite.mode = BX_OVERWRITE_FORCE;
+            break;
+        case 'i':
+            options->overwrite.mode = BX_OVERWRITE_INTERACTIVE;
             break;
         case 'H':
             options->deref_mode = BX_CP_DEREF_COMMAND_LINE;
@@ -394,20 +338,20 @@ static bool bx_cp_parse_options(int argc,
             options->hard_link = true;
             break;
         case 'n':
-            options->update_mode = BX_CP_UPDATE_NONE;
+            options->overwrite.mode = BX_OVERWRITE_NO_CLOBBER;
             break;
         case 'p':
             options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
-            options->preserve_mask |= BX_CP_PRESERVE_MODE |
-                                      BX_CP_PRESERVE_OWNERSHIP |
-                                      BX_CP_PRESERVE_TIMESTAMPS;
+            options->preserve_mask |= BX_PRESERVE_MODE |
+                                      BX_PRESERVE_OWNERSHIP |
+                                      BX_PRESERVE_TIMESTAMPS;
             break;
         case BX_CP_OPT_PRESERVE:
             if (optarg == NULL) {
                 options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
-                options->preserve_mask |= BX_CP_PRESERVE_MODE |
-                                          BX_CP_PRESERVE_OWNERSHIP |
-                                          BX_CP_PRESERVE_TIMESTAMPS;
+                options->preserve_mask |= BX_PRESERVE_MODE |
+                                          BX_PRESERVE_OWNERSHIP |
+                                          BX_PRESERVE_TIMESTAMPS;
             } else {
                 bool mode_mentioned = false;
                 if (!bx_cp_parse_preserve_list(options,
@@ -444,7 +388,7 @@ static bool bx_cp_parse_options(int argc,
             options->recursive = true;
             break;
         case BX_CP_OPT_REMOVE_DESTINATION:
-            options->remove_destination = true;
+            options->overwrite.remove_destination = true;
             break;
         case BX_CP_OPT_STRIP_TRAILING_SLASHES:
             options->strip_trailing_slashes = true;
@@ -464,7 +408,7 @@ static bool bx_cp_parse_options(int argc,
             }
             break;
         case 'u':
-            options->update_mode = BX_CP_UPDATE_OLDER;
+            options->update_mode = BX_UPDATE_OLDER;
             break;
         case 'v':
             options->verbose = true;
@@ -594,24 +538,13 @@ static bool bx_cp_should_skip_existing(const struct bx_cp_options *options,
                                        const struct stat *src_stat,
                                        const struct stat *dest_stat,
                                        bool *skip_out) {
-    *skip_out = false;
-
-    switch (options->update_mode) {
-    case BX_CP_UPDATE_ALL:
-        return true;
-    case BX_CP_UPDATE_NONE:
-        *skip_out = true;
-        return true;
-    case BX_CP_UPDATE_NONE_FAIL:
-        bx_cp_diag(options, "will not overwrite '%s'", dest_path);
-        return false;
-    case BX_CP_UPDATE_OLDER:
-        if (bx_stat_timespec_compare(&src_stat->st_mtim, &dest_stat->st_mtim) <= 0) {
-            *skip_out = true;
+    bool error = false;
+    if (!bx_update_should_skip(options->update_mode, src_stat, dest_stat, skip_out, &error)) {
+        if (error) {
+            bx_cp_diag(options, "will not overwrite '%s'", dest_path);
         }
-        return true;
+        return false;
     }
-
     return true;
 }
 
@@ -663,24 +596,9 @@ static bool bx_cp_prepare_parents(const struct bx_cp_context *ctx, const char *p
 static bool bx_cp_apply_fd_attrs(const struct bx_cp_context *ctx,
                                  int fd,
                                  const struct stat *src_stat) {
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_OWNERSHIP) != 0u) {
-        if (fchown(fd, src_stat->st_uid, src_stat->st_gid) != 0) {
-            bx_cp_perror_path(ctx->options, "fchown");
-            return false;
-        }
-    }
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) != 0u) {
-        if (fchmod(fd, src_stat->st_mode & 07777u) != 0) {
-            bx_cp_perror_path(ctx->options, "fchmod");
-            return false;
-        }
-    }
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_TIMESTAMPS) != 0u) {
-        struct timespec ts[2] = {src_stat->st_atim, src_stat->st_mtim};
-        if (futimens(fd, ts) != 0) {
-            bx_cp_perror_path(ctx->options, "futimens");
-            return false;
-        }
+    if (!bx_copy_fd_metadata(fd, src_stat, ctx->options->preserve_mask)) {
+        bx_cp_perror_path(ctx->options, "fchown/fchmod/futimens");
+        return false;
     }
     return true;
 }
@@ -690,34 +608,11 @@ static bool bx_cp_apply_path_attrs(const struct bx_cp_context *ctx,
                                    const struct stat *src_stat,
                                    bool no_follow,
                                    bool is_directory) {
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_OWNERSHIP) != 0u) {
-        if ((no_follow ? lchown(dest_path, src_stat->st_uid, src_stat->st_gid)
-                       : chown(dest_path, src_stat->st_uid, src_stat->st_gid)) != 0) {
-            bx_cp_perror_path(ctx->options, dest_path);
-            return false;
-        }
+    (void)is_directory;
+    if (!bx_copy_path_metadata(dest_path, src_stat, ctx->options->preserve_mask, no_follow)) {
+        bx_cp_perror_path(ctx->options, dest_path);
+        return false;
     }
-
-    if (!no_follow && (ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) != 0u) {
-        if (chmod(dest_path, src_stat->st_mode & 07777u) != 0) {
-            bx_cp_perror_path(ctx->options, dest_path);
-            return false;
-        }
-    }
-
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_TIMESTAMPS) != 0u) {
-        struct timespec ts[2] = {src_stat->st_atim, src_stat->st_mtim};
-        int flags = no_follow ? AT_SYMLINK_NOFOLLOW : 0;
-        if (utimensat(AT_FDCWD, dest_path, ts, flags) != 0) {
-            bx_cp_perror_path(ctx->options, dest_path);
-            return false;
-        }
-    }
-
-    if (!no_follow && !is_directory && (ctx->options->preserve_mask & BX_CP_PRESERVE_MODE) == 0u) {
-        /* nothing */
-    }
-
     return true;
 }
 
@@ -817,30 +712,16 @@ static char *bx_cp_required_self_copy_child(const struct bx_cp_context *ctx,
 }
 
 static bool bx_cp_copy_data(int src_fd, int dest_fd, const struct bx_cp_options *options) {
-    char buffer[65536];
-
-    while (true) {
-        ssize_t nread = read(src_fd, buffer, sizeof(buffer));
-        if (nread == 0) {
-            return true;
-        }
-        if (nread < 0) {
-            bx_cp_perror_path(options, "read");
-            return false;
-        }
-
-        ssize_t written_total = 0;
-        while (written_total < nread) {
-            ssize_t nwritten = write(dest_fd,
-                                     buffer + written_total,
-                                     (size_t)(nread - written_total));
-            if (nwritten < 0) {
-                bx_cp_perror_path(options, "write");
-                return false;
-            }
-            written_total += nwritten;
-        }
+    int res = bx_copy_data(src_fd, dest_fd);
+    if (res == BX_COPY_DATA_SUCCESS) {
+        return true;
     }
+    if (res == BX_COPY_DATA_READ_ERROR) {
+        bx_cp_perror_path(options, "read");
+    } else if (res == BX_COPY_DATA_WRITE_ERROR) {
+        bx_cp_perror_path(options, "write");
+    }
+    return false;
 }
 
 static bool bx_cp_unlink_existing_file(const struct bx_cp_context *ctx, const char *dest_path) {
@@ -872,7 +753,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         return false;
     }
 
-    if (dest_state.dangling_symlink && !ctx->options->remove_destination) {
+    if (dest_state.dangling_symlink && !ctx->options->overwrite.remove_destination) {
         bx_cp_diag(ctx->options, "not writing through dangling symlink '%s'", dest_path);
         return false;
     }
@@ -883,6 +764,14 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         }
         if (skip) {
             return true;
+        }
+
+        if (ctx->options->overwrite.mode == BX_OVERWRITE_INTERACTIVE) {
+            char prompt[PATH_MAX + 32];
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            if (!bx_prompt_confirm(prompt)) {
+                return true;
+            }
         }
     }
 
@@ -899,7 +788,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         }
     }
 
-    if (ctx->options->remove_destination && dest_state.exists_lstat) {
+    if (ctx->options->overwrite.remove_destination && dest_state.exists_lstat) {
         if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
             goto fail;
         }
@@ -912,7 +801,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
     }
 
     dest_fd = open(dest_path, dest_open_flags, create_mode);
-    if (dest_fd < 0 && ctx->options->force && dest_state.exists_lstat) {
+    if (dest_fd < 0 && ctx->options->overwrite.mode == BX_OVERWRITE_FORCE && dest_state.exists_lstat) {
         if (bx_cp_unlink_existing_file(ctx, dest_path)) {
             dest_fd = open(dest_path, dest_open_flags, create_mode);
         }
@@ -1467,7 +1356,7 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
         return bx_cp_create_hard_link(ctx, src_path, dest_path, &src_stat, follow_source);
     }
 
-    if ((ctx->options->preserve_mask & BX_CP_PRESERVE_LINKS) != 0u &&
+    if ((ctx->options->preserve_mask & BX_PRESERVE_LINKS) != 0u &&
         !ctx->options->hard_link &&
         !ctx->options->symbolic_link) {
         struct bx_cp_link_entry *entry = bx_cp_find_link_entry(ctx, src_stat.st_dev, src_stat.st_ino);
@@ -1503,21 +1392,10 @@ static char *bx_cp_build_dest_path(const struct bx_cp_options *options,
                                    const char *source_operand,
                                    const char *destination_root,
                                    bool destination_is_directory) {
-    if (options->parents) {
-        char *parents_path = bx_path_parents_layout_dup(source_operand);
-        char *res = bx_path_join(destination_root, parents_path);
-        free(parents_path);
-        return res;
-    }
-
-    if (destination_is_directory) {
-        char *base = bx_path_basename_dup(source_operand);
-        char *res = bx_path_join(destination_root, base);
-        free(base);
-        return res;
-    }
-
-    return xstrdup(destination_root);
+    return bx_path_build_dest(source_operand,
+                              destination_root,
+                              destination_is_directory,
+                              options->parents);
 }
 
 int bx_cp_main(int argc, char **argv) {
