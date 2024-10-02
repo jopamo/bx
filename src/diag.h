@@ -7,10 +7,31 @@
 #include <string.h>
 #include <stdarg.h>
 
-/*
- * bx_err: Print a formatted error message to stderr.
- * Prefixes with "bx: ".
- */
+struct bx_diag_ctx {
+    const char *progname;
+    int exit_status;
+};
+
+static inline void bx_vdiag(const struct bx_diag_ctx *ctx, const char *fmt, va_list ap) {
+    fprintf(stderr, "%s: ", ctx->progname);
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+}
+
+static inline void bx_diag(struct bx_diag_ctx *ctx, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    bx_vdiag(ctx, fmt, ap);
+    va_end(ap);
+    ctx->exit_status = 1;
+}
+
+static inline void bx_perror_path(struct bx_diag_ctx *ctx, const char *path) {
+    fprintf(stderr, "%s: %s: %s\n", ctx->progname, path, strerror(errno));
+    ctx->exit_status = 1;
+}
+
+/* Legacy helpers for now */
 static inline void bx_err(const char *fmt, ...) {
     va_list ap;
     fprintf(stderr, "bx: ");
@@ -20,10 +41,6 @@ static inline void bx_err(const char *fmt, ...) {
     fprintf(stderr, "\n");
 }
 
-/*
- * bx_fatal: Print a formatted error message and exit with given code.
- * Prefixes with "bx: ".
- */
 static inline void bx_fatal(int code, const char *fmt, ...) {
     va_list ap;
     fprintf(stderr, "bx: ");
@@ -34,15 +51,8 @@ static inline void bx_fatal(int code, const char *fmt, ...) {
     exit(code);
 }
 
-/*
- * bx_perror: Print a message and the error string for errno.
- * Prefixes with "bx: ".
- */
 #define bx_perror(msg) fprintf(stderr, "bx: %s: %s\n", msg, strerror(errno))
 
-/*
- * bx_pfatal: bx_perror followed by exit.
- */
 #define bx_pfatal(code, msg) do { \
     bx_perror(msg); \
     exit(code); \

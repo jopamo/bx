@@ -63,31 +63,6 @@ static void print_version(void) {
     printf("bx which version %s\n", BX_VERSION);
 }
 
-static int usage_error_missing_operand(const char *progname) {
-    print_help(stderr, progname);
-    return 255;
-}
-
-static int usage_error_unknown_short_option(const char *progname, int opt) {
-    fprintf(stderr, "%s: invalid option -- '%c'\n", progname, opt);
-    print_help(stderr, progname);
-    return 255;
-}
-
-static int usage_error_unknown_long_option(const char *progname, const char *option) {
-    fprintf(stderr, "%s: unrecognized option '%s'\n", progname, option);
-    print_help(stderr, progname);
-    return 255;
-}
-
-static void warn_unknown_short_option(const char *progname, int opt) {
-    fprintf(stderr, "%s: invalid option -- '%c'\n", progname, opt);
-}
-
-static void warn_unknown_long_option(const char *progname, const char *option) {
-    fprintf(stderr, "%s: unrecognized option '%s'\n", progname, option);
-}
-
 static void print_missing_search_space(FILE *stream, const char *cmd) {
     const char *slash = strrchr(cmd, '/');
     if (!slash) {
@@ -108,16 +83,17 @@ static void print_missing_search_space(FILE *stream, const char *cmd) {
     fwrite(cmd, 1, dir_len, stream);
 }
 
-static void print_not_found_diag(const char *progname, const char *cmd) {
+static void print_not_found_diag(struct bx_diag_ctx *diag, const char *cmd) {
     const char *slash = strrchr(cmd, '/');
     const char *name = slash ? slash + 1 : cmd;
     if (*name == '\0') {
         name = cmd;
     }
 
-    fprintf(stderr, "%s: no %s in (", progname, name);
+    fprintf(stderr, "%s: no %s in (", diag->progname, name);
     print_missing_search_space(stderr, cmd);
     fputs(")\n", stderr);
+    diag->exit_status++;
 }
 
 static bool is_executable(const char *path) {
@@ -654,7 +630,9 @@ int bx_which_main(int argc, char **argv) {
     int c;
     struct alias *aliases = NULL;
     struct function *functions = NULL;
-    const char *progname = which_progname(argv[0]);
+    struct bx_diag_ctx diag = {0};
+
+    diag.progname = which_progname(argv[0]);
 
     static struct option long_options[] = {
         {"all", no_argument, 0, 'a'},
@@ -700,27 +678,32 @@ int bx_which_main(int argc, char **argv) {
                 opts.read_functions = false;
                 opts.skip_functions = true;
                 break;
-            case 1009: print_help(stdout, progname); return 0;
+            case 1009: print_help(stdout, diag.progname); return 0;
             case '?':
                 if (opts.tty_only) {
                     if (optopt != 0) {
-                        warn_unknown_short_option(progname, optopt);
+                        fprintf(stderr, "%s: invalid option -- '%c'\n", diag.progname, optopt);
                     } else {
-                        warn_unknown_long_option(progname, argv[optind - 1]);
+                        fprintf(stderr, "%s: unrecognized option '%s'\n", diag.progname, argv[optind - 1]);
                     }
                     break;
                 }
                 if (optopt != 0) {
-                    return usage_error_unknown_short_option(progname, optopt);
+                    fprintf(stderr, "%s: invalid option -- '%c'\n", diag.progname, optopt);
+                    print_help(stderr, diag.progname);
+                    return 255;
                 }
-                return usage_error_unknown_long_option(progname, argv[optind - 1]);
+                fprintf(stderr, "%s: unrecognized option '%s'\n", diag.progname, argv[optind - 1]);
+                print_help(stderr, diag.progname);
+                return 255;
             default:
                 return 255;
         }
     }
 
     if (optind >= argc) {
-        return usage_error_missing_operand(progname);
+        print_help(stderr, diag.progname);
+        return 255;
     }
 
     parse_stdin(&opts, &aliases, &functions);
@@ -730,21 +713,17 @@ int bx_which_main(int argc, char **argv) {
     memset(alias_consumed, 0, (size_t)operand_count * sizeof(bool));
     emit_aliases_for_operands(aliases, operand_count, argv + optind, opts.all, alias_consumed);
 
-    int exit_status = 0;
     for (int i = 0; i < operand_count; i++) {
         if (!opts.all && alias_consumed[i]) {
             continue;
         }
         if (!find_command(argv[optind + i], &opts, NULL, functions)) {
-            print_not_found_diag(progname, argv[optind + i]);
-            if (exit_status < 255) {
-                exit_status++;
-            }
+            print_not_found_diag(&diag, argv[optind + i]);
         }
     }
 
     free(alias_consumed);
     free_aliases(aliases);
     free_functions(functions);
-    return exit_status;
+    return diag.exit_status > 255 ? 255 : diag.exit_status;
 }
