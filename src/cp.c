@@ -22,7 +22,6 @@
 #include "common/copy_metadata.h"
 #include "common/update_policy.h"
 #include "common/args_common.h"
-#include "common/overwrite_policy.h"
 #include "common/prompt_ops.h"
 #include "common/path_ops.h"
 #include "common/same_file.h"
