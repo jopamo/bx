@@ -22,6 +22,7 @@
 #include "common/copy_metadata.h"
 #include "common/update_policy.h"
 #include "common/args_common.h"
+#include "common/backup_ops.h"
 #include "common/prompt_ops.h"
 #include "common/path_ops.h"
 #include "common/same_file.h"
@@ -75,12 +76,15 @@ struct bx_cp_options {
     bool parents;
     bool no_target_directory;
     bool verbose;
+    bool debug;
     bool strip_trailing_slashes;
     bool show_help;
     bool show_version;
     enum bx_cp_deref_mode deref_mode;
     enum bx_cp_mode_policy mode_policy;
     enum bx_update_mode update_mode;
+    enum bx_backup_mode backup_mode;
+    const char *suffix;
     unsigned preserve_mask;
     const char *target_directory;
 };
@@ -101,6 +105,7 @@ struct bx_cp_dir_entry {
 struct bx_cp_context {
     const struct bx_cp_options *options;
     struct bx_diag_ctx *diag;
+    struct bx_backup_params backup_params;
     mode_t umask_value;
     struct bx_cp_link_entry *links;
     struct bx_cp_dir_entry *source_dirs;
@@ -275,30 +280,39 @@ static bool bx_cp_parse_options(int argc,
             options->recursive = true;
             options->deref_mode = BX_CP_DEREF_NEVER;
             options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
-            options->preserve_mask |= BX_PRESERVE_MODE |
-                                      BX_PRESERVE_OWNERSHIP |
-                                      BX_PRESERVE_TIMESTAMPS |
-                                      BX_PRESERVE_LINKS;
+            options->preserve_mask |= BX_PRESERVE_ALL;
             break;
         case BX_CP_OPT_ATTRIBUTES_ONLY:
             options->attributes_only = true;
             break;
+        case 'b':
+            options->backup_mode = BX_BACKUP_UNSPECIFIED;
+            break;
+        case BX_CP_OPT_BACKUP:
+            if (optarg == NULL) {
+                options->backup_mode = BX_BACKUP_UNSPECIFIED;
+            } else {
+                if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
+                    bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                    return false;
+                }
+            }
+            break;
         case BX_CP_OPT_COPY_CONTENTS:
             options->copy_contents = true;
             break;
-        case 'b':
         case 'S':
-        case 'x':
-        case 'Z':
-            bx_diag(diag, "option '%s' is not implemented", argv[optind - 1]);
-            return false;
-        case BX_CP_OPT_BACKUP:
-        case BX_CP_OPT_DEBUG:
+            options->suffix = optarg;
+            break;
         case BX_CP_OPT_REFLINK:
         case BX_CP_OPT_SPARSE:
         case BX_CP_OPT_CONTEXT:
             bx_diag(diag, "option '%s' is not implemented", argv[optind - 1]);
             return false;
+        case BX_CP_OPT_DEBUG:
+            options->debug = true;
+            options->verbose = true;
+            break;
         case 'd':
             options->deref_mode = BX_CP_DEREF_NEVER;
             options->preserve_mask |= BX_PRESERVE_LINKS;
@@ -533,6 +547,7 @@ static bool bx_cp_should_skip_existing(const struct bx_cp_options *options,
                                        bool *skip_out,
                                        struct bx_diag_ctx *diag) {
     if (options->no_clobber) {
+        bx_debug(diag, "skipping '%s' because of -n", dest_path);
         *skip_out = true;
         return true;
     }
@@ -548,6 +563,9 @@ static bool bx_cp_should_skip_existing(const struct bx_cp_options *options,
             bx_diag(diag, "will not overwrite '%s'", dest_path);
         }
         return false;
+    }
+    if (*skip_out) {
+        bx_debug(diag, "skipping '%s' because of --update", dest_path);
     }
     return true;
 }
@@ -650,13 +668,10 @@ static mode_t bx_cp_regular_file_create_mode(const struct bx_cp_context *ctx,
 }
 
 static void bx_cp_print_verbose(const struct bx_cp_context *ctx,
-                                const char *src_path,
-                                const char *dest_path) {
-    if (ctx->options->verbose) {
-        printf("'%s' -> '%s'\n", src_path, dest_path);
-    }
+                                 const char *src_path,
+                                 const char *dest_path) {
+    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
 }
-
 static void bx_cp_diag_self_recursive_copy(struct bx_cp_context *ctx,
                                            const char *src_path,
                                            const char *dest_path) {
@@ -753,6 +768,16 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
     }
 
     if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
+        if (ctx->backup_params.mode != BX_BACKUP_NONE && ctx->options->force &&
+            S_ISREG(src_stat->st_mode) && strcmp(src_path, dest_path) == 0) {
+            char *backup_file = bx_backup_create_copy(dest_path, &ctx->backup_params, ctx->diag);
+            if (backup_file) {
+                bx_info(ctx->diag, "'%s' -> '%s'", src_path, backup_file);
+                free(backup_file);
+                return true;
+            }
+        }
+        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
         bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
         return false;
     }
@@ -776,6 +801,12 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+        if (backup_file) {
+            free(backup_file);
+            memset(&dest_state, 0, sizeof(dest_state));
         }
     }
 
@@ -950,15 +981,32 @@ static bool bx_cp_copy_special_node(struct bx_cp_context *ctx,
         if (skip) {
             return true;
         }
-        if (S_ISDIR(dest_state.lst.st_mode)) {
-            bx_diag(ctx->diag,
-                       "cannot overwrite directory '%s' with non-directory '%s'",
-                       dest_path,
-                       src_path);
-            return false;
+
+        if (ctx->options->interactive) {
+            char prompt[PATH_MAX + 32];
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            if (!bx_prompt_confirm(prompt)) {
+                return true;
+            }
         }
-        if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
-            return false;
+
+        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+        if (backup_file) {
+            free(backup_file);
+            memset(&dest_state, 0, sizeof(dest_state));
+        }
+
+        if (dest_state.exists_lstat) {
+            if (S_ISDIR(dest_state.lst.st_mode)) {
+                bx_diag(ctx->diag,
+                           "cannot overwrite directory '%s' with non-directory '%s'",
+                           dest_path,
+                           src_path);
+                return false;
+            }
+            if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
+                return false;
+            }
         }
     }
 
@@ -1022,12 +1070,29 @@ static bool bx_cp_copy_symlink_object(struct bx_cp_context *ctx,
         if (skip) {
             return true;
         }
-        if (S_ISDIR(dest_state.lst.st_mode)) {
-            bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-            return false;
+
+        if (ctx->options->interactive) {
+            char prompt[PATH_MAX + 32];
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            if (!bx_prompt_confirm(prompt)) {
+                return true;
+            }
         }
-        if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
-            return false;
+
+        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+        if (backup_file) {
+            free(backup_file);
+            memset(&dest_state, 0, sizeof(dest_state));
+        }
+
+        if (dest_state.exists_lstat) {
+            if (S_ISDIR(dest_state.lst.st_mode)) {
+                bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
+                return false;
+            }
+            if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
+                return false;
+            }
         }
     }
 
@@ -1096,18 +1161,26 @@ static bool bx_cp_create_symbolic_link(struct bx_cp_context *ctx,
                     return true;
                 }
             }
+
+            char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+            if (backup_file) {
+                free(backup_file);
+                memset(&dest_state, 0, sizeof(dest_state));
+            }
         }
-        if (S_ISDIR(dest_state.lst.st_mode)) {
-            bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_operand);
-            return false;
-        }
-        if (!(ctx->options->force || ctx->options->remove_destination)) {
-            errno = EEXIST;
-            bx_perror_path(ctx->diag, dest_path);
-            return false;
-        }
-        if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
-            return false;
+        if (dest_state.exists_lstat) {
+            if (S_ISDIR(dest_state.lst.st_mode)) {
+                bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_operand);
+                return false;
+            }
+            if (!(ctx->options->force || ctx->options->remove_destination)) {
+                errno = EEXIST;
+                bx_perror_path(ctx->diag, dest_path);
+                return false;
+            }
+            if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
+                return false;
+            }
         }
     }
 
@@ -1134,6 +1207,7 @@ static bool bx_cp_create_hard_link(struct bx_cp_context *ctx,
     }
 
     if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
+        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
         bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
         return false;
     }
@@ -1152,6 +1226,12 @@ static bool bx_cp_create_hard_link(struct bx_cp_context *ctx,
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+        if (backup_file) {
+            free(backup_file);
+            memset(&dest_state, 0, sizeof(dest_state));
         }
     }
 
@@ -1429,6 +1509,8 @@ int bx_cp_main(int argc, char **argv) {
     }
 
     diag_ctx.progname = options.progname;
+    diag_ctx.verbose = options.verbose;
+    diag_ctx.debug = options.debug;
 
     if (options.show_help) {
         bx_cp_print_help(stdout, options.progname);
@@ -1504,6 +1586,7 @@ int bx_cp_main(int argc, char **argv) {
     ctx.options = &options;
     ctx.diag = &diag_ctx;
     ctx.umask_value = old_umask;
+    bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
 
     for (int i = 0; i < source_count; i++) {
         char *lookup_path = xstrdup(source_operands[i]);

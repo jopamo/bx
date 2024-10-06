@@ -18,6 +18,7 @@ add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
 sources = [
   'src/common/args_common.c',
+  'src/common/backup_ops.c',
   'src/common/copy_data.c',
   'src/common/copy_metadata.c',
   'src/common/prompt_ops.c',

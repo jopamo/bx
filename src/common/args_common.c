@@ -84,3 +84,26 @@ bool bx_args_parse_update_mode(const char *arg,
 
     return false;
 }
+
+bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out) {
+    if (arg == NULL) {
+        return false;
+    }
+    if (strcmp(arg, "none") == 0 || strcmp(arg, "off") == 0) {
+        *mode_out = BX_BACKUP_OFF;
+        return true;
+    }
+    if (strcmp(arg, "numbered") == 0 || strcmp(arg, "t") == 0) {
+        *mode_out = BX_BACKUP_NUMBERED;
+        return true;
+    }
+    if (strcmp(arg, "existing") == 0 || strcmp(arg, "nil") == 0) {
+        *mode_out = BX_BACKUP_EXISTING;
+        return true;
+    }
+    if (strcmp(arg, "simple") == 0 || strcmp(arg, "never") == 0) {
+        *mode_out = BX_BACKUP_SIMPLE;
+        return true;
+    }
+    return false;
+}

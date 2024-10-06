@@ -13,4 +13,15 @@ bool bx_args_parse_preserve_list(const char *arg,
 bool bx_args_parse_update_mode(const char *arg,
                                enum bx_update_mode *mode_out);
 
+enum bx_backup_mode {
+    BX_BACKUP_NONE = 0,
+    BX_BACKUP_UNSPECIFIED,
+    BX_BACKUP_OFF,
+    BX_BACKUP_SIMPLE,
+    BX_BACKUP_NUMBERED,
+    BX_BACKUP_EXISTING,
+};
+
+bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out);
+
 #endif /* BX_COMMON_ARGS_COMMON_H */
