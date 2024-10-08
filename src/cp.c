@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -39,6 +40,18 @@ enum bx_cp_deref_mode {
     BX_CP_DEREF_COMMAND_LINE,
 };
 
+enum bx_cp_sparse_mode {
+    BX_CP_SPARSE_AUTO = 0,
+    BX_CP_SPARSE_ALWAYS,
+    BX_CP_SPARSE_NEVER,
+};
+
+enum bx_cp_reflink_mode {
+    BX_CP_REFLINK_NEVER = 0,
+    BX_CP_REFLINK_AUTO,
+    BX_CP_REFLINK_ALWAYS,
+};
+
 enum bx_cp_mode_policy {
     BX_CP_MODE_POLICY_DEFAULT = 0,
     BX_CP_MODE_POLICY_PRESERVE,
@@ -77,10 +90,13 @@ struct bx_cp_options {
     bool no_target_directory;
     bool verbose;
     bool debug;
+    bool one_file_system;
     bool strip_trailing_slashes;
     bool show_help;
     bool show_version;
     enum bx_cp_deref_mode deref_mode;
+    enum bx_cp_sparse_mode sparse_mode;
+    enum bx_cp_reflink_mode reflink_mode;
     enum bx_cp_mode_policy mode_policy;
     enum bx_update_mode update_mode;
     enum bx_backup_mode backup_mode;
@@ -112,6 +128,7 @@ struct bx_cp_context {
     bool dest_root_active;
     dev_t dest_root_dev;
     ino_t dest_root_ino;
+    dev_t source_root_dev;
     bool stop_current_source;
     const char *current_source_root;
     const char *current_dest_root;
@@ -252,6 +269,7 @@ static bool bx_cp_parse_options(int argc,
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cp_progname(argv[0]);
+    diag->progname = options->progname;
     options->deref_mode = BX_CP_DEREF_DEFAULT;
     options->mode_policy = BX_CP_MODE_POLICY_DEFAULT;
     options->update_mode = BX_UPDATE_ALL;
@@ -306,7 +324,33 @@ static bool bx_cp_parse_options(int argc,
             options->suffix = optarg;
             break;
         case BX_CP_OPT_REFLINK:
+            if (optarg == NULL) {
+                options->reflink_mode = BX_CP_REFLINK_ALWAYS;
+            } else if (strcmp(optarg, "always") == 0) {
+                options->reflink_mode = BX_CP_REFLINK_ALWAYS;
+            } else if (strcmp(optarg, "auto") == 0) {
+                options->reflink_mode = BX_CP_REFLINK_AUTO;
+            } else if (strcmp(optarg, "never") == 0) {
+                options->reflink_mode = BX_CP_REFLINK_NEVER;
+            } else {
+                bx_diag(diag, "invalid --reflink argument '%s'", optarg);
+                return false;
+            }
+            break;
         case BX_CP_OPT_SPARSE:
+            if (optarg == NULL) {
+                options->sparse_mode = BX_CP_SPARSE_AUTO;
+            } else if (strcmp(optarg, "always") == 0) {
+                options->sparse_mode = BX_CP_SPARSE_ALWAYS;
+            } else if (strcmp(optarg, "auto") == 0) {
+                options->sparse_mode = BX_CP_SPARSE_AUTO;
+            } else if (strcmp(optarg, "never") == 0) {
+                options->sparse_mode = BX_CP_SPARSE_NEVER;
+            } else {
+                bx_diag(diag, "invalid --sparse argument '%s'", optarg);
+                return false;
+            }
+            break;
         case BX_CP_OPT_CONTEXT:
             bx_diag(diag, "option '%s' is not implemented", argv[optind - 1]);
             return false;
@@ -420,6 +464,9 @@ static bool bx_cp_parse_options(int argc,
             break;
         case 'v':
             options->verbose = true;
+            break;
+        case 'x':
+            options->one_file_system = true;
             break;
         case ':':
             if (optopt != 0) {
@@ -758,15 +805,21 @@ static char *bx_cp_required_self_copy_child(const struct bx_cp_context *ctx,
     return component;
 }
 
-static bool bx_cp_copy_data(int src_fd, int dest_fd, struct bx_diag_ctx *diag) {
-    int res = bx_copy_data(src_fd, dest_fd);
+static bool bx_cp_copy_data(int src_fd, int dest_fd, struct bx_diag_ctx *diag, const struct bx_cp_options *options) {
+    struct bx_copy_data_options data_opts;
+    data_opts.sparse_mode = (enum bx_sparse_mode)options->sparse_mode;
+    data_opts.reflink_mode = (enum bx_reflink_mode)options->reflink_mode;
+
+    int res = bx_copy_data(src_fd, dest_fd, &data_opts);
     if (res == BX_COPY_DATA_SUCCESS) {
         return true;
     }
     if (res == BX_COPY_DATA_READ_ERROR) {
         bx_perror_path(diag, "read");
     } else if (res == BX_COPY_DATA_WRITE_ERROR) {
-        bx_perror_path(diag, "write");
+        bx_perror_path(diag, "write/lseek/ftruncate");
+    } else if (res == BX_COPY_DATA_REFLINK_FAILED) {
+        bx_diag(diag, "failed to clone '%s'", "destination"); // We don't have the path here easily
     }
     return false;
 }
@@ -879,7 +932,7 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         goto fail;
     }
 
-    if (!ctx->options->attributes_only && !bx_cp_copy_data(src_fd, dest_fd, ctx->diag)) {
+    if (!ctx->options->attributes_only && !bx_cp_copy_data(src_fd, dest_fd, ctx->diag, ctx->options)) {
         goto fail;
     }
     if (!bx_cp_apply_fd_attrs(ctx, src_fd, dest_fd, src_stat)) {
@@ -1040,6 +1093,85 @@ static bool bx_cp_copy_special_node(struct bx_cp_context *ctx,
     }
 
     if (!create_node(ctx, dest_path, create_mode)) {
+        return false;
+    }
+
+    if (!bx_cp_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, false)) {
+        return false;
+    }
+
+    bx_cp_add_link_entry(ctx, src_stat, dest_path);
+    bx_cp_print_verbose(ctx, src_path, dest_path);
+    return true;
+}
+
+static bool bx_cp_create_device_node(struct bx_cp_context *ctx,
+                                     const char *dest_path,
+                                     mode_t create_mode,
+                                     dev_t rdev) {
+    if (mknod(dest_path, create_mode, rdev) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_cp_copy_device_node(struct bx_cp_context *ctx,
+                                   const char *src_path,
+                                   const char *dest_path,
+                                   const struct stat *src_stat) {
+    struct bx_dest_state dest_state;
+    bool skip = false;
+    mode_t create_mode = bx_cp_regular_file_create_mode(ctx, src_stat);
+
+    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat && bx_same_file(src_stat, &dest_state.lst)) {
+        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
+        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat) {
+        if (!bx_cp_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.lst, &skip, ctx->diag)) {
+            return false;
+        }
+        if (skip) {
+            return true;
+        }
+
+        if (ctx->options->interactive) {
+            char prompt[PATH_MAX + 32];
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            if (!bx_prompt_confirm(prompt)) {
+                return true;
+            }
+        }
+
+        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
+        if (backup_file) {
+            free(backup_file);
+            memset(&dest_state, 0, sizeof(dest_state));
+        }
+
+        if (dest_state.exists_lstat) {
+            if (S_ISDIR(dest_state.lst.st_mode)) {
+                bx_diag(ctx->diag,
+                           "cannot overwrite directory '%s' with non-directory '%s'",
+                           dest_path,
+                           src_path);
+                return false;
+            }
+            if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
+                return false;
+            }
+        }
+    }
+
+    if (!bx_cp_create_device_node(ctx, dest_path, create_mode, src_stat->st_rdev)) {
         return false;
     }
 
@@ -1446,6 +1578,10 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
         return false;
     }
 
+    if (!top_level && ctx->options->one_file_system && src_lstat.st_dev != ctx->source_root_dev) {
+        return true;
+    }
+
     source_is_symlink = S_ISLNK(src_lstat.st_mode);
     follow_source = bx_cp_should_follow_source(ctx->options, top_level, source_is_symlink);
 
@@ -1456,6 +1592,10 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
         }
     } else {
         src_stat = src_lstat;
+    }
+
+    if (top_level) {
+        ctx->source_root_dev = src_stat.st_dev;
     }
 
     if (follow_source &&
@@ -1508,6 +1648,12 @@ static bool bx_cp_copy_path(struct bx_cp_context *ctx,
             return bx_cp_copy_socket_contents(ctx, src_path, dest_path, &src_stat);
         }
         return bx_cp_copy_socket(ctx, src_path, dest_path, &src_stat);
+    }
+    if (S_ISCHR(src_stat.st_mode) || S_ISBLK(src_stat.st_mode)) {
+        if (ctx->options->copy_contents) {
+            return bx_cp_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
+        }
+        return bx_cp_copy_device_node(ctx, src_path, dest_path, &src_stat);
     }
     if (S_ISREG(src_stat.st_mode)) {
         return bx_cp_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);

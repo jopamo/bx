@@ -147,7 +147,8 @@ char *bx_backup_create_copy(const char *path, const struct bx_backup_params *par
             return NULL;
         }
 
-        if (bx_copy_data(src_fd, dest_fd) != BX_COPY_DATA_SUCCESS) {
+        struct bx_copy_data_options data_opts = {BX_SPARSE_NEVER, BX_REFLINK_NEVER};
+        if (bx_copy_data(src_fd, dest_fd, &data_opts) != BX_COPY_DATA_SUCCESS) {
             bx_perror_path(diag, backup_path);
             close(src_fd);
             close(dest_fd);
