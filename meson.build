@@ -28,6 +28,7 @@ sources = [
   'src/common/stat_ops.c',
   'src/main.c',
   'src/cp.c',
+  'src/mv.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
@@ -80,6 +81,10 @@ if get_option('tests')
 
   test_cp_differential = files('tests/cp/test_cp_differential.py')
   test('cp differential', python3, args : [test_cp_differential, cp_ref, bx_exe, meson.current_build_dir()])
+
+  test_mv_differential = files('tests/mv/test_mv_differential.py')
+  mv_ref = find_program('mv')
+  test('mv differential', python3, args : [test_mv_differential, mv_ref, bx_exe, meson.current_build_dir()])
 
   test_cp_cli_differential = files('tests/cp/test_cp_cli_differential.py')
   test('cp cli differential', python3, args : [test_cp_cli_differential, cp_ref, bx_exe, meson.current_build_dir()])
