@@ -91,6 +91,18 @@ static bool bx_copy_unlink_existing_file(const struct bx_copy_context *ctx, cons
     return true;
 }
 
+static bool bx_copy_reject_directory_dest(const struct bx_copy_context *ctx,
+                                          const char *source_path,
+                                          const char *dest_path,
+                                          const struct bx_dest_state *dest_state) {
+    if (!dest_state->exists_lstat || !S_ISDIR(dest_state->lst.st_mode)) {
+        return true;
+    }
+
+    bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_path);
+    return false;
+}
+
 static bool bx_copy_apply_fd_attrs(const struct bx_copy_context *ctx,
                                    int src_fd,
                                    int dest_fd,
@@ -328,10 +340,14 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
 
         if (ctx->options->interactive) {
             char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
         }
 
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
@@ -339,11 +355,6 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
             free(backup_file);
             memset(&dest_state, 0, sizeof(dest_state));
         }
-    }
-
-    if (dest_state.exists_lstat && S_ISDIR(dest_state.lst.st_mode)) {
-        bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-        return false;
     }
 
     if (!ctx->options->attributes_only || open_source_for_attributes_only ||
@@ -516,10 +527,14 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
 
         if (ctx->options->interactive) {
             char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
         }
 
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
@@ -529,13 +544,6 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag,
-                           "cannot overwrite directory '%s' with non-directory '%s'",
-                           dest_path,
-                           src_path);
-                return false;
-            }
             if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
@@ -595,10 +603,14 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
 
         if (ctx->options->interactive) {
             char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
         }
 
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
@@ -608,13 +620,6 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag,
-                           "cannot overwrite directory '%s' with non-directory '%s'",
-                           dest_path,
-                           src_path);
-                return false;
-            }
             if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
@@ -684,10 +689,14 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
 
         if (ctx->options->interactive) {
             char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }
+        }
+
+        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
         }
 
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
@@ -697,10 +706,6 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-                return false;
-            }
             if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
@@ -767,7 +772,7 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
 
             if (ctx->options->interactive) {
                 char prompt[PATH_MAX + 32];
-                snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+                snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
                 if (!bx_prompt_confirm(prompt)) {
                     return true;
                 }
@@ -833,7 +838,7 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
 
         if (ctx->options->interactive) {
             char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
             if (!bx_prompt_confirm(prompt)) {
                 return true;
             }

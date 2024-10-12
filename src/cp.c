@@ -832,6 +832,18 @@ static bool bx_cp_unlink_existing_file(const struct bx_cp_context *ctx, const ch
     return true;
 }
 
+static bool bx_cp_reject_directory_dest(const struct bx_cp_context *ctx,
+                                        const char *source_path,
+                                        const char *dest_path,
+                                        const struct bx_dest_state *dest_state) {
+    if (!dest_state->exists_lstat || !S_ISDIR(dest_state->lst.st_mode)) {
+        return true;
+    }
+
+    bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_path);
+    return false;
+}
+
 static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
                                     const char *src_path,
                                     const char *dest_path,
@@ -884,16 +896,15 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
             }
         }
 
+        if (!bx_cp_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
+        }
+
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
         if (backup_file) {
             free(backup_file);
             memset(&dest_state, 0, sizeof(dest_state));
         }
-    }
-
-    if (dest_state.exists_lstat && S_ISDIR(dest_state.lst.st_mode)) {
-        bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-        return false;
     }
 
     if (!ctx->options->attributes_only || open_source_for_attributes_only ||
@@ -1072,6 +1083,10 @@ static bool bx_cp_copy_special_node(struct bx_cp_context *ctx,
             }
         }
 
+        if (!bx_cp_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
+        }
+
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
         if (backup_file) {
             free(backup_file);
@@ -1079,13 +1094,6 @@ static bool bx_cp_copy_special_node(struct bx_cp_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag,
-                           "cannot overwrite directory '%s' with non-directory '%s'",
-                           dest_path,
-                           src_path);
-                return false;
-            }
             if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
@@ -1151,6 +1159,10 @@ static bool bx_cp_copy_device_node(struct bx_cp_context *ctx,
             }
         }
 
+        if (!bx_cp_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
+        }
+
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
         if (backup_file) {
             free(backup_file);
@@ -1158,13 +1170,6 @@ static bool bx_cp_copy_device_node(struct bx_cp_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag,
-                           "cannot overwrite directory '%s' with non-directory '%s'",
-                           dest_path,
-                           src_path);
-                return false;
-            }
             if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
@@ -1240,6 +1245,10 @@ static bool bx_cp_copy_symlink_object(struct bx_cp_context *ctx,
             }
         }
 
+        if (!bx_cp_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
+            return false;
+        }
+
         char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
         if (backup_file) {
             free(backup_file);
@@ -1247,10 +1256,6 @@ static bool bx_cp_copy_symlink_object(struct bx_cp_context *ctx,
         }
 
         if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-                return false;
-            }
             if (!bx_cp_unlink_existing_file(ctx, dest_path)) {
                 return false;
             }
