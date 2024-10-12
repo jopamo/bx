@@ -21,7 +21,7 @@ sources = [
   'src/common/backup_ops.c',
   'src/common/copy_data.c',
   'src/common/copy_metadata.c',
-  'src/common/prompt_ops.c',
+  'src/common/copy_tree.c',
   'src/common/update_policy.c',
   'src/common/path_ops.c',
   'src/common/same_file.c',
