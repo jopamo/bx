@@ -177,6 +177,23 @@ struct bx_mv_context {
     struct bx_backup_params backup_params;
 };
 
+static bool bx_mv_backup_existing_dest(struct bx_mv_context *ctx,
+                                       const char *dest_path,
+                                       struct bx_dest_state *dest_state) {
+    char *backup_file = NULL;
+    enum bx_backup_create_result result =
+        bx_backup_create(dest_path, &ctx->backup_params, ctx->diag, &backup_file);
+
+    if (result == BX_BACKUP_CREATE_FAILED) {
+        return false;
+    }
+    if (result == BX_BACKUP_CREATE_CREATED) {
+        free(backup_file);
+        memset(dest_state, 0, sizeof(*dest_state));
+    }
+    return true;
+}
+
 static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
                                        const char *dest_path,
                                        const struct stat *src_stat,
@@ -244,10 +261,8 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
             }
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_mv_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
     }
 

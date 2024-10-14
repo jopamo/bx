@@ -99,68 +99,128 @@ static char *get_backup_path(const char *path, const struct bx_backup_params *pa
     return NULL;
 }
 
-char *bx_backup_create(const char *path, const struct bx_backup_params *params, struct bx_diag_ctx *diag) {
-    if (params->mode == BX_BACKUP_NONE || params->mode == BX_BACKUP_OFF) {
-        return NULL;
-    }
-
-    struct stat st;
-    if (lstat(path, &st) != 0) {
-        return NULL;
-    }
-
-    char *backup_path = get_backup_path(path, params, NULL);
-    if (backup_path) {
-        if (rename(path, backup_path) != 0) {
-            bx_perror_path(diag, path);
-            free(backup_path);
-            return NULL;
-        }
-        return backup_path;
-    }
-    return NULL;
+static void bx_backup_diag_errno(struct bx_diag_ctx *diag, const char *path, int err) {
+    bx_diag(diag, "cannot backup '%s': %s", path, strerror(err));
 }
 
-char *bx_backup_create_copy(const char *path, const struct bx_backup_params *params, struct bx_diag_ctx *diag) {
+enum bx_backup_create_result bx_backup_create(const char *path,
+                                              const struct bx_backup_params *params,
+                                              struct bx_diag_ctx *diag,
+                                              char **backup_path_out) {
+    if (backup_path_out) {
+        *backup_path_out = NULL;
+    }
+
     if (params->mode == BX_BACKUP_NONE || params->mode == BX_BACKUP_OFF) {
-        return NULL;
+        return BX_BACKUP_CREATE_SKIPPED;
     }
 
     struct stat st;
     if (lstat(path, &st) != 0) {
-        return NULL;
+        if (errno == ENOENT || errno == ENOTDIR) {
+            return BX_BACKUP_CREATE_SKIPPED;
+        }
+        bx_backup_diag_errno(diag, path, errno);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+    (void)st;
+
+    char *backup_path = get_backup_path(path, params, NULL);
+    if (backup_path == NULL) {
+        bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    if (rename(path, backup_path) != 0) {
+        int err = errno;
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    if (backup_path_out) {
+        *backup_path_out = backup_path;
+    } else {
+        free(backup_path);
+    }
+    return BX_BACKUP_CREATE_CREATED;
+}
+
+enum bx_backup_create_result bx_backup_create_copy(const char *path,
+                                                   const struct bx_backup_params *params,
+                                                   struct bx_diag_ctx *diag,
+                                                   char **backup_path_out) {
+    if (backup_path_out) {
+        *backup_path_out = NULL;
+    }
+
+    if (params->mode == BX_BACKUP_NONE || params->mode == BX_BACKUP_OFF) {
+        return BX_BACKUP_CREATE_SKIPPED;
+    }
+
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) {
+            return BX_BACKUP_CREATE_SKIPPED;
+        }
+        bx_backup_diag_errno(diag, path, errno);
+        return BX_BACKUP_CREATE_FAILED;
     }
 
     char *backup_path = get_backup_path(path, params, NULL);
-    if (backup_path) {
-        int src_fd = open(path, O_RDONLY);
-        if (src_fd < 0) {
-            bx_perror_path(diag, path);
-            free(backup_path);
-            return NULL;
-        }
-        int dest_fd = open(backup_path, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777u);
-        if (dest_fd < 0) {
-            bx_perror_path(diag, backup_path);
-            close(src_fd);
-            free(backup_path);
-            return NULL;
-        }
-
-        struct bx_copy_data_options data_opts = {BX_SPARSE_NEVER, BX_REFLINK_NEVER};
-        if (bx_copy_data(src_fd, dest_fd, &data_opts) != BX_COPY_DATA_SUCCESS) {
-            bx_perror_path(diag, backup_path);
-            close(src_fd);
-            close(dest_fd);
-            unlink(backup_path);
-            free(backup_path);
-            return NULL;
-        }
-
-        close(src_fd);
-        close(dest_fd);
-        return backup_path;
+    if (backup_path == NULL) {
+        bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
+        return BX_BACKUP_CREATE_FAILED;
     }
 
-    return NULL;
+    int src_fd = open(path, O_RDONLY);
+    if (src_fd < 0) {
+        int err = errno;
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    int dest_fd = open(backup_path, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777u);
+    if (dest_fd < 0) {
+        int err = errno;
+        close(src_fd);
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    struct bx_copy_data_options data_opts = {BX_SPARSE_NEVER, BX_REFLINK_NEVER};
+    if (bx_copy_data(src_fd, dest_fd, &data_opts) != BX_COPY_DATA_SUCCESS) {
+        int err = errno != 0 ? errno : EIO;
+        close(src_fd);
+        close(dest_fd);
+        unlink(backup_path);
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    if (close(src_fd) != 0) {
+        int err = errno;
+        close(dest_fd);
+        unlink(backup_path);
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+    if (close(dest_fd) != 0) {
+        int err = errno;
+        unlink(backup_path);
+        free(backup_path);
+        bx_backup_diag_errno(diag, path, err);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    if (backup_path_out) {
+        *backup_path_out = backup_path;
+    } else {
+        free(backup_path);
+    }
+    return BX_BACKUP_CREATE_CREATED;
 }

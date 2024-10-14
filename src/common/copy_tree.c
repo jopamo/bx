@@ -103,6 +103,37 @@ static bool bx_copy_reject_directory_dest(const struct bx_copy_context *ctx,
     return false;
 }
 
+static bool bx_copy_backup_existing_dest(struct bx_copy_context *ctx,
+                                         const char *dest_path,
+                                         struct bx_dest_state *dest_state) {
+    char *backup_file = NULL;
+    enum bx_backup_create_result result =
+        bx_backup_create(dest_path, &ctx->backup_params, ctx->diag, &backup_file);
+
+    if (result == BX_BACKUP_CREATE_FAILED) {
+        return false;
+    }
+    if (result == BX_BACKUP_CREATE_CREATED) {
+        free(backup_file);
+        memset(dest_state, 0, sizeof(*dest_state));
+    }
+    return true;
+}
+
+static enum bx_backup_create_result bx_copy_backup_same_file_copy(struct bx_copy_context *ctx,
+                                                                  const char *src_path,
+                                                                  const char *dest_path) {
+    char *backup_file = NULL;
+    enum bx_backup_create_result result =
+        bx_backup_create_copy(dest_path, &ctx->backup_params, ctx->diag, &backup_file);
+
+    if (result == BX_BACKUP_CREATE_CREATED) {
+        bx_info(ctx->diag, "'%s' -> '%s'", src_path, backup_file);
+        free(backup_file);
+    }
+    return result;
+}
+
 static bool bx_copy_apply_fd_attrs(const struct bx_copy_context *ctx,
                                    int src_fd,
                                    int dest_fd,
@@ -313,11 +344,13 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
         if (ctx->backup_params.mode != BX_BACKUP_NONE && ctx->options->force &&
             S_ISREG(src_stat->st_mode) && strcmp(src_path, dest_path) == 0) {
-            char *backup_file = bx_backup_create_copy(dest_path, &ctx->backup_params, ctx->diag);
-            if (backup_file) {
-                bx_info(ctx->diag, "'%s' -> '%s'", src_path, backup_file);
-                free(backup_file);
+            enum bx_backup_create_result backup_result =
+                bx_copy_backup_same_file_copy(ctx, src_path, dest_path);
+            if (backup_result == BX_BACKUP_CREATE_CREATED) {
                 return true;
+            }
+            if (backup_result == BX_BACKUP_CREATE_FAILED) {
+                return false;
             }
         }
         bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
@@ -350,10 +383,8 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
             return false;
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
     }
 
@@ -537,10 +568,8 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
             return false;
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
 
         if (dest_state.exists_lstat) {
@@ -613,10 +642,8 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
             return false;
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
 
         if (dest_state.exists_lstat) {
@@ -699,10 +726,8 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
             return false;
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
 
         if (dest_state.exists_lstat) {
@@ -778,10 +803,8 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
                 }
             }
 
-            char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-            if (backup_file) {
-                free(backup_file);
-                memset(&dest_state, 0, sizeof(dest_state));
+            if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+                return false;
             }
         }
         if (dest_state.exists_lstat) {
@@ -844,10 +867,8 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
             }
         }
 
-        char *backup_file = bx_backup_create(dest_path, &ctx->backup_params, ctx->diag);
-        if (backup_file) {
-            free(backup_file);
-            memset(&dest_state, 0, sizeof(dest_state));
+        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            return false;
         }
     }
 
