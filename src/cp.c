@@ -1576,7 +1576,7 @@ finish:
         }
     }
     if (!bx_cp_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, true)) {
-        return false;
+        ok = false;
     }
     if (ok && created) {
         bx_cp_print_verbose(ctx, src_path, dest_path);

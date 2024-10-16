@@ -24,6 +24,7 @@ sources = [
   'src/common/copy_tree.c',
   'src/common/update_policy.c',
   'src/common/path_ops.c',
+  'src/common/prompt_ops.c',
   'src/common/same_file.c',
   'src/common/stat_ops.c',
   'src/main.c',
@@ -81,6 +82,9 @@ if get_option('tests')
 
   test_cp_differential = files('tests/cp/test_cp_differential.py')
   test('cp differential', python3, args : [test_cp_differential, cp_ref, bx_exe, meson.current_build_dir()])
+
+  test_cp_cleanup_state = files('tests/cp/test_cp_cleanup_state.py')
+  test('cp cleanup state', python3, args : [test_cp_cleanup_state, bx_exe, meson.current_build_dir()])
 
   test_mv_differential = files('tests/mv/test_mv_differential.py')
   mv_ref = find_program('mv')

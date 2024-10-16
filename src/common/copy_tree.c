@@ -1086,7 +1086,7 @@ finish:
         }
     }
     if (!bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, true)) {
-        return false;
+        ok = false;
     }
     if (ok && created) {
         bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
