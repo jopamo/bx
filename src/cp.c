@@ -227,6 +227,28 @@ static bool bx_cp_parse_update_mode(struct bx_diag_ctx *diag,
     return true;
 }
 
+static bool bx_cp_preserve_list_mentions_context(const char *arg) {
+    if (arg == NULL) {
+        return false;
+    }
+
+    char *copy = xstrdup(arg);
+    char *saveptr = NULL;
+    bool found = false;
+
+    for (char *token = strtok_r(copy, ",", &saveptr);
+         token != NULL;
+         token = strtok_r(NULL, ",", &saveptr)) {
+        if (strcmp(token, "context") == 0) {
+            found = true;
+            break;
+        }
+    }
+
+    free(copy);
+    return found;
+}
+
 static bool bx_cp_parse_options(int argc,
                                 char **argv,
                                 struct bx_cp_options *options,
@@ -405,6 +427,7 @@ static bool bx_cp_parse_options(int argc,
                                           BX_PRESERVE_OWNERSHIP |
                                           BX_PRESERVE_TIMESTAMPS;
             } else {
+                bool context_mentioned = bx_cp_preserve_list_mentions_context(optarg);
                 bool mode_mentioned = false;
                 if (!bx_cp_parse_preserve_list(diag,
                                                optarg,
@@ -416,9 +439,13 @@ static bool bx_cp_parse_options(int argc,
                 if (mode_mentioned) {
                     options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
                 }
+                if (context_mentioned) {
+                    options->preserve_mask |= BX_PRESERVE_CONTEXT_STRICT;
+                }
             }
             break;
         case BX_CP_OPT_NO_PRESERVE: {
+            bool context_mentioned = bx_cp_preserve_list_mentions_context(optarg);
             bool mode_mentioned = false;
             if (!bx_cp_parse_preserve_list(diag,
                                            optarg,
@@ -429,6 +456,9 @@ static bool bx_cp_parse_options(int argc,
             }
             if (mode_mentioned) {
                 options->mode_policy = BX_CP_MODE_POLICY_NO_PRESERVE;
+            }
+            if (context_mentioned) {
+                options->preserve_mask &= ~BX_PRESERVE_CONTEXT_STRICT;
             }
             break;
         }

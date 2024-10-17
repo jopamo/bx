@@ -11,49 +11,98 @@
 
 #include "copy_metadata.h"
 
-static bool bx_copy_specific_xattr_fd(int src_fd, int dest_fd, const char *name) {
-    ssize_t val_size = fgetxattr(src_fd, name, NULL, 0);
-    if (val_size < 0) return true;
+static bool bx_xattr_error_missing(int err) {
+    return err == ENODATA
+#ifdef ENOATTR
+        || err == ENOATTR
+#endif
+        ;
+}
 
-    char *value = malloc((size_t)val_size);
+static bool bx_xattr_error_unsupported(int err) {
+    return err == ENOSYS || err == ENOTSUP
+#ifdef EOPNOTSUPP
+        || err == EOPNOTSUPP
+#endif
+        ;
+}
+
+static bool bx_xattr_error_ignorable(int err, bool allow_missing) {
+    if (allow_missing && bx_xattr_error_missing(err)) {
+        return true;
+    }
+    return bx_xattr_error_unsupported(err);
+}
+
+static bool bx_copy_specific_xattr_fd(int src_fd, int dest_fd, const char *name, bool allow_missing) {
+    ssize_t val_size = fgetxattr(src_fd, name, NULL, 0);
+    if (val_size < 0) {
+        return bx_xattr_error_ignorable(errno, allow_missing);
+    }
+
+    char *value = malloc(val_size > 0 ? (size_t)val_size : 1u);
     if (!value) return false;
 
     val_size = fgetxattr(src_fd, name, value, (size_t)val_size);
-    if (val_size >= 0) {
-        fsetxattr(dest_fd, name, value, (size_t)val_size, 0);
+    if (val_size < 0) {
+        int err = errno;
+        free(value);
+        return bx_xattr_error_ignorable(err, allow_missing);
     }
+
+    if (fsetxattr(dest_fd, name, value, (size_t)val_size, 0) != 0) {
+        free(value);
+        return false;
+    }
+
     free(value);
     return true;
 }
 
-static bool bx_copy_specific_xattr_path(const char *src_path, const char *dest_path, const char *name, bool no_follow) {
+static bool bx_copy_specific_xattr_path(const char *src_path,
+                                        const char *dest_path,
+                                        const char *name,
+                                        bool no_follow,
+                                        bool allow_missing) {
     ssize_t val_size = no_follow ? lgetxattr(src_path, name, NULL, 0) : getxattr(src_path, name, NULL, 0);
-    if (val_size < 0) return true;
+    if (val_size < 0) {
+        return bx_xattr_error_ignorable(errno, allow_missing);
+    }
 
-    char *value = malloc((size_t)val_size);
+    char *value = malloc(val_size > 0 ? (size_t)val_size : 1u);
     if (!value) return false;
 
     val_size = no_follow ? lgetxattr(src_path, name, value, (size_t)val_size) : getxattr(src_path, name, value, (size_t)val_size);
-    if (val_size >= 0) {
-        if (no_follow) {
-            lsetxattr(dest_path, name, value, (size_t)val_size, 0);
-        } else {
-            setxattr(dest_path, name, value, (size_t)val_size, 0);
-        }
+    if (val_size < 0) {
+        int err = errno;
+        free(value);
+        return bx_xattr_error_ignorable(err, allow_missing);
     }
+
+    int rc;
+    if (no_follow) {
+        rc = lsetxattr(dest_path, name, value, (size_t)val_size, 0);
+    } else {
+        rc = setxattr(dest_path, name, value, (size_t)val_size, 0);
+    }
+    if (rc != 0) {
+        free(value);
+        return false;
+    }
+
     free(value);
     return true;
 }
 
 static bool bx_copy_acls_fd(int src_fd, int dest_fd) {
-    if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "system.posix_acl_access")) return false;
-    if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "system.posix_acl_default")) return false;
+    if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "system.posix_acl_access", true)) return false;
+    if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "system.posix_acl_default", true)) return false;
     return true;
 }
 
 static bool bx_copy_acls_path(const char *src_path, const char *dest_path, bool no_follow) {
-    if (!bx_copy_specific_xattr_path(src_path, dest_path, "system.posix_acl_access", no_follow)) return false;
-    if (!bx_copy_specific_xattr_path(src_path, dest_path, "system.posix_acl_default", no_follow)) return false;
+    if (!bx_copy_specific_xattr_path(src_path, dest_path, "system.posix_acl_access", no_follow, true)) return false;
+    if (!bx_copy_specific_xattr_path(src_path, dest_path, "system.posix_acl_default", no_follow, true)) return false;
     return true;
 }
 
@@ -76,17 +125,34 @@ static bool bx_copy_xattrs_fd(int src_fd, int dest_fd) {
 
     for (char *name = list; name < list + size; name += strlen(name) + 1) {
         ssize_t val_size = fgetxattr(src_fd, name, NULL, 0);
-        if (val_size < 0) continue;
+        if (val_size < 0) {
+            if (bx_xattr_error_missing(errno)) {
+                continue;
+            }
+            free(list);
+            return false;
+        }
 
-        char *value = malloc((size_t)val_size);
+        char *value = malloc(val_size > 0 ? (size_t)val_size : 1u);
         if (!value) {
             free(list);
             return false;
         }
 
         val_size = fgetxattr(src_fd, name, value, (size_t)val_size);
-        if (val_size >= 0) {
-            fsetxattr(dest_fd, name, value, (size_t)val_size, 0);
+        if (val_size < 0) {
+            int err = errno;
+            free(value);
+            if (bx_xattr_error_missing(err)) {
+                continue;
+            }
+            free(list);
+            return false;
+        }
+        if (fsetxattr(dest_fd, name, value, (size_t)val_size, 0) != 0) {
+            free(value);
+            free(list);
+            return false;
         }
         free(value);
     }
@@ -114,21 +180,40 @@ static bool bx_copy_xattrs_path(const char *src_path, const char *dest_path, boo
 
     for (char *name = list; name < list + size; name += strlen(name) + 1) {
         ssize_t val_size = no_follow ? lgetxattr(src_path, name, NULL, 0) : getxattr(src_path, name, NULL, 0);
-        if (val_size < 0) continue;
+        if (val_size < 0) {
+            if (bx_xattr_error_missing(errno)) {
+                continue;
+            }
+            free(list);
+            return false;
+        }
 
-        char *value = malloc((size_t)val_size);
+        char *value = malloc(val_size > 0 ? (size_t)val_size : 1u);
         if (!value) {
             free(list);
             return false;
         }
 
         val_size = no_follow ? lgetxattr(src_path, name, value, (size_t)val_size) : getxattr(src_path, name, value, (size_t)val_size);
-        if (val_size >= 0) {
-            if (no_follow) {
-                lsetxattr(dest_path, name, value, (size_t)val_size, 0);
-            } else {
-                setxattr(dest_path, name, value, (size_t)val_size, 0);
+        if (val_size < 0) {
+            int err = errno;
+            free(value);
+            if (bx_xattr_error_missing(err)) {
+                continue;
             }
+            free(list);
+            return false;
+        }
+        int rc;
+        if (no_follow) {
+            rc = lsetxattr(dest_path, name, value, (size_t)val_size, 0);
+        } else {
+            rc = setxattr(dest_path, name, value, (size_t)val_size, 0);
+        }
+        if (rc != 0) {
+            free(value);
+            free(list);
+            return false;
         }
         free(value);
     }
@@ -159,7 +244,8 @@ bool bx_copy_fd_metadata(int src_fd, int dest_fd, const struct stat *src_stat, u
     }
     if ((mask & BX_PRESERVE_CONTEXT) != 0u) {
         if (src_fd >= 0) {
-            if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "security.selinux")) return false;
+            bool allow_missing = (mask & BX_PRESERVE_CONTEXT_STRICT) == 0u;
+            if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "security.selinux", allow_missing)) return false;
         }
     }
     if ((mask & BX_PRESERVE_XATTR) != 0u) {
@@ -196,7 +282,8 @@ bool bx_copy_path_metadata(const char *src_path, const char *dest_path, const st
     }
 
     if ((mask & BX_PRESERVE_CONTEXT) != 0u) {
-        if (!bx_copy_specific_xattr_path(src_path, dest_path, "security.selinux", no_follow)) return false;
+        bool allow_missing = (mask & BX_PRESERVE_CONTEXT_STRICT) == 0u;
+        if (!bx_copy_specific_xattr_path(src_path, dest_path, "security.selinux", no_follow, allow_missing)) return false;
     }
 
     if ((mask & BX_PRESERVE_XATTR) != 0u) {
