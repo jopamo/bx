@@ -27,6 +27,7 @@ sources = [
   'src/common/prompt_ops.c',
   'src/common/same_file.c',
   'src/common/stat_ops.c',
+  'src/common/remove_ops.c',
   'src/main.c',
   'src/cp.c',
   'src/mv.c',

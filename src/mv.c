@@ -18,6 +18,9 @@
 #include "common/backup_ops.h"
 #include "common/prompt_ops.h"
 #include "common/update_policy.h"
+#include "common/copy_tree.h"
+#include "common/remove_ops.h"
+#include "common/copy_metadata.h"
 
 struct bx_mv_options {
     const char *progname;
@@ -27,6 +30,7 @@ struct bx_mv_options {
     bool verbose;
     bool debug;
     bool strip_trailing_slashes;
+    bool no_copy;
     bool show_help;
     bool show_version;
     enum bx_update_mode update_mode;
@@ -53,6 +57,7 @@ static void bx_mv_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "  -f, --force                do not prompt before overwriting\n");
     fprintf(stream, "  -i, --interactive          prompt before overwrite\n");
     fprintf(stream, "  -n, --no-clobber           do not overwrite an existing file\n");
+    fprintf(stream, "      --no-copy              do not copy if renaming fails\n");
     fprintf(stream, "      --strip-trailing-slashes  remove trailing slashes from SOURCE operands\n");
     fprintf(stream, "  -S, --suffix=SUFFIX        override the usual backup suffix\n");
     fprintf(stream, "  -t, --target-directory=DIRECTORY  move all SOURCE arguments into DIRECTORY\n");
@@ -70,6 +75,7 @@ enum {
     BX_MV_OPT_BACKUP = 256,
     BX_MV_OPT_STRIP_TRAILING_SLASHES,
     BX_MV_OPT_UPDATE,
+    BX_MV_OPT_NO_COPY,
     BX_MV_OPT_DEBUG,
 };
 
@@ -79,6 +85,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
         {"force", no_argument, NULL, 'f'},
         {"interactive", no_argument, NULL, 'i'},
         {"no-clobber", no_argument, NULL, 'n'},
+        {"no-copy", no_argument, NULL, BX_MV_OPT_NO_COPY},
         {"strip-trailing-slashes", no_argument, NULL, BX_MV_OPT_STRIP_TRAILING_SLASHES},
         {"suffix", required_argument, NULL, 'S'},
         {"target-directory", required_argument, NULL, 't'},
@@ -153,6 +160,9 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
             case 'S':
                 options->suffix = optarg;
                 break;
+            case BX_MV_OPT_NO_COPY:
+                options->no_copy = true;
+                break;
             case BX_MV_OPT_STRIP_TRAILING_SLASHES:
                 options->strip_trailing_slashes = true;
                 break;
@@ -220,6 +230,55 @@ static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
     return true;
 }
 
+static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
+                                         const char *src_path,
+                                         const char *dest_path,
+                                         const struct stat *src_stat) {
+    (void)src_stat;
+    struct bx_copy_options copy_opts = {0};
+    struct bx_copy_context copy_ctx = {0};
+    
+    copy_opts.recursive = true;
+    copy_opts.mode_policy = BX_MODE_POLICY_PRESERVE;
+    copy_opts.preserve_mask = BX_PRESERVE_ALL;
+    copy_opts.verbose = ctx->options->verbose;
+    copy_opts.debug = ctx->options->debug;
+    copy_opts.move_mode = true;
+    /* Interaction was already handled in bx_mv_rename_file */
+    copy_opts.force = true;
+    copy_opts.interactive = false;
+    copy_opts.no_clobber = false;
+    copy_opts.update_mode = BX_UPDATE_ALL;
+
+    copy_ctx.options = &copy_opts;
+    copy_ctx.diag = ctx->diag;
+    copy_ctx.umask_value = umask(0);
+    umask(copy_ctx.umask_value);
+    
+    bx_backup_get_params(BX_BACKUP_NONE, NULL, &copy_ctx.backup_params);
+
+    if (ctx->options->verbose) {
+        bx_info(ctx->diag, "inter-device move: '%s' -> '%s'; copying then removing", src_path, dest_path);
+    }
+
+    if (!bx_copy_path(&copy_ctx, src_path, src_path, dest_path, true)) {
+        bx_copy_free_links(&copy_ctx);
+        bx_copy_free_source_dirs(&copy_ctx);
+        free(copy_ctx.current_dest_root_realpath);
+        return false;
+    }
+
+    bx_copy_free_links(&copy_ctx);
+    bx_copy_free_source_dirs(&copy_ctx);
+    free(copy_ctx.current_dest_root_realpath);
+
+    if (!bx_remove_recursive(src_path, ctx->diag)) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool bx_mv_rename_file(struct bx_mv_context *ctx,
                               const char *src_path,
                               const char *dest_path) {
@@ -274,9 +333,11 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
     }
 
     if (errno == EXDEV) {
-        /* TODO: cross-device fallback */
-        bx_diag(ctx->diag, "cannot move '%s' to '%s': Cross-device link", src_path, dest_path);
-        return false;
+        if (ctx->options->no_copy) {
+            bx_diag(ctx->diag, "cannot move '%s' to '%s': Cross-device link and --no-copy specified", src_path, dest_path);
+            return false;
+        }
+        return bx_mv_cross_device_fallback(ctx, src_path, dest_path, &src_stat);
     }
 
     bx_perror_path(ctx->diag, dest_path);
