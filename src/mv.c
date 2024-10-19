@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <limits.h>
+#include <fcntl.h>
+#include <sys/syscall.h>
 
 #include "applets.h"
 #include "diag.h"
@@ -22,6 +25,24 @@
 #include "common/remove_ops.h"
 #include "common/copy_metadata.h"
 
+#ifndef RENAME_EXCHANGE
+# define RENAME_EXCHANGE (1 << 1)
+#endif
+
+#ifndef AT_FDCWD
+# define AT_FDCWD -100
+#endif
+
+static int bx_renameat2(int oldfd, const char *oldpath, int newfd, const char *newpath, unsigned int flags) {
+#ifdef SYS_renameat2
+    return (int)syscall(SYS_renameat2, oldfd, oldpath, newfd, newpath, flags);
+#else
+    (void)oldfd; (void)oldpath; (void)newfd; (void)newpath; (void)flags;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
 struct bx_mv_options {
     const char *progname;
     bool force;
@@ -31,6 +52,7 @@ struct bx_mv_options {
     bool debug;
     bool strip_trailing_slashes;
     bool no_copy;
+    bool exchange;
     bool show_help;
     bool show_version;
     enum bx_update_mode update_mode;
@@ -58,6 +80,7 @@ static void bx_mv_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "  -i, --interactive          prompt before overwrite\n");
     fprintf(stream, "  -n, --no-clobber           do not overwrite an existing file\n");
     fprintf(stream, "      --no-copy              do not copy if renaming fails\n");
+    fprintf(stream, "      --exchange             exchange source and destination\n");
     fprintf(stream, "      --strip-trailing-slashes  remove trailing slashes from SOURCE operands\n");
     fprintf(stream, "  -S, --suffix=SUFFIX        override the usual backup suffix\n");
     fprintf(stream, "  -t, --target-directory=DIRECTORY  move all SOURCE arguments into DIRECTORY\n");
@@ -76,6 +99,7 @@ enum {
     BX_MV_OPT_STRIP_TRAILING_SLASHES,
     BX_MV_OPT_UPDATE,
     BX_MV_OPT_NO_COPY,
+    BX_MV_OPT_EXCHANGE,
     BX_MV_OPT_DEBUG,
 };
 
@@ -86,6 +110,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
         {"interactive", no_argument, NULL, 'i'},
         {"no-clobber", no_argument, NULL, 'n'},
         {"no-copy", no_argument, NULL, BX_MV_OPT_NO_COPY},
+        {"exchange", no_argument, NULL, BX_MV_OPT_EXCHANGE},
         {"strip-trailing-slashes", no_argument, NULL, BX_MV_OPT_STRIP_TRAILING_SLASHES},
         {"suffix", required_argument, NULL, 'S'},
         {"target-directory", required_argument, NULL, 't'},
@@ -162,6 +187,9 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
                 break;
             case BX_MV_OPT_NO_COPY:
                 options->no_copy = true;
+                break;
+            case BX_MV_OPT_EXCHANGE:
+                options->exchange = true;
                 break;
             case BX_MV_OPT_STRIP_TRAILING_SLASHES:
                 options->strip_trailing_slashes = true;
@@ -305,24 +333,42 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
     }
 
     if (dest_state.exists_lstat) {
-        if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_stat, &dest_state.lst, &skip, ctx->diag)) {
-            return false;
-        }
-        if (skip) {
-            return true;
-        }
-
-        if (ctx->options->interactive && !ctx->options->force) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
+        if (ctx->options->exchange) {
+            /* No need for prompts/backups when exchanging */
+        } else {
+            if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_stat, &dest_state.lst, &skip, ctx->diag)) {
+                return false;
+            }
+            if (skip) {
                 return true;
             }
-        }
 
-        if (!bx_mv_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
+            if (ctx->options->interactive && !ctx->options->force) {
+                char prompt[PATH_MAX + 32];
+                snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
+                if (!bx_prompt_confirm(prompt)) {
+                    return true;
+                }
+            }
+
+            if (!bx_mv_backup_existing_dest(ctx, dest_path, &dest_state)) {
+                return false;
+            }
         }
+    } else if (ctx->options->exchange) {
+        bx_diag(ctx->diag, "cannot exchange '%s' and '%s': Destination does not exist", src_path, dest_path);
+        return false;
+    }
+
+    if (ctx->options->exchange) {
+        if (bx_renameat2(AT_FDCWD, src_path, AT_FDCWD, dest_path, RENAME_EXCHANGE) == 0) {
+            if (ctx->options->verbose) {
+                bx_info(ctx->diag, "exchanged '%s' and '%s'", src_path, dest_path);
+            }
+            return true;
+        }
+        bx_perror_path(ctx->diag, "renameat2 (exchange)");
+        return false;
     }
 
     if (rename(src_path, dest_path) == 0) {
@@ -377,6 +423,28 @@ int bx_mv_main(int argc, char **argv) {
     ctx.options = &options;
     ctx.diag = &diag;
     bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
+
+    if (options.exchange) {
+        if (options.target_directory || options.no_target_directory || operand_count != 2) {
+            bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t or -T");
+            return 1;
+        }
+        const char *src_path = argv[first_operand];
+        const char *dest_path = argv[first_operand + 1];
+        
+        char *final_src = options.strip_trailing_slashes
+                          ? bx_path_strip_trailing_slashes_dup(src_path)
+                          : xstrdup(src_path);
+        char *final_dst = options.strip_trailing_slashes
+                          ? bx_path_strip_trailing_slashes_dup(dest_path)
+                          : xstrdup(dest_path);
+
+        bx_mv_rename_file(&ctx, final_src, final_dst);
+
+        free(final_src);
+        free(final_dst);
+        return diag.exit_status;
+    }
 
     const char *destination_root = NULL;
     int source_count = 0;
