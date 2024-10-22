@@ -37,8 +37,6 @@ bool bx_args_parse_preserve_list(const char *arg,
         } else if (strcmp(token, "all") == 0) {
             bits = BX_PRESERVE_ALL;
             mode_mentioned = true;
-        } else if (strcmp(token, "context") == 0) {
-            bits = BX_PRESERVE_CONTEXT;
         } else if (strcmp(token, "xattr") == 0) {
             bits = BX_PRESERVE_XATTR;
         } else {

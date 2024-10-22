@@ -25,6 +25,7 @@
 #include "path_ops.h"
 #include "same_file.h"
 #include "stat_ops.h"
+#include "fd_ops.h"
 #include "diag.h"
 #include "libbx.h"
 
@@ -152,11 +153,9 @@ static bool bx_copy_apply_path_attrs(const struct bx_copy_context *ctx,
                                      bool no_follow,
                                      bool is_directory) {
     (void)is_directory;
-    if (!bx_copy_path_metadata(src_path, dest_path, src_stat, ctx->options->preserve_mask, no_follow)) {
-        bx_perror_path(ctx->diag, dest_path);
-        return false;
-    }
-    return true;
+    return bx_copy_path_metadata(src_path, dest_path, src_stat, ctx->options->preserve_mask, no_follow)
+        ? true
+        : (bx_perror_path(ctx->diag, dest_path), false);
 }
 
 static bool bx_copy_should_skip_existing(const struct bx_copy_options *options,
@@ -389,10 +388,9 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     }
 
     if (!ctx->options->attributes_only || open_source_for_attributes_only ||
-        (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_CONTEXT | BX_PRESERVE_MODE)) != 0u) {
-        src_fd = open(src_path, O_RDONLY);
+        (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_MODE)) != 0u) {
+        src_fd = bx_fd_open_read(src_path, ctx->diag);
         if (src_fd < 0) {
-            bx_perror_path(ctx->diag, src_path);
             return false;
         }
     }
@@ -404,22 +402,21 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
         memset(&dest_state, 0, sizeof(dest_state));
     }
 
-    int dest_open_flags = O_WRONLY | O_CREAT;
+    int dest_open_flags = O_CREAT;
     if (!ctx->options->attributes_only) {
         dest_open_flags |= O_TRUNC;
     }
 
-    dest_fd = open(dest_path, dest_open_flags, create_mode);
+    dest_fd = bx_fd_open_write(dest_path, dest_open_flags, create_mode,
+                               (ctx->options->force && dest_state.exists_lstat) ? NULL : ctx->diag);
     if (dest_fd < 0 && ctx->options->force && dest_state.exists_lstat) {
         if (bx_copy_unlink_existing_file(ctx, dest_path)) {
-            dest_fd = open(dest_path, dest_open_flags, create_mode);
+            dest_fd = bx_fd_open_write(dest_path, dest_open_flags, create_mode, ctx->diag);
         }
     }
     if (dest_fd < 0) {
         if (dest_state.dangling_symlink && !ctx->options->force && !ctx->options->remove_destination) {
             bx_diag(ctx->diag, "not writing through dangling symlink '%s'", dest_path);
-        } else {
-            bx_perror_path(ctx->diag, dest_path);
         }
         goto fail;
     }
@@ -431,31 +428,21 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
         goto fail;
     }
 
-    if (close(dest_fd) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
-        dest_fd = -1;
+    if (!bx_fd_close(&dest_fd, dest_path, ctx->diag)) {
         goto fail;
     }
-    dest_fd = -1;
 
-    if (src_fd >= 0 && close(src_fd) != 0) {
-        bx_perror_path(ctx->diag, src_path);
-        src_fd = -1;
+    if (src_fd >= 0 && !bx_fd_close(&src_fd, src_path, ctx->diag)) {
         return false;
     }
-    src_fd = -1;
 
     bx_copy_add_link_entry(ctx, src_stat, dest_path);
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     return true;
 
 fail:
-    if (dest_fd >= 0) {
-        close(dest_fd);
-    }
-    if (src_fd >= 0) {
-        close(src_fd);
-    }
+    bx_fd_cleanup(&src_fd);
+    bx_fd_cleanup(&dest_fd);
     return false;
 }
 
@@ -509,18 +496,17 @@ static bool bx_copy_create_socket_node(struct bx_copy_context *ctx,
     socklen_t addr_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + path_len + 1u);
     if (bind(fd, (const struct sockaddr *)&addr, addr_len) != 0) {
         bx_perror_path(ctx->diag, dest_path);
-        close(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
     if (chmod(dest_path, create_mode) != 0) {
         bx_perror_path(ctx->diag, dest_path);
-        close(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
-    if (close(fd) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
+    if (!bx_fd_close(&fd, dest_path, ctx->diag)) {
         return false;
     }
 
@@ -953,7 +939,7 @@ static bool bx_copy_prepare_parents(struct bx_copy_context *ctx, const char *sou
             }
 
             if (ctx->options->mode_policy == BX_MODE_POLICY_PRESERVE ||
-                (ctx->options->preserve_mask & (BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_XATTR | BX_PRESERVE_CONTEXT)) != 0u) {
+                (ctx->options->preserve_mask & (BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_XATTR)) != 0u) {
                 if (!bx_copy_path_metadata(current_src, current_dest, &src_st, ctx->options->preserve_mask, false)) {
                 }
             }

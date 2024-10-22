@@ -242,12 +242,6 @@ bool bx_copy_fd_metadata(int src_fd, int dest_fd, const struct stat *src_stat, u
             return false;
         }
     }
-    if ((mask & BX_PRESERVE_CONTEXT) != 0u) {
-        if (src_fd >= 0) {
-            bool allow_missing = (mask & BX_PRESERVE_CONTEXT_STRICT) == 0u;
-            if (!bx_copy_specific_xattr_fd(src_fd, dest_fd, "security.selinux", allow_missing)) return false;
-        }
-    }
     if ((mask & BX_PRESERVE_XATTR) != 0u) {
         if (src_fd >= 0) {
             if (!bx_copy_xattrs_fd(src_fd, dest_fd)) {
@@ -279,11 +273,6 @@ bool bx_copy_path_metadata(const char *src_path, const char *dest_path, const st
         if (utimensat(AT_FDCWD, dest_path, ts, flags) != 0) {
             return false;
         }
-    }
-
-    if ((mask & BX_PRESERVE_CONTEXT) != 0u) {
-        bool allow_missing = (mask & BX_PRESERVE_CONTEXT_STRICT) == 0u;
-        if (!bx_copy_specific_xattr_path(src_path, dest_path, "security.selinux", no_follow, allow_missing)) return false;
     }
 
     if ((mask & BX_PRESERVE_XATTR) != 0u) {

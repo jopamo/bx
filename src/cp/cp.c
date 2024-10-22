@@ -28,6 +28,7 @@
 #include "common/path_ops.h"
 #include "common/same_file.h"
 #include "common/stat_ops.h"
+#include "common/fd_ops.h"
 #include "diag.h"
 #include "libbx.h"
 
@@ -72,7 +73,6 @@ enum bx_cp_longopt {
     BX_CP_OPT_SPARSE,
     BX_CP_OPT_STRIP_TRAILING_SLASHES,
     BX_CP_OPT_UPDATE,
-    BX_CP_OPT_CONTEXT,
 };
 
 struct bx_cp_options {
@@ -170,12 +170,9 @@ static void bx_cp_print_help(FILE *stream, const char *progname) {
     fprintf(stream, "      --update[=MODE]        MODE is all, none, none-fail, or older\n");
     fprintf(stream, "  -u                         same as --update=older\n");
     fprintf(stream, "  -v, --verbose              explain what is being done\n");
+    fprintf(stream, "  -x, --one-file-system      stay on this file system\n");
     fprintf(stream, "      --help                 display this help and exit\n");
     fprintf(stream, "      --version              output version information and exit\n");
-    fprintf(stream, "\n");
-    fprintf(stream, "Not yet implemented: backup, reflink, sparse,\n");
-    fprintf(stream, "one-file-system, SELinux/SMACK context handling.\n");
-    fprintf(stream, "Current limitation: --copy-contents only affects FIFOs and sockets; other special files remain unsupported.\n");
 }
 
 static void bx_cp_print_version(void) {
@@ -227,28 +224,6 @@ static bool bx_cp_parse_update_mode(struct bx_diag_ctx *diag,
     return true;
 }
 
-static bool bx_cp_preserve_list_mentions_context(const char *arg) {
-    if (arg == NULL) {
-        return false;
-    }
-
-    char *copy = xstrdup(arg);
-    char *saveptr = NULL;
-    bool found = false;
-
-    for (char *token = strtok_r(copy, ",", &saveptr);
-         token != NULL;
-         token = strtok_r(NULL, ",", &saveptr)) {
-        if (strcmp(token, "context") == 0) {
-            found = true;
-            break;
-        }
-    }
-
-    free(copy);
-    return found;
-}
-
 static bool bx_cp_parse_options(int argc,
                                 char **argv,
                                 struct bx_cp_options *options,
@@ -282,12 +257,11 @@ static bool bx_cp_parse_options(int argc,
         {"update", optional_argument, NULL, BX_CP_OPT_UPDATE},
         {"verbose", no_argument, NULL, 'v'},
         {"one-file-system", no_argument, NULL, 'x'},
-        {"context", optional_argument, NULL, BX_CP_OPT_CONTEXT},
         {"help", no_argument, NULL, 1},
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
     };
-    char short_buf[] = ":abdfHiLPlnpRrsS:t:TuvxZ";
+    char short_buf[] = ":abdfHiLPlnpRrsS:t:Tuvx";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cp_progname(argv[0]);
@@ -373,9 +347,6 @@ static bool bx_cp_parse_options(int argc,
                 return false;
             }
             break;
-        case BX_CP_OPT_CONTEXT:
-            bx_diag(diag, "option '%s' is not implemented", argv[optind - 1]);
-            return false;
         case BX_CP_OPT_DEBUG:
             options->debug = true;
             options->verbose = true;
@@ -427,7 +398,6 @@ static bool bx_cp_parse_options(int argc,
                                           BX_PRESERVE_OWNERSHIP |
                                           BX_PRESERVE_TIMESTAMPS;
             } else {
-                bool context_mentioned = bx_cp_preserve_list_mentions_context(optarg);
                 bool mode_mentioned = false;
                 if (!bx_cp_parse_preserve_list(diag,
                                                optarg,
@@ -439,13 +409,9 @@ static bool bx_cp_parse_options(int argc,
                 if (mode_mentioned) {
                     options->mode_policy = BX_CP_MODE_POLICY_PRESERVE;
                 }
-                if (context_mentioned) {
-                    options->preserve_mask |= BX_PRESERVE_CONTEXT_STRICT;
-                }
             }
             break;
         case BX_CP_OPT_NO_PRESERVE: {
-            bool context_mentioned = bx_cp_preserve_list_mentions_context(optarg);
             bool mode_mentioned = false;
             if (!bx_cp_parse_preserve_list(diag,
                                            optarg,
@@ -456,9 +422,6 @@ static bool bx_cp_parse_options(int argc,
             }
             if (mode_mentioned) {
                 options->mode_policy = BX_CP_MODE_POLICY_NO_PRESERVE;
-            }
-            if (context_mentioned) {
-                options->preserve_mask &= ~BX_PRESERVE_CONTEXT_STRICT;
             }
             break;
         }
@@ -701,7 +664,7 @@ static bool bx_cp_prepare_parents(struct bx_cp_context *ctx, const char *source_
             }
 
             if (ctx->options->mode_policy == BX_CP_MODE_POLICY_PRESERVE ||
-                (ctx->options->preserve_mask & (BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_XATTR | BX_PRESERVE_CONTEXT)) != 0u) {
+                (ctx->options->preserve_mask & (BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_XATTR)) != 0u) {
                 if (!bx_copy_path_metadata(current_src, current_dest, &src_st, ctx->options->preserve_mask, false)) {
                     /* GNU cp --parents -p: if it fails to preserve metadata, it's a warning but continues?
                      * Actually it seems it's a non-fatal error but sets exit status.
@@ -969,10 +932,9 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
     }
 
     if (!ctx->options->attributes_only || open_source_for_attributes_only ||
-        (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_CONTEXT | BX_PRESERVE_MODE)) != 0u) {
-        src_fd = open(src_path, O_RDONLY);
+        (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_MODE)) != 0u) {
+        src_fd = bx_fd_open_read(src_path, ctx->diag);
         if (src_fd < 0) {
-            bx_perror_path(ctx->diag, src_path);
             return false;
         }
     }
@@ -984,22 +946,21 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         memset(&dest_state, 0, sizeof(dest_state));
     }
 
-    int dest_open_flags = O_WRONLY | O_CREAT;
+    int dest_open_flags = O_CREAT;
     if (!ctx->options->attributes_only) {
         dest_open_flags |= O_TRUNC;
     }
 
-    dest_fd = open(dest_path, dest_open_flags, create_mode);
+    dest_fd = bx_fd_open_write(dest_path, dest_open_flags, create_mode,
+                               (ctx->options->force && dest_state.exists_lstat) ? NULL : ctx->diag);
     if (dest_fd < 0 && ctx->options->force && dest_state.exists_lstat) {
         if (bx_cp_unlink_existing_file(ctx, dest_path)) {
-            dest_fd = open(dest_path, dest_open_flags, create_mode);
+            dest_fd = bx_fd_open_write(dest_path, dest_open_flags, create_mode, ctx->diag);
         }
     }
     if (dest_fd < 0) {
         if (dest_state.dangling_symlink && !ctx->options->force && !ctx->options->remove_destination) {
             bx_diag(ctx->diag, "not writing through dangling symlink '%s'", dest_path);
-        } else {
-            bx_perror_path(ctx->diag, dest_path);
         }
         goto fail;
     }
@@ -1011,31 +972,21 @@ static bool bx_cp_copy_regular_file(struct bx_cp_context *ctx,
         goto fail;
     }
 
-    if (close(dest_fd) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
-        dest_fd = -1;
+    if (!bx_fd_close(&dest_fd, dest_path, ctx->diag)) {
         goto fail;
     }
-    dest_fd = -1;
 
-    if (src_fd >= 0 && close(src_fd) != 0) {
-        bx_perror_path(ctx->diag, src_path);
-        src_fd = -1;
+    if (src_fd >= 0 && !bx_fd_close(&src_fd, src_path, ctx->diag)) {
         return false;
     }
-    src_fd = -1;
 
     bx_cp_add_link_entry(ctx, src_stat, dest_path);
     bx_cp_print_verbose(ctx, src_path, dest_path);
     return true;
 
 fail:
-    if (dest_fd >= 0) {
-        close(dest_fd);
-    }
-    if (src_fd >= 0) {
-        close(src_fd);
-    }
+    bx_fd_cleanup(&src_fd);
+    bx_fd_cleanup(&dest_fd);
     return false;
 }
 
@@ -1089,18 +1040,17 @@ static bool bx_cp_create_socket_node(struct bx_cp_context *ctx,
     socklen_t addr_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + path_len + 1u);
     if (bind(fd, (const struct sockaddr *)&addr, addr_len) != 0) {
         bx_perror_path(ctx->diag, dest_path);
-        close(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
     if (chmod(dest_path, create_mode) != 0) {
         bx_perror_path(ctx->diag, dest_path);
-        close(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
-    if (close(fd) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
+    if (!bx_fd_close(&fd, dest_path, ctx->diag)) {
         return false;
     }
 

@@ -15,6 +15,7 @@
 #include "libbx.h"
 #include "path_ops.h"
 #include "copy_data.h"
+#include "fd_ops.h"
 
 void bx_backup_get_params(enum bx_backup_mode cmd_mode,
                           const char *cmd_suffix,
@@ -173,7 +174,7 @@ enum bx_backup_create_result bx_backup_create_copy(const char *path,
         return BX_BACKUP_CREATE_FAILED;
     }
 
-    int src_fd = open(path, O_RDONLY);
+    int src_fd = bx_fd_open_read(path, NULL);
     if (src_fd < 0) {
         int err = errno;
         free(backup_path);
@@ -181,10 +182,10 @@ enum bx_backup_create_result bx_backup_create_copy(const char *path,
         return BX_BACKUP_CREATE_FAILED;
     }
 
-    int dest_fd = open(backup_path, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777u);
+    int dest_fd = bx_fd_open_write(backup_path, O_CREAT | O_EXCL, st.st_mode & 0777u, NULL);
     if (dest_fd < 0) {
         int err = errno;
-        close(src_fd);
+        bx_fd_cleanup(&src_fd);
         free(backup_path);
         bx_backup_diag_errno(diag, path, err);
         return BX_BACKUP_CREATE_FAILED;
@@ -193,23 +194,23 @@ enum bx_backup_create_result bx_backup_create_copy(const char *path,
     struct bx_copy_data_options data_opts = {BX_SPARSE_NEVER, BX_REFLINK_NEVER};
     if (bx_copy_data(src_fd, dest_fd, &data_opts) != BX_COPY_DATA_SUCCESS) {
         int err = errno != 0 ? errno : EIO;
-        close(src_fd);
-        close(dest_fd);
+        bx_fd_cleanup(&src_fd);
+        bx_fd_cleanup(&dest_fd);
         unlink(backup_path);
         free(backup_path);
         bx_backup_diag_errno(diag, path, err);
         return BX_BACKUP_CREATE_FAILED;
     }
 
-    if (close(src_fd) != 0) {
+    if (!bx_fd_close(&src_fd, NULL, NULL)) {
         int err = errno;
-        close(dest_fd);
+        bx_fd_cleanup(&dest_fd);
         unlink(backup_path);
         free(backup_path);
         bx_backup_diag_errno(diag, path, err);
         return BX_BACKUP_CREATE_FAILED;
     }
-    if (close(dest_fd) != 0) {
+    if (!bx_fd_close(&dest_fd, NULL, NULL)) {
         int err = errno;
         unlink(backup_path);
         free(backup_path);

@@ -10,6 +10,7 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
+#include <libgen.h>
 
 #include "applets.h"
 #include "diag.h"
@@ -65,6 +66,53 @@ struct bx_mv_options {
 static const char *bx_mv_progname(const char *argv0) {
     const char *base = strrchr(argv0, '/');
     return base ? base + 1 : argv0;
+}
+
+static bool bx_mv_operand_had_trailing_slashes(const char *path) {
+    size_t len = strlen(path);
+    return len > 1 && path[len - 1] == '/';
+}
+
+static bool bx_mv_parent_exists_as_directory(const char *path) {
+    char *copy = xstrdup(path);
+    char *parent = dirname(copy);
+    bool is_dir = bx_stat_is_dir_path(parent);
+    free(copy);
+    return is_dir;
+}
+
+static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options *options,
+                                                      const char *src_path,
+                                                      const char *dest_path,
+                                                      bool source_had_trailing_slashes,
+                                                      bool destination_is_directory,
+                                                      int source_count) {
+    struct stat src_lstat;
+    struct stat src_stat;
+    struct stat dest_lstat;
+
+    if (!source_had_trailing_slashes ||
+        options->no_target_directory ||
+        options->target_directory != NULL ||
+        destination_is_directory ||
+        source_count != 1) {
+        return false;
+    }
+
+    if (lstat(src_path, &src_lstat) != 0 || !S_ISLNK(src_lstat.st_mode)) {
+        return false;
+    }
+    if (stat(src_path, &src_stat) != 0 || !S_ISDIR(src_stat.st_mode)) {
+        return false;
+    }
+    if (lstat(dest_path, &dest_lstat) == 0) {
+        return false;
+    }
+    if (errno != ENOENT) {
+        return false;
+    }
+
+    return bx_mv_parent_exists_as_directory(dest_path);
 }
 
 static void bx_mv_print_help(FILE *stream, const char *progname) {
@@ -203,6 +251,11 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
             default:
                 return false;
         }
+    }
+
+    if (options->target_directory != NULL && options->no_target_directory) {
+        bx_diag(diag, "cannot combine --target-directory (-t) and --no-target-directory (-T)");
+        return false;
     }
 
     *first_operand = optind;
@@ -400,6 +453,10 @@ int bx_mv_main(int argc, char **argv) {
         return 1;
     }
 
+    diag.progname = options.progname;
+    diag.verbose = options.verbose;
+    diag.debug = options.debug;
+
     if (options.show_help) {
         bx_mv_print_help(stdout, options.progname);
         return 0;
@@ -425,8 +482,8 @@ int bx_mv_main(int argc, char **argv) {
     bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
 
     if (options.exchange) {
-        if (options.target_directory || options.no_target_directory || operand_count != 2) {
-            bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t or -T");
+        if (options.target_directory || operand_count != 2) {
+            bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t");
             return 1;
         }
         const char *src_path = argv[first_operand];
@@ -489,11 +546,24 @@ int bx_mv_main(int argc, char **argv) {
     }
 
     for (int i = 0; i < source_count; i++) {
+        bool source_had_trailing_slashes = bx_mv_operand_had_trailing_slashes(source_operands[i]);
         char *source_operand = options.strip_trailing_slashes
                                ? bx_path_strip_trailing_slashes_dup(source_operands[i])
                                : xstrdup(source_operands[i]);
         
         char *dest_path = bx_path_build_dest(source_operand, destination_root, destination_is_directory, false);
+
+        if (bx_mv_should_reject_stripped_missing_dest(&options,
+                                                      source_operand,
+                                                      dest_path,
+                                                      source_had_trailing_slashes,
+                                                      destination_is_directory,
+                                                      source_count)) {
+            bx_diag(&diag, "cannot move '%s' to '%s': Not a directory", source_operand, dest_path);
+            free(dest_path);
+            free(source_operand);
+            continue;
+        }
 
         bx_mv_rename_file(&ctx, source_operand, dest_path);
 
