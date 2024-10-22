@@ -54,10 +54,10 @@ static bool bx_copy_should_follow_source(const struct bx_copy_options *options,
 
 static mode_t bx_copy_regular_file_create_mode(const struct bx_copy_context *ctx,
                                                const struct stat *src_stat) {
-    if (ctx->options->mode_policy == BX_MODE_POLICY_PRESERVE) {
-        return src_stat->st_mode & 0777u;
+    if (ctx->options->mode_policy == BX_MODE_POLICY_NO_PRESERVE) {
+        return 0666u;
     }
-    return 0666u & ~ctx->umask_value;
+    return src_stat->st_mode & 0777u;
 }
 
 static mode_t bx_copy_directory_create_mode(const struct bx_copy_context *ctx,
@@ -72,16 +72,13 @@ static mode_t bx_copy_directory_create_mode(const struct bx_copy_context *ctx,
         return source_mode | S_IRWXU;
     }
 
-    mode_t mkdir_mode = 0777u & ~ctx->umask_value;
-    if ((source_mode & S_IRWXU) != S_IRWXU) {
-        *final_mode_out = source_mode;
-        *restore_mode_out = true;
-        return mkdir_mode | S_IRWXU;
+    if (ctx->options->mode_policy == BX_MODE_POLICY_NO_PRESERVE) {
+        *final_mode_out = 0777u & ~ctx->umask_value;
+    } else {
+        *final_mode_out = source_mode & ~ctx->umask_value;
     }
-
-    *final_mode_out = 0;
-    *restore_mode_out = false;
-    return mkdir_mode;
+    *restore_mode_out = (*final_mode_out | S_IRWXU) != *final_mode_out;
+    return *final_mode_out | S_IRWXU;
 }
 
 static bool bx_copy_unlink_existing_file(const struct bx_copy_context *ctx, const char *dest_path) {
@@ -204,6 +201,13 @@ static void bx_copy_add_link_entry(struct bx_copy_context *ctx, const struct sta
         !ctx->options->hard_link && !ctx->options->move_mode) {
         return;
     }
+    if (st->st_nlink < 2) {
+        return;
+    }
+    if (bx_copy_find_link_entry(ctx, st->st_dev, st->st_ino) != NULL) {
+        return;
+    }
+
     struct bx_link_entry *entry = xmalloc(sizeof(*entry));
     entry->dev = st->st_dev;
     entry->ino = st->st_ino;
@@ -259,7 +263,7 @@ void bx_copy_free_source_dirs(struct bx_copy_context *ctx) {
 static char *bx_copy_realpath_dup(const char *path) {
     char buf[PATH_MAX];
     if (realpath(path, buf) == NULL) {
-        return xstrdup(path);
+        return NULL;
     }
     return xstrdup(buf);
 }
@@ -271,6 +275,7 @@ static void bx_copy_diag_self_recursive_copy(struct bx_copy_context *ctx,
     const char *diag_dest = ctx->current_dest_root ? ctx->current_dest_root : dest_path;
 
     bx_diag(ctx->diag, "cannot copy a directory, '%s', into itself, '%s'", diag_src, diag_dest);
+    ctx->stop_current_source = true;
 }
 
 static void bx_copy_diag_cyclic_symlink(struct bx_copy_context *ctx, const char *src_path) {
@@ -278,17 +283,18 @@ static void bx_copy_diag_cyclic_symlink(struct bx_copy_context *ctx, const char 
 }
 
 static char *bx_copy_required_self_copy_child(struct bx_copy_context *ctx, const char *src_path) {
-    if (!ctx->dest_root_active) {
+    if (ctx->current_dest_root_realpath == NULL) {
         return NULL;
     }
 
     char *src_realpath = bx_copy_realpath_dup(src_path);
+    if (src_realpath == NULL) {
+        return NULL;
+    }
     size_t src_len = strlen(src_realpath);
     const char *dest_realpath = ctx->current_dest_root_realpath;
-    size_t dest_len = strlen(dest_realpath);
 
-    if (dest_len <= src_len ||
-        strncmp(src_realpath, dest_realpath, src_len) != 0 ||
+    if (strncmp(dest_realpath, src_realpath, src_len) != 0 ||
         dest_realpath[src_len] != '/') {
         free(src_realpath);
         return NULL;
@@ -296,7 +302,11 @@ static char *bx_copy_required_self_copy_child(struct bx_copy_context *ctx, const
 
     const char *suffix = dest_realpath + src_len + 1;
     const char *slash = strchr(suffix, '/');
-    size_t component_len = slash ? (size_t)(slash - suffix) : strlen(suffix);
+    if (slash == NULL) {
+        free(src_realpath);
+        return NULL;
+    }
+    size_t component_len = (size_t)(slash - suffix);
 
     char *component = xmalloc(component_len + 1);
     memcpy(component, suffix, component_len);
