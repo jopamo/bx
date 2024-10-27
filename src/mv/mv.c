@@ -7,7 +7,6 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <limits.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <libgen.h>
@@ -20,7 +19,7 @@
 #include "common/same_file.h"
 #include "common/stat_ops.h"
 #include "common/backup_ops.h"
-#include "common/prompt_ops.h"
+#include "common/overwrite_ops.h"
 #include "common/update_policy.h"
 #include "common/copy_tree.h"
 #include "common/remove_ops.h"
@@ -268,47 +267,21 @@ struct bx_mv_context {
     struct bx_backup_params backup_params;
 };
 
-static bool bx_mv_backup_existing_dest(struct bx_mv_context *ctx,
-                                       const char *dest_path,
-                                       struct bx_dest_state *dest_state) {
-    char *backup_file = NULL;
-    enum bx_backup_create_result result =
-        bx_backup_create(dest_path, &ctx->backup_params, ctx->diag, &backup_file);
-
-    if (result == BX_BACKUP_CREATE_FAILED) {
-        return false;
-    }
-    if (result == BX_BACKUP_CREATE_CREATED) {
-        free(backup_file);
-        memset(dest_state, 0, sizeof(*dest_state));
-    }
-    return true;
-}
-
 static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
                                        const char *dest_path,
                                        const struct stat *src_stat,
                                        const struct stat *dest_stat,
                                        bool *skip_out,
                                        struct bx_diag_ctx *diag) {
-    if (options->no_clobber) {
-        *skip_out = true;
-        return true;
-    }
-
-    if (options->interactive) {
-        *skip_out = false;
-        return true;
-    }
-
-    bool error = false;
-    if (!bx_update_should_skip(options->update_mode, src_stat, dest_stat, skip_out, &error)) {
-        if (error) {
-            bx_diag(diag, "will not overwrite '%s'", dest_path);
-        }
-        return false;
-    }
-    return true;
+    return bx_overwrite_should_skip(options->no_clobber,
+                                    options->interactive,
+                                    options->update_mode,
+                                    dest_path,
+                                    src_stat,
+                                    dest_stat,
+                                    skip_out,
+                                    NULL,
+                                    diag);
 }
 
 static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
@@ -397,14 +370,12 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
             }
 
             if (ctx->options->interactive && !ctx->options->force) {
-                char prompt[PATH_MAX + 32];
-                snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->options->progname, dest_path);
-                if (!bx_prompt_confirm(prompt)) {
+                if (!bx_prompt_overwrite(ctx->options->progname, dest_path)) {
                     return true;
                 }
             }
 
-            if (!bx_mv_backup_existing_dest(ctx, dest_path, &dest_state)) {
+            if (!bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, &dest_state)) {
                 return false;
             }
         }

@@ -29,6 +29,7 @@ sources = [
   'src/common/stat_ops.c',
   'src/common/remove_ops.c',
   'src/common/fd_ops.c',
+  'src/common/overwrite_ops.c',
   'src/main.c',
   'src/cp/cp.c',
   'src/mv/mv.c',

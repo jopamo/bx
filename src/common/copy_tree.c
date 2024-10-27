@@ -21,7 +21,7 @@
 #include "update_policy.h"
 #include "args_common.h"
 #include "backup_ops.h"
-#include "prompt_ops.h"
+#include "overwrite_ops.h"
 #include "path_ops.h"
 #include "same_file.h"
 #include "stat_ops.h"
@@ -101,23 +101,6 @@ static bool bx_copy_reject_directory_dest(const struct bx_copy_context *ctx,
     return false;
 }
 
-static bool bx_copy_backup_existing_dest(struct bx_copy_context *ctx,
-                                         const char *dest_path,
-                                         struct bx_dest_state *dest_state) {
-    char *backup_file = NULL;
-    enum bx_backup_create_result result =
-        bx_backup_create(dest_path, &ctx->backup_params, ctx->diag, &backup_file);
-
-    if (result == BX_BACKUP_CREATE_FAILED) {
-        return false;
-    }
-    if (result == BX_BACKUP_CREATE_CREATED) {
-        free(backup_file);
-        memset(dest_state, 0, sizeof(*dest_state));
-    }
-    return true;
-}
-
 static enum bx_backup_create_result bx_copy_backup_same_file_copy(struct bx_copy_context *ctx,
                                                                   const char *src_path,
                                                                   const char *dest_path) {
@@ -161,28 +144,93 @@ static bool bx_copy_should_skip_existing(const struct bx_copy_options *options,
                                          const struct stat *dest_stat,
                                          bool *skip_out,
                                          struct bx_diag_ctx *diag) {
-    if (options->no_clobber) {
-        bx_debug(diag, "skipping '%s' because of -n", dest_path);
-        *skip_out = true;
-        return true;
-    }
-
-    if (options->interactive) {
-        *skip_out = false;
-        return true;
-    }
-
-    bool error = false;
-    if (!bx_update_should_skip(options->update_mode, src_stat, dest_stat, skip_out, &error)) {
-        if (error) {
-            bx_diag(diag, "will not overwrite '%s'", dest_path);
-        }
+    enum bx_overwrite_skip_reason reason = BX_OVERWRITE_SKIP_NONE;
+    if (!bx_overwrite_should_skip(options->no_clobber,
+                                  options->interactive,
+                                  options->update_mode,
+                                  dest_path,
+                                  src_stat,
+                                  dest_stat,
+                                  skip_out,
+                                  &reason,
+                                  diag)) {
         return false;
     }
+
     if (*skip_out) {
-        bx_debug(diag, "skipping '%s' because of --update", dest_path);
+        if (reason == BX_OVERWRITE_SKIP_NO_CLOBBER) {
+            bx_debug(diag, "skipping '%s' because of -n", dest_path);
+        } else if (reason == BX_OVERWRITE_SKIP_UPDATE) {
+            bx_debug(diag, "skipping '%s' because of --update", dest_path);
+        }
     }
     return true;
+}
+
+enum bx_copy_overwrite_result {
+    BX_COPY_OVERWRITE_FAILED = 0,
+    BX_COPY_OVERWRITE_SKIP,
+    BX_COPY_OVERWRITE_CONTINUE,
+};
+
+static enum bx_copy_overwrite_result bx_copy_prepare_overwrite(struct bx_copy_context *ctx,
+                                                               const char *source_path,
+                                                               const char *dest_path,
+                                                               const struct stat *src_stat,
+                                                               const struct stat *dest_stat,
+                                                               struct bx_dest_state *dest_state,
+                                                               bool reject_directory_dest,
+                                                               bool unlink_existing_dest) {
+    bool skip = false;
+
+    if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, dest_stat, &skip, ctx->diag)) {
+        return BX_COPY_OVERWRITE_FAILED;
+    }
+    if (skip) {
+        return BX_COPY_OVERWRITE_SKIP;
+    }
+
+    if (ctx->options->interactive && !bx_prompt_overwrite(ctx->diag->progname, dest_path)) {
+        return BX_COPY_OVERWRITE_SKIP;
+    }
+
+    if (reject_directory_dest &&
+        !bx_copy_reject_directory_dest(ctx, source_path, dest_path, dest_state)) {
+        return BX_COPY_OVERWRITE_FAILED;
+    }
+
+    if (!bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, dest_state)) {
+        return BX_COPY_OVERWRITE_FAILED;
+    }
+
+    if (unlink_existing_dest && dest_state->exists_lstat &&
+        !bx_copy_unlink_existing_file(ctx, dest_path)) {
+        return BX_COPY_OVERWRITE_FAILED;
+    }
+
+    return BX_COPY_OVERWRITE_CONTINUE;
+}
+
+static bool bx_copy_prepare_link_destination(struct bx_copy_context *ctx,
+                                             const char *source_path,
+                                             const char *dest_path,
+                                             const struct bx_dest_state *dest_state) {
+    if (!dest_state->exists_lstat) {
+        return true;
+    }
+
+    if (S_ISDIR(dest_state->lst.st_mode)) {
+        bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_path);
+        return false;
+    }
+
+    if (!(ctx->options->force || ctx->options->remove_destination)) {
+        errno = EEXIST;
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    return bx_copy_unlink_existing_file(ctx, dest_path);
 }
 
 static struct bx_link_entry *bx_copy_find_link_entry(struct bx_copy_context *ctx, dev_t dev, ino_t ino) {
@@ -342,7 +390,6 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     int src_fd = -1;
     int dest_fd = -1;
     struct bx_dest_state dest_state;
-    bool skip = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
@@ -373,27 +420,14 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     }
 
     if (dest_state.exists_stat) {
-        if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.st, &skip, ctx->diag)) {
+        enum bx_copy_overwrite_result result =
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
+                                      &dest_state, true, false);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
-        if (skip) {
+        if (result == BX_COPY_OVERWRITE_SKIP) {
             return true;
-        }
-
-        if (ctx->options->interactive) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
-                return true;
-            }
-        }
-
-        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
         }
     }
 
@@ -531,7 +565,6 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
                                                      const char *dest_path,
                                                      mode_t create_mode)) {
     struct bx_dest_state dest_state;
-    bool skip = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
@@ -545,33 +578,14 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
     }
 
     if (dest_state.exists_lstat) {
-        if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.lst, &skip, ctx->diag)) {
+        enum bx_copy_overwrite_result result =
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst,
+                                      &dest_state, true, true);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
-        if (skip) {
+        if (result == BX_COPY_OVERWRITE_SKIP) {
             return true;
-        }
-
-        if (ctx->options->interactive) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
-                return true;
-            }
-        }
-
-        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (dest_state.exists_lstat) {
-            if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
-                return false;
-            }
         }
     }
 
@@ -604,7 +618,6 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
                                  const char *dest_path,
                                  const struct stat *src_stat) {
     struct bx_dest_state dest_state;
-    bool skip = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
@@ -619,33 +632,14 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
     }
 
     if (dest_state.exists_lstat) {
-        if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.lst, &skip, ctx->diag)) {
+        enum bx_copy_overwrite_result result =
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst,
+                                      &dest_state, true, true);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
-        if (skip) {
+        if (result == BX_COPY_OVERWRITE_SKIP) {
             return true;
-        }
-
-        if (ctx->options->interactive) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
-                return true;
-            }
-        }
-
-        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (dest_state.exists_lstat) {
-            if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
-                return false;
-            }
         }
     }
 
@@ -688,7 +682,6 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
                                     const char *dest_path,
                                     const struct stat *src_lstat) {
     struct bx_dest_state dest_state;
-    bool skip = false;
     ssize_t target_size = src_lstat->st_size > 0 ? src_lstat->st_size : 256;
     char *link_target = NULL;
 
@@ -703,33 +696,14 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
     }
 
     if (dest_state.exists_lstat) {
-        if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_lstat, &dest_state.lst, &skip, ctx->diag)) {
+        enum bx_copy_overwrite_result result =
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_lstat, &dest_state.lst,
+                                      &dest_state, true, true);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
-        if (skip) {
+        if (result == BX_COPY_OVERWRITE_SKIP) {
             return true;
-        }
-
-        if (ctx->options->interactive) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
-                return true;
-            }
-        }
-
-        if (!bx_copy_reject_directory_dest(ctx, src_path, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
-        }
-
-        if (dest_state.exists_lstat) {
-            if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
-                return false;
-            }
         }
     }
 
@@ -770,7 +744,6 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
                                          const char *dest_path,
                                          const struct stat *src_stat) {
     struct bx_dest_state dest_state;
-    bool skip = false;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
@@ -784,38 +757,18 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
 
     if (dest_state.exists_lstat) {
         if (dest_state.exists_stat) {
-            if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.st, &skip, ctx->diag)) {
+            enum bx_copy_overwrite_result result =
+                bx_copy_prepare_overwrite(ctx, source_operand, dest_path, src_stat, &dest_state.st,
+                                          &dest_state, false, false);
+            if (result == BX_COPY_OVERWRITE_FAILED) {
                 return false;
             }
-            if (skip) {
+            if (result == BX_COPY_OVERWRITE_SKIP) {
                 return true;
             }
-
-            if (ctx->options->interactive) {
-                char prompt[PATH_MAX + 32];
-                snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-                if (!bx_prompt_confirm(prompt)) {
-                    return true;
-                }
-            }
-
-            if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-                return false;
-            }
         }
-        if (dest_state.exists_lstat) {
-            if (S_ISDIR(dest_state.lst.st_mode)) {
-                bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, source_operand);
-                return false;
-            }
-            if (!(ctx->options->force || ctx->options->remove_destination)) {
-                errno = EEXIST;
-                bx_perror_path(ctx->diag, dest_path);
-                return false;
-            }
-            if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
-                return false;
-            }
+        if (!bx_copy_prepare_link_destination(ctx, source_operand, dest_path, &dest_state)) {
+            return false;
         }
     }
 
@@ -834,7 +787,6 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
                                      const struct stat *src_stat,
                                      bool follow_source) {
     struct bx_dest_state dest_state;
-    bool skip = false;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
@@ -848,39 +800,19 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
     }
 
     if (dest_state.exists_stat) {
-        if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, &dest_state.st, &skip, ctx->diag)) {
+        enum bx_copy_overwrite_result result =
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
+                                      &dest_state, false, false);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
-        if (skip) {
+        if (result == BX_COPY_OVERWRITE_SKIP) {
             return true;
-        }
-
-        if (ctx->options->interactive) {
-            char prompt[PATH_MAX + 32];
-            snprintf(prompt, sizeof(prompt), "%s: overwrite '%s'? ", ctx->diag->progname, dest_path);
-            if (!bx_prompt_confirm(prompt)) {
-                return true;
-            }
-        }
-
-        if (!bx_copy_backup_existing_dest(ctx, dest_path, &dest_state)) {
-            return false;
         }
     }
 
-    if (dest_state.exists_lstat) {
-        if (S_ISDIR(dest_state.lst.st_mode)) {
-            bx_diag(ctx->diag, "cannot overwrite directory '%s' with non-directory '%s'", dest_path, src_path);
-            return false;
-        }
-        if (!(ctx->options->force || ctx->options->remove_destination)) {
-            errno = EEXIST;
-            bx_perror_path(ctx->diag, dest_path);
-            return false;
-        }
-        if (!bx_copy_unlink_existing_file(ctx, dest_path)) {
-            return false;
-        }
+    if (!bx_copy_prepare_link_destination(ctx, src_path, dest_path, &dest_state)) {
+        return false;
     }
 
     if (linkat(AT_FDCWD,
