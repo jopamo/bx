@@ -34,6 +34,15 @@ static bool bx_xattr_error_ignorable(int err, bool allow_missing) {
     return bx_xattr_error_unsupported(err);
 }
 
+static bool bx_ownership_error_ignorable(int err) {
+    /*
+     * GNU cp treats ownership preservation as best-effort for
+     * unprivileged callers: EPERM/EACCES cover the common "not allowed"
+     * cases, and EINVAL covers unmapped IDs in user namespaces.
+     */
+    return err == EPERM || err == EACCES || err == EINVAL;
+}
+
 static bool bx_copy_specific_xattr_fd(int src_fd, int dest_fd, const char *name, bool allow_missing) {
     ssize_t val_size = fgetxattr(src_fd, name, NULL, 0);
     if (val_size < 0) {
@@ -225,7 +234,9 @@ static bool bx_copy_xattrs_path(const char *src_path, const char *dest_path, boo
 bool bx_copy_fd_metadata(int src_fd, int dest_fd, const struct stat *src_stat, unsigned mask) {
     if ((mask & BX_PRESERVE_OWNERSHIP) != 0u) {
         if (fchown(dest_fd, src_stat->st_uid, src_stat->st_gid) != 0) {
-            return false;
+            if (!bx_ownership_error_ignorable(errno)) {
+                return false;
+            }
         }
     }
     if ((mask & BX_PRESERVE_MODE) != 0u) {
@@ -256,7 +267,9 @@ bool bx_copy_path_metadata(const char *src_path, const char *dest_path, const st
     if ((mask & BX_PRESERVE_OWNERSHIP) != 0u) {
         if ((no_follow ? lchown(dest_path, src_stat->st_uid, src_stat->st_gid)
                        : chown(dest_path, src_stat->st_uid, src_stat->st_gid)) != 0) {
-            return false;
+            if (!bx_ownership_error_ignorable(errno)) {
+                return false;
+            }
         }
     }
 
