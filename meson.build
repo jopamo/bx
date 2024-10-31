@@ -89,6 +89,9 @@ if get_option('tests')
   test_cp_cleanup_state = files('tests/cp/test_cp_cleanup_state.py')
   test('cp cleanup state', python3, args : [test_cp_cleanup_state, bx_exe, meson.current_build_dir()])
 
+  test_cp_reference_resolution = files('tests/cp/test_cp_reference_resolution.py')
+  test('cp reference resolution', python3, args : [test_cp_reference_resolution])
+
   test_cp_preserve_metadata = files('tests/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 

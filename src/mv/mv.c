@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <sys/syscall.h>
 #include <libgen.h>
 
@@ -284,6 +285,87 @@ static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
                                     diag);
 }
 
+static bool bx_mv_directory_is_empty(const char *path,
+                                     bool *empty_out,
+                                     struct bx_diag_ctx *diag) {
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    bool empty = true;
+    bool ok = true;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (entry == NULL) {
+            if (errno != 0) {
+                bx_perror_path(diag, path);
+                ok = false;
+            }
+            break;
+        }
+        if (bx_path_is_dot_or_dotdot(entry->d_name)) {
+            continue;
+        }
+        empty = false;
+        break;
+    }
+
+    if (closedir(dir) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    if (!ok) {
+        return false;
+    }
+
+    *empty_out = empty;
+    return true;
+}
+
+static bool bx_mv_prepare_cross_device_destination(struct bx_mv_context *ctx,
+                                                   const char *dest_path,
+                                                   const struct stat *src_stat) {
+    struct bx_dest_state dest_state;
+
+    if (!S_ISDIR(src_stat->st_mode)) {
+        return true;
+    }
+
+    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!dest_state.exists_lstat || !S_ISDIR(dest_state.lst.st_mode)) {
+        return true;
+    }
+
+    bool empty = false;
+    if (!bx_mv_directory_is_empty(dest_path, &empty, ctx->diag)) {
+        return false;
+    }
+    if (!empty) {
+        errno = ENOTEMPTY;
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (rmdir(dest_path) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (ctx->options->debug) {
+        bx_info(ctx->diag,
+                "cross-device move removing empty destination directory '%s' before copy",
+                dest_path);
+    }
+    return true;
+}
+
 static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
                                          const char *src_path,
                                          const char *dest_path,
@@ -302,17 +384,24 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
     copy_opts.force = true;
     copy_opts.interactive = false;
     copy_opts.no_clobber = false;
+    copy_opts.remove_destination = true;
     copy_opts.update_mode = BX_UPDATE_ALL;
 
     copy_ctx.options = &copy_opts;
     copy_ctx.diag = ctx->diag;
     copy_ctx.umask_value = umask(0);
     umask(copy_ctx.umask_value);
+    copy_ctx.current_source_root = src_path;
+    copy_ctx.current_dest_root = dest_path;
     
     bx_backup_get_params(BX_BACKUP_NONE, NULL, &copy_ctx.backup_params);
 
     if (ctx->options->verbose) {
         bx_info(ctx->diag, "inter-device move: '%s' -> '%s'; copying then removing", src_path, dest_path);
+    }
+
+    if (!bx_mv_prepare_cross_device_destination(ctx, dest_path, src_stat)) {
+        return false;
     }
 
     if (!bx_copy_path(&copy_ctx, src_path, src_path, dest_path, true)) {
