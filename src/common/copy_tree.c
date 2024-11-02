@@ -180,8 +180,13 @@ static enum bx_copy_overwrite_result bx_copy_prepare_overwrite(struct bx_copy_co
                                                                const struct stat *dest_stat,
                                                                struct bx_dest_state *dest_state,
                                                                bool reject_directory_dest,
-                                                               bool unlink_existing_dest) {
+                                                               bool unlink_existing_dest,
+                                                               char **backup_path_out) {
     bool skip = false;
+
+    if (backup_path_out != NULL) {
+        *backup_path_out = NULL;
+    }
 
     if (!bx_copy_should_skip_existing(ctx->options, dest_path, src_stat, dest_stat, &skip, ctx->diag)) {
         return BX_COPY_OVERWRITE_FAILED;
@@ -199,7 +204,11 @@ static enum bx_copy_overwrite_result bx_copy_prepare_overwrite(struct bx_copy_co
         return BX_COPY_OVERWRITE_FAILED;
     }
 
-    if (!bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, dest_state)) {
+    if (!bx_overwrite_backup_existing(dest_path,
+                                      &ctx->backup_params,
+                                      ctx->diag,
+                                      dest_state,
+                                      backup_path_out)) {
         return BX_COPY_OVERWRITE_FAILED;
     }
 
@@ -363,14 +372,14 @@ static char *bx_copy_required_self_copy_child(struct bx_copy_context *ctx, const
     return component;
 }
 
-static bool bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx *diag, const struct bx_copy_options *options) {
+static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx *diag, const struct bx_copy_options *options) {
     struct bx_copy_data_options data_opts;
     data_opts.sparse_mode = options->sparse_mode;
     data_opts.reflink_mode = options->reflink_mode;
 
     int res = bx_copy_data(src_fd, dest_fd, &data_opts);
     if (res == BX_COPY_DATA_SUCCESS) {
-        return true;
+        return res;
     }
     if (res == BX_COPY_DATA_READ_ERROR) {
         bx_perror_path(diag, "read");
@@ -379,7 +388,29 @@ static bool bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx *d
     } else if (res == BX_COPY_DATA_REFLINK_FAILED) {
         bx_diag(diag, "failed to clone '%s'", "destination");
     }
-    return false;
+    return res;
+}
+
+static bool bx_copy_cleanup_failed_created_destination(struct bx_copy_context *ctx,
+                                                       const char *dest_path) {
+    if (unlink(dest_path) != 0 && errno != ENOENT) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_restore_failed_backup(struct bx_copy_context *ctx,
+                                          const char *backup_path,
+                                          const char *dest_path) {
+    if (backup_path == NULL) {
+        return true;
+    }
+    if (rename(backup_path, dest_path) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    return true;
 }
 
 static bool bx_copy_regular_file(struct bx_copy_context *ctx,
@@ -387,9 +418,17 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
                                  const char *dest_path,
                                  const struct stat *src_stat,
                                  bool open_source_for_attributes_only) {
+    enum {
+        BX_COPY_REGULAR_PRE_DEST_OPEN = 0,
+        BX_COPY_REGULAR_DEST_OPENED,
+        BX_COPY_REGULAR_DATA_COPIED,
+    } stage = BX_COPY_REGULAR_PRE_DEST_OPEN;
     int src_fd = -1;
     int dest_fd = -1;
+    int copy_res = BX_COPY_DATA_SUCCESS;
     struct bx_dest_state dest_state;
+    char *backup_path = NULL;
+    bool created_destination_from_scratch = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
@@ -422,7 +461,7 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     if (dest_state.exists_stat) {
         enum bx_copy_overwrite_result result =
             bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
-                                      &dest_state, true, false);
+                                      &dest_state, true, false, &backup_path);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
@@ -435,7 +474,7 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
         (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_MODE)) != 0u) {
         src_fd = bx_fd_open_read(src_path, ctx->diag);
         if (src_fd < 0) {
-            return false;
+            goto fail;
         }
     }
 
@@ -445,6 +484,8 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
         }
         memset(&dest_state, 0, sizeof(dest_state));
     }
+
+    created_destination_from_scratch = !dest_state.exists_lstat;
 
     int dest_open_flags = O_CREAT;
     if (!ctx->options->attributes_only) {
@@ -464,10 +505,15 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
         }
         goto fail;
     }
+    stage = BX_COPY_REGULAR_DEST_OPENED;
 
-    if (!ctx->options->attributes_only && !bx_copy_data_internal(src_fd, dest_fd, ctx->diag, ctx->options)) {
-        goto fail;
+    if (!ctx->options->attributes_only) {
+        copy_res = bx_copy_data_internal(src_fd, dest_fd, ctx->diag, ctx->options);
+        if (copy_res != BX_COPY_DATA_SUCCESS) {
+            goto fail;
+        }
     }
+    stage = BX_COPY_REGULAR_DATA_COPIED;
     if (!bx_copy_apply_fd_attrs(ctx, src_fd, dest_fd, src_stat)) {
         goto fail;
     }
@@ -482,11 +528,26 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
 
     bx_copy_add_link_entry(ctx, src_stat, dest_path);
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
+    free(backup_path);
     return true;
 
 fail:
     bx_fd_cleanup(&src_fd);
     bx_fd_cleanup(&dest_fd);
+    if (copy_res == BX_COPY_DATA_REFLINK_FAILED && created_destination_from_scratch) {
+        if (!bx_copy_cleanup_failed_created_destination(ctx, dest_path)) {
+            free(backup_path);
+            return false;
+        }
+    }
+    if ((backup_path != NULL && stage == BX_COPY_REGULAR_PRE_DEST_OPEN) ||
+        (backup_path != NULL && copy_res == BX_COPY_DATA_REFLINK_FAILED)) {
+        if (!bx_copy_restore_failed_backup(ctx, backup_path, dest_path)) {
+            free(backup_path);
+            return false;
+        }
+    }
+    free(backup_path);
     return false;
 }
 
@@ -580,7 +641,7 @@ static bool bx_copy_special_node(struct bx_copy_context *ctx,
     if (dest_state.exists_lstat) {
         enum bx_copy_overwrite_result result =
             bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst,
-                                      &dest_state, true, true);
+                                      &dest_state, true, true, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
@@ -634,7 +695,7 @@ static bool bx_copy_device_node(struct bx_copy_context *ctx,
     if (dest_state.exists_lstat) {
         enum bx_copy_overwrite_result result =
             bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst,
-                                      &dest_state, true, true);
+                                      &dest_state, true, true, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
@@ -698,7 +759,7 @@ static bool bx_copy_symlink_object(struct bx_copy_context *ctx,
     if (dest_state.exists_lstat) {
         enum bx_copy_overwrite_result result =
             bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_lstat, &dest_state.lst,
-                                      &dest_state, true, true);
+                                      &dest_state, true, true, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
@@ -759,7 +820,7 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
         if (dest_state.exists_stat) {
             enum bx_copy_overwrite_result result =
                 bx_copy_prepare_overwrite(ctx, source_operand, dest_path, src_stat, &dest_state.st,
-                                          &dest_state, false, false);
+                                          &dest_state, false, false, NULL);
             if (result == BX_COPY_OVERWRITE_FAILED) {
                 return false;
             }
@@ -802,7 +863,7 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
     if (dest_state.exists_stat) {
         enum bx_copy_overwrite_result result =
             bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
-                                      &dest_state, false, false);
+                                      &dest_state, false, false, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }

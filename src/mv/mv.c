@@ -464,7 +464,11 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
                 }
             }
 
-            if (!bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, &dest_state)) {
+            if (!bx_overwrite_backup_existing(dest_path,
+                                              &ctx->backup_params,
+                                              ctx->diag,
+                                              &dest_state,
+                                              NULL)) {
                 return false;
             }
         }

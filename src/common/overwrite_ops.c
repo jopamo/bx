@@ -49,8 +49,14 @@ bool bx_overwrite_should_skip(bool no_clobber,
 bool bx_overwrite_backup_existing(const char *dest_path,
                                   const struct bx_backup_params *backup_params,
                                   struct bx_diag_ctx *diag,
-                                  struct bx_dest_state *dest_state) {
+                                  struct bx_dest_state *dest_state,
+                                  char **backup_path_out) {
     char *backup_file = NULL;
+
+    if (backup_path_out != NULL) {
+        *backup_path_out = NULL;
+    }
+
     enum bx_backup_create_result result =
         bx_backup_create(dest_path, backup_params, diag, &backup_file);
 
@@ -58,8 +64,12 @@ bool bx_overwrite_backup_existing(const char *dest_path,
         return false;
     }
     if (result == BX_BACKUP_CREATE_CREATED) {
-        free(backup_file);
         memset(dest_state, 0, sizeof(*dest_state));
+        if (backup_path_out != NULL) {
+            *backup_path_out = backup_file;
+        } else {
+            free(backup_file);
+        }
     }
     return true;
 }
