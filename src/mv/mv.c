@@ -181,7 +181,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
     while ((c = getopt_long(argc, argv, short_opts, long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
-                options->backup_mode = BX_BACKUP_UNSPECIFIED;
+                bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_MV_OPT_BACKUP:
                 if (optarg) {
@@ -190,7 +190,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
                         return false;
                     }
                 } else {
-                    options->backup_mode = BX_BACKUP_UNSPECIFIED;
+                    bx_args_enable_backup_mode(&options->backup_mode);
                 }
                 break;
             case 'f':
@@ -257,6 +257,14 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
         bx_diag(diag, "cannot combine --target-directory (-t) and --no-target-directory (-T)");
         return false;
     }
+    if (bx_args_backup_mode_requested(options->backup_mode) &&
+        (options->no_clobber ||
+         options->update_mode == BX_UPDATE_NONE ||
+         options->update_mode == BX_UPDATE_NONE_FAIL ||
+         options->exchange)) {
+        bx_diag(diag, "cannot combine --backup with --exchange, -n, --update=none, or --update=none-fail");
+        return false;
+    }
 
     *first_operand = optind;
     return true;
@@ -266,7 +274,50 @@ struct bx_mv_context {
     const struct bx_mv_options *options;
     struct bx_diag_ctx *diag;
     struct bx_backup_params backup_params;
+    struct bx_copy_options cross_device_copy_options;
+    struct bx_copy_context cross_device_copy_ctx;
 };
+
+static void bx_mv_init_cross_device_copy_context(struct bx_mv_context *ctx) {
+    memset(&ctx->cross_device_copy_options, 0, sizeof(ctx->cross_device_copy_options));
+    ctx->cross_device_copy_options.recursive = true;
+    ctx->cross_device_copy_options.mode_policy = BX_MODE_POLICY_PRESERVE;
+    ctx->cross_device_copy_options.preserve_mask = BX_PRESERVE_ALL;
+    ctx->cross_device_copy_options.verbose = ctx->options->verbose;
+    ctx->cross_device_copy_options.debug = ctx->options->debug;
+    ctx->cross_device_copy_options.move_mode = true;
+    /* Interaction was already handled in bx_mv_rename_file. */
+    ctx->cross_device_copy_options.force = true;
+    ctx->cross_device_copy_options.interactive = false;
+    ctx->cross_device_copy_options.no_clobber = false;
+    ctx->cross_device_copy_options.remove_destination = true;
+    ctx->cross_device_copy_options.update_mode = BX_UPDATE_ALL;
+
+    memset(&ctx->cross_device_copy_ctx, 0, sizeof(ctx->cross_device_copy_ctx));
+    ctx->cross_device_copy_ctx.options = &ctx->cross_device_copy_options;
+    ctx->cross_device_copy_ctx.diag = ctx->diag;
+    ctx->cross_device_copy_ctx.umask_value = umask(0);
+    umask(ctx->cross_device_copy_ctx.umask_value);
+
+    bx_backup_get_params(BX_BACKUP_NONE, NULL, &ctx->cross_device_copy_ctx.backup_params);
+}
+
+static void bx_mv_reset_cross_device_copy_call_state(struct bx_mv_context *ctx) {
+    struct bx_copy_context *copy_ctx = &ctx->cross_device_copy_ctx;
+
+    bx_copy_free_source_dirs(copy_ctx);
+    bx_copy_free_parent_attrs(copy_ctx);
+    free(copy_ctx->current_dest_root_realpath);
+    copy_ctx->current_dest_root_realpath = NULL;
+    copy_ctx->current_source_root = NULL;
+    copy_ctx->current_dest_root = NULL;
+    copy_ctx->stop_current_source = false;
+}
+
+static void bx_mv_free_cross_device_copy_context(struct bx_mv_context *ctx) {
+    bx_mv_reset_cross_device_copy_call_state(ctx);
+    bx_copy_free_links(&ctx->cross_device_copy_ctx);
+}
 
 static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
                                        const char *dest_path,
@@ -370,31 +421,7 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
                                          const char *src_path,
                                          const char *dest_path,
                                          const struct stat *src_stat) {
-    (void)src_stat;
-    struct bx_copy_options copy_opts = {0};
-    struct bx_copy_context copy_ctx = {0};
-    
-    copy_opts.recursive = true;
-    copy_opts.mode_policy = BX_MODE_POLICY_PRESERVE;
-    copy_opts.preserve_mask = BX_PRESERVE_ALL;
-    copy_opts.verbose = ctx->options->verbose;
-    copy_opts.debug = ctx->options->debug;
-    copy_opts.move_mode = true;
-    /* Interaction was already handled in bx_mv_rename_file */
-    copy_opts.force = true;
-    copy_opts.interactive = false;
-    copy_opts.no_clobber = false;
-    copy_opts.remove_destination = true;
-    copy_opts.update_mode = BX_UPDATE_ALL;
-
-    copy_ctx.options = &copy_opts;
-    copy_ctx.diag = ctx->diag;
-    copy_ctx.umask_value = umask(0);
-    umask(copy_ctx.umask_value);
-    copy_ctx.current_source_root = src_path;
-    copy_ctx.current_dest_root = dest_path;
-    
-    bx_backup_get_params(BX_BACKUP_NONE, NULL, &copy_ctx.backup_params);
+    struct bx_copy_context *copy_ctx = &ctx->cross_device_copy_ctx;
 
     if (ctx->options->verbose) {
         bx_info(ctx->diag, "inter-device move: '%s' -> '%s'; copying then removing", src_path, dest_path);
@@ -404,16 +431,16 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
         return false;
     }
 
-    if (!bx_copy_path(&copy_ctx, src_path, src_path, dest_path, true)) {
-        bx_copy_free_links(&copy_ctx);
-        bx_copy_free_source_dirs(&copy_ctx);
-        free(copy_ctx.current_dest_root_realpath);
+    copy_ctx->stop_current_source = false;
+    copy_ctx->current_source_root = src_path;
+    copy_ctx->current_dest_root = dest_path;
+
+    if (!bx_copy_path(copy_ctx, src_path, src_path, dest_path, true)) {
+        bx_mv_reset_cross_device_copy_call_state(ctx);
         return false;
     }
 
-    bx_copy_free_links(&copy_ctx);
-    bx_copy_free_source_dirs(&copy_ctx);
-    free(copy_ctx.current_dest_root_realpath);
+    bx_mv_reset_cross_device_copy_call_state(ctx);
 
     if (!bx_remove_recursive(src_path, ctx->diag)) {
         return false;
@@ -460,6 +487,7 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
 
             if (ctx->options->interactive && !ctx->options->force) {
                 if (!bx_prompt_overwrite(ctx->options->progname, dest_path)) {
+                    ctx->diag->exit_status = 1;
                     return true;
                 }
             }
@@ -512,6 +540,7 @@ int bx_mv_main(int argc, char **argv) {
     struct bx_diag_ctx diag = {0};
     int first_operand;
     struct bx_mv_context ctx;
+    int exit_status = 0;
 
     if (!bx_mv_parse_options(argc, argv, &options, &first_operand, &diag)) {
         return 1;
@@ -544,11 +573,13 @@ int bx_mv_main(int argc, char **argv) {
     ctx.options = &options;
     ctx.diag = &diag;
     bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
+    bx_mv_init_cross_device_copy_context(&ctx);
 
     if (options.exchange) {
         if (options.target_directory || operand_count != 2) {
             bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t");
-            return 1;
+            exit_status = 1;
+            goto finish;
         }
         const char *src_path = argv[first_operand];
         const char *dest_path = argv[first_operand + 1];
@@ -564,7 +595,8 @@ int bx_mv_main(int argc, char **argv) {
 
         free(final_src);
         free(final_dst);
-        return diag.exit_status;
+        exit_status = diag.exit_status;
+        goto finish;
     }
 
     const char *destination_root = NULL;
@@ -578,17 +610,20 @@ int bx_mv_main(int argc, char **argv) {
         source_count = operand_count;
         if (!bx_stat_is_dir_path(destination_root)) {
             bx_diag(&diag, "target '%s' is not a directory", destination_root);
-            return 1;
+            exit_status = 1;
+            goto finish;
         }
         destination_is_directory = true;
     } else if (options.no_target_directory) {
         if (operand_count < 2) {
             bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
-            return 1;
+            exit_status = 1;
+            goto finish;
         }
         if (operand_count > 2) {
             bx_diag(&diag, "extra operand '%s'", argv[first_operand + 2]);
-            return 1;
+            exit_status = 1;
+            goto finish;
         }
         destination_root = argv[first_operand + 1];
         source_operands = argv + first_operand;
@@ -601,7 +636,8 @@ int bx_mv_main(int argc, char **argv) {
         if (source_count > 1) {
             if (!bx_stat_is_dir_path(destination_root)) {
                 bx_diag(&diag, "target '%s' is not a directory", destination_root);
-                return 1;
+                exit_status = 1;
+                goto finish;
             }
             destination_is_directory = true;
         } else if (bx_stat_is_dir_path(destination_root)) {
@@ -635,5 +671,9 @@ int bx_mv_main(int argc, char **argv) {
         free(source_operand);
     }
 
-    return diag.exit_status;
+    exit_status = diag.exit_status;
+
+finish:
+    bx_mv_free_cross_device_copy_context(&ctx);
+    return exit_status;
 }

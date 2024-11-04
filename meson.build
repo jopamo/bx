@@ -92,6 +92,9 @@ if get_option('tests')
   test_cp_reference_resolution = files('tests/cp/test_cp_reference_resolution.py')
   test('cp reference resolution', python3, args : [test_cp_reference_resolution])
 
+  test_fuzz_reference_resolution = files('tests/test_fuzz_reference_resolution.py')
+  test('fuzz reference resolution', python3, args : [test_fuzz_reference_resolution])
+
   test_cp_preserve_metadata = files('tests/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 
@@ -104,6 +107,12 @@ if get_option('tests')
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
+
+  test_cp_fuzz = files('tests/cp/test_cp_fuzz.py')
+  test('cp fuzz', python3, args : [test_cp_fuzz, cp_ref, bx_exe, meson.current_build_dir(), '20', '0'])
+
+  test_mv_fuzz = files('tests/mv/test_mv_fuzz.py')
+  test('mv fuzz', python3, args : [test_mv_fuzz, mv_ref, bx_exe, meson.current_build_dir(), '20', '0'])
 
   test_cp_cli_differential = files('tests/cp/test_cp_cli_differential.py')
   test('cp cli differential', python3, args : [test_cp_cli_differential, cp_ref, bx_exe, meson.current_build_dir()])

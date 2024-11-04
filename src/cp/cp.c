@@ -187,11 +187,11 @@ static bool bx_cp_parse_options(int argc,
             options->copy.attributes_only = true;
             break;
         case 'b':
-            options->backup_mode = BX_BACKUP_UNSPECIFIED;
+            bx_args_enable_backup_mode(&options->backup_mode);
             break;
         case BX_CP_OPT_BACKUP:
             if (optarg == NULL) {
-                options->backup_mode = BX_BACKUP_UNSPECIFIED;
+                bx_args_enable_backup_mode(&options->backup_mode);
             } else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
                 bx_diag(diag, "invalid --backup control value '%s'", optarg);
                 return false;
@@ -372,6 +372,13 @@ static bool bx_cp_parse_options(int argc,
         bx_diag(diag, "cannot combine --link and --symbolic-link");
         return false;
     }
+    if (bx_args_backup_mode_requested(options->backup_mode) &&
+        (options->copy.no_clobber ||
+         options->copy.update_mode == BX_UPDATE_NONE ||
+         options->copy.update_mode == BX_UPDATE_NONE_FAIL)) {
+        bx_diag(diag, "cannot combine --backup with -n, --update=none, or --update=none-fail");
+        return false;
+    }
     if (options->target_directory && options->no_target_directory) {
         bx_diag(diag, "cannot combine --target-directory and --no-target-directory");
         return false;
@@ -518,5 +525,6 @@ int bx_cp_main(int argc, char **argv) {
 
     bx_copy_free_links(&copy_ctx);
     bx_copy_free_source_dirs(&copy_ctx);
+    bx_copy_free_parent_attrs(&copy_ctx);
     return diag_ctx.exit_status;
 }

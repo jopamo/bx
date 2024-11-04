@@ -59,6 +59,13 @@ struct bx_dir_entry {
     struct bx_dir_entry *next;
 };
 
+struct bx_parent_attr_entry {
+    char *src_path;
+    char *dest_path;
+    struct stat src_stat;
+    struct bx_parent_attr_entry *next;
+};
+
 struct bx_copy_context {
     const struct bx_copy_options *options;
     struct bx_diag_ctx *diag;
@@ -67,6 +74,7 @@ struct bx_copy_context {
     
     struct bx_link_entry *links;
     struct bx_dir_entry *source_dirs;
+    struct bx_parent_attr_entry *parent_attrs;
     
     bool dest_root_active;
     dev_t dest_root_dev;
@@ -90,5 +98,6 @@ bool bx_copy_path(struct bx_copy_context *ctx,
 
 void bx_copy_free_links(struct bx_copy_context *ctx);
 void bx_copy_free_source_dirs(struct bx_copy_context *ctx);
+void bx_copy_free_parent_attrs(struct bx_copy_context *ctx);
 
 #endif /* BX_COMMON_COPY_TREE_H */

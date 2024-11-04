@@ -23,5 +23,8 @@ enum bx_backup_mode {
 };
 
 bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out);
+void bx_args_enable_backup_mode(enum bx_backup_mode *mode);
+bool bx_args_backup_mode_requested(enum bx_backup_mode mode);
+bool bx_args_backup_mode_enabled(enum bx_backup_mode mode);
 
 #endif /* BX_COMMON_ARGS_COMMON_H */

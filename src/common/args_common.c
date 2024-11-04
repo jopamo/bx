@@ -105,3 +105,17 @@ bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out) {
     }
     return false;
 }
+
+void bx_args_enable_backup_mode(enum bx_backup_mode *mode) {
+    if (*mode == BX_BACKUP_NONE) {
+        *mode = BX_BACKUP_UNSPECIFIED;
+    }
+}
+
+bool bx_args_backup_mode_requested(enum bx_backup_mode mode) {
+    return mode != BX_BACKUP_NONE;
+}
+
+bool bx_args_backup_mode_enabled(enum bx_backup_mode mode) {
+    return mode != BX_BACKUP_NONE && mode != BX_BACKUP_OFF;
+}

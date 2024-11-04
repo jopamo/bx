@@ -60,6 +60,18 @@ static mode_t bx_copy_regular_file_create_mode(const struct bx_copy_context *ctx
     return src_stat->st_mode & 0777u;
 }
 
+static const struct stat *bx_copy_overwrite_dest_stat(const struct bx_copy_context *ctx,
+                                                      const struct bx_dest_state *dest_state) {
+    if (dest_state->exists_stat) {
+        return &dest_state->st;
+    }
+    if (dest_state->dangling_symlink &&
+        bx_args_backup_mode_enabled(ctx->backup_params.mode)) {
+        return &dest_state->lst;
+    }
+    return NULL;
+}
+
 static mode_t bx_copy_directory_create_mode(const struct bx_copy_context *ctx,
                                             const struct stat *src_stat,
                                             mode_t *final_mode_out,
@@ -115,6 +127,53 @@ static enum bx_backup_create_result bx_copy_backup_same_file_copy(struct bx_copy
     return result;
 }
 
+static bool bx_copy_parent_dir_stat(const char *path, struct stat *parent_stat_out) {
+    char *stripped = bx_path_strip_trailing_slashes_dup(path);
+    char *parent_path = NULL;
+    char *slash = strrchr(stripped, '/');
+
+    if (slash == NULL) {
+        parent_path = xstrdup(".");
+    } else if (slash == stripped) {
+        parent_path = xstrdup("/");
+    } else {
+        size_t parent_len = (size_t)(slash - stripped);
+        parent_path = xmalloc(parent_len + 1u);
+        memcpy(parent_path, stripped, parent_len);
+        parent_path[parent_len] = '\0';
+    }
+
+    bool ok = stat(parent_path, parent_stat_out) == 0;
+    free(parent_path);
+    free(stripped);
+    return ok;
+}
+
+static bool bx_copy_paths_name_same_directory_entry(const char *src_path, const char *dest_path) {
+    bool same_entry = true;
+    char *src_base = bx_path_basename_dup(src_path);
+    char *dest_base = bx_path_basename_dup(dest_path);
+
+    if (strcmp(src_base, dest_base) != 0) {
+        same_entry = false;
+        goto out;
+    }
+
+    struct stat src_parent_stat;
+    struct stat dest_parent_stat;
+    if (!bx_copy_parent_dir_stat(src_path, &src_parent_stat) ||
+        !bx_copy_parent_dir_stat(dest_path, &dest_parent_stat)) {
+        goto out;
+    }
+
+    same_entry = bx_same_file(&src_parent_stat, &dest_parent_stat);
+
+out:
+    free(dest_base);
+    free(src_base);
+    return same_entry;
+}
+
 static bool bx_copy_apply_fd_attrs(const struct bx_copy_context *ctx,
                                    int src_fd,
                                    int dest_fd,
@@ -136,6 +195,23 @@ static bool bx_copy_apply_path_attrs(const struct bx_copy_context *ctx,
     return bx_copy_path_metadata(src_path, dest_path, src_stat, ctx->options->preserve_mask, no_follow)
         ? true
         : (bx_perror_path(ctx->diag, dest_path), false);
+}
+
+static unsigned bx_copy_parent_preserve_mask(const struct bx_copy_context *ctx) {
+    unsigned mask = ctx->options->preserve_mask &
+                    (BX_PRESERVE_MODE |
+                     BX_PRESERVE_OWNERSHIP |
+                     BX_PRESERVE_TIMESTAMPS);
+
+    if (ctx->options->mode_policy == BX_MODE_POLICY_PRESERVE) {
+        mask |= BX_PRESERVE_MODE;
+    }
+
+    if (ctx->options->mode_policy == BX_MODE_POLICY_NO_PRESERVE) {
+        mask &= ~BX_PRESERVE_MODE;
+    }
+
+    return mask;
 }
 
 static bool bx_copy_should_skip_existing(const struct bx_copy_options *options,
@@ -196,6 +272,7 @@ static enum bx_copy_overwrite_result bx_copy_prepare_overwrite(struct bx_copy_co
     }
 
     if (ctx->options->interactive && !bx_prompt_overwrite(ctx->diag->progname, dest_path)) {
+        ctx->diag->exit_status = 1;
         return BX_COPY_OVERWRITE_SKIP;
     }
 
@@ -317,6 +394,55 @@ void bx_copy_free_source_dirs(struct bx_copy_context *ctx) {
     }
 }
 
+void bx_copy_free_parent_attrs(struct bx_copy_context *ctx) {
+    struct bx_parent_attr_entry *curr = ctx->parent_attrs;
+    while (curr != NULL) {
+        struct bx_parent_attr_entry *next = curr->next;
+        free(curr->src_path);
+        free(curr->dest_path);
+        free(curr);
+        curr = next;
+    }
+    ctx->parent_attrs = NULL;
+}
+
+static bool bx_copy_record_parent_attr(struct bx_copy_context *ctx,
+                                       const char *src_path,
+                                       const char *dest_path,
+                                       const struct stat *src_stat) {
+    struct bx_parent_attr_entry *entry = xmalloc(sizeof(*entry));
+
+    entry->src_path = xstrdup(src_path);
+    entry->dest_path = xstrdup(dest_path);
+    entry->src_stat = *src_stat;
+    entry->next = ctx->parent_attrs;
+    ctx->parent_attrs = entry;
+    return true;
+}
+
+static bool bx_copy_apply_parent_attrs(struct bx_copy_context *ctx) {
+    unsigned mask = bx_copy_parent_preserve_mask(ctx);
+
+    if (mask == 0u) {
+        return true;
+    }
+
+    for (struct bx_parent_attr_entry *entry = ctx->parent_attrs;
+         entry != NULL;
+         entry = entry->next) {
+        if (!bx_copy_path_metadata(entry->src_path,
+                                   entry->dest_path,
+                                   &entry->src_stat,
+                                   mask,
+                                   false)) {
+            bx_perror_path(ctx->diag, entry->dest_path);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static char *bx_copy_realpath_dup(const char *path) {
     char buf[PATH_MAX];
     if (realpath(path, buf) == NULL) {
@@ -427,6 +553,7 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
     int dest_fd = -1;
     int copy_res = BX_COPY_DATA_SUCCESS;
     struct bx_dest_state dest_state;
+    const struct stat *overwrite_stat = NULL;
     char *backup_path = NULL;
     bool created_destination_from_scratch = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
@@ -438,29 +565,48 @@ static bool bx_copy_regular_file(struct bx_copy_context *ctx,
 
     if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
         if (ctx->backup_params.mode != BX_BACKUP_NONE && ctx->options->force &&
-            S_ISREG(src_stat->st_mode) && strcmp(src_path, dest_path) == 0) {
-            enum bx_backup_create_result backup_result =
-                bx_copy_backup_same_file_copy(ctx, src_path, dest_path);
-            if (backup_result == BX_BACKUP_CREATE_CREATED) {
-                return true;
-            }
-            if (backup_result == BX_BACKUP_CREATE_FAILED) {
+            S_ISREG(src_stat->st_mode)) {
+            if (strcmp(src_path, dest_path) == 0) {
+                enum bx_backup_create_result backup_result =
+                    bx_copy_backup_same_file_copy(ctx, src_path, dest_path);
+                if (backup_result == BX_BACKUP_CREATE_CREATED) {
+                    return true;
+                }
+                if (backup_result == BX_BACKUP_CREATE_FAILED) {
+                    return false;
+                }
+            } else if (!bx_copy_paths_name_same_directory_entry(src_path, dest_path)) {
+                /*
+                 * GNU cp lets --force --backup replace an alternate destination
+                 * entry that resolves to the same regular file (for example via
+                 * a hard link or a symlink). The exact same directory entry
+                 * still errors unless the operand strings are identical, which
+                 * is handled by the special-case backup copy above.
+                 */
+            } else {
+                bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
+                bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
                 return false;
             }
+        } else {
+            bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
+            bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+            return false;
         }
-        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
-        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
-        return false;
     }
 
-    if (dest_state.dangling_symlink && !ctx->options->remove_destination) {
+    overwrite_stat = bx_copy_overwrite_dest_stat(ctx, &dest_state);
+
+    if (dest_state.dangling_symlink &&
+        !ctx->options->remove_destination &&
+        overwrite_stat == NULL) {
         bx_diag(ctx->diag, "not writing through dangling symlink '%s'", dest_path);
         return false;
     }
 
-    if (dest_state.exists_stat) {
+    if (overwrite_stat != NULL) {
         enum bx_copy_overwrite_result result =
-            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, overwrite_stat,
                                       &dest_state, true, false, &backup_path);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
@@ -805,6 +951,7 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
                                          const char *dest_path,
                                          const struct stat *src_stat) {
     struct bx_dest_state dest_state;
+    const struct stat *overwrite_stat = NULL;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
@@ -816,10 +963,12 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
         return false;
     }
 
+    overwrite_stat = bx_copy_overwrite_dest_stat(ctx, &dest_state);
+
     if (dest_state.exists_lstat) {
-        if (dest_state.exists_stat) {
+        if (overwrite_stat != NULL) {
             enum bx_copy_overwrite_result result =
-                bx_copy_prepare_overwrite(ctx, source_operand, dest_path, src_stat, &dest_state.st,
+                bx_copy_prepare_overwrite(ctx, source_operand, dest_path, src_stat, overwrite_stat,
                                           &dest_state, false, false, NULL);
             if (result == BX_COPY_OVERWRITE_FAILED) {
                 return false;
@@ -848,6 +997,7 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
                                      const struct stat *src_stat,
                                      bool follow_source) {
     struct bx_dest_state dest_state;
+    const struct stat *overwrite_stat = NULL;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
@@ -860,9 +1010,11 @@ static bool bx_copy_create_hard_link(struct bx_copy_context *ctx,
         return false;
     }
 
-    if (dest_state.exists_stat) {
+    overwrite_stat = bx_copy_overwrite_dest_stat(ctx, &dest_state);
+
+    if (overwrite_stat != NULL) {
         enum bx_copy_overwrite_result result =
-            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.st,
+            bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, overwrite_stat,
                                       &dest_state, false, false, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
@@ -893,6 +1045,7 @@ static bool bx_copy_prepare_parents(struct bx_copy_context *ctx, const char *sou
     char *src_copy = xstrdup(source_operand);
     size_t len = strlen(src_copy);
     size_t start = 0;
+    unsigned parent_mask = bx_copy_parent_preserve_mask(ctx);
 
     if (len == 0) {
         free(src_copy);
@@ -911,6 +1064,9 @@ static bool bx_copy_prepare_parents(struct bx_copy_context *ctx, const char *sou
             char *current_src = (start == 1 && src_copy[0] == '\0') ? "/" : src_copy;
             char *current_dest = bx_path_join(ctx->target_root, current_src);
             struct stat src_st;
+            mode_t mkdir_mode;
+            mode_t final_mode = 0;
+            bool restore_mode = false;
 
             if (stat(current_src, &src_st) != 0) {
                 bx_perror_path(ctx->diag, current_src);
@@ -919,7 +1075,10 @@ static bool bx_copy_prepare_parents(struct bx_copy_context *ctx, const char *sou
                 return false;
             }
 
-            if (mkdir(current_dest, 0777u & ~ctx->umask_value) != 0) {
+            mkdir_mode = bx_copy_directory_create_mode(ctx, &src_st, &final_mode, &restore_mode);
+            (void)final_mode;
+            (void)restore_mode;
+            if (mkdir(current_dest, mkdir_mode) != 0) {
                 if (errno != EEXIST) {
                     bx_perror_path(ctx->diag, current_dest);
                     free(current_dest);
@@ -941,10 +1100,11 @@ static bool bx_copy_prepare_parents(struct bx_copy_context *ctx, const char *sou
                 }
             }
 
-            if (ctx->options->mode_policy == BX_MODE_POLICY_PRESERVE ||
-                (ctx->options->preserve_mask & (BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_XATTR)) != 0u) {
-                if (!bx_copy_path_metadata(current_src, current_dest, &src_st, ctx->options->preserve_mask, false)) {
-                }
+            if (parent_mask != 0u &&
+                !bx_copy_record_parent_attr(ctx, current_src, current_dest, &src_st)) {
+                free(current_dest);
+                free(src_copy);
+                return false;
             }
             free(current_dest);
         }
@@ -1097,6 +1257,8 @@ bool bx_copy_path(struct bx_copy_context *ctx,
     struct stat src_stat;
     bool source_is_symlink;
     bool follow_source;
+    bool ok = false;
+    bool parents_prepared = false;
 
     if (lstat(src_path, &src_lstat) != 0) {
         bx_perror_path(ctx->diag, src_path);
@@ -1131,23 +1293,31 @@ bool bx_copy_path(struct bx_copy_context *ctx,
         return false;
     }
 
-    if (ctx->options->parents && !bx_copy_prepare_parents(ctx, source_operand)) {
-        return false;
+    if (top_level && ctx->options->parents) {
+        bx_copy_free_parent_attrs(ctx);
+        if (!bx_copy_prepare_parents(ctx, source_operand)) {
+            bx_copy_free_parent_attrs(ctx);
+            return false;
+        }
+        parents_prepared = true;
     }
 
     if (S_ISDIR(src_stat.st_mode)) {
         if (!ctx->options->recursive) {
             bx_diag(ctx->diag, "-r not specified; omitting directory '%s'", src_path);
-            return false;
+            goto finish;
         }
-        return bx_copy_directory(ctx, src_path, dest_path, &src_stat, top_level);
+        ok = bx_copy_directory(ctx, src_path, dest_path, &src_stat, top_level);
+        goto finish;
     }
 
     if (ctx->options->symbolic_link) {
-        return bx_copy_create_symbolic_link(ctx, source_operand, dest_path, &src_stat);
+        ok = bx_copy_create_symbolic_link(ctx, source_operand, dest_path, &src_stat);
+        goto finish;
     }
     if (ctx->options->hard_link) {
-        return bx_copy_create_hard_link(ctx, src_path, dest_path, &src_stat, follow_source);
+        ok = bx_copy_create_hard_link(ctx, src_path, dest_path, &src_stat, follow_source);
+        goto finish;
     }
 
     if ((ctx->options->preserve_mask & BX_PRESERVE_LINKS) != 0u &&
@@ -1155,35 +1325,52 @@ bool bx_copy_path(struct bx_copy_context *ctx,
         !ctx->options->symbolic_link) {
         struct bx_link_entry *entry = bx_copy_find_link_entry(ctx, src_stat.st_dev, src_stat.st_ino);
         if (entry != NULL) {
-            return bx_copy_create_hard_link(ctx, entry->dest_path, dest_path, &src_stat, false);
+            ok = bx_copy_create_hard_link(ctx, entry->dest_path, dest_path, &src_stat, false);
+            goto finish;
         }
     }
 
     if (!follow_source && S_ISLNK(src_lstat.st_mode)) {
-        return bx_copy_symlink_object(ctx, src_path, dest_path, &src_lstat);
+        ok = bx_copy_symlink_object(ctx, src_path, dest_path, &src_lstat);
+        goto finish;
     }
     if (S_ISFIFO(src_stat.st_mode)) {
         if (!ctx->options->recursive || ctx->options->copy_contents) {
-            return bx_copy_fifo_contents(ctx, src_path, dest_path, &src_stat);
+            ok = bx_copy_fifo_contents(ctx, src_path, dest_path, &src_stat);
+            goto finish;
         }
-        return bx_copy_fifo(ctx, src_path, dest_path, &src_stat);
+        ok = bx_copy_fifo(ctx, src_path, dest_path, &src_stat);
+        goto finish;
     }
     if (S_ISSOCK(src_stat.st_mode)) {
         if (!ctx->options->recursive || ctx->options->copy_contents) {
-            return bx_copy_socket_contents(ctx, src_path, dest_path, &src_stat);
+            ok = bx_copy_socket_contents(ctx, src_path, dest_path, &src_stat);
+            goto finish;
         }
-        return bx_copy_socket(ctx, src_path, dest_path, &src_stat);
+        ok = bx_copy_socket(ctx, src_path, dest_path, &src_stat);
+        goto finish;
     }
     if (S_ISCHR(src_stat.st_mode) || S_ISBLK(src_stat.st_mode)) {
         if (ctx->options->copy_contents) {
-            return bx_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
+            ok = bx_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
+            goto finish;
         }
-        return bx_copy_device_node(ctx, src_path, dest_path, &src_stat);
+        ok = bx_copy_device_node(ctx, src_path, dest_path, &src_stat);
+        goto finish;
     }
     if (S_ISREG(src_stat.st_mode)) {
-        return bx_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
+        ok = bx_copy_regular_file_path(ctx, src_path, dest_path, &src_stat);
+        goto finish;
     }
 
     bx_diag(ctx->diag, "unsupported file type for '%s'", src_path);
-    return false;
+finish:
+    if (parents_prepared) {
+        if (ok && !bx_copy_apply_parent_attrs(ctx)) {
+            ok = false;
+        }
+        bx_copy_free_parent_attrs(ctx);
+    }
+
+    return ok;
 }
