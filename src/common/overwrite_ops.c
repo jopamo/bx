@@ -28,10 +28,6 @@ bool bx_overwrite_should_skip(bool no_clobber,
         return true;
     }
 
-    if (interactive) {
-        return true;
-    }
-
     bool error = false;
     if (!bx_update_should_skip(update_mode, src_stat, dest_stat, skip_out, &error)) {
         if (error) {
@@ -43,6 +39,11 @@ bool bx_overwrite_should_skip(bool no_clobber,
     if (*skip_out && reason_out != NULL) {
         *reason_out = BX_OVERWRITE_SKIP_UPDATE;
     }
+
+    if (interactive) {
+        return true;
+    }
+
     return true;
 }
 

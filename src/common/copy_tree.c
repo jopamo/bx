@@ -60,6 +60,44 @@ static mode_t bx_copy_regular_file_create_mode(const struct bx_copy_context *ctx
     return src_stat->st_mode & 0777u;
 }
 
+static char *bx_copy_parent_dir_dup(const char *path) {
+    char *copy = xstrdup(path);
+    char *slash = strrchr(copy, '/');
+
+    if (slash == NULL) {
+        free(copy);
+        return xstrdup(".");
+    }
+    if (slash == copy) {
+        slash[1] = '\0';
+        return copy;
+    }
+
+    *slash = '\0';
+    return copy;
+}
+
+static bool bx_copy_relative_symlink_stays_in_cwd(const char *dest_path) {
+    char *parent = bx_copy_parent_dir_dup(dest_path);
+    char *parent_real = realpath(parent, NULL);
+    bool same_directory = true;
+
+    free(parent);
+
+    if (parent_real == NULL) {
+        return true;
+    }
+
+    char *cwd_real = realpath(".", NULL);
+    if (cwd_real != NULL) {
+        same_directory = strcmp(parent_real, cwd_real) == 0;
+        free(cwd_real);
+    }
+
+    free(parent_real);
+    return same_directory;
+}
+
 static const struct stat *bx_copy_overwrite_dest_stat(const struct bx_copy_context *ctx,
                                                       const struct bx_dest_state *dest_state) {
     if (dest_state->exists_stat) {
@@ -980,6 +1018,14 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context *ctx,
         if (!bx_copy_prepare_link_destination(ctx, source_operand, dest_path, &dest_state)) {
             return false;
         }
+    }
+
+    if (source_operand[0] != '/' &&
+        !bx_copy_relative_symlink_stays_in_cwd(dest_path)) {
+        bx_diag(ctx->diag,
+                "%s: can make relative symbolic links only in current directory",
+                dest_path);
+        return false;
     }
 
     if (symlink(source_operand, dest_path) != 0) {

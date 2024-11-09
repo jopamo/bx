@@ -325,9 +325,20 @@ static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
                                        const struct stat *dest_stat,
                                        bool *skip_out,
                                        struct bx_diag_ctx *diag) {
+    enum bx_update_mode update_mode = options->update_mode;
+
+    if (update_mode == BX_UPDATE_OLDER &&
+        S_ISDIR(src_stat->st_mode)) {
+        /* GNU mv does not use directory mtimes to suppress rename-time
+         * directory semantics: directory targets may still replace empty
+         * directories, and incompatible non-directory targets must still fail.
+         */
+        update_mode = BX_UPDATE_ALL;
+    }
+
     return bx_overwrite_should_skip(options->no_clobber,
                                     options->interactive,
-                                    options->update_mode,
+                                    update_mode,
                                     dest_path,
                                     src_stat,
                                     dest_stat,
@@ -449,12 +460,39 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
     return true;
 }
 
+static bool bx_mv_restore_failed_backup(struct bx_mv_context *ctx,
+                                        const char *dest_path,
+                                        const char *backup_path) {
+    struct stat st;
+
+    if (backup_path == NULL) {
+        return true;
+    }
+
+    if (lstat(dest_path, &st) == 0) {
+        return true;
+    }
+    if (errno != ENOENT && errno != ENOTDIR) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (rename(backup_path, dest_path) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_mv_rename_file(struct bx_mv_context *ctx,
                               const char *src_path,
                               const char *dest_path) {
     struct stat src_stat;
     struct bx_dest_state dest_state;
+    char *backup_path = NULL;
     bool skip = false;
+    bool ok = false;
+    bool restore_backup_on_failure = false;
 
     if (lstat(src_path, &src_stat) != 0) {
         bx_perror_path(ctx->diag, src_path);
@@ -475,30 +513,27 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
     }
 
     if (dest_state.exists_lstat) {
-        if (ctx->options->exchange) {
-            /* No need for prompts/backups when exchanging */
-        } else {
-            if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_stat, &dest_state.lst, &skip, ctx->diag)) {
-                return false;
-            }
-            if (skip) {
+        if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_stat, &dest_state.lst, &skip, ctx->diag)) {
+            return false;
+        }
+        if (skip) {
+            return true;
+        }
+
+        if (ctx->options->interactive && !ctx->options->force) {
+            if (!bx_prompt_overwrite(ctx->options->progname, dest_path)) {
+                ctx->diag->exit_status = 1;
                 return true;
             }
+        }
 
-            if (ctx->options->interactive && !ctx->options->force) {
-                if (!bx_prompt_overwrite(ctx->options->progname, dest_path)) {
-                    ctx->diag->exit_status = 1;
-                    return true;
-                }
-            }
-
-            if (!bx_overwrite_backup_existing(dest_path,
-                                              &ctx->backup_params,
-                                              ctx->diag,
-                                              &dest_state,
-                                              NULL)) {
-                return false;
-            }
+        if (!ctx->options->exchange &&
+            !bx_overwrite_backup_existing(dest_path,
+                                          &ctx->backup_params,
+                                          ctx->diag,
+                                          &dest_state,
+                                          &backup_path)) {
+            goto finish;
         }
     } else if (ctx->options->exchange) {
         bx_diag(ctx->diag, "cannot exchange '%s' and '%s': Destination does not exist", src_path, dest_path);
@@ -510,29 +545,41 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
             if (ctx->options->verbose) {
                 bx_info(ctx->diag, "exchanged '%s' and '%s'", src_path, dest_path);
             }
-            return true;
+            ok = true;
+            goto finish;
         }
         bx_perror_path(ctx->diag, "renameat2 (exchange)");
-        return false;
+        goto finish;
     }
 
     if (rename(src_path, dest_path) == 0) {
         if (ctx->options->verbose) {
             bx_info(ctx->diag, "renamed '%s' -> '%s'", src_path, dest_path);
         }
-        return true;
+        ok = true;
+        goto finish;
     }
 
     if (errno == EXDEV) {
         if (ctx->options->no_copy) {
             bx_diag(ctx->diag, "cannot move '%s' to '%s': Cross-device link and --no-copy specified", src_path, dest_path);
-            return false;
+            goto finish;
         }
-        return bx_mv_cross_device_fallback(ctx, src_path, dest_path, &src_stat);
+        restore_backup_on_failure = true;
+        ok = bx_mv_cross_device_fallback(ctx, src_path, dest_path, &src_stat);
+        goto finish;
     }
 
     bx_perror_path(ctx->diag, dest_path);
-    return false;
+
+finish:
+    if (!ok && restore_backup_on_failure &&
+        !bx_mv_restore_failed_backup(ctx, dest_path, backup_path)) {
+        free(backup_path);
+        return false;
+    }
+    free(backup_path);
+    return ok;
 }
 
 int bx_mv_main(int argc, char **argv) {

@@ -98,6 +98,9 @@ if get_option('tests')
   test_cp_preserve_metadata = files('tests/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 
+  test_security_context_unsupported = files('tests/test_security_context_unsupported.py')
+  test('security-context unsupported', python3, args : [test_security_context_unsupported, bx_exe])
+
   test_mv_differential = files('tests/mv/test_mv_differential.py')
   mv_ref = find_program('mv')
   test('mv differential', python3, args : [test_mv_differential, mv_ref, bx_exe, meson.current_build_dir()])
