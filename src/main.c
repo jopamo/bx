@@ -18,6 +18,9 @@ static const struct applet applets[] = {
     {"which", bx_which_main},
     {"cp", bx_cp_main},
     {"mv", bx_mv_main},
+#if BX_HAVE_MIRA_EMBED
+    {"wget", bx_wget_main},
+#endif
     {"true", bx_true_main},
     {"false", bx_false_main},
 };

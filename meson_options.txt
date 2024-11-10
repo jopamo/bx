@@ -6,3 +6,10 @@ option(
   value : 'shebang',
   description : 'Install multicall applets as shebang wrappers or symlinks'
 )
+option(
+  'mira_embed',
+  type : 'combo',
+  choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Enable wget applet backed by mira-embed static library'
+)

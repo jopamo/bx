@@ -16,6 +16,25 @@ warn_flags = [
 ]
 add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
+mira_embed_opt = get_option('mira_embed')
+mira_embed_dep = declare_dependency()
+mira_embed_enabled = false
+if mira_embed_opt != 'disabled'
+  mira_embed_dep = dependency('mira-embed', required : mira_embed_opt == 'enabled')
+  mira_embed_enabled = mira_embed_dep.found()
+endif
+
+if mira_embed_enabled
+  add_project_arguments('-DBX_HAVE_MIRA_EMBED=1', language : 'c')
+else
+  add_project_arguments('-DBX_HAVE_MIRA_EMBED=0', language : 'c')
+endif
+
+bx_deps = []
+if mira_embed_enabled
+  bx_deps += [mira_embed_dep]
+endif
+
 sources = [
   'src/common/args_common.c',
   'src/common/backup_ops.c',
@@ -33,16 +52,21 @@ sources = [
   'src/main.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
+  'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
 applet_names = ['which', 'cp', 'true', 'false']
+if mira_embed_enabled
+  applet_names += ['wget']
+endif
 
 bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
+  dependencies : bx_deps,
   install : true
 )
 

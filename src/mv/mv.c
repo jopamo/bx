@@ -61,6 +61,7 @@ struct bx_mv_options {
     const char *suffix;
     const char *target_directory;
     bool no_target_directory;
+    bool backup_conflict_warning;
 };
 
 static const char *bx_mv_progname(const char *argv0) {
@@ -79,6 +80,139 @@ static bool bx_mv_parent_exists_as_directory(const char *path) {
     bool is_dir = bx_stat_is_dir_path(parent);
     free(copy);
     return is_dir;
+}
+
+static char *bx_mv_parent_dir_dup(const char *path) {
+    char *copy = xstrdup(path);
+    char *slash = strrchr(copy, '/');
+
+    if (slash == NULL) {
+        free(copy);
+        return xstrdup(".");
+    }
+    if (slash == copy) {
+        slash[1] = '\0';
+        return copy;
+    }
+
+    *slash = '\0';
+    return copy;
+}
+
+static char *bx_mv_canonical_dest_path_no_follow(const char *dest_path) {
+    char *parent = bx_mv_parent_dir_dup(dest_path);
+    char *parent_real = realpath(parent, NULL);
+    char *base = bx_path_basename_dup(dest_path);
+    char *result = NULL;
+
+    free(parent);
+    if (parent_real == NULL) {
+        free(base);
+        return NULL;
+    }
+
+    if (strcmp(base, "/") == 0) {
+        result = xstrdup("/");
+    } else if (strcmp(parent_real, "/") == 0) {
+        size_t len = strlen(base);
+        result = xmalloc(len + 2u);
+        result[0] = '/';
+        memcpy(result + 1u, base, len + 1u);
+    } else {
+        size_t parent_len = strlen(parent_real);
+        size_t base_len = strlen(base);
+        result = xmalloc(parent_len + 1u + base_len + 1u);
+        memcpy(result, parent_real, parent_len);
+        result[parent_len] = '/';
+        memcpy(result + parent_len + 1u, base, base_len + 1u);
+    }
+
+    free(base);
+    free(parent_real);
+    return result;
+}
+
+static bool bx_mv_symlink_source_matches_destination_path(const char *src_path,
+                                                          const char *dest_path) {
+    bool same = false;
+    char *resolved_source = realpath(src_path, NULL);
+    char *resolved_dest = NULL;
+
+    if (resolved_source == NULL) {
+        return false;
+    }
+
+    resolved_dest = bx_mv_canonical_dest_path_no_follow(dest_path);
+    if (resolved_dest != NULL &&
+        strcmp(resolved_source, resolved_dest) == 0) {
+        same = true;
+    }
+
+    free(resolved_dest);
+    free(resolved_source);
+    return same;
+}
+
+static bool bx_mv_parent_dir_stat(const char *path, struct stat *parent_stat_out) {
+    char *stripped = bx_path_strip_trailing_slashes_dup(path);
+    char *parent_path = NULL;
+    char *slash = strrchr(stripped, '/');
+    bool ok = false;
+
+    if (slash == NULL) {
+        parent_path = xstrdup(".");
+    } else if (slash == stripped) {
+        parent_path = xstrdup("/");
+    } else {
+        size_t parent_len = (size_t)(slash - stripped);
+        parent_path = xmalloc(parent_len + 1u);
+        memcpy(parent_path, stripped, parent_len);
+        parent_path[parent_len] = '\0';
+    }
+
+    ok = stat(parent_path, parent_stat_out) == 0;
+    free(parent_path);
+    free(stripped);
+    return ok;
+}
+
+static bool bx_mv_paths_name_same_directory_entry(const char *src_path,
+                                                  const char *dest_path) {
+    bool same_entry = true;
+    char *src_base = bx_path_basename_dup(src_path);
+    char *dest_base = bx_path_basename_dup(dest_path);
+
+    if (strcmp(src_base, dest_base) != 0) {
+        same_entry = false;
+        goto out;
+    }
+
+    struct stat src_parent_stat;
+    struct stat dest_parent_stat;
+    if (!bx_mv_parent_dir_stat(src_path, &src_parent_stat) ||
+        !bx_mv_parent_dir_stat(dest_path, &dest_parent_stat)) {
+        goto out;
+    }
+
+    same_entry = bx_same_file(&src_parent_stat, &dest_parent_stat);
+
+out:
+    free(dest_base);
+    free(src_base);
+    return same_entry;
+}
+
+static bool bx_mv_paths_are_same_file(const char *src_path,
+                                      const char *dest_path,
+                                      const struct stat *src_lstat,
+                                      const struct stat *dest_lstat) {
+    if (bx_same_file(src_lstat, dest_lstat)) {
+        return true;
+    }
+    if (!S_ISLNK(src_lstat->st_mode)) {
+        return false;
+    }
+    return bx_mv_symlink_source_matches_destination_path(src_path, dest_path);
 }
 
 static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options *options,
@@ -232,6 +366,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
                 break;
             case 'S':
                 options->suffix = optarg;
+                bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case BX_MV_OPT_NO_COPY:
                 options->no_copy = true;
@@ -263,7 +398,10 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
          options->update_mode == BX_UPDATE_NONE_FAIL ||
          options->exchange)) {
         bx_diag(diag, "cannot combine --backup with --exchange, -n, --update=none, or --update=none-fail");
-        return false;
+        options->backup_conflict_warning = true;
+        if (options->exchange) {
+            return false;
+        }
     }
 
     *first_operand = optind;
@@ -487,14 +625,16 @@ static bool bx_mv_restore_failed_backup(struct bx_mv_context *ctx,
 static bool bx_mv_rename_file(struct bx_mv_context *ctx,
                               const char *src_path,
                               const char *dest_path) {
-    struct stat src_stat;
+    struct stat src_lstat;
     struct bx_dest_state dest_state;
     char *backup_path = NULL;
     bool skip = false;
     bool ok = false;
     bool restore_backup_on_failure = false;
+    bool same_file = false;
+    bool same_directory_entry = false;
 
-    if (lstat(src_path, &src_stat) != 0) {
+    if (lstat(src_path, &src_lstat) != 0) {
         bx_perror_path(ctx->diag, src_path);
         return false;
     }
@@ -504,16 +644,31 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
         return false;
     }
 
-    if (dest_state.exists_lstat && bx_same_file(&src_stat, &dest_state.lst)) {
-        /* GNU mv: error if same file, unless it's a hardlink but even then...
-         * Actually GNU mv says "'src' and 'dest' are the same file"
-         */
-        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
-        return false;
-    }
-
     if (dest_state.exists_lstat) {
-        if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_stat, &dest_state.lst, &skip, ctx->diag)) {
+        same_file = bx_mv_paths_are_same_file(src_path, dest_path, &src_lstat, &dest_state.lst);
+        if (same_file) {
+            same_directory_entry =
+                bx_same_file(&src_lstat, &dest_state.lst) &&
+                bx_mv_paths_name_same_directory_entry(src_path, dest_path);
+
+            if (ctx->options->no_clobber ||
+                ctx->options->update_mode == BX_UPDATE_NONE) {
+                return true;
+            }
+            if (ctx->options->update_mode == BX_UPDATE_NONE_FAIL) {
+                bx_diag(ctx->diag, "will not overwrite '%s'", dest_path);
+                return false;
+            }
+
+            if (same_directory_entry ||
+                ctx->options->exchange ||
+                !bx_args_backup_mode_enabled(ctx->backup_params.mode)) {
+                bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+                return false;
+            }
+        }
+
+        if (!bx_mv_should_skip_existing(ctx->options, dest_path, &src_lstat, &dest_state.lst, &skip, ctx->diag)) {
             return false;
         }
         if (skip) {
@@ -566,7 +721,7 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
             goto finish;
         }
         restore_backup_on_failure = true;
-        ok = bx_mv_cross_device_fallback(ctx, src_path, dest_path, &src_stat);
+        ok = bx_mv_cross_device_fallback(ctx, src_path, dest_path, &src_lstat);
         goto finish;
     }
 
@@ -615,6 +770,10 @@ int bx_mv_main(int argc, char **argv) {
         bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
         return 1;
     }
+    if (options.exchange && (options.target_directory || operand_count != 2)) {
+        bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t");
+        return 1;
+    }
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.options = &options;
@@ -622,34 +781,11 @@ int bx_mv_main(int argc, char **argv) {
     bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
     bx_mv_init_cross_device_copy_context(&ctx);
 
-    if (options.exchange) {
-        if (options.target_directory || operand_count != 2) {
-            bx_diag(&diag, "--exchange requires exactly two path operands and cannot be used with -t");
-            exit_status = 1;
-            goto finish;
-        }
-        const char *src_path = argv[first_operand];
-        const char *dest_path = argv[first_operand + 1];
-        
-        char *final_src = options.strip_trailing_slashes
-                          ? bx_path_strip_trailing_slashes_dup(src_path)
-                          : xstrdup(src_path);
-        char *final_dst = options.strip_trailing_slashes
-                          ? bx_path_strip_trailing_slashes_dup(dest_path)
-                          : xstrdup(dest_path);
-
-        bx_mv_rename_file(&ctx, final_src, final_dst);
-
-        free(final_src);
-        free(final_dst);
-        exit_status = diag.exit_status;
-        goto finish;
-    }
-
     const char *destination_root = NULL;
     int source_count = 0;
     char **source_operands = NULL;
     bool destination_is_directory = false;
+    char *resolved_destination_root = NULL;
 
     if (options.target_directory != NULL) {
         destination_root = options.target_directory;
@@ -692,6 +828,22 @@ int bx_mv_main(int argc, char **argv) {
         }
     }
 
+    if (destination_is_directory) {
+        resolved_destination_root = realpath(destination_root, NULL);
+        if (resolved_destination_root != NULL) {
+            destination_root = resolved_destination_root;
+        }
+    }
+
+    if (options.backup_conflict_warning &&
+        (options.target_directory != NULL ||
+         options.no_target_directory ||
+         source_count != 1 ||
+         destination_is_directory)) {
+        exit_status = diag.exit_status;
+        goto finish;
+    }
+
     for (int i = 0; i < source_count; i++) {
         bool source_had_trailing_slashes = bx_mv_operand_had_trailing_slashes(source_operands[i]);
         char *source_operand = options.strip_trailing_slashes
@@ -721,6 +873,7 @@ int bx_mv_main(int argc, char **argv) {
     exit_status = diag.exit_status;
 
 finish:
+    free(resolved_destination_root);
     bx_mv_free_cross_device_copy_context(&ctx);
     return exit_status;
 }
