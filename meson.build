@@ -16,6 +16,14 @@ warn_flags = [
 ]
 add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
+bx_link_args = []
+if get_option('static_binary')
+  if not cc.has_link_argument('-static')
+    error('static_binary=true requires a toolchain that supports -static')
+  endif
+  bx_link_args += ['-static']
+endif
+
 mira_embed_opt = get_option('mira_embed')
 mira_embed_dep = declare_dependency()
 mira_embed_enabled = false
@@ -83,6 +91,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
   dependencies : bx_deps,
+  link_args : bx_link_args,
   install : true
 )
 
