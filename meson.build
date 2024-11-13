@@ -25,6 +25,22 @@ if mira_embed_opt != 'disabled'
 endif
 
 if mira_embed_enabled
+  mira_embed_has_run_argv = cc.has_function(
+    'mira_embed_run_argv',
+    prefix : '#include <mira/embed.h>',
+    dependencies : [mira_embed_dep],
+  )
+  if not mira_embed_has_run_argv
+    if mira_embed_opt == 'enabled'
+      error('mira-embed found but missing mira_embed_run_argv; reinstall a newer mira-embed static library')
+    endif
+    warning('mira-embed found but missing mira_embed_run_argv; disabling wget applet')
+    mira_embed_enabled = false
+    mira_embed_dep = declare_dependency()
+  endif
+endif
+
+if mira_embed_enabled
   add_project_arguments('-DBX_HAVE_MIRA_EMBED=1', language : 'c')
 else
   add_project_arguments('-DBX_HAVE_MIRA_EMBED=0', language : 'c')
