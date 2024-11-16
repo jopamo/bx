@@ -1,9 +1,10 @@
 option('tests', type : 'boolean', value : true, description : 'Build and run tests')
 option(
   'static_binary',
-  type : 'boolean',
-  value : true,
-  description : 'Link bx as a static executable by default'
+  type : 'combo',
+  choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Static link policy: auto (musl toolchains), enabled (force), or disabled'
 )
 option(
   'multicall_install_mode',

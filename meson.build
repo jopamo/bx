@@ -16,11 +16,31 @@ warn_flags = [
 ]
 add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
-bx_link_args = []
-if get_option('static_binary')
-  if not cc.has_link_argument('-static')
-    error('static_binary=true requires a toolchain that supports -static')
+static_binary_opt = get_option('static_binary')
+static_link_supported = cc.has_link_argument('-static')
+compiler_targets_glibc = cc.has_header_symbol('features.h', '__GLIBC__')
+musl_gcc = find_program('musl-gcc', required : false)
+
+use_static_binary = false
+if static_binary_opt == 'enabled'
+  if not static_link_supported
+    error('static_binary=enabled requires a toolchain that supports -static')
   endif
+  use_static_binary = true
+elif static_binary_opt == 'auto'
+  if compiler_targets_glibc
+    if musl_gcc.found()
+      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup via scripts/meson-setup.sh or CC=musl-gcc.')
+    endif
+  elif static_link_supported
+    use_static_binary = true
+  else
+    warning('static_binary=auto: toolchain lacks -static; using shared linkage')
+  endif
+endif
+
+bx_link_args = []
+if use_static_binary
   bx_link_args += ['-static']
 endif
 
