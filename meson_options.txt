@@ -17,5 +17,5 @@ option(
   type : 'combo',
   choices : ['auto', 'enabled', 'disabled'],
   value : 'auto',
-  description : 'Enable wget applet backed by mira-embed static library'
+  description : 'Enable mira-embed backend for the wget applet'
 )

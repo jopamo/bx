@@ -42,7 +42,7 @@ if mira_embed_enabled
     if mira_embed_opt == 'enabled'
       error('mira-embed found but missing mira_embed_run_argv; reinstall a newer mira-embed static library')
     endif
-    warning('mira-embed found but missing mira_embed_run_argv; disabling wget applet')
+    warning('mira-embed found but missing mira_embed_run_argv; disabling wget mira-embed backend')
     mira_embed_enabled = false
     mira_embed_dep = declare_dependency()
   endif
@@ -82,10 +82,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'cp', 'true', 'false']
-if mira_embed_enabled
-  applet_names += ['wget']
-endif
+applet_names = ['which', 'cp', 'mv', 'wget', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
