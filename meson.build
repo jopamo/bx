@@ -96,13 +96,14 @@ sources = [
   'src/main.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
+  'src/expr/expr.c',
   'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'cp', 'mv', 'wget', 'true', 'false']
+applet_names = ['which', 'cp', 'mv', 'wget', 'expr', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -173,6 +174,10 @@ if get_option('tests')
 
   test_mv_cli_differential = files('tests/mv/test_mv_cli_differential.py')
   test('mv cli differential', python3, args : [test_mv_cli_differential, mv_ref, bx_exe, meson.current_build_dir()])
+
+  expr_ref = find_program('expr')
+  test_expr_differential = files('tests/expr/test_expr_differential.py')
+  test('expr differential', python3, args : [test_expr_differential, expr_ref, bx_exe, meson.current_build_dir()])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])

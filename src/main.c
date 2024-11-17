@@ -19,6 +19,7 @@ static const struct applet applets[] = {
     {"cp", bx_cp_main},
     {"mv", bx_mv_main},
     {"wget", bx_wget_main},
+    {"expr", bx_expr_main},
     {"true", bx_true_main},
     {"false", bx_false_main},
 };
