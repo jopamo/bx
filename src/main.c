@@ -20,6 +20,7 @@ static const struct applet applets[] = {
     {"mv", bx_mv_main},
     {"wget", bx_wget_main},
     {"expr", bx_expr_main},
+    {"md5sum", bx_md5sum_main},
     {"true", bx_true_main},
     {"false", bx_false_main},
 };

@@ -147,17 +147,20 @@ sources = [
   'src/common/remove_ops.c',
   'src/common/fd_ops.c',
   'src/common/overwrite_ops.c',
+  'src/common/md5.c',
+  'src/common/digest_util.c',
   'src/main.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
+  'src/md5sum/md5sum.c',
   'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'cp', 'mv', 'wget', 'expr', 'true', 'false']
+applet_names = ['which', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -232,6 +235,19 @@ if get_option('tests')
   expr_ref = find_program('expr')
   test_expr_differential = files('tests/expr/test_expr_differential.py')
   test('expr differential', python3, args : [test_expr_differential, expr_ref, bx_exe, meson.current_build_dir()])
+
+  test_md5_vectors = executable(
+    'test-md5-vectors',
+    ['tests/md5sum/test_md5_vectors.c', 'src/common/md5.c'],
+    include_directories : include_directories('src'),
+  )
+  test('md5 vectors', test_md5_vectors)
+
+  test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
+  test('md5sum basic', test_md5sum_basic, args : [bx_exe])
+
+  test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
+  test('md5sum check', test_md5sum_check, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
