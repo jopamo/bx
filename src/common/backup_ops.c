@@ -17,16 +17,15 @@
 #include "copy_data.h"
 #include "fd_ops.h"
 
-void bx_backup_get_params(enum bx_backup_mode cmd_mode,
-                          const char *cmd_suffix,
-                          struct bx_backup_params *out) {
+void bx_backup_get_params(enum bx_backup_mode cmd_mode, const char* cmd_suffix, struct bx_backup_params* out) {
     if (cmd_mode == BX_BACKUP_UNSPECIFIED) {
-        const char *vc = getenv("VERSION_CONTROL");
+        const char* vc = getenv("VERSION_CONTROL");
         if (vc) {
             if (!bx_args_parse_backup_mode(vc, &cmd_mode)) {
                 cmd_mode = BX_BACKUP_EXISTING;
             }
-        } else {
+        }
+        else {
             cmd_mode = BX_BACKUP_EXISTING;
         }
     }
@@ -35,29 +34,29 @@ void bx_backup_get_params(enum bx_backup_mode cmd_mode,
 
     if (cmd_suffix) {
         out->suffix = cmd_suffix;
-    } else {
-        const char *sbs = getenv("SIMPLE_BACKUP_SUFFIX");
+    }
+    else {
+        const char* sbs = getenv("SIMPLE_BACKUP_SUFFIX");
         out->suffix = sbs ? sbs : "~";
     }
 }
 
-static int get_max_backup_version(const char *dir, const char *base) {
-    DIR *d = opendir(dir);
-    if (!d) return 0;
+static int get_max_backup_version(const char* dir, const char* base) {
+    DIR* d = opendir(dir);
+    if (!d)
+        return 0;
 
     int max_v = 0;
     size_t base_len = strlen(base);
-    struct dirent *de;
+    struct dirent* de;
 
     while ((de = readdir(d)) != NULL) {
-        if (strncmp(de->d_name, base, base_len) == 0 &&
-            de->d_name[base_len] == '.' &&
-            de->d_name[base_len + 1] == '~') {
-            
-            char *endptr;
+        if (strncmp(de->d_name, base, base_len) == 0 && de->d_name[base_len] == '.' && de->d_name[base_len + 1] == '~') {
+            char* endptr;
             long v = strtol(de->d_name + base_len + 2, &endptr, 10);
             if (*endptr == '~' && endptr[1] == '\0') {
-                if (v > max_v) max_v = (int)v;
+                if (v > max_v)
+                    max_v = (int)v;
             }
         }
     }
@@ -65,33 +64,36 @@ static int get_max_backup_version(const char *dir, const char *base) {
     return max_v;
 }
 
-static char *get_backup_path(const char *path, const struct bx_backup_params *params, enum bx_backup_mode *effective_mode_out) {
+static char* get_backup_path(const char* path, const struct bx_backup_params* params, enum bx_backup_mode* effective_mode_out) {
     enum bx_backup_mode effective_mode = params->mode;
     if (effective_mode == BX_BACKUP_EXISTING) {
-        char *dir_copy = xstrdup(path);
-        char *dname = dirname(dir_copy);
-        char *base = bx_path_basename_dup(path);
+        char* dir_copy = xstrdup(path);
+        char* dname = dirname(dir_copy);
+        char* base = bx_path_basename_dup(path);
         if (get_max_backup_version(dname, base) > 0) {
             effective_mode = BX_BACKUP_NUMBERED;
-        } else {
+        }
+        else {
             effective_mode = BX_BACKUP_SIMPLE;
         }
         free(base);
         free(dir_copy);
     }
 
-    if (effective_mode_out) *effective_mode_out = effective_mode;
+    if (effective_mode_out)
+        *effective_mode_out = effective_mode;
 
     if (effective_mode == BX_BACKUP_SIMPLE) {
-        char *res = xmalloc(strlen(path) + strlen(params->suffix) + 1);
+        char* res = xmalloc(strlen(path) + strlen(params->suffix) + 1);
         sprintf(res, "%s%s", path, params->suffix);
         return res;
-    } else if (effective_mode == BX_BACKUP_NUMBERED) {
-        char *dir_copy = xstrdup(path);
-        char *dname = dirname(dir_copy);
-        char *base = bx_path_basename_dup(path);
+    }
+    else if (effective_mode == BX_BACKUP_NUMBERED) {
+        char* dir_copy = xstrdup(path);
+        char* dname = dirname(dir_copy);
+        char* base = bx_path_basename_dup(path);
         int next_v = get_max_backup_version(dname, base) + 1;
-        char *res = xmalloc(strlen(path) + 16);
+        char* res = xmalloc(strlen(path) + 16);
         sprintf(res, "%s.~%d~", path, next_v);
         free(base);
         free(dir_copy);
@@ -100,14 +102,11 @@ static char *get_backup_path(const char *path, const struct bx_backup_params *pa
     return NULL;
 }
 
-static void bx_backup_diag_errno(struct bx_diag_ctx *diag, const char *path, int err) {
+static void bx_backup_diag_errno(struct bx_diag_ctx* diag, const char* path, int err) {
     bx_diag(diag, "cannot backup '%s': %s", path, strerror(err));
 }
 
-enum bx_backup_create_result bx_backup_create(const char *path,
-                                              const struct bx_backup_params *params,
-                                              struct bx_diag_ctx *diag,
-                                              char **backup_path_out) {
+enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_backup_params* params, struct bx_diag_ctx* diag, char** backup_path_out) {
     if (backup_path_out) {
         *backup_path_out = NULL;
     }
@@ -126,7 +125,7 @@ enum bx_backup_create_result bx_backup_create(const char *path,
     }
     (void)st;
 
-    char *backup_path = get_backup_path(path, params, NULL);
+    char* backup_path = get_backup_path(path, params, NULL);
     if (backup_path == NULL) {
         bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
         return BX_BACKUP_CREATE_FAILED;
@@ -141,16 +140,14 @@ enum bx_backup_create_result bx_backup_create(const char *path,
 
     if (backup_path_out) {
         *backup_path_out = backup_path;
-    } else {
+    }
+    else {
         free(backup_path);
     }
     return BX_BACKUP_CREATE_CREATED;
 }
 
-enum bx_backup_create_result bx_backup_create_copy(const char *path,
-                                                   const struct bx_backup_params *params,
-                                                   struct bx_diag_ctx *diag,
-                                                   char **backup_path_out) {
+enum bx_backup_create_result bx_backup_create_copy(const char* path, const struct bx_backup_params* params, struct bx_diag_ctx* diag, char** backup_path_out) {
     if (backup_path_out) {
         *backup_path_out = NULL;
     }
@@ -168,7 +165,7 @@ enum bx_backup_create_result bx_backup_create_copy(const char *path,
         return BX_BACKUP_CREATE_FAILED;
     }
 
-    char *backup_path = get_backup_path(path, params, NULL);
+    char* backup_path = get_backup_path(path, params, NULL);
     if (backup_path == NULL) {
         bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
         return BX_BACKUP_CREATE_FAILED;
@@ -220,7 +217,8 @@ enum bx_backup_create_result bx_backup_create_copy(const char *path,
 
     if (backup_path_out) {
         *backup_path_out = backup_path;
-    } else {
+    }
+    else {
         free(backup_path);
     }
     return BX_BACKUP_CREATE_CREATED;

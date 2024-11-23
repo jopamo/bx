@@ -17,8 +17,8 @@ struct bx_md5_ctx {
     size_t buffer_len;
 };
 
-void bx_md5_init(struct bx_md5_ctx *ctx);
-void bx_md5_update(struct bx_md5_ctx *ctx, const void *data, size_t len);
-void bx_md5_final(struct bx_md5_ctx *ctx, uint8_t out[BX_MD5_DIGEST_SIZE]);
+void bx_md5_init(struct bx_md5_ctx* ctx);
+void bx_md5_update(struct bx_md5_ctx* ctx, const void* data, size_t len);
+void bx_md5_final(struct bx_md5_ctx* ctx, uint8_t out[BX_MD5_DIGEST_SIZE]);
 
 #endif /* BX_COMMON_MD5_H */

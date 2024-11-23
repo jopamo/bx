@@ -3,6 +3,6 @@
 
 #include <stdbool.h>
 
-bool bx_prompt_confirm(const char *prompt);
+bool bx_prompt_confirm(const char* prompt);
 
 #endif /* BX_COMMON_PROMPT_OPS_H */

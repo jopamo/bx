@@ -20,14 +20,7 @@ static int bx_digest_hex_value(int ch) {
     return -1;
 }
 
-int bx_digest_fd(void *ctx,
-                 size_t ctx_size,
-                 bx_digest_init_fn init_fn,
-                 bx_digest_update_fn update_fn,
-                 bx_digest_final_fn final_fn,
-                 int fd,
-                 uint8_t *out,
-                 size_t out_len) {
+int bx_digest_fd(void* ctx, size_t ctx_size, bx_digest_init_fn init_fn, bx_digest_update_fn update_fn, bx_digest_final_fn final_fn, int fd, uint8_t* out, size_t out_len) {
     uint8_t buffer[32768];
 
     (void)out_len;
@@ -54,23 +47,9 @@ int bx_digest_fd(void *ctx,
     return 0;
 }
 
-int bx_digest_file(void *ctx,
-                   size_t ctx_size,
-                   bx_digest_init_fn init_fn,
-                   bx_digest_update_fn update_fn,
-                   bx_digest_final_fn final_fn,
-                   const char *path,
-                   uint8_t *out,
-                   size_t out_len) {
+int bx_digest_file(void* ctx, size_t ctx_size, bx_digest_init_fn init_fn, bx_digest_update_fn update_fn, bx_digest_final_fn final_fn, const char* path, uint8_t* out, size_t out_len) {
     if (strcmp(path, "-") == 0) {
-        return bx_digest_fd(ctx,
-                            ctx_size,
-                            init_fn,
-                            update_fn,
-                            final_fn,
-                            STDIN_FILENO,
-                            out,
-                            out_len);
+        return bx_digest_fd(ctx, ctx_size, init_fn, update_fn, final_fn, STDIN_FILENO, out, out_len);
     }
 
     int fd = open(path, O_RDONLY);
@@ -85,7 +64,7 @@ int bx_digest_file(void *ctx,
     return rc;
 }
 
-void bx_hex_encode_lower(const uint8_t *in, size_t len, char *out) {
+void bx_hex_encode_lower(const uint8_t* in, size_t len, char* out) {
     static const char digits[] = "0123456789abcdef";
 
     for (size_t i = 0; i < len; i++) {
@@ -96,9 +75,7 @@ void bx_hex_encode_lower(const uint8_t *in, size_t len, char *out) {
     out[len * 2u] = '\0';
 }
 
-bool bx_parse_check_line(char *line,
-                         size_t digest_len,
-                         struct bx_checksum_record *record) {
+bool bx_parse_check_line(char* line, size_t digest_len, struct bx_checksum_record* record) {
     size_t line_len = strlen(line);
     size_t hex_len = digest_len * 2u;
 
@@ -125,9 +102,11 @@ bool bx_parse_check_line(char *line,
 
     if (line[hex_len + 1u] == '*') {
         record->binary_mode = true;
-    } else if (line[hex_len + 1u] == ' ') {
+    }
+    else if (line[hex_len + 1u] == ' ') {
         record->binary_mode = false;
-    } else {
+    }
+    else {
         return false;
     }
 

@@ -13,8 +13,8 @@ struct bx_dest_state {
     struct stat st;
 };
 
-bool bx_stat_is_dir_path(const char *path);
-int bx_stat_collect_dest_state(const char *path, struct bx_dest_state *state);
-int bx_stat_timespec_compare(const struct timespec *a, const struct timespec *b);
+bool bx_stat_is_dir_path(const char* path);
+int bx_stat_collect_dest_state(const char* path, struct bx_dest_state* state);
+int bx_stat_timespec_compare(const struct timespec* a, const struct timespec* b);
 
 #endif /* BX_COMMON_STAT_OPS_H */

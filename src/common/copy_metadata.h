@@ -12,11 +12,9 @@ enum {
     BX_PRESERVE_XATTR = 1u << 4,
 };
 
-#define BX_PRESERVE_ALL (BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | \
-                         BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_LINKS | \
-                         BX_PRESERVE_XATTR)
+#define BX_PRESERVE_ALL (BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS | BX_PRESERVE_LINKS | BX_PRESERVE_XATTR)
 
-bool bx_copy_fd_metadata(int src_fd, int dest_fd, const struct stat *src_stat, unsigned mask);
-bool bx_copy_path_metadata(const char *src_path, const char *dest_path, const struct stat *src_stat, unsigned mask, bool no_follow);
+bool bx_copy_fd_metadata(int src_fd, int dest_fd, const struct stat* src_stat, unsigned mask);
+bool bx_copy_path_metadata(const char* src_path, const char* dest_path, const struct stat* src_stat, unsigned mask, bool no_follow);
 
 #endif /* BX_COMMON_COPY_METADATA_H */

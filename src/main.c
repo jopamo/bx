@@ -7,32 +7,25 @@
 #include "diag.h"
 #include "libbx.h"
 
-typedef int (*applet_main_t)(int argc, char **argv);
+typedef int (*applet_main_t)(int argc, char** argv);
 
 struct applet {
-    const char *name;
+    const char* name;
     applet_main_t main;
 };
 
 static const struct applet applets[] = {
-    {"which", bx_which_main},
-    {"cp", bx_cp_main},
-    {"mv", bx_mv_main},
-    {"wget", bx_wget_main},
-    {"expr", bx_expr_main},
-    {"md5sum", bx_md5sum_main},
-    {"true", bx_true_main},
-    {"false", bx_false_main},
+    {"which", bx_which_main}, {"cp", bx_cp_main}, {"mv", bx_mv_main}, {"wget", bx_wget_main}, {"expr", bx_expr_main}, {"md5sum", bx_md5sum_main}, {"true", bx_true_main}, {"false", bx_false_main},
 };
 
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";
 
-static const char *get_basename(const char *path) {
-    const char *base = strrchr(path, '/');
+static const char* get_basename(const char* path) {
+    const char* base = strrchr(path, '/');
     return base ? base + 1 : path;
 }
 
-static applet_main_t find_applet(const char *name) {
+static applet_main_t find_applet(const char* name) {
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         if (strcmp(applets[i].name, name) == 0) {
             return applets[i].main;
@@ -41,21 +34,21 @@ static applet_main_t find_applet(const char *name) {
     return NULL;
 }
 
-static const char *get_shebang_applet(const char *arg) {
+static const char* get_shebang_applet(const char* arg) {
     size_t prefix_len = sizeof(shebang_applet_prefix) - 1;
 
     if (!arg || strncmp(arg, shebang_applet_prefix, prefix_len) != 0) {
         return NULL;
     }
 
-    const char *name = arg + prefix_len;
+    const char* name = arg + prefix_len;
     return (name[0] != '\0') ? name : NULL;
 }
 
-static int run_shebang_applet(applet_main_t applet_main, int argc, char **argv) {
+static int run_shebang_applet(applet_main_t applet_main, int argc, char** argv) {
     int applet_argc = argc - 2;
-    char **applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
-    char *applet_argv0 = xstrdup(get_basename(argv[2]));
+    char** applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
+    char* applet_argv0 = xstrdup(get_basename(argv[2]));
 
     applet_argv[0] = applet_argv0;
     for (int i = 1; i < applet_argc; i++) {
@@ -69,17 +62,18 @@ static int run_shebang_applet(applet_main_t applet_main, int argc, char **argv) 
     return rc;
 }
 
-int main(int argc, char **argv) {
-    if (argc < 1) return 1;
+int main(int argc, char** argv) {
+    if (argc < 1)
+        return 1;
 
-    const char *progname = get_basename(argv[0]);
+    const char* progname = get_basename(argv[0]);
     applet_main_t applet_main = find_applet(progname);
 
     if (applet_main) {
         return applet_main(argc, argv);
     }
 
-    const char *shebang_applet = (argc >= 2) ? get_shebang_applet(argv[1]) : NULL;
+    const char* shebang_applet = (argc >= 2) ? get_shebang_applet(argv[1]) : NULL;
     if (shebang_applet) {
         applet_main = find_applet(shebang_applet);
         if (!applet_main) {

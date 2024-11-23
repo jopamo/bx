@@ -9,9 +9,10 @@
 
 #include "copy_data.h"
 
-static bool is_all_zeros(const char *buf, size_t size) {
+static bool is_all_zeros(const char* buf, size_t size) {
     for (size_t i = 0; i < size; i++) {
-        if (buf[i] != 0) return false;
+        if (buf[i] != 0)
+            return false;
     }
     return true;
 }
@@ -28,9 +29,7 @@ static bool bx_copy_sparse_auto_seek_unsupported(int errnum) {
     return false;
 }
 
-static int bx_copy_data_buffered(int src_fd,
-                                 int dest_fd,
-                                 enum bx_sparse_mode sparse_mode) {
+static int bx_copy_data_buffered(int src_fd, int dest_fd, enum bx_sparse_mode sparse_mode) {
     char buffer[65536];
     off_t last_write_end = 0;
     bool sparse_detected = false;
@@ -60,12 +59,11 @@ static int bx_copy_data_buffered(int src_fd,
             }
             last_write_end += nread;
             sparse_detected = true;
-        } else {
+        }
+        else {
             ssize_t written_total = 0;
             while (written_total < nread) {
-                ssize_t nwritten = write(dest_fd,
-                                         buffer + written_total,
-                                         (size_t)(nread - written_total));
+                ssize_t nwritten = write(dest_fd, buffer + written_total, (size_t)(nread - written_total));
                 if (nwritten < 0) {
                     return BX_COPY_DATA_WRITE_ERROR;
                 }
@@ -76,9 +74,7 @@ static int bx_copy_data_buffered(int src_fd,
     }
 }
 
-static int bx_copy_data_copy_range(int src_fd,
-                                   int dest_fd,
-                                   off_t length) {
+static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length) {
     char buffer[65536];
     off_t remaining = length;
 
@@ -95,9 +91,7 @@ static int bx_copy_data_copy_range(int src_fd,
 
         ssize_t written_total = 0;
         while (written_total < nread) {
-            ssize_t nwritten = write(dest_fd,
-                                     buffer + written_total,
-                                     (size_t)(nread - written_total));
+            ssize_t nwritten = write(dest_fd, buffer + written_total, (size_t)(nread - written_total));
             if (nwritten < 0) {
                 return BX_COPY_DATA_WRITE_ERROR;
             }
@@ -110,9 +104,7 @@ static int bx_copy_data_copy_range(int src_fd,
     return BX_COPY_DATA_SUCCESS;
 }
 
-static int bx_copy_data_sparse_auto(int src_fd,
-                                    int dest_fd,
-                                    bool *handled_out) {
+static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) {
     struct stat src_stat;
     off_t offset = 0;
     bool preserved_hole = false;
@@ -204,7 +196,7 @@ static int bx_copy_data_sparse_auto(int src_fd,
     return BX_COPY_DATA_SUCCESS;
 }
 
-int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options *opts) {
+int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opts) {
     if (opts->reflink_mode != BX_REFLINK_NEVER) {
         if (ioctl(dest_fd, FICLONE, src_fd) == 0) {
             return BX_COPY_DATA_SUCCESS;

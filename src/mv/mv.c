@@ -27,25 +27,29 @@
 #include "common/copy_metadata.h"
 
 #ifndef RENAME_EXCHANGE
-# define RENAME_EXCHANGE (1 << 1)
+#define RENAME_EXCHANGE (1 << 1)
 #endif
 
 #ifndef AT_FDCWD
-# define AT_FDCWD -100
+#define AT_FDCWD -100
 #endif
 
-static int bx_renameat2(int oldfd, const char *oldpath, int newfd, const char *newpath, unsigned int flags) {
+static int bx_renameat2(int oldfd, const char* oldpath, int newfd, const char* newpath, unsigned int flags) {
 #ifdef SYS_renameat2
     return (int)syscall(SYS_renameat2, oldfd, oldpath, newfd, newpath, flags);
 #else
-    (void)oldfd; (void)oldpath; (void)newfd; (void)newpath; (void)flags;
+    (void)oldfd;
+    (void)oldpath;
+    (void)newfd;
+    (void)newpath;
+    (void)flags;
     errno = ENOSYS;
     return -1;
 #endif
 }
 
 struct bx_mv_options {
-    const char *progname;
+    const char* progname;
     bool force;
     bool interactive;
     bool no_clobber;
@@ -58,33 +62,33 @@ struct bx_mv_options {
     bool show_version;
     enum bx_update_mode update_mode;
     enum bx_backup_mode backup_mode;
-    const char *suffix;
-    const char *target_directory;
+    const char* suffix;
+    const char* target_directory;
     bool no_target_directory;
     bool backup_conflict_warning;
 };
 
-static const char *bx_mv_progname(const char *argv0) {
-    const char *base = strrchr(argv0, '/');
+static const char* bx_mv_progname(const char* argv0) {
+    const char* base = strrchr(argv0, '/');
     return base ? base + 1 : argv0;
 }
 
-static bool bx_mv_operand_had_trailing_slashes(const char *path) {
+static bool bx_mv_operand_had_trailing_slashes(const char* path) {
     size_t len = strlen(path);
     return len > 1 && path[len - 1] == '/';
 }
 
-static bool bx_mv_parent_exists_as_directory(const char *path) {
-    char *copy = xstrdup(path);
-    char *parent = dirname(copy);
+static bool bx_mv_parent_exists_as_directory(const char* path) {
+    char* copy = xstrdup(path);
+    char* parent = dirname(copy);
     bool is_dir = bx_stat_is_dir_path(parent);
     free(copy);
     return is_dir;
 }
 
-static char *bx_mv_parent_dir_dup(const char *path) {
-    char *copy = xstrdup(path);
-    char *slash = strrchr(copy, '/');
+static char* bx_mv_parent_dir_dup(const char* path) {
+    char* copy = xstrdup(path);
+    char* slash = strrchr(copy, '/');
 
     if (slash == NULL) {
         free(copy);
@@ -99,11 +103,11 @@ static char *bx_mv_parent_dir_dup(const char *path) {
     return copy;
 }
 
-static char *bx_mv_canonical_dest_path_no_follow(const char *dest_path) {
-    char *parent = bx_mv_parent_dir_dup(dest_path);
-    char *parent_real = realpath(parent, NULL);
-    char *base = bx_path_basename_dup(dest_path);
-    char *result = NULL;
+static char* bx_mv_canonical_dest_path_no_follow(const char* dest_path) {
+    char* parent = bx_mv_parent_dir_dup(dest_path);
+    char* parent_real = realpath(parent, NULL);
+    char* base = bx_path_basename_dup(dest_path);
+    char* result = NULL;
 
     free(parent);
     if (parent_real == NULL) {
@@ -113,12 +117,14 @@ static char *bx_mv_canonical_dest_path_no_follow(const char *dest_path) {
 
     if (strcmp(base, "/") == 0) {
         result = xstrdup("/");
-    } else if (strcmp(parent_real, "/") == 0) {
+    }
+    else if (strcmp(parent_real, "/") == 0) {
         size_t len = strlen(base);
         result = xmalloc(len + 2u);
         result[0] = '/';
         memcpy(result + 1u, base, len + 1u);
-    } else {
+    }
+    else {
         size_t parent_len = strlen(parent_real);
         size_t base_len = strlen(base);
         result = xmalloc(parent_len + 1u + base_len + 1u);
@@ -132,19 +138,17 @@ static char *bx_mv_canonical_dest_path_no_follow(const char *dest_path) {
     return result;
 }
 
-static bool bx_mv_symlink_source_matches_destination_path(const char *src_path,
-                                                          const char *dest_path) {
+static bool bx_mv_symlink_source_matches_destination_path(const char* src_path, const char* dest_path) {
     bool same = false;
-    char *resolved_source = realpath(src_path, NULL);
-    char *resolved_dest = NULL;
+    char* resolved_source = realpath(src_path, NULL);
+    char* resolved_dest = NULL;
 
     if (resolved_source == NULL) {
         return false;
     }
 
     resolved_dest = bx_mv_canonical_dest_path_no_follow(dest_path);
-    if (resolved_dest != NULL &&
-        strcmp(resolved_source, resolved_dest) == 0) {
+    if (resolved_dest != NULL && strcmp(resolved_source, resolved_dest) == 0) {
         same = true;
     }
 
@@ -153,17 +157,19 @@ static bool bx_mv_symlink_source_matches_destination_path(const char *src_path,
     return same;
 }
 
-static bool bx_mv_parent_dir_stat(const char *path, struct stat *parent_stat_out) {
-    char *stripped = bx_path_strip_trailing_slashes_dup(path);
-    char *parent_path = NULL;
-    char *slash = strrchr(stripped, '/');
+static bool bx_mv_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
+    char* stripped = bx_path_strip_trailing_slashes_dup(path);
+    char* parent_path = NULL;
+    char* slash = strrchr(stripped, '/');
     bool ok = false;
 
     if (slash == NULL) {
         parent_path = xstrdup(".");
-    } else if (slash == stripped) {
+    }
+    else if (slash == stripped) {
         parent_path = xstrdup("/");
-    } else {
+    }
+    else {
         size_t parent_len = (size_t)(slash - stripped);
         parent_path = xmalloc(parent_len + 1u);
         memcpy(parent_path, stripped, parent_len);
@@ -176,11 +182,10 @@ static bool bx_mv_parent_dir_stat(const char *path, struct stat *parent_stat_out
     return ok;
 }
 
-static bool bx_mv_paths_name_same_directory_entry(const char *src_path,
-                                                  const char *dest_path) {
+static bool bx_mv_paths_name_same_directory_entry(const char* src_path, const char* dest_path) {
     bool same_entry = true;
-    char *src_base = bx_path_basename_dup(src_path);
-    char *dest_base = bx_path_basename_dup(dest_path);
+    char* src_base = bx_path_basename_dup(src_path);
+    char* dest_base = bx_path_basename_dup(dest_path);
 
     if (strcmp(src_base, dest_base) != 0) {
         same_entry = false;
@@ -189,8 +194,7 @@ static bool bx_mv_paths_name_same_directory_entry(const char *src_path,
 
     struct stat src_parent_stat;
     struct stat dest_parent_stat;
-    if (!bx_mv_parent_dir_stat(src_path, &src_parent_stat) ||
-        !bx_mv_parent_dir_stat(dest_path, &dest_parent_stat)) {
+    if (!bx_mv_parent_dir_stat(src_path, &src_parent_stat) || !bx_mv_parent_dir_stat(dest_path, &dest_parent_stat)) {
         goto out;
     }
 
@@ -202,10 +206,7 @@ out:
     return same_entry;
 }
 
-static bool bx_mv_paths_are_same_file(const char *src_path,
-                                      const char *dest_path,
-                                      const struct stat *src_lstat,
-                                      const struct stat *dest_lstat) {
+static bool bx_mv_paths_are_same_file(const char* src_path, const char* dest_path, const struct stat* src_lstat, const struct stat* dest_lstat) {
     if (bx_same_file(src_lstat, dest_lstat)) {
         return true;
     }
@@ -215,9 +216,9 @@ static bool bx_mv_paths_are_same_file(const char *src_path,
     return bx_mv_symlink_source_matches_destination_path(src_path, dest_path);
 }
 
-static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options *options,
-                                                      const char *src_path,
-                                                      const char *dest_path,
+static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options* options,
+                                                      const char* src_path,
+                                                      const char* dest_path,
                                                       bool source_had_trailing_slashes,
                                                       bool destination_is_directory,
                                                       int source_count) {
@@ -225,11 +226,7 @@ static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options
     struct stat src_stat;
     struct stat dest_lstat;
 
-    if (!source_had_trailing_slashes ||
-        options->no_target_directory ||
-        options->target_directory != NULL ||
-        destination_is_directory ||
-        source_count != 1) {
+    if (!source_had_trailing_slashes || options->no_target_directory || options->target_directory != NULL || destination_is_directory || source_count != 1) {
         return false;
     }
 
@@ -249,7 +246,7 @@ static bool bx_mv_should_reject_stripped_missing_dest(const struct bx_mv_options
     return bx_mv_parent_exists_as_directory(dest_path);
 }
 
-static void bx_mv_print_help(FILE *stream, const char *progname) {
+static void bx_mv_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "usage: %s [OPTION]... [-T] SOURCE DEST\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... SOURCE... DIRECTORY\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... -t DIRECTORY SOURCE...\n", progname);
@@ -285,25 +282,23 @@ enum {
     BX_MV_OPT_DEBUG,
 };
 
-static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *options, int *first_operand, struct bx_diag_ctx *diag) {
-    static const struct option long_options[] = {
-        {"backup", optional_argument, NULL, BX_MV_OPT_BACKUP},
-        {"force", no_argument, NULL, 'f'},
-        {"interactive", no_argument, NULL, 'i'},
-        {"no-clobber", no_argument, NULL, 'n'},
-        {"no-copy", no_argument, NULL, BX_MV_OPT_NO_COPY},
-        {"exchange", no_argument, NULL, BX_MV_OPT_EXCHANGE},
-        {"strip-trailing-slashes", no_argument, NULL, BX_MV_OPT_STRIP_TRAILING_SLASHES},
-        {"suffix", required_argument, NULL, 'S'},
-        {"target-directory", required_argument, NULL, 't'},
-        {"no-target-directory", no_argument, NULL, 'T'},
-        {"update", optional_argument, NULL, BX_MV_OPT_UPDATE},
-        {"verbose", no_argument, NULL, 'v'},
-        {"debug", no_argument, NULL, BX_MV_OPT_DEBUG},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0}
-    };
+static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+    static const struct option long_options[] = {{"backup", optional_argument, NULL, BX_MV_OPT_BACKUP},
+                                                 {"force", no_argument, NULL, 'f'},
+                                                 {"interactive", no_argument, NULL, 'i'},
+                                                 {"no-clobber", no_argument, NULL, 'n'},
+                                                 {"no-copy", no_argument, NULL, BX_MV_OPT_NO_COPY},
+                                                 {"exchange", no_argument, NULL, BX_MV_OPT_EXCHANGE},
+                                                 {"strip-trailing-slashes", no_argument, NULL, BX_MV_OPT_STRIP_TRAILING_SLASHES},
+                                                 {"suffix", required_argument, NULL, 'S'},
+                                                 {"target-directory", required_argument, NULL, 't'},
+                                                 {"no-target-directory", no_argument, NULL, 'T'},
+                                                 {"update", optional_argument, NULL, BX_MV_OPT_UPDATE},
+                                                 {"verbose", no_argument, NULL, 'v'},
+                                                 {"debug", no_argument, NULL, BX_MV_OPT_DEBUG},
+                                                 {"help", no_argument, NULL, 1},
+                                                 {"version", no_argument, NULL, 2},
+                                                 {NULL, 0, NULL, 0}};
     char short_opts[] = "bfint:TuvS:";
 
     memset(options, 0, sizeof(*options));
@@ -323,7 +318,8 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
                         bx_diag(diag, "invalid --backup control value '%s'", optarg);
                         return false;
                     }
-                } else {
+                }
+                else {
                     bx_args_enable_backup_mode(&options->backup_mode);
                 }
                 break;
@@ -392,11 +388,7 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
         bx_diag(diag, "cannot combine --target-directory (-t) and --no-target-directory (-T)");
         return false;
     }
-    if (bx_args_backup_mode_requested(options->backup_mode) &&
-        (options->no_clobber ||
-         options->update_mode == BX_UPDATE_NONE ||
-         options->update_mode == BX_UPDATE_NONE_FAIL ||
-         options->exchange)) {
+    if (bx_args_backup_mode_requested(options->backup_mode) && (options->no_clobber || options->update_mode == BX_UPDATE_NONE || options->update_mode == BX_UPDATE_NONE_FAIL || options->exchange)) {
         bx_diag(diag, "cannot combine --backup with --exchange, -n, --update=none, or --update=none-fail");
         options->backup_conflict_warning = true;
         if (options->exchange) {
@@ -409,14 +401,14 @@ static bool bx_mv_parse_options(int argc, char **argv, struct bx_mv_options *opt
 }
 
 struct bx_mv_context {
-    const struct bx_mv_options *options;
-    struct bx_diag_ctx *diag;
+    const struct bx_mv_options* options;
+    struct bx_diag_ctx* diag;
     struct bx_backup_params backup_params;
     struct bx_copy_options cross_device_copy_options;
     struct bx_copy_context cross_device_copy_ctx;
 };
 
-static void bx_mv_init_cross_device_copy_context(struct bx_mv_context *ctx) {
+static void bx_mv_init_cross_device_copy_context(struct bx_mv_context* ctx) {
     memset(&ctx->cross_device_copy_options, 0, sizeof(ctx->cross_device_copy_options));
     ctx->cross_device_copy_options.recursive = true;
     ctx->cross_device_copy_options.mode_policy = BX_MODE_POLICY_PRESERVE;
@@ -440,8 +432,8 @@ static void bx_mv_init_cross_device_copy_context(struct bx_mv_context *ctx) {
     bx_backup_get_params(BX_BACKUP_NONE, NULL, &ctx->cross_device_copy_ctx.backup_params);
 }
 
-static void bx_mv_reset_cross_device_copy_call_state(struct bx_mv_context *ctx) {
-    struct bx_copy_context *copy_ctx = &ctx->cross_device_copy_ctx;
+static void bx_mv_reset_cross_device_copy_call_state(struct bx_mv_context* ctx) {
+    struct bx_copy_context* copy_ctx = &ctx->cross_device_copy_ctx;
 
     bx_copy_free_source_dirs(copy_ctx);
     bx_copy_free_parent_attrs(copy_ctx);
@@ -452,21 +444,20 @@ static void bx_mv_reset_cross_device_copy_call_state(struct bx_mv_context *ctx) 
     copy_ctx->stop_current_source = false;
 }
 
-static void bx_mv_free_cross_device_copy_context(struct bx_mv_context *ctx) {
+static void bx_mv_free_cross_device_copy_context(struct bx_mv_context* ctx) {
     bx_mv_reset_cross_device_copy_call_state(ctx);
     bx_copy_free_links(&ctx->cross_device_copy_ctx);
 }
 
-static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
-                                       const char *dest_path,
-                                       const struct stat *src_stat,
-                                       const struct stat *dest_stat,
-                                       bool *skip_out,
-                                       struct bx_diag_ctx *diag) {
+static bool bx_mv_should_skip_existing(const struct bx_mv_options* options,
+                                       const char* dest_path,
+                                       const struct stat* src_stat,
+                                       const struct stat* dest_stat,
+                                       bool* skip_out,
+                                       struct bx_diag_ctx* diag) {
     enum bx_update_mode update_mode = options->update_mode;
 
-    if (update_mode == BX_UPDATE_OLDER &&
-        S_ISDIR(src_stat->st_mode)) {
+    if (update_mode == BX_UPDATE_OLDER && S_ISDIR(src_stat->st_mode)) {
         /* GNU mv does not use directory mtimes to suppress rename-time
          * directory semantics: directory targets may still replace empty
          * directories, and incompatible non-directory targets must still fail.
@@ -474,21 +465,11 @@ static bool bx_mv_should_skip_existing(const struct bx_mv_options *options,
         update_mode = BX_UPDATE_ALL;
     }
 
-    return bx_overwrite_should_skip(options->no_clobber,
-                                    options->interactive,
-                                    update_mode,
-                                    dest_path,
-                                    src_stat,
-                                    dest_stat,
-                                    skip_out,
-                                    NULL,
-                                    diag);
+    return bx_overwrite_should_skip(options->no_clobber, options->interactive, update_mode, dest_path, src_stat, dest_stat, skip_out, NULL, diag);
 }
 
-static bool bx_mv_directory_is_empty(const char *path,
-                                     bool *empty_out,
-                                     struct bx_diag_ctx *diag) {
-    DIR *dir = opendir(path);
+static bool bx_mv_directory_is_empty(const char* path, bool* empty_out, struct bx_diag_ctx* diag) {
+    DIR* dir = opendir(path);
     if (dir == NULL) {
         bx_perror_path(diag, path);
         return false;
@@ -498,7 +479,7 @@ static bool bx_mv_directory_is_empty(const char *path,
     bool ok = true;
     for (;;) {
         errno = 0;
-        struct dirent *entry = readdir(dir);
+        struct dirent* entry = readdir(dir);
         if (entry == NULL) {
             if (errno != 0) {
                 bx_perror_path(diag, path);
@@ -526,9 +507,7 @@ static bool bx_mv_directory_is_empty(const char *path,
     return true;
 }
 
-static bool bx_mv_prepare_cross_device_destination(struct bx_mv_context *ctx,
-                                                   const char *dest_path,
-                                                   const struct stat *src_stat) {
+static bool bx_mv_prepare_cross_device_destination(struct bx_mv_context* ctx, const char* dest_path, const struct stat* src_stat) {
     struct bx_dest_state dest_state;
 
     if (!S_ISDIR(src_stat->st_mode)) {
@@ -559,18 +538,13 @@ static bool bx_mv_prepare_cross_device_destination(struct bx_mv_context *ctx,
     }
 
     if (ctx->options->debug) {
-        bx_info(ctx->diag,
-                "cross-device move removing empty destination directory '%s' before copy",
-                dest_path);
+        bx_info(ctx->diag, "cross-device move removing empty destination directory '%s' before copy", dest_path);
     }
     return true;
 }
 
-static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
-                                         const char *src_path,
-                                         const char *dest_path,
-                                         const struct stat *src_stat) {
-    struct bx_copy_context *copy_ctx = &ctx->cross_device_copy_ctx;
+static bool bx_mv_cross_device_fallback(struct bx_mv_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat) {
+    struct bx_copy_context* copy_ctx = &ctx->cross_device_copy_ctx;
 
     if (ctx->options->verbose) {
         bx_info(ctx->diag, "inter-device move: '%s' -> '%s'; copying then removing", src_path, dest_path);
@@ -598,9 +572,7 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context *ctx,
     return true;
 }
 
-static bool bx_mv_restore_failed_backup(struct bx_mv_context *ctx,
-                                        const char *dest_path,
-                                        const char *backup_path) {
+static bool bx_mv_restore_failed_backup(struct bx_mv_context* ctx, const char* dest_path, const char* backup_path) {
     struct stat st;
 
     if (backup_path == NULL) {
@@ -622,12 +594,10 @@ static bool bx_mv_restore_failed_backup(struct bx_mv_context *ctx,
     return true;
 }
 
-static bool bx_mv_rename_file(struct bx_mv_context *ctx,
-                              const char *src_path,
-                              const char *dest_path) {
+static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, const char* dest_path) {
     struct stat src_lstat;
     struct bx_dest_state dest_state;
-    char *backup_path = NULL;
+    char* backup_path = NULL;
     bool skip = false;
     bool ok = false;
     bool restore_backup_on_failure = false;
@@ -647,12 +617,9 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
     if (dest_state.exists_lstat) {
         same_file = bx_mv_paths_are_same_file(src_path, dest_path, &src_lstat, &dest_state.lst);
         if (same_file) {
-            same_directory_entry =
-                bx_same_file(&src_lstat, &dest_state.lst) &&
-                bx_mv_paths_name_same_directory_entry(src_path, dest_path);
+            same_directory_entry = bx_same_file(&src_lstat, &dest_state.lst) && bx_mv_paths_name_same_directory_entry(src_path, dest_path);
 
-            if (ctx->options->no_clobber ||
-                ctx->options->update_mode == BX_UPDATE_NONE) {
+            if (ctx->options->no_clobber || ctx->options->update_mode == BX_UPDATE_NONE) {
                 return true;
             }
             if (ctx->options->update_mode == BX_UPDATE_NONE_FAIL) {
@@ -660,9 +627,7 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
                 return false;
             }
 
-            if (same_directory_entry ||
-                ctx->options->exchange ||
-                !bx_args_backup_mode_enabled(ctx->backup_params.mode)) {
+            if (same_directory_entry || ctx->options->exchange || !bx_args_backup_mode_enabled(ctx->backup_params.mode)) {
                 bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
                 return false;
             }
@@ -682,15 +647,11 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
             }
         }
 
-        if (!ctx->options->exchange &&
-            !bx_overwrite_backup_existing(dest_path,
-                                          &ctx->backup_params,
-                                          ctx->diag,
-                                          &dest_state,
-                                          &backup_path)) {
+        if (!ctx->options->exchange && !bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, &dest_state, &backup_path)) {
             goto finish;
         }
-    } else if (ctx->options->exchange) {
+    }
+    else if (ctx->options->exchange) {
         bx_diag(ctx->diag, "cannot exchange '%s' and '%s': Destination does not exist", src_path, dest_path);
         return false;
     }
@@ -728,8 +689,7 @@ static bool bx_mv_rename_file(struct bx_mv_context *ctx,
     bx_perror_path(ctx->diag, dest_path);
 
 finish:
-    if (!ok && restore_backup_on_failure &&
-        !bx_mv_restore_failed_backup(ctx, dest_path, backup_path)) {
+    if (!ok && restore_backup_on_failure && !bx_mv_restore_failed_backup(ctx, dest_path, backup_path)) {
         free(backup_path);
         return false;
     }
@@ -737,7 +697,7 @@ finish:
     return ok;
 }
 
-int bx_mv_main(int argc, char **argv) {
+int bx_mv_main(int argc, char** argv) {
     struct bx_mv_options options;
     struct bx_diag_ctx diag = {0};
     int first_operand;
@@ -781,11 +741,11 @@ int bx_mv_main(int argc, char **argv) {
     bx_backup_get_params(options.backup_mode, options.suffix, &ctx.backup_params);
     bx_mv_init_cross_device_copy_context(&ctx);
 
-    const char *destination_root = NULL;
+    const char* destination_root = NULL;
     int source_count = 0;
-    char **source_operands = NULL;
+    char** source_operands = NULL;
     bool destination_is_directory = false;
-    char *resolved_destination_root = NULL;
+    char* resolved_destination_root = NULL;
 
     if (options.target_directory != NULL) {
         destination_root = options.target_directory;
@@ -797,7 +757,8 @@ int bx_mv_main(int argc, char **argv) {
             goto finish;
         }
         destination_is_directory = true;
-    } else if (options.no_target_directory) {
+    }
+    else if (options.no_target_directory) {
         if (operand_count < 2) {
             bx_diag(&diag, "missing destination file operand after '%s'", argv[first_operand]);
             exit_status = 1;
@@ -811,7 +772,8 @@ int bx_mv_main(int argc, char **argv) {
         destination_root = argv[first_operand + 1];
         source_operands = argv + first_operand;
         source_count = 1;
-    } else {
+    }
+    else {
         destination_root = argv[argc - 1];
         source_operands = argv + first_operand;
         source_count = operand_count - 1;
@@ -823,7 +785,8 @@ int bx_mv_main(int argc, char **argv) {
                 goto finish;
             }
             destination_is_directory = true;
-        } else if (bx_stat_is_dir_path(destination_root)) {
+        }
+        else if (bx_stat_is_dir_path(destination_root)) {
             destination_is_directory = true;
         }
     }
@@ -835,29 +798,18 @@ int bx_mv_main(int argc, char **argv) {
         }
     }
 
-    if (options.backup_conflict_warning &&
-        (options.target_directory != NULL ||
-         options.no_target_directory ||
-         source_count != 1 ||
-         destination_is_directory)) {
+    if (options.backup_conflict_warning && (options.target_directory != NULL || options.no_target_directory || source_count != 1 || destination_is_directory)) {
         exit_status = diag.exit_status;
         goto finish;
     }
 
     for (int i = 0; i < source_count; i++) {
         bool source_had_trailing_slashes = bx_mv_operand_had_trailing_slashes(source_operands[i]);
-        char *source_operand = options.strip_trailing_slashes
-                               ? bx_path_strip_trailing_slashes_dup(source_operands[i])
-                               : xstrdup(source_operands[i]);
-        
-        char *dest_path = bx_path_build_dest(source_operand, destination_root, destination_is_directory, false);
+        char* source_operand = options.strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
 
-        if (bx_mv_should_reject_stripped_missing_dest(&options,
-                                                      source_operand,
-                                                      dest_path,
-                                                      source_had_trailing_slashes,
-                                                      destination_is_directory,
-                                                      source_count)) {
+        char* dest_path = bx_path_build_dest(source_operand, destination_root, destination_is_directory, false);
+
+        if (bx_mv_should_reject_stripped_missing_dest(&options, source_operand, dest_path, source_had_trailing_slashes, destination_is_directory, source_count)) {
             bx_diag(&diag, "cannot move '%s' to '%s': Not a directory", source_operand, dest_path);
             free(dest_path);
             free(source_operand);

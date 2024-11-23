@@ -5,18 +5,18 @@
 #include "common/path_ops.h"
 #include "libbx.h"
 
-static char *bx_path_dup_range(const char *start, size_t len) {
-    char *res = xmalloc(len + 1u);
+static char* bx_path_dup_range(const char* start, size_t len) {
+    char* res = xmalloc(len + 1u);
     memcpy(res, start, len);
     res[len] = '\0';
     return res;
 }
 
-char *bx_path_join(const char *left, const char *right) {
+char* bx_path_join(const char* left, const char* right) {
     size_t left_len = strlen(left);
     size_t right_len = strlen(right);
     bool need_slash = (left_len > 0 && left[left_len - 1] != '/');
-    char *res = xmalloc(left_len + (need_slash ? 1u : 0u) + right_len + 1u);
+    char* res = xmalloc(left_len + (need_slash ? 1u : 0u) + right_len + 1u);
 
     memcpy(res, left, left_len);
     size_t pos = left_len;
@@ -28,7 +28,7 @@ char *bx_path_join(const char *left, const char *right) {
     return res;
 }
 
-char *bx_path_strip_trailing_slashes_dup(const char *path) {
+char* bx_path_strip_trailing_slashes_dup(const char* path) {
     size_t len = strlen(path);
 
     while (len > 1 && path[len - 1] == '/') {
@@ -37,13 +37,13 @@ char *bx_path_strip_trailing_slashes_dup(const char *path) {
     return bx_path_dup_range(path, len);
 }
 
-char *bx_path_basename_dup(const char *path) {
-    const char *end = path + strlen(path);
+char* bx_path_basename_dup(const char* path) {
+    const char* end = path + strlen(path);
     while (end > path + 1 && end[-1] == '/') {
         end--;
     }
 
-    const char *base = end;
+    const char* base = end;
     while (base > path && base[-1] != '/') {
         base--;
     }
@@ -54,11 +54,11 @@ char *bx_path_basename_dup(const char *path) {
     return bx_path_dup_range(base, (size_t)(end - base));
 }
 
-char *bx_path_parents_layout_dup(const char *source_operand) {
-    const char *p = source_operand;
-    char *copy;
-    char *readp;
-    char *writep;
+char* bx_path_parents_layout_dup(const char* source_operand) {
+    const char* p = source_operand;
+    char* copy;
+    char* readp;
+    char* writep;
     bool previous_was_slash = false;
 
     while (*p == '/') {
@@ -83,7 +83,8 @@ char *bx_path_parents_layout_dup(const char *source_operand) {
                 *writep++ = *readp;
             }
             previous_was_slash = true;
-        } else {
+        }
+        else {
             *writep++ = *readp;
             previous_was_slash = false;
         }
@@ -101,24 +102,21 @@ char *bx_path_parents_layout_dup(const char *source_operand) {
     return copy;
 }
 
-bool bx_path_is_dot_or_dotdot(const char *name) {
+bool bx_path_is_dot_or_dotdot(const char* name) {
     return (strcmp(name, ".") == 0 || strcmp(name, "..") == 0);
 }
 
-char *bx_path_build_dest(const char *source_operand,
-                         const char *destination_root,
-                         bool destination_is_directory,
-                         bool parents) {
+char* bx_path_build_dest(const char* source_operand, const char* destination_root, bool destination_is_directory, bool parents) {
     if (parents) {
-        char *parents_path = bx_path_parents_layout_dup(source_operand);
-        char *res = bx_path_join(destination_root, parents_path);
+        char* parents_path = bx_path_parents_layout_dup(source_operand);
+        char* res = bx_path_join(destination_root, parents_path);
         free(parents_path);
         return res;
     }
 
     if (destination_is_directory) {
-        char *base = bx_path_basename_dup(source_operand);
-        char *res = bx_path_join(destination_root, base);
+        char* base = bx_path_basename_dup(source_operand);
+        char* res = bx_path_join(destination_root, base);
         free(base);
         return res;
     }

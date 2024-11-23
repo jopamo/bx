@@ -5,7 +5,7 @@
 #include <mira/embed.h>
 #endif
 
-int bx_wget_main(int argc, char **argv) {
+int bx_wget_main(int argc, char** argv) {
 #if BX_HAVE_MIRA_EMBED
     return mira_embed_run_argv(argc, argv);
 #else

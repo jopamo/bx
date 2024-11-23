@@ -10,7 +10,7 @@
 #include "path_ops.h"
 #include "diag.h"
 
-bool bx_remove_recursive(const char *path, struct bx_diag_ctx *diag) {
+bool bx_remove_recursive(const char* path, struct bx_diag_ctx* diag) {
     struct stat st;
     if (lstat(path, &st) != 0) {
         if (errno == ENOENT) {
@@ -28,7 +28,7 @@ bool bx_remove_recursive(const char *path, struct bx_diag_ctx *diag) {
         return true;
     }
 
-    DIR *dir = opendir(path);
+    DIR* dir = opendir(path);
     if (dir == NULL) {
         bx_perror_path(diag, path);
         return false;
@@ -37,7 +37,7 @@ bool bx_remove_recursive(const char *path, struct bx_diag_ctx *diag) {
     bool ok = true;
     for (;;) {
         errno = 0;
-        struct dirent *entry = readdir(dir);
+        struct dirent* entry = readdir(dir);
         if (entry == NULL) {
             if (errno != 0) {
                 bx_perror_path(diag, path);
@@ -49,7 +49,7 @@ bool bx_remove_recursive(const char *path, struct bx_diag_ctx *diag) {
             continue;
         }
 
-        char *child_path = bx_path_join(path, entry->d_name);
+        char* child_path = bx_path_join(path, entry->d_name);
         if (!bx_remove_recursive(child_path, diag)) {
             ok = false;
         }

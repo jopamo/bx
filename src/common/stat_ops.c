@@ -5,12 +5,12 @@
 
 #include "common/stat_ops.h"
 
-bool bx_stat_is_dir_path(const char *path) {
+bool bx_stat_is_dir_path(const char* path) {
     struct stat st;
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-int bx_stat_collect_dest_state(const char *path, struct bx_dest_state *state) {
+int bx_stat_collect_dest_state(const char* path, struct bx_dest_state* state) {
     memset(state, 0, sizeof(*state));
 
     if (lstat(path, &state->lst) != 0) {
@@ -34,7 +34,7 @@ int bx_stat_collect_dest_state(const char *path, struct bx_dest_state *state) {
     return -1;
 }
 
-int bx_stat_timespec_compare(const struct timespec *a, const struct timespec *b) {
+int bx_stat_timespec_compare(const struct timespec* a, const struct timespec* b) {
     if (a->tv_sec < b->tv_sec) {
         return -1;
     }

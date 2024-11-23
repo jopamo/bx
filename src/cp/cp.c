@@ -17,14 +17,14 @@
 #include "libbx.h"
 
 struct bx_cp_options {
-    const char *progname;
+    const char* progname;
     bool strip_trailing_slashes;
     bool show_help;
     bool show_version;
     bool no_target_directory;
     enum bx_backup_mode backup_mode;
-    const char *suffix;
-    const char *target_directory;
+    const char* suffix;
+    const char* target_directory;
     struct bx_copy_options copy;
 };
 
@@ -44,11 +44,11 @@ enum bx_cp_longopt {
     BX_CP_OPT_UPDATE,
 };
 
-static const char *bx_cp_progname(const char *argv0) {
+static const char* bx_cp_progname(const char* argv0) {
     return (argv0 && argv0[0] != '\0') ? argv0 : "cp";
 }
 
-static void bx_cp_print_help(FILE *stream, const char *progname) {
+static void bx_cp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [-T] SOURCE DEST\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... SOURCE... DIRECTORY\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... -t DIRECTORY SOURCE...\n", progname);
@@ -87,12 +87,8 @@ static void bx_cp_print_version(void) {
     printf("cp (bx) %s\n", BX_VERSION);
 }
 
-static bool bx_cp_parse_preserve_list(struct bx_diag_ctx *diag,
-                                      const char *arg,
-                                      unsigned *mask,
-                                      bool set_bits,
-                                      bool *mode_mentioned_out) {
-    char *invalid_token = NULL;
+static bool bx_cp_parse_preserve_list(struct bx_diag_ctx* diag, const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out) {
+    char* invalid_token = NULL;
     if (!bx_args_parse_preserve_list(arg, mask, set_bits, mode_mentioned_out, &invalid_token)) {
         bx_diag(diag, "invalid attribute '%s'", invalid_token);
         free(invalid_token);
@@ -101,9 +97,7 @@ static bool bx_cp_parse_preserve_list(struct bx_diag_ctx *diag,
     return true;
 }
 
-static bool bx_cp_parse_update_mode(struct bx_diag_ctx *diag,
-                                    const char *arg,
-                                    enum bx_update_mode *mode_out) {
+static bool bx_cp_parse_update_mode(struct bx_diag_ctx* diag, const char* arg, enum bx_update_mode* mode_out) {
     if (!bx_args_parse_update_mode(arg, mode_out)) {
         bx_diag(diag, "invalid --update mode '%s'", arg);
         return false;
@@ -111,11 +105,7 @@ static bool bx_cp_parse_update_mode(struct bx_diag_ctx *diag,
     return true;
 }
 
-static bool bx_cp_parse_options(int argc,
-                                char **argv,
-                                struct bx_cp_options *options,
-                                int *first_operand,
-                                struct bx_diag_ctx *diag) {
+static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"archive", no_argument, NULL, 'a'},
         {"attributes-only", no_argument, NULL, BX_CP_OPT_ATTRIBUTES_ONLY},
@@ -171,200 +161,202 @@ static bool bx_cp_parse_options(int argc,
         }
 
         switch (c) {
-        case 1:
-            options->show_help = true;
-            break;
-        case 2:
-            options->show_version = true;
-            break;
-        case 'a':
-            options->copy.recursive = true;
-            options->copy.deref_mode = BX_DEREF_NEVER;
-            options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
-            options->copy.preserve_mask |= BX_PRESERVE_ALL;
-            break;
-        case BX_CP_OPT_ATTRIBUTES_ONLY:
-            options->copy.attributes_only = true;
-            break;
-        case 'b':
-            bx_args_enable_backup_mode(&options->backup_mode);
-            break;
-        case BX_CP_OPT_BACKUP:
-            if (optarg == NULL) {
-                bx_args_enable_backup_mode(&options->backup_mode);
-            } else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
-                bx_diag(diag, "invalid --backup control value '%s'", optarg);
-                return false;
-            }
-            break;
-        case BX_CP_OPT_COPY_CONTENTS:
-            options->copy.copy_contents = true;
-            break;
-        case 'S':
-            options->suffix = optarg;
-            break;
-        case BX_CP_OPT_REFLINK:
-            if (optarg == NULL) {
-                options->copy.reflink_mode = BX_REFLINK_ALWAYS;
-            } else if (strcmp(optarg, "always") == 0) {
-                options->copy.reflink_mode = BX_REFLINK_ALWAYS;
-            } else if (strcmp(optarg, "auto") == 0) {
-                options->copy.reflink_mode = BX_REFLINK_AUTO;
-            } else if (strcmp(optarg, "never") == 0) {
-                options->copy.reflink_mode = BX_REFLINK_NEVER;
-            } else {
-                bx_diag(diag, "invalid --reflink argument '%s'", optarg);
-                return false;
-            }
-            break;
-        case BX_CP_OPT_SPARSE:
-            if (optarg == NULL) {
-                options->copy.sparse_mode = BX_SPARSE_AUTO;
-            } else if (strcmp(optarg, "always") == 0) {
-                options->copy.sparse_mode = BX_SPARSE_ALWAYS;
-            } else if (strcmp(optarg, "auto") == 0) {
-                options->copy.sparse_mode = BX_SPARSE_AUTO;
-            } else if (strcmp(optarg, "never") == 0) {
-                options->copy.sparse_mode = BX_SPARSE_NEVER;
-            } else {
-                bx_diag(diag, "invalid --sparse argument '%s'", optarg);
-                return false;
-            }
-            break;
-        case BX_CP_OPT_DEBUG:
-            options->copy.debug = true;
-            options->copy.verbose = true;
-            break;
-        case 'd':
-            options->copy.deref_mode = BX_DEREF_NEVER;
-            options->copy.preserve_mask |= BX_PRESERVE_LINKS;
-            break;
-        case 'f':
-            options->copy.force = true;
-            break;
-        case 'i':
-            options->copy.interactive = true;
-            options->copy.no_clobber = false;
-            break;
-        case 'H':
-            options->copy.deref_mode = BX_DEREF_COMMAND_LINE;
-            break;
-        case 'L':
-            options->copy.deref_mode = BX_DEREF_ALWAYS;
-            break;
-        case 'P':
-            options->copy.deref_mode = BX_DEREF_NEVER;
-            break;
-        case BX_CP_OPT_KEEP_DIRECTORY_SYMLINK:
-            /* Accepted as a no-op selector for current destination handling. */
-            break;
-        case 'l':
-            options->copy.hard_link = true;
-            break;
-        case 'n':
-            options->copy.no_clobber = true;
-            options->copy.interactive = false;
-            break;
-        case 'p':
-            options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
-            options->copy.preserve_mask |= BX_PRESERVE_MODE |
-                                           BX_PRESERVE_OWNERSHIP |
-                                           BX_PRESERVE_TIMESTAMPS;
-            break;
-        case BX_CP_OPT_PRESERVE:
-            if (optarg == NULL) {
+            case 1:
+                options->show_help = true;
+                break;
+            case 2:
+                options->show_version = true;
+                break;
+            case 'a':
+                options->copy.recursive = true;
+                options->copy.deref_mode = BX_DEREF_NEVER;
                 options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
-                options->copy.preserve_mask |= BX_PRESERVE_MODE |
-                                               BX_PRESERVE_OWNERSHIP |
-                                               BX_PRESERVE_TIMESTAMPS;
-            } else {
+                options->copy.preserve_mask |= BX_PRESERVE_ALL;
+                break;
+            case BX_CP_OPT_ATTRIBUTES_ONLY:
+                options->copy.attributes_only = true;
+                break;
+            case 'b':
+                bx_args_enable_backup_mode(&options->backup_mode);
+                break;
+            case BX_CP_OPT_BACKUP:
+                if (optarg == NULL) {
+                    bx_args_enable_backup_mode(&options->backup_mode);
+                }
+                else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
+                    bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                    return false;
+                }
+                break;
+            case BX_CP_OPT_COPY_CONTENTS:
+                options->copy.copy_contents = true;
+                break;
+            case 'S':
+                options->suffix = optarg;
+                break;
+            case BX_CP_OPT_REFLINK:
+                if (optarg == NULL) {
+                    options->copy.reflink_mode = BX_REFLINK_ALWAYS;
+                }
+                else if (strcmp(optarg, "always") == 0) {
+                    options->copy.reflink_mode = BX_REFLINK_ALWAYS;
+                }
+                else if (strcmp(optarg, "auto") == 0) {
+                    options->copy.reflink_mode = BX_REFLINK_AUTO;
+                }
+                else if (strcmp(optarg, "never") == 0) {
+                    options->copy.reflink_mode = BX_REFLINK_NEVER;
+                }
+                else {
+                    bx_diag(diag, "invalid --reflink argument '%s'", optarg);
+                    return false;
+                }
+                break;
+            case BX_CP_OPT_SPARSE:
+                if (optarg == NULL) {
+                    options->copy.sparse_mode = BX_SPARSE_AUTO;
+                }
+                else if (strcmp(optarg, "always") == 0) {
+                    options->copy.sparse_mode = BX_SPARSE_ALWAYS;
+                }
+                else if (strcmp(optarg, "auto") == 0) {
+                    options->copy.sparse_mode = BX_SPARSE_AUTO;
+                }
+                else if (strcmp(optarg, "never") == 0) {
+                    options->copy.sparse_mode = BX_SPARSE_NEVER;
+                }
+                else {
+                    bx_diag(diag, "invalid --sparse argument '%s'", optarg);
+                    return false;
+                }
+                break;
+            case BX_CP_OPT_DEBUG:
+                options->copy.debug = true;
+                options->copy.verbose = true;
+                break;
+            case 'd':
+                options->copy.deref_mode = BX_DEREF_NEVER;
+                options->copy.preserve_mask |= BX_PRESERVE_LINKS;
+                break;
+            case 'f':
+                options->copy.force = true;
+                break;
+            case 'i':
+                options->copy.interactive = true;
+                options->copy.no_clobber = false;
+                break;
+            case 'H':
+                options->copy.deref_mode = BX_DEREF_COMMAND_LINE;
+                break;
+            case 'L':
+                options->copy.deref_mode = BX_DEREF_ALWAYS;
+                break;
+            case 'P':
+                options->copy.deref_mode = BX_DEREF_NEVER;
+                break;
+            case BX_CP_OPT_KEEP_DIRECTORY_SYMLINK:
+                /* Accepted as a no-op selector for current destination handling. */
+                break;
+            case 'l':
+                options->copy.hard_link = true;
+                break;
+            case 'n':
+                options->copy.no_clobber = true;
+                options->copy.interactive = false;
+                break;
+            case 'p':
+                options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
+                options->copy.preserve_mask |= BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS;
+                break;
+            case BX_CP_OPT_PRESERVE:
+                if (optarg == NULL) {
+                    options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
+                    options->copy.preserve_mask |= BX_PRESERVE_MODE | BX_PRESERVE_OWNERSHIP | BX_PRESERVE_TIMESTAMPS;
+                }
+                else {
+                    bool mode_mentioned = false;
+                    if (!bx_cp_parse_preserve_list(diag, optarg, &options->copy.preserve_mask, true, &mode_mentioned)) {
+                        return false;
+                    }
+                    if (mode_mentioned) {
+                        options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
+                    }
+                }
+                break;
+            case BX_CP_OPT_NO_PRESERVE: {
                 bool mode_mentioned = false;
-                if (!bx_cp_parse_preserve_list(diag,
-                                               optarg,
-                                               &options->copy.preserve_mask,
-                                               true,
-                                               &mode_mentioned)) {
+                if (!bx_cp_parse_preserve_list(diag, optarg, &options->copy.preserve_mask, false, &mode_mentioned)) {
                     return false;
                 }
                 if (mode_mentioned) {
-                    options->copy.mode_policy = BX_MODE_POLICY_PRESERVE;
+                    options->copy.mode_policy = BX_MODE_POLICY_NO_PRESERVE;
                 }
+                break;
             }
-            break;
-        case BX_CP_OPT_NO_PRESERVE: {
-            bool mode_mentioned = false;
-            if (!bx_cp_parse_preserve_list(diag,
-                                           optarg,
-                                           &options->copy.preserve_mask,
-                                           false,
-                                           &mode_mentioned)) {
-                return false;
-            }
-            if (mode_mentioned) {
-                options->copy.mode_policy = BX_MODE_POLICY_NO_PRESERVE;
-            }
-            break;
-        }
-        case BX_CP_OPT_PARENTS:
-            options->copy.parents = true;
-            break;
-        case 'R':
-        case 'r':
-            options->copy.recursive = true;
-            break;
-        case BX_CP_OPT_REMOVE_DESTINATION:
-            options->copy.remove_destination = true;
-            break;
-        case BX_CP_OPT_STRIP_TRAILING_SLASHES:
-            options->strip_trailing_slashes = true;
-            break;
-        case 's':
-            options->copy.symbolic_link = true;
-            break;
-        case 't':
-            options->target_directory = optarg;
-            break;
-        case 'T':
-            options->no_target_directory = true;
-            break;
-        case BX_CP_OPT_UPDATE:
-            if (!bx_cp_parse_update_mode(diag, optarg, &options->copy.update_mode)) {
-                return false;
-            }
-            break;
-        case 'u':
-            options->copy.update_mode = BX_UPDATE_OLDER;
-            break;
-        case 'v':
-            options->copy.verbose = true;
-            break;
-        case 'x':
-            options->copy.one_file_system = true;
-            break;
-        case ':':
-            if (optopt != 0) {
-                const char *arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
-                if (arg != NULL && strncmp(arg, "--", 2) == 0) {
-                    bx_diag(diag, "option '%s' requires an argument", arg);
-                } else {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
+            case BX_CP_OPT_PARENTS:
+                options->copy.parents = true;
+                break;
+            case 'R':
+            case 'r':
+                options->copy.recursive = true;
+                break;
+            case BX_CP_OPT_REMOVE_DESTINATION:
+                options->copy.remove_destination = true;
+                break;
+            case BX_CP_OPT_STRIP_TRAILING_SLASHES:
+                options->strip_trailing_slashes = true;
+                break;
+            case 's':
+                options->copy.symbolic_link = true;
+                break;
+            case 't':
+                options->target_directory = optarg;
+                break;
+            case 'T':
+                options->no_target_directory = true;
+                break;
+            case BX_CP_OPT_UPDATE:
+                if (!bx_cp_parse_update_mode(diag, optarg, &options->copy.update_mode)) {
+                    return false;
                 }
-            } else {
-                bx_diag(diag, "option requires an argument");
-            }
-            return false;
-        case '?':
-            if (optopt != 0) {
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-            } else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-            } else {
-                bx_diag(diag, "unrecognized option");
-            }
-            return false;
-        default:
-            bx_diag(diag, "internal option parsing error");
-            return false;
+                break;
+            case 'u':
+                options->copy.update_mode = BX_UPDATE_OLDER;
+                break;
+            case 'v':
+                options->copy.verbose = true;
+                break;
+            case 'x':
+                options->copy.one_file_system = true;
+                break;
+            case ':':
+                if (optopt != 0) {
+                    const char* arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
+                    if (arg != NULL && strncmp(arg, "--", 2) == 0) {
+                        bx_diag(diag, "option '%s' requires an argument", arg);
+                    }
+                    else {
+                        bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                    }
+                }
+                else {
+                    bx_diag(diag, "option requires an argument");
+                }
+                return false;
+            case '?':
+                if (optopt != 0) {
+                    bx_diag(diag, "invalid option -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "unrecognized option");
+                }
+                return false;
+            default:
+                bx_diag(diag, "internal option parsing error");
+                return false;
         }
     }
 
@@ -372,10 +364,7 @@ static bool bx_cp_parse_options(int argc,
         bx_diag(diag, "cannot combine --link and --symbolic-link");
         return false;
     }
-    if (bx_args_backup_mode_requested(options->backup_mode) &&
-        (options->copy.no_clobber ||
-         options->copy.update_mode == BX_UPDATE_NONE ||
-         options->copy.update_mode == BX_UPDATE_NONE_FAIL)) {
+    if (bx_args_backup_mode_requested(options->backup_mode) && (options->copy.no_clobber || options->copy.update_mode == BX_UPDATE_NONE || options->copy.update_mode == BX_UPDATE_NONE_FAIL)) {
         bx_diag(diag, "cannot combine --backup with -n, --update=none, or --update=none-fail");
         return false;
     }
@@ -392,21 +381,11 @@ static bool bx_cp_parse_options(int argc,
     return true;
 }
 
-static char *bx_cp_build_dest_path(const struct bx_cp_options *options,
-                                   const char *source_operand,
-                                   const char *destination_root,
-                                   bool destination_is_directory) {
-    return bx_path_build_dest(source_operand,
-                              destination_root,
-                              destination_is_directory,
-                              options->copy.parents);
+static char* bx_cp_build_dest_path(const struct bx_cp_options* options, const char* source_operand, const char* destination_root, bool destination_is_directory) {
+    return bx_path_build_dest(source_operand, destination_root, destination_is_directory, options->copy.parents);
 }
 
-static void bx_cp_init_copy_context(struct bx_copy_context *ctx,
-                                    const struct bx_cp_options *options,
-                                    struct bx_diag_ctx *diag,
-                                    const char *destination_root,
-                                    mode_t umask_value) {
+static void bx_cp_init_copy_context(struct bx_copy_context* ctx, const struct bx_cp_options* options, struct bx_diag_ctx* diag, const char* destination_root, mode_t umask_value) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->options = &options->copy;
     ctx->diag = diag;
@@ -415,7 +394,7 @@ static void bx_cp_init_copy_context(struct bx_copy_context *ctx,
     bx_backup_get_params(options->backup_mode, options->suffix, &ctx->backup_params);
 }
 
-int bx_cp_main(int argc, char **argv) {
+int bx_cp_main(int argc, char** argv) {
     struct bx_cp_options options;
     int first_operand = 0;
     struct bx_copy_context copy_ctx;
@@ -444,9 +423,9 @@ int bx_cp_main(int argc, char **argv) {
         return 1;
     }
 
-    const char *destination_root = NULL;
+    const char* destination_root = NULL;
     int source_count = 0;
-    char **source_operands = NULL;
+    char** source_operands = NULL;
     bool destination_is_directory = false;
 
     if (options.target_directory != NULL) {
@@ -458,7 +437,8 @@ int bx_cp_main(int argc, char **argv) {
             return 1;
         }
         destination_is_directory = true;
-    } else if (options.no_target_directory) {
+    }
+    else if (options.no_target_directory) {
         if (operand_count < 2) {
             bx_diag(&diag_ctx, "missing destination file operand after '%s'", argv[first_operand]);
             return 1;
@@ -471,7 +451,8 @@ int bx_cp_main(int argc, char **argv) {
         destination_root = argv[first_operand + 1];
         source_operands = argv + first_operand;
         source_count = 1;
-    } else {
+    }
+    else {
         if (operand_count < 2) {
             bx_diag(&diag_ctx, "missing destination file operand after '%s'", argv[first_operand]);
             return 1;
@@ -486,7 +467,8 @@ int bx_cp_main(int argc, char **argv) {
                 return 1;
             }
             destination_is_directory = true;
-        } else if (!options.no_target_directory && bx_stat_is_dir_path(destination_root)) {
+        }
+        else if (!options.no_target_directory && bx_stat_is_dir_path(destination_root)) {
             destination_is_directory = true;
         }
 
@@ -502,11 +484,9 @@ int bx_cp_main(int argc, char **argv) {
     bx_cp_init_copy_context(&copy_ctx, &options, &diag_ctx, destination_root, old_umask);
 
     for (int i = 0; i < source_count; i++) {
-        char *lookup_path = xstrdup(source_operands[i]);
-        char *source_operand = options.strip_trailing_slashes
-                               ? bx_path_strip_trailing_slashes_dup(source_operands[i])
-                               : xstrdup(source_operands[i]);
-        char *dest_path = bx_cp_build_dest_path(&options, source_operand, destination_root, destination_is_directory);
+        char* lookup_path = xstrdup(source_operands[i]);
+        char* source_operand = options.strip_trailing_slashes ? bx_path_strip_trailing_slashes_dup(source_operands[i]) : xstrdup(source_operands[i]);
+        char* dest_path = bx_cp_build_dest_path(&options, source_operand, destination_root, destination_is_directory);
 
         copy_ctx.stop_current_source = false;
         copy_ctx.current_source_root = lookup_path;

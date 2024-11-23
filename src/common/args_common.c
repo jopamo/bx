@@ -7,39 +7,39 @@
 #include "update_policy.h"
 #include "libbx.h"
 
-bool bx_args_parse_preserve_list(const char *arg,
-                                unsigned *mask,
-                                bool set_bits,
-                                bool *mode_mentioned_out,
-                                char **invalid_token_out) {
-    char *copy = xstrdup(arg);
-    char *saveptr = NULL;
+bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out, char** invalid_token_out) {
+    char* copy = xstrdup(arg);
+    char* saveptr = NULL;
     bool mode_mentioned = false;
 
     if (invalid_token_out) {
         *invalid_token_out = NULL;
     }
 
-    for (char *token = strtok_r(copy, ",", &saveptr);
-         token != NULL;
-         token = strtok_r(NULL, ",", &saveptr)) {
+    for (char* token = strtok_r(copy, ",", &saveptr); token != NULL; token = strtok_r(NULL, ",", &saveptr)) {
         unsigned bits = 0;
 
         if (strcmp(token, "mode") == 0) {
             bits = BX_PRESERVE_MODE;
             mode_mentioned = true;
-        } else if (strcmp(token, "ownership") == 0) {
+        }
+        else if (strcmp(token, "ownership") == 0) {
             bits = BX_PRESERVE_OWNERSHIP;
-        } else if (strcmp(token, "timestamps") == 0) {
+        }
+        else if (strcmp(token, "timestamps") == 0) {
             bits = BX_PRESERVE_TIMESTAMPS;
-        } else if (strcmp(token, "links") == 0) {
+        }
+        else if (strcmp(token, "links") == 0) {
             bits = BX_PRESERVE_LINKS;
-        } else if (strcmp(token, "all") == 0) {
+        }
+        else if (strcmp(token, "all") == 0) {
             bits = BX_PRESERVE_ALL;
             mode_mentioned = true;
-        } else if (strcmp(token, "xattr") == 0) {
+        }
+        else if (strcmp(token, "xattr") == 0) {
             bits = BX_PRESERVE_XATTR;
-        } else {
+        }
+        else {
             if (invalid_token_out) {
                 *invalid_token_out = xstrdup(token);
             }
@@ -49,7 +49,8 @@ bool bx_args_parse_preserve_list(const char *arg,
 
         if (set_bits) {
             *mask |= bits;
-        } else {
+        }
+        else {
             *mask &= ~bits;
         }
     }
@@ -61,8 +62,7 @@ bool bx_args_parse_preserve_list(const char *arg,
     return true;
 }
 
-bool bx_args_parse_update_mode(const char *arg,
-                               enum bx_update_mode *mode_out) {
+bool bx_args_parse_update_mode(const char* arg, enum bx_update_mode* mode_out) {
     if (arg == NULL || strcmp(arg, "older") == 0) {
         *mode_out = BX_UPDATE_OLDER;
         return true;
@@ -83,7 +83,7 @@ bool bx_args_parse_update_mode(const char *arg,
     return false;
 }
 
-bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out) {
+bool bx_args_parse_backup_mode(const char* arg, enum bx_backup_mode* mode_out) {
     if (arg == NULL) {
         return false;
     }
@@ -106,7 +106,7 @@ bool bx_args_parse_backup_mode(const char *arg, enum bx_backup_mode *mode_out) {
     return false;
 }
 
-void bx_args_enable_backup_mode(enum bx_backup_mode *mode) {
+void bx_args_enable_backup_mode(enum bx_backup_mode* mode) {
     if (*mode == BX_BACKUP_NONE) {
         *mode = BX_BACKUP_UNSPECIFIED;
     }

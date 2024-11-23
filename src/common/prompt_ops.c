@@ -7,24 +7,25 @@
 
 #include "prompt_ops.h"
 
-bool bx_prompt_confirm(const char *prompt) {
+bool bx_prompt_confirm(const char* prompt) {
     if (!isatty(STDIN_FILENO)) {
         // GNU tools usually don't prompt if stdin is not a tty
-        // but it depends on the applet. 
+        // but it depends on the applet.
         // For now, assume if not a TTY, we read from stdin.
     }
 
     fprintf(stderr, "%s", prompt);
     fflush(stderr);
 
-    char *line = NULL;
+    char* line = NULL;
     size_t len = 0;
     if (getline(&line, &len, stdin) == -1) {
         return false;
     }
 
-    char *p = line;
-    while (isspace((unsigned char)*p)) p++;
+    char* p = line;
+    while (isspace((unsigned char)*p))
+        p++;
 
     bool confirmed = (tolower((unsigned char)*p) == 'y');
     free(line);

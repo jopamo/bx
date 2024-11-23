@@ -25,6 +25,6 @@ struct bx_copy_data_options {
     enum bx_reflink_mode reflink_mode;
 };
 
-int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options *opts);
+int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opts);
 
 #endif /* BX_COMMON_COPY_DATA_H */
