@@ -154,13 +154,14 @@ sources = [
   'src/mv/mv.c',
   'src/expr/expr.c',
   'src/md5sum/md5sum.c',
+  'src/base64/base64.c',
   'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'true', 'false']
+applet_names = ['which', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -248,6 +249,9 @@ if get_option('tests')
 
   test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
   test('md5sum check', test_md5sum_check, args : [bx_exe])
+
+  test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
+  test('base64 basic', test_base64_basic, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
