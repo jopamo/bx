@@ -27,7 +27,7 @@ struct base64_options {
 struct base64_encode_state {
     size_t wrap_cols;
     size_t line_len;
-    uint8_t tail[2];
+    uint8_t tail[3];
     size_t tail_len;
     bool wrote_output;
 };
@@ -384,7 +384,7 @@ static bool base64_encode_stream(FILE* stream, const char* source_name, const st
     struct base64_encode_state state = {
         .wrap_cols = options->wrap_cols,
         .line_len = 0,
-        .tail = {0, 0},
+        .tail = {0, 0, 0},
         .tail_len = 0,
         .wrote_output = false,
     };
