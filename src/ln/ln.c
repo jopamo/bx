@@ -10,14 +10,19 @@
 
 #include "applets.h"
 #include "common/path_ops.h"
+#include "common/prompt_ops.h"
 #include "common/same_file.h"
 #include "diag.h"
 #include "libbx.h"
 
+char* realpath(const char* restrict path, char* restrict resolved_path);
+
 struct bx_ln_options {
     const char* progname;
     bool symbolic;
+    bool relative;
     bool force;
+    bool interactive;
     bool no_dereference;
     bool no_target_directory;
     bool verbose;
@@ -40,9 +45,11 @@ static void bx_ln_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Create a link to TARGET with the name LINK_NAME.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -f, --force                remove existing destination files\n");
+    fprintf(stream, "  -i, --interactive          prompt whether to remove destinations\n");
     fprintf(stream, "  -L, --logical              dereference TARGETs that are symbolic links\n");
     fprintf(stream, "  -n, --no-dereference       treat LINK_NAME as a normal file if it is a symbolic link\n");
     fprintf(stream, "  -P, --physical             make hard links directly to symbolic links (default)\n");
+    fprintf(stream, "  -r, --relative             with -s, create links relative to link location\n");
     fprintf(stream, "  -s, --symbolic             make symbolic links instead of hard links\n");
     fprintf(stream, "  -t, --target-directory=DIR specify the directory for all links\n");
     fprintf(stream, "  -T, --no-target-directory  treat LINK_NAME as a normal file always\n");
@@ -58,9 +65,11 @@ static void bx_ln_print_version(const char* progname) {
 static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"force", no_argument, NULL, 'f'},
+        {"interactive", no_argument, NULL, 'i'},
         {"logical", no_argument, NULL, 'L'},
         {"no-dereference", no_argument, NULL, 'n'},
         {"physical", no_argument, NULL, 'P'},
+        {"relative", no_argument, NULL, 'r'},
         {"symbolic", no_argument, NULL, 's'},
         {"target-directory", required_argument, NULL, 't'},
         {"no-target-directory", no_argument, NULL, 'T'},
@@ -69,7 +78,7 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
     };
-    char short_opts[] = "+:fLnPst:Tv";
+    char short_opts[] = "+:fiLnPrst:Tv";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_ln_progname(argv[0]);
@@ -88,6 +97,11 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         switch (c) {
             case 'f':
                 options->force = true;
+                options->interactive = false;
+                break;
+            case 'i':
+                options->interactive = true;
+                options->force = false;
                 break;
             case 'L':
                 options->follow_symlinks = true;
@@ -97,6 +111,9 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
                 break;
             case 'P':
                 options->follow_symlinks = false;
+                break;
+            case 'r':
+                options->relative = true;
                 break;
             case 's':
                 options->symbolic = true;
@@ -137,6 +154,11 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         return false;
     }
 
+    if (options->relative && !options->symbolic) {
+        bx_diag(diag, "cannot do --relative without --symbolic");
+        return false;
+    }
+
     *first_operand = optind;
     return true;
 }
@@ -147,24 +169,272 @@ static bool bx_ln_path_is_directory(const char* path, bool follow_symlinks) {
     return rc == 0 && S_ISDIR(st.st_mode);
 }
 
+struct bx_ln_components {
+    char** parts;
+    size_t count;
+};
+
+static void bx_ln_components_push(struct bx_ln_components* components, const char* part) {
+    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + 1u));
+    components->parts[components->count++] = xstrdup(part);
+}
+
+static void bx_ln_components_pop(struct bx_ln_components* components) {
+    if (components->count == 0) {
+        return;
+    }
+    free(components->parts[components->count - 1u]);
+    components->count--;
+}
+
+static void bx_ln_components_free(struct bx_ln_components* components) {
+    for (size_t i = 0; i < components->count; i++) {
+        free(components->parts[i]);
+    }
+    free(components->parts);
+    components->parts = NULL;
+    components->count = 0;
+}
+
+static void bx_ln_components_append_normalized(struct bx_ln_components* components, const char* path) {
+    char* copy = xstrdup(path);
+    char* saveptr = NULL;
+
+    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
+        if (strcmp(token, ".") == 0 || token[0] == '\0') {
+            continue;
+        }
+        if (strcmp(token, "..") == 0) {
+            bx_ln_components_pop(components);
+            continue;
+        }
+        bx_ln_components_push(components, token);
+    }
+
+    free(copy);
+}
+
+static char* bx_ln_components_to_absolute_path(const struct bx_ln_components* components) {
+    if (components->count == 0) {
+        return xstrdup("/");
+    }
+
+    size_t len = 2u;
+    for (size_t i = 0; i < components->count; i++) {
+        len += strlen(components->parts[i]);
+        if (i + 1u < components->count) {
+            len++;
+        }
+    }
+
+    char* path = xmalloc(len);
+    size_t pos = 0;
+    path[pos++] = '/';
+    for (size_t i = 0; i < components->count; i++) {
+        size_t part_len = strlen(components->parts[i]);
+        memcpy(path + pos, components->parts[i], part_len);
+        pos += part_len;
+        if (i + 1u < components->count) {
+            path[pos++] = '/';
+        }
+    }
+    path[pos] = '\0';
+    return path;
+}
+
+static char* bx_ln_getcwd_dup(void) {
+    size_t size = 128u;
+    char* cwd = xmalloc(size);
+
+    while (getcwd(cwd, size) == NULL) {
+        if (errno != ERANGE) {
+            free(cwd);
+            return NULL;
+        }
+        size *= 2u;
+        cwd = xrealloc(cwd, size);
+    }
+
+    return cwd;
+}
+
+static char* bx_ln_normalize_absolute_lexical(const char* path) {
+    struct bx_ln_components components = {0};
+    char* cwd = NULL;
+    char* normalized = NULL;
+
+    if (path[0] != '/') {
+        cwd = bx_ln_getcwd_dup();
+        if (cwd == NULL) {
+            return NULL;
+        }
+        bx_ln_components_append_normalized(&components, cwd);
+    }
+
+    bx_ln_components_append_normalized(&components, path);
+    normalized = bx_ln_components_to_absolute_path(&components);
+
+    free(cwd);
+    bx_ln_components_free(&components);
+    return normalized;
+}
+
+static bool bx_ln_parent_dir_dup(const char* path, char** parent_out) {
+    char* copy = xstrdup(path);
+    char* slash = strrchr(copy, '/');
+
+    if (slash == NULL) {
+        free(copy);
+        *parent_out = xstrdup(".");
+        return true;
+    }
+    if (slash == copy) {
+        slash[1] = '\0';
+        *parent_out = copy;
+        return true;
+    }
+
+    *slash = '\0';
+    *parent_out = copy;
+    return true;
+}
+
+static char* bx_ln_canonicalize_for_relative(const char* path) {
+    char* canonical = realpath(path, NULL);
+    if (canonical != NULL) {
+        return canonical;
+    }
+
+    if (errno == ENOENT || errno == ENOTDIR) {
+        char* parent = NULL;
+        char* parent_real = NULL;
+        char* base = NULL;
+        char* joined = NULL;
+        char* normalized = NULL;
+
+        if (!bx_ln_parent_dir_dup(path, &parent)) {
+            return NULL;
+        }
+
+        parent_real = realpath(parent, NULL);
+        if (parent_real != NULL) {
+            base = bx_path_basename_dup(path);
+            joined = bx_path_join(parent_real, base);
+            normalized = bx_ln_normalize_absolute_lexical(joined);
+            free(joined);
+            free(base);
+            free(parent_real);
+            free(parent);
+            return normalized;
+        }
+
+        free(parent);
+        return bx_ln_normalize_absolute_lexical(path);
+    }
+
+    return NULL;
+}
+
+static char* bx_ln_relative_path_between(const char* from_abs, const char* to_abs) {
+    struct bx_ln_components from_components = {0};
+    struct bx_ln_components to_components = {0};
+    char* relative = NULL;
+    size_t common = 0;
+
+    if (from_abs[0] != '/' || to_abs[0] != '/') {
+        return NULL;
+    }
+
+    bx_ln_components_append_normalized(&from_components, from_abs);
+    bx_ln_components_append_normalized(&to_components, to_abs);
+
+    while (common < from_components.count && common < to_components.count && strcmp(from_components.parts[common], to_components.parts[common]) == 0) {
+        common++;
+    }
+
+    size_t up_count = from_components.count - common;
+    size_t down_count = to_components.count - common;
+    size_t segment_count = up_count + down_count;
+    if (segment_count == 0) {
+        relative = xstrdup(".");
+        goto out;
+    }
+
+    size_t len = 1u;
+    if (segment_count > 1u) {
+        len += segment_count - 1u;
+    }
+    len += up_count * 2u;
+    for (size_t i = common; i < to_components.count; i++) {
+        len += strlen(to_components.parts[i]);
+    }
+
+    relative = xmalloc(len);
+    size_t pos = 0;
+    for (size_t i = 0; i < up_count; i++) {
+        if (pos > 0) {
+            relative[pos++] = '/';
+        }
+        relative[pos++] = '.';
+        relative[pos++] = '.';
+    }
+    for (size_t i = common; i < to_components.count; i++) {
+        if (pos > 0) {
+            relative[pos++] = '/';
+        }
+        size_t part_len = strlen(to_components.parts[i]);
+        memcpy(relative + pos, to_components.parts[i], part_len);
+        pos += part_len;
+    }
+    relative[pos] = '\0';
+
+out:
+    bx_ln_components_free(&from_components);
+    bx_ln_components_free(&to_components);
+    return relative;
+}
+
+static char* bx_ln_make_relative_source_path(const char* source_path, const char* destination_path, struct bx_diag_ctx* diag) {
+    char* destination_parent = NULL;
+    char* destination_parent_abs = NULL;
+    char* source_abs = NULL;
+    char* relative = NULL;
+    int saved_errno;
+
+    source_abs = bx_ln_canonicalize_for_relative(source_path);
+    if (source_abs == NULL) {
+        saved_errno = errno;
+        bx_diag(diag, "cannot resolve source '%s' for relative link: %s", source_path, strerror(saved_errno));
+        return NULL;
+    }
+
+    bx_ln_parent_dir_dup(destination_path, &destination_parent);
+    destination_parent_abs = bx_ln_canonicalize_for_relative(destination_parent);
+    if (destination_parent_abs == NULL) {
+        saved_errno = errno;
+        bx_diag(diag, "cannot resolve destination directory '%s' for relative link: %s", destination_parent, strerror(saved_errno));
+        free(destination_parent);
+        free(source_abs);
+        return NULL;
+    }
+
+    relative = bx_ln_relative_path_between(destination_parent_abs, source_abs);
+    if (relative == NULL) {
+        bx_diag(diag, "cannot build relative path from '%s' to '%s'", destination_parent_abs, source_abs);
+    }
+
+    free(destination_parent_abs);
+    free(destination_parent);
+    free(source_abs);
+    return relative;
+}
+
 static bool bx_ln_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
     char* stripped = bx_path_strip_trailing_slashes_dup(path);
     char* parent_path = NULL;
-    char* slash = strrchr(stripped, '/');
     bool ok = false;
 
-    if (slash == NULL) {
-        parent_path = xstrdup(".");
-    }
-    else if (slash == stripped) {
-        parent_path = xstrdup("/");
-    }
-    else {
-        size_t parent_len = (size_t)(slash - stripped);
-        parent_path = xmalloc(parent_len + 1u);
-        memcpy(parent_path, stripped, parent_len);
-        parent_path[parent_len] = '\0';
-    }
+    bx_ln_parent_dir_dup(stripped, &parent_path);
 
     ok = stat(parent_path, parent_stat_out) == 0;
     free(parent_path);
@@ -255,6 +525,16 @@ static bool bx_ln_create_link_once(const struct bx_ln_options* options, const ch
     return false;
 }
 
+static bool bx_ln_prompt_replace(const struct bx_ln_options* options, const char* destination_path) {
+    size_t prompt_len = strlen(options->progname) + strlen(destination_path) + sizeof(": replace ''? ");
+    char* prompt = xmalloc(prompt_len);
+
+    snprintf(prompt, prompt_len, "%s: replace '%s'? ", options->progname, destination_path);
+    bool confirmed = bx_prompt_confirm(prompt);
+    free(prompt);
+    return confirmed;
+}
+
 static void bx_ln_diag_create_failure(const struct bx_ln_options* options, struct bx_diag_ctx* diag, const char* source_path, const char* destination_path, int err) {
     const char* link_kind = options->symbolic ? "symbolic" : "hard";
     const char* separator = options->symbolic ? "->" : "=>";
@@ -281,14 +561,21 @@ static bool bx_ln_create_link(const struct bx_ln_options* options, struct bx_dia
         return true;
     }
 
-    if (!(options->force && err == EEXIST)) {
+    if (err != EEXIST || (!options->force && !options->interactive)) {
         bx_ln_diag_create_failure(options, diag, source_path, destination_path, err);
         return false;
     }
 
+    if (options->interactive && !bx_ln_prompt_replace(options, destination_path)) {
+        diag->exit_status = 1;
+        return true;
+    }
+
     if (bx_ln_paths_name_same_directory_entry(source_path, destination_path)) {
-        bx_diag(diag, "'%s' and '%s' are the same file", source_path, destination_path);
-        return false;
+        if (!options->interactive) {
+            bx_diag(diag, "'%s' and '%s' are the same file", source_path, destination_path);
+            return false;
+        }
     }
 
     if (!options->symbolic && bx_ln_hard_link_already_exists(source_path, destination_path, options->follow_symlinks)) {
@@ -394,8 +681,20 @@ int bx_ln_main(int argc, char** argv) {
     for (int i = 0; i < source_count; i++) {
         const char* source_path = source_paths[i];
         char* destination_path = bx_ln_build_destination_path(source_path, destination_root, destination_is_directory);
+        const char* link_source_path = source_path;
+        char* relative_source_path = NULL;
 
-        bx_ln_create_link(&options, &diag, source_path, destination_path);
+        if (options.relative) {
+            relative_source_path = bx_ln_make_relative_source_path(source_path, destination_path, &diag);
+            if (relative_source_path == NULL) {
+                free(destination_path);
+                continue;
+            }
+            link_source_path = relative_source_path;
+        }
+
+        bx_ln_create_link(&options, &diag, link_source_path, destination_path);
+        free(relative_source_path);
         free(destination_path);
     }
 
