@@ -9,6 +9,8 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "common/args_common.h"
+#include "common/backup_ops.h"
 #include "common/path_ops.h"
 #include "common/prompt_ops.h"
 #include "common/same_file.h"
@@ -21,6 +23,7 @@ struct bx_ln_options {
     const char* progname;
     bool symbolic;
     bool relative;
+    bool allow_directory_hard_links;
     bool force;
     bool interactive;
     bool no_dereference;
@@ -28,8 +31,14 @@ struct bx_ln_options {
     bool verbose;
     bool follow_symlinks;
     const char* target_directory;
+    enum bx_backup_mode backup_mode;
+    const char* suffix;
     bool show_help;
     bool show_version;
+};
+
+enum {
+    BX_LN_OPT_BACKUP = 256,
 };
 
 static const char* bx_ln_progname(const char* argv0) {
@@ -45,12 +54,16 @@ static void bx_ln_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Create a link to TARGET with the name LINK_NAME.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -f, --force                remove existing destination files\n");
+    fprintf(stream, "      --backup[=CONTROL]     make a backup of each existing destination file\n");
+    fprintf(stream, "  -b                         like --backup but does not accept an argument\n");
+    fprintf(stream, "  -d, -F, --directory        allow hard links to directories\n");
     fprintf(stream, "  -i, --interactive          prompt whether to remove destinations\n");
     fprintf(stream, "  -L, --logical              dereference TARGETs that are symbolic links\n");
     fprintf(stream, "  -n, --no-dereference       treat LINK_NAME as a normal file if it is a symbolic link\n");
     fprintf(stream, "  -P, --physical             make hard links directly to symbolic links (default)\n");
     fprintf(stream, "  -r, --relative             with -s, create links relative to link location\n");
     fprintf(stream, "  -s, --symbolic             make symbolic links instead of hard links\n");
+    fprintf(stream, "  -S, --suffix=SUFFIX        override the usual backup suffix\n");
     fprintf(stream, "  -t, --target-directory=DIR specify the directory for all links\n");
     fprintf(stream, "  -T, --no-target-directory  treat LINK_NAME as a normal file always\n");
     fprintf(stream, "  -v, --verbose              print name of each linked file\n");
@@ -64,6 +77,8 @@ static void bx_ln_print_version(const char* progname) {
 
 static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
+        {"backup", optional_argument, NULL, BX_LN_OPT_BACKUP},
+        {"directory", no_argument, NULL, 'd'},
         {"force", no_argument, NULL, 'f'},
         {"interactive", no_argument, NULL, 'i'},
         {"logical", no_argument, NULL, 'L'},
@@ -71,6 +86,7 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         {"physical", no_argument, NULL, 'P'},
         {"relative", no_argument, NULL, 'r'},
         {"symbolic", no_argument, NULL, 's'},
+        {"suffix", required_argument, NULL, 'S'},
         {"target-directory", required_argument, NULL, 't'},
         {"no-target-directory", no_argument, NULL, 'T'},
         {"verbose", no_argument, NULL, 'v'},
@@ -78,7 +94,7 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
     };
-    char short_opts[] = "+:fiLnPrst:Tv";
+    char short_opts[] = "+:bdFfiLnPrsS:t:Tv";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_ln_progname(argv[0]);
@@ -95,6 +111,22 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
         }
 
         switch (c) {
+            case 'b':
+                bx_args_enable_backup_mode(&options->backup_mode);
+                break;
+            case BX_LN_OPT_BACKUP:
+                if (optarg == NULL) {
+                    bx_args_enable_backup_mode(&options->backup_mode);
+                }
+                else if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
+                    bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                    return false;
+                }
+                break;
+            case 'd':
+            case 'F':
+                options->allow_directory_hard_links = true;
+                break;
             case 'f':
                 options->force = true;
                 options->interactive = false;
@@ -117,6 +149,10 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
                 break;
             case 's':
                 options->symbolic = true;
+                break;
+            case 'S':
+                options->suffix = optarg;
+                bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case 't':
                 options->target_directory = optarg;
@@ -507,6 +543,30 @@ static bool bx_ln_remove_destination_for_force(const char* destination_path, str
     return true;
 }
 
+static bool bx_ln_prepare_destination_for_replace(const char* destination_path, const struct bx_backup_params* backup_params, bool backup_enabled, struct bx_diag_ctx* diag) {
+    struct stat dest_lstat;
+
+    if (lstat(destination_path, &dest_lstat) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        bx_diag(diag, "cannot remove '%s': %s", destination_path, strerror(errno));
+        return false;
+    }
+
+    if (S_ISDIR(dest_lstat.st_mode)) {
+        bx_diag(diag, "%s: cannot overwrite directory", destination_path);
+        return false;
+    }
+
+    if (backup_enabled) {
+        enum bx_backup_create_result backup_result = bx_backup_create(destination_path, backup_params, diag, NULL);
+        return backup_result != BX_BACKUP_CREATE_FAILED;
+    }
+
+    return bx_ln_remove_destination_for_force(destination_path, diag);
+}
+
 static bool bx_ln_create_link_once(const struct bx_ln_options* options, const char* source_path, const char* destination_path, int* err_out) {
     int rc;
     if (options->symbolic) {
@@ -553,17 +613,30 @@ static void bx_ln_print_verbose_line(const struct bx_ln_options* options, const 
     printf("'%s' => '%s'\n", destination_path, source_path);
 }
 
-static bool bx_ln_create_link(const struct bx_ln_options* options, struct bx_diag_ctx* diag, const char* source_path, const char* destination_path) {
+static bool bx_ln_create_link(const struct bx_ln_options* options, const struct bx_backup_params* backup_params, struct bx_diag_ctx* diag, const char* source_path, const char* destination_path) {
     int err = 0;
+    bool backup_enabled = bx_args_backup_mode_enabled(backup_params->mode);
+
+    if (!options->symbolic && !options->allow_directory_hard_links && bx_ln_path_is_directory(source_path, options->follow_symlinks)) {
+        bx_diag(diag, "%s: hard link not allowed for directory", source_path);
+        return false;
+    }
 
     if (bx_ln_create_link_once(options, source_path, destination_path, &err)) {
         bx_ln_print_verbose_line(options, source_path, destination_path);
         return true;
     }
 
-    if (err != EEXIST || (!options->force && !options->interactive)) {
+    if (err != EEXIST || (!options->force && !options->interactive && !backup_enabled)) {
         bx_ln_diag_create_failure(options, diag, source_path, destination_path, err);
         return false;
+    }
+
+    if (!options->symbolic && bx_ln_paths_name_same_directory_entry(source_path, destination_path)) {
+        if (!options->interactive || backup_enabled) {
+            bx_diag(diag, "'%s' and '%s' are the same file", source_path, destination_path);
+            return false;
+        }
     }
 
     if (options->interactive && !bx_ln_prompt_replace(options, destination_path)) {
@@ -571,19 +644,12 @@ static bool bx_ln_create_link(const struct bx_ln_options* options, struct bx_dia
         return true;
     }
 
-    if (bx_ln_paths_name_same_directory_entry(source_path, destination_path)) {
-        if (!options->interactive) {
-            bx_diag(diag, "'%s' and '%s' are the same file", source_path, destination_path);
-            return false;
-        }
-    }
-
-    if (!options->symbolic && bx_ln_hard_link_already_exists(source_path, destination_path, options->follow_symlinks)) {
+    if (!backup_enabled && !options->symbolic && bx_ln_hard_link_already_exists(source_path, destination_path, options->follow_symlinks)) {
         bx_ln_print_verbose_line(options, source_path, destination_path);
         return true;
     }
 
-    if (!bx_ln_remove_destination_for_force(destination_path, diag)) {
+    if (!bx_ln_prepare_destination_for_replace(destination_path, backup_params, backup_enabled, diag)) {
         return false;
     }
 
@@ -609,6 +675,7 @@ static char* bx_ln_build_destination_path(const char* source_path, const char* d
 
 int bx_ln_main(int argc, char** argv) {
     struct bx_ln_options options;
+    struct bx_backup_params backup_params;
     struct bx_diag_ctx diag = {
         .progname = "ln",
         .exit_status = 0,
@@ -629,6 +696,7 @@ int bx_ln_main(int argc, char** argv) {
         bx_ln_print_version(options.progname);
         return 0;
     }
+    bx_backup_get_params(options.backup_mode, options.suffix, &backup_params);
 
     int operand_count = argc - first_operand;
     char** operands = argv + first_operand;
@@ -693,7 +761,7 @@ int bx_ln_main(int argc, char** argv) {
             link_source_path = relative_source_path;
         }
 
-        bx_ln_create_link(&options, &diag, link_source_path, destination_path);
+        bx_ln_create_link(&options, &backup_params, &diag, link_source_path, destination_path);
         free(relative_source_path);
         free(destination_path);
     }
