@@ -151,6 +151,7 @@ sources = [
   'src/common/digest_util.c',
   'src/main.c',
   'src/ln/ln.c',
+  'src/link/link.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
@@ -162,7 +163,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -256,6 +257,9 @@ if get_option('tests')
 
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe])
+
+  test_link_basic = find_program('tests/link/test_link_basic.sh')
+  test('link basic', test_link_basic, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
