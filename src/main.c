@@ -15,8 +15,8 @@ struct applet {
 };
 
 static const struct applet applets[] = {
-    {"which", bx_which_main}, {"ln", bx_ln_main},         {"link", bx_link_main},     {"cp", bx_cp_main},     {"mv", bx_mv_main},       {"wget", bx_wget_main},
-    {"expr", bx_expr_main},   {"md5sum", bx_md5sum_main}, {"base64", bx_base64_main}, {"true", bx_true_main}, {"false", bx_false_main},
+    {"which", bx_which_main}, {"ln", bx_ln_main},     {"link", bx_link_main},     {"unlink", bx_unlink_main}, {"cp", bx_cp_main},     {"mv", bx_mv_main},
+    {"wget", bx_wget_main},   {"expr", bx_expr_main}, {"md5sum", bx_md5sum_main}, {"base64", bx_base64_main}, {"true", bx_true_main}, {"false", bx_false_main},
 };
 
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";
