@@ -154,6 +154,9 @@ sources = [
   'src/link/link.c',
   'src/unlink/unlink.c',
   'src/readlink/readlink.c',
+  'src/realpath/realpath.c',
+  'src/basename/basename.c',
+  'src/dirname/dirname.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
@@ -165,7 +168,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -268,6 +271,15 @@ if get_option('tests')
 
   test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
   test('readlink basic', test_readlink_basic, args : [bx_exe])
+
+  test_realpath_basic = find_program('tests/realpath/test_realpath_basic.sh')
+  test('realpath basic', test_realpath_basic, args : [bx_exe])
+
+  test_basename_basic = find_program('tests/basename/test_basename_basic.sh')
+  test('basename basic', test_basename_basic, args : [bx_exe])
+
+  test_dirname_basic = find_program('tests/dirname/test_dirname_basic.sh')
+  test('dirname basic', test_dirname_basic, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
