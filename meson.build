@@ -153,6 +153,7 @@ sources = [
   'src/ln/ln.c',
   'src/link/link.c',
   'src/unlink/unlink.c',
+  'src/readlink/readlink.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
@@ -164,7 +165,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -264,6 +265,9 @@ if get_option('tests')
 
   test_unlink_basic = find_program('tests/unlink/test_unlink_basic.sh')
   test('unlink basic', test_unlink_basic, args : [bx_exe])
+
+  test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
+  test('readlink basic', test_readlink_basic, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
