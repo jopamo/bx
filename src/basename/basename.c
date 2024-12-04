@@ -34,12 +34,25 @@ static void bx_basename_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s NAME [SUFFIX]\n", progname);
     fprintf(stream, "  or:  %s OPTION... NAME...\n", progname);
     fprintf(stream, "Print NAME with any leading directory components removed.\n");
+    fprintf(stream, "If specified, also remove a trailing SUFFIX.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -a, --multiple       support multiple arguments and treat each as a NAME\n");
-    fprintf(stream, "  -s, --suffix=SUFFIX  remove a trailing SUFFIX; implies -a\n");
-    fprintf(stream, "  -z, --zero           end each output line with NUL, not newline\n");
-    fprintf(stream, "      --help           display this help and exit\n");
-    fprintf(stream, "      --version        output version information and exit\n");
+    fprintf(stream, "Mandatory arguments to long options are mandatory for short options too.\n");
+    fprintf(stream, "  -a, --multiple\n");
+    fprintf(stream, "         support multiple arguments and treat each as a NAME\n");
+    fprintf(stream, "  -s, --suffix=SUFFIX\n");
+    fprintf(stream, "         remove a trailing SUFFIX; implies -a\n");
+    fprintf(stream, "  -z, --zero\n");
+    fprintf(stream, "         end each output line with NUL, not newline\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Examples:\n");
+    fprintf(stream, "  %s /usr/bin/sort          -> \"sort\"\n", progname);
+    fprintf(stream, "  %s include/stdio.h .h     -> \"stdio\"\n", progname);
+    fprintf(stream, "  %s -s .h include/stdio.h  -> \"stdio\"\n", progname);
+    fprintf(stream, "  %s -a any/str1 any/str2   -> \"str1\" followed by \"str2\"\n", progname);
 }
 
 static void bx_basename_print_version(const char* progname) {
