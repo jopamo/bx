@@ -30,11 +30,20 @@ static const char* bx_dirname_progname(const char* argv0) {
 
 static void bx_dirname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION] NAME...\n", progname);
-    fprintf(stream, "Output each NAME with its last non-slash component removed.\n");
+    fprintf(stream, "Output each NAME with its last non-slash component and trailing slashes\n");
+    fprintf(stream, "removed; if NAME contains no /'s, output '.' (meaning the current directory).\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -z, --zero     end each output line with NUL, not newline\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "  -z, --zero\n");
+    fprintf(stream, "         end each output line with NUL, not newline\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Examples:\n");
+    fprintf(stream, "  %s /usr/bin/          -> \"/usr\"\n", progname);
+    fprintf(stream, "  %s dir1/str dir2/str  -> \"dir1\" followed by \"dir2\"\n", progname);
+    fprintf(stream, "  %s stdio.h            -> \".\"\n", progname);
 }
 
 static void bx_dirname_print_version(const char* progname) {
