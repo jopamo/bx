@@ -1,9 +1,12 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -12,6 +15,7 @@
 
 enum {
     BX_MKTEMP_OPT_TMPDIR = 256,
+    BX_MKTEMP_OPT_SUFFIX,
 };
 
 struct bx_mktemp_options {
@@ -21,6 +25,7 @@ struct bx_mktemp_options {
     bool quiet;
     bool tmpdir_specified;
     const char* tmpdir_arg;
+    const char* suffix;
     bool show_help;
     bool show_version;
 };
@@ -47,11 +52,12 @@ static void bx_mktemp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -q, --quiet         suppress diagnostics for creation failures\n");
     fprintf(stream, "  -p DIR              interpret TEMPLATE relative to DIR\n");
     fprintf(stream, "      --tmpdir[=DIR]  like -p; if DIR is omitted use $TMPDIR or /tmp\n");
+    fprintf(stream, "      --suffix=SUFF   append SUFF to TEMPLATE; SUFF must not contain '/'\n");
     fprintf(stream, "      --help          display this help and exit\n");
     fprintf(stream, "      --version       output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "If TEMPLATE is omitted, mktemp uses tmp.XXXXXX with --tmpdir implied.\n");
-    fprintf(stream, "TEMPLATE must end with at least 6 'X' characters.\n");
+    fprintf(stream, "TEMPLATE must contain at least 3 consecutive 'X' in the last component.\n");
 }
 
 static void bx_mktemp_print_version(const char* progname) {
@@ -64,6 +70,7 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
         {"dry-run", no_argument, NULL, 'u'},
         {"quiet", no_argument, NULL, 'q'},
         {"tmpdir", optional_argument, NULL, BX_MKTEMP_OPT_TMPDIR},
+        {"suffix", required_argument, NULL, BX_MKTEMP_OPT_SUFFIX},
         {"help", no_argument, NULL, 1},
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
@@ -100,6 +107,9 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
             case BX_MKTEMP_OPT_TMPDIR:
                 options->tmpdir_specified = true;
                 options->tmpdir_arg = optarg;
+                break;
+            case BX_MKTEMP_OPT_SUFFIX:
+                options->suffix = optarg;
                 break;
             case 1:
                 options->show_help = true;
@@ -158,51 +168,151 @@ static char* bx_mktemp_join_path(const char* directory, const char* template_tex
     return joined;
 }
 
-static bool bx_mktemp_template_valid(const char* template_text) {
-    size_t template_len = strlen(template_text);
-    if (template_len < 6) {
-        return false;
+static void bx_mktemp_seed_rng(void) {
+    static bool seeded = false;
+    if (seeded) {
+        return;
     }
 
-    for (size_t i = template_len - 6; i < template_len; i++) {
-        if (template_text[i] != 'X') {
-            return false;
-        }
-    }
-
-    return true;
+    unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
+    srand(seed);
+    seeded = true;
 }
 
-static bool bx_mktemp_create_path(const struct bx_mktemp_options* options, char* path_out) {
-    if (options->create_directory) {
-        if (mkdtemp(path_out) == NULL) {
+static void bx_mktemp_fill_random(char* out, size_t count) {
+    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const size_t alphabet_len = sizeof(alphabet) - 1u;
+
+    bx_mktemp_seed_rng();
+    for (size_t i = 0; i < count; i++) {
+        out[i] = alphabet[(size_t)(rand() % (int)alphabet_len)];
+    }
+}
+
+static bool bx_mktemp_prepare_template(const char* full_template,
+                                       const char* original_template,
+                                       const struct bx_mktemp_options* options,
+                                       char** prepared_template_out,
+                                       size_t* x_start_out,
+                                       size_t* x_len_out,
+                                       struct bx_diag_ctx* diag) {
+    size_t template_len = strlen(full_template);
+    size_t component_start = 0;
+    const char* slash = strrchr(full_template, '/');
+    if (slash != NULL) {
+        component_start = (size_t)(slash - full_template) + 1u;
+    }
+
+    if (options->suffix != NULL) {
+        if (template_len == 0 || full_template[template_len - 1u] != 'X') {
+            bx_diag(diag, "with --suffix, template must end in 'X': '%s'", original_template);
             return false;
         }
 
-        if (options->dry_run && rmdir(path_out) != 0) {
+        size_t run_start = template_len;
+        while (run_start > component_start && full_template[run_start - 1u] == 'X') {
+            run_start--;
+        }
+
+        size_t run_len = template_len - run_start;
+        if (run_len < 3u) {
+            bx_diag(diag, "template must contain at least 3 consecutive 'X' characters in the last component: '%s'", original_template);
             return false;
         }
 
+        if (strchr(options->suffix, '/') != NULL) {
+            bx_diag(diag, "invalid suffix '%s': contains directory separator", options->suffix);
+            return false;
+        }
+
+        size_t suffix_len = strlen(options->suffix);
+        char* prepared = xmalloc(template_len + suffix_len + 1u);
+        memcpy(prepared, full_template, template_len);
+        memcpy(prepared + template_len, options->suffix, suffix_len + 1u);
+
+        *prepared_template_out = prepared;
+        *x_start_out = run_start;
+        *x_len_out = run_len;
         return true;
     }
 
-    int fd = mkstemp(path_out);
+    size_t search = template_len;
+    while (search > component_start && full_template[search - 1u] != 'X') {
+        search--;
+    }
+    if (search == component_start) {
+        bx_diag(diag, "template must contain at least 3 consecutive 'X' characters in the last component: '%s'", original_template);
+        return false;
+    }
+
+    size_t run_end = search;
+    size_t run_start = run_end;
+    while (run_start > component_start && full_template[run_start - 1u] == 'X') {
+        run_start--;
+    }
+
+    size_t run_len = run_end - run_start;
+    if (run_len < 3u) {
+        bx_diag(diag, "template must contain at least 3 consecutive 'X' characters in the last component: '%s'", original_template);
+        return false;
+    }
+
+    *prepared_template_out = xstrdup(full_template);
+    *x_start_out = run_start;
+    *x_len_out = run_len;
+    return true;
+}
+
+static bool bx_mktemp_try_create(const struct bx_mktemp_options* options, const char* path) {
+    if (options->dry_run) {
+        struct stat st;
+        if (lstat(path, &st) == 0) {
+            errno = EEXIST;
+            return false;
+        }
+
+        if (errno == ENOENT) {
+            return true;
+        }
+
+        return false;
+    }
+
+    if (options->create_directory) {
+        return mkdir(path, S_IRWXU) == 0;
+    }
+
+    int fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
     if (fd < 0) {
         return false;
     }
 
     if (close(fd) != 0) {
         int saved_errno = errno;
-        (void)unlink(path_out);
+        (void)unlink(path);
         errno = saved_errno;
         return false;
     }
 
-    if (options->dry_run && unlink(path_out) != 0) {
-        return false;
+    return true;
+}
+
+static bool bx_mktemp_create_path(const struct bx_mktemp_options* options, char* path_out, size_t x_start, size_t x_len) {
+    enum { BX_MKTEMP_MAX_ATTEMPTS = 16384 };
+
+    for (int attempt = 0; attempt < BX_MKTEMP_MAX_ATTEMPTS; attempt++) {
+        bx_mktemp_fill_random(path_out + x_start, x_len);
+        if (bx_mktemp_try_create(options, path_out)) {
+            return true;
+        }
+
+        if (errno != EEXIST) {
+            return false;
+        }
     }
 
-    return true;
+    errno = EEXIST;
+    return false;
 }
 
 int bx_mktemp_main(int argc, char** argv) {
@@ -247,14 +357,17 @@ int bx_mktemp_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    char* full_template = use_tmpdir ? bx_mktemp_join_path(tmpdir, template_text) : xstrdup(template_text);
-    if (!bx_mktemp_template_valid(full_template)) {
-        bx_diag(&diag, "template must end with at least 6 'X' characters: '%s'", template_text);
-        free(full_template);
+    char* joined_template = use_tmpdir ? bx_mktemp_join_path(tmpdir, template_text) : xstrdup(template_text);
+    char* full_template = NULL;
+    size_t x_start = 0;
+    size_t x_len = 0;
+    if (!bx_mktemp_prepare_template(joined_template, template_text, &options, &full_template, &x_start, &x_len, &diag)) {
+        free(joined_template);
         return diag.exit_status;
     }
+    free(joined_template);
 
-    if (!bx_mktemp_create_path(&options, full_template)) {
+    if (!bx_mktemp_create_path(&options, full_template, x_start, x_len)) {
         if (!options.quiet) {
             bx_perror_path(&diag, full_template);
         }

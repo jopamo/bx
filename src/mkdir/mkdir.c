@@ -12,7 +12,10 @@
 
 struct bx_mkdir_options {
     const char* progname;
+    bool mode_set;
+    mode_t mode;
     bool parents;
+    bool verbose;
     bool show_help;
     bool show_version;
 };
@@ -51,12 +54,28 @@ static void bx_mkdir_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static bool bx_mkdir_parse_mode(const char* text, mode_t* mode_out, struct bx_diag_ctx* diag) {
+    if (text == NULL || text[0] == '\0') {
+        bx_diag(diag, "invalid mode '%s'", (text != NULL) ? text : "");
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    unsigned long value = strtoul(text, &end, 8);
+    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0' || value > 07777ul) {
+        bx_diag(diag, "invalid mode '%s'", text);
+        return false;
+    }
+
+    *mode_out = (mode_t)value;
+    return true;
+}
+
 static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"parents", no_argument, NULL, 'p'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+        {"mode", required_argument, NULL, 'm'}, {"parents", no_argument, NULL, 'p'}, {"verbose", no_argument, NULL, 'v'},
+        {"help", no_argument, NULL, 1},         {"version", no_argument, NULL, 2},   {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -68,14 +87,23 @@ static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_option
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+p", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:m:pv", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'm':
+                if (!bx_mkdir_parse_mode(optarg, &options->mode, diag)) {
+                    return false;
+                }
+                options->mode_set = true;
+                break;
             case 'p':
                 options->parents = true;
+                break;
+            case 'v':
+                options->verbose = true;
                 break;
             case 1:
                 options->show_help = true;
@@ -83,6 +111,14 @@ static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_option
             case 2:
                 options->show_version = true;
                 return true;
+            case ':':
+                if (optopt != 0) {
+                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                }
+                else {
+                    bx_diag(diag, "option requires an argument");
+                }
+                return false;
             case '?':
                 if (optopt != 0) {
                     bx_diag(diag, "invalid option -- '%c'", optopt);
@@ -103,8 +139,24 @@ static bool bx_mkdir_parse_options(int argc, char** argv, struct bx_mkdir_option
     return true;
 }
 
-static bool bx_mkdir_create_component(const char* path, bool final_component, struct bx_diag_ctx* diag) {
-    if (mkdir(path, 0777) == 0) {
+static bool bx_mkdir_emit_created(const char* path, struct bx_diag_ctx* diag) {
+    if (fprintf(stdout, "mkdir: created directory '%s'\n", path) < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_mkdir_create_component(const char* path, bool final_component, const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
+    mode_t create_mode = (options->mode_set && final_component) ? options->mode : 0777u;
+    if (mkdir(path, create_mode) == 0) {
+        if (options->mode_set && final_component && chmod(path, options->mode) != 0) {
+            bx_perror_path(diag, path);
+            return false;
+        }
+        if (options->verbose && !bx_mkdir_emit_created(path, diag)) {
+            return false;
+        }
         return true;
     }
 
@@ -122,7 +174,7 @@ static bool bx_mkdir_create_component(const char* path, bool final_component, st
     return false;
 }
 
-static bool bx_mkdir_parents(const char* path, struct bx_diag_ctx* diag) {
+static bool bx_mkdir_parents(const char* path, const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
     char* path_copy = xstrdup(path);
     size_t len = strlen(path_copy);
     size_t start = 0;
@@ -151,7 +203,7 @@ static bool bx_mkdir_parents(const char* path, struct bx_diag_ctx* diag) {
         char saved = path_copy[i];
         path_copy[i] = '\0';
 
-        if (path_copy[0] != '\0' && !bx_mkdir_create_component(path_copy, final_component, diag)) {
+        if (path_copy[0] != '\0' && !bx_mkdir_create_component(path_copy, final_component, options, diag)) {
             free(path_copy);
             return false;
         }
@@ -165,11 +217,21 @@ static bool bx_mkdir_parents(const char* path, struct bx_diag_ctx* diag) {
 
 static bool bx_mkdir_one(const char* path, const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
     if (options->parents) {
-        return bx_mkdir_parents(path, diag);
+        return bx_mkdir_parents(path, options, diag);
     }
 
-    if (mkdir(path, 0777) != 0) {
+    mode_t create_mode = options->mode_set ? options->mode : 0777u;
+    if (mkdir(path, create_mode) != 0) {
         bx_perror_path(diag, path);
+        return false;
+    }
+
+    if (options->mode_set && chmod(path, options->mode) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    if (options->verbose && !bx_mkdir_emit_created(path, diag)) {
         return false;
     }
 
@@ -208,6 +270,10 @@ int bx_mkdir_main(int argc, char** argv) {
 
     for (int i = first_operand; i < argc; i++) {
         (void)bx_mkdir_one(argv[i], &options, &diag);
+    }
+
+    if (options.verbose && fflush(stdout) == EOF) {
+        bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
     return diag.exit_status;
