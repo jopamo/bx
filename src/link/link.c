@@ -30,8 +30,10 @@ static void bx_link_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  or:  %s OPTION\n", progname);
     fprintf(stream, "Call the link function to create a link named FILE2 to an existing FILE1.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
 }
 
 static void bx_link_print_version(const char* progname) {

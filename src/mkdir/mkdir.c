@@ -33,9 +33,18 @@ static void bx_mkdir_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... DIRECTORY...\n", progname);
     fprintf(stream, "Create the DIRECTORY(ies), if they do not already exist.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -p, --parents  no error if existing, make parent directories as needed\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "Mandatory arguments to long options are mandatory for short options too.\n");
+    fprintf(stream, "  -m, --mode=MODE\n");
+    fprintf(stream, "         set file mode (as in chmod), not a=rwx - umask\n");
+    fprintf(stream, "  -p, --parents\n");
+    fprintf(stream, "         no error if existing, make parent directories as needed,\n");
+    fprintf(stream, "         with their file modes unaffected by any -m option\n");
+    fprintf(stream, "  -v, --verbose\n");
+    fprintf(stream, "         print a message for each created directory\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
 }
 
 static void bx_mkdir_print_version(const char* progname) {
