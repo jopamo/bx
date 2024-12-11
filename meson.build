@@ -164,6 +164,7 @@ sources = [
   'src/mkfifo/mkfifo.c',
   'src/mknod/mknod.c',
   'src/mktemp/mktemp.c',
+  'src/install/install.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
@@ -175,7 +176,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -308,6 +309,9 @@ if get_option('tests')
 
   test_mktemp_basic = find_program('tests/mktemp/test_mktemp_basic.sh')
   test('mktemp basic', test_mktemp_basic, args : [bx_exe])
+
+  test_install_basic = find_program('tests/install/test_install_basic.sh')
+  test('install basic', test_install_basic, args : [bx_exe])
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])

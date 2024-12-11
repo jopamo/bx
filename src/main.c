@@ -30,6 +30,7 @@ static const struct applet applets[] = {
     {"mkfifo", bx_mkfifo_main},
     {"mknod", bx_mknod_main},
     {"mktemp", bx_mktemp_main},
+    {"install", bx_install_main},
     {"cp", bx_cp_main},
     {"mv", bx_mv_main},
     {"wget", bx_wget_main},

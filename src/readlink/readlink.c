@@ -13,6 +13,7 @@
 struct bx_readlink_options {
     const char* progname;
     bool no_newline;
+    bool zero_terminated;
     bool show_help;
     bool show_version;
 };
@@ -34,6 +35,7 @@ static void bx_readlink_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Print value of each symbolic link FILE.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -n, --no-newline  do not output the trailing delimiter\n");
+    fprintf(stream, "  -z, --zero        end each output line with NUL, not newline\n");
     fprintf(stream, "      --help        display this help and exit\n");
     fprintf(stream, "      --version     output version information and exit\n");
 }
@@ -44,10 +46,7 @@ static void bx_readlink_print_version(const char* progname) {
 
 static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"no-newline", no_argument, NULL, 'n'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+        {"no-newline", no_argument, NULL, 'n'}, {"zero", no_argument, NULL, 'z'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -59,7 +58,7 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+n", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+nz", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -67,6 +66,9 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
         switch (c) {
             case 'n':
                 options->no_newline = true;
+                break;
+            case 'z':
+                options->zero_terminated = true;
                 break;
             case 1:
                 options->show_help = true;
@@ -122,13 +124,13 @@ static bool bx_readlink_read_target(const char* path, char** target_out, struct 
     }
 }
 
-static bool bx_readlink_emit_target(const char* target, bool no_newline, struct bx_diag_ctx* diag) {
+static bool bx_readlink_emit_target(const char* target, bool no_newline, bool zero_terminated, struct bx_diag_ctx* diag) {
     if (fputs(target, stdout) == EOF) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
 
-    if (!no_newline && fputc('\n', stdout) == EOF) {
+    if (!no_newline && fputc(zero_terminated ? '\0' : '\n', stdout) == EOF) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -166,6 +168,12 @@ int bx_readlink_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
+    bool no_newline = options.no_newline;
+    if (no_newline && operand_count > 1) {
+        fprintf(stderr, "%s: ignoring --no-newline with multiple arguments\n", options.progname);
+        no_newline = false;
+    }
+
     char** operands = argv + first_operand;
     for (int i = 0; i < operand_count; i++) {
         char* target = NULL;
@@ -173,7 +181,7 @@ int bx_readlink_main(int argc, char** argv) {
             continue;
         }
 
-        if (!bx_readlink_emit_target(target, options.no_newline, &diag)) {
+        if (!bx_readlink_emit_target(target, no_newline, options.zero_terminated, &diag)) {
             free(target);
             return diag.exit_status;
         }
