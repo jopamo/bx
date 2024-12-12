@@ -303,7 +303,8 @@ static bool bx_install_emit_copy(const char* src_path, const char* dest_path, st
     return true;
 }
 
-static bool bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_final_mode, bool verbose, struct bx_diag_ctx* diag) {
+static bool
+bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_final_mode, bool apply_final_owner_group, const struct bx_install_options* options, bool verbose, struct bx_diag_ctx* diag) {
     char* normalized = bx_path_strip_trailing_slashes_dup(path);
     if (normalized[0] == '\0') {
         errno = ENOENT;
@@ -335,7 +336,7 @@ static bool bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_fin
         mode_t create_mode = (final_component && set_final_mode) ? final_mode : 0755u;
 
         if (mkdir(normalized, create_mode) == 0) {
-            if (final_component && !bx_install_apply_owner_group_path(normalized, options->owner_set, options->owner, options->group_set, options->group, diag)) {
+            if (final_component && apply_final_owner_group && !bx_install_apply_owner_group_path(normalized, options->owner_set, options->owner, options->group_set, options->group, diag)) {
                 free(normalized);
                 return false;
             }
@@ -363,7 +364,7 @@ static bool bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_fin
                 return false;
             }
             if (final_component && set_final_mode) {
-                if (!bx_install_apply_owner_group_path(normalized, options->owner_set, options->owner, options->group_set, options->group, diag)) {
+                if (apply_final_owner_group && !bx_install_apply_owner_group_path(normalized, options->owner_set, options->owner, options->group_set, options->group, diag)) {
                     free(normalized);
                     return false;
                 }
@@ -596,7 +597,7 @@ int bx_install_main(int argc, char** argv) {
         }
 
         for (int i = first_operand; i < argc; i++) {
-            (void)bx_install_mkdir_p(argv[i], install_mode, true, options.verbose, &diag);
+            (void)bx_install_mkdir_p(argv[i], install_mode, true, true, &options, options.verbose, &diag);
         }
 
         if (options.verbose && fflush(stdout) == EOF) {
@@ -660,7 +661,7 @@ int bx_install_main(int argc, char** argv) {
         if (options.make_leading_dirs) {
             char* parent_dir = bx_install_parent_dir_dup(dest_path);
             if (parent_dir != NULL) {
-                if (!bx_install_mkdir_p(parent_dir, 0755u, false, options.verbose, &diag)) {
+                if (!bx_install_mkdir_p(parent_dir, 0755u, false, false, &options, options.verbose, &diag)) {
                     free(parent_dir);
                     free(dest_path);
                     continue;
