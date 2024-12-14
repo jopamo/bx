@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -21,9 +22,11 @@
 
 struct bx_install_options {
     const char* progname;
+    bool compare;
     bool directory_mode;
     bool make_leading_dirs;
     bool preserve_timestamps;
+    bool strip;
     bool mode_set;
     mode_t mode;
     bool owner_set;
@@ -59,12 +62,14 @@ static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Create all components of DIRECTORY(ies) with -d.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Supported options:\n");
+    fprintf(stream, "  -C, --compare               compare source/destination and skip unchanged outputs\n");
     fprintf(stream, "  -d, --directory             treat all operands as directories to create\n");
     fprintf(stream, "  -D                          create all leading components of DEST\n");
     fprintf(stream, "  -g, --group=GROUP           set group ownership (name or numeric ID)\n");
     fprintf(stream, "  -m, --mode=MODE             set permission mode (octal)\n");
     fprintf(stream, "  -o, --owner=OWNER           set owner (name or numeric ID)\n");
     fprintf(stream, "  -p, --preserve-timestamps   apply source atime/mtime to destination\n");
+    fprintf(stream, "  -s, --strip                 strip symbol tables after copying files\n");
     fprintf(stream, "  -t, --target-directory=DIR  copy all SOURCE arguments into DIR\n");
     fprintf(stream, "  -T, --no-target-directory   treat DEST as a normal file path\n");
     fprintf(stream, "  -v, --verbose               print each created directory and copied file\n");
@@ -179,11 +184,13 @@ static bool bx_install_apply_owner_group_path(const char* path, bool owner_set, 
 
 static bool bx_install_parse_options(int argc, char** argv, struct bx_install_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
+        {"compare", no_argument, NULL, 'C'},
         {"directory", no_argument, NULL, 'd'},
         {"group", required_argument, NULL, 'g'},
         {"mode", required_argument, NULL, 'm'},
         {"owner", required_argument, NULL, 'o'},
         {"preserve-timestamps", no_argument, NULL, 'p'},
+        {"strip", no_argument, NULL, 's'},
         {"target-directory", required_argument, NULL, 't'},
         {"no-target-directory", no_argument, NULL, 'T'},
         {"verbose", no_argument, NULL, 'v'},
@@ -201,12 +208,15 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:Ddg:m:o:pt:Tv", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:CDdg:m:o:pst:Tv", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'C':
+                options->compare = true;
+                break;
             case 'D':
                 options->make_leading_dirs = true;
                 break;
@@ -233,6 +243,9 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 break;
             case 'p':
                 options->preserve_timestamps = true;
+                break;
+            case 's':
+                options->strip = true;
                 break;
             case 't':
                 options->target_directory = optarg;
@@ -280,6 +293,11 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
 
     if (options->target_directory != NULL && options->no_target_directory) {
         bx_diag(diag, "cannot combine --target-directory and --no-target-directory");
+        return false;
+    }
+
+    if (options->compare && options->strip) {
+        bx_diag(diag, "options --compare (-C) and --strip are mutually exclusive");
         return false;
     }
 
@@ -431,6 +449,139 @@ static bool bx_install_validate_directory_target(const char* path, struct bx_dia
     return true;
 }
 
+static bool bx_install_times_equal(const struct timespec* left, const struct timespec* right) {
+    return left->tv_sec == right->tv_sec && left->tv_nsec == right->tv_nsec;
+}
+
+static bool bx_install_destination_matches_compare_requirements(const struct stat* src_st, const struct stat* dest_st, const struct bx_install_options* options) {
+    mode_t expected_mode = options->mode_set ? options->mode : 0755u;
+    if ((dest_st->st_mode & 07777u) != expected_mode) {
+        return false;
+    }
+
+    if (options->owner_set && dest_st->st_uid != options->owner) {
+        return false;
+    }
+
+    if (options->group_set && dest_st->st_gid != options->group) {
+        return false;
+    }
+
+    if (options->preserve_timestamps && (!bx_install_times_equal(&src_st->st_atim, &dest_st->st_atim) || !bx_install_times_equal(&src_st->st_mtim, &dest_st->st_mtim))) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool bx_install_compare_file_contents(const char* src_path, const char* dest_path, struct bx_diag_ctx* diag, bool* equal_out) {
+    int src_fd = -1;
+    int dest_fd = -1;
+    bool equal = false;
+
+    src_fd = open(src_path, O_RDONLY);
+    if (src_fd < 0) {
+        bx_perror_path(diag, src_path);
+        return false;
+    }
+
+    dest_fd = open(dest_path, O_RDONLY);
+    if (dest_fd < 0) {
+        bx_perror_path(diag, dest_path);
+        (void)close(src_fd);
+        return false;
+    }
+
+    unsigned char src_buf[8192];
+    unsigned char dest_buf[8192];
+    for (;;) {
+        ssize_t src_read = -1;
+        do {
+            src_read = read(src_fd, src_buf, sizeof(src_buf));
+        } while (src_read < 0 && errno == EINTR);
+        if (src_read < 0) {
+            bx_perror_path(diag, src_path);
+            goto fail;
+        }
+
+        ssize_t dest_read = -1;
+        do {
+            dest_read = read(dest_fd, dest_buf, sizeof(dest_buf));
+        } while (dest_read < 0 && errno == EINTR);
+        if (dest_read < 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail;
+        }
+
+        if (src_read != dest_read) {
+            equal = false;
+            break;
+        }
+
+        if (src_read == 0) {
+            equal = true;
+            break;
+        }
+
+        if (memcmp(src_buf, dest_buf, (size_t)src_read) != 0) {
+            equal = false;
+            break;
+        }
+    }
+
+    if (close(dest_fd) != 0) {
+        bx_perror_path(diag, dest_path);
+        dest_fd = -1;
+        goto fail;
+    }
+    dest_fd = -1;
+
+    if (close(src_fd) != 0) {
+        bx_perror_path(diag, src_path);
+        src_fd = -1;
+        goto fail;
+    }
+    src_fd = -1;
+
+    *equal_out = equal;
+    return true;
+
+fail:
+    if (dest_fd >= 0) {
+        (void)close(dest_fd);
+    }
+    if (src_fd >= 0) {
+        (void)close(src_fd);
+    }
+    return false;
+}
+
+static bool bx_install_run_strip(const char* path, struct bx_diag_ctx* diag) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        bx_diag(diag, "failed to start strip: %s", strerror(errno));
+        return false;
+    }
+
+    if (pid == 0) {
+        execlp("strip", "strip", path, (char*)NULL);
+        _exit(errno == ENOENT ? 127 : 126);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        bx_diag(diag, "failed to wait for strip: %s", strerror(errno));
+        return false;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+
+    bx_diag(diag, "strip process terminated abnormally");
+    return false;
+}
+
 static bool bx_install_copy_regular_file(const char* src_path, const char* dest_path, const struct bx_install_options* options, struct bx_diag_ctx* diag) {
     struct stat src_st;
     struct stat dest_st;
@@ -464,6 +615,16 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
     else if (errno != ENOENT) {
         bx_perror_path(diag, dest_path);
         return false;
+    }
+
+    if (options->compare && dest_exists && S_ISREG(dest_st.st_mode)) {
+        bool same_contents = false;
+        if (!bx_install_compare_file_contents(src_path, dest_path, diag, &same_contents)) {
+            return false;
+        }
+        if (same_contents && bx_install_destination_matches_compare_requirements(&src_st, &dest_st, options)) {
+            return true;
+        }
     }
 
     src_fd = open(src_path, O_RDONLY);
@@ -512,7 +673,7 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
         goto fail_remove;
     }
 
-    if (options->preserve_timestamps) {
+    if (options->preserve_timestamps && !options->strip) {
         struct timespec ts[2] = {src_st.st_atim, src_st.st_mtim};
         if (futimens(dest_fd, ts) != 0) {
             bx_perror_path(diag, dest_path);
@@ -533,6 +694,18 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
         goto fail_keep;
     }
     src_fd = -1;
+
+    if (options->strip && !bx_install_run_strip(dest_path, diag)) {
+        goto fail_remove;
+    }
+
+    if (options->preserve_timestamps && options->strip) {
+        struct timespec ts[2] = {src_st.st_atim, src_st.st_mtim};
+        if (utimensat(AT_FDCWD, dest_path, ts, 0) != 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail_remove;
+        }
+    }
 
     if (options->verbose && !bx_install_emit_copy(src_path, dest_path, diag)) {
         return false;
