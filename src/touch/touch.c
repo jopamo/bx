@@ -1,20 +1,31 @@
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "applets.h"
 #include "diag.h"
+
+enum bx_touch_time_source {
+    BX_TOUCH_TIME_SOURCE_NOW = 0,
+    BX_TOUCH_TIME_SOURCE_DATE,
+    BX_TOUCH_TIME_SOURCE_TIMESTAMP,
+};
 
 struct bx_touch_options {
     const char* progname;
     bool update_atime;
     bool update_mtime;
     bool no_create;
+    enum bx_touch_time_source time_source;
+    struct timespec explicit_time;
     bool show_help;
     bool show_version;
 };
@@ -36,23 +47,279 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Update the access and modification times of each FILE to now.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -a             change only the access time\n");
-    fprintf(stream, "  -m             change only the modification time\n");
+    fprintf(stream, "  -a               change only the access time\n");
+    fprintf(stream, "  -d, --date=STRING  parse STRING and use it instead of current time\n");
+    fprintf(stream, "  -m               change only the modification time\n");
+    fprintf(stream, "  -t STAMP         use [[CC]YY]MMDDhhmm[.ss] instead of current time\n");
     fprintf(stream, "  -c, --no-create  do not create any files\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "      --help       display this help and exit\n");
+    fprintf(stream, "      --version    output version information and exit\n");
 }
 
 static void bx_touch_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static bool bx_touch_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out) {
+    int value = 0;
+    for (size_t i = 0; i < width; i++) {
+        unsigned char ch = (unsigned char)text[start + i];
+        if (!isdigit(ch)) {
+            return false;
+        }
+        value = (value * 10) + (int)(ch - '0');
+    }
+    *value_out = value;
+    return true;
+}
+
+static bool bx_touch_parse_optional_fraction(const char** text, long* nsec_out) {
+    const char* p = *text;
+    long nsec = 0;
+    size_t digits = 0;
+
+    if (*p != '.') {
+        *nsec_out = 0;
+        return true;
+    }
+
+    p++;
+    if (!isdigit((unsigned char)*p)) {
+        return false;
+    }
+
+    while (isdigit((unsigned char)*p)) {
+        if (digits < 9u) {
+            nsec = (nsec * 10L) + (long)(*p - '0');
+        }
+        digits++;
+        p++;
+    }
+
+    while (digits < 9u) {
+        nsec *= 10L;
+        digits++;
+    }
+
+    *text = p;
+    *nsec_out = nsec;
+    return true;
+}
+
+static bool bx_touch_build_local_timestamp(int year, int month, int day, int hour, int minute, int second, long nsec, struct timespec* timestamp_out) {
+    if (year < 0 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60 || nsec < 0 || nsec > 999999999L) {
+        return false;
+    }
+
+    struct tm tm_value;
+    memset(&tm_value, 0, sizeof(tm_value));
+    tm_value.tm_year = year - 1900;
+    tm_value.tm_mon = month - 1;
+    tm_value.tm_mday = day;
+    tm_value.tm_hour = hour;
+    tm_value.tm_min = minute;
+    tm_value.tm_sec = second;
+    tm_value.tm_isdst = -1;
+
+    int expected_year = tm_value.tm_year;
+    int expected_mon = tm_value.tm_mon;
+    int expected_day = tm_value.tm_mday;
+    int expected_hour = tm_value.tm_hour;
+    int expected_minute = tm_value.tm_min;
+    int expected_second = tm_value.tm_sec;
+
+    time_t seconds = mktime(&tm_value);
+    if (tm_value.tm_year != expected_year || tm_value.tm_mon != expected_mon || tm_value.tm_mday != expected_day || tm_value.tm_hour != expected_hour || tm_value.tm_min != expected_minute ||
+        tm_value.tm_sec != expected_second) {
+        return false;
+    }
+
+    timestamp_out->tv_sec = seconds;
+    timestamp_out->tv_nsec = nsec;
+    return true;
+}
+
+static bool bx_touch_parse_date_literal(const char* value, struct timespec* timestamp_out) {
+    const char* p = value;
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    long nsec = 0;
+    bool have_seconds = false;
+
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+
+    if (strlen(p) < 10) {
+        return false;
+    }
+
+    if (!bx_touch_parse_fixed_width_int(p, 0, 4, &year) || p[4] != '-' || !bx_touch_parse_fixed_width_int(p, 5, 2, &month) || p[7] != '-' || !bx_touch_parse_fixed_width_int(p, 8, 2, &day)) {
+        return false;
+    }
+    p += 10;
+
+    if (*p == ' ' || *p == 'T') {
+        p++;
+        if (strlen(p) < 5) {
+            return false;
+        }
+        if (!bx_touch_parse_fixed_width_int(p, 0, 2, &hour) || p[2] != ':' || !bx_touch_parse_fixed_width_int(p, 3, 2, &minute)) {
+            return false;
+        }
+        p += 5;
+
+        if (*p == ':') {
+            p++;
+            if (strlen(p) < 2) {
+                return false;
+            }
+            if (!bx_touch_parse_fixed_width_int(p, 0, 2, &second)) {
+                return false;
+            }
+            p += 2;
+            have_seconds = true;
+        }
+    }
+    else if (*p != '\0' && !isspace((unsigned char)*p)) {
+        return false;
+    }
+
+    if (*p == '.') {
+        if (!have_seconds) {
+            return false;
+        }
+        if (!bx_touch_parse_optional_fraction(&p, &nsec)) {
+            return false;
+        }
+    }
+
+    while (isspace((unsigned char)*p)) {
+        p++;
+    }
+    if (*p != '\0') {
+        return false;
+    }
+
+    return bx_touch_build_local_timestamp(year, month, day, hour, minute, second, nsec, timestamp_out);
+}
+
+static bool bx_touch_parse_epoch_literal(const char* value, struct timespec* timestamp_out) {
+    if (value == NULL || value[0] != '@' || value[1] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    long long seconds_ll = strtoll(value + 1, &end, 10);
+    if (errno != 0 || end == value + 1) {
+        return false;
+    }
+
+    const char* tail = end;
+    long nsec = 0;
+    if (*tail == '.') {
+        if (!bx_touch_parse_optional_fraction(&tail, &nsec)) {
+            return false;
+        }
+    }
+    if (*tail != '\0') {
+        return false;
+    }
+
+    time_t seconds = (time_t)seconds_ll;
+    if ((long long)seconds != seconds_ll) {
+        return false;
+    }
+
+    if (seconds_ll < 0 && nsec != 0) {
+        return false;
+    }
+
+    timestamp_out->tv_sec = seconds;
+    timestamp_out->tv_nsec = nsec;
+    return true;
+}
+
+static bool bx_touch_parse_date_argument(const char* value, struct timespec* timestamp_out) {
+    if (value != NULL && value[0] == '@') {
+        return bx_touch_parse_epoch_literal(value, timestamp_out);
+    }
+    return bx_touch_parse_date_literal(value, timestamp_out);
+}
+
+static bool bx_touch_current_local_year(int* year_out) {
+    time_t now = time(NULL);
+    struct tm local_tm;
+
+    if (localtime_r(&now, &local_tm) == NULL) {
+        return false;
+    }
+
+    *year_out = local_tm.tm_year + 1900;
+    return true;
+}
+
+static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* timestamp_out) {
+    if (value == NULL || value[0] == '\0') {
+        return false;
+    }
+
+    const char* dot = strchr(value, '.');
+    if (dot != NULL && strchr(dot + 1, '.') != NULL) {
+        return false;
+    }
+
+    size_t main_len = (dot != NULL) ? (size_t)(dot - value) : strlen(value);
+    if (main_len != 8 && main_len != 10 && main_len != 12) {
+        return false;
+    }
+
+    int second = 0;
+    if (dot != NULL) {
+        const char* seconds_text = dot + 1;
+        if (strlen(seconds_text) != 2 || !bx_touch_parse_fixed_width_int(seconds_text, 0, 2, &second)) {
+            return false;
+        }
+    }
+
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+
+    if (main_len == 12) {
+        if (!bx_touch_parse_fixed_width_int(value, 0, 4, &year) || !bx_touch_parse_fixed_width_int(value, 4, 2, &month) || !bx_touch_parse_fixed_width_int(value, 6, 2, &day) ||
+            !bx_touch_parse_fixed_width_int(value, 8, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 10, 2, &minute)) {
+            return false;
+        }
+    }
+    else if (main_len == 10) {
+        int yy = 0;
+        if (!bx_touch_parse_fixed_width_int(value, 0, 2, &yy) || !bx_touch_parse_fixed_width_int(value, 2, 2, &month) || !bx_touch_parse_fixed_width_int(value, 4, 2, &day) ||
+            !bx_touch_parse_fixed_width_int(value, 6, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 8, 2, &minute)) {
+            return false;
+        }
+        year = (yy >= 69) ? (1900 + yy) : (2000 + yy);
+    }
+    else {
+        if (!bx_touch_current_local_year(&year) || !bx_touch_parse_fixed_width_int(value, 0, 2, &month) || !bx_touch_parse_fixed_width_int(value, 2, 2, &day) ||
+            !bx_touch_parse_fixed_width_int(value, 4, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 6, 2, &minute)) {
+            return false;
+        }
+    }
+
+    return bx_touch_build_local_timestamp(year, month, day, hour, minute, second, 0, timestamp_out);
+}
+
 static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"no-create", no_argument, NULL, 'c'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+        {"date", required_argument, NULL, 'd'}, {"no-create", no_argument, NULL, 'c'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -64,7 +331,7 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+acm", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:acd:mt:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -73,11 +340,33 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
             case 'a':
                 options->update_atime = true;
                 break;
+            case 'c':
+                options->no_create = true;
+                break;
+            case 'd':
+                if (options->time_source == BX_TOUCH_TIME_SOURCE_TIMESTAMP) {
+                    bx_diag(diag, "cannot specify times from more than one source");
+                    return false;
+                }
+                if (!bx_touch_parse_date_argument(optarg, &options->explicit_time)) {
+                    bx_diag(diag, "invalid date format '%s'", optarg);
+                    return false;
+                }
+                options->time_source = BX_TOUCH_TIME_SOURCE_DATE;
+                break;
             case 'm':
                 options->update_mtime = true;
                 break;
-            case 'c':
-                options->no_create = true;
+            case 't':
+                if (options->time_source == BX_TOUCH_TIME_SOURCE_DATE) {
+                    bx_diag(diag, "cannot specify times from more than one source");
+                    return false;
+                }
+                if (!bx_touch_parse_stamp_argument(optarg, &options->explicit_time)) {
+                    bx_diag(diag, "invalid date format '%s'", optarg);
+                    return false;
+                }
+                options->time_source = BX_TOUCH_TIME_SOURCE_TIMESTAMP;
                 break;
             case 1:
                 options->show_help = true;
@@ -85,6 +374,20 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
             case 2:
                 options->show_version = true;
                 return true;
+            case ':':
+                if (optopt != 0) {
+                    const char* arg = (optind > 0 && optind <= argc) ? argv[optind - 1] : NULL;
+                    if (arg != NULL && strncmp(arg, "--", 2) == 0) {
+                        bx_diag(diag, "option '%s' requires an argument", arg);
+                    }
+                    else {
+                        bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                    }
+                }
+                else {
+                    bx_diag(diag, "option requires an argument");
+                }
+                return false;
             case '?':
                 if (optopt != 0) {
                     bx_diag(diag, "invalid option -- '%c'", optopt);
@@ -97,6 +400,7 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                 }
                 return false;
             default:
+                bx_diag(diag, "internal option parsing error");
                 return false;
         }
     }
@@ -111,14 +415,28 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
 }
 
 static const struct timespec* bx_touch_requested_times(const struct bx_touch_options* options, struct timespec times[2]) {
-    if (options->update_atime && options->update_mtime) {
+    if (options->time_source == BX_TOUCH_TIME_SOURCE_NOW && options->update_atime && options->update_mtime) {
         return NULL;
     }
 
-    times[0].tv_sec = 0;
-    times[0].tv_nsec = options->update_atime ? UTIME_NOW : UTIME_OMIT;
-    times[1].tv_sec = 0;
-    times[1].tv_nsec = options->update_mtime ? UTIME_NOW : UTIME_OMIT;
+    if (options->time_source == BX_TOUCH_TIME_SOURCE_NOW) {
+        times[0].tv_sec = 0;
+        times[0].tv_nsec = options->update_atime ? UTIME_NOW : UTIME_OMIT;
+        times[1].tv_sec = 0;
+        times[1].tv_nsec = options->update_mtime ? UTIME_NOW : UTIME_OMIT;
+        return times;
+    }
+
+    times[0] = options->explicit_time;
+    times[1] = options->explicit_time;
+    if (!options->update_atime) {
+        times[0].tv_sec = 0;
+        times[0].tv_nsec = UTIME_OMIT;
+    }
+    if (!options->update_mtime) {
+        times[1].tv_sec = 0;
+        times[1].tv_nsec = UTIME_OMIT;
+    }
     return times;
 }
 
