@@ -12,6 +12,8 @@
 
 struct bx_touch_options {
     const char* progname;
+    bool update_atime;
+    bool update_mtime;
     bool no_create;
     bool show_help;
     bool show_version;
@@ -34,6 +36,8 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Update the access and modification times of each FILE to now.\n");
     fprintf(stream, "\n");
+    fprintf(stream, "  -a             change only the access time\n");
+    fprintf(stream, "  -m             change only the modification time\n");
     fprintf(stream, "  -c, --no-create  do not create any files\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
@@ -60,12 +64,18 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+c", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+acm", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'a':
+                options->update_atime = true;
+                break;
+            case 'm':
+                options->update_mtime = true;
+                break;
             case 'c':
                 options->no_create = true;
                 break;
@@ -91,12 +101,32 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
         }
     }
 
+    if (!options->update_atime && !options->update_mtime) {
+        options->update_atime = true;
+        options->update_mtime = true;
+    }
+
     *first_operand = optind;
     return true;
 }
 
+static const struct timespec* bx_touch_requested_times(const struct bx_touch_options* options, struct timespec times[2]) {
+    if (options->update_atime && options->update_mtime) {
+        return NULL;
+    }
+
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = options->update_atime ? UTIME_NOW : UTIME_OMIT;
+    times[1].tv_sec = 0;
+    times[1].tv_nsec = options->update_mtime ? UTIME_NOW : UTIME_OMIT;
+    return times;
+}
+
 static void bx_touch_path(const char* path, const struct bx_touch_options* options, struct bx_diag_ctx* diag) {
-    if (utimensat(AT_FDCWD, path, NULL, 0) == 0) {
+    struct timespec times[2];
+    const struct timespec* requested_times = bx_touch_requested_times(options, times);
+
+    if (utimensat(AT_FDCWD, path, requested_times, 0) == 0) {
         return;
     }
 
@@ -120,7 +150,7 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
         return;
     }
 
-    if (utimensat(AT_FDCWD, path, NULL, 0) != 0) {
+    if (utimensat(AT_FDCWD, path, requested_times, 0) != 0) {
         bx_perror_path(diag, path);
     }
 }
