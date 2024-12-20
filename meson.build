@@ -317,6 +317,9 @@ if get_option('tests')
   test_install_basic = find_program('tests/install/test_install_basic.sh')
   test('install basic', test_install_basic, args : [bx_exe])
 
+  test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
+  test('tier1 safe-replace smoke', test_tier1_safe_replace, args : [bx_exe])
+
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
 
