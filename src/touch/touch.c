@@ -17,6 +17,7 @@ enum bx_touch_time_source {
     BX_TOUCH_TIME_SOURCE_NOW = 0,
     BX_TOUCH_TIME_SOURCE_DATE,
     BX_TOUCH_TIME_SOURCE_TIMESTAMP,
+    BX_TOUCH_TIME_SOURCE_REFERENCE,
 };
 
 struct bx_touch_options {
@@ -25,7 +26,8 @@ struct bx_touch_options {
     bool update_mtime;
     bool no_create;
     enum bx_touch_time_source time_source;
-    struct timespec explicit_time;
+    struct timespec explicit_atime;
+    struct timespec explicit_mtime;
     bool show_help;
     bool show_version;
 };
@@ -50,6 +52,7 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -a               change only the access time\n");
     fprintf(stream, "  -d, --date=STRING  parse STRING and use it instead of current time\n");
     fprintf(stream, "  -m               change only the modification time\n");
+    fprintf(stream, "  -r, --reference=FILE  use FILE times instead of current time\n");
     fprintf(stream, "  -t STAMP         use [[CC]YY]MMDDhhmm[.ss] instead of current time\n");
     fprintf(stream, "  -c, --no-create  do not create any files\n");
     fprintf(stream, "      --help       display this help and exit\n");
@@ -58,6 +61,15 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
 
 static void bx_touch_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_touch_time_source_is_compatible(enum bx_touch_time_source current, enum bx_touch_time_source requested) {
+    return current == BX_TOUCH_TIME_SOURCE_NOW || current == requested;
+}
+
+static void bx_touch_set_explicit_times(struct bx_touch_options* options, const struct timespec* atime, const struct timespec* mtime) {
+    options->explicit_atime = *atime;
+    options->explicit_mtime = *mtime;
 }
 
 static bool bx_touch_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out) {
@@ -319,7 +331,8 @@ static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* ti
 
 static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"date", required_argument, NULL, 'd'}, {"no-create", no_argument, NULL, 'c'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
+        {"date", required_argument, NULL, 'd'}, {"no-create", no_argument, NULL, 'c'}, {"reference", required_argument, NULL, 'r'},
+        {"help", no_argument, NULL, 1},         {"version", no_argument, NULL, 2},     {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -331,7 +344,7 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:acd:mt:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:acd:mr:t:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -343,31 +356,51 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
             case 'c':
                 options->no_create = true;
                 break;
-            case 'd':
-                if (options->time_source == BX_TOUCH_TIME_SOURCE_TIMESTAMP) {
+            case 'd': {
+                if (!bx_touch_time_source_is_compatible(options->time_source, BX_TOUCH_TIME_SOURCE_DATE)) {
                     bx_diag(diag, "cannot specify times from more than one source");
                     return false;
                 }
-                if (!bx_touch_parse_date_argument(optarg, &options->explicit_time)) {
+                struct timespec parsed_date;
+                if (!bx_touch_parse_date_argument(optarg, &parsed_date)) {
                     bx_diag(diag, "invalid date format '%s'", optarg);
                     return false;
                 }
+                bx_touch_set_explicit_times(options, &parsed_date, &parsed_date);
                 options->time_source = BX_TOUCH_TIME_SOURCE_DATE;
                 break;
+            }
             case 'm':
                 options->update_mtime = true;
                 break;
-            case 't':
-                if (options->time_source == BX_TOUCH_TIME_SOURCE_DATE) {
+            case 'r': {
+                if (!bx_touch_time_source_is_compatible(options->time_source, BX_TOUCH_TIME_SOURCE_REFERENCE)) {
                     bx_diag(diag, "cannot specify times from more than one source");
                     return false;
                 }
-                if (!bx_touch_parse_stamp_argument(optarg, &options->explicit_time)) {
+                struct stat ref_st;
+                if (stat(optarg, &ref_st) != 0) {
+                    bx_perror_path(diag, optarg);
+                    return false;
+                }
+                bx_touch_set_explicit_times(options, &ref_st.st_atim, &ref_st.st_mtim);
+                options->time_source = BX_TOUCH_TIME_SOURCE_REFERENCE;
+                break;
+            }
+            case 't': {
+                if (!bx_touch_time_source_is_compatible(options->time_source, BX_TOUCH_TIME_SOURCE_TIMESTAMP)) {
+                    bx_diag(diag, "cannot specify times from more than one source");
+                    return false;
+                }
+                struct timespec parsed_stamp;
+                if (!bx_touch_parse_stamp_argument(optarg, &parsed_stamp)) {
                     bx_diag(diag, "invalid date format '%s'", optarg);
                     return false;
                 }
+                bx_touch_set_explicit_times(options, &parsed_stamp, &parsed_stamp);
                 options->time_source = BX_TOUCH_TIME_SOURCE_TIMESTAMP;
                 break;
+            }
             case 1:
                 options->show_help = true;
                 return true;
@@ -427,8 +460,8 @@ static const struct timespec* bx_touch_requested_times(const struct bx_touch_opt
         return times;
     }
 
-    times[0] = options->explicit_time;
-    times[1] = options->explicit_time;
+    times[0] = options->explicit_atime;
+    times[1] = options->explicit_mtime;
     if (!options->update_atime) {
         times[0].tv_sec = 0;
         times[0].tv_nsec = UTIME_OMIT;
