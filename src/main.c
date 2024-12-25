@@ -31,6 +31,7 @@ static const struct applet applets[] = {
     {"mknod", bx_mknod_main},
     {"mktemp", bx_mktemp_main},
     {"touch", bx_touch_main},
+    {"truncate", bx_truncate_main},
     {"install", bx_install_main},
     {"cp", bx_cp_main},
     {"mv", bx_mv_main},

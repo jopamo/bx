@@ -18,6 +18,7 @@ int bx_mkfifo_main(int argc, char** argv);
 int bx_mknod_main(int argc, char** argv);
 int bx_mktemp_main(int argc, char** argv);
 int bx_touch_main(int argc, char** argv);
+int bx_truncate_main(int argc, char** argv);
 int bx_install_main(int argc, char** argv);
 int bx_cp_main(int argc, char** argv);
 int bx_mv_main(int argc, char** argv);

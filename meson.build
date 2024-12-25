@@ -165,6 +165,7 @@ sources = [
   'src/mknod/mknod.c',
   'src/mktemp/mktemp.c',
   'src/touch/touch.c',
+  'src/truncate/truncate.c',
   'src/install/install.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
@@ -177,7 +178,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -313,6 +314,9 @@ if get_option('tests')
 
   test_touch_basic = find_program('tests/touch/test_touch_basic.sh')
   test('touch basic', test_touch_basic, args : [bx_exe])
+
+  test_truncate_basic = find_program('tests/truncate/test_truncate_basic.sh')
+  test('truncate basic', test_truncate_basic, args : [bx_exe])
 
   test_install_basic = find_program('tests/install/test_install_basic.sh')
   test('install basic', test_install_basic, args : [bx_exe])

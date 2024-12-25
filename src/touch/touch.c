@@ -25,6 +25,7 @@ struct bx_touch_options {
     bool update_atime;
     bool update_mtime;
     bool no_create;
+    bool no_dereference;
     enum bx_touch_time_source time_source;
     struct timespec explicit_atime;
     struct timespec explicit_mtime;
@@ -51,6 +52,7 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "  -a               change only the access time\n");
     fprintf(stream, "  -d, --date=STRING  parse STRING and use it instead of current time\n");
+    fprintf(stream, "  -h, --no-dereference  affect each symbolic link instead of any referenced file\n");
     fprintf(stream, "  -m               change only the modification time\n");
     fprintf(stream, "  -r, --reference=FILE  use FILE times instead of current time\n");
     fprintf(stream, "  -t STAMP         use [[CC]YY]MMDDhhmm[.ss] instead of current time\n");
@@ -331,8 +333,13 @@ static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* ti
 
 static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"date", required_argument, NULL, 'd'}, {"no-create", no_argument, NULL, 'c'}, {"reference", required_argument, NULL, 'r'},
-        {"help", no_argument, NULL, 1},         {"version", no_argument, NULL, 2},     {NULL, 0, NULL, 0},
+        {"date", required_argument, NULL, 'd'},
+        {"no-create", no_argument, NULL, 'c'},
+        {"no-dereference", no_argument, NULL, 'h'},
+        {"reference", required_argument, NULL, 'r'},
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -344,7 +351,7 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:acd:mr:t:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:acd:hmr:t:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -370,6 +377,9 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
                 options->time_source = BX_TOUCH_TIME_SOURCE_DATE;
                 break;
             }
+            case 'h':
+                options->no_dereference = true;
+                break;
             case 'm':
                 options->update_mtime = true;
                 break;
@@ -476,8 +486,9 @@ static const struct timespec* bx_touch_requested_times(const struct bx_touch_opt
 static void bx_touch_path(const char* path, const struct bx_touch_options* options, struct bx_diag_ctx* diag) {
     struct timespec times[2];
     const struct timespec* requested_times = bx_touch_requested_times(options, times);
+    int utimensat_flags = options->no_dereference ? AT_SYMLINK_NOFOLLOW : 0;
 
-    if (utimensat(AT_FDCWD, path, requested_times, 0) == 0) {
+    if (utimensat(AT_FDCWD, path, requested_times, utimensat_flags) == 0) {
         return;
     }
 
@@ -487,6 +498,11 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
     }
 
     if (options->no_create) {
+        return;
+    }
+
+    if (options->no_dereference) {
+        bx_perror_path(diag, path);
         return;
     }
 
@@ -501,7 +517,7 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
         return;
     }
 
-    if (utimensat(AT_FDCWD, path, requested_times, 0) != 0) {
+    if (utimensat(AT_FDCWD, path, requested_times, utimensat_flags) != 0) {
         bx_perror_path(diag, path);
     }
 }
