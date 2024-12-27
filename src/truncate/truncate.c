@@ -32,6 +32,7 @@ struct bx_truncate_size_spec {
 struct bx_truncate_options {
     const char* progname;
     bool no_create;
+    bool io_blocks;
     bool size_specified;
     struct bx_truncate_size_spec size_spec;
     const char* reference_path;
@@ -57,6 +58,7 @@ static void bx_truncate_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Shrink or extend the size of each FILE to the specified size.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -c, --no-create       do not create missing files\n");
+    fprintf(stream, "  -o, --io-blocks       treat SIZE as number of I/O blocks of each file\n");
     fprintf(stream, "  -r, --reference=FILE  base size on FILE\n");
     fprintf(stream, "  -s, --size=SIZE       set or adjust file size by SIZE bytes\n");
     fprintf(stream, "                         SIZE accepts leading +, -, <, >, /, or %% modifiers\n");
@@ -184,8 +186,13 @@ static bool bx_truncate_parse_size_spec(const char* text, struct bx_truncate_siz
 
 static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"no-create", no_argument, NULL, 'c'}, {"reference", required_argument, NULL, 'r'}, {"size", required_argument, NULL, 's'},
-        {"help", no_argument, NULL, 1},        {"version", no_argument, NULL, 2},           {NULL, 0, NULL, 0},
+        {"no-create", no_argument, NULL, 'c'},
+        {"io-blocks", no_argument, NULL, 'o'},
+        {"reference", required_argument, NULL, 'r'},
+        {"size", required_argument, NULL, 's'},
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -197,7 +204,7 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:cr:s:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:cor:s:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -205,6 +212,9 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
         switch (c) {
             case 'c':
                 options->no_create = true;
+                break;
+            case 'o':
+                options->io_blocks = true;
                 break;
             case 'r':
                 options->reference_path = optarg;
@@ -262,6 +272,11 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
 
     if (options->reference_path != NULL && options->size_specified && options->size_spec.mode == BX_TRUNCATE_SIZE_SET) {
         bx_diag(diag, "you must specify a relative '--size' with '--reference'");
+        return false;
+    }
+
+    if (options->io_blocks && !options->size_specified) {
+        bx_diag(diag, "'--io-blocks' was specified but '--size' was not");
         return false;
     }
 
@@ -339,25 +354,60 @@ static bool bx_truncate_uintmax_to_off_t(uintmax_t value, off_t* out) {
 static bool
 bx_truncate_resolve_target_size(const struct bx_truncate_options* options, int fd, uintmax_t reference_size, bool has_reference, const char* path, off_t* target_out, struct bx_diag_ctx* diag) {
     uintmax_t target_size = 0;
+    struct bx_truncate_size_spec effective_spec = options->size_spec;
+    struct stat st;
+    bool have_stat = false;
+
+    bool need_stat = false;
+    if (options->io_blocks && options->size_specified) {
+        need_stat = true;
+    }
+    if (options->size_specified && !has_reference && options->size_spec.mode != BX_TRUNCATE_SIZE_SET) {
+        need_stat = true;
+    }
+
+    if (need_stat) {
+        if (fstat(fd, &st) != 0) {
+            bx_perror_path(diag, path);
+            return false;
+        }
+        have_stat = true;
+    }
+
+    if (options->io_blocks && options->size_specified) {
+        if (st.st_blksize <= 0) {
+            bx_diag(diag, "%s: invalid I/O block size", path);
+            return false;
+        }
+
+        uintmax_t block_size = (uintmax_t)st.st_blksize;
+        if (effective_spec.value > UINTMAX_MAX / block_size) {
+            bx_diag(diag, "%s: size overflow", path);
+            return false;
+        }
+        effective_spec.value *= block_size;
+    }
 
     if (!options->size_specified) {
         target_size = reference_size;
     }
     else if (has_reference) {
-        if (!bx_truncate_compute_size(&options->size_spec, reference_size, &target_size, diag)) {
+        if (!bx_truncate_compute_size(&effective_spec, reference_size, &target_size, diag)) {
             return false;
         }
     }
-    else if (options->size_spec.mode == BX_TRUNCATE_SIZE_SET) {
-        target_size = options->size_spec.value;
+    else if (effective_spec.mode == BX_TRUNCATE_SIZE_SET) {
+        target_size = effective_spec.value;
     }
     else {
-        struct stat st;
-        if (fstat(fd, &st) != 0) {
-            bx_perror_path(diag, path);
-            return false;
+        if (!have_stat) {
+            if (fstat(fd, &st) != 0) {
+                bx_perror_path(diag, path);
+                return false;
+            }
+            have_stat = true;
         }
-        if (!bx_truncate_compute_size(&options->size_spec, (uintmax_t)st.st_size, &target_size, diag)) {
+        if (!bx_truncate_compute_size(&effective_spec, (uintmax_t)st.st_size, &target_size, diag)) {
             return false;
         }
     }
