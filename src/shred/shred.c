@@ -14,13 +14,30 @@
 #include "applets.h"
 #include "diag.h"
 
+enum bx_shred_remove_mode {
+    BX_SHRED_REMOVE_UNLINK = 0,
+    BX_SHRED_REMOVE_WIPE,
+    BX_SHRED_REMOVE_WIPESYNC,
+};
+
+enum {
+    BX_SHRED_OPT_HELP = 256,
+    BX_SHRED_OPT_VERSION,
+    BX_SHRED_OPT_REMOVE,
+    BX_SHRED_OPT_RANDOM_SOURCE,
+};
+
 struct bx_shred_options {
     const char* progname;
     bool force;
     unsigned int iterations;
+    const char* random_source_path;
+    bool random_source_specified;
+    bool exact;
     bool size_specified;
     uintmax_t size_bytes;
     bool remove_file;
+    enum bx_shred_remove_mode remove_mode;
     bool verbose;
     bool zero_final;
     bool show_help;
@@ -46,10 +63,12 @@ static void bx_shred_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "  -f, --force           change permissions to allow writing if needed\n");
     fprintf(stream, "  -n, --iterations=N    overwrite N times instead of the default (3)\n");
+    fprintf(stream, "      --random-source=FILE  get random bytes from FILE\n");
     fprintf(stream, "  -s, --size=N          shred this many bytes (supports K/M/... suffixes)\n");
-    fprintf(stream, "  -u, --remove          remove each file after overwriting\n");
+    fprintf(stream, "  -u                    remove each file after overwriting\n");
+    fprintf(stream, "      --remove[=HOW]    remove using HOW: unlink, wipe, or wipesync\n");
     fprintf(stream, "  -v, --verbose         explain what is being done\n");
-    fprintf(stream, "  -x, --exact           accepted for GNU compatibility\n");
+    fprintf(stream, "  -x, --exact           do not round file sizes up to the next full block\n");
     fprintf(stream, "  -z, --zero            add a final overwrite with zeros\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
@@ -145,18 +164,84 @@ static bool bx_shred_parse_iterations(const char* text, unsigned int* iterations
     return true;
 }
 
+static bool bx_shred_round_up_to_block(uintmax_t size_bytes, uintmax_t block_size, uintmax_t* rounded_size_out) {
+    if (rounded_size_out == NULL) {
+        return false;
+    }
+
+    if (block_size <= 1 || size_bytes == 0) {
+        *rounded_size_out = size_bytes;
+        return true;
+    }
+
+    uintmax_t remainder = size_bytes % block_size;
+    if (remainder == 0) {
+        *rounded_size_out = size_bytes;
+        return true;
+    }
+
+    uintmax_t extra = block_size - remainder;
+    if (size_bytes > UINTMAX_MAX - extra) {
+        return false;
+    }
+
+    *rounded_size_out = size_bytes + extra;
+    return true;
+}
+
+static bool bx_shred_parse_remove_mode(const char* text, enum bx_shred_remove_mode* remove_mode_out) {
+    if (text == NULL || remove_mode_out == NULL) {
+        return false;
+    }
+
+    if (strcmp(text, "unlink") == 0) {
+        *remove_mode_out = BX_SHRED_REMOVE_UNLINK;
+        return true;
+    }
+    if (strcmp(text, "wipe") == 0) {
+        *remove_mode_out = BX_SHRED_REMOVE_WIPE;
+        return true;
+    }
+    if (strcmp(text, "wipesync") == 0) {
+        *remove_mode_out = BX_SHRED_REMOVE_WIPESYNC;
+        return true;
+    }
+    return false;
+}
+
+static const char* bx_shred_remove_mode_name(enum bx_shred_remove_mode remove_mode) {
+    switch (remove_mode) {
+        case BX_SHRED_REMOVE_UNLINK:
+            return "unlink";
+        case BX_SHRED_REMOVE_WIPE:
+            return "wipe";
+        case BX_SHRED_REMOVE_WIPESYNC:
+            return "wipesync";
+    }
+
+    return "unlink";
+}
+
 static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"force", no_argument, NULL, 'f'},      {"iterations", required_argument, NULL, 'n'},
-        {"size", required_argument, NULL, 's'}, {"remove", no_argument, NULL, 'u'},
-        {"verbose", no_argument, NULL, 'v'},    {"exact", no_argument, NULL, 'x'},
-        {"zero", no_argument, NULL, 'z'},       {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},      {NULL, 0, NULL, 0},
+        {"force", no_argument, NULL, 'f'},
+        {"iterations", required_argument, NULL, 'n'},
+        {"remove", optional_argument, NULL, BX_SHRED_OPT_REMOVE},
+        {"random-source", required_argument, NULL, BX_SHRED_OPT_RANDOM_SOURCE},
+        {"size", required_argument, NULL, 's'},
+        {"verbose", no_argument, NULL, 'v'},
+        {"exact", no_argument, NULL, 'x'},
+        {"zero", no_argument, NULL, 'z'},
+        {"help", no_argument, NULL, BX_SHRED_OPT_HELP},
+        {"version", no_argument, NULL, BX_SHRED_OPT_VERSION},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_shred_progname((argc > 0) ? argv[0] : NULL);
     options->iterations = 3u;
+    options->random_source_path = "/dev/urandom";
+    options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
     diag->progname = options->progname;
 
     opterr = 0;
@@ -188,19 +273,36 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
                 break;
             case 'u':
                 options->remove_file = true;
+                options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
                 break;
             case 'v':
                 options->verbose = true;
                 break;
             case 'x':
+                options->exact = true;
                 break;
             case 'z':
                 options->zero_final = true;
                 break;
-            case 1:
+            case BX_SHRED_OPT_REMOVE:
+                options->remove_file = true;
+                if (optarg == NULL) {
+                    options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
+                    break;
+                }
+                if (!bx_shred_parse_remove_mode(optarg, &options->remove_mode)) {
+                    bx_diag(diag, "invalid argument '%s' for '--remove'", optarg);
+                    return false;
+                }
+                break;
+            case BX_SHRED_OPT_RANDOM_SOURCE:
+                options->random_source_path = optarg;
+                options->random_source_specified = true;
+                break;
+            case BX_SHRED_OPT_HELP:
                 options->show_help = true;
                 break;
-            case 2:
+            case BX_SHRED_OPT_VERSION:
                 options->show_version = true;
                 break;
             case ':':
@@ -234,7 +336,7 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
     return true;
 }
 
-static bool bx_shred_fill_random(int random_fd, unsigned char* buffer, size_t count, struct bx_diag_ctx* diag) {
+static bool bx_shred_fill_random(int random_fd, const char* random_source_path, unsigned char* buffer, size_t count, struct bx_diag_ctx* diag) {
     size_t done = 0;
     while (done < count) {
         ssize_t nread = read(random_fd, buffer + done, count - done);
@@ -242,11 +344,11 @@ static bool bx_shred_fill_random(int random_fd, unsigned char* buffer, size_t co
             if (errno == EINTR) {
                 continue;
             }
-            bx_perror_path(diag, "/dev/urandom");
+            bx_perror_path(diag, random_source_path);
             return false;
         }
         if (nread == 0) {
-            bx_diag(diag, "/dev/urandom: unexpected end of file");
+            bx_diag(diag, "%s: unexpected end of file", random_source_path);
             return false;
         }
         done += (size_t)nread;
@@ -274,7 +376,7 @@ static bool bx_shred_write_all(int fd, const unsigned char* buffer, size_t count
     return true;
 }
 
-static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, int random_fd, bool zero_fill, struct bx_diag_ctx* diag) {
+static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, int random_fd, const char* random_source_path, bool zero_fill, struct bx_diag_ctx* diag) {
     if (lseek(fd, 0, SEEK_SET) < 0) {
         bx_perror_path(diag, path);
         return false;
@@ -287,7 +389,7 @@ static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, i
         if (zero_fill) {
             memset(buffer, 0, chunk);
         }
-        else if (!bx_shred_fill_random(random_fd, buffer, chunk, diag)) {
+        else if (!bx_shred_fill_random(random_fd, random_source_path, buffer, chunk, diag)) {
             return false;
         }
 
@@ -334,7 +436,23 @@ static int bx_shred_open_target(const char* path, bool force, struct bx_diag_ctx
     return fd;
 }
 
-static bool bx_shred_apply_path(const char* path, const struct bx_shred_options* options, int random_fd, struct bx_diag_ctx* diag) {
+static bool bx_shred_remove_path(const char* path, enum bx_shred_remove_mode remove_mode, struct bx_diag_ctx* diag) {
+    switch (remove_mode) {
+        case BX_SHRED_REMOVE_UNLINK:
+        case BX_SHRED_REMOVE_WIPE:
+        case BX_SHRED_REMOVE_WIPESYNC:
+            break;
+    }
+
+    if (unlink(path) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool bx_shred_apply_path(const char* path, const struct bx_shred_options* options, int random_fd, const char* random_source_path, struct bx_diag_ctx* diag) {
     int fd = bx_shred_open_target(path, options->force, diag);
     if (fd < 0) {
         return false;
@@ -360,6 +478,16 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
     }
     else {
         bytes_to_overwrite = (uintmax_t)st.st_size;
+        if (!options->exact && st.st_blksize > 1) {
+            uintmax_t rounded_bytes = 0;
+            if (!bx_shred_round_up_to_block(bytes_to_overwrite, (uintmax_t)st.st_blksize, &rounded_bytes)) {
+                bx_diag(diag, "%s: file size too large to round to block boundary", path);
+                ok = false;
+            }
+            else {
+                bytes_to_overwrite = rounded_bytes;
+            }
+        }
     }
 
     unsigned int total_passes = options->iterations + (options->zero_final ? 1u : 0u);
@@ -367,7 +495,7 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
     if (ok) {
         for (unsigned int i = 0; i < options->iterations; i++) {
             bx_info(diag, "%s: pass %u/%u (random)", path, i + 1u, total_passes);
-            if (!bx_shred_overwrite_pass(fd, path, bytes_to_overwrite, random_fd, false, diag)) {
+            if (!bx_shred_overwrite_pass(fd, path, bytes_to_overwrite, random_fd, random_source_path, false, diag)) {
                 ok = false;
                 break;
             }
@@ -376,7 +504,7 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
 
     if (ok && options->zero_final) {
         bx_info(diag, "%s: pass %u/%u (zero)", path, options->iterations + 1u, total_passes);
-        if (!bx_shred_overwrite_pass(fd, path, bytes_to_overwrite, random_fd, true, diag)) {
+        if (!bx_shred_overwrite_pass(fd, path, bytes_to_overwrite, random_fd, random_source_path, true, diag)) {
             ok = false;
         }
     }
@@ -387,9 +515,8 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
     }
 
     if (ok && options->remove_file) {
-        bx_info(diag, "%s: removing", path);
-        if (unlink(path) != 0) {
-            bx_perror_path(diag, path);
+        bx_info(diag, "%s: removing (%s)", path, bx_shred_remove_mode_name(options->remove_mode));
+        if (!bx_shred_remove_path(path, options->remove_mode, diag)) {
             ok = false;
         }
     }
@@ -430,20 +557,20 @@ int bx_shred_main(int argc, char** argv) {
     }
 
     int random_fd = -1;
-    if (options.iterations > 0) {
-        random_fd = open("/dev/urandom", O_RDONLY);
+    if (options.iterations > 0 || options.random_source_specified) {
+        random_fd = open(options.random_source_path, O_RDONLY);
         if (random_fd < 0) {
-            bx_perror_path(&diag, "/dev/urandom");
+            bx_perror_path(&diag, options.random_source_path);
             return diag.exit_status;
         }
     }
 
     for (int i = first_operand; i < argc; i++) {
-        (void)bx_shred_apply_path(argv[i], &options, random_fd, &diag);
+        (void)bx_shred_apply_path(argv[i], &options, random_fd, options.random_source_path, &diag);
     }
 
     if (random_fd >= 0 && close(random_fd) != 0) {
-        bx_perror_path(&diag, "/dev/urandom");
+        bx_perror_path(&diag, options.random_source_path);
     }
 
     return diag.exit_status;
