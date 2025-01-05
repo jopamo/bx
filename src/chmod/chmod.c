@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,6 +7,7 @@
 #include <sys/stat.h>
 
 #include "applets.h"
+#include "common/path_ops.h"
 #include "diag.h"
 #include "libbx.h"
 
@@ -20,6 +22,12 @@ enum bx_chmod_mode_kind {
     BX_CHMOD_MODE_SYMBOLIC = 1,
 };
 
+enum bx_chmod_report_mode {
+    BX_CHMOD_REPORT_NONE = 0,
+    BX_CHMOD_REPORT_CHANGES,
+    BX_CHMOD_REPORT_VERBOSE,
+};
+
 struct bx_chmod_mode_spec {
     enum bx_chmod_mode_kind kind;
     mode_t numeric_mode;
@@ -29,6 +37,10 @@ struct bx_chmod_mode_spec {
 
 struct bx_chmod_options {
     const char* progname;
+    bool recursive;
+    bool quiet;
+    enum bx_chmod_report_mode report_mode;
+    const char* reference_path;
     bool show_help;
     bool show_version;
 };
@@ -48,14 +60,29 @@ static const char* bx_chmod_progname(const char* argv0) {
 static void bx_chmod_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... MODE[,MODE]... FILE...\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... OCTAL-MODE FILE...\n", progname);
+    fprintf(stream, "  or:  %s [OPTION]... --reference=RFILE FILE...\n", progname);
     fprintf(stream, "Change the mode of each FILE to MODE.\n");
     fprintf(stream, "\n");
+    fprintf(stream, "  -c, --changes    like verbose but report only when a change is made\n");
+    fprintf(stream, "  -f, --silent, --quiet  suppress most error messages\n");
+    fprintf(stream, "  -R, --recursive  change files and directories recursively\n");
+    fprintf(stream, "      --reference=RFILE  use RFILE's mode instead of MODE values\n");
+    fprintf(stream, "  -v, --verbose    output a diagnostic for every file processed\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
 }
 
 static void bx_chmod_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_chmod_short_group_is_options(const char* arg) {
+    for (const char* p = arg + 1; *p != '\0'; p++) {
+        if (*p != 'R' && *p != 'c' && *p != 'f' && *p != 'v') {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool bx_chmod_parse_options(int argc, char** argv, struct bx_chmod_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -81,10 +108,67 @@ static bool bx_chmod_parse_options(int argc, char** argv, struct bx_chmod_option
             *first_operand = i + 1;
             return true;
         }
-        if (arg[0] == '-' && arg[1] == '-' && arg[2] != '\0') {
+        if (strcmp(arg, "--changes") == 0) {
+            options->report_mode = BX_CHMOD_REPORT_CHANGES;
+            i++;
+            continue;
+        }
+        if (strcmp(arg, "--recursive") == 0) {
+            options->recursive = true;
+            i++;
+            continue;
+        }
+        if (strcmp(arg, "--verbose") == 0) {
+            options->report_mode = BX_CHMOD_REPORT_VERBOSE;
+            i++;
+            continue;
+        }
+        if (strcmp(arg, "--quiet") == 0 || strcmp(arg, "--silent") == 0) {
+            options->quiet = true;
+            i++;
+            continue;
+        }
+        if (strcmp(arg, "--reference") == 0) {
+            if (i + 1 >= argc) {
+                bx_diag(diag, "option '--reference' requires an argument");
+                return false;
+            }
+            options->reference_path = argv[i + 1];
+            i += 2;
+            continue;
+        }
+        if (strncmp(arg, "--reference=", 12) == 0) {
+            options->reference_path = arg + 12;
+            i++;
+            continue;
+        }
+        if (arg[0] == '-' && arg[1] == '-') {
             bx_diag(diag, "unrecognized option '%s'", arg);
             return false;
         }
+        if (arg[0] == '-' && arg[1] != '\0') {
+            if (!bx_chmod_short_group_is_options(arg)) {
+                break;
+            }
+
+            for (const char* p = arg + 1; *p != '\0'; p++) {
+                if (*p == 'R') {
+                    options->recursive = true;
+                }
+                else if (*p == 'c') {
+                    options->report_mode = BX_CHMOD_REPORT_CHANGES;
+                }
+                else if (*p == 'f') {
+                    options->quiet = true;
+                }
+                else if (*p == 'v') {
+                    options->report_mode = BX_CHMOD_REPORT_VERBOSE;
+                }
+            }
+            i++;
+            continue;
+        }
+
         break;
     }
 
@@ -381,28 +465,143 @@ static bool bx_chmod_parse_mode_spec(const char* text, struct bx_chmod_mode_spec
     return false;
 }
 
-static void bx_chmod_apply_one(const char* path, const struct bx_chmod_mode_spec* mode_spec, struct bx_diag_ctx* diag) {
-    mode_t mode_value = 0u;
+static bool bx_chmod_parse_reference_mode(const char* reference_path, struct bx_chmod_mode_spec* mode_spec, struct bx_diag_ctx* diag) {
+    struct stat st;
+    if (stat(reference_path, &st) != 0) {
+        bx_perror_path(diag, reference_path);
+        return false;
+    }
+
+    memset(mode_spec, 0, sizeof(*mode_spec));
+    mode_spec->kind = BX_CHMOD_MODE_NUMERIC;
+    mode_spec->numeric_mode = st.st_mode & 07777u;
+    return true;
+}
+
+static void bx_chmod_perror_path(const struct bx_chmod_options* options, struct bx_diag_ctx* diag, const char* path) {
+    if (options->quiet) {
+        diag->exit_status = 1;
+        return;
+    }
+    bx_perror_path(diag, path);
+}
+
+static bool bx_chmod_emit_report(const struct bx_chmod_options* options, const char* path, mode_t old_mode, mode_t new_mode, bool changed, struct bx_diag_ctx* diag) {
+    if (options->report_mode == BX_CHMOD_REPORT_NONE) {
+        return true;
+    }
+    if (options->report_mode == BX_CHMOD_REPORT_CHANGES && !changed) {
+        return true;
+    }
+
+    int wrote = 0;
+    if (changed) {
+        wrote = fprintf(stdout, "mode of '%s' changed from %04o to %04o\n", path, (unsigned int)(old_mode & 07777u), (unsigned int)(new_mode & 07777u));
+    }
+    else {
+        wrote = fprintf(stdout, "mode of '%s' retained as %04o\n", path, (unsigned int)(new_mode & 07777u));
+    }
+    if (wrote < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_chmod_apply_existing(const char* path, const struct stat* st, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+    mode_t old_mode = st->st_mode & 07777u;
+    mode_t mode_value = old_mode;
 
     if (mode_spec->kind == BX_CHMOD_MODE_NUMERIC) {
         mode_value = mode_spec->numeric_mode;
     }
-    else {
-        struct stat st;
-        if (stat(path, &st) != 0) {
-            bx_perror_path(diag, path);
-            return;
-        }
-
-        if (!bx_chmod_apply_symbolic_mode(mode_spec->symbolic_mode, st.st_mode & 07777u, S_ISDIR(st.st_mode), mode_spec->umask_value, &mode_value)) {
-            bx_diag(diag, "invalid mode '%s'", mode_spec->symbolic_mode);
-            return;
-        }
+    else if (!bx_chmod_apply_symbolic_mode(mode_spec->symbolic_mode, old_mode, S_ISDIR(st->st_mode), mode_spec->umask_value, &mode_value)) {
+        bx_diag(diag, "invalid mode '%s'", mode_spec->symbolic_mode);
+        return false;
     }
 
     if (chmod(path, mode_value) != 0) {
-        bx_perror_path(diag, path);
+        bx_chmod_perror_path(options, diag, path);
+        return false;
     }
+
+    bool changed = (old_mode != mode_value);
+    return bx_chmod_emit_report(options, path, old_mode, mode_value, changed, diag);
+}
+
+static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    if (top_level) {
+        if (stat(path, &st) != 0) {
+            bx_chmod_perror_path(options, diag, path);
+            return false;
+        }
+    }
+    else {
+        if (lstat(path, &st) != 0) {
+            bx_chmod_perror_path(options, diag, path);
+            return false;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            return true;
+        }
+    }
+
+    bool ok = bx_chmod_apply_existing(path, &st, mode_spec, options, diag);
+
+    if (!options->recursive || !S_ISDIR(st.st_mode)) {
+        return ok;
+    }
+
+    DIR* dir = opendir(path);
+    if (dir == NULL) {
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    bool recurse_ok = true;
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (entry == NULL) {
+            if (errno != 0) {
+                bx_chmod_perror_path(options, diag, path);
+                recurse_ok = false;
+            }
+            break;
+        }
+        if (bx_path_is_dot_or_dotdot(entry->d_name)) {
+            continue;
+        }
+
+        char* child_path = bx_path_join(path, entry->d_name);
+        if (!bx_chmod_apply_path_recursive(child_path, false, mode_spec, options, diag)) {
+            recurse_ok = false;
+        }
+        free(child_path);
+    }
+
+    if (closedir(dir) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        recurse_ok = false;
+    }
+
+    return ok && recurse_ok;
+}
+
+static void bx_chmod_apply_one(const char* path, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+    (void)bx_chmod_apply_path_recursive(path, true, mode_spec, options, diag);
+}
+
+static int bx_chmod_report_missing_mode_operand(struct bx_diag_ctx* diag, const char* mode_operand) {
+    if (mode_operand == NULL) {
+        bx_diag(diag, "missing operand");
+    }
+    else {
+        bx_diag(diag, "missing operand after '%s'", mode_operand);
+    }
+    return diag->exit_status;
 }
 
 int bx_chmod_main(int argc, char** argv) {
@@ -432,29 +631,39 @@ int bx_chmod_main(int argc, char** argv) {
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        return diag.exit_status;
-    }
-    if (operand_count <= 1) {
-        bx_diag(&diag, "missing operand after '%s'", argv[first_operand]);
-        return diag.exit_status;
+        return bx_chmod_report_missing_mode_operand(&diag, NULL);
     }
 
-    if (!bx_chmod_parse_mode_spec(argv[first_operand], &mode_spec, &diag)) {
-        return diag.exit_status;
-    }
+    int first_file = first_operand;
 
-    int first_file = first_operand + 1;
-    if (first_file < argc && strcmp(argv[first_file], "--") == 0) {
-        first_file++;
+    if (options.reference_path != NULL) {
+        if (!bx_chmod_parse_reference_mode(options.reference_path, &mode_spec, &diag)) {
+            return diag.exit_status;
+        }
     }
-    if (first_file >= argc) {
-        bx_diag(&diag, "missing operand after '%s'", argv[first_operand]);
-        return diag.exit_status;
+    else {
+        if (operand_count <= 1) {
+            return bx_chmod_report_missing_mode_operand(&diag, argv[first_operand]);
+        }
+        if (!bx_chmod_parse_mode_spec(argv[first_operand], &mode_spec, &diag)) {
+            return diag.exit_status;
+        }
+
+        first_file = first_operand + 1;
+        if (first_file < argc && strcmp(argv[first_file], "--") == 0) {
+            first_file++;
+        }
+        if (first_file >= argc) {
+            return bx_chmod_report_missing_mode_operand(&diag, argv[first_operand]);
+        }
     }
 
     for (int i = first_file; i < argc; i++) {
-        bx_chmod_apply_one(argv[i], &mode_spec, &diag);
+        bx_chmod_apply_one(argv[i], &mode_spec, &options, &diag);
+    }
+
+    if (options.report_mode != BX_CHMOD_REPORT_NONE && fflush(stdout) == EOF) {
+        bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
     return diag.exit_status;

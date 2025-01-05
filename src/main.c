@@ -25,6 +25,7 @@ static const struct applet applets[] = {
     {"dirname", bx_dirname_main},
     {"pathchk", bx_pathchk_main},
     {"chmod", bx_chmod_main},
+    {"chown", bx_chown_main},
     {"rm", bx_rm_main},
     {"mkdir", bx_mkdir_main},
     {"rmdir", bx_rmdir_main},

@@ -12,6 +12,7 @@ int bx_basename_main(int argc, char** argv);
 int bx_dirname_main(int argc, char** argv);
 int bx_pathchk_main(int argc, char** argv);
 int bx_chmod_main(int argc, char** argv);
+int bx_chown_main(int argc, char** argv);
 int bx_rm_main(int argc, char** argv);
 int bx_mkdir_main(int argc, char** argv);
 int bx_rmdir_main(int argc, char** argv);
