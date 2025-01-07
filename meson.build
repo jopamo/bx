@@ -160,6 +160,7 @@ sources = [
   'src/pathchk/pathchk.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
+  'src/chgrp/chgrp.c',
   'src/rm/rm.c',
   'src/mkdir/mkdir.c',
   'src/rmdir/rmdir.c',
@@ -181,7 +182,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'chmod', 'chown', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -302,6 +303,9 @@ if get_option('tests')
 
   test_chown_basic = find_program('tests/chown/test_chown_basic.sh')
   test('chown basic', test_chown_basic, args : [bx_exe])
+
+  test_chgrp_basic = find_program('tests/chgrp/test_chgrp_basic.sh')
+  test('chgrp basic', test_chgrp_basic, args : [bx_exe])
 
   test_rm_basic = find_program('tests/rm/test_rm_basic.sh')
   test('rm basic', test_rm_basic, args : [bx_exe])
