@@ -158,6 +158,7 @@ sources = [
   'src/basename/basename.c',
   'src/dirname/dirname.c',
   'src/pathchk/pathchk.c',
+  'src/stat/stat.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -182,7 +183,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -297,6 +298,9 @@ if get_option('tests')
 
   test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe])
+
+  test_stat_basic = find_program('tests/stat/test_stat_basic.sh')
+  test('stat basic', test_stat_basic, args : [bx_exe])
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
