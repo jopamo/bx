@@ -1,19 +1,90 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <mntent.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "diag.h"
+#include "libbx.h"
+
+enum bx_df_size_mode {
+    BX_DF_SIZE_1K = 0,
+    BX_DF_SIZE_HUMAN_1024,
+    BX_DF_SIZE_HUMAN_1000,
+};
+
+enum bx_df_output_field {
+    BX_DF_FIELD_SOURCE = 0,
+    BX_DF_FIELD_FSTYPE,
+    BX_DF_FIELD_ITOTAL,
+    BX_DF_FIELD_IUSED,
+    BX_DF_FIELD_IAVAIL,
+    BX_DF_FIELD_IPCENT,
+    BX_DF_FIELD_SIZE,
+    BX_DF_FIELD_USED,
+    BX_DF_FIELD_AVAIL,
+    BX_DF_FIELD_PCENT,
+    BX_DF_FIELD_FILE,
+    BX_DF_FIELD_TARGET,
+    BX_DF_FIELD_COUNT,
+};
 
 struct bx_df_options {
     const char* progname;
     bool show_help;
     bool show_version;
+    bool posix_format;
+    bool print_type;
+    bool use_output;
+    enum bx_df_size_mode size_mode;
+    enum bx_df_output_field output_fields[BX_DF_FIELD_COUNT];
+    size_t output_field_count;
+};
+
+struct bx_df_mount_entry {
+    char* source;
+    char* target;
+    char* fstype;
+};
+
+struct bx_df_mount_table {
+    struct bx_df_mount_entry* entries;
+    size_t count;
+};
+
+struct bx_df_row {
+    const char* operand;
+    const char* source;
+    const char* target;
+    const char* fstype;
+    uintmax_t block_size;
+    uintmax_t total_blocks;
+    uintmax_t used_blocks;
+    uintmax_t avail_blocks;
+    uintmax_t inode_total;
+    uintmax_t inode_used;
+    uintmax_t inode_avail;
+    unsigned block_usage_percent;
+    unsigned inode_usage_percent;
+};
+
+struct bx_df_column_set {
+    enum bx_df_output_field fields[BX_DF_FIELD_COUNT];
+    size_t count;
+    bool custom_output;
+};
+
+enum {
+    BX_DF_OPT_HELP = 1,
+    BX_DF_OPT_VERSION = 2,
+    BX_DF_OPT_OUTPUT = 3,
 };
 
 static const char* bx_df_progname(const char* argv0) {
@@ -33,7 +104,12 @@ static void bx_df_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Show file system space usage for each FILE.\n");
     fprintf(stream, "With no FILE, use '.'.\n");
     fprintf(stream, "\n");
+    fprintf(stream, "  -H             print sizes in powers of 1000\n");
+    fprintf(stream, "  -h             print sizes in powers of 1024\n");
     fprintf(stream, "  -k             use 1K blocks (default)\n");
+    fprintf(stream, "  -P             use POSIX output format\n");
+    fprintf(stream, "  -T             print file system type\n");
+    fprintf(stream, "      --output[=FIELD_LIST]  use the output format defined by FIELD_LIST\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
 }
@@ -42,15 +118,131 @@ static void bx_df_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static bool bx_df_parse_output_field_name(const char* name, enum bx_df_output_field* field_out) {
+    if (strcmp(name, "source") == 0) {
+        *field_out = BX_DF_FIELD_SOURCE;
+        return true;
+    }
+    if (strcmp(name, "fstype") == 0) {
+        *field_out = BX_DF_FIELD_FSTYPE;
+        return true;
+    }
+    if (strcmp(name, "itotal") == 0) {
+        *field_out = BX_DF_FIELD_ITOTAL;
+        return true;
+    }
+    if (strcmp(name, "iused") == 0) {
+        *field_out = BX_DF_FIELD_IUSED;
+        return true;
+    }
+    if (strcmp(name, "iavail") == 0) {
+        *field_out = BX_DF_FIELD_IAVAIL;
+        return true;
+    }
+    if (strcmp(name, "ipcent") == 0) {
+        *field_out = BX_DF_FIELD_IPCENT;
+        return true;
+    }
+    if (strcmp(name, "size") == 0) {
+        *field_out = BX_DF_FIELD_SIZE;
+        return true;
+    }
+    if (strcmp(name, "used") == 0) {
+        *field_out = BX_DF_FIELD_USED;
+        return true;
+    }
+    if (strcmp(name, "avail") == 0) {
+        *field_out = BX_DF_FIELD_AVAIL;
+        return true;
+    }
+    if (strcmp(name, "pcent") == 0) {
+        *field_out = BX_DF_FIELD_PCENT;
+        return true;
+    }
+    if (strcmp(name, "file") == 0) {
+        *field_out = BX_DF_FIELD_FILE;
+        return true;
+    }
+    if (strcmp(name, "target") == 0) {
+        *field_out = BX_DF_FIELD_TARGET;
+        return true;
+    }
+    return false;
+}
+
+static bool bx_df_output_field_is_selected(const struct bx_df_options* options, enum bx_df_output_field field) {
+    for (size_t i = 0; i < options->output_field_count; i++) {
+        if (options->output_fields[i] == field) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void bx_df_set_default_output_fields(struct bx_df_options* options) {
+    static const enum bx_df_output_field defaults[] = {
+        BX_DF_FIELD_SOURCE, BX_DF_FIELD_FSTYPE, BX_DF_FIELD_ITOTAL, BX_DF_FIELD_IUSED, BX_DF_FIELD_IAVAIL, BX_DF_FIELD_IPCENT,
+        BX_DF_FIELD_SIZE,   BX_DF_FIELD_USED,   BX_DF_FIELD_AVAIL,  BX_DF_FIELD_PCENT, BX_DF_FIELD_FILE,   BX_DF_FIELD_TARGET,
+    };
+
+    options->output_field_count = 0;
+    for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
+        options->output_fields[options->output_field_count++] = defaults[i];
+    }
+}
+
+static bool bx_df_append_output_fields(const char* text, struct bx_df_options* options, struct bx_diag_ctx* diag) {
+    char* copy = xstrdup(text);
+    char* cursor = copy;
+
+    while (true) {
+        char* token = cursor;
+        char* comma = strchr(cursor, ',');
+        if (comma != NULL) {
+            *comma = '\0';
+            cursor = comma + 1;
+        }
+
+        if (token[0] == '\0') {
+            bx_diag(diag, "option --output: field '%s' unknown", token);
+            free(copy);
+            return false;
+        }
+
+        enum bx_df_output_field field;
+        if (!bx_df_parse_output_field_name(token, &field)) {
+            bx_diag(diag, "option --output: field '%s' unknown", token);
+            free(copy);
+            return false;
+        }
+        if (bx_df_output_field_is_selected(options, field)) {
+            bx_diag(diag, "option --output: field '%s' used more than once", token);
+            free(copy);
+            return false;
+        }
+
+        options->output_fields[options->output_field_count++] = field;
+
+        if (comma == NULL) {
+            break;
+        }
+    }
+
+    free(copy);
+    return true;
+}
+
 static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"help", no_argument, NULL, BX_DF_OPT_HELP},
+        {"version", no_argument, NULL, BX_DF_OPT_VERSION},
+        {"output", optional_argument, NULL, BX_DF_OPT_OUTPUT},
         {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_df_progname((argc > 0) ? argv[0] : NULL);
+    options->size_mode = BX_DF_SIZE_1K;
     diag->progname = options->progname;
 
     opterr = 0;
@@ -58,18 +250,40 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+k", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+hHkPT", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
-            case 'k':
+            case 'h':
+                options->size_mode = BX_DF_SIZE_HUMAN_1024;
                 break;
-            case 1:
+            case 'H':
+                options->size_mode = BX_DF_SIZE_HUMAN_1000;
+                break;
+            case 'k':
+                options->size_mode = BX_DF_SIZE_1K;
+                break;
+            case 'P':
+                options->posix_format = true;
+                break;
+            case 'T':
+                options->print_type = true;
+                break;
+            case BX_DF_OPT_OUTPUT:
+                options->use_output = true;
+                if (optarg == NULL) {
+                    bx_df_set_default_output_fields(options);
+                }
+                else if (!bx_df_append_output_fields(optarg, options, diag)) {
+                    return false;
+                }
+                break;
+            case BX_DF_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_DF_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case '?':
@@ -88,36 +302,48 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
         }
     }
 
+    if (options->use_output && options->output_field_count == 0u) {
+        bx_df_set_default_output_fields(options);
+    }
+    if (options->use_output && options->posix_format) {
+        bx_diag(diag, "options -P and --output are mutually exclusive");
+        return false;
+    }
+    if (options->use_output && options->print_type) {
+        bx_diag(diag, "options -T and --output are mutually exclusive");
+        return false;
+    }
+
     *first_operand = optind;
     return true;
 }
 
-static uintmax_t bx_df_scale_to_1k(uintmax_t blocks, uintmax_t fragment_size) {
-    if (blocks == 0u || fragment_size == 0u) {
+static uintmax_t bx_df_scale_blocks(uintmax_t blocks, uintmax_t block_size, uintmax_t divisor) {
+    if (blocks == 0u || block_size == 0u || divisor == 0u) {
         return 0u;
     }
 
-    if (blocks > (UINTMAX_MAX / fragment_size)) {
-        return UINTMAX_MAX;
+    if (blocks > (UINTMAX_MAX / block_size)) {
+        return UINTMAX_MAX / divisor;
     }
 
-    return (blocks * fragment_size) / 1024u;
+    return (blocks * block_size) / divisor;
 }
 
-static unsigned bx_df_usage_percent(uintmax_t used_1k, uintmax_t available_1k) {
-    uintmax_t denominator = used_1k + available_1k;
-    if (denominator < used_1k) {
+static unsigned bx_df_usage_percent(uintmax_t used, uintmax_t available) {
+    uintmax_t denominator = used + available;
+    if (denominator < used) {
         denominator = UINTMAX_MAX;
     }
     if (denominator == 0u) {
         return 0u;
     }
 
-    if (used_1k > (UINTMAX_MAX / 100u)) {
+    if (used > (UINTMAX_MAX / 100u)) {
         return 100u;
     }
 
-    uintmax_t scaled = used_1k * 100u;
+    uintmax_t scaled = used * 100u;
     uintmax_t percent = scaled / denominator;
     if ((scaled % denominator) != 0u && percent < UINTMAX_MAX) {
         percent++;
@@ -129,46 +355,486 @@ static unsigned bx_df_usage_percent(uintmax_t used_1k, uintmax_t available_1k) {
     return (unsigned)percent;
 }
 
-static bool bx_df_emit_header(struct bx_diag_ctx* diag) {
-    if (fprintf(stdout, "%-20s %10s %10s %10s %4s %s\n", "Filesystem", "1K-blocks", "Used", "Available", "Use%", "Mounted on") < 0) {
+static void bx_df_format_human_value(uintmax_t value, uintmax_t base, char* buffer, size_t buffer_size) {
+    static const char suffixes[] = "BKMGTPEZY";
+
+    if (value < base) {
+        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, value);
+        return;
+    }
+
+    double scaled = (double)value;
+    size_t suffix_index = 0;
+    while (scaled >= (double)base && suffix_index + 1 < (sizeof(suffixes) - 1u)) {
+        scaled /= (double)base;
+        suffix_index++;
+    }
+
+    if (scaled >= 10.0) {
+        (void)snprintf(buffer, buffer_size, "%.0f%c", scaled, suffixes[suffix_index]);
+    }
+    else {
+        (void)snprintf(buffer, buffer_size, "%.1f%c", scaled, suffixes[suffix_index]);
+    }
+}
+
+static void bx_df_format_blocks(uintmax_t blocks, uintmax_t block_size, enum bx_df_size_mode mode, char* buffer, size_t buffer_size) {
+    if (mode == BX_DF_SIZE_1K) {
+        uintmax_t value = bx_df_scale_blocks(blocks, block_size, 1024u);
+        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, value);
+        return;
+    }
+
+    uintmax_t bytes = bx_df_scale_blocks(blocks, block_size, 1u);
+    uintmax_t base = (mode == BX_DF_SIZE_HUMAN_1000) ? 1000u : 1024u;
+    bx_df_format_human_value(bytes, base, buffer, buffer_size);
+}
+
+static int bx_df_octal_digit(char c) {
+    if (c >= '0' && c <= '7') {
+        return c - '0';
+    }
+    return -1;
+}
+
+static char* bx_df_unescape_mount_field(const char* text) {
+    size_t len = text != NULL ? strlen(text) : 0u;
+    char* out = xmalloc(len + 1u);
+    size_t out_pos = 0;
+
+    for (size_t i = 0; i < len;) {
+        if (text[i] == '\\' && i + 3u < len) {
+            int d1 = bx_df_octal_digit(text[i + 1u]);
+            int d2 = bx_df_octal_digit(text[i + 2u]);
+            int d3 = bx_df_octal_digit(text[i + 3u]);
+            if (d1 >= 0 && d2 >= 0 && d3 >= 0) {
+                out[out_pos++] = (char)((d1 << 6) | (d2 << 3) | d3);
+                i += 4u;
+                continue;
+            }
+        }
+
+        out[out_pos++] = text[i++];
+    }
+
+    out[out_pos] = '\0';
+    return out;
+}
+
+static void bx_df_strip_trailing_slashes(char* path) {
+    size_t len = strlen(path);
+    while (len > 1u && path[len - 1u] == '/') {
+        path[len - 1u] = '\0';
+        len--;
+    }
+}
+
+static void bx_df_free_mount_table(struct bx_df_mount_table* table) {
+    for (size_t i = 0; i < table->count; i++) {
+        free(table->entries[i].source);
+        free(table->entries[i].target);
+        free(table->entries[i].fstype);
+    }
+    free(table->entries);
+    table->entries = NULL;
+    table->count = 0;
+}
+
+static void bx_df_load_mount_table(struct bx_df_mount_table* table) {
+    memset(table, 0, sizeof(*table));
+
+    FILE* fp = setmntent("/proc/self/mounts", "r");
+    if (fp == NULL) {
+        fp = setmntent("/etc/mtab", "r");
+    }
+    if (fp == NULL) {
+        return;
+    }
+
+    struct mntent* ent;
+    while ((ent = getmntent(fp)) != NULL) {
+        char* source = bx_df_unescape_mount_field(ent->mnt_fsname);
+        char* target = bx_df_unescape_mount_field(ent->mnt_dir);
+        char* fstype = bx_df_unescape_mount_field(ent->mnt_type);
+        bx_df_strip_trailing_slashes(target);
+
+        struct bx_df_mount_entry* resized = xrealloc(table->entries, (table->count + 1u) * sizeof(*table->entries));
+        table->entries = resized;
+        table->entries[table->count].source = source;
+        table->entries[table->count].target = target;
+        table->entries[table->count].fstype = fstype;
+        table->count++;
+    }
+
+    (void)endmntent(fp);
+}
+
+static bool bx_df_mount_matches_path(const char* mount_target, const char* path) {
+    if (mount_target == NULL || path == NULL || mount_target[0] == '\0' || path[0] == '\0') {
+        return false;
+    }
+
+    if (strcmp(mount_target, "/") == 0) {
+        return path[0] == '/';
+    }
+
+    size_t mount_len = strlen(mount_target);
+    if (strncmp(path, mount_target, mount_len) != 0) {
+        return false;
+    }
+
+    return path[mount_len] == '\0' || path[mount_len] == '/';
+}
+
+static const struct bx_df_mount_entry* bx_df_find_mount_for_path(const struct bx_df_mount_table* table, const char* path) {
+    const struct bx_df_mount_entry* best = NULL;
+    size_t best_len = 0;
+
+    for (size_t i = 0; i < table->count; i++) {
+        const struct bx_df_mount_entry* entry = &table->entries[i];
+        if (!bx_df_mount_matches_path(entry->target, path)) {
+            continue;
+        }
+
+        size_t target_len = strlen(entry->target);
+        if (best == NULL || target_len > best_len) {
+            best = entry;
+            best_len = target_len;
+        }
+    }
+
+    return best;
+}
+
+static char* bx_df_path_for_mount_lookup(const char* path) {
+    if (path == NULL || path[0] == '\0') {
+        return xstrdup("");
+    }
+    if (path[0] == '/') {
+        return xstrdup(path);
+    }
+
+    size_t cwd_size = 128u;
+    while (true) {
+        char* cwd = xmalloc(cwd_size);
+        if (getcwd(cwd, cwd_size) != NULL) {
+            size_t cwd_len = strlen(cwd);
+            size_t path_len = strlen(path);
+            bool root = (cwd_len == 1u && cwd[0] == '/');
+            size_t out_len = cwd_len + (root ? 0u : 1u) + path_len;
+            char* out = xmalloc(out_len + 1u);
+
+            if (root) {
+                (void)snprintf(out, out_len + 1u, "/%s", path);
+            }
+            else {
+                (void)snprintf(out, out_len + 1u, "%s/%s", cwd, path);
+            }
+            free(cwd);
+            return out;
+        }
+
+        free(cwd);
+        if (errno != ERANGE) {
+            break;
+        }
+
+        if (cwd_size > (SIZE_MAX / 2u)) {
+            break;
+        }
+        cwd_size *= 2u;
+    }
+
+    return xstrdup(path);
+}
+
+static bool bx_df_populate_row(const char* path, const struct bx_df_mount_table* mount_table, struct bx_df_row* row, struct bx_diag_ctx* diag) {
+    struct statvfs fs;
+    if (statvfs(path, &fs) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    memset(row, 0, sizeof(*row));
+    row->operand = path;
+    row->source = path;
+    row->target = path;
+    row->fstype = "-";
+
+    row->block_size = (fs.f_frsize != 0u) ? (uintmax_t)fs.f_frsize : (uintmax_t)fs.f_bsize;
+    if (row->block_size == 0u) {
+        row->block_size = 1024u;
+    }
+
+    row->total_blocks = (uintmax_t)fs.f_blocks;
+    uintmax_t free_blocks = (uintmax_t)fs.f_bfree;
+    row->avail_blocks = (uintmax_t)fs.f_bavail;
+    row->used_blocks = (row->total_blocks > free_blocks) ? (row->total_blocks - free_blocks) : 0u;
+
+    uintmax_t used_1k = bx_df_scale_blocks(row->used_blocks, row->block_size, 1024u);
+    uintmax_t avail_1k = bx_df_scale_blocks(row->avail_blocks, row->block_size, 1024u);
+    row->block_usage_percent = bx_df_usage_percent(used_1k, avail_1k);
+
+    row->inode_total = (uintmax_t)fs.f_files;
+    uintmax_t inode_free = (uintmax_t)fs.f_ffree;
+    row->inode_avail = (uintmax_t)fs.f_favail;
+    row->inode_used = (row->inode_total > inode_free) ? (row->inode_total - inode_free) : 0u;
+    row->inode_usage_percent = bx_df_usage_percent(row->inode_used, row->inode_avail);
+
+    char* lookup_path = bx_df_path_for_mount_lookup(path);
+    const struct bx_df_mount_entry* mount = bx_df_find_mount_for_path(mount_table, lookup_path);
+    if (mount != NULL) {
+        row->source = mount->source;
+        row->target = mount->target;
+        row->fstype = mount->fstype;
+    }
+    free(lookup_path);
+
+    return true;
+}
+
+static void bx_df_build_columns(const struct bx_df_options* options, struct bx_df_column_set* columns) {
+    memset(columns, 0, sizeof(*columns));
+
+    if (options->use_output) {
+        columns->custom_output = true;
+        columns->count = options->output_field_count;
+        for (size_t i = 0; i < options->output_field_count; i++) {
+            columns->fields[i] = options->output_fields[i];
+        }
+        return;
+    }
+
+    columns->custom_output = false;
+    columns->fields[columns->count++] = BX_DF_FIELD_SOURCE;
+    if (options->print_type) {
+        columns->fields[columns->count++] = BX_DF_FIELD_FSTYPE;
+    }
+    columns->fields[columns->count++] = BX_DF_FIELD_SIZE;
+    columns->fields[columns->count++] = BX_DF_FIELD_USED;
+    columns->fields[columns->count++] = BX_DF_FIELD_AVAIL;
+    columns->fields[columns->count++] = BX_DF_FIELD_PCENT;
+    columns->fields[columns->count++] = BX_DF_FIELD_TARGET;
+}
+
+static const char* bx_df_column_label(enum bx_df_output_field field, const struct bx_df_options* options, bool custom_output) {
+    switch (field) {
+        case BX_DF_FIELD_SOURCE:
+            return "Filesystem";
+        case BX_DF_FIELD_FSTYPE:
+            return "Type";
+        case BX_DF_FIELD_ITOTAL:
+            return "Inodes";
+        case BX_DF_FIELD_IUSED:
+            return "IUsed";
+        case BX_DF_FIELD_IAVAIL:
+            return "IFree";
+        case BX_DF_FIELD_IPCENT:
+            return "IUse%";
+        case BX_DF_FIELD_SIZE:
+            if (options->size_mode == BX_DF_SIZE_1K) {
+                if (!custom_output && options->posix_format) {
+                    return "1024-blocks";
+                }
+                return "1K-blocks";
+            }
+            return "Size";
+        case BX_DF_FIELD_USED:
+            return "Used";
+        case BX_DF_FIELD_AVAIL:
+            return custom_output ? "Avail" : "Available";
+        case BX_DF_FIELD_PCENT:
+            if (!custom_output && options->posix_format && options->size_mode == BX_DF_SIZE_1K) {
+                return "Capacity";
+            }
+            return "Use%";
+        case BX_DF_FIELD_FILE:
+            return "File";
+        case BX_DF_FIELD_TARGET:
+            return "Mounted on";
+        case BX_DF_FIELD_COUNT:
+            break;
+    }
+
+    return "";
+}
+
+static bool bx_df_field_left_aligned(enum bx_df_output_field field) {
+    switch (field) {
+        case BX_DF_FIELD_SOURCE:
+        case BX_DF_FIELD_FSTYPE:
+        case BX_DF_FIELD_FILE:
+        case BX_DF_FIELD_TARGET:
+            return true;
+        case BX_DF_FIELD_ITOTAL:
+        case BX_DF_FIELD_IUSED:
+        case BX_DF_FIELD_IAVAIL:
+        case BX_DF_FIELD_IPCENT:
+        case BX_DF_FIELD_SIZE:
+        case BX_DF_FIELD_USED:
+        case BX_DF_FIELD_AVAIL:
+        case BX_DF_FIELD_PCENT:
+        case BX_DF_FIELD_COUNT:
+            break;
+    }
+    return false;
+}
+
+static int bx_df_field_base_width(enum bx_df_output_field field, bool custom_output) {
+    switch (field) {
+        case BX_DF_FIELD_SOURCE:
+            return 20;
+        case BX_DF_FIELD_FSTYPE:
+            return 6;
+        case BX_DF_FIELD_ITOTAL:
+        case BX_DF_FIELD_IUSED:
+        case BX_DF_FIELD_IAVAIL:
+        case BX_DF_FIELD_USED:
+        case BX_DF_FIELD_AVAIL:
+            return 10;
+        case BX_DF_FIELD_SIZE:
+            return 11;
+        case BX_DF_FIELD_IPCENT:
+            return 5;
+        case BX_DF_FIELD_PCENT:
+            return custom_output ? 5 : 8;
+        case BX_DF_FIELD_FILE:
+            return custom_output ? 4 : 0;
+        case BX_DF_FIELD_TARGET:
+        case BX_DF_FIELD_COUNT:
+            break;
+    }
+    return 0;
+}
+
+static bool bx_df_emit_cell(const char* text, enum bx_df_output_field field, bool custom_output, bool first_column, struct bx_diag_ctx* diag) {
+    const char* value = text != NULL ? text : "";
+    int width = bx_df_field_base_width(field, custom_output);
+    int text_width = (int)strlen(value);
+    if (text_width > width) {
+        width = text_width;
+    }
+
+    bool left = bx_df_field_left_aligned(field);
+    int rc;
+    if (width > 0) {
+        if (first_column) {
+            rc = fprintf(stdout, left ? "%-*s" : "%*s", width, value);
+        }
+        else {
+            rc = fprintf(stdout, left ? " %-*s" : " %*s", width, value);
+        }
+    }
+    else if (first_column) {
+        rc = fprintf(stdout, "%s", value);
+    }
+    else {
+        rc = fprintf(stdout, " %s", value);
+    }
+
+    if (rc < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+
+    return true;
+}
+
+static bool bx_df_emit_header(const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
+    bool first = true;
+    for (size_t i = 0; i < columns->count; i++) {
+        enum bx_df_output_field field = columns->fields[i];
+        const char* label = bx_df_column_label(field, options, columns->custom_output);
+        if (!bx_df_emit_cell(label, field, columns->custom_output, first, diag)) {
+            return false;
+        }
+        first = false;
+    }
+
+    if (fputc('\n', stdout) == EOF) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
     return true;
 }
 
-static bool bx_df_process_operand(const char* path, struct bx_diag_ctx* diag) {
-    struct statvfs fs;
-    if (statvfs(path, &fs) != 0) {
-        bx_perror_path(diag, path);
-        return true;
+static const char* bx_df_row_value(enum bx_df_output_field field, const struct bx_df_row* row, const struct bx_df_options* options, char* buffer, size_t buffer_size) {
+    switch (field) {
+        case BX_DF_FIELD_SOURCE:
+            return row->source;
+        case BX_DF_FIELD_FSTYPE:
+            return row->fstype;
+        case BX_DF_FIELD_ITOTAL:
+            (void)snprintf(buffer, buffer_size, "%" PRIuMAX, row->inode_total);
+            return buffer;
+        case BX_DF_FIELD_IUSED:
+            (void)snprintf(buffer, buffer_size, "%" PRIuMAX, row->inode_used);
+            return buffer;
+        case BX_DF_FIELD_IAVAIL:
+            (void)snprintf(buffer, buffer_size, "%" PRIuMAX, row->inode_avail);
+            return buffer;
+        case BX_DF_FIELD_IPCENT:
+            (void)snprintf(buffer, buffer_size, "%u%%", row->inode_usage_percent);
+            return buffer;
+        case BX_DF_FIELD_SIZE:
+            bx_df_format_blocks(row->total_blocks, row->block_size, options->size_mode, buffer, buffer_size);
+            return buffer;
+        case BX_DF_FIELD_USED:
+            bx_df_format_blocks(row->used_blocks, row->block_size, options->size_mode, buffer, buffer_size);
+            return buffer;
+        case BX_DF_FIELD_AVAIL:
+            bx_df_format_blocks(row->avail_blocks, row->block_size, options->size_mode, buffer, buffer_size);
+            return buffer;
+        case BX_DF_FIELD_PCENT:
+            (void)snprintf(buffer, buffer_size, "%u%%", row->block_usage_percent);
+            return buffer;
+        case BX_DF_FIELD_FILE:
+            return row->operand;
+        case BX_DF_FIELD_TARGET:
+            return row->target;
+        case BX_DF_FIELD_COUNT:
+            break;
     }
 
-    uintmax_t fragment_size = (fs.f_frsize != 0u) ? (uintmax_t)fs.f_frsize : (uintmax_t)fs.f_bsize;
-    if (fragment_size == 0u) {
-        fragment_size = 1024u;
+    return "";
+}
+
+static bool bx_df_emit_row(const struct bx_df_row* row, const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
+    bool first = true;
+    for (size_t i = 0; i < columns->count; i++) {
+        enum bx_df_output_field field = columns->fields[i];
+        char buffer[64];
+        const char* value = bx_df_row_value(field, row, options, buffer, sizeof(buffer));
+        if (!bx_df_emit_cell(value, field, columns->custom_output, first, diag)) {
+            return false;
+        }
+        first = false;
     }
 
-    uintmax_t total_blocks = (uintmax_t)fs.f_blocks;
-    uintmax_t free_blocks = (uintmax_t)fs.f_bfree;
-    uintmax_t available_blocks = (uintmax_t)fs.f_bavail;
-    uintmax_t used_blocks = (total_blocks > free_blocks) ? (total_blocks - free_blocks) : 0u;
-
-    uintmax_t total_1k = bx_df_scale_to_1k(total_blocks, fragment_size);
-    uintmax_t used_1k = bx_df_scale_to_1k(used_blocks, fragment_size);
-    uintmax_t available_1k = bx_df_scale_to_1k(available_blocks, fragment_size);
-    unsigned usage_percent = bx_df_usage_percent(used_1k, available_1k);
-
-    if (fprintf(stdout, "%-20s %10" PRIuMAX " %10" PRIuMAX " %10" PRIuMAX " %3u%% %s\n", path, total_1k, used_1k, available_1k, usage_percent, path) < 0) {
+    if (fputc('\n', stdout) == EOF) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
-
     return true;
+}
+
+static bool bx_df_process_operand(const char* path,
+                                  const struct bx_df_options* options,
+                                  const struct bx_df_mount_table* mount_table,
+                                  const struct bx_df_column_set* columns,
+                                  struct bx_diag_ctx* diag) {
+    struct bx_df_row row;
+    if (!bx_df_populate_row(path, mount_table, &row, diag)) {
+        return true;
+    }
+
+    return bx_df_emit_row(&row, columns, options, diag);
 }
 
 int bx_df_main(int argc, char** argv) {
     struct bx_df_options options;
+    struct bx_df_mount_table mount_table;
+    struct bx_df_column_set columns;
     struct bx_diag_ctx diag = {
         .progname = "df",
         .exit_status = 0,
@@ -176,6 +842,7 @@ int bx_df_main(int argc, char** argv) {
         .debug = false,
     };
     int first_operand = 0;
+    int rc = 0;
 
     if (!bx_df_parse_options(argc, argv, &options, &first_operand, &diag)) {
         return diag.exit_status != 0 ? diag.exit_status : 1;
@@ -191,20 +858,26 @@ int bx_df_main(int argc, char** argv) {
         return 0;
     }
 
-    if (!bx_df_emit_header(&diag)) {
-        return diag.exit_status;
+    bx_df_load_mount_table(&mount_table);
+    bx_df_build_columns(&options, &columns);
+
+    if (!bx_df_emit_header(&columns, &options, &diag)) {
+        rc = diag.exit_status;
+        goto out;
     }
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        if (!bx_df_process_operand(".", &diag)) {
-            return diag.exit_status;
+        if (!bx_df_process_operand(".", &options, &mount_table, &columns, &diag)) {
+            rc = diag.exit_status;
+            goto out;
         }
     }
     else {
         for (int i = first_operand; i < argc; i++) {
-            if (!bx_df_process_operand(argv[i], &diag)) {
-                return diag.exit_status;
+            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &diag)) {
+                rc = diag.exit_status;
+                goto out;
             }
         }
     }
@@ -212,6 +885,9 @@ int bx_df_main(int argc, char** argv) {
     if (fflush(stdout) == EOF) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
+    rc = diag.exit_status;
 
-    return diag.exit_status;
+out:
+    bx_df_free_mount_table(&mount_table);
+    return rc;
 }
