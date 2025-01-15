@@ -26,6 +26,7 @@ static const struct applet applets[] = {
     {"pathchk", bx_pathchk_main},
     {"stat", bx_stat_main},
     {"df", bx_df_main},
+    {"du", bx_du_main},
     {"chmod", bx_chmod_main},
     {"chown", bx_chown_main},
     {"chgrp", bx_chgrp_main},

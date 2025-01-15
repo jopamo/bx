@@ -160,6 +160,7 @@ sources = [
   'src/pathchk/pathchk.c',
   'src/stat/stat.c',
   'src/df/df.c',
+  'src/du/du.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -184,7 +185,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -305,6 +306,9 @@ if get_option('tests')
 
   test_df_basic = find_program('tests/df/test_df_basic.sh')
   test('df basic', test_df_basic, args : [bx_exe])
+
+  test_du_basic = find_program('tests/du/test_du_basic.sh')
+  test('du basic', test_du_basic, args : [bx_exe])
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
