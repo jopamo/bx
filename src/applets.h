@@ -14,6 +14,7 @@ int bx_pathchk_main(int argc, char** argv);
 int bx_stat_main(int argc, char** argv);
 int bx_df_main(int argc, char** argv);
 int bx_du_main(int argc, char** argv);
+int bx_sync_main(int argc, char** argv);
 int bx_chmod_main(int argc, char** argv);
 int bx_chown_main(int argc, char** argv);
 int bx_chgrp_main(int argc, char** argv);
