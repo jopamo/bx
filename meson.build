@@ -162,6 +162,7 @@ sources = [
   'src/df/df.c',
   'src/du/du.c',
   'src/sync/sync.c',
+  'src/env/env.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -186,7 +187,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'env', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -313,6 +314,9 @@ if get_option('tests')
 
   test_sync_basic = find_program('tests/sync/test_sync_basic.sh')
   test('sync basic', test_sync_basic, args : [bx_exe])
+
+  test_env_basic = find_program('tests/env/test_env_basic.sh')
+  test('env basic', test_env_basic, args : [bx_exe])
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
