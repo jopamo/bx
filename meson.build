@@ -146,6 +146,8 @@ sources = [
   'src/common/stat_ops.c',
   'src/common/remove_ops.c',
   'src/common/fd_ops.c',
+  'src/common/size_parse.c',
+  'src/common/xreadwrite.c',
   'src/common/overwrite_ops.c',
   'src/common/md5.c',
   'src/common/digest_util.c',
@@ -162,10 +164,12 @@ sources = [
   'src/df/df.c',
   'src/du/du.c',
   'src/sync/sync.c',
+  'src/dd/dd.c',
   'src/env/env.c',
   'src/printenv/printenv.c',
   'src/nice/nice.c',
   'src/nohup/nohup.c',
+  'src/timeout/timeout.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -190,7 +194,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'env', 'printenv', 'nice', 'nohup', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -318,6 +322,9 @@ if get_option('tests')
   test_sync_basic = find_program('tests/sync/test_sync_basic.sh')
   test('sync basic', test_sync_basic, args : [bx_exe])
 
+  test_dd_basic = find_program('tests/dd/test_dd_basic.sh')
+  test('dd basic', test_dd_basic, args : [bx_exe])
+
   test_env_basic = find_program('tests/env/test_env_basic.sh')
   test('env basic', test_env_basic, args : [bx_exe])
 
@@ -329,6 +336,9 @@ if get_option('tests')
 
   test_nohup_basic = find_program('tests/nohup/test_nohup_basic.sh')
   test('nohup basic', test_nohup_basic, args : [bx_exe])
+
+  test_timeout_basic = find_program('tests/timeout/test_timeout_basic.sh')
+  test('timeout basic', test_timeout_basic, args : [bx_exe])
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
@@ -374,6 +384,10 @@ if get_option('tests')
 
   test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
+
+  dd_ref = find_program('dd')
+  test_dd_differential = files('tests/dd/test_dd_differential.py')
+  test('dd differential', python3, args : [test_dd_differential, dd_ref, bx_exe, meson.current_build_dir()])
 
   test_cp_fuzz = files('tests/cp/test_cp_fuzz.py')
   test('cp fuzz', python3, args : [test_cp_fuzz, cp_ref, bx_exe, meson.current_build_dir(), '20', '0'])
