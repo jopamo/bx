@@ -34,6 +34,7 @@ static const struct applet applets[] = {
     {"nice", bx_nice_main},
     {"nohup", bx_nohup_main},
     {"timeout", bx_timeout_main},
+    {"chroot", bx_chroot_main},
     {"chmod", bx_chmod_main},
     {"chown", bx_chown_main},
     {"chgrp", bx_chgrp_main},

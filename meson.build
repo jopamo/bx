@@ -170,6 +170,7 @@ sources = [
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
+  'src/chroot/chroot.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -194,7 +195,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -339,6 +340,9 @@ if get_option('tests')
 
   test_timeout_basic = find_program('tests/timeout/test_timeout_basic.sh')
   test('timeout basic', test_timeout_basic, args : [bx_exe])
+
+  test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
+  test('chroot basic', test_chroot_basic, args : [bx_exe])
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
