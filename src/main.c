@@ -54,6 +54,7 @@ static const struct applet applets[] = {
     {"expr", bx_expr_main},
     {"md5sum", bx_md5sum_main},
     {"base64", bx_base64_main},
+    {"shuf", bx_shuf_main},
     {"true", bx_true_main},
     {"false", bx_false_main},
 };

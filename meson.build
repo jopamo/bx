@@ -189,13 +189,14 @@ sources = [
   'src/expr/expr.c',
   'src/md5sum/md5sum.c',
   'src/base64/base64.c',
+  'src/shuf/shuf.c',
   'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -286,6 +287,9 @@ if get_option('tests')
 
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe])
+
+  test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
+  test('shuf basic', test_shuf_basic, args : [bx_exe])
 
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe])

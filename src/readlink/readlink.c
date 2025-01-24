@@ -4,16 +4,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "applets.h"
+#include "common/path_ops.h"
 #include "diag.h"
 #include "libbx.h"
 
+char* realpath(const char* restrict path, char* restrict resolved_path);
+
+enum bx_readlink_mode {
+    BX_READLINK_MODE_READ_SYMLINK = 0,
+    BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST,
+    BX_READLINK_MODE_CANONICALIZE_EXISTING,
+    BX_READLINK_MODE_CANONICALIZE_MISSING,
+};
+
+struct bx_readlink_components {
+    char** parts;
+    size_t count;
+};
+
 struct bx_readlink_options {
     const char* progname;
+    enum bx_readlink_mode mode;
     bool no_newline;
     bool zero_terminated;
+    bool verbose_errors;
+    bool posixly_correct;
     bool show_help;
     bool show_version;
 };
@@ -32,25 +51,65 @@ static const char* bx_readlink_progname(const char* argv0) {
 
 static void bx_readlink_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
-    fprintf(stream, "Print value of each symbolic link FILE.\n");
+    fprintf(stream, "Print value of a symbolic link or canonical file name\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -n, --no-newline  do not output the trailing delimiter\n");
-    fprintf(stream, "  -z, --zero        end each output line with NUL, not newline\n");
-    fprintf(stream, "      --help        display this help and exit\n");
-    fprintf(stream, "      --version     output version information and exit\n");
+    fprintf(stream, "  -f, --canonicalize\n");
+    fprintf(stream, "         canonicalize by following every symlink\n");
+    fprintf(stream, "         in every component of the given name recursively;\n");
+    fprintf(stream, "         all but the last component must exist\n");
+    fprintf(stream, "  -e, --canonicalize-existing\n");
+    fprintf(stream, "         canonicalize by following every symlink\n");
+    fprintf(stream, "         in every component of the given name recursively;\n");
+    fprintf(stream, "         all components must exist\n");
+    fprintf(stream, "  -m, --canonicalize-missing\n");
+    fprintf(stream, "         canonicalize by following every symlink\n");
+    fprintf(stream, "         in every component of the given name recursively,\n");
+    fprintf(stream, "         without requirements on components existence\n");
+    fprintf(stream, "  -n, --no-newline\n");
+    fprintf(stream, "         do not output the trailing delimiter\n");
+    fprintf(stream, "  -q, --quiet\n");
+    fprintf(stream, "  -s, --silent\n");
+    fprintf(stream, "         suppress most error messages\n");
+    fprintf(stream, "         (on by default if POSIXLY_CORRECT is not set)\n");
+    fprintf(stream, "  -v, --verbose\n");
+    fprintf(stream, "         report error messages\n");
+    fprintf(stream, "         (on by default if POSIXLY_CORRECT is set)\n");
+    fprintf(stream, "  -z, --zero\n");
+    fprintf(stream, "         end each output line with NUL, not newline\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
 }
 
 static void bx_readlink_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static void bx_readlink_print_try_help(const char* progname) {
+    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+}
+
 static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"no-newline", no_argument, NULL, 'n'}, {"zero", no_argument, NULL, 'z'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
+        {"canonicalize", no_argument, NULL, 'f'},
+        {"canonicalize-existing", no_argument, NULL, 'e'},
+        {"canonicalize-missing", no_argument, NULL, 'm'},
+        {"no-newline", no_argument, NULL, 'n'},
+        {"quiet", no_argument, NULL, 'q'},
+        {"silent", no_argument, NULL, 's'},
+        {"verbose", no_argument, NULL, 'v'},
+        {"zero", no_argument, NULL, 'z'},
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_readlink_progname((argc > 0) ? argv[0] : NULL);
+    options->mode = BX_READLINK_MODE_READ_SYMLINK;
+    options->posixly_correct = (getenv("POSIXLY_CORRECT") != NULL);
+    options->verbose_errors = options->posixly_correct;
     diag->progname = options->progname;
 
     opterr = 0;
@@ -58,14 +117,34 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+nz", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+efmnqsvz", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'f':
+                options->mode = BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST;
+                break;
+            case 'e':
+                options->mode = BX_READLINK_MODE_CANONICALIZE_EXISTING;
+                break;
+            case 'm':
+                options->mode = BX_READLINK_MODE_CANONICALIZE_MISSING;
+                break;
             case 'n':
                 options->no_newline = true;
+                break;
+            case 'q':
+            case 's':
+                if (!options->posixly_correct) {
+                    options->verbose_errors = false;
+                }
+                break;
+            case 'v':
+                if (!options->posixly_correct) {
+                    options->verbose_errors = true;
+                }
                 break;
             case 'z':
                 options->zero_terminated = true;
@@ -96,7 +175,162 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
     return true;
 }
 
-static bool bx_readlink_read_target(const char* path, char** target_out, struct bx_diag_ctx* diag) {
+static void bx_readlink_components_push(struct bx_readlink_components* components, const char* part) {
+    components->parts = xrealloc(components->parts, (components->count + 1u) * sizeof(*components->parts));
+    components->parts[components->count++] = xstrdup(part);
+}
+
+static void bx_readlink_components_pop(struct bx_readlink_components* components) {
+    if (components->count == 0u) {
+        return;
+    }
+
+    free(components->parts[components->count - 1u]);
+    components->count--;
+}
+
+static void bx_readlink_components_free(struct bx_readlink_components* components) {
+    for (size_t i = 0; i < components->count; i++) {
+        free(components->parts[i]);
+    }
+
+    free(components->parts);
+    components->parts = NULL;
+    components->count = 0u;
+}
+
+static void bx_readlink_components_clear(struct bx_readlink_components* components) {
+    bx_readlink_components_free(components);
+}
+
+static bool bx_readlink_components_shift(struct bx_readlink_components* components, char** part_out) {
+    if (components->count == 0u) {
+        return false;
+    }
+
+    char* part = components->parts[0];
+    if (components->count > 1u) {
+        memmove(components->parts, components->parts + 1u, (components->count - 1u) * sizeof(*components->parts));
+    }
+    components->count--;
+    *part_out = part;
+    return true;
+}
+
+static void bx_readlink_components_append_raw(struct bx_readlink_components* components, const char* path) {
+    char* copy = xstrdup(path);
+    char* saveptr = NULL;
+
+    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
+        bx_readlink_components_push(components, token);
+    }
+
+    free(copy);
+}
+
+static void bx_readlink_components_append_normalized_part(struct bx_readlink_components* components, const char* part) {
+    if (strcmp(part, ".") == 0 || part[0] == '\0') {
+        return;
+    }
+    if (strcmp(part, "..") == 0) {
+        bx_readlink_components_pop(components);
+        return;
+    }
+
+    bx_readlink_components_push(components, part);
+}
+
+static void bx_readlink_components_append_normalized_and_clear(struct bx_readlink_components* components, struct bx_readlink_components* remainder) {
+    for (size_t i = 0; i < remainder->count; i++) {
+        bx_readlink_components_append_normalized_part(components, remainder->parts[i]);
+    }
+    bx_readlink_components_clear(remainder);
+}
+
+static void bx_readlink_components_prepend_path(struct bx_readlink_components* components, const char* path) {
+    struct bx_readlink_components head = {0};
+    bx_readlink_components_append_raw(&head, path);
+
+    if (head.count == 0u) {
+        bx_readlink_components_free(&head);
+        return;
+    }
+
+    char** merged = xmalloc((head.count + components->count) * sizeof(*merged));
+    memcpy(merged, head.parts, head.count * sizeof(*merged));
+    if (components->count > 0u) {
+        memcpy(merged + head.count, components->parts, components->count * sizeof(*merged));
+    }
+
+    free(head.parts);
+    free(components->parts);
+    components->parts = merged;
+    components->count += head.count;
+}
+
+static char* bx_readlink_components_to_absolute_path(const struct bx_readlink_components* components, size_t count) {
+    if (count == 0u) {
+        return xstrdup("/");
+    }
+
+    size_t len = 2u;
+    for (size_t i = 0; i < count; i++) {
+        len += strlen(components->parts[i]);
+        if (i + 1u < count) {
+            len++;
+        }
+    }
+
+    char* path = xmalloc(len);
+    size_t pos = 0u;
+    path[pos++] = '/';
+
+    for (size_t i = 0; i < count; i++) {
+        size_t part_len = strlen(components->parts[i]);
+        memcpy(path + pos, components->parts[i], part_len);
+        pos += part_len;
+        if (i + 1u < count) {
+            path[pos++] = '/';
+        }
+    }
+
+    path[pos] = '\0';
+    return path;
+}
+
+static char* bx_readlink_getcwd_dup(void) {
+    size_t size = 128u;
+    char* cwd = xmalloc(size);
+
+    while (getcwd(cwd, size) == NULL) {
+        if (errno != ERANGE) {
+            free(cwd);
+            return NULL;
+        }
+
+        size *= 2u;
+        cwd = xrealloc(cwd, size);
+    }
+
+    return cwd;
+}
+
+static char* bx_readlink_make_absolute_input(const char* path) {
+    if (path[0] == '/') {
+        return xstrdup(path);
+    }
+
+    char* cwd = bx_readlink_getcwd_dup();
+    if (cwd == NULL) {
+        return NULL;
+    }
+
+    char* absolute = bx_path_join(cwd, path);
+    free(cwd);
+    return absolute;
+}
+
+static bool bx_readlink_readlink_alloc(const char* path, char** target_out) {
     size_t buffer_size = 128u;
 
     while (true) {
@@ -105,7 +339,6 @@ static bool bx_readlink_read_target(const char* path, char** target_out, struct 
 
         if (len < 0) {
             free(buffer);
-            bx_diag(diag, "cannot read link '%s': %s", path, strerror(errno));
             return false;
         }
 
@@ -117,11 +350,145 @@ static bool bx_readlink_read_target(const char* path, char** target_out, struct 
 
         free(buffer);
         if (buffer_size > ((size_t)-1) / 2u) {
-            bx_diag(diag, "cannot read link '%s': symbolic link value too large", path);
+            errno = ENAMETOOLONG;
             return false;
         }
         buffer_size *= 2u;
     }
+}
+
+static bool bx_readlink_find_existing_prefix(const struct bx_readlink_components* components, size_t* prefix_count_out, char** resolved_prefix_out) {
+    for (size_t prefix_count = components->count;;) {
+        char* prefix_path = bx_readlink_components_to_absolute_path(components, prefix_count);
+        char* resolved_prefix = realpath(prefix_path, NULL);
+        int saved_errno = errno;
+        free(prefix_path);
+
+        if (resolved_prefix != NULL) {
+            *prefix_count_out = prefix_count;
+            *resolved_prefix_out = resolved_prefix;
+            return true;
+        }
+
+        if (prefix_count == 0u) {
+            errno = saved_errno;
+            return false;
+        }
+
+        prefix_count--;
+    }
+}
+
+static char* bx_readlink_append_remainder_lexical(const char* resolved_prefix, const struct bx_readlink_components* raw_components, size_t remainder_start) {
+    struct bx_readlink_components normalized_components = {0};
+    char* output_path;
+
+    bx_readlink_components_append_raw(&normalized_components, resolved_prefix);
+    for (size_t i = remainder_start; i < raw_components->count; i++) {
+        bx_readlink_components_append_normalized_part(&normalized_components, raw_components->parts[i]);
+    }
+
+    output_path = bx_readlink_components_to_absolute_path(&normalized_components, normalized_components.count);
+    bx_readlink_components_free(&normalized_components);
+    return output_path;
+}
+
+static char* bx_readlink_canonicalize_fallback(const char* path, enum bx_readlink_mode mode, int initial_errno) {
+    struct bx_readlink_components raw_components = {0};
+    size_t prefix_count = 0u;
+    char* absolute_input = NULL;
+    char* resolved_prefix = NULL;
+    char* resolved = NULL;
+
+    absolute_input = bx_readlink_make_absolute_input(path);
+    if (absolute_input == NULL) {
+        return NULL;
+    }
+
+    bx_readlink_components_append_raw(&raw_components, absolute_input);
+    if (!bx_readlink_find_existing_prefix(&raw_components, &prefix_count, &resolved_prefix)) {
+        bx_readlink_components_free(&raw_components);
+        free(absolute_input);
+        errno = initial_errno;
+        return NULL;
+    }
+
+    size_t remainder_count = raw_components.count - prefix_count;
+    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && remainder_count > 1u) {
+        free(resolved_prefix);
+        bx_readlink_components_free(&raw_components);
+        free(absolute_input);
+        errno = initial_errno;
+        return NULL;
+    }
+
+    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && remainder_count == 1u) {
+        struct stat st;
+        if (stat(resolved_prefix, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            int saved_errno = errno;
+            free(resolved_prefix);
+            bx_readlink_components_free(&raw_components);
+            free(absolute_input);
+            errno = (saved_errno == 0) ? ENOTDIR : saved_errno;
+            return NULL;
+        }
+    }
+
+    resolved = bx_readlink_append_remainder_lexical(resolved_prefix, &raw_components, prefix_count);
+    free(resolved_prefix);
+    bx_readlink_components_free(&raw_components);
+    free(absolute_input);
+    return resolved;
+}
+
+static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mode mode) {
+    if (path == NULL || path[0] == '\0') {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    char* resolved = realpath(path, NULL);
+    if (resolved != NULL) {
+        return resolved;
+    }
+
+    int initial_errno = errno;
+    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING) {
+        errno = initial_errno;
+        return NULL;
+    }
+
+    if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING && initial_errno == ELOOP) {
+        char* absolute = bx_readlink_make_absolute_input(path);
+        if (absolute == NULL) {
+            return NULL;
+        }
+
+        struct bx_readlink_components normalized = {0};
+        bx_readlink_components_append_raw(&normalized, absolute);
+        struct bx_readlink_components output = {0};
+        bx_readlink_components_append_normalized_and_clear(&output, &normalized);
+
+        char* lexical = bx_readlink_components_to_absolute_path(&output, output.count);
+        bx_readlink_components_free(&output);
+        free(absolute);
+        return lexical;
+    }
+
+    if (initial_errno != ENOENT && initial_errno != ENOTDIR) {
+        errno = initial_errno;
+        return NULL;
+    }
+
+    return bx_readlink_canonicalize_fallback(path, mode, initial_errno);
+}
+
+static void bx_readlink_report_path_error(struct bx_diag_ctx* diag, bool verbose_errors, const char* path, const char* action, int errnum) {
+    if (!verbose_errors) {
+        diag->exit_status = 1;
+        return;
+    }
+    bx_diag(diag, "cannot %s '%s': %s", action, path, strerror(errnum));
 }
 
 static bool bx_readlink_emit_target(const char* target, bool no_newline, bool zero_terminated, struct bx_diag_ctx* diag) {
@@ -138,6 +505,33 @@ static bool bx_readlink_emit_target(const char* target, bool no_newline, bool ze
     return true;
 }
 
+static bool bx_readlink_process_operand(const char* operand, const struct bx_readlink_options* options, bool no_newline, struct bx_diag_ctx* diag) {
+    char* output = NULL;
+    const char* action = NULL;
+
+    if (options->mode == BX_READLINK_MODE_READ_SYMLINK) {
+        action = "read link";
+        if (!bx_readlink_readlink_alloc(operand, &output)) {
+            int saved_errno = errno;
+            bx_readlink_report_path_error(diag, options->verbose_errors, operand, action, saved_errno);
+            return false;
+        }
+    }
+    else {
+        action = "canonicalize";
+        output = bx_readlink_canonicalize_path(operand, options->mode);
+        if (output == NULL) {
+            int saved_errno = errno;
+            bx_readlink_report_path_error(diag, options->verbose_errors, operand, action, saved_errno);
+            return false;
+        }
+    }
+
+    bool emitted = bx_readlink_emit_target(output, no_newline, options->zero_terminated, diag);
+    free(output);
+    return emitted;
+}
+
 int bx_readlink_main(int argc, char** argv) {
     struct bx_readlink_options options;
     struct bx_diag_ctx diag = {
@@ -149,6 +543,7 @@ int bx_readlink_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_readlink_parse_options(argc, argv, &options, &first_operand, &diag)) {
+        bx_readlink_print_try_help(options.progname);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -165,6 +560,7 @@ int bx_readlink_main(int argc, char** argv) {
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
         bx_diag(&diag, "missing operand");
+        bx_readlink_print_try_help(options.progname);
         return diag.exit_status;
     }
 
@@ -176,17 +572,9 @@ int bx_readlink_main(int argc, char** argv) {
 
     char** operands = argv + first_operand;
     for (int i = 0; i < operand_count; i++) {
-        char* target = NULL;
-        if (!bx_readlink_read_target(operands[i], &target, &diag)) {
+        if (!bx_readlink_process_operand(operands[i], &options, no_newline, &diag)) {
             continue;
         }
-
-        if (!bx_readlink_emit_target(target, no_newline, options.zero_terminated, &diag)) {
-            free(target);
-            return diag.exit_status;
-        }
-
-        free(target);
     }
 
     if (fflush(stdout) == EOF) {
