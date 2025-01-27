@@ -357,130 +357,179 @@ static bool bx_readlink_readlink_alloc(const char* path, char** target_out) {
     }
 }
 
-static bool bx_readlink_find_existing_prefix(const struct bx_readlink_components* components, size_t* prefix_count_out, char** resolved_prefix_out) {
-    for (size_t prefix_count = components->count;;) {
-        char* prefix_path = bx_readlink_components_to_absolute_path(components, prefix_count);
-        char* resolved_prefix = realpath(prefix_path, NULL);
-        int saved_errno = errno;
-        free(prefix_path);
-
-        if (resolved_prefix != NULL) {
-            *prefix_count_out = prefix_count;
-            *resolved_prefix_out = resolved_prefix;
-            return true;
-        }
-
-        if (prefix_count == 0u) {
-            errno = saved_errno;
-            return false;
-        }
-
-        prefix_count--;
-    }
-}
-
-static char* bx_readlink_append_remainder_lexical(const char* resolved_prefix, const struct bx_readlink_components* raw_components, size_t remainder_start) {
-    struct bx_readlink_components normalized_components = {0};
-    char* output_path;
-
-    bx_readlink_components_append_raw(&normalized_components, resolved_prefix);
-    for (size_t i = remainder_start; i < raw_components->count; i++) {
-        bx_readlink_components_append_normalized_part(&normalized_components, raw_components->parts[i]);
+static bool bx_readlink_has_non_root_trailing_slash(const char* path) {
+    size_t len = strlen(path);
+    if (len == 0u) {
+        return false;
     }
 
-    output_path = bx_readlink_components_to_absolute_path(&normalized_components, normalized_components.count);
-    bx_readlink_components_free(&normalized_components);
-    return output_path;
+    size_t trimmed = len;
+    while (trimmed > 0u && path[trimmed - 1u] == '/') {
+        trimmed--;
+    }
+
+    return trimmed > 0u && trimmed < len;
 }
 
-static char* bx_readlink_canonicalize_fallback(const char* path, enum bx_readlink_mode mode, int initial_errno) {
-    struct bx_readlink_components raw_components = {0};
-    size_t prefix_count = 0u;
+static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mode mode) {
+    struct bx_readlink_components pending = {0};
+    struct bx_readlink_components resolved = {0};
     char* absolute_input = NULL;
-    char* resolved_prefix = NULL;
-    char* resolved = NULL;
+    char* output = NULL;
+    bool require_directory_if_existing = false;
+    size_t symlink_expansions = 0u;
+
+    if (path == NULL || path[0] == '\0') {
+        errno = ENOENT;
+        return NULL;
+    }
 
     absolute_input = bx_readlink_make_absolute_input(path);
     if (absolute_input == NULL) {
         return NULL;
     }
 
-    bx_readlink_components_append_raw(&raw_components, absolute_input);
-    if (!bx_readlink_find_existing_prefix(&raw_components, &prefix_count, &resolved_prefix)) {
-        bx_readlink_components_free(&raw_components);
-        free(absolute_input);
-        errno = initial_errno;
-        return NULL;
-    }
-
-    size_t remainder_count = raw_components.count - prefix_count;
-    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && remainder_count > 1u) {
-        free(resolved_prefix);
-        bx_readlink_components_free(&raw_components);
-        free(absolute_input);
-        errno = initial_errno;
-        return NULL;
-    }
-
-    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && remainder_count == 1u) {
-        struct stat st;
-        if (stat(resolved_prefix, &st) != 0 || !S_ISDIR(st.st_mode)) {
-            int saved_errno = errno;
-            free(resolved_prefix);
-            bx_readlink_components_free(&raw_components);
-            free(absolute_input);
-            errno = (saved_errno == 0) ? ENOTDIR : saved_errno;
-            return NULL;
-        }
-    }
-
-    resolved = bx_readlink_append_remainder_lexical(resolved_prefix, &raw_components, prefix_count);
-    free(resolved_prefix);
-    bx_readlink_components_free(&raw_components);
+    require_directory_if_existing = bx_readlink_has_non_root_trailing_slash(path);
+    bx_readlink_components_append_raw(&pending, absolute_input);
     free(absolute_input);
-    return resolved;
-}
 
-static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mode mode) {
-    if (path == NULL || path[0] == '\0') {
-        errno = ENOENT;
-        return NULL;
-    }
+    while (pending.count > 0u) {
+        char* part = NULL;
+        char* base = NULL;
+        char* candidate = NULL;
+        struct stat st;
+        bool has_more = false;
+        int saved_errno = 0;
 
-    char* resolved = realpath(path, NULL);
-    if (resolved != NULL) {
-        return resolved;
-    }
+        (void)bx_readlink_components_shift(&pending, &part);
+        has_more = (pending.count > 0u);
 
-    int initial_errno = errno;
-    if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING) {
-        errno = initial_errno;
-        return NULL;
-    }
-
-    if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING && initial_errno == ELOOP) {
-        char* absolute = bx_readlink_make_absolute_input(path);
-        if (absolute == NULL) {
-            return NULL;
+        if (strcmp(part, ".") == 0 || part[0] == '\0') {
+            free(part);
+            continue;
+        }
+        if (strcmp(part, "..") == 0) {
+            bx_readlink_components_pop(&resolved);
+            free(part);
+            continue;
         }
 
-        struct bx_readlink_components normalized = {0};
-        bx_readlink_components_append_raw(&normalized, absolute);
-        struct bx_readlink_components output = {0};
-        bx_readlink_components_append_normalized_and_clear(&output, &normalized);
+        base = bx_readlink_components_to_absolute_path(&resolved, resolved.count);
+        candidate = bx_path_join(base, part);
+        free(base);
 
-        char* lexical = bx_readlink_components_to_absolute_path(&output, output.count);
-        bx_readlink_components_free(&output);
-        free(absolute);
-        return lexical;
+        if (lstat(candidate, &st) == 0) {
+            if (S_ISLNK(st.st_mode)) {
+                char* target = NULL;
+
+                if (symlink_expansions >= 40u) {
+                    if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
+                        bx_readlink_components_append_normalized_part(&resolved, part);
+                        bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
+                        free(candidate);
+                        free(part);
+                        break;
+                    }
+
+                    free(candidate);
+                    free(part);
+                    errno = ELOOP;
+                    goto fail;
+                }
+
+                symlink_expansions++;
+                if (!bx_readlink_readlink_alloc(candidate, &target)) {
+                    saved_errno = errno;
+                    free(candidate);
+                    free(part);
+                    errno = saved_errno;
+                    goto fail;
+                }
+
+                if (target[0] == '/') {
+                    bx_readlink_components_clear(&resolved);
+                }
+                bx_readlink_components_prepend_path(&pending, target);
+
+                free(target);
+                free(candidate);
+                free(part);
+                continue;
+            }
+
+            if (has_more && !S_ISDIR(st.st_mode)) {
+                if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
+                    bx_readlink_components_append_normalized_part(&resolved, part);
+                    bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
+                    free(candidate);
+                    free(part);
+                    break;
+                }
+
+                free(candidate);
+                free(part);
+                errno = ENOTDIR;
+                goto fail;
+            }
+
+            bx_readlink_components_append_normalized_part(&resolved, part);
+            free(candidate);
+            free(part);
+            continue;
+        }
+
+        saved_errno = errno;
+        if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
+            bx_readlink_components_append_normalized_part(&resolved, part);
+            bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
+            free(candidate);
+            free(part);
+            break;
+        }
+
+        if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && !has_more && saved_errno == ENOENT) {
+            bx_readlink_components_append_normalized_part(&resolved, part);
+            free(candidate);
+            free(part);
+            break;
+        }
+
+        free(candidate);
+        free(part);
+        errno = saved_errno;
+        goto fail;
     }
 
-    if (initial_errno != ENOENT && initial_errno != ENOTDIR) {
-        errno = initial_errno;
-        return NULL;
+    output = bx_readlink_components_to_absolute_path(&resolved, resolved.count);
+
+    if (require_directory_if_existing && mode != BX_READLINK_MODE_CANONICALIZE_MISSING) {
+        struct stat st;
+
+        if (stat(output, &st) != 0) {
+            int saved_errno = errno;
+            if (!(mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && saved_errno == ENOENT)) {
+                free(output);
+                output = NULL;
+                errno = saved_errno;
+                goto fail;
+            }
+        }
+        else if (!S_ISDIR(st.st_mode)) {
+            free(output);
+            output = NULL;
+            errno = ENOTDIR;
+            goto fail;
+        }
     }
 
-    return bx_readlink_canonicalize_fallback(path, mode, initial_errno);
+    bx_readlink_components_free(&pending);
+    bx_readlink_components_free(&resolved);
+    return output;
+
+fail:
+    bx_readlink_components_free(&pending);
+    bx_readlink_components_free(&resolved);
+    return NULL;
 }
 
 static void bx_readlink_report_path_error(struct bx_diag_ctx* diag, bool verbose_errors, const char* path, const char* action, int errnum) {

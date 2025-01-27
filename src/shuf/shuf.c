@@ -279,14 +279,9 @@ static bool bx_shuf_load_echo_input(char** argv, int first_operand, int argc, st
 }
 
 static bool bx_shuf_load_range_input(intmax_t lo, intmax_t hi, struct bx_shuf_records* records, struct bx_diag_ctx* diag) {
-    __int128 diff = (__int128)hi - (__int128)lo;
-    if (diff < 0) {
-        bx_diag(diag, "invalid input range");
-        return false;
-    }
-
-    __uint128_t span = (__uint128_t)diff + 1u;
-    if (span > (__uint128_t)SIZE_MAX) {
+    uintmax_t span = (uintmax_t)hi - (uintmax_t)lo;
+    span += 1u;
+    if (span == 0 || span > (uintmax_t)SIZE_MAX) {
         bx_diag(diag, "input range too large");
         return false;
     }
@@ -427,8 +422,7 @@ static bool bx_shuf_rng_uniform(struct bx_shuf_rng* rng, size_t upper_bound, siz
         return true;
     }
 
-    __uint128_t full_range = (__uint128_t)UINT64_MAX + 1u;
-    uint64_t max_acceptable = (uint64_t)(full_range - (full_range % upper) - 1u);
+    uint64_t threshold = (uint64_t)(-upper) % upper;
 
     while (true) {
         uint64_t raw = 0;
@@ -436,7 +430,7 @@ static bool bx_shuf_rng_uniform(struct bx_shuf_rng* rng, size_t upper_bound, siz
             return false;
         }
 
-        if (raw <= max_acceptable) {
+        if (raw >= threshold) {
             *value_out = (size_t)(raw % upper);
             return true;
         }
