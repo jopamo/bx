@@ -34,6 +34,7 @@ static const struct applet applets[] = {
     {"dd", bx_dd_main},
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
+    {"tty", bx_tty_main},
     {"nice", bx_nice_main},
     {"nohup", bx_nohup_main},
     {"timeout", bx_timeout_main},

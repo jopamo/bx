@@ -168,6 +168,7 @@ sources = [
   'src/dd/dd.c',
   'src/env/env.c',
   'src/printenv/printenv.c',
+  'src/tty/tty.c',
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
@@ -197,7 +198,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -339,6 +340,9 @@ if get_option('tests')
 
   test_printenv_basic = find_program('tests/printenv/test_printenv_basic.sh')
   test('printenv basic', test_printenv_basic, args : [bx_exe])
+
+  test_tty_basic = find_program('tests/tty/test_tty_basic.sh')
+  test('tty basic', test_tty_basic, args : [bx_exe])
 
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe])

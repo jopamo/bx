@@ -21,6 +21,7 @@ int bx_sync_main(int argc, char** argv);
 int bx_dd_main(int argc, char** argv);
 int bx_env_main(int argc, char** argv);
 int bx_printenv_main(int argc, char** argv);
+int bx_tty_main(int argc, char** argv);
 int bx_nice_main(int argc, char** argv);
 int bx_nohup_main(int argc, char** argv);
 int bx_timeout_main(int argc, char** argv);
