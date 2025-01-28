@@ -160,6 +160,7 @@ sources = [
   'src/basename/basename.c',
   'src/dirname/dirname.c',
   'src/pathchk/pathchk.c',
+  'src/ls/ls.c',
   'src/stat/stat.c',
   'src/df/df.c',
   'src/du/du.c',
@@ -196,7 +197,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -314,6 +315,9 @@ if get_option('tests')
 
   test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe])
+
+  test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
+  test('ls basic', test_ls_basic, args : [bx_exe])
 
   test_stat_basic = find_program('tests/stat/test_stat_basic.sh')
   test('stat basic', test_stat_basic, args : [bx_exe])
