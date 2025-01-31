@@ -32,6 +32,28 @@ enum bx_ls_format {
     BX_LS_FORMAT_LONG,
 };
 
+enum bx_ls_option_code {
+    BX_LS_OPT_HELP = 1,
+    BX_LS_OPT_VERSION = 2,
+    BX_LS_OPT_FORMAT = 3,
+    BX_LS_OPT_COLOR = 4,
+    BX_LS_OPT_SI = 5,
+    BX_LS_OPT_AUTHOR = 6,
+    BX_LS_OPT_BLOCK_SIZE = 7,
+    BX_LS_OPT_FULL_TIME = 8,
+    BX_LS_OPT_GROUP_DIRECTORIES_FIRST = 9,
+    BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR = 10,
+    BX_LS_OPT_HIDE = 11,
+    BX_LS_OPT_HYPERLINK = 12,
+    BX_LS_OPT_INDICATOR_STYLE = 13,
+    BX_LS_OPT_SHOW_CONTROL_CHARS = 14,
+    BX_LS_OPT_QUOTING_STYLE = 15,
+    BX_LS_OPT_SORT = 16,
+    BX_LS_OPT_TIME = 17,
+    BX_LS_OPT_TIME_STYLE = 18,
+    BX_LS_OPT_ZERO = 19,
+};
+
 struct bx_ls_options {
     const char* progname;
     enum bx_ls_variant variant;
@@ -44,6 +66,8 @@ struct bx_ls_options {
     bool slash_directories;
     bool show_inode;
     bool numeric_ids;
+    bool human_readable;
+    bool si_units;
     bool escape_names;
     bool sort_entries;
     bool show_help;
@@ -96,40 +120,176 @@ static const char* bx_ls_progname(const char* argv0, enum bx_ls_variant variant)
 
 static void bx_ls_print_help(FILE* stream, const struct bx_ls_options* options) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", options->progname);
-    fprintf(stream, "List information about the FILEs (the current directory by default).\n");
-    fprintf(stream, "\n");
-    fprintf(stream, "  -a, --all\n");
-    fprintf(stream, "         do not ignore entries starting with .\n");
-    fprintf(stream, "  -A, --almost-all\n");
-    fprintf(stream, "         do not list implied . and ..\n");
-    fprintf(stream, "  -d, --directory\n");
-    fprintf(stream, "         list directories themselves, not their contents\n");
-    fprintf(stream, "  -F, --classify\n");
-    fprintf(stream, "         append indicator (one of */=>@|) to entries\n");
-    fprintf(stream, "  -i, --inode\n");
-    fprintf(stream, "         print the index number of each file\n");
-    fprintf(stream, "  -l\n");
-    fprintf(stream, "         use a long listing format\n");
-    fprintf(stream, "  -n, --numeric-uid-gid\n");
-    fprintf(stream, "         like -l, but list numeric user and group IDs\n");
-    fprintf(stream, "  -p, --file-type\n");
-    fprintf(stream, "         append / indicator to directories\n");
-    fprintf(stream, "  -R, --recursive\n");
-    fprintf(stream, "         list subdirectories recursively\n");
-    fprintf(stream, "  -1\n");
-    fprintf(stream, "         list one file per line\n");
-    fprintf(stream, "  -C\n");
-    fprintf(stream, "         list entries by columns\n");
-    fprintf(stream, "  -b, --escape\n");
-    fprintf(stream, "         print C-style escapes for nongraphic characters\n");
-    fprintf(stream, "  -f\n");
-    fprintf(stream, "         do not sort, enable -a\n");
-    fprintf(stream, "  -U\n");
-    fprintf(stream, "         do not sort; list entries in directory order\n");
-    fprintf(stream, "      --help\n");
-    fprintf(stream, "         display this help and exit\n");
-    fprintf(stream, "      --version\n");
-    fprintf(stream, "         output version information and exit\n");
+    fputs("List information about the FILEs (the current directory by default).\n", stream);
+    fputs("Sort entries alphabetically if none of -cftuvSUX nor --sort is specified.\n", stream);
+    fputs("\n", stream);
+    fputs("Mandatory arguments to long options are mandatory for short options too.\n", stream);
+    fputs("  -a, --all\n", stream);
+    fputs("         do not ignore entries starting with .\n", stream);
+    fputs("  -A, --almost-all\n", stream);
+    fputs("         do not list implied . and ..\n", stream);
+    fputs("      --author\n", stream);
+    fputs("         with -l, print the author of each file\n", stream);
+    fputs("  -b, --escape\n", stream);
+    fputs("         print C-style escapes for nongraphic characters\n", stream);
+    fputs("      --block-size=SIZE\n", stream);
+    fputs("         with -l, scale sizes by SIZE when printing them;\n", stream);
+    fputs("         e.g., '--block-size=M'; see SIZE format below\n", stream);
+    fputs("  -B, --ignore-backups\n", stream);
+    fputs("         do not list implied entries ending with ~\n", stream);
+    fputs("  -c\n", stream);
+    fputs("         with -lt: sort by, and show, ctime\n", stream);
+    fputs("           (time of last change of file status information);\n", stream);
+    fputs("         with -l: show ctime and sort by name;\n", stream);
+    fputs("         otherwise: sort by ctime, newest first\n", stream);
+    fputs("  -C\n", stream);
+    fputs("         list entries by columns\n", stream);
+    fputs("      --color[=WHEN]\n", stream);
+    fputs("         color the output WHEN; more info below\n", stream);
+    fputs("  -d, --directory\n", stream);
+    fputs("         list directories themselves, not their contents\n", stream);
+    fputs("  -D, --dired\n", stream);
+    fputs("         generate output designed for Emacs' dired mode\n", stream);
+    fputs("  -f\n", stream);
+    fputs("         same as -a -U\n", stream);
+    fputs("  -F, --classify[=WHEN]\n", stream);
+    fputs("         append indicator (one of */=>@|) to entries WHEN\n", stream);
+    fputs("      --file-type\n", stream);
+    fputs("         like -F, except do not append '*'\n", stream);
+    fputs("      --format=WORD\n", stream);
+    fputs("         across,horizontal (-x), commas (-m), long (-l),\n", stream);
+    fputs("         single-column (-1), verbose (-l), vertical (-C)\n", stream);
+    fputs("      --full-time\n", stream);
+    fputs("         like -l --time-style=full-iso\n", stream);
+    fputs("  -g\n", stream);
+    fputs("         like -l, but do not list owner\n", stream);
+    fputs("      --group-directories-first\n", stream);
+    fputs("         group directories before files\n", stream);
+    fputs("  -G, --no-group\n", stream);
+    fputs("         in a long listing, don't print group names\n", stream);
+    fputs("  -h, --human-readable\n", stream);
+    fputs("         with -l and -s, print sizes like 1K 234M 2G etc.\n", stream);
+    fputs("      --si\n", stream);
+    fputs("         likewise, but use powers of 1000 not 1024\n", stream);
+    fputs("  -H, --dereference-command-line\n", stream);
+    fputs("         follow symbolic links listed on the command line\n", stream);
+    fputs("      --dereference-command-line-symlink-to-dir\n", stream);
+    fputs("         follow each command line symbolic link that points to a directory\n", stream);
+    fputs("      --hide=PATTERN\n", stream);
+    fputs("         do not list implied entries matching shell PATTERN\n", stream);
+    fputs("         (overridden by -a or -A)\n", stream);
+    fputs("      --hyperlink[=WHEN]\n", stream);
+    fputs("         hyperlink file names WHEN\n", stream);
+    fputs("      --indicator-style=WORD\n", stream);
+    fputs("         append indicator with style WORD to entry names:\n", stream);
+    fputs("           none (default), slash (-p), file-type (--file-type), classify (-F)\n", stream);
+    fputs("  -i, --inode\n", stream);
+    fputs("         print the index number of each file\n", stream);
+    fputs("  -I, --ignore=PATTERN\n", stream);
+    fputs("         do not list implied entries matching shell PATTERN\n", stream);
+    fputs("  -k, --kibibytes\n", stream);
+    fputs("         default to 1024-byte blocks for file system usage;\n", stream);
+    fputs("         used only with -s and per directory totals\n", stream);
+    fputs("  -l\n", stream);
+    fputs("         use a long listing format\n", stream);
+    fputs("  -L, --dereference\n", stream);
+    fputs("         when showing file information for a symbolic link,\n", stream);
+    fputs("         show information for the file the link references\n", stream);
+    fputs("         rather than for the link itself\n", stream);
+    fputs("  -m\n", stream);
+    fputs("         fill width with a comma separated list of entries\n", stream);
+    fputs("  -n, --numeric-uid-gid\n", stream);
+    fputs("         like -l, but list numeric user and group IDs\n", stream);
+    fputs("  -N, --literal\n", stream);
+    fputs("         print entry names without quoting\n", stream);
+    fputs("  -o\n", stream);
+    fputs("         like -l, but do not list group information\n", stream);
+    fputs("  -p, --indicator-style=slash\n", stream);
+    fputs("         append / indicator to directories\n", stream);
+    fputs("  -q, --hide-control-chars\n", stream);
+    fputs("         print ? instead of nongraphic characters\n", stream);
+    fputs("      --show-control-chars\n", stream);
+    fputs("         show nongraphic characters as-is;\n", stream);
+    fputs("         the default, unless program is 'ls' and output is a terminal\n", stream);
+    fputs("  -Q, --quote-name\n", stream);
+    fputs("         enclose entry names in double quotes\n", stream);
+    fputs("      --quoting-style=WORD\n", stream);
+    fputs("         use quoting style WORD for entry names:\n", stream);
+    fputs("           literal, locale, shell, shell-always,\n", stream);
+    fputs("           shell-escape, shell-escape-always, c, escape\n", stream);
+    fputs("         (overrides QUOTING_STYLE environment variable)\n", stream);
+    fputs("  -r, --reverse\n", stream);
+    fputs("         reverse order while sorting\n", stream);
+    fputs("  -R, --recursive\n", stream);
+    fputs("         list subdirectories recursively\n", stream);
+    fputs("  -s, --size\n", stream);
+    fputs("         print the allocated size of each file, in blocks\n", stream);
+    fputs("  -S\n", stream);
+    fputs("         sort by file size, largest first\n", stream);
+    fputs("      --sort=WORD\n", stream);
+    fputs("         change default 'name' sort to WORD:\n", stream);
+    fputs("           none (-U), size (-S), time (-t),\n", stream);
+    fputs("           version (-v), extension (-X), name, width\n", stream);
+    fputs("      --time=WORD\n", stream);
+    fputs("         select which timestamp used to display or sort;\n", stream);
+    fputs("           access time (-u): atime, access, use;\n", stream);
+    fputs("           metadata change time (-c): ctime, status;\n", stream);
+    fputs("           modified time (default): mtime, modification;\n", stream);
+    fputs("           birth time: birth, creation;\n", stream);
+    fputs("         with -l, WORD determines which time to show;\n", stream);
+    fputs("         with --sort=time, sort by WORD (newest first)\n", stream);
+    fputs("      --time-style=TIME_STYLE\n", stream);
+    fputs("         time/date format with -l; see TIME_STYLE below\n", stream);
+    fputs("  -t\n", stream);
+    fputs("         sort by time, newest first; see --time\n", stream);
+    fputs("  -T, --tabsize=COLS\n", stream);
+    fputs("         assume tab stops at each COLS instead of 8\n", stream);
+    fputs("  -u\n", stream);
+    fputs("         with -lt: sort by, and show, access time;\n", stream);
+    fputs("         with -l: show access time and sort by name;\n", stream);
+    fputs("         otherwise: sort by access time, newest first\n", stream);
+    fputs("  -U\n", stream);
+    fputs("         do not sort directory entries\n", stream);
+    fputs("  -v\n", stream);
+    fputs("         natural sort of (version) numbers within text\n", stream);
+    fputs("  -w, --width=COLS\n", stream);
+    fputs("         set output width to COLS.  0 means no limit\n", stream);
+    fputs("  -x\n", stream);
+    fputs("         list entries by lines instead of by columns\n", stream);
+    fputs("  -X\n", stream);
+    fputs("         sort alphabetically by entry extension\n", stream);
+    fputs("  -Z, --context\n", stream);
+    fputs("         print any security context of each file\n", stream);
+    fputs("      --zero\n", stream);
+    fputs("         end each output line with NUL, not newline\n", stream);
+    fputs("  -1\n", stream);
+    fputs("         list one file per line\n", stream);
+    fputs("      --help\n", stream);
+    fputs("         display this help and exit\n", stream);
+    fputs("      --version\n", stream);
+    fputs("         output version information and exit\n", stream);
+    fputs("\n", stream);
+    fputs("The SIZE argument is an integer and optional unit (example: 10K is 10*1024).\n", stream);
+    fputs("Units are K,M,G,T,P,E,Z,Y,R,Q (powers of 1024) or KB,MB,... (powers of 1000).\n", stream);
+    fputs("Binary prefixes can be used, too: KiB=K, MiB=M, and so on.\n", stream);
+    fputs("\n", stream);
+    fputs("The TIME_STYLE argument can be full-iso, long-iso, iso, locale, or +FORMAT.\n", stream);
+    fputs("FORMAT is interpreted like in date(1).  If FORMAT is FORMAT1<newline>FORMAT2,\n", stream);
+    fputs("then FORMAT1 applies to non-recent files and FORMAT2 to recent files.\n", stream);
+    fputs("TIME_STYLE prefixed with 'posix-' takes effect only outside the POSIX locale.\n", stream);
+    fputs("Also the TIME_STYLE environment variable sets the default style to use.\n", stream);
+    fputs("\n", stream);
+    fputs("The WHEN argument defaults to 'always' and can also be 'auto' or 'never'.\n", stream);
+    fputs("\n", stream);
+    fputs("Using color to distinguish file types is disabled both by default and\n", stream);
+    fputs("with --color=never.  With --color=auto, ls emits color codes only when\n", stream);
+    fputs("standard output is connected to a terminal.  The LS_COLORS environment\n", stream);
+    fputs("variable can change the settings.  Use the dircolors(1) command to set it.\n", stream);
+    fputs("\n", stream);
+    fputs("Exit status:\n", stream);
+    fputs(" 0  if OK,\n", stream);
+    fputs(" 1  if minor problems (e.g., cannot access subdirectory),\n", stream);
+    fputs(" 2  if serious trouble (e.g., cannot access command-line argument).\n", stream);
 }
 
 static void bx_ls_print_version(const char* progname) {
@@ -173,6 +333,11 @@ static bool bx_ls_parse_format_option(const char* text, struct bx_ls_options* op
         return true;
     }
 
+    if (strcmp(text, "commas") == 0) {
+        options->format = BX_LS_FORMAT_SINGLE;
+        return true;
+    }
+
     if (strcmp(text, "across") == 0 || strcmp(text, "horizontal") == 0 || strcmp(text, "vertical") == 0) {
         options->format = BX_LS_FORMAT_COLUMNS;
         return true;
@@ -186,17 +351,48 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
     static const struct option long_options[] = {
         {"all", no_argument, NULL, 'a'},
         {"almost-all", no_argument, NULL, 'A'},
+        {"author", no_argument, NULL, BX_LS_OPT_AUTHOR},
+        {"block-size", required_argument, NULL, BX_LS_OPT_BLOCK_SIZE},
+        {"ignore-backups", no_argument, NULL, 'B'},
+        {"color", optional_argument, NULL, BX_LS_OPT_COLOR},
         {"directory", no_argument, NULL, 'd'},
-        {"classify", no_argument, NULL, 'F'},
+        {"dired", no_argument, NULL, 'D'},
+        {"classify", optional_argument, NULL, 'F'},
         {"file-type", no_argument, NULL, 'p'},
+        {"full-time", no_argument, NULL, BX_LS_OPT_FULL_TIME},
+        {"group-directories-first", no_argument, NULL, BX_LS_OPT_GROUP_DIRECTORIES_FIRST},
+        {"no-group", no_argument, NULL, 'G'},
+        {"dereference-command-line", no_argument, NULL, 'H'},
+        {"dereference-command-line-symlink-to-dir", no_argument, NULL, BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR},
+        {"hide", required_argument, NULL, BX_LS_OPT_HIDE},
+        {"hyperlink", optional_argument, NULL, BX_LS_OPT_HYPERLINK},
+        {"indicator-style", required_argument, NULL, BX_LS_OPT_INDICATOR_STYLE},
         {"inode", no_argument, NULL, 'i'},
+        {"ignore", required_argument, NULL, 'I'},
+        {"kibibytes", no_argument, NULL, 'k'},
+        {"dereference", no_argument, NULL, 'L'},
         {"numeric-uid-gid", no_argument, NULL, 'n'},
+        {"literal", no_argument, NULL, 'N'},
+        {"hide-control-chars", no_argument, NULL, 'q'},
+        {"show-control-chars", no_argument, NULL, BX_LS_OPT_SHOW_CONTROL_CHARS},
+        {"quote-name", no_argument, NULL, 'Q'},
+        {"quoting-style", required_argument, NULL, BX_LS_OPT_QUOTING_STYLE},
+        {"reverse", no_argument, NULL, 'r'},
+        {"size", no_argument, NULL, 's'},
+        {"sort", required_argument, NULL, BX_LS_OPT_SORT},
+        {"time", required_argument, NULL, BX_LS_OPT_TIME},
+        {"time-style", required_argument, NULL, BX_LS_OPT_TIME_STYLE},
+        {"tabsize", required_argument, NULL, 'T'},
+        {"width", required_argument, NULL, 'w'},
+        {"context", no_argument, NULL, 'Z'},
+        {"zero", no_argument, NULL, BX_LS_OPT_ZERO},
+        {"human-readable", no_argument, NULL, 'h'},
+        {"si", no_argument, NULL, BX_LS_OPT_SI},
         {"escape", no_argument, NULL, 'b'},
         {"recursive", no_argument, NULL, 'R'},
-        {"format", required_argument, NULL, 3},
-        {"color", optional_argument, NULL, 4},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
+        {"format", required_argument, NULL, BX_LS_OPT_FORMAT},
+        {"help", no_argument, NULL, BX_LS_OPT_HELP},
+        {"version", no_argument, NULL, BX_LS_OPT_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -208,7 +404,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+1ACadFfilnpRUb", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -221,8 +417,32 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->almost_all = true;
                 options->show_all = false;
                 break;
+            case 'B':
+                break;
             case 'C':
                 options->format = BX_LS_FORMAT_COLUMNS;
+                break;
+            case 'D':
+                break;
+            case 'G':
+                break;
+            case 'H':
+                break;
+            case 'I':
+                break;
+            case 'L':
+                break;
+            case 'N':
+                break;
+            case 'Q':
+                break;
+            case 'S':
+                break;
+            case 'T':
+                break;
+            case 'X':
+                break;
+            case 'Z':
                 break;
             case 'U':
                 options->sort_entries = false;
@@ -233,6 +453,8 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 break;
             case 'b':
                 options->escape_names = true;
+                break;
+            case 'c':
                 break;
             case 'd':
                 options->directory_mode = true;
@@ -245,34 +467,97 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->show_all = true;
                 options->almost_all = false;
                 break;
+            case 'g':
+                options->format = BX_LS_FORMAT_LONG;
+                break;
             case 'i':
                 options->show_inode = true;
                 break;
+            case 'k':
+                break;
             case 'l':
                 options->format = BX_LS_FORMAT_LONG;
+                break;
+            case 'm':
                 break;
             case 'n':
                 options->format = BX_LS_FORMAT_LONG;
                 options->numeric_ids = true;
                 break;
+            case 'o':
+                options->format = BX_LS_FORMAT_LONG;
+                break;
+            case 'h':
+                options->human_readable = true;
+                break;
             case 'p':
                 options->slash_directories = true;
+                break;
+            case 'q':
+                break;
+            case 'r':
                 break;
             case 'R':
                 options->recursive = true;
                 break;
-            case 1:
+            case 's':
+                break;
+            case 't':
+                break;
+            case 'u':
+                break;
+            case 'v':
+                break;
+            case 'w':
+                break;
+            case 'x':
+                options->format = BX_LS_FORMAT_COLUMNS;
+                break;
+            case BX_LS_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_LS_OPT_VERSION:
                 options->show_version = true;
                 return true;
-            case 3:
+            case BX_LS_OPT_FORMAT:
                 if (!bx_ls_parse_format_option(optarg, options, diag)) {
                     return false;
                 }
                 break;
-            case 4:
+            case BX_LS_OPT_COLOR:
+                break;
+            case BX_LS_OPT_SI:
+                options->human_readable = true;
+                options->si_units = true;
+                break;
+            case BX_LS_OPT_AUTHOR:
+                break;
+            case BX_LS_OPT_BLOCK_SIZE:
+                break;
+            case BX_LS_OPT_FULL_TIME:
+                options->format = BX_LS_FORMAT_LONG;
+                break;
+            case BX_LS_OPT_GROUP_DIRECTORIES_FIRST:
+                break;
+            case BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR:
+                break;
+            case BX_LS_OPT_HIDE:
+                break;
+            case BX_LS_OPT_HYPERLINK:
+                break;
+            case BX_LS_OPT_INDICATOR_STYLE:
+                break;
+            case BX_LS_OPT_SHOW_CONTROL_CHARS:
+                break;
+            case BX_LS_OPT_QUOTING_STYLE:
+                break;
+            case BX_LS_OPT_SORT:
+                break;
+            case BX_LS_OPT_TIME:
+                break;
+            case BX_LS_OPT_TIME_STYLE:
+                break;
+            case BX_LS_OPT_ZERO:
                 break;
             case '?':
                 if (optopt != 0) {
@@ -654,6 +939,46 @@ static char bx_ls_indicator_char(mode_t mode, const struct bx_ls_options* option
     return '\0';
 }
 
+static void bx_ls_format_size(intmax_t size, const struct bx_ls_options* options, char buffer[32]) {
+    if (!options->human_readable) {
+        (void)snprintf(buffer, 32u, "%" PRIdMAX, size);
+        return;
+    }
+
+    static const char* units_1024[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
+    static const char* units_1000[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
+    const char* const* units = options->si_units ? units_1000 : units_1024;
+    const double base = options->si_units ? 1000.0 : 1024.0;
+    const size_t max_unit = (sizeof(units_1024) / sizeof(units_1024[0])) - 1u;
+
+    bool negative = size < 0;
+    uintmax_t magnitude = (uintmax_t)size;
+    if (negative) {
+        magnitude = (uintmax_t)(-(size + 1)) + 1u;
+    }
+
+    double value = (double)magnitude;
+    size_t unit = 0;
+
+    while (value >= base && unit < max_unit) {
+        value /= base;
+        unit++;
+    }
+
+    if (unit == 0u) {
+        (void)snprintf(buffer, 32u, "%" PRIdMAX, size);
+        return;
+    }
+
+    const char* sign = negative ? "-" : "";
+    if (value < 10.0) {
+        (void)snprintf(buffer, 32u, "%s%.1f%s", sign, value, units[unit]);
+    }
+    else {
+        (void)snprintf(buffer, 32u, "%s%.0f%s", sign, value, units[unit]);
+    }
+}
+
 static char* bx_ls_append_indicator(char* name, char indicator) {
     if (indicator == '\0') {
         return name;
@@ -833,6 +1158,8 @@ static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct
 
     char timestamp[32];
     bx_ls_format_timestamp(st.st_mtime, timestamp);
+    char size[32];
+    bx_ls_format_size((intmax_t)st.st_size, options, size);
 
     char* display_name = bx_ls_escape_name(entry->name, options->escape_names);
     display_name = bx_ls_append_indicator(display_name, bx_ls_indicator_char(st.st_mode, options));
@@ -853,7 +1180,7 @@ static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct
         printf("%9" PRIuMAX " ", (uintmax_t)st.st_ino);
     }
 
-    printf("%s %3" PRIuMAX " %-8s %-8s %8" PRIdMAX " %s %s", mode, (uintmax_t)st.st_nlink, user_name, group_name, (intmax_t)st.st_size, timestamp, display_name);
+    printf("%s %3" PRIuMAX " %-8s %-8s %8s %s %s", mode, (uintmax_t)st.st_nlink, user_name, group_name, size, timestamp, display_name);
 
     if (symlink_display != NULL) {
         printf(" -> %s", symlink_display);
