@@ -20,3 +20,9 @@ option(
   value : 'auto',
   description : 'Enable mira-embed backend for the wget applet'
 )
+option(
+  'install_ls_colors',
+  type : 'boolean',
+  value : true,
+  description : 'Install bx LS_COLORS data and profile.d bootstrap script'
+)

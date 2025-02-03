@@ -54,6 +54,12 @@ enum bx_ls_option_code {
     BX_LS_OPT_ZERO = 19,
 };
 
+enum bx_ls_color_when {
+    BX_LS_COLOR_NEVER = 0,
+    BX_LS_COLOR_ALWAYS,
+    BX_LS_COLOR_AUTO,
+};
+
 struct bx_ls_options {
     const char* progname;
     enum bx_ls_variant variant;
@@ -72,6 +78,7 @@ struct bx_ls_options {
     bool sort_entries;
     bool show_help;
     bool show_version;
+    enum bx_ls_color_when color_when;
 };
 
 struct bx_ls_entry {
@@ -315,6 +322,7 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->format = bx_ls_default_format(variant);
     options->sort_entries = true;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
+    options->color_when = BX_LS_COLOR_NEVER;
 }
 
 static bool bx_ls_parse_format_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
@@ -344,6 +352,29 @@ static bool bx_ls_parse_format_option(const char* text, struct bx_ls_options* op
     }
 
     bx_diag(diag, "invalid argument '%s' for '--format'", text);
+    return false;
+}
+
+static bool bx_ls_parse_color_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    const char* when = text;
+    if (when == NULL) {
+        when = "always";
+    }
+
+    if (strcmp(when, "always") == 0) {
+        options->color_when = BX_LS_COLOR_ALWAYS;
+        return true;
+    }
+    if (strcmp(when, "auto") == 0) {
+        options->color_when = BX_LS_COLOR_AUTO;
+        return true;
+    }
+    if (strcmp(when, "never") == 0) {
+        options->color_when = BX_LS_COLOR_NEVER;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--color'", when);
     return false;
 }
 
@@ -525,6 +556,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 }
                 break;
             case BX_LS_OPT_COLOR:
+                if (!bx_ls_parse_color_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_SI:
                 options->human_readable = true;
@@ -939,6 +973,266 @@ static char bx_ls_indicator_char(mode_t mode, const struct bx_ls_options* option
     return '\0';
 }
 
+static bool bx_ls_color_enabled(const struct bx_ls_options* options) {
+    switch (options->color_when) {
+        case BX_LS_COLOR_ALWAYS:
+            return true;
+        case BX_LS_COLOR_AUTO:
+            return isatty(STDOUT_FILENO);
+        case BX_LS_COLOR_NEVER:
+        default:
+            return false;
+    }
+}
+
+static bool bx_ls_lookup_ls_colors_key(const char* key, char* buffer, size_t buffer_size) {
+    if (buffer_size == 0u) {
+        return false;
+    }
+
+    const char* ls_colors = getenv("LS_COLORS");
+    if (ls_colors == NULL || ls_colors[0] == '\0') {
+        return false;
+    }
+
+    size_t key_len = strlen(key);
+    const char* cursor = ls_colors;
+
+    const char* match_value = NULL;
+    size_t match_len = 0u;
+
+    while (*cursor != '\0') {
+        const char* entry_start = cursor;
+        while (*cursor != '\0' && *cursor != ':') {
+            cursor++;
+        }
+        const char* entry_end = cursor;
+
+        const char* equal = memchr(entry_start, '=', (size_t)(entry_end - entry_start));
+        if (equal != NULL && (size_t)(equal - entry_start) == key_len && strncmp(entry_start, key, key_len) == 0) {
+            match_value = equal + 1;
+            match_len = (size_t)(entry_end - equal - 1);
+        }
+
+        if (*cursor == ':') {
+            cursor++;
+        }
+    }
+
+    if (match_value == NULL) {
+        return false;
+    }
+
+    if (match_len >= buffer_size) {
+        match_len = buffer_size - 1u;
+    }
+    memcpy(buffer, match_value, match_len);
+    buffer[match_len] = '\0';
+    return true;
+}
+
+static bool bx_ls_name_has_suffix(const char* name, size_t name_len, const char* suffix, size_t suffix_len) {
+    if (suffix_len > name_len) {
+        return false;
+    }
+
+    return memcmp(name + (name_len - suffix_len), suffix, suffix_len) == 0;
+}
+
+static bool bx_ls_lookup_ls_colors_suffix(const char* name, char* buffer, size_t buffer_size) {
+    if (buffer_size == 0u) {
+        return false;
+    }
+
+    const char* ls_colors = getenv("LS_COLORS");
+    if (ls_colors == NULL || ls_colors[0] == '\0') {
+        return false;
+    }
+
+    const size_t name_len = strlen(name);
+    const char* cursor = ls_colors;
+    const char* match_value = NULL;
+    size_t match_len = 0u;
+
+    while (*cursor != '\0') {
+        const char* entry_start = cursor;
+        while (*cursor != '\0' && *cursor != ':') {
+            cursor++;
+        }
+        const char* entry_end = cursor;
+
+        const char* equal = memchr(entry_start, '=', (size_t)(entry_end - entry_start));
+        if (equal != NULL && entry_start < equal && entry_start[0] == '*') {
+            const char* suffix = entry_start + 1;
+            size_t suffix_len = (size_t)(equal - suffix);
+            if (suffix_len != 0u && bx_ls_name_has_suffix(name, name_len, suffix, suffix_len)) {
+                match_value = equal + 1;
+                match_len = (size_t)(entry_end - equal - 1);
+            }
+        }
+
+        if (*cursor == ':') {
+            cursor++;
+        }
+    }
+
+    if (match_value == NULL) {
+        return false;
+    }
+
+    if (match_len >= buffer_size) {
+        match_len = buffer_size - 1u;
+    }
+    memcpy(buffer, match_value, match_len);
+    buffer[match_len] = '\0';
+    return true;
+}
+
+static const char* bx_ls_default_color_code(const char* key) {
+    (void)key;
+    return "";
+}
+
+static const char* bx_ls_color_code_for_key(const char* key, char* buffer, size_t buffer_size) {
+    if (bx_ls_lookup_ls_colors_key(key, buffer, buffer_size)) {
+        return buffer;
+    }
+    return bx_ls_default_color_code(key);
+}
+
+static const char* bx_ls_color_key_for_mode(mode_t mode) {
+    if (S_ISDIR(mode)) {
+        bool sticky = false;
+#ifdef S_ISVTX
+        sticky = (mode & S_ISVTX) != 0;
+#endif
+        bool world_writable = (mode & S_IWOTH) != 0;
+        if (world_writable && sticky) {
+            return "tw";
+        }
+        if (world_writable) {
+            return "ow";
+        }
+        if (sticky) {
+            return "st";
+        }
+        return "di";
+    }
+
+    if (S_ISFIFO(mode)) {
+        return "pi";
+    }
+#ifdef S_ISSOCK
+    if (S_ISSOCK(mode)) {
+        return "so";
+    }
+#endif
+#ifdef S_ISDOOR
+    if (S_ISDOOR(mode)) {
+        return "do";
+    }
+#endif
+    if (S_ISBLK(mode)) {
+        return "bd";
+    }
+    if (S_ISCHR(mode)) {
+        return "cd";
+    }
+
+    return "no";
+}
+
+static const char* bx_ls_color_code_for_regular(const struct bx_ls_entry* entry, const struct stat* st, char* buffer, size_t buffer_size) {
+    mode_t mode = st->st_mode;
+
+    if ((mode & S_ISUID) != 0) {
+        return bx_ls_color_code_for_key("su", buffer, buffer_size);
+    }
+    if ((mode & S_ISGID) != 0) {
+        return bx_ls_color_code_for_key("sg", buffer, buffer_size);
+    }
+    if ((mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0) {
+        return bx_ls_color_code_for_key("ex", buffer, buffer_size);
+    }
+    if (st->st_nlink > 1u) {
+        return bx_ls_color_code_for_key("mh", buffer, buffer_size);
+    }
+    if (bx_ls_lookup_ls_colors_suffix(entry->name, buffer, buffer_size)) {
+        return buffer;
+    }
+
+    return bx_ls_color_code_for_key("fi", buffer, buffer_size);
+}
+
+static const char* bx_ls_color_code_for_entry(const struct bx_ls_entry* entry, const struct stat* st, char* buffer, size_t buffer_size) {
+    mode_t mode = st->st_mode;
+
+    if (S_ISLNK(mode)) {
+        struct stat target_stat;
+        if (stat(entry->full_path, &target_stat) != 0) {
+            return bx_ls_color_code_for_key("or", buffer, buffer_size);
+        }
+
+        char link_buffer[64];
+        if (bx_ls_lookup_ls_colors_key("ln", link_buffer, sizeof(link_buffer)) && strcmp(link_buffer, "target") == 0) {
+            if (S_ISREG(target_stat.st_mode)) {
+                return bx_ls_color_code_for_regular(entry, &target_stat, buffer, buffer_size);
+            }
+            return bx_ls_color_code_for_key(bx_ls_color_key_for_mode(target_stat.st_mode), buffer, buffer_size);
+        }
+
+        return bx_ls_color_code_for_key("ln", buffer, buffer_size);
+    }
+
+    if (S_ISREG(mode)) {
+        return bx_ls_color_code_for_regular(entry, st, buffer, buffer_size);
+    }
+
+    return bx_ls_color_code_for_key(bx_ls_color_key_for_mode(mode), buffer, buffer_size);
+}
+
+static char* bx_ls_colorize_name(const char* text, const struct bx_ls_entry* entry, const struct stat* st, const struct bx_ls_options* options) {
+    if (!bx_ls_color_enabled(options)) {
+        return xstrdup(text);
+    }
+
+    char color_buffer[128];
+    const char* color = bx_ls_color_code_for_entry(entry, st, color_buffer, sizeof(color_buffer));
+    if (color == NULL || color[0] == '\0') {
+        return xstrdup(text);
+    }
+
+    char reset_buffer[64];
+    const char* reset = bx_ls_color_code_for_key("rs", reset_buffer, sizeof(reset_buffer));
+    if (reset == NULL || reset[0] == '\0') {
+        reset = "0";
+    }
+
+    size_t color_len = strlen(color);
+    size_t text_len = strlen(text);
+    size_t reset_len = strlen(reset);
+    size_t output_len = 2u + color_len + 1u + text_len + 2u + reset_len + 1u;
+    char* output = xmalloc(output_len + 1u);
+    size_t out_pos = 0;
+
+    output[out_pos++] = '\033';
+    output[out_pos++] = '[';
+    memcpy(output + out_pos, color, color_len);
+    out_pos += color_len;
+    output[out_pos++] = 'm';
+
+    memcpy(output + out_pos, text, text_len);
+    out_pos += text_len;
+
+    output[out_pos++] = '\033';
+    output[out_pos++] = '[';
+    memcpy(output + out_pos, reset, reset_len);
+    out_pos += reset_len;
+    output[out_pos++] = 'm';
+    output[out_pos] = '\0';
+    return output;
+}
+
 static void bx_ls_format_size(intmax_t size, const struct bx_ls_options* options, char buffer[32]) {
     if (!options->human_readable) {
         (void)snprintf(buffer, 32u, "%" PRIdMAX, size);
@@ -1016,6 +1310,9 @@ static bool bx_ls_build_short_cell(const struct bx_ls_entry* entry, const struct
     char* name = bx_ls_escape_name(entry->name, options->escape_names);
     if (have_stat) {
         name = bx_ls_append_indicator(name, bx_ls_indicator_char(st.st_mode, options));
+        char* colored_name = bx_ls_colorize_name(name, entry, &st, options);
+        free(name);
+        name = colored_name;
     }
 
     if (!options->show_inode) {
@@ -1059,6 +1356,29 @@ static size_t bx_ls_output_width(void) {
     return 80u;
 }
 
+static size_t bx_ls_display_width(const char* text) {
+    size_t width = 0;
+
+    for (size_t i = 0; text[i] != '\0';) {
+        if ((unsigned char)text[i] == 0x1b && text[i + 1u] == '[') {
+            i += 2u;
+            while (text[i] != '\0') {
+                unsigned char ch = (unsigned char)text[i];
+                i++;
+                if (ch >= 0x40u && ch <= 0x7eu) {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        i++;
+        width++;
+    }
+
+    return width;
+}
+
 static void bx_ls_print_entries_single(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     for (size_t i = 0; i < entries->len; i++) {
         char* cell = NULL;
@@ -1088,7 +1408,7 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
         }
 
         cells[cell_count++] = cell;
-        size_t cell_width = strlen(cell);
+        size_t cell_width = bx_ls_display_width(cell);
         if (cell_width > max_width) {
             max_width = cell_width;
         }
@@ -1126,7 +1446,7 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
             }
 
             if (next_col < column_count) {
-                size_t used = strlen(cells[idx]);
+                size_t used = bx_ls_display_width(cells[idx]);
                 size_t pad = (column_width > used) ? (column_width - used) : 1u;
                 for (size_t p = 0; p < pad; p++) {
                     (void)fputc(' ', stdout);
@@ -1163,6 +1483,9 @@ static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct
 
     char* display_name = bx_ls_escape_name(entry->name, options->escape_names);
     display_name = bx_ls_append_indicator(display_name, bx_ls_indicator_char(st.st_mode, options));
+    char* colored_name = bx_ls_colorize_name(display_name, entry, &st, options);
+    free(display_name);
+    display_name = colored_name;
 
     char* symlink_display = NULL;
     if (S_ISLNK(st.st_mode)) {

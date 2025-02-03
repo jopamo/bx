@@ -236,6 +236,28 @@ else
   endforeach
 endif
 
+if get_option('install_ls_colors')
+  lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
+  install_data('config/lscolors.dircolors',
+    install_dir : lscolors_install_subdir
+  )
+
+  lscolors_profile_conf = configuration_data()
+  lscolors_profile_conf.set(
+    'LSCOLORS_FILE',
+    join_paths(join_paths(get_option('prefix'), lscolors_install_subdir), 'lscolors.dircolors')
+  )
+  lscolors_profile = configure_file(
+    input : 'scripts/bx-lscolors-profile.sh.in',
+    output : 'bx-lscolors.sh',
+    configuration : lscolors_profile_conf,
+  )
+  install_data(lscolors_profile,
+    install_dir : join_paths(get_option('sysconfdir'), 'profile.d'),
+    install_mode : 'rw-r--r--'
+  )
+endif
+
 if get_option('tests')
   python3 = find_program('python3')
   which_ref = find_program('which')
