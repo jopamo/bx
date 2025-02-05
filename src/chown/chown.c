@@ -36,10 +36,27 @@ enum bx_chown_symlink_traversal {
     BX_CHOWN_SYMLINK_TRAVERSAL_L,
 };
 
+enum {
+    BX_CHOWN_OPT_HELP = 1,
+    BX_CHOWN_OPT_VERSION,
+    BX_CHOWN_OPT_REFERENCE,
+    BX_CHOWN_OPT_FROM,
+    BX_CHOWN_OPT_DEREFERENCE,
+    BX_CHOWN_OPT_NO_PRESERVE_ROOT,
+    BX_CHOWN_OPT_PRESERVE_ROOT,
+};
+
+struct bx_chown_parsed_owner {
+    uid_t owner;
+    bool symbolic;
+    gid_t login_group;
+};
+
 struct bx_chown_options {
     const char* progname;
     bool recursive;
     bool no_dereference;
+    bool preserve_root;
     bool quiet;
     enum bx_chown_report_mode report_mode;
     enum bx_chown_symlink_traversal symlink_traversal;
@@ -68,21 +85,60 @@ static const char* bx_chown_progname(const char* argv0) {
 static void bx_chown_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [OWNER][:[GROUP]] FILE...\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... --reference=RFILE FILE...\n", progname);
-    fprintf(stream, "Change the owner and/or group of each FILE.\n");
+    fprintf(stream, "Change the owner and/or group of each FILE to OWNER and/or GROUP.\n");
+    fprintf(stream, "With --reference, change the owner and group of each FILE to those of RFILE.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -c, --changes    like verbose but report only when a change is made\n");
-    fprintf(stream, "  -f, --silent, --quiet  suppress most error messages\n");
-    fprintf(stream, "  -h, --no-dereference   affect symbolic links instead of referenced files\n");
-    fprintf(stream, "  -H                     follow command-line symbolic links during recursion\n");
-    fprintf(stream, "  -L                     follow all symbolic links during recursion\n");
-    fprintf(stream, "  -P                     do not follow symbolic links during recursion (default)\n");
-    fprintf(stream, "  -R, --recursive        operate on files and directories recursively\n");
+    fprintf(stream, "  -c, --changes\n");
+    fprintf(stream, "         like verbose but report only when a change is made\n");
+    fprintf(stream, "  -f, --silent, --quiet\n");
+    fprintf(stream, "         suppress most error messages\n");
+    fprintf(stream, "  -v, --verbose\n");
+    fprintf(stream, "         output a diagnostic for every file processed\n");
+    fprintf(stream, "      --dereference\n");
+    fprintf(stream, "         affect the referent of each symbolic link (this is\n");
+    fprintf(stream, "         the default), rather than the symbolic link itself\n");
+    fprintf(stream, "  -h, --no-dereference\n");
+    fprintf(stream, "         affect symbolic links instead of any referenced file;\n");
+    fprintf(stream, "         useful only on systems that can change the ownership of a symlink\n");
     fprintf(stream, "      --from=CURRENT_OWNER:CURRENT_GROUP\n");
-    fprintf(stream, "                         change only when the current owner/group match\n");
-    fprintf(stream, "      --reference=RFILE  use RFILE's owner and group instead of OWNER:GROUP values\n");
-    fprintf(stream, "  -v, --verbose    output a diagnostic for every file processed\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "         change the ownership of each file only if its\n");
+    fprintf(stream, "         current owner and/or group match those specified here.\n");
+    fprintf(stream, "         Either may be omitted, in which case a match\n");
+    fprintf(stream, "         is not required for the omitted attribute\n");
+    fprintf(stream, "      --no-preserve-root\n");
+    fprintf(stream, "         do not treat '/' specially (the default)\n");
+    fprintf(stream, "      --preserve-root\n");
+    fprintf(stream, "         fail to operate recursively on '/'\n");
+    fprintf(stream, "      --reference=RFILE\n");
+    fprintf(stream, "         use RFILE's ownership rather than specifying values.\n");
+    fprintf(stream, "         RFILE is always dereferenced if a symbolic link.\n");
+    fprintf(stream, "  -R, --recursive\n");
+    fprintf(stream, "         operate on files and directories recursively\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "The following options modify how a hierarchy is traversed when the -R\n");
+    fprintf(stream, "option is also specified.  If more than one is specified, only the final\n");
+    fprintf(stream, "one takes effect. -P is the default.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  -H\n");
+    fprintf(stream, "         if a command line argument is a symlink to a directory, traverse it\n");
+    fprintf(stream, "  -L\n");
+    fprintf(stream, "         traverse every symbolic link to a directory encountered\n");
+    fprintf(stream, "  -P\n");
+    fprintf(stream, "         do not traverse any symbolic links\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Owner is unchanged if missing.  Group is unchanged if missing, but changed\n");
+    fprintf(stream, "to login group if implied by a ':' following a symbolic OWNER.\n");
+    fprintf(stream, "OWNER and GROUP may be numeric as well as symbolic.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Examples:\n");
+    fprintf(stream, "  %s root /u        Change the owner of /u to \"root\".\n", progname);
+    fprintf(stream, "  %s root:staff /u  Likewise, but also change its group to \"staff\".\n", progname);
+    fprintf(stream, "  %s -hR root /u    Change the owner of /u and subfiles to \"root\".\n", progname);
 }
 
 static void bx_chown_print_version(const char* progname) {
@@ -91,9 +147,20 @@ static void bx_chown_print_version(const char* progname) {
 
 static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"changes", no_argument, NULL, 'c'},        {"recursive", no_argument, NULL, 'R'}, {"quiet", no_argument, NULL, 'f'},    {"silent", no_argument, NULL, 'f'},
-        {"no-dereference", no_argument, NULL, 'h'}, {"dereference", no_argument, NULL, 5}, {"from", required_argument, NULL, 4}, {"reference", required_argument, NULL, 3},
-        {"verbose", no_argument, NULL, 'v'},        {"help", no_argument, NULL, 1},        {"version", no_argument, NULL, 2},    {NULL, 0, NULL, 0},
+        {"changes", no_argument, NULL, 'c'},
+        {"recursive", no_argument, NULL, 'R'},
+        {"quiet", no_argument, NULL, 'f'},
+        {"silent", no_argument, NULL, 'f'},
+        {"no-dereference", no_argument, NULL, 'h'},
+        {"dereference", no_argument, NULL, BX_CHOWN_OPT_DEREFERENCE},
+        {"from", required_argument, NULL, BX_CHOWN_OPT_FROM},
+        {"reference", required_argument, NULL, BX_CHOWN_OPT_REFERENCE},
+        {"no-preserve-root", no_argument, NULL, BX_CHOWN_OPT_NO_PRESERVE_ROOT},
+        {"preserve-root", no_argument, NULL, BX_CHOWN_OPT_PRESERVE_ROOT},
+        {"verbose", no_argument, NULL, 'v'},
+        {"help", no_argument, NULL, BX_CHOWN_OPT_HELP},
+        {"version", no_argument, NULL, BX_CHOWN_OPT_VERSION},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -132,25 +199,31 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
             case 'P':
                 options->symlink_traversal = BX_CHOWN_SYMLINK_TRAVERSAL_P;
                 break;
-            case 3:
+            case BX_CHOWN_OPT_REFERENCE:
                 options->reference_path = optarg;
                 break;
-            case 4:
+            case BX_CHOWN_OPT_FROM:
                 if (!bx_chown_parse_owner_group(optarg, &options->from_owner_group, diag)) {
                     return false;
                 }
                 options->from_filter_set = true;
                 break;
-            case 5:
+            case BX_CHOWN_OPT_DEREFERENCE:
                 options->no_dereference = false;
+                break;
+            case BX_CHOWN_OPT_NO_PRESERVE_ROOT:
+                options->preserve_root = false;
+                break;
+            case BX_CHOWN_OPT_PRESERVE_ROOT:
+                options->preserve_root = true;
                 break;
             case 'v':
                 options->report_mode = BX_CHOWN_REPORT_VERBOSE;
                 break;
-            case 1:
+            case BX_CHOWN_OPT_HELP:
                 options->show_help = true;
                 return true;
-            case 2:
+            case BX_CHOWN_OPT_VERSION:
                 options->show_version = true;
                 return true;
             case ':':
@@ -237,16 +310,20 @@ static bool bx_chown_parse_id_numeric(const char* text, uintmax_t max_value, uin
     return true;
 }
 
-static bool bx_chown_parse_owner(const char* text, uid_t* owner_out, struct bx_diag_ctx* diag) {
+static bool bx_chown_parse_owner(const char* text, struct bx_chown_parsed_owner* owner_out, struct bx_diag_ctx* diag) {
     uintmax_t numeric_id = 0;
     if (bx_chown_parse_id_numeric(text, (uintmax_t)((uid_t)-1), &numeric_id)) {
-        *owner_out = (uid_t)numeric_id;
+        owner_out->owner = (uid_t)numeric_id;
+        owner_out->symbolic = false;
+        owner_out->login_group = 0;
         return true;
     }
 
     struct passwd* passwd_entry = getpwnam(text);
     if (passwd_entry != NULL) {
-        *owner_out = passwd_entry->pw_uid;
+        owner_out->owner = passwd_entry->pw_uid;
+        owner_out->symbolic = true;
+        owner_out->login_group = passwd_entry->pw_gid;
         return true;
     }
 
@@ -283,10 +360,12 @@ static bool bx_chown_parse_owner_group(const char* text, struct bx_chown_owner_g
     char* separator = strchr(spec, ':');
     if (separator == NULL) {
         if (spec[0] != '\0') {
-            if (!bx_chown_parse_owner(spec, &parsed->owner, diag)) {
+            struct bx_chown_parsed_owner owner;
+            if (!bx_chown_parse_owner(spec, &owner, diag)) {
                 free(spec);
                 return false;
             }
+            parsed->owner = owner.owner;
             parsed->owner_set = true;
         }
 
@@ -297,19 +376,29 @@ static bool bx_chown_parse_owner_group(const char* text, struct bx_chown_owner_g
     *separator = '\0';
     const char* owner_text = spec;
     const char* group_text = separator + 1;
+    bool owner_is_symbolic = false;
+    gid_t owner_login_group = 0;
 
     if (owner_text[0] != '\0') {
-        if (!bx_chown_parse_owner(owner_text, &parsed->owner, diag)) {
+        struct bx_chown_parsed_owner owner;
+        if (!bx_chown_parse_owner(owner_text, &owner, diag)) {
             free(spec);
             return false;
         }
+        parsed->owner = owner.owner;
         parsed->owner_set = true;
+        owner_is_symbolic = owner.symbolic;
+        owner_login_group = owner.login_group;
     }
     if (group_text[0] != '\0') {
         if (!bx_chown_parse_group(group_text, &parsed->group, diag)) {
             free(spec);
             return false;
         }
+        parsed->group_set = true;
+    }
+    else if (owner_is_symbolic) {
+        parsed->group = owner_login_group;
         parsed->group_set = true;
     }
 
@@ -367,6 +456,17 @@ static bool bx_chown_should_follow_symlink_for_recursion(const struct bx_chown_o
         return options->symlink_traversal != BX_CHOWN_SYMLINK_TRAVERSAL_P;
     }
     return options->symlink_traversal == BX_CHOWN_SYMLINK_TRAVERSAL_L;
+}
+
+static bool bx_chown_stat_is_root_directory(const struct stat* st, struct bx_diag_ctx* diag, bool* is_root_out) {
+    struct stat root_st;
+    if (stat("/", &root_st) != 0) {
+        bx_perror_path(diag, "/");
+        return false;
+    }
+
+    *is_root_out = (st->st_dev == root_st.st_dev && st->st_ino == root_st.st_ino);
+    return true;
 }
 
 static bool bx_chown_apply_existing(const char* path, const struct stat* st, bool no_follow, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
@@ -433,8 +533,6 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
         }
     }
 
-    bool ok = bx_chown_apply_existing(path, &apply_stat, no_follow, owner, group, options, diag);
-
     bool should_recurse = false;
     if (!options->recursive) {
         should_recurse = false;
@@ -445,6 +543,20 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
     else {
         should_recurse = S_ISDIR(path_lstat.st_mode);
     }
+
+    if (should_recurse && options->preserve_root) {
+        bool is_root = false;
+        const struct stat* recurse_stat = is_symlink ? &target_stat : &path_lstat;
+        if (!bx_chown_stat_is_root_directory(recurse_stat, diag, &is_root)) {
+            return false;
+        }
+        if (is_root) {
+            bx_diag(diag, "refusing to operate recursively on '/'");
+            return false;
+        }
+    }
+
+    bool ok = bx_chown_apply_existing(path, &apply_stat, no_follow, owner, group, options, diag);
 
     if (!should_recurse) {
         return ok;

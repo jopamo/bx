@@ -153,7 +153,7 @@ int bx_chgrp_main(int argc, char** argv) {
             continue;
         }
         if (strcmp(arg, "--changes") == 0 || strcmp(arg, "--recursive") == 0 || strcmp(arg, "--quiet") == 0 || strcmp(arg, "--silent") == 0 || strcmp(arg, "--no-dereference") == 0 ||
-            strcmp(arg, "--dereference") == 0 || strcmp(arg, "--verbose") == 0) {
+            strcmp(arg, "--dereference") == 0 || strcmp(arg, "--verbose") == 0 || strcmp(arg, "--no-preserve-root") == 0 || strcmp(arg, "--preserve-root") == 0) {
             operand_index++;
             continue;
         }
