@@ -63,6 +63,7 @@ static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "Supported options:\n");
     fprintf(stream, "  -C, --compare               compare source/destination and skip unchanged outputs\n");
+    fprintf(stream, "  -c                          (ignored)\n");
     fprintf(stream, "  -d, --directory             treat all operands as directories to create\n");
     fprintf(stream, "  -D                          create all leading components of DEST\n");
     fprintf(stream, "  -g, --group=GROUP           set group ownership (name or numeric ID)\n");
@@ -449,7 +450,7 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:CDdg:m:o:pst:Tv", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+:CcDdg:m:o:pst:Tv", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -457,6 +458,9 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
         switch (c) {
             case 'C':
                 options->compare = true;
+                break;
+            case 'c':
+                /* GNU install accepts -c as a no-op compatibility option. */
                 break;
             case 'D':
                 options->make_leading_dirs = true;
