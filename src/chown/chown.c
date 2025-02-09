@@ -56,6 +56,7 @@ struct bx_chown_options {
     const char* progname;
     bool recursive;
     bool no_dereference;
+    bool dereference_explicit;
     bool preserve_root;
     bool quiet;
     enum bx_chown_report_mode report_mode;
@@ -65,6 +66,12 @@ struct bx_chown_options {
     struct bx_chown_owner_group from_owner_group;
     bool show_help;
     bool show_version;
+};
+
+struct bx_chown_dir_stack_entry {
+    dev_t dev;
+    ino_t ino;
+    const struct bx_chown_dir_stack_entry* next;
 };
 
 static bool bx_chown_parse_owner_group(const char* text, struct bx_chown_owner_group* parsed, struct bx_diag_ctx* diag);
@@ -210,6 +217,7 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
                 break;
             case BX_CHOWN_OPT_DEREFERENCE:
                 options->no_dereference = false;
+                options->dereference_explicit = true;
                 break;
             case BX_CHOWN_OPT_NO_PRESERVE_ROOT:
                 options->preserve_root = false;
@@ -435,17 +443,15 @@ static bool bx_chown_matches_from_filter(const struct bx_chown_options* options,
 }
 
 static bool bx_chown_should_follow_symlink_for_apply(const struct bx_chown_options* options, bool top_level) {
+    (void)top_level;
+
     if (options->no_dereference) {
         return false;
     }
     if (!options->recursive) {
         return true;
     }
-
-    if (top_level) {
-        return options->symlink_traversal != BX_CHOWN_SYMLINK_TRAVERSAL_P;
-    }
-    return options->symlink_traversal == BX_CHOWN_SYMLINK_TRAVERSAL_L;
+    return options->symlink_traversal != BX_CHOWN_SYMLINK_TRAVERSAL_P;
 }
 
 static bool bx_chown_should_follow_symlink_for_recursion(const struct bx_chown_options* options, bool top_level) {
@@ -467,6 +473,15 @@ static bool bx_chown_stat_is_root_directory(const struct stat* st, struct bx_dia
 
     *is_root_out = (st->st_dev == root_st.st_dev && st->st_ino == root_st.st_ino);
     return true;
+}
+
+static bool bx_chown_dir_stack_contains(const struct bx_chown_dir_stack_entry* stack, dev_t dev, ino_t ino) {
+    for (const struct bx_chown_dir_stack_entry* curr = stack; curr != NULL; curr = curr->next) {
+        if (curr->dev == dev && curr->ino == ino) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool bx_chown_apply_existing(const char* path, const struct stat* st, bool no_follow, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
@@ -507,7 +522,13 @@ static bool bx_chown_apply_existing(const char* path, const struct stat* st, boo
     return true;
 }
 
-static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
+static bool bx_chown_apply_path_recursive(const char* path,
+                                          bool top_level,
+                                          uid_t owner,
+                                          gid_t group,
+                                          const struct bx_chown_options* options,
+                                          struct bx_diag_ctx* diag,
+                                          const struct bx_chown_dir_stack_entry* dir_stack) {
     struct stat path_lstat;
     if (lstat(path, &path_lstat) != 0) {
         bx_chown_perror_path(options, diag, path);
@@ -544,9 +565,13 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
         should_recurse = S_ISDIR(path_lstat.st_mode);
     }
 
+    const struct stat* recurse_stat = NULL;
+    if (should_recurse) {
+        recurse_stat = is_symlink ? &target_stat : &path_lstat;
+    }
+
     if (should_recurse && options->preserve_root) {
         bool is_root = false;
-        const struct stat* recurse_stat = is_symlink ? &target_stat : &path_lstat;
         if (!bx_chown_stat_is_root_directory(recurse_stat, diag, &is_root)) {
             return false;
         }
@@ -561,6 +586,16 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
     if (!should_recurse) {
         return ok;
     }
+
+    if (bx_chown_dir_stack_contains(dir_stack, recurse_stat->st_dev, recurse_stat->st_ino)) {
+        return ok;
+    }
+
+    struct bx_chown_dir_stack_entry stack_entry = {
+        .dev = recurse_stat->st_dev,
+        .ino = recurse_stat->st_ino,
+        .next = dir_stack,
+    };
 
     DIR* dir = opendir(path);
     if (dir == NULL) {
@@ -584,7 +619,7 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
         }
 
         char* child_path = bx_path_join(path, entry->d_name);
-        if (!bx_chown_apply_path_recursive(child_path, false, owner, group, options, diag)) {
+        if (!bx_chown_apply_path_recursive(child_path, false, owner, group, options, diag, &stack_entry)) {
             recurse_ok = false;
         }
         free(child_path);
@@ -599,7 +634,7 @@ static bool bx_chown_apply_path_recursive(const char* path, bool top_level, uid_
 }
 
 static bool bx_chown_apply_one(const char* path, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
-    return bx_chown_apply_path_recursive(path, true, owner, group, options, diag);
+    return bx_chown_apply_path_recursive(path, true, owner, group, options, diag, NULL);
 }
 
 int bx_chown_main(int argc, char** argv) {
@@ -624,6 +659,11 @@ int bx_chown_main(int argc, char** argv) {
     if (options.show_version) {
         bx_chown_print_version(options.progname);
         return 0;
+    }
+
+    if (options.recursive && options.dereference_explicit && !options.no_dereference && options.symlink_traversal == BX_CHOWN_SYMLINK_TRAVERSAL_P) {
+        bx_diag(&diag, "-R --dereference requires either -H or -L");
+        return diag.exit_status;
     }
 
     struct bx_chown_owner_group owner_group;
