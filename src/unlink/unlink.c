@@ -38,6 +38,10 @@ static void bx_unlink_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static void bx_unlink_print_try_help(const char* progname) {
+    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+}
+
 static bool bx_unlink_parse_options(int argc, char** argv, struct bx_unlink_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 1},
@@ -97,6 +101,7 @@ int bx_unlink_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_unlink_parse_options(argc, argv, &options, &first_operand, &diag)) {
+        bx_unlink_print_try_help(diag.progname);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -114,11 +119,13 @@ int bx_unlink_main(int argc, char** argv) {
     char** operands = argv + first_operand;
     if (operand_count <= 0) {
         bx_diag(&diag, "missing operand");
+        bx_unlink_print_try_help(options.progname);
         return diag.exit_status;
     }
 
     if (operand_count > 1) {
         bx_diag(&diag, "extra operand '%s'", operands[1]);
+        bx_unlink_print_try_help(options.progname);
         return diag.exit_status;
     }
 
