@@ -193,6 +193,10 @@ static void bx_realpath_components_free(struct bx_realpath_components* component
     components->count = 0;
 }
 
+static void bx_realpath_components_clear(struct bx_realpath_components* components) {
+    bx_realpath_components_free(components);
+}
+
 static void bx_realpath_components_append_raw(struct bx_realpath_components* components, const char* path) {
     char* copy = xstrdup(path);
     char* saveptr = NULL;
@@ -202,6 +206,21 @@ static void bx_realpath_components_append_raw(struct bx_realpath_components* com
     }
 
     free(copy);
+}
+
+static void bx_realpath_components_insert_raw_path(struct bx_realpath_components* components, size_t index, const char* path) {
+    struct bx_realpath_components inserted = {0};
+
+    bx_realpath_components_append_raw(&inserted, path);
+    if (inserted.count == 0) {
+        return;
+    }
+
+    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + inserted.count));
+    memmove(&components->parts[index + inserted.count], &components->parts[index], sizeof(*components->parts) * (components->count - index));
+    memcpy(&components->parts[index], inserted.parts, sizeof(*components->parts) * inserted.count);
+    components->count += inserted.count;
+    free(inserted.parts);
 }
 
 static void bx_realpath_components_append_normalized(struct bx_realpath_components* components, const char* path) {
@@ -390,101 +409,136 @@ static char* bx_realpath_relative_path_between(const char* from_abs, const char*
     return relative;
 }
 
-static bool bx_realpath_find_existing_prefix(const struct bx_realpath_components* components, size_t* prefix_count_out, char** resolved_prefix_out) {
-    for (size_t prefix_count = components->count;;) {
-        char* prefix_path = bx_realpath_components_to_absolute_path(components, prefix_count);
-        char* resolved_prefix = realpath(prefix_path, NULL);
-        int saved_errno = errno;
-        free(prefix_path);
+static char* bx_realpath_readlink_dup(const char* path) {
+    size_t size = 128u;
 
-        if (resolved_prefix != NULL) {
-            *prefix_count_out = prefix_count;
-            *resolved_prefix_out = resolved_prefix;
-            return true;
+    while (true) {
+        char* buf = xmalloc(size);
+        ssize_t len = readlink(path, buf, size);
+        if (len < 0) {
+            free(buf);
+            return NULL;
+        }
+        if ((size_t)len < size) {
+            buf[len] = '\0';
+            return buf;
         }
 
-        if (prefix_count == 0) {
-            errno = saved_errno;
-            return false;
-        }
-
-        prefix_count--;
+        free(buf);
+        size *= 2u;
     }
-}
-
-static char* bx_realpath_append_remainder_lexical(const char* resolved_prefix, const struct bx_realpath_components* raw_components, size_t remainder_start) {
-    struct bx_realpath_components normalized_components = {0};
-    char* output_path;
-
-    bx_realpath_components_append_normalized(&normalized_components, resolved_prefix);
-    for (size_t i = remainder_start; i < raw_components->count; i++) {
-        bx_realpath_components_append_normalized_part(&normalized_components, raw_components->parts[i]);
-    }
-
-    output_path = bx_realpath_components_to_absolute_path(&normalized_components, normalized_components.count);
-    bx_realpath_components_free(&normalized_components);
-    return output_path;
 }
 
 static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_realpath_canonicalization_mode canonicalization_mode) {
-    char* resolved = realpath(path, NULL);
-    if (resolved != NULL) {
-        return resolved;
-    }
-
-    int initial_errno = errno;
-    if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING) {
-        errno = initial_errno;
-        return NULL;
-    }
-    if (initial_errno != ENOENT && initial_errno != ENOTDIR) {
-        errno = initial_errno;
-        return NULL;
-    }
-
     char* absolute_input = bx_realpath_make_absolute_input(path);
+    struct bx_realpath_components pending = {0};
+    struct bx_realpath_components resolved_components = {0};
+    char* resolved = NULL;
+
     if (absolute_input == NULL) {
         return NULL;
     }
 
-    struct bx_realpath_components raw_components = {0};
-    bx_realpath_components_append_raw(&raw_components, absolute_input);
+    bx_realpath_components_append_raw(&pending, absolute_input);
+    free(absolute_input);
 
-    size_t prefix_count = 0;
-    char* resolved_prefix = NULL;
-    if (!bx_realpath_find_existing_prefix(&raw_components, &prefix_count, &resolved_prefix)) {
-        bx_realpath_components_free(&raw_components);
-        free(absolute_input);
-        errno = initial_errno;
-        return NULL;
-    }
-
-    size_t remainder_count = raw_components.count - prefix_count;
-    if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST && remainder_count > 1u) {
-        free(resolved_prefix);
-        bx_realpath_components_free(&raw_components);
-        free(absolute_input);
-        errno = initial_errno;
-        return NULL;
-    }
-
-    if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST && remainder_count == 1u) {
+    for (size_t i = 0; i < pending.count; i++) {
+        const char* part = pending.parts[i];
         struct stat st;
-        if (stat(resolved_prefix, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        char* current_path;
+
+        if (strcmp(part, ".") == 0 || part[0] == '\0') {
+            continue;
+        }
+        if (strcmp(part, "..") == 0) {
+            bx_realpath_components_pop(&resolved_components);
+            continue;
+        }
+
+        current_path = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+        char* next_path = bx_path_join(current_path, part);
+        free(current_path);
+
+        if (lstat(next_path, &st) != 0) {
             int saved_errno = errno;
-            free(resolved_prefix);
-            bx_realpath_components_free(&raw_components);
-            free(absolute_input);
-            errno = (saved_errno == 0) ? ENOTDIR : saved_errno;
+            if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING) {
+                free(next_path);
+                bx_realpath_components_free(&pending);
+                bx_realpath_components_free(&resolved_components);
+                errno = saved_errno;
+                return NULL;
+            }
+
+            if (saved_errno == ENOENT || (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING && saved_errno == ENOTDIR)) {
+                if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST && i + 1u < pending.count) {
+                    free(next_path);
+                    bx_realpath_components_free(&pending);
+                    bx_realpath_components_free(&resolved_components);
+                    errno = saved_errno;
+                    return NULL;
+                }
+                bx_realpath_components_push(&resolved_components, part);
+                for (size_t j = i + 1u; j < pending.count; j++) {
+                    bx_realpath_components_append_normalized_part(&resolved_components, pending.parts[j]);
+                }
+                resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+                free(next_path);
+                bx_realpath_components_free(&pending);
+                bx_realpath_components_free(&resolved_components);
+                return resolved;
+            }
+
+            free(next_path);
+            bx_realpath_components_free(&pending);
+            bx_realpath_components_free(&resolved_components);
+            errno = saved_errno;
+            return NULL;
+        }
+
+        if (S_ISLNK(st.st_mode)) {
+            char* target = bx_realpath_readlink_dup(next_path);
+            free(next_path);
+            if (target == NULL) {
+                int saved_errno = errno;
+                bx_realpath_components_free(&pending);
+                bx_realpath_components_free(&resolved_components);
+                errno = saved_errno;
+                return NULL;
+            }
+
+            memmove(&pending.parts[i], &pending.parts[i + 1u], sizeof(*pending.parts) * (pending.count - (i + 1u)));
+            pending.count--;
+            if (target[0] == '/') {
+                bx_realpath_components_clear(&resolved_components);
+            }
+            bx_realpath_components_insert_raw_path(&pending, i, target);
+            free(target);
+            i--;
+            continue;
+        }
+
+        bx_realpath_components_push(&resolved_components, part);
+        free(next_path);
+        if (i + 1u < pending.count && !S_ISDIR(st.st_mode)) {
+            if (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING) {
+                for (size_t j = i + 1u; j < pending.count; j++) {
+                    bx_realpath_components_append_normalized_part(&resolved_components, pending.parts[j]);
+                }
+                resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+                bx_realpath_components_free(&pending);
+                bx_realpath_components_free(&resolved_components);
+                return resolved;
+            }
+            bx_realpath_components_free(&pending);
+            bx_realpath_components_free(&resolved_components);
+            errno = ENOTDIR;
             return NULL;
         }
     }
 
-    resolved = bx_realpath_append_remainder_lexical(resolved_prefix, &raw_components, prefix_count);
-
-    free(resolved_prefix);
-    bx_realpath_components_free(&raw_components);
-    free(absolute_input);
+    resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+    bx_realpath_components_free(&pending);
+    bx_realpath_components_free(&resolved_components);
     return resolved;
 }
 
