@@ -612,6 +612,53 @@ static char* bx_realpath_canonicalize_path_no_symlinks(const char* path, enum bx
     return normalized;
 }
 
+static bool bx_realpath_validate_logical_input_path(const char* absolute_input, enum bx_realpath_canonicalization_mode canonicalization_mode) {
+    struct bx_realpath_components input_components = {0};
+    struct bx_realpath_components logical_components = {0};
+
+    if (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING) {
+        return true;
+    }
+
+    bx_realpath_components_append_raw(&input_components, absolute_input);
+
+    for (size_t i = 0; i < input_components.count; i++) {
+        const char* part = input_components.parts[i];
+        char* current_path;
+        struct stat st;
+        bool must_check;
+
+        if (strcmp(part, ".") == 0 || part[0] == '\0') {
+            continue;
+        }
+        if (strcmp(part, "..") == 0) {
+            bx_realpath_components_pop(&logical_components);
+            continue;
+        }
+
+        bx_realpath_components_push(&logical_components, part);
+        must_check = (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING) || (i + 1u < input_components.count);
+        if (!must_check) {
+            continue;
+        }
+
+        current_path = bx_realpath_components_to_absolute_path(&logical_components, logical_components.count);
+        if (stat(current_path, &st) != 0) {
+            int saved_errno = errno;
+            free(current_path);
+            bx_realpath_components_free(&input_components);
+            bx_realpath_components_free(&logical_components);
+            errno = saved_errno;
+            return false;
+        }
+        free(current_path);
+    }
+
+    bx_realpath_components_free(&input_components);
+    bx_realpath_components_free(&logical_components);
+    return true;
+}
+
 static char* bx_realpath_canonicalize_path(const char* path, enum bx_realpath_canonicalization_mode canonicalization_mode, enum bx_realpath_symlink_mode symlink_mode) {
     char* absolute_input = NULL;
     char* normalized_input = NULL;
@@ -628,6 +675,13 @@ static char* bx_realpath_canonicalize_path(const char* path, enum bx_realpath_ca
         case BX_REALPATH_SYMLINK_LOGICAL:
             absolute_input = bx_realpath_make_absolute_input(path);
             if (absolute_input == NULL) {
+                return NULL;
+            }
+
+            if (!bx_realpath_validate_logical_input_path(absolute_input, canonicalization_mode)) {
+                int saved_errno = errno;
+                free(absolute_input);
+                errno = saved_errno;
                 return NULL;
             }
 

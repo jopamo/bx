@@ -3,7 +3,9 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -206,6 +208,43 @@ static bool bx_pathchk_check_path_length(const char* name, long path_max, struct
     return true;
 }
 
+static bool bx_pathchk_check_existing_prefixes(const char* name, struct bx_diag_ctx* diag) {
+    const char* slash = strchr(name, '/');
+    while (slash != NULL) {
+        size_t prefix_len = (size_t)(slash - name);
+        if (prefix_len > 0) {
+            char* prefix = malloc(prefix_len + 1);
+            if (prefix == NULL) {
+                bx_diag(diag, "memory allocation failed");
+                return false;
+            }
+
+            memcpy(prefix, name, prefix_len);
+            prefix[prefix_len] = '\0';
+
+            struct stat st;
+            if (stat(prefix, &st) == 0) {
+                if (!S_ISDIR(st.st_mode)) {
+                    bx_diag(diag, "%s: Not a directory", name);
+                    free(prefix);
+                    return false;
+                }
+            }
+            else if (errno != ENOENT) {
+                bx_perror_path(diag, name);
+                free(prefix);
+                return false;
+            }
+
+            free(prefix);
+        }
+
+        slash = strchr(slash + 1, '/');
+    }
+
+    return true;
+}
+
 static void bx_pathchk_check_name(const char* name, const struct bx_pathchk_options* options, struct bx_diag_ctx* diag) {
     if (name == NULL || name[0] == '\0') {
         bx_diag(diag, "empty file name");
@@ -224,6 +263,10 @@ static void bx_pathchk_check_name(const char* name, const struct bx_pathchk_opti
     }
 
     if (!bx_pathchk_check_component_lengths(name, name_max, diag)) {
+        return;
+    }
+
+    if (!options->portability && !bx_pathchk_check_existing_prefixes(name, diag)) {
         return;
     }
 
