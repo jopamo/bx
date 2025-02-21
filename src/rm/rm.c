@@ -32,6 +32,7 @@ struct bx_rm_options {
     bool remove_empty_dirs;
     bool force;
     bool recursive;
+    bool verbose;
     bool preserve_root;
     bool one_file_system;
     enum bx_rm_interactive_mode interactive_mode;
@@ -63,6 +64,7 @@ static void bx_rm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --no-preserve-root    do not treat '/' specially\n");
     fprintf(stream, "      --preserve-root       do not remove '/' (default)\n");
     fprintf(stream, "  -r, -R, --recursive  remove directories and their contents recursively\n");
+    fprintf(stream, "  -v, --verbose     explain what is being done\n");
     fprintf(stream, "  -x, --one-file-system  when removing a hierarchy recursively, skip directories on different file systems\n");
     fprintf(stream, "      --help       display this help and exit\n");
     fprintf(stream, "      --version    output version information and exit\n");
@@ -97,6 +99,7 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
         {"one-file-system", no_argument, NULL, 'x'},
         {"preserve-root", no_argument, NULL, BX_RM_OPT_PRESERVE_ROOT},
         {"recursive", no_argument, NULL, 'r'},
+        {"verbose", no_argument, NULL, 'v'},
         {"help", no_argument, NULL, 1},
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
@@ -112,7 +115,7 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+dfiIRrx", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+dfiIRrvx", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -136,6 +139,9 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
             case 'R':
             case 'r':
                 options->recursive = true;
+                break;
+            case 'v':
+                options->verbose = true;
                 break;
             case 'x':
                 options->one_file_system = true;
@@ -228,6 +234,32 @@ static bool bx_rm_prompt_once(const struct bx_rm_options* options, int operand_c
     return confirmed;
 }
 
+static bool bx_rm_print_removed(const struct bx_rm_options* options, const char* path, bool is_directory, struct bx_diag_ctx* diag) {
+    if (!options->verbose) {
+        return true;
+    }
+
+    int rc = printf(is_directory ? "removed directory '%s'\n" : "removed '%s'\n", path);
+    if (rc >= 0) {
+        return true;
+    }
+
+    int err = errno;
+    errno = err;
+    bx_diag(diag, "write error: %s", strerror(err));
+    return false;
+}
+
+struct bx_rm_recursive_report_ctx {
+    const struct bx_rm_options* options;
+    struct bx_diag_ctx* diag;
+};
+
+static void bx_rm_report_recursive_removed(const char* path, bool is_directory, void* user_data) {
+    struct bx_rm_recursive_report_ctx* ctx = user_data;
+    (void)bx_rm_print_removed(ctx->options, path, is_directory, ctx->diag);
+}
+
 static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* options, struct bx_diag_ctx* diag) {
     struct stat st;
     bool is_root = false;
@@ -261,9 +293,25 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
                 return true;
             }
             if (options->one_file_system) {
-                return bx_remove_recursive_one_file_system(path, st.st_dev, diag);
+                if (!options->verbose) {
+                    return bx_remove_recursive_one_file_system(path, st.st_dev, diag);
+                }
+
+                struct bx_rm_recursive_report_ctx report_ctx = {
+                    .options = options,
+                    .diag = diag,
+                };
+                return bx_remove_recursive_one_file_system_report(path, st.st_dev, diag, bx_rm_report_recursive_removed, &report_ctx);
             }
-            return bx_remove_recursive(path, diag);
+            if (!options->verbose) {
+                return bx_remove_recursive(path, diag);
+            }
+
+            struct bx_rm_recursive_report_ctx report_ctx = {
+                .options = options,
+                .diag = diag,
+            };
+            return bx_remove_recursive_report(path, diag, bx_rm_report_recursive_removed, &report_ctx);
         }
 
         if (options->remove_empty_dirs) {
@@ -271,7 +319,7 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
                 return true;
             }
             if (rmdir(path) == 0) {
-                return true;
+                return bx_rm_print_removed(options, path, true, diag);
             }
 
             if (errno == ENOENT && options->force) {
@@ -291,7 +339,7 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
     }
 
     if (unlink(path) == 0) {
-        return true;
+        return bx_rm_print_removed(options, path, false, diag);
     }
 
     if (errno == ENOENT && options->force) {

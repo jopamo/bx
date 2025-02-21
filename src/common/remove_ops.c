@@ -10,7 +10,8 @@
 #include "path_ops.h"
 #include "diag.h"
 
-static bool bx_remove_recursive_impl(const char* path, bool one_file_system, dev_t root_dev, bool top_level, struct bx_diag_ctx* diag) {
+static bool
+bx_remove_recursive_impl(const char* path, bool one_file_system, dev_t root_dev, bool top_level, struct bx_diag_ctx* diag, bx_remove_report_removed_fn report_removed, void* report_removed_user_data) {
     struct stat st;
     if (lstat(path, &st) != 0) {
         if (errno == ENOENT) {
@@ -28,6 +29,9 @@ static bool bx_remove_recursive_impl(const char* path, bool one_file_system, dev
         if (unlink(path) != 0) {
             bx_perror_path(diag, path);
             return false;
+        }
+        if (report_removed != NULL) {
+            report_removed(path, false, report_removed_user_data);
         }
         return true;
     }
@@ -54,7 +58,7 @@ static bool bx_remove_recursive_impl(const char* path, bool one_file_system, dev
         }
 
         char* child_path = bx_path_join(path, entry->d_name);
-        if (!bx_remove_recursive_impl(child_path, one_file_system, root_dev, false, diag)) {
+        if (!bx_remove_recursive_impl(child_path, one_file_system, root_dev, false, diag, report_removed, report_removed_user_data)) {
             ok = false;
         }
         free(child_path);
@@ -70,15 +74,26 @@ static bool bx_remove_recursive_impl(const char* path, bool one_file_system, dev
             bx_perror_path(diag, path);
             ok = false;
         }
+        else if (report_removed != NULL) {
+            report_removed(path, true, report_removed_user_data);
+        }
     }
 
     return ok;
 }
 
 bool bx_remove_recursive(const char* path, struct bx_diag_ctx* diag) {
-    return bx_remove_recursive_impl(path, false, 0, true, diag);
+    return bx_remove_recursive_impl(path, false, 0, true, diag, NULL, NULL);
 }
 
 bool bx_remove_recursive_one_file_system(const char* path, dev_t root_dev, struct bx_diag_ctx* diag) {
-    return bx_remove_recursive_impl(path, true, root_dev, true, diag);
+    return bx_remove_recursive_impl(path, true, root_dev, true, diag, NULL, NULL);
+}
+
+bool bx_remove_recursive_report(const char* path, struct bx_diag_ctx* diag, bx_remove_report_removed_fn report_removed, void* report_removed_user_data) {
+    return bx_remove_recursive_impl(path, false, 0, true, diag, report_removed, report_removed_user_data);
+}
+
+bool bx_remove_recursive_one_file_system_report(const char* path, dev_t root_dev, struct bx_diag_ctx* diag, bx_remove_report_removed_fn report_removed, void* report_removed_user_data) {
+    return bx_remove_recursive_impl(path, true, root_dev, true, diag, report_removed, report_removed_user_data);
 }
