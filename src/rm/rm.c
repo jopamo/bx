@@ -34,6 +34,7 @@ struct bx_rm_options {
     bool recursive;
     bool verbose;
     bool preserve_root;
+    bool preserve_root_all;
     bool one_file_system;
     enum bx_rm_interactive_mode interactive_mode;
     bool show_help;
@@ -62,7 +63,9 @@ static void bx_rm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -I               prompt once before removing many files or recursively\n");
     fprintf(stream, "      --interactive[=WHEN]  prompt according to WHEN: never, once, or always\n");
     fprintf(stream, "      --no-preserve-root    do not treat '/' specially\n");
-    fprintf(stream, "      --preserve-root       do not remove '/' (default)\n");
+    fprintf(stream, "      --preserve-root[=all]  do not remove '/' (default);\n");
+    fprintf(stream, "                            with 'all', reject command line arguments\n");
+    fprintf(stream, "                            on a separate device from their parent\n");
     fprintf(stream, "  -r, -R, --recursive  remove directories and their contents recursively\n");
     fprintf(stream, "  -v, --verbose     explain what is being done\n");
     fprintf(stream, "  -x, --one-file-system  when removing a hierarchy recursively, skip directories on different file systems\n");
@@ -97,7 +100,7 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
         {"interactive", optional_argument, NULL, BX_RM_OPT_INTERACTIVE},
         {"no-preserve-root", no_argument, NULL, BX_RM_OPT_NO_PRESERVE_ROOT},
         {"one-file-system", no_argument, NULL, 'x'},
-        {"preserve-root", no_argument, NULL, BX_RM_OPT_PRESERVE_ROOT},
+        {"preserve-root", optional_argument, NULL, BX_RM_OPT_PRESERVE_ROOT},
         {"recursive", no_argument, NULL, 'r'},
         {"verbose", no_argument, NULL, 'v'},
         {"help", no_argument, NULL, 1},
@@ -160,6 +163,15 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
                 break;
             case BX_RM_OPT_PRESERVE_ROOT:
                 options->preserve_root = true;
+                if (optarg != NULL) {
+                    if (strcmp(optarg, "all") == 0) {
+                        options->preserve_root_all = true;
+                    }
+                    else {
+                        bx_diag(diag, "invalid argument '%s' for '--preserve-root'", optarg);
+                        return false;
+                    }
+                }
                 break;
             case 1:
                 options->show_help = true;
@@ -203,6 +215,45 @@ static bool bx_rm_operand_is_root_directory(const struct stat* path_st, struct b
 
     *is_root_out = (path_st->st_dev == root_st.st_dev && path_st->st_ino == root_st.st_ino);
     return true;
+}
+
+static char* bx_rm_parent_path_dup(const char* path) {
+    char* stripped = bx_path_strip_trailing_slashes_dup(path);
+    const char* slash = strrchr(stripped, '/');
+    char* parent = NULL;
+
+    if (slash == NULL) {
+        parent = xstrdup(".");
+    }
+    else if (slash == stripped) {
+        parent = xstrdup("/");
+    }
+    else {
+        size_t len = (size_t)(slash - stripped);
+        parent = xmalloc(len + 1u);
+        memcpy(parent, stripped, len);
+        parent[len] = '\0';
+    }
+
+    free(stripped);
+    return parent;
+}
+
+static bool bx_rm_operand_is_separate_device_from_parent(const char* path, dev_t path_dev, struct bx_diag_ctx* diag, bool* separate_out) {
+    char* parent_path = bx_rm_parent_path_dup(path);
+    struct stat parent_st;
+    bool ok = true;
+
+    if (stat(parent_path, &parent_st) != 0) {
+        bx_perror_path(diag, parent_path);
+        ok = false;
+    }
+    else {
+        *separate_out = (path_dev != parent_st.st_dev);
+    }
+
+    free(parent_path);
+    return ok;
 }
 
 static bool bx_rm_prompt_remove(const struct bx_rm_options* options, const char* path) {
@@ -263,6 +314,7 @@ static void bx_rm_report_recursive_removed(const char* path, bool is_directory, 
 static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* options, struct bx_diag_ctx* diag) {
     struct stat st;
     bool is_root = false;
+    bool separate_device = false;
 
     if (bx_rm_operand_is_dot_or_dotdot(path)) {
         bx_diag(diag, "refusing to remove '.' or '..' directory: skipping '%s'", path);
@@ -283,6 +335,16 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
         }
         if (is_root) {
             bx_diag(diag, "refusing to remove '/' recursively");
+            return false;
+        }
+    }
+
+    if (options->recursive && options->preserve_root_all && S_ISDIR(st.st_mode)) {
+        if (!bx_rm_operand_is_separate_device_from_parent(path, st.st_dev, diag, &separate_device)) {
+            return false;
+        }
+        if (separate_device) {
+            bx_diag(diag, "skipping '%s', since it is on a different device and --preserve-root=all is in effect", path);
             return false;
         }
     }

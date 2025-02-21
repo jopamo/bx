@@ -390,6 +390,9 @@ if get_option('tests')
   test_rm_basic = find_program('tests/rm/test_rm_basic.sh')
   test('rm basic', test_rm_basic, args : [bx_exe])
 
+  test_rm_smoke_differential = find_program('tests/rm/test_rm_smoke_differential.sh')
+  test('rm smoke differential', test_rm_smoke_differential, args : [bx_exe])
+
   test_mkdir_basic = find_program('tests/mkdir/test_mkdir_basic.sh')
   test('mkdir basic', test_mkdir_basic, args : [bx_exe])
 
