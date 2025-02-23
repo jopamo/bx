@@ -342,8 +342,14 @@ if get_option('tests')
   test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
   test('ls basic', test_ls_basic, args : [bx_exe])
 
+  test_ls_smoke_differential = find_program('tests/ls/test_ls_smoke_differential.sh')
+  test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe])
+
   test_stat_basic = find_program('tests/stat/test_stat_basic.sh')
   test('stat basic', test_stat_basic, args : [bx_exe])
+
+  test_stat_smoke_differential = find_program('tests/stat/test_stat_smoke_differential.sh')
+  test('stat smoke differential', test_stat_smoke_differential, args : [bx_exe])
 
   test_df_basic = find_program('tests/df/test_df_basic.sh')
   test('df basic', test_df_basic, args : [bx_exe])
@@ -360,11 +366,20 @@ if get_option('tests')
   test_env_basic = find_program('tests/env/test_env_basic.sh')
   test('env basic', test_env_basic, args : [bx_exe])
 
+  test_env_smoke_differential = find_program('tests/env/test_env_smoke_differential.sh')
+  test('env smoke differential', test_env_smoke_differential, args : [bx_exe])
+
   test_printenv_basic = find_program('tests/printenv/test_printenv_basic.sh')
   test('printenv basic', test_printenv_basic, args : [bx_exe])
 
+  test_printenv_smoke_differential = find_program('tests/printenv/test_printenv_smoke_differential.sh')
+  test('printenv smoke differential', test_printenv_smoke_differential, args : [bx_exe])
+
   test_tty_basic = find_program('tests/tty/test_tty_basic.sh')
   test('tty basic', test_tty_basic, args : [bx_exe])
+
+  test_tty_smoke_differential = find_program('tests/tty/test_tty_smoke_differential.sh')
+  test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe])
 
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe])
@@ -378,14 +393,26 @@ if get_option('tests')
   test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
   test('chroot basic', test_chroot_basic, args : [bx_exe])
 
+  test_chroot_smoke_differential = find_program('tests/chroot/test_chroot_smoke_differential.sh')
+  test('chroot smoke differential', test_chroot_smoke_differential, args : [bx_exe])
+
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe])
+
+  test_chmod_smoke_differential = find_program('tests/chmod/test_chmod_smoke_differential.sh')
+  test('chmod smoke differential', test_chmod_smoke_differential, args : [bx_exe])
 
   test_chown_basic = find_program('tests/chown/test_chown_basic.sh')
   test('chown basic', test_chown_basic, args : [bx_exe])
 
+  test_chown_smoke_differential = find_program('tests/chown/test_chown_smoke_differential.sh')
+  test('chown smoke differential', test_chown_smoke_differential, args : [bx_exe])
+
   test_chgrp_basic = find_program('tests/chgrp/test_chgrp_basic.sh')
   test('chgrp basic', test_chgrp_basic, args : [bx_exe])
+
+  test_chgrp_smoke_differential = find_program('tests/chgrp/test_chgrp_smoke_differential.sh')
+  test('chgrp smoke differential', test_chgrp_smoke_differential, args : [bx_exe])
 
   test_rm_basic = find_program('tests/rm/test_rm_basic.sh')
   test('rm basic', test_rm_basic, args : [bx_exe])
@@ -402,6 +429,9 @@ if get_option('tests')
   test_rmdir_basic = find_program('tests/rmdir/test_rmdir_basic.sh')
   test('rmdir basic', test_rmdir_basic, args : [bx_exe])
 
+  test_rmdir_smoke_differential = find_program('tests/rmdir/test_rmdir_smoke_differential.sh')
+  test('rmdir smoke differential', test_rmdir_smoke_differential, args : [bx_exe])
+
   test_mkfifo_basic = find_program('tests/mkfifo/test_mkfifo_basic.sh')
   test('mkfifo basic', test_mkfifo_basic, args : [bx_exe])
 
@@ -411,8 +441,14 @@ if get_option('tests')
   test_mktemp_basic = find_program('tests/mktemp/test_mktemp_basic.sh')
   test('mktemp basic', test_mktemp_basic, args : [bx_exe])
 
+  test_mktemp_smoke_differential = find_program('tests/mktemp/test_mktemp_smoke_differential.sh')
+  test('mktemp smoke differential', test_mktemp_smoke_differential, args : [bx_exe])
+
   test_touch_basic = find_program('tests/touch/test_touch_basic.sh')
   test('touch basic', test_touch_basic, args : [bx_exe])
+
+  test_touch_smoke_differential = find_program('tests/touch/test_touch_smoke_differential.sh')
+  test('touch smoke differential', test_touch_smoke_differential, args : [bx_exe])
 
   test_truncate_basic = find_program('tests/truncate/test_truncate_basic.sh')
   test('truncate basic', test_truncate_basic, args : [bx_exe])
@@ -420,8 +456,14 @@ if get_option('tests')
   test_shred_basic = find_program('tests/shred/test_shred_basic.sh')
   test('shred basic', test_shred_basic, args : [bx_exe])
 
+  test_shred_smoke_differential = find_program('tests/shred/test_shred_smoke_differential.sh')
+  test('shred smoke differential', test_shred_smoke_differential, args : [bx_exe])
+
   test_install_basic = find_program('tests/install/test_install_basic.sh')
   test('install basic', test_install_basic, args : [bx_exe])
+
+  test_install_smoke_differential = find_program('tests/install/test_install_smoke_differential.sh')
+  test('install smoke differential', test_install_smoke_differential, args : [bx_exe])
 
   test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
   test('tier1 safe-replace smoke', test_tier1_safe_replace, args : [bx_exe])

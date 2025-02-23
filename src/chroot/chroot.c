@@ -5,6 +5,7 @@
 #include <grp.h>
 #include <inttypes.h>
 #include <pwd.h>
+#include <sys/stat.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,7 @@ struct bx_chroot_name_or_id {
 
 struct bx_chroot_userspec_arg {
     bool present;
+    bool user_present;
     struct bx_chroot_name_or_id user;
     struct bx_chroot_name_or_id group;
     bool group_present;
@@ -28,6 +30,7 @@ struct bx_chroot_userspec_arg {
 
 struct bx_chroot_groups_arg {
     bool present;
+    char* raw;
     char** items;
     size_t count;
 };
@@ -107,6 +110,7 @@ static void bx_chroot_free_groups_arg(struct bx_chroot_groups_arg* groups) {
     }
 
     free(groups->items);
+    free(groups->raw);
     memset(groups, 0, sizeof(*groups));
 }
 
@@ -154,14 +158,11 @@ static bool bx_chroot_parse_userspec(const char* text, struct bx_chroot_userspec
         }
     }
 
-    if (spec[0] == '\0') {
-        bx_diag(diag, "empty user in --userspec");
-        free(spec);
-        bx_chroot_free_userspec_arg(&parsed);
-        return false;
+    if (spec[0] != '\0') {
+        parsed.user.raw = xstrdup(spec);
+        parsed.user_present = true;
     }
 
-    parsed.user.raw = xstrdup(spec);
     free(spec);
 
     bx_chroot_free_userspec_arg(out);
@@ -178,6 +179,7 @@ static bool bx_chroot_parse_groups(const char* text, struct bx_chroot_groups_arg
     struct bx_chroot_groups_arg parsed;
     memset(&parsed, 0, sizeof(parsed));
     parsed.present = true;
+    parsed.raw = xstrdup(text);
 
     if (text[0] != '\0') {
         char* copy = xstrdup(text);
@@ -189,15 +191,10 @@ static bool bx_chroot_parse_groups(const char* text, struct bx_chroot_groups_arg
                 *comma = '\0';
             }
 
-            if (token[0] == '\0') {
-                bx_diag(diag, "invalid empty supplementary group in --groups");
-                free(copy);
-                bx_chroot_free_groups_arg(&parsed);
-                return false;
+            if (token[0] != '\0') {
+                parsed.items = xrealloc(parsed.items, (parsed.count + 1) * sizeof(*parsed.items));
+                parsed.items[parsed.count++] = xstrdup(token);
             }
-
-            parsed.items = xrealloc(parsed.items, (parsed.count + 1) * sizeof(*parsed.items));
-            parsed.items[parsed.count++] = xstrdup(token);
 
             if (comma == NULL) {
                 break;
@@ -364,7 +361,15 @@ static bool bx_chroot_resolve_explicit_groups(const struct bx_chroot_groups_arg*
     *groups_out = NULL;
     *ngroups_out = 0;
 
-    if (!arg->present || arg->count == 0) {
+    if (!arg->present) {
+        return true;
+    }
+
+    if (arg->count == 0) {
+        if (arg->raw != NULL && arg->raw[0] != '\0') {
+            bx_diag(diag, "invalid group list '%s'", arg->raw);
+            return false;
+        }
         return true;
     }
 
@@ -393,36 +398,46 @@ static bool bx_chroot_resolve_creds_here(const struct bx_chroot_cred_spec* spec,
 
     char* supplementary_user = NULL;
     if (spec->userspec.present) {
-        uid_t uid = 0;
-        gid_t primary_gid = 0;
-        bool needs_passwd_entry = !spec->userspec.group_present || !spec->groups.present;
-        bool need_supplementary_groups = !spec->groups.present;
+        if (spec->userspec.user_present) {
+            uid_t uid = 0;
+            gid_t primary_gid = 0;
+            bool needs_passwd_entry = !spec->userspec.group_present || !spec->groups.present;
+            bool need_supplementary_groups = !spec->groups.present;
 
-        if (!bx_chroot_resolve_user_item(&spec->userspec.user, needs_passwd_entry, &uid, &primary_gid, need_supplementary_groups ? &supplementary_user : NULL, diag)) {
-            goto fail;
+            if (!bx_chroot_resolve_user_item(&spec->userspec.user, needs_passwd_entry, &uid, &primary_gid, need_supplementary_groups ? &supplementary_user : NULL, diag)) {
+                goto fail;
+            }
+
+            out->uid_set = true;
+            out->uid = uid;
+
+            if (spec->userspec.group_present) {
+                gid_t gid = 0;
+                if (!bx_chroot_resolve_group_item(&spec->userspec.group, &gid, diag)) {
+                    goto fail;
+                }
+                out->gid_set = true;
+                out->gid = gid;
+            }
+            else {
+                out->gid_set = true;
+                out->gid = primary_gid;
+            }
+
+            if (!spec->groups.present) {
+                if (!bx_chroot_resolve_supplementary_groups_from_user(supplementary_user, out->gid, &out->groups, &out->ngroups, diag)) {
+                    goto fail;
+                }
+                out->groups_set = true;
+            }
         }
-
-        out->uid_set = true;
-        out->uid = uid;
-
-        if (spec->userspec.group_present) {
+        else if (spec->userspec.group_present) {
             gid_t gid = 0;
             if (!bx_chroot_resolve_group_item(&spec->userspec.group, &gid, diag)) {
                 goto fail;
             }
             out->gid_set = true;
             out->gid = gid;
-        }
-        else {
-            out->gid_set = true;
-            out->gid = primary_gid;
-        }
-
-        if (!spec->groups.present) {
-            if (!bx_chroot_resolve_supplementary_groups_from_user(supplementary_user, out->gid, &out->groups, &out->ngroups, diag)) {
-                goto fail;
-            }
-            out->groups_set = true;
         }
     }
 
@@ -469,6 +484,23 @@ static bool bx_chroot_apply_creds(const struct bx_chroot_resolved_creds* creds, 
 
 static void bx_chroot_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_chroot_newroot_is_old_root(const char* newroot) {
+    if (newroot == NULL) {
+        return false;
+    }
+
+    struct stat old_root_stat;
+    struct stat new_root_stat;
+    if (stat("/", &old_root_stat) != 0) {
+        return false;
+    }
+    if (stat(newroot, &new_root_stat) != 0) {
+        return false;
+    }
+
+    return old_root_stat.st_dev == new_root_stat.st_dev && old_root_stat.st_ino == new_root_stat.st_ino;
 }
 
 static bool bx_chroot_parse_options(int argc, char** argv, struct bx_chroot_options* options, struct bx_diag_ctx* diag) {
@@ -584,10 +616,8 @@ int bx_chroot_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
-    struct bx_chroot_resolved_creds outer_creds;
-    struct bx_chroot_resolved_creds inner_creds;
-    memset(&outer_creds, 0, sizeof(outer_creds));
-    memset(&inner_creds, 0, sizeof(inner_creds));
+    struct bx_chroot_resolved_creds creds;
+    memset(&creds, 0, sizeof(creds));
     char* default_shell_copy = NULL;
     int rc = 125;
 
@@ -609,13 +639,12 @@ int bx_chroot_main(int argc, char** argv) {
         return 0;
     }
 
-    bool identity_options_present = bx_chroot_identity_options_present(&options.cred_spec);
-    if (identity_options_present) {
-        if (!bx_chroot_resolve_creds_here(&options.cred_spec, &outer_creds, &diag)) {
-            goto out;
-        }
+    if (options.skip_chdir && !bx_chroot_newroot_is_old_root(options.newroot)) {
+        bx_diag(&diag, "option --skip-chdir only permitted if NEWROOT is old '/'");
+        goto out;
     }
 
+    bool identity_options_present = bx_chroot_identity_options_present(&options.cred_spec);
     if (chroot(options.newroot) != 0) {
         bx_diag(&diag, "cannot change root directory to '%s': %s", options.newroot, strerror(errno));
         goto out;
@@ -627,12 +656,11 @@ int bx_chroot_main(int argc, char** argv) {
     }
 
     if (identity_options_present) {
-        const struct bx_chroot_resolved_creds* final_creds = &outer_creds;
-        if (bx_chroot_resolve_creds_here(&options.cred_spec, &inner_creds, NULL)) {
-            final_creds = &inner_creds;
+        if (!bx_chroot_resolve_creds_here(&options.cred_spec, &creds, &diag)) {
+            goto out;
         }
 
-        if (!bx_chroot_apply_creds(final_creds, &diag)) {
+        if (!bx_chroot_apply_creds(&creds, &diag)) {
             goto out;
         }
     }
@@ -643,8 +671,7 @@ int bx_chroot_main(int argc, char** argv) {
 
 out:
     free(default_shell_copy);
-    bx_chroot_free_resolved_creds(&inner_creds);
-    bx_chroot_free_resolved_creds(&outer_creds);
+    bx_chroot_free_resolved_creds(&creds);
     bx_chroot_free_cred_spec(&options.cred_spec);
     return rc;
 }

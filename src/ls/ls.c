@@ -32,6 +32,12 @@ enum bx_ls_format {
     BX_LS_FORMAT_LONG,
 };
 
+enum bx_ls_sort_mode {
+    BX_LS_SORT_NAME = 0,
+    BX_LS_SORT_TIME,
+    BX_LS_SORT_SIZE,
+};
+
 enum bx_ls_option_code {
     BX_LS_OPT_HELP = 1,
     BX_LS_OPT_VERSION = 2,
@@ -76,6 +82,8 @@ struct bx_ls_options {
     bool si_units;
     bool escape_names;
     bool sort_entries;
+    bool reverse_sort;
+    enum bx_ls_sort_mode sort_mode;
     bool show_help;
     bool show_version;
     enum bx_ls_color_when color_when;
@@ -321,6 +329,7 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->variant = variant;
     options->format = bx_ls_default_format(variant);
     options->sort_entries = true;
+    options->sort_mode = BX_LS_SORT_NAME;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
     options->color_when = BX_LS_COLOR_NEVER;
 }
@@ -375,6 +384,45 @@ static bool bx_ls_parse_color_option(const char* text, struct bx_ls_options* opt
     }
 
     bx_diag(diag, "invalid argument '%s' for '--color'", when);
+    return false;
+}
+
+static bool bx_ls_parse_sort_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--sort' requires an argument");
+        return false;
+    }
+
+    if (strcmp(text, "none") == 0) {
+        options->sort_entries = false;
+        return true;
+    }
+
+    if (strcmp(text, "name") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_NAME;
+        return true;
+    }
+
+    if (strcmp(text, "time") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_TIME;
+        return true;
+    }
+
+    if (strcmp(text, "size") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_SIZE;
+        return true;
+    }
+
+    if (strcmp(text, "version") == 0 || strcmp(text, "extension") == 0 || strcmp(text, "width") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_NAME;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--sort'", text);
     return false;
 }
 
@@ -468,6 +516,8 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 'Q':
                 break;
             case 'S':
+                options->sort_entries = true;
+                options->sort_mode = BX_LS_SORT_SIZE;
                 break;
             case 'T':
                 break;
@@ -527,6 +577,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 'q':
                 break;
             case 'r':
+                options->reverse_sort = true;
                 break;
             case 'R':
                 options->recursive = true;
@@ -534,6 +585,8 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 's':
                 break;
             case 't':
+                options->sort_entries = true;
+                options->sort_mode = BX_LS_SORT_TIME;
                 break;
             case 'u':
                 break;
@@ -586,6 +639,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case BX_LS_OPT_QUOTING_STYLE:
                 break;
             case BX_LS_OPT_SORT:
+                if (!bx_ls_parse_sort_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_TIME:
                 break;
@@ -657,16 +713,76 @@ static void bx_ls_path_list_free(struct bx_ls_path_list* list) {
     list->cap = 0;
 }
 
-static int bx_ls_entry_compare_name(const void* lhs, const void* rhs) {
+static void bx_ls_perror_path(struct bx_diag_ctx* diag, const char* path, int status) {
+    int err = errno;
+    fprintf(stderr, "%s: %s: %s\n", diag->progname, path, strerror(err));
+    if (diag->exit_status < status) {
+        diag->exit_status = status;
+    }
+}
+
+static const struct bx_ls_options* bx_ls_sort_options = NULL;
+
+static int bx_ls_compare_intmax(intmax_t lhs, intmax_t rhs) {
+    if (lhs < rhs) {
+        return -1;
+    }
+    if (lhs > rhs) {
+        return 1;
+    }
+    return 0;
+}
+
+static int bx_ls_entry_compare(const void* lhs, const void* rhs) {
     const struct bx_ls_entry* a = (const struct bx_ls_entry*)lhs;
     const struct bx_ls_entry* b = (const struct bx_ls_entry*)rhs;
-    return strcmp(a->name, b->name);
+
+    enum bx_ls_sort_mode sort_mode = BX_LS_SORT_NAME;
+    bool reverse = false;
+    if (bx_ls_sort_options != NULL) {
+        sort_mode = bx_ls_sort_options->sort_mode;
+        reverse = bx_ls_sort_options->reverse_sort;
+    }
+
+    int cmp = 0;
+    if (sort_mode == BX_LS_SORT_TIME) {
+        if (a->has_stat && b->has_stat) {
+            cmp = bx_ls_compare_intmax((intmax_t)b->st.st_mtime, (intmax_t)a->st.st_mtime);
+#if defined(__linux__)
+            if (cmp == 0) {
+                cmp = bx_ls_compare_intmax((intmax_t)b->st.st_mtim.tv_nsec, (intmax_t)a->st.st_mtim.tv_nsec);
+            }
+#endif
+        }
+        else if (a->has_stat != b->has_stat) {
+            cmp = a->has_stat ? -1 : 1;
+        }
+    }
+    else if (sort_mode == BX_LS_SORT_SIZE) {
+        if (a->has_stat && b->has_stat) {
+            cmp = bx_ls_compare_intmax((intmax_t)b->st.st_size, (intmax_t)a->st.st_size);
+        }
+        else if (a->has_stat != b->has_stat) {
+            cmp = a->has_stat ? -1 : 1;
+        }
+    }
+
+    if (cmp == 0) {
+        cmp = strcmp(a->name, b->name);
+    }
+
+    return reverse ? -cmp : cmp;
 }
 
 static int bx_ls_path_compare(const void* lhs, const void* rhs) {
     const char* const* a = (const char* const*)lhs;
     const char* const* b = (const char* const*)rhs;
-    return strcmp(*a, *b);
+
+    int cmp = strcmp(*a, *b);
+    if (bx_ls_sort_options != NULL && bx_ls_sort_options->reverse_sort) {
+        cmp = -cmp;
+    }
+    return cmp;
 }
 
 static bool bx_ls_should_include_name(const char* name, const struct bx_ls_options* options) {
@@ -682,10 +798,6 @@ static bool bx_ls_should_include_name(const char* name, const struct bx_ls_optio
 }
 
 static char* bx_ls_join_path(const char* dir_path, const char* name) {
-    if (strcmp(dir_path, ".") == 0) {
-        return xstrdup(name);
-    }
-
     size_t dir_len = strlen(dir_path);
     size_t name_len = strlen(name);
     bool needs_slash = dir_len > 0 && dir_path[dir_len - 1u] != '/';
@@ -704,10 +816,10 @@ static char* bx_ls_join_path(const char* dir_path, const char* name) {
     return joined;
 }
 
-static bool bx_ls_collect_directory_entries(const char* dir_path, const struct bx_ls_options* options, struct bx_ls_entry_list* entries, struct bx_diag_ctx* diag) {
+static bool bx_ls_collect_directory_entries(const char* dir_path, const struct bx_ls_options* options, struct bx_ls_entry_list* entries, struct bx_diag_ctx* diag, int error_status) {
     DIR* dir = opendir(dir_path);
     if (dir == NULL) {
-        bx_perror_path(diag, dir_path);
+        bx_ls_perror_path(diag, dir_path, error_status);
         return false;
     }
 
@@ -718,7 +830,7 @@ static bool bx_ls_collect_directory_entries(const char* dir_path, const struct b
         struct dirent* dirent = readdir(dir);
         if (dirent == NULL) {
             if (errno != 0) {
-                bx_perror_path(diag, dir_path);
+                bx_ls_perror_path(diag, dir_path, error_status);
                 ok = false;
             }
             break;
@@ -739,12 +851,14 @@ static bool bx_ls_collect_directory_entries(const char* dir_path, const struct b
     }
 
     if (closedir(dir) != 0) {
-        bx_perror_path(diag, dir_path);
+        bx_ls_perror_path(diag, dir_path, error_status);
         ok = false;
     }
 
     if (options->sort_entries && entries->len > 1) {
-        qsort(entries->items, entries->len, sizeof(entries->items[0]), bx_ls_entry_compare_name);
+        bx_ls_sort_options = options;
+        qsort(entries->items, entries->len, sizeof(entries->items[0]), bx_ls_entry_compare);
+        bx_ls_sort_options = NULL;
     }
 
     return ok;
@@ -1298,7 +1412,7 @@ static bool bx_ls_entry_stat(const struct bx_ls_entry* entry, struct stat* st, s
     }
 
     if (emit_error) {
-        bx_perror_path(diag, entry->full_path);
+        bx_ls_perror_path(diag, entry->full_path, 1);
     }
     return false;
 }
@@ -1491,7 +1605,7 @@ static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct
     if (S_ISLNK(st.st_mode)) {
         char* symlink_target = bx_ls_readlink_target(entry->full_path);
         if (symlink_target == NULL) {
-            bx_perror_path(diag, entry->full_path);
+            bx_ls_perror_path(diag, entry->full_path, 1);
         }
         else {
             symlink_display = bx_ls_escape_name(symlink_target, options->escape_names);
@@ -1556,13 +1670,14 @@ static void bx_ls_print_entries(const struct bx_ls_entry_list* entries, const st
     }
 }
 
-static void bx_ls_list_directory(const char* dir_path, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_header) {
+static void bx_ls_list_directory(const char* dir_path, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_header, bool is_command_line_dir) {
     if (print_header) {
         printf("%s:\n", dir_path);
     }
 
     struct bx_ls_entry_list entries = {0};
-    (void)bx_ls_collect_directory_entries(dir_path, options, &entries, diag);
+    int error_status = is_command_line_dir ? 2 : 1;
+    (void)bx_ls_collect_directory_entries(dir_path, options, &entries, diag, error_status);
     bx_ls_print_entries(&entries, options, diag, options->format == BX_LS_FORMAT_LONG);
 
     if (options->recursive) {
@@ -1576,7 +1691,7 @@ static void bx_ls_list_directory(const char* dir_path, const struct bx_ls_option
             }
 
             (void)fputc('\n', stdout);
-            bx_ls_list_directory(entry->full_path, options, diag, true);
+            bx_ls_list_directory(entry->full_path, options, diag, true, false);
         }
     }
 
@@ -1596,7 +1711,7 @@ static void bx_ls_add_operand_as_entry(const char* operand, const struct stat* s
 static void bx_ls_classify_operand(const char* operand, const struct bx_ls_options* options, struct bx_ls_entry_list* file_entries, struct bx_ls_path_list* directory_paths, struct bx_diag_ctx* diag) {
     struct stat st;
     if (lstat(operand, &st) != 0) {
-        bx_perror_path(diag, operand);
+        bx_ls_perror_path(diag, operand, 2);
         return;
     }
 
@@ -1623,10 +1738,14 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
 
     if (options->sort_entries) {
         if (file_entries.len > 1) {
-            qsort(file_entries.items, file_entries.len, sizeof(file_entries.items[0]), bx_ls_entry_compare_name);
+            bx_ls_sort_options = options;
+            qsort(file_entries.items, file_entries.len, sizeof(file_entries.items[0]), bx_ls_entry_compare);
+            bx_ls_sort_options = NULL;
         }
         if (directory_paths.len > 1) {
+            bx_ls_sort_options = options;
             qsort(directory_paths.items, directory_paths.len, sizeof(directory_paths.items[0]), bx_ls_path_compare);
+            bx_ls_sort_options = NULL;
         }
     }
 
@@ -1642,7 +1761,7 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
         if (wrote_output) {
             (void)fputc('\n', stdout);
         }
-        bx_ls_list_directory(directory_paths.items[i], options, diag, print_directory_headers);
+        bx_ls_list_directory(directory_paths.items[i], options, diag, print_directory_headers, true);
         wrote_output = true;
     }
 

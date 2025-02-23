@@ -131,10 +131,8 @@ static bool bx_env_parse_options(int argc, char** argv, struct bx_env_options* o
         }
     }
 
-    bool option_terminator_seen = (optind > 1 && optind <= argc && strcmp(argv[optind - 1], "--") == 0);
-
     *first_operand = optind;
-    if (!option_terminator_seen && *first_operand < argc && strcmp(argv[*first_operand], "-") == 0) {
+    if (*first_operand < argc && strcmp(argv[*first_operand], "-") == 0) {
         options->ignore_environment = true;
         (*first_operand)++;
     }
