@@ -42,10 +42,15 @@ struct bx_df_options {
     bool show_version;
     bool posix_format;
     bool print_type;
+    bool show_total;
     bool use_output;
     enum bx_df_size_mode size_mode;
     enum bx_df_output_field output_fields[BX_DF_FIELD_COUNT];
     size_t output_field_count;
+    char** include_types;
+    size_t include_type_count;
+    char** exclude_types;
+    size_t exclude_type_count;
 };
 
 struct bx_df_mount_entry {
@@ -81,10 +86,21 @@ struct bx_df_column_set {
     bool custom_output;
 };
 
+struct bx_df_totals {
+    uintmax_t total_bytes;
+    uintmax_t used_bytes;
+    uintmax_t avail_bytes;
+    uintmax_t inode_total;
+    uintmax_t inode_used;
+    uintmax_t inode_avail;
+    bool has_rows;
+};
+
 enum {
     BX_DF_OPT_HELP = 1,
     BX_DF_OPT_VERSION = 2,
     BX_DF_OPT_OUTPUT = 3,
+    BX_DF_OPT_TOTAL = 4,
 };
 
 static const char* bx_df_progname(const char* argv0) {
@@ -109,6 +125,9 @@ static void bx_df_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -k             use 1K blocks (default)\n");
     fprintf(stream, "  -P             use POSIX output format\n");
     fprintf(stream, "  -T             print file system type\n");
+    fprintf(stream, "  -t, --type=TYPE        limit listing to file systems of type TYPE\n");
+    fprintf(stream, "  -x, --exclude-type=TYPE  limit listing to file systems not of type TYPE\n");
+    fprintf(stream, "      --total            produce a grand total\n");
     fprintf(stream, "      --output[=FIELD_LIST]  use the output format defined by FIELD_LIST\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
@@ -232,11 +251,47 @@ static bool bx_df_append_output_fields(const char* text, struct bx_df_options* o
     return true;
 }
 
+static void bx_df_free_type_list(char** list, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        free(list[i]);
+    }
+    free(list);
+}
+
+static bool bx_df_append_type(char*** list_out, size_t* count_out, const char* type_name, struct bx_diag_ctx* diag) {
+    if (type_name == NULL || type_name[0] == '\0') {
+        bx_diag(diag, "invalid file system type '%s'", type_name != NULL ? type_name : "");
+        return false;
+    }
+
+    char** resized = xrealloc(*list_out, (*count_out + 1u) * sizeof(**list_out));
+    *list_out = resized;
+    (*list_out)[*count_out] = xstrdup(type_name);
+    (*count_out)++;
+    return true;
+}
+
+static void bx_df_free_options(struct bx_df_options* options) {
+    if (options == NULL) {
+        return;
+    }
+
+    bx_df_free_type_list(options->include_types, options->include_type_count);
+    bx_df_free_type_list(options->exclude_types, options->exclude_type_count);
+    options->include_types = NULL;
+    options->include_type_count = 0;
+    options->exclude_types = NULL;
+    options->exclude_type_count = 0;
+}
+
 static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, BX_DF_OPT_HELP},
         {"version", no_argument, NULL, BX_DF_OPT_VERSION},
         {"output", optional_argument, NULL, BX_DF_OPT_OUTPUT},
+        {"type", required_argument, NULL, 't'},
+        {"exclude-type", required_argument, NULL, 'x'},
+        {"total", no_argument, NULL, BX_DF_OPT_TOTAL},
         {NULL, 0, NULL, 0},
     };
 
@@ -250,7 +305,7 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+hHkPT", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+hHkPTt:x:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -271,6 +326,16 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
             case 'T':
                 options->print_type = true;
                 break;
+            case 't':
+                if (!bx_df_append_type(&options->include_types, &options->include_type_count, optarg, diag)) {
+                    return false;
+                }
+                break;
+            case 'x':
+                if (!bx_df_append_type(&options->exclude_types, &options->exclude_type_count, optarg, diag)) {
+                    return false;
+                }
+                break;
             case BX_DF_OPT_OUTPUT:
                 options->use_output = true;
                 if (optarg == NULL) {
@@ -280,12 +345,26 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
                     return false;
                 }
                 break;
+            case BX_DF_OPT_TOTAL:
+                options->show_total = true;
+                break;
             case BX_DF_OPT_HELP:
                 options->show_help = true;
                 return true;
             case BX_DF_OPT_VERSION:
                 options->show_version = true;
                 return true;
+            case ':':
+                if (optopt != 0) {
+                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "option requires an argument");
+                }
+                return false;
             case '?':
                 if (optopt != 0) {
                     bx_diag(diag, "invalid option -- '%c'", optopt);
@@ -313,6 +392,10 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
         bx_diag(diag, "options -T and --output are mutually exclusive");
         return false;
     }
+    if (options->include_type_count > 0u && options->exclude_type_count > 0u) {
+        bx_diag(diag, "options -t and -x are mutually exclusive");
+        return false;
+    }
 
     *first_operand = optind;
     return true;
@@ -328,6 +411,23 @@ static uintmax_t bx_df_scale_blocks(uintmax_t blocks, uintmax_t block_size, uint
     }
 
     return (blocks * block_size) / divisor;
+}
+
+static uintmax_t bx_df_saturating_add(uintmax_t left, uintmax_t right) {
+    if (left > UINTMAX_MAX - right) {
+        return UINTMAX_MAX;
+    }
+    return left + right;
+}
+
+static uintmax_t bx_df_saturating_mul(uintmax_t left, uintmax_t right) {
+    if (left == 0u || right == 0u) {
+        return 0u;
+    }
+    if (left > UINTMAX_MAX / right) {
+        return UINTMAX_MAX;
+    }
+    return left * right;
 }
 
 static unsigned bx_df_usage_percent(uintmax_t used, uintmax_t available) {
@@ -818,14 +918,74 @@ static bool bx_df_emit_row(const struct bx_df_row* row, const struct bx_df_colum
     return true;
 }
 
+static bool bx_df_type_list_contains(char* const* list, size_t count, const char* type_name) {
+    const char* candidate = (type_name != NULL) ? type_name : "";
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(list[i], candidate) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bx_df_row_selected(const struct bx_df_options* options, const struct bx_df_row* row) {
+    if (options->include_type_count > 0u && !bx_df_type_list_contains(options->include_types, options->include_type_count, row->fstype)) {
+        return false;
+    }
+    if (options->exclude_type_count > 0u && bx_df_type_list_contains(options->exclude_types, options->exclude_type_count, row->fstype)) {
+        return false;
+    }
+    return true;
+}
+
+static void bx_df_add_row_to_totals(struct bx_df_totals* totals, const struct bx_df_row* row) {
+    uintmax_t total_bytes = bx_df_saturating_mul(row->total_blocks, row->block_size);
+    uintmax_t used_bytes = bx_df_saturating_mul(row->used_blocks, row->block_size);
+    uintmax_t avail_bytes = bx_df_saturating_mul(row->avail_blocks, row->block_size);
+
+    totals->total_bytes = bx_df_saturating_add(totals->total_bytes, total_bytes);
+    totals->used_bytes = bx_df_saturating_add(totals->used_bytes, used_bytes);
+    totals->avail_bytes = bx_df_saturating_add(totals->avail_bytes, avail_bytes);
+    totals->inode_total = bx_df_saturating_add(totals->inode_total, row->inode_total);
+    totals->inode_used = bx_df_saturating_add(totals->inode_used, row->inode_used);
+    totals->inode_avail = bx_df_saturating_add(totals->inode_avail, row->inode_avail);
+    totals->has_rows = true;
+}
+
+static void bx_df_totals_to_row(const struct bx_df_totals* totals, struct bx_df_row* row) {
+    memset(row, 0, sizeof(*row));
+    row->operand = "total";
+    row->source = "total";
+    row->target = "-";
+    row->fstype = "-";
+    row->block_size = 1u;
+    row->total_blocks = totals->total_bytes;
+    row->used_blocks = totals->used_bytes;
+    row->avail_blocks = totals->avail_bytes;
+    row->inode_total = totals->inode_total;
+    row->inode_used = totals->inode_used;
+    row->inode_avail = totals->inode_avail;
+    row->block_usage_percent = bx_df_usage_percent(totals->used_bytes, totals->avail_bytes);
+    row->inode_usage_percent = bx_df_usage_percent(totals->inode_used, totals->inode_avail);
+}
+
 static bool bx_df_process_operand(const char* path,
                                   const struct bx_df_options* options,
                                   const struct bx_df_mount_table* mount_table,
                                   const struct bx_df_column_set* columns,
+                                  struct bx_df_totals* totals,
                                   struct bx_diag_ctx* diag) {
     struct bx_df_row row;
     if (!bx_df_populate_row(path, mount_table, &row, diag)) {
         return true;
+    }
+
+    if (!bx_df_row_selected(options, &row)) {
+        return true;
+    }
+
+    if (totals != NULL) {
+        bx_df_add_row_to_totals(totals, &row);
     }
 
     return bx_df_emit_row(&row, columns, options, diag);
@@ -835,6 +995,7 @@ int bx_df_main(int argc, char** argv) {
     struct bx_df_options options;
     struct bx_df_mount_table mount_table;
     struct bx_df_column_set columns;
+    struct bx_df_totals totals = {0};
     struct bx_diag_ctx diag = {
         .progname = "df",
         .exit_status = 0,
@@ -845,16 +1006,19 @@ int bx_df_main(int argc, char** argv) {
     int rc = 0;
 
     if (!bx_df_parse_options(argc, argv, &options, &first_operand, &diag)) {
+        bx_df_free_options(&options);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
     if (options.show_help) {
         bx_df_print_help(stdout, options.progname);
+        bx_df_free_options(&options);
         return 0;
     }
 
     if (options.show_version) {
         bx_df_print_version(options.progname);
+        bx_df_free_options(&options);
         return 0;
     }
 
@@ -868,17 +1032,30 @@ int bx_df_main(int argc, char** argv) {
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        if (!bx_df_process_operand(".", &options, &mount_table, &columns, &diag)) {
+        if (!bx_df_process_operand(".", &options, &mount_table, &columns, &totals, &diag)) {
             rc = diag.exit_status;
             goto out;
         }
     }
     else {
         for (int i = first_operand; i < argc; i++) {
-            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &diag)) {
+            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &totals, &diag)) {
                 rc = diag.exit_status;
                 goto out;
             }
+        }
+    }
+
+    if (!totals.has_rows && diag.exit_status == 0) {
+        bx_diag(&diag, "no file systems processed");
+    }
+
+    if (options.show_total && totals.has_rows) {
+        struct bx_df_row total_row;
+        bx_df_totals_to_row(&totals, &total_row);
+        if (!bx_df_emit_row(&total_row, &columns, &options, &diag)) {
+            rc = diag.exit_status;
+            goto out;
         }
     }
 
@@ -889,5 +1066,6 @@ int bx_df_main(int argc, char** argv) {
 
 out:
     bx_df_free_mount_table(&mount_table);
+    bx_df_free_options(&options);
     return rc;
 }

@@ -354,11 +354,20 @@ if get_option('tests')
   test_df_basic = find_program('tests/df/test_df_basic.sh')
   test('df basic', test_df_basic, args : [bx_exe])
 
+  test_df_smoke_differential = find_program('tests/df/test_df_smoke_differential.sh')
+  test('df smoke differential', test_df_smoke_differential, args : [bx_exe])
+
   test_du_basic = find_program('tests/du/test_du_basic.sh')
   test('du basic', test_du_basic, args : [bx_exe])
 
+  test_du_smoke_differential = find_program('tests/du/test_du_smoke_differential.sh')
+  test('du smoke differential', test_du_smoke_differential, args : [bx_exe])
+
   test_sync_basic = find_program('tests/sync/test_sync_basic.sh')
   test('sync basic', test_sync_basic, args : [bx_exe])
+
+  test_sync_smoke_differential = find_program('tests/sync/test_sync_smoke_differential.sh')
+  test('sync smoke differential', test_sync_smoke_differential, args : [bx_exe])
 
   test_dd_basic = find_program('tests/dd/test_dd_basic.sh')
   test('dd basic', test_dd_basic, args : [bx_exe])
@@ -384,11 +393,20 @@ if get_option('tests')
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe])
 
+  test_nice_smoke_differential = find_program('tests/nice/test_nice_smoke_differential.sh')
+  test('nice smoke differential', test_nice_smoke_differential, args : [bx_exe])
+
   test_nohup_basic = find_program('tests/nohup/test_nohup_basic.sh')
   test('nohup basic', test_nohup_basic, args : [bx_exe])
 
+  test_nohup_smoke_differential = find_program('tests/nohup/test_nohup_smoke_differential.sh')
+  test('nohup smoke differential', test_nohup_smoke_differential, args : [bx_exe])
+
   test_timeout_basic = find_program('tests/timeout/test_timeout_basic.sh')
   test('timeout basic', test_timeout_basic, args : [bx_exe])
+
+  test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
+  test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe])
 
   test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
   test('chroot basic', test_chroot_basic, args : [bx_exe])
@@ -435,8 +453,14 @@ if get_option('tests')
   test_mkfifo_basic = find_program('tests/mkfifo/test_mkfifo_basic.sh')
   test('mkfifo basic', test_mkfifo_basic, args : [bx_exe])
 
+  test_mkfifo_smoke_differential = find_program('tests/mkfifo/test_mkfifo_smoke_differential.sh')
+  test('mkfifo smoke differential', test_mkfifo_smoke_differential, args : [bx_exe])
+
   test_mknod_basic = find_program('tests/mknod/test_mknod_basic.sh')
   test('mknod basic', test_mknod_basic, args : [bx_exe])
+
+  test_mknod_smoke_differential = find_program('tests/mknod/test_mknod_smoke_differential.sh')
+  test('mknod smoke differential', test_mknod_smoke_differential, args : [bx_exe])
 
   test_mktemp_basic = find_program('tests/mktemp/test_mktemp_basic.sh')
   test('mktemp basic', test_mktemp_basic, args : [bx_exe])
@@ -452,6 +476,9 @@ if get_option('tests')
 
   test_truncate_basic = find_program('tests/truncate/test_truncate_basic.sh')
   test('truncate basic', test_truncate_basic, args : [bx_exe])
+
+  test_truncate_smoke_differential = find_program('tests/truncate/test_truncate_smoke_differential.sh')
+  test('truncate smoke differential', test_truncate_smoke_differential, args : [bx_exe])
 
   test_shred_basic = find_program('tests/shred/test_shred_basic.sh')
   test('shred basic', test_shred_basic, args : [bx_exe])

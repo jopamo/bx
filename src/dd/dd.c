@@ -546,6 +546,35 @@ static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx) {
     return true;
 }
 
+static bool bx_dd_finalize_output_size(struct bx_dd_ctx* ctx) {
+    if (!ctx->cfg.seek_set || (ctx->cfg.conv_mask & BX_DD_CONV_NOTRUNC) != 0u) {
+        return true;
+    }
+
+    struct stat st;
+    if (fstat(ctx->outfd, &st) != 0) {
+        bx_dd_perror_path(ctx->progname, ctx->output_path);
+        return false;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        return true;
+    }
+
+    off_t end_pos = lseek(ctx->outfd, 0, SEEK_CUR);
+    if (end_pos < 0) {
+        bx_dd_perror_path(ctx->progname, ctx->output_path);
+        return false;
+    }
+
+    if (ftruncate(ctx->outfd, end_pos) != 0) {
+        bx_dd_perror_path(ctx->progname, ctx->output_path);
+        return false;
+    }
+
+    return true;
+}
+
 static bool bx_dd_now(struct timespec* ts_out) {
     if (ts_out == NULL) {
         return false;
@@ -886,6 +915,10 @@ int bx_dd_main(int argc, char** argv) {
 
 out:
     if (ctx.outfd >= 0) {
+        if (!bx_dd_finalize_output_size(&ctx)) {
+            rc = 1;
+        }
+
         if ((ctx.cfg.conv_mask & BX_DD_CONV_FDATASYNC) != 0u) {
             if (fdatasync(ctx.outfd) != 0) {
                 bx_dd_perror_path(ctx.progname, ctx.output_path);

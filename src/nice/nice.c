@@ -47,6 +47,10 @@ static void bx_nice_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+static void bx_nice_print_try_help(const char* progname) {
+    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+}
+
 static bool bx_nice_parse_int(const char* text, int* value_out) {
     if (text == NULL || text[0] == '\0') {
         return false;
@@ -207,7 +211,8 @@ int bx_nice_main(int argc, char** argv) {
     };
 
     if (!bx_nice_parse_options(argc, argv, &options, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+        bx_nice_print_try_help(options.progname);
+        return 125;
     }
 
     if (options.show_help) {
@@ -223,7 +228,8 @@ int bx_nice_main(int argc, char** argv) {
     if (options.first_operand >= argc) {
         if (options.adjustment_specified) {
             bx_diag(&diag, "a command is required when an adjustment is specified");
-            return diag.exit_status;
+            bx_nice_print_try_help(options.progname);
+            return 125;
         }
 
         if (!bx_nice_print_current_niceness(&diag)) {
