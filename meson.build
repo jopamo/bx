@@ -315,6 +315,9 @@ if get_option('tests')
   test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
   test('shuf basic', test_shuf_basic, args : [bx_exe])
 
+  test_shuf_smoke_differential = find_program('tests/shuf/test_shuf_smoke_differential.sh')
+  test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe])
+
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe])
 
@@ -371,6 +374,9 @@ if get_option('tests')
 
   test_dd_basic = find_program('tests/dd/test_dd_basic.sh')
   test('dd basic', test_dd_basic, args : [bx_exe])
+
+  test_dd_smoke_differential = find_program('tests/dd/test_dd_smoke_differential.sh')
+  test('dd smoke differential', test_dd_smoke_differential, args : [bx_exe])
 
   test_env_basic = find_program('tests/env/test_env_basic.sh')
   test('env basic', test_env_basic, args : [bx_exe])
