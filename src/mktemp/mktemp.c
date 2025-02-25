@@ -23,6 +23,7 @@ struct bx_mktemp_options {
     bool create_directory;
     bool dry_run;
     bool quiet;
+    bool template_component_mode;
     bool tmpdir_specified;
     const char* tmpdir_arg;
     const char* suffix;
@@ -45,18 +46,21 @@ static const char* bx_mktemp_progname(const char* argv0) {
 
 static void bx_mktemp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [TEMPLATE]\n", progname);
-    fprintf(stream, "Create a temporary file or directory and print its name.\n");
+    fprintf(stream, "Create a temporary file or directory, safely, and print its name.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -d, --directory     create a directory, not a file\n");
-    fprintf(stream, "  -u, --dry-run       print a name without keeping the created path\n");
+    fprintf(stream, "  -u, --dry-run       do not create anything; merely print a name (unsafe)\n");
     fprintf(stream, "  -q, --quiet         suppress diagnostics for creation failures\n");
-    fprintf(stream, "  -p DIR              interpret TEMPLATE relative to DIR\n");
-    fprintf(stream, "      --tmpdir[=DIR]  like -p; if DIR is omitted use $TMPDIR or /tmp\n");
     fprintf(stream, "      --suffix=SUFF   append SUFF to TEMPLATE; SUFF must not contain '/'\n");
+    fprintf(stream, "  -p DIR, --tmpdir[=DIR]\n");
+    fprintf(stream, "                     interpret TEMPLATE relative to DIR; if DIR is omitted,\n");
+    fprintf(stream, "                     use $TMPDIR if set, else /tmp\n");
+    fprintf(stream, "  -t                 interpret TEMPLATE as a name component under $TMPDIR,\n");
+    fprintf(stream, "                     else -p DIR, else /tmp (deprecated)\n");
     fprintf(stream, "      --help          display this help and exit\n");
     fprintf(stream, "      --version       output version information and exit\n");
     fprintf(stream, "\n");
-    fprintf(stream, "If TEMPLATE is omitted, mktemp uses tmp.XXXXXX with --tmpdir implied.\n");
+    fprintf(stream, "If TEMPLATE is omitted, mktemp uses tmp.XXXXXXXXXX with --tmpdir implied.\n");
     fprintf(stream, "TEMPLATE must contain at least 3 consecutive 'X' in the last component.\n");
 }
 
@@ -85,7 +89,7 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+duqp:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+duqtp:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -99,6 +103,9 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
                 break;
             case 'q':
                 options->quiet = true;
+                break;
+            case 't':
+                options->template_component_mode = true;
                 break;
             case 'p':
                 options->tmpdir_specified = true;
@@ -137,10 +144,35 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
     return true;
 }
 
-static const char* bx_mktemp_default_tmpdir(void) {
+static const char* bx_mktemp_tmpdir_env(void) {
     const char* tmpdir_env = getenv("TMPDIR");
     if (tmpdir_env != NULL && tmpdir_env[0] != '\0') {
         return tmpdir_env;
+    }
+
+    return NULL;
+}
+
+static const char* bx_mktemp_default_tmpdir(void) {
+    const char* tmpdir_env = bx_mktemp_tmpdir_env();
+    return (tmpdir_env != NULL) ? tmpdir_env : "/tmp";
+}
+
+static const char* bx_mktemp_resolve_tmpdir_option(const struct bx_mktemp_options* options) {
+    if (options->tmpdir_arg != NULL && options->tmpdir_arg[0] != '\0') {
+        return options->tmpdir_arg;
+    }
+    return bx_mktemp_default_tmpdir();
+}
+
+static const char* bx_mktemp_resolve_t_tmpdir(const struct bx_mktemp_options* options) {
+    const char* tmpdir_env = bx_mktemp_tmpdir_env();
+    if (tmpdir_env != NULL) {
+        return tmpdir_env;
+    }
+
+    if (options->tmpdir_specified && options->tmpdir_arg != NULL && options->tmpdir_arg[0] != '\0') {
+        return options->tmpdir_arg;
     }
 
     return "/tmp";
@@ -345,14 +377,24 @@ int bx_mktemp_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    const char* template_text = (operand_count == 1) ? argv[first_operand] : "tmp.XXXXXX";
-    bool use_tmpdir = options.tmpdir_specified || operand_count == 0;
+    const char* template_text = (operand_count == 1) ? argv[first_operand] : "tmp.XXXXXXXXXX";
+    bool use_tmpdir = options.template_component_mode || options.tmpdir_specified || operand_count == 0;
     const char* tmpdir = NULL;
     if (use_tmpdir) {
-        tmpdir = (options.tmpdir_arg != NULL) ? options.tmpdir_arg : bx_mktemp_default_tmpdir();
+        if (options.template_component_mode) {
+            tmpdir = bx_mktemp_resolve_t_tmpdir(&options);
+        }
+        else {
+            tmpdir = bx_mktemp_resolve_tmpdir_option(&options);
+        }
     }
 
-    if (use_tmpdir && template_text[0] == '/') {
+    if (options.template_component_mode && strchr(template_text, '/') != NULL) {
+        bx_diag(&diag, "invalid template, '%s', contains directory separator", template_text);
+        return diag.exit_status;
+    }
+
+    if (use_tmpdir && !options.template_component_mode && template_text[0] == '/') {
         bx_diag(&diag, "template must not be absolute with --tmpdir: '%s'", template_text);
         return diag.exit_status;
     }
