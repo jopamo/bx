@@ -32,6 +32,7 @@ static const struct applet applets[] = {
     {"du", bx_du_main},
     {"sync", bx_sync_main},
     {"dd", bx_dd_main},
+    {"printf", bx_printf_main},
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
     {"tty", bx_tty_main},

@@ -166,6 +166,7 @@ sources = [
   'src/du/du.c',
   'src/sync/sync.c',
   'src/dd/dd.c',
+  'src/printf/printf.c',
   'src/env/env.c',
   'src/printenv/printenv.c',
   'src/tty/tty.c',
@@ -198,7 +199,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -377,6 +378,12 @@ if get_option('tests')
 
   test_dd_smoke_differential = find_program('tests/dd/test_dd_smoke_differential.sh')
   test('dd smoke differential', test_dd_smoke_differential, args : [bx_exe])
+
+  test_printf_basic = find_program('tests/printf/test_printf_basic.sh')
+  test('printf basic', test_printf_basic, args : [bx_exe])
+
+  test_printf_smoke_differential = find_program('tests/printf/test_printf_smoke_differential.sh')
+  test('printf smoke differential', test_printf_smoke_differential, args : [bx_exe])
 
   test_env_basic = find_program('tests/env/test_env_basic.sh')
   test('env basic', test_env_basic, args : [bx_exe])

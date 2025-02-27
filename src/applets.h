@@ -19,6 +19,7 @@ int bx_df_main(int argc, char** argv);
 int bx_du_main(int argc, char** argv);
 int bx_sync_main(int argc, char** argv);
 int bx_dd_main(int argc, char** argv);
+int bx_printf_main(int argc, char** argv);
 int bx_env_main(int argc, char** argv);
 int bx_printenv_main(int argc, char** argv);
 int bx_tty_main(int argc, char** argv);
