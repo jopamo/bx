@@ -107,7 +107,7 @@ static void bx_printf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  \\xHH    byte with hexadecimal value HH (1 to 2 digits)\n");
     fprintf(stream, "  \\uHHHH  Unicode (ISO/IEC 10646) character with hex value HHHH (4 digits)\n");
     fprintf(stream, "  \\UHHHHHHHH  Unicode character with hex value HHHHHHHH (8 digits)\n");
-    fprintf(stream, "  %%      a single %%\n");
+    fprintf(stream, "  %%%%      a single %%\n");
     fprintf(stream, "  %%b      ARGUMENT as a string with '\\' escapes interpreted,\n");
     fprintf(stream, "          except that octal escapes should have a leading 0 like \\0NNN\n");
     fprintf(stream, "  %%q      ARGUMENT is printed in a format that can be reused as shell input,\n");
@@ -260,6 +260,17 @@ static bool bx_printf_append_text(char* buffer, size_t buffer_size, size_t* len,
 
     memcpy(buffer + *len, text, text_len);
     *len += text_len;
+    buffer[*len] = '\0';
+    return true;
+}
+
+static bool bx_printf_append_char(char* buffer, size_t buffer_size, size_t* len, char ch) {
+    if (*len + 1u >= buffer_size) {
+        return false;
+    }
+
+    buffer[*len] = ch;
+    (*len)++;
     buffer[*len] = '\0';
     return true;
 }
@@ -1033,16 +1044,16 @@ static bool bx_printf_is_shell_safe_char(unsigned char ch) {
     }
 
     switch (ch) {
-        case '@':
         case '%':
-        case '_':
         case '+':
-        case '=':
-        case ':':
         case ',':
+        case '-':
         case '.':
         case '/':
-        case '-':
+        case ':':
+        case '@':
+        case ']':
+        case '_':
             return true;
         default:
             return false;
@@ -1054,20 +1065,101 @@ static bool bx_printf_is_shell_safe_string(const char* text) {
         return false;
     }
 
+    size_t text_len = strlen(text);
     const unsigned char* p = (const unsigned char*)text;
+    size_t index = 0;
     while (*p != '\0') {
-        if (!bx_printf_is_shell_safe_char(*p)) {
+        unsigned char ch = *p;
+        if ((ch == '~' || ch == '#') && index > 0u) {
+            p++;
+            index++;
+            continue;
+        }
+        if ((ch == '{' || ch == '}') && text_len > 1u) {
+            p++;
+            index++;
+            continue;
+        }
+        if (!bx_printf_is_shell_safe_char(ch)) {
             return false;
         }
         p++;
+        index++;
     }
 
     return true;
 }
 
+static bool bx_printf_is_shell_double_quote_char(unsigned char ch) {
+    return ch == ' ' || ch == '\'' || bx_printf_is_shell_safe_char(ch);
+}
+
+static bool bx_printf_can_use_double_quotes(const char* text) {
+    bool has_single_quote = false;
+    const unsigned char* p = (const unsigned char*)text;
+    size_t index = 0;
+
+    while (*p != '\0') {
+        unsigned char ch = *p++;
+        if (!isprint(ch)) {
+            return false;
+        }
+        if (ch == '\'') {
+            has_single_quote = true;
+        }
+        if ((ch == '#' || ch == '~') && index == 0u) {
+            index++;
+            continue;
+        }
+        if (!bx_printf_is_shell_double_quote_char(ch)) {
+            return false;
+        }
+        index++;
+    }
+
+    return has_single_quote;
+}
+
+static bool bx_printf_append_dollar_escape(char* buffer, size_t buffer_size, size_t* len, unsigned char ch) {
+    switch (ch) {
+        case '\a':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\a");
+        case '\b':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\b");
+        case '\t':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\t");
+        case '\n':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\n");
+        case '\v':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\v");
+        case '\f':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\f");
+        case '\r':
+            return bx_printf_append_text(buffer, buffer_size, len, "\\r");
+        default: {
+            char octal_escape[5];
+            int written = snprintf(octal_escape, sizeof(octal_escape), "\\%03o", (unsigned int)ch);
+            if (written < 0 || (size_t)written >= sizeof(octal_escape)) {
+                return false;
+            }
+            return bx_printf_append_text(buffer, buffer_size, len, octal_escape);
+        }
+    }
+}
+
 static char* bx_printf_quote_shell(const char* text) {
+    enum bx_printf_quote_mode {
+        BX_PRINTF_QUOTE_MODE_NONE = 0,
+        BX_PRINTF_QUOTE_MODE_SINGLE,
+        BX_PRINTF_QUOTE_MODE_DOLLAR,
+    };
+
     if (text == NULL) {
         text = "";
+    }
+
+    if (text[0] == '\0') {
+        return xstrdup("''");
     }
 
     if (bx_printf_is_shell_safe_string(text)) {
@@ -1075,25 +1167,144 @@ static char* bx_printf_quote_shell(const char* text) {
     }
 
     size_t text_len = strlen(text);
-    if (text_len > (SIZE_MAX - 3u) / 5u) {
+    if (bx_printf_can_use_double_quotes(text)) {
+        if (text_len > (SIZE_MAX - 3u)) {
+            return NULL;
+        }
+
+        char* out = xmalloc(text_len + 3u);
+        size_t out_len = 0;
+        out[0] = '\0';
+
+        if (!bx_printf_append_char(out, text_len + 3u, &out_len, '\"')) {
+            free(out);
+            return NULL;
+        }
+        if (!bx_printf_append_text(out, text_len + 3u, &out_len, text)) {
+            free(out);
+            return NULL;
+        }
+        if (!bx_printf_append_char(out, text_len + 3u, &out_len, '\"')) {
+            free(out);
+            return NULL;
+        }
+        return out;
+    }
+
+    if (text_len > (SIZE_MAX - 8u) / 12u) {
         return NULL;
     }
 
-    char* out = xmalloc(text_len * 5u + 3u);
+    size_t out_cap = text_len * 12u + 8u;
+    char* out = xmalloc(out_cap);
     size_t out_len = 0;
+    enum bx_printf_quote_mode mode = BX_PRINTF_QUOTE_MODE_NONE;
+    bool emitted = false;
 
-    out[out_len++] = '\'';
+    out[0] = '\0';
     for (size_t i = 0; i < text_len; i++) {
-        if (text[i] == '\'') {
-            memcpy(out + out_len, "'\"'\"'", 5u);
-            out_len += 5u;
+        unsigned char ch = (unsigned char)text[i];
+        if (!isprint(ch)) {
+            if (mode == BX_PRINTF_QUOTE_MODE_SINGLE) {
+                if (!bx_printf_append_char(out, out_cap, &out_len, '\'')) {
+                    free(out);
+                    return NULL;
+                }
+                mode = BX_PRINTF_QUOTE_MODE_NONE;
+            }
+            if (mode != BX_PRINTF_QUOTE_MODE_DOLLAR) {
+                if (!emitted) {
+                    if (!bx_printf_append_text(out, out_cap, &out_len, "''")) {
+                        free(out);
+                        return NULL;
+                    }
+                    emitted = true;
+                }
+                if (!bx_printf_append_text(out, out_cap, &out_len, "$'")) {
+                    free(out);
+                    return NULL;
+                }
+                mode = BX_PRINTF_QUOTE_MODE_DOLLAR;
+            }
+            if (!bx_printf_append_dollar_escape(out, out_cap, &out_len, ch)) {
+                free(out);
+                return NULL;
+            }
+            emitted = true;
+            continue;
         }
-        else {
-            out[out_len++] = text[i];
+
+        if (mode == BX_PRINTF_QUOTE_MODE_DOLLAR) {
+            if (!bx_printf_append_char(out, out_cap, &out_len, '\'')) {
+                free(out);
+                return NULL;
+            }
+            mode = BX_PRINTF_QUOTE_MODE_NONE;
+        }
+
+        if (ch == '\'') {
+            if (mode == BX_PRINTF_QUOTE_MODE_SINGLE) {
+                if (!bx_printf_append_char(out, out_cap, &out_len, '\'')) {
+                    free(out);
+                    return NULL;
+                }
+                mode = BX_PRINTF_QUOTE_MODE_NONE;
+            }
+            if (!emitted) {
+                if (!bx_printf_append_text(out, out_cap, &out_len, "''")) {
+                    free(out);
+                    return NULL;
+                }
+                emitted = true;
+            }
+            if (!bx_printf_append_text(out, out_cap, &out_len, "\\'")) {
+                free(out);
+                return NULL;
+            }
+            bool next_is_printable_non_quote = false;
+            if (i + 1u < text_len) {
+                unsigned char next = (unsigned char)text[i + 1u];
+                next_is_printable_non_quote = (next != '\'') && (isprint(next) != 0);
+            }
+            if (!next_is_printable_non_quote) {
+                if (!bx_printf_append_text(out, out_cap, &out_len, "''")) {
+                    free(out);
+                    return NULL;
+                }
+            }
+            emitted = true;
+            continue;
+        }
+
+        if (mode != BX_PRINTF_QUOTE_MODE_SINGLE) {
+            if (!bx_printf_append_char(out, out_cap, &out_len, '\'')) {
+                free(out);
+                return NULL;
+            }
+            mode = BX_PRINTF_QUOTE_MODE_SINGLE;
+            emitted = true;
+        }
+
+        if (!bx_printf_append_char(out, out_cap, &out_len, (char)ch)) {
+            free(out);
+            return NULL;
+        }
+        emitted = true;
+    }
+
+    if (mode == BX_PRINTF_QUOTE_MODE_SINGLE || mode == BX_PRINTF_QUOTE_MODE_DOLLAR) {
+        if (!bx_printf_append_char(out, out_cap, &out_len, '\'')) {
+            free(out);
+            return NULL;
         }
     }
-    out[out_len++] = '\'';
-    out[out_len] = '\0';
+
+    if (!emitted) {
+        if (!bx_printf_append_text(out, out_cap, &out_len, "''")) {
+            free(out);
+            return NULL;
+        }
+    }
 
     return out;
 }
