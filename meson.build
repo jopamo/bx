@@ -313,11 +313,14 @@ if get_option('tests')
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe])
 
+  fast_track_p0_suite = ['fast-track', 'fast-track-p0']
+  fast_track_p1_suite = ['fast-track', 'fast-track-p1']
+
   test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
-  test('shuf basic', test_shuf_basic, args : [bx_exe])
+  test('shuf basic', test_shuf_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_shuf_smoke_differential = find_program('tests/shuf/test_shuf_smoke_differential.sh')
-  test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe])
+  test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe])
@@ -344,166 +347,166 @@ if get_option('tests')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe])
 
   test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
-  test('ls basic', test_ls_basic, args : [bx_exe])
+  test('ls basic', test_ls_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_ls_smoke_differential = find_program('tests/ls/test_ls_smoke_differential.sh')
-  test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe])
+  test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_stat_basic = find_program('tests/stat/test_stat_basic.sh')
-  test('stat basic', test_stat_basic, args : [bx_exe])
+  test('stat basic', test_stat_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_stat_smoke_differential = find_program('tests/stat/test_stat_smoke_differential.sh')
-  test('stat smoke differential', test_stat_smoke_differential, args : [bx_exe])
+  test('stat smoke differential', test_stat_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_df_basic = find_program('tests/df/test_df_basic.sh')
-  test('df basic', test_df_basic, args : [bx_exe])
+  test('df basic', test_df_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_df_smoke_differential = find_program('tests/df/test_df_smoke_differential.sh')
-  test('df smoke differential', test_df_smoke_differential, args : [bx_exe])
+  test('df smoke differential', test_df_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_du_basic = find_program('tests/du/test_du_basic.sh')
-  test('du basic', test_du_basic, args : [bx_exe])
+  test('du basic', test_du_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_du_smoke_differential = find_program('tests/du/test_du_smoke_differential.sh')
-  test('du smoke differential', test_du_smoke_differential, args : [bx_exe])
+  test('du smoke differential', test_du_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_sync_basic = find_program('tests/sync/test_sync_basic.sh')
-  test('sync basic', test_sync_basic, args : [bx_exe])
+  test('sync basic', test_sync_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_sync_smoke_differential = find_program('tests/sync/test_sync_smoke_differential.sh')
-  test('sync smoke differential', test_sync_smoke_differential, args : [bx_exe])
+  test('sync smoke differential', test_sync_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_dd_basic = find_program('tests/dd/test_dd_basic.sh')
-  test('dd basic', test_dd_basic, args : [bx_exe])
+  test('dd basic', test_dd_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_dd_smoke_differential = find_program('tests/dd/test_dd_smoke_differential.sh')
-  test('dd smoke differential', test_dd_smoke_differential, args : [bx_exe])
+  test('dd smoke differential', test_dd_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_printf_basic = find_program('tests/printf/test_printf_basic.sh')
-  test('printf basic', test_printf_basic, args : [bx_exe])
+  test('printf basic', test_printf_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_printf_smoke_differential = find_program('tests/printf/test_printf_smoke_differential.sh')
-  test('printf smoke differential', test_printf_smoke_differential, args : [bx_exe])
+  test('printf smoke differential', test_printf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_env_basic = find_program('tests/env/test_env_basic.sh')
-  test('env basic', test_env_basic, args : [bx_exe])
+  test('env basic', test_env_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_env_smoke_differential = find_program('tests/env/test_env_smoke_differential.sh')
-  test('env smoke differential', test_env_smoke_differential, args : [bx_exe])
+  test('env smoke differential', test_env_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_printenv_basic = find_program('tests/printenv/test_printenv_basic.sh')
-  test('printenv basic', test_printenv_basic, args : [bx_exe])
+  test('printenv basic', test_printenv_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_printenv_smoke_differential = find_program('tests/printenv/test_printenv_smoke_differential.sh')
-  test('printenv smoke differential', test_printenv_smoke_differential, args : [bx_exe])
+  test('printenv smoke differential', test_printenv_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_tty_basic = find_program('tests/tty/test_tty_basic.sh')
-  test('tty basic', test_tty_basic, args : [bx_exe])
+  test('tty basic', test_tty_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_tty_smoke_differential = find_program('tests/tty/test_tty_smoke_differential.sh')
-  test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe])
+  test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
-  test('nice basic', test_nice_basic, args : [bx_exe])
+  test('nice basic', test_nice_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_nice_smoke_differential = find_program('tests/nice/test_nice_smoke_differential.sh')
-  test('nice smoke differential', test_nice_smoke_differential, args : [bx_exe])
+  test('nice smoke differential', test_nice_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_nohup_basic = find_program('tests/nohup/test_nohup_basic.sh')
-  test('nohup basic', test_nohup_basic, args : [bx_exe])
+  test('nohup basic', test_nohup_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_nohup_smoke_differential = find_program('tests/nohup/test_nohup_smoke_differential.sh')
-  test('nohup smoke differential', test_nohup_smoke_differential, args : [bx_exe])
+  test('nohup smoke differential', test_nohup_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_timeout_basic = find_program('tests/timeout/test_timeout_basic.sh')
-  test('timeout basic', test_timeout_basic, args : [bx_exe])
+  test('timeout basic', test_timeout_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
-  test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe])
+  test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
-  test('chroot basic', test_chroot_basic, args : [bx_exe])
+  test('chroot basic', test_chroot_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chroot_smoke_differential = find_program('tests/chroot/test_chroot_smoke_differential.sh')
-  test('chroot smoke differential', test_chroot_smoke_differential, args : [bx_exe])
+  test('chroot smoke differential', test_chroot_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
-  test('chmod basic', test_chmod_basic, args : [bx_exe])
+  test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_chmod_smoke_differential = find_program('tests/chmod/test_chmod_smoke_differential.sh')
-  test('chmod smoke differential', test_chmod_smoke_differential, args : [bx_exe])
+  test('chmod smoke differential', test_chmod_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_chown_basic = find_program('tests/chown/test_chown_basic.sh')
-  test('chown basic', test_chown_basic, args : [bx_exe])
+  test('chown basic', test_chown_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_chown_smoke_differential = find_program('tests/chown/test_chown_smoke_differential.sh')
-  test('chown smoke differential', test_chown_smoke_differential, args : [bx_exe])
+  test('chown smoke differential', test_chown_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_chgrp_basic = find_program('tests/chgrp/test_chgrp_basic.sh')
-  test('chgrp basic', test_chgrp_basic, args : [bx_exe])
+  test('chgrp basic', test_chgrp_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_chgrp_smoke_differential = find_program('tests/chgrp/test_chgrp_smoke_differential.sh')
-  test('chgrp smoke differential', test_chgrp_smoke_differential, args : [bx_exe])
+  test('chgrp smoke differential', test_chgrp_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_rm_basic = find_program('tests/rm/test_rm_basic.sh')
-  test('rm basic', test_rm_basic, args : [bx_exe])
+  test('rm basic', test_rm_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_rm_smoke_differential = find_program('tests/rm/test_rm_smoke_differential.sh')
-  test('rm smoke differential', test_rm_smoke_differential, args : [bx_exe])
+  test('rm smoke differential', test_rm_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_mkdir_basic = find_program('tests/mkdir/test_mkdir_basic.sh')
-  test('mkdir basic', test_mkdir_basic, args : [bx_exe])
+  test('mkdir basic', test_mkdir_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_mkdir_smoke_differential = find_program('tests/mkdir/test_mkdir_smoke_differential.sh')
-  test('mkdir smoke differential', test_mkdir_smoke_differential, args : [bx_exe])
+  test('mkdir smoke differential', test_mkdir_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_rmdir_basic = find_program('tests/rmdir/test_rmdir_basic.sh')
-  test('rmdir basic', test_rmdir_basic, args : [bx_exe])
+  test('rmdir basic', test_rmdir_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_rmdir_smoke_differential = find_program('tests/rmdir/test_rmdir_smoke_differential.sh')
-  test('rmdir smoke differential', test_rmdir_smoke_differential, args : [bx_exe])
+  test('rmdir smoke differential', test_rmdir_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_mkfifo_basic = find_program('tests/mkfifo/test_mkfifo_basic.sh')
-  test('mkfifo basic', test_mkfifo_basic, args : [bx_exe])
+  test('mkfifo basic', test_mkfifo_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_mkfifo_smoke_differential = find_program('tests/mkfifo/test_mkfifo_smoke_differential.sh')
-  test('mkfifo smoke differential', test_mkfifo_smoke_differential, args : [bx_exe])
+  test('mkfifo smoke differential', test_mkfifo_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_mknod_basic = find_program('tests/mknod/test_mknod_basic.sh')
-  test('mknod basic', test_mknod_basic, args : [bx_exe])
+  test('mknod basic', test_mknod_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_mknod_smoke_differential = find_program('tests/mknod/test_mknod_smoke_differential.sh')
-  test('mknod smoke differential', test_mknod_smoke_differential, args : [bx_exe])
+  test('mknod smoke differential', test_mknod_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_mktemp_basic = find_program('tests/mktemp/test_mktemp_basic.sh')
-  test('mktemp basic', test_mktemp_basic, args : [bx_exe])
+  test('mktemp basic', test_mktemp_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_mktemp_smoke_differential = find_program('tests/mktemp/test_mktemp_smoke_differential.sh')
-  test('mktemp smoke differential', test_mktemp_smoke_differential, args : [bx_exe])
+  test('mktemp smoke differential', test_mktemp_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_touch_basic = find_program('tests/touch/test_touch_basic.sh')
-  test('touch basic', test_touch_basic, args : [bx_exe])
+  test('touch basic', test_touch_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_touch_smoke_differential = find_program('tests/touch/test_touch_smoke_differential.sh')
-  test('touch smoke differential', test_touch_smoke_differential, args : [bx_exe])
+  test('touch smoke differential', test_touch_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
   test_truncate_basic = find_program('tests/truncate/test_truncate_basic.sh')
-  test('truncate basic', test_truncate_basic, args : [bx_exe])
+  test('truncate basic', test_truncate_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_truncate_smoke_differential = find_program('tests/truncate/test_truncate_smoke_differential.sh')
-  test('truncate smoke differential', test_truncate_smoke_differential, args : [bx_exe])
+  test('truncate smoke differential', test_truncate_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_shred_basic = find_program('tests/shred/test_shred_basic.sh')
-  test('shred basic', test_shred_basic, args : [bx_exe])
+  test('shred basic', test_shred_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_shred_smoke_differential = find_program('tests/shred/test_shred_smoke_differential.sh')
-  test('shred smoke differential', test_shred_smoke_differential, args : [bx_exe])
+  test('shred smoke differential', test_shred_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_install_basic = find_program('tests/install/test_install_basic.sh')
-  test('install basic', test_install_basic, args : [bx_exe])
+  test('install basic', test_install_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_install_smoke_differential = find_program('tests/install/test_install_smoke_differential.sh')
-  test('install smoke differential', test_install_smoke_differential, args : [bx_exe])
+  test('install smoke differential', test_install_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
   test('tier1 safe-replace smoke', test_tier1_safe_replace, args : [bx_exe])
