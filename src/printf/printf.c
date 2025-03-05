@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1343,13 +1344,21 @@ static bool bx_printf_decode_b_argument(const char* text, struct bx_printf_byte_
     return true;
 }
 
-#define BX_PRINTF_CALL_NO_VALUE(spec, width, precision)                                                                                                             \
-    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? fprintf(stdout, (spec)->canonical, (width), (precision)) : fprintf(stdout, (spec)->canonical, (width))) \
-                            : ((spec)->precision_from_arg ? fprintf(stdout, (spec)->canonical, (precision)) : fprintf(stdout, (spec)->canonical)))
+static int bx_printf_call_format(const char* format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    int result = vfprintf(stdout, format, ap);
+    va_end(ap);
+    return result;
+}
 
-#define BX_PRINTF_CALL_VALUE(spec, width, precision, value)                                                                                                                           \
-    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? fprintf(stdout, (spec)->canonical, (width), (precision), (value)) : fprintf(stdout, (spec)->canonical, (width), (value))) \
-                            : ((spec)->precision_from_arg ? fprintf(stdout, (spec)->canonical, (precision), (value)) : fprintf(stdout, (spec)->canonical, (value))))
+#define BX_PRINTF_CALL_NO_VALUE(spec, width, precision)                                                                                                                         \
+    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (width), (precision)) : bx_printf_call_format((spec)->canonical, (width))) \
+                            : ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (precision)) : bx_printf_call_format((spec)->canonical)))
+
+#define BX_PRINTF_CALL_VALUE(spec, width, precision, value)                                                                                                                                       \
+    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (width), (precision), (value)) : bx_printf_call_format((spec)->canonical, (width), (value))) \
+                            : ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (precision), (value)) : bx_printf_call_format((spec)->canonical, (value))))
 
 static bool bx_printf_check_fprintf_result(int result, struct bx_diag_ctx* diag) {
     if (result < 0) {

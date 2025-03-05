@@ -506,6 +506,7 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
                 return NULL;
             }
 
+            free(pending.parts[i]);
             memmove(&pending.parts[i], &pending.parts[i + 1u], sizeof(*pending.parts) * (pending.count - (i + 1u)));
             pending.count--;
             if (target[0] == '/') {

@@ -304,17 +304,21 @@ if get_option('tests')
   )
   test('md5 vectors', test_md5_vectors)
 
+  fast_track_p0_suite = ['fast-track', 'fast-track-p0']
+  fast_track_p1_suite = ['fast-track', 'fast-track-p1']
+  fast_track_p2_suite = ['fast-track', 'fast-track-p2']
+
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
-  test('md5sum basic', test_md5sum_basic, args : [bx_exe])
+  test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_md5sum_smoke_differential = find_program('tests/md5sum/test_md5sum_smoke_differential.sh')
+  test('md5sum smoke differential', test_md5sum_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
   test('md5sum check', test_md5sum_check, args : [bx_exe])
 
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
-  test('base64 basic', test_base64_basic, args : [bx_exe])
-
-  fast_track_p0_suite = ['fast-track', 'fast-track-p0']
-  fast_track_p1_suite = ['fast-track', 'fast-track-p1']
+  test('base64 basic', test_base64_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
   test('shuf basic', test_shuf_basic, args : [bx_exe], suite : fast_track_p1_suite)
@@ -323,28 +327,34 @@ if get_option('tests')
   test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
-  test('ln basic', test_ln_basic, args : [bx_exe])
+  test('ln basic', test_ln_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_link_basic = find_program('tests/link/test_link_basic.sh')
-  test('link basic', test_link_basic, args : [bx_exe])
+  test('link basic', test_link_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_unlink_basic = find_program('tests/unlink/test_unlink_basic.sh')
-  test('unlink basic', test_unlink_basic, args : [bx_exe])
+  test('unlink basic', test_unlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
-  test('readlink basic', test_readlink_basic, args : [bx_exe])
+  test('readlink basic', test_readlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_realpath_basic = find_program('tests/realpath/test_realpath_basic.sh')
-  test('realpath basic', test_realpath_basic, args : [bx_exe])
+  test('realpath basic', test_realpath_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_basename_basic = find_program('tests/basename/test_basename_basic.sh')
-  test('basename basic', test_basename_basic, args : [bx_exe])
+  test('basename basic', test_basename_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_basename_smoke_differential = find_program('tests/basename/test_basename_smoke_differential.sh')
+  test('basename smoke differential', test_basename_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_dirname_basic = find_program('tests/dirname/test_dirname_basic.sh')
-  test('dirname basic', test_dirname_basic, args : [bx_exe])
+  test('dirname basic', test_dirname_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_dirname_smoke_differential = find_program('tests/dirname/test_dirname_smoke_differential.sh')
+  test('dirname smoke differential', test_dirname_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
-  test('pathchk basic', test_pathchk_basic, args : [bx_exe])
+  test('pathchk basic', test_pathchk_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
   test('ls basic', test_ls_basic, args : [bx_exe], suite : fast_track_p0_suite)
