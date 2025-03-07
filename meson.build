@@ -320,6 +320,9 @@ if get_option('tests')
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_base64_smoke_differential = find_program('tests/base64/test_base64_smoke_differential.sh')
+  test('base64 smoke differential', test_base64_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
   test('shuf basic', test_shuf_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
@@ -334,6 +337,9 @@ if get_option('tests')
 
   test_unlink_basic = find_program('tests/unlink/test_unlink_basic.sh')
   test('unlink basic', test_unlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_unlink_smoke_differential = find_program('tests/unlink/test_unlink_smoke_differential.sh')
+  test('unlink smoke differential', test_unlink_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
   test('readlink basic', test_readlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
