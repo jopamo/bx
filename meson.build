@@ -332,8 +332,14 @@ if get_option('tests')
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_ln_smoke_differential = find_program('tests/ln/test_ln_smoke_differential.sh')
+  test('ln smoke differential', test_ln_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_link_basic = find_program('tests/link/test_link_basic.sh')
   test('link basic', test_link_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_link_smoke_differential = find_program('tests/link/test_link_smoke_differential.sh')
+  test('link smoke differential', test_link_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_unlink_basic = find_program('tests/unlink/test_unlink_basic.sh')
   test('unlink basic', test_unlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
@@ -344,8 +350,14 @@ if get_option('tests')
   test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
   test('readlink basic', test_readlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_readlink_smoke_differential = find_program('tests/readlink/test_readlink_smoke_differential.sh')
+  test('readlink smoke differential', test_readlink_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_realpath_basic = find_program('tests/realpath/test_realpath_basic.sh')
   test('realpath basic', test_realpath_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_realpath_smoke_differential = find_program('tests/realpath/test_realpath_smoke_differential.sh')
+  test('realpath smoke differential', test_realpath_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_basename_basic = find_program('tests/basename/test_basename_basic.sh')
   test('basename basic', test_basename_basic, args : [bx_exe], suite : fast_track_p2_suite)
@@ -361,6 +373,9 @@ if get_option('tests')
 
   test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_pathchk_smoke_differential = find_program('tests/pathchk/test_pathchk_smoke_differential.sh')
+  test('pathchk smoke differential', test_pathchk_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
   test('ls basic', test_ls_basic, args : [bx_exe], suite : fast_track_p0_suite)
