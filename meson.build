@@ -152,6 +152,7 @@ sources = [
   'src/common/md5.c',
   'src/common/digest_util.c',
   'src/main.c',
+  'src/cat/cat.c',
   'src/ln/ln.c',
   'src/link/link.c',
   'src/unlink/unlink.c',
@@ -199,7 +200,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -307,6 +308,12 @@ if get_option('tests')
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
   fast_track_p2_suite = ['fast-track', 'fast-track-p2']
+
+  test_cat_basic = find_program('tests/cat/test_cat_basic.sh')
+  test('cat basic', test_cat_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_cat_smoke_differential = find_program('tests/cat/test_cat_smoke_differential.sh')
+  test('cat smoke differential', test_cat_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)

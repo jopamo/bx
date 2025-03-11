@@ -3,6 +3,7 @@
 
 int bx_true_main(int argc, char** argv);
 int bx_false_main(int argc, char** argv);
+int bx_cat_main(int argc, char** argv);
 int bx_ln_main(int argc, char** argv);
 int bx_link_main(int argc, char** argv);
 int bx_unlink_main(int argc, char** argv);

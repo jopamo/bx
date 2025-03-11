@@ -15,6 +15,7 @@ struct applet {
 };
 
 static const struct applet applets[] = {
+    {"cat", bx_cat_main},
     {"which", bx_which_main},
     {"ln", bx_ln_main},
     {"link", bx_link_main},
