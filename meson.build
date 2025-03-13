@@ -191,6 +191,7 @@ sources = [
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/expr/expr.c',
+  'src/cksum/cksum.c',
   'src/md5sum/md5sum.c',
   'src/base64/base64.c',
   'src/shuf/shuf.c',
@@ -200,7 +201,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -323,6 +324,9 @@ if get_option('tests')
 
   test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
   test('md5sum check', test_md5sum_check, args : [bx_exe])
+
+  test_cksum_basic = find_program('tests/cksum/test_cksum_basic.sh')
+  test('cksum basic', test_cksum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe], suite : fast_track_p2_suite)
