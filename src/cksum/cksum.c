@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "applets.h"
 #include "common/digest_util.h"
@@ -33,8 +34,15 @@ enum cksum_output_mode {
 
 enum cksum_longopt {
     CKSUM_OPT_ALGORITHM = 256,
+    CKSUM_OPT_CHECK,
+    CKSUM_OPT_IGNORE_MISSING,
+    CKSUM_OPT_QUIET,
+    CKSUM_OPT_STATUS,
+    CKSUM_OPT_STRICT,
     CKSUM_OPT_TAG,
     CKSUM_OPT_UNTAGGED,
+    CKSUM_OPT_WARN,
+    CKSUM_OPT_ZERO,
 };
 
 enum cksum_algorithm_parse_status {
@@ -47,6 +55,14 @@ struct cksum_options {
     const char* progname;
     enum cksum_algorithm algorithm;
     enum cksum_output_mode output_mode;
+    bool algorithm_specified;
+    bool check_mode;
+    bool ignore_missing;
+    bool quiet;
+    bool status;
+    bool strict;
+    bool warn;
+    bool zero_terminated;
     bool show_help;
     bool show_version;
     int first_operand;
@@ -96,6 +112,13 @@ static void cksum_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Print or check checksums and digest values.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -a, --algorithm=TYPE   select algorithm: bsd, sysv, crc, crc32b, md5\n");
+    fprintf(stream, "  -c, --check            read checksums from the FILEs and check them\n");
+    fprintf(stream, "      --ignore-missing   don't fail or report status for missing files\n");
+    fprintf(stream, "      --quiet            don't print OK for each successfully verified file\n");
+    fprintf(stream, "      --status           don't output anything, status code shows success\n");
+    fprintf(stream, "      --strict           fail if checksum input has improperly formatted lines\n");
+    fprintf(stream, "  -w, --warn             warn about improperly formatted checksum lines\n");
+    fprintf(stream, "  -z, --zero             end each output line with NUL, not newline\n");
     fprintf(stream, "      --tag              create a BSD-style checksum\n");
     fprintf(stream, "      --untagged         create a reversed style checksum\n");
     fprintf(stream, "      --help             display this help and exit\n");
@@ -139,8 +162,15 @@ static enum cksum_algorithm_parse_status cksum_parse_algorithm_name(const char* 
 static bool cksum_parse_options(int argc, char** argv, struct cksum_options* options) {
     static const struct option long_options[] = {
         {"algorithm", required_argument, NULL, CKSUM_OPT_ALGORITHM},
+        {"check", no_argument, NULL, CKSUM_OPT_CHECK},
+        {"ignore-missing", no_argument, NULL, CKSUM_OPT_IGNORE_MISSING},
+        {"quiet", no_argument, NULL, CKSUM_OPT_QUIET},
+        {"status", no_argument, NULL, CKSUM_OPT_STATUS},
+        {"strict", no_argument, NULL, CKSUM_OPT_STRICT},
         {"tag", no_argument, NULL, CKSUM_OPT_TAG},
         {"untagged", no_argument, NULL, CKSUM_OPT_UNTAGGED},
+        {"warn", no_argument, NULL, CKSUM_OPT_WARN},
+        {"zero", no_argument, NULL, CKSUM_OPT_ZERO},
         {"help", no_argument, NULL, 1},
         {"version", no_argument, NULL, 2},
         {NULL, 0, NULL, 0},
@@ -155,7 +185,7 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:a:", long_options, NULL);
+        int c = getopt_long(argc, argv, "+:a:cwz", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -174,13 +204,38 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
                     return false;
                 }
                 options->algorithm = parsed_algorithm;
+                options->algorithm_specified = true;
                 break;
             }
+            case 'c':
+            case CKSUM_OPT_CHECK:
+                options->check_mode = true;
+                break;
+            case CKSUM_OPT_IGNORE_MISSING:
+                options->ignore_missing = true;
+                break;
+            case CKSUM_OPT_QUIET:
+                options->quiet = true;
+                break;
+            case CKSUM_OPT_STATUS:
+                options->status = true;
+                break;
+            case CKSUM_OPT_STRICT:
+                options->strict = true;
+                break;
+            case 'w':
+            case CKSUM_OPT_WARN:
+                options->warn = true;
+                break;
             case CKSUM_OPT_TAG:
                 options->output_mode = CKSUM_OUTPUT_TAGGED;
                 break;
             case CKSUM_OPT_UNTAGGED:
                 options->output_mode = CKSUM_OUTPUT_UNTAGGED;
+                break;
+            case 'z':
+            case CKSUM_OPT_ZERO:
+                options->zero_terminated = true;
                 break;
             case 1:
                 options->show_help = true;
@@ -357,6 +412,206 @@ static void cksum_md5_update(void* opaque, const uint8_t* data, size_t len) {
     bx_md5_update(&state->ctx, data, len);
 }
 
+static void cksum_md5_init_adapter(void* ctx) {
+    bx_md5_init((struct bx_md5_ctx*)ctx);
+}
+
+static void cksum_md5_update_adapter(void* ctx, const void* data, size_t len) {
+    bx_md5_update((struct bx_md5_ctx*)ctx, data, len);
+}
+
+static void cksum_md5_final_adapter(void* ctx, uint8_t* out) {
+    bx_md5_final((struct bx_md5_ctx*)ctx, out);
+}
+
+static int cksum_md5_hash_path(const char* path, uint8_t out[BX_MD5_DIGEST_SIZE]) {
+    struct bx_md5_ctx ctx;
+
+    return bx_digest_file(&ctx, sizeof(ctx), cksum_md5_init_adapter, cksum_md5_update_adapter, cksum_md5_final_adapter, path, out, BX_MD5_DIGEST_SIZE);
+}
+
+static int cksum_hex_value(int ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool cksum_parse_md5_tagged_line(char* line, struct bx_checksum_record* record) {
+    static const char prefix[] = "MD5 (";
+    const size_t prefix_len = sizeof(prefix) - 1u;
+    const size_t digest_hex_len = BX_MD5_DIGEST_SIZE * 2u;
+
+    if (strncmp(line, prefix, prefix_len) != 0) {
+        return false;
+    }
+
+    char* close_paren = strrchr(line, ')');
+    if (close_paren == NULL || close_paren < line + prefix_len) {
+        return false;
+    }
+    if (strncmp(close_paren, ") = ", 4u) != 0) {
+        return false;
+    }
+
+    const char* digest_text = close_paren + 4;
+    if (strlen(digest_text) != digest_hex_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i < BX_MD5_DIGEST_SIZE; i++) {
+        int hi = cksum_hex_value((unsigned char)digest_text[i * 2u]);
+        int lo = cksum_hex_value((unsigned char)digest_text[i * 2u + 1u]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        record->digest[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    *close_paren = '\0';
+    record->digest_len = BX_MD5_DIGEST_SIZE;
+    record->binary_mode = false;
+    record->filename = line + prefix_len;
+    return record->filename[0] != '\0';
+}
+
+static bool cksum_parse_check_record(const struct cksum_options* options, char* line, struct bx_checksum_record* record) {
+    if (options->algorithm_specified && options->algorithm == CKSUM_ALGORITHM_MD5) {
+        if (bx_parse_check_line(line, BX_MD5_DIGEST_SIZE, record)) {
+            return true;
+        }
+    }
+
+    return cksum_parse_md5_tagged_line(line, record);
+}
+
+static const char* cksum_plural_suffix(size_t count) {
+    return (count == 1u) ? "" : "s";
+}
+
+static int cksum_verify_stream(FILE* stream, const char* source_name, const struct cksum_options* options) {
+    char* line = NULL;
+    size_t cap = 0u;
+    size_t line_no = 0u;
+    size_t parsed_count = 0u;
+    size_t malformed_count = 0u;
+    size_t success_count = 0u;
+    size_t mismatch_count = 0u;
+    size_t read_fail_count = 0u;
+    bool failed = false;
+
+    while (true) {
+        ssize_t nread = getline(&line, &cap, stream);
+        if (nread < 0) {
+            break;
+        }
+
+        line_no++;
+        if (nread > 0 && line[nread - 1] == '\n') {
+            line[nread - 1] = '\0';
+        }
+
+        struct bx_checksum_record expected;
+        if (!cksum_parse_check_record(options, line, &expected)) {
+            malformed_count++;
+            if (options->warn && !options->status) {
+                fprintf(stderr, "%s: %s:%zu: improperly formatted checksum line\n", options->progname, source_name, line_no);
+            }
+            continue;
+        }
+        parsed_count++;
+
+        uint8_t actual[BX_MD5_DIGEST_SIZE];
+        if (cksum_md5_hash_path(expected.filename, actual) != 0) {
+            int saved_errno = errno;
+            if (options->ignore_missing && saved_errno == ENOENT) {
+                continue;
+            }
+
+            fprintf(stderr, "%s: %s: %s\n", options->progname, expected.filename, strerror(saved_errno));
+            if (!options->status) {
+                printf("%s: FAILED open or read\n", expected.filename);
+            }
+            read_fail_count++;
+            failed = true;
+            continue;
+        }
+
+        if (memcmp(actual, expected.digest, BX_MD5_DIGEST_SIZE) == 0) {
+            success_count++;
+            if (!options->quiet && !options->status) {
+                printf("%s: OK\n", expected.filename);
+            }
+            continue;
+        }
+
+        if (!options->status) {
+            printf("%s: FAILED\n", expected.filename);
+        }
+        mismatch_count++;
+        failed = true;
+    }
+
+    if (ferror(stream)) {
+        fprintf(stderr, "%s: %s: read error\n", options->progname, source_name);
+        failed = true;
+    }
+
+    if (parsed_count == 0u) {
+        fprintf(stderr, "%s: %s: no properly formatted checksum lines found\n", options->progname, source_name);
+        failed = true;
+    }
+
+    if (malformed_count > 0u) {
+        if (!options->status) {
+            fprintf(stderr, "%s: WARNING: %zu line%s is improperly formatted\n", options->progname, malformed_count, cksum_plural_suffix(malformed_count));
+        }
+        if (options->strict) {
+            failed = true;
+        }
+    }
+
+    if (mismatch_count > 0u && !options->status) {
+        fprintf(stderr, "%s: WARNING: %zu computed checksum%s did NOT match\n", options->progname, mismatch_count, cksum_plural_suffix(mismatch_count));
+    }
+
+    if (read_fail_count > 0u && !options->status) {
+        fprintf(stderr, "%s: WARNING: %zu listed file%s could not be read\n", options->progname, read_fail_count, cksum_plural_suffix(read_fail_count));
+    }
+
+    if (options->ignore_missing && parsed_count > 0u && success_count == 0u) {
+        if (!options->status) {
+            fprintf(stderr, "%s: %s: no file was verified\n", options->progname, source_name);
+        }
+        failed = true;
+    }
+
+    free(line);
+    return failed ? CKSUM_EXIT_FAIL : CKSUM_EXIT_OK;
+}
+
+static int cksum_check_file(const struct cksum_options* options, const char* path) {
+    if (strcmp(path, "-") == 0) {
+        return cksum_verify_stream(stdin, "-", options);
+    }
+
+    FILE* stream = fopen(path, "r");
+    if (stream == NULL) {
+        fprintf(stderr, "%s: %s: %s\n", options->progname, path, strerror(errno));
+        return CKSUM_EXIT_FAIL;
+    }
+
+    int rc = cksum_verify_stream(stream, path, options);
+    fclose(stream);
+    return rc;
+}
+
 static bool cksum_compute_result(FILE* stream, enum cksum_algorithm algorithm, struct cksum_result* out_result) {
     memset(out_result, 0, sizeof(*out_result));
     out_result->algorithm = algorithm;
@@ -463,30 +718,33 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
         case CKSUM_ALGORITHM_CRC:
         case CKSUM_ALGORITHM_CRC32B:
             if (show_name_for_numeric_algorithms) {
-                printf("%" PRIu32 " %" PRIuMAX " %s\n", result.value, result.size, path);
+                printf("%" PRIu32 " %" PRIuMAX " %s", result.value, result.size, path);
             }
             else {
-                printf("%" PRIu32 " %" PRIuMAX "\n", result.value, result.size);
+                printf("%" PRIu32 " %" PRIuMAX, result.value, result.size);
             }
+            putchar(options->zero_terminated ? '\0' : '\n');
             break;
         case CKSUM_ALGORITHM_SYSV: {
             uintmax_t blocks = (result.size + 511u) / 512u;
             if (show_name_for_numeric_algorithms) {
-                printf("%" PRIu32 " %" PRIuMAX " %s\n", result.value, blocks, path);
+                printf("%" PRIu32 " %" PRIuMAX " %s", result.value, blocks, path);
             }
             else {
-                printf("%" PRIu32 " %" PRIuMAX "\n", result.value, blocks);
+                printf("%" PRIu32 " %" PRIuMAX, result.value, blocks);
             }
+            putchar(options->zero_terminated ? '\0' : '\n');
             break;
         }
         case CKSUM_ALGORITHM_BSD: {
             uintmax_t blocks = (result.size + 1023u) / 1024u;
             if (show_name_for_numeric_algorithms) {
-                printf("%05" PRIu32 " %5" PRIuMAX " %s\n", result.value, blocks, path);
+                printf("%05" PRIu32 " %5" PRIuMAX " %s", result.value, blocks, path);
             }
             else {
-                printf("%05" PRIu32 " %5" PRIuMAX "\n", result.value, blocks);
+                printf("%05" PRIu32 " %5" PRIuMAX, result.value, blocks);
             }
+            putchar(options->zero_terminated ? '\0' : '\n');
             break;
         }
         case CKSUM_ALGORITHM_MD5: {
@@ -495,16 +753,36 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
             bx_hex_encode_lower(result.md5, BX_MD5_DIGEST_SIZE, digest_hex);
 
             if (tagged) {
-                printf("MD5 (%s) = %s\n", path, digest_hex);
+                printf("MD5 (%s) = %s", path, digest_hex);
             }
             else {
-                printf("%s  %s\n", digest_hex, path);
+                printf("%s  %s", digest_hex, path);
             }
+            putchar(options->zero_terminated ? '\0' : '\n');
             break;
         }
     }
 
     return true;
+}
+
+static const char* cksum_find_check_only_option(const struct cksum_options* options) {
+    if (options->ignore_missing) {
+        return "--ignore-missing";
+    }
+    if (options->quiet) {
+        return "--quiet";
+    }
+    if (options->status) {
+        return "--status";
+    }
+    if (options->strict) {
+        return "--strict";
+    }
+    if (options->warn) {
+        return "--warn";
+    }
+    return NULL;
 }
 
 int bx_cksum_main(int argc, char** argv) {
@@ -523,6 +801,34 @@ int bx_cksum_main(int argc, char** argv) {
     if (options.show_version) {
         cksum_print_version(options.progname);
         return CKSUM_EXIT_OK;
+    }
+
+    if (!options.check_mode) {
+        const char* check_only = cksum_find_check_only_option(&options);
+        if (check_only != NULL) {
+            fprintf(stderr, "%s: the %s option is meaningful only when verifying checksums\n", options.progname, check_only);
+            fprintf(stderr, "Try '%s --help' for more information.\n", options.progname);
+            return CKSUM_EXIT_FAIL;
+        }
+    }
+
+    if (options.check_mode && options.algorithm_specified && options.algorithm != CKSUM_ALGORITHM_MD5) {
+        fprintf(stderr, "%s: --check is not supported with --algorithm={bsd,sysv,crc,crc32b}\n", options.progname);
+        return CKSUM_EXIT_FAIL;
+    }
+
+    if (options.check_mode) {
+        if (options.first_operand >= argc) {
+            return cksum_check_file(&options, "-");
+        }
+
+        int rc = CKSUM_EXIT_OK;
+        for (int i = options.first_operand; i < argc; i++) {
+            if (cksum_check_file(&options, argv[i]) != CKSUM_EXIT_OK) {
+                rc = CKSUM_EXIT_FAIL;
+            }
+        }
+        return rc;
     }
 
     int rc = CKSUM_EXIT_OK;

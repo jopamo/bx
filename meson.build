@@ -328,6 +328,9 @@ if get_option('tests')
   test_cksum_basic = find_program('tests/cksum/test_cksum_basic.sh')
   test('cksum basic', test_cksum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_cksum_check = find_program('tests/cksum/test_cksum_check.sh')
+  test('cksum check', test_cksum_check, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
