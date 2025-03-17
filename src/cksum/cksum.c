@@ -34,9 +34,11 @@ enum cksum_output_mode {
 
 enum cksum_longopt {
     CKSUM_OPT_ALGORITHM = 256,
+    CKSUM_OPT_BASE64,
     CKSUM_OPT_CHECK,
     CKSUM_OPT_IGNORE_MISSING,
     CKSUM_OPT_QUIET,
+    CKSUM_OPT_RAW,
     CKSUM_OPT_STATUS,
     CKSUM_OPT_STRICT,
     CKSUM_OPT_TAG,
@@ -63,8 +65,10 @@ struct cksum_options {
     bool strict;
     bool warn;
     bool zero_terminated;
+    bool raw_output;
     bool show_help;
     bool show_version;
+    bool base64_output;
     int first_operand;
 };
 
@@ -103,6 +107,8 @@ static bool cksum_crc_table_ready;
 static uint32_t cksum_crc32b_table[256];
 static bool cksum_crc32b_table_ready;
 
+static const char cksum_base64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
 static const char* cksum_progname(const char* argv0) {
     return (argv0 && argv0[0] != '\0') ? argv0 : "cksum";
 }
@@ -112,12 +118,14 @@ static void cksum_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Print or check checksums and digest values.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -a, --algorithm=TYPE   select algorithm: bsd, sysv, crc, crc32b, md5\n");
+    fprintf(stream, "      --base64           emit base64-encoded digests, not hexadecimal\n");
     fprintf(stream, "  -c, --check            read checksums from the FILEs and check them\n");
     fprintf(stream, "      --ignore-missing   don't fail or report status for missing files\n");
     fprintf(stream, "      --quiet            don't print OK for each successfully verified file\n");
     fprintf(stream, "      --status           don't output anything, status code shows success\n");
     fprintf(stream, "      --strict           fail if checksum input has improperly formatted lines\n");
     fprintf(stream, "  -w, --warn             warn about improperly formatted checksum lines\n");
+    fprintf(stream, "      --raw              emit a raw binary digest, not hexadecimal\n");
     fprintf(stream, "  -z, --zero             end each output line with NUL, not newline\n");
     fprintf(stream, "      --tag              create a BSD-style checksum\n");
     fprintf(stream, "      --untagged         create a reversed style checksum\n");
@@ -162,9 +170,11 @@ static enum cksum_algorithm_parse_status cksum_parse_algorithm_name(const char* 
 static bool cksum_parse_options(int argc, char** argv, struct cksum_options* options) {
     static const struct option long_options[] = {
         {"algorithm", required_argument, NULL, CKSUM_OPT_ALGORITHM},
+        {"base64", no_argument, NULL, CKSUM_OPT_BASE64},
         {"check", no_argument, NULL, CKSUM_OPT_CHECK},
         {"ignore-missing", no_argument, NULL, CKSUM_OPT_IGNORE_MISSING},
         {"quiet", no_argument, NULL, CKSUM_OPT_QUIET},
+        {"raw", no_argument, NULL, CKSUM_OPT_RAW},
         {"status", no_argument, NULL, CKSUM_OPT_STATUS},
         {"strict", no_argument, NULL, CKSUM_OPT_STRICT},
         {"tag", no_argument, NULL, CKSUM_OPT_TAG},
@@ -211,11 +221,17 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
             case CKSUM_OPT_CHECK:
                 options->check_mode = true;
                 break;
+            case CKSUM_OPT_BASE64:
+                options->base64_output = true;
+                break;
             case CKSUM_OPT_IGNORE_MISSING:
                 options->ignore_missing = true;
                 break;
             case CKSUM_OPT_QUIET:
                 options->quiet = true;
+                break;
+            case CKSUM_OPT_RAW:
+                options->raw_output = true;
                 break;
             case CKSUM_OPT_STATUS:
                 options->status = true;
@@ -443,10 +459,168 @@ static int cksum_hex_value(int ch) {
     return -1;
 }
 
+static int cksum_base64_value(int ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A';
+    }
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - 'a' + 26;
+    }
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0' + 52;
+    }
+    if (ch == '+') {
+        return 62;
+    }
+    if (ch == '/') {
+        return 63;
+    }
+    return -1;
+}
+
+static size_t cksum_base64_encoded_length(size_t input_len) {
+    return ((input_len + 2u) / 3u) * 4u;
+}
+
+static void cksum_base64_encode(const uint8_t* in, size_t len, char* out) {
+    size_t in_i = 0u;
+    size_t out_i = 0u;
+
+    while ((len - in_i) >= 3u) {
+        uint8_t a = in[in_i];
+        uint8_t b = in[in_i + 1u];
+        uint8_t c = in[in_i + 2u];
+
+        out[out_i++] = cksum_base64_alphabet[a >> 2u];
+        out[out_i++] = cksum_base64_alphabet[((a & 0x03u) << 4u) | (b >> 4u)];
+        out[out_i++] = cksum_base64_alphabet[((b & 0x0fu) << 2u) | (c >> 6u)];
+        out[out_i++] = cksum_base64_alphabet[c & 0x3fu];
+        in_i += 3u;
+    }
+
+    if ((len - in_i) == 1u) {
+        uint8_t a = in[in_i];
+        out[out_i++] = cksum_base64_alphabet[a >> 2u];
+        out[out_i++] = cksum_base64_alphabet[(a & 0x03u) << 4u];
+        out[out_i++] = '=';
+        out[out_i++] = '=';
+    }
+    else if ((len - in_i) == 2u) {
+        uint8_t a = in[in_i];
+        uint8_t b = in[in_i + 1u];
+        out[out_i++] = cksum_base64_alphabet[a >> 2u];
+        out[out_i++] = cksum_base64_alphabet[((a & 0x03u) << 4u) | (b >> 4u)];
+        out[out_i++] = cksum_base64_alphabet[(b & 0x0fu) << 2u];
+        out[out_i++] = '=';
+    }
+
+    out[out_i] = '\0';
+}
+
+static bool cksum_decode_base64(const char* text, size_t expected_len, uint8_t* out) {
+    size_t text_len = strlen(text);
+    size_t expected_text_len = cksum_base64_encoded_length(expected_len);
+    size_t out_i = 0u;
+
+    if (text_len != expected_text_len) {
+        return false;
+    }
+
+    for (size_t i = 0; i < text_len; i += 4u) {
+        int v0 = cksum_base64_value((unsigned char)text[i]);
+        int v1 = cksum_base64_value((unsigned char)text[i + 1u]);
+        char c2 = text[i + 2u];
+        char c3 = text[i + 3u];
+        int v2 = (c2 == '=') ? 0 : cksum_base64_value((unsigned char)c2);
+        int v3 = (c3 == '=') ? 0 : cksum_base64_value((unsigned char)c3);
+
+        if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) {
+            return false;
+        }
+        if (c2 == '=' && c3 != '=') {
+            return false;
+        }
+        if ((c2 == '=' || c3 == '=') && (i + 4u) != text_len) {
+            return false;
+        }
+
+        if (out_i >= expected_len) {
+            return false;
+        }
+        out[out_i++] = (uint8_t)((v0 << 2) | (v1 >> 4));
+
+        if (c2 != '=') {
+            if (out_i >= expected_len) {
+                return false;
+            }
+            out[out_i++] = (uint8_t)(((v1 & 0x0f) << 4) | (v2 >> 2));
+        }
+        if (c3 != '=') {
+            if (out_i >= expected_len) {
+                return false;
+            }
+            out[out_i++] = (uint8_t)(((v2 & 0x03) << 6) | v3);
+        }
+    }
+
+    return out_i == expected_len;
+}
+
+static bool cksum_parse_md5_digest_text(const char* text, uint8_t out[BX_MD5_DIGEST_SIZE]) {
+    const size_t digest_hex_len = BX_MD5_DIGEST_SIZE * 2u;
+
+    if (strlen(text) == digest_hex_len) {
+        for (size_t i = 0; i < BX_MD5_DIGEST_SIZE; i++) {
+            int hi = cksum_hex_value((unsigned char)text[i * 2u]);
+            int lo = cksum_hex_value((unsigned char)text[i * 2u + 1u]);
+            if (hi < 0 || lo < 0) {
+                return false;
+            }
+            out[i] = (uint8_t)((hi << 4) | lo);
+        }
+        return true;
+    }
+
+    return cksum_decode_base64(text, BX_MD5_DIGEST_SIZE, out);
+}
+
+static bool cksum_parse_md5_untagged_base64_line(char* line, struct bx_checksum_record* record) {
+    const size_t digest_b64_len = cksum_base64_encoded_length(BX_MD5_DIGEST_SIZE);
+    char saved_sep = '\0';
+
+    if (strlen(line) < (digest_b64_len + 2u)) {
+        return false;
+    }
+    if (line[digest_b64_len] != ' ') {
+        return false;
+    }
+
+    if (line[digest_b64_len + 1u] == '*') {
+        record->binary_mode = true;
+    }
+    else if (line[digest_b64_len + 1u] == ' ') {
+        record->binary_mode = false;
+    }
+    else {
+        return false;
+    }
+
+    saved_sep = line[digest_b64_len];
+    line[digest_b64_len] = '\0';
+    bool digest_ok = cksum_decode_base64(line, BX_MD5_DIGEST_SIZE, record->digest);
+    line[digest_b64_len] = saved_sep;
+    if (!digest_ok) {
+        return false;
+    }
+
+    record->digest_len = BX_MD5_DIGEST_SIZE;
+    record->filename = line + digest_b64_len + 2u;
+    return record->filename[0] != '\0';
+}
+
 static bool cksum_parse_md5_tagged_line(char* line, struct bx_checksum_record* record) {
     static const char prefix[] = "MD5 (";
     const size_t prefix_len = sizeof(prefix) - 1u;
-    const size_t digest_hex_len = BX_MD5_DIGEST_SIZE * 2u;
 
     if (strncmp(line, prefix, prefix_len) != 0) {
         return false;
@@ -461,17 +635,8 @@ static bool cksum_parse_md5_tagged_line(char* line, struct bx_checksum_record* r
     }
 
     const char* digest_text = close_paren + 4;
-    if (strlen(digest_text) != digest_hex_len) {
+    if (!cksum_parse_md5_digest_text(digest_text, record->digest)) {
         return false;
-    }
-
-    for (size_t i = 0; i < BX_MD5_DIGEST_SIZE; i++) {
-        int hi = cksum_hex_value((unsigned char)digest_text[i * 2u]);
-        int lo = cksum_hex_value((unsigned char)digest_text[i * 2u + 1u]);
-        if (hi < 0 || lo < 0) {
-            return false;
-        }
-        record->digest[i] = (uint8_t)((hi << 4) | lo);
     }
 
     *close_paren = '\0';
@@ -484,6 +649,9 @@ static bool cksum_parse_md5_tagged_line(char* line, struct bx_checksum_record* r
 static bool cksum_parse_check_record(const struct cksum_options* options, char* line, struct bx_checksum_record* record) {
     if (options->algorithm_specified && options->algorithm == CKSUM_ALGORITHM_MD5) {
         if (bx_parse_check_line(line, BX_MD5_DIGEST_SIZE, record)) {
+            return true;
+        }
+        if (cksum_parse_md5_untagged_base64_line(line, record)) {
             return true;
         }
     }
@@ -714,6 +882,40 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
         return false;
     }
 
+    if (options->raw_output) {
+        uint8_t raw_buffer[4];
+        const uint8_t* raw_data = NULL;
+        size_t raw_len = 0u;
+
+        switch (result.algorithm) {
+            case CKSUM_ALGORITHM_CRC:
+            case CKSUM_ALGORITHM_CRC32B:
+                raw_buffer[0] = (uint8_t)((result.value >> 24) & 0xffu);
+                raw_buffer[1] = (uint8_t)((result.value >> 16) & 0xffu);
+                raw_buffer[2] = (uint8_t)((result.value >> 8) & 0xffu);
+                raw_buffer[3] = (uint8_t)(result.value & 0xffu);
+                raw_data = raw_buffer;
+                raw_len = sizeof(raw_buffer);
+                break;
+            case CKSUM_ALGORITHM_SYSV:
+            case CKSUM_ALGORITHM_BSD:
+                raw_buffer[0] = (uint8_t)((result.value >> 8) & 0xffu);
+                raw_buffer[1] = (uint8_t)(result.value & 0xffu);
+                raw_data = raw_buffer;
+                raw_len = 2u;
+                break;
+            case CKSUM_ALGORITHM_MD5:
+                raw_data = result.md5;
+                raw_len = BX_MD5_DIGEST_SIZE;
+                break;
+        }
+
+        if (raw_len > 0u) {
+            (void)fwrite(raw_data, 1, raw_len, stdout);
+        }
+        return true;
+    }
+
     switch (result.algorithm) {
         case CKSUM_ALGORITHM_CRC:
         case CKSUM_ALGORITHM_CRC32B:
@@ -749,14 +951,19 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
         }
         case CKSUM_ALGORITHM_MD5: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
-            char digest_hex[BX_MD5_DIGEST_SIZE * 2u + 1u];
-            bx_hex_encode_lower(result.md5, BX_MD5_DIGEST_SIZE, digest_hex);
-
-            if (tagged) {
-                printf("MD5 (%s) = %s", path, digest_hex);
+            char digest_text[cksum_base64_encoded_length(BX_MD5_DIGEST_SIZE) + 1u];
+            if (options->base64_output) {
+                cksum_base64_encode(result.md5, BX_MD5_DIGEST_SIZE, digest_text);
             }
             else {
-                printf("%s  %s", digest_hex, path);
+                bx_hex_encode_lower(result.md5, BX_MD5_DIGEST_SIZE, digest_text);
+            }
+
+            if (tagged) {
+                printf("MD5 (%s) = %s", path, digest_text);
+            }
+            else {
+                printf("%s  %s", digest_text, path);
             }
             putchar(options->zero_terminated ? '\0' : '\n');
             break;
@@ -810,6 +1017,17 @@ int bx_cksum_main(int argc, char** argv) {
             fprintf(stderr, "Try '%s --help' for more information.\n", options.progname);
             return CKSUM_EXIT_FAIL;
         }
+    }
+
+    if (!options.check_mode && options.raw_output && (argc - options.first_operand) > 1) {
+        fprintf(stderr, "%s: the --raw option is not supported with multiple files\n", options.progname);
+        return CKSUM_EXIT_FAIL;
+    }
+
+    if (options.base64_output && options.raw_output) {
+        fprintf(stderr, "%s: --base64 and --raw are mutually exclusive\n", options.progname);
+        fprintf(stderr, "Try '%s --help' for more information.\n", options.progname);
+        return CKSUM_EXIT_FAIL;
     }
 
     if (options.check_mode && options.algorithm_specified && options.algorithm != CKSUM_ALGORITHM_MD5) {
