@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "common/digest_util.h"
 #include "common/md5.h"
+#include "common/sha1.h"
 
 enum {
     CKSUM_EXIT_OK = 0,
@@ -22,6 +23,7 @@ enum cksum_algorithm {
     CKSUM_ALGORITHM_CRC = 0,
     CKSUM_ALGORITHM_CRC32B,
     CKSUM_ALGORITHM_MD5,
+    CKSUM_ALGORITHM_SHA1,
     CKSUM_ALGORITHM_SYSV,
     CKSUM_ALGORITHM_BSD,
 };
@@ -77,6 +79,7 @@ struct cksum_result {
     uint32_t value;
     uintmax_t size;
     uint8_t md5[BX_MD5_DIGEST_SIZE];
+    uint8_t sha1[BX_SHA1_DIGEST_SIZE];
 };
 
 typedef void (*cksum_update_fn)(void* state, const uint8_t* data, size_t len);
@@ -101,6 +104,10 @@ struct cksum_md5_state {
     struct bx_md5_ctx ctx;
 };
 
+struct cksum_sha1_state {
+    struct bx_sha1_ctx ctx;
+};
+
 static uint32_t cksum_crc_table[256];
 static bool cksum_crc_table_ready;
 
@@ -117,7 +124,7 @@ static void cksum_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Print or check checksums and digest values.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -a, --algorithm=TYPE   select algorithm: bsd, sysv, crc, crc32b, md5\n");
+    fprintf(stream, "  -a, --algorithm=TYPE   select algorithm: bsd, sysv, crc, crc32b, md5, sha1\n");
     fprintf(stream, "      --base64           emit base64-encoded digests, not hexadecimal\n");
     fprintf(stream, "  -c, --check            read checksums from the FILEs and check them\n");
     fprintf(stream, "      --ignore-missing   don't fail or report status for missing files\n");
@@ -150,6 +157,10 @@ static enum cksum_algorithm_parse_status cksum_parse_algorithm_name(const char* 
         *out_algorithm = CKSUM_ALGORITHM_MD5;
         return CKSUM_ALGORITHM_PARSE_OK;
     }
+    if (strcmp(text, "sha1") == 0) {
+        *out_algorithm = CKSUM_ALGORITHM_SHA1;
+        return CKSUM_ALGORITHM_PARSE_OK;
+    }
     if (strcmp(text, "sysv") == 0) {
         *out_algorithm = CKSUM_ALGORITHM_SYSV;
         return CKSUM_ALGORITHM_PARSE_OK;
@@ -159,8 +170,7 @@ static enum cksum_algorithm_parse_status cksum_parse_algorithm_name(const char* 
         return CKSUM_ALGORITHM_PARSE_OK;
     }
 
-    if (strcmp(text, "sha1") == 0 || strcmp(text, "sha224") == 0 || strcmp(text, "sha256") == 0 || strcmp(text, "sha384") == 0 || strcmp(text, "sha512") == 0 || strcmp(text, "blake2b") == 0 ||
-        strcmp(text, "sm3") == 0) {
+    if (strcmp(text, "sha224") == 0 || strcmp(text, "sha256") == 0 || strcmp(text, "sha384") == 0 || strcmp(text, "sha512") == 0 || strcmp(text, "blake2b") == 0 || strcmp(text, "sm3") == 0) {
         return CKSUM_ALGORITHM_PARSE_UNSUPPORTED;
     }
 
@@ -426,6 +436,11 @@ static void cksum_bsd_update(void* opaque, const uint8_t* data, size_t len) {
 static void cksum_md5_update(void* opaque, const uint8_t* data, size_t len) {
     struct cksum_md5_state* state = (struct cksum_md5_state*)opaque;
     bx_md5_update(&state->ctx, data, len);
+}
+
+static void cksum_sha1_update(void* opaque, const uint8_t* data, size_t len) {
+    struct cksum_sha1_state* state = (struct cksum_sha1_state*)opaque;
+    bx_sha1_update(&state->ctx, data, len);
 }
 
 static void cksum_md5_init_adapter(void* ctx) {
@@ -836,6 +851,15 @@ static bool cksum_compute_result(FILE* stream, enum cksum_algorithm algorithm, s
             bx_md5_final(&state.ctx, out_result->md5);
             return true;
         }
+        case CKSUM_ALGORITHM_SHA1: {
+            struct cksum_sha1_state state;
+            bx_sha1_init(&state.ctx);
+            if (!cksum_read_stream(stream, &state, cksum_sha1_update, &out_result->size)) {
+                return false;
+            }
+            bx_sha1_final(&state.ctx, out_result->sha1);
+            return true;
+        }
     }
 
     errno = EINVAL;
@@ -908,6 +932,10 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 raw_data = result.md5;
                 raw_len = BX_MD5_DIGEST_SIZE;
                 break;
+            case CKSUM_ALGORITHM_SHA1:
+                raw_data = result.sha1;
+                raw_len = BX_SHA1_DIGEST_SIZE;
+                break;
         }
 
         if (raw_len > 0u) {
@@ -961,6 +989,25 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
 
             if (tagged) {
                 printf("MD5 (%s) = %s", path, digest_text);
+            }
+            else {
+                printf("%s  %s", digest_text, path);
+            }
+            putchar(options->zero_terminated ? '\0' : '\n');
+            break;
+        }
+        case CKSUM_ALGORITHM_SHA1: {
+            bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
+            char digest_text[(BX_SHA1_DIGEST_SIZE * 2u) + 1u];
+            if (options->base64_output) {
+                cksum_base64_encode(result.sha1, BX_SHA1_DIGEST_SIZE, digest_text);
+            }
+            else {
+                bx_hex_encode_lower(result.sha1, BX_SHA1_DIGEST_SIZE, digest_text);
+            }
+
+            if (tagged) {
+                printf("SHA1 (%s) = %s", path, digest_text);
             }
             else {
                 printf("%s  %s", digest_text, path);
@@ -1031,7 +1078,7 @@ int bx_cksum_main(int argc, char** argv) {
     }
 
     if (options.check_mode && options.algorithm_specified && options.algorithm != CKSUM_ALGORITHM_MD5) {
-        fprintf(stderr, "%s: --check is not supported with --algorithm={bsd,sysv,crc,crc32b}\n", options.progname);
+        fprintf(stderr, "%s: --check is currently supported only with --algorithm=md5\n", options.progname);
         return CKSUM_EXIT_FAIL;
     }
 

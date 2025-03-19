@@ -150,6 +150,7 @@ sources = [
   'src/common/xreadwrite.c',
   'src/common/overwrite_ops.c',
   'src/common/md5.c',
+  'src/common/sha1.c',
   'src/common/digest_util.c',
   'src/main.c',
   'src/cat/cat.c',
