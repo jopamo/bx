@@ -4,6 +4,7 @@
 int bx_true_main(int argc, char** argv);
 int bx_false_main(int argc, char** argv);
 int bx_cat_main(int argc, char** argv);
+int bx_cut_main(int argc, char** argv);
 int bx_ln_main(int argc, char** argv);
 int bx_link_main(int argc, char** argv);
 int bx_unlink_main(int argc, char** argv);
@@ -45,6 +46,7 @@ int bx_cp_main(int argc, char** argv);
 int bx_mv_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
 int bx_expr_main(int argc, char** argv);
+int bx_comm_main(int argc, char** argv);
 int bx_cksum_main(int argc, char** argv);
 int bx_md5sum_main(int argc, char** argv);
 int bx_base64_main(int argc, char** argv);

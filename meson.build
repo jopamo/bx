@@ -151,9 +151,13 @@ sources = [
   'src/common/overwrite_ops.c',
   'src/common/md5.c',
   'src/common/sha1.c',
+  'src/common/sha256.c',
+  'src/common/sha512.c',
   'src/common/digest_util.c',
   'src/main.c',
   'src/cat/cat.c',
+  'src/cut/cut.c',
+  'src/comm/comm.c',
   'src/ln/ln.c',
   'src/link/link.c',
   'src/unlink/unlink.c',
@@ -202,7 +206,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -316,6 +320,12 @@ if get_option('tests')
 
   test_cat_smoke_differential = find_program('tests/cat/test_cat_smoke_differential.sh')
   test('cat smoke differential', test_cat_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_comm_basic = find_program('tests/comm/test_comm_basic.sh')
+  test('comm basic', test_comm_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_cut_basic = find_program('tests/cut/test_cut_basic.sh')
+  test('cut basic', test_cut_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
