@@ -156,7 +156,12 @@ sources = [
   'src/common/digest_util.c',
   'src/main.c',
   'src/cat/cat.c',
+  'src/echo/echo.c',
+  'src/expand/expand.c',
+  'src/id/id.c',
+  'src/join/join.c',
   'src/cut/cut.c',
+  'src/date/date.c',
   'src/comm/comm.c',
   'src/ln/ln.c',
   'src/link/link.c',
@@ -206,7 +211,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'id', 'join', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -326,6 +331,18 @@ if get_option('tests')
 
   test_cut_basic = find_program('tests/cut/test_cut_basic.sh')
   test('cut basic', test_cut_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_date_basic = find_program('tests/date/test_date_basic.sh')
+  test('date basic', test_date_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_echo_basic = find_program('tests/echo/test_echo_basic.sh')
+  test('echo basic', test_echo_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_id_basic = find_program('tests/id/test_id_basic.sh')
+  test('id basic', test_id_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_join_basic = find_program('tests/join/test_join_basic.sh')
+  test('join basic', test_join_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)

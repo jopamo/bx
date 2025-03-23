@@ -17,6 +17,7 @@ struct applet {
 static const struct applet applets[] = {
     {"cat", bx_cat_main},
     {"cut", bx_cut_main},
+    {"date", bx_date_main},
     {"which", bx_which_main},
     {"ln", bx_ln_main},
     {"link", bx_link_main},
@@ -59,6 +60,10 @@ static const struct applet applets[] = {
     {"mv", bx_mv_main},
     {"wget", bx_wget_main},
     {"expr", bx_expr_main},
+    {"echo", bx_echo_main},
+    {"expand", bx_expand_main},
+    {"id", bx_id_main},
+    {"join", bx_join_main},
     {"comm", bx_comm_main},
     {"cksum", bx_cksum_main},
     {"md5sum", bx_md5sum_main},

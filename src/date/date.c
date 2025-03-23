@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
 #include <stdbool.h>
@@ -88,7 +89,7 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+d:f:I::Rr:s:u", long_options, &option_index);
+        int c = getopt_long(argc, argv, "d:f:I::Rr:s:u", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -140,13 +141,10 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
     return true;
 }
 
-// Stub for now - complex GNU date parsing is hard.
-// We'll support some basic formats.
 static bool parse_date_string(const char* str, struct timespec* ts, bool utc, struct bx_diag_ctx* diag) {
     struct tm tm;
     memset(&tm, 0, sizeof(tm));
 
-    // Try some common formats
     if (strptime(str, "%Y-%m-%d %H:%M:%S", &tm) || strptime(str, "%Y-%m-%d", &tm) || strptime(str, "%H:%M:%S", &tm)) {
         time_t t = utc ? timegm(&tm) : mktime(&tm);
         if (t == (time_t)-1) {
@@ -162,9 +160,7 @@ static bool parse_date_string(const char* str, struct timespec* ts, bool utc, st
     return false;
 }
 
-static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc, struct bx_diag_ctx* diag) {
-    // MMDDhhmm[[CC]YY][.ss]
-    // 10 or 12 or 8 digits, maybe .ss
+static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc) {
     size_t len = strlen(str);
     const char* dot = strchr(str, '.');
     size_t main_len = dot ? (size_t)(dot - str) : len;
@@ -177,7 +173,6 @@ static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc
     struct tm* now_tm = utc ? gmtime(&now) : localtime(&now);
     tm = *now_tm;
 
-    // Use sscanf or manual parsing
     int month, day, hour, min, year = -1, sec = 0;
     if (sscanf(str, "%2d%2d%2d%2d", &month, &day, &hour, &min) != 4)
         return false;
@@ -217,6 +212,83 @@ static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc
     return true;
 }
 
+static void format_and_print(struct timespec* ts, struct bx_date_options* options, const char* format, struct bx_diag_ctx* diag) {
+    struct tm* tm = options->utc ? gmtime(&ts->tv_sec) : localtime(&ts->tv_sec);
+    if (!tm) {
+        bx_diag(diag, "cannot convert time");
+        return;
+    }
+
+    if (options->rfc_3339) {
+        char buf[128];
+        char tz_buf[32];
+        strftime(tz_buf, sizeof(tz_buf), "%z", tm);
+        if (strlen(tz_buf) == 5) {
+            memmove(tz_buf + 4, tz_buf + 3, 3);
+            tz_buf[3] = ':';
+        }
+
+        if (strcmp(options->rfc_3339_fmt, "date") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+            printf("%s\n", buf);
+        }
+        else if (strcmp(options->rfc_3339_fmt, "seconds") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+            printf("%s%s\n", buf, tz_buf);
+        }
+        else if (strcmp(options->rfc_3339_fmt, "ns") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+            printf("%s.%09ld%s\n", buf, ts->tv_nsec, tz_buf);
+        }
+        else {
+            bx_diag(diag, "invalid RFC 3339 precision: '%s'", options->rfc_3339_fmt);
+        }
+        return;
+    }
+
+    if (options->iso_8601_fmt) {
+        char buf[128];
+        char tz_buf[32];
+        strftime(tz_buf, sizeof(tz_buf), "%z", tm);
+        if (strlen(tz_buf) == 5) {
+            memmove(tz_buf + 4, tz_buf + 3, 3);
+            tz_buf[3] = ':';
+        }
+
+        if (strcmp(options->iso_8601_fmt, "date") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%d", tm);
+            printf("%s\n", buf);
+        }
+        else if (strcmp(options->iso_8601_fmt, "hours") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%dT%H", tm);
+            printf("%s%s\n", buf, tz_buf);
+        }
+        else if (strcmp(options->iso_8601_fmt, "minutes") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M", tm);
+            printf("%s%s\n", buf, tz_buf);
+        }
+        else if (strcmp(options->iso_8601_fmt, "seconds") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm);
+            printf("%s%s\n", buf, tz_buf);
+        }
+        else if (strcmp(options->iso_8601_fmt, "ns") == 0) {
+            strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", tm);
+            printf("%s,%09ld%s\n", buf, ts->tv_nsec, tz_buf);
+        }
+        return;
+    }
+
+    char buf[1024];
+    if (strftime(buf, sizeof(buf), format, tm) == 0) {
+        if (format[0] != '\0') {
+            bx_diag(diag, "format error");
+            return;
+        }
+        buf[0] = '\0';
+    }
+    printf("%s\n", buf);
+}
+
 int bx_date_main(int argc, char** argv) {
     struct bx_date_options options;
     struct bx_diag_ctx diag = {.progname = "date", .exit_status = 0};
@@ -239,6 +311,38 @@ int bx_date_main(int argc, char** argv) {
         return 1;
     }
 
+    int num_operands = argc - first_operand;
+    const char* format = "%a %b %e %H:%M:%S %Z %Y";
+
+    if (num_operands == 1 && argv[first_operand][0] == '+') {
+        format = argv[first_operand] + 1;
+    }
+    else if (options.rfc_email) {
+        format = "%a, %d %b %Y %H:%M:%S %z";
+    }
+
+    if (options.file) {
+        FILE* f = strcmp(options.file, "-") == 0 ? stdin : fopen(options.file, "r");
+        if (!f) {
+            bx_diag(&diag, "%s: %s", options.file, strerror(errno));
+            return 1;
+        }
+        char* line = NULL;
+        size_t len = 0;
+        while (getline(&line, &len, f) != -1) {
+            char* nl = strchr(line, '\n');
+            if (nl)
+                *nl = '\0';
+            if (parse_date_string(line, &ts, options.utc, &diag)) {
+                format_and_print(&ts, &options, format, &diag);
+            }
+        }
+        free(line);
+        if (f != stdin)
+            fclose(f);
+        return diag.exit_status;
+    }
+
     if (options.reference_file) {
         struct stat st;
         if (stat(options.reference_file, &st) != 0) {
@@ -246,24 +350,37 @@ int bx_date_main(int argc, char** argv) {
             return 1;
         }
         ts.tv_sec = st.st_mtime;
-#ifdef __USE_XOPEN2K8
         ts.tv_nsec = st.st_mtim.tv_nsec;
-#else
-        ts.tv_nsec = 0;
-#endif
     }
     else if (options.date_str) {
         if (!parse_date_string(options.date_str, &ts, options.utc, &diag))
             return 1;
     }
     else if (options.set_str) {
-        // ... set time logic ...
+        struct timespec new_ts;
+        if (!parse_date_string(options.set_str, &new_ts, options.utc, &diag))
+            return 1;
+        if (clock_settime(CLOCK_REALTIME, &new_ts) != 0) {
+            bx_diag(&diag, "cannot set date: %s", strerror(errno));
+            return 1;
+        }
+        return 0;
     }
-    else if (argc - first_operand == 1 && !strchr(argv[first_operand], '+')) {
-        if (!parse_legacy_set_time(argv[first_operand], &ts, options.utc, &diag)) {
+    else if (num_operands >= 1 && argv[first_operand][0] != '+') {
+        if (!parse_legacy_set_time(argv[first_operand], &ts, options.utc)) {
             bx_diag(&diag, "invalid date '%s'", argv[first_operand]);
             return 1;
         }
+        if (clock_settime(CLOCK_REALTIME, &ts) != 0) {
+            bx_diag(&diag, "cannot set date: %s", strerror(errno));
+        }
+        first_operand++;
+        num_operands--;
+    }
+
+    if (num_operands > 1) {
+        bx_diag(&diag, "extra operand '%s'", argv[first_operand + 1]);
+        return 1;
     }
 
     if (options.resolution) {
@@ -273,45 +390,7 @@ int bx_date_main(int argc, char** argv) {
         return 0;
     }
 
-    struct tm* tm = options.utc ? gmtime(&ts.tv_sec) : localtime(&ts.tv_sec);
-    if (!tm) {
-        bx_diag(&diag, "cannot convert time");
-        return 1;
-    }
-
-    char buf[1024];
-    const char* format = "%a %b %e %H:%M:%S %Z %Y";  // Default GNU date format
-
-    if (argc - first_operand >= 1 && argv[first_operand][0] == '+') {
-        format = argv[first_operand] + 1;
-    }
-    else if (options.rfc_email) {
-        format = "%a, %d %b %Y %H:%M:%S %z";
-    }
-    else if (options.iso_8601_fmt) {
-        if (strcmp(options.iso_8601_fmt, "date") == 0)
-            format = "%Y-%m-%d";
-        else if (strcmp(options.iso_8601_fmt, "hours") == 0)
-            format = "%Y-%m-%dT%H%z";
-        else if (strcmp(options.iso_8601_fmt, "minutes") == 0)
-            format = "%Y-%m-%dT%H:%M%z";
-        else if (strcmp(options.iso_8601_fmt, "seconds") == 0)
-            format = "%Y-%m-%dT%H:%M:%S%z";
-        else if (strcmp(options.iso_8601_fmt, "ns") == 0) {
-            strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S,", tm);
-            printf("%s%09ld%s\n", buf, ts.tv_nsec, "TODO_TZ");  // ISO 8601 with ns is tricky
-            return 0;
-        }
-    }
-    else if (options.rfc_3339) {
-        // ...
-    }
-
-    if (strftime(buf, sizeof(buf), format, tm) == 0) {
-        bx_diag(&diag, "format error");
-        return 1;
-    }
-    printf("%s\n", buf);
+    format_and_print(&ts, &options, format, &diag);
 
     return diag.exit_status;
 }
