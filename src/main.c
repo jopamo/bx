@@ -60,6 +60,8 @@ static const struct applet applets[] = {
     {"mv", bx_mv_main},
     {"wget", bx_wget_main},
     {"expr", bx_expr_main},
+    {"fold", bx_fold_main},
+    {"head", bx_head_main},
     {"echo", bx_echo_main},
     {"expand", bx_expand_main},
     {"id", bx_id_main},

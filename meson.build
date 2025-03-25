@@ -157,6 +157,8 @@ sources = [
   'src/main.c',
   'src/cat/cat.c',
   'src/echo/echo.c',
+  'src/fold/fold.c',
+  'src/head/head.c',
   'src/expand/expand.c',
   'src/id/id.c',
   'src/join/join.c',
@@ -211,7 +213,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'id', 'join', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'id', 'join', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -337,6 +339,15 @@ if get_option('tests')
 
   test_echo_basic = find_program('tests/echo/test_echo_basic.sh')
   test('echo basic', test_echo_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_expand_basic = find_program('tests/expand/test_expand_basic.sh')
+  test('expand basic', test_expand_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_fold_basic = find_program('tests/fold/test_fold_basic.sh')
+  test('fold basic', test_fold_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_head_basic = find_program('tests/head/test_head_basic.sh')
+  test('head basic', test_head_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_id_basic = find_program('tests/id/test_id_basic.sh')
   test('id basic', test_id_basic, args : [bx_exe], suite : fast_track_p2_suite)
