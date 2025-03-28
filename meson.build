@@ -159,8 +159,10 @@ sources = [
   'src/echo/echo.c',
   'src/fold/fold.c',
   'src/head/head.c',
+  'src/hostid/hostid.c',
   'src/expand/expand.c',
   'src/id/id.c',
+  'src/logname/logname.c',
   'src/join/join.c',
   'src/cut/cut.c',
   'src/date/date.c',
@@ -213,7 +215,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'id', 'join', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -349,8 +351,14 @@ if get_option('tests')
   test_head_basic = find_program('tests/head/test_head_basic.sh')
   test('head basic', test_head_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_hostid_basic = find_program('tests/hostid/test_hostid_basic.sh')
+  test('hostid basic', test_hostid_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_id_basic = find_program('tests/id/test_id_basic.sh')
   test('id basic', test_id_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_logname_basic = find_program('tests/logname/test_logname_basic.sh')
+  test('logname basic', test_logname_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_join_basic = find_program('tests/join/test_join_basic.sh')
   test('join basic', test_join_basic, args : [bx_exe], suite : fast_track_p2_suite)
