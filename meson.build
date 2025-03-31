@@ -128,7 +128,7 @@ else
   add_project_arguments('-DBX_HAVE_MIRA_EMBED=0', language : 'c')
 endif
 
-bx_deps = []
+bx_deps = [cc.find_library('m', required : false)]
 if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
@@ -204,6 +204,8 @@ sources = [
   'src/install/install.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
+  'src/nproc/nproc.c',
+  'src/numfmt/numfmt.c',
   'src/expr/expr.c',
   'src/cksum/cksum.c',
   'src/md5sum/md5sum.c',
@@ -215,7 +217,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -359,6 +361,12 @@ if get_option('tests')
 
   test_logname_basic = find_program('tests/logname/test_logname_basic.sh')
   test('logname basic', test_logname_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_nproc_basic = find_program('tests/nproc/test_nproc_basic.sh')
+  test('nproc basic', test_nproc_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_numfmt_basic = find_program('tests/numfmt/test_numfmt_basic.sh')
+  test('numfmt basic', test_numfmt_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_join_basic = find_program('tests/join/test_join_basic.sh')
   test('join basic', test_join_basic, args : [bx_exe], suite : fast_track_p2_suite)
