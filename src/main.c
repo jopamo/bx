@@ -14,6 +14,15 @@ struct applet {
     applet_main_t main;
 };
 
+/*
+ * Boot-critical dispatch order:
+ * init is reserved as the first slot by design.
+ * switch_root is intentionally kept as the first post-init applet.
+ */
+static const struct applet boot_critical_applets[] = {
+    {"switch_root", bx_switch_root_main},
+};
+
 static const struct applet applets[] = {
     {"cat", bx_cat_main},
     {"cut", bx_cut_main},
@@ -88,6 +97,12 @@ static const char* get_basename(const char* path) {
 }
 
 static applet_main_t find_applet(const char* name) {
+    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
+        if (strcmp(boot_critical_applets[i].name, name) == 0) {
+            return boot_critical_applets[i].main;
+        }
+    }
+
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         if (strcmp(applets[i].name, name) == 0) {
             return applets[i].main;
@@ -174,6 +189,9 @@ usage:
     printf("usage: bx SUBCOMMAND [options] ...\n");
     printf("\n");
     printf("Currently supported subcommands:\n");
+    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
+        printf("  %s\n", boot_critical_applets[i].name);
+    }
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         printf("  %s\n", applets[i].name);
     }

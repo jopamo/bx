@@ -188,6 +188,7 @@ sources = [
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
+  'src/switch_root/switch_root.c',
   'src/chroot/chroot.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
@@ -204,6 +205,7 @@ sources = [
   'src/install/install.c',
   'src/cp/cp.c',
   'src/mv/mv.c',
+  'src/nl/nl.c',
   'src/nproc/nproc.c',
   'src/numfmt/numfmt.c',
   'src/expr/expr.c',
@@ -217,7 +219,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -370,6 +372,9 @@ if get_option('tests')
 
   test_join_basic = find_program('tests/join/test_join_basic.sh')
   test('join basic', test_join_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_nl_basic = find_program('tests/nl/test_nl_basic.sh')
+  test('nl basic', test_nl_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)

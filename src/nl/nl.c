@@ -240,6 +240,7 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->header;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
+                printf("\n");
                 continue;
             }
             else if (line[2] == delim1 && line[3] == delim2 && (line[4] == '\n' || line[4] == '\0')) {
@@ -247,6 +248,7 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->body;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
+                printf("\n");
                 continue;
             }
             else if (line[2] == '\n' || line[2] == '\0') {
@@ -254,6 +256,7 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->footer;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
+                printf("\n");
                 continue;
             }
         }
