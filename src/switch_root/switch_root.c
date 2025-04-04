@@ -328,6 +328,10 @@ static bool bx_switch_root_validate_init_target(const struct bx_switch_root_opti
     }
 
     if (strchr(init_target, '/') != NULL) {
+        if (init_target[0] != '/') {
+            bx_diag(diag, "INIT path must be absolute when containing '/': '%s'", init_target);
+            return false;
+        }
         return bx_switch_root_validate_init_path(options->new_root, init_target, diag);
     }
 
@@ -335,7 +339,8 @@ static bool bx_switch_root_validate_init_target(const struct bx_switch_root_opti
 }
 
 static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const char* target_relpath, const char* new_root, struct bx_diag_ctx* diag) {
-    if (stat(source_path, &(struct stat){0}) != 0) {
+    struct stat source_st;
+    if (stat(source_path, &source_st) != 0) {
         if (errno == ENOENT) {
             return true;
         }

@@ -190,6 +190,7 @@ sources = [
   'src/timeout/timeout.c',
   'src/switch_root/switch_root.c',
   'src/chroot/chroot.c',
+  'src/mount/mount.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -206,6 +207,7 @@ sources = [
   'src/cp/cp.c',
   'src/mv/mv.c',
   'src/nl/nl.c',
+  'src/od/od.c',
   'src/nproc/nproc.c',
   'src/numfmt/numfmt.c',
   'src/expr/expr.c',
@@ -219,7 +221,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -376,6 +378,10 @@ if get_option('tests')
   test_nl_basic = find_program('tests/nl/test_nl_basic.sh')
   test('nl basic', test_nl_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_od_basic = find_program('tests/od/test_od_basic.sh')
+  test('od basic', test_od_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
@@ -529,11 +535,20 @@ if get_option('tests')
   test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
   test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_switch_root_basic = find_program('tests/switch_root/test_switch_root_basic.sh')
+  test('switch_root basic', test_switch_root_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_switch_root_initramfs_smoke = find_program('tests/switch_root/test_switch_root_initramfs_smoke.sh')
+  test('switch_root initramfs smoke', test_switch_root_initramfs_smoke, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
   test('chroot basic', test_chroot_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chroot_smoke_differential = find_program('tests/chroot/test_chroot_smoke_differential.sh')
   test('chroot smoke differential', test_chroot_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_mount_basic = find_program('tests/mount/test_mount_basic.sh')
+  test('mount basic', test_mount_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
