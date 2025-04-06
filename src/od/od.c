@@ -175,7 +175,7 @@ static void dump_line(unsigned char* buf, size_t n, size_t addr, struct bx_od_op
             if (i + 1 < n)
                 printf(" %06o", (int)buf[i] | ((int)buf[i + 1] << 8));
             else
-                printf(" %03o", buf[i]);
+                printf(" %06o", (int)buf[i]);
         }
     }
     printf("\n");
@@ -200,6 +200,7 @@ int bx_od_main(int argc, char** argv) {
     int num_files = argc - first_operand;
     size_t total_addr = 0;
     unsigned char* buf = xmalloc(options.width);
+    size_t n;
 
     for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
@@ -214,12 +215,19 @@ int bx_od_main(int argc, char** argv) {
             // Fallback for non-seekable
         }
 
-        size_t n;
-        while ((n = fread(buf, 1, options.width, f)) > 0) {
+        while (true) {
+            size_t to_read = options.width;
+            if (options.read_bytes > 0) {
+                if (total_addr >= options.read_bytes)
+                    break;
+                if (to_read > options.read_bytes - total_addr)
+                    to_read = options.read_bytes - total_addr;
+            }
+            n = fread(buf, 1, to_read, f);
+            if (n == 0)
+                break;
             dump_line(buf, n, total_addr, &options);
             total_addr += n;
-            if (options.read_bytes > 0 && total_addr >= options.read_bytes)
-                break;
         }
 
         if (f != stdin)

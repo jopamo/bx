@@ -24,6 +24,8 @@ static const struct applet boot_critical_applets[] = {
 };
 
 static const struct applet applets[] = {
+    {"ash", bx_ash_main},
+    {"sh", bx_ash_main},
     {"cat", bx_cat_main},
     {"cut", bx_cut_main},
     {"date", bx_date_main},
@@ -48,6 +50,7 @@ static const struct applet applets[] = {
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
     {"tty", bx_tty_main},
+    {"getty", bx_getty_main},
     {"nice", bx_nice_main},
     {"nohup", bx_nohup_main},
     {"timeout", bx_timeout_main},
@@ -70,6 +73,7 @@ static const struct applet applets[] = {
     {"mv", bx_mv_main},
     {"nl", bx_nl_main},
     {"od", bx_od_main},
+    {"paste", bx_paste_main},
     {"nproc", bx_nproc_main},
     {"numfmt", bx_numfmt_main},
     {"wget", bx_wget_main},
@@ -147,6 +151,9 @@ int main(int argc, char** argv) {
 
     const char* progname = get_basename(argv[0]);
     applet_main_t applet_main = find_applet(progname);
+    if (!applet_main && progname[0] == '-' && progname[1] != '\0') {
+        applet_main = find_applet(progname + 1);
+    }
 
     if (applet_main) {
         return applet_main(argc, argv);

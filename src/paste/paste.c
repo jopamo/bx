@@ -1,0 +1,211 @@
+#include <errno.h>
+#include <getopt.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "applets.h"
+#include "diag.h"
+#include "libbx.h"
+
+struct bx_paste_options {
+    const char* progname;
+    const char* delimiters;
+    bool serial;
+    bool zero_terminated;
+    bool show_help;
+    bool show_version;
+};
+
+static void bx_paste_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
+    fprintf(stream, "Write lines consisting of the sequentially corresponding lines from\n");
+    fprintf(stream, "each FILE, separated by TABs, to standard output.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "With no FILE, or when FILE is -, read standard input.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n");
+    fprintf(stream, "  -s, --serial            paste one file at a time instead of in parallel\n");
+    fprintf(stream, "  -z, --zero-terminated   line delimiter is NUL, not newline\n");
+    fprintf(stream, "      --help     display this help and exit\n");
+    fprintf(stream, "      --version  output version information and exit\n");
+}
+
+static void bx_paste_print_version(const char* progname) {
+    printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+    static const struct option long_options[] = {
+        {"delimiters", required_argument, NULL, 'd'},
+        {"serial", no_argument, NULL, 's'},
+        {"zero-terminated", no_argument, NULL, 'z'},
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
+    };
+
+    memset(options, 0, sizeof(*options));
+    options->progname = "paste";
+    options->delimiters = "\t";
+    diag->progname = options->progname;
+
+    opterr = 0;
+    optind = 1;
+
+    while (true) {
+        int option_index = 0;
+        int c = getopt_long(argc, argv, "d:sz", long_options, &option_index);
+        if (c == -1)
+            break;
+
+        switch (c) {
+            case 'd':
+                options->delimiters = optarg;
+                break;
+            case 's':
+                options->serial = true;
+                break;
+            case 'z':
+                options->zero_terminated = true;
+                break;
+            case 1:
+                options->show_help = true;
+                return true;
+            case 2:
+                options->show_version = true;
+                return true;
+            case '?':
+                bx_diag(diag, "invalid option -- '%c'", optopt);
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    *first_operand = optind;
+    return true;
+}
+
+static void paste_serial(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
+    int delimiter = options->zero_terminated ? '\0' : '\n';
+    size_t num_delims = strlen(options->delimiters);
+
+    for (int i = 0; i < num_files; i++) {
+        FILE* f = strcmp(filenames[i], "-") == 0 ? stdin : fopen(filenames[i], "r");
+        if (!f) {
+            bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
+            continue;
+        }
+
+        char* line = NULL;
+        size_t cap = 0;
+        ssize_t len;
+        bool first_line = true;
+        size_t delim_idx = 0;
+        while ((len = getdelim(&line, &cap, delimiter, f)) != -1) {
+            if (!first_line) {
+                putchar(options->delimiters[delim_idx]);
+                delim_idx = (delim_idx + 1) % num_delims;
+            }
+            if (line[len - 1] == delimiter)
+                line[len - 1] = '\0';
+            fputs(line, stdout);
+            first_line = false;
+        }
+        putchar(delimiter);
+        free(line);
+        if (f != stdin)
+            fclose(f);
+    }
+}
+
+static void paste_parallel(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
+    FILE** files = xmalloc(num_files * sizeof(FILE*));
+    for (int i = 0; i < num_files; i++) {
+        files[i] = strcmp(filenames[i], "-") == 0 ? stdin : fopen(filenames[i], "r");
+        if (!files[i]) {
+            bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
+        }
+    }
+
+    int delimiter = options->zero_terminated ? '\0' : '\n';
+    size_t num_delims = strlen(options->delimiters);
+
+    char* line = NULL;
+    size_t line_cap = 0;
+
+    while (true) {
+        bool any_active = false;
+        bool any_opened = false;
+        for (int i = 0; i < num_files; i++) {
+            if (files[i])
+                any_opened = true;
+            ssize_t len = -1;
+            if (files[i]) {
+                len = getdelim(&line, &line_cap, delimiter, files[i]);
+                if (len == -1) {
+                    if (files[i] != stdin)
+                        fclose(files[i]);
+                    files[i] = NULL;
+                }
+            }
+
+            if (len != -1) {
+                any_active = true;
+                if (line[len - 1] == delimiter)
+                    line[len - 1] = '\0';
+                fputs(line, stdout);
+            }
+
+            if (i + 1 < num_files) {
+                putchar(options->delimiters[i % num_delims]);
+            }
+        }
+        if (!any_active && !any_opened)
+            break;
+        if (any_active || any_opened)
+            putchar(delimiter);
+        if (!any_opened)
+            break;
+    }
+
+    for (int i = 0; i < num_files; i++)
+        if (files[i] && files[i] != stdin)
+            fclose(files[i]);
+    free(files);
+    free(line);
+}
+
+int bx_paste_main(int argc, char** argv) {
+    struct bx_paste_options options;
+    struct bx_diag_ctx diag = {.progname = "paste", .exit_status = 0};
+    int first_operand = 0;
+
+    if (!bx_paste_parse_options(argc, argv, &options, &first_operand, &diag))
+        return 1;
+    if (options.show_help) {
+        bx_paste_print_help(stdout, options.progname);
+        return 0;
+    }
+    if (options.show_version) {
+        bx_paste_print_version(options.progname);
+        return 0;
+    }
+
+    int num_files = argc - first_operand;
+    char* default_filenames[] = {"-"};
+    char** filenames = (num_files == 0) ? default_filenames : &argv[first_operand];
+    int real_num_files = (num_files == 0) ? 1 : num_files;
+
+    if (options.serial) {
+        paste_serial(real_num_files, filenames, &options, &diag);
+    }
+    else {
+        paste_parallel(real_num_files, filenames, &options, &diag);
+    }
+
+    return diag.exit_status;
+}

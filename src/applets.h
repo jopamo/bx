@@ -26,6 +26,7 @@ int bx_printf_main(int argc, char** argv);
 int bx_env_main(int argc, char** argv);
 int bx_printenv_main(int argc, char** argv);
 int bx_tty_main(int argc, char** argv);
+int bx_getty_main(int argc, char** argv);
 int bx_nice_main(int argc, char** argv);
 int bx_nohup_main(int argc, char** argv);
 int bx_timeout_main(int argc, char** argv);
@@ -50,6 +51,7 @@ int bx_cp_main(int argc, char** argv);
 int bx_mv_main(int argc, char** argv);
 int bx_nl_main(int argc, char** argv);
 int bx_od_main(int argc, char** argv);
+int bx_paste_main(int argc, char** argv);
 int bx_nproc_main(int argc, char** argv);
 int bx_numfmt_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
@@ -67,5 +69,6 @@ int bx_cksum_main(int argc, char** argv);
 int bx_md5sum_main(int argc, char** argv);
 int bx_base64_main(int argc, char** argv);
 int bx_shuf_main(int argc, char** argv);
+int bx_ash_main(int argc, char** argv);
 
 #endif /* BX_APPLETS_H */

@@ -155,6 +155,7 @@ sources = [
   'src/common/sha512.c',
   'src/common/digest_util.c',
   'src/main.c',
+  'src/ash/ash.c',
   'src/cat/cat.c',
   'src/echo/echo.c',
   'src/fold/fold.c',
@@ -185,6 +186,7 @@ sources = [
   'src/env/env.c',
   'src/printenv/printenv.c',
   'src/tty/tty.c',
+  'src/getty/getty.c',
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
@@ -208,6 +210,7 @@ sources = [
   'src/mv/mv.c',
   'src/nl/nl.c',
   'src/od/od.c',
+  'src/paste/paste.c',
   'src/nproc/nproc.c',
   'src/numfmt/numfmt.c',
   'src/expr/expr.c',
@@ -221,7 +224,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'nice', 'nohup', 'timeout', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -381,6 +384,9 @@ if get_option('tests')
   test_od_basic = find_program('tests/od/test_od_basic.sh')
   test('od basic', test_od_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_paste_basic = find_program('tests/paste/test_paste_basic.sh')
+  test('paste basic', test_paste_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
@@ -516,6 +522,9 @@ if get_option('tests')
 
   test_tty_smoke_differential = find_program('tests/tty/test_tty_smoke_differential.sh')
   test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
+  test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe], suite : fast_track_p1_suite)
