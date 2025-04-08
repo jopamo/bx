@@ -136,40 +136,40 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
 
     char* line = NULL;
     size_t line_cap = 0;
+    char** row_fields = xmalloc(num_files * sizeof(char*));
 
     while (true) {
         bool any_active = false;
-        bool any_opened = false;
         for (int i = 0; i < num_files; i++) {
-            if (files[i])
-                any_opened = true;
-            ssize_t len = -1;
+            row_fields[i] = NULL;
             if (files[i]) {
-                len = getdelim(&line, &line_cap, delimiter, files[i]);
-                if (len == -1) {
+                ssize_t len = getdelim(&line, &line_cap, delimiter, files[i]);
+                if (len != -1) {
+                    any_active = true;
+                    if (line[len - 1] == delimiter)
+                        line[len - 1] = '\0';
+                    row_fields[i] = xstrdup(line);
+                }
+                else {
                     if (files[i] != stdin)
                         fclose(files[i]);
                     files[i] = NULL;
                 }
             }
+        }
 
-            if (len != -1) {
-                any_active = true;
-                if (line[len - 1] == delimiter)
-                    line[len - 1] = '\0';
-                fputs(line, stdout);
-            }
+        if (!any_active)
+            break;
 
+        for (int i = 0; i < num_files; i++) {
+            if (row_fields[i])
+                fputs(row_fields[i], stdout);
             if (i + 1 < num_files) {
                 putchar(options->delimiters[i % num_delims]);
             }
+            free(row_fields[i]);
         }
-        if (!any_active && !any_opened)
-            break;
-        if (any_active || any_opened)
-            putchar(delimiter);
-        if (!any_opened)
-            break;
+        putchar(delimiter);
     }
 
     for (int i = 0; i < num_files; i++)
@@ -177,6 +177,7 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
             fclose(files[i]);
     free(files);
     free(line);
+    free(row_fields);
 }
 
 int bx_paste_main(int argc, char** argv) {

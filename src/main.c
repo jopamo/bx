@@ -50,6 +50,7 @@ static const struct applet applets[] = {
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
     {"tty", bx_tty_main},
+    {"stty", bx_stty_main},
     {"getty", bx_getty_main},
     {"nice", bx_nice_main},
     {"nohup", bx_nohup_main},

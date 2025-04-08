@@ -1770,7 +1770,7 @@ static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_token
     return status;
 }
 
-static int ash_execute_buffer(struct ash_shell* shell, const char* input) {
+static int ash_execute_segment(struct ash_shell* shell, const char* input) {
     struct ash_tokens tokens;
     ash_tokens_init(&tokens);
 
@@ -1785,6 +1785,77 @@ static int ash_execute_buffer(struct ash_shell* shell, const char* input) {
     ash_tokens_destroy(&tokens);
     shell->last_status = rc;
     return rc;
+}
+
+static int ash_execute_buffer(struct ash_shell* shell, const char* input) {
+    size_t start = 0;
+    size_t i = 0;
+    bool in_single = false;
+    bool in_double = false;
+    bool escape = false;
+    int status = shell->last_status;
+
+    while (true) {
+        char ch = input[i];
+        bool at_end = (ch == '\0');
+        bool separator = false;
+
+        if (!in_single && !in_double && !escape && (ch == ';' || ch == '\n' || ch == '\0')) {
+            separator = true;
+        }
+
+        if (separator) {
+            size_t len = i - start;
+            if (len > 0u) {
+                char* segment = ash_slice_dup(input + start, len);
+                status = ash_execute_segment(shell, segment);
+                free(segment);
+                if (shell->should_exit) {
+                    return status;
+                }
+            }
+
+            if (at_end) {
+                break;
+            }
+
+            start = i + 1u;
+            i++;
+            continue;
+        }
+
+        if (escape) {
+            escape = false;
+            i++;
+            continue;
+        }
+
+        if (!in_single && ch == '\\') {
+            escape = true;
+            i++;
+            continue;
+        }
+
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            i++;
+            continue;
+        }
+
+        if (!in_single && ch == '\"') {
+            in_double = !in_double;
+            i++;
+            continue;
+        }
+
+        if (at_end) {
+            break;
+        }
+
+        i++;
+    }
+
+    return status;
 }
 
 static const char* ash_default_prompt(void) {

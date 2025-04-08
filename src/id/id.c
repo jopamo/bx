@@ -16,6 +16,7 @@
 
 struct bx_id_options {
     const char* progname;
+    bool only_context;
     bool only_group;
     bool all_groups;
     bool only_name;
@@ -31,17 +32,18 @@ static void bx_id_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Print user and group information for each specified USER,\n");
     fprintf(stream, "or (when USER omitted) for the current process.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -a                      ignore, for compatibility with other versions\n");
-    fprintf(stream, "  -g, --group             print only the effective group ID\n");
-    fprintf(stream, "  -G, --groups            print all group IDs\n");
-    fprintf(stream, "  -n, --name              print a name instead of a number, for -ugG\n");
-    fprintf(stream, "  -r, --real              print the real ID instead of the effective ID, with -ugG\n");
-    fprintf(stream, "  -u, --user              print only the effective user ID\n");
-    fprintf(stream, "  -z, --zero              delimit output with NUL characters, not whitespace\n");
-    fprintf(stream, "      --help     display this help and exit\n");
-    fprintf(stream, "      --version  output version information and exit\n");
+    fprintf(stream, "  -a                  ignore (compatibility no-op)\n");
+    fprintf(stream, "  -Z, --context       print only security context (SELinux only)\n");
+    fprintf(stream, "  -g, --group         print only the effective group ID\n");
+    fprintf(stream, "  -G, --groups        print all group IDs\n");
+    fprintf(stream, "  -n, --name          print names for -u, -g, -G\n");
+    fprintf(stream, "  -r, --real          print real IDs for -u, -g, -G\n");
+    fprintf(stream, "  -u, --user          print only the effective user ID\n");
+    fprintf(stream, "  -z, --zero          use NUL delimiters (not valid in default format)\n");
+    fprintf(stream, "      --help          display this help and exit\n");
+    fprintf(stream, "      --version       output version information and exit\n");
     fprintf(stream, "\n");
-    fprintf(stream, "Without any OPTION, print some identifying information for each USER.\n");
+    fprintf(stream, "Without any OPTION, print uid/gid/groups summary information.\n");
 }
 
 static void bx_id_print_version(const char* progname) {
@@ -50,9 +52,8 @@ static void bx_id_print_version(const char* progname) {
 
 static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"group", no_argument, NULL, 'g'}, {"groups", no_argument, NULL, 'G'}, {"name", no_argument, NULL, 'n'},
-        {"real", no_argument, NULL, 'r'},  {"user", no_argument, NULL, 'u'},   {"zero", no_argument, NULL, 'z'},
-        {"help", no_argument, NULL, 1},    {"version", no_argument, NULL, 2},  {NULL, 0, NULL, 0},
+        {"context", no_argument, NULL, 'Z'}, {"group", no_argument, NULL, 'g'}, {"groups", no_argument, NULL, 'G'}, {"name", no_argument, NULL, 'n'},  {"real", no_argument, NULL, 'r'},
+        {"user", no_argument, NULL, 'u'},    {"zero", no_argument, NULL, 'z'},  {"help", no_argument, NULL, 1},     {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -64,7 +65,7 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "agGnr_uz", long_options, &option_index);
+        int c = getopt_long(argc, argv, "aZgGnruz", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -72,6 +73,9 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
         switch (c) {
             case 'a':
                 break;  // ignored
+            case 'Z':
+                options->only_context = true;
+                break;
             case 'g':
                 options->only_group = true;
                 break;
@@ -97,7 +101,15 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
                 options->show_version = true;
                 return true;
             case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
+                if (optopt != 0) {
+                    bx_diag(diag, "invalid option -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "unrecognized option");
+                }
                 return false;
             default:
                 return false;
@@ -112,8 +124,12 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
         bx_diag(diag, "cannot print only names or real IDs in default format");
         return false;
     }
+    if (options->zero_terminated && !(options->only_user || options->only_group || options->all_groups || options->only_context)) {
+        bx_diag(diag, "option --zero not permitted in default format");
+        return false;
+    }
 
-    int count = (options->only_user ? 1 : 0) + (options->only_group ? 1 : 0) + (options->all_groups ? 1 : 0);
+    int count = (options->only_user ? 1 : 0) + (options->only_group ? 1 : 0) + (options->all_groups ? 1 : 0) + (options->only_context ? 1 : 0);
     if (count > 1) {
         bx_diag(diag, "cannot print \"only\" of more than one choice");
         return false;
@@ -121,6 +137,62 @@ static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* opt
 
     *first_operand = optind;
     return true;
+}
+
+static int bx_collect_groups(const char* username, gid_t primary_gid, gid_t** groups_out, struct bx_diag_ctx* diag) {
+    gid_t* raw_groups = NULL;
+    int raw_count = 0;
+
+    if (username) {
+        int capacity = 32;
+        raw_groups = xmalloc((size_t)capacity * sizeof(gid_t));
+        raw_count = capacity;
+        if (getgrouplist(username, primary_gid, raw_groups, &raw_count) == -1) {
+            raw_groups = xrealloc(raw_groups, (size_t)raw_count * sizeof(gid_t));
+            if (getgrouplist(username, primary_gid, raw_groups, &raw_count) == -1) {
+                free(raw_groups);
+                bx_diag(diag, "cannot determine groups for '%s'", username);
+                return -1;
+            }
+        }
+    }
+    else {
+        raw_count = getgroups(0, NULL);
+        if (raw_count < 0) {
+            bx_diag(diag, "cannot get supplementary groups: %s", strerror(errno));
+            return -1;
+        }
+        raw_groups = xmalloc((size_t)(raw_count + 1) * sizeof(gid_t));
+        int fetched = getgroups(raw_count, raw_groups);
+        if (fetched < 0) {
+            free(raw_groups);
+            bx_diag(diag, "cannot get supplementary groups: %s", strerror(errno));
+            return -1;
+        }
+        raw_count = fetched;
+    }
+
+    gid_t* ordered_groups = xmalloc((size_t)(raw_count + 1) * sizeof(gid_t));
+    int ordered_count = 0;
+    ordered_groups[ordered_count++] = primary_gid;
+
+    for (int i = 0; i < raw_count; i++) {
+        gid_t gid = raw_groups[i];
+        bool seen = false;
+        for (int j = 0; j < ordered_count; j++) {
+            if (ordered_groups[j] == gid) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            ordered_groups[ordered_count++] = gid;
+        }
+    }
+
+    free(raw_groups);
+    *groups_out = ordered_groups;
+    return ordered_count;
 }
 
 static void print_id_info(const char* username, struct bx_id_options* options, struct bx_diag_ctx* diag) {
@@ -177,31 +249,11 @@ static void print_id_info(const char* username, struct bx_id_options* options, s
     }
 
     if (options->all_groups) {
-        gid_t* groups;
-        int ngroups;
-        if (username) {
-            // Need to find groups for this user
-            struct passwd* p = getpwnam(username);
-            ngroups = 32;
-            groups = xmalloc(ngroups * sizeof(gid_t));
-            if (getgrouplist(username, p->pw_gid, groups, &ngroups) == -1) {
-                groups = xrealloc(groups, ngroups * sizeof(gid_t));
-                getgrouplist(username, p->pw_gid, groups, &ngroups);
-            }
-        }
-        else {
-            ngroups = getgroups(0, NULL);
-            groups = xmalloc((ngroups + 1) * sizeof(gid_t));
-            ngroups = getgroups(ngroups, groups);
-            // Also include effective/real group if not already there
-            gid_t gid = options->only_real ? rgid : egid;
-            bool found = false;
-            for (int i = 0; i < ngroups; i++)
-                if (groups[i] == gid)
-                    found = true;
-            if (!found)
-                groups[ngroups++] = gid;
-        }
+        gid_t primary_gid = options->only_real ? rgid : egid;
+        gid_t* groups = NULL;
+        int ngroups = bx_collect_groups(username, primary_gid, &groups, diag);
+        if (ngroups < 0)
+            return;
 
         for (int i = 0; i < ngroups; i++) {
             if (i > 0)
@@ -223,52 +275,49 @@ static void print_id_info(const char* username, struct bx_id_options* options, s
     }
 
     // Default format: uid=... gid=... groups=...
-    struct passwd* upwd = getpwuid(euid);
-    struct group* egp = getgrgid(egid);
+    struct passwd* rpwd = getpwuid(ruid);
+    struct group* rgp = getgrgid(rgid);
 
-    printf("uid=%u", (unsigned int)euid);
-    if (upwd)
-        printf("(%s)", upwd->pw_name);
+    printf("uid=%u", (unsigned int)ruid);
+    if (rpwd)
+        printf("(%s)", rpwd->pw_name);
 
-    printf(" gid=%u", (unsigned int)egid);
-    if (egp)
-        printf("(%s)", egp->gr_name);
+    printf(" gid=%u", (unsigned int)rgid);
+    if (rgp)
+        printf("(%s)", rgp->gr_name);
 
     if (euid != ruid) {
-        struct passwd* rpwd = getpwuid(ruid);
-        printf(" euid=%u", (unsigned int)ruid);
-        if (rpwd)
-            printf("(%s)", rpwd->pw_name);
+        struct passwd* upwd = getpwuid(euid);
+        printf(" euid=%u", (unsigned int)euid);
+        if (upwd)
+            printf("(%s)", upwd->pw_name);
     }
     if (egid != rgid) {
-        struct group* rgp = getgrgid(rgid);
-        printf(" egid=%u", (unsigned int)rgid);
-        if (rgp)
-            printf("(%s)", rgp->gr_name);
+        struct group* egp = getgrgid(egid);
+        printf(" egid=%u", (unsigned int)egid);
+        if (egp)
+            printf("(%s)", egp->gr_name);
     }
 
     printf(" groups=");
-    gid_t* groups;
-    int ngroups;
+    gid_t* groups = NULL;
+    int ngroups = 0;
     if (username) {
-        struct passwd* p = getpwnam(username);
         ngroups = 32;
-        groups = xmalloc(ngroups * sizeof(gid_t));
-        if (getgrouplist(username, p->pw_gid, groups, &ngroups) == -1) {
-            groups = xrealloc(groups, ngroups * sizeof(gid_t));
-            getgrouplist(username, p->pw_gid, groups, &ngroups);
+        groups = xmalloc((size_t)ngroups * sizeof(gid_t));
+        if (getgrouplist(username, egid, groups, &ngroups) == -1) {
+            groups = xrealloc(groups, (size_t)ngroups * sizeof(gid_t));
+            if (getgrouplist(username, egid, groups, &ngroups) == -1) {
+                free(groups);
+                bx_diag(diag, "cannot determine groups for '%s'", username);
+                return;
+            }
         }
     }
     else {
-        ngroups = getgroups(0, NULL);
-        groups = xmalloc((ngroups + 1) * sizeof(gid_t));
-        ngroups = getgroups(ngroups, groups);
-        bool found = false;
-        for (int i = 0; i < ngroups; i++)
-            if (groups[i] == egid)
-                found = true;
-        if (!found)
-            groups[ngroups++] = egid;
+        ngroups = bx_collect_groups(username, egid, &groups, diag);
+        if (ngroups < 0)
+            return;
     }
 
     for (int i = 0; i < ngroups; i++) {
@@ -297,6 +346,11 @@ int bx_id_main(int argc, char** argv) {
     if (options.show_version) {
         bx_id_print_version(options.progname);
         return 0;
+    }
+
+    if (options.only_context) {
+        bx_diag(&diag, "--context (-Z) works only on an SELinux-enabled kernel");
+        return diag.exit_status;
     }
 
     int num_users = argc - first_operand;

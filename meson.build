@@ -186,6 +186,7 @@ sources = [
   'src/env/env.c',
   'src/printenv/printenv.c',
   'src/tty/tty.c',
+  'src/stty/stty.c',
   'src/getty/getty.c',
   'src/nice/nice.c',
   'src/nohup/nohup.c',
@@ -224,7 +225,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -523,8 +524,23 @@ if get_option('tests')
   test_tty_smoke_differential = find_program('tests/tty/test_tty_smoke_differential.sh')
   test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
+  test_stty_basic = find_program('tests/stty/test_stty_basic.sh')
+  test('stty basic', test_stty_basic, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_stty_smoke_differential = find_program('tests/stty/test_stty_smoke_differential.sh')
+  test('stty smoke differential', test_stty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
+
   test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_ash_basic = find_program('tests/ash/test_ash_basic.sh')
+  test('ash basic', test_ash_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_ash_interactive = files('tests/ash/test_ash_interactive.py')
+  test('ash interactive startup', python3, args : [test_ash_interactive, bx_exe], suite : fast_track_p1_suite)
+
+  test_ash_rescue_rootfs_smoke = find_program('tests/ash/test_ash_rescue_rootfs_smoke.sh')
+  test('ash rescue rootfs smoke', test_ash_rescue_rootfs_smoke, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe], suite : fast_track_p1_suite)
