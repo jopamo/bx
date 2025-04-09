@@ -33,7 +33,7 @@ static void bx_id_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "or (when USER omitted) for the current process.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -a                  ignore (compatibility no-op)\n");
-    fprintf(stream, "  -Z, --context       print only security context (SELinux only)\n");
+    fprintf(stream, "  -Z, --context       print only security context (currently unsupported)\n");
     fprintf(stream, "  -g, --group         print only the effective group ID\n");
     fprintf(stream, "  -G, --groups        print all group IDs\n");
     fprintf(stream, "  -n, --name          print names for -u, -g, -G\n");
@@ -195,6 +195,61 @@ static int bx_collect_groups(const char* username, gid_t primary_gid, gid_t** gr
     return ordered_count;
 }
 
+static int bx_collect_current_groups_default(gid_t primary_gid, gid_t** groups_out, struct bx_diag_ctx* diag) {
+    int raw_count = getgroups(0, NULL);
+    if (raw_count < 0) {
+        bx_diag(diag, "cannot get supplementary groups: %s", strerror(errno));
+        return -1;
+    }
+
+    gid_t* raw_groups = xmalloc((size_t)(raw_count + 1) * sizeof(gid_t));
+    int fetched = getgroups(raw_count, raw_groups);
+    if (fetched < 0) {
+        free(raw_groups);
+        bx_diag(diag, "cannot get supplementary groups: %s", strerror(errno));
+        return -1;
+    }
+
+    raw_count = fetched;
+    gid_t* ordered_groups = xmalloc((size_t)(raw_count + 1) * sizeof(gid_t));
+    int ordered_count = 0;
+    int primary_index = -1;
+
+    for (int i = 0; i < raw_count; i++) {
+        gid_t gid = raw_groups[i];
+        bool seen = false;
+        for (int j = 0; j < ordered_count; j++) {
+            if (ordered_groups[j] == gid) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+
+        if (gid == primary_gid && primary_index < 0) {
+            primary_index = ordered_count;
+        }
+        ordered_groups[ordered_count++] = gid;
+    }
+
+    if (primary_index >= 0) {
+        if (primary_index > 0) {
+            gid_t primary = ordered_groups[primary_index];
+            memmove(ordered_groups + 1, ordered_groups, (size_t)primary_index * sizeof(gid_t));
+            ordered_groups[0] = primary;
+        }
+    }
+    else {
+        ordered_groups[ordered_count++] = primary_gid;
+    }
+
+    free(raw_groups);
+    *groups_out = ordered_groups;
+    return ordered_count;
+}
+
 static void print_id_info(const char* username, struct bx_id_options* options, struct bx_diag_ctx* diag) {
     uid_t ruid, euid;
     gid_t rgid, egid;
@@ -315,7 +370,7 @@ static void print_id_info(const char* username, struct bx_id_options* options, s
         }
     }
     else {
-        ngroups = bx_collect_groups(username, egid, &groups, diag);
+        ngroups = bx_collect_current_groups_default(egid, &groups, diag);
         if (ngroups < 0)
             return;
     }
@@ -349,7 +404,7 @@ int bx_id_main(int argc, char** argv) {
     }
 
     if (options.only_context) {
-        bx_diag(&diag, "--context (-Z) works only on an SELinux-enabled kernel");
+        bx_diag(&diag, "--context (-Z) is not supported in this build");
         return diag.exit_status;
     }
 
