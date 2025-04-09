@@ -358,16 +358,9 @@ static void print_id_info(const char* username, struct bx_id_options* options, s
     gid_t* groups = NULL;
     int ngroups = 0;
     if (username) {
-        ngroups = 32;
-        groups = xmalloc((size_t)ngroups * sizeof(gid_t));
-        if (getgrouplist(username, egid, groups, &ngroups) == -1) {
-            groups = xrealloc(groups, (size_t)ngroups * sizeof(gid_t));
-            if (getgrouplist(username, egid, groups, &ngroups) == -1) {
-                free(groups);
-                bx_diag(diag, "cannot determine groups for '%s'", username);
-                return;
-            }
-        }
+        ngroups = bx_collect_groups(username, egid, &groups, diag);
+        if (ngroups < 0)
+            return;
     }
     else {
         ngroups = bx_collect_current_groups_default(egid, &groups, diag);
