@@ -236,11 +236,15 @@ bx_exe = executable('bx',
 )
 
 multicall_install_mode = get_option('multicall_install_mode')
+install_sh_shortcut = get_option('install_sh_shortcut')
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_path = join_paths(install_bindir, 'bx')
 
 if multicall_install_mode == 'symlink'
   foreach applet : applet_names
+    if applet == 'sh' and not install_sh_shortcut
+      continue
+    endif
     install_symlink(applet,
       pointing_to : 'bx',
       install_dir : get_option('bindir')
@@ -248,6 +252,9 @@ if multicall_install_mode == 'symlink'
   endforeach
 else
   foreach applet : applet_names
+    if applet == 'sh' and not install_sh_shortcut
+      continue
+    endif
     wrapper_conf = configuration_data()
     wrapper_conf.set('BX_PATH', install_bx_path)
     wrapper_conf.set('APPLET', applet)
@@ -679,7 +686,11 @@ if get_option('tests')
   test(
     'install applet wrappers',
     test_install_applets,
-    args : [meson.current_build_dir(), install_bindir]
+    args : [
+      meson.current_build_dir(),
+      install_bindir,
+      install_sh_shortcut ? 'true' : 'false',
+    ]
   )
 
   test_parity_cli = files('tests/test_parity_cli.py')
