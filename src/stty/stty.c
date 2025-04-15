@@ -48,6 +48,20 @@ enum bx_stty_composite {
     BX_STTY_COMPOSITE_EK,
     BX_STTY_COMPOSITE_NL,
     BX_STTY_COMPOSITE_UNNL,
+    BX_STTY_COMPOSITE_PASS8,
+    BX_STTY_COMPOSITE_UNPASS8,
+    BX_STTY_COMPOSITE_LITOUT,
+    BX_STTY_COMPOSITE_UNLITOUT,
+    BX_STTY_COMPOSITE_EVENP,
+    BX_STTY_COMPOSITE_UNEVENP,
+    BX_STTY_COMPOSITE_ODDP,
+    BX_STTY_COMPOSITE_UNODDP,
+    BX_STTY_COMPOSITE_CRT,
+    BX_STTY_COMPOSITE_DEC,
+    BX_STTY_COMPOSITE_DECCTLQ,
+    BX_STTY_COMPOSITE_UNDECCTLQ,
+    BX_STTY_COMPOSITE_LCASE,
+    BX_STTY_COMPOSITE_UNLCASE,
 };
 
 enum bx_stty_op_kind {
@@ -465,6 +479,9 @@ static const struct bx_stty_flag_spec bx_stty_flag_table[] = {
 #endif
 #ifdef XCASE
     {"xcase", BX_STTY_FIELD_LFLAG, XCASE},
+#endif
+#ifdef EXTPROC
+    {"extproc", BX_STTY_FIELD_LFLAG, EXTPROC},
 #endif
 };
 
@@ -1110,6 +1127,14 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         return bx_stty_plan_append_op(plan, &op);
     }
 
+    if (negated && strcmp(name, "cooked") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = BX_STTY_COMPOSITE_RAW;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
     if (strcmp(name, "cbreak") == 0) {
         struct bx_stty_op op;
         memset(&op, 0, sizeof(op));
@@ -1139,6 +1164,70 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         memset(&op, 0, sizeof(op));
         op.kind = BX_STTY_OP_COMPOSITE;
         op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNNL : BX_STTY_COMPOSITE_NL;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "pass8") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNPASS8 : BX_STTY_COMPOSITE_PASS8;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "litout") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNLITOUT : BX_STTY_COMPOSITE_LITOUT;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "evenp") == 0 || strcmp(name, "parity") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNEVENP : BX_STTY_COMPOSITE_EVENP;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "oddp") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNODDP : BX_STTY_COMPOSITE_ODDP;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (!negated && strcmp(name, "crt") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = BX_STTY_COMPOSITE_CRT;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (!negated && strcmp(name, "dec") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = BX_STTY_COMPOSITE_DEC;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "decctlq") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNDECCTLQ : BX_STTY_COMPOSITE_DECCTLQ;
+        return bx_stty_plan_append_op(plan, &op);
+    }
+
+    if (strcmp(name, "lcase") == 0 || strcmp(name, "LCASE") == 0) {
+        struct bx_stty_op op;
+        memset(&op, 0, sizeof(op));
+        op.kind = BX_STTY_OP_COMPOSITE;
+        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNLCASE : BX_STTY_COMPOSITE_LCASE;
         return bx_stty_plan_append_op(plan, &op);
     }
 
@@ -1528,6 +1617,28 @@ static bool bx_stty_print_save(const struct bx_stty_state* state, struct bx_diag
     return bx_stty_write_newline(diag);
 }
 
+static void bx_stty_set_cs7(struct termios* tio) {
+#ifdef CSIZE
+    tio->c_cflag &= ~CSIZE;
+#ifdef CS7
+    tio->c_cflag |= CS7;
+#endif
+#else
+    (void)tio;
+#endif
+}
+
+static void bx_stty_set_cs8(struct termios* tio) {
+#ifdef CSIZE
+    tio->c_cflag &= ~CSIZE;
+#ifdef CS8
+    tio->c_cflag |= CS8;
+#endif
+#else
+    (void)tio;
+#endif
+}
+
 static void bx_stty_apply_cooked(struct termios* tio) {
 #ifdef IGNBRK
     tio->c_iflag &= ~IGNBRK;
@@ -1622,12 +1733,7 @@ static void bx_stty_apply_raw(struct termios* tio) {
 #ifdef ICANON
     tio->c_lflag &= ~ICANON;
 #endif
-#ifdef CSIZE
-    tio->c_cflag &= ~CSIZE;
-#ifdef CS8
-    tio->c_cflag |= CS8;
-#endif
-#endif
+    bx_stty_set_cs8(tio);
 #ifdef VMIN
     tio->c_cc[VMIN] = (cc_t)1;
 #endif
@@ -1685,12 +1791,7 @@ static void bx_stty_apply_sane(struct termios* tio) {
 #ifdef CREAD
     tio->c_cflag |= CREAD;
 #endif
-#ifdef CSIZE
-    tio->c_cflag &= ~CSIZE;
-#ifdef CS8
-    tio->c_cflag |= CS8;
-#endif
-#endif
+    bx_stty_set_cs8(tio);
 #ifdef ISIG
     tio->c_lflag |= ISIG;
 #endif
@@ -1812,19 +1913,183 @@ static bool bx_stty_apply_composite(struct termios* tio, enum bx_stty_composite 
 
         case BX_STTY_COMPOSITE_NL:
 #ifdef ICRNL
-            tio->c_iflag |= ICRNL;
+            tio->c_iflag &= ~ICRNL;
 #endif
 #ifdef ONLCR
-            tio->c_oflag |= ONLCR;
+            tio->c_oflag &= ~ONLCR;
 #endif
             return true;
 
         case BX_STTY_COMPOSITE_UNNL:
 #ifdef ICRNL
-            tio->c_iflag &= ~ICRNL;
+            tio->c_iflag |= ICRNL;
+#endif
+#ifdef INLCR
+            tio->c_iflag &= ~INLCR;
+#endif
+#ifdef IGNCR
+            tio->c_iflag &= ~IGNCR;
 #endif
 #ifdef ONLCR
-            tio->c_oflag &= ~ONLCR;
+            tio->c_oflag |= ONLCR;
+#endif
+#ifdef OCRNL
+            tio->c_oflag &= ~OCRNL;
+#endif
+#ifdef ONLRET
+            tio->c_oflag &= ~ONLRET;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_PASS8:
+#ifdef PARENB
+            tio->c_cflag &= ~PARENB;
+#endif
+#ifdef ISTRIP
+            tio->c_iflag &= ~ISTRIP;
+#endif
+            bx_stty_set_cs8(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_UNPASS8:
+#ifdef PARENB
+            tio->c_cflag |= PARENB;
+#endif
+#ifdef ISTRIP
+            tio->c_iflag |= ISTRIP;
+#endif
+            bx_stty_set_cs7(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_LITOUT:
+#ifdef PARENB
+            tio->c_cflag &= ~PARENB;
+#endif
+#ifdef ISTRIP
+            tio->c_iflag &= ~ISTRIP;
+#endif
+#ifdef OPOST
+            tio->c_oflag &= ~OPOST;
+#endif
+            bx_stty_set_cs8(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_UNLITOUT:
+#ifdef PARENB
+            tio->c_cflag |= PARENB;
+#endif
+#ifdef ISTRIP
+            tio->c_iflag |= ISTRIP;
+#endif
+#ifdef OPOST
+            tio->c_oflag |= OPOST;
+#endif
+            bx_stty_set_cs7(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_EVENP:
+#ifdef PARENB
+            tio->c_cflag |= PARENB;
+#endif
+#ifdef PARODD
+            tio->c_cflag &= ~PARODD;
+#endif
+            bx_stty_set_cs7(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_UNEVENP:
+            bx_stty_set_cs8(tio);
+#ifdef PARENB
+            tio->c_cflag &= ~PARENB;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_ODDP:
+#ifdef PARENB
+            tio->c_cflag |= PARENB;
+#endif
+#ifdef PARODD
+            tio->c_cflag |= PARODD;
+#endif
+            bx_stty_set_cs7(tio);
+            return true;
+
+        case BX_STTY_COMPOSITE_UNODDP:
+            bx_stty_set_cs8(tio);
+#ifdef PARENB
+            tio->c_cflag &= ~PARENB;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_CRT:
+#ifdef ECHOE
+            tio->c_lflag |= ECHOE;
+#endif
+#ifdef ECHOCTL
+            tio->c_lflag |= ECHOCTL;
+#endif
+#ifdef ECHOKE
+            tio->c_lflag |= ECHOKE;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_DEC:
+#ifdef ECHOE
+            tio->c_lflag |= ECHOE;
+#endif
+#ifdef ECHOCTL
+            tio->c_lflag |= ECHOCTL;
+#endif
+#ifdef ECHOKE
+            tio->c_lflag |= ECHOKE;
+#endif
+#ifdef IXANY
+            tio->c_iflag &= ~IXANY;
+#endif
+#ifdef VINTR
+            tio->c_cc[VINTR] = (cc_t)3;
+#endif
+#ifdef VERASE
+            tio->c_cc[VERASE] = (cc_t)127;
+#endif
+#ifdef VKILL
+            tio->c_cc[VKILL] = (cc_t)21;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_DECCTLQ:
+#ifdef IXANY
+            tio->c_iflag &= ~IXANY;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_UNDECCTLQ:
+#ifdef IXANY
+            tio->c_iflag |= IXANY;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_LCASE:
+#ifdef XCASE
+            tio->c_lflag |= XCASE;
+#endif
+#ifdef IUCLC
+            tio->c_iflag |= IUCLC;
+#endif
+#ifdef OLCUC
+            tio->c_oflag |= OLCUC;
+#endif
+            return true;
+
+        case BX_STTY_COMPOSITE_UNLCASE:
+#ifdef XCASE
+            tio->c_lflag &= ~XCASE;
+#endif
+#ifdef IUCLC
+            tio->c_iflag &= ~IUCLC;
+#endif
+#ifdef OLCUC
+            tio->c_oflag &= ~OLCUC;
 #endif
             return true;
     }
