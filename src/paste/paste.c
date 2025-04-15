@@ -12,7 +12,9 @@
 
 struct bx_paste_options {
     const char* progname;
-    const char* delimiters;
+    int* delimiters;
+    size_t delimiters_len;
+    const char* delimiter_spec;
     bool serial;
     bool zero_terminated;
     bool show_help;
@@ -26,7 +28,8 @@ static void bx_paste_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "With no FILE, or when FILE is -, read standard input.\n");
     fprintf(stream, "\n");
-    fprintf(stream, "  -d, --delimiters=LIST   reuse characters from LIST instead of TABs\n");
+    fprintf(stream, "  -d, --delimiters=LIST   reuse characters from LIST instead of TABs;\n");
+    fprintf(stream, "                            backslash escapes are supported\n");
     fprintf(stream, "  -s, --serial            paste one file at a time instead of in parallel\n");
     fprintf(stream, "  -z, --zero-terminated   line delimiter is NUL, not newline\n");
     fprintf(stream, "      --help     display this help and exit\n");
@@ -35,6 +38,66 @@ static void bx_paste_print_help(FILE* stream, const char* progname) {
 
 static void bx_paste_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_paste_parse_delimiters(const char* spec, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
+    size_t spec_len = strlen(spec);
+    size_t capacity = spec_len == 0 ? 1 : spec_len;
+    int* delimiters = xmalloc(capacity * sizeof(*delimiters));
+    size_t count = 0;
+
+    if (spec_len == 0) {
+        delimiters[count++] = -1;
+    }
+
+    for (size_t i = 0; i < spec_len; i++) {
+        unsigned char ch = (unsigned char)spec[i];
+        if (ch != '\\') {
+            delimiters[count++] = (int)ch;
+            continue;
+        }
+
+        if (i + 1 >= spec_len) {
+            free(delimiters);
+            bx_diag(diag, "delimiter list ends with an unescaped backslash: %s", spec);
+            return false;
+        }
+
+        i++;
+        switch (spec[i]) {
+            case '0':
+                delimiters[count++] = -1;
+                break;
+            case 'b':
+                delimiters[count++] = '\b';
+                break;
+            case 'f':
+                delimiters[count++] = '\f';
+                break;
+            case 'n':
+                delimiters[count++] = '\n';
+                break;
+            case 'r':
+                delimiters[count++] = '\r';
+                break;
+            case 't':
+                delimiters[count++] = '\t';
+                break;
+            case 'v':
+                delimiters[count++] = '\v';
+                break;
+            case '\\':
+                delimiters[count++] = '\\';
+                break;
+            default:
+                delimiters[count++] = (unsigned char)spec[i];
+                break;
+        }
+    }
+
+    options->delimiters = delimiters;
+    options->delimiters_len = count;
+    return true;
 }
 
 static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -49,7 +112,7 @@ static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_option
 
     memset(options, 0, sizeof(*options));
     options->progname = "paste";
-    options->delimiters = "\t";
+    options->delimiter_spec = "\t";
     diag->progname = options->progname;
 
     opterr = 0;
@@ -63,7 +126,7 @@ static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_option
 
         switch (c) {
             case 'd':
-                options->delimiters = optarg;
+                options->delimiter_spec = optarg;
                 break;
             case 's':
                 options->serial = true;
@@ -86,12 +149,18 @@ static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_option
     }
 
     *first_operand = optind;
-    return true;
+    return bx_paste_parse_delimiters(options->delimiter_spec, options, diag);
+}
+
+static void bx_paste_emit_delimiter(const struct bx_paste_options* options, size_t index) {
+    int delim = options->delimiters[index % options->delimiters_len];
+    if (delim >= 0) {
+        putchar(delim);
+    }
 }
 
 static void paste_serial(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
     int delimiter = options->zero_terminated ? '\0' : '\n';
-    size_t num_delims = strlen(options->delimiters);
 
     for (int i = 0; i < num_files; i++) {
         FILE* f = strcmp(filenames[i], "-") == 0 ? stdin : fopen(filenames[i], "r");
@@ -107,8 +176,8 @@ static void paste_serial(int num_files, char** filenames, struct bx_paste_option
         size_t delim_idx = 0;
         while ((len = getdelim(&line, &cap, delimiter, f)) != -1) {
             if (!first_line) {
-                putchar(options->delimiters[delim_idx]);
-                delim_idx = (delim_idx + 1) % num_delims;
+                bx_paste_emit_delimiter(options, delim_idx);
+                delim_idx++;
             }
             if (line[len - 1] == delimiter)
                 line[len - 1] = '\0';
@@ -132,7 +201,6 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
     }
 
     int delimiter = options->zero_terminated ? '\0' : '\n';
-    size_t num_delims = strlen(options->delimiters);
 
     char* line = NULL;
     size_t line_cap = 0;
@@ -165,7 +233,7 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
             if (row_fields[i])
                 fputs(row_fields[i], stdout);
             if (i + 1 < num_files) {
-                putchar(options->delimiters[i % num_delims]);
+                bx_paste_emit_delimiter(options, (size_t)i);
             }
             free(row_fields[i]);
         }
@@ -208,5 +276,6 @@ int bx_paste_main(int argc, char** argv) {
         paste_parallel(real_num_files, filenames, &options, &diag);
     }
 
+    free(options.delimiters);
     return diag.exit_status;
 }

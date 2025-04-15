@@ -19,9 +19,11 @@ struct bx_getty_options {
     const char* progname;
     bool show_help;
     bool show_version;
+    bool collect_login_name;
     const char* tty_operand;
     const char* term_name;
     const char* baud_rate;
+    const char* autologin_user;
     int command_index;
 };
 
@@ -66,6 +68,9 @@ static void bx_getty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "  -s, --baud=BAUD   set terminal speed (for serial consoles)\n");
     fprintf(stream, "  -t, --term=TERM   set TERM for the exec'd program\n");
+    fprintf(stream, "  -l, --login       prompt for a login name and append it to PROGRAM args\n");
+    fprintf(stream, "  -a, --autologin=USER\n");
+    fprintf(stream, "                    append USER without prompting (debug mode)\n");
     fprintf(stream, "  -h, --help        display this help and exit\n");
     fprintf(stream, "  -V, --version     output version information and exit\n");
 }
@@ -80,7 +85,13 @@ static void bx_getty_print_try_help(const char* progname) {
 
 static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"baud", required_argument, NULL, 's'}, {"term", required_argument, NULL, 't'}, {"help", no_argument, NULL, 'h'}, {"version", no_argument, NULL, 'V'}, {NULL, 0, NULL, 0},
+        {"baud", required_argument, NULL, 's'},
+        {"term", required_argument, NULL, 't'},
+        {"login", no_argument, NULL, 'l'},
+        {"autologin", required_argument, NULL, 'a'},
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'V'},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -91,7 +102,7 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+s:t:hV", long_options, NULL);
+        int c = getopt_long(argc, argv, "+:s:t:la:hV", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -103,12 +114,34 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
             case 't':
                 options->term_name = optarg;
                 break;
+            case 'l':
+                options->collect_login_name = true;
+                break;
+            case 'a':
+                if (optarg == NULL || optarg[0] == '\0') {
+                    bx_diag(diag, "autologin user may not be empty");
+                    return false;
+                }
+                options->autologin_user = optarg;
+                options->collect_login_name = true;
+                break;
             case 'h':
                 options->show_help = true;
                 return true;
             case 'V':
                 options->show_version = true;
                 return true;
+            case ':':
+                if (optopt != 0) {
+                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "option requires an argument");
+                }
+                return false;
             case '?':
                 if (optopt != 0) {
                     bx_diag(diag, "invalid option -- '%c'", optopt);
@@ -304,9 +337,54 @@ static bool bx_getty_attach_stdio(int tty_fd, struct bx_diag_ctx* diag) {
     return true;
 }
 
-static int bx_getty_exec_program(const struct bx_getty_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
-    (void)argc;
+static bool bx_getty_prompt_login_name(char* buffer, size_t buffer_size, struct bx_diag_ctx* diag) {
+    if (buffer_size == 0) {
+        bx_diag(diag, "internal error: login buffer is empty");
+        return false;
+    }
 
+    if (fputs("login: ", stdout) == EOF || fflush(stdout) == EOF) {
+        bx_diag(diag, "cannot write login prompt: %s", strerror(errno));
+        return false;
+    }
+
+    if (fgets(buffer, (int)buffer_size, stdin) == NULL) {
+        if (ferror(stdin)) {
+            bx_diag(diag, "cannot read login name: %s", strerror(errno));
+        }
+        else {
+            bx_diag(diag, "no login name received");
+        }
+        return false;
+    }
+
+    size_t len = strlen(buffer);
+    bool truncated = (len == (buffer_size - 1u));
+    if (len > 0 && buffer[len - 1u] == '\n') {
+        truncated = false;
+    }
+
+    while (len > 0 && (buffer[len - 1u] == '\n' || buffer[len - 1u] == '\r')) {
+        buffer[--len] = '\0';
+    }
+
+    if (truncated) {
+        int ch = 0;
+        while ((ch = getchar()) != '\n' && ch != '\r' && ch != EOF) {
+        }
+        bx_diag(diag, "login name is too long");
+        return false;
+    }
+
+    if (buffer[0] == '\0') {
+        bx_diag(diag, "empty login name");
+        return false;
+    }
+
+    return true;
+}
+
+static int bx_getty_exec_program(const struct bx_getty_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
     char* tty_path = bx_getty_resolve_tty_path(options->tty_operand);
     int tty_fd = open(tty_path, O_RDWR | O_NOCTTY);
     if (tty_fd < 0) {
@@ -333,8 +411,38 @@ static int bx_getty_exec_program(const struct bx_getty_options* options, int arg
         return 1;
     }
 
-    execvp(argv[options->command_index], &argv[options->command_index]);
-    bx_diag(diag, "cannot execute '%s': %s", argv[options->command_index], strerror(errno));
+    char* login_name = NULL;
+    if (options->collect_login_name) {
+        if (options->autologin_user != NULL) {
+            login_name = xstrdup(options->autologin_user);
+        }
+        else {
+            char login_buffer[256];
+            if (!bx_getty_prompt_login_name(login_buffer, sizeof(login_buffer), diag)) {
+                free(tty_path);
+                return 1;
+            }
+            login_name = xstrdup(login_buffer);
+        }
+    }
+
+    char** command_argv = &argv[options->command_index];
+    char** composed_argv = NULL;
+    if (login_name != NULL) {
+        int command_argc = argc - options->command_index;
+        composed_argv = xmalloc(((size_t)command_argc + 2u) * sizeof(*composed_argv));
+        for (int i = 0; i < command_argc; i++) {
+            composed_argv[i] = argv[options->command_index + i];
+        }
+        composed_argv[command_argc] = login_name;
+        composed_argv[command_argc + 1] = NULL;
+        command_argv = composed_argv;
+    }
+
+    execvp(command_argv[0], command_argv);
+    bx_diag(diag, "cannot execute '%s': %s", command_argv[0], strerror(errno));
+    free(composed_argv);
+    free(login_name);
     free(tty_path);
     return 1;
 }
