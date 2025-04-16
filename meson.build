@@ -185,6 +185,7 @@ sources = [
   'src/printf/printf.c',
   'src/env/env.c',
   'src/printenv/printenv.c',
+  'src/pwd/pwd.c',
   'src/tty/tty.c',
   'src/stty/stty.c',
   'src/getty/getty.c',
@@ -225,7 +226,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -524,6 +525,9 @@ if get_option('tests')
 
   test_printenv_smoke_differential = find_program('tests/printenv/test_printenv_smoke_differential.sh')
   test('printenv smoke differential', test_printenv_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_pwd_basic = find_program('tests/pwd/test_pwd_basic.sh')
+  test('pwd basic', test_pwd_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_tty_basic = find_program('tests/tty/test_tty_basic.sh')
   test('tty basic', test_tty_basic, args : [bx_exe], suite : fast_track_p0_suite)

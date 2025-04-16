@@ -25,6 +25,7 @@ int bx_dd_main(int argc, char** argv);
 int bx_printf_main(int argc, char** argv);
 int bx_env_main(int argc, char** argv);
 int bx_printenv_main(int argc, char** argv);
+int bx_pwd_main(int argc, char** argv);
 int bx_tty_main(int argc, char** argv);
 int bx_stty_main(int argc, char** argv);
 int bx_getty_main(int argc, char** argv);
