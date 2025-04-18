@@ -72,5 +72,21 @@ int bx_md5sum_main(int argc, char** argv);
 int bx_base64_main(int argc, char** argv);
 int bx_shuf_main(int argc, char** argv);
 int bx_ash_main(int argc, char** argv);
+int bx_yes_main(int argc, char** argv);
+int bx_whoami_main(int argc, char** argv);
+int bx_sleep_main(int argc, char** argv);
+int bx_uname_main(int argc, char** argv);
+int bx_wc_main(int argc, char** argv);
+int bx_uniq_main(int argc, char** argv);
+int bx_unexpand_main(int argc, char** argv);
+int bx_sum_main(int argc, char** argv);
+int bx_tac_main(int argc, char** argv);
+int bx_tail_main(int argc, char** argv);
+int bx_tee_main(int argc, char** argv);
+int bx_test_main(int argc, char** argv);
+int bx_tr_main(int argc, char** argv);
+int bx_seq_main(int argc, char** argv);
+int bx_split_main(int argc, char** argv);
+int bx_sort_main(int argc, char** argv);
 
 #endif /* BX_APPLETS_H */

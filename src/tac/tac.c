@@ -9,7 +9,9 @@
 #include "diag.h"
 
 static void tac_file(FILE* f, const char* separator, bool before) {
+    (void)before;
     char** lines = NULL;
+
     size_t* line_lens = NULL;
     size_t nlines = 0;
     size_t cap = 0;

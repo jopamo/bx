@@ -220,13 +220,29 @@ sources = [
   'src/md5sum/md5sum.c',
   'src/base64/base64.c',
   'src/shuf/shuf.c',
+  'src/yes/yes.c',
+  'src/whoami/whoami.c',
+  'src/sleep/sleep.c',
+  'src/uname/uname.c',
+  'src/wc/wc.c',
+  'src/uniq/uniq.c',
+  'src/unexpand/unexpand.c',
+  'src/sum/sum.c',
+  'src/tac/tac.c',
+  'src/tail/tail.c',
+  'src/tee/tee.c',
+  'src/test/test.c',
+  'src/tr/tr.c',
+  'src/seq/seq.c',
+  'src/split/split.c',
+  'src/sort/sort.c',
   'src/wget.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,

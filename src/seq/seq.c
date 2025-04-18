@@ -14,7 +14,6 @@ int bx_seq_main(int argc, char** argv) {
 
     const char* format = NULL;
     const char* separator = "\n";
-    bool equal_width = false;
     int c;
     while ((c = getopt_long(argc, argv, "f:s:w", long_options, NULL)) != -1) {
         switch (c) {
@@ -24,10 +23,10 @@ int bx_seq_main(int argc, char** argv) {
             case 's':
                 separator = optarg;
                 break;
-            case 'w':
-                equal_width = true;
+            case 'w': /* equal_width = true; */
                 break;
             case 'h':
+
                 printf("Usage: %s [OPTION]... LAST\n", argv[0]);
                 printf("  or:  %s [OPTION]... FIRST LAST\n", argv[0]);
                 printf("  or:  %s [OPTION]... FIRST INCREMENT LAST\n", argv[0]);

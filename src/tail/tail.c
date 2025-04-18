@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <time.h>
 #include "applets.h"
 #include "diag.h"
 
@@ -209,7 +210,7 @@ int bx_tail_main(int argc, char** argv) {
     else {
         bool multiple = (argc - optind > 1);
         for (int i = optind; i < argc; i++) {
-            if (multiple && !opts.quiet || opts.verbose) {
+            if ((multiple && !opts.quiet) || opts.verbose) {
                 printf("%s==> %s <==\n", (i > optind) ? "\n" : "", argv[i]);
             }
             FILE* f = fopen(argv[i], "r");
@@ -224,15 +225,19 @@ int bx_tail_main(int argc, char** argv) {
 
             if (opts.follow) {
                 // Simple follow
+                struct timespec ts;
+                ts.tv_sec = (time_t)opts.sleep_interval;
+                ts.tv_nsec = (long)((opts.sleep_interval - (double)ts.tv_sec) * 1000000000.0);
                 while (1) {
-                    int c;
-                    while ((c = getc(f)) != EOF)
-                        putchar(c);
+                    int ch;
+                    while ((ch = getc(f)) != EOF)
+                        putchar(ch);
                     fflush(stdout);
-                    usleep((useconds_t)(opts.sleep_interval * 1000000.0));
+                    nanosleep(&ts, NULL);
                     clearerr(f);
                 }
             }
+
             fclose(f);
         }
     }

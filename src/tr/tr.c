@@ -54,7 +54,7 @@ int bx_tr_main(int argc, char** argv) {
                                                  {"version", no_argument, NULL, 'v'},
                                                  {NULL, 0, NULL, 0}};
 
-    bool complement = false, delete = false, squeeze = false, truncate = false;
+    bool complement = false, delete = false, squeeze = false;
     int c;
     while ((c = getopt_long(argc, argv, "cdst", long_options, NULL)) != -1) {
         switch (c) {
@@ -67,10 +67,10 @@ int bx_tr_main(int argc, char** argv) {
             case 's':
                 squeeze = true;
                 break;
-            case 't':
-                truncate = true;
+            case 't': /* truncate = true; */
                 break;
             case 'h':
+
                 printf("Usage: %s [OPTION]... SET1 [SET2]\n", argv[0]);
                 // ...
                 return 0;
@@ -95,7 +95,6 @@ int bx_tr_main(int argc, char** argv) {
     }
 
     unsigned char map[256];
-    bool in_set1[256] = {0};
     bool del[256] = {0};
     for (int i = 0; i < 256; i++)
         map[i] = (unsigned char)i;

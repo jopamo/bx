@@ -63,12 +63,6 @@ int bx_sum_main(int argc, char** argv) {
         }
     }
 
-    bool print_name = (argc - optind > 1) || (optind < argc && sysv);
-    // GNU sum behavior for print_name is a bit inconsistent between versions, but usually it prints if >1 file.
-    // BSD sum: prints name if >0 files?
-    // Actually GNU sum -r prints name if >= 1 operand.
-    // GNU sum -s prints name if >= 1 operand.
-
     if (optind == argc) {
         if (sysv)
             sum_sysv(stdin, NULL, false);
