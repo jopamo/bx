@@ -215,6 +215,7 @@ sources = [
   'src/paste/paste.c',
   'src/nproc/nproc.c',
   'src/numfmt/numfmt.c',
+  'src/nc/nc.c',
   'src/expr/expr.c',
   'src/cksum/cksum.c',
   'src/md5sum/md5sum.c',
@@ -237,12 +238,13 @@ sources = [
   'src/split/split.c',
   'src/sort/sort.c',
   'src/wget.c',
+  'src/traceroute/traceroute.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -587,6 +589,9 @@ if get_option('tests')
   test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
   test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_nc_basic = files('tests/nc/test_nc_basic.py')
+  test('nc basic', python3, args : [test_nc_basic, bx_exe], suite : fast_track_p1_suite)
+
   test_switch_root_basic = find_program('tests/switch_root/test_switch_root_basic.sh')
   test('switch_root basic', test_switch_root_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
@@ -702,6 +707,9 @@ if get_option('tests')
   test_multicall = find_program('tests/test_multicall.sh')
   test('multicall test', test_multicall, args : [bx_exe])
 
+  test_new_applets = find_program('tests/test_new_applets.sh')
+  test('new applets basic', test_new_applets, args : [bx_exe])
+
   test_install_applets = find_program('tests/test_install_applets.sh')
   test(
     'install applet wrappers',
@@ -734,7 +742,7 @@ if get_option('tests')
   test('which parity alias', python3, args : [test_parity_alias, which_ref, bx_exe, meson.current_build_dir()])
 
   test_parity_functions = files('tests/test_parity_functions.py')
-  test('which parity functions', python3, args : [test_parity_functions, which_ref, bx_exe, meson.current_build_dir()])
+  test('which parity functions', python3, args : [test_parity_functions, bx_exe, meson.current_build_dir()])
 
   test_parity_exit_status = files('tests/test_parity_exit_status.py')
   test('which parity exit status', python3, args : [test_parity_exit_status, which_ref, bx_exe, meson.current_build_dir()])

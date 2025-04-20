@@ -56,6 +56,7 @@ int bx_od_main(int argc, char** argv);
 int bx_paste_main(int argc, char** argv);
 int bx_nproc_main(int argc, char** argv);
 int bx_numfmt_main(int argc, char** argv);
+int bx_nc_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
 int bx_expr_main(int argc, char** argv);
 int bx_fold_main(int argc, char** argv);
@@ -88,5 +89,6 @@ int bx_tr_main(int argc, char** argv);
 int bx_seq_main(int argc, char** argv);
 int bx_split_main(int argc, char** argv);
 int bx_sort_main(int argc, char** argv);
+int bx_traceroute_main(int argc, char** argv);
 
 #endif /* BX_APPLETS_H */
