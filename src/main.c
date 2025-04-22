@@ -20,6 +20,7 @@ struct applet {
  * switch_root is intentionally kept as the first post-init applet.
  */
 static const struct applet boot_critical_applets[] = {
+    {"init", bx_init_main},
     {"switch_root", bx_switch_root_main},
 };
 

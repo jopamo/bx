@@ -192,6 +192,7 @@ sources = [
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
+  'src/init/init.c',
   'src/switch_root/switch_root.c',
   'src/chroot/chroot.c',
   'src/mount/mount.c',
@@ -244,7 +245,7 @@ sources = [
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
 
 bx_exe = executable('bx',
   sources,
@@ -562,6 +563,9 @@ if get_option('tests')
   test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_init_basic = find_program('tests/init/test_init_basic.sh')
+  test('init basic', test_init_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_ash_basic = find_program('tests/ash/test_ash_basic.sh')
   test('ash basic', test_ash_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
@@ -742,7 +746,7 @@ if get_option('tests')
   test('which parity alias', python3, args : [test_parity_alias, which_ref, bx_exe, meson.current_build_dir()])
 
   test_parity_functions = files('tests/test_parity_functions.py')
-  test('which parity functions', python3, args : [test_parity_functions, bx_exe, meson.current_build_dir()])
+  test('which parity functions', python3, args : [test_parity_functions, which_ref, bx_exe, meson.current_build_dir()])
 
   test_parity_exit_status = files('tests/test_parity_exit_status.py')
   test('which parity exit status', python3, args : [test_parity_exit_status, which_ref, bx_exe, meson.current_build_dir()])
