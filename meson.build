@@ -257,12 +257,16 @@ bx_exe = executable('bx',
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
+install_init_shortcut = get_option('install_init_shortcut')
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_path = join_paths(install_bindir, 'bx')
 
 if multicall_install_mode == 'symlink'
   foreach applet : applet_names
     if applet == 'sh' and not install_sh_shortcut
+      continue
+    endif
+    if applet == 'init' and not install_init_shortcut
       continue
     endif
     install_symlink(applet,
@@ -273,6 +277,9 @@ if multicall_install_mode == 'symlink'
 else
   foreach applet : applet_names
     if applet == 'sh' and not install_sh_shortcut
+      continue
+    endif
+    if applet == 'init' and not install_init_shortcut
       continue
     endif
     wrapper_conf = configuration_data()
@@ -722,6 +729,7 @@ if get_option('tests')
       meson.current_build_dir(),
       install_bindir,
       install_sh_shortcut ? 'true' : 'false',
+      install_init_shortcut ? 'true' : 'false',
     ]
   )
 

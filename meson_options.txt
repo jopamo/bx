@@ -32,3 +32,9 @@ option(
   value : false,
   description : 'Install sh multicall shortcut alongside ash'
 )
+option(
+  'install_init_shortcut',
+  type : 'boolean',
+  value : false,
+  description : 'Install init multicall shortcut'
+)
