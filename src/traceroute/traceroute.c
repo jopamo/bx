@@ -354,14 +354,14 @@ static bool bx_traceroute_wait_for_reply(int fd, int timeout_ms, struct bx_trace
     return true;
 }
 
-static bool bx_traceroute_send_probe(const struct sockaddr_in* destination,
-                                     unsigned int ttl,
-                                     unsigned int port,
-                                     double wait_secs,
-                                     const unsigned char* payload,
-                                     size_t payload_len,
-                                     struct bx_traceroute_probe_result* result,
-                                     struct bx_diag_ctx* diag) {
+static bool bx_traceroute_send_probe_socket(const struct sockaddr_in* destination,
+                                            unsigned int ttl,
+                                            unsigned int port,
+                                            const unsigned char* payload,
+                                            size_t payload_len,
+                                            int* out_fd,
+                                            double* out_send_time,
+                                            struct bx_diag_ctx* diag) {
     int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (fd < 0) {
         bx_diag(diag, "cannot open probe socket: %s", strerror(errno));
@@ -399,22 +399,8 @@ static bool bx_traceroute_send_probe(const struct sockaddr_in* destination,
         return false;
     }
 
-    int timeout_ms = (int)(wait_secs * 1000.0);
-    if (timeout_ms < 1) {
-        timeout_ms = 1;
-    }
-
-    bool wait_ok = bx_traceroute_wait_for_reply(fd, timeout_ms, result, diag);
-    double end_time = bx_traceroute_now_secs();
-    close(fd);
-
-    if (!wait_ok) {
-        return false;
-    }
-
-    if (result->replied) {
-        result->rtt_ms = (end_time - start_time) * 1000.0;
-    }
+    *out_fd = fd;
+    *out_send_time = start_time;
 
     return true;
 }
@@ -512,12 +498,18 @@ int bx_traceroute_main(int argc, char** argv) {
     bx_traceroute_init_payload(payload, payload_len);
 
     struct bx_traceroute_probe_result* results = xmalloc((size_t)options.queries * sizeof(*results));
+    int* probe_fds = xmalloc((size_t)options.queries * sizeof(*probe_fds));
+    double* probe_start_times = xmalloc((size_t)options.queries * sizeof(*probe_start_times));
 
     printf("traceroute to %s (%s), %u hops max, %zu byte packets\n", options.destination, destination_text, options.max_hops, payload_len);
 
     bool reached = false;
     for (unsigned int ttl = options.first_hop; ttl <= options.max_hops; ttl++) {
         memset(results, 0, (size_t)options.queries * sizeof(*results));
+        for (unsigned int query = 0; query < options.queries; query++) {
+            probe_fds[query] = -1;
+            probe_start_times[query] = 0.0;
+        }
 
         unsigned int hop_offset = (ttl - options.first_hop) * options.queries;
         unsigned int port_span = 65536u - options.base_port;
@@ -528,11 +520,51 @@ int bx_traceroute_main(int argc, char** argv) {
                 port += (hop_offset + query) % port_span;
             }
 
-            if (!bx_traceroute_send_probe(&destination, ttl, port, options.wait_secs, payload, payload_len, &results[query], &diag)) {
+            if (!bx_traceroute_send_probe_socket(&destination, ttl, port, payload, payload_len, &probe_fds[query], &probe_start_times[query], &diag)) {
+                for (unsigned int i = 0; i <= query; i++) {
+                    if (probe_fds[i] >= 0) {
+                        close(probe_fds[i]);
+                        probe_fds[i] = -1;
+                    }
+                }
+                free(probe_start_times);
+                free(probe_fds);
+                free(results);
+                return 1;
+            }
+        }
+
+        double hop_deadline = bx_traceroute_now_secs() + options.wait_secs;
+        for (unsigned int query = 0; query < options.queries; query++) {
+            double remaining_secs = hop_deadline - bx_traceroute_now_secs();
+            int timeout_ms = 0;
+            if (remaining_secs > 0.0) {
+                timeout_ms = (int)(remaining_secs * 1000.0);
+                if (timeout_ms < 1) {
+                    timeout_ms = 1;
+                }
+            }
+
+            if (!bx_traceroute_wait_for_reply(probe_fds[query], timeout_ms, &results[query], &diag)) {
+                for (unsigned int i = query; i < options.queries; i++) {
+                    if (probe_fds[i] >= 0) {
+                        close(probe_fds[i]);
+                        probe_fds[i] = -1;
+                    }
+                }
+                free(probe_start_times);
+                free(probe_fds);
                 free(results);
                 return 1;
             }
 
+            double end_time = bx_traceroute_now_secs();
+            close(probe_fds[query]);
+            probe_fds[query] = -1;
+
+            if (results[query].replied) {
+                results[query].rtt_ms = (end_time - probe_start_times[query]) * 1000.0;
+            }
             if (results[query].reached) {
                 reached = true;
             }
@@ -545,6 +577,8 @@ int bx_traceroute_main(int argc, char** argv) {
         }
     }
 
+    free(probe_start_times);
+    free(probe_fds);
     free(results);
     return 0;
 }
