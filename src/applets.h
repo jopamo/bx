@@ -36,6 +36,7 @@ int bx_init_main(int argc, char** argv);
 int bx_switch_root_main(int argc, char** argv);
 int bx_chroot_main(int argc, char** argv);
 int bx_mount_main(int argc, char** argv);
+int bx_umount_main(int argc, char** argv);
 int bx_chmod_main(int argc, char** argv);
 int bx_chown_main(int argc, char** argv);
 int bx_chgrp_main(int argc, char** argv);

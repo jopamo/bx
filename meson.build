@@ -196,6 +196,7 @@ sources = [
   'src/switch_root/switch_root.c',
   'src/chroot/chroot.c',
   'src/mount/mount.c',
+  'src/umount/umount.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -617,6 +618,9 @@ if get_option('tests')
 
   test_mount_basic = find_program('tests/mount/test_mount_basic.sh')
   test('mount basic', test_mount_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_umount_basic = find_program('tests/umount/test_umount_basic.sh')
+  test('umount basic', test_umount_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
