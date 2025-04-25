@@ -140,7 +140,7 @@ static bool bx_traceroute_parse_options(int argc, char** argv, struct bx_tracero
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+4f:m:q:w:p:nhV", long_options, NULL);
+        int c = getopt_long(argc, argv, ":+4f:m:q:w:p:nhV", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -234,10 +234,15 @@ static bool bx_traceroute_parse_options(int argc, char** argv, struct bx_tracero
     return true;
 }
 
-static double bx_traceroute_now_secs(void) {
+static bool bx_traceroute_now_secs(double* out_secs, struct bx_diag_ctx* diag) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        bx_diag(diag, "failed to read monotonic clock: %s", strerror(errno));
+        return false;
+    }
+
+    *out_secs = (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+    return true;
 }
 
 static void bx_traceroute_init_payload(unsigned char* payload, size_t payload_len) {
@@ -273,85 +278,76 @@ static bool bx_traceroute_resolve_destination(const char* host, struct sockaddr_
     return true;
 }
 
-static bool bx_traceroute_wait_for_reply(int fd, int timeout_ms, struct bx_traceroute_probe_result* result, struct bx_diag_ctx* diag) {
-    struct pollfd poll_fd;
-    poll_fd.fd = fd;
-    poll_fd.events = POLLIN | POLLERR;
-    poll_fd.revents = 0;
+static bool bx_traceroute_recv_icmp_reply(int fd, struct bx_traceroute_probe_result* result, bool* out_replied, struct bx_diag_ctx* diag) {
+    *out_replied = false;
 
-    int poll_rc;
-    do {
-        poll_rc = poll(&poll_fd, 1, timeout_ms);
-    } while (poll_rc < 0 && errno == EINTR);
+    for (;;) {
+        char payload[2048];
+        unsigned char control[1024];
+        struct sockaddr_in sender;
+        memset(&sender, 0, sizeof(sender));
 
-    if (poll_rc == 0) {
+        struct iovec iov;
+        iov.iov_base = payload;
+        iov.iov_len = sizeof(payload);
+
+        struct msghdr msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_name = &sender;
+        msg.msg_namelen = sizeof(sender);
+        msg.msg_iov = &iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        ssize_t recv_rc;
+        do {
+            recv_rc = recvmsg(fd, &msg, MSG_ERRQUEUE | MSG_DONTWAIT);
+        } while (recv_rc < 0 && errno == EINTR);
+
+        if (recv_rc < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return true;
+            }
+            bx_diag(diag, "recvmsg(MSG_ERRQUEUE) failed: %s", strerror(errno));
+            return false;
+        }
+
+        struct sock_extended_err* ext_err = NULL;
+        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+            if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) {
+                ext_err = (struct sock_extended_err*)CMSG_DATA(cmsg);
+                break;
+            }
+        }
+
+        if (ext_err == NULL) {
+            continue;
+        }
+
+        if (ext_err->ee_origin != SO_EE_ORIGIN_ICMP) {
+            continue;
+        }
+
+        result->replied = true;
+        result->icmp_type = ext_err->ee_type;
+        result->icmp_code = ext_err->ee_code;
+
+        struct sockaddr* offender = SO_EE_OFFENDER(ext_err);
+        if (offender != NULL && offender->sa_family == AF_INET) {
+            result->responder = ((struct sockaddr_in*)offender)->sin_addr;
+        }
+        else {
+            result->responder = sender.sin_addr;
+        }
+
+        if (ext_err->ee_type == ICMP_DEST_UNREACH && ext_err->ee_code == ICMP_PORT_UNREACH) {
+            result->reached = true;
+        }
+
+        *out_replied = true;
         return true;
     }
-    if (poll_rc < 0) {
-        bx_diag(diag, "poll failed: %s", strerror(errno));
-        return false;
-    }
-
-    char payload[2048];
-    unsigned char control[1024];
-    struct sockaddr_in sender;
-    memset(&sender, 0, sizeof(sender));
-
-    struct iovec iov;
-    iov.iov_base = payload;
-    iov.iov_len = sizeof(payload);
-
-    struct msghdr msg;
-    memset(&msg, 0, sizeof(msg));
-    msg.msg_name = &sender;
-    msg.msg_namelen = sizeof(sender);
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
-
-    ssize_t recv_rc;
-    do {
-        recv_rc = recvmsg(fd, &msg, MSG_ERRQUEUE);
-    } while (recv_rc < 0 && errno == EINTR);
-
-    if (recv_rc < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return true;
-        }
-        bx_diag(diag, "recvmsg(MSG_ERRQUEUE) failed: %s", strerror(errno));
-        return false;
-    }
-
-    struct sock_extended_err* ext_err = NULL;
-    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-        if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) {
-            ext_err = (struct sock_extended_err*)CMSG_DATA(cmsg);
-            break;
-        }
-    }
-
-    if (ext_err == NULL) {
-        return true;
-    }
-
-    result->replied = true;
-    result->icmp_type = ext_err->ee_type;
-    result->icmp_code = ext_err->ee_code;
-
-    struct sockaddr* offender = SO_EE_OFFENDER(ext_err);
-    if (offender != NULL && offender->sa_family == AF_INET) {
-        result->responder = ((struct sockaddr_in*)offender)->sin_addr;
-    }
-    else {
-        result->responder = sender.sin_addr;
-    }
-
-    if (ext_err->ee_origin == SO_EE_ORIGIN_ICMP && ext_err->ee_type == ICMP_DEST_UNREACH && ext_err->ee_code == ICMP_PORT_UNREACH) {
-        result->reached = true;
-    }
-
-    return true;
 }
 
 static bool bx_traceroute_send_probe_socket(const struct sockaddr_in* destination,
