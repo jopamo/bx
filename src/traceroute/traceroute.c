@@ -234,15 +234,12 @@ static bool bx_traceroute_parse_options(int argc, char** argv, struct bx_tracero
     return true;
 }
 
-static bool bx_traceroute_now_secs(double* out_secs, struct bx_diag_ctx* diag) {
+static double bx_traceroute_now_secs(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        bx_diag(diag, "failed to read monotonic clock: %s", strerror(errno));
-        return false;
+        return 0.0;
     }
-
-    *out_secs = (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-    return true;
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
 static void bx_traceroute_init_payload(unsigned char* payload, size_t payload_len) {
@@ -348,6 +345,29 @@ static bool bx_traceroute_recv_icmp_reply(int fd, struct bx_traceroute_probe_res
         *out_replied = true;
         return true;
     }
+}
+
+static bool bx_traceroute_wait_for_reply(int fd, int timeout_ms, struct bx_traceroute_probe_result* result, struct bx_diag_ctx* diag) {
+    struct pollfd poll_fd;
+    poll_fd.fd = fd;
+    poll_fd.events = POLLIN | POLLERR;
+    poll_fd.revents = 0;
+
+    int poll_rc;
+    do {
+        poll_rc = poll(&poll_fd, 1, timeout_ms);
+    } while (poll_rc < 0 && errno == EINTR);
+
+    if (poll_rc == 0) {
+        return true;
+    }
+    if (poll_rc < 0) {
+        bx_diag(diag, "poll failed: %s", strerror(errno));
+        return false;
+    }
+
+    bool replied = false;
+    return bx_traceroute_recv_icmp_reply(fd, result, &replied, diag);
 }
 
 static bool bx_traceroute_send_probe_socket(const struct sockaddr_in* destination,

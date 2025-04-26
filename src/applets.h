@@ -29,6 +29,9 @@ int bx_pwd_main(int argc, char** argv);
 int bx_tty_main(int argc, char** argv);
 int bx_stty_main(int argc, char** argv);
 int bx_getty_main(int argc, char** argv);
+int bx_setsid_main(int argc, char** argv);
+int bx_ip_main(int argc, char** argv);
+int bx_dhcp_main(int argc, char** argv);
 int bx_nice_main(int argc, char** argv);
 int bx_nohup_main(int argc, char** argv);
 int bx_timeout_main(int argc, char** argv);
@@ -37,6 +40,10 @@ int bx_switch_root_main(int argc, char** argv);
 int bx_chroot_main(int argc, char** argv);
 int bx_mount_main(int argc, char** argv);
 int bx_umount_main(int argc, char** argv);
+int bx_kill_main(int argc, char** argv);
+int bx_ps_main(int argc, char** argv);
+int bx_dmesg_main(int argc, char** argv);
+int bx_reboot_main(int argc, char** argv);
 int bx_chmod_main(int argc, char** argv);
 int bx_chown_main(int argc, char** argv);
 int bx_chgrp_main(int argc, char** argv);
@@ -91,5 +98,6 @@ int bx_seq_main(int argc, char** argv);
 int bx_split_main(int argc, char** argv);
 int bx_sort_main(int argc, char** argv);
 int bx_traceroute_main(int argc, char** argv);
+int bx_ping_main(int argc, char** argv);
 
 #endif /* BX_APPLETS_H */

@@ -29,12 +29,12 @@ option(
 option(
   'install_sh_shortcut',
   type : 'boolean',
-  value : false,
-  description : 'Install sh multicall shortcut alongside ash'
+  value : true,
+  description : 'Install sh multicall shortcut alongside ash (set false to omit /bin/sh wrapper)'
 )
 option(
   'install_init_shortcut',
   type : 'boolean',
   value : false,
-  description : 'Install init multicall shortcut'
+  description : 'Install init multicall shortcut plus /init and /sbin/init entrypoint symlinks'
 )

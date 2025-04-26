@@ -1,93 +1,236 @@
+#include <errno.h>
+#include <getopt.h>
+#include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <time.h>
-#include <errno.h>
+#include <unistd.h>
+
 #include "applets.h"
 #include "diag.h"
 
-int bx_sleep_main(int argc, char** argv) {
-    if (argc < 2) {
-        bx_err("missing operand");
-        printf("Try '%s --help' for more information.\n", argv[0]);
-        return 1;
+static const char* bx_sleep_progname(const char* argv0) {
+    if (argv0 == NULL || argv0[0] == '\0') {
+        return "sleep";
     }
 
-    if (argc == 2) {
-        if (strcmp(argv[1], "--help") == 0) {
-            printf("Usage: %s NUMBER[SUFFIX]...\n", argv[0]);
-            printf("Pause for NUMBER seconds.  SUFFIX may be 's' for seconds (the default),\n");
-            printf("'m' for minutes, 'h' for hours or 'd' for days.  NUMBER need not be an\n");
-            printf("integer.  Given two or more arguments, pause for the amount of time\n");
-            printf("specified by the sum of their values.\n");
-            printf("\n");
-            printf("      --help          display this help and exit\n");
-            printf("      --version       output version information and exit\n");
-            return 0;
+    const char* base = strrchr(argv0, '/');
+    if (base != NULL && base[1] != '\0') {
+        return base + 1;
+    }
+
+    return argv0;
+}
+
+static void bx_sleep_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s NUMBER[SUFFIX]...\n", progname);
+    fprintf(stream, "  or:  %s OPTION\n", progname);
+    fprintf(stream, "Pause for NUMBER seconds.  SUFFIX may be 's' for seconds (the default),\n");
+    fprintf(stream, "'m' for minutes, 'h' for hours or 'd' for days.  NUMBER need not be an\n");
+    fprintf(stream, "integer.  Given two or more arguments, pause for the amount of time\n");
+    fprintf(stream, "specified by the sum of their values.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "      --help          display this help and exit\n");
+    fprintf(stream, "      --version       output version information and exit\n");
+}
+
+static void bx_sleep_print_version(const char* progname) {
+    printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static void bx_sleep_print_try_help(const char* progname) {
+    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+}
+
+static bool bx_sleep_parse_interval(const char* text, double* seconds_out, bool* infinite_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(text, &end);
+
+    if (end == text || isnan(value)) {
+        return false;
+    }
+
+    double multiplier = 1.0;
+    if (*end != '\0') {
+        if (end[1] != '\0') {
+            return false;
         }
-        if (strcmp(argv[1], "--version") == 0) {
-            printf("sleep (bx) %s\n", BX_VERSION);
-            return 0;
+
+        switch (*end) {
+            case 's':
+                multiplier = 1.0;
+                break;
+            case 'm':
+                multiplier = 60.0;
+                break;
+            case 'h':
+                multiplier = 3600.0;
+                break;
+            case 'd':
+                multiplier = 86400.0;
+                break;
+            default:
+                return false;
         }
     }
 
-    double total_seconds = 0;
-    for (int i = 1; i < argc; i++) {
-        char* end;
-        errno = 0;
-        double val = strtod(argv[i], &end);
-        if (end == argv[i] || errno != 0) {
-            bx_err("invalid time interval '%s'", argv[i]);
-            return 1;
+    value *= multiplier;
+    if (isnan(value) || value < 0.0) {
+        return false;
+    }
+
+    if (isinf(value)) {
+        *seconds_out = 0.0;
+        *infinite_out = true;
+        return true;
+    }
+
+    if (!isfinite(value)) {
+        return false;
+    }
+
+    *seconds_out = value;
+    *infinite_out = false;
+    return true;
+}
+
+static int bx_sleep_for_seconds(double total_seconds) {
+    const double max_chunk_seconds = 1000000000.0;
+    const double epsilon = 1e-12;
+
+    while (total_seconds > epsilon) {
+        double chunk = total_seconds;
+        if (chunk > max_chunk_seconds) {
+            chunk = max_chunk_seconds;
         }
 
-        if (*end != '\0') {
-            if (strcmp(end, "s") == 0) {
-                // val is in seconds
-            }
-            else if (strcmp(end, "m") == 0) {
-                val *= 60.0;
-            }
-            else if (strcmp(end, "h") == 0) {
-                val *= 3600.0;
-            }
-            else if (strcmp(end, "d") == 0) {
-                val *= 86400.0;
-            }
-            else {
-                bx_err("invalid time interval '%s'", argv[i]);
+        if (chunk < epsilon) {
+            break;
+        }
+
+        time_t sec_part = (time_t)chunk;
+        long nsec_part = (long)((chunk - (double)sec_part) * 1000000000.0);
+        if (nsec_part >= 1000000000L) {
+            sec_part++;
+            nsec_part -= 1000000000L;
+        }
+        if (nsec_part < 0L) {
+            nsec_part = 0L;
+        }
+
+        struct timespec ts = {
+            .tv_sec = sec_part,
+            .tv_nsec = nsec_part,
+        };
+
+        while (nanosleep(&ts, &ts) == -1) {
+            if (errno != EINTR) {
+                bx_perror("nanosleep");
                 return 1;
             }
         }
 
-        if (val < 0) {
-            bx_err("invalid time interval '%s'", argv[i]);
-            return 1;
-        }
-
-        total_seconds += val;
-    }
-
-    struct timespec ts;
-    ts.tv_sec = (time_t)total_seconds;
-    ts.tv_nsec = (long)((total_seconds - (double)ts.tv_sec) * 1000000000.0);
-
-    // Handle potential rounding issues
-    if (ts.tv_nsec >= 1000000000L) {
-        ts.tv_sec++;
-        ts.tv_nsec -= 1000000000L;
-    }
-    if (ts.tv_nsec < 0) {
-        ts.tv_nsec = 0;
-    }
-
-    while (nanosleep(&ts, &ts) == -1) {
-        if (errno != EINTR) {
-            bx_perror("nanosleep");
-            return 1;
-        }
+        total_seconds -= chunk;
     }
 
     return 0;
+}
+
+static int bx_sleep_forever(void) {
+    for (;;) {
+        int rc = bx_sleep_for_seconds(1000000000.0);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+}
+
+int bx_sleep_main(int argc, char** argv) {
+    static const struct option long_options[] = {
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
+    };
+
+    const char* progname = bx_sleep_progname((argc > 0) ? argv[0] : NULL);
+
+    opterr = 0;
+    optind = 1;
+
+    while (true) {
+        int c = getopt_long(argc, argv, "", long_options, NULL);
+        if (c == -1) {
+            break;
+        }
+
+        switch (c) {
+            case 1:
+                bx_sleep_print_help(stdout, progname);
+                return 0;
+            case 2:
+                bx_sleep_print_version(progname);
+                return 0;
+            case '?':
+                if (optopt != 0) {
+                    bx_err("invalid option -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_err("unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_err("unrecognized option");
+                }
+                bx_sleep_print_try_help(progname);
+                return 1;
+            default:
+                bx_sleep_print_try_help(progname);
+                return 1;
+        }
+    }
+
+    int first_operand = optind;
+    if (first_operand >= argc) {
+        if (argc == 2 && strcmp(argv[1], "--") == 0) {
+            return 0;
+        }
+
+        bx_err("missing operand");
+        bx_sleep_print_try_help(progname);
+        return 1;
+    }
+
+    double total_seconds = 0.0;
+    bool sleep_forever = false;
+    for (int i = first_operand; i < argc; i++) {
+        double value_seconds = 0.0;
+        bool value_infinite = false;
+        if (!bx_sleep_parse_interval(argv[i], &value_seconds, &value_infinite)) {
+            bx_err("invalid time interval '%s'", argv[i]);
+            bx_sleep_print_try_help(progname);
+            return 1;
+        }
+
+        if (value_infinite) {
+            sleep_forever = true;
+            continue;
+        }
+
+        total_seconds += value_seconds;
+        if (isinf(total_seconds)) {
+            sleep_forever = true;
+        }
+    }
+
+    if (sleep_forever) {
+        return bx_sleep_forever();
+    }
+
+    return bx_sleep_for_seconds(total_seconds);
 }

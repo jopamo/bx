@@ -189,6 +189,9 @@ sources = [
   'src/tty/tty.c',
   'src/stty/stty.c',
   'src/getty/getty.c',
+  'src/setsid/setsid.c',
+  'src/ip/ip.c',
+  'src/dhcp/dhcp.c',
   'src/nice/nice.c',
   'src/nohup/nohup.c',
   'src/timeout/timeout.c',
@@ -197,6 +200,10 @@ sources = [
   'src/chroot/chroot.c',
   'src/mount/mount.c',
   'src/umount/umount.c',
+  'src/kill/kill.c',
+  'src/ps/ps.c',
+  'src/dmesg/dmesg.c',
+  'src/reboot/reboot.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
   'src/chgrp/chgrp.c',
@@ -241,26 +248,36 @@ sources = [
   'src/sort/sort.c',
   'src/wget.c',
   'src/traceroute/traceroute.c',
+  'src/ping/ping.c',
   'src/which.c',
   'src/applets.c',
   'src/libbx.c',
 ]
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'chroot', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'ip', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+
+multicall_install_mode = get_option('multicall_install_mode')
+install_sh_shortcut = get_option('install_sh_shortcut')
+install_init_shortcut = get_option('install_init_shortcut')
+install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
+install_bx_bindir = install_bindir
+if install_init_shortcut and install_bindir.startswith('/usr/')
+  install_bx_bindir = '/bin'
+endif
+install_bx_path = join_paths(install_bx_bindir, 'bx')
+applet_link_target = 'bx'
+if install_bx_bindir != install_bindir
+  applet_link_target = install_bx_path
+endif
 
 bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
   dependencies : bx_deps,
   link_args : bx_link_args,
-  install : true
+  install : true,
+  install_dir : install_bx_bindir
 )
-
-multicall_install_mode = get_option('multicall_install_mode')
-install_sh_shortcut = get_option('install_sh_shortcut')
-install_init_shortcut = get_option('install_init_shortcut')
-install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
-install_bx_path = join_paths(install_bindir, 'bx')
 
 if multicall_install_mode == 'symlink'
   foreach applet : applet_names
@@ -271,7 +288,7 @@ if multicall_install_mode == 'symlink'
       continue
     endif
     install_symlink(applet,
-      pointing_to : 'bx',
+      pointing_to : applet_link_target,
       install_dir : get_option('bindir')
     )
   endforeach
@@ -296,6 +313,22 @@ else
       install_mode : 'rwxr-xr-x'
     )
   endforeach
+endif
+
+if install_init_shortcut
+  if install_bx_bindir != '/'
+    install_symlink('init',
+      pointing_to : install_bx_path,
+      install_dir : '/'
+    )
+  endif
+
+  if install_bx_bindir != '/sbin'
+    install_symlink('init',
+      pointing_to : install_bx_path,
+      install_dir : '/sbin'
+    )
+  endif
 endif
 
 if get_option('install_ls_colors')
@@ -451,6 +484,9 @@ if get_option('tests')
   test_shuf_smoke_differential = find_program('tests/shuf/test_shuf_smoke_differential.sh')
   test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_sort_basic = find_program('tests/sort/test_sort_basic.sh')
+  test('sort basic', test_sort_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
@@ -571,6 +607,18 @@ if get_option('tests')
   test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_setsid_basic = find_program('tests/setsid/test_setsid_basic.sh')
+  test('setsid basic', test_setsid_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_ip_basic = find_program('tests/ip/test_ip_basic.sh')
+  test('ip basic', test_ip_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_dhcp_basic = files('tests/dhcp/test_dhcp_basic.py')
+  test('dhcp basic', python3, args : [test_dhcp_basic, bx_exe], suite : fast_track_p1_suite)
+
+  test_ping_basic = find_program('tests/ping/test_ping_basic.sh')
+  test('ping basic', test_ping_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_init_basic = find_program('tests/init/test_init_basic.sh')
   test('init basic', test_init_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
@@ -601,6 +649,9 @@ if get_option('tests')
   test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
   test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_sleep_basic = find_program('tests/sleep/test_sleep_basic.sh')
+  test('sleep basic', test_sleep_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_nc_basic = files('tests/nc/test_nc_basic.py')
   test('nc basic', python3, args : [test_nc_basic, bx_exe], suite : fast_track_p1_suite)
 
@@ -621,6 +672,27 @@ if get_option('tests')
 
   test_umount_basic = find_program('tests/umount/test_umount_basic.sh')
   test('umount basic', test_umount_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_umount_shutdown_flow = find_program('tests/umount/test_umount_shutdown_flow.sh')
+  test('umount shutdown-flow integration', test_umount_shutdown_flow, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_kill_basic = find_program('tests/kill/test_kill_basic.sh')
+  test('kill basic', test_kill_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_ps_basic = find_program('tests/ps/test_ps_basic.sh')
+  test('ps basic', test_ps_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_dmesg_basic = find_program('tests/dmesg/test_dmesg_basic.sh')
+  test('dmesg basic', test_dmesg_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_reboot_basic = find_program('tests/reboot/test_reboot_basic.sh')
+  test('reboot basic', test_reboot_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_halt_basic = find_program('tests/halt/test_halt_basic.sh')
+  test('halt basic', test_halt_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_poweroff_basic = find_program('tests/poweroff/test_poweroff_basic.sh')
+  test('poweroff basic', test_poweroff_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
@@ -732,6 +804,7 @@ if get_option('tests')
     args : [
       meson.current_build_dir(),
       install_bindir,
+      install_bx_path,
       install_sh_shortcut ? 'true' : 'false',
       install_init_shortcut ? 'true' : 'false',
     ]

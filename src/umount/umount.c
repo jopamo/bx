@@ -11,10 +11,15 @@
 #include "diag.h"
 #include "libbx.h"
 
+#ifndef MNT_FORCE
+#define MNT_FORCE 0
+#endif
+
 struct bx_umount_options {
     const char* progname;
     bool show_help;
     bool show_version;
+    bool force;
     bool lazy;
     int operand_index;
     const char* target;
@@ -37,6 +42,7 @@ static void bx_umount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... TARGET\n", progname);
     fprintf(stream, "Unmount a filesystem at TARGET.\n");
     fprintf(stream, "\n");
+    fprintf(stream, "  -f, --force    force unmount (filesystem support required)\n");
     fprintf(stream, "  -l, --lazy     detach filesystem now, clean up references later\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
@@ -54,10 +60,7 @@ static void bx_umount_print_version(const char* progname) {
 
 static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
-        {"lazy", no_argument, NULL, 'l'},
-        {"help", no_argument, NULL, 1},
-        {"version", no_argument, NULL, 2},
-        {NULL, 0, NULL, 0},
+        {"force", no_argument, NULL, 'f'}, {"lazy", no_argument, NULL, 'l'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
@@ -68,12 +71,15 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+l", long_options, NULL);
+        int c = getopt_long(argc, argv, "+fl", long_options, NULL);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'f':
+                options->force = true;
+                break;
             case 'l':
                 options->lazy = true;
                 break;
@@ -124,7 +130,13 @@ static bool bx_umount_validate_request(int argc, char** argv, struct bx_umount_o
 }
 
 static bool bx_umount_perform(const struct bx_umount_options* options, struct bx_diag_ctx* diag) {
-    int flags = options->lazy ? MNT_DETACH : 0;
+    int flags = 0;
+    if (options->force) {
+        flags |= MNT_FORCE;
+    }
+    if (options->lazy) {
+        flags |= MNT_DETACH;
+    }
     if (umount2(options->target, flags) == 0) {
         return true;
     }
