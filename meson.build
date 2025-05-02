@@ -258,7 +258,9 @@ applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fo
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
+install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'ip', 'dmesg', 'kill', 'mount', 'setsid', 'umount']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 if install_init_shortcut and install_bindir.startswith('/usr/')
@@ -287,6 +289,9 @@ if multicall_install_mode == 'symlink'
     if applet == 'init' and not install_init_shortcut
       continue
     endif
+    if system_conflict_applet_names.contains(applet) and not install_system_conflict_shortcuts
+      continue
+    endif
     install_symlink(applet,
       pointing_to : applet_link_target,
       install_dir : get_option('bindir')
@@ -298,6 +303,9 @@ else
       continue
     endif
     if applet == 'init' and not install_init_shortcut
+      continue
+    endif
+    if system_conflict_applet_names.contains(applet) and not install_system_conflict_shortcuts
       continue
     endif
     wrapper_conf = configuration_data()
@@ -806,6 +814,7 @@ if get_option('tests')
       install_bindir,
       install_bx_path,
       install_sh_shortcut ? 'true' : 'false',
+      install_system_conflict_shortcuts ? 'true' : 'false',
       install_init_shortcut ? 'true' : 'false',
     ]
   )
