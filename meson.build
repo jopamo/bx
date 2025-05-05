@@ -819,6 +819,9 @@ if get_option('tests')
     ]
   )
 
+  test_install_missing_shortcuts = find_program('tests/test_install_missing_shortcuts.sh')
+  test('install missing shortcuts', test_install_missing_shortcuts, args : [bx_exe])
+
   test_parity_cli = files('tests/test_parity_cli.py')
   test('which parity cli', python3, args : [test_parity_cli, which_ref, bx_exe, meson.current_build_dir()])
 

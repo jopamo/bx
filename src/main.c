@@ -2,6 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <limits.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "which.h"
 #include "applets.h"
 #include "diag.h"
@@ -180,6 +185,124 @@ static int run_shebang_applet(applet_main_t applet_main, int argc, char** argv) 
     return rc;
 }
 
+static bool path_is_directory(const char* path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return false;
+    }
+    return S_ISDIR(st.st_mode);
+}
+
+static char* resolve_self_path(const char* argv0) {
+    char proc_path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", proc_path, sizeof(proc_path) - 1);
+    if (len >= 0) {
+        proc_path[len] = '\0';
+        return xstrdup(proc_path);
+    }
+
+    return xstrdup(argv0 != NULL ? argv0 : "bx");
+}
+
+static int install_one_applet_shortcut(const char* bx_path, const char* install_dir, const char* applet_name, bool symlink_mode) {
+    size_t dir_len = strlen(install_dir);
+    size_t applet_len = strlen(applet_name);
+    size_t needs_slash = (dir_len > 0 && install_dir[dir_len - 1] == '/') ? 0 : 1;
+    size_t path_len = dir_len + needs_slash + applet_len + 1;
+
+    char* destination_path = xmalloc(path_len);
+    memcpy(destination_path, install_dir, dir_len);
+    if (needs_slash) {
+        destination_path[dir_len] = '/';
+    }
+    memcpy(destination_path + dir_len + needs_slash, applet_name, applet_len);
+    destination_path[path_len - 1] = '\0';
+
+    struct stat st;
+    if (lstat(destination_path, &st) == 0) {
+        free(destination_path);
+        return 0;
+    }
+    if (errno != ENOENT) {
+        bx_perror(destination_path);
+        free(destination_path);
+        return 1;
+    }
+
+    int rc;
+    if (symlink_mode) {
+        rc = symlink(bx_path, destination_path);
+    }
+    else {
+        rc = link(bx_path, destination_path);
+    }
+
+    if (rc != 0) {
+        bx_perror(destination_path);
+        free(destination_path);
+        return 1;
+    }
+
+    free(destination_path);
+    return 0;
+}
+
+static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode) {
+    if (!path_is_directory(install_dir)) {
+        bx_err("install target is not a directory: %s", install_dir);
+        return 1;
+    }
+
+    int status = 0;
+    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
+        if (install_one_applet_shortcut(bx_path, install_dir, boot_critical_applets[i].name, symlink_mode) != 0) {
+            status = 1;
+        }
+    }
+    for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
+        if (install_one_applet_shortcut(bx_path, install_dir, applets[i].name, symlink_mode) != 0) {
+            status = 1;
+        }
+    }
+
+    return status;
+}
+
+static int run_install_mode(int argc, char** argv) {
+    bool symlink_mode = false;
+    const char* install_dir = ".";
+    bool install_dir_set = false;
+
+    for (int i = 2; i < argc; i++) {
+        const char* arg = argv[i];
+        if (strcmp(arg, "--help") == 0) {
+            printf("usage: bx --install [-s|--symlink] [DIR]\n");
+            printf("Install missing applet shortcuts into DIR (default: .).\n");
+            printf("By default hard links are created; -s creates symlinks.\n");
+            return 0;
+        }
+        if (strcmp(arg, "-s") == 0 || strcmp(arg, "--symlink") == 0) {
+            symlink_mode = true;
+            continue;
+        }
+        if (arg[0] == '-') {
+            bx_err("unknown --install option: %s", arg);
+            return 1;
+        }
+        if (install_dir_set) {
+            bx_err("unexpected --install operand: %s", arg);
+            return 1;
+        }
+        install_dir = arg;
+        install_dir_set = true;
+    }
+
+    char* bx_path = resolve_self_path(argv[0]);
+    int rc = install_missing_applets(bx_path, install_dir, symlink_mode);
+    free(bx_path);
+    return rc;
+}
+
 int main(int argc, char** argv) {
     if (argc < 1)
         return 1;
@@ -216,6 +339,10 @@ int main(int argc, char** argv) {
         goto usage;
     }
 
+    if (strcmp(argv[1], "--install") == 0) {
+        return run_install_mode(argc, argv);
+    }
+
     if (strcmp(argv[1], "--version") == 0) {
         printf("bx version %s\n", BX_VERSION);
         return 0;
@@ -231,6 +358,10 @@ int main(int argc, char** argv) {
 
 usage:
     printf("usage: bx SUBCOMMAND [options] ...\n");
+    printf("       bx --install [-s|--symlink] [DIR]\n");
+    printf("\n");
+    printf("--install creates shortcuts only for applets missing in DIR.\n");
+    printf("Use -s to create symlinks (default is hard links).\n");
     printf("\n");
     printf("Currently supported subcommands:\n");
     for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
