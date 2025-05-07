@@ -615,6 +615,9 @@ if get_option('tests')
   test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_getty_console_vm_smoke = find_program('tests/getty/test_getty_console_vm_smoke.sh')
+  test('getty console vm smoke', test_getty_console_vm_smoke, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_setsid_basic = find_program('tests/setsid/test_setsid_basic.sh')
   test('setsid basic', test_setsid_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
