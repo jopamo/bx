@@ -18,6 +18,7 @@ add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
 static_binary_opt = get_option('static_binary')
 static_link_supported = cc.has_link_argument('-static')
+static_no_pie_supported = cc.has_link_argument('-no-pie')
 compiler_targets_glibc = cc.has_header_symbol('features.h', '__GLIBC__')
 musl_gcc = find_program('musl-gcc', required : false)
 
@@ -39,10 +40,14 @@ elif static_binary_opt == 'auto'
   endif
 endif
 
-bx_link_args = []
+bx_static_link_args = []
 if use_static_binary
-  bx_link_args += ['-static']
+  bx_static_link_args += ['-static']
+  if static_no_pie_supported
+    bx_static_link_args += ['-no-pie']
+  endif
 endif
+bx_link_args = bx_static_link_args
 
 mira_embed_opt = get_option('mira_embed')
 mira_embed_dep = declare_dependency()
@@ -109,7 +114,7 @@ if mira_embed_enabled and use_static_binary
     }
     ''',
     dependencies : [mira_embed_dep],
-    args : ['-static'],
+    args : bx_static_link_args,
     name : 'mira-embed static linkability probe',
   )
   if not mira_embed_static_link_ok

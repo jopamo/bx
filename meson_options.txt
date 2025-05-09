@@ -3,8 +3,8 @@ option(
   'static_binary',
   type : 'combo',
   choices : ['auto', 'enabled', 'disabled'],
-  value : 'auto',
-  description : 'Static link policy: auto (musl toolchains), enabled (force), or disabled'
+  value : 'enabled',
+  description : 'Static link policy: enabled (default), auto (musl toolchains), or disabled'
 )
 option(
   'multicall_install_mode',
