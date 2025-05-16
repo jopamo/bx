@@ -60,7 +60,6 @@ static const struct applet applets[] = {
     {"stty", bx_stty_main},
     {"getty", bx_getty_main},
     {"setsid", bx_setsid_main},
-    {"ip", bx_ip_main},
     {"dhcp", bx_dhcp_main},
     {"udhcpc", bx_dhcp_main},
     {"nice", bx_nice_main},

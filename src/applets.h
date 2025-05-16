@@ -30,7 +30,6 @@ int bx_tty_main(int argc, char** argv);
 int bx_stty_main(int argc, char** argv);
 int bx_getty_main(int argc, char** argv);
 int bx_setsid_main(int argc, char** argv);
-int bx_ip_main(int argc, char** argv);
 int bx_dhcp_main(int argc, char** argv);
 int bx_nice_main(int argc, char** argv);
 int bx_nohup_main(int argc, char** argv);
