@@ -16,6 +16,7 @@
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,
     SORT_MODE_NUMERIC,
+    SORT_MODE_HUMAN,
     SORT_MODE_VERSION,
 } sort_mode_t;
 
@@ -58,6 +59,7 @@ typedef struct {
     size_t int_len;
     const unsigned char* frac_digits;
     size_t frac_len;
+    unsigned char suffix;
     bool has_digits;
     bool is_zero;
 } numeric_token_t;
@@ -96,6 +98,7 @@ static void sort_print_help(const char* progname) {
     puts("");
     puts("Ordering options:");
     puts("  -n, --numeric-sort      compare according to numeric value");
+    puts("  -h, --human-numeric-sort  compare human readable numbers (e.g., 2K 1G)");
     puts("  -V, --version-sort      natural sort of version numbers within text");
     puts("  -f, --ignore-case       fold lower case to upper case characters");
     puts("  -r, --reverse           reverse the result of comparisons");
@@ -350,9 +353,82 @@ static void sort_parse_numeric_token(const char* text, numeric_token_t* token) {
     token->int_len = (size_t)(int_end - int_begin);
     token->frac_digits = frac_begin;
     token->frac_len = (size_t)(frac_end - frac_begin);
+    token->suffix = *p;
     token->has_digits = (token->int_len > 0 || token->frac_len > 0);
 
     token->is_zero = true;
+    if (token->has_digits) {
+        for (size_t i = 0; i < token->int_len; i++) {
+            if (token->int_digits[i] != '0') {
+                token->is_zero = false;
+                break;
+            }
+        }
+        if (token->is_zero) {
+            for (size_t i = 0; i < token->frac_len; i++) {
+                if (token->frac_digits[i] != '0') {
+                    token->is_zero = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!token->has_digits || token->is_zero) {
+        token->sign = 1;
+    }
+}
+
+static void sort_parse_human_token(const char* text, numeric_token_t* token) {
+    const unsigned char* p = (const unsigned char*)text;
+
+    while (isspace(*p)) {
+        p++;
+    }
+
+    token->sign = 1;
+    if (*p == '-') {
+        token->sign = -1;
+        p++;
+    }
+    else if (*p == '+') {
+        token->int_digits = p;
+        token->int_len = 0u;
+        token->frac_digits = p;
+        token->frac_len = 0u;
+        token->suffix = *p;
+        token->has_digits = false;
+        token->is_zero = true;
+        return;
+    }
+
+    const unsigned char* int_begin = p;
+    while (isdigit(*p)) {
+        p++;
+    }
+    const unsigned char* int_end = p;
+
+    const unsigned char* frac_begin = p;
+    const unsigned char* frac_end = p;
+    if (*p == '.') {
+        p++;
+        frac_begin = p;
+        while (isdigit(*p)) {
+            p++;
+        }
+        frac_end = p;
+    }
+
+    size_t int_len = (size_t)(int_end - int_begin);
+    size_t frac_len = (size_t)(frac_end - frac_begin);
+    token->int_digits = int_begin;
+    token->int_len = int_len;
+    token->frac_digits = frac_begin;
+    token->frac_len = frac_len;
+    token->suffix = *p;
+    token->has_digits = (int_len > 0u || frac_len > 0u);
+    token->is_zero = true;
+
     if (token->has_digits) {
         for (size_t i = 0; i < token->int_len; i++) {
             if (token->int_digits[i] != '0') {
@@ -449,6 +525,84 @@ static int sort_compare_numeric_key(const char* left, const char* right) {
     return abs_cmp;
 }
 
+static unsigned int sort_human_suffix_magnitude(unsigned char suffix) {
+    switch (suffix) {
+        case 'K':
+        case 'k':
+            return 1u;
+        case 'M':
+            return 2u;
+        case 'G':
+            return 3u;
+        case 'T':
+            return 4u;
+        case 'P':
+            return 5u;
+        case 'E':
+            return 6u;
+        case 'Z':
+            return 7u;
+        case 'Y':
+            return 8u;
+        case 'R':
+            return 9u;
+        case 'Q':
+            return 10u;
+        default:
+            return 0u;
+    }
+}
+
+static unsigned int sort_human_suffix_variant(unsigned char suffix) {
+    if (suffix == 'k') {
+        return 1u;
+    }
+    return 0u;
+}
+
+static int sort_compare_human_key(const char* left, const char* right) {
+    numeric_token_t left_token = {0};
+    numeric_token_t right_token = {0};
+    sort_parse_human_token(left, &left_token);
+    sort_parse_human_token(right, &right_token);
+
+    if (left_token.sign != right_token.sign) {
+        return (left_token.sign < right_token.sign) ? -1 : 1;
+    }
+
+    if (left_token.is_zero || right_token.is_zero) {
+        if (left_token.is_zero && right_token.is_zero) {
+            return 0;
+        }
+        return left_token.is_zero ? -1 : 1;
+    }
+
+    unsigned int left_magnitude = left_token.has_digits ? sort_human_suffix_magnitude(left_token.suffix) : 0u;
+    unsigned int right_magnitude = right_token.has_digits ? sort_human_suffix_magnitude(right_token.suffix) : 0u;
+    if (left_magnitude != right_magnitude) {
+        if (left_token.sign < 0) {
+            return (left_magnitude < right_magnitude) ? 1 : -1;
+        }
+        return (left_magnitude < right_magnitude) ? -1 : 1;
+    }
+
+    int abs_cmp = sort_compare_numeric_abs(&left_token, &right_token);
+    if (left_token.sign < 0) {
+        abs_cmp = -abs_cmp;
+    }
+    if (abs_cmp != 0) {
+        return abs_cmp;
+    }
+
+    unsigned int left_variant = left_token.has_digits ? sort_human_suffix_variant(left_token.suffix) : 0u;
+    unsigned int right_variant = right_token.has_digits ? sort_human_suffix_variant(right_token.suffix) : 0u;
+    if (left_variant != right_variant) {
+        return (left_variant < right_variant) ? -1 : 1;
+    }
+
+    return 0;
+}
+
 static int sort_compare_char(unsigned char left, unsigned char right, bool ignore_case) {
     if (ignore_case) {
         left = (unsigned char)tolower(left);
@@ -532,6 +686,8 @@ static int sort_compare_key_text(const sort_opts_t* opts, const char* left, cons
     switch (opts->mode) {
         case SORT_MODE_NUMERIC:
             return sort_compare_numeric_key(left, right);
+        case SORT_MODE_HUMAN:
+            return sort_compare_human_key(left, right);
         case SORT_MODE_VERSION:
             return sort_compare_version_key(left, right, opts->ignore_case);
         case SORT_MODE_LEXICOGRAPHIC:
@@ -716,6 +872,7 @@ static bool sort_write_line(FILE* out, const char* line, int delimiter) {
 
 int bx_sort_main(int argc, char** argv) {
     static const struct option long_options[] = {
+        {"human-numeric-sort", no_argument, NULL, 'h'},
         {"numeric-sort", no_argument, NULL, 'n'},
         {"reverse", no_argument, NULL, 'r'},
         {"unique", no_argument, NULL, 'u'},
@@ -752,8 +909,11 @@ int bx_sort_main(int argc, char** argv) {
     };
 
     int c;
-    while ((c = getopt_long(argc, argv, "nrufo:cCszt:k:V", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnrufo:cCszt:k:V", long_options, NULL)) != -1) {
         switch (c) {
+            case 'h':
+                opts.mode = SORT_MODE_HUMAN;
+                break;
             case 'n':
                 opts.mode = SORT_MODE_NUMERIC;
                 break;

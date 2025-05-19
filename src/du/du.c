@@ -70,7 +70,7 @@ static void bx_du_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -H                    dereference command line symlinks\n");
     fprintf(stream, "  -L, --dereference     dereference all symbolic links\n");
     fprintf(stream, "  -P, --no-dereference  do not dereference symbolic links (default)\n");
-    fprintf(stream, "      --max-depth=N     print the total for a directory only if it is N or fewer levels below arguments\n");
+    fprintf(stream, "  -d, --max-depth=N     print the total for a directory only if it is N or fewer levels below arguments\n");
     fprintf(stream, "  -s, --summarize       display only a total for each argument\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
@@ -201,7 +201,7 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+acshkxB:DHLP", long_options, &option_index);
+        int c = getopt_long(argc, argv, "+acshkxd:B:DHLP", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -243,6 +243,7 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
             case 's':
                 options->summarize = true;
                 break;
+            case 'd':
             case BX_DU_OPT_MAX_DEPTH:
                 options->limit_depth = true;
                 if (!bx_du_parse_max_depth(optarg, &options->max_depth, diag)) {
