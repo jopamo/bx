@@ -13,6 +13,7 @@ int bx_readlink_main(int argc, char** argv);
 int bx_realpath_main(int argc, char** argv);
 int bx_basename_main(int argc, char** argv);
 int bx_dirname_main(int argc, char** argv);
+int bx_dircolors_main(int argc, char** argv);
 int bx_pathchk_main(int argc, char** argv);
 int bx_ls_main(int argc, char** argv);
 int bx_dir_main(int argc, char** argv);

@@ -43,6 +43,7 @@ static const struct applet applets[] = {
     {"realpath", bx_realpath_main},
     {"basename", bx_basename_main},
     {"dirname", bx_dirname_main},
+    {"dircolors", bx_dircolors_main},
     {"pathchk", bx_pathchk_main},
     {"ls", bx_ls_main},
     {"dir", bx_dir_main},
