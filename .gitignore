@@ -1,7 +1,6 @@
 *.md
 !README.md
-!HACKING.md
 tests/__*
 __pycache__/
 *.py[cod]
-ref
+ref/
