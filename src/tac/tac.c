@@ -9,7 +9,6 @@
 #include "diag.h"
 
 static void tac_file(FILE* f, const char* separator, bool before) {
-    (void)before;
     char** lines = NULL;
 
     size_t* line_lens = NULL;
@@ -38,6 +37,49 @@ static void tac_file(FILE* f, const char* separator, bool before) {
         nlines++;
     }
     free(line);
+
+    if (before) {
+        bool last_had_sep = false;
+
+        for (size_t i = 0; i < nlines; i++) {
+            size_t record_len = line_lens[i];
+            bool has_sep = (record_len > 0 && lines[i][record_len - 1] == sep);
+            size_t body_len = has_sep ? record_len - 1 : record_len;
+            size_t prefix_len = (i == 0) ? 0 : 1;
+            char* record = malloc(prefix_len + body_len + 1);
+            size_t out_len = 0;
+
+            if (i > 0) {
+                record[out_len++] = sep;
+            }
+
+            if (body_len > 0) {
+                memcpy(record + out_len, lines[i], body_len);
+                out_len += body_len;
+            }
+
+            record[out_len] = '\0';
+
+            free(lines[i]);
+            lines[i] = record;
+            line_lens[i] = out_len;
+            last_had_sep = has_sep;
+        }
+
+        if (last_had_sep) {
+            if (nlines >= cap) {
+                cap = cap ? cap * 2 : 1024;
+                lines = realloc(lines, cap * sizeof(char*));
+                line_lens = realloc(line_lens, cap * sizeof(size_t));
+            }
+
+            lines[nlines] = malloc(2);
+            lines[nlines][0] = sep;
+            lines[nlines][1] = '\0';
+            line_lens[nlines] = 1;
+            nlines++;
+        }
+    }
 
     for (size_t i = nlines; i > 0; i--) {
         fwrite(lines[i - 1], 1, line_lens[i - 1], stdout);

@@ -608,6 +608,19 @@ static bool bx_stty_parse_speed(const char* token, speed_t* speed_out) {
     return true;
 }
 
+static int bx_stty_set_input_speed(struct termios* tio, speed_t speed) {
+#ifdef B0
+    if (speed == B0) {
+        return cfsetispeed(tio, speed);
+    }
+#endif
+    return cfsetspeed(tio, speed);
+}
+
+static int bx_stty_set_both_speeds(struct termios* tio, speed_t speed) {
+    return cfsetspeed(tio, speed);
+}
+
 static bool bx_stty_parse_unsigned(const char* token, unsigned long max_value, unsigned* out) {
     if (token == NULL || token[0] == '\0' || token[0] == '+' || token[0] == '-') {
         return false;
@@ -1647,7 +1660,7 @@ static void bx_stty_apply_cooked(struct termios* tio) {
     tio->c_iflag |= BRKINT;
 #endif
 #ifdef IGNPAR
-    tio->c_iflag &= ~IGNPAR;
+    tio->c_iflag |= IGNPAR;
 #endif
 #ifdef PARMRK
     tio->c_iflag &= ~PARMRK;
@@ -1656,7 +1669,7 @@ static void bx_stty_apply_cooked(struct termios* tio) {
     tio->c_iflag &= ~INPCK;
 #endif
 #ifdef ISTRIP
-    tio->c_iflag &= ~ISTRIP;
+    tio->c_iflag |= ISTRIP;
 #endif
 #ifdef INLCR
     tio->c_iflag &= ~INLCR;
@@ -2262,7 +2275,7 @@ static int bx_stty_apply_ops(int fd, const struct bx_stty_plan* plan, struct bx_
                 break;
 
             case BX_STTY_OP_ISPEED:
-                if (cfsetispeed(&state->tio, op->u.speed.speed) != 0) {
+                if (bx_stty_set_input_speed(&state->tio, op->u.speed.speed) != 0) {
                     bx_diag(diag, "unable to set input speed: %s", strerror(errno));
                     return diag->exit_status;
                 }
@@ -2278,7 +2291,7 @@ static int bx_stty_apply_ops(int fd, const struct bx_stty_plan* plan, struct bx_
                 break;
 
             case BX_STTY_OP_SPEED_BOTH:
-                if (cfsetispeed(&state->tio, op->u.speed.speed) != 0 || cfsetospeed(&state->tio, op->u.speed.speed) != 0) {
+                if (bx_stty_set_both_speeds(&state->tio, op->u.speed.speed) != 0) {
                     bx_diag(diag, "unable to set speed: %s", strerror(errno));
                     return diag->exit_status;
                 }

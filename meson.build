@@ -506,6 +506,9 @@ if get_option('tests')
   test_tr_smoke_differential = find_program('tests/tr/test_tr_smoke_differential.sh')
   test('tr smoke differential', test_tr_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_tac_basic = find_program('tests/tac/test_tac_basic.sh')
+  test('tac basic', test_tac_basic, args : [bx_exe], suite : fast_track_p0_suite)
+
   test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
