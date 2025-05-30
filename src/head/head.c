@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,30 +52,71 @@ static void bx_head_print_version(const char* progname) {
 }
 
 // Simplified suffix parser for now
-static long long parse_num(const char* str, struct bx_diag_ctx* diag) {
-    char* endptr;
-    bool negative = false;
-    if (str[0] == '-') {
-        negative = true;
-        str++;
+static bool bx_head_apply_multiplier(long long* value, long long multiplier) {
+    if (*value > LLONG_MAX / multiplier) {
+        return false;
     }
-    long long val = strtoll(str, &endptr, 10);
-    if (endptr == str) {
-        bx_diag(diag, "invalid number of lines: '%s'", str);
-        return -1;
+
+    *value *= multiplier;
+    return true;
+}
+
+// Simplified suffix parser for now
+static bool bx_head_parse_num(const char* str, long long* value_out) {
+    char* endptr = NULL;
+    bool negative = false;
+    const char* magnitude = str;
+
+    if (magnitude == NULL || magnitude[0] == '\0') {
+        return false;
+    }
+
+    if (magnitude[0] == '-') {
+        negative = true;
+        magnitude++;
+        if (magnitude[0] == '\0') {
+            return false;
+        }
+    }
+
+    errno = 0;
+    long long val = strtoll(magnitude, &endptr, 10);
+    if (errno != 0 || endptr == magnitude) {
+        return false;
     }
 
     if (*endptr != '\0') {
         // Multiplier suffixes
-        if (strcmp(endptr, "K") == 0)
-            val *= 1024;
-        else if (strcmp(endptr, "M") == 0)
-            val *= 1024 * 1024;
-        else if (strcmp(endptr, "G") == 0)
-            val *= 1024 * 1024 * 1024;
+        if (strcmp(endptr, "K") == 0) {
+            if (!bx_head_apply_multiplier(&val, 1024LL)) {
+                return false;
+            }
+        }
+        else if (strcmp(endptr, "M") == 0) {
+            if (!bx_head_apply_multiplier(&val, 1024LL * 1024LL)) {
+                return false;
+            }
+        }
+        else if (strcmp(endptr, "G") == 0) {
+            if (!bx_head_apply_multiplier(&val, 1024LL * 1024LL * 1024LL)) {
+                return false;
+            }
+        }
+        else {
+            return false;
+        }
     }
 
-    return negative ? -val : val;
+    *value_out = negative ? -val : val;
+    return true;
+}
+
+static bool bx_head_parse_legacy_lines_option(const char* arg, long long* lines_out) {
+    if (arg == NULL || arg[0] != '-' || arg[1] == '\0' || arg[1] == '-') {
+        return false;
+    }
+
+    return bx_head_parse_num(arg + 1, lines_out);
 }
 
 static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -89,8 +131,17 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
     options->lines = 10;
     diag->progname = options->progname;
 
+    int option_start = 1;
+    if (argc > 1) {
+        long long legacy_lines = 0;
+        if (bx_head_parse_legacy_lines_option(argv[1], &legacy_lines)) {
+            options->lines = legacy_lines;
+            option_start = 2;
+        }
+    }
+
     opterr = 0;
-    optind = 1;
+    optind = option_start;
 
     while (true) {
         int option_index = 0;
@@ -100,18 +151,26 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
         }
 
         switch (c) {
-            case 'c':
-                options->bytes = parse_num(optarg, diag);
-                if (options->bytes == -1)
+            case 'c': {
+                long long bytes = 0;
+                if (!bx_head_parse_num(optarg, &bytes)) {
+                    bx_diag(diag, "invalid number of bytes: '%s'", optarg);
                     return false;
+                }
+                options->bytes = bytes;
                 options->lines = 0;
                 break;
-            case 'n':
-                options->lines = parse_num(optarg, diag);
-                if (options->lines == -1)
+            }
+            case 'n': {
+                long long lines = 0;
+                if (!bx_head_parse_num(optarg, &lines)) {
+                    bx_diag(diag, "invalid number of lines: '%s'", optarg);
                     return false;
+                }
+                options->lines = lines;
                 options->bytes = 0;
                 break;
+            }
             case 'q':
                 options->quiet = true;
                 options->verbose = false;
@@ -130,7 +189,18 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
                 options->show_version = true;
                 return true;
             case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
+                if (optopt == 'c' || optopt == 'n') {
+                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
+                }
+                else if (optopt != 0) {
+                    bx_diag(diag, "invalid option -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "unrecognized option");
+                }
                 return false;
             default:
                 return false;
