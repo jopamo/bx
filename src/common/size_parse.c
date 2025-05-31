@@ -36,12 +36,16 @@ static bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_
         return false;
     }
 
-    if (suffix[0] == '\0' || strcmp(suffix, "c") == 0 || strcmp(suffix, "C") == 0 || strcmp(suffix, "B") == 0) {
+    if (suffix[0] == 'x') {
+        suffix++;
+    }
+
+    if (suffix[0] == '\0' || strcmp(suffix, "c") == 0 || strcmp(suffix, "B") == 0) {
         *multiplier_out = 1;
         return true;
     }
 
-    if (strcmp(suffix, "w") == 0 || strcmp(suffix, "W") == 0) {
+    if (strcmp(suffix, "w") == 0) {
         *multiplier_out = 2;
         return true;
     }
@@ -102,7 +106,7 @@ static bool bx_size_parse_factor(const char* text, size_t len, uintmax_t* value_
         return false;
     }
 
-    char suffix[4];
+    char suffix[5];
     size_t suffix_len = len - pos;
     if (suffix_len >= sizeof(suffix)) {
         return false;
@@ -145,7 +149,7 @@ bool bx_dd_parse_size(const char* text, uintmax_t* value_out) {
     const char* p = text;
 
     while (true) {
-        if (*p == 'x' || *p == '\0') {
+        if ((*p == 'x' && p[1] >= '0' && p[1] <= '9') || *p == '\0') {
             uintmax_t factor = 0;
             if (!bx_size_parse_factor(factor_start, (size_t)(p - factor_start), &factor)) {
                 return false;

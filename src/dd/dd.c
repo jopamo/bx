@@ -103,6 +103,7 @@ struct bx_dd_stats {
     uintmax_t full_out;
     uintmax_t partial_out;
     uintmax_t bytes_copied;
+    uintmax_t truncated_records;
 };
 
 struct bx_dd_ctx {
@@ -124,6 +125,7 @@ struct bx_dd_ctx {
     size_t cbuf_len;
 
     bool block_truncating;
+    bool block_truncated_counted;
     bool swab_have_saved;
     unsigned char swab_saved;
 
@@ -135,6 +137,8 @@ struct bx_dd_ctx {
 };
 
 static volatile sig_atomic_t bx_dd_usr1_requested = 0;
+
+static void bx_dd_maybe_warn_truncated_records(const struct bx_dd_ctx* ctx);
 
 static const char* bx_dd_progname(const char* argv0) {
     if (argv0 == NULL || argv0[0] == '\0') {
@@ -208,6 +212,13 @@ static void bx_dd_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "Sending a USR1 signal to a running 'dd' process makes it\n");
     fprintf(stream, "print I/O statistics to standard error and then resume copying.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Options are:\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
 }
 
 static void bx_dd_print_version(const char* progname) {
@@ -233,6 +244,10 @@ static void bx_dd_perror_path(const char* progname, const char* path) {
 
 static void bx_dd_perror_with_errno(const char* progname, const char* path, int errnum) {
     fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errnum));
+}
+
+static void bx_dd_perror_setting_flags(const char* progname, const char* path, int errnum) {
+    fprintf(stderr, "%s: setting flags for '%s': %s\n", progname, path, strerror(errnum));
 }
 
 static bool bx_dd_key_eq(const char* key, size_t key_len, const char* expected) {
@@ -297,50 +312,51 @@ static bool bx_dd_parse_count_like(const char* text, uintmax_t* value_out, bool*
     return true;
 }
 
-static bool bx_dd_parse_conv(struct bx_dd_config* cfg, const char* value, const char* progname) {
-    char* copy = xstrdup(value);
-    char* saveptr = NULL;
-    char* token = strtok_r(copy, ",", &saveptr);
-
-    if (token == NULL) {
-        bx_dd_diag(progname, "invalid conversion list");
-        free(copy);
-        return false;
+static char* bx_dd_token_dup(const char* start, size_t len) {
+    char* token = xmalloc(len + 1u);
+    if (len > 0) {
+        memcpy(token, start, len);
     }
+    token[len] = '\0';
+    return token;
+}
 
-    while (token != NULL) {
+static bool bx_dd_parse_conv(struct bx_dd_config* cfg, const char* value, const char* progname) {
+    const char* token_start = value;
+    const char* p = value;
+
+    while (true) {
+        if (*p != ',' && *p != '\0') {
+            p++;
+            continue;
+        }
+
+        char* token = bx_dd_token_dup(token_start, (size_t)(p - token_start));
         if (token[0] == '\0') {
-            bx_dd_diag(progname, "invalid conversion list");
-            free(copy);
+            bx_dd_diag(progname, "invalid conversion: ''");
+            free(token);
             return false;
         }
 
         if (strcmp(token, "ascii") == 0) {
-            cfg->conv_mask &= ~(BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM);
             cfg->conv_mask |= BX_DD_CONV_ASCII;
         }
         else if (strcmp(token, "ebcdic") == 0) {
-            cfg->conv_mask &= ~(BX_DD_CONV_ASCII | BX_DD_CONV_IBM);
             cfg->conv_mask |= BX_DD_CONV_EBCDIC;
         }
         else if (strcmp(token, "ibm") == 0) {
-            cfg->conv_mask &= ~(BX_DD_CONV_ASCII | BX_DD_CONV_EBCDIC);
             cfg->conv_mask |= BX_DD_CONV_IBM;
         }
         else if (strcmp(token, "block") == 0) {
-            cfg->conv_mask &= ~BX_DD_CONV_UNBLOCK;
             cfg->conv_mask |= BX_DD_CONV_BLOCK;
         }
         else if (strcmp(token, "unblock") == 0) {
-            cfg->conv_mask &= ~BX_DD_CONV_BLOCK;
             cfg->conv_mask |= BX_DD_CONV_UNBLOCK;
         }
         else if (strcmp(token, "lcase") == 0) {
-            cfg->conv_mask &= ~BX_DD_CONV_UCASE;
             cfg->conv_mask |= BX_DD_CONV_LCASE;
         }
         else if (strcmp(token, "ucase") == 0) {
-            cfg->conv_mask &= ~BX_DD_CONV_LCASE;
             cfg->conv_mask |= BX_DD_CONV_UCASE;
         }
         else if (strcmp(token, "sparse") == 0) {
@@ -371,15 +387,20 @@ static bool bx_dd_parse_conv(struct bx_dd_config* cfg, const char* value, const 
             cfg->conv_mask |= BX_DD_CONV_FDATASYNC;
         }
         else {
-            bx_dd_diag(progname, "unsupported conversion '%s'", token);
-            free(copy);
+            bx_dd_diag(progname, "invalid conversion: '%s'", token);
+            free(token);
             return false;
         }
 
-        token = strtok_r(NULL, ",", &saveptr);
+        free(token);
+
+        if (*p == '\0') {
+            break;
+        }
+        token_start = p + 1;
+        p++;
     }
 
-    free(copy);
     return true;
 }
 
@@ -387,10 +408,6 @@ static bool bx_dd_apply_flag_token(struct bx_dd_config* cfg, const char* token, 
     unsigned* mask = input_flag ? &cfg->iflag_mask : &cfg->oflag_mask;
 
     if (strcmp(token, "append") == 0) {
-        if (input_flag) {
-            bx_dd_diag(progname, "invalid input flag '%s'", token);
-            return false;
-        }
         *mask |= BX_DD_FLAG_APPEND;
         return true;
     }
@@ -405,32 +422,26 @@ static bool bx_dd_apply_flag_token(struct bx_dd_config* cfg, const char* token, 
     }
 
     if (strcmp(token, "count_bytes") == 0) {
-        if (!input_flag) {
-            bx_dd_diag(progname, "invalid output flag '%s'", token);
-            return false;
-        }
         *mask |= BX_DD_FLAG_COUNT_BYTES;
-        cfg->count_bytes = true;
+        if (input_flag) {
+            cfg->count_bytes = true;
+        }
         return true;
     }
 
     if (strcmp(token, "skip_bytes") == 0) {
-        if (!input_flag) {
-            bx_dd_diag(progname, "invalid output flag '%s'", token);
-            return false;
-        }
         *mask |= BX_DD_FLAG_SKIP_BYTES;
-        cfg->skip_bytes = true;
+        if (input_flag) {
+            cfg->skip_bytes = true;
+        }
         return true;
     }
 
     if (strcmp(token, "seek_bytes") == 0) {
-        if (input_flag) {
-            bx_dd_diag(progname, "invalid input flag '%s'", token);
-            return false;
-        }
         *mask |= BX_DD_FLAG_SEEK_BYTES;
-        cfg->seek_bytes = true;
+        if (!input_flag) {
+            cfg->seek_bytes = true;
+        }
         return true;
     }
 
@@ -476,32 +487,36 @@ static bool bx_dd_apply_flag_token(struct bx_dd_config* cfg, const char* token, 
 }
 
 static bool bx_dd_parse_flag_list(struct bx_dd_config* cfg, const char* value, bool input_flag, const char* progname) {
-    char* copy = xstrdup(value);
-    char* saveptr = NULL;
-    char* token = strtok_r(copy, ",", &saveptr);
+    const char* token_start = value;
+    const char* p = value;
 
-    if (token == NULL) {
-        bx_dd_diag(progname, "invalid %s flag list", input_flag ? "input" : "output");
-        free(copy);
-        return false;
-    }
+    while (true) {
+        if (*p != ',' && *p != '\0') {
+            p++;
+            continue;
+        }
 
-    while (token != NULL) {
+        char* token = bx_dd_token_dup(token_start, (size_t)(p - token_start));
         if (token[0] == '\0') {
-            bx_dd_diag(progname, "invalid %s flag list", input_flag ? "input" : "output");
-            free(copy);
+            bx_dd_diag(progname, "invalid %s flag: ''", input_flag ? "input" : "output");
+            free(token);
             return false;
         }
 
         if (!bx_dd_apply_flag_token(cfg, token, input_flag, progname)) {
-            free(copy);
+            free(token);
             return false;
         }
 
-        token = strtok_r(NULL, ",", &saveptr);
+        free(token);
+
+        if (*p == '\0') {
+            break;
+        }
+        token_start = p + 1;
+        p++;
     }
 
-    free(copy);
     return true;
 }
 
@@ -514,20 +529,19 @@ static bool bx_dd_parse_oflag(struct bx_dd_config* cfg, const char* value, const
 }
 
 static bool bx_dd_parse_status(struct bx_dd_config* cfg, const char* value, const char* progname) {
-    char* copy = xstrdup(value);
-    char* saveptr = NULL;
-    char* token = strtok_r(copy, ",", &saveptr);
+    const char* token_start = value;
+    const char* p = value;
 
-    if (token == NULL) {
-        bx_dd_diag(progname, "invalid status level");
-        free(copy);
-        return false;
-    }
+    while (true) {
+        if (*p != ',' && *p != '\0') {
+            p++;
+            continue;
+        }
 
-    while (token != NULL) {
+        char* token = bx_dd_token_dup(token_start, (size_t)(p - token_start));
         if (token[0] == '\0') {
-            bx_dd_diag(progname, "invalid status level");
-            free(copy);
+            bx_dd_diag(progname, "invalid status level: ''");
+            free(token);
             return false;
         }
 
@@ -541,15 +555,20 @@ static bool bx_dd_parse_status(struct bx_dd_config* cfg, const char* value, cons
             cfg->status_mask = BX_DD_STATUS_PROGRESS;
         }
         else {
-            bx_dd_diag(progname, "invalid status level '%s'", token);
-            free(copy);
+            bx_dd_diag(progname, "invalid status level: '%s'", token);
+            free(token);
             return false;
         }
 
-        token = strtok_r(NULL, ",", &saveptr);
+        free(token);
+
+        if (*p == '\0') {
+            break;
+        }
+        token_start = p + 1;
+        p++;
     }
 
-    free(copy);
     return true;
 }
 
@@ -604,9 +623,7 @@ static bool bx_dd_parse_assignment(struct bx_dd_config* cfg, const char* arg, co
         if (!bx_dd_parse_count_like(value, &cfg->count, &bytes, "count", progname)) {
             return false;
         }
-        if (bytes) {
-            cfg->count_bytes = true;
-        }
+        cfg->count_bytes = bytes || (cfg->iflag_mask & BX_DD_FLAG_COUNT_BYTES) != 0u;
         cfg->count_set = true;
         return true;
     }
@@ -616,9 +633,7 @@ static bool bx_dd_parse_assignment(struct bx_dd_config* cfg, const char* arg, co
         if (!bx_dd_parse_count_like(value, &cfg->skip, &bytes, "skip", progname)) {
             return false;
         }
-        if (bytes) {
-            cfg->skip_bytes = true;
-        }
+        cfg->skip_bytes = bytes || (cfg->iflag_mask & BX_DD_FLAG_SKIP_BYTES) != 0u;
         cfg->skip_set = true;
         return true;
     }
@@ -628,9 +643,7 @@ static bool bx_dd_parse_assignment(struct bx_dd_config* cfg, const char* arg, co
         if (!bx_dd_parse_count_like(value, &cfg->seek, &bytes, "seek", progname)) {
             return false;
         }
-        if (bytes) {
-            cfg->seek_bytes = true;
-        }
+        cfg->seek_bytes = bytes || (cfg->oflag_mask & BX_DD_FLAG_SEEK_BYTES) != 0u;
         cfg->seek_set = true;
         return true;
     }
@@ -655,6 +668,42 @@ static bool bx_dd_parse_assignment(struct bx_dd_config* cfg, const char* arg, co
     return false;
 }
 
+static unsigned bx_dd_popcount(unsigned value) {
+    unsigned count = 0;
+    while (value != 0u) {
+        count += value & 1u;
+        value >>= 1u;
+    }
+    return count;
+}
+
+static bool bx_dd_validate_config(const struct bx_dd_config* cfg, const char* progname) {
+    unsigned charset = cfg->conv_mask & (BX_DD_CONV_ASCII | BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM);
+    if (bx_dd_popcount(charset) > 1u) {
+        bx_dd_diag(progname, "cannot combine any two of {ascii,ebcdic,ibm}");
+        return false;
+    }
+
+    bool block_side = (cfg->conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM)) != 0u;
+    bool unblock_side = (cfg->conv_mask & (BX_DD_CONV_UNBLOCK | BX_DD_CONV_ASCII)) != 0u;
+    if (block_side && unblock_side) {
+        bx_dd_diag(progname, "cannot combine block and unblock");
+        return false;
+    }
+
+    if ((cfg->conv_mask & BX_DD_CONV_LCASE) != 0u && (cfg->conv_mask & BX_DD_CONV_UCASE) != 0u) {
+        bx_dd_diag(progname, "cannot combine lcase and ucase");
+        return false;
+    }
+
+    if ((cfg->conv_mask & BX_DD_CONV_EXCL) != 0u && (cfg->conv_mask & BX_DD_CONV_NOCREAT) != 0u) {
+        bx_dd_diag(progname, "cannot combine excl and nocreat");
+        return false;
+    }
+
+    return true;
+}
+
 static bool bx_dd_parse_args(struct bx_dd_config* cfg, int argc, char** argv, enum bx_dd_mode* mode_out, const char* progname) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->ibs = 512u;
@@ -663,20 +712,27 @@ static bool bx_dd_parse_args(struct bx_dd_config* cfg, int argc, char** argv, en
 
     *mode_out = BX_DD_MODE_RUN;
 
+    bool end_options = false;
+
     for (int i = 1; i < argc; i++) {
         const char* arg = argv[i];
 
-        if (strcmp(arg, "--help") == 0) {
+        if (!end_options && strcmp(arg, "--") == 0) {
+            end_options = true;
+            continue;
+        }
+
+        if (!end_options && strcmp(arg, "--help") == 0) {
             *mode_out = BX_DD_MODE_HELP;
             return true;
         }
 
-        if (strcmp(arg, "--version") == 0) {
+        if (!end_options && strcmp(arg, "--version") == 0) {
             *mode_out = BX_DD_MODE_VERSION;
             return true;
         }
 
-        if (arg[0] == '-' && arg[1] != '\0') {
+        if (!end_options && arg[0] == '-' && arg[1] != '\0') {
             bx_dd_diag(progname, "unrecognized option '%s'", arg);
             return false;
         }
@@ -691,8 +747,7 @@ static bool bx_dd_parse_args(struct bx_dd_config* cfg, int argc, char** argv, en
         cfg->obs = cfg->bs;
     }
 
-    if ((cfg->conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK)) != 0u && !cfg->cbs_set) {
-        bx_dd_diag(progname, "cbs is required for block and unblock conversions");
+    if (!bx_dd_validate_config(cfg, progname)) {
         return false;
     }
 
@@ -791,38 +846,161 @@ static bool bx_dd_add_open_flags(unsigned mask, int* flags_out, const char* prog
     return true;
 }
 
+static bool bx_dd_apply_standard_fd_flags(struct bx_dd_ctx* ctx, int fd, unsigned mask, const char* path) {
+#ifdef O_DIRECTORY
+    if ((mask & BX_DD_FLAG_DIRECTORY) != 0u) {
+        struct stat st;
+        if (fstat(fd, &st) != 0) {
+            bx_dd_perror_setting_flags(ctx->progname, path, errno);
+            return false;
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            bx_dd_perror_setting_flags(ctx->progname, path, ENOTDIR);
+            return false;
+        }
+    }
+#else
+    if ((mask & BX_DD_FLAG_DIRECTORY) != 0u) {
+        bx_dd_diag(ctx->progname, "directory open flag is not supported on this platform");
+        return false;
+    }
+#endif
+
+    int set_flags = 0;
+
+    if ((mask & BX_DD_FLAG_APPEND) != 0u) {
+        set_flags |= O_APPEND;
+    }
+#ifdef O_DIRECT
+    if ((mask & BX_DD_FLAG_DIRECT) != 0u) {
+        set_flags |= O_DIRECT;
+    }
+#else
+    if ((mask & BX_DD_FLAG_DIRECT) != 0u) {
+        bx_dd_diag(ctx->progname, "direct I/O is not supported on this platform");
+        return false;
+    }
+#endif
+#ifdef O_DSYNC
+    if ((mask & BX_DD_FLAG_DSYNC) != 0u) {
+        set_flags |= O_DSYNC;
+    }
+#else
+    if ((mask & BX_DD_FLAG_DSYNC) != 0u) {
+        bx_dd_diag(ctx->progname, "synchronized data I/O is not supported on this platform");
+        return false;
+    }
+#endif
+#ifdef O_SYNC
+    if ((mask & BX_DD_FLAG_SYNC) != 0u) {
+        set_flags |= O_SYNC;
+    }
+#else
+    if ((mask & BX_DD_FLAG_SYNC) != 0u) {
+        bx_dd_diag(ctx->progname, "synchronized I/O is not supported on this platform");
+        return false;
+    }
+#endif
+#ifdef O_NONBLOCK
+    if ((mask & BX_DD_FLAG_NONBLOCK) != 0u) {
+        set_flags |= O_NONBLOCK;
+    }
+#else
+    if ((mask & BX_DD_FLAG_NONBLOCK) != 0u) {
+        bx_dd_diag(ctx->progname, "nonblocking I/O is not supported on this platform");
+        return false;
+    }
+#endif
+#ifdef O_NOATIME
+    if ((mask & BX_DD_FLAG_NOATIME) != 0u) {
+        set_flags |= O_NOATIME;
+    }
+#else
+    if ((mask & BX_DD_FLAG_NOATIME) != 0u) {
+        bx_dd_diag(ctx->progname, "noatime is not supported on this platform");
+        return false;
+    }
+#endif
+
+    if (set_flags == 0) {
+        return true;
+    }
+
+    int current = fcntl(fd, F_GETFL);
+    if (current < 0) {
+        bx_dd_perror_setting_flags(ctx->progname, path, errno);
+        return false;
+    }
+
+    if (fcntl(fd, F_SETFL, current | set_flags) != 0) {
+        bx_dd_perror_setting_flags(ctx->progname, path, errno);
+        return false;
+    }
+
+    return true;
+}
+
 static bool bx_dd_open_files(struct bx_dd_ctx* ctx) {
-    ctx->input_path = (ctx->cfg.ifile != NULL) ? ctx->cfg.ifile : "/dev/stdin";
-    ctx->output_path = (ctx->cfg.ofile != NULL) ? ctx->cfg.ofile : "/dev/stdout";
+    ctx->input_path = (ctx->cfg.ifile != NULL) ? ctx->cfg.ifile : "standard input";
+    ctx->output_path = (ctx->cfg.ofile != NULL) ? ctx->cfg.ofile : "standard output";
 
-    int in_flags = O_RDONLY;
-    if (!bx_dd_add_open_flags(ctx->cfg.iflag_mask, &in_flags, ctx->progname)) {
-        return false;
+    if (ctx->cfg.ifile == NULL) {
+        ctx->infd = dup(STDIN_FILENO);
+        if (ctx->infd < 0) {
+            bx_dd_perror_path(ctx->progname, ctx->input_path);
+            return false;
+        }
+        if (!bx_dd_apply_standard_fd_flags(ctx, ctx->infd, ctx->cfg.iflag_mask, ctx->input_path)) {
+            return false;
+        }
     }
-    ctx->infd = open(ctx->input_path, in_flags);
-    if (ctx->infd < 0) {
-        bx_dd_perror_path(ctx->progname, ctx->input_path);
-        return false;
-    }
-
-    int out_flags = O_WRONLY;
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_NOCREAT) == 0u || (ctx->cfg.conv_mask & BX_DD_CONV_EXCL) != 0u) {
-        out_flags |= O_CREAT;
-    }
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_EXCL) != 0u) {
-        out_flags |= O_EXCL;
-    }
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_NOTRUNC) == 0u && !ctx->cfg.seek_set) {
-        out_flags |= O_TRUNC;
-    }
-    if (!bx_dd_add_open_flags(ctx->cfg.oflag_mask, &out_flags, ctx->progname)) {
-        return false;
+    else {
+        int in_flags = O_RDONLY;
+        if (!bx_dd_add_open_flags(ctx->cfg.iflag_mask, &in_flags, ctx->progname)) {
+            return false;
+        }
+        ctx->infd = open(ctx->input_path, in_flags);
+        if (ctx->infd < 0) {
+            bx_dd_perror_path(ctx->progname, ctx->input_path);
+            return false;
+        }
     }
 
-    ctx->outfd = open(ctx->output_path, out_flags, ctx->cfg.create_mode);
-    if (ctx->outfd < 0) {
-        bx_dd_perror_path(ctx->progname, ctx->output_path);
-        return false;
+    unsigned effective_oflag_mask = ctx->cfg.oflag_mask;
+    if ((effective_oflag_mask & BX_DD_FLAG_APPEND) != 0u && ctx->cfg.seek_set && (ctx->cfg.conv_mask & BX_DD_CONV_NOTRUNC) == 0u) {
+        effective_oflag_mask &= ~BX_DD_FLAG_APPEND;
+    }
+
+    if (ctx->cfg.ofile == NULL) {
+        ctx->outfd = dup(STDOUT_FILENO);
+        if (ctx->outfd < 0) {
+            bx_dd_perror_path(ctx->progname, ctx->output_path);
+            return false;
+        }
+        if (!bx_dd_apply_standard_fd_flags(ctx, ctx->outfd, effective_oflag_mask, ctx->output_path)) {
+            return false;
+        }
+    }
+    else {
+        int out_flags = O_WRONLY;
+        if ((ctx->cfg.conv_mask & BX_DD_CONV_NOCREAT) == 0u || (ctx->cfg.conv_mask & BX_DD_CONV_EXCL) != 0u) {
+            out_flags |= O_CREAT;
+        }
+        if ((ctx->cfg.conv_mask & BX_DD_CONV_EXCL) != 0u) {
+            out_flags |= O_EXCL;
+        }
+        if ((ctx->cfg.conv_mask & BX_DD_CONV_NOTRUNC) == 0u && !ctx->cfg.seek_set) {
+            out_flags |= O_TRUNC;
+        }
+        if (!bx_dd_add_open_flags(effective_oflag_mask, &out_flags, ctx->progname)) {
+            return false;
+        }
+
+        ctx->outfd = open(ctx->output_path, out_flags, ctx->cfg.create_mode);
+        if (ctx->outfd < 0) {
+            bx_dd_perror_path(ctx->progname, ctx->output_path);
+            return false;
+        }
     }
 
     return true;
@@ -988,18 +1166,96 @@ static double bx_dd_elapsed_seconds(const struct timespec* start, const struct t
     return (double)sec + (double)nsec / 1000000000.0;
 }
 
+static void bx_dd_format_rate(double bytes_per_sec, char* buf, size_t buf_size) {
+    static const char* units[] = { "B/s", "kB/s", "MB/s", "GB/s", "TB/s", "PB/s", "EB/s" };
+    size_t unit = 0;
+    double value = bytes_per_sec;
+
+    while (value >= 999.5 && unit + 1u < sizeof(units) / sizeof(units[0])) {
+        value /= 1000.0;
+        unit++;
+    }
+
+    if (value == 0.0) {
+        snprintf(buf, buf_size, "0.0 %s", units[(unit == 0) ? 1u : unit]);
+        return;
+    }
+
+    char number[64];
+    snprintf(number, sizeof(number), "%.3g", value);
+    snprintf(buf, buf_size, "%s %s", number, units[unit]);
+}
+
+static void bx_dd_format_amount(double value, char* buf, size_t buf_size) {
+    snprintf(buf, buf_size, "%.1f", value);
+}
+
+static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size) {
+    if (bytes < 1000) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
+        }
+        return false;
+    }
+
+    static const char* decimal_units[] = { "kB", "MB", "GB", "TB", "PB", "EB" };
+    static const char* binary_units[] = { "KiB", "MiB", "GiB", "TiB", "PiB", "EiB" };
+
+    double decimal = (double)bytes;
+    size_t decimal_unit = 0;
+    do {
+        decimal /= 1000.0;
+        if (decimal < 999.95 || decimal_unit + 1u >= sizeof(decimal_units) / sizeof(decimal_units[0])) {
+            break;
+        }
+        decimal_unit++;
+    } while (true);
+
+    char decimal_number[64];
+    bx_dd_format_amount(decimal, decimal_number, sizeof(decimal_number));
+
+    if (bytes < 1024) {
+        snprintf(buf, buf_size, " (%s %s)", decimal_number, decimal_units[decimal_unit]);
+        return true;
+    }
+
+    double binary = (double)bytes;
+    size_t binary_unit = 0;
+    do {
+        binary /= 1024.0;
+        if (binary < 999.95 || binary_unit + 1u >= sizeof(binary_units) / sizeof(binary_units[0])) {
+            break;
+        }
+        binary_unit++;
+    } while (true);
+
+    char binary_number[64];
+    bx_dd_format_amount(binary, binary_number, sizeof(binary_number));
+    snprintf(buf, buf_size, " (%s %s, %s %s)", decimal_number, decimal_units[decimal_unit], binary_number, binary_units[binary_unit]);
+    return true;
+}
+
+static void bx_dd_print_bytes_copied_line(uintmax_t bytes, double elapsed) {
+    if (elapsed <= 0.0) {
+        elapsed = 0.000001;
+    }
+
+    char rate[128];
+    bx_dd_format_rate((double)bytes / elapsed, rate, sizeof(rate));
+
+    char humans[160];
+    bx_dd_format_byte_humans(bytes, humans, sizeof(humans));
+
+    fprintf(stderr, "%ju %s%s copied, %.6g s, %s\n", bytes, (bytes == 1) ? "byte" : "bytes", humans, elapsed, rate);
+}
+
 static void bx_dd_print_progress_line(struct bx_dd_ctx* ctx, const struct timespec* now) {
     if (ctx->cfg.status_mask != BX_DD_STATUS_PROGRESS || !ctx->time_ready) {
         return;
     }
 
     double elapsed = bx_dd_elapsed_seconds(&ctx->start_time, now);
-    if (elapsed <= 0.0) {
-        elapsed = 0.000001;
-    }
-
-    double bytes_per_sec = (double)ctx->st.bytes_copied / elapsed;
-    fprintf(stderr, "%ju bytes copied, %.6f s, %.1f bytes/s\n", ctx->st.bytes_copied, elapsed, bytes_per_sec);
+    bx_dd_print_bytes_copied_line(ctx->st.bytes_copied, elapsed);
 }
 
 static void bx_dd_maybe_print_progress(struct bx_dd_ctx* ctx) {
@@ -1028,6 +1284,7 @@ static void bx_dd_print_summary(const struct bx_dd_ctx* ctx) {
 
     fprintf(stderr, "%ju+%ju records in\n", ctx->st.full_in, ctx->st.partial_in);
     fprintf(stderr, "%ju+%ju records out\n", ctx->st.full_out, ctx->st.partial_out);
+    bx_dd_maybe_warn_truncated_records(ctx);
 
     if (ctx->cfg.status_mask == BX_DD_STATUS_NOXFER) {
         return;
@@ -1040,12 +1297,7 @@ static void bx_dd_print_summary(const struct bx_dd_ctx* ctx) {
     }
 
     double elapsed = bx_dd_elapsed_seconds(&ctx->start_time, &now);
-    if (elapsed <= 0.0) {
-        elapsed = 0.000001;
-    }
-
-    double bytes_per_sec = (double)ctx->st.bytes_copied / elapsed;
-    fprintf(stderr, "%ju bytes copied, %.6f s, %.1f bytes/s\n", ctx->st.bytes_copied, elapsed, bytes_per_sec);
+    bx_dd_print_bytes_copied_line(ctx->st.bytes_copied, elapsed);
 }
 
 static void bx_dd_handle_usr1(int signo) {
@@ -1075,6 +1327,29 @@ static void* bx_dd_alloc_buffer(size_t size) {
     return xmalloc(size);
 }
 
+static bool bx_dd_record_conversion_active(const struct bx_dd_ctx* ctx) {
+    if (!ctx->cfg.cbs_set || ctx->cfg.cbs == 0) {
+        return false;
+    }
+
+    return (ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK | BX_DD_CONV_ASCII | BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM)) != 0u;
+}
+
+static bool bx_dd_effective_block(const struct bx_dd_ctx* ctx) {
+    return bx_dd_record_conversion_active(ctx) && (ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_EBCDIC | BX_DD_CONV_IBM)) != 0u;
+}
+
+static bool bx_dd_effective_unblock(const struct bx_dd_ctx* ctx) {
+    return bx_dd_record_conversion_active(ctx) && (ctx->cfg.conv_mask & (BX_DD_CONV_UNBLOCK | BX_DD_CONV_ASCII)) != 0u;
+}
+
+static unsigned char bx_dd_sync_pad_byte(const struct bx_dd_ctx* ctx) {
+    if (bx_dd_effective_block(ctx) || bx_dd_effective_unblock(ctx)) {
+        return (unsigned char)' ';
+    }
+    return (unsigned char)0;
+}
+
 static bool bx_dd_alloc_buffers(struct bx_dd_ctx* ctx) {
     if (ctx->cfg.ibs == 0 || ctx->cfg.obs == 0) {
         bx_dd_diag(ctx->progname, "block sizes must be greater than zero");
@@ -1089,7 +1364,7 @@ static bool bx_dd_alloc_buffers(struct bx_dd_ctx* ctx) {
     ctx->ibuf = bx_dd_alloc_buffer((size_t)ctx->cfg.ibs);
     ctx->obuf = bx_dd_alloc_buffer((size_t)ctx->cfg.obs);
     ctx->xbuf = bx_dd_alloc_buffer((size_t)ctx->cfg.ibs + 1u);
-    if ((ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK)) != 0u) {
+    if (bx_dd_record_conversion_active(ctx)) {
         ctx->cbuf = bx_dd_alloc_buffer((size_t)ctx->cfg.cbs);
     }
     ctx->obuf_len = 0;
@@ -1277,31 +1552,102 @@ static bool bx_dd_flush_output(struct bx_dd_ctx* ctx, bool final) {
     return bx_dd_write_chunk(ctx, ctx->obuf, tail);
 }
 
-static void bx_dd_apply_byte_conversions(const struct bx_dd_ctx* ctx, unsigned char* data, size_t len) {
-    const unsigned char* table = NULL;
+static const unsigned char* bx_dd_input_charset_table(const struct bx_dd_ctx* ctx) {
     if ((ctx->cfg.conv_mask & BX_DD_CONV_ASCII) != 0u) {
-        table = bx_dd_ascii_table;
+        return bx_dd_ascii_table;
     }
-    else if ((ctx->cfg.conv_mask & BX_DD_CONV_EBCDIC) != 0u) {
-        table = bx_dd_ebcdic_table;
+
+    return NULL;
+}
+
+static const unsigned char* bx_dd_output_charset_table(const struct bx_dd_ctx* ctx) {
+    if ((ctx->cfg.conv_mask & BX_DD_CONV_EBCDIC) != 0u) {
+        return bx_dd_ebcdic_table;
     }
-    else if ((ctx->cfg.conv_mask & BX_DD_CONV_IBM) != 0u) {
-        table = bx_dd_ibm_table;
+    if ((ctx->cfg.conv_mask & BX_DD_CONV_IBM) != 0u) {
+        return bx_dd_ibm_table;
+    }
+
+    return NULL;
+}
+
+static void bx_dd_apply_table(unsigned char* data, size_t len, const unsigned char* table) {
+    if (table == NULL) {
+        return;
     }
 
     for (size_t i = 0; i < len; i++) {
+        data[i] = table[data[i]];
+    }
+}
+
+static void bx_dd_apply_case_conversions(const struct bx_dd_ctx* ctx, unsigned char* data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
         unsigned char ch = data[i];
-        if (table != NULL) {
-            ch = table[ch];
-        }
         if ((ctx->cfg.conv_mask & BX_DD_CONV_LCASE) != 0u && ch >= 'A' && ch <= 'Z') {
-            ch = (unsigned char)(ch - 'A' + 'a');
+            data[i] = (unsigned char)(ch - 'A' + 'a');
         }
         else if ((ctx->cfg.conv_mask & BX_DD_CONV_UCASE) != 0u && ch >= 'a' && ch <= 'z') {
-            ch = (unsigned char)(ch - 'a' + 'A');
+            data[i] = (unsigned char)(ch - 'a' + 'A');
         }
-        data[i] = ch;
     }
+}
+
+static void bx_dd_apply_pre_record_conversions(const struct bx_dd_ctx* ctx, unsigned char* data, size_t len) {
+    const unsigned char* input_table = bx_dd_input_charset_table(ctx);
+    if (input_table != NULL) {
+        bx_dd_apply_table(data, len, input_table);
+        bx_dd_apply_case_conversions(ctx, data, len);
+        return;
+    }
+
+    bx_dd_apply_case_conversions(ctx, data, len);
+}
+
+static void bx_dd_apply_output_charset(const struct bx_dd_ctx* ctx, unsigned char* data, size_t len) {
+    bx_dd_apply_table(data, len, bx_dd_output_charset_table(ctx));
+}
+
+static bool bx_dd_queue_block_payload(struct bx_dd_ctx* ctx, unsigned char* data, size_t len) {
+    bx_dd_apply_output_charset(ctx, data, len);
+    return bx_dd_queue_output(ctx, data, len);
+}
+
+static void bx_dd_note_truncated_record(struct bx_dd_ctx* ctx) {
+    if (ctx->st.truncated_records < UINTMAX_MAX) {
+        ctx->st.truncated_records++;
+    }
+}
+
+static void bx_dd_enter_block_truncation(struct bx_dd_ctx* ctx) {
+    ctx->block_truncating = true;
+    ctx->block_truncated_counted = false;
+}
+
+static void bx_dd_count_current_truncated_record(struct bx_dd_ctx* ctx) {
+    if (!ctx->block_truncated_counted) {
+        bx_dd_note_truncated_record(ctx);
+        ctx->block_truncated_counted = true;
+    }
+}
+
+static void bx_dd_clear_block_record(struct bx_dd_ctx* ctx) {
+    if (ctx->block_truncating) {
+        ctx->block_truncating = false;
+        ctx->block_truncated_counted = false;
+    }
+}
+
+static bool bx_dd_current_block_record_has_data(const struct bx_dd_ctx* ctx) {
+    return ctx->cbuf_len > 0;
+}
+
+static void bx_dd_maybe_warn_truncated_records(const struct bx_dd_ctx* ctx) {
+    if (ctx->st.truncated_records == 0 || ctx->cfg.status_mask == BX_DD_STATUS_NONE) {
+        return;
+    }
+
+    fprintf(stderr, "%ju truncated record%s\n", ctx->st.truncated_records, (ctx->st.truncated_records == 1) ? "" : "s");
 }
 
 static bool bx_dd_queue_block_record(struct bx_dd_ctx* ctx) {
@@ -1310,11 +1656,12 @@ static bool bx_dd_queue_block_record(struct bx_dd_ctx* ctx) {
         ctx->cbuf[ctx->cbuf_len++] = ' ';
     }
 
-    if (!bx_dd_queue_output(ctx, ctx->cbuf, cbs)) {
+    if (!bx_dd_queue_block_payload(ctx, ctx->cbuf, cbs)) {
         return false;
     }
 
     ctx->cbuf_len = 0;
+    bx_dd_clear_block_record(ctx);
     return true;
 }
 
@@ -1326,7 +1673,10 @@ static bool bx_dd_process_block_bytes(struct bx_dd_ctx* ctx, const unsigned char
 
         if (ctx->block_truncating) {
             if (ch == '\n') {
-                ctx->block_truncating = false;
+                bx_dd_clear_block_record(ctx);
+            }
+            else {
+                bx_dd_count_current_truncated_record(ctx);
             }
             continue;
         }
@@ -1340,15 +1690,15 @@ static bool bx_dd_process_block_bytes(struct bx_dd_ctx* ctx, const unsigned char
 
         ctx->cbuf[ctx->cbuf_len++] = ch;
         if (ctx->cbuf_len == cbs) {
-            if (!bx_dd_queue_output(ctx, ctx->cbuf, cbs)) {
+            if (!bx_dd_queue_block_payload(ctx, ctx->cbuf, cbs)) {
                 return false;
             }
             ctx->cbuf_len = 0;
-            ctx->block_truncating = true;
+            bx_dd_enter_block_truncation(ctx);
         }
     }
 
-    if (final && ctx->cbuf_len > 0) {
+    if (final && bx_dd_current_block_record_has_data(ctx)) {
         return bx_dd_queue_block_record(ctx);
     }
 
@@ -1394,16 +1744,17 @@ static bool bx_dd_process_unblock_bytes(struct bx_dd_ctx* ctx, const unsigned ch
 }
 
 static bool bx_dd_queue_converted_bytes(struct bx_dd_ctx* ctx, unsigned char* data, size_t len, bool final) {
-    bx_dd_apply_byte_conversions(ctx, data, len);
+    bx_dd_apply_pre_record_conversions(ctx, data, len);
 
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_BLOCK) != 0u) {
+    if (bx_dd_effective_block(ctx)) {
         return bx_dd_process_block_bytes(ctx, data, len, final);
     }
 
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_UNBLOCK) != 0u) {
+    if (bx_dd_effective_unblock(ctx)) {
         return bx_dd_process_unblock_bytes(ctx, data, len, final);
     }
 
+    bx_dd_apply_output_charset(ctx, data, len);
     if (len > 0 && !bx_dd_queue_output(ctx, data, len)) {
         return false;
     }
@@ -1450,11 +1801,11 @@ static bool bx_dd_finish_conversions(struct bx_dd_ctx* ctx) {
         }
     }
 
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_BLOCK) != 0u) {
+    if (bx_dd_effective_block(ctx)) {
         return bx_dd_process_block_bytes(ctx, NULL, 0, true);
     }
 
-    if ((ctx->cfg.conv_mask & BX_DD_CONV_UNBLOCK) != 0u) {
+    if (bx_dd_effective_unblock(ctx)) {
         return bx_dd_process_unblock_bytes(ctx, NULL, 0, true);
     }
 
@@ -1498,7 +1849,7 @@ static int bx_dd_run(struct bx_dd_ctx* ctx) {
                 size_t out_len = nread;
 
                 if ((ctx->cfg.conv_mask & BX_DD_CONV_SYNC) != 0u && nread < ibs) {
-                    unsigned char pad = ((ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK)) != 0u) ? (unsigned char)' ' : (unsigned char)0;
+                    unsigned char pad = bx_dd_sync_pad_byte(ctx);
                     memset(ctx->ibuf + nread, pad, ibs - nread);
                     out_len = ibs;
                 }
@@ -1519,7 +1870,7 @@ static int bx_dd_run(struct bx_dd_ctx* ctx) {
             }
 
             if ((ctx->cfg.conv_mask & BX_DD_CONV_SYNC) != 0u) {
-                unsigned char pad = ((ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK)) != 0u) ? (unsigned char)' ' : (unsigned char)0;
+                unsigned char pad = bx_dd_sync_pad_byte(ctx);
                 memset(ctx->ibuf, pad, ibs);
                 ctx->st.partial_in++;
 
@@ -1556,7 +1907,7 @@ static int bx_dd_run(struct bx_dd_ctx* ctx) {
 
         size_t out_len = nread;
         if ((ctx->cfg.conv_mask & BX_DD_CONV_SYNC) != 0u && nread < ibs) {
-            unsigned char pad = ((ctx->cfg.conv_mask & (BX_DD_CONV_BLOCK | BX_DD_CONV_UNBLOCK)) != 0u) ? (unsigned char)' ' : (unsigned char)0;
+            unsigned char pad = bx_dd_sync_pad_byte(ctx);
             memset(ctx->ibuf + nread, pad, ibs - nread);
             out_len = ibs;
         }
