@@ -1,9 +1,11 @@
+#include <errno.h>
+#include <getopt.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
-#include <stdbool.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
@@ -19,6 +21,100 @@ typedef struct {
     bool zero_terminated;
     double sleep_interval;
 } tail_opts_t;
+
+static bool bx_tail_apply_multiplier(long long* value, long long multiplier) {
+    if (*value > LLONG_MAX / multiplier) {
+        return false;
+    }
+
+    *value *= multiplier;
+    return true;
+}
+
+static bool bx_tail_parse_magnitude(const char* text, long long* value_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    long long value = strtoll(text, &end, 10);
+    if (errno != 0 || end == text) {
+        return false;
+    }
+
+    if (*end != '\0') {
+        if (strcmp(end, "K") == 0) {
+            if (!bx_tail_apply_multiplier(&value, 1024LL)) {
+                return false;
+            }
+        }
+        else if (strcmp(end, "M") == 0) {
+            if (!bx_tail_apply_multiplier(&value, 1024LL * 1024LL)) {
+                return false;
+            }
+        }
+        else if (strcmp(end, "G") == 0) {
+            if (!bx_tail_apply_multiplier(&value, 1024LL * 1024LL * 1024LL)) {
+                return false;
+            }
+        }
+        else {
+            return false;
+        }
+    }
+
+    *value_out = value;
+    return true;
+}
+
+static bool bx_tail_parse_count_argument(const char* text, long long* value_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    bool from_start = false;
+    const char* magnitude = text;
+    if (magnitude[0] == '+') {
+        from_start = true;
+        magnitude++;
+        if (magnitude[0] == '\0') {
+            return false;
+        }
+    }
+    else if (magnitude[0] == '-') {
+        magnitude++;
+        if (magnitude[0] == '\0') {
+            return false;
+        }
+    }
+
+    long long value = 0;
+    if (!bx_tail_parse_magnitude(magnitude, &value)) {
+        return false;
+    }
+
+    *value_out = from_start ? value : -value;
+    return true;
+}
+
+static bool bx_tail_parse_legacy_lines_option(const char* arg, long long* lines_out) {
+    if (arg == NULL || (arg[0] != '-' && arg[0] != '+') || arg[1] == '\0') {
+        return false;
+    }
+
+    if (arg[0] == '-' && arg[1] == '-') {
+        return false;
+    }
+
+    long long value = 0;
+    if (!bx_tail_parse_magnitude(arg + 1, &value)) {
+        return false;
+    }
+
+    *lines_out = (arg[0] == '+') ? value : -value;
+    return true;
+}
 
 static void tail_bytes(FILE* f, long long n) {
     if (n > 0) {
@@ -157,19 +253,35 @@ int bx_tail_main(int argc, char** argv) {
                                                  {NULL, 0, NULL, 0}};
 
     tail_opts_t opts = {.lines = -10, .bytes = 0, .follow = false, .quiet = false, .verbose = false, .zero_terminated = false, .sleep_interval = 1.0};
+    struct bx_diag_ctx diag = {.progname = "tail", .exit_status = 0};
+    int option_start = 1;
+    if (argc > 1) {
+        long long legacy_lines = 0;
+        if (bx_tail_parse_legacy_lines_option(argv[1], &legacy_lines)) {
+            opts.lines = legacy_lines;
+            opts.bytes = 0;
+            option_start = 2;
+        }
+    }
+
+    opterr = 0;
+    optind = option_start;
+
     int c;
     while ((c = getopt_long(argc, argv, "c:n:f::qvs:z", long_options, NULL)) != -1) {
         switch (c) {
             case 'c':
-                opts.bytes = atoll(optarg[0] == '+' ? optarg + 1 : optarg);
-                if (optarg[0] != '+')
-                    opts.bytes = -opts.bytes;
+                if (!bx_tail_parse_count_argument(optarg, &opts.bytes)) {
+                    bx_diag(&diag, "invalid number of bytes: '%s'", optarg);
+                    return 1;
+                }
                 opts.lines = 0;
                 break;
             case 'n':
-                opts.lines = atoll(optarg[0] == '+' ? optarg + 1 : optarg);
-                if (optarg[0] != '+')
-                    opts.lines = -opts.lines;
+                if (!bx_tail_parse_count_argument(optarg, &opts.lines)) {
+                    bx_diag(&diag, "invalid number of lines: '%s'", optarg);
+                    return 1;
+                }
                 opts.bytes = 0;
                 break;
             case 'f':
@@ -196,6 +308,20 @@ int bx_tail_main(int argc, char** argv) {
             case 'V':
                 printf("tail (bx) %s\n", BX_VERSION);
                 return 0;
+            case '?':
+                if (optopt == 'c' || optopt == 'n' || optopt == 's') {
+                    bx_diag(&diag, "option requires an argument -- '%c'", optopt);
+                }
+                else if (optopt != 0) {
+                    bx_diag(&diag, "invalid option -- '%c'", optopt);
+                }
+                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    bx_diag(&diag, "unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(&diag, "unrecognized option");
+                }
+                return 1;
             default:
                 return 1;
         }
@@ -210,12 +336,14 @@ int bx_tail_main(int argc, char** argv) {
     else {
         bool multiple = (argc - optind > 1);
         for (int i = optind; i < argc; i++) {
+            const char* path = argv[i];
             if ((multiple && !opts.quiet) || opts.verbose) {
-                printf("%s==> %s <==\n", (i > optind) ? "\n" : "", argv[i]);
+                printf("%s==> %s <==\n", (i > optind) ? "\n" : "", path);
             }
-            FILE* f = fopen(argv[i], "r");
+
+            FILE* f = (strcmp(path, "-") == 0) ? stdin : fopen(path, "r");
             if (!f) {
-                bx_perror(argv[i]);
+                bx_perror_path(&diag, path);
                 continue;
             }
             if (opts.bytes != 0)
@@ -238,9 +366,10 @@ int bx_tail_main(int argc, char** argv) {
                 }
             }
 
-            fclose(f);
+            if (f != stdin)
+                fclose(f);
         }
     }
 
-    return 0;
+    return diag.exit_status;
 }

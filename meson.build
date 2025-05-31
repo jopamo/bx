@@ -442,6 +442,9 @@ if get_option('tests')
   test_head_basic = find_program('tests/head/test_head_basic.sh')
   test('head basic', test_head_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_tail_basic = find_program('tests/tail/test_tail_basic.sh')
+  test('tail basic', test_tail_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
   test_hostid_basic = find_program('tests/hostid/test_hostid_basic.sh')
   test('hostid basic', test_hostid_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
