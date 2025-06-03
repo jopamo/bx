@@ -1521,6 +1521,14 @@ static bool bx_dd_queue_output(struct bx_dd_ctx* ctx, const unsigned char* data,
     size_t offset = 0;
 
     while (offset < len) {
+        if (ctx->obuf_len == 0 && len - offset >= obs) {
+            if (!bx_dd_write_chunk(ctx, data + offset, obs)) {
+                return false;
+            }
+            offset += obs;
+            continue;
+        }
+
         size_t space = obs - ctx->obuf_len;
         size_t take = len - offset;
         if (take > space) {
@@ -1838,10 +1846,14 @@ static int bx_dd_run(struct bx_dd_ctx* ctx) {
         bx_dd_read_input(ctx, want, &nread, &read_err);
 
         if (read_err != 0) {
-            bx_dd_perror_with_errno(ctx->progname, ctx->input_path, read_err);
-
             if ((ctx->cfg.conv_mask & BX_DD_CONV_NOERROR) == 0u) {
+                bx_dd_perror_with_errno(ctx->progname, ctx->input_path, read_err);
                 return 1;
+            }
+
+            if (ctx->cfg.status_mask != BX_DD_STATUS_NONE) {
+                bx_dd_perror_with_errno(ctx->progname, ctx->input_path, read_err);
+                bx_dd_print_summary(ctx);
             }
 
             if (nread > 0) {

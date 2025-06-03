@@ -810,6 +810,9 @@ if get_option('tests')
   test_dd_differential = files('tests/dd/test_dd_differential.py')
   test('dd differential', python3, args : [test_dd_differential, dd_ref, bx_exe, meson.current_build_dir()])
 
+  test_dd_fuzz = files('tests/dd/test_dd_fuzz.py')
+  test('dd fuzz', python3, args : [test_dd_fuzz, dd_ref, bx_exe, meson.current_build_dir(), '40', '0'])
+
   test_cp_fuzz = files('tests/cp/test_cp_fuzz.py')
   test('cp fuzz', python3, args : [test_cp_fuzz, cp_ref, bx_exe, meson.current_build_dir(), '20', '0'])
 
