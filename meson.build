@@ -468,6 +468,8 @@ if get_option('tests')
 
   test_od_basic = find_program('tests/od/test_od_basic.sh')
   test('od basic', test_od_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_od_smoke_differential = find_program('tests/od/test_od_smoke_differential.sh')
+  test('od smoke differential', test_od_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_paste_basic = find_program('tests/paste/test_paste_basic.sh')
   test('paste basic', test_paste_basic, args : [bx_exe], suite : fast_track_p2_suite)
