@@ -1,51 +1,1989 @@
+#include <ctype.h>
 #include <errno.h>
+#include <float.h>
+#include <getopt.h>
+#include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "applets.h"
 #include "diag.h"
+#include "libbx.h"
 
-static bool bx_od_find_repo_ref(char* path, size_t path_size) {
-    char exe_path[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (len < 0) {
+enum bx_od_endian_mode {
+    BX_OD_ENDIAN_NATIVE = 0,
+    BX_OD_ENDIAN_LITTLE,
+    BX_OD_ENDIAN_BIG,
+};
+
+enum bx_od_format_kind {
+    BX_OD_FMT_NAMED_CHAR = 0,
+    BX_OD_FMT_CHAR,
+    BX_OD_FMT_SIGNED_DECIMAL,
+    BX_OD_FMT_UNSIGNED_DECIMAL,
+    BX_OD_FMT_OCTAL,
+    BX_OD_FMT_HEXADECIMAL,
+    BX_OD_FMT_FLOAT,
+};
+
+enum bx_od_float_mode {
+    BX_OD_FLOAT_HALF = 0,
+    BX_OD_FLOAT_BFLOAT16,
+    BX_OD_FLOAT_NATIVE,
+};
+
+struct bx_od_format {
+    enum bx_od_format_kind kind;
+    enum bx_od_float_mode float_mode;
+    size_t unit_size;
+    bool char_suffix;
+    size_t intrinsic_width;
+    size_t cell_width;
+};
+
+struct bx_od_options {
+    const char* progname;
+    char address_radix;
+    uintmax_t skip_bytes;
+    uintmax_t read_bytes;
+    bool read_bytes_set;
+    bool output_duplicates;
+    uintmax_t width;
+    bool width_specified;
+    bool strings_mode;
+    uintmax_t strings_min;
+    bool traditional_mode;
+    bool show_help;
+    bool show_version;
+    bool saw_nontraditional_option;
+    enum bx_od_endian_mode endian_mode;
+    struct bx_od_format* formats;
+    size_t format_count;
+    size_t format_capacity;
+};
+
+struct bx_od_operands {
+    const char** files;
+    size_t file_count;
+    uintmax_t offset;
+    bool have_label;
+    uintmax_t label;
+};
+
+struct bx_od_input {
+    const char** files;
+    size_t file_count;
+    size_t next_index;
+    FILE* current;
+    const char* current_name;
+    bool current_is_stdin;
+    struct bx_diag_ctx* diag;
+};
+
+static bool bx_od_host_is_little_endian(void) {
+    const uint16_t value = 1u;
+    return *((const unsigned char*)&value) == 1u;
+}
+
+static void bx_od_warn(const char* progname, const char* fmt, ...) {
+    va_list ap;
+
+    fprintf(stderr, "%s: warning: ", progname);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+
+static void bx_od_traditional_extra_operand(struct bx_diag_ctx* diag, const char* operand) {
+    fprintf(stderr, "%s: extra operand '%s'\n", diag->progname, operand);
+    fprintf(stderr, "%s: compatibility mode supports at most one file\n", diag->progname);
+    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+    diag->exit_status = 1;
+}
+
+static bool bx_od_safe_mul(uintmax_t a, uintmax_t b, uintmax_t* out) {
+    if (out == NULL) {
         return false;
     }
 
-    exe_path[len] = '\0';
-
-    char* slash = strrchr(exe_path, '/');
-    if (slash == NULL) {
-        return false;
-    }
-    *slash = '\0';
-
-    slash = strrchr(exe_path, '/');
-    if (slash == NULL) {
-        return false;
-    }
-    *slash = '\0';
-
-    if (snprintf(path, path_size, "%s/ref/od", exe_path) >= (int)path_size) {
+    if (a != 0u && b > UINTMAX_MAX / a) {
         return false;
     }
 
-    return access(path, X_OK) == 0;
+    *out = a * b;
+    return true;
+}
+
+static uintmax_t bx_od_gcd(uintmax_t a, uintmax_t b) {
+    while (b != 0u) {
+        uintmax_t t = a % b;
+        a = b;
+        b = t;
+    }
+
+    return a;
+}
+
+static bool bx_od_lcm(uintmax_t a, uintmax_t b, uintmax_t* out) {
+    uintmax_t g;
+    uintmax_t reduced;
+
+    if (a == 0u || b == 0u || out == NULL) {
+        return false;
+    }
+
+    g = bx_od_gcd(a, b);
+    reduced = a / g;
+    return bx_od_safe_mul(reduced, b, out);
+}
+
+static bool bx_od_parse_prefixed_uint(const char* text, uintmax_t* value_out, const char** end_out) {
+    const char* p = text;
+    uintmax_t value = 0u;
+    int base = 10;
+    bool have_digit = false;
+
+    if (text == NULL || value_out == NULL) {
+        return false;
+    }
+
+    if (*p == '+') {
+        p++;
+    }
+
+    if (*p == '\0') {
+        return false;
+    }
+
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        base = 16;
+        p += 2;
+    }
+
+    while (*p != '\0') {
+        unsigned int digit;
+
+        if (*p >= '0' && *p <= '9') {
+            digit = (unsigned int)(*p - '0');
+        }
+        else if (base == 16 && *p >= 'a' && *p <= 'f') {
+            digit = (unsigned int)(*p - 'a') + 10u;
+        }
+        else if (base == 16 && *p >= 'A' && *p <= 'F') {
+            digit = (unsigned int)(*p - 'A') + 10u;
+        }
+        else {
+            break;
+        }
+
+        if (digit >= (unsigned int)base) {
+            break;
+        }
+
+        if (value > (UINTMAX_MAX - (uintmax_t)digit) / (uintmax_t)base) {
+            return false;
+        }
+
+        value = value * (uintmax_t)base + (uintmax_t)digit;
+        have_digit = true;
+        p++;
+    }
+
+    if (!have_digit) {
+        return false;
+    }
+
+    *value_out = value;
+    if (end_out != NULL) {
+        *end_out = p;
+    }
+    return true;
+}
+
+static bool bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_out) {
+    char prefix;
+    unsigned int power = 0u;
+    unsigned int base = 0u;
+    uintmax_t value = 1u;
+
+    if (suffix == NULL || multiplier_out == NULL) {
+        return false;
+    }
+
+    if (suffix[0] == '\0') {
+        *multiplier_out = 1u;
+        return true;
+    }
+
+    if (strcmp(suffix, "b") == 0) {
+        *multiplier_out = 512u;
+        return true;
+    }
+
+    prefix = suffix[0];
+    if (prefix == 'k') {
+        prefix = 'K';
+    }
+
+    switch (prefix) {
+        case 'K':
+            power = 1u;
+            break;
+        case 'M':
+            power = 2u;
+            break;
+        case 'G':
+            power = 3u;
+            break;
+        case 'T':
+            power = 4u;
+            break;
+        case 'P':
+            power = 5u;
+            break;
+        case 'E':
+            power = 6u;
+            break;
+        case 'Z':
+            power = 7u;
+            break;
+        case 'Y':
+            power = 8u;
+            break;
+        case 'R':
+            power = 9u;
+            break;
+        case 'Q':
+            power = 10u;
+            break;
+        default:
+            return false;
+    }
+
+    if (suffix[1] == '\0') {
+        base = 1024u;
+    }
+    else if ((suffix[1] == 'B' || suffix[1] == 'b') && suffix[2] == '\0') {
+        base = 1000u;
+    }
+    else if ((suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b') && suffix[3] == '\0') {
+        base = 1024u;
+    }
+    else {
+        return false;
+    }
+
+    for (unsigned int i = 0u; i < power; i++) {
+        if (!bx_od_safe_mul(value, (uintmax_t)base, &value)) {
+            return false;
+        }
+    }
+
+    *multiplier_out = value;
+    return true;
+}
+
+static bool bx_od_parse_bytes(const char* text, uintmax_t* value_out) {
+    uintmax_t value;
+    uintmax_t multiplier;
+    const char* suffix;
+
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    if (text[0] == '-') {
+        return false;
+    }
+
+    if (!bx_od_parse_prefixed_uint(text, &value, &suffix)) {
+        return false;
+    }
+
+    if (!bx_od_parse_byte_suffix(suffix, &multiplier)) {
+        return false;
+    }
+
+    return bx_od_safe_mul(value, multiplier, value_out);
+}
+
+static bool bx_od_parse_traditional_offset(const char* text, uintmax_t* value_out) {
+    const char* p = text;
+    size_t len;
+    bool use_decimal = false;
+    bool use_blocks = false;
+    uintmax_t value = 0u;
+
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    if (*p == '+') {
+        p++;
+    }
+
+    if (*p == '\0') {
+        return false;
+    }
+
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+        const char* end = NULL;
+
+        if (!bx_od_parse_prefixed_uint(p, &value, &end)) {
+            return false;
+        }
+
+        if (end == NULL || *end != '\0') {
+            return false;
+        }
+
+        *value_out = value;
+        return true;
+    }
+
+    len = strlen(p);
+    if (len == 0u) {
+        return false;
+    }
+
+    if (p[len - 1u] == 'b') {
+        use_blocks = true;
+        len--;
+    }
+
+    if (len > 0u && p[len - 1u] == '.') {
+        use_decimal = true;
+        len--;
+    }
+
+    if (len == 0u) {
+        return false;
+    }
+
+    if (use_decimal) {
+        for (size_t i = 0u; i < len; i++) {
+            unsigned int digit;
+
+            if (p[i] < '0' || p[i] > '9') {
+                return false;
+            }
+
+            digit = (unsigned int)(p[i] - '0');
+            if (value > (UINTMAX_MAX - (uintmax_t)digit) / 10u) {
+                return false;
+            }
+            value = value * 10u + (uintmax_t)digit;
+        }
+    }
+    else {
+        for (size_t i = 0u; i < len; i++) {
+            unsigned int digit;
+
+            if (p[i] < '0' || p[i] > '7') {
+                return false;
+            }
+
+            digit = (unsigned int)(p[i] - '0');
+            if (value > (UINTMAX_MAX - (uintmax_t)digit) / 8u) {
+                return false;
+            }
+            value = value * 8u + (uintmax_t)digit;
+        }
+    }
+
+    if (use_blocks && !bx_od_safe_mul(value, 512u, &value)) {
+        return false;
+    }
+
+    *value_out = value;
+    return true;
+}
+
+static bool bx_od_parse_decimal_size(const char* text, size_t len, size_t* value_out) {
+    size_t value = 0u;
+
+    if (text == NULL || len == 0u || value_out == NULL) {
+        return false;
+    }
+
+    for (size_t i = 0u; i < len; i++) {
+        unsigned int digit;
+
+        if (text[i] < '0' || text[i] > '9') {
+            return false;
+        }
+
+        digit = (unsigned int)(text[i] - '0');
+        if (value > (SIZE_MAX - (size_t)digit) / 10u) {
+            return false;
+        }
+
+        value = value * 10u + (size_t)digit;
+    }
+
+    *value_out = value;
+    return true;
+}
+
+static bool bx_od_integral_size_supported(size_t size) {
+    return size == 1u || size == 2u || size == 4u || size == 8u;
+}
+
+static bool bx_od_float_size_supported(size_t size) {
+    return size == 2u || size == sizeof(float) || size == sizeof(double) || size == sizeof(long double);
+}
+
+static bool bx_od_add_format(struct bx_od_options* options, const struct bx_od_format* format) {
+    size_t new_capacity;
+
+    if (options->format_count == options->format_capacity) {
+        new_capacity = (options->format_capacity == 0u) ? 8u : options->format_capacity * 2u;
+        options->formats = xrealloc(options->formats, new_capacity * sizeof(*options->formats));
+        options->format_capacity = new_capacity;
+    }
+
+    options->formats[options->format_count++] = *format;
+    return true;
+}
+
+static bool bx_od_append_format(struct bx_od_options* options,
+                                enum bx_od_format_kind kind,
+                                enum bx_od_float_mode float_mode,
+                                size_t unit_size,
+                                bool char_suffix) {
+    struct bx_od_format format;
+
+    memset(&format, 0, sizeof(format));
+    format.kind = kind;
+    format.float_mode = float_mode;
+    format.unit_size = unit_size;
+    format.char_suffix = char_suffix;
+
+    return bx_od_add_format(options, &format);
+}
+
+static bool bx_od_append_named_shortcut(struct bx_od_options* options, int c) {
+    switch (c) {
+        case 'a':
+            return bx_od_append_format(options, BX_OD_FMT_NAMED_CHAR, BX_OD_FLOAT_NATIVE, 1u, false);
+        case 'b':
+            return bx_od_append_format(options, BX_OD_FMT_OCTAL, BX_OD_FLOAT_NATIVE, 1u, false);
+        case 'c':
+            return bx_od_append_format(options, BX_OD_FMT_CHAR, BX_OD_FLOAT_NATIVE, 1u, false);
+        case 'd':
+            return bx_od_append_format(options, BX_OD_FMT_UNSIGNED_DECIMAL, BX_OD_FLOAT_NATIVE, 2u, false);
+        case 'f':
+            return bx_od_append_format(options, BX_OD_FMT_FLOAT, BX_OD_FLOAT_NATIVE, sizeof(float), false);
+        case 'i':
+            return bx_od_append_format(options, BX_OD_FMT_SIGNED_DECIMAL, BX_OD_FLOAT_NATIVE, sizeof(int), false);
+        case 'l':
+            return bx_od_append_format(options, BX_OD_FMT_SIGNED_DECIMAL, BX_OD_FLOAT_NATIVE, sizeof(long), false);
+        case 'o':
+            return bx_od_append_format(options, BX_OD_FMT_OCTAL, BX_OD_FLOAT_NATIVE, 2u, false);
+        case 's':
+            return bx_od_append_format(options, BX_OD_FMT_SIGNED_DECIMAL, BX_OD_FLOAT_NATIVE, 2u, false);
+        case 'x':
+            return bx_od_append_format(options, BX_OD_FMT_HEXADECIMAL, BX_OD_FLOAT_NATIVE, 2u, false);
+        default:
+            return false;
+    }
+}
+
+static bool bx_od_parse_type_string(const char* text, struct bx_od_options* options, struct bx_diag_ctx* diag) {
+    const char* p = text;
+
+    if (text == NULL || text[0] == '\0') {
+        bx_diag(diag, "invalid type string '%s'", text ? text : "");
+        return false;
+    }
+
+    while (*p != '\0') {
+        enum bx_od_format_kind kind;
+        enum bx_od_float_mode float_mode = BX_OD_FLOAT_NATIVE;
+        size_t unit_size = 0u;
+        bool char_suffix = false;
+        char type = *p++;
+
+        switch (type) {
+            case 'a':
+                kind = BX_OD_FMT_NAMED_CHAR;
+                unit_size = 1u;
+                break;
+            case 'c':
+                kind = BX_OD_FMT_CHAR;
+                unit_size = 1u;
+                break;
+            case 'd':
+            case 'o':
+            case 'u':
+            case 'x': {
+                const char* digits_start;
+                size_t digits_len;
+
+                if (type == 'd') {
+                    kind = BX_OD_FMT_SIGNED_DECIMAL;
+                }
+                else if (type == 'o') {
+                    kind = BX_OD_FMT_OCTAL;
+                }
+                else if (type == 'u') {
+                    kind = BX_OD_FMT_UNSIGNED_DECIMAL;
+                }
+                else {
+                    kind = BX_OD_FMT_HEXADECIMAL;
+                }
+
+                unit_size = sizeof(int);
+                if (*p == 'C') {
+                    unit_size = sizeof(char);
+                    p++;
+                }
+                else if (*p == 'S') {
+                    unit_size = sizeof(short);
+                    p++;
+                }
+                else if (*p == 'I') {
+                    unit_size = sizeof(int);
+                    p++;
+                }
+                else if (*p == 'L') {
+                    unit_size = sizeof(long);
+                    p++;
+                }
+                else if (isdigit((unsigned char)*p)) {
+                    digits_start = p;
+                    digits_len = strspn(p, "0123456789");
+                    if (!bx_od_parse_decimal_size(digits_start, digits_len, &unit_size)) {
+                        bx_diag(diag, "invalid type string '%s'", text);
+                        return false;
+                    }
+                    p += digits_len;
+                }
+
+                if (!bx_od_integral_size_supported(unit_size)) {
+                    bx_diag(diag, "invalid type string '%s'", text);
+                    return false;
+                }
+                break;
+            }
+            case 'f': {
+                const char* digits_start;
+                size_t digits_len;
+
+                kind = BX_OD_FMT_FLOAT;
+                unit_size = sizeof(double);
+                if (*p == 'B') {
+                    float_mode = BX_OD_FLOAT_BFLOAT16;
+                    unit_size = 2u;
+                    p++;
+                }
+                else if (*p == 'H') {
+                    float_mode = BX_OD_FLOAT_HALF;
+                    unit_size = 2u;
+                    p++;
+                }
+                else if (*p == 'F') {
+                    float_mode = BX_OD_FLOAT_NATIVE;
+                    unit_size = sizeof(float);
+                    p++;
+                }
+                else if (*p == 'D') {
+                    float_mode = BX_OD_FLOAT_NATIVE;
+                    unit_size = sizeof(double);
+                    p++;
+                }
+                else if (*p == 'L') {
+                    float_mode = BX_OD_FLOAT_NATIVE;
+                    unit_size = sizeof(long double);
+                    p++;
+                }
+                else if (isdigit((unsigned char)*p)) {
+                    digits_start = p;
+                    digits_len = strspn(p, "0123456789");
+                    if (!bx_od_parse_decimal_size(digits_start, digits_len, &unit_size)) {
+                        bx_diag(diag, "invalid type string '%s'", text);
+                        return false;
+                    }
+                    p += digits_len;
+                    if (unit_size == 2u) {
+                        float_mode = BX_OD_FLOAT_HALF;
+                    }
+                }
+
+                if (!bx_od_float_size_supported(unit_size)) {
+                    bx_diag(diag, "invalid type string '%s'", text);
+                    return false;
+                }
+                break;
+            }
+            default:
+                bx_diag(diag, "invalid type string '%s'", text);
+                return false;
+        }
+
+        if (*p == 'z') {
+            char_suffix = true;
+            p++;
+        }
+
+        if (!bx_od_append_format(options, kind, float_mode, unit_size, char_suffix)) {
+            bx_diag(diag, "out of memory");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static size_t bx_od_unsigned_digits(size_t unit_size) {
+    switch (unit_size) {
+        case 1u:
+            return 3u;
+        case 2u:
+            return 5u;
+        case 4u:
+            return 10u;
+        case 8u:
+            return 20u;
+        default:
+            return 20u;
+    }
+}
+
+static size_t bx_od_signed_digits(size_t unit_size) {
+    switch (unit_size) {
+        case 1u:
+            return 4u;
+        case 2u:
+            return 6u;
+        case 4u:
+            return 11u;
+        case 8u:
+            return 20u;
+        default:
+            return 20u;
+    }
+}
+
+static size_t bx_od_float_digits(size_t unit_size) {
+    if (unit_size <= 4u) {
+        return 15u;
+    }
+
+    if (unit_size == 8u) {
+        return 24u;
+    }
+
+    return 29u;
+}
+
+static size_t bx_od_intrinsic_width(const struct bx_od_format* format) {
+    switch (format->kind) {
+        case BX_OD_FMT_NAMED_CHAR:
+        case BX_OD_FMT_CHAR:
+            return 3u;
+        case BX_OD_FMT_SIGNED_DECIMAL:
+            return bx_od_signed_digits(format->unit_size);
+        case BX_OD_FMT_UNSIGNED_DECIMAL:
+            return bx_od_unsigned_digits(format->unit_size);
+        case BX_OD_FMT_OCTAL:
+            return (format->unit_size * 8u + 2u) / 3u;
+        case BX_OD_FMT_HEXADECIMAL:
+            return format->unit_size * 2u;
+        case BX_OD_FMT_FLOAT:
+            return bx_od_float_digits(format->unit_size);
+    }
+
+    return 3u;
+}
+
+static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag_ctx* diag) {
+    uintmax_t width_multiple = 1u;
+    uintmax_t adjusted_width;
+
+    if (options->strings_mode) {
+        return true;
+    }
+
+    if (options->width > SIZE_MAX) {
+        bx_diag(diag, "invalid width '%ju'", options->width);
+        return false;
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        options->formats[i].intrinsic_width = bx_od_intrinsic_width(&options->formats[i]);
+        options->formats[i].cell_width = options->formats[i].intrinsic_width;
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        size_t max_width = options->formats[i].intrinsic_width;
+
+        for (size_t j = 0u; j < options->format_count; j++) {
+            if (options->formats[j].unit_size == options->formats[i].unit_size &&
+                options->formats[j].intrinsic_width > max_width) {
+                max_width = options->formats[j].intrinsic_width;
+            }
+        }
+
+        options->formats[i].cell_width = max_width;
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        if (!bx_od_lcm(width_multiple, (uintmax_t)options->formats[i].unit_size, &width_multiple)) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+    }
+
+    if (!options->width_specified) {
+        if (options->width < width_multiple) {
+            options->width = width_multiple;
+        }
+        return true;
+    }
+
+    if (options->width == 0u) {
+        bx_diag(diag, "invalid width '%ju'", options->width);
+        return false;
+    }
+
+    adjusted_width = options->width;
+    if (adjusted_width < width_multiple) {
+        adjusted_width = width_multiple;
+    }
+    else if (adjusted_width % width_multiple != 0u) {
+        adjusted_width -= adjusted_width % width_multiple;
+    }
+
+    if (adjusted_width != options->width) {
+        bx_od_warn(options->progname, "invalid width %ju; using %ju instead", options->width, adjusted_width);
+        options->width = adjusted_width;
+    }
+
+    return true;
+}
+
+static void bx_od_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
+    fprintf(stream, "  or:  %s [-abcdfilosx]... [FILE] [[+]OFFSET[.][b]]\n", progname);
+    fprintf(stream, "  or:  %s --traditional [OPTION]... [FILE] [[+]OFFSET[.][b] [+][LABEL][.][b]]\n", progname);
+    fprintf(stream, "\n");
+    fprintf(stream, "Write an unambiguous representation, octal bytes by default,\n");
+    fprintf(stream, "of FILE to standard output.  With more than one FILE argument,\n");
+    fprintf(stream, "concatenate them in the listed order to form the input.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "With no FILE, or when FILE is -, read standard input.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "If first and second call formats both apply, the second format is assumed\n");
+    fprintf(stream, "if the last operand begins with + or (if there are 2 operands) a digit.\n");
+    fprintf(stream, "An OFFSET operand means -j OFFSET.  LABEL is the pseudo-address\n");
+    fprintf(stream, "at first byte printed, incremented when dump is progressing.\n");
+    fprintf(stream, "For OFFSET and LABEL, a 0x or 0X prefix indicates hexadecimal;\n");
+    fprintf(stream, "suffixes may be . for decimal and b for multiply by 512.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Mandatory arguments to long options are mandatory for short options too.\n");
+    fprintf(stream, "  -A, --address-radix=RADIX\n");
+    fprintf(stream, "         output format for file offsets;\n");
+    fprintf(stream, "         RADIX is one of [doxn], for Decimal, Octal, Hex or None\n");
+    fprintf(stream, "      --endian={big|little}\n");
+    fprintf(stream, "         swap input bytes according the specified order\n");
+    fprintf(stream, "  -j, --skip-bytes=BYTES\n");
+    fprintf(stream, "         skip BYTES input bytes first\n");
+    fprintf(stream, "  -N, --read-bytes=BYTES\n");
+    fprintf(stream, "         limit dump to BYTES input bytes\n");
+    fprintf(stream, "  -S BYTES, --strings[=BYTES]\n");
+    fprintf(stream, "         show only NUL terminated strings\n");
+    fprintf(stream, "         of at least BYTES (default 3) printable characters\n");
+    fprintf(stream, "  -t, --format=TYPE\n");
+    fprintf(stream, "         select output format or formats\n");
+    fprintf(stream, "  -v, --output-duplicates\n");
+    fprintf(stream, "         do not use * to mark line suppression\n");
+    fprintf(stream, "  -w[BYTES], --width[=BYTES]\n");
+    fprintf(stream, "         output BYTES bytes per output line;\n");
+    fprintf(stream, "         32 is implied when BYTES is not specified\n");
+    fprintf(stream, "      --traditional\n");
+    fprintf(stream, "         accept arguments in third form above\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Traditional format specifications may be intermixed; they accumulate:\n");
+    fprintf(stream, "  -a   same as -t a,  select named characters, ignoring high-order bit\n");
+    fprintf(stream, "  -b   same as -t o1, select octal bytes\n");
+    fprintf(stream, "  -c   same as -t c,  select printable characters or backslash escapes\n");
+    fprintf(stream, "  -d   same as -t u2, select unsigned decimal 2-byte units\n");
+    fprintf(stream, "  -f   same as -t fF, select floats\n");
+    fprintf(stream, "  -i   same as -t dI, select decimal ints\n");
+    fprintf(stream, "  -l   same as -t dL, select decimal longs\n");
+    fprintf(stream, "  -o   same as -t o2, select octal 2-byte units\n");
+    fprintf(stream, "  -s   same as -t d2, select decimal 2-byte units\n");
+    fprintf(stream, "  -x   same as -t x2, select hexadecimal 2-byte units\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "TYPE is made up of one or more of these specifications:\n");
+    fprintf(stream, "  a          named character, ignoring high-order bit\n");
+    fprintf(stream, "  c          printable character or backslash escape\n");
+    fprintf(stream, "  d[SIZE]    signed decimal, SIZE bytes per integer\n");
+    fprintf(stream, "  f[SIZE]    floating point, SIZE bytes per float\n");
+    fprintf(stream, "  o[SIZE]    octal, SIZE bytes per integer\n");
+    fprintf(stream, "  u[SIZE]    unsigned decimal, SIZE bytes per integer\n");
+    fprintf(stream, "  x[SIZE]    hexadecimal, SIZE bytes per integer\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "SIZE is a number.  For TYPE in [doux], SIZE may also be C for\n");
+    fprintf(stream, "sizeof(char), S for sizeof(short), I for sizeof(int) or L for\n");
+    fprintf(stream, "sizeof(long).  If TYPE is f, SIZE may also be B for Brain 16 bit,\n");
+    fprintf(stream, "H for Half precision float, F for sizeof(float), D for sizeof(double),\n");
+    fprintf(stream, "or L for sizeof(long double).\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Adding a z suffix to any type displays printable characters at the end of\n");
+    fprintf(stream, "each output line.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "BYTES is hex with 0x or 0X prefix, and may have a multiplier suffix:\n");
+    fprintf(stream, "  b    512\n");
+    fprintf(stream, "  KB   1000\n");
+    fprintf(stream, "  K    1024\n");
+    fprintf(stream, "  MB   1000*1000\n");
+    fprintf(stream, "  M    1024*1024\n");
+    fprintf(stream, "and so on for G, T, P, E, Z, Y, R, Q.\n");
+    fprintf(stream, "Binary prefixes can be used, too: KiB=K, MiB=M, and so on.\n");
+}
+
+static void bx_od_print_version(const char* progname) {
+    printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+    enum {
+        BX_OD_OPT_HELP = 256,
+        BX_OD_OPT_VERSION,
+        BX_OD_OPT_ENDIAN,
+        BX_OD_OPT_STRINGS,
+        BX_OD_OPT_TRADITIONAL,
+    };
+
+    static const struct option long_options[] = {
+        {"address-radix", required_argument, NULL, 'A'},
+        {"endian", required_argument, NULL, BX_OD_OPT_ENDIAN},
+        {"skip-bytes", required_argument, NULL, 'j'},
+        {"read-bytes", required_argument, NULL, 'N'},
+        {"strings", optional_argument, NULL, BX_OD_OPT_STRINGS},
+        {"format", required_argument, NULL, 't'},
+        {"output-duplicates", no_argument, NULL, 'v'},
+        {"width", optional_argument, NULL, 'w'},
+        {"traditional", no_argument, NULL, BX_OD_OPT_TRADITIONAL},
+        {"help", no_argument, NULL, BX_OD_OPT_HELP},
+        {"version", no_argument, NULL, BX_OD_OPT_VERSION},
+        {NULL, 0, NULL, 0},
+    };
+
+    memset(options, 0, sizeof(*options));
+    options->progname = "od";
+    options->address_radix = 'o';
+    options->width = 16u;
+    options->strings_min = 3u;
+    options->endian_mode = BX_OD_ENDIAN_NATIVE;
+    diag->progname = options->progname;
+
+    opterr = 0;
+    optind = 1;
+
+    while (true) {
+        int option_index = 0;
+        int c = getopt_long(argc, argv, "A:j:N:S:t:vw::abcdfilosx", long_options, &option_index);
+
+        if (c == -1) {
+            break;
+        }
+
+        switch (c) {
+            case 'A':
+                if (optarg == NULL || optarg[0] == '\0' || optarg[1] != '\0' ||
+                    (optarg[0] != 'd' && optarg[0] != 'o' && optarg[0] != 'x' && optarg[0] != 'n')) {
+                    bx_diag(diag, "invalid radix '%s'", optarg ? optarg : "");
+                    return false;
+                }
+                options->address_radix = optarg[0];
+                options->saw_nontraditional_option = true;
+                break;
+            case BX_OD_OPT_ENDIAN:
+                if (strcmp(optarg, "big") == 0) {
+                    options->endian_mode = BX_OD_ENDIAN_BIG;
+                }
+                else if (strcmp(optarg, "little") == 0) {
+                    options->endian_mode = BX_OD_ENDIAN_LITTLE;
+                }
+                else {
+                    bx_diag(diag, "invalid argument '%s' for '--endian'", optarg);
+                    return false;
+                }
+                options->saw_nontraditional_option = true;
+                break;
+            case 'j':
+                if (!bx_od_parse_bytes(optarg, &options->skip_bytes)) {
+                    bx_diag(diag, "invalid number of bytes to skip: '%s'", optarg);
+                    return false;
+                }
+                options->saw_nontraditional_option = true;
+                break;
+            case 'N':
+                if (!bx_od_parse_bytes(optarg, &options->read_bytes)) {
+                    bx_diag(diag, "invalid number of bytes to read: '%s'", optarg);
+                    return false;
+                }
+                options->read_bytes_set = true;
+                options->saw_nontraditional_option = true;
+                break;
+            case 'S':
+                if (!bx_od_parse_bytes(optarg, &options->strings_min)) {
+                    bx_diag(diag, "invalid -S argument '%s'", optarg);
+                    return false;
+                }
+                options->strings_mode = true;
+                options->saw_nontraditional_option = true;
+                break;
+            case BX_OD_OPT_STRINGS:
+                options->strings_mode = true;
+                if (optarg != NULL) {
+                    if (!bx_od_parse_bytes(optarg, &options->strings_min)) {
+                        bx_diag(diag, "invalid --strings argument '%s'", optarg);
+                        return false;
+                    }
+                }
+                options->saw_nontraditional_option = true;
+                break;
+            case 't':
+                if (!bx_od_parse_type_string(optarg, options, diag)) {
+                    return false;
+                }
+                options->saw_nontraditional_option = true;
+                break;
+            case 'v':
+                options->output_duplicates = true;
+                options->saw_nontraditional_option = true;
+                break;
+            case 'w':
+                if (optarg == NULL) {
+                    options->width = 32u;
+                }
+                else if (!bx_od_parse_bytes(optarg, &options->width)) {
+                    bx_diag(diag, "invalid width '%s'", optarg);
+                    return false;
+                }
+                options->width_specified = true;
+                options->saw_nontraditional_option = true;
+                break;
+            case 'a':
+            case 'b':
+            case 'c':
+            case 'd':
+            case 'f':
+            case 'i':
+            case 'l':
+            case 'o':
+            case 's':
+            case 'x':
+                if (!bx_od_append_named_shortcut(options, c)) {
+                    bx_diag(diag, "out of memory");
+                    return false;
+                }
+                break;
+            case BX_OD_OPT_TRADITIONAL:
+                options->traditional_mode = true;
+                break;
+            case BX_OD_OPT_HELP:
+                options->show_help = true;
+                *first_operand = optind;
+                return true;
+            case BX_OD_OPT_VERSION:
+                options->show_version = true;
+                *first_operand = optind;
+                return true;
+            case '?':
+            default:
+                if (optind > 0 && optind <= argc) {
+                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
+                }
+                else {
+                    bx_diag(diag, "unrecognized option");
+                }
+                return false;
+        }
+    }
+
+    if (options->strings_mode && options->format_count != 0u) {
+        bx_diag(diag, "no type may be specified when dumping strings");
+        return false;
+    }
+
+    if (!options->strings_mode && options->format_count == 0u) {
+        if (!bx_od_append_format(options, BX_OD_FMT_OCTAL, BX_OD_FLOAT_NATIVE, 2u, false)) {
+            bx_diag(diag, "out of memory");
+            return false;
+        }
+    }
+
+    if (!bx_od_finalize_formats(options, diag)) {
+        return false;
+    }
+
+    *first_operand = optind;
+    return true;
+}
+
+static bool bx_od_is_legacy_offset_candidate(const char* text) {
+    return text != NULL && (text[0] == '+' || isdigit((unsigned char)text[0]));
+}
+
+static bool bx_od_parse_operands(int argc,
+                                 char** argv,
+                                 int first_operand,
+                                 const struct bx_od_options* options,
+                                 struct bx_od_operands* operands,
+                                 struct bx_diag_ctx* diag) {
+    int count = argc - first_operand;
+    const char** files = NULL;
+
+    memset(operands, 0, sizeof(*operands));
+    operands->offset = options->skip_bytes;
+
+    if (count > 0) {
+        files = xmalloc((size_t)count * sizeof(*files));
+        for (int i = 0; i < count; i++) {
+            files[i] = argv[first_operand + i];
+        }
+    }
+
+    if (options->traditional_mode) {
+        uintmax_t value1;
+        uintmax_t value2;
+
+        if (count == 0) {
+            operands->files = files;
+            return true;
+        }
+
+        if (count == 1) {
+            if (bx_od_parse_traditional_offset(files[0], &value1)) {
+                operands->files = files;
+                operands->offset = value1;
+                return true;
+            }
+
+            operands->files = files;
+            operands->file_count = 1u;
+            return true;
+        }
+
+        if (count == 2) {
+            bool first_is_offset = bx_od_parse_traditional_offset(files[0], &value1);
+            bool second_is_offset = bx_od_parse_traditional_offset(files[1], &value2);
+
+            if (first_is_offset && second_is_offset) {
+                operands->files = files;
+                operands->offset = value1;
+                operands->have_label = true;
+                operands->label = value2;
+                return true;
+            }
+
+            if (!first_is_offset && second_is_offset) {
+                operands->files = files;
+                operands->file_count = 1u;
+                operands->offset = value2;
+                return true;
+            }
+
+            bx_od_traditional_extra_operand(diag, files[1]);
+            free((void*)files);
+            return false;
+        }
+
+        if (count == 3) {
+            if (!bx_od_parse_traditional_offset(files[1], &value1) || !bx_od_parse_traditional_offset(files[2], &value2)) {
+                bx_od_traditional_extra_operand(diag, files[1]);
+                free((void*)files);
+                return false;
+            }
+
+            operands->files = files;
+            operands->file_count = 1u;
+            operands->offset = value1;
+            operands->have_label = true;
+            operands->label = value2;
+            return true;
+        }
+
+        bx_od_traditional_extra_operand(diag, files[1]);
+        free((void*)files);
+        return false;
+    }
+
+    if (!options->saw_nontraditional_option && count <= 2) {
+        uintmax_t value;
+
+        if (count == 1 && files[0][0] == '+' && bx_od_parse_traditional_offset(files[0], &value)) {
+            operands->files = files;
+            operands->offset = value;
+            return true;
+        }
+
+        if (count == 2 && bx_od_is_legacy_offset_candidate(files[1]) && bx_od_parse_traditional_offset(files[1], &value)) {
+            operands->files = files;
+            operands->file_count = 1u;
+            operands->offset = value;
+            return true;
+        }
+    }
+
+    operands->files = files;
+    operands->file_count = (size_t)((count > 0) ? count : 0);
+    return true;
+}
+
+static void bx_od_input_init(struct bx_od_input* input,
+                             const struct bx_od_operands* operands,
+                             struct bx_diag_ctx* diag) {
+    memset(input, 0, sizeof(*input));
+    input->files = operands->files;
+    input->file_count = operands->file_count;
+    input->diag = diag;
+}
+
+static bool bx_od_input_open_next(struct bx_od_input* input) {
+    while (true) {
+        if (input->file_count == 0u && input->next_index == 0u) {
+            input->current = stdin;
+            input->current_name = "-";
+            input->current_is_stdin = true;
+            input->next_index = 1u;
+            return true;
+        }
+
+        if (input->next_index >= input->file_count) {
+            return false;
+        }
+
+        input->current_name = input->files[input->next_index++];
+        if (strcmp(input->current_name, "-") == 0) {
+            input->current = stdin;
+            input->current_is_stdin = true;
+            return true;
+        }
+
+        input->current = fopen(input->current_name, "rb");
+        if (input->current != NULL) {
+            input->current_is_stdin = false;
+            return true;
+        }
+
+        bx_diag(input->diag, "%s: %s", input->current_name, strerror(errno));
+    }
+}
+
+static void bx_od_input_close_current(struct bx_od_input* input) {
+    if (input->current != NULL && !input->current_is_stdin) {
+        fclose(input->current);
+    }
+
+    input->current = NULL;
+    input->current_name = NULL;
+    input->current_is_stdin = false;
+}
+
+static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer, size_t count) {
+    size_t total = 0u;
+
+    while (total < count) {
+        size_t nread;
+
+        if (input->current == NULL && !bx_od_input_open_next(input)) {
+            break;
+        }
+
+        nread = fread(buffer + total, 1u, count - total, input->current);
+        if (nread > 0u) {
+            total += nread;
+            continue;
+        }
+
+        if (ferror(input->current)) {
+            bx_diag(input->diag, "%s: %s", input->current_name, strerror(errno));
+            clearerr(input->current);
+        }
+
+        bx_od_input_close_current(input);
+    }
+
+    return total;
+}
+
+static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count) {
+    unsigned char discard[8192];
+
+    while (count > 0u) {
+        size_t chunk = sizeof(discard);
+        size_t nread;
+
+        if (count < (uintmax_t)chunk) {
+            chunk = (size_t)count;
+        }
+
+        nread = bx_od_input_read(input, discard, chunk);
+        if (nread == 0u) {
+            return false;
+        }
+
+        count -= (uintmax_t)nread;
+    }
+
+    return true;
+}
+
+static void bx_od_format_address_component(uintmax_t value, char radix, char* buffer, size_t buffer_size) {
+    char raw[128];
+    size_t min_width = (radix == 'x') ? 6u : 7u;
+    size_t raw_len;
+    size_t zeros;
+    size_t pos = 0u;
+
+    if (radix == 'd') {
+        snprintf(raw, sizeof(raw), "%" PRIuMAX, value);
+    }
+    else if (radix == 'x') {
+        snprintf(raw, sizeof(raw), "%" PRIxMAX, value);
+    }
+    else {
+        snprintf(raw, sizeof(raw), "%" PRIoMAX, value);
+    }
+
+    raw_len = strlen(raw);
+    if (raw_len >= min_width) {
+        snprintf(buffer, buffer_size, "%s", raw);
+        return;
+    }
+
+    zeros = min_width - raw_len;
+    while (pos < zeros && pos + 1u < buffer_size) {
+        buffer[pos++] = '0';
+    }
+
+    if (pos < buffer_size) {
+        snprintf(buffer + pos, buffer_size - pos, "%s", raw);
+    }
+}
+
+static void bx_od_build_prefix(char* buffer,
+                               size_t buffer_size,
+                               char radix,
+                               uintmax_t address,
+                               bool have_label,
+                               uintmax_t label) {
+    char address_buf[128];
+    char label_buf[128];
+
+    buffer[0] = '\0';
+
+    if (radix != 'n') {
+        bx_od_format_address_component(address, radix, address_buf, sizeof(address_buf));
+        snprintf(buffer, buffer_size, "%s", address_buf);
+    }
+
+    if (have_label) {
+        bx_od_format_address_component(label, (radix == 'n') ? 'o' : radix, label_buf, sizeof(label_buf));
+        if (radix != 'n') {
+            size_t len = strlen(buffer);
+            snprintf(buffer + len, (len < buffer_size) ? buffer_size - len : 0u, " (%s)", label_buf);
+        }
+        else {
+            snprintf(buffer, buffer_size, "(%s)", label_buf);
+        }
+    }
+}
+
+static uintmax_t bx_od_unpack_uint(const unsigned char* bytes,
+                                   size_t bytes_available,
+                                   size_t unit_size,
+                                   enum bx_od_endian_mode endian_mode) {
+    enum bx_od_endian_mode effective = endian_mode;
+    uintmax_t value = 0u;
+
+    if (effective == BX_OD_ENDIAN_NATIVE) {
+        effective = bx_od_host_is_little_endian() ? BX_OD_ENDIAN_LITTLE : BX_OD_ENDIAN_BIG;
+    }
+
+    if (effective == BX_OD_ENDIAN_LITTLE) {
+        for (size_t i = 0u; i < unit_size; i++) {
+            unsigned int byte = (i < bytes_available) ? bytes[i] : 0u;
+            value |= ((uintmax_t)byte) << (i * 8u);
+        }
+    }
+    else {
+        for (size_t i = 0u; i < unit_size; i++) {
+            unsigned int byte = (i < bytes_available) ? bytes[i] : 0u;
+            value = (value << 8u) | (uintmax_t)byte;
+        }
+    }
+
+    return value;
+}
+
+static intmax_t bx_od_unpack_int(const unsigned char* bytes,
+                                 size_t bytes_available,
+                                 size_t unit_size,
+                                 enum bx_od_endian_mode endian_mode) {
+    uintmax_t uvalue = bx_od_unpack_uint(bytes, bytes_available, unit_size, endian_mode);
+
+    if (unit_size == 8u) {
+        int64_t value = (int64_t)(uint64_t)uvalue;
+        return (intmax_t)value;
+    }
+
+    if (unit_size == 4u) {
+        int32_t value = (int32_t)(uint32_t)uvalue;
+        return (intmax_t)value;
+    }
+
+    if (unit_size == 2u) {
+        int16_t value = (int16_t)(uint16_t)uvalue;
+        return (intmax_t)value;
+    }
+
+    return (intmax_t)(int8_t)(uint8_t)uvalue;
+}
+
+static void bx_od_prepare_host_bytes(unsigned char* out,
+                                     size_t unit_size,
+                                     const unsigned char* bytes,
+                                     size_t bytes_available,
+                                     enum bx_od_endian_mode endian_mode) {
+    enum bx_od_endian_mode effective = endian_mode;
+    bool host_little = bx_od_host_is_little_endian();
+    bool same_order;
+
+    if (effective == BX_OD_ENDIAN_NATIVE) {
+        effective = host_little ? BX_OD_ENDIAN_LITTLE : BX_OD_ENDIAN_BIG;
+    }
+
+    same_order = (host_little && effective == BX_OD_ENDIAN_LITTLE) || (!host_little && effective == BX_OD_ENDIAN_BIG);
+    memset(out, 0, unit_size);
+
+    for (size_t i = 0u; i < bytes_available && i < unit_size; i++) {
+        if (same_order) {
+            out[i] = bytes[i];
+        }
+        else {
+            out[unit_size - 1u - i] = bytes[i];
+        }
+    }
+}
+
+static double bx_od_half_to_double(uint16_t bits) {
+    unsigned int sign = (bits >> 15) & 1u;
+    unsigned int exponent = (bits >> 10) & 0x1fu;
+    unsigned int fraction = bits & 0x3ffu;
+    double value;
+
+    if (exponent == 0u) {
+        if (fraction == 0u) {
+            value = 0.0;
+        }
+        else {
+            value = ldexp((double)fraction, -24);
+        }
+    }
+    else if (exponent == 0x1fu) {
+        value = (fraction == 0u) ? INFINITY : NAN;
+    }
+    else {
+        value = ldexp(1.0 + ((double)fraction / 1024.0), (int)exponent - 15);
+    }
+
+    return sign ? -value : value;
+}
+
+static bool bx_od_float_bits_equal(float a, float b) {
+    uint32_t ua = 0u;
+    uint32_t ub = 0u;
+
+    memcpy(&ua, &a, sizeof(ua));
+    memcpy(&ub, &b, sizeof(ub));
+    return ua == ub;
+}
+
+static bool bx_od_double_bits_equal(double a, double b) {
+    uint64_t ua = 0u;
+    uint64_t ub = 0u;
+
+    memcpy(&ua, &a, sizeof(ua));
+    memcpy(&ub, &b, sizeof(ub));
+    return ua == ub;
+}
+
+static bool bx_od_long_double_bits_equal(long double a, long double b) {
+    return memcmp(&a, &b, sizeof(a)) == 0;
+}
+
+static void bx_od_format_shortest_float(float value, char* out, size_t out_size) {
+    char candidate[128];
+#ifdef FLT_DECIMAL_DIG
+    const int max_precision = FLT_DECIMAL_DIG;
+#else
+    const int max_precision = 9;
+#endif
+
+    if (isnan(value) || isinf(value)) {
+        snprintf(out, out_size, "%g", (double)value);
+        return;
+    }
+
+    for (int precision = 1; precision <= max_precision; precision++) {
+        char* end = NULL;
+        float parsed;
+
+        snprintf(candidate, sizeof(candidate), "%.*g", precision, (double)value);
+        errno = 0;
+        parsed = strtof(candidate, &end);
+        if (errno == 0 && end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value)) {
+            snprintf(out, out_size, "%s", candidate);
+            return;
+        }
+    }
+
+    snprintf(out, out_size, "%.*g", max_precision, (double)value);
+}
+
+static void bx_od_format_shortest_double(double value, char* out, size_t out_size) {
+    char candidate[128];
+#ifdef DBL_DECIMAL_DIG
+    const int max_precision = DBL_DECIMAL_DIG;
+#else
+    const int max_precision = 17;
+#endif
+
+    if (!isfinite(value)) {
+        snprintf(out, out_size, "%g", value);
+        return;
+    }
+
+    for (int precision = 1; precision <= max_precision; precision++) {
+        char* end = NULL;
+        double parsed;
+
+        snprintf(candidate, sizeof(candidate), "%.*g", precision, value);
+        errno = 0;
+        parsed = strtod(candidate, &end);
+        if (errno == 0 && end != NULL && *end == '\0' && bx_od_double_bits_equal(parsed, value)) {
+            snprintf(out, out_size, "%s", candidate);
+            return;
+        }
+    }
+
+    snprintf(out, out_size, "%.*g", max_precision, value);
+}
+
+static void bx_od_format_shortest_long_double(long double value, char* out, size_t out_size) {
+    char candidate[160];
+#ifdef LDBL_DECIMAL_DIG
+    const int max_precision = LDBL_DECIMAL_DIG;
+#elif defined(DECIMAL_DIG)
+    const int max_precision = DECIMAL_DIG;
+#else
+    const int max_precision = 21;
+#endif
+
+    if (isnan(value) || isinf(value)) {
+        snprintf(out, out_size, "%Lg", value);
+        return;
+    }
+
+    for (int precision = 1; precision <= max_precision; precision++) {
+        char* end = NULL;
+        long double parsed;
+
+        snprintf(candidate, sizeof(candidate), "%.*Lg", precision, value);
+        errno = 0;
+        parsed = strtold(candidate, &end);
+        if (errno == 0 && end != NULL && *end == '\0' && bx_od_long_double_bits_equal(parsed, value)) {
+            snprintf(out, out_size, "%s", candidate);
+            return;
+        }
+    }
+
+    snprintf(out, out_size, "%.*Lg", max_precision, value);
+}
+
+static void bx_od_render_named_char(unsigned char byte, char* out, size_t out_size) {
+    static const char* const names[33] = {
+        "nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+        " bs", " ht", " nl", " vt", " ff", " cr", " so", " si",
+        "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+        "can", " em", "sub", "esc", " fs", " gs", " rs", " us",
+        " sp",
+    };
+    unsigned char value = (unsigned char)(byte & 0x7fu);
+
+    if (value <= 32u) {
+        snprintf(out, out_size, "%s", names[value]);
+        return;
+    }
+
+    if (value == 127u) {
+        snprintf(out, out_size, "del");
+        return;
+    }
+
+    if (isprint(value)) {
+        snprintf(out, out_size, "%c", value);
+        return;
+    }
+
+    snprintf(out, out_size, "%03o", value);
+}
+
+static void bx_od_render_char(unsigned char byte, char* out, size_t out_size) {
+    switch (byte) {
+        case '\0':
+            snprintf(out, out_size, "\\0");
+            break;
+        case '\a':
+            snprintf(out, out_size, "\\a");
+            break;
+        case '\b':
+            snprintf(out, out_size, "\\b");
+            break;
+        case '\t':
+            snprintf(out, out_size, "\\t");
+            break;
+        case '\n':
+            snprintf(out, out_size, "\\n");
+            break;
+        case '\v':
+            snprintf(out, out_size, "\\v");
+            break;
+        case '\f':
+            snprintf(out, out_size, "\\f");
+            break;
+        case '\r':
+            snprintf(out, out_size, "\\r");
+            break;
+        default:
+            if (isprint(byte)) {
+                snprintf(out, out_size, "%c", byte);
+            }
+            else {
+                snprintf(out, out_size, "%03o", byte);
+            }
+            break;
+    }
+}
+
+static bool bx_od_render_token(const struct bx_od_format* format,
+                               const unsigned char* bytes,
+                               size_t bytes_available,
+                               enum bx_od_endian_mode endian_mode,
+                               char* out,
+                               size_t out_size) {
+    switch (format->kind) {
+        case BX_OD_FMT_NAMED_CHAR:
+            bx_od_render_named_char(bytes[0], out, out_size);
+            return true;
+        case BX_OD_FMT_CHAR:
+            bx_od_render_char(bytes[0], out, out_size);
+            return true;
+        case BX_OD_FMT_SIGNED_DECIMAL:
+            snprintf(out, out_size, "%" PRIdMAX,
+                     bx_od_unpack_int(bytes, bytes_available, format->unit_size, endian_mode));
+            return true;
+        case BX_OD_FMT_UNSIGNED_DECIMAL:
+            snprintf(out, out_size, "%" PRIuMAX,
+                     bx_od_unpack_uint(bytes, bytes_available, format->unit_size, endian_mode));
+            return true;
+        case BX_OD_FMT_OCTAL:
+            snprintf(out, out_size, "%0*" PRIoMAX, (int)format->intrinsic_width,
+                     bx_od_unpack_uint(bytes, bytes_available, format->unit_size, endian_mode));
+            return true;
+        case BX_OD_FMT_HEXADECIMAL:
+            snprintf(out, out_size, "%0*" PRIxMAX, (int)format->intrinsic_width,
+                     bx_od_unpack_uint(bytes, bytes_available, format->unit_size, endian_mode));
+            return true;
+        case BX_OD_FMT_FLOAT: {
+            unsigned char host_bytes[sizeof(long double)];
+
+            bx_od_prepare_host_bytes(host_bytes, format->unit_size, bytes, bytes_available, endian_mode);
+
+            if (format->float_mode == BX_OD_FLOAT_HALF) {
+                uint16_t raw = 0u;
+                float value;
+
+                memcpy(&raw, host_bytes, sizeof(raw));
+                value = (float)bx_od_half_to_double(raw);
+                bx_od_format_shortest_float(value, out, out_size);
+                return true;
+            }
+
+            if (format->float_mode == BX_OD_FLOAT_BFLOAT16) {
+                uint16_t raw = 0u;
+                uint32_t bits = 0u;
+                float value = 0.0f;
+
+                memcpy(&raw, host_bytes, sizeof(raw));
+                bits = ((uint32_t)raw) << 16u;
+                memcpy(&value, &bits, sizeof(value));
+                bx_od_format_shortest_float(value, out, out_size);
+                return true;
+            }
+
+            if (format->unit_size == sizeof(float)) {
+                float value = 0.0f;
+                memcpy(&value, host_bytes, sizeof(value));
+                bx_od_format_shortest_float(value, out, out_size);
+                return true;
+            }
+
+            if (format->unit_size == sizeof(double)) {
+                double value = 0.0;
+                memcpy(&value, host_bytes, sizeof(value));
+                bx_od_format_shortest_double(value, out, out_size);
+                return true;
+            }
+
+            if (format->unit_size == sizeof(long double)) {
+                long double value = 0.0L;
+                memcpy(&value, host_bytes, sizeof(value));
+                bx_od_format_shortest_long_double(value, out, out_size);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    return false;
+}
+
+static void bx_od_print_ascii_trailer(const unsigned char* buffer, size_t size) {
+    fputs("  >", stdout);
+    for (size_t i = 0u; i < size; i++) {
+        unsigned char ch = buffer[i];
+        fputc(isprint(ch) ? (int)ch : '.', stdout);
+    }
+    fputc('<', stdout);
+}
+
+static bool bx_od_print_block(const struct bx_od_options* options,
+                              const unsigned char* buffer,
+                              size_t size,
+                              uintmax_t address,
+                              bool have_label,
+                              uintmax_t label) {
+    char prefix[256];
+    char token[256];
+    size_t prefix_len;
+    size_t min_unit = 0u;
+    int base_slot_width = 0;
+
+    bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
+    prefix_len = strlen(prefix);
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        if (min_unit == 0u || options->formats[i].unit_size < min_unit) {
+            min_unit = options->formats[i].unit_size;
+        }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        if (options->formats[i].unit_size == min_unit) {
+            int slot = (int)options->formats[i].cell_width + 1;
+            if (slot > base_slot_width) {
+                base_slot_width = slot;
+            }
+        }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        const struct bx_od_format* format = &options->formats[i];
+        int slot_width = base_slot_width * (int)(format->unit_size / min_unit);
+
+        if (i == 0u) {
+            fputs(prefix, stdout);
+        }
+        else {
+            for (size_t j = 0u; j < prefix_len; j++) {
+                fputc(' ', stdout);
+            }
+        }
+
+        for (size_t pos = 0u; pos < size; pos += format->unit_size) {
+            size_t bytes_available = format->unit_size;
+
+            if (bytes_available > size - pos) {
+                bytes_available = size - pos;
+            }
+
+            if (!bx_od_render_token(format, buffer + pos, bytes_available, options->endian_mode, token, sizeof(token))) {
+                return false;
+            }
+
+            printf("%*s", slot_width, token);
+        }
+
+        if (format->char_suffix) {
+            bx_od_print_ascii_trailer(buffer, size);
+        }
+
+        fputc('\n', stdout);
+    }
+
+    return true;
+}
+
+static void bx_od_print_final_line(const struct bx_od_options* options,
+                                   uintmax_t address,
+                                   bool have_label,
+                                   uintmax_t label) {
+    char prefix[256];
+
+    bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
+    if (prefix[0] != '\0') {
+        puts(prefix);
+    }
+}
+
+static bool bx_od_dump_regular(const struct bx_od_options* options,
+                               const struct bx_od_operands* operands,
+                               struct bx_diag_ctx* diag) {
+    struct bx_od_input input;
+    unsigned char* buffer = xmalloc((size_t)options->width);
+    unsigned char* previous = xmalloc((size_t)options->width);
+    size_t previous_size = 0u;
+    bool previous_valid = false;
+    bool suppressed = false;
+    uintmax_t dumped = 0u;
+    uintmax_t address = operands->offset;
+    uintmax_t label = operands->label;
+
+    bx_od_input_init(&input, operands, diag);
+
+    if (!bx_od_input_skip(&input, operands->offset)) {
+        bx_diag(diag, "cannot skip past end of combined input");
+        bx_od_input_close_current(&input);
+        free(buffer);
+        free(previous);
+        return false;
+    }
+
+    while (true) {
+        size_t to_read = (size_t)options->width;
+        size_t nread;
+
+        if (options->read_bytes_set) {
+            uintmax_t remaining = options->read_bytes - dumped;
+            if (dumped >= options->read_bytes) {
+                break;
+            }
+            if (remaining < (uintmax_t)to_read) {
+                to_read = (size_t)remaining;
+            }
+        }
+
+        nread = bx_od_input_read(&input, buffer, to_read);
+        if (nread == 0u) {
+            break;
+        }
+
+        if (!options->output_duplicates &&
+            previous_valid &&
+            nread == previous_size &&
+            memcmp(previous, buffer, nread) == 0) {
+            if (!suppressed) {
+                puts("*");
+                suppressed = true;
+            }
+        }
+        else {
+            suppressed = false;
+            if (!bx_od_print_block(options, buffer, nread, address, operands->have_label, label)) {
+                bx_diag(diag, "failed to render output");
+                bx_od_input_close_current(&input);
+                free(buffer);
+                free(previous);
+                return false;
+            }
+        }
+
+        memcpy(previous, buffer, nread);
+        previous_size = nread;
+        previous_valid = true;
+
+        dumped += (uintmax_t)nread;
+        address = operands->offset + dumped;
+        if (operands->have_label) {
+            label = operands->label + dumped;
+        }
+    }
+
+    bx_od_input_close_current(&input);
+    bx_od_print_final_line(options, address, operands->have_label, label);
+    free(buffer);
+    free(previous);
+    return true;
+}
+
+static void bx_od_print_string_line(const struct bx_od_options* options,
+                                    uintmax_t address,
+                                    bool have_label,
+                                    uintmax_t label,
+                                    const char* text) {
+    char prefix[256];
+
+    bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
+    if (prefix[0] != '\0') {
+        printf("%s ", prefix);
+    }
+    puts(text);
+}
+
+static bool bx_od_dump_strings(const struct bx_od_options* options,
+                               const struct bx_od_operands* operands,
+                               struct bx_diag_ctx* diag) {
+    struct bx_od_input input;
+    unsigned char chunk[4096];
+    char* string_buf = NULL;
+    size_t string_cap = 0u;
+    size_t string_len = 0u;
+    bool in_string = false;
+    uintmax_t string_start = operands->offset;
+    uintmax_t position = operands->offset;
+    uintmax_t remaining = options->read_bytes_set ? options->read_bytes : UINTMAX_MAX;
+
+    bx_od_input_init(&input, operands, diag);
+
+    if (!bx_od_input_skip(&input, operands->offset)) {
+        bx_diag(diag, "cannot skip past end of combined input");
+        bx_od_input_close_current(&input);
+        free(string_buf);
+        return false;
+    }
+
+    while (remaining > 0u) {
+        size_t to_read = sizeof(chunk);
+        size_t nread;
+
+        if (options->read_bytes_set && remaining < (uintmax_t)to_read) {
+            to_read = (size_t)remaining;
+        }
+
+        nread = bx_od_input_read(&input, chunk, to_read);
+        if (nread == 0u) {
+            break;
+        }
+
+        for (size_t i = 0u; i < nread; i++) {
+            unsigned char ch = chunk[i];
+
+            if (isprint(ch)) {
+                if (!in_string) {
+                    in_string = true;
+                    string_start = position;
+                    string_len = 0u;
+                }
+
+                if (string_len + 1u >= string_cap) {
+                    size_t new_cap = (string_cap == 0u) ? 64u : string_cap * 2u;
+                    string_buf = xrealloc(string_buf, new_cap);
+                    string_cap = new_cap;
+                }
+
+                string_buf[string_len++] = (char)ch;
+            }
+            else if (ch == '\0') {
+                uintmax_t label = 0u;
+
+                if (!in_string) {
+                    string_start = position;
+                    string_len = 0u;
+                }
+
+                if (string_buf == NULL) {
+                    string_buf = xmalloc(1u);
+                    string_cap = 1u;
+                }
+
+                string_buf[string_len] = '\0';
+                if ((uintmax_t)string_len >= options->strings_min) {
+                    if (operands->have_label) {
+                        label = operands->label + (string_start - operands->offset);
+                    }
+                    bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf);
+                }
+
+                in_string = false;
+                string_len = 0u;
+            }
+            else {
+                in_string = false;
+                string_len = 0u;
+            }
+
+            position++;
+        }
+
+        if (options->read_bytes_set) {
+            remaining -= (uintmax_t)nread;
+        }
+    }
+
+    bx_od_input_close_current(&input);
+    free(string_buf);
+    return true;
 }
 
 int bx_od_main(int argc, char** argv) {
+    struct bx_od_options options;
+    struct bx_od_operands operands;
     struct bx_diag_ctx diag = {.progname = "od", .exit_status = 0};
-    char ref_path[PATH_MAX];
+    int first_operand = 0;
+    bool ok;
 
-    if (bx_od_find_repo_ref(ref_path, sizeof(ref_path))) {
-        execv(ref_path, argv);
+    if (!bx_od_parse_options(argc, argv, &options, &first_operand, &diag)) {
+        free(options.formats);
+        return 1;
     }
 
-    execvp("od", argv);
-    bx_diag(&diag, "failed to execute od: %s", strerror(errno));
-    (void)argc;
-    return 1;
+    if (options.show_help) {
+        bx_od_print_help(stdout, options.progname);
+        free(options.formats);
+        return 0;
+    }
+
+    if (options.show_version) {
+        bx_od_print_version(options.progname);
+        free(options.formats);
+        return 0;
+    }
+
+    if (!bx_od_parse_operands(argc, argv, first_operand, &options, &operands, &diag)) {
+        free(options.formats);
+        return 1;
+    }
+
+    if (options.strings_mode) {
+        ok = bx_od_dump_strings(&options, &operands, &diag);
+    }
+    else {
+        ok = bx_od_dump_regular(&options, &operands, &diag);
+    }
+
+    free((void*)operands.files);
+    free(options.formats);
+    return ok ? diag.exit_status : 1;
 }
