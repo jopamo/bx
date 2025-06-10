@@ -470,6 +470,8 @@ if get_option('tests')
   test('od basic', test_od_basic, args : [bx_exe], suite : fast_track_p2_suite)
   test_od_smoke_differential = find_program('tests/od/test_od_smoke_differential.sh')
   test('od smoke differential', test_od_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+  test_od_audit = files('tests/od/od_audit.py')
+  test('od audit differential', python3, args : [test_od_audit, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_paste_basic = find_program('tests/paste/test_paste_basic.sh')
   test('paste basic', test_paste_basic, args : [bx_exe], suite : fast_track_p2_suite)

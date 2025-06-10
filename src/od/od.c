@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "applets.h"
 #include "diag.h"
@@ -48,6 +49,7 @@ struct bx_od_format {
 
 struct bx_od_options {
     const char* progname;
+    const char* width_option_name;
     char address_radix;
     uintmax_t skip_bytes;
     uintmax_t read_bytes;
@@ -105,6 +107,10 @@ static void bx_od_traditional_extra_operand(struct bx_diag_ctx* diag, const char
     fprintf(stderr, "%s: compatibility mode supports at most one file\n", diag->progname);
     fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
     diag->exit_status = 1;
+}
+
+static bool bx_od_short_option_requires_argument(int c) {
+    return c == 'A' || c == 'j' || c == 'N' || c == 'S' || c == 't' || c == 'w';
 }
 
 static bool bx_od_safe_mul(uintmax_t a, uintmax_t b, uintmax_t* out) {
@@ -567,7 +573,9 @@ static bool bx_od_parse_type_string(const char* text, struct bx_od_options* opti
                 }
 
                 if (!bx_od_integral_size_supported(unit_size)) {
-                    bx_diag(diag, "invalid type string '%s'", text);
+                    fprintf(stderr, "%s: invalid type string '%s';\n", diag->progname, text);
+                    fprintf(stderr, "this system doesn't provide a %zu-byte integral type\n", unit_size);
+                    diag->exit_status = 1;
                     return false;
                 }
                 break;
@@ -617,13 +625,15 @@ static bool bx_od_parse_type_string(const char* text, struct bx_od_options* opti
                 }
 
                 if (!bx_od_float_size_supported(unit_size)) {
-                    bx_diag(diag, "invalid type string '%s'", text);
+                    fprintf(stderr, "%s: invalid type string '%s';\n", diag->progname, text);
+                    fprintf(stderr, "this system doesn't provide a %zu-byte floating point type\n", unit_size);
+                    diag->exit_status = 1;
                     return false;
                 }
                 break;
             }
             default:
-                bx_diag(diag, "invalid type string '%s'", text);
+                bx_diag(diag, "invalid character '%c' in type string '%s'", type, text);
                 return false;
         }
 
@@ -712,7 +722,7 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
     }
 
     if (options->width > SIZE_MAX) {
-        bx_diag(diag, "invalid width '%ju'", options->width);
+        bx_diag(diag, "invalid %s argument '%ju'", options->width_option_name, options->width);
         return false;
     }
 
@@ -749,7 +759,7 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
     }
 
     if (options->width == 0u) {
-        bx_diag(diag, "invalid width '%ju'", options->width);
+        bx_diag(diag, "invalid %s argument '%ju'", options->width_option_name, options->width);
         return false;
     }
 
@@ -887,6 +897,7 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
 
     memset(options, 0, sizeof(*options));
     options->progname = "od";
+    options->width_option_name = "-w";
     options->address_radix = 'o';
     options->width = 16u;
     options->strings_min = 3u;
@@ -908,7 +919,8 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
             case 'A':
                 if (optarg == NULL || optarg[0] == '\0' || optarg[1] != '\0' ||
                     (optarg[0] != 'd' && optarg[0] != 'o' && optarg[0] != 'x' && optarg[0] != 'n')) {
-                    bx_diag(diag, "invalid radix '%s'", optarg ? optarg : "");
+                    bx_diag(diag, "invalid output address radix '%s'; it must be one character from [doxn]",
+                            optarg ? optarg : "");
                     return false;
                 }
                 options->address_radix = optarg[0];
@@ -922,21 +934,26 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                     options->endian_mode = BX_OD_ENDIAN_LITTLE;
                 }
                 else {
-                    bx_diag(diag, "invalid argument '%s' for '--endian'", optarg);
+                    fprintf(stderr, "%s: invalid argument '%s' for '--endian'\n", diag->progname, optarg);
+                    fprintf(stderr, "Valid arguments are:\n");
+                    fprintf(stderr, "  - 'little'\n");
+                    fprintf(stderr, "  - 'big'\n");
+                    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+                    diag->exit_status = 1;
                     return false;
                 }
                 options->saw_nontraditional_option = true;
                 break;
             case 'j':
                 if (!bx_od_parse_bytes(optarg, &options->skip_bytes)) {
-                    bx_diag(diag, "invalid number of bytes to skip: '%s'", optarg);
+                    bx_diag(diag, "invalid -j argument '%s'", optarg);
                     return false;
                 }
                 options->saw_nontraditional_option = true;
                 break;
             case 'N':
                 if (!bx_od_parse_bytes(optarg, &options->read_bytes)) {
-                    bx_diag(diag, "invalid number of bytes to read: '%s'", optarg);
+                    bx_diag(diag, "invalid -N argument '%s'", optarg);
                     return false;
                 }
                 options->read_bytes_set = true;
@@ -971,11 +988,18 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 options->saw_nontraditional_option = true;
                 break;
             case 'w':
+                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL &&
+                    strncmp(argv[optind - 1], "--width", 7u) == 0) {
+                    options->width_option_name = "--width";
+                }
+                else {
+                    options->width_option_name = "-w";
+                }
                 if (optarg == NULL) {
                     options->width = 32u;
                 }
                 else if (!bx_od_parse_bytes(optarg, &options->width)) {
-                    bx_diag(diag, "invalid width '%s'", optarg);
+                    bx_diag(diag, "invalid %s argument '%s'", options->width_option_name, optarg);
                     return false;
                 }
                 options->width_specified = true;
@@ -1009,6 +1033,12 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 return true;
             case '?':
             default:
+                if (bx_od_short_option_requires_argument(optopt)) {
+                    fprintf(stderr, "%s: option requires an argument -- '%c'\n", diag->progname, optopt);
+                    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+                    diag->exit_status = 1;
+                    return false;
+                }
                 if (optind > 0 && optind <= argc) {
                     bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
                 }
@@ -1158,6 +1188,20 @@ static void bx_od_input_init(struct bx_od_input* input,
     input->diag = diag;
 }
 
+static bool bx_od_operands_are_stdin_only(const struct bx_od_operands* operands) {
+    if (operands->file_count == 0u) {
+        return true;
+    }
+
+    for (size_t i = 0u; i < operands->file_count; i++) {
+        if (strcmp(operands->files[i], "-") != 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool bx_od_input_open_next(struct bx_od_input* input) {
     while (true) {
         if (input->file_count == 0u && input->next_index == 0u) {
@@ -1226,8 +1270,26 @@ static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer,
     return total;
 }
 
-static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count) {
+static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count, bool try_seek_stdin) {
     unsigned char discard[8192];
+
+    if (count == 0u) {
+        return true;
+    }
+
+    if (try_seek_stdin) {
+        if (input->current == NULL && !bx_od_input_open_next(input)) {
+            return false;
+        }
+
+        if (input->current != NULL && input->current_is_stdin && count <= (uintmax_t)INT64_MAX) {
+            clearerr(input->current);
+            if (fseeko(input->current, (off_t)count, SEEK_CUR) == 0) {
+                return true;
+            }
+            clearerr(input->current);
+        }
+    }
 
     while (count > 0u) {
         size_t chunk = sizeof(discard);
@@ -1773,7 +1835,7 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
 
     bx_od_input_init(&input, operands, diag);
 
-    if (!bx_od_input_skip(&input, operands->offset)) {
+    if (!bx_od_input_skip(&input, operands->offset, bx_od_operands_are_stdin_only(operands))) {
         bx_diag(diag, "cannot skip past end of combined input");
         bx_od_input_close_current(&input);
         free(buffer);
@@ -1867,7 +1929,7 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
 
     bx_od_input_init(&input, operands, diag);
 
-    if (!bx_od_input_skip(&input, operands->offset)) {
+    if (!bx_od_input_skip(&input, operands->offset, bx_od_operands_are_stdin_only(operands))) {
         bx_diag(diag, "cannot skip past end of combined input");
         bx_od_input_close_current(&input);
         free(string_buf);
