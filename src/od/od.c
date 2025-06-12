@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <float.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -10,9 +11,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "applets.h"
+#include "common/xreadwrite.h"
 #include "diag.h"
 #include "libbx.h"
 
@@ -38,6 +42,12 @@ enum bx_od_float_mode {
     BX_OD_FLOAT_NATIVE,
 };
 
+enum bx_od_parse_result {
+    BX_OD_PARSE_OK = 0,
+    BX_OD_PARSE_INVALID,
+    BX_OD_PARSE_TOO_LARGE,
+};
+
 struct bx_od_format {
     enum bx_od_format_kind kind;
     enum bx_od_float_mode float_mode;
@@ -45,6 +55,7 @@ struct bx_od_format {
     bool char_suffix;
     size_t intrinsic_width;
     size_t cell_width;
+    int slot_width;
 };
 
 struct bx_od_options {
@@ -67,6 +78,8 @@ struct bx_od_options {
     struct bx_od_format* formats;
     size_t format_count;
     size_t format_capacity;
+    size_t min_unit;
+    int base_slot_width;
 };
 
 struct bx_od_operands {
@@ -81,9 +94,10 @@ struct bx_od_input {
     const char** files;
     size_t file_count;
     size_t next_index;
-    FILE* current;
+    int current_fd;
     const char* current_name;
     bool current_is_stdin;
+    bool had_error;
     struct bx_diag_ctx* diag;
 };
 
@@ -101,6 +115,44 @@ static void bx_od_warn(const char* progname, const char* fmt, ...) {
     va_end(ap);
     fputc('\n', stderr);
 }
+
+static void bx_od_try_help(const struct bx_diag_ctx* diag) {
+    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+}
+
+static void bx_od_option_too_large(struct bx_diag_ctx* diag, const char* option_name, const char* arg) {
+    fprintf(stderr, "%s: %s argument '%s' too large\n", diag->progname, option_name, arg ? arg : "");
+    diag->exit_status = 1;
+}
+
+static void bx_od_invalid_option_short(struct bx_diag_ctx* diag, int opt) {
+    fprintf(stderr, "%s: invalid option -- '%c'\n", diag->progname, opt);
+    bx_od_try_help(diag);
+    diag->exit_status = 1;
+}
+
+static void bx_od_unrecognized_option(struct bx_diag_ctx* diag, const char* arg) {
+    if (arg != NULL) {
+        fprintf(stderr, "%s: unrecognized option '%s'\n", diag->progname, arg);
+    }
+    else {
+        fprintf(stderr, "%s: unrecognized option\n", diag->progname);
+    }
+    bx_od_try_help(diag);
+    diag->exit_status = 1;
+}
+
+static void bx_od_invalid_suffix_in_argument(struct bx_diag_ctx* diag,
+                                             const char* option_name,
+                                             const char* arg) {
+    fprintf(stderr, "%s: invalid suffix in %s argument '%s'\n", diag->progname, option_name, arg ? arg : "");
+    diag->exit_status = 1;
+}
+
+static bool bx_od_parse_bytes_with_diag(const char* option_name,
+                                        const char* text,
+                                        uintmax_t* value_out,
+                                        struct bx_diag_ctx* diag);
 
 static void bx_od_traditional_extra_operand(struct bx_diag_ctx* diag, const char* operand) {
     fprintf(stderr, "%s: extra operand '%s'\n", diag->progname, operand);
@@ -149,14 +201,16 @@ static bool bx_od_lcm(uintmax_t a, uintmax_t b, uintmax_t* out) {
     return bx_od_safe_mul(reduced, b, out);
 }
 
-static bool bx_od_parse_prefixed_uint(const char* text, uintmax_t* value_out, const char** end_out) {
+static enum bx_od_parse_result bx_od_parse_prefixed_uint(const char* text,
+                                                         uintmax_t* value_out,
+                                                         const char** end_out) {
     const char* p = text;
     uintmax_t value = 0u;
     int base = 10;
     bool have_digit = false;
 
     if (text == NULL || value_out == NULL) {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     if (*p == '+') {
@@ -164,7 +218,7 @@ static bool bx_od_parse_prefixed_uint(const char* text, uintmax_t* value_out, co
     }
 
     if (*p == '\0') {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
@@ -193,7 +247,7 @@ static bool bx_od_parse_prefixed_uint(const char* text, uintmax_t* value_out, co
         }
 
         if (value > (UINTMAX_MAX - (uintmax_t)digit) / (uintmax_t)base) {
-            return false;
+            return BX_OD_PARSE_TOO_LARGE;
         }
 
         value = value * (uintmax_t)base + (uintmax_t)digit;
@@ -202,34 +256,34 @@ static bool bx_od_parse_prefixed_uint(const char* text, uintmax_t* value_out, co
     }
 
     if (!have_digit) {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     *value_out = value;
     if (end_out != NULL) {
         *end_out = p;
     }
-    return true;
+    return BX_OD_PARSE_OK;
 }
 
-static bool bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_out) {
+static enum bx_od_parse_result bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_out) {
     char prefix;
     unsigned int power = 0u;
     unsigned int base = 0u;
     uintmax_t value = 1u;
 
     if (suffix == NULL || multiplier_out == NULL) {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     if (suffix[0] == '\0') {
         *multiplier_out = 1u;
-        return true;
+        return BX_OD_PARSE_OK;
     }
 
     if (strcmp(suffix, "b") == 0) {
         *multiplier_out = 512u;
-        return true;
+        return BX_OD_PARSE_OK;
     }
 
     prefix = suffix[0];
@@ -269,7 +323,7 @@ static bool bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_ou
             power = 10u;
             break;
         default:
-            return false;
+            return BX_OD_PARSE_INVALID;
     }
 
     if (suffix[1] == '\0') {
@@ -282,41 +336,152 @@ static bool bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_ou
         base = 1024u;
     }
     else {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     for (unsigned int i = 0u; i < power; i++) {
         if (!bx_od_safe_mul(value, (uintmax_t)base, &value)) {
-            return false;
+            return BX_OD_PARSE_TOO_LARGE;
         }
     }
 
     *multiplier_out = value;
-    return true;
+    return BX_OD_PARSE_OK;
 }
 
-static bool bx_od_parse_bytes(const char* text, uintmax_t* value_out) {
+static enum bx_od_parse_result bx_od_parse_bytes(const char* text, uintmax_t* value_out) {
     uintmax_t value;
     uintmax_t multiplier;
     const char* suffix;
+    enum bx_od_parse_result status;
 
     if (text == NULL || text[0] == '\0' || value_out == NULL) {
-        return false;
+        return BX_OD_PARSE_INVALID;
     }
 
     if (text[0] == '-') {
+        return BX_OD_PARSE_INVALID;
+    }
+
+    status = bx_od_parse_prefixed_uint(text, &value, &suffix);
+    if (status != BX_OD_PARSE_OK) {
+        return status;
+    }
+
+    status = bx_od_parse_byte_suffix(suffix, &multiplier);
+    if (status != BX_OD_PARSE_OK) {
+        return status;
+    }
+
+    if (!bx_od_safe_mul(value, multiplier, value_out)) {
+        return BX_OD_PARSE_TOO_LARGE;
+    }
+
+    return BX_OD_PARSE_OK;
+}
+
+static bool bx_od_parse_bytes_with_diag(const char* option_name,
+                                        const char* text,
+                                        uintmax_t* value_out,
+                                        struct bx_diag_ctx* diag) {
+    enum bx_od_parse_result status = bx_od_parse_bytes(text, value_out);
+
+    if (status == BX_OD_PARSE_OK) {
+        return true;
+    }
+
+    if (status == BX_OD_PARSE_TOO_LARGE) {
+        bx_od_option_too_large(diag, option_name, text);
+    }
+    else {
+        bx_diag(diag, "invalid %s argument '%s'", option_name, text ? text : "");
+    }
+
+    return false;
+}
+
+static enum bx_od_parse_result bx_od_parse_width(const char* text, uintmax_t* value_out, bool* invalid_suffix_out) {
+    const char* p = text;
+    uintmax_t value = 0u;
+    bool have_digit = false;
+
+    if (invalid_suffix_out != NULL) {
+        *invalid_suffix_out = false;
+    }
+
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return BX_OD_PARSE_INVALID;
+    }
+
+    if (*p == '+') {
+        p++;
+    }
+    else if (*p == '-') {
+        return BX_OD_PARSE_INVALID;
+    }
+
+    while (*p >= '0' && *p <= '9') {
+        unsigned int digit = (unsigned int)(*p - '0');
+
+        if (value > (UINTMAX_MAX - (uintmax_t)digit) / 10u) {
+            return BX_OD_PARSE_TOO_LARGE;
+        }
+
+        value = value * 10u + (uintmax_t)digit;
+        have_digit = true;
+        p++;
+    }
+
+    if (!have_digit) {
+        return BX_OD_PARSE_INVALID;
+    }
+
+    if (*p != '\0') {
+        if (invalid_suffix_out != NULL) {
+            *invalid_suffix_out = true;
+        }
+        return BX_OD_PARSE_INVALID;
+    }
+
+    *value_out = value;
+    return BX_OD_PARSE_OK;
+}
+
+static bool bx_od_parse_endian_value(const char* text, enum bx_od_endian_mode* value_out, bool* ambiguous_out) {
+    size_t len;
+    bool matches_big;
+    bool matches_little;
+
+    if (ambiguous_out != NULL) {
+        *ambiguous_out = false;
+    }
+
+    if (text == NULL || value_out == NULL) {
         return false;
     }
 
-    if (!bx_od_parse_prefixed_uint(text, &value, &suffix)) {
+    len = strlen(text);
+    matches_big = strncmp("big", text, len) == 0;
+    matches_little = strncmp("little", text, len) == 0;
+
+    if (matches_big && matches_little) {
+        if (ambiguous_out != NULL) {
+            *ambiguous_out = true;
+        }
         return false;
     }
 
-    if (!bx_od_parse_byte_suffix(suffix, &multiplier)) {
-        return false;
+    if (matches_big) {
+        *value_out = BX_OD_ENDIAN_BIG;
+        return true;
     }
 
-    return bx_od_safe_mul(value, multiplier, value_out);
+    if (matches_little) {
+        *value_out = BX_OD_ENDIAN_LITTLE;
+        return true;
+    }
+
+    return false;
 }
 
 static bool bx_od_parse_traditional_offset(const char* text, uintmax_t* value_out) {
@@ -341,7 +506,7 @@ static bool bx_od_parse_traditional_offset(const char* text, uintmax_t* value_ou
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
         const char* end = NULL;
 
-        if (!bx_od_parse_prefixed_uint(p, &value, &end)) {
+        if (bx_od_parse_prefixed_uint(p, &value, &end) != BX_OD_PARSE_OK) {
             return false;
         }
 
@@ -504,9 +669,13 @@ static bool bx_od_append_named_shortcut(struct bx_od_options* options, int c) {
 static bool bx_od_parse_type_string(const char* text, struct bx_od_options* options, struct bx_diag_ctx* diag) {
     const char* p = text;
 
-    if (text == NULL || text[0] == '\0') {
-        bx_diag(diag, "invalid type string '%s'", text ? text : "");
+    if (text == NULL) {
+        bx_diag(diag, "invalid type string ''");
         return false;
+    }
+
+    if (text[0] == '\0') {
+        return true;
     }
 
     while (*p != '\0') {
@@ -729,6 +898,7 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
     for (size_t i = 0u; i < options->format_count; i++) {
         options->formats[i].intrinsic_width = bx_od_intrinsic_width(&options->formats[i]);
         options->formats[i].cell_width = options->formats[i].intrinsic_width;
+        options->formats[i].slot_width = 0;
     }
 
     for (size_t i = 0u; i < options->format_count; i++) {
@@ -744,11 +914,31 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
         options->formats[i].cell_width = max_width;
     }
 
+    options->min_unit = 0u;
+    options->base_slot_width = 0;
+
     for (size_t i = 0u; i < options->format_count; i++) {
+        if (options->min_unit == 0u || options->formats[i].unit_size < options->min_unit) {
+            options->min_unit = options->formats[i].unit_size;
+        }
+
         if (!bx_od_lcm(width_multiple, (uintmax_t)options->formats[i].unit_size, &width_multiple)) {
             bx_diag(diag, "invalid line width");
             return false;
         }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        if (options->formats[i].unit_size == options->min_unit) {
+            int slot = (int)options->formats[i].cell_width + 1;
+            if (slot > options->base_slot_width) {
+                options->base_slot_width = slot;
+            }
+        }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        options->formats[i].slot_width = options->base_slot_width * (int)(options->formats[i].unit_size / options->min_unit);
     }
 
     if (!options->width_specified) {
@@ -927,41 +1117,42 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 options->saw_nontraditional_option = true;
                 break;
             case BX_OD_OPT_ENDIAN:
-                if (strcmp(optarg, "big") == 0) {
-                    options->endian_mode = BX_OD_ENDIAN_BIG;
-                }
-                else if (strcmp(optarg, "little") == 0) {
-                    options->endian_mode = BX_OD_ENDIAN_LITTLE;
-                }
-                else {
-                    fprintf(stderr, "%s: invalid argument '%s' for '--endian'\n", diag->progname, optarg);
+                {
+                    bool ambiguous = false;
+
+                    if (bx_od_parse_endian_value(optarg, &options->endian_mode, &ambiguous)) {
+                        options->saw_nontraditional_option = true;
+                        break;
+                    }
+
+                    if (ambiguous) {
+                        fprintf(stderr, "%s: ambiguous argument '%s' for '--endian'\n", diag->progname, optarg);
+                    }
+                    else {
+                        fprintf(stderr, "%s: invalid argument '%s' for '--endian'\n", diag->progname, optarg);
+                    }
                     fprintf(stderr, "Valid arguments are:\n");
                     fprintf(stderr, "  - 'little'\n");
                     fprintf(stderr, "  - 'big'\n");
-                    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+                    bx_od_try_help(diag);
                     diag->exit_status = 1;
                     return false;
                 }
-                options->saw_nontraditional_option = true;
-                break;
             case 'j':
-                if (!bx_od_parse_bytes(optarg, &options->skip_bytes)) {
-                    bx_diag(diag, "invalid -j argument '%s'", optarg);
+                if (!bx_od_parse_bytes_with_diag("-j", optarg, &options->skip_bytes, diag)) {
                     return false;
                 }
                 options->saw_nontraditional_option = true;
                 break;
             case 'N':
-                if (!bx_od_parse_bytes(optarg, &options->read_bytes)) {
-                    bx_diag(diag, "invalid -N argument '%s'", optarg);
+                if (!bx_od_parse_bytes_with_diag("-N", optarg, &options->read_bytes, diag)) {
                     return false;
                 }
                 options->read_bytes_set = true;
                 options->saw_nontraditional_option = true;
                 break;
             case 'S':
-                if (!bx_od_parse_bytes(optarg, &options->strings_min)) {
-                    bx_diag(diag, "invalid -S argument '%s'", optarg);
+                if (!bx_od_parse_bytes_with_diag("-S", optarg, &options->strings_min, diag)) {
                     return false;
                 }
                 options->strings_mode = true;
@@ -970,8 +1161,7 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
             case BX_OD_OPT_STRINGS:
                 options->strings_mode = true;
                 if (optarg != NULL) {
-                    if (!bx_od_parse_bytes(optarg, &options->strings_min)) {
-                        bx_diag(diag, "invalid --strings argument '%s'", optarg);
+                    if (!bx_od_parse_bytes_with_diag("--strings", optarg, &options->strings_min, diag)) {
                         return false;
                     }
                 }
@@ -998,9 +1188,23 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
                 if (optarg == NULL) {
                     options->width = 32u;
                 }
-                else if (!bx_od_parse_bytes(optarg, &options->width)) {
-                    bx_diag(diag, "invalid %s argument '%s'", options->width_option_name, optarg);
-                    return false;
+                else {
+                    bool invalid_suffix = false;
+                    enum bx_od_parse_result status = bx_od_parse_width(optarg, &options->width, &invalid_suffix);
+
+                    if (status == BX_OD_PARSE_TOO_LARGE) {
+                        bx_od_option_too_large(diag, options->width_option_name, optarg);
+                        return false;
+                    }
+                    if (status != BX_OD_PARSE_OK) {
+                        if (invalid_suffix) {
+                            bx_od_invalid_suffix_in_argument(diag, options->width_option_name, optarg);
+                        }
+                        else {
+                            bx_diag(diag, "invalid %s argument '%s'", options->width_option_name, optarg);
+                        }
+                        return false;
+                    }
                 }
                 options->width_specified = true;
                 options->saw_nontraditional_option = true;
@@ -1035,15 +1239,18 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
             default:
                 if (bx_od_short_option_requires_argument(optopt)) {
                     fprintf(stderr, "%s: option requires an argument -- '%c'\n", diag->progname, optopt);
-                    fprintf(stderr, "Try '%s --help' for more information.\n", diag->progname);
+                    bx_od_try_help(diag);
                     diag->exit_status = 1;
                     return false;
                 }
-                if (optind > 0 && optind <= argc) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
+                if (optopt != 0 && isprint(optopt)) {
+                    bx_od_invalid_option_short(diag, optopt);
+                }
+                else if (optind > 0 && optind <= argc) {
+                    bx_od_unrecognized_option(diag, argv[optind - 1]);
                 }
                 else {
-                    bx_diag(diag, "unrecognized option");
+                    bx_od_unrecognized_option(diag, NULL);
                 }
                 return false;
         }
@@ -1185,6 +1392,8 @@ static void bx_od_input_init(struct bx_od_input* input,
     memset(input, 0, sizeof(*input));
     input->files = operands->files;
     input->file_count = operands->file_count;
+    input->current_fd = -1;
+    input->had_error = false;
     input->diag = diag;
 }
 
@@ -1205,7 +1414,7 @@ static bool bx_od_operands_are_stdin_only(const struct bx_od_operands* operands)
 static bool bx_od_input_open_next(struct bx_od_input* input) {
     while (true) {
         if (input->file_count == 0u && input->next_index == 0u) {
-            input->current = stdin;
+            input->current_fd = STDIN_FILENO;
             input->current_name = "-";
             input->current_is_stdin = true;
             input->next_index = 1u;
@@ -1218,27 +1427,28 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
 
         input->current_name = input->files[input->next_index++];
         if (strcmp(input->current_name, "-") == 0) {
-            input->current = stdin;
+            input->current_fd = STDIN_FILENO;
             input->current_is_stdin = true;
             return true;
         }
 
-        input->current = fopen(input->current_name, "rb");
-        if (input->current != NULL) {
+        input->current_fd = open(input->current_name, O_RDONLY);
+        if (input->current_fd >= 0) {
             input->current_is_stdin = false;
             return true;
         }
 
+        input->had_error = true;
         bx_diag(input->diag, "%s: %s", input->current_name, strerror(errno));
     }
 }
 
 static void bx_od_input_close_current(struct bx_od_input* input) {
-    if (input->current != NULL && !input->current_is_stdin) {
-        fclose(input->current);
+    if (input->current_fd >= 0 && !input->current_is_stdin) {
+        close(input->current_fd);
     }
 
-    input->current = NULL;
+    input->current_fd = -1;
     input->current_name = NULL;
     input->current_is_stdin = false;
 }
@@ -1247,27 +1457,31 @@ static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer,
     size_t total = 0u;
 
     while (total < count) {
-        size_t nread;
+        ssize_t nread;
 
-        if (input->current == NULL && !bx_od_input_open_next(input)) {
+        if (input->current_fd < 0 && !bx_od_input_open_next(input)) {
             break;
         }
 
-        nread = fread(buffer + total, 1u, count - total, input->current);
-        if (nread > 0u) {
-            total += nread;
+        nread = bx_xread(input->current_fd, buffer + total, count - total);
+        if (nread > 0) {
+            total += (size_t)nread;
             continue;
         }
 
-        if (ferror(input->current)) {
+        if (nread < 0) {
+            input->had_error = true;
             bx_diag(input->diag, "%s: %s", input->current_name, strerror(errno));
-            clearerr(input->current);
         }
 
         bx_od_input_close_current(input);
     }
 
     return total;
+}
+
+static bool bx_od_input_had_error(const struct bx_od_input* input) {
+    return input != NULL && input->had_error;
 }
 
 static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count, bool try_seek_stdin) {
@@ -1278,28 +1492,61 @@ static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count, bool tr
     }
 
     if (try_seek_stdin) {
-        if (input->current == NULL && !bx_od_input_open_next(input)) {
+        if (input->current_fd < 0 && !bx_od_input_open_next(input)) {
             return false;
         }
 
-        if (input->current != NULL && input->current_is_stdin && count <= (uintmax_t)INT64_MAX) {
-            clearerr(input->current);
-            if (fseeko(input->current, (off_t)count, SEEK_CUR) == 0) {
+        if (input->current_fd >= 0 && input->current_is_stdin && count <= (uintmax_t)INT64_MAX) {
+            if (lseek(input->current_fd, (off_t)count, SEEK_CUR) >= (off_t)0) {
                 return true;
             }
-            clearerr(input->current);
         }
     }
 
     while (count > 0u) {
         size_t chunk = sizeof(discard);
-        size_t nread;
+
+        if (input->current_fd < 0 && !bx_od_input_open_next(input)) {
+            return false;
+        }
+
+        if (input->current_fd >= 0 && !input->current_is_stdin) {
+            struct stat st;
+
+            if (fstat(input->current_fd, &st) == 0 && S_ISREG(st.st_mode)) {
+                off_t current = lseek(input->current_fd, (off_t)0, SEEK_CUR);
+
+                if (current >= (off_t)0) {
+                    uintmax_t remaining = (st.st_size > current) ? (uintmax_t)((uintmax_t)st.st_size - (uintmax_t)current) : 0u;
+
+                    if (remaining > 0u) {
+                        uintmax_t step = (count < remaining) ? count : remaining;
+
+                        if (step <= (uintmax_t)INT64_MAX &&
+                            lseek(input->current_fd, (off_t)step, SEEK_CUR) == current + (off_t)step) {
+                            count -= step;
+                            if (count == 0u) {
+                                return true;
+                            }
+                            if (step == remaining) {
+                                bx_od_input_close_current(input);
+                                continue;
+                            }
+                        }
+                    }
+                    else {
+                        bx_od_input_close_current(input);
+                        continue;
+                    }
+                }
+            }
+        }
 
         if (count < (uintmax_t)chunk) {
             chunk = (size_t)count;
         }
 
-        nread = bx_od_input_read(input, discard, chunk);
+        size_t nread = bx_od_input_read(input, discard, chunk);
         if (nread == 0u) {
             return false;
         }
@@ -1501,19 +1748,23 @@ static void bx_od_format_shortest_float(float value, char* out, size_t out_size)
 #else
     const int max_precision = 9;
 #endif
+    float abs_value = signbit(value) ? -value : value;
+    int min_precision = (abs_value < FLT_MIN) ? 1 : FLT_DIG;
 
-    if (isnan(value) || isinf(value)) {
+    if (!isfinite(value)) {
         snprintf(out, out_size, "%g", (double)value);
         return;
     }
 
-    for (int precision = 1; precision <= max_precision; precision++) {
+    for (int precision = min_precision; precision <= max_precision; precision++) {
         char* end = NULL;
+        double parsed_double;
         float parsed;
 
         snprintf(candidate, sizeof(candidate), "%.*g", precision, (double)value);
         errno = 0;
-        parsed = strtof(candidate, &end);
+        parsed_double = strtod(candidate, &end);
+        parsed = (float)parsed_double;
         if (errno == 0 && end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value)) {
             snprintf(out, out_size, "%s", candidate);
             return;
@@ -1530,13 +1781,15 @@ static void bx_od_format_shortest_double(double value, char* out, size_t out_siz
 #else
     const int max_precision = 17;
 #endif
+    double abs_value = signbit(value) ? -value : value;
+    int min_precision = (abs_value < DBL_MIN) ? 1 : DBL_DIG;
 
     if (!isfinite(value)) {
         snprintf(out, out_size, "%g", value);
         return;
     }
 
-    for (int precision = 1; precision <= max_precision; precision++) {
+    for (int precision = min_precision; precision <= max_precision; precision++) {
         char* end = NULL;
         double parsed;
 
@@ -1561,13 +1814,15 @@ static void bx_od_format_shortest_long_double(long double value, char* out, size
 #else
     const int max_precision = 21;
 #endif
+    long double abs_value = signbit(value) ? -value : value;
+    int min_precision = (abs_value < LDBL_MIN) ? 1 : LDBL_DIG;
 
     if (isnan(value) || isinf(value)) {
         snprintf(out, out_size, "%Lg", value);
         return;
     }
 
-    for (int precision = 1; precision <= max_precision; precision++) {
+    for (int precision = min_precision; precision <= max_precision; precision++) {
         char* end = NULL;
         long double parsed;
 
@@ -1750,30 +2005,13 @@ static bool bx_od_print_block(const struct bx_od_options* options,
     char prefix[256];
     char token[256];
     size_t prefix_len;
-    size_t min_unit = 0u;
-    int base_slot_width = 0;
 
     bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
     prefix_len = strlen(prefix);
 
     for (size_t i = 0u; i < options->format_count; i++) {
-        if (min_unit == 0u || options->formats[i].unit_size < min_unit) {
-            min_unit = options->formats[i].unit_size;
-        }
-    }
-
-    for (size_t i = 0u; i < options->format_count; i++) {
-        if (options->formats[i].unit_size == min_unit) {
-            int slot = (int)options->formats[i].cell_width + 1;
-            if (slot > base_slot_width) {
-                base_slot_width = slot;
-            }
-        }
-    }
-
-    for (size_t i = 0u; i < options->format_count; i++) {
         const struct bx_od_format* format = &options->formats[i];
-        int slot_width = base_slot_width * (int)(format->unit_size / min_unit);
+        size_t printed_units = 0u;
 
         if (i == 0u) {
             fputs(prefix, stdout);
@@ -1795,10 +2033,17 @@ static bool bx_od_print_block(const struct bx_od_options* options,
                 return false;
             }
 
-            printf("%*s", slot_width, token);
+            printf("%*s", format->slot_width, token);
+            printed_units++;
         }
 
         if (format->char_suffix) {
+            size_t full_units = (size_t)(options->width / format->unit_size);
+
+            while (printed_units < full_units) {
+                printf("%*s", format->slot_width, "");
+                printed_units++;
+            }
             bx_od_print_ascii_trailer(buffer, size);
         }
 
@@ -1825,7 +2070,7 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
                                struct bx_diag_ctx* diag) {
     struct bx_od_input input;
     unsigned char* buffer = xmalloc((size_t)options->width);
-    unsigned char* previous = xmalloc((size_t)options->width);
+    unsigned char* previous = options->output_duplicates ? NULL : xmalloc((size_t)options->width);
     size_t previous_size = 0u;
     bool previous_valid = false;
     bool suppressed = false;
@@ -1836,7 +2081,9 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
     bx_od_input_init(&input, operands, diag);
 
     if (!bx_od_input_skip(&input, operands->offset, bx_od_operands_are_stdin_only(operands))) {
-        bx_diag(diag, "cannot skip past end of combined input");
+        if (!bx_od_input_had_error(&input)) {
+            bx_diag(diag, "cannot skip past end of combined input");
+        }
         bx_od_input_close_current(&input);
         free(buffer);
         free(previous);
@@ -1882,9 +2129,11 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
             }
         }
 
-        memcpy(previous, buffer, nread);
-        previous_size = nread;
-        previous_valid = true;
+        if (!options->output_duplicates) {
+            memcpy(previous, buffer, nread);
+            previous_size = nread;
+            previous_valid = true;
+        }
 
         dumped += (uintmax_t)nread;
         address = operands->offset + dumped;
@@ -1930,7 +2179,9 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
     bx_od_input_init(&input, operands, diag);
 
     if (!bx_od_input_skip(&input, operands->offset, bx_od_operands_are_stdin_only(operands))) {
-        bx_diag(diag, "cannot skip past end of combined input");
+        if (!bx_od_input_had_error(&input)) {
+            bx_diag(diag, "cannot skip past end of combined input");
+        }
         bx_od_input_close_current(&input);
         free(string_buf);
         return false;

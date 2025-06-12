@@ -21,29 +21,47 @@ typedef enum {
 } sort_mode_t;
 
 typedef struct {
-    size_t start_field;
-    size_t end_field;
+    size_t field;
+    size_t char_offset;
+    bool has_char_offset;
+    bool ignore_leading_blanks;
+} sort_key_part_t;
+
+typedef struct {
+    sort_key_part_t start;
+    sort_key_part_t end;
+    bool has_end;
+    sort_mode_t mode;
+    bool has_mode;
+    bool reverse;
+    bool ignore_case;
 } sort_key_spec_t;
+
+typedef struct {
+    sort_key_spec_t* items;
+    size_t len;
+    size_t cap;
+} sort_key_spec_vec_t;
 
 typedef struct {
     sort_mode_t mode;
     bool reverse;
     bool unique;
     bool ignore_case;
+    bool ignore_leading_blanks;
     bool check;
     bool check_quiet;
     bool stable;
     bool zero_terminated;
     bool has_field_separator;
     unsigned char field_separator;
-    bool has_key_spec;
-    sort_key_spec_t key_spec;
+    sort_key_spec_vec_t key_specs;
     const char* output_path;
 } sort_opts_t;
 
 typedef struct {
     char* text;
-    char* key_text;
+    char** key_texts;
     size_t original_index;
 } sort_line_t;
 
@@ -63,6 +81,18 @@ typedef struct {
     bool has_digits;
     bool is_zero;
 } numeric_token_t;
+
+typedef struct {
+    const char* base_start;
+    const char* data_start;
+    const char* data_end;
+} sort_field_range_t;
+
+typedef struct {
+    sort_mode_t mode;
+    bool ignore_case;
+    bool reverse;
+} sort_order_opts_t;
 
 typedef enum {
     SORT_STREAM_OK,
@@ -97,6 +127,8 @@ static void sort_print_help(const char* progname) {
     puts("Write sorted concatenation of all FILE(s) to standard output.");
     puts("");
     puts("Ordering options:");
+    puts("  -b, --ignore-leading-blanks");
+    puts("                          ignore leading blanks when finding sort keys");
     puts("  -n, --numeric-sort      compare according to numeric value");
     puts("  -h, --human-numeric-sort  compare human readable numbers (e.g., 2K 1G)");
     puts("  -V, --version-sort      natural sort of version numbers within text");
@@ -122,7 +154,44 @@ static void sort_print_help(const char* progname) {
     puts("      --version           output version information and exit");
 }
 
-static bool sort_line_vec_push(sort_line_vec_t* vec, char* text, char* key_text, size_t original_index) {
+static bool sort_key_spec_vec_push(sort_key_spec_vec_t* vec, const sort_key_spec_t* spec) {
+    if (vec->len == vec->cap) {
+        size_t new_cap = (vec->cap == 0) ? 4u : vec->cap * 2u;
+        if (new_cap < vec->cap || new_cap > SIZE_MAX / sizeof(vec->items[0])) {
+            errno = ENOMEM;
+            return false;
+        }
+        sort_key_spec_t* resized = realloc(vec->items, new_cap * sizeof(vec->items[0]));
+        if (!resized) {
+            return false;
+        }
+        vec->items = resized;
+        vec->cap = new_cap;
+    }
+
+    vec->items[vec->len] = *spec;
+    vec->len++;
+    return true;
+}
+
+static void sort_key_spec_vec_free(sort_key_spec_vec_t* vec) {
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static void sort_free_key_texts(char** key_texts, size_t key_count) {
+    if (!key_texts) {
+        return;
+    }
+    for (size_t i = 0; i < key_count; i++) {
+        free(key_texts[i]);
+    }
+    free(key_texts);
+}
+
+static bool sort_line_vec_push(sort_line_vec_t* vec, char* text, char** key_texts, size_t original_index) {
     if (vec->len == vec->cap) {
         size_t new_cap = (vec->cap == 0) ? 1024u : vec->cap * 2u;
         if (new_cap < vec->cap || new_cap > SIZE_MAX / sizeof(vec->items[0])) {
@@ -138,19 +207,19 @@ static bool sort_line_vec_push(sort_line_vec_t* vec, char* text, char* key_text,
     }
 
     vec->items[vec->len].text = text;
-    vec->items[vec->len].key_text = key_text;
+    vec->items[vec->len].key_texts = key_texts;
     vec->items[vec->len].original_index = original_index;
     vec->len++;
     return true;
 }
 
-static void sort_line_vec_free(sort_line_vec_t* vec) {
+static void sort_line_vec_free(sort_line_vec_t* vec, size_t key_count) {
     if (!vec->items) {
         return;
     }
     for (size_t i = 0; i < vec->len; i++) {
         free(vec->items[i].text);
-        free(vec->items[i].key_text);
+        sort_free_key_texts(vec->items[i].key_texts, key_count);
     }
     free(vec->items);
     vec->items = NULL;
@@ -183,27 +252,80 @@ static bool sort_parse_positive_index(const char** text, size_t* value_out) {
     return true;
 }
 
+static bool sort_set_mode(sort_mode_t* mode_out, bool* has_mode_out, sort_mode_t mode) {
+    if (*has_mode_out && *mode_out != mode) {
+        return false;
+    }
+    *mode_out = mode;
+    *has_mode_out = true;
+    return true;
+}
+
+static bool sort_parse_key_part(const char** text, sort_key_spec_t* spec, sort_key_part_t* part) {
+    if (!sort_parse_positive_index(text, &part->field)) {
+        return false;
+    }
+
+    if (**text == '.') {
+        size_t char_number = 0;
+        (*text)++;
+        if (!sort_parse_positive_index(text, &char_number)) {
+            return false;
+        }
+        part->has_char_offset = true;
+        part->char_offset = char_number - 1u;
+    }
+
+    while (**text != '\0' && **text != ',') {
+        switch (**text) {
+            case 'b':
+                part->ignore_leading_blanks = true;
+                break;
+            case 'f':
+                spec->ignore_case = true;
+                break;
+            case 'r':
+                spec->reverse = true;
+                break;
+            case 'n':
+                if (!sort_set_mode(&spec->mode, &spec->has_mode, SORT_MODE_NUMERIC)) {
+                    return false;
+                }
+                break;
+            case 'h':
+                if (!sort_set_mode(&spec->mode, &spec->has_mode, SORT_MODE_HUMAN)) {
+                    return false;
+                }
+                break;
+            case 'V':
+                if (!sort_set_mode(&spec->mode, &spec->has_mode, SORT_MODE_VERSION)) {
+                    return false;
+                }
+                break;
+            default:
+                return false;
+        }
+        (*text)++;
+    }
+
+    return true;
+}
+
 static bool sort_parse_key_spec(const char* text, sort_key_spec_t* spec_out) {
     const char* p = text;
     sort_key_spec_t spec = {0};
 
-    if (!sort_parse_positive_index(&p, &spec.start_field)) {
+    if (!sort_parse_key_part(&p, &spec, &spec.start)) {
         return false;
     }
 
-    if (*p == '\0') {
-        spec.end_field = 0;
-    }
-    else if (*p == ',') {
+    if (*p == ',') {
         p++;
-        if (!sort_parse_positive_index(&p, &spec.end_field)) {
+        spec.has_end = true;
+        if (!sort_parse_key_part(&p, &spec, &spec.end)) {
             return false;
         }
-        if (*p != '\0') {
-            return false;
-        }
-    }
-    else {
+    } else if (*p != '\0') {
         return false;
     }
 
@@ -211,7 +333,7 @@ static bool sort_parse_key_spec(const char* text, sort_key_spec_t* spec_out) {
     return true;
 }
 
-static bool sort_find_field_range(const char* line, const sort_opts_t* opts, size_t field_number, const char** field_start, const char** field_end) {
+static bool sort_find_field_range(const char* line, const sort_opts_t* opts, size_t field_number, sort_field_range_t* range_out) {
     const char* line_end = line + strlen(line);
 
     if (opts->has_field_separator) {
@@ -220,8 +342,9 @@ static bool sort_find_field_range(const char* line, const sort_opts_t* opts, siz
         while (current < field_number) {
             const char* separator = strchr(cursor, (int)opts->field_separator);
             if (!separator) {
-                *field_start = line_end;
-                *field_end = line_end;
+                range_out->base_start = line_end;
+                range_out->data_start = line_end;
+                range_out->data_end = line_end;
                 return false;
             }
             cursor = separator + 1;
@@ -229,45 +352,42 @@ static bool sort_find_field_range(const char* line, const sort_opts_t* opts, siz
         }
 
         const char* separator = strchr(cursor, (int)opts->field_separator);
-        *field_start = cursor;
-        *field_end = separator ? separator : line_end;
+        range_out->base_start = cursor;
+        range_out->data_start = cursor;
+        range_out->data_end = separator ? separator : line_end;
         return true;
     }
 
-    const unsigned char* cursor = (const unsigned char*)line;
-    while (*cursor != '\0' && isblank(*cursor)) {
-        cursor++;
-    }
-    if (*cursor == '\0') {
-        *field_start = line_end;
-        *field_end = line_end;
-        return false;
-    }
-
-    size_t current = 1;
-    while (current < field_number) {
-        while (*cursor != '\0' && !isblank(*cursor)) {
-            cursor++;
-        }
-        while (*cursor != '\0' && isblank(*cursor)) {
+    const char* cursor = line;
+    for (size_t current = 1; current <= field_number; current++) {
+        const char* base_start = cursor;
+        while (*cursor != '\0' && isblank((unsigned char)*cursor)) {
             cursor++;
         }
         if (*cursor == '\0') {
-            *field_start = line_end;
-            *field_end = line_end;
+            range_out->base_start = line_end;
+            range_out->data_start = line_end;
+            range_out->data_end = line_end;
             return false;
         }
-        current++;
+
+        const char* data_start = cursor;
+        while (*cursor != '\0' && !isblank((unsigned char)*cursor)) {
+            cursor++;
+        }
+
+        if (current == field_number) {
+            range_out->base_start = base_start;
+            range_out->data_start = data_start;
+            range_out->data_end = cursor;
+            return true;
+        }
     }
 
-    const unsigned char* start = cursor;
-    while (*cursor != '\0' && !isblank(*cursor)) {
-        cursor++;
-    }
-
-    *field_start = (const char*)start;
-    *field_end = (const char*)cursor;
-    return true;
+    range_out->base_start = line_end;
+    range_out->data_start = line_end;
+    range_out->data_end = line_end;
+    return false;
 }
 
 static char* sort_strdup_range(const char* start, size_t length) {
@@ -285,36 +405,88 @@ static char* sort_strdup_range(const char* start, size_t length) {
     return copy;
 }
 
-static char* sort_make_key_copy(const sort_opts_t* opts, const char* line) {
+static const char* sort_skip_leading_blanks(const char* text) {
+    while (*text != '\0' && isblank((unsigned char)*text)) {
+        text++;
+    }
+    return text;
+}
+
+static const char* sort_clamped_advance(const char* start, const char* end, size_t count) {
+    size_t available = (size_t)(end - start);
+    if (count > available) {
+        return end;
+    }
+    return start + count;
+}
+
+static const char* sort_key_part_base(const sort_opts_t* opts, const sort_key_part_t* part, const sort_field_range_t* field) {
+    if (opts->has_field_separator) {
+        return field->data_start;
+    }
+    if (opts->ignore_leading_blanks || part->ignore_leading_blanks) {
+        return field->data_start;
+    }
+    return field->base_start;
+}
+
+static char* sort_make_key_copy_for_spec(const sort_opts_t* opts, const sort_key_spec_t* spec, const char* line) {
     const char* line_end = line + strlen(line);
-    const char* key_start = line;
+    const char* key_start = line_end;
     const char* key_end = line_end;
 
-    if (opts->has_key_spec) {
-        const char* start_field_begin = NULL;
-        const char* ignored_end = NULL;
-        bool has_start_field = sort_find_field_range(line, opts, opts->key_spec.start_field, &start_field_begin, &ignored_end);
-        if (!has_start_field) {
-            key_start = line_end;
+    sort_field_range_t start_field = {0};
+    if (sort_find_field_range(line, opts, spec->start.field, &start_field)) {
+        const char* start_base = sort_key_part_base(opts, &spec->start, &start_field);
+        size_t start_offset = spec->start.has_char_offset ? spec->start.char_offset : 0u;
+        key_start = sort_clamped_advance(start_base, start_field.data_end, start_offset);
+
+        if (!spec->has_end) {
             key_end = line_end;
         }
         else {
-            key_start = start_field_begin;
-            if (opts->key_spec.end_field == 0) {
+            sort_field_range_t end_field = {0};
+            if (!sort_find_field_range(line, opts, spec->end.field, &end_field)) {
                 key_end = line_end;
             }
             else {
-                const char* end_field_end = NULL;
-                bool has_end_field = sort_find_field_range(line, opts, opts->key_spec.end_field, &ignored_end, &end_field_end);
-                key_end = has_end_field ? end_field_end : line_end;
-            }
-            if (key_end < key_start) {
-                key_end = key_start;
+                if (spec->end.has_char_offset) {
+                    const char* end_base = sort_key_part_base(opts, &spec->end, &end_field);
+                    key_end = sort_clamped_advance(end_base, end_field.data_end, spec->end.char_offset + 1u);
+                }
+                else {
+                    key_end = end_field.data_end;
+                }
             }
         }
     }
 
+    if (key_end < key_start) {
+        key_end = key_start;
+    }
+
     return sort_strdup_range(key_start, (size_t)(key_end - key_start));
+}
+
+static char** sort_make_key_copies(const sort_opts_t* opts, const char* line) {
+    if (opts->key_specs.len == 0) {
+        return NULL;
+    }
+
+    char** key_texts = calloc(opts->key_specs.len, sizeof(key_texts[0]));
+    if (!key_texts) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < opts->key_specs.len; i++) {
+        key_texts[i] = sort_make_key_copy_for_spec(opts, &opts->key_specs.items[i], line);
+        if (!key_texts[i]) {
+            sort_free_key_texts(key_texts, opts->key_specs.len);
+            return NULL;
+        }
+    }
+
+    return key_texts;
 }
 
 static void sort_parse_numeric_token(const char* text, numeric_token_t* token) {
@@ -682,52 +854,109 @@ static int sort_compare_default_line(const char* left, const char* right) {
     return sort_cmp_sign(strcoll(left, right));
 }
 
-static int sort_compare_key_text(const sort_opts_t* opts, const char* left, const char* right) {
-    switch (opts->mode) {
+static int sort_compare_text_with_order(const sort_order_opts_t* order, const char* left, const char* right) {
+    int cmp = 0;
+
+    switch (order->mode) {
         case SORT_MODE_NUMERIC:
-            return sort_compare_numeric_key(left, right);
+            cmp = sort_compare_numeric_key(left, right);
+            break;
         case SORT_MODE_HUMAN:
-            return sort_compare_human_key(left, right);
+            cmp = sort_compare_human_key(left, right);
+            break;
         case SORT_MODE_VERSION:
-            return sort_compare_version_key(left, right, opts->ignore_case);
+            cmp = sort_compare_version_key(left, right, order->ignore_case);
+            break;
         case SORT_MODE_LEXICOGRAPHIC:
         default:
-            if (opts->ignore_case) {
-                return sort_cmp_sign(strcasecmp(left, right));
+            if (order->ignore_case) {
+                cmp = sort_cmp_sign(strcasecmp(left, right));
             }
-            return sort_cmp_sign(strcoll(left, right));
+            else {
+                cmp = sort_cmp_sign(strcoll(left, right));
+            }
+            break;
     }
+
+    if (order->reverse) {
+        cmp = -cmp;
+    }
+    return cmp;
 }
 
-static int sort_compare_for_output(const sort_opts_t* opts, const char* left_line, const char* left_key, const char* right_line, const char* right_key) {
-    int cmp = sort_compare_key_text(opts, left_key, right_key);
+static sort_order_opts_t sort_primary_order_for_key(const sort_opts_t* opts, const sort_key_spec_t* spec, bool include_reverse) {
+    sort_order_opts_t order = {
+        .mode = spec->has_mode ? spec->mode : opts->mode,
+        .ignore_case = (opts->ignore_case || spec->ignore_case),
+        .reverse = include_reverse ? (opts->reverse || spec->reverse) : false,
+    };
+    return order;
+}
+
+static sort_order_opts_t sort_primary_order_for_line(const sort_opts_t* opts, bool include_reverse) {
+    sort_order_opts_t order = {
+        .mode = opts->mode,
+        .ignore_case = opts->ignore_case,
+        .reverse = include_reverse ? opts->reverse : false,
+    };
+    return order;
+}
+
+static int sort_compare_primary(const sort_opts_t* opts,
+                                const char* left_line,
+                                char* const* left_keys,
+                                const char* right_line,
+                                char* const* right_keys,
+                                bool include_reverse) {
+    if (opts->key_specs.len == 0) {
+        const char* left_key = opts->ignore_leading_blanks ? sort_skip_leading_blanks(left_line) : left_line;
+        const char* right_key = opts->ignore_leading_blanks ? sort_skip_leading_blanks(right_line) : right_line;
+        sort_order_opts_t order = sort_primary_order_for_line(opts, include_reverse);
+        return sort_compare_text_with_order(&order, left_key, right_key);
+    }
+
+    for (size_t i = 0; i < opts->key_specs.len; i++) {
+        sort_order_opts_t order = sort_primary_order_for_key(opts, &opts->key_specs.items[i], include_reverse);
+        int cmp = sort_compare_text_with_order(&order, left_keys[i], right_keys[i]);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+
+    return 0;
+}
+
+static int sort_compare_for_output(const sort_opts_t* opts,
+                                   const char* left_line,
+                                   char* const* left_keys,
+                                   const char* right_line,
+                                   char* const* right_keys) {
+    int cmp = sort_compare_primary(opts, left_line, left_keys, right_line, right_keys, true);
 
     if (cmp == 0 && !opts->stable && !opts->unique) {
         cmp = sort_compare_default_line(left_line, right_line);
-    }
-
-    if (opts->reverse) {
-        cmp = -cmp;
+        if (opts->reverse) {
+            cmp = -cmp;
+        }
     }
 
     return cmp;
 }
 
-static const char* sort_line_key_text(const sort_opts_t* opts, const sort_line_t* line) {
-    if (opts->has_key_spec && line->key_text) {
-        return line->key_text;
-    }
-    return line->text;
+static int sort_compare_primary_for_unique(const sort_opts_t* opts,
+                                           const char* left_line,
+                                           char* const* left_keys,
+                                           const char* right_line,
+                                           char* const* right_keys) {
+    return sort_compare_primary(opts, left_line, left_keys, right_line, right_keys, false);
 }
 
 static int sort_qsort_compare(const void* left_ptr, const void* right_ptr, void* arg) {
     const sort_opts_t* opts = (const sort_opts_t*)arg;
     const sort_line_t* left = (const sort_line_t*)left_ptr;
     const sort_line_t* right = (const sort_line_t*)right_ptr;
-    const char* left_key = sort_line_key_text(opts, left);
-    const char* right_key = sort_line_key_text(opts, right);
 
-    int cmp = sort_compare_for_output(opts, left->text, left_key, right->text, right_key);
+    int cmp = sort_compare_for_output(opts, left->text, left->key_texts, right->text, right->key_texts);
     if (cmp != 0) {
         return cmp;
     }
@@ -765,10 +994,10 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
             return SORT_STREAM_NOMEM;
         }
 
-        char* key_copy = NULL;
-        if (opts->has_key_spec) {
-            key_copy = sort_make_key_copy(opts, copy);
-            if (!key_copy) {
+        char** key_texts = NULL;
+        if (opts->key_specs.len > 0) {
+            key_texts = sort_make_key_copies(opts, copy);
+            if (!key_texts) {
                 sort_report_memory_exhausted(progname);
                 free(copy);
                 free(line);
@@ -776,10 +1005,10 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
             }
         }
 
-        if (!sort_line_vec_push(lines, copy, key_copy, *next_index)) {
+        if (!sort_line_vec_push(lines, copy, key_texts, *next_index)) {
             sort_report_memory_exhausted(progname);
             free(copy);
-            free(key_copy);
+            sort_free_key_texts(key_texts, opts->key_specs.len);
             free(line);
             return SORT_STREAM_NOMEM;
         }
@@ -795,7 +1024,13 @@ static sort_stream_status_t sort_read_stream(FILE* stream, const char* source_la
 }
 
 static sort_stream_status_t
-sort_check_stream(FILE* stream, const char* source_label, const sort_opts_t* opts, char** previous_line, char** previous_key, bool* have_previous_line, const char* progname) {
+sort_check_stream(FILE* stream,
+                  const char* source_label,
+                  const sort_opts_t* opts,
+                  char** previous_line,
+                  char*** previous_keys,
+                  bool* have_previous_line,
+                  const char* progname) {
     char* line = NULL;
     size_t line_cap = 0;
     ssize_t len;
@@ -808,10 +1043,10 @@ sort_check_stream(FILE* stream, const char* source_label, const sort_opts_t* opt
         }
         line_number++;
 
-        char* line_key = NULL;
-        if (opts->has_key_spec) {
-            line_key = sort_make_key_copy(opts, line);
-            if (!line_key) {
+        char** line_keys = NULL;
+        if (opts->key_specs.len > 0) {
+            line_keys = sort_make_key_copies(opts, line);
+            if (!line_keys) {
                 sort_report_memory_exhausted(progname);
                 free(line);
                 return SORT_STREAM_NOMEM;
@@ -819,14 +1054,12 @@ sort_check_stream(FILE* stream, const char* source_label, const sort_opts_t* opt
         }
 
         if (*have_previous_line) {
-            const char* left_key = opts->has_key_spec ? *previous_key : *previous_line;
-            const char* right_key = opts->has_key_spec ? line_key : line;
-            int cmp = sort_compare_for_output(opts, *previous_line, left_key, line, right_key);
+            int cmp = sort_compare_for_output(opts, *previous_line, *previous_keys, line, line_keys);
             if (cmp > 0 || (opts->unique && cmp == 0)) {
                 if (!opts->check_quiet) {
                     fprintf(stderr, "%s: %s:%zu: disorder\n", progname, source_label, line_number);
                 }
-                free(line_key);
+                sort_free_key_texts(line_keys, opts->key_specs.len);
                 free(line);
                 return SORT_STREAM_DISORDER;
             }
@@ -835,20 +1068,18 @@ sort_check_stream(FILE* stream, const char* source_label, const sort_opts_t* opt
         char* copy = strdup(line);
         if (!copy) {
             sort_report_memory_exhausted(progname);
-            free(line_key);
+            sort_free_key_texts(line_keys, opts->key_specs.len);
             free(line);
             return SORT_STREAM_NOMEM;
         }
 
         free(*previous_line);
         *previous_line = copy;
-        if (opts->has_key_spec) {
-            free(*previous_key);
-            *previous_key = line_key;
-            line_key = NULL;
-        }
+        sort_free_key_texts(*previous_keys, opts->key_specs.len);
+        *previous_keys = line_keys;
+        line_keys = NULL;
         *have_previous_line = true;
-        free(line_key);
+        sort_free_key_texts(line_keys, opts->key_specs.len);
     }
 
     free(line);
@@ -872,6 +1103,7 @@ static bool sort_write_line(FILE* out, const char* line, int delimiter) {
 
 int bx_sort_main(int argc, char** argv) {
     static const struct option long_options[] = {
+        {"ignore-leading-blanks", no_argument, NULL, 'b'},
         {"human-numeric-sort", no_argument, NULL, 'h'},
         {"numeric-sort", no_argument, NULL, 'n'},
         {"reverse", no_argument, NULL, 'r'},
@@ -897,25 +1129,37 @@ int bx_sort_main(int argc, char** argv) {
         .reverse = false,
         .unique = false,
         .ignore_case = false,
+        .ignore_leading_blanks = false,
         .check = false,
         .check_quiet = false,
         .stable = false,
         .zero_terminated = false,
         .has_field_separator = false,
         .field_separator = 0,
-        .has_key_spec = false,
-        .key_spec = {.start_field = 1u, .end_field = 0u},
+        .key_specs = {0},
         .output_path = NULL,
     };
+    bool has_global_mode = false;
 
     int c;
-    while ((c = getopt_long(argc, argv, "hnrufo:cCszt:k:V", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
         switch (c) {
+            case 'b':
+                opts.ignore_leading_blanks = true;
+                break;
             case 'h':
-                opts.mode = SORT_MODE_HUMAN;
+                if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_HUMAN)) {
+                    fprintf(stderr, "%s: incompatible sorting options\n", progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
+                    return 1;
+                }
                 break;
             case 'n':
-                opts.mode = SORT_MODE_NUMERIC;
+                if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_NUMERIC)) {
+                    fprintf(stderr, "%s: incompatible sorting options\n", progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
+                    return 1;
+                }
                 break;
             case 'r':
                 opts.reverse = true;
@@ -943,41 +1187,58 @@ int bx_sort_main(int argc, char** argv) {
             case 't':
                 if (!optarg || optarg[0] == '\0') {
                     fprintf(stderr, "%s: empty tab\n", progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
                     return 1;
                 }
                 if (optarg[1] != '\0') {
                     fprintf(stderr, "%s: multi-character tab '%s'\n", progname, optarg);
+                    sort_key_spec_vec_free(&opts.key_specs);
                     return 1;
                 }
                 opts.has_field_separator = true;
                 opts.field_separator = (unsigned char)optarg[0];
                 break;
-            case 'k':
-                if (!sort_parse_key_spec(optarg, &opts.key_spec)) {
+            case 'k': {
+                sort_key_spec_t spec = {0};
+                if (!sort_parse_key_spec(optarg, &spec)) {
                     fprintf(stderr, "%s: invalid key specification '%s'\n", progname, optarg);
+                    sort_key_spec_vec_free(&opts.key_specs);
                     return 1;
                 }
-                opts.has_key_spec = true;
+                if (!sort_key_spec_vec_push(&opts.key_specs, &spec)) {
+                    sort_report_memory_exhausted(progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
+                    return 1;
+                }
                 break;
+            }
             case 'z':
                 opts.zero_terminated = true;
                 break;
             case 'V':
-                opts.mode = SORT_MODE_VERSION;
+                if (!sort_set_mode(&opts.mode, &has_global_mode, SORT_MODE_VERSION)) {
+                    fprintf(stderr, "%s: incompatible sorting options\n", progname);
+                    sort_key_spec_vec_free(&opts.key_specs);
+                    return 1;
+                }
                 break;
             case SORT_OPT_HELP:
                 sort_print_help(progname);
+                sort_key_spec_vec_free(&opts.key_specs);
                 return 0;
             case SORT_OPT_VERSION:
                 printf("sort (bx) %s\n", BX_VERSION);
+                sort_key_spec_vec_free(&opts.key_specs);
                 return 0;
             default:
+                sort_key_spec_vec_free(&opts.key_specs);
                 return 1;
         }
     }
 
     if (opts.check && opts.output_path) {
         fprintf(stderr, "%s: cannot use -o with -c or -C\n", progname);
+        sort_key_spec_vec_free(&opts.key_specs);
         return 1;
     }
 
@@ -985,11 +1246,11 @@ int bx_sort_main(int argc, char** argv) {
 
     if (opts.check) {
         char* previous_line = NULL;
-        char* previous_key = NULL;
+        char** previous_keys = NULL;
         bool have_previous_line = false;
 
         if (optind == argc) {
-            sort_stream_status_t status = sort_check_stream(stdin, "standard input", &opts, &previous_line, &previous_key, &have_previous_line, progname);
+            sort_stream_status_t status = sort_check_stream(stdin, "standard input", &opts, &previous_line, &previous_keys, &have_previous_line, progname);
             if (status != SORT_STREAM_OK) {
                 had_error = true;
             }
@@ -1013,7 +1274,7 @@ int bx_sort_main(int argc, char** argv) {
                     }
                 }
 
-                sort_stream_status_t status = sort_check_stream(stream, source_label, &opts, &previous_line, &previous_key, &have_previous_line, progname);
+                sort_stream_status_t status = sort_check_stream(stream, source_label, &opts, &previous_line, &previous_keys, &have_previous_line, progname);
                 if (status != SORT_STREAM_OK) {
                     had_error = true;
                 }
@@ -1030,7 +1291,8 @@ int bx_sort_main(int argc, char** argv) {
         }
 
         free(previous_line);
-        free(previous_key);
+        sort_free_key_texts(previous_keys, opts.key_specs.len);
+        sort_key_spec_vec_free(&opts.key_specs);
         return had_error ? 1 : 0;
     }
 
@@ -1108,10 +1370,12 @@ int bx_sort_main(int argc, char** argv) {
         size_t last_unique_index = 0;
 
         for (size_t i = 0; i < lines.len; i++) {
-            const char* current_key = sort_line_key_text(&opts, &lines.items[i]);
             if (opts.unique && have_last_unique) {
-                const char* previous_key = sort_line_key_text(&opts, &lines.items[last_unique_index]);
-                if (sort_compare_key_text(&opts, previous_key, current_key) == 0) {
+                if (sort_compare_primary_for_unique(&opts,
+                                                    lines.items[last_unique_index].text,
+                                                    lines.items[last_unique_index].key_texts,
+                                                    lines.items[i].text,
+                                                    lines.items[i].key_texts) == 0) {
                     continue;
                 }
             }
@@ -1140,6 +1404,7 @@ int bx_sort_main(int argc, char** argv) {
         }
     }
 
-    sort_line_vec_free(&lines);
+    sort_line_vec_free(&lines, opts.key_specs.len);
+    sort_key_spec_vec_free(&opts.key_specs);
     return had_error ? 1 : 0;
 }
