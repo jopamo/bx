@@ -5,6 +5,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <locale.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -105,6 +106,25 @@ static bool bx_od_host_is_little_endian(void) {
     const uint16_t value = 1u;
     return *((const unsigned char*)&value) == 1u;
 }
+static char* bx_od_push_c_numeric_locale(void) {
+    const char* current = setlocale(LC_NUMERIC, NULL);
+    char* saved = NULL;
+
+    if (current != NULL) {
+        saved = xstrdup(current);
+        setlocale(LC_NUMERIC, "C");
+    }
+
+    return saved;
+}
+
+static void bx_od_pop_numeric_locale(char* saved_locale) {
+    if (saved_locale != NULL) {
+        setlocale(LC_NUMERIC, saved_locale);
+        free(saved_locale);
+    }
+}
+
 
 static void bx_od_warn(const char* progname, const char* fmt, ...) {
     va_list ap;
@@ -929,16 +949,30 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
     }
 
     for (size_t i = 0u; i < options->format_count; i++) {
-        if (options->formats[i].unit_size == options->min_unit) {
-            int slot = (int)options->formats[i].cell_width + 1;
-            if (slot > options->base_slot_width) {
-                options->base_slot_width = slot;
-            }
+        size_t ratio = options->formats[i].unit_size / options->min_unit;
+        size_t needed = options->formats[i].cell_width + 1u;
+        size_t base_needed = (needed + ratio - 1u) / ratio;
+
+        if (base_needed > (size_t)INT_MAX) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        if ((int)base_needed > options->base_slot_width) {
+            options->base_slot_width = (int)base_needed;
         }
     }
 
     for (size_t i = 0u; i < options->format_count; i++) {
-        options->formats[i].slot_width = options->base_slot_width * (int)(options->formats[i].unit_size / options->min_unit);
+        size_t ratio = options->formats[i].unit_size / options->min_unit;
+        size_t slot_width = (size_t)options->base_slot_width * ratio;
+
+        if (slot_width > (size_t)INT_MAX) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        options->formats[i].slot_width = (int)slot_width;
     }
 
     if (!options->width_specified) {
@@ -962,7 +996,9 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
     }
 
     if (adjusted_width != options->width) {
-        bx_od_warn(options->progname, "invalid width %ju; using %ju instead", options->width, adjusted_width);
+        if (!(options->read_bytes_set && options->read_bytes == 0u)) {
+            bx_od_warn(options->progname, "invalid width %ju; using %ju instead", options->width, adjusted_width);
+        }
         options->width = adjusted_width;
     }
 
@@ -1743,6 +1779,7 @@ static bool bx_od_long_double_bits_equal(long double a, long double b) {
 
 static void bx_od_format_shortest_float(float value, char* out, size_t out_size) {
     char candidate[128];
+    char* saved_locale = bx_od_push_c_numeric_locale();
 #ifdef FLT_DECIMAL_DIG
     const int max_precision = FLT_DECIMAL_DIG;
 #else
@@ -1753,29 +1790,30 @@ static void bx_od_format_shortest_float(float value, char* out, size_t out_size)
 
     if (!isfinite(value)) {
         snprintf(out, out_size, "%g", (double)value);
+        bx_od_pop_numeric_locale(saved_locale);
         return;
     }
 
     for (int precision = min_precision; precision <= max_precision; precision++) {
         char* end = NULL;
-        double parsed_double;
         float parsed;
 
         snprintf(candidate, sizeof(candidate), "%.*g", precision, (double)value);
-        errno = 0;
-        parsed_double = strtod(candidate, &end);
-        parsed = (float)parsed_double;
-        if (errno == 0 && end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value)) {
+        parsed = strtof(candidate, &end);
+        if (end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value)) {
             snprintf(out, out_size, "%s", candidate);
+            bx_od_pop_numeric_locale(saved_locale);
             return;
         }
     }
 
     snprintf(out, out_size, "%.*g", max_precision, (double)value);
+    bx_od_pop_numeric_locale(saved_locale);
 }
 
 static void bx_od_format_shortest_double(double value, char* out, size_t out_size) {
     char candidate[128];
+    char* saved_locale = bx_od_push_c_numeric_locale();
 #ifdef DBL_DECIMAL_DIG
     const int max_precision = DBL_DECIMAL_DIG;
 #else
@@ -1786,6 +1824,7 @@ static void bx_od_format_shortest_double(double value, char* out, size_t out_siz
 
     if (!isfinite(value)) {
         snprintf(out, out_size, "%g", value);
+        bx_od_pop_numeric_locale(saved_locale);
         return;
     }
 
@@ -1794,19 +1833,21 @@ static void bx_od_format_shortest_double(double value, char* out, size_t out_siz
         double parsed;
 
         snprintf(candidate, sizeof(candidate), "%.*g", precision, value);
-        errno = 0;
         parsed = strtod(candidate, &end);
-        if (errno == 0 && end != NULL && *end == '\0' && bx_od_double_bits_equal(parsed, value)) {
+        if (end != NULL && *end == '\0' && bx_od_double_bits_equal(parsed, value)) {
             snprintf(out, out_size, "%s", candidate);
+            bx_od_pop_numeric_locale(saved_locale);
             return;
         }
     }
 
     snprintf(out, out_size, "%.*g", max_precision, value);
+    bx_od_pop_numeric_locale(saved_locale);
 }
 
 static void bx_od_format_shortest_long_double(long double value, char* out, size_t out_size) {
     char candidate[160];
+    char* saved_locale = bx_od_push_c_numeric_locale();
 #ifdef LDBL_DECIMAL_DIG
     const int max_precision = LDBL_DECIMAL_DIG;
 #elif defined(DECIMAL_DIG)
@@ -1819,6 +1860,7 @@ static void bx_od_format_shortest_long_double(long double value, char* out, size
 
     if (isnan(value) || isinf(value)) {
         snprintf(out, out_size, "%Lg", value);
+        bx_od_pop_numeric_locale(saved_locale);
         return;
     }
 
@@ -1827,15 +1869,16 @@ static void bx_od_format_shortest_long_double(long double value, char* out, size
         long double parsed;
 
         snprintf(candidate, sizeof(candidate), "%.*Lg", precision, value);
-        errno = 0;
         parsed = strtold(candidate, &end);
-        if (errno == 0 && end != NULL && *end == '\0' && bx_od_long_double_bits_equal(parsed, value)) {
+        if (end != NULL && *end == '\0' && bx_od_long_double_bits_equal(parsed, value)) {
             snprintf(out, out_size, "%s", candidate);
+            bx_od_pop_numeric_locale(saved_locale);
             return;
         }
     }
 
     snprintf(out, out_size, "%.*Lg", max_precision, value);
+    bx_od_pop_numeric_locale(saved_locale);
 }
 
 static void bx_od_render_named_char(unsigned char byte, char* out, size_t out_size) {
@@ -2253,6 +2296,16 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
         if (options->read_bytes_set) {
             remaining -= (uintmax_t)nread;
         }
+    }
+
+    if (options->read_bytes_set && remaining == 0u && in_string && (uintmax_t)string_len >= options->strings_min) {
+        uintmax_t label = 0u;
+
+        string_buf[string_len] = '\0';
+        if (operands->have_label) {
+            label = operands->label + (string_start - operands->offset);
+        }
+        bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf);
     }
 
     bx_od_input_close_current(&input);
