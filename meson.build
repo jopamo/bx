@@ -384,6 +384,15 @@ if get_option('tests')
   test_cp_reference_resolution = files('tests/cp/test_cp_reference_resolution.py')
   test('cp reference resolution', python3, args : [test_cp_reference_resolution])
 
+  test_coreutils_symlink_reference_resolution = files('tests/test_coreutils_symlink_reference_resolution.py')
+  test('coreutils symlink reference resolution', python3, args : [test_coreutils_symlink_reference_resolution])
+
+  test_bx_symlink_dispatch_setup = files('tests/test_bx_symlink_dispatch_setup.py')
+  test('bx symlink dispatch setup', python3, args : [test_bx_symlink_dispatch_setup])
+
+  test_audit_thin_applets = files('tests/audit_thin_applets.py')
+  test('audit thin applets', python3, args : [test_audit_thin_applets, bx_exe, meson.current_build_dir()])
+
   test_fuzz_reference_resolution = files('tests/test_fuzz_reference_resolution.py')
   test('fuzz reference resolution', python3, args : [test_fuzz_reference_resolution])
 

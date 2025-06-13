@@ -108,6 +108,14 @@ struct bx_ls_path_list {
     size_t cap;
 };
 
+struct bx_ls_long_widths {
+    size_t inode;
+    size_t nlink;
+    size_t user;
+    size_t group;
+    size_t size;
+};
+
 static const char* bx_ls_variant_name(enum bx_ls_variant variant) {
     switch (variant) {
         case BX_LS_VARIANT_DIR:
@@ -1417,6 +1425,72 @@ static bool bx_ls_entry_stat(const struct bx_ls_entry* entry, struct stat* st, s
     return false;
 }
 
+static size_t bx_ls_uintmax_width(uintmax_t value) {
+    size_t width = 1u;
+    while (value >= 10u) {
+        value /= 10u;
+        width++;
+    }
+    return width;
+}
+
+static void bx_ls_long_widths_init(struct bx_ls_long_widths* widths, const struct bx_ls_options* options) {
+    widths->inode = options->show_inode ? 1u : 0u;
+    widths->nlink = 1u;
+    widths->user = 1u;
+    widths->group = 1u;
+    widths->size = 1u;
+}
+
+static void bx_ls_compute_long_widths(
+    const struct bx_ls_entry_list* entries,
+    const struct bx_ls_options* options,
+    struct bx_diag_ctx* diag,
+    struct bx_ls_long_widths* widths) {
+    bx_ls_long_widths_init(widths, options);
+
+    for (size_t i = 0; i < entries->len; i++) {
+        const struct bx_ls_entry* entry = &entries->items[i];
+        struct stat st;
+        if (!bx_ls_entry_stat(entry, &st, diag, false)) {
+            continue;
+        }
+
+        if (options->show_inode) {
+            size_t inode_width = bx_ls_uintmax_width((uintmax_t)st.st_ino);
+            if (inode_width > widths->inode) {
+                widths->inode = inode_width;
+            }
+        }
+
+        size_t nlink_width = bx_ls_uintmax_width((uintmax_t)st.st_nlink);
+        if (nlink_width > widths->nlink) {
+            widths->nlink = nlink_width;
+        }
+
+        char user_numeric[32];
+        const char* user_name = bx_ls_user_name(st.st_uid, options->numeric_ids, user_numeric);
+        size_t user_width = strlen(user_name);
+        if (user_width > widths->user) {
+            widths->user = user_width;
+        }
+
+        char group_numeric[32];
+        const char* group_name = bx_ls_group_name(st.st_gid, options->numeric_ids, group_numeric);
+        size_t group_width = strlen(group_name);
+        if (group_width > widths->group) {
+            widths->group = group_width;
+        }
+
+        char size_text[32];
+        bx_ls_format_size((intmax_t)st.st_size, options, size_text);
+        size_t size_width = strlen(size_text);
+        if (size_width > widths->size) {
+            widths->size = size_width;
+        }
+    }
+}
+
 static bool bx_ls_build_short_cell(const struct bx_ls_entry* entry, const struct bx_ls_options* options, struct bx_diag_ctx* diag, char** out_cell) {
     struct stat st;
     bool have_stat = bx_ls_entry_stat(entry, &st, diag, options->show_inode);
@@ -1462,9 +1536,14 @@ static size_t bx_ls_output_width(void) {
         }
     }
 
+    bool stdout_is_tty = (isatty(STDOUT_FILENO) == 1);
     struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+    if (stdout_is_tty && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
         return (size_t)ws.ws_col;
+    }
+
+    if (!stdout_is_tty) {
+        return SIZE_MAX;
     }
 
     return 80u;
@@ -1539,7 +1618,24 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
     if (column_count == 0u) {
         column_count = 1u;
     }
+    if (column_count > cell_count) {
+        column_count = cell_count;
+    }
     size_t row_count = (cell_count + column_count - 1u) / column_count;
+    size_t* column_widths = xmalloc(column_count * sizeof(*column_widths));
+    for (size_t col = 0; col < column_count; col++) {
+        column_widths[col] = 0u;
+        for (size_t row = 0; row < row_count; row++) {
+            size_t idx = col * row_count + row;
+            if (idx >= cell_count) {
+                continue;
+            }
+            size_t used = bx_ls_display_width(cells[idx]);
+            if (used > column_widths[col]) {
+                column_widths[col] = used;
+            }
+        }
+    }
 
     for (size_t row = 0; row < row_count; row++) {
         for (size_t col = 0; col < column_count; col++) {
@@ -1561,7 +1657,8 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
 
             if (next_col < column_count) {
                 size_t used = bx_ls_display_width(cells[idx]);
-                size_t pad = (column_width > used) ? (column_width - used) : 1u;
+                size_t pad = (column_widths[col] > used) ? (column_widths[col] - used) : 0u;
+                pad += 2u;
                 for (size_t p = 0; p < pad; p++) {
                     (void)fputc(' ', stdout);
                 }
@@ -1573,10 +1670,15 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
     for (size_t i = 0; i < cell_count; i++) {
         free(cells[i]);
     }
+    free(column_widths);
     free(cells);
 }
 
-static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+static void bx_ls_print_long_entry(
+    const struct bx_ls_entry* entry,
+    const struct bx_ls_options* options,
+    const struct bx_ls_long_widths* widths,
+    struct bx_diag_ctx* diag) {
     struct stat st;
     if (!bx_ls_entry_stat(entry, &st, diag, true)) {
         return;
@@ -1614,10 +1716,22 @@ static void bx_ls_print_long_entry(const struct bx_ls_entry* entry, const struct
     }
 
     if (options->show_inode) {
-        printf("%9" PRIuMAX " ", (uintmax_t)st.st_ino);
+        printf("%*" PRIuMAX " ", (int)widths->inode, (uintmax_t)st.st_ino);
     }
 
-    printf("%s %3" PRIuMAX " %-8s %-8s %8s %s %s", mode, (uintmax_t)st.st_nlink, user_name, group_name, size, timestamp, display_name);
+    printf(
+        "%s %*" PRIuMAX " %-*s %-*s %*s %s %s",
+        mode,
+        (int)widths->nlink,
+        (uintmax_t)st.st_nlink,
+        (int)widths->user,
+        user_name,
+        (int)widths->group,
+        group_name,
+        (int)widths->size,
+        size,
+        timestamp,
+        display_name);
 
     if (symlink_display != NULL) {
         printf(" -> %s", symlink_display);
@@ -1646,12 +1760,15 @@ static uintmax_t bx_ls_total_blocks_kib(const struct bx_ls_entry_list* entries, 
 }
 
 static void bx_ls_print_entries_long(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_total) {
+    struct bx_ls_long_widths widths;
+    bx_ls_compute_long_widths(entries, options, diag, &widths);
+
     if (print_total) {
         printf("total %" PRIuMAX "\n", bx_ls_total_blocks_kib(entries, diag));
     }
 
     for (size_t i = 0; i < entries->len; i++) {
-        bx_ls_print_long_entry(&entries->items[i], options, diag);
+        bx_ls_print_long_entry(&entries->items[i], options, &widths, diag);
     }
 }
 
