@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "diag.h"
 #include "libbx.h"
 
 extern char** environ;
@@ -196,6 +197,11 @@ static void ash_string_append_text(struct ash_string* string, const char* text) 
 }
 
 static void ash_string_append_span(struct ash_string* string, const char* text, size_t len) {
+    if (len > (size_t)PTRDIFF_MAX || string->len > SIZE_MAX - len - 1u) {
+        bx_fatal(3, "ash string overflow");
+        return;
+    }
+
     ash_string_reserve(string, string->len + len + 1u);
     memcpy(string->data + string->len, text, len);
     string->len += len;
@@ -1115,8 +1121,8 @@ static int ash_exec_external(struct ash_shell* shell, char** argv) {
 
     const char* segment = path;
     while (true) {
-        const char* colon = strchr(segment, ':');
-        size_t dir_len = (colon != NULL) ? (size_t)(colon - segment) : strlen(segment);
+        size_t dir_len = strcspn(segment, ":");
+        bool has_colon = (segment[dir_len] == ':');
 
         struct ash_string candidate;
         ash_string_init(&candidate);
@@ -1145,10 +1151,10 @@ static int ash_exec_external(struct ash_shell* shell, char** argv) {
 
         free(candidate_path);
 
-        if (colon == NULL) {
+        if (!has_colon) {
             break;
         }
-        segment = colon + 1u;
+        segment += dir_len + 1u;
     }
 
     if (saw_eacces) {
