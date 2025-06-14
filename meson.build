@@ -668,8 +668,12 @@ if get_option('tests')
   test_ash_basic = find_program('tests/ash/test_ash_basic.sh')
   test('ash basic', test_ash_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_sh_busybox_smoke_differential = find_program('tests/ash/test_sh_busybox_smoke_differential.sh')
+  test('sh busybox smoke differential', test_sh_busybox_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_ash_interactive = files('tests/ash/test_ash_interactive.py')
   test('ash interactive startup', python3, args : [test_ash_interactive, bx_exe], suite : fast_track_p1_suite)
+  test('sh interactive startup', python3, args : [test_ash_interactive, bx_exe, 'sh'], suite : fast_track_p1_suite)
 
   test_ash_rescue_rootfs_smoke = find_program('tests/ash/test_ash_rescue_rootfs_smoke.sh')
   test('ash rescue rootfs smoke', test_ash_rescue_rootfs_smoke, args : [bx_exe], suite : fast_track_p1_suite)
