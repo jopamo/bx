@@ -702,6 +702,9 @@ if get_option('tests')
   test_nc_basic = files('tests/nc/test_nc_basic.py')
   test('nc basic', python3, args : [test_nc_basic, bx_exe], suite : fast_track_p1_suite)
 
+  test_nc_busybox_smoke_differential = files('tests/nc/test_nc_busybox_smoke_differential.py')
+  test('nc busybox smoke differential', python3, args : [test_nc_busybox_smoke_differential, bx_exe], suite : fast_track_p1_suite)
+
   test_switch_root_basic = find_program('tests/switch_root/test_switch_root_basic.sh')
   test('switch_root basic', test_switch_root_basic, args : [bx_exe], suite : fast_track_p1_suite)
 

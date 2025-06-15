@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/reboot.h>
@@ -68,6 +69,46 @@ static void bx_reboot_print_try_help(const char* progname) {
 
 static void bx_reboot_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+enum bx_reboot_backend_kind {
+    BX_REBOOT_BACKEND_SYSTEM = 0,
+    BX_REBOOT_BACKEND_MOCK,
+    BX_REBOOT_BACKEND_UNSUPPORTED,
+};
+
+static enum bx_reboot_backend_kind bx_reboot_backend_kind(void) {
+    const char* backend = getenv("BX_REBOOT_BACKEND");
+    if (backend == NULL || backend[0] == '\0') {
+        return BX_REBOOT_BACKEND_SYSTEM;
+    }
+
+    if (strcmp(backend, "mock") == 0) {
+        return BX_REBOOT_BACKEND_MOCK;
+    }
+
+    if (strcmp(backend, "unsupported") == 0) {
+        return BX_REBOOT_BACKEND_UNSUPPORTED;
+    }
+
+    return BX_REBOOT_BACKEND_UNSUPPORTED;
+}
+
+static int bx_reboot_perform(const struct bx_reboot_options* options) {
+    switch (bx_reboot_backend_kind()) {
+        case BX_REBOOT_BACKEND_MOCK:
+            errno = EPERM;
+            return -1;
+        case BX_REBOOT_BACKEND_UNSUPPORTED:
+            errno = ENOSYS;
+            return -1;
+        case BX_REBOOT_BACKEND_SYSTEM:
+        default:
+            break;
+    }
+
+    sync();
+    return reboot(options->action_command);
 }
 
 static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_options* options, struct bx_diag_ctx* diag) {
@@ -146,8 +187,7 @@ int bx_reboot_main(int argc, char** argv) {
         return 0;
     }
 
-    sync();
-    if (reboot(options.action_command) != 0) {
+    if (bx_reboot_perform(&options) != 0) {
         bx_diag(&diag, "failed to %s: %s", options.action_text, strerror(errno));
         return (diag.exit_status != 0) ? diag.exit_status : 1;
     }
