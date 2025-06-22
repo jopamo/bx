@@ -1,600 +1,1772 @@
+/*
+    Copyright (c)  2006, 2007		Dmitry Butskoy
+                                        <dmitry@butskoy.name>
+    License:  GPL v2 or any later
+
+    See COPYING for the status of this software.
+*/
+
 #define _GNU_SOURCE
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <getopt.h>
-#include <time.h>
-#include <linux/errqueue.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/ip_icmp.h>
-#include <poll.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
+#include <stdarg.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <poll.h>
+#include <sched.h>
+#ifndef CLONE_NEWNET
+#define CLONE_NEWNET 0x40000000
+#endif
+#include <netinet/icmp6.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/in.h>
+#include <netinet/ip6.h>
+#include <netdb.h>
+#include <errno.h>
+#include <locale.h>
+#include <time.h>
+#include <linux/types.h>
+#include <linux/errqueue.h>
+#include <linux/net_tstamp.h>
 
-#include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+/*  XXX: Remove this when things will be defined properly in netinet/ ...  */
+#include "flowlabel.h"
 
-#ifndef IP_RECVERR
-#define IP_RECVERR 11
+#include <clif.h>
+#include "version.h"
+#include "traceroute.h"
+
+#ifndef ICMP6_DST_UNREACH_BEYONDSCOPE
+#ifdef ICMP6_DST_UNREACH_NOTNEIGHBOR
+#define ICMP6_DST_UNREACH_BEYONDSCOPE ICMP6_DST_UNREACH_NOTNEIGHBOR
+#else
+#define ICMP6_DST_UNREACH_BEYONDSCOPE 2
+#endif
 #endif
 
-struct bx_traceroute_options {
-    const char* progname;
-    bool show_help;
-    bool show_version;
-    bool numeric_only;
-    unsigned int first_hop;
-    unsigned int max_hops;
-    unsigned int queries;
-    unsigned int base_port;
-    double wait_secs;
-    const char* destination;
+#ifndef IPV6_RECVHOPLIMIT
+#define IPV6_RECVHOPLIMIT IPV6_HOPLIMIT
+#endif
+
+#ifndef IP_PMTUDISC_PROBE
+#define IP_PMTUDISC_PROBE 3
+#endif
+
+#ifndef IPV6_PMTUDISC_PROBE
+#define IPV6_PMTUDISC_PROBE 3
+#endif
+
+#ifndef AI_IDN
+#define AI_IDN 0
+#endif
+
+#ifndef NI_IDN
+#define NI_IDN 0
+#endif
+
+#define MAX_HOPS 255
+#define MAX_PROBES 10
+#define MAX_GATEWAYS_4 8
+#define MAX_GATEWAYS_6 127
+#define DEF_HOPS 30
+#define MAX_SIM_PROBES 1024
+#define DEF_SIM_PROBES 16 /*  including several hops   */
+#define DEF_NUM_PROBES 3
+#define DEF_WAIT_SECS 5.0
+#define DEF_HERE_FACTOR 3
+#define DEF_NEAR_FACTOR 10
+#ifndef DEF_WAIT_PREC
+#define DEF_WAIT_PREC 0.001 /*  +1 ms  to avoid precision issues   */
+#endif
+#define DEF_SEND_SECS 0
+#define DEF_DATA_LEN 40 /*  all but IP header...  */
+#define MAX_PACKET_LEN 65000
+
+#define ttl2hops(X) (((X) <= 64 ? 65 : ((X) <= 128 ? 129 : 256)) - (X))
+
+static char version_string[] =
+    "Modern traceroute for Linux, "
+    "version " TRACEROUTE_VERSION
+    "\nCopyright (c) 2016  Dmitry Butskoy, "
+    "  License: GPL v2 or any later";
+int debug = 0;
+static int jsonl = 0;
+static int quiet = 0;
+static int bpf_mode = 0; /* 0=auto, 1=on, 2=off */
+static unsigned int first_hop = 1;
+unsigned int max_hops = DEF_HOPS;
+static unsigned int sim_probes = DEF_SIM_PROBES;
+unsigned int probes_per_hop = DEF_NUM_PROBES;
+static unsigned int ecmp = 0;
+
+static char** gateways = NULL;
+static int num_gateways = 0;
+static unsigned char* rtbuf = NULL;
+static size_t rtbuf_len = 0;
+static unsigned int ipv6_rthdr_type = 2; /*  IPV6_RTHDR_TYPE_2   */
+
+static size_t header_len = 0;
+static size_t data_len = 0;
+
+static int dontfrag = 0;
+static int noresolve = 0;
+static int extension = 0;
+static int as_lookups = 0;
+static unsigned int dst_port_seq = 0;
+static unsigned int tos = 0;
+static unsigned int flow_label = 0;
+static int noroute = 0;
+static unsigned int fwmark = 0;
+static int packet_len = -1;
+static double wait_secs = DEF_WAIT_SECS;
+static double deadline = 0;
+static double here_factor = DEF_HERE_FACTOR;
+static double near_factor = DEF_NEAR_FACTOR;
+static double send_secs = DEF_SEND_SECS;
+static int mtudisc = 0;
+static int backward = 0;
+
+static sockaddr_any dst_addr = {
+    {
+        0,
+    },
 };
-
-struct bx_traceroute_probe_result {
-    bool replied;
-    bool reached;
-    struct in_addr responder;
-    int icmp_type;
-    int icmp_code;
-    double rtt_ms;
+static char* dst_name = NULL;
+static char* device = NULL;
+static sockaddr_any src_addr = {
+    {
+        0,
+    },
 };
+static unsigned int src_port = 0;
 
-static const char* bx_traceroute_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "traceroute";
-    }
+static int auto_fallback = 0;
+static char* netns = NULL;
+static const char* module = "default";
+static const tr_module* ops = NULL;
 
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
+static char* opts[16] = {
+    NULL,
+}; /*  assume enough   */
+static unsigned int opts_idx = 1; /*  first one reserved...   */
 
-    return argv0;
+static int af = 0;
+
+probe* probes = NULL;
+static unsigned int num_probes = 0;
+
+typedef enum { TS_USERSPACE = 0, TS_KERNEL_SW, TS_KERNEL_HW } ts_mode_t;
+
+static ts_mode_t ts_mode = TS_KERNEL_SW; /* Default to kernel-sw as it was effectively the default */
+
+static int set_ts_mode(CLIF_option* optn, char* arg) {
+    if (!strcmp(arg, "userspace"))
+        ts_mode = TS_USERSPACE;
+    else if (!strcmp(arg, "kernel-sw") || !strcmp(arg, "sw"))
+        ts_mode = TS_KERNEL_SW;
+    else if (!strcmp(arg, "kernel-hw") || !strcmp(arg, "hw"))
+        ts_mode = TS_KERNEL_HW;
+    else
+        return -1;
+    return 0;
 }
 
-static void bx_traceroute_print_help(FILE* stream, const char* progname) {
-    fprintf(stream, "Usage: %s [OPTION]... HOST\n", progname);
-    fprintf(stream, "Trace the IPv4 route to HOST with UDP probes.\n");
-    fprintf(stream, "\n");
-    fprintf(stream, "  -4, --ipv4            use IPv4 (default and only mode in this phase)\n");
-    fprintf(stream, "  -f, --first-hop=NUM   start at hop NUM (default: 1)\n");
-    fprintf(stream, "  -m, --max-hops=NUM    set max hops (default: 30)\n");
-    fprintf(stream, "  -q, --queries=NUM     probes per hop (default: 3)\n");
-    fprintf(stream, "  -w, --wait=SECS       wait per probe in seconds (default: 5)\n");
-    fprintf(stream, "  -p, --port=PORT       destination base UDP port (default: 33434)\n");
-    fprintf(stream, "  -n, --numeric         do not resolve host names\n");
-    fprintf(stream, "  -h, --help            display this help and exit\n");
-    fprintf(stream, "  -V, --version         output version information and exit\n");
+static void ex_error(const char* format, ...) {
+    va_list ap;
+
+    va_start(ap, format);
+    vfprintf(stderr, format, ap);
+    va_end(ap);
+
+    fprintf(stderr, "\n");
+
+    exit(2);
 }
 
-static void bx_traceroute_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
+void error(const char* str) {
+    fprintf(stderr, "\n");
+
+    perror(str);
+
+    exit(1);
 }
 
-static bool bx_traceroute_parse_uint(const char* text, unsigned int min_value, unsigned int max_value, unsigned int* out) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
-        return false;
-    }
-    if (value < min_value || value > max_value) {
-        return false;
-    }
-
-    *out = (unsigned int)value;
-    return true;
+void error_or_perm(const char* str) {
+    if (errno == EPERM)
+        fprintf(stderr,
+                "You do not have enough privileges to use "
+                "this traceroute method.");
+    error(str);
 }
 
-static bool bx_traceroute_parse_double(const char* text, double min_value, double max_value, double* out) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
+void put_err(probe* pb, const char* format, ...) {
+    va_list ap;
+    char* curr = pb->err_str;
+    char* end = pb->err_str + sizeof(pb->err_str) - 1;
 
-    errno = 0;
-    char* end = NULL;
-    double value = strtod(text, &end);
-    if (errno != 0 || end == text || *end != '\0') {
-        return false;
-    }
-    if (!(value >= min_value && value <= max_value)) {
-        return false;
-    }
+    /*  It can already contain something when `--mtu' or `-T -O mss'   */
+    while (curr < end && *curr)
+        curr++;
 
-    *out = value;
-    return true;
+    va_start(ap, format);
+    vsnprintf(curr, end - curr, format, ap);
+    va_end(ap);
 }
 
-static bool bx_traceroute_parse_options(int argc, char** argv, struct bx_traceroute_options* options, struct bx_diag_ctx* diag) {
-    static const struct option long_options[] = {
-        {"ipv4", no_argument, NULL, '4'},           {"first-hop", required_argument, NULL, 'f'},
-        {"max-hops", required_argument, NULL, 'm'}, {"queries", required_argument, NULL, 'q'},
-        {"wait", required_argument, NULL, 'w'},     {"port", required_argument, NULL, 'p'},
-        {"numeric", no_argument, NULL, 'n'},        {"help", no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'V'},        {NULL, 0, NULL, 0},
-    };
+/*  Set initial parameters according to how we was called   */
 
-    memset(options, 0, sizeof(*options));
-    options->progname = bx_traceroute_progname((argc > 0) ? argv[0] : NULL);
-    options->first_hop = 1;
-    options->max_hops = 30;
-    options->queries = 3;
-    options->base_port = 33434;
-    options->wait_secs = 5.0;
+static void check_progname(const char* name) {
+    const char* p;
+    int l;
 
-    diag->progname = options->progname;
+    // Find the last '/' in the program name to get the actual executable name
+    p = strrchr(name, '/');
+    p = p ? p + 1 : name;  // If '/' found, skip it; otherwise, use the name directly
 
-    opterr = 0;
-    optind = 1;
+    l = strlen(p);
 
-    while (true) {
-        int c = getopt_long(argc, argv, ":+4f:m:q:w:p:nhV", long_options, NULL);
-        if (c == -1) {
+    // If the name is empty or invalid, do nothing
+    if (l == 0)
+        return;
+
+    // Check if the last character is '6' or '4' to set address family
+    if (p[l - 1] == '6')
+        af = AF_INET6;
+    else if (p[l - 1] == '4')
+        af = AF_INET;
+
+    // Check the program name prefix to set the module
+    if (strncmp(p, "tcp", 3) == 0)
+        module = "tcp";
+    else if (strncmp(p, "tracert", 7) == 0)
+        module = "icmp";
+}
+
+static int getaddr(const char* name, sockaddr_any* addr) {
+    int ret;
+    struct addrinfo hints, *ai, *res = NULL;
+
+    if (!name || !addr) {
+        fprintf(stderr, "Invalid arguments\n");
+        return -1;
+    }
+
+    // Clear out hints and set defaults
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = af;     // Use the global address family 'af'
+    hints.ai_flags = AI_IDN;  // For International Domain Names
+
+    // Get address info
+    ret = getaddrinfo(name, NULL, &hints, &res);
+    if (ret) {
+        fprintf(stderr, "%s: %s\n", name, gai_strerror(ret));
+        return -1;
+    }
+
+    // Find the first matching address family (or use the first available)
+    for (ai = res; ai; ai = ai->ai_next) {
+        if (!af || ai->ai_family == af) {
             break;
         }
+    }
 
-        switch (c) {
-            case '4':
-                break;
-            case 'f':
-                if (!bx_traceroute_parse_uint(optarg, 1, 255, &options->first_hop)) {
-                    bx_diag(diag, "invalid first hop: '%s'", optarg);
-                    return false;
-                }
-                break;
-            case 'm':
-                if (!bx_traceroute_parse_uint(optarg, 1, 255, &options->max_hops)) {
-                    bx_diag(diag, "invalid max hops: '%s'", optarg);
-                    return false;
-                }
-                break;
-            case 'q':
-                if (!bx_traceroute_parse_uint(optarg, 1, 32, &options->queries)) {
-                    bx_diag(diag, "invalid query count: '%s'", optarg);
-                    return false;
-                }
-                break;
-            case 'w':
-                if (!bx_traceroute_parse_double(optarg, 0.001, 86400.0, &options->wait_secs)) {
-                    bx_diag(diag, "invalid wait time: '%s'", optarg);
-                    return false;
-                }
-                break;
-            case 'p':
-                if (!bx_traceroute_parse_uint(optarg, 1, 65535, &options->base_port)) {
-                    bx_diag(diag, "invalid port: '%s'", optarg);
-                    return false;
-                }
-                break;
-            case 'n':
-                options->numeric_only = true;
-                break;
-            case 'h':
-                options->show_help = true;
-                return true;
-            case 'V':
-                options->show_version = true;
-                return true;
-            case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
-                return false;
-            case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
-                return false;
-            default:
-                return false;
+    // If no matching address family is found, just use the first available
+    if (!ai) {
+        ai = res;  // anything, as a fallback
+    }
+
+    // Check if the address length is valid
+    if (ai->ai_addrlen > sizeof(*addr)) {
+        freeaddrinfo(res);  // Cleanup before returning
+        return -1;          // Paranoia check
+    }
+
+    // Copy the address into the provided sockaddr_any structure
+    memcpy(addr, ai->ai_addr, ai->ai_addrlen);
+
+    freeaddrinfo(res);  // Cleanup after processing
+
+    // If the address is IPv6 and is a mapped IPv4 address, handle it as IPv4
+    if (addr->sa.sa_family == AF_INET6 && IN6_IS_ADDR_V4MAPPED(&addr->sin6.sin6_addr)) {
+        if (af == AF_INET6) {
+            return -1;  // If IPv6 is requested, return an error for v4mapped addresses
         }
+
+        // Convert the v4mapped address to IPv4
+        addr->sa.sa_family = AF_INET;
+        addr->sin.sin_addr.s_addr =
+            addr->sin6.sin6_addr.s6_addr32[3];  // Extract IPv4 address from the v4mapped address
     }
 
-    if (options->first_hop > options->max_hops) {
-        bx_diag(diag, "first hop (%u) must be <= max hops (%u)", options->first_hop, options->max_hops);
-        return false;
-    }
-
-    if (optind >= argc) {
-        bx_diag(diag, "missing operand: HOST");
-        return false;
-    }
-
-    options->destination = argv[optind++];
-
-    if (optind != argc) {
-        bx_diag(diag, "extra operand: '%s'", argv[optind]);
-        return false;
-    }
-
-    return true;
+    return 0;  // Success
 }
 
-static double bx_traceroute_now_secs(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0.0;
-    }
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
+static void make_fd_used(int fd) {
+    int nfd;
 
-static void bx_traceroute_init_payload(unsigned char* payload, size_t payload_len) {
-    for (size_t i = 0; i < payload_len; i++) {
-        payload[i] = (unsigned char)(0x40u + (unsigned char)(i & 0x3fu));
-    }
-}
-
-static bool bx_traceroute_resolve_destination(const char* host, struct sockaddr_in* destination, char* address_text, size_t address_text_len, struct bx_diag_ctx* diag) {
-    struct addrinfo hints;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-
-    struct addrinfo* result = NULL;
-    int gai_rc = getaddrinfo(host, NULL, &hints, &result);
-    if (gai_rc != 0) {
-        bx_diag(diag, "cannot resolve '%s': %s", host, gai_strerror(gai_rc));
-        return false;
-    }
-
-    const struct sockaddr_in* resolved = (const struct sockaddr_in*)result->ai_addr;
-    *destination = *resolved;
-
-    if (inet_ntop(AF_INET, &resolved->sin_addr, address_text, address_text_len) == NULL) {
-        bx_diag(diag, "cannot format destination address: %s", strerror(errno));
-        freeaddrinfo(result);
-        return false;
-    }
-
-    freeaddrinfo(result);
-    return true;
-}
-
-static bool bx_traceroute_recv_icmp_reply(int fd, struct bx_traceroute_probe_result* result, bool* out_replied, struct bx_diag_ctx* diag) {
-    *out_replied = false;
-
-    for (;;) {
-        char payload[2048];
-        unsigned char control[1024];
-        struct sockaddr_in sender;
-        memset(&sender, 0, sizeof(sender));
-
-        struct iovec iov;
-        iov.iov_base = payload;
-        iov.iov_len = sizeof(payload);
-
-        struct msghdr msg;
-        memset(&msg, 0, sizeof(msg));
-        msg.msg_name = &sender;
-        msg.msg_namelen = sizeof(sender);
-        msg.msg_iov = &iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = control;
-        msg.msg_controllen = sizeof(control);
-
-        ssize_t recv_rc;
-        do {
-            recv_rc = recvmsg(fd, &msg, MSG_ERRQUEUE | MSG_DONTWAIT);
-        } while (recv_rc < 0 && errno == EINTR);
-
-        if (recv_rc < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return true;
-            }
-            bx_diag(diag, "recvmsg(MSG_ERRQUEUE) failed: %s", strerror(errno));
-            return false;
-        }
-
-        struct sock_extended_err* ext_err = NULL;
-        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-            if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) {
-                ext_err = (struct sock_extended_err*)CMSG_DATA(cmsg);
-                break;
-            }
-        }
-
-        if (ext_err == NULL) {
-            continue;
-        }
-
-        if (ext_err->ee_origin != SO_EE_ORIGIN_ICMP) {
-            continue;
-        }
-
-        result->replied = true;
-        result->icmp_type = ext_err->ee_type;
-        result->icmp_code = ext_err->ee_code;
-
-        struct sockaddr* offender = SO_EE_OFFENDER(ext_err);
-        if (offender != NULL && offender->sa_family == AF_INET) {
-            result->responder = ((struct sockaddr_in*)offender)->sin_addr;
-        }
-        else {
-            result->responder = sender.sin_addr;
-        }
-
-        if (ext_err->ee_type == ICMP_DEST_UNREACH && ext_err->ee_code == ICMP_PORT_UNREACH) {
-            result->reached = true;
-        }
-
-        *out_replied = true;
-        return true;
-    }
-}
-
-static bool bx_traceroute_wait_for_reply(int fd, int timeout_ms, struct bx_traceroute_probe_result* result, struct bx_diag_ctx* diag) {
-    struct pollfd poll_fd;
-    poll_fd.fd = fd;
-    poll_fd.events = POLLIN | POLLERR;
-    poll_fd.revents = 0;
-
-    int poll_rc;
-    do {
-        poll_rc = poll(&poll_fd, 1, timeout_ms);
-    } while (poll_rc < 0 && errno == EINTR);
-
-    if (poll_rc == 0) {
-        return true;
-    }
-    if (poll_rc < 0) {
-        bx_diag(diag, "poll failed: %s", strerror(errno));
-        return false;
-    }
-
-    bool replied = false;
-    return bx_traceroute_recv_icmp_reply(fd, result, &replied, diag);
-}
-
-static bool bx_traceroute_send_probe_socket(const struct sockaddr_in* destination,
-                                            unsigned int ttl,
-                                            unsigned int port,
-                                            const unsigned char* payload,
-                                            size_t payload_len,
-                                            int* out_fd,
-                                            double* out_send_time,
-                                            struct bx_diag_ctx* diag) {
-    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (fd < 0) {
-        bx_diag(diag, "cannot open probe socket: %s", strerror(errno));
-        return false;
-    }
-
-    int ttl_value = (int)ttl;
-    if (setsockopt(fd, SOL_IP, IP_TTL, &ttl_value, sizeof(ttl_value)) != 0) {
-        bx_diag(diag, "cannot set TTL: %s", strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    int recv_err = 1;
-    if (setsockopt(fd, SOL_IP, IP_RECVERR, &recv_err, sizeof(recv_err)) != 0) {
-        bx_diag(diag, "cannot enable IP_RECVERR: %s", strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    struct sockaddr_in target = *destination;
-    target.sin_port = htons((uint16_t)port);
-
-    if (connect(fd, (const struct sockaddr*)&target, sizeof(target)) != 0) {
-        bx_diag(diag, "cannot connect probe socket: %s", strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    double start_time = bx_traceroute_now_secs();
-    ssize_t send_rc = send(fd, payload, payload_len, 0);
-    if (send_rc < 0) {
-        bx_diag(diag, "cannot send probe: %s", strerror(errno));
-        close(fd);
-        return false;
-    }
-
-    *out_fd = fd;
-    *out_send_time = start_time;
-
-    return true;
-}
-
-static void bx_traceroute_format_endpoint(const struct in_addr* address, bool numeric_only, char* out, size_t out_len) {
-    char address_text[INET_ADDRSTRLEN];
-    if (inet_ntop(AF_INET, address, address_text, sizeof(address_text)) == NULL) {
-        snprintf(out, out_len, "?.?.?.?");
+    if (fcntl(fd, F_GETFL) != -1)
         return;
+
+    if (errno != EBADF)
+        error("fcntl F_GETFL");
+
+    nfd = open("/dev/null", O_RDONLY);
+    if (nfd < 0)
+        error("open /dev/null");
+
+    if (nfd != fd) {
+        dup2(nfd, fd);
+        close(nfd);
     }
 
-    if (numeric_only) {
-        snprintf(out, out_len, "%s", address_text);
+    return;
+}
+
+static char addr2str_buf[INET6_ADDRSTRLEN];
+
+const char* addr2str(const sockaddr_any* addr) {
+    getnameinfo(&addr->sa, sizeof(*addr), addr2str_buf, sizeof(addr2str_buf), 0, 0, NI_NUMERICHOST);
+
+    return addr2str_buf;
+}
+
+/*	IP  options  stuff	    */
+
+static void init_ip_options(void) {
+    sockaddr_any* gates;
+    int i, max;
+
+    if (!num_gateways)
         return;
+
+    /* Check for TYPE, ADDR, ADDR... form for IPv6 gateways */
+    if (af == AF_INET6 && num_gateways > 1 && gateways[0]) {
+        char* q;
+        unsigned int value = strtoul(gateways[0], &q, 0);
+
+        if (!*q) {
+            ipv6_rthdr_type = value;
+            num_gateways--;
+            for (i = 0; i < num_gateways; i++)
+                gateways[i] = gateways[i + 1];
+        }
     }
 
-    struct sockaddr_in sockaddr;
-    memset(&sockaddr, 0, sizeof(sockaddr));
-    sockaddr.sin_family = AF_INET;
-    sockaddr.sin_addr = *address;
+    max = (af == AF_INET) ? MAX_GATEWAYS_4 : MAX_GATEWAYS_6;
+    if (num_gateways > max)
+        ex_error("Too many gateways specified. No more than %d", max);
 
-    char host[NI_MAXHOST];
-    int name_rc = getnameinfo((const struct sockaddr*)&sockaddr, sizeof(sockaddr), host, sizeof(host), NULL, 0, NI_NAMEREQD);
-    if (name_rc == 0) {
-        snprintf(out, out_len, "%s (%s)", host, address_text);
+    // Dynamically allocate memory for gates
+    gates = malloc(num_gateways * sizeof(*gates));
+    if (!gates)
+        error("malloc");
+
+    for (i = 0; i < num_gateways; i++) {
+        if (!gateways[i])
+            error("Invalid gateway address");
+
+        if (getaddr(gateways[i], &gates[i]) < 0)
+            ex_error("Failed to resolve gateway address");  // Error already reported by getaddr
+
+        if (gates[i].sa.sa_family != af)
+            ex_error("IP version mismatch in gateway addresses");
+
+        free(gateways[i]);  // Free the original gateway string
+    }
+
+    free(gateways);   // Free the gateways array itself
+    gateways = NULL;  // Set to NULL to avoid dangling pointers
+
+    if (af == AF_INET) {
+        struct in_addr* in;
+
+        // Allocate space for the routing buffer
+        rtbuf_len = 4 + (num_gateways + 1) * sizeof(*in);
+        rtbuf = malloc(rtbuf_len);
+        if (!rtbuf)
+            error("malloc");
+
+        in = (struct in_addr*)&rtbuf[4];
+        for (i = 0; i < num_gateways; i++)
+            memcpy(&in[i], &gates[i].sin.sin_addr, sizeof(*in));
+
+        // Final hop (destination address)
+        memcpy(&in[i], &dst_addr.sin.sin_addr, sizeof(*in));
+        i++;
+
+        rtbuf[0] = IPOPT_NOP;
+        rtbuf[1] = IPOPT_LSRR;
+        rtbuf[2] = (i * sizeof(*in)) + 3;
+        rtbuf[3] = IPOPT_MINOFF;
+    }
+    else if (af == AF_INET6) {
+        struct in6_addr* in6;
+        struct ip6_rthdr* rth;
+
+        // IPV6_RTHDR_TYPE_0 length is 8
+        rtbuf_len = 8 + num_gateways * sizeof(*in6);
+        rtbuf = malloc(rtbuf_len);
+        if (!rtbuf)
+            error("malloc");
+
+        rth = (struct ip6_rthdr*)rtbuf;
+        rth->ip6r_nxt = 0;
+        rth->ip6r_len = 2 * num_gateways;
+        rth->ip6r_type = ipv6_rthdr_type;
+        rth->ip6r_segleft = num_gateways;
+
+        *((uint32_t*)(rth + 1)) = 0;  // Padding for the routing header
+
+        in6 = (struct in6_addr*)(rtbuf + 8);
+        for (i = 0; i < num_gateways; i++)
+            memcpy(&in6[i], &gates[i].sin6.sin6_addr, sizeof(*in6));
+    }
+
+    // Clean up allocated memory for gateways array
+    free(gates);
+}
+
+/*	Command line stuff	    */
+
+static int set_af(CLIF_option* optn, char* arg) {
+    int vers = (long)optn->data;
+
+    if (vers == 4)
+        af = AF_INET;
+    else if (vers == 6)
+        af = AF_INET6;
+    else
+        return -1;
+
+    return 0;
+}
+
+static int add_gateway(CLIF_option* optn, char* arg) {
+    if (num_gateways >= MAX_GATEWAYS_6) { /*  127 > 8 ... :)   */
+        fprintf(stderr, "Too many gateways specified.");
+        return -1;
+    }
+
+    gateways = realloc(gateways, (num_gateways + 1) * sizeof(*gateways));
+    if (!gateways)
+        error("malloc");
+    gateways[num_gateways++] = strdup(arg);
+
+    return 0;
+}
+
+static int set_source(CLIF_option* optn, char* arg) {
+    return getaddr(arg, &src_addr);
+}
+
+static int set_port(CLIF_option* optn, char* arg) {
+    unsigned int* up = (unsigned int*)optn->data;
+    char* q;
+
+    *up = strtoul(arg, &q, 0);
+    if (q == arg) {
+        struct servent* s = getservbyname(arg, NULL);
+
+        if (!s)
+            return -1;
+        *up = ntohs(s->s_port);
+    }
+
+    return 0;
+}
+
+static int set_module(CLIF_option* optn, char* arg) {
+    module = (char*)optn->data;
+
+    return 0;
+}
+
+static int set_mod_option(CLIF_option* optn, char* arg) {
+    if (!strcmp(arg, "help")) {
+        const tr_module* mod = tr_get_module(module);
+
+        if (mod && mod->options) {
+            /*  just to set common keyword flag...  */
+            CLIF_parse(1, &arg, 0, 0, CLIF_KEYWORD);
+            CLIF_print_options(NULL, mod->options);
+        }
+        else
+            fprintf(stderr, "No options for module `%s'\n", module);
+
+        exit(0);
+    }
+
+    if (opts_idx >= sizeof(opts) / sizeof(*opts)) {
+        fprintf(stderr, "Too many module options\n");
+        return -1;
+    }
+
+    opts[opts_idx] = strdup(arg);
+    if (!opts[opts_idx])
+        error("strdup");
+    opts_idx++;
+
+    return 0;
+}
+
+static int set_raw(CLIF_option* optn, char* arg) {
+    char buf[1024];
+
+    module = "raw";
+
+    snprintf(buf, sizeof(buf), "protocol=%s", arg);
+    return set_mod_option(optn, buf);
+}
+
+static int set_wait_specs(CLIF_option* optn, char* arg) {
+    char *p, *q;
+
+    here_factor = near_factor = 0;
+
+    wait_secs = strtod(p = arg, &q);
+    if (q == p)
+        return -1;
+    if (!*q++)
+        return 0;
+
+    here_factor = strtod(p = q, &q);
+    if (q == p)
+        return -1;
+    if (!*q++)
+        return 0;
+
+    near_factor = strtod(p = q, &q);
+    if (q == p || *q)
+        return -1;
+
+    return 0;
+}
+
+static int set_bpf(CLIF_option* optn, char* arg) {
+    if (!arg || !strcasecmp(arg, "auto"))
+        bpf_mode = 0;
+    else if (!strcasecmp(arg, "on"))
+        bpf_mode = 1;
+    else if (!strcasecmp(arg, "off"))
+        bpf_mode = 2;
+    else
+        return -1;
+    return 0;
+}
+
+static int set_host(CLIF_argument* argm, char* arg, int index) {
+    if (getaddr(arg, &dst_addr) < 0)
+        return -1;
+
+    dst_name = arg;
+
+    /*  i.e., guess it by the addr in cmdline...  */
+    if (!af)
+        af = dst_addr.sa.sa_family;
+
+    return 0;
+}
+
+static CLIF_option option_list[] = {
+    {"4", 0, 0, "Use IPv4", set_af, (void*)4, 0, CLIF_EXTRA},
+    {"6", 0, 0, "Use IPv6", set_af, (void*)6, 0, 0},
+    {"d", "debug", 0, "Enable socket level debugging", CLIF_set_flag, &debug, 0, 0},
+    {0, "jsonl", 0, "Use JSONL streaming output", CLIF_set_flag, &jsonl, 0, 0},
+    {0, "quiet", 0, "Do not print human-readable output", CLIF_set_flag, &quiet, 0, 0},
+    {0, "bpf", "mode", "Enable eBPF correlation (auto|on|off)", set_bpf, 0, 0, 0},
+    {"F", "dont-fragment", 0, "Do not fragment packets", CLIF_set_flag, &dontfrag, 0, CLIF_ABBREV},
+    {"f", "first", "first_ttl", "Start from the %s hop (instead from 1)", CLIF_set_uint, &first_hop, 0, 0},
+    {"g", "gateway", "gate",
+     "Route packets through the specified gateway "
+     "(maximum " _TEXT(MAX_GATEWAYS_4) " for IPv4 and " _TEXT(MAX_GATEWAYS_6) " for IPv6)",
+     add_gateway, 0, 0, CLIF_SEVERAL},
+    {"I", "icmp", 0, "Use ICMP ECHO for tracerouting", set_module, "icmp", 0, 0},
+    {"T", "tcp", 0,
+     "Use TCP SYN for tracerouting (default "
+     "port is " _TEXT(DEF_TCP_PORT) ")",
+     set_module, "tcp", 0, 0},
+    {"i", "interface", "device",
+     "Specify a network interface "
+     "to operate with",
+     CLIF_set_string, &device, 0, 0},
+    {0, "netns", "path",
+     "Switch to the network namespace specified by %s "
+     "before starting",
+     CLIF_set_string, &netns, 0, 0},
+    {"m", "max-hops", "max_ttl",
+     "Set the max number of hops (max TTL "
+     "to be reached). Default is " _TEXT(DEF_HOPS),
+     CLIF_set_uint, &max_hops, 0, 0},
+    {"N", "sim-queries", "squeries",
+     "Set the number of probes "
+     "to be tried simultaneously (default is " _TEXT(DEF_SIM_PROBES) ")",
+     CLIF_set_uint, &sim_probes, 0, 0},
+    {"n", 0, 0, "Do not resolve IP addresses to their domain names", CLIF_set_flag, &noresolve, 0, 0},
+    {"p", "port", "port",
+     "Set the destination port to use. "
+     "It is either initial udp port value for "
+     "\"default\" method (incremented by each probe, "
+     "default is " _TEXT(DEF_START_PORT) "), "
+                                         "or initial seq for \"icmp\" (incremented as well, "
+                                         "default from 1), or some constant destination port"
+                                         " for other methods (with default of " _TEXT(
+                                             DEF_TCP_PORT) " for \"tcp\", " _TEXT(DEF_UDP_PORT) " for \"udp\", etc.)",
+     set_port, &dst_port_seq, 0, 0},
+    {"t", "tos", "tos",
+     "Set the TOS (IPv4 type of service) or TC "
+     "(IPv6 traffic class) value for outgoing packets",
+     CLIF_set_uint, &tos, 0, 0},
+    {"l", "flowlabel", "flow_label", "Use specified %s for IPv6 packets", CLIF_set_uint, &flow_label, 0, 0},
+    {"w", "wait", "MAX,HERE,NEAR",
+     "Wait for a probe no more than HERE "
+     "(default " _TEXT(DEF_HERE_FACTOR) ") times longer "
+                                        "than a response from the same hop, or no more "
+                                        "than NEAR (default " _TEXT(
+                                            DEF_NEAR_FACTOR) ") "
+                                                             "times than some next hop, or MAX (default " _TEXT(
+                                                                 DEF_WAIT_SECS) ") seconds "
+                                                                                "(float point values allowed too)",
+     set_wait_specs, 0, 0, 0},
+    {0, "deadline", "seconds",
+     "Set the overall deadline for the whole traceroute "
+     "in seconds (float point values allowed too). "
+     "If the deadline is reached, the traceroute "
+     "stops immediately",
+     CLIF_set_double, &deadline, 0, 0},
+    {0, "ts", "MODE",
+     "Set timestamping MODE (userspace, kernel-sw, kernel-hw). "
+     "Default is kernel-sw",
+     set_ts_mode, 0, 0, 0},
+    {0, "auto-fallback", 0, "Automatically switch to TCP SYN probes if UDP is filtered", CLIF_set_flag, &auto_fallback,
+     0, 0},
+    {"q", "queries", "nqueries",
+     "Set the number of probes per each hop. "
+     "Default is " _TEXT(DEF_NUM_PROBES),
+     CLIF_set_uint, &probes_per_hop, 0, 0},
+    {0, "ecmp", "num", "Run %s distinct flow identities per TTL", CLIF_set_uint, &ecmp, 0, 0},
+    {"r", 0, 0,
+     "Bypass the normal routing and send directly to a host "
+     "on an attached network",
+     CLIF_set_flag, &noroute, 0, 0},
+    {"s", "source", "src_addr", "Use source %s for outgoing packets", set_source, 0, 0, 0},
+    {"z", "sendwait", "sendwait",
+     "Minimal time interval between probes "
+     "(default " _TEXT(DEF_SEND_SECS) "). If the value "
+                                      "is more than 10, then it specifies a number "
+                                      "in milliseconds, else it is a number of seconds "
+                                      "(float point values allowed too)",
+     CLIF_set_double, &send_secs, 0, 0},
+    {"e", "extensions", 0,
+     "Show ICMP extensions (if present), "
+     "including MPLS",
+     CLIF_set_flag, &extension, 0, CLIF_ABBREV},
+    {"A", "as-path-lookups", 0,
+     "Perform AS path lookups in routing "
+     "registries and print results directly after "
+     "the corresponding addresses",
+     CLIF_set_flag, &as_lookups, 0, 0},
+    {"M", "module", "name",
+     "Use specified module (either builtin or "
+     "external) for traceroute operations. Most methods "
+     "have their shortcuts (`-I' means `-M icmp' etc.)",
+     CLIF_set_string, &module, 0, CLIF_EXTRA},
+    {"O", "options", "OPTS",
+     "Use module-specific option %s for the "
+     "traceroute module. Several %s allowed, separated "
+     "by comma. If %s is \"help\", print info about "
+     "available options",
+     set_mod_option, 0, 0, CLIF_SEVERAL | CLIF_EXTRA},
+    {0, "sport", "num",
+     "Use source port %s for outgoing packets. "
+     "Implies `-N 1'",
+     set_port, &src_port, 0, CLIF_EXTRA},
+#ifdef SO_MARK
+    {0, "fwmark", "num", "Set firewall mark for outgoing packets", CLIF_set_uint, &fwmark, 0, 0},
+#endif
+    {"U", "udp", 0,
+     "Use UDP to particular port for tracerouting "
+     "(instead of increasing the port per each probe), "
+     "default port is " _TEXT(DEF_UDP_PORT),
+     set_module, "udp", 0, CLIF_EXTRA},
+    {0, "UL", 0, "Use UDPLITE for tracerouting (default dest port is " _TEXT(DEF_UDP_PORT) ")", set_module, "udplite",
+     0, CLIF_ONEDASH | CLIF_EXTRA},
+    {"D", "dccp", 0,
+     "Use DCCP Request for tracerouting (default "
+     "port is " _TEXT(DEF_DCCP_PORT) ")",
+     set_module, "dccp", 0, CLIF_EXTRA},
+    {"P", "protocol", "prot",
+     "Use raw packet of protocol %s "
+     "for tracerouting",
+     set_raw, 0, 0, CLIF_EXTRA},
+    {0, "mtu", 0,
+     "Discover MTU along the path being traced. "
+     "Implies `-F -N 1'",
+     CLIF_set_flag, &mtudisc, 0, CLIF_EXTRA},
+    {0, "back", 0,
+     "Guess the number of hops in the backward path "
+     "and print if it differs",
+     CLIF_set_flag, &backward, 0, CLIF_EXTRA},
+    CLIF_VERSION_OPTION(version_string),
+    CLIF_HELP_OPTION,
+    CLIF_END_OPTION};
+
+static CLIF_argument arg_list[] = {
+    {"host", "The host to traceroute to", set_host, 0, CLIF_STRICT},
+    {"packetlen",
+     "The full packet length (default is the length of "
+     "an IP header plus " _TEXT(DEF_DATA_LEN) "). Can be "
+                                              "ignored or increased to a minimal allowed value",
+     CLIF_arg_int, &packet_len, 0},
+    CLIF_END_ARGUMENT};
+
+static void do_it(void);
+
+int main(int argc, char* argv[]) {
+    setlocale(LC_ALL, "");
+    setlocale(LC_NUMERIC, "C"); /*  avoid commas in msec printed  */
+
+    check_progname(argv[0]);
+
+    if (CLIF_parse(argc, argv, option_list, arg_list, CLIF_MAY_JOIN_ARG | CLIF_MAY_NOEQUAL | CLIF_HELP_EMPTY) < 0)
+        exit(2);
+
+    if (ecmp > probes_per_hop)
+        probes_per_hop = ecmp;
+
+    if (netns) {
+        int fd = open(netns, O_RDONLY);
+        if (fd < 0) {
+            fprintf(stderr, "open %s: %s\n", netns, strerror(errno));
+            exit(2);
+        }
+        if (setns(fd, CLONE_NEWNET) < 0) {
+            fprintf(stderr, "setns %s: %s\n", netns, strerror(errno));
+            exit(2);
+        }
+        close(fd);
+    }
+
+    ops = tr_get_module(module);
+    if (!ops)
+        ex_error("Unknown traceroute module %s", module);
+
+    if (!first_hop || first_hop > max_hops)
+        ex_error("first hop out of range");
+    if (max_hops > MAX_HOPS)
+        ex_error("max hops cannot be more than " _TEXT(MAX_HOPS));
+    if (!probes_per_hop || probes_per_hop > MAX_PROBES)
+        ex_error("no more than " _TEXT(MAX_PROBES) " probes per hop");
+    if (sim_probes > MAX_SIM_PROBES)
+        ex_error("sim-queries cannot be more than " _TEXT(MAX_SIM_PROBES));
+    if (wait_secs < 0 || here_factor < 0 || near_factor < 0)
+        ex_error("bad wait specifications `%g,%g,%g' used", wait_secs, here_factor, near_factor);
+    if (packet_len > MAX_PACKET_LEN)
+        ex_error("too big packetlen %d specified", packet_len);
+    if (src_addr.sa.sa_family && src_addr.sa.sa_family != af)
+        ex_error("IP version mismatch in addresses specified");
+    if (send_secs < 0)
+        ex_error("bad sendtime `%g' specified", send_secs);
+    if (send_secs >= 10) /*  it is milliseconds   */
+        send_secs /= 1000;
+
+    if (af == AF_INET6 && (tos || flow_label))
+        dst_addr.sin6.sin6_flowinfo = htonl(((tos & 0xff) << 20) | (flow_label & 0x000fffff));
+
+    if (src_port) {
+        src_addr.sin.sin_port = htons((uint16_t)src_port);
+        src_addr.sa.sa_family = af;
+    }
+
+    if (src_port || ops->one_per_time) {
+        sim_probes = 1;
+        here_factor = near_factor = 0;
+    }
+
+    /*  make sure we don't std{in,out,err} to open sockets  */
+    make_fd_used(0);
+    make_fd_used(1);
+    make_fd_used(2);
+
+    init_ip_options();
+
+    header_len = (af == AF_INET ? sizeof(struct iphdr) : sizeof(struct ip6_hdr)) + rtbuf_len + ops->header_len;
+
+    if (mtudisc) {
+        dontfrag = 1;
+        sim_probes = 1;
+        if (packet_len < 0)
+            packet_len = MAX_PACKET_LEN;
+    }
+
+    if (packet_len < 0) {
+        if (DEF_DATA_LEN >= ops->header_len)
+            data_len = DEF_DATA_LEN - ops->header_len;
     }
     else {
-        snprintf(out, out_len, "%s", address_text);
+        if (packet_len >= 0 && (size_t)packet_len >= header_len)
+            data_len = (size_t)packet_len - header_len;
     }
+
+    num_probes = max_hops * probes_per_hop;
+    probes = calloc(num_probes, sizeof(*probes));
+    if (!probes)
+        error("calloc");
+
+    if (ops->options && opts_idx > 1) {
+        opts[0] = strdup(module); /*  aka argv[0] ...  */
+        if (CLIF_parse(opts_idx, opts, ops->options, 0, CLIF_KEYWORD) < 0)
+            exit(2);
+    }
+
+    if (ops->init(&dst_addr, dst_port_seq, &data_len) < 0)
+        ex_error("trace method's init failed");
+
+    if (bpf_mode != 2) {
+        const char* bpf_objs[] = {"probe.bpf.o", "bpf/probe.bpf.o", "/usr/share/traceroute/probe.bpf.o", NULL};
+        int i;
+        for (i = 0; bpf_objs[i]; i++) {
+            if (access(bpf_objs[i], R_OK) == 0) {
+                if (bpf_init(bpf_objs[i]) == 0) {
+                    if (debug)
+                        fprintf(stderr, "BPF initialized using %s\n", bpf_objs[i]);
+                    break;
+                }
+            }
+        }
+        if (!bpf_objs[i] && bpf_mode == 1)
+            ex_error("BPF initialization failed");
+    }
+
+    if (device) {
+        xdp_init(device, "xdp_probe.bpf.o");
+    }
+
+    do_it();
+
+    xdp_cleanup();
+    bpf_cleanup();
+
+    return 0;
 }
 
-static void bx_traceroute_print_hop_line(unsigned int ttl, const struct bx_traceroute_probe_result* results, unsigned int queries, bool numeric_only) {
-    printf("%2u  ", ttl);
+/*	PRINT  STUFF	    */
 
-    char last_endpoint[NI_MAXHOST + INET_ADDRSTRLEN + 8];
-    last_endpoint[0] = '\0';
+static void print_header(void) {
+    /*  Note, without ending new-line!  */
+    printf("traceroute to %s (%s), %u hops max, %zu byte packets", dst_name, addr2str(&dst_addr), max_hops,
+           header_len + data_len);
+    fflush(stdout);
+}
 
-    for (unsigned int i = 0; i < queries; i++) {
-        const struct bx_traceroute_probe_result* result = &results[i];
-        if (!result->replied) {
-            printf("*  ");
-            last_endpoint[0] = '\0';
-            continue;
-        }
+static void print_addr(sockaddr_any* res) {
+    const char* str;
 
-        char endpoint[NI_MAXHOST + INET_ADDRSTRLEN + 8];
-        bx_traceroute_format_endpoint(&result->responder, numeric_only, endpoint, sizeof(endpoint));
+    if (!res->sa.sa_family)
+        return;
 
-        if (last_endpoint[0] == '\0' || strcmp(last_endpoint, endpoint) != 0) {
-            printf("%s  ", endpoint);
-            snprintf(last_endpoint, sizeof(last_endpoint), "%s", endpoint);
-        }
+    str = addr2str(res);
 
-        printf("%.3f ms", result->rtt_ms);
+    if (noresolve)
+        printf(" %s", str);
+    else {
+        char buf[1024];
 
-        if (result->icmp_type == ICMP_DEST_UNREACH && result->icmp_code != ICMP_PORT_UNREACH) {
-            printf(" !%d", result->icmp_code);
-        }
-
-        printf("  ");
+        buf[0] = '\0';
+        getnameinfo(&res->sa, sizeof(*res), buf, sizeof(buf), 0, 0, NI_IDN);
+        printf(" %s (%s)", buf[0] ? buf : str, str);
     }
 
+    if (as_lookups)
+        printf(" [%s]", get_as_path(str));
+}
+
+static void print_probe(probe* pb) {
+    unsigned int idx = (pb - probes);
+    unsigned int ttl = idx / probes_per_hop + 1;
+    unsigned int np = idx % probes_per_hop;
+
+    if (np == 0)
+        printf("\n%2u ", ttl);
+
+    if (!pb->res.sa.sa_family)
+        printf(" *");
+    else {
+        int prn = !np; /*  print if the first...  */
+
+        if (np) { /*  ...and if differs with previous   */
+            probe* p;
+
+            /*  skip expired   */
+            for (p = pb - 1; np && !p->res.sa.sa_family; p--, np--)
+                ;
+
+            if (!np || !equal_addr(&p->res, &pb->res) ||
+                (p->ext != pb->ext && !(p->ext && pb->ext && !strcmp(p->ext, pb->ext))) ||
+                (backward && p->recv_ttl != pb->recv_ttl))
+                prn = 1;
+        }
+
+        if (prn) {
+            print_addr(&pb->res);
+
+            if (pb->ext)
+                printf(" <%s>", pb->ext);
+
+            if (backward && pb->recv_ttl) {
+                int hops = ttl2hops(pb->recv_ttl);
+                if (hops != (int)ttl)
+                    printf(" '-%d'", hops);
+            }
+        }
+    }
+
+    if (pb->recv_time) {
+        double diff = pb->recv_time - pb->send_time;
+
+        printf("  %.3f ms", diff * 1000);
+    }
+
+    if (pb->err_str[0])
+        printf(" %s", pb->err_str);
+
+    fflush(stdout);
+
+    return;
+}
+
+static void print_end(void) {
+    bpf_print_histograms();
     printf("\n");
 }
 
-int bx_traceroute_main(int argc, char** argv) {
-    struct bx_traceroute_options options;
-    struct bx_diag_ctx diag = {
-        .progname = "traceroute",
-        .exit_status = 0,
-    };
+void tr_report_header(const char* dst_name, const sockaddr_any* dst_addr, unsigned int max_hops, size_t packet_len) {
+    if (jsonl)
+        tr_export_jsonl_header(dst_name, dst_addr, max_hops, packet_len);
+    if (!quiet)
+        print_header();
+}
 
-    if (!bx_traceroute_parse_options(argc, argv, &options, &diag)) {
+void tr_report_probe(probe* pb) {
+    if (jsonl)
+        tr_export_jsonl_probe(pb);
+    if (!quiet)
+        print_probe(pb);
+}
+
+void tr_report_end(void) {
+    if (jsonl)
+        tr_export_jsonl_end();
+    if (!quiet)
+        print_end();
+}
+
+/*	Compute  timeout  stuff		*/
+
+static double get_timeout(probe* pb) {
+    double value;
+
+    if (here_factor) {
+        /*  check for already replied from the same hop   */
+        unsigned int i;
+        int idx = (pb - probes);
+        probe* p = &probes[idx - (idx % probes_per_hop)];
+
+        for (i = 0; i < probes_per_hop; i++, p++) {
+            /*   `p == pb' skipped since  !pb->done   */
+
+            if (p->done && (value = p->recv_time - p->send_time) > 0) {
+                value += DEF_WAIT_PREC;
+                value *= here_factor;
+                return value < wait_secs ? value : wait_secs;
+            }
+        }
+    }
+
+    if (near_factor) {
+        /*  check forward for already replied   */
+        probe *p, *endp = probes + num_probes;
+
+        for (p = pb + 1; p < endp && p->send_time; p++) {
+            if (p->done && (value = p->recv_time - p->send_time) > 0) {
+                value += DEF_WAIT_PREC;
+                value *= near_factor;
+                return value < wait_secs ? value : wait_secs;
+            }
+        }
+    }
+
+    return wait_secs;
+}
+
+/*	Check  expiration  stuff	*/
+
+static void check_expired(probe* pb) {
+    /*
+     * Correctness beats cleverness: never “guess” a hop; always report
+     * “unknown/no reply” explicitly.
+     * We no longer try to pull back "final" responses from later probes or hops.
+     */
+    return;
+}
+
+static int ecmp_rotates_source_port(void) {
+    const char* mod_name = ops ? ops->name : module;
+
+    if (src_port)
         return 1;
-    }
 
-    if (options.show_help) {
-        bx_traceroute_print_help(stdout, options.progname);
+    if (!mod_name)
         return 0;
-    }
 
-    if (options.show_version) {
-        bx_traceroute_print_version(options.progname);
+    return !strcmp(mod_name, "default") || !strcmp(mod_name, "udp") || !strcmp(mod_name, "tcp");
+}
+
+static unsigned int ecmp_flow_slot(const probe* pb) {
+    unsigned int np = (unsigned int)(pb - probes) % probes_per_hop;
+    return np % ecmp;
+}
+
+static int ecmp_flow_inflight(const probe* pb) {
+    unsigned int n;
+    unsigned int slot;
+
+    if (!ecmp || !pb || !ecmp_rotates_source_port())
         return 0;
+
+    slot = ecmp_flow_slot(pb);
+
+    for (n = 0; n < num_probes; n++) {
+        probe* p = &probes[n];
+
+        if (p == pb || p->done || !p->send_time)
+            continue;
+
+        if (ecmp_flow_slot(p) == slot)
+            return 1;
     }
 
-    struct sockaddr_in destination;
-    char destination_text[INET_ADDRSTRLEN];
-    if (!bx_traceroute_resolve_destination(options.destination, &destination, destination_text, sizeof(destination_text), &diag)) {
-        return 1;
+    return 0;
+}
+
+probe* probe_by_seq(int seq) {
+    unsigned int n;
+
+    if (seq <= 0)
+        return NULL;
+
+    for (n = 0; n < num_probes; n++) {
+        if (probes[n].seq == seq)
+            return &probes[n];
     }
 
-    const size_t payload_len = 40;
-    unsigned char payload[payload_len];
-    bx_traceroute_init_payload(payload, payload_len);
+    return NULL;
+}
 
-    struct bx_traceroute_probe_result* results = xmalloc((size_t)options.queries * sizeof(*results));
-    int* probe_fds = xmalloc((size_t)options.queries * sizeof(*probe_fds));
-    double* probe_start_times = xmalloc((size_t)options.queries * sizeof(*probe_start_times));
+probe* probe_by_sk(int sk) {
+    unsigned int n;
 
-    printf("traceroute to %s (%s), %u hops max, %zu byte packets\n", options.destination, destination_text, options.max_hops, payload_len);
+    if (sk <= 0)
+        return NULL;
 
-    bool reached = false;
-    for (unsigned int ttl = options.first_hop; ttl <= options.max_hops; ttl++) {
-        memset(results, 0, (size_t)options.queries * sizeof(*results));
-        for (unsigned int query = 0; query < options.queries; query++) {
-            probe_fds[query] = -1;
-            probe_start_times[query] = 0.0;
-        }
+    for (n = 0; n < num_probes; n++) {
+        if (probes[n].sk == sk)
+            return &probes[n];
+    }
 
-        unsigned int hop_offset = (ttl - options.first_hop) * options.queries;
-        unsigned int port_span = 65536u - options.base_port;
+    return NULL;
+}
 
-        for (unsigned int query = 0; query < options.queries; query++) {
-            unsigned int port = options.base_port;
-            if (port_span > 0u) {
-                port += (hop_offset + query) % port_span;
-            }
+static void poll_callback(int fd, int revents) {
+    bpf_poll(fd, revents);
+    xdp_poll(fd, revents);
+    ops->recv_probe(fd, revents);
+}
 
-            if (!bx_traceroute_send_probe_socket(&destination, ttl, port, payload, payload_len, &probe_fds[query], &probe_start_times[query], &diag)) {
-                for (unsigned int i = 0; i <= query; i++) {
-                    if (probe_fds[i] >= 0) {
-                        close(probe_fds[i]);
-                        probe_fds[i] = -1;
-                    }
-                }
-                free(probe_start_times);
-                free(probe_fds);
-                free(results);
-                return 1;
-            }
-        }
+static void do_it(void) {
+    unsigned int start = (first_hop - 1) * probes_per_hop;
+    unsigned int end = num_probes;
+    double last_send = 0;
+    double start_time = get_time();
+    int consecutive_losses = 0;
 
-        double hop_deadline = bx_traceroute_now_secs() + options.wait_secs;
-        for (unsigned int query = 0; query < options.queries; query++) {
-            double remaining_secs = hop_deadline - bx_traceroute_now_secs();
-            int timeout_ms = 0;
-            if (remaining_secs > 0.0) {
-                timeout_ms = (int)(remaining_secs * 1000.0);
-                if (timeout_ms < 1) {
-                    timeout_ms = 1;
-                }
-            }
+    tr_report_header(dst_name, &dst_addr, max_hops, header_len + data_len);
 
-            if (!bx_traceroute_wait_for_reply(probe_fds[query], timeout_ms, &results[query], &diag)) {
-                for (unsigned int i = query; i < options.queries; i++) {
-                    if (probe_fds[i] >= 0) {
-                        close(probe_fds[i]);
-                        probe_fds[i] = -1;
-                    }
-                }
-                free(probe_start_times);
-                free(probe_fds);
-                free(results);
-                return 1;
-            }
+    while (start < end) {
+        unsigned int n, num = 0;
+        double next_time = 0;
+        double now_time = get_time();
 
-            double end_time = bx_traceroute_now_secs();
-            close(probe_fds[query]);
-            probe_fds[query] = -1;
-
-            if (results[query].replied) {
-                results[query].rtt_ms = (end_time - probe_start_times[query]) * 1000.0;
-            }
-            if (results[query].reached) {
-                reached = true;
-            }
-        }
-
-        bx_traceroute_print_hop_line(ttl, results, options.queries, options.numeric_only);
-
-        if (reached) {
+        if (deadline > 0 && now_time - start_time > deadline) {
+            /* Deadline reached - terminate immediately */
             break;
         }
+
+        for (n = start; n < end; n++) {
+            probe* pb = &probes[n];
+
+            if (n == start &&              /*  probably time to print...  */
+                !pb->done && pb->send_time /*  ...but yet not replied   */
+            ) {
+                double expire_time = pb->send_time + get_timeout(pb);
+
+                if (expire_time > now_time)
+                    next_time = expire_time;
+                else {
+                    ops->expire_probe(pb);
+                    check_expired(pb);
+                }
+            }
+
+            if (pb->done) {
+                if (n == start) { /*  can print it now   */
+                    tr_report_probe(pb);
+                    start++;
+
+                    if (start % probes_per_hop == 0) {
+                        /* Check if the whole hop failed */
+                        int hop_failed = 1;
+                        unsigned int i;
+                        for (i = start - probes_per_hop; i < start; i++) {
+                            if (probes[i].res.sa.sa_family) {
+                                hop_failed = 0;
+                                break;
+                            }
+                        }
+
+                        if (hop_failed)
+                            consecutive_losses++;
+                        else
+                            consecutive_losses = 0;
+
+                        if (auto_fallback && consecutive_losses >= 3 && strcmp(ops->name, "tcp") != 0) {
+                            const tr_module* next_ops = tr_get_module("tcp");
+                            if (next_ops) {
+                                size_t dummy_len = data_len;
+                                if (next_ops->init(&dst_addr, 0, &dummy_len) == 0) {
+                                    ops = next_ops;
+                                    if (!quiet)
+                                        printf("\n[Fallback to TCP SYN probes at hop %u]", start / probes_per_hop + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (pb->final)
+                    end = (n / probes_per_hop + 1) * probes_per_hop;
+
+                continue;
+            }
+
+            if (!pb->send_time) {
+                int ttl;
+                double next;
+
+                if (ecmp_flow_inflight(pb))
+                    continue;
+
+                if (send_secs && (next = last_send + send_secs) > now_time) {
+                    next_time = next;
+                    break;
+                }
+
+                ttl = (int)(n / probes_per_hop + 1);
+
+                ops->send_probe(pb, ttl);
+
+                if (!pb->send_time) {
+                    if (next_time)
+                        break; /*  have chances later   */
+                    else
+                        error("send probe");
+                }
+
+                last_send = pb->send_time;
+            }
+
+            if (!next_time)
+                next_time = pb->send_time + get_timeout(pb);
+
+            num++;
+            if (num >= sim_probes)
+                break;
+        }
+
+        if (next_time) {
+            double now = get_time();
+            double timeout = next_time - now;
+
+            if (deadline > 0) {
+                double remaining = deadline - (now - start_time);
+                if (remaining < 0)
+                    remaining = 0;
+                if (remaining < timeout)
+                    timeout = remaining;
+            }
+
+            if (timeout < 0)
+                timeout = 0;
+
+            do_poll(timeout, poll_callback);
+        }
     }
 
-    free(probe_start_times);
-    free(probe_fds);
-    free(results);
-    return 0;
+    tr_report_end();
+
+    return;
+}
+
+void tune_socket(int sk, probe* pb) {
+    int i = 0;
+
+    if (debug) {
+        i = 1;
+        if (setsockopt(sk, SOL_SOCKET, SO_DEBUG, &i, sizeof(i)) < 0)
+            error("setsockopt SO_DEBUG");
+    }
+
+#ifdef SO_MARK
+    if (fwmark) {
+        if (setsockopt(sk, SOL_SOCKET, SO_MARK, &fwmark, sizeof(fwmark)) < 0)
+            error("setsockopt SO_MARK");
+    }
+#endif
+
+    if (rtbuf && rtbuf_len) {
+        if (af == AF_INET) {
+            if (setsockopt(sk, IPPROTO_IP, IP_OPTIONS, rtbuf, rtbuf_len) < 0)
+                error("setsockopt IP_OPTIONS");
+        }
+        else if (af == AF_INET6) {
+            if (setsockopt(sk, IPPROTO_IPV6, IPV6_RTHDR, rtbuf, rtbuf_len) < 0)
+                error("setsockopt IPV6_RTHDR");
+        }
+    }
+
+    bind_socket(sk, pb);
+
+    if (af == AF_INET) {
+        i = dontfrag ? IP_PMTUDISC_PROBE : IP_PMTUDISC_DONT;
+        if (setsockopt(sk, SOL_IP, IP_MTU_DISCOVER, &i, sizeof(i)) < 0 &&
+            (!dontfrag || (i = IP_PMTUDISC_DO, setsockopt(sk, SOL_IP, IP_MTU_DISCOVER, &i, sizeof(i)) < 0)))
+            error("setsockopt IP_MTU_DISCOVER");
+
+        if (tos) {
+            i = tos;
+            if (setsockopt(sk, SOL_IP, IP_TOS, &i, sizeof(i)) < 0)
+                error("setsockopt IP_TOS");
+        }
+    }
+    else if (af == AF_INET6) {
+        i = dontfrag ? IPV6_PMTUDISC_PROBE : IPV6_PMTUDISC_DONT;
+        if (setsockopt(sk, SOL_IPV6, IPV6_MTU_DISCOVER, &i, sizeof(i)) < 0 &&
+            (!dontfrag || (i = IPV6_PMTUDISC_DO, setsockopt(sk, SOL_IPV6, IPV6_MTU_DISCOVER, &i, sizeof(i)) < 0)))
+            error("setsockopt IPV6_MTU_DISCOVER");
+
+        if (flow_label) {
+            struct in6_flowlabel_req flr;
+            unsigned int label = flow_label;
+
+            if (ecmp && pb) {
+                unsigned int np = (pb - probes) % probes_per_hop;
+                unsigned int flow_idx = np % ecmp;
+                label += flow_idx;
+            }
+
+            memset(&flr, 0, sizeof(flr));
+            flr.flr_label = htonl(label & 0x000fffff);
+            flr.flr_action = IPV6_FL_A_GET;
+            flr.flr_flags = IPV6_FL_F_CREATE;
+            flr.flr_share = IPV6_FL_S_ANY;
+            memcpy(&flr.flr_dst, &dst_addr.sin6.sin6_addr, sizeof(flr.flr_dst));
+
+            if (setsockopt(sk, IPPROTO_IPV6, IPV6_FLOWLABEL_MGR, &flr, sizeof(flr)) < 0)
+                error("setsockopt IPV6_FLOWLABEL_MGR");
+        }
+
+        if (tos) {
+            i = tos;
+            if (setsockopt(sk, IPPROTO_IPV6, IPV6_TCLASS, &i, sizeof(i)) < 0)
+                error("setsockopt IPV6_TCLASS");
+        }
+
+        if (tos || flow_label) {
+            i = 1;
+            if (setsockopt(sk, IPPROTO_IPV6, IPV6_FLOWINFO_SEND, &i, sizeof(i)) < 0)
+                error("setsockopt IPV6_FLOWINFO_SEND");
+        }
+    }
+
+    if (noroute) {
+        i = noroute;
+        if (setsockopt(sk, SOL_SOCKET, SO_DONTROUTE, &i, sizeof(i)) < 0)
+            error("setsockopt SO_DONTROUTE");
+    }
+
+    use_timestamp(sk);
+
+    use_recv_ttl(sk);
+
+    fcntl(sk, F_SETFL, O_NONBLOCK);
+
+    return;
+}
+
+void parse_icmp_res(probe* pb, int type, int code, int info) {
+    if (af == AF_INET) {
+        if (type == ICMP_TIME_EXCEEDED) {
+            if (code == ICMP_EXC_TTL)
+                return;
+        }
+
+        if (type == ICMP_DEST_UNREACH) {
+            switch (code) {
+                case ICMP_UNREACH_NET:
+                case ICMP_UNREACH_NET_UNKNOWN:
+                case ICMP_UNREACH_ISOLATED:
+                case ICMP_UNREACH_TOSNET:
+                    put_err(pb, "!N");
+                    break;
+
+                case ICMP_UNREACH_HOST:
+                case ICMP_UNREACH_HOST_UNKNOWN:
+                case ICMP_UNREACH_TOSHOST:
+                    put_err(pb, "!H");
+                    break;
+
+                case ICMP_UNREACH_NET_PROHIB:
+                case ICMP_UNREACH_HOST_PROHIB:
+                case ICMP_UNREACH_FILTER_PROHIB:
+                    put_err(pb, "!X");
+                    break;
+
+                case ICMP_UNREACH_PORT:
+                    /*  dest host is reached   */
+                    break;
+
+                case ICMP_UNREACH_PROTOCOL:
+                    put_err(pb, "!P");
+                    break;
+
+                case ICMP_UNREACH_NEEDFRAG:
+                    put_err(pb, "!F-%d", info);
+                    pb->mtu = info;
+                    break;
+
+                case ICMP_UNREACH_SRCFAIL:
+                    put_err(pb, "!S");
+                    break;
+
+                case ICMP_UNREACH_HOST_PRECEDENCE:
+                    put_err(pb, "!V");
+                    break;
+
+                case ICMP_UNREACH_PRECEDENCE_CUTOFF:
+                    put_err(pb, "!C");
+                    break;
+
+                default:
+                    put_err(pb, "!<%u>", code);
+                    break;
+            }
+        }
+        else
+            put_err(pb, "!<%u-%u>", type, code);
+    }
+    else if (af == AF_INET6) {
+        if (type == ICMP6_TIME_EXCEEDED) {
+            if (code == ICMP6_TIME_EXCEED_TRANSIT)
+                return;
+        }
+
+        if (type == ICMP6_DST_UNREACH) {
+            switch (code) {
+                case ICMP6_DST_UNREACH_NOROUTE:
+                    put_err(pb, "!N");
+                    break;
+
+                case ICMP6_DST_UNREACH_BEYONDSCOPE:
+                case ICMP6_DST_UNREACH_ADDR:
+                    put_err(pb, "!H");
+                    break;
+
+                case ICMP6_DST_UNREACH_ADMIN:
+                    put_err(pb, "!X");
+                    break;
+
+                case ICMP6_DST_UNREACH_NOPORT:
+                    /*  dest host is reached   */
+                    break;
+
+                default:
+                    put_err(pb, "!<%u>", code);
+                    break;
+            }
+        }
+        else if (type == ICMP6_PACKET_TOO_BIG) {
+            put_err(pb, "!F-%d", info);
+            pb->mtu = info;
+        }
+        else
+            put_err(pb, "!<%u-%u>", type, code);
+    }
+
+    pb->final = 1;
+
+    return;
+}
+
+static void parse_local_res(probe* pb, int ee_errno, int info) {
+    if (ee_errno == EMSGSIZE && info != 0) {
+        put_err(pb, "!F-%d", info);
+        pb->final = 1;
+        return;
+    }
+
+    errno = ee_errno;
+    error("local recverr");
+}
+
+void probe_done(probe* pb) {
+    if (pb->sk) {
+        del_poll(pb->sk);
+        close(pb->sk);
+        pb->sk = 0;
+    }
+
+    pb->seq = 0;
+
+    pb->done = 1;
+}
+
+void recv_reply(int sk, int err, check_reply_t check_reply) {
+    struct msghdr msg;
+    sockaddr_any from;
+    struct iovec iov;
+    int n;
+    probe* pb;
+    char buf[1280]; /*  min mtu for ipv6 ( >= 576 for ipv4)  */
+    char* bufp = buf;
+    char control[1024];
+    struct cmsghdr* cm;
+    double recv_time = 0;
+    int recv_ttl = 0;
+    int ifindex_in = 0;
+    int ifindex_out = 0;
+    struct sock_extended_err* ee = NULL;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = &from;
+    msg.msg_namelen = sizeof(from);
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+    iov.iov_base = buf;
+    iov.iov_len = sizeof(buf);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    n = recvmsg(sk, &msg, err ? MSG_ERRQUEUE : 0);
+    if (n < 0)
+        return;
+
+    /*  when not MSG_ERRQUEUE, AF_INET returns full ipv4 header
+        on raw sockets...
+    */
+
+    if (!err && af == AF_INET &&
+        /*  XXX: Assume that the presence of an extra header means
+            that it is not a raw socket...
+        */
+        ops->header_len == 0) {
+        struct iphdr* ip = (struct iphdr*)bufp;
+        int hlen;
+
+        if (n < (int)sizeof(struct iphdr))
+            return;
+
+        hlen = ip->ihl << 2;
+        if (n < hlen)
+            return;
+
+        bufp += hlen;
+        n -= hlen;
+    }
+
+    pb = check_reply(sk, err, &from, bufp, n);
+    if (!pb) {
+        /*  for `frag needed' case at the local host,
+            kernel >= 3.13 sends local error (no more icmp)
+        */
+        if (!n && err && dontfrag) {
+            pb = &probes[(first_hop - 1) * probes_per_hop];
+            if (pb->done)
+                return;
+        }
+        else
+            return;
+    }
+
+    /*  Parse CMSG stuff   */
+
+    for (cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
+        void* ptr = CMSG_DATA(cm);
+
+        if (cm->cmsg_level == SOL_SOCKET) {
+            if (cm->cmsg_type == SCM_TIMESTAMPNS) {
+                struct timespec* ts = (struct timespec*)ptr;
+
+                recv_time = ts->tv_sec + ts->tv_nsec / 1000000000.;
+            }
+            else if (cm->cmsg_type == SO_TIMESTAMP) {
+                struct timeval* tv = (struct timeval*)ptr;
+
+                recv_time = tv->tv_sec + tv->tv_usec / 1000000.;
+            }
+            else if (cm->cmsg_type == SCM_TIMESTAMPING) {
+                struct timespec* ts = (struct timespec*)ptr;
+                /* ts[0] is software, ts[1] is transformed hardware, ts[2] is raw hardware */
+                if (ts_mode == TS_KERNEL_HW && (ts[2].tv_sec || ts[2].tv_nsec)) {
+                    recv_time = ts[2].tv_sec + ts[2].tv_nsec / 1000000000.;
+                }
+                else {
+                    recv_time = ts[0].tv_sec + ts[0].tv_nsec / 1000000000.;
+                }
+            }
+        }
+        else if (cm->cmsg_level == SOL_IP) {
+            if (cm->cmsg_type == IP_TTL)
+                recv_ttl = *((int*)ptr);
+            else if (cm->cmsg_type == IP_PKTINFO) {
+                struct in_pktinfo* pkt = (struct in_pktinfo*)ptr;
+                ifindex_in = pkt->ipi_ifindex;
+            }
+            else if (cm->cmsg_type == IP_RECVERR) {
+                ee = (struct sock_extended_err*)ptr;
+
+                if (ee->ee_origin != SO_EE_ORIGIN_ICMP && ee->ee_origin != SO_EE_ORIGIN_LOCAL &&
+                    ee->ee_origin != SO_EE_ORIGIN_TIMESTAMPING)
+                    return;
+
+                /*  dgram icmp sockets might return extra things...  */
+                if (ee->ee_origin == SO_EE_ORIGIN_ICMP &&
+                    (ee->ee_type == ICMP_SOURCE_QUENCH || ee->ee_type == ICMP_REDIRECT))
+                    return;
+            }
+        }
+        else if (cm->cmsg_level == SOL_IPV6) {
+            if (cm->cmsg_type == IPV6_HOPLIMIT)
+                recv_ttl = *((int*)ptr);
+            else if (cm->cmsg_type == IPV6_PKTINFO) {
+                struct in6_pktinfo* pkt = (struct in6_pktinfo*)ptr;
+                ifindex_in = pkt->ipi6_ifindex;
+            }
+            else if (cm->cmsg_type == IPV6_RECVERR) {
+                ee = (struct sock_extended_err*)ptr;
+
+                if (ee->ee_origin != SO_EE_ORIGIN_ICMP6 && ee->ee_origin != SO_EE_ORIGIN_LOCAL &&
+                    ee->ee_origin != SO_EE_ORIGIN_TIMESTAMPING)
+                    return;
+            }
+        }
+    }
+
+    if (!recv_time)
+        recv_time = get_time();
+
+    if (!err)
+        memcpy(&pb->res, &from, sizeof(pb->res));
+
+    pb->recv_time = recv_time;
+
+    pb->recv_ttl = recv_ttl;
+
+    if (ee) {
+        ifindex_out = ee->ee_data;
+    }
+
+    pb->ifindex_in = ifindex_in;
+    pb->ifindex_out = ifindex_out;
+
+    if (ee && ee->ee_origin == SO_EE_ORIGIN_TIMESTAMPING) {
+        pb->send_time = recv_time;
+        return;
+    }
+
+    if (ee && (ee->ee_origin == SO_EE_ORIGIN_ICMP || ee->ee_origin == SO_EE_ORIGIN_ICMP6)) {
+        memcpy(&pb->res, SO_EE_OFFENDER(ee), sizeof(pb->res));
+        parse_icmp_res(pb, ee->ee_type, ee->ee_code, ee->ee_info);
+    }
+
+    if (ee && ee->ee_origin == SO_EE_ORIGIN_LOCAL)
+        parse_local_res(pb, ee->ee_errno, ee->ee_info);
+
+    if (ee && mtudisc && ee->ee_info >= header_len && ee->ee_info < header_len + data_len) {
+        data_len = ee->ee_info - header_len;
+
+        probe_done(pb);
+
+        /*  clear this probe (as actually the previous hop answers here)
+          but fill its `err_str' by the info obtained. Ugly, but easy...
+        */
+        memset(pb, 0, sizeof(*pb));
+        pb->mtu = ee->ee_info;
+        put_err(pb, "F=%d", ee->ee_info);
+
+        return;
+    }
+
+    if (ee && extension && header_len + n >= (128 + 8) && /*  at least... (rfc4884)  */
+        header_len <= 128 &&                              /*  paranoia   */
+        ((af == AF_INET && (ee->ee_type == ICMP_TIME_EXCEEDED || ee->ee_type == ICMP_DEST_UNREACH ||
+                            ee->ee_type == ICMP_PARAMETERPROB)) ||
+         (af == AF_INET6 && (ee->ee_type == ICMP6_TIME_EXCEEDED || ee->ee_type == ICMP6_DST_UNREACH)))) {
+        int step;
+        int offs = 128 - header_len;
+
+        if ((size_t)n > data_len)
+            step = 0; /*  guaranteed at 128 ...  */
+        else
+            step = af == AF_INET ? 4 : 8;
+
+        handle_extensions(pb, bufp + offs, n - offs, step);
+    }
+
+    probe_done(pb);
+}
+
+int equal_addr(const sockaddr_any* a, const sockaddr_any* b) {
+    if (!a->sa.sa_family)
+        return 0;
+
+    if (a->sa.sa_family != b->sa.sa_family)
+        return 0;
+
+    if (a->sa.sa_family == AF_INET6)
+        return !memcmp(&a->sin6.sin6_addr, &b->sin6.sin6_addr, sizeof(a->sin6.sin6_addr));
+    else
+        return !memcmp(&a->sin.sin_addr, &b->sin.sin_addr, sizeof(a->sin.sin_addr));
+    return 0; /*  not reached   */
+}
+
+void bind_socket(int sk, probe* pb) {
+    sockaddr_any *addr, tmp;
+
+    if (device) {
+        if (setsockopt(sk, SOL_SOCKET, SO_BINDTODEVICE, device, strlen(device) + 1) < 0)
+            error("setsockopt SO_BINDTODEVICE");
+    }
+
+    if (!src_addr.sa.sa_family) {
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.sa.sa_family = af;
+        addr = &tmp;
+    }
+    else
+        addr = &src_addr;
+
+    if (ecmp && pb && ecmp_rotates_source_port()) {
+        unsigned int flow_idx = ecmp_flow_slot(pb);
+        uint16_t port = ntohs(addr->sin.sin_port); /* same offset for sin6 */
+
+        if (!port)
+            port = DEF_START_PORT; /* arbitrary base for rotation if not specified */
+        port += flow_idx;
+        if (addr->sa.sa_family == AF_INET6)
+            addr->sin6.sin6_port = htons(port);
+        else
+            addr->sin.sin_port = htons(port);
+    }
+
+    if (bind(sk, &addr->sa, sizeof(*addr)) < 0)
+        error("bind");
+
+    return;
+}
+
+void use_timestamp(int sk) {
+    int n = 1;
+    int flags;
+
+    if (ts_mode == TS_USERSPACE)
+        return;
+
+    if (ts_mode == TS_KERNEL_SW) {
+        flags = SOF_TIMESTAMPING_RX_SOFTWARE | SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_TX_SOFTWARE;
+        if (setsockopt(sk, SOL_SOCKET, SO_TIMESTAMPING, &flags, sizeof(flags)) < 0) {
+            /*  fallback to SO_TIMESTAMPNS if SO_TIMESTAMPING not supported   */
+            if (setsockopt(sk, SOL_SOCKET, SO_TIMESTAMPNS, &n, sizeof(n)) < 0)
+                setsockopt(sk, SOL_SOCKET, SO_TIMESTAMP, &n, sizeof(n));
+        }
+    }
+    else if (ts_mode == TS_KERNEL_HW) {
+        flags = SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_RAW_HARDWARE | SOF_TIMESTAMPING_RX_SOFTWARE |
+                SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE | SOF_TIMESTAMPING_TX_SOFTWARE;
+        if (setsockopt(sk, SOL_SOCKET, SO_TIMESTAMPING, &flags, sizeof(flags)) < 0) {
+            error("setsockopt SO_TIMESTAMPING (kernel-hw)");
+        }
+    }
+}
+
+void use_recv_ttl(int sk) {
+    int n = 1;
+
+    if (af == AF_INET) {
+        setsockopt(sk, SOL_IP, IP_RECVTTL, &n, sizeof(n));
+        setsockopt(sk, SOL_IP, IP_PKTINFO, &n, sizeof(n));
+    }
+    else if (af == AF_INET6) {
+        setsockopt(sk, SOL_IPV6, IPV6_RECVHOPLIMIT, &n, sizeof(n));
+        setsockopt(sk, SOL_IPV6, IPV6_RECVPKTINFO, &n, sizeof(n));
+    }
+    /*  foo on errors   */
+}
+
+void use_recverr(int sk) {
+    int val = 1;
+
+    if (af == AF_INET) {
+        if (setsockopt(sk, SOL_IP, IP_RECVERR, &val, sizeof(val)) < 0)
+            error("setsockopt IP_RECVERR");
+    }
+    else if (af == AF_INET6) {
+        if (setsockopt(sk, SOL_IPV6, IPV6_RECVERR, &val, sizeof(val)) < 0)
+            error("setsockopt IPV6_RECVERR");
+    }
+}
+
+void set_ttl(int sk, int ttl) {
+    if (af == AF_INET) {
+        if (setsockopt(sk, SOL_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
+            error("setsockopt IP_TTL");
+    }
+    else if (af == AF_INET6) {
+        if (setsockopt(sk, SOL_IPV6, IPV6_UNICAST_HOPS, &ttl, sizeof(ttl)) < 0)
+            error("setsockopt IPV6_UNICAST_HOPS");
+    }
+}
+
+int do_send(int sk, const void* data, size_t len, const sockaddr_any* addr) {
+    int res;
+
+    if (!addr || raw_can_connect())
+        res = send(sk, data, len, 0);
+    else
+        res = sendto(sk, data, len, 0, &addr->sa, sizeof(*addr));
+
+    if (res < 0) {
+        if (errno == ENOBUFS || errno == EAGAIN)
+            return res;
+        if (errno == EMSGSIZE || errno == EHOSTUNREACH)
+            return 0;  /*  recverr will say more...  */
+        error("send"); /*  not recoverable   */
+    }
+
+    return res;
+}
+
+int raw_can_connect(void) {
+    return 1;
 }
