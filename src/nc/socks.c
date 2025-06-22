@@ -54,6 +54,36 @@
 #define SOCKS_DOMAIN 3
 #define SOCKS_IPV6 4
 
+static int nc_b64_ntop(const unsigned char* src, size_t srclen, char* dst, size_t dstlen) {
+    static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t out_len = ((srclen + 2) / 3) * 4;
+    size_t i;
+    size_t o = 0;
+
+    if (dst == NULL || dstlen == 0)
+        return -1;
+    if (out_len + 1 > dstlen)
+        return -1;
+
+    for (i = 0; i < srclen; i += 3) {
+        size_t rem = srclen - i;
+        unsigned int triple = (unsigned int)src[i] << 16;
+
+        if (rem > 1)
+            triple |= (unsigned int)src[i + 1] << 8;
+        if (rem > 2)
+            triple |= (unsigned int)src[i + 2];
+
+        dst[o++] = b64[(triple >> 18) & 0x3f];
+        dst[o++] = b64[(triple >> 12) & 0x3f];
+        dst[o++] = (rem > 1) ? b64[(triple >> 6) & 0x3f] : '=';
+        dst[o++] = (rem > 2) ? b64[triple & 0x3f] : '=';
+    }
+
+    dst[o] = '\0';
+    return (int)o;
+}
+
 int remote_connect(const char*, const char*, struct addrinfo, char*);
 int socks_connect(const char*,
                   const char*,
@@ -457,7 +487,8 @@ again:
             getproxypass(proxyuser, proxyhost, proxypass, sizeof proxypass);
             r = snprintf((char*)buf, sizeof(buf), "%s:%s", proxyuser, proxypass);
             explicit_bzero(proxypass, sizeof proxypass);
-            if (r == -1 || (size_t)r >= sizeof(buf) || b64_ntop(buf, strlen((char*)buf), resp, sizeof(resp)) == -1) {
+            if (r == -1 || (size_t)r >= sizeof(buf) ||
+                nc_b64_ntop(buf, strlen((char*)buf), resp, sizeof(resp)) == -1) {
                 close(proxyfd);
                 errx(EXIT_USAGE, "Proxy username/password too long");
             }

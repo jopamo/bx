@@ -133,7 +133,9 @@ else
   add_project_arguments('-DBX_HAVE_MIRA_EMBED=0', language : 'c')
 endif
 
-bx_deps = [cc.find_library('m', required : false)]
+threads_dep = dependency('threads')
+
+bx_deps = [cc.find_library('m', required : false), threads_dep]
 if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
@@ -229,7 +231,6 @@ sources = [
   'src/paste/paste.c',
   'src/nproc/nproc.c',
   'src/numfmt/numfmt.c',
-  'src/nc/nc.c',
   'src/expr/expr.c',
   'src/cksum/cksum.c',
   'src/md5sum/md5sum.c',
@@ -259,6 +260,40 @@ sources = [
   'src/libbx.c',
 ]
 
+nc_sources = files(
+  'src/nc/nc.c',
+  'src/nc/atomicio.c',
+  'src/nc/bpf.c',
+  'src/nc/hexdump.c',
+  'src/nc/io.c',
+  'src/nc/log.c',
+  'src/nc/mptcp_pm.c',
+  'src/nc/network.c',
+  'src/nc/pcap.c',
+  'src/nc/proxy_proto.c',
+  'src/nc/quic.c',
+  'src/nc/socks.c',
+  'src/nc/tls.c',
+  'src/nc/tls_disabled.c',
+  'src/nc/utils.c',
+)
+
+nc_c_args = cc.get_supported_arguments([
+  '-DBX_NC_TLS_DISABLED=1',
+  '-D_GNU_SOURCE',
+  '-D_DEFAULT_SOURCE',
+  '-D__FAVOR_BSD',
+  '-Wno-error',
+  '-Wno-pedantic',
+])
+
+nc_lib = static_library('bx_nc',
+  nc_sources,
+  include_directories : include_directories('src', 'src/nc'),
+  dependencies : [threads_dep],
+  c_args : nc_c_args,
+)
+
 applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
 
 multicall_install_mode = get_option('multicall_install_mode')
@@ -281,6 +316,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
   dependencies : bx_deps,
+  link_whole : [nc_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

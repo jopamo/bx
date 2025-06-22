@@ -687,6 +687,10 @@ int main(int argc, char* argv[]) {
         errx(EXIT_USAGE, "you must specify -c to use -H");
     if (tls_expectname && !usetls)
         errx(EXIT_USAGE, "you must specify -c to use -e");
+#ifdef BX_NC_TLS_DISABLED
+    if (usetls || dtls)
+        errx(EXIT_USAGE, "TLS/DTLS support is disabled in this build");
+#endif
     enforce_io_backend_policy();
 
     /* Get name of temporary socket for unix datagram client */

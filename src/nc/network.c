@@ -21,6 +21,10 @@
 #define IPTOS_DSCP_CS7 0xe0
 #endif
 
+#ifndef IPTOS_DSCP_VA
+#define IPTOS_DSCP_VA 0xB0
+#endif
+
 #ifndef AF_VSOCK
 #define AF_VSOCK 40
 #endif

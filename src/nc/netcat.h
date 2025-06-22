@@ -23,7 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
-#include <tls.h>
+#include "tls.h"
 #include <unistd.h>
 
 #include "atomicio.h"
@@ -70,7 +70,7 @@
 extern int dflag;          /* detached, no stdin */
 extern int Fflag;          /* fdpass sock to stdout */
 extern unsigned int iflag; /* Interval Flag */
-extern int kflag;          /* More than one connect */
+extern int keepopen;       /* More than one connect */
 extern int lflag;          /* Bind to local port */
 extern int jflag;          /* JSON output */
 extern char* pcapfile;     /* PCAP file path */
