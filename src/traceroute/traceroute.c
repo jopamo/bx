@@ -163,6 +163,8 @@ typedef enum { TS_USERSPACE = 0, TS_KERNEL_SW, TS_KERNEL_HW } ts_mode_t;
 static ts_mode_t ts_mode = TS_KERNEL_SW; /* Default to kernel-sw as it was effectively the default */
 
 static int set_ts_mode(CLIF_option* optn, char* arg) {
+    (void)optn;
+
     if (!strcmp(arg, "userspace"))
         ts_mode = TS_USERSPACE;
     else if (!strcmp(arg, "kernel-sw") || !strcmp(arg, "sw"))
@@ -434,6 +436,8 @@ static void init_ip_options(void) {
 static int set_af(CLIF_option* optn, char* arg) {
     int vers = (long)optn->data;
 
+    (void)arg;
+
     if (vers == 4)
         af = AF_INET;
     else if (vers == 6)
@@ -445,6 +449,8 @@ static int set_af(CLIF_option* optn, char* arg) {
 }
 
 static int add_gateway(CLIF_option* optn, char* arg) {
+    (void)optn;
+
     if (num_gateways >= MAX_GATEWAYS_6) { /*  127 > 8 ... :)   */
         fprintf(stderr, "Too many gateways specified.");
         return -1;
@@ -459,6 +465,8 @@ static int add_gateway(CLIF_option* optn, char* arg) {
 }
 
 static int set_source(CLIF_option* optn, char* arg) {
+    (void)optn;
+
     return getaddr(arg, &src_addr);
 }
 
@@ -479,12 +487,16 @@ static int set_port(CLIF_option* optn, char* arg) {
 }
 
 static int set_module(CLIF_option* optn, char* arg) {
+    (void)arg;
+
     module = (char*)optn->data;
 
     return 0;
 }
 
 static int set_mod_option(CLIF_option* optn, char* arg) {
+    (void)optn;
+
     if (!strcmp(arg, "help")) {
         const tr_module* mod = tr_get_module(module);
 
@@ -524,6 +536,8 @@ static int set_raw(CLIF_option* optn, char* arg) {
 static int set_wait_specs(CLIF_option* optn, char* arg) {
     char *p, *q;
 
+    (void)optn;
+
     here_factor = near_factor = 0;
 
     wait_secs = strtod(p = arg, &q);
@@ -546,6 +560,8 @@ static int set_wait_specs(CLIF_option* optn, char* arg) {
 }
 
 static int set_bpf(CLIF_option* optn, char* arg) {
+    (void)optn;
+
     if (!arg || !strcasecmp(arg, "auto"))
         bpf_mode = 0;
     else if (!strcasecmp(arg, "on"))
@@ -558,6 +574,9 @@ static int set_bpf(CLIF_option* optn, char* arg) {
 }
 
 static int set_host(CLIF_argument* argm, char* arg, int index) {
+    (void)argm;
+    (void)index;
+
     if (getaddr(arg, &dst_addr) < 0)
         return -1;
 
@@ -723,6 +742,7 @@ static CLIF_argument arg_list[] = {
     CLIF_END_ARGUMENT};
 
 static void do_it(void);
+int main(int argc, char* argv[]);
 
 int main(int argc, char* argv[]) {
     setlocale(LC_ALL, "");
@@ -942,9 +962,12 @@ static void print_end(void) {
     printf("\n");
 }
 
-void tr_report_header(const char* dst_name, const sockaddr_any* dst_addr, unsigned int max_hops, size_t packet_len) {
+void tr_report_header(const char* report_dst_name,
+                      const sockaddr_any* report_dst_addr,
+                      unsigned int report_max_hops,
+                      size_t report_packet_len) {
     if (jsonl)
-        tr_export_jsonl_header(dst_name, dst_addr, max_hops, packet_len);
+        tr_export_jsonl_header(report_dst_name, report_dst_addr, report_max_hops, report_packet_len);
     if (!quiet)
         print_header();
 }
@@ -1004,6 +1027,8 @@ static double get_timeout(probe* pb) {
 /*	Check  expiration  stuff	*/
 
 static void check_expired(probe* pb) {
+    (void)pb;
+
     /*
      * Correctness beats cleverness: never “guess” a hop; always report
      * “unknown/no reply” explicitly.

@@ -39,6 +39,8 @@ static int icmp_sk = -1;
 static int tcp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* packet_len_p) {
     int af = dest->sa.sa_family;
 
+    (void)packet_len_p;
+
     dest_addr = *dest;
     dest_addr.sin.sin_port = htons(DEF_TCP_PORT);
 
@@ -100,6 +102,10 @@ static probe* tcp_check_reply(int sk, int err, sockaddr_any* from, char* buf, si
     int type, code, info;
     probe* pb;
     struct tcphdr* tcp;
+
+    (void)sk;
+    (void)err;
+    (void)from;
 
     if (len < sizeof(struct icmphdr))
         return NULL;

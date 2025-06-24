@@ -166,6 +166,9 @@ static probe* icmp_check_reply(int sk, int err, sockaddr_any* from, char* buf, s
     uint16_t recv_id, recv_seq;
     probe* pb;
 
+    (void)sk;
+    (void)from;
+
     if (len < sizeof(struct icmphdr))
         return NULL;
 

@@ -152,28 +152,29 @@ int quic_test(int s, char* host, char* port) {
                 char dcid_hex[513];
                 char scid_hex[513];
                 char versions[2048];
-                int i, off;
-                unsigned char dcid_len, scid_len;
+                size_t i, off;
+                size_t dcid_len, scid_len;
+                size_t recv_len = (size_t)len;
 
-                dcid_len = recv_buf[5];
-                if (dcid_len > 255)
-                    dcid_len = 255;
+                dcid_len = (recv_len > 6) ? recv_buf[5] : 0;
+                if (6 + dcid_len > recv_len)
+                    dcid_len = (recv_len >= 6) ? recv_len - 6 : 0;
                 for (i = 0; i < dcid_len; i++)
                     snprintf(dcid_hex + i * 2, 3, "%02x", recv_buf[6 + i]);
                 dcid_hex[dcid_len * 2] = '\0';
 
                 off = 6 + dcid_len;
-                scid_len = recv_buf[off];
-                if (scid_len > 255)
-                    scid_len = 255;
+                scid_len = (off < recv_len) ? recv_buf[off] : 0;
+                if (off + 1 + scid_len > recv_len)
+                    scid_len = (recv_len > off + 1) ? recv_len - off - 1 : 0;
                 for (i = 0; i < scid_len; i++)
                     snprintf(scid_hex + i * 2, 3, "%02x", recv_buf[off + 1 + i]);
                 scid_hex[scid_len * 2] = '\0';
 
                 off = off + 1 + scid_len;
                 versions[0] = '\0';
-                if (len - off >= 4 && ((len - off) % 4 == 0)) {
-                    int num_versions = (len - off) / 4;
+                if (recv_len >= off + 4 && ((recv_len - off) % 4 == 0)) {
+                    size_t num_versions = (recv_len - off) / 4;
                     char* p = versions;
                     for (i = 0; i < num_versions; i++) {
                         if (i > 0)
@@ -187,8 +188,8 @@ int quic_test(int s, char* host, char* port) {
                 json_event_begin(stderr, "info", "quic_version_negotiation_received", "in", "udp", "disabled",
                                  "version_negotiation", src_addr_p, src_port_p, dst_addr_p, dst_port_p);
                 fprintf(stderr,
-                        ",\"host\":\"%s\",\"port\":\"%s\",\"dcid_len\":%u,\"dcid\":\"%s\","
-                        "\"scid_len\":%u,\"scid\":\"%s\",\"offered_versions\":[%s]}\n",
+                        ",\"host\":\"%s\",\"port\":\"%s\",\"dcid_len\":%zu,\"dcid\":\"%s\","
+                        "\"scid_len\":%zu,\"scid\":\"%s\",\"offered_versions\":[%s]}\n",
                         host, port, dcid_len, dcid_hex, scid_len, scid_hex, versions);
             }
             return 1;
@@ -203,31 +204,28 @@ int quic_test(int s, char* host, char* port) {
             char scid_hex[513];
             dcid_hex[0] = '\0';
             scid_hex[0] = '\0';
-            int i, off;
-            unsigned char dcid_len, scid_len;
+            size_t i, off;
+            size_t dcid_len, scid_len;
+            size_t recv_len = (size_t)len;
             unsigned char packet_type = (recv_buf[0] >> 4) & 0x03;
 
-            dcid_len = recv_buf[5];
-            if (dcid_len > 255)
-                dcid_len = 255;
+            dcid_len = (recv_len > 6) ? recv_buf[5] : 0;
             /* Ensure DCID doesn't exceed packet bounds */
-            if (6 + dcid_len > len)
-                dcid_len = (len >= 6) ? len - 6 : 0;
+            if (6 + dcid_len > recv_len)
+                dcid_len = (recv_len >= 6) ? recv_len - 6 : 0;
             for (i = 0; i < dcid_len; i++)
                 snprintf(dcid_hex + i * 2, 3, "%02x", recv_buf[6 + i]);
             dcid_hex[dcid_len * 2] = '\0';
 
             off = 6 + dcid_len;
-            if (off >= len) {
+            if (off >= recv_len) {
                 scid_len = 0;
-                off = len;
+                off = recv_len;
             }
             else {
                 scid_len = recv_buf[off];
-                if (scid_len > 255)
-                    scid_len = 255;
-                if (off + 1 + scid_len > len)
-                    scid_len = (len >= off + 1) ? len - off - 1 : 0;
+                if (off + 1 + scid_len > recv_len)
+                    scid_len = (recv_len >= off + 1) ? recv_len - off - 1 : 0;
                 for (i = 0; i < scid_len; i++)
                     snprintf(scid_hex + i * 2, 3, "%02x", recv_buf[off + 1 + i]);
                 scid_hex[scid_len * 2] = '\0';
@@ -236,12 +234,12 @@ int quic_test(int s, char* host, char* port) {
 
             if (packet_type == 3) { /* Retry */
                 /* Retry packet has token and 16-byte integrity tag */
-                size_t token_len = (len >= off + 16) ? (len - off - 16) : 0;
+                size_t token_len = (recv_len >= off + 16) ? (recv_len - off - 16) : 0;
                 json_event_begin(stderr, "info", "quic_retry_received", "in", "udp", "disabled", "retry_received",
                                  src_addr_p, src_port_p, dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","
-                        "\"dcid_len\":%u,\"dcid\":\"%s\",\"scid_len\":%u,\"scid\":\"%s\",\"token_len\":%zu}\n",
+                        "\"dcid_len\":%zu,\"dcid\":\"%s\",\"scid_len\":%zu,\"scid\":\"%s\",\"token_len\":%zu}\n",
                         host, port, recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len,
                         scid_hex, token_len);
             }
@@ -264,7 +262,7 @@ int quic_test(int s, char* host, char* port) {
                                  dst_addr_p, dst_port_p);
                 fprintf(stderr,
                         ",\"host\":\"%s\",\"port\":\"%s\",\"version\":\"%02x%02x%02x%02x\","
-                        "\"dcid_len\":%u,\"dcid\":\"%s\",\"scid_len\":%u,\"scid\":\"%s\"}\n",
+                        "\"dcid_len\":%zu,\"dcid\":\"%s\",\"scid_len\":%zu,\"scid\":\"%s\"}\n",
                         host, port, recv_buf[1], recv_buf[2], recv_buf[3], recv_buf[4], dcid_len, dcid_hex, scid_len,
                         scid_hex);
             }

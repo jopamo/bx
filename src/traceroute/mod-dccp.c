@@ -213,10 +213,12 @@ static void dccp_send_probe(probe* pb, int ttl) {
     return;
 }
 
-static probe* dccp_check_reply(int sk, int err, sockaddr_any* from, char* buf, size_t len) {
+static probe* dccp_check_reply(int sk, int err, sockaddr_any* from, char* reply_buf, size_t len) {
     probe* pb;
-    struct dccp_hdr* ndh = (struct dccp_hdr*)buf;
+    struct dccp_hdr* ndh = (struct dccp_hdr*)reply_buf;
     uint16_t sport, dport;
+
+    (void)sk;
 
     if (len < 8)
         return NULL; /*  too short   */

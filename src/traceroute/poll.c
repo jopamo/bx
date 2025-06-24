@@ -97,7 +97,9 @@ void do_poll(double timeout, void (*callback)(int fd, int revents)) {
     }
 }
 
-void cleanup() {
+static void cleanup(void) __attribute__((unused));
+
+static void cleanup(void) {
     free(pfd);
     pfd = NULL;
     num_polls = 0;

@@ -102,16 +102,16 @@ static char* print_tcp_info(struct tcphdr* tcp, size_t len) {
     char* curr = str;
     char* end = str + (sizeof(str) / sizeof(*str) - 1);
     const char* p;
-    unsigned int flags;
+    unsigned int tcp_reply_flags;
     uint8_t* ptr;
 
     if (len < sizeof(struct tcphdr) || len != (size_t)(TCPHDR_DOFF(tcp) << 2))
         return NULL;
 
-    flags = TH_FLAGS(tcp);
+    tcp_reply_flags = TH_FLAGS(tcp);
 
     for (i = 0; i < sizeof(tcp_flags) / sizeof(*tcp_flags); i++) {
-        if (!(flags & tcp_flags[i].flag))
+        if (!(tcp_reply_flags & tcp_flags[i].flag))
             continue;
 
         if (curr > str && curr < end)
@@ -126,7 +126,7 @@ static char* print_tcp_info(struct tcphdr* tcp, size_t len) {
     while (len > 1) {
         int op = *ptr;
         size_t oplen = ptr[1];
-        char buf[16];
+        char optbuf[16];
         const char* name = NULL;
 
         switch (op) {
@@ -139,8 +139,8 @@ static char* print_tcp_info(struct tcphdr* tcp, size_t len) {
             case TCPOPT_MAXSEG:
                 if (oplen == TCPOLEN_MAXSEG && oplen <= len) {
                     uint16_t rcv_mss = ntohs(*((uint16_t*)(ptr + 2)));
-                    snprintf(buf, sizeof(buf), "mss=%u", rcv_mss);
-                    name = buf;
+                    snprintf(optbuf, sizeof(optbuf), "mss=%u", rcv_mss);
+                    name = optbuf;
                 }
                 break;
             case TCPOPT_SACK_PERMITTED:
@@ -182,6 +182,8 @@ static char* print_tcp_info(struct tcphdr* tcp, size_t len) {
 static int set_tcp_flag(CLIF_option* optn, char* arg) {
     size_t i;
 
+    (void)arg;
+
     for (i = 0; i < sizeof(tcp_flags) / sizeof(*tcp_flags); i++) {
         if (!strcmp(optn->long_opt, tcp_flags[i].name)) {
             flags |= tcp_flags[i].flag;
@@ -196,6 +198,8 @@ static int set_tcp_flags(CLIF_option* optn, char* arg) {
     char* q;
     unsigned long value;
 
+    (void)optn;
+
     value = strtoul(arg, &q, 0);
     if (q == arg)
         return -1;
@@ -205,6 +209,8 @@ static int set_tcp_flags(CLIF_option* optn, char* arg) {
 }
 
 static int set_flag(CLIF_option* optn, char* arg) {
+    (void)arg;
+
     flags |= (unsigned long)optn->data;
 
     return 0;
@@ -263,13 +269,13 @@ static CLIF_option tcp_options[] = {
 #define SYSCTL_PREFIX "/proc/sys/net/ipv4/tcp_"
 static int check_sysctl(const char* name) {
     int fd, res;
-    char buf[sizeof(SYSCTL_PREFIX) + strlen(name) + 1];
+    char sysctl_path[sizeof(SYSCTL_PREFIX) + strlen(name) + 1];
     uint8_t ch;
 
-    strcpy(buf, SYSCTL_PREFIX);
-    strcat(buf, name);
+    strcpy(sysctl_path, SYSCTL_PREFIX);
+    strcat(sysctl_path, name);
 
-    fd = open(buf, O_RDONLY, 0);
+    fd = open(sysctl_path, O_RDONLY, 0);
     if (fd < 0)
         return 0;
 
@@ -544,10 +550,12 @@ static void tcp_send_probe(probe* pb, int ttl) {
     return;
 }
 
-static probe* tcp_check_reply(int sk, int err, sockaddr_any* from, char* buf, size_t len) {
+static probe* tcp_check_reply(int sk, int err, sockaddr_any* from, char* reply_buf, size_t len) {
     probe* pb;
-    struct tcphdr* tcp = (struct tcphdr*)buf;
+    struct tcphdr* tcp = (struct tcphdr*)reply_buf;
     uint16_t sport, dport;
+
+    (void)sk;
 
     if (len < 8)
         return NULL; /*  too short   */

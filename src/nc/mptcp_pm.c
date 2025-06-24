@@ -12,15 +12,15 @@ static int nla_ok(const struct nlattr* nla, int rem) {
     return rem >= (int)sizeof(*nla) && nla->nla_len >= sizeof(*nla) && nla->nla_len <= rem;
 }
 
-static struct nlattr* nla_next(const struct nlattr* nla, int* rem) {
+static const struct nlattr* nla_next(const struct nlattr* nla, int* rem) {
     int len = NLA_ALIGN(nla->nla_len);
 
     *rem -= len;
-    return (struct nlattr*)((char*)nla + len);
+    return (const struct nlattr*)((const char*)nla + len);
 }
 
-static void* nla_data_ptr(const struct nlattr* nla) {
-    return (char*)nla + NLA_HDRLEN;
+static const void* nla_data_ptr(const struct nlattr* nla) {
+    return (const char*)nla + NLA_HDRLEN;
 }
 
 static int nla_data_len(const struct nlattr* nla) {
@@ -88,7 +88,7 @@ void mptcp_pm_reset_event(struct mptcp_pm_event* event) {
 
 int mptcp_pm_parse_genl_event(const struct nlmsghdr* nlh, size_t nlh_len, struct mptcp_pm_event* event) {
     const struct genlmsghdr* ghdr;
-    struct nlattr* attr;
+    const struct nlattr* attr;
     int rem;
 
     if (nlh == NULL || event == NULL)
@@ -101,7 +101,7 @@ int mptcp_pm_parse_genl_event(const struct nlmsghdr* nlh, size_t nlh_len, struct
     event->cmd = ghdr->cmd;
 
     rem = (int)nlh->nlmsg_len - NLMSG_HDRLEN - GENL_HDRLEN;
-    attr = (struct nlattr*)((char*)ghdr + GENL_HDRLEN);
+    attr = (const struct nlattr*)((const char*)ghdr + GENL_HDRLEN);
 
     while (nla_ok(attr, rem)) {
         uint16_t type = attr->nla_type & NLA_TYPE_MASK;
@@ -224,7 +224,7 @@ int mptcp_pm_parse_ctrl_getfamily(const struct nlmsghdr* nlh,
                                   uint16_t* family_id,
                                   uint32_t* group_id) {
     const struct genlmsghdr* ghdr;
-    struct nlattr* attr;
+    const struct nlattr* attr;
     int rem;
     uint16_t fam = 0;
     uint32_t grp = 0;
@@ -241,7 +241,7 @@ int mptcp_pm_parse_ctrl_getfamily(const struct nlmsghdr* nlh,
         return -1;
 
     rem = (int)nlh->nlmsg_len - NLMSG_HDRLEN - GENL_HDRLEN;
-    attr = (struct nlattr*)((char*)ghdr + GENL_HDRLEN);
+    attr = (const struct nlattr*)((const char*)ghdr + GENL_HDRLEN);
 
     while (nla_ok(attr, rem)) {
         uint16_t type = attr->nla_type & NLA_TYPE_MASK;
@@ -252,11 +252,11 @@ int mptcp_pm_parse_ctrl_getfamily(const struct nlmsghdr* nlh,
         }
         else if (type == CTRL_ATTR_MCAST_GROUPS) {
             int nrem = nla_data_len(attr);
-            struct nlattr* group = (struct nlattr*)nla_data_ptr(attr);
+            const struct nlattr* group = (const struct nlattr*)nla_data_ptr(attr);
 
             while (nla_ok(group, nrem)) {
                 int grem = nla_data_len(group);
-                struct nlattr* ga = (struct nlattr*)nla_data_ptr(group);
+                const struct nlattr* ga = (const struct nlattr*)nla_data_ptr(group);
                 uint32_t candidate_id = 0;
                 int has_id = 0;
                 int matches_name = 0;

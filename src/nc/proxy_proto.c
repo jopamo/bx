@@ -138,17 +138,23 @@ int serialize_proxy_v1(char* buf, size_t len, const struct proxy_info* info) {
     uint16_t src_p, dst_p;
 
     if (info->family == AF_INET) {
-        inet_ntop(AF_INET, &((struct sockaddr_in*)&info->src)->sin_addr, src, sizeof(src));
-        inet_ntop(AF_INET, &((struct sockaddr_in*)&info->dst)->sin_addr, dst, sizeof(dst));
-        src_p = ntohs(((struct sockaddr_in*)&info->src)->sin_port);
-        dst_p = ntohs(((struct sockaddr_in*)&info->dst)->sin_port);
+        const struct sockaddr_in* src4 = (const struct sockaddr_in*)&info->src;
+        const struct sockaddr_in* dst4 = (const struct sockaddr_in*)&info->dst;
+
+        inet_ntop(AF_INET, &src4->sin_addr, src, sizeof(src));
+        inet_ntop(AF_INET, &dst4->sin_addr, dst, sizeof(dst));
+        src_p = ntohs(src4->sin_port);
+        dst_p = ntohs(dst4->sin_port);
         return snprintf(buf, len, "PROXY TCP4 %s %s %u %u\r\n", src, dst, src_p, dst_p);
     }
     else if (info->family == AF_INET6) {
-        inet_ntop(AF_INET6, &((struct sockaddr_in6*)&info->src)->sin6_addr, src, sizeof(src));
-        inet_ntop(AF_INET6, &((struct sockaddr_in6*)&info->dst)->sin6_addr, dst, sizeof(dst));
-        src_p = ntohs(((struct sockaddr_in6*)&info->src)->sin6_port);
-        dst_p = ntohs(((struct sockaddr_in6*)&info->dst)->sin6_port);
+        const struct sockaddr_in6* src6 = (const struct sockaddr_in6*)&info->src;
+        const struct sockaddr_in6* dst6 = (const struct sockaddr_in6*)&info->dst;
+
+        inet_ntop(AF_INET6, &src6->sin6_addr, src, sizeof(src));
+        inet_ntop(AF_INET6, &dst6->sin6_addr, dst, sizeof(dst));
+        src_p = ntohs(src6->sin6_port);
+        dst_p = ntohs(dst6->sin6_port);
         return snprintf(buf, len, "PROXY TCP6 %s %s %u %u\r\n", src, dst, src_p, dst_p);
     }
     else {
@@ -166,25 +172,31 @@ int serialize_proxy_v2(uint8_t* buf, size_t len, const struct proxy_info* info) 
     hdr->ver_cmd = 0x21; /* v2, PROXY */
 
     if (info->family == AF_INET) {
+        const struct sockaddr_in* src4 = (const struct sockaddr_in*)&info->src;
+        const struct sockaddr_in* dst4 = (const struct sockaddr_in*)&info->dst;
+
         if (len < 16 + 12)
             return -1;
         hdr->fam_proto = (info->type == SOCK_STREAM) ? 0x11 : 0x12;
         hdr->len = htons(12);
-        hdr->addr.ipv4_addr.src_addr = ((struct sockaddr_in*)&info->src)->sin_addr.s_addr;
-        hdr->addr.ipv4_addr.dst_addr = ((struct sockaddr_in*)&info->dst)->sin_addr.s_addr;
-        hdr->addr.ipv4_addr.src_port = ((struct sockaddr_in*)&info->src)->sin_port;
-        hdr->addr.ipv4_addr.dst_port = ((struct sockaddr_in*)&info->dst)->sin_port;
+        hdr->addr.ipv4_addr.src_addr = src4->sin_addr.s_addr;
+        hdr->addr.ipv4_addr.dst_addr = dst4->sin_addr.s_addr;
+        hdr->addr.ipv4_addr.src_port = src4->sin_port;
+        hdr->addr.ipv4_addr.dst_port = dst4->sin_port;
         return 16 + 12;
     }
     else if (info->family == AF_INET6) {
+        const struct sockaddr_in6* src6 = (const struct sockaddr_in6*)&info->src;
+        const struct sockaddr_in6* dst6 = (const struct sockaddr_in6*)&info->dst;
+
         if (len < 16 + 36)
             return -1;
         hdr->fam_proto = (info->type == SOCK_STREAM) ? 0x21 : 0x22;
         hdr->len = htons(36);
-        memcpy(hdr->addr.ipv6_addr.src_addr, &((struct sockaddr_in6*)&info->src)->sin6_addr, 16);
-        memcpy(hdr->addr.ipv6_addr.dst_addr, &((struct sockaddr_in6*)&info->dst)->sin6_addr, 16);
-        hdr->addr.ipv6_addr.src_port = ((struct sockaddr_in6*)&info->src)->sin6_port;
-        hdr->addr.ipv6_addr.dst_port = ((struct sockaddr_in6*)&info->dst)->sin6_port;
+        memcpy(hdr->addr.ipv6_addr.src_addr, &src6->sin6_addr, 16);
+        memcpy(hdr->addr.ipv6_addr.dst_addr, &dst6->sin6_addr, 16);
+        hdr->addr.ipv6_addr.src_port = src6->sin6_port;
+        hdr->addr.ipv6_addr.dst_port = dst6->sin6_port;
         return 16 + 36;
     }
     else {
@@ -200,17 +212,23 @@ static void report_proxy(const struct proxy_info* info, int version) {
         uint16_t src_p = 0, dst_p = 0;
 
         if (info->family == AF_INET) {
-            inet_ntop(AF_INET, &((struct sockaddr_in*)&info->src)->sin_addr, src, sizeof(src));
-            inet_ntop(AF_INET, &((struct sockaddr_in*)&info->dst)->sin_addr, dst, sizeof(dst));
-            src_p = ntohs(((struct sockaddr_in*)&info->src)->sin_port);
-            dst_p = ntohs(((struct sockaddr_in*)&info->dst)->sin_port);
+            const struct sockaddr_in* src4 = (const struct sockaddr_in*)&info->src;
+            const struct sockaddr_in* dst4 = (const struct sockaddr_in*)&info->dst;
+
+            inet_ntop(AF_INET, &src4->sin_addr, src, sizeof(src));
+            inet_ntop(AF_INET, &dst4->sin_addr, dst, sizeof(dst));
+            src_p = ntohs(src4->sin_port);
+            dst_p = ntohs(dst4->sin_port);
             fprintf(stderr, "PROXY v%d: %s:%u -> %s:%u\n", version, src, src_p, dst, dst_p);
         }
         else if (info->family == AF_INET6) {
-            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&info->src)->sin6_addr, src, sizeof(src));
-            inet_ntop(AF_INET6, &((struct sockaddr_in6*)&info->dst)->sin6_addr, dst, sizeof(dst));
-            src_p = ntohs(((struct sockaddr_in6*)&info->src)->sin6_port);
-            dst_p = ntohs(((struct sockaddr_in6*)&info->dst)->sin6_port);
+            const struct sockaddr_in6* src6 = (const struct sockaddr_in6*)&info->src;
+            const struct sockaddr_in6* dst6 = (const struct sockaddr_in6*)&info->dst;
+
+            inet_ntop(AF_INET6, &src6->sin6_addr, src, sizeof(src));
+            inet_ntop(AF_INET6, &dst6->sin6_addr, dst, sizeof(dst));
+            src_p = ntohs(src6->sin6_port);
+            dst_p = ntohs(dst6->sin6_port);
             fprintf(stderr, "PROXY v%d: [%s]:%u -> [%s]:%u\n", version, src, src_p, dst, dst_p);
         }
         else {

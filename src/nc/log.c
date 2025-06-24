@@ -258,7 +258,7 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
 
 #ifdef __linux__
     if (sa && sa->sa_family == AF_VSOCK) {
-        struct sockaddr_vm* svm = (struct sockaddr_vm*)sa;
+        const struct sockaddr_vm* svm = (const struct sockaddr_vm*)sa;
         snprintf(cid, sizeof(cid), "%u", svm->svm_cid);
         snprintf(vmport, sizeof(vmport), "%u", svm->svm_port);
         if (strcmp(msg, "Connection received") == 0) {

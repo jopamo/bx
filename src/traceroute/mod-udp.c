@@ -153,6 +153,9 @@ static void udp_send_probe(probe* pb, int ttl) {
 static probe* udp_check_reply(int sk, int err, sockaddr_any* from, char* buf, size_t len) {
     probe* pb;
 
+    (void)buf;
+    (void)len;
+
     pb = probe_by_sk(sk);
     if (!pb)
         return NULL;

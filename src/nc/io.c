@@ -108,7 +108,7 @@ static int base64_encode(const unsigned char* in, size_t in_len, char* out, size
     return p - out;
 }
 
-void splice_loop(int net_fd) {
+static void splice_loop(int net_fd) {
     int p_in[2], p_out[2];
     struct pollfd pfd[4];
     int stdin_fd = STDIN_FILENO;
@@ -522,9 +522,30 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
             else if (strcmp(profile, "base64-json") == 0) {
                 char b64[BUFSIZE * 2];
                 if (base64_encode(buf, original_len, b64, sizeof(b64)) != -1) {
-                    snprintf((char*)temp_buf, sizeof(temp_buf),
-                             "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"%s\"}", b64);
-                    write_len = strlen((char*)temp_buf);
+                    int prefix_len = snprintf((char*)temp_buf,
+                                              sizeof(temp_buf),
+                                              "{\"status\": \"success\", \"session_id\": \"89234\", \"debug_trace\": \"");
+                    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
+                        memcpy(temp_buf, buf, original_len);
+                        write_len = original_len;
+                    }
+                    else {
+                        size_t used = (size_t)prefix_len;
+                        size_t avail = sizeof(temp_buf) - used;
+                        size_t payload_len = strlen(b64);
+
+                        if (avail <= 3)
+                            payload_len = 0;
+                        else if (payload_len > avail - 3)
+                            payload_len = avail - 3;
+
+                        memcpy(temp_buf + used, b64, payload_len);
+                        used += payload_len;
+                        temp_buf[used++] = '"';
+                        temp_buf[used++] = '}';
+                        temp_buf[used] = '\0';
+                        write_len = used;
+                    }
                 }
                 else {
                     memcpy(temp_buf, buf, original_len);
@@ -537,12 +558,33 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
                     /* Dialect: Looks like a telemetry report */
                     const char* statuses[] = {"active", "idle", "processing", "maintenance"};
                     const char* regions[] = {"us-east-1", "eu-west-1", "ap-southeast-2", "sa-east-1"};
+                    int prefix_len = snprintf((char*)temp_buf,
+                                              sizeof(temp_buf),
+                                              "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"",
+                                              nc_random_uniform(10000),
+                                              regions[nc_random_uniform(4)],
+                                              statuses[nc_random_uniform(4)]);
+                    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(temp_buf)) {
+                        memcpy(temp_buf, buf, original_len);
+                        write_len = original_len;
+                    }
+                    else {
+                        size_t used = (size_t)prefix_len;
+                        size_t avail = sizeof(temp_buf) - used;
+                        size_t payload_len = strlen(b64);
 
-                    snprintf((char*)temp_buf, sizeof(temp_buf),
-                             "{\"metadata\":{\"id\":%u,\"region\":\"%s\",\"status\":\"%s\"},\"payload\":\"%s\"}",
-                             nc_random_uniform(10000), regions[nc_random_uniform(4)], statuses[nc_random_uniform(4)],
-                             b64);
-                    write_len = strlen((char*)temp_buf);
+                        if (avail <= 3)
+                            payload_len = 0;
+                        else if (payload_len > avail - 3)
+                            payload_len = avail - 3;
+
+                        memcpy(temp_buf + used, b64, payload_len);
+                        used += payload_len;
+                        temp_buf[used++] = '"';
+                        temp_buf[used++] = '}';
+                        temp_buf[used] = '\0';
+                        write_len = used;
+                    }
                 }
                 else {
                     memcpy(temp_buf, buf, original_len);

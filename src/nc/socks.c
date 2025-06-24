@@ -136,8 +136,8 @@ static size_t proxy_read_full(int fd, void* buf, size_t n) {
     return proxy_atomicio(read, fd, buf, n, POLLIN);
 }
 
-static size_t proxy_write_full(int fd, const void* buf, size_t n) {
-    return proxy_atomicio(vwrite, fd, (void*)buf, n, POLLOUT);
+static size_t proxy_write_full(int fd, void* buf, size_t n) {
+    return proxy_atomicio(vwrite, fd, buf, n, POLLOUT);
 }
 
 static int decode_addrport(const char* h,
@@ -481,12 +481,12 @@ again:
         }
 
         if (authretry > 1) {
-            char proxypass[256];
+            char http_proxypass[256];
             char resp[1024];
 
-            getproxypass(proxyuser, proxyhost, proxypass, sizeof proxypass);
-            r = snprintf((char*)buf, sizeof(buf), "%s:%s", proxyuser, proxypass);
-            explicit_bzero(proxypass, sizeof proxypass);
+            getproxypass(proxyuser, proxyhost, http_proxypass, sizeof http_proxypass);
+            r = snprintf((char*)buf, sizeof(buf), "%s:%s", proxyuser, http_proxypass);
+            explicit_bzero(http_proxypass, sizeof http_proxypass);
             if (r == -1 || (size_t)r >= sizeof(buf) ||
                 nc_b64_ntop(buf, strlen((char*)buf), resp, sizeof(resp)) == -1) {
                 close(proxyfd);
@@ -505,7 +505,7 @@ again:
                 close(proxyfd);
                 err(EXIT_RUNTIME, "write failed (%zu/%d)", cnt, r);
             }
-            explicit_bzero(proxypass, sizeof proxypass);
+            explicit_bzero(http_proxypass, sizeof http_proxypass);
             explicit_bzero(buf, sizeof buf);
         }
 

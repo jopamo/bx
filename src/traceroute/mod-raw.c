@@ -36,6 +36,8 @@ static int seq = 0;
 static int set_protocol(CLIF_option* optn, char* arg) {
     char* q;
 
+    (void)optn;
+
     protocol = strtoul(arg, &q, 0);
     if (q == arg) {
         struct protoent* p = getprotobyname(arg);
@@ -108,6 +110,10 @@ static void raw_send_probe(probe* pb, int ttl) {
 
 static probe* raw_check_reply(int sk, int err, sockaddr_any* from, char* buf, size_t len) {
     probe* pb;
+
+    (void)sk;
+    (void)buf;
+    (void)len;
 
     if (!equal_addr(&dest_addr, from))
         return NULL;

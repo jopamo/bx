@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <netinet/in.h>  // For htons()
 
+uint16_t in_csum(const void* ptr, size_t len);
+
 uint16_t in_csum(const void* ptr, size_t len) {
     const uint16_t* p = (const uint16_t*)ptr;
     size_t nw = len / 2;   // Number of 16-bit words
@@ -23,7 +25,7 @@ uint16_t in_csum(const void* ptr, size_t len) {
 
     // Handle the last byte if length is odd
     if (len & 0x1) {
-        sum += htons(*((unsigned char*)p) << 8);
+        sum += htons(*((const unsigned char*)p) << 8);
     }
 
     // Fold 32-bit sum to 16 bits (add overflow from the higher 16 bits)

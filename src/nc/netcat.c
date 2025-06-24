@@ -136,7 +136,7 @@ static int io_uringflag;          /* require io_uring backend */
 static int quietflag;             /* suppress non-error informational output */
 static const char* log_file_path; /* append diagnostic output to this file */
 
-void do_readwrite(int nfd, struct tls* tls_ctx) {
+static void do_readwrite(int nfd, struct tls* tls_ctx) {
 #ifdef GAPING_SECURITY_HOLE
     if (exec_path) {
         spawn_exec(nfd);
