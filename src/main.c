@@ -54,6 +54,7 @@ static const struct applet applets[] = {
     {"sync", bx_sync_main},
     {"dd", bx_dd_main},
     {"printf", bx_printf_main},
+    {"ed", bx_ed_main},
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
     {"pwd", bx_pwd_main},
