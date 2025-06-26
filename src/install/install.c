@@ -14,6 +14,8 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "common/args_common.h"
+#include "common/backup_ops.h"
 #include "common/copy_data.h"
 #include "common/path_ops.h"
 #include "common/same_file.h"
@@ -22,11 +24,15 @@
 
 struct bx_install_options {
     const char* progname;
+    enum bx_backup_mode backup_mode;
+    const char* backup_suffix;
     bool compare;
     bool directory_mode;
     bool make_leading_dirs;
+    bool debug;
     bool preserve_timestamps;
     bool strip;
+    const char* strip_program;
     bool mode_set;
     mode_t mode;
     bool owner_set;
@@ -62,20 +68,29 @@ static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Create all components of DIRECTORY(ies) with -d.\n");
     fprintf(stream, "\n");
     fprintf(stream, "Supported options:\n");
+    fprintf(stream, "      --backup[=CONTROL]     make a backup of each existing destination file\n");
+    fprintf(stream, "  -b                         like --backup but does not accept an argument\n");
     fprintf(stream, "  -C, --compare               compare source/destination and skip unchanged outputs\n");
     fprintf(stream, "  -c                          (ignored)\n");
     fprintf(stream, "  -d, --directory             treat all operands as directories to create\n");
     fprintf(stream, "  -D                          create all leading components of DEST\n");
+    fprintf(stream, "      --debug                 explain how a file is copied (implies -v)\n");
     fprintf(stream, "  -g, --group=GROUP           set group ownership (name or numeric ID)\n");
     fprintf(stream, "  -m, --mode=MODE             set permission mode (octal or symbolic, as in chmod)\n");
     fprintf(stream, "  -o, --owner=OWNER           set owner (name or numeric ID)\n");
     fprintf(stream, "  -p, --preserve-timestamps   apply source atime/mtime to destination\n");
     fprintf(stream, "  -s, --strip                 strip symbol tables after copying files\n");
+    fprintf(stream, "      --strip-program=PROGRAM program used to strip binaries\n");
+    fprintf(stream, "  -S, --suffix=SUFFIX         override the usual backup suffix\n");
     fprintf(stream, "  -t, --target-directory=DIR  copy all SOURCE arguments into DIR\n");
     fprintf(stream, "  -T, --no-target-directory   treat DEST as a normal file path\n");
     fprintf(stream, "  -v, --verbose               print each created directory and copied file\n");
     fprintf(stream, "      --help                  display this help and exit\n");
     fprintf(stream, "      --version               output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Backup suffix is '~' unless overridden by -S/--suffix or SIMPLE_BACKUP_SUFFIX.\n");
+    fprintf(stream, "Backup control for --backup follows VERSION_CONTROL values:\n");
+    fprintf(stream, "  none/off, numbered/t, existing/nil, simple/never.\n");
 }
 
 static void bx_install_print_version(const char* progname) {
@@ -424,15 +439,25 @@ static bool bx_install_apply_owner_group_path(const char* path, bool owner_set, 
     return true;
 }
 
+enum {
+    BX_INSTALL_OPT_BACKUP = 256,
+    BX_INSTALL_OPT_DEBUG,
+    BX_INSTALL_OPT_STRIP_PROGRAM,
+};
+
 static bool bx_install_parse_options(int argc, char** argv, struct bx_install_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
+        {"backup", optional_argument, NULL, BX_INSTALL_OPT_BACKUP},
         {"compare", no_argument, NULL, 'C'},
         {"directory", no_argument, NULL, 'd'},
+        {"debug", no_argument, NULL, BX_INSTALL_OPT_DEBUG},
         {"group", required_argument, NULL, 'g'},
         {"mode", required_argument, NULL, 'm'},
         {"owner", required_argument, NULL, 'o'},
         {"preserve-timestamps", no_argument, NULL, 'p'},
         {"strip", no_argument, NULL, 's'},
+        {"strip-program", required_argument, NULL, BX_INSTALL_OPT_STRIP_PROGRAM},
+        {"suffix", required_argument, NULL, 'S'},
         {"target-directory", required_argument, NULL, 't'},
         {"no-target-directory", no_argument, NULL, 'T'},
         {"verbose", no_argument, NULL, 'v'},
@@ -450,12 +475,26 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:CcDdg:m:o:pst:Tv", long_options, &option_index);
+        int c = getopt_long(argc, argv, ":bCcDdg:m:o:psS:t:Tv", long_options, &option_index);
         if (c == -1) {
             break;
         }
 
         switch (c) {
+            case 'b':
+                bx_args_enable_backup_mode(&options->backup_mode);
+                break;
+            case BX_INSTALL_OPT_BACKUP:
+                if (optarg != NULL) {
+                    if (!bx_args_parse_backup_mode(optarg, &options->backup_mode)) {
+                        bx_diag(diag, "invalid --backup control value '%s'", optarg);
+                        return false;
+                    }
+                }
+                else {
+                    bx_args_enable_backup_mode(&options->backup_mode);
+                }
+                break;
             case 'C':
                 options->compare = true;
                 break;
@@ -467,6 +506,10 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 break;
             case 'd':
                 options->directory_mode = true;
+                break;
+            case BX_INSTALL_OPT_DEBUG:
+                options->debug = true;
+                options->verbose = true;
                 break;
             case 'g':
                 if (!bx_install_parse_group(optarg, &options->group, diag)) {
@@ -491,6 +534,13 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 break;
             case 's':
                 options->strip = true;
+                break;
+            case BX_INSTALL_OPT_STRIP_PROGRAM:
+                options->strip_program = optarg;
+                break;
+            case 'S':
+                options->backup_suffix = optarg;
+                bx_args_enable_backup_mode(&options->backup_mode);
                 break;
             case 't':
                 options->target_directory = optarg;
@@ -801,15 +851,17 @@ fail:
     return false;
 }
 
-static bool bx_install_run_strip(const char* path, struct bx_diag_ctx* diag) {
+static bool bx_install_run_strip(const char* strip_program, const char* path, struct bx_diag_ctx* diag) {
+    const char* program = (strip_program != NULL && strip_program[0] != '\0') ? strip_program : "strip";
+
     pid_t pid = fork();
     if (pid < 0) {
-        bx_diag(diag, "failed to start strip: %s", strerror(errno));
+        bx_diag(diag, "failed to start strip program '%s': %s", program, strerror(errno));
         return false;
     }
 
     if (pid == 0) {
-        execlp("strip", "strip", path, (char*)NULL);
+        execlp(program, program, path, (char*)NULL);
         _exit(errno == ENOENT ? 127 : 126);
     }
 
@@ -823,15 +875,20 @@ static bool bx_install_run_strip(const char* path, struct bx_diag_ctx* diag) {
         return true;
     }
 
-    bx_diag(diag, "strip process terminated abnormally");
+    bx_diag(diag, "strip program '%s' terminated abnormally", program);
     return false;
 }
 
-static bool bx_install_copy_regular_file(const char* src_path, const char* dest_path, const struct bx_install_options* options, struct bx_diag_ctx* diag) {
+static bool bx_install_copy_regular_file(const char* src_path,
+                                         const char* dest_path,
+                                         const struct bx_install_options* options,
+                                         const struct bx_backup_params* backup_params,
+                                         struct bx_diag_ctx* diag) {
     struct stat src_st;
     struct stat dest_st;
     bool dest_exists = false;
     bool dest_created = false;
+    char* backup_path = NULL;
     int src_fd = -1;
     int dest_fd = -1;
 
@@ -878,9 +935,17 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
         return false;
     }
 
-    if (dest_exists && unlink(dest_path) != 0) {
-        bx_perror_path(diag, dest_path);
-        goto fail_keep;
+    if (dest_exists) {
+        if (bx_args_backup_mode_enabled(backup_params->mode)) {
+            enum bx_backup_create_result backup_result = bx_backup_create(dest_path, backup_params, diag, &backup_path);
+            if (backup_result == BX_BACKUP_CREATE_FAILED) {
+                goto fail_keep;
+            }
+        }
+        else if (unlink(dest_path) != 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail_keep;
+        }
     }
 
     dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
@@ -940,7 +1005,7 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
     }
     src_fd = -1;
 
-    if (options->strip && !bx_install_run_strip(dest_path, diag)) {
+    if (options->strip && !bx_install_run_strip(options->strip_program, dest_path, diag)) {
         goto fail_remove;
     }
 
@@ -953,9 +1018,11 @@ static bool bx_install_copy_regular_file(const char* src_path, const char* dest_
     }
 
     if (options->verbose && !bx_install_emit_copy(src_path, dest_path, diag)) {
+        free(backup_path);
         return false;
     }
 
+    free(backup_path);
     return true;
 
 fail_remove:
@@ -968,6 +1035,7 @@ fail_remove:
     if (dest_created) {
         (void)unlink(dest_path);
     }
+    free(backup_path);
     return false;
 
 fail_keep:
@@ -977,11 +1045,13 @@ fail_keep:
     if (src_fd >= 0) {
         (void)close(src_fd);
     }
+    free(backup_path);
     return false;
 }
 
 int bx_install_main(int argc, char** argv) {
     struct bx_install_options options;
+    struct bx_backup_params backup_params;
     struct bx_diag_ctx diag = {
         .progname = "install",
         .exit_status = 0,
@@ -1007,6 +1077,8 @@ int bx_install_main(int argc, char** argv) {
     int operand_count = argc - first_operand;
     mode_t install_mode = options.mode_set ? options.mode : 0755u;
     diag.verbose = options.verbose;
+    diag.debug = options.debug;
+    bx_backup_get_params(options.backup_mode, options.backup_suffix, &backup_params);
 
     if (options.directory_mode) {
         if (operand_count <= 0) {
@@ -1068,8 +1140,16 @@ int bx_install_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    if (destination_is_directory && !bx_install_validate_directory_target(destination_root, &diag)) {
-        return diag.exit_status;
+    if (destination_is_directory) {
+        if (options.make_leading_dirs && options.target_directory != NULL) {
+            if (!bx_install_mkdir_p(destination_root, 0755u, false, false, &options, options.verbose, &diag)) {
+                return diag.exit_status;
+            }
+        }
+
+        if (!bx_install_validate_directory_target(destination_root, &diag)) {
+            return diag.exit_status;
+        }
     }
 
     for (int i = 0; i < source_count; i++) {
@@ -1088,7 +1168,7 @@ int bx_install_main(int argc, char** argv) {
             }
         }
 
-        (void)bx_install_copy_regular_file(source_path, dest_path, &options, &diag);
+        (void)bx_install_copy_regular_file(source_path, dest_path, &options, &backup_params, &diag);
         free(dest_path);
     }
 
