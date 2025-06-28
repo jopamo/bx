@@ -335,7 +335,92 @@ traceroute_lib = static_library('bx_traceroute',
   c_args : traceroute_c_args,
 )
 
-applet_names = ['ash', 'sh', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+bc_version = '7.2.0'
+
+bc_host_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+])
+
+bc_strgen = executable('bx_bc_strgen',
+  'src/bc/strgen.c',
+  include_directories : include_directories('src/bc/include'),
+  native : true,
+  c_args : bc_host_c_args,
+)
+
+bc_help_src = custom_target(
+  'bx_bc_help_c',
+  input : 'src/bc/assets/bc_help.txt',
+  output : 'bx_bc_help.c',
+  command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_help', '', 'BC_ENABLED', '0'],
+)
+
+bc_lib_src = custom_target(
+  'bx_bc_lib_c',
+  input : 'src/bc/assets/lib.bc',
+  output : 'bx_bc_lib.c',
+  command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_lib', 'bc_lib_name', 'BC_ENABLED', '1'],
+)
+
+bc_lib2_src = custom_target(
+  'bx_bc_lib2_c',
+  input : 'src/bc/assets/lib2.bc',
+  output : 'bx_bc_lib2.c',
+  command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_lib2', 'bc_lib2_name', 'BC_ENABLED && BC_ENABLE_EXTRA_MATH', '1'],
+)
+
+bc_sources = files(
+  'src/bc/args.c',
+  'src/bc/bc.c',
+  'src/bc/bc_lex.c',
+  'src/bc/bc_parse.c',
+  'src/bc/data.c',
+  'src/bc/file.c',
+  'src/bc/lang.c',
+  'src/bc/lex.c',
+  'src/bc/main.c',
+  'src/bc/num.c',
+  'src/bc/opt.c',
+  'src/bc/parse.c',
+  'src/bc/program.c',
+  'src/bc/rand.c',
+  'src/bc/read.c',
+  'src/bc/vector.c',
+  'src/bc/vm.c',
+)
+
+bc_c_args = [
+  '-DBC_ENABLED=1',
+  '-DDC_ENABLED=0',
+  '-DBC_ENABLE_EXTRA_MATH=1',
+  '-DBC_ENABLE_HISTORY=0',
+  '-DBC_ENABLE_EDITLINE=0',
+  '-DBC_ENABLE_READLINE=0',
+  '-DBC_ENABLE_NLS=0',
+  '-DBC_ENABLE_LIBRARY=0',
+  '-DBC_ENABLE_MEMCHECK=0',
+  '-DBC_ENABLE_AFL=0',
+  '-DBC_ENABLE_OSSFUZZ=0',
+  '-DVERSION=' + bc_version,
+  '-DBUILD_TYPE=release',
+  '-DMAINEXEC=bc',
+  '-Dmain=bx_bc_main',
+]
+bc_c_args += cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-cast-qual',
+  '-Wno-shadow',
+  '-Wno-missing-prototypes',
+  '-Wno-strict-prototypes',
+])
+
+bc_lib = static_library('bx_bc',
+  [bc_help_src, bc_lib_src, bc_lib2_src, bc_sources],
+  include_directories : include_directories('src/bc/include'),
+  c_args : bc_c_args,
+)
+
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -357,7 +442,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : include_directories('src'),
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib],
+  link_whole : [nc_lib, traceroute_lib, bc_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
@@ -518,6 +603,9 @@ if get_option('tests')
 
   test_echo_basic = find_program('tests/echo/test_echo_basic.sh')
   test('echo basic', test_echo_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_bc_basic = find_program('tests/bc/test_bc_basic.sh')
+  test('bc basic', test_bc_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_ed_basic = find_program('tests/ed/test_ed_basic.sh')
   test('ed basic', test_ed_basic, args : [bx_exe], suite : fast_track_p2_suite)

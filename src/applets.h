@@ -4,6 +4,7 @@
 int bx_true_main(int argc, char** argv);
 int bx_false_main(int argc, char** argv);
 int bx_cat_main(int argc, char** argv);
+int bx_bc_main(int argc, char** argv);
 int bx_cut_main(int argc, char** argv);
 int bx_date_main(int argc, char** argv);
 int bx_ln_main(int argc, char** argv);

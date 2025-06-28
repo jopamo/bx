@@ -32,6 +32,7 @@ static const struct applet boot_critical_applets[] = {
 static const struct applet applets[] = {
     {"ash", bx_ash_main},
     {"sh", bx_ash_main},
+    {"bc", bx_bc_main},
     {"cat", bx_cat_main},
     {"cut", bx_cut_main},
     {"date", bx_date_main},
