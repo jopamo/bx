@@ -420,7 +420,11 @@ bc_lib = static_library('bx_bc',
   c_args : bc_c_args,
 )
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'true', 'false']
+gnu_applet_objects = []
+gnu_applet_deps = []
+subdir('src/gnu')
+
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'true', 'false']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -440,8 +444,9 @@ endif
 
 bx_exe = executable('bx',
   sources,
+  objects : gnu_applet_objects,
   include_directories : include_directories('src'),
-  dependencies : bx_deps,
+  dependencies : bx_deps + gnu_applet_deps,
   link_whole : [nc_lib, traceroute_lib, bc_lib],
   link_args : bx_link_args,
   install : true,
@@ -995,6 +1000,9 @@ if get_option('tests')
 
   test_install_smoke_differential = find_program('tests/install/test_install_smoke_differential.sh')
   test('install smoke differential', test_install_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_tar_basic = find_program('tests/tar/test_tar_basic.sh')
+  test('tar basic', test_tar_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
   test('tier1 safe-replace smoke', test_tier1_safe_replace, args : [bx_exe])

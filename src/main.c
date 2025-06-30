@@ -133,6 +133,7 @@ static const struct applet applets[] = {
     {"seq", bx_seq_main},
     {"split", bx_split_main},
     {"sort", bx_sort_main},
+    {"tar", bx_tar_main},
     {"true", bx_true_main},
     {"false", bx_false_main},
 };

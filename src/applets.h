@@ -101,5 +101,6 @@ int bx_split_main(int argc, char** argv);
 int bx_sort_main(int argc, char** argv);
 int bx_traceroute_main(int argc, char** argv);
 int bx_ping_main(int argc, char** argv);
+int bx_tar_main(int argc, char** argv);
 
 #endif /* BX_APPLETS_H */
