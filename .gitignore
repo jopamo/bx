@@ -4,3 +4,4 @@ tests/__*
 __pycache__/
 *.py[cod]
 ref/
+build*

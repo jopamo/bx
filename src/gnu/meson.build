@@ -282,6 +282,7 @@ gnu_applet_deps += bx_gnu_shared_deps
 
 bx_gnu_common_c_args = cc.get_supported_arguments([
   '-DHAVE_CONFIG_H=1',
+  '-ffat-lto-objects',
   '-Wno-error',
   '-Wno-unused-value',
   '-Wno-duplicated-branches',
