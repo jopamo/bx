@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <argp.h>
 #include <argp-version-etc.h>
+#include <version-etc.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -73,6 +74,14 @@ const char *program_authors[] =
   };
 
 const char *argp_program_bug_address = "<" PACKAGE_BUGREPORT ">";
+
+static void
+cpio_version_etc_hook (FILE *stream, struct argp_state *state)
+{
+  (void) state;
+  version_etc_ar (stream, "cpio", PACKAGE_NAME, VERSION, program_authors);
+}
+
 static char doc[] = N_("GNU cpio copies files to and from archives\n\
 \n\
 Examples:\n\
@@ -802,7 +811,7 @@ main (int argc, char *argv[])
   textdomain (PACKAGE);
 
   set_program_name (argv[0]);
-  argp_version_setup ("cpio", program_authors);
+  argp_program_version_hook = cpio_version_etc_hook;
   process_args (argc, argv);
 
   initialize_buffers ();

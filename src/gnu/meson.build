@@ -280,6 +280,9 @@ bx_gnu_acl_dep = cc.find_library('acl', required : true)
 bx_gnu_shared_deps = [bx_gnu_acl_dep]
 gnu_applet_deps += bx_gnu_shared_deps
 
+# GNU shared runtime is built exactly once.
+# Applet-specific include directories apply only to applet sources, never to
+# shared gnulib/paxutils sources.
 bx_gnu_common_c_args = cc.get_supported_arguments([
   '-DHAVE_CONFIG_H=1',
   '-ffat-lto-objects',
@@ -300,14 +303,6 @@ bx_gnu_common_c_args = cc.get_supported_arguments([
 bx_gnu_shared_raw_lib = static_library('bx_gnu_shared_raw',
   bx_gnu_shared_gnulib_sources + bx_gnu_shared_pax_sources,
   include_directories : bx_gnu_shared_inc,
-  dependencies : bx_gnu_shared_deps,
-  c_args : bx_gnu_common_c_args,
-  override_options : ['c_std=gnu23'],
-)
-
-bx_gnu_shared_cpio_raw_lib = static_library('bx_gnu_shared_cpio_raw',
-  bx_gnu_shared_gnulib_sources + bx_gnu_shared_pax_sources,
-  include_directories : bx_gnu_cpio_inc,
   dependencies : bx_gnu_shared_deps,
   c_args : bx_gnu_common_c_args,
   override_options : ['c_std=gnu23'],
@@ -366,7 +361,7 @@ gnu_combine_cpio_command = [
 ]
 
 bx_gnu_cpio_object = custom_target('bx_gnu_cpio_object',
-  input : [bx_gnu_cpio_raw_lib, bx_gnu_shared_cpio_raw_lib, gnu_combine_script],
+  input : [bx_gnu_cpio_raw_lib, bx_gnu_shared_raw_lib, gnu_combine_script],
   output : ['bx_gnu_cpio_keep_global_symbols.txt', 'bx_gnu_cpio.o'],
   command : gnu_combine_cpio_command,
 )
