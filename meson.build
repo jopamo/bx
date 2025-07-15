@@ -1004,23 +1004,23 @@ if get_option('tests')
   test_tar_basic = find_program('tests/tar/test_tar_basic.sh')
   test('tar basic', test_tar_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_tar_differential = files('tests/tar/test_tar_differential.py')
   tar_ref = find_program('tar', required : false)
   tar_differential_args = [test_tar_differential, bx_exe, meson.current_build_dir()]
   if tar_ref.found()
     tar_differential_args += [tar_ref.full_path()]
   endif
-  test_tar_differential = files('tests/tar/test_tar_differential.py')
   test('tar differential', python3, args : tar_differential_args)
 
   test_cpio_basic = find_program('tests/cpio/test_cpio_basic.sh')
   test('cpio basic', test_cpio_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
+  test_cpio_differential = files('tests/cpio/test_cpio_differential.py')
   cpio_ref = find_program('cpio', required : false)
   cpio_differential_args = [test_cpio_differential, bx_exe, meson.current_build_dir()]
   if cpio_ref.found()
     cpio_differential_args += [cpio_ref.full_path()]
   endif
-  test_cpio_differential = files('tests/cpio/test_cpio_differential.py')
   test('cpio differential', python3, args : cpio_differential_args)
 
   test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
