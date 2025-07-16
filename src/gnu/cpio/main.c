@@ -202,14 +202,14 @@ static struct argp_option options[] = {
   {NULL, 'O', N_("[[USER@]HOST:]FILE-NAME"), 0,
    N_("Archive filename to use instead of standard output. Optional USER and HOST specify the user and host names in case of a remote archive"), GRID+1 },
   {"renumber-inodes", RENUMBER_INODES_OPTION, NULL, 0,
-   N_("Renumber inodes") },
+   N_("Renumber inodes"), 0 },
   {"ignore-devno", IGNORE_DEVNO_OPTION, NULL, 0,
-   N_("Don't store device numbers") },
+   N_("Don't store device numbers"), 0 },
   {"ignore-dirnlink", IGNORE_DIRNLINK_OPTION, NULL, 0,
-   N_("ignore number of links of a directory; always assume 2") },
+   N_("ignore number of links of a directory; always assume 2"), 0 },
   {"device-independent", DEVICE_INDEPENDENT_OPTION, NULL, 0,
-   N_("Create device-independent (reproducible) archives") },
-  {"reproducible", 0, NULL, OPTION_ALIAS },
+   N_("Create device-independent (reproducible) archives"), 0 },
+  {"reproducible", 0, NULL, OPTION_ALIAS, NULL, 0 },
 #undef GRID
 
   /* ********** */
@@ -259,7 +259,7 @@ static struct argp_option options[] = {
    N_("Write files with large blocks of zeros as sparse files"), GRID+1 },
 #undef GRID
 
-  {0, 0, 0, 0}
+  {0, 0, 0, 0, 0, 0}
 };
 
 static char *input_archive_name = 0;
@@ -276,7 +276,7 @@ warn_control (char *arg)
     { "truncate",   CPIO_WARN_TRUNCATE  },
     { "all",        CPIO_WARN_ALL       },
     { "interdir",   CPIO_WARN_INTERDIR  },
-    { NULL }
+    { NULL,         0                   }
   };
   struct warn_tab *wt;
   int offset = 0;

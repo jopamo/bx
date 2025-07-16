@@ -35,7 +35,7 @@ openat_save_fail (int errnum)
 {
 #ifndef GNULIB_LIBPOSIX
   error (exit_failure, errnum,
-         _("unable to record current working directory"));
+         "%s", _("unable to record current working directory"));
 #endif
   /* _Noreturn cannot be applied to error, since it returns
      when its first argument is 0.  To help compilers understand that this
@@ -54,7 +54,7 @@ openat_restore_fail (int errnum)
 {
 #ifndef GNULIB_LIBPOSIX
   error (exit_failure, errnum,
-         _("failed to return to initial working directory"));
+         "%s", _("failed to return to initial working directory"));
 #endif
 
   /* As above.  */

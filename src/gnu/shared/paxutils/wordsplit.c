@@ -583,13 +583,14 @@ wordsplit_dump_nodes (struct wordsplit *wsp)
       if (p->flags & _WSNF_WORD)
 	wsp->ws_debug ("(%02td) %4jd: %p: %#04x (%s):%s;",
 		       wsp->ws_lvl,
-		       n, p, p->flags, wsnode_flagstr (p->flags), p->v.word);
+		       n, (void *) p, p->flags, wsnode_flagstr (p->flags),
+		       p->v.word);
       else
 	{
 	  idx_t seglen = p->v.segm.end - p->v.segm.beg;
 	  wsp->ws_debug ("(%02td) %4jd: %p: %#04x (%s):%.*s%s;",
 			 wsp->ws_lvl,
-			 n, p, p->flags, wsnode_flagstr (p->flags),
+			 n, (void *) p, p->flags, wsnode_flagstr (p->flags),
 			 printflen (seglen), wsp->ws_input + p->v.segm.beg,
 			 printfdots (seglen));
 	}
@@ -2380,7 +2381,8 @@ static struct exptab exptab[] = {
     NULL },
   { N_("path expansion"),       WRDSF_PATHEXPAND, 0,
     wordsplit_pathexpand },
-  { NULL }
+  { NULL,                       0,                0,
+    NULL }
 };
 
 static bool

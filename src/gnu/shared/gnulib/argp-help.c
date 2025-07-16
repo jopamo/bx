@@ -107,7 +107,7 @@ struct uparams
 static struct uparams uparams = {
   DUP_ARGS, DUP_ARGS_NOTE,
   SHORT_OPT_COL, LONG_OPT_COL, DOC_OPT_COL, OPT_DOC_COL, HEADER_COL,
-  USAGE_INDENT, RMARGIN
+  USAGE_INDENT, RMARGIN, 0
 };
 
 /* A particular uparam, and what the user name is.  */

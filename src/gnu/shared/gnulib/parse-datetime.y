@@ -312,21 +312,30 @@ digits_to_date_time (parser_control *pc, textint text_int)
 static bool
 apply_relative_time (parser_control *pc, relative_time rel, int factor)
 {
-  if (factor < 0
-      ? (ckd_sub (&pc->rel.ns, pc->rel.ns, rel.ns)
-         | ckd_sub (&pc->rel.seconds, pc->rel.seconds, rel.seconds)
-         | ckd_sub (&pc->rel.minutes, pc->rel.minutes, rel.minutes)
-         | ckd_sub (&pc->rel.hour, pc->rel.hour, rel.hour)
-         | ckd_sub (&pc->rel.day, pc->rel.day, rel.day)
-         | ckd_sub (&pc->rel.month, pc->rel.month, rel.month)
-         | ckd_sub (&pc->rel.year, pc->rel.year, rel.year))
-      : (ckd_add (&pc->rel.ns, pc->rel.ns, rel.ns)
-         | ckd_add (&pc->rel.seconds, pc->rel.seconds, rel.seconds)
-         | ckd_add (&pc->rel.minutes, pc->rel.minutes, rel.minutes)
-         | ckd_add (&pc->rel.hour, pc->rel.hour, rel.hour)
-         | ckd_add (&pc->rel.day, pc->rel.day, rel.day)
-         | ckd_add (&pc->rel.month, pc->rel.month, rel.month)
-         | ckd_add (&pc->rel.year, pc->rel.year, rel.year)))
+  int overflow = 0;
+
+  if (factor < 0)
+    {
+      overflow |= ckd_sub (&pc->rel.ns, pc->rel.ns, rel.ns);
+      overflow |= ckd_sub (&pc->rel.seconds, pc->rel.seconds, rel.seconds);
+      overflow |= ckd_sub (&pc->rel.minutes, pc->rel.minutes, rel.minutes);
+      overflow |= ckd_sub (&pc->rel.hour, pc->rel.hour, rel.hour);
+      overflow |= ckd_sub (&pc->rel.day, pc->rel.day, rel.day);
+      overflow |= ckd_sub (&pc->rel.month, pc->rel.month, rel.month);
+      overflow |= ckd_sub (&pc->rel.year, pc->rel.year, rel.year);
+    }
+  else
+    {
+      overflow |= ckd_add (&pc->rel.ns, pc->rel.ns, rel.ns);
+      overflow |= ckd_add (&pc->rel.seconds, pc->rel.seconds, rel.seconds);
+      overflow |= ckd_add (&pc->rel.minutes, pc->rel.minutes, rel.minutes);
+      overflow |= ckd_add (&pc->rel.hour, pc->rel.hour, rel.hour);
+      overflow |= ckd_add (&pc->rel.day, pc->rel.day, rel.day);
+      overflow |= ckd_add (&pc->rel.month, pc->rel.month, rel.month);
+      overflow |= ckd_add (&pc->rel.year, pc->rel.year, rel.year);
+    }
+
+  if (overflow)
     return false;
   pc->rels_seen = true;
   return true;

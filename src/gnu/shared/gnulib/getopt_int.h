@@ -96,7 +96,18 @@ struct _getopt_data
 
 /* The initializer is necessary to set OPTIND and OPTERR to their
    default values and to clear the initialization flag.  */
-#define _GETOPT_DATA_INITIALIZER	{ 1, 1 }
+#define _GETOPT_DATA_INITIALIZER					\
+  {									\
+    .optind = 1,							\
+    .opterr = 1,							\
+    .optopt = 0,							\
+    .optarg = 0,							\
+    .__initialized = 0,						\
+    .__nextchar = 0,							\
+    .__ordering = REQUIRE_ORDER,					\
+    .__first_nonopt = 0,						\
+    .__last_nonopt = 0						\
+  }
 
 extern int _getopt_internal_r (int ___argc, char **___argv,
 			       const char *__shortopts,

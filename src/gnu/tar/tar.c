@@ -1785,11 +1785,12 @@ parse_opt (int key, char *arg, struct argp_state *state)
       sparse_option = true;
       {
 	char *p;
-	bool vmajor, vminor;
+	bool vmajor = false;
+	bool vminor = false;
 	tar_sparse_major = stoint (arg, &p, &vmajor, 0, INTMAX_MAX);
-	if ((p != arg) & (*p == '.'))
+	if (p != arg && *p == '.')
 	  tar_sparse_minor = stoint (p + 1, &p, &vminor, 0, INTMAX_MAX);
-	if ((p == arg) | *p | vmajor | vminor)
+	if (p == arg || *p != '\0' || vmajor || vminor)
 	  paxusage (_("Invalid sparse version value"));
       }
       break;
@@ -2211,7 +2212,7 @@ parse_opt (int key, char *arg, struct argp_state *state)
 
 static struct argp_child argp_children[] = {
   { &names_argp, 0, NULL, GRID_FILE_NAME },
-  { NULL }
+  { NULL, 0, NULL, 0 }
 };
 
 static struct argp argp = {

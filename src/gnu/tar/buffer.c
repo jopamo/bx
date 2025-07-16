@@ -496,7 +496,7 @@ print_stats (FILE *fp, const char *text, tarlong numbytes)
 {
   char abbr[LONGEST_HUMAN_READABLE + 1];
   int human_opts = human_autoscale | human_base_1024 | human_SI | human_B;
-  double ulim = UINTMAX_MAX + 1.0;
+  double ulim = 2.0 * (double) (UINTMAX_MAX / 2 + 1);
 
   intmax_t n = fprintf (fp, "%s: "TARLONG_FORMAT" (", gettext (text), numbytes);
 

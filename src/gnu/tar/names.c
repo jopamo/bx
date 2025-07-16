@@ -152,7 +152,7 @@ static struct argp_option names_options[] = {
   {"no-wildcards-match-slash", NO_WILDCARDS_MATCH_SLASH_OPTION, NULL, 0,
    N_("wildcards do not match '/'"), GRID_MATCH },
 
-  {NULL}
+  {NULL, 0, NULL, 0, NULL, 0}
 };
 
 static struct argp_option const *

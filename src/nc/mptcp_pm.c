@@ -96,7 +96,7 @@ int mptcp_pm_parse_genl_event(const struct nlmsghdr* nlh, size_t nlh_len, struct
     if (nlh_len < sizeof(*nlh) || nlh->nlmsg_len < NLMSG_LENGTH(GENL_HDRLEN) || nlh->nlmsg_len > nlh_len)
         return -1;
 
-    ghdr = (const struct genlmsghdr*)NLMSG_DATA(nlh);
+    ghdr = (const struct genlmsghdr*)((const char*)nlh + NLMSG_HDRLEN);
     mptcp_pm_reset_event(event);
     event->cmd = ghdr->cmd;
 
@@ -236,7 +236,7 @@ int mptcp_pm_parse_ctrl_getfamily(const struct nlmsghdr* nlh,
     if (nlh_len < sizeof(*nlh) || nlh->nlmsg_len < NLMSG_LENGTH(GENL_HDRLEN) || nlh->nlmsg_len > nlh_len)
         return -1;
 
-    ghdr = (const struct genlmsghdr*)NLMSG_DATA(nlh);
+    ghdr = (const struct genlmsghdr*)((const char*)nlh + NLMSG_HDRLEN);
     if (ghdr->cmd != CTRL_CMD_NEWFAMILY && ghdr->cmd != CTRL_CMD_GETFAMILY)
         return -1;
 

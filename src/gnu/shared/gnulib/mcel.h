@@ -214,7 +214,8 @@ mcel_tocmp (wint_t (*to) (wint_t), mcel_t c1, mcel_t c2)
 MCEL_INLINE bool
 mcel_isbasic (char c)
 {
-  return _GL_LIKELY (0 <= c && c < MCEL_ERR_MIN);
+  unsigned char uc = c;
+  return _GL_LIKELY (uc < MCEL_ERR_MIN);
 }
 
 /* Scan bytes from P inclusive to LIM exclusive.  P must be less than LIM.

@@ -43,7 +43,7 @@ endif
 bx_static_link_args = []
 if use_static_binary
   bx_static_link_args += ['-static']
-  if static_no_pie_supported
+  if static_no_pie_supported and cc.get_id() != 'clang'
     bx_static_link_args += ['-no-pie']
   endif
 endif
