@@ -1077,10 +1077,11 @@ if get_option('tests')
   test_parity_dot_tilde = files('tests/test_parity_dot_tilde.py')
   test('which parity dot tilde', python3, args : [test_parity_dot_tilde, which_ref, bx_exe, meson.current_build_dir()])
   if unshare.found()
+    test_parity_dot_tilde_root = find_program('tests/test_parity_dot_tilde_root.sh')
     test(
       'which parity dot tilde root',
-      unshare,
-      args : ['-Ur', python3, test_parity_dot_tilde, which_ref, bx_exe, meson.current_build_dir()],
+      test_parity_dot_tilde_root,
+      args : [python3, test_parity_dot_tilde, which_ref, bx_exe, meson.current_build_dir()],
       env : {'BX_PARITY_CASE' : 'show_tilde_root_home'},
     )
   endif

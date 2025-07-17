@@ -145,6 +145,16 @@ static void do_readwrite(int nfd, struct tls* tls_ctx) {
     readwrite(nfd, tls_ctx);
 }
 
+static const char* nc_progname(const char* argv0) {
+    const char* base;
+
+    if (argv0 == NULL || argv0[0] == '\0')
+        return "nc";
+
+    base = strrchr(argv0, '/');
+    return base == NULL ? argv0 : base + 1;
+}
+
 static void enforce_io_backend_policy(void) {
     if (!io_uringflag)
         return;
@@ -185,6 +195,7 @@ int main(int argc, char* argv[]) {
     int option_index = 0;
     int pcap_path_explicit = 0;
     int pcap_path_default = 0;
+    const char* progname = nc_progname(argc > 0 ? argv[0] : NULL);
     static struct option long_options[] = {{"mptcp", no_argument, NULL, 1001},
                                            {"help", no_argument, NULL, 'h'},
                                            {"tfo", no_argument, NULL, 1002},
@@ -377,8 +388,9 @@ int main(int argc, char* argv[]) {
                 family = AF_INET;
                 break;
             case '6':
-                family = AF_INET6;
-                break;
+                fprintf(stderr, "%s: IPv6 is not supported in this IPv4-only build\n", progname);
+                fprintf(stderr, "Try '%s --help' for more information.\n", progname);
+                exit(EXIT_USAGE);
             case 'j':
                 jflag = 1;
                 break;

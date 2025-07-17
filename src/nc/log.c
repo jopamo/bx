@@ -310,8 +310,8 @@ void report_sock(const char* msg, const struct sockaddr* sa, socklen_t salen, ch
 }
 
 void help(void) {
-    fprintf(stderr, "Netcat 30th anniversary edition\n");
-    fprintf(stderr,
+    fprintf(stdout, "Netcat 30th anniversary edition\n");
+    fprintf(stdout,
             "\n"
             "        /\\_/\\\n"
             "       / 0 0 \\\n"
@@ -326,7 +326,7 @@ void help(void) {
             "      \\__.=|___E\n"
             "             /\n"
             "\n");
-    fprintf(stderr,
+    fprintf(stdout,
             "\n"
             "Usage: nc [options] [destination] [port]\n"
             "\n"
