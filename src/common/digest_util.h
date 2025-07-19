@@ -19,7 +19,7 @@ struct bx_checksum_record {
     uint8_t digest[64];
     size_t digest_len;
     bool binary_mode;
-    const char* filename;
+    char* filename;
 };
 
 bool bx_parse_check_line(char* line, size_t digest_len, struct bx_checksum_record* record);

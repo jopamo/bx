@@ -161,6 +161,7 @@ sources = [
   'src/common/sha256.c',
   'src/common/sha512.c',
   'src/common/digest_util.c',
+  'src/common/digestsum.c',
   'src/main.c',
   'src/ash/ash.c',
   'src/cat/cat.c',
@@ -242,6 +243,7 @@ sources = [
   'src/expr/expr.c',
   'src/cksum/cksum.c',
   'src/md5sum/md5sum.c',
+  'src/sha1sum/sha1sum.c',
   'src/base64/base64.c',
   'src/shuf/shuf.c',
   'src/yes/yes.c',
@@ -424,7 +426,7 @@ gnu_applet_objects = []
 gnu_applet_deps = []
 subdir('src/gnu')
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -587,6 +589,13 @@ if get_option('tests')
   )
   test('md5 vectors', test_md5_vectors)
 
+  test_sha1_vectors = executable(
+    'test-sha1-vectors',
+    ['tests/sha1sum/test_sha1_vectors.c', 'src/common/sha1.c'],
+    include_directories : include_directories('src'),
+  )
+  test('sha1 vectors', test_sha1_vectors)
+
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
   fast_track_p2_suite = ['fast-track', 'fast-track-p2']
@@ -664,11 +673,20 @@ if get_option('tests')
   test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_md5sum_smoke_differential = find_program('tests/md5sum/test_md5sum_smoke_differential.sh')
-  test('md5sum smoke differential', test_md5sum_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
+  test_md5sum_differential = files('tests/md5sum/test_md5sum_differential.py')
+  test('md5sum differential', python3, args : [test_md5sum_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
-  test('md5sum check', test_md5sum_check, args : [bx_exe])
+  test('md5sum check', test_md5sum_check, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_sha1sum_basic = find_program('tests/sha1sum/test_sha1sum_basic.sh')
+  test('sha1sum basic', test_sha1sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_sha1sum_differential = files('tests/sha1sum/test_sha1sum_differential.py')
+  test('sha1sum differential', python3, args : [test_sha1sum_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+
+  test_sha1sum_check = find_program('tests/sha1sum/test_sha1sum_check.sh')
+  test('sha1sum check', test_sha1sum_check, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_cksum_basic = find_program('tests/cksum/test_cksum_basic.sh')
   test('cksum basic', test_cksum_basic, args : [bx_exe], suite : fast_track_p2_suite)
