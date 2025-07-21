@@ -29,6 +29,17 @@
 /* Define to the number of bits in type 'wchar_t'. */
 #define BITSIZEOF_WCHAR_T 32
 
+/* Gnulib's generated <uchar.h> only auto-detects UCS-4 wchar_t through
+   __STDC_ISO_10646__. musl does not define that macro, even though Linux
+   wchar_t is still 32-bit Unicode. Force the wchar_t-backed c32 path for
+   this vendored Linux baseline so the GNU tar/cpio import does not fall back
+   to libunistring uc_* entry points that we do not vendor. */
+#ifndef _GL_WCHAR_T_IS_UCS4
+# if defined __linux__ && BITSIZEOF_WCHAR_T == 32
+#  define _GL_WCHAR_T_IS_UCS4 1
+# endif
+#endif
+
 /* Define to the number of bits in type 'wint_t'. */
 /* #undef BITSIZEOF_WINT_T */
 
@@ -140,7 +151,15 @@
 
 /* Define to 1 if fflush is known to work on stdin as per POSIX.1-2008 or
    later, 0 if fflush is known to not work, -1 if unknown. */
-#define FUNC_FFLUSH_STDIN 0
+#if defined __linux__ && !defined __GLIBC__ && !defined __UCLIBC__ \
+    && !defined __BIONIC__
+/* The imported GNU baseline hard-codes a glibc configure result.  On musl we
+   want gnulib's POSIX.1-2008 fallback path instead of a hard #error in
+   fseeko.c.  */
+# define FUNC_FFLUSH_STDIN -1
+#else
+# define FUNC_FFLUSH_STDIN 0
+#endif
 
 /* Define to 1 if mkdir mistakenly creates a directory given with a trailing
    dot component. */
@@ -1671,7 +1690,11 @@
 #define HAVE_REWINDDIR 1
 
 /* Define to 1 if you have the 'rpmatch' function. */
-#define HAVE_RPMATCH 1
+#ifdef __GLIBC__
+# define HAVE_RPMATCH 1
+#else
+# define HAVE_RPMATCH 0
+#endif
 
 /* Define to 1 if you have the <sdkddkver.h> header file. */
 /* #undef HAVE_SDKDDKVER_H */
@@ -1768,7 +1791,12 @@
 #define HAVE_STRCHRNUL 1
 
 /* Define to 1 if you have the `strerrorname_np' function. */
-#define HAVE_STRERRORNAME_NP 1
+#if defined __GLIBC__ && defined __GLIBC_MINOR__ \
+    && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 32))
+# define HAVE_STRERRORNAME_NP 1
+#else
+# define HAVE_STRERRORNAME_NP 0
+#endif
 
 /* Define if you have 'strerror_r'. */
 #define HAVE_STRERROR_R 1
@@ -2028,7 +2056,12 @@
 #define HAVE_WORKING_RENAMEAT2 1
 
 /* Define to 1 if the function strerrorname_np exists and works. */
-#define HAVE_WORKING_STRERRORNAME_NP 1
+#if defined __GLIBC__ && defined __GLIBC_MINOR__ \
+    && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 32))
+# define HAVE_WORKING_STRERRORNAME_NP 1
+#else
+# define HAVE_WORKING_STRERRORNAME_NP 0
+#endif
 
 /* Define if the uselocale function exists and may safely be called. */
 #define HAVE_WORKING_USELOCALE 1
@@ -2427,7 +2460,11 @@
 #define STDC_HEADERS 1
 
 /* Define to 1 if strerror_r returns char *. */
-#define STRERROR_R_CHAR_P 1
+#ifdef __GLIBC__
+# define STRERROR_R_CHAR_P 1
+#else
+# define STRERROR_R_CHAR_P 0
+#endif
 
 /* Define to 1 if time_t is signed. */
 #define TIME_T_IS_SIGNED 1
@@ -3934,4 +3971,3 @@
 #ifndef GNULIB_TEXT_DOMAIN
 # define GNULIB_TEXT_DOMAIN/**/"gnulib"
 #endif
-

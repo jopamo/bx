@@ -344,82 +344,85 @@ static bool bx_chmod_apply_symbolic_mode(const char* text, mode_t start_mode, bo
             who_flags = BX_CHMOD_WHO_ALL;
         }
 
-        char op = *p;
-        if (op != '+' && op != '-' && op != '=') {
-            return false;
-        }
-        p++;
-
-        if (*p == '\0' || *p == ',') {
+        if (*p != '+' && *p != '-' && *p != '=') {
             return false;
         }
 
-        mode_t clause_rwx_bits = 0u;
-        mode_t clause_special_bits = 0u;
-        mode_t source_mode = mode;
-
-        while (*p != '\0' && *p != ',') {
-            switch (*p) {
-                case 'r':
-                case 'w':
-                case 'x':
-                    clause_rwx_bits |= bx_chmod_perm_bits_for_who(who_flags, *p);
-                    break;
-                case 'X':
-                    if (is_directory || (source_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0u) {
-                        clause_rwx_bits |= bx_chmod_perm_bits_for_who(who_flags, 'x');
-                    }
-                    break;
-                case 's':
-                    if ((who_flags & BX_CHMOD_WHO_U) != 0u) {
-                        clause_special_bits |= S_ISUID;
-                    }
-                    if ((who_flags & BX_CHMOD_WHO_G) != 0u) {
-                        clause_special_bits |= S_ISGID;
-                    }
-                    break;
-                case 't':
-                    if ((who_flags & BX_CHMOD_WHO_O) != 0u) {
-                        clause_special_bits |= BX_CHMOD_STICKY_BIT;
-                    }
-                    break;
-                case 'u':
-                case 'g':
-                case 'o':
-                    clause_rwx_bits |= bx_chmod_copy_perm_bits(source_mode, who_flags, *p);
-                    break;
-                default:
-                    return false;
-            }
+        while (*p == '+' || *p == '-' || *p == '=') {
+            char op = *p;
             p++;
-        }
 
-        mode_t affected_rwx_mask = bx_chmod_rwx_mask_from_who(who_flags);
-        if (!who_specified) {
-            affected_rwx_mask &= (mode_t)(~umask_value) & 0777u;
-        }
+            if (*p == '\0' || *p == ',') {
+                return false;
+            }
 
-        mode_t clear_rwx_mask = affected_rwx_mask;
-        if (op == '=' && !who_specified) {
-            clear_rwx_mask = S_IRWXU | S_IRWXG | S_IRWXO;
-        }
+            mode_t op_rwx_bits = 0u;
+            mode_t op_special_bits = 0u;
+            mode_t source_mode = mode;
 
-        mode_t affected_special_mask = who_specified ? bx_chmod_special_mask_from_who(who_flags) : (S_ISUID | S_ISGID | BX_CHMOD_STICKY_BIT);
-        mode_t applied_rwx_bits = clause_rwx_bits & affected_rwx_mask;
+            while (*p != '\0' && *p != ',' && *p != '+' && *p != '-' && *p != '=') {
+                switch (*p) {
+                    case 'r':
+                    case 'w':
+                    case 'x':
+                        op_rwx_bits |= bx_chmod_perm_bits_for_who(who_flags, *p);
+                        break;
+                    case 'X':
+                        if (is_directory || (source_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0u) {
+                            op_rwx_bits |= bx_chmod_perm_bits_for_who(who_flags, 'x');
+                        }
+                        break;
+                    case 's':
+                        if ((who_flags & BX_CHMOD_WHO_U) != 0u) {
+                            op_special_bits |= S_ISUID;
+                        }
+                        if ((who_flags & BX_CHMOD_WHO_G) != 0u) {
+                            op_special_bits |= S_ISGID;
+                        }
+                        break;
+                    case 't':
+                        if ((who_flags & BX_CHMOD_WHO_O) != 0u) {
+                            op_special_bits |= BX_CHMOD_STICKY_BIT;
+                        }
+                        break;
+                    case 'u':
+                    case 'g':
+                    case 'o':
+                        op_rwx_bits |= bx_chmod_copy_perm_bits(source_mode, who_flags, *p);
+                        break;
+                    default:
+                        return false;
+                }
+                p++;
+            }
 
-        if (op == '+') {
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
-        }
-        else if (op == '-') {
-            mode &= ~applied_rwx_bits;
-            mode &= ~clause_special_bits;
-        }
-        else {
-            mode &= ~clear_rwx_mask;
-            mode &= ~affected_special_mask;
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
+            mode_t affected_rwx_mask = bx_chmod_rwx_mask_from_who(who_flags);
+            if (!who_specified) {
+                affected_rwx_mask &= (mode_t)(~umask_value) & 0777u;
+            }
+
+            mode_t clear_rwx_mask = affected_rwx_mask;
+            if (op == '=' && !who_specified) {
+                clear_rwx_mask = S_IRWXU | S_IRWXG | S_IRWXO;
+            }
+
+            mode_t affected_special_mask = who_specified ? bx_chmod_special_mask_from_who(who_flags) : (S_ISUID | S_ISGID | BX_CHMOD_STICKY_BIT);
+            mode_t applied_rwx_bits = op_rwx_bits & affected_rwx_mask;
+
+            if (op == '+') {
+                mode |= applied_rwx_bits;
+                mode |= op_special_bits;
+            }
+            else if (op == '-') {
+                mode &= ~applied_rwx_bits;
+                mode &= ~op_special_bits;
+            }
+            else {
+                mode &= ~clear_rwx_mask;
+                mode &= ~affected_special_mask;
+                mode |= applied_rwx_bits;
+                mode |= op_special_bits;
+            }
         }
 
         if (*p == ',') {

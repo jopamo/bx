@@ -1408,7 +1408,7 @@ read_directory_file (void)
 	  break;
 
 	default:
-	  unreachable ();
+	  gl_unreachable ();
 	}
     }
 

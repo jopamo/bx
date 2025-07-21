@@ -2175,7 +2175,7 @@ _GL_WARN_ON_USE (realpath, "realpath is unportable - use gnulib module "
 #if 1
 /* Test a user response to a question.
    Return 1 if it is affirmative, 0 if it is negative, or -1 if not clear.  */
-# if !1
+# if !HAVE_RPMATCH
 _GL_FUNCDECL_SYS (rpmatch, int, (const char *response),
                                 _GL_ARG_NONNULL ((1)) _GL_ATTRIBUTE_NODISCARD);
 # endif

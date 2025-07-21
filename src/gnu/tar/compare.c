@@ -355,7 +355,7 @@ dumpdir_cmp (const char *a, const char *b)
 	return *b;
 
       default:
-	unreachable ();
+	gl_unreachable ();
       }
   return *b;
 }

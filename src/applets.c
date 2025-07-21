@@ -27,6 +27,17 @@ int bx_true_main(int argc, char** argv) {
         return 0;
     }
 
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        puts("true (GNU coreutils) 9.11");
+        puts("Copyright (C) 2026 Free Software Foundation, Inc.");
+        puts("License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.");
+        puts("This is free software: you are free to change and redistribute it.");
+        puts("There is NO WARRANTY, to the extent permitted by law.");
+        puts("");
+        puts("Written by Jim Meyering.");
+        return 0;
+    }
+
     (void)argc;
     (void)argv;
     return 0;

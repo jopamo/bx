@@ -110,6 +110,7 @@ bx_gnu_shared_gnulib_sources = files(
   'shared/gnulib/realloc.c',
   'shared/gnulib/reallocarray.c',
   'shared/gnulib/regex.c',
+  'shared/gnulib/rpmatch.c',
   'shared/gnulib/renameatu.c',
   'shared/gnulib/safe-read.c',
   'shared/gnulib/safe-write.c',

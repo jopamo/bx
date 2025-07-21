@@ -127,6 +127,10 @@
 
 #include <limits.h>
 #include <inttypes.h>
+
+#ifndef UINTMAX_WIDTH
+# define UINTMAX_WIDTH (sizeof (uintmax_t) * CHAR_BIT)
+#endif
 
 /* Prototypes for external functions.  */
 

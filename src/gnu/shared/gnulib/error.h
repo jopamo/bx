@@ -25,7 +25,18 @@
 
 /* The include_next requires a split double-inclusion guard.  */
 #if 1 && !defined __MINGW32__
-# include_next <error.h>
+# if defined __has_include_next
+#  if __has_include_next(<error.h>)
+#   include_next <error.h>
+#  else
+#   undef HAVE_ERROR
+#   define HAVE_ERROR 0
+#   undef HAVE_ERROR_H
+#   define HAVE_ERROR_H 0
+#  endif
+# else
+#  include_next <error.h>
+# endif
 #endif
 
 #ifndef _GL_ERROR_H
@@ -474,7 +485,7 @@ _GL_CXXALIAS_RPL (error, void,
      _gl_error_call (rpl_error, status, __VA_ARGS__)
 # endif
 #else
-# if ! 1
+# if !HAVE_ERROR
 _GL_FUNCDECL_SYS (error, void,
                   (int __status, int __errnum, const char *__format, ...),
                   _GL_ATTRIBUTE_COLD
@@ -535,7 +546,7 @@ _GL_CXXALIAS_RPL (error_at_line, void,
      _gl_error_call (rpl_error_at_line, status, __VA_ARGS__)
 # endif
 #else
-# if ! 1
+# if !HAVE_ERROR
 _GL_FUNCDECL_SYS (error_at_line, void,
                   (int __status, int __errnum, const char *__filename,
                    unsigned int __lineno, const char *__format, ...),
