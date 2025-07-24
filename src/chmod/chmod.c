@@ -352,10 +352,6 @@ static bool bx_chmod_apply_symbolic_mode(const char* text, mode_t start_mode, bo
             char op = *p;
             p++;
 
-            if (*p == '\0' || *p == ',') {
-                return false;
-            }
-
             mode_t op_rwx_bits = 0u;
             mode_t op_special_bits = 0u;
             mode_t source_mode = mode;

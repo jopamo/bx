@@ -944,6 +944,15 @@ if get_option('tests')
   test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
+  test_chmod_symbolic_x = find_program('tests/chmod/test_chmod_symbolic_x.sh')
+  test('chmod symbolic x', test_chmod_symbolic_x, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_chmod_recursive = find_program('tests/chmod/test_chmod_recursive.sh')
+  test('chmod recursive', test_chmod_recursive, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_chmod_invalid_modes = find_program('tests/chmod/test_chmod_invalid_modes.sh')
+  test('chmod invalid modes', test_chmod_invalid_modes, args : [bx_exe], suite : fast_track_p0_suite)
+
   test_chmod_smoke_differential = find_program('tests/chmod/test_chmod_smoke_differential.sh')
   test('chmod smoke differential', test_chmod_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
