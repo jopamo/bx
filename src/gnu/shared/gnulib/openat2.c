@@ -35,7 +35,6 @@
 
 #if defined __linux__ || defined __ANDROID__
 # include <sys/syscall.h>
-# include <linux/version.h>
 # if HAVE_SYS_VFS_H && HAVE_FSTATFS && HAVE_STRUCT_STATFS_F_TYPE
 #  include <sys/vfs.h>
 /* Linux-specific constant from coreutils src/fs.h.  */
@@ -44,17 +43,12 @@
 #endif
 
 /* FSTAT_O_PATH_BUG is true if fstat fails on O_PATH file descriptors.
-   Although it can be dicey to use static checks for Linux kernel versions,
-   due to the dubious practice of building on newer kernels for older ones,
-   do it here anyway as the buggy kernels are rare (all EOLed by 2016)
-   and builders for them are unlikely to use the dubious practice.
-   Circa 2030 we should remove the old-kernel workarounds entirely.  */
-#ifdef LINUX_VERSION_CODE
-# define FSTAT_O_PATH_BUG (KERNEL_VERSION (2, 6, 39) <= LINUX_VERSION_CODE \
-                           && LINUX_VERSION_CODE < KERNEL_VERSION (3, 6, 0))
-#else
-# define FSTAT_O_PATH_BUG false
-#endif
+   Gnulib sniffs LINUX_VERSION_CODE for this, but some cross sysroots ship
+   <linux/version.h> without a usable numeric definition.  An empty macro is
+   enough to make '#if ... LINUX_VERSION_CODE ...' invalid.  Since the buggy
+   kernels were EOLed long ago, do not depend on brittle kernel-header version
+   guessing here.  */
+#define FSTAT_O_PATH_BUG 0
 
 #ifndef E2BIG
 # define E2BIG EINVAL
