@@ -13,6 +13,10 @@
 #include "diag.h"
 #include "libbx.h"
 
+#ifndef BX_LSCOLORS_FILE
+#define BX_LSCOLORS_FILE "/usr/share/bx/lscolors.dircolors"
+#endif
+
 enum bx_dircolors_shell_mode {
     BX_DIRCOLORS_SHELL_BOURNE = 0,
     BX_DIRCOLORS_SHELL_C,
@@ -101,7 +105,7 @@ static void bx_dircolors_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]\n", progname);
     fprintf(stream, "Output shell commands to set LS_COLORS.\n");
     fprintf(stream, "FILE defaults to the first readable path among:\n");
-    fprintf(stream, "  /etc/LS_COLORS, /etc/DIR_COLORS, /usr/share/bx/lscolors.dircolors\n");
+    fprintf(stream, "  /etc/LS_COLORS, /etc/DIR_COLORS, %s\n", BX_LSCOLORS_FILE);
     fprintf(stream, "\n");
     fprintf(stream, "  -b, --bourne-shell   output Bourne shell commands\n");
     fprintf(stream, "  -c, --c-shell        output C shell commands\n");
@@ -427,7 +431,7 @@ static const char* bx_dircolors_default_input_path(void) {
     static const char* candidates[] = {
         "/etc/LS_COLORS",
         "/etc/DIR_COLORS",
-        "/usr/share/bx/lscolors.dircolors",
+        BX_LSCOLORS_FILE,
     };
 
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {

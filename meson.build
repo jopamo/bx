@@ -6,6 +6,10 @@ project('bx', 'c',
 
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', '-DBX_VERSION="' + meson.project_version() + '"', language : 'c')
 
+lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
+lscolors_install_path = join_paths(join_paths(get_option('prefix'), lscolors_install_subdir), 'lscolors.dircolors')
+add_project_arguments('-DBX_LSCOLORS_FILE="' + lscolors_install_path + '"', language : 'c')
+
 cc = meson.get_compiler('c')
 warn_flags = [
   '-Wshadow',
@@ -514,7 +518,6 @@ if install_init_shortcut
 endif
 
 if get_option('install_ls_colors')
-  lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
   install_data('config/lscolors.dircolors',
     install_dir : lscolors_install_subdir
   )
@@ -522,7 +525,7 @@ if get_option('install_ls_colors')
   lscolors_profile_conf = configuration_data()
   lscolors_profile_conf.set(
     'LSCOLORS_FILE',
-    join_paths(join_paths(get_option('prefix'), lscolors_install_subdir), 'lscolors.dircolors')
+    lscolors_install_path
   )
   lscolors_profile = configure_file(
     input : 'scripts/bx-lscolors-profile.sh.in',
@@ -761,7 +764,7 @@ if get_option('tests')
   test('dirname smoke differential', test_dirname_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_dircolors_basic = find_program('tests/dircolors/test_dircolors_basic.sh')
-  test('dircolors basic', test_dircolors_basic, args : [bx_exe], suite : fast_track_p0_suite)
+  test('dircolors basic', test_dircolors_basic, args : [bx_exe, lscolors_install_path], suite : fast_track_p0_suite)
 
   test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe], suite : fast_track_p2_suite)
