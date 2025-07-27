@@ -369,13 +369,13 @@ static inline ssize_t direct_sendfile(int out_fd, int in_fd, off_t* offset, size
 static inline ssize_t direct_write(int fd, const void* buf, size_t count) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_write;
-    register long x0 asm("x0") = (long)fd;
-    register long x1 asm("x1") = (long)buf;
-    register long x2 asm("x2") = (long)count;
+    register long x8 __asm__("x8") = __NR_write;
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)count;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -392,13 +392,13 @@ static inline ssize_t direct_write(int fd, const void* buf, size_t count) {
 static inline ssize_t direct_read(int fd, void* buf, size_t count) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_read;
-    register long x0 asm("x0") = (long)fd;
-    register long x1 asm("x1") = (long)buf;
-    register long x2 asm("x2") = (long)count;
+    register long x8 __asm__("x8") = __NR_read;
+    register long x0 __asm__("x0") = (long)fd;
+    register long x1 __asm__("x1") = (long)buf;
+    register long x2 __asm__("x2") = (long)count;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -415,13 +415,13 @@ static inline ssize_t direct_read(int fd, void* buf, size_t count) {
 static inline int direct_socket(int domain, int type, int protocol) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_socket;
-    register long x0 asm("x0") = (long)domain;
-    register long x1 asm("x1") = (long)type;
-    register long x2 asm("x2") = (long)protocol;
+    register long x8 __asm__("x8") = __NR_socket;
+    register long x0 __asm__("x0") = (long)domain;
+    register long x1 __asm__("x1") = (long)type;
+    register long x2 __asm__("x2") = (long)protocol;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -438,13 +438,13 @@ static inline int direct_socket(int domain, int type, int protocol) {
 static inline int direct_bind(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_bind;
-    register long x0 asm("x0") = (long)sockfd;
-    register long x1 asm("x1") = (long)addr;
-    register long x2 asm("x2") = (long)addrlen;
+    register long x8 __asm__("x8") = __NR_bind;
+    register long x0 __asm__("x0") = (long)sockfd;
+    register long x1 __asm__("x1") = (long)addr;
+    register long x2 __asm__("x2") = (long)addrlen;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -461,12 +461,12 @@ static inline int direct_bind(int sockfd, const struct sockaddr* addr, socklen_t
 static inline int direct_listen(int sockfd, int backlog) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_listen;
-    register long x0 asm("x0") = (long)sockfd;
-    register long x1 asm("x1") = (long)backlog;
+    register long x8 __asm__("x8") = __NR_listen;
+    register long x0 __asm__("x0") = (long)sockfd;
+    register long x1 __asm__("x1") = (long)backlog;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %4" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -483,13 +483,13 @@ static inline int direct_listen(int sockfd, int backlog) {
 static inline int direct_connect(int sockfd, const struct sockaddr* addr, socklen_t addrlen) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = __NR_connect;
-    register long x0 asm("x0") = (long)sockfd;
-    register long x1 asm("x1") = (long)addr;
-    register long x2 asm("x2") = (long)addrlen;
+    register long x8 __asm__("x8") = __NR_connect;
+    register long x0 __asm__("x0") = (long)sockfd;
+    register long x1 __asm__("x1") = (long)addr;
+    register long x2 __asm__("x2") = (long)addrlen;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
     }
     else {
@@ -506,14 +506,14 @@ static inline int direct_connect(int sockfd, const struct sockaddr* addr, sockle
 static inline ssize_t direct_sendfile(int out_fd, int in_fd, off_t* offset, size_t count) {
     if (!syscall_gadget)
         find_gadget();
-    register long x8 asm("x8") = (sys_sendfile_nr != -1) ? sys_sendfile_nr : __NR_sendfile;
-    register long x0 asm("x0") = (long)out_fd;
-    register long x1 asm("x1") = (long)in_fd;
-    register long x2 asm("x2") = (long)offset;
-    register long x3 asm("x3") = (long)count;
+    register long x8 __asm__("x8") = (sys_sendfile_nr != -1) ? sys_sendfile_nr : __NR_sendfile;
+    register long x0 __asm__("x0") = (long)out_fd;
+    register long x1 __asm__("x1") = (long)in_fd;
+    register long x2 __asm__("x2") = (long)offset;
+    register long x3 __asm__("x3") = (long)count;
 
     if (syscall_gadget) {
-        register void* gadget asm("x9") = syscall_gadget;
+        register void* gadget __asm__("x9") = syscall_gadget;
         __asm__ volatile("blr %6"
                          : "=r"(x0)
                          : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(gadget)
