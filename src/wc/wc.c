@@ -8,6 +8,8 @@
 #include <locale.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include "applets.h"
 #include "diag.h"
 
@@ -27,7 +29,7 @@ static void wc_count(FILE* f, wc_counts_t* res) {
     int c;
     while ((c = getc(f)) != EOF) {
         res->bytes++;
-        res->chars++;  // Simple ASCII/UTF-8 byte-as-char for now, can be improved with mbrtowc
+        res->chars++;
 
         if (c == '\n') {
             res->lines++;
@@ -56,36 +58,64 @@ static void wc_count(FILE* f, wc_counts_t* res) {
     }
 }
 
-static void print_counts(const wc_counts_t* res, bool opt_l, bool opt_w, bool opt_c, bool opt_m, bool opt_L, const char* name) {
-    bool first = true;
-    if (opt_l) {
-        printf("%s%llu", first ? "" : " ", res->lines);
-        first = false;
+static int count_digits(unsigned long long n) {
+    if (n == 0) return 1;
+    int d = 0;
+    while (n) { d++; n /= 10; }
+    return d;
+}
+
+static void value_str(unsigned long long n, char* buf) {
+    sprintf(buf, "%llu", n);
+}
+
+static void print_one(const char* fmt, int width, unsigned long long val) {
+    char buf[32];
+    value_str(val, buf);
+    printf(fmt, width, buf);
+}
+
+static int compute_number_width(int num_files, char** files, int optind) {
+    int width = 1;
+    int minimum_width = 1;
+    unsigned long long regular_total = 0;
+    bool any_non_regular = false;
+
+    for (int i = 0; i < num_files; i++) {
+        const char* name = files[optind + i];
+        if (strcmp(name, "-") == 0) {
+            any_non_regular = true;
+            continue;
+        }
+        struct stat st;
+        if (stat(name, &st) != 0) {
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            any_non_regular = true;
+        }
+        else {
+            if (regular_total + (unsigned long long)st.st_size < regular_total) {
+                regular_total = ~0ULL;
+                break;
+            }
+            regular_total += (unsigned long long)st.st_size;
+        }
     }
-    if (opt_w) {
-        printf("%s%llu", first ? "" : " ", res->words);
-        first = false;
-    }
-    if (opt_m) {
-        printf("%s%llu", first ? "" : " ", res->chars);
-        first = false;
-    }
-    if (opt_c) {
-        printf("%s%llu", first ? "" : " ", res->bytes);
-        first = false;
-    }
-    if (opt_L) {
-        printf("%s%llu", first ? "" : " ", res->max_line_width);
-        first = false;
-    }
-    if (name)
-        printf(" %s", name);
-    printf("\n");
+
+    if (any_non_regular)
+        minimum_width = 7;
+
+    width = count_digits(regular_total);
+    if (width < minimum_width)
+        width = minimum_width;
+
+    return width;
 }
 
 int bx_wc_main(int argc, char** argv) {
     static const struct option long_options[] = {{"bytes", no_argument, NULL, 'c'},           {"chars", no_argument, NULL, 'm'}, {"lines", no_argument, NULL, 'l'},   {"words", no_argument, NULL, 'w'},
-                                                 {"max-line-length", no_argument, NULL, 'L'}, {"help", no_argument, NULL, 'h'},  {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+                                                  {"max-line-length", no_argument, NULL, 'L'}, {"help", no_argument, NULL, 'h'},  {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
 
     bool opt_c = false, opt_m = false, opt_l = false, opt_w = false, opt_L = false;
     int c;
@@ -132,51 +162,99 @@ int bx_wc_main(int argc, char** argv) {
         opt_l = opt_w = opt_c = true;
     }
 
-    wc_counts_t total = {0};
-    int files_processed = 0;
+    int num_files = argc - optind;
+    int field_count = (opt_l ? 1 : 0) + (opt_w ? 1 : 0) + (opt_c ? 1 : 0) + (opt_m ? 1 : 0) + (opt_L ? 1 : 0);
 
-    if (optind == argc) {
+    if (num_files == 0) {
+        int width = field_count > 1 ? 7 : 1;
         wc_counts_t res;
         wc_count(stdin, &res);
-        print_counts(&res, opt_l, opt_w, opt_c, opt_m, opt_L, NULL);
+
+        if (field_count > 1) {
+            const char* fmt = "%*s";
+            if (opt_l) { print_one(fmt, width, res.lines); fmt = " %*s"; }
+            if (opt_w) { print_one(fmt, width, res.words); fmt = " %*s"; }
+            if (opt_m) { print_one(fmt, width, res.chars); fmt = " %*s"; }
+            if (opt_c) { print_one(fmt, width, res.bytes); fmt = " %*s"; }
+            if (opt_L) { print_one(fmt, width, res.max_line_width); }
+        } else {
+            if (opt_l) printf("%llu", res.lines);
+            if (opt_w) printf("%llu", res.words);
+            if (opt_m) printf("%llu", res.chars);
+            if (opt_c) printf("%llu", res.bytes);
+            if (opt_L) printf("%llu", res.max_line_width);
+        }
+        printf("\n");
         return 0;
     }
 
-    for (int i = optind; i < argc; i++) {
+    wc_counts_t* counts = malloc((size_t)num_files * sizeof(wc_counts_t));
+    bool* file_ok = malloc((size_t)num_files * sizeof(bool));
+    int ncounts = 0;
+    bool had_error = false;
+
+    for (int i = 0; i < num_files; i++) {
+        const char* name = argv[optind + i];
         FILE* f;
-        const char* name = argv[i];
         if (strcmp(name, "-") == 0) {
             f = stdin;
-            name = NULL;
         }
         else {
             f = fopen(name, "r");
             if (!f) {
-                bx_perror(argv[i]);
+                fprintf(stderr, "%s: %s: %s\n", argv[0], name, strerror(errno));
+                had_error = true;
+                file_ok[i] = false;
                 continue;
             }
         }
-
-        wc_counts_t res;
-        wc_count(f, &res);
+        wc_count(f, &counts[ncounts]);
         if (f != stdin)
             fclose(f);
-
-        print_counts(&res, opt_l, opt_w, opt_c, opt_m, opt_L, argv[i]);
-
-        total.lines += res.lines;
-        total.words += res.words;
-        total.chars += res.chars;
-        total.bytes += res.bytes;
-        if (res.max_line_width > total.max_line_width) {
-            total.max_line_width = res.max_line_width;
-        }
-        files_processed++;
+        file_ok[i] = true;
+        ncounts++;
     }
 
-    if (files_processed > 1) {
-        print_counts(&total, opt_l, opt_w, opt_c, opt_m, opt_L, "total");
+    wc_counts_t total = {0};
+    for (int i = 0; i < ncounts; i++) {
+        total.lines += counts[i].lines;
+        total.words += counts[i].words;
+        total.chars += counts[i].chars;
+        total.bytes += counts[i].bytes;
+        if (counts[i].max_line_width > total.max_line_width)
+            total.max_line_width = counts[i].max_line_width;
     }
 
-    return 0;
+    bool show_total = num_files > 1;
+    int width = compute_number_width(num_files, argv, optind);
+
+    int out_idx = 0;
+    for (int i = 0; i < num_files; i++) {
+        if (!file_ok[i])
+            continue;
+        wc_counts_t* r = &counts[out_idx++];
+
+        const char* fmt = "%*s";
+        if (opt_l) { print_one(fmt, width, r->lines); fmt = " %*s"; }
+        if (opt_w) { print_one(fmt, width, r->words); fmt = " %*s"; }
+        if (opt_m) { print_one(fmt, width, r->chars); fmt = " %*s"; }
+        if (opt_c) { print_one(fmt, width, r->bytes); fmt = " %*s"; }
+        if (opt_L) { print_one(fmt, width, r->max_line_width); }
+
+        printf(" %s\n", argv[optind + i]);
+    }
+
+    if (show_total) {
+        const char* fmt = "%*s";
+        if (opt_l) { print_one(fmt, width, total.lines); fmt = " %*s"; }
+        if (opt_w) { print_one(fmt, width, total.words); fmt = " %*s"; }
+        if (opt_m) { print_one(fmt, width, total.chars); fmt = " %*s"; }
+        if (opt_c) { print_one(fmt, width, total.bytes); fmt = " %*s"; }
+        if (opt_L) { print_one(fmt, width, total.max_line_width); }
+        printf(" total\n");
+    }
+
+    free(counts);
+    free(file_ok);
+    return had_error ? 1 : 0;
 }

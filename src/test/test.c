@@ -89,13 +89,6 @@ static void bx_test_print_bracket_help(void) {
     puts("Your shell may have its own version of test and/or [, which usually supersedes");
     puts("the version described here.  Please refer to your shell's documentation");
     puts("for details about the options it supports.");
-    puts("");
-    puts("Report bugs to: bug-coreutils@gnu.org");
-    puts("GNU coreutils home page: <https://www.gnu.org/software/coreutils/>");
-    puts("General help using GNU software: <https://www.gnu.org/gethelp/>");
-    puts("Report any translation bugs to <https://translationproject.org/team/>");
-    puts("Full documentation <https://www.gnu.org/software/coreutils/test>");
-    puts("or available locally via: info '(coreutils) test invocation'");
 }
 
 static void bx_test_print_bracket_version(void) {

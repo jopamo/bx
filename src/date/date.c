@@ -164,11 +164,7 @@ static void bx_date_print_help(FILE* stream, const char* progname) {
     fputs("Show the local time for 9AM next Friday on the west coast of the US\n", stream);
     fputs("  $ date --date='TZ=\"America/Los_Angeles\" 09:00 next Fri'\n", stream);
     fputs("\n", stream);
-    fputs("Report bugs to: bug-coreutils@gnu.org\n", stream);
-    fputs("GNU coreutils home page: <https://www.gnu.org/software/coreutils/>\n", stream);
-    fputs("General help using GNU software: <https://www.gnu.org/gethelp/>\n", stream);
-    fputs("Full documentation <https://www.gnu.org/software/coreutils/date>\n", stream);
-    fputs("or available locally via: info '(coreutils) date invocation'\n", stream);
+
 }
 
 static void bx_date_print_version(const char* progname) {
