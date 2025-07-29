@@ -167,6 +167,7 @@ int bx_tac_main(int argc, char** argv) {
         tac_file(stdin, separator, before);
     }
     else {
+        bool had_error = false;
         for (int i = optind; i < argc; i++) {
             FILE* f;
             if (strcmp(argv[i], "-") == 0) {
@@ -176,6 +177,7 @@ int bx_tac_main(int argc, char** argv) {
                 f = fopen(argv[i], "r");
                 if (!f) {
                     bx_perror(argv[i]);
+                    had_error = true;
                     continue;
                 }
             }
@@ -183,6 +185,8 @@ int bx_tac_main(int argc, char** argv) {
             if (f != stdin)
                 fclose(f);
         }
+        if (had_error)
+            return 1;
     }
 
     return 0;

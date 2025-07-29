@@ -122,10 +122,13 @@ int bx_split_main(int argc, char** argv) {
             break;
         }
 
+        bool wrote_anything = false;
+
         if (split_by_lines) {
             for (long long i = 0; i < lines_per_file; i++) {
                 int ch;
                 while ((ch = getc(in)) != EOF) {
+                    wrote_anything = true;
                     putc(ch, out);
                     if (ch == '\n')
                         break;
@@ -143,10 +146,16 @@ int bx_split_main(int argc, char** argv) {
                     eof = true;
                     break;
                 }
+                wrote_anything = true;
                 putc(ch, out);
             }
         }
         fclose(out);
+
+        if (!wrote_anything) {
+            unlink(out_name);
+        }
+
         if (eof)
             break;
         next_suffix(suffix, suffix_length, numeric, hex);
