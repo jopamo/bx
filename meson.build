@@ -138,8 +138,9 @@ else
 endif
 
 threads_dep = dependency('threads')
+pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
 
-bx_deps = [cc.find_library('m', required : false), threads_dep]
+bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep]
 if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
