@@ -9,10 +9,10 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "common/copy_metadata.h"
-#include "common/copy_tree.h"
-#include "common/path_ops.h"
-#include "common/stat_ops.h"
+#include "lib/copy_metadata.h"
+#include "lib/copy_tree.h"
+#include "lib/path_ops.h"
+#include "lib/stat_ops.h"
 #include "diag.h"
 #include "libbx.h"
 

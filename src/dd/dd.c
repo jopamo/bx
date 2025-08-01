@@ -17,8 +17,8 @@
 #include "applets.h"
 #include "diag.h"
 #include "libbx.h"
-#include "common/size_parse.h"
-#include "common/xreadwrite.h"
+#include "lib/size_parse.h"
+#include "lib/xreadwrite.h"
 
 enum {
     BX_DD_CONV_SYNC = 1u << 0,

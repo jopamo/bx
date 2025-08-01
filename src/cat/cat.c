@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "common/xreadwrite.h"
+#include "lib/xreadwrite.h"
 
 struct bx_cat_options {
     const char* progname;

@@ -9,11 +9,11 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "common/args_common.h"
-#include "common/backup_ops.h"
-#include "common/path_ops.h"
-#include "common/prompt_ops.h"
-#include "common/same_file.h"
+#include "lib/args_common.h"
+#include "lib/backup_ops.h"
+#include "lib/path_ops.h"
+#include "lib/prompt_ops.h"
+#include "lib/same_file.h"
 #include "diag.h"
 #include "libbx.h"
 

@@ -1,1 +1,0 @@
-char *mkdtempat (int, char *);

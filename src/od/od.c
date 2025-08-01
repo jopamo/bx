@@ -17,7 +17,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "common/xreadwrite.h"
+#include "lib/xreadwrite.h"
 #include "diag.h"
 #include "libbx.h"
 

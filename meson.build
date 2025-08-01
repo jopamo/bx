@@ -146,27 +146,27 @@ if mira_embed_enabled
 endif
 
 sources = [
-  'src/common/args_common.c',
-  'src/common/backup_ops.c',
-  'src/common/copy_data.c',
-  'src/common/copy_metadata.c',
-  'src/common/copy_tree.c',
-  'src/common/update_policy.c',
-  'src/common/path_ops.c',
-  'src/common/prompt_ops.c',
-  'src/common/same_file.c',
-  'src/common/stat_ops.c',
-  'src/common/remove_ops.c',
-  'src/common/fd_ops.c',
-  'src/common/size_parse.c',
-  'src/common/xreadwrite.c',
-  'src/common/overwrite_ops.c',
-  'src/common/md5.c',
-  'src/common/sha1.c',
-  'src/common/sha256.c',
-  'src/common/sha512.c',
-  'src/common/digest_util.c',
-  'src/common/digestsum.c',
+  'src/lib/args_common.c',
+  'src/lib/backup_ops.c',
+  'src/lib/copy_data.c',
+  'src/lib/copy_metadata.c',
+  'src/lib/copy_tree.c',
+  'src/lib/update_policy.c',
+  'src/lib/path_ops.c',
+  'src/lib/prompt_ops.c',
+  'src/lib/same_file.c',
+  'src/lib/stat_ops.c',
+  'src/lib/remove_ops.c',
+  'src/lib/fd_ops.c',
+  'src/lib/size_parse.c',
+  'src/lib/xreadwrite.c',
+  'src/lib/overwrite_ops.c',
+  'src/lib/md5.c',
+  'src/lib/sha1.c',
+  'src/lib/sha256.c',
+  'src/lib/sha512.c',
+  'src/lib/digest_util.c',
+  'src/lib/digestsum.c',
   'src/main.c',
   'src/ash/ash.c',
   'src/cat/cat.c',
@@ -270,8 +270,15 @@ sources = [
   'src/wget.c',
   'src/ping/ping.c',
   'src/which.c',
-  'src/applets.c',
+  'src/dispatch/applets.c',
   'src/libbx.c',
+  'src/search/search.c',
+  'src/search/options.c',
+  'src/search/pcre2_matcher.c',
+  'src/search/literal.c',
+  'src/search/walk.c',
+  'src/applets/grep.c',
+  'src/applets/fd/fd.c',
 ]
 
 nc_sources = files(
@@ -303,7 +310,7 @@ nc_c_args = cc.get_supported_arguments([
 
 nc_lib = static_library('bx_nc',
   nc_sources,
-  include_directories : include_directories('src', 'src/nc'),
+  include_directories : include_directories('src', 'src/dispatch', 'src/nc'),
   dependencies : [threads_dep],
   c_args : nc_c_args,
 )
@@ -429,9 +436,9 @@ bc_lib = static_library('bx_bc',
 
 gnu_applet_objects = []
 gnu_applet_deps = []
-subdir('src/gnu')
+subdir('src/vendor/gnu')
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -452,7 +459,7 @@ endif
 bx_exe = executable('bx',
   sources,
   objects : gnu_applet_objects,
-  include_directories : include_directories('src'),
+  include_directories : include_directories('src', 'src/dispatch'),
   dependencies : bx_deps + gnu_applet_deps,
   link_whole : [nc_lib, traceroute_lib, bc_lib],
   link_args : bx_link_args,
@@ -588,15 +595,15 @@ if get_option('tests')
 
   test_md5_vectors = executable(
     'test-md5-vectors',
-    ['tests/md5sum/test_md5_vectors.c', 'src/common/md5.c'],
-    include_directories : include_directories('src'),
+    ['tests/md5sum/test_md5_vectors.c', 'src/lib/md5.c'],
+    include_directories : include_directories('src', 'src/dispatch'),
   )
   test('md5 vectors', test_md5_vectors)
 
   test_sha1_vectors = executable(
     'test-sha1-vectors',
-    ['tests/sha1sum/test_sha1_vectors.c', 'src/common/sha1.c'],
-    include_directories : include_directories('src'),
+    ['tests/sha1sum/test_sha1_vectors.c', 'src/lib/sha1.c'],
+    include_directories : include_directories('src', 'src/dispatch'),
   )
   test('sha1 vectors', test_sha1_vectors)
 
@@ -1125,4 +1132,6 @@ if get_option('tests')
 
   test_parity_exit_status = files('tests/test_parity_exit_status.py')
   test('which parity exit status', python3, args : [test_parity_exit_status, which_ref, bx_exe, meson.current_build_dir()])
+  test_grep_basic = find_program('tests/grep/test_grep_basic.sh')
+  test('grep basic', test_grep_basic, args : [bx_exe], suite : fast_track_p2_suite)
 endif

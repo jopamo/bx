@@ -10,11 +10,11 @@
 #include <sys/types.h>
 
 #include "applets.h"
-#include "common/digest_util.h"
-#include "common/md5.h"
-#include "common/sha1.h"
-#include "common/sha256.h"
-#include "common/sha512.h"
+#include "lib/digest_util.h"
+#include "lib/md5.h"
+#include "lib/sha1.h"
+#include "lib/sha256.h"
+#include "lib/sha512.h"
 
 enum {
     CKSUM_EXIT_OK = 0,

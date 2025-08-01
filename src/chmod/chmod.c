@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 
 #include "applets.h"
-#include "common/path_ops.h"
+#include "lib/path_ops.h"
 #include "diag.h"
 #include "libbx.h"
 
