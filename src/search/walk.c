@@ -94,6 +94,13 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         if (is_ignored(ent->d_name, ignore_patterns, ignore_n))
             continue;
 
+        if (opts->exclude_dirs) {
+            bool skip = false;
+            for (int e = 0; e < opts->num_exclude_dirs; e++)
+                if (fnmatch(opts->exclude_dirs[e], ent->d_name, 0) == 0) skip = true;
+            if (skip) continue;
+        }
+
         size_t plen = strlen(dirpath) + 1 + strlen(ent->d_name) + 1;
         char *full = malloc(plen);
         snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
@@ -105,7 +112,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         struct walk_entry entry = {.path = full, .is_dir = S_ISDIR(st.st_mode)};
         cb(&entry, user);
 
-        if (entry.is_dir && !opts->follow_symlinks) {
+        if (entry.is_dir) {
             walk_recursive(full, opts, cb, user, depth + 1);
         }
         free(full);

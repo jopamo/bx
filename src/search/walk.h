@@ -11,6 +11,8 @@ struct walk_opts {
     int  max_depth;
     const char *exclude_pattern;
     const char *type_filter;
+    char **exclude_dirs;
+    int   num_exclude_dirs;
 };
 
 struct walk_entry {

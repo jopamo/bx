@@ -1,5 +1,4 @@
 #define _GNU_SOURCE
-#include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <stdbool.h>
@@ -9,6 +8,7 @@
 #include <sys/stat.h>
 #include "search.h"
 #include "options.h"
+#include "walk.h"
 #include "pcre2_matcher.h"
 #include "literal.h"
 #include "diag.h"
@@ -236,90 +236,57 @@ static bool is_binary(const char *path) {
     return false;
 }
 
-/* --- pattern matching helpers --- */
+/* --- recursive search using shared walker --- */
 
-static bool match_any_pattern(const char *name, char **patterns, int n) {
-    for (int i = 0; i < n; i++)
-        if (fnmatch(patterns[i], name, 0) == 0)
-            return true;
-    return n == 0;
-}
-
-static bool excluded_by_patterns(const char *name, char **patterns, int n) {
-    if (n == 0) return false;
-    return match_any_pattern(name, patterns, n);
-}
-
-/* --- directory walker --- */
-
-struct file_entry { char *path; };
-struct file_list {
-    struct file_entry *entries;
-    int count, cap;
+struct grep_walk_state {
+    struct bx_matcher *m;
+    struct search_opts *opts;
+    int *match_count;
+    int *exit_status;
 };
 
-static void file_list_add(struct file_list *fl, const char *path) {
-    if (fl->count >= fl->cap) {
-        fl->cap = fl->cap ? fl->cap * 2 : 256;
-        fl->entries = realloc(fl->entries, (size_t)fl->cap * sizeof(*fl->entries));
+static void grep_walk_cb(const struct walk_entry *entry, void *user) {
+    struct grep_walk_state *gs = user;
+    if (entry->is_dir) return;
+
+    const char *name = strrchr(entry->path, '/');
+    name = name ? name + 1 : entry->path;
+
+    if (gs->opts->num_include > 0) {
+        bool ok = false;
+        for (int i = 0; i < gs->opts->num_include; i++)
+            if (fnmatch(gs->opts->include_patterns[i], name, 0) == 0) ok = true;
+        if (!ok) return;
     }
-    fl->entries[fl->count].path = strdup(path);
-    fl->count++;
-}
-
-static bool file_list_contains(struct file_list *fl, const char *path) {
-    for (int i = 0; i < fl->count; i++)
-        if (strcmp(fl->entries[i].path, path) == 0) return true;
-    return false;
-}
-
-static void file_list_free(struct file_list *fl) {
-    for (int i = 0; i < fl->count; i++) free(fl->entries[i].path);
-    free(fl->entries);
-}
-
-static int walk_dir(const char *dirpath, struct file_list *fl, struct search_opts *opts,
-                    int depth, struct file_list *visited) {
-    if (depth > 100) return 0;
-    DIR *d = opendir(dirpath);
-    if (!d) {
-        if (errno != EACCES)
-            fprintf(stderr, "grep: %s: %s\n", dirpath, strerror(errno));
-        return 0;
+    if (gs->opts->num_exclude > 0) {
+        for (int i = 0; i < gs->opts->num_exclude; i++)
+            if (fnmatch(gs->opts->exclude_patterns[i], name, 0) == 0) return;
     }
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        size_t plen = strlen(dirpath) + 1 + strlen(ent->d_name) + 1;
-        char *full = malloc(plen);
-        snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
-        struct stat st;
-        int stat_rc = opts->follow_symlinks ? stat(full, &st) : lstat(full, &st);
-        if (stat_rc != 0) { free(full); continue; }
-        if (S_ISDIR(st.st_mode)) {
-            if (excluded_by_patterns(ent->d_name, opts->exclude_dir_patterns, opts->num_exclude_dir)) {
-                free(full); continue;
+
+    if (!gs->opts->binary_as_text && is_binary(entry->path)) {
+        if (!gs->opts->binary_without_match && !gs->opts->quiet) {
+            bool matched = false;
+            FILE *f = fopen(entry->path, "r");
+            if (f) {
+                char *line = NULL; size_t cap = 0; ssize_t len;
+                while ((len = getline(&line, &cap, f)) != -1) {
+                    struct bx_match bm;
+                    if (matcher_find(gs->m, (unsigned char *)line, (size_t)len, 0, &bm) == 0)
+                        { matched = true; break; }
+                }
+                free(line); fclose(f);
             }
-            char *real = realpath(full, NULL);
-            if (real) {
-                if (file_list_contains(visited, real)) { free(real); free(full); continue; }
-                file_list_add(visited, real);
-                free(real);
+            if (matched) {
+                printf("Binary file %s matches\n", entry->path);
+                (*gs->match_count)++; *gs->exit_status = 0;
             }
-            walk_dir(full, fl, opts, depth + 1, visited);
-        } else if (S_ISREG(st.st_mode)) {
-            if (!match_any_pattern(ent->d_name, opts->include_patterns, opts->num_include)) {
-                free(full); continue;
-            }
-            if (excluded_by_patterns(ent->d_name, opts->exclude_patterns, opts->num_exclude)) {
-                free(full); continue;
-            }
-            file_list_add(fl, full);
         }
-        free(full);
+        return;
     }
-    closedir(d);
-    return 0;
+
+    int r = search_file(entry->path, gs->m, gs->opts, gs->match_count);
+    if (r == 2) *gs->exit_status = 2;
+    else if (r == 0) *gs->exit_status = 0;
 }
 
 /* --- main entry point --- */
@@ -355,8 +322,18 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     if (num_files == 0) {
         exit_status = search_file(NULL, m, &opts, &global_matches);
     } else if (opts.recursive) {
-        struct file_list fl = {0};
-        struct file_list visited = {0};
+        struct grep_walk_state gs = {.m = m, .opts = &opts,
+                                     .match_count = &global_matches,
+                                     .exit_status = &exit_status};
+        struct walk_opts wopts = {
+            .hidden = true,
+            .no_ignore = true,
+            .follow_symlinks = opts.follow_symlinks,
+            .max_depth = -1,
+            .exclude_dirs = opts.exclude_dir_patterns,
+            .num_exclude_dirs = opts.num_exclude_dir,
+        };
+
         for (int j = first_file; j < argc; j++) {
             struct stat st;
             if (stat(argv[j], &st) != 0) {
@@ -365,43 +342,11 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                char *real = realpath(argv[j], NULL);
-                if (real) { file_list_add(&visited, real); free(real); }
-                walk_dir(argv[j], &fl, &opts, 0, &visited);
+                walk_dir(argv[j], &wopts, grep_walk_cb, &gs);
             } else if (S_ISREG(st.st_mode)) {
-                if (match_any_pattern(argv[j], opts.include_patterns, opts.num_include) &&
-                    !excluded_by_patterns(argv[j], opts.exclude_patterns, opts.num_exclude))
-                    file_list_add(&fl, argv[j]);
+                grep_walk_cb(&(struct walk_entry){.path = argv[j], .is_dir = false}, &gs);
             }
         }
-        for (int j = 0; j < fl.count; j++) {
-            if (!opts.binary_as_text && is_binary(fl.entries[j].path)) {
-                if (!opts.binary_without_match && !opts.quiet) {
-                    bool matched = false;
-                    FILE *f = fopen(fl.entries[j].path, "r");
-                    if (f) {
-                        char *line = NULL; size_t cap = 0;
-                        ssize_t len;
-                        while ((len = getline(&line, &cap, f)) != -1) {
-                            struct bx_match bm;
-                            if (matcher_find(m, (unsigned char *)line, (size_t)len, 0, &bm) == 0)
-                                { matched = true; break; }
-                        }
-                        free(line); fclose(f);
-                    }
-                    if (matched) {
-                        printf("Binary file %s matches\n", fl.entries[j].path);
-                        global_matches++; exit_status = 0;
-                    }
-                }
-                continue;
-            }
-            int r = search_file(fl.entries[j].path, m, &opts, &global_matches);
-            if (r == 2) exit_status = 2;
-            else if (r == 0) exit_status = 0;
-        }
-        file_list_free(&fl);
-        file_list_free(&visited);
     } else {
         for (int j = first_file; j < argc; j++) {
             int r = search_file(argv[j], m, &opts, &global_matches);
