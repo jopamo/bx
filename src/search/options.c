@@ -13,6 +13,7 @@ enum {
     OPT_INCLUDE,
     OPT_EXCLUDE,
     OPT_EXCLUDE_DIR,
+    OPT_FILES,
 };
 
 void bx_search_print_help(const char *progname) {
@@ -62,6 +63,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
 
     if (personality == BX_SEARCH_EGREP) opts->extended_regex = true;
     if (personality == BX_SEARCH_FGREP) opts->fixed_strings = true;
+    if (personality == BX_SEARCH_RG) {
+        opts->recursive = true;
+        opts->follow_symlinks = false;
+        opts->binary_without_match = true;
+        opts->hidden = false;
+        opts->no_ignore = false;
+        opts->smart_case = true;
+    } else {
+        opts->hidden = true;
+        opts->no_ignore = true;
+    }
 
     static struct option long_opts[] = {
         {"help",         no_argument,       NULL, OPT_HELP},
@@ -70,6 +82,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"include",      required_argument, NULL, OPT_INCLUDE},
         {"exclude",      required_argument, NULL, OPT_EXCLUDE},
         {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
+        {"files",        no_argument,       NULL, OPT_FILES},
         {NULL, 0, NULL, 0},
     };
 
@@ -77,7 +90,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "EFHhinovclLqrRIaA:B:C:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "EFHhinovclLqrRIaA:B:C:wPxSm:", long_opts, NULL)) != -1) {
         switch (c) {
         case 'E': opts->extended_regex = true; break;
         case 'F': opts->fixed_strings = true; break;
@@ -95,6 +108,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'R': opts->recursive = true; opts->follow_symlinks = false; break;
         case 'I': opts->binary_without_match = true; break;
         case 'a': opts->binary_as_text = true; break;
+        case 'w': opts->word_regexp = true; break;
+        case 'x': opts->line_regexp = true; break;
+        case 'P': opts->perl_regexp = true; break;
+        case 'S': opts->smart_case = true; opts->ignore_case = false; break;
+        case 'm': opts->max_count = atoi(optarg); break;
         case 'A': opts->after_context = atoi(optarg); break;
         case 'B': opts->before_context = atoi(optarg); break;
         case 'C': {
@@ -115,6 +133,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (opts->num_exclude_dir < MAX_EXCLUDE_DIR_PATTERNS)
                 opts->exclude_dir_patterns[opts->num_exclude_dir++] = strdup(optarg);
             break;
+        case OPT_FILES:
+            opts->files_only = true;
+            break;
         case OPT_HELP:
             bx_search_print_help(argv[0]);
             return 1;
@@ -131,11 +152,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     }
 
     if (optind >= argc) {
-        fprintf(stderr, "%s: missing pattern\n", argv[0]);
-        return -1;
+        if (!opts->files_only) {
+            fprintf(stderr, "%s: missing pattern\n", argv[0]);
+            return -1;
+        }
+        *pattern = "";
+    } else {
+        *pattern = argv[optind++];
     }
-
-    *pattern = argv[optind++];
     *first_file = optind;
     return 0;
 }

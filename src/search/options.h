@@ -18,9 +18,15 @@ struct search_opts {
     bool files_without_match;
     bool quiet;
     bool ignore_case;
+    bool smart_case;
     bool only_matching;
     bool fixed_strings;
     bool extended_regex;
+    bool perl_regexp;
+    bool word_regexp;
+    bool line_regexp;
+    bool files_only;
+    int  max_count;
     int  after_context;
     int  before_context;
     bool recursive;
@@ -33,6 +39,8 @@ struct search_opts {
     char *exclude_dir_patterns[MAX_EXCLUDE_DIR_PATTERNS];
     bool binary_as_text;
     bool binary_without_match;
+    bool hidden;
+    bool no_ignore;
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,

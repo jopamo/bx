@@ -44,23 +44,50 @@ static void matcher_free(struct bx_matcher *m) {
 }
 
 static struct bx_matcher *compile_matcher(const char *pattern, struct search_opts *opts) {
+    char *wrapped = NULL;
+    const char *final_pattern = pattern;
+
+    if (opts->word_regexp || opts->line_regexp) {
+        size_t plen = strlen(pattern);
+        size_t wlen = plen + 10;
+        wrapped = malloc(wlen);
+        char *p = wrapped;
+        if (opts->line_regexp) *p++ = '^';
+        if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
+        memcpy(p, pattern, plen); p += plen;
+        if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
+        if (opts->line_regexp) *p++ = '$';
+        *p = '\0';
+        final_pattern = wrapped;
+    }
+
     struct bx_matcher *m = calloc(1, sizeof(*m));
+    int flags = 0;
+
+    if (opts->ignore_case)
+        flags |= BX_REGEX_ICASE;
+
+    if (opts->smart_case && !opts->ignore_case) {
+        bool has_upper = false;
+        for (const char *c = final_pattern; *c; c++)
+            if (*c >= 'A' && *c <= 'Z') { has_upper = true; break; }
+        if (!has_upper && !opts->fixed_strings)
+            flags |= BX_REGEX_ICASE;
+    }
 
     if (opts->fixed_strings) {
+        if (bx_literal_compile(&m->literal, final_pattern, (flags & BX_REGEX_ICASE) != 0) != 0) {
+            free(wrapped); free(m); return NULL;
+        }
         m->kind = MATCHER_LITERAL;
-        if (bx_literal_compile(&m->literal, pattern, opts->ignore_case) != 0) {
-            free(m);
-            return NULL;
-        }
     } else {
-        m->kind = MATCHER_REGEX;
-        int flags = 0;
-        if (opts->ignore_case) flags |= BX_REGEX_ICASE;
-        if (bx_regex_compile(&m->regex, pattern, flags) != 0) {
-            free(m);
-            return NULL;
+        if (bx_regex_compile(&m->regex, final_pattern, flags) != 0) {
+            free(wrapped); free(m); return NULL;
         }
+        m->kind = MATCHER_REGEX;
     }
+
+    free(wrapped);
     return m;
 }
 
@@ -187,7 +214,7 @@ static int search_file_streaming(const char *filename, const char *display_name,
         if (opts->invert_match) matched = !matched;
         if (matched) {
             file_matches++; status = 0;
-            if (opts->quiet) break;
+            if (opts->quiet || (opts->max_count > 0 && file_matches >= opts->max_count)) break;
             if (opts->count_only || opts->files_with_matches || opts->files_without_match) continue;
             if (opts->show_filename && display_name) printf("%s:", display_name);
             if (opts->show_line_number) printf("%d:", line_num);
@@ -244,6 +271,12 @@ struct grep_walk_state {
     int *match_count;
     int *exit_status;
 };
+
+static void fs_cb(const struct walk_entry *entry, void *user) {
+    (void)user;
+    if (!entry->is_dir)
+        printf("%s\n", entry->path);
+}
 
 static void grep_walk_cb(const struct walk_entry *entry, void *user) {
     struct grep_walk_state *gs = user;
@@ -302,6 +335,32 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         return rc == 1 ? 0 : 2;
     }
 
+    if (opts.files_only) {
+        struct walk_opts wopts = {
+            .hidden = opts.hidden,
+            .no_ignore = opts.no_ignore,
+            .follow_symlinks = opts.follow_symlinks,
+            .max_depth = -1,
+            .exclude_dirs = opts.exclude_dir_patterns,
+            .num_exclude_dirs = opts.num_exclude_dir,
+        };
+        int num_files = argc - first_file;
+        if (num_files == 0) {
+            walk_dir(".", &wopts, fs_cb, NULL);
+        } else {
+            for (int j = first_file; j < argc; j++) {
+                struct stat st;
+                if (stat(argv[j], &st) != 0) continue;
+                if (S_ISDIR(st.st_mode))
+                    walk_dir(argv[j], &wopts, fs_cb, NULL);
+                else
+                    printf("%s\n", argv[j]);
+            }
+        }
+        bx_search_free_options(&opts);
+        return 0;
+    }
+
     struct bx_matcher *m = compile_matcher(pattern, &opts);
     if (!m) {
         fprintf(stderr, "%s: invalid pattern: %s\n",
@@ -326,8 +385,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                      .match_count = &global_matches,
                                      .exit_status = &exit_status};
         struct walk_opts wopts = {
-            .hidden = true,
-            .no_ignore = true,
+            .hidden = opts.hidden,
+            .no_ignore = opts.no_ignore,
             .follow_symlinks = opts.follow_symlinks,
             .max_depth = -1,
             .exclude_dirs = opts.exclude_dir_patterns,
