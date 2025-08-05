@@ -27,6 +27,9 @@ struct search_opts {
     bool line_regexp;
     bool files_only;
     int  max_count;
+    int  unrestrict_level;
+    char *extra_patterns[16];
+    int   num_extra_patterns;
     int  after_context;
     int  before_context;
     bool recursive;
@@ -51,5 +54,6 @@ void bx_search_free_options(struct search_opts *opts);
 
 void bx_search_print_help(const char *progname);
 void bx_search_print_version(const char *progname);
+void bx_search_print_type_list(void);
 
 #endif

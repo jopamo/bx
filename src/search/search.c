@@ -361,7 +361,30 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         return 0;
     }
 
-    struct bx_matcher *m = compile_matcher(pattern, &opts);
+    struct bx_matcher *m;
+
+    if (opts.num_extra_patterns > 0) {
+        size_t total = strlen(pattern) + 4;
+        for (int k = 0; k < opts.num_extra_patterns; k++)
+            total += strlen(opts.extra_patterns[k]) + 2;
+        char *combined = malloc(total);
+        char *p = combined;
+        *p++ = '(';
+        memcpy(p, pattern, strlen(pattern)); p += strlen(pattern);
+        for (int k = 0; k < opts.num_extra_patterns; k++) {
+            *p++ = '|';
+            const char *ep = opts.extra_patterns[k];
+            size_t elen = strlen(ep);
+            memcpy(p, ep, elen); p += elen;
+        }
+        *p++ = ')';
+        *p = '\0';
+        m = compile_matcher(combined, &opts);
+        free(combined);
+    } else {
+        m = compile_matcher(pattern, &opts);
+    }
+
     if (!m) {
         fprintf(stderr, "%s: invalid pattern: %s\n",
                 argv[0] ? argv[0] : "grep", pattern);

@@ -27,6 +27,9 @@ int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags) {
     struct bx_regex *rx = malloc(sizeof(*rx));
     rx->code = code;
     rx->md = pcre2_match_data_create_from_pattern(code, NULL);
+
+    pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
+
     *out = rx;
     return 0;
 }
