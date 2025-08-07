@@ -11,11 +11,15 @@
 #include "walk.h"
 #include "pcre2_matcher.h"
 #include "literal.h"
-#include "diag.h"
+#include "lib/color.h"
+#include "bx/diag.h"
 
 /* --- unified matcher (regex or literal) --- */
 
-enum matcher_kind { MATCHER_REGEX, MATCHER_LITERAL };
+enum matcher_kind {
+    MATCHER_REGEX,
+    MATCHER_LITERAL,
+};
 
 struct bx_matcher {
     enum matcher_kind kind;
@@ -29,10 +33,8 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
                         size_t start, struct bx_match *out) {
     if (m->kind == MATCHER_LITERAL)
         return bx_literal_find(m->literal, buf, len, start, out);
-    struct bx_match tmp;
-    int rc = bx_regex_find(m->regex, buf, len, start, &tmp);
-    if (rc == 0) { out->start = tmp.start; out->end = tmp.end; }
-    return rc;
+
+    return bx_regex_find(m->regex, buf, len, start, out);
 }
 
 static void matcher_free(struct bx_matcher *m) {
@@ -46,49 +48,85 @@ static void matcher_free(struct bx_matcher *m) {
 static struct bx_matcher *compile_matcher(const char *pattern, struct search_opts *opts) {
     char *wrapped = NULL;
     const char *final_pattern = pattern;
+    int flags = 0;
 
     if (opts->word_regexp || opts->line_regexp) {
         size_t plen = strlen(pattern);
-        size_t wlen = plen + 10;
-        wrapped = malloc(wlen);
+        size_t extra = 1;
+        if (opts->word_regexp) extra += 4;
+        if (opts->line_regexp) extra += 2;
+        wrapped = malloc(plen + extra);
+        if (!wrapped)
+            return NULL;
+
         char *p = wrapped;
         if (opts->line_regexp) *p++ = '^';
         if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
-        memcpy(p, pattern, plen); p += plen;
+        memcpy(p, pattern, plen);
+        p += plen;
         if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
         if (opts->line_regexp) *p++ = '$';
         *p = '\0';
         final_pattern = wrapped;
     }
 
-    struct bx_matcher *m = calloc(1, sizeof(*m));
-    int flags = 0;
-
     if (opts->ignore_case)
         flags |= BX_REGEX_ICASE;
 
     if (opts->smart_case && !opts->ignore_case) {
         bool has_upper = false;
-        for (const char *c = final_pattern; *c; c++)
-            if (*c >= 'A' && *c <= 'Z') { has_upper = true; break; }
-        if (!has_upper && !opts->fixed_strings)
+        for (const char *c = final_pattern; *c; c++) {
+            if (*c >= 'A' && *c <= 'Z') {
+                has_upper = true;
+                break;
+            }
+        }
+        if (!has_upper)
             flags |= BX_REGEX_ICASE;
+    }
+
+    struct bx_matcher *m = calloc(1, sizeof(*m));
+    if (!m) {
+        free(wrapped);
+        return NULL;
     }
 
     if (opts->fixed_strings) {
         if (bx_literal_compile(&m->literal, final_pattern, (flags & BX_REGEX_ICASE) != 0) != 0) {
-            free(wrapped); free(m); return NULL;
+            free(wrapped);
+            free(m);
+            return NULL;
         }
         m->kind = MATCHER_LITERAL;
     } else {
         if (bx_regex_compile(&m->regex, final_pattern, flags) != 0) {
-            free(wrapped); free(m); return NULL;
+            free(wrapped);
+            free(m);
+            return NULL;
         }
         m->kind = MATCHER_REGEX;
     }
 
     free(wrapped);
     return m;
+}
+
+/* --- match output helpers --- */
+
+static void print_match_colored(const unsigned char *line, size_t len,
+                                 size_t match_start, size_t match_end,
+                                 struct search_opts *opts) {
+    if (!opts->only_matching) {
+        fwrite(line, 1, match_start, stdout);
+        if (bx_color_enabled()) fputs(bx_color_red(), stdout);
+        fwrite(line + match_start, 1, match_end - match_start, stdout);
+        if (bx_color_enabled()) fputs(bx_color_reset(), stdout);
+        fwrite(line + match_end, 1, len - match_end, stdout);
+        if (line[len - 1] != '\n') putchar('\n');
+    } else {
+        fwrite(line + match_start, 1, match_end - match_start, stdout);
+        putchar('\n');
+    }
 }
 
 /* --- line buffering for context --- */
@@ -175,11 +213,10 @@ static int search_file_buffered(const char *filename, const char *display_name,
         }
         if (opts->show_filename && display_name) printf("%s%c", display_name, lines[i].match ? ':' : '-');
         if (opts->show_line_number) printf("%d%c", i + 1, lines[i].match ? ':' : '-');
-        if (opts->only_matching && lines[i].match) {
+        if (lines[i].match) {
             struct bx_match bm;
             matcher_find(m, (unsigned char *)lines[i].text, lines[i].len, 0, &bm);
-            fwrite(lines[i].text + bm.start, 1, bm.end - bm.start, stdout);
-            putchar('\n');
+            print_match_colored((unsigned char *)lines[i].text, lines[i].len, bm.start, bm.end, opts);
         } else {
             fwrite(lines[i].text, 1, lines[i].len, stdout);
             if (lines[i].text[lines[i].len - 1] != '\n') putchar('\n');
@@ -218,12 +255,7 @@ static int search_file_streaming(const char *filename, const char *display_name,
             if (opts->count_only || opts->files_with_matches || opts->files_without_match) continue;
             if (opts->show_filename && display_name) printf("%s:", display_name);
             if (opts->show_line_number) printf("%d:", line_num);
-            if (opts->only_matching) {
-                fwrite(line + bm.start, 1, bm.end - bm.start, stdout); putchar('\n');
-            } else {
-                fwrite(line, 1, (size_t)len, stdout);
-                if (line[len - 1] != '\n') putchar('\n');
-            }
+            print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
         }
     }
 

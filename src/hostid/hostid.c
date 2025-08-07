@@ -10,8 +10,8 @@
 #include <netinet/in.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 static bool bx_hostid_try_file(uint32_t* id_out) {
     int fd = open("/etc/hostid", O_RDONLY);

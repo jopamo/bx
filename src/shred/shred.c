@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 enum bx_shred_remove_mode {
     BX_SHRED_REMOVE_UNLINK = 0,

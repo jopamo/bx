@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#include "lib/digest_util.h"
+#include "crypto/digest_util.h"
 
 struct bx_digestsum_impl {
     const char* default_progname;

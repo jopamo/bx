@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0

@@ -1,6 +1,6 @@
 #include "applets.h"
-#include "lib/digestsum.h"
-#include "lib/md5.h"
+#include "crypto/digestsum.h"
+#include "crypto/md5.h"
 
 static void bx_md5sum_init_adapter(void* ctx) {
     bx_md5_init((struct bx_md5_ctx*)ctx);

@@ -2,7 +2,7 @@
 #define BX_COMMON_BACKUP_OPS_H
 
 #include "args_common.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 struct bx_backup_params {
     enum bx_backup_mode mode;

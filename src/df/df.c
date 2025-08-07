@@ -11,8 +11,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum bx_df_size_mode {
     BX_DF_SIZE_1K = 0,

@@ -21,8 +21,8 @@
 #endif
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 struct bx_stat_options {
     const char* progname;

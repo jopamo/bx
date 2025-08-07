@@ -4,7 +4,7 @@
 #include <stdbool.h>
 
 #include "lib/fd_ops.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 bool bx_fd_close(int* p_fd, const char* path, struct bx_diag_ctx* diag) {
     if (p_fd == NULL || *p_fd < 0) {

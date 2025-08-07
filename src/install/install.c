@@ -19,8 +19,8 @@
 #include "lib/copy_data.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 struct bx_install_options {
     const char* progname;

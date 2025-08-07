@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static void sum_bsd(FILE* f, const char* name, bool print_name) {
     uint16_t checksum = 0;

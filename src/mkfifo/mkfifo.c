@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 struct bx_mkfifo_options {
     const char* progname;

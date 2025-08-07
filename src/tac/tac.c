@@ -8,7 +8,7 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static void tac_push_record(char*** records, size_t** record_lens, size_t* count, size_t* cap, const char* data, size_t len) {
     if (*count >= *cap) {

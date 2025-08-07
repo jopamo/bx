@@ -10,7 +10,7 @@
 #include <sys/sysmacros.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 struct bx_mknod_options {
     const char* progname;

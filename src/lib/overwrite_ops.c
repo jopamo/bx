@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "overwrite_ops.h"
-#include "libbx.h"
+#include "bx/libbx.h"
 #include "prompt_ops.h"
 
 bool bx_overwrite_should_skip(bool no_clobber,

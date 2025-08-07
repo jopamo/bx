@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 enum bx_touch_time_source {
     BX_TOUCH_TIME_SOURCE_NOW = 0,

@@ -26,8 +26,8 @@
 #include "same_file.h"
 #include "stat_ops.h"
 #include "fd_ops.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 

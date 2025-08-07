@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "applets.h"
-#include "libbx.h"
+#include "bx/libbx.h"
 
 enum {
     BX_CHGRP_OPT_HELP = 1,

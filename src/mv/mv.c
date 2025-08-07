@@ -13,8 +13,8 @@
 #include <libgen.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"

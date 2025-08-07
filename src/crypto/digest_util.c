@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "lib/digest_util.h"
+#include "crypto/digest_util.h"
 
 static int bx_digest_hex_value(int ch) {
     if (ch >= '0' && ch <= '9') {

@@ -5,7 +5,7 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static void unexpand_file(FILE* f, int tab_size, bool all) {
     int c;

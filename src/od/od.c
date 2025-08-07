@@ -18,8 +18,8 @@
 
 #include "applets.h"
 #include "lib/xreadwrite.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum bx_od_endian_mode {
     BX_OD_ENDIAN_NATIVE = 0,

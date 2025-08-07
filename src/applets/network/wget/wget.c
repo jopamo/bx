@@ -1,5 +1,5 @@
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 #if BX_HAVE_MIRA_EMBED
 #include <mira/embed.h>

@@ -17,7 +17,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
 #define BX_PING_DEFAULT_TIMEOUT_MS 1000u

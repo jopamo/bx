@@ -10,7 +10,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 typedef struct {
     long long lines;

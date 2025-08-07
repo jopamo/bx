@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "search.h"
+#include "lib/color.h"
 
 #define MAX_INCLUDE_PATTERNS 32
 #define MAX_EXCLUDE_PATTERNS 32
@@ -30,6 +31,7 @@ struct search_opts {
     int  unrestrict_level;
     char *extra_patterns[16];
     int   num_extra_patterns;
+    enum  bx_color_mode color_mode;
     int  after_context;
     int  before_context;
     bool recursive;

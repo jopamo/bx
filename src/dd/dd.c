@@ -15,8 +15,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 

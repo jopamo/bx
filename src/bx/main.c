@@ -9,8 +9,8 @@
 #include <sys/stat.h>
 #include "which.h"
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 typedef int (*applet_main_t)(int argc, char** argv);
 

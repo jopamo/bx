@@ -14,8 +14,8 @@
 
 #include "applets.h"
 #include "lib/path_ops.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum bx_chown_report_mode {
     BX_CHOWN_REPORT_NONE = 0,

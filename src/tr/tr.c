@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum tr_array_kind {
     TR_ARRAY_STRING1 = 0,

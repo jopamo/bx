@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <getopt.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 int bx_uname_main(int argc, char** argv) {
     static const struct option long_options[] = {{"all", no_argument, NULL, 'a'},

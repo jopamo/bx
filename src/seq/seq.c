@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static int count_decimal_places(const char* s) {
     const char* dot = strchr(s, '.');

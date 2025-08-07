@@ -11,7 +11,7 @@
 #include <strings.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 struct bx_kill_options {
     const char* progname;

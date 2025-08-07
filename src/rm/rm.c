@@ -11,8 +11,8 @@
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/remove_ops.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum bx_rm_interactive_mode {
     BX_RM_INTERACTIVE_NEVER = 0,

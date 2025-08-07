@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "diag.h"
+#include "bx/diag.h"
 
 /* bx_fd_close: close *p_fd if >= 0, sets *p_fd to -1.
  * Reports error to diag if path is non-NULL.

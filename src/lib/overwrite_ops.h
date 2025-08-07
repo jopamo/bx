@@ -5,7 +5,7 @@
 #include <sys/stat.h>
 
 #include "backup_ops.h"
-#include "diag.h"
+#include "bx/diag.h"
 #include "stat_ops.h"
 #include "update_policy.h"
 

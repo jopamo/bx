@@ -10,8 +10,8 @@
 #include <sys/mount.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifndef MS_MANDLOCK
 #define MS_MANDLOCK 0ul

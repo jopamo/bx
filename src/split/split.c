@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static void next_suffix(char* suffix, int length, bool numeric, bool hex) {
     for (int i = length - 1; i >= 0; i--) {

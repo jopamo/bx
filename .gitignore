@@ -3,6 +3,7 @@
 tests/__*
 __pycache__/
 *.py[cod]
+.pytest_cache/
 ref/
 build*
 .tmp/

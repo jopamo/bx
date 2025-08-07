@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "lib/sha512.h"
+#include "crypto/sha512.h"
 
 static uint64_t bx_sha512_rotr64(uint64_t value, unsigned shift) {
     return (value >> shift) | (value << (64u - shift));

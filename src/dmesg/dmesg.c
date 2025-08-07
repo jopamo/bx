@@ -9,8 +9,8 @@
 #include <sys/klog.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #define BX_KLOG_ACTION_READ_ALL 3
 #define BX_KLOG_ACTION_SIZE_BUFFER 10

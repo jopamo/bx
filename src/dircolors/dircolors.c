@@ -10,8 +10,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifndef BX_LSCOLORS_FILE
 #define BX_LSCOLORS_FILE "/usr/share/bx/lscolors.dircolors"

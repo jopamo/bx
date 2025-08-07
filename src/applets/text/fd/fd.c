@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 #include "search/walk.h"
 #include "search/options.h"
 

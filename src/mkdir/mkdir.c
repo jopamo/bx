@@ -7,8 +7,8 @@
 #include <sys/stat.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifdef S_ISVTX
 #define BX_MKDIR_STICKY_BIT S_ISVTX

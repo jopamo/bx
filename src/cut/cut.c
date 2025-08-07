@@ -8,8 +8,8 @@
 #include <stdint.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum cut_mode { CUT_MODE_BYTES, CUT_MODE_CHARS, CUT_MODE_FIELDS, CUT_MODE_NONE };
 

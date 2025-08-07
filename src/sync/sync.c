@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 struct bx_sync_options {
     const char* progname;

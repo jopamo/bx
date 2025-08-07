@@ -5,7 +5,7 @@
 #include <string.h>
 #include "options.h"
 #include "search.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 enum {
     OPT_HELP = 256,
@@ -15,6 +15,7 @@ enum {
     OPT_EXCLUDE_DIR,
     OPT_FILES,
     OPT_TYPE_LIST,
+    OPT_COLOR,
 };
 
 void bx_search_print_help(const char *progname) {
@@ -141,6 +142,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"type-not",     required_argument, NULL, 'T'},
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
         {"file",         required_argument, NULL, 'f'},
+        {"color",        optional_argument, NULL, OPT_COLOR},
+        {"colour",       optional_argument, NULL, OPT_COLOR},
         {NULL, 0, NULL, 0},
     };
 
@@ -247,6 +250,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_TYPE_LIST:
             bx_search_print_type_list();
             return 1;
+        case OPT_COLOR:
+            opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
+            bx_color_set_mode(opts->color_mode);
+            break;
         case OPT_HELP:
             bx_search_print_help(argv[0]);
             return 1;

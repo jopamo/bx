@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 typedef struct {
     bool count;

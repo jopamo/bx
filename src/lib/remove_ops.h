@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <sys/types.h>
-#include "diag.h"
+#include "bx/diag.h"
 
 typedef void (*bx_remove_report_removed_fn)(const char* path, bool is_directory, void* user_data);
 

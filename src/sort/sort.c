@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,

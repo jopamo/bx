@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static int pos;
 static int argc_val;

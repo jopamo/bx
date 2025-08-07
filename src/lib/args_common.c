@@ -5,7 +5,7 @@
 #include "args_common.h"
 #include "copy_metadata.h"
 #include "update_policy.h"
-#include "libbx.h"
+#include "bx/libbx.h"
 
 bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out, char** invalid_token_out) {
     char* copy = xstrdup(arg);

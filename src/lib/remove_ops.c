@@ -8,7 +8,7 @@
 
 #include "remove_ops.h"
 #include "path_ops.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static bool
 bx_remove_recursive_impl(const char* path, bool one_file_system, dev_t root_dev, bool top_level, struct bx_diag_ctx* diag, bx_remove_report_removed_fn report_removed, void* report_removed_user_data) {

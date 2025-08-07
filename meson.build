@@ -35,7 +35,7 @@ if static_binary_opt == 'enabled'
 elif static_binary_opt == 'auto'
   if compiler_targets_glibc
     if musl_gcc.found()
-      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup via scripts/meson-setup.sh or CC=musl-gcc.')
+      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup via scripts/dev/meson-setup.sh or CC=musl-gcc.')
     endif
   elif static_link_supported
     use_static_binary = true
@@ -145,58 +145,124 @@ if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
 
-sources = [
+# shared bx runtime and helpers
+bx_core_sources = [
+  'src/bx/main.c',
+  'src/bx/libbx.c',
+  'src/dispatch/applets.c',
+]
+
+bx_lib_sources = [
   'src/lib/args_common.c',
   'src/lib/backup_ops.c',
+  'src/lib/color.c',
   'src/lib/copy_data.c',
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
-  'src/lib/update_policy.c',
+  'src/lib/fd_ops.c',
+  'src/lib/output.c',
+  'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
   'src/lib/prompt_ops.c',
-  'src/lib/same_file.c',
-  'src/lib/stat_ops.c',
   'src/lib/remove_ops.c',
-  'src/lib/fd_ops.c',
+  'src/lib/same_file.c',
   'src/lib/size_parse.c',
+  'src/lib/stat_ops.c',
+  'src/lib/update_policy.c',
   'src/lib/xreadwrite.c',
-  'src/lib/overwrite_ops.c',
-  'src/lib/md5.c',
-  'src/lib/sha1.c',
-  'src/lib/sha256.c',
-  'src/lib/sha512.c',
-  'src/lib/digest_util.c',
-  'src/lib/digestsum.c',
-  'src/main.c',
-  'src/ash/ash.c',
+]
+
+bx_crypto_sources = [
+  'src/crypto/digest_util.c',
+  'src/crypto/digestsum.c',
+  'src/crypto/md5.c',
+  'src/crypto/sha1.c',
+  'src/crypto/sha256.c',
+  'src/crypto/sha512.c',
+]
+
+# applet groups
+bx_base_applet_sources = [
+  'src/base64/base64.c',
+  'src/basename/basename.c',
   'src/cat/cat.c',
+  'src/cksum/cksum.c',
+  'src/comm/comm.c',
+  'src/cp/cp.c',
+  'src/cut/cut.c',
+  'src/date/date.c',
+  'src/df/df.c',
+  'src/dircolors/dircolors.c',
+  'src/dirname/dirname.c',
+  'src/du/du.c',
   'src/echo/echo.c',
+  'src/env/env.c',
+  'src/expand/expand.c',
+  'src/expr/expr.c',
   'src/fold/fold.c',
   'src/head/head.c',
   'src/hostid/hostid.c',
-  'src/expand/expand.c',
   'src/id/id.c',
-  'src/logname/logname.c',
   'src/join/join.c',
-  'src/cut/cut.c',
-  'src/date/date.c',
-  'src/comm/comm.c',
-  'src/ln/ln.c',
   'src/link/link.c',
-  'src/unlink/unlink.c',
+  'src/ln/ln.c',
+  'src/logname/logname.c',
+  'src/ls/ls.c',
+  'src/md5sum/md5sum.c',
+  'src/mkdir/mkdir.c',
+  'src/mkfifo/mkfifo.c',
+  'src/mknod/mknod.c',
+  'src/mktemp/mktemp.c',
+  'src/mv/mv.c',
+  'src/nl/nl.c',
+  'src/nohup/nohup.c',
+  'src/nproc/nproc.c',
+  'src/numfmt/numfmt.c',
+  'src/od/od.c',
+  'src/paste/paste.c',
+  'src/pathchk/pathchk.c',
+  'src/printenv/printenv.c',
+  'src/printf/printf.c',
+  'src/pwd/pwd.c',
   'src/readlink/readlink.c',
   'src/realpath/realpath.c',
-  'src/basename/basename.c',
-  'src/dirname/dirname.c',
-  'src/dircolors/dircolors.c',
-  'src/pathchk/pathchk.c',
-  'src/ls/ls.c',
+  'src/rm/rm.c',
+  'src/rmdir/rmdir.c',
+  'src/seq/seq.c',
+  'src/sha1sum/sha1sum.c',
+  'src/shred/shred.c',
+  'src/shuf/shuf.c',
+  'src/sleep/sleep.c',
+  'src/sort/sort.c',
+  'src/split/split.c',
   'src/stat/stat.c',
-  'src/df/df.c',
-  'src/du/du.c',
+  'src/sum/sum.c',
   'src/sync/sync.c',
+  'src/tac/tac.c',
+  'src/tail/tail.c',
+  'src/tee/tee.c',
+  'src/test/test.c',
+  'src/touch/touch.c',
+  'src/tr/tr.c',
+  'src/truncate/truncate.c',
+  'src/tty/tty.c',
+  'src/uname/uname.c',
+  'src/unexpand/unexpand.c',
+  'src/unlink/unlink.c',
+  'src/uniq/uniq.c',
+  'src/umount/umount.c',
+  'src/wc/wc.c',
+  'src/whoami/whoami.c',
+  'src/yes/yes.c',
+  'src/applets/base/which/which.c',
+]
+
+bx_shell_applet_sources = [
+  'src/applets/shell/ash/ash.c',
+]
+
+bx_text_applet_sources = [
   'src/dd/dd.c',
-  'src/printf/printf.c',
   'src/ed/buffer.c',
   'src/ed/carg_parser.c',
   'src/ed/global.c',
@@ -205,81 +271,54 @@ sources = [
   'src/ed/main_loop.c',
   'src/ed/regex.c',
   'src/ed/signal.c',
-  'src/env/env.c',
-  'src/printenv/printenv.c',
-  'src/pwd/pwd.c',
-  'src/tty/tty.c',
-  'src/stty/stty.c',
-  'src/getty/getty.c',
-  'src/setsid/setsid.c',
-  'src/dhcp/dhcp.c',
-  'src/nice/nice.c',
-  'src/nohup/nohup.c',
-  'src/timeout/timeout.c',
-  'src/init/init.c',
-  'src/switch_root/switch_root.c',
-  'src/chroot/chroot.c',
-  'src/mount/mount.c',
-  'src/umount/umount.c',
-  'src/kill/kill.c',
-  'src/ps/ps.c',
-  'src/dmesg/dmesg.c',
-  'src/reboot/reboot.c',
+  'src/applets/text/fd/fd.c',
+  'src/applets/text/grep/grep.c',
+  'src/applets/text/rg/rg.c',
+]
+
+bx_system_applet_sources = [
+  'src/chgrp/chgrp.c',
   'src/chmod/chmod.c',
   'src/chown/chown.c',
-  'src/chgrp/chgrp.c',
-  'src/rm/rm.c',
-  'src/mkdir/mkdir.c',
-  'src/rmdir/rmdir.c',
-  'src/mkfifo/mkfifo.c',
-  'src/mknod/mknod.c',
-  'src/mktemp/mktemp.c',
-  'src/touch/touch.c',
-  'src/truncate/truncate.c',
-  'src/shred/shred.c',
+  'src/chroot/chroot.c',
+  'src/dmesg/dmesg.c',
+  'src/getty/getty.c',
+  'src/init/init.c',
   'src/install/install.c',
-  'src/cp/cp.c',
-  'src/mv/mv.c',
-  'src/nl/nl.c',
-  'src/od/od.c',
-  'src/paste/paste.c',
-  'src/nproc/nproc.c',
-  'src/numfmt/numfmt.c',
-  'src/expr/expr.c',
-  'src/cksum/cksum.c',
-  'src/md5sum/md5sum.c',
-  'src/sha1sum/sha1sum.c',
-  'src/base64/base64.c',
-  'src/shuf/shuf.c',
-  'src/yes/yes.c',
-  'src/whoami/whoami.c',
-  'src/sleep/sleep.c',
-  'src/uname/uname.c',
-  'src/wc/wc.c',
-  'src/uniq/uniq.c',
-  'src/unexpand/unexpand.c',
-  'src/sum/sum.c',
-  'src/tac/tac.c',
-  'src/tail/tail.c',
-  'src/tee/tee.c',
-  'src/test/test.c',
-  'src/tr/tr.c',
-  'src/seq/seq.c',
-  'src/split/split.c',
-  'src/sort/sort.c',
-  'src/wget.c',
+  'src/kill/kill.c',
+  'src/mount/mount.c',
+  'src/nice/nice.c',
+  'src/ps/ps.c',
+  'src/reboot/reboot.c',
+  'src/setsid/setsid.c',
+  'src/stty/stty.c',
+  'src/applets/system/switch_root/switch_root.c',
+  'src/timeout/timeout.c',
+]
+
+bx_network_applet_sources = [
+  'src/dhcp/dhcp.c',
   'src/ping/ping.c',
-  'src/which.c',
-  'src/dispatch/applets.c',
-  'src/libbx.c',
-  'src/search/search.c',
+  'src/applets/network/wget/wget.c',
+]
+
+bx_search_sources = [
+  'src/search/literal.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
-  'src/search/literal.c',
+  'src/search/search.c',
   'src/search/walk.c',
-  'src/applets/grep.c',
-  'src/applets/fd/fd.c',
 ]
+
+sources = bx_core_sources
+sources += bx_lib_sources
+sources += bx_crypto_sources
+sources += bx_base_applet_sources
+sources += bx_shell_applet_sources
+sources += bx_text_applet_sources
+sources += bx_system_applet_sources
+sources += bx_network_applet_sources
+sources += bx_search_sources
 
 nc_sources = files(
   'src/nc/nc.c',
@@ -498,7 +537,7 @@ else
     wrapper_conf.set('BX_PATH', install_bx_path)
     wrapper_conf.set('APPLET', applet)
     wrapper = configure_file(
-      input : 'scripts/applet-shebang.in',
+      input : 'scripts/dev/applet-shebang.in',
       output : applet,
       configuration : wrapper_conf,
     )
@@ -536,7 +575,7 @@ if get_option('install_ls_colors')
     lscolors_install_path
   )
   lscolors_profile = configure_file(
-    input : 'scripts/bx-lscolors-profile.sh.in',
+    input : 'scripts/dev/bx-lscolors-profile.sh.in',
     output : 'bx-lscolors.sh',
     configuration : lscolors_profile_conf,
   )
@@ -595,14 +634,14 @@ if get_option('tests')
 
   test_md5_vectors = executable(
     'test-md5-vectors',
-    ['tests/md5sum/test_md5_vectors.c', 'src/lib/md5.c'],
+    ['tests/md5sum/test_md5_vectors.c', 'src/crypto/md5.c'],
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('md5 vectors', test_md5_vectors)
 
   test_sha1_vectors = executable(
     'test-sha1-vectors',
-    ['tests/sha1sum/test_sha1_vectors.c', 'src/lib/sha1.c'],
+    ['tests/sha1sum/test_sha1_vectors.c', 'src/crypto/sha1.c'],
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('sha1 vectors', test_sha1_vectors)
@@ -1132,6 +1171,12 @@ if get_option('tests')
 
   test_parity_exit_status = files('tests/test_parity_exit_status.py')
   test('which parity exit status', python3, args : [test_parity_exit_status, which_ref, bx_exe, meson.current_build_dir()])
-  test_grep_basic = find_program('tests/grep/test_grep_basic.sh')
+  test_grep_basic = find_program('tests/applets/text/grep/test_grep_basic.sh')
   test('grep basic', test_grep_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_rg_basic = find_program('tests/applets/text/rg/test_rg_basic.sh')
+  test('rg basic', test_rg_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_fd_basic = find_program('tests/applets/text/fd/test_fd_basic.sh')
+  test('fd basic', test_fd_basic, args : [bx_exe], suite : fast_track_p2_suite)
 endif

@@ -8,8 +8,8 @@
 #include <regex.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum numbering_style { STYLE_ALL, STYLE_NONEMPTY, STYLE_NONE, STYLE_REGEX };
 

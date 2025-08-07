@@ -17,8 +17,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum bx_ls_variant {
     BX_LS_VARIANT_LS,

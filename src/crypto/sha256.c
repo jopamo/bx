@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "lib/sha256.h"
+#include "crypto/sha256.h"
 
 static uint32_t bx_sha256_rotr32(uint32_t value, unsigned shift) {
     return (value >> shift) | (value << (32u - shift));

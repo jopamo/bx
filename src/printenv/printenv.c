@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 extern char** environ;
 

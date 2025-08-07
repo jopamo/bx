@@ -1,6 +1,6 @@
 #include "applets.h"
-#include "lib/digestsum.h"
-#include "lib/sha1.h"
+#include "crypto/digestsum.h"
+#include "crypto/sha1.h"
 
 static void bx_sha1sum_init_adapter(void* ctx) {
     bx_sha1_init((struct bx_sha1_ctx*)ctx);

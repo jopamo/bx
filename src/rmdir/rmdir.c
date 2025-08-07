@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum {
     BX_RMDIR_OPT_IGNORE_FAIL_ON_NON_EMPTY = 256,

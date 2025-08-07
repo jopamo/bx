@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 static const char* bx_sleep_progname(const char* argv0) {
     if (argv0 == NULL || argv0[0] == '\0') {

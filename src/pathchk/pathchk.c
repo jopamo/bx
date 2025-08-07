@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 #define BX_PATHCHK_POSIX_PATH_MAX 255L
 #define BX_PATHCHK_POSIX_NAME_MAX 14L

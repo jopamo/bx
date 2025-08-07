@@ -8,7 +8,7 @@
 #include <string.h>
 #include <sys/types.h>
 
-#include "lib/digestsum.h"
+#include "crypto/digestsum.h"
 
 enum {
     BX_DIGESTSUM_EXIT_OK = 0,

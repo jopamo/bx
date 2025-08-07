@@ -11,8 +11,8 @@
 
 #include "backup_ops.h"
 #include "args_common.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 #include "path_ops.h"
 #include "copy_data.h"
 #include "fd_ops.h"

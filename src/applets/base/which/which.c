@@ -9,8 +9,8 @@
 #include <ctype.h>
 
 #include "which.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 struct which_opts {
     bool all;

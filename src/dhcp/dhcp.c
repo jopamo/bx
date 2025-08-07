@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
 #define BX_DHCP_PACKET_MIN_LEN 240u

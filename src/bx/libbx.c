@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
-#include "libbx.h"
-#include "diag.h"
+#include "bx/libbx.h"
+#include "bx/diag.h"
 
 void* xmalloc(size_t size) {
     void* p = malloc(size);

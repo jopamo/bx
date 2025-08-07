@@ -8,8 +8,8 @@
 #include <ctype.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 struct bx_expand_options {
     const char* progname;

@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <sys/stat.h>
-#include "diag.h"
+#include "bx/diag.h"
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"

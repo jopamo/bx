@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "lib/path_ops.h"
-#include "libbx.h"
+#include "bx/libbx.h"
 
 static char* bx_path_dup_range(const char* start, size_t len) {
     char* res = xmalloc(len + 1u);

@@ -8,8 +8,8 @@
 #include <sys/mount.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifndef MNT_FORCE
 #define MNT_FORCE 0

@@ -13,8 +13,8 @@
 #include <wchar.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 enum expr_token_kind {
     TOK_END = 0,

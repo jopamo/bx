@@ -11,7 +11,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 typedef struct {
     unsigned long long lines;

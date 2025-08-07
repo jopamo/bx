@@ -8,8 +8,8 @@
 
 #include "applets.h"
 #include "lib/path_ops.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 #ifdef S_ISVTX
 #define BX_CHMOD_STICKY_BIT S_ISVTX

@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "lib/sha1.h"
+#include "crypto/sha1.h"
 
 static uint32_t bx_sha1_rotl32(uint32_t value, unsigned shift) {
     return (value << shift) | (value >> (32u - shift));

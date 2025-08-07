@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "diag.h"
+#include "bx/diag.h"
 
 enum bx_truncate_size_mode {
     BX_TRUNCATE_SIZE_SET = 0,

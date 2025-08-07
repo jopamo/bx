@@ -6,8 +6,8 @@
 #include <errno.h>
 
 #include "applets.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 static void bx_logname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]\n", progname);

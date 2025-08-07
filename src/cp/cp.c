@@ -13,8 +13,8 @@
 #include "lib/copy_tree.h"
 #include "lib/path_ops.h"
 #include "lib/stat_ops.h"
-#include "diag.h"
-#include "libbx.h"
+#include "bx/diag.h"
+#include "bx/libbx.h"
 
 struct bx_cp_options {
     const char* progname;
