@@ -183,77 +183,76 @@ bx_crypto_sources = [
 
 # applet groups
 bx_base_applet_sources = [
-  'src/base64/base64.c',
-  'src/basename/basename.c',
-  'src/cat/cat.c',
-  'src/cksum/cksum.c',
-  'src/comm/comm.c',
-  'src/cp/cp.c',
-  'src/cut/cut.c',
-  'src/date/date.c',
-  'src/df/df.c',
-  'src/dircolors/dircolors.c',
-  'src/dirname/dirname.c',
-  'src/du/du.c',
-  'src/echo/echo.c',
-  'src/env/env.c',
-  'src/expand/expand.c',
-  'src/expr/expr.c',
-  'src/fold/fold.c',
-  'src/head/head.c',
-  'src/hostid/hostid.c',
-  'src/id/id.c',
-  'src/join/join.c',
-  'src/link/link.c',
-  'src/ln/ln.c',
-  'src/logname/logname.c',
-  'src/ls/ls.c',
-  'src/md5sum/md5sum.c',
-  'src/mkdir/mkdir.c',
-  'src/mkfifo/mkfifo.c',
-  'src/mknod/mknod.c',
-  'src/mktemp/mktemp.c',
-  'src/mv/mv.c',
-  'src/nl/nl.c',
-  'src/nohup/nohup.c',
-  'src/nproc/nproc.c',
-  'src/numfmt/numfmt.c',
-  'src/od/od.c',
-  'src/paste/paste.c',
-  'src/pathchk/pathchk.c',
-  'src/printenv/printenv.c',
-  'src/printf/printf.c',
-  'src/pwd/pwd.c',
-  'src/readlink/readlink.c',
-  'src/realpath/realpath.c',
-  'src/rm/rm.c',
-  'src/rmdir/rmdir.c',
-  'src/seq/seq.c',
-  'src/sha1sum/sha1sum.c',
-  'src/shred/shred.c',
-  'src/shuf/shuf.c',
-  'src/sleep/sleep.c',
-  'src/sort/sort.c',
-  'src/split/split.c',
-  'src/stat/stat.c',
-  'src/sum/sum.c',
-  'src/sync/sync.c',
-  'src/tac/tac.c',
-  'src/tail/tail.c',
-  'src/tee/tee.c',
-  'src/test/test.c',
-  'src/touch/touch.c',
-  'src/tr/tr.c',
-  'src/truncate/truncate.c',
-  'src/tty/tty.c',
-  'src/uname/uname.c',
-  'src/unexpand/unexpand.c',
-  'src/unlink/unlink.c',
-  'src/uniq/uniq.c',
-  'src/umount/umount.c',
-  'src/wc/wc.c',
-  'src/whoami/whoami.c',
-  'src/yes/yes.c',
+  'src/applets/base/base64/base64.c',
+  'src/applets/base/basename/basename.c',
+  'src/applets/base/cat/cat.c',
+  'src/applets/base/cksum/cksum.c',
+  'src/applets/base/comm/comm.c',
+  'src/applets/base/cp/cp.c',
+  'src/applets/base/cut/cut.c',
+  'src/applets/base/date/date.c',
+  'src/applets/base/df/df.c',
+  'src/applets/base/dircolors/dircolors.c',
+  'src/applets/base/dirname/dirname.c',
+  'src/applets/base/du/du.c',
+  'src/applets/base/echo/echo.c',
+  'src/applets/base/env/env.c',
+  'src/applets/base/expand/expand.c',
+  'src/applets/base/expr/expr.c',
+  'src/applets/base/fold/fold.c',
+  'src/applets/base/head/head.c',
+  'src/applets/base/hostid/hostid.c',
+  'src/applets/base/id/id.c',
+  'src/applets/base/join/join.c',
+  'src/applets/base/link/link.c',
+  'src/applets/base/ln/ln.c',
+  'src/applets/base/logname/logname.c',
+  'src/applets/base/ls/ls.c',
+  'src/applets/base/md5sum/md5sum.c',
+  'src/applets/base/mkdir/mkdir.c',
+  'src/applets/base/mkfifo/mkfifo.c',
+  'src/applets/base/mknod/mknod.c',
+  'src/applets/base/mktemp/mktemp.c',
+  'src/applets/base/mv/mv.c',
+  'src/applets/base/nl/nl.c',
+  'src/applets/base/nohup/nohup.c',
+  'src/applets/base/nproc/nproc.c',
+  'src/applets/base/numfmt/numfmt.c',
+  'src/applets/base/od/od.c',
+  'src/applets/base/paste/paste.c',
+  'src/applets/base/pathchk/pathchk.c',
+  'src/applets/base/printenv/printenv.c',
+  'src/applets/base/printf/printf.c',
+  'src/applets/base/pwd/pwd.c',
+  'src/applets/base/readlink/readlink.c',
+  'src/applets/base/realpath/realpath.c',
+  'src/applets/base/rm/rm.c',
+  'src/applets/base/rmdir/rmdir.c',
+  'src/applets/base/seq/seq.c',
+  'src/applets/base/sha1sum/sha1sum.c',
+  'src/applets/base/shred/shred.c',
+  'src/applets/base/shuf/shuf.c',
+  'src/applets/base/sleep/sleep.c',
+  'src/applets/base/sort/sort.c',
+  'src/applets/base/split/split.c',
+  'src/applets/base/stat/stat.c',
+  'src/applets/base/sum/sum.c',
+  'src/applets/base/sync/sync.c',
+  'src/applets/base/tac/tac.c',
+  'src/applets/base/tail/tail.c',
+  'src/applets/base/tee/tee.c',
+  'src/applets/base/test/test.c',
+  'src/applets/base/touch/touch.c',
+  'src/applets/base/tr/tr.c',
+  'src/applets/base/truncate/truncate.c',
+  'src/applets/base/tty/tty.c',
+  'src/applets/base/uname/uname.c',
+  'src/applets/base/unexpand/unexpand.c',
+  'src/applets/base/unlink/unlink.c',
+  'src/applets/base/uniq/uniq.c',
+  'src/applets/base/wc/wc.c',
+  'src/applets/base/whoami/whoami.c',
+  'src/applets/base/yes/yes.c',
   'src/applets/base/which/which.c',
 ]
 
@@ -262,43 +261,44 @@ bx_shell_applet_sources = [
 ]
 
 bx_text_applet_sources = [
-  'src/dd/dd.c',
-  'src/ed/buffer.c',
-  'src/ed/carg_parser.c',
-  'src/ed/global.c',
-  'src/ed/io.c',
-  'src/ed/main.c',
-  'src/ed/main_loop.c',
-  'src/ed/regex.c',
-  'src/ed/signal.c',
+  'src/applets/text/dd/dd.c',
+  'src/applets/text/ed/buffer.c',
+  'src/applets/text/ed/carg_parser.c',
+  'src/applets/text/ed/global.c',
+  'src/applets/text/ed/io.c',
+  'src/applets/text/ed/main.c',
+  'src/applets/text/ed/main_loop.c',
+  'src/applets/text/ed/regex.c',
+  'src/applets/text/ed/signal.c',
   'src/applets/text/fd/fd.c',
   'src/applets/text/grep/grep.c',
   'src/applets/text/rg/rg.c',
 ]
 
 bx_system_applet_sources = [
-  'src/chgrp/chgrp.c',
-  'src/chmod/chmod.c',
-  'src/chown/chown.c',
-  'src/chroot/chroot.c',
-  'src/dmesg/dmesg.c',
-  'src/getty/getty.c',
-  'src/init/init.c',
-  'src/install/install.c',
-  'src/kill/kill.c',
-  'src/mount/mount.c',
-  'src/nice/nice.c',
-  'src/ps/ps.c',
-  'src/reboot/reboot.c',
-  'src/setsid/setsid.c',
-  'src/stty/stty.c',
+  'src/applets/system/chgrp/chgrp.c',
+  'src/applets/system/chmod/chmod.c',
+  'src/applets/system/chown/chown.c',
+  'src/applets/system/chroot/chroot.c',
+  'src/applets/system/dmesg/dmesg.c',
+  'src/applets/system/getty/getty.c',
+  'src/applets/system/init/init.c',
+  'src/applets/system/install/install.c',
+  'src/applets/system/kill/kill.c',
+  'src/applets/system/mount/mount.c',
+  'src/applets/system/nice/nice.c',
+  'src/applets/system/ps/ps.c',
+  'src/applets/system/reboot/reboot.c',
+  'src/applets/system/setsid/setsid.c',
+  'src/applets/system/stty/stty.c',
   'src/applets/system/switch_root/switch_root.c',
-  'src/timeout/timeout.c',
+  'src/applets/system/timeout/timeout.c',
+  'src/applets/system/umount/umount.c',
 ]
 
 bx_network_applet_sources = [
-  'src/dhcp/dhcp.c',
-  'src/ping/ping.c',
+  'src/applets/network/dhcp/dhcp.c',
+  'src/applets/network/ping/ping.c',
   'src/applets/network/wget/wget.c',
 ]
 
@@ -321,21 +321,21 @@ sources += bx_network_applet_sources
 sources += bx_search_sources
 
 nc_sources = files(
-  'src/nc/nc.c',
-  'src/nc/atomicio.c',
-  'src/nc/bpf.c',
-  'src/nc/hexdump.c',
-  'src/nc/io.c',
-  'src/nc/log.c',
-  'src/nc/mptcp_pm.c',
-  'src/nc/network.c',
-  'src/nc/pcap.c',
-  'src/nc/proxy_proto.c',
-  'src/nc/quic.c',
-  'src/nc/socks.c',
-  'src/nc/tls.c',
-  'src/nc/tls_disabled.c',
-  'src/nc/utils.c',
+  'src/applets/network/nc/nc.c',
+  'src/applets/network/nc/atomicio.c',
+  'src/applets/network/nc/bpf.c',
+  'src/applets/network/nc/hexdump.c',
+  'src/applets/network/nc/io.c',
+  'src/applets/network/nc/log.c',
+  'src/applets/network/nc/mptcp_pm.c',
+  'src/applets/network/nc/network.c',
+  'src/applets/network/nc/pcap.c',
+  'src/applets/network/nc/proxy_proto.c',
+  'src/applets/network/nc/quic.c',
+  'src/applets/network/nc/socks.c',
+  'src/applets/network/nc/tls.c',
+  'src/applets/network/nc/tls_disabled.c',
+  'src/applets/network/nc/utils.c',
 )
 
 nc_c_args = cc.get_supported_arguments([
@@ -349,30 +349,30 @@ nc_c_args = cc.get_supported_arguments([
 
 nc_lib = static_library('bx_nc',
   nc_sources,
-  include_directories : include_directories('src', 'src/dispatch', 'src/nc'),
+  include_directories : include_directories('src', 'src/dispatch', 'src/applets/network/nc'),
   dependencies : [threads_dep],
   c_args : nc_c_args,
 )
 
 traceroute_sources = files(
-  'src/traceroute/traceroute.c',
-  'src/traceroute/as_lookups.c',
-  'src/traceroute/csum.c',
-  'src/traceroute/export.c',
-  'src/traceroute/extension.c',
-  'src/traceroute/mod-dccp.c',
-  'src/traceroute/mod-icmp.c',
-  'src/traceroute/mod-raw.c',
-  'src/traceroute/mod-tcp.c',
-  'src/traceroute/mod-tcpconn.c',
-  'src/traceroute/mod-udp.c',
-  'src/traceroute/module.c',
-  'src/traceroute/poll.c',
-  'src/traceroute/random.c',
-  'src/traceroute/time.c',
-  'src/traceroute/clif.c',
-  'src/traceroute/bpf_disabled.c',
-  'src/traceroute/xdp_disabled.c',
+  'src/applets/network/traceroute/traceroute.c',
+  'src/applets/network/traceroute/as_lookups.c',
+  'src/applets/network/traceroute/csum.c',
+  'src/applets/network/traceroute/export.c',
+  'src/applets/network/traceroute/extension.c',
+  'src/applets/network/traceroute/mod-dccp.c',
+  'src/applets/network/traceroute/mod-icmp.c',
+  'src/applets/network/traceroute/mod-raw.c',
+  'src/applets/network/traceroute/mod-tcp.c',
+  'src/applets/network/traceroute/mod-tcpconn.c',
+  'src/applets/network/traceroute/mod-udp.c',
+  'src/applets/network/traceroute/module.c',
+  'src/applets/network/traceroute/poll.c',
+  'src/applets/network/traceroute/random.c',
+  'src/applets/network/traceroute/time.c',
+  'src/applets/network/traceroute/clif.c',
+  'src/applets/network/traceroute/bpf_disabled.c',
+  'src/applets/network/traceroute/xdp_disabled.c',
 )
 
 traceroute_c_args = cc.get_supported_arguments([
@@ -384,7 +384,7 @@ traceroute_c_args = cc.get_supported_arguments([
 
 traceroute_lib = static_library('bx_traceroute',
   traceroute_sources,
-  include_directories : include_directories('src/traceroute'),
+  include_directories : include_directories('src/applets/network/traceroute'),
   c_args : traceroute_c_args,
 )
 
@@ -395,51 +395,51 @@ bc_host_c_args = cc.get_supported_arguments([
 ])
 
 bc_strgen = executable('bx_bc_strgen',
-  'src/bc/strgen.c',
-  include_directories : include_directories('src/bc/include'),
+  'src/applets/base/bc/strgen.c',
+  include_directories : include_directories('src/applets/base/bc/include'),
   native : true,
   c_args : bc_host_c_args,
 )
 
 bc_help_src = custom_target(
   'bx_bc_help_c',
-  input : 'src/bc/assets/bc_help.txt',
+  input : 'src/applets/base/bc/assets/bc_help.txt',
   output : 'bx_bc_help.c',
   command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_help', '', 'BC_ENABLED', '0'],
 )
 
 bc_lib_src = custom_target(
   'bx_bc_lib_c',
-  input : 'src/bc/assets/lib.bc',
+  input : 'src/applets/base/bc/assets/lib.bc',
   output : 'bx_bc_lib.c',
   command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_lib', 'bc_lib_name', 'BC_ENABLED', '1'],
 )
 
 bc_lib2_src = custom_target(
   'bx_bc_lib2_c',
-  input : 'src/bc/assets/lib2.bc',
+  input : 'src/applets/base/bc/assets/lib2.bc',
   output : 'bx_bc_lib2.c',
   command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_lib2', 'bc_lib2_name', 'BC_ENABLED && BC_ENABLE_EXTRA_MATH', '1'],
 )
 
 bc_sources = files(
-  'src/bc/args.c',
-  'src/bc/bc.c',
-  'src/bc/bc_lex.c',
-  'src/bc/bc_parse.c',
-  'src/bc/data.c',
-  'src/bc/file.c',
-  'src/bc/lang.c',
-  'src/bc/lex.c',
-  'src/bc/main.c',
-  'src/bc/num.c',
-  'src/bc/opt.c',
-  'src/bc/parse.c',
-  'src/bc/program.c',
-  'src/bc/rand.c',
-  'src/bc/read.c',
-  'src/bc/vector.c',
-  'src/bc/vm.c',
+  'src/applets/base/bc/args.c',
+  'src/applets/base/bc/bc.c',
+  'src/applets/base/bc/bc_lex.c',
+  'src/applets/base/bc/bc_parse.c',
+  'src/applets/base/bc/data.c',
+  'src/applets/base/bc/file.c',
+  'src/applets/base/bc/lang.c',
+  'src/applets/base/bc/lex.c',
+  'src/applets/base/bc/main.c',
+  'src/applets/base/bc/num.c',
+  'src/applets/base/bc/opt.c',
+  'src/applets/base/bc/parse.c',
+  'src/applets/base/bc/program.c',
+  'src/applets/base/bc/rand.c',
+  'src/applets/base/bc/read.c',
+  'src/applets/base/bc/vector.c',
+  'src/applets/base/bc/vm.c',
 )
 
 bc_c_args = [
@@ -469,7 +469,7 @@ bc_c_args += cc.get_supported_arguments([
 
 bc_lib = static_library('bx_bc',
   [bc_help_src, bc_lib_src, bc_lib2_src, bc_sources],
-  include_directories : include_directories('src/bc/include'),
+  include_directories : include_directories('src/applets/base/bc/include'),
   c_args : bc_c_args,
 )
 
@@ -591,16 +591,16 @@ if get_option('tests')
   cp_ref = find_program('cp')
   unshare = find_program('unshare', required : false)
 
-  test_which = find_program('tests/test_which.sh')
+  test_which = find_program('tests/applets/base/which/test_which.sh')
   test('which unit test', test_which, args : [bx_exe])
 
-  test_cp_differential = files('tests/cp/test_cp_differential.py')
+  test_cp_differential = files('tests/applets/base/cp/test_cp_differential.py')
   test('cp differential', python3, args : [test_cp_differential, cp_ref, bx_exe, meson.current_build_dir()])
 
-  test_cp_cleanup_state = files('tests/cp/test_cp_cleanup_state.py')
+  test_cp_cleanup_state = files('tests/applets/base/cp/test_cp_cleanup_state.py')
   test('cp cleanup state', python3, args : [test_cp_cleanup_state, bx_exe, meson.current_build_dir()])
 
-  test_cp_reference_resolution = files('tests/cp/test_cp_reference_resolution.py')
+  test_cp_reference_resolution = files('tests/applets/base/cp/test_cp_reference_resolution.py')
   test('cp reference resolution', python3, args : [test_cp_reference_resolution])
 
   test_coreutils_symlink_reference_resolution = files('tests/test_coreutils_symlink_reference_resolution.py')
@@ -615,33 +615,33 @@ if get_option('tests')
   test_fuzz_reference_resolution = files('tests/test_fuzz_reference_resolution.py')
   test('fuzz reference resolution', python3, args : [test_fuzz_reference_resolution])
 
-  test_cp_preserve_metadata = files('tests/cp/test_cp_preserve_metadata.py')
+  test_cp_preserve_metadata = files('tests/applets/base/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 
   test_security_context_unsupported = files('tests/test_security_context_unsupported.py')
   test('security-context unsupported', python3, args : [test_security_context_unsupported, bx_exe])
 
-  test_mv_differential = files('tests/mv/test_mv_differential.py')
+  test_mv_differential = files('tests/applets/base/mv/test_mv_differential.py')
   mv_ref = find_program('mv')
   test('mv differential', python3, args : [test_mv_differential, mv_ref, bx_exe, meson.current_build_dir()])
 
-  test_mv_cli_differential = files('tests/mv/test_mv_cli_differential.py')
+  test_mv_cli_differential = files('tests/applets/base/mv/test_mv_cli_differential.py')
   test('mv cli differential', python3, args : [test_mv_cli_differential, mv_ref, bx_exe, meson.current_build_dir()])
 
   expr_ref = find_program('expr')
-  test_expr_differential = files('tests/expr/test_expr_differential.py')
+  test_expr_differential = files('tests/applets/base/expr/test_expr_differential.py')
   test('expr differential', python3, args : [test_expr_differential, expr_ref, bx_exe, meson.current_build_dir()])
 
   test_md5_vectors = executable(
     'test-md5-vectors',
-    ['tests/md5sum/test_md5_vectors.c', 'src/crypto/md5.c'],
+    ['tests/applets/base/md5sum/test_md5_vectors.c', 'src/crypto/md5.c'],
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('md5 vectors', test_md5_vectors)
 
   test_sha1_vectors = executable(
     'test-sha1-vectors',
-    ['tests/sha1sum/test_sha1_vectors.c', 'src/crypto/sha1.c'],
+    ['tests/applets/base/sha1sum/test_sha1_vectors.c', 'src/crypto/sha1.c'],
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('sha1 vectors', test_sha1_vectors)
@@ -650,438 +650,438 @@ if get_option('tests')
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
   fast_track_p2_suite = ['fast-track', 'fast-track-p2']
 
-  test_cat_basic = find_program('tests/cat/test_cat_basic.sh')
+  test_cat_basic = find_program('tests/applets/base/cat/test_cat_basic.sh')
   test('cat basic', test_cat_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_cat_smoke_differential = find_program('tests/cat/test_cat_smoke_differential.sh')
+  test_cat_smoke_differential = find_program('tests/applets/base/cat/test_cat_smoke_differential.sh')
   test('cat smoke differential', test_cat_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_comm_basic = find_program('tests/comm/test_comm_basic.sh')
+  test_comm_basic = find_program('tests/applets/base/comm/test_comm_basic.sh')
   test('comm basic', test_comm_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_cut_basic = find_program('tests/cut/test_cut_basic.sh')
+  test_cut_basic = find_program('tests/applets/base/cut/test_cut_basic.sh')
   test('cut basic', test_cut_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_date_basic = find_program('tests/date/test_date_basic.sh')
+  test_date_basic = find_program('tests/applets/base/date/test_date_basic.sh')
   test('date basic', test_date_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_echo_basic = find_program('tests/echo/test_echo_basic.sh')
+  test_echo_basic = find_program('tests/applets/base/echo/test_echo_basic.sh')
   test('echo basic', test_echo_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_bc_basic = find_program('tests/bc/test_bc_basic.sh')
+  test_bc_basic = find_program('tests/applets/base/bc/test_bc_basic.sh')
   test('bc basic', test_bc_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_ed_basic = find_program('tests/ed/test_ed_basic.sh')
+  test_ed_basic = find_program('tests/applets/text/ed/test_ed_basic.sh')
   test('ed basic', test_ed_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_expand_basic = find_program('tests/expand/test_expand_basic.sh')
+  test_expand_basic = find_program('tests/applets/base/expand/test_expand_basic.sh')
   test('expand basic', test_expand_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_fold_basic = find_program('tests/fold/test_fold_basic.sh')
+  test_fold_basic = find_program('tests/applets/base/fold/test_fold_basic.sh')
   test('fold basic', test_fold_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_head_basic = find_program('tests/head/test_head_basic.sh')
+  test_head_basic = find_program('tests/applets/base/head/test_head_basic.sh')
   test('head basic', test_head_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_tail_basic = find_program('tests/tail/test_tail_basic.sh')
+  test_tail_basic = find_program('tests/applets/base/tail/test_tail_basic.sh')
   test('tail basic', test_tail_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_hostid_basic = find_program('tests/hostid/test_hostid_basic.sh')
+  test_hostid_basic = find_program('tests/applets/base/hostid/test_hostid_basic.sh')
   test('hostid basic', test_hostid_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_id_basic = find_program('tests/id/test_id_basic.sh')
+  test_id_basic = find_program('tests/applets/base/id/test_id_basic.sh')
   test('id basic', test_id_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_logname_basic = find_program('tests/logname/test_logname_basic.sh')
+  test_logname_basic = find_program('tests/applets/base/logname/test_logname_basic.sh')
   test('logname basic', test_logname_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_nproc_basic = find_program('tests/nproc/test_nproc_basic.sh')
+  test_nproc_basic = find_program('tests/applets/base/nproc/test_nproc_basic.sh')
   test('nproc basic', test_nproc_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_numfmt_basic = find_program('tests/numfmt/test_numfmt_basic.sh')
+  test_numfmt_basic = find_program('tests/applets/base/numfmt/test_numfmt_basic.sh')
   test('numfmt basic', test_numfmt_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_join_basic = find_program('tests/join/test_join_basic.sh')
+  test_join_basic = find_program('tests/applets/base/join/test_join_basic.sh')
   test('join basic', test_join_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_nl_basic = find_program('tests/nl/test_nl_basic.sh')
+  test_nl_basic = find_program('tests/applets/base/nl/test_nl_basic.sh')
   test('nl basic', test_nl_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_od_basic = find_program('tests/od/test_od_basic.sh')
+  test_od_basic = find_program('tests/applets/base/od/test_od_basic.sh')
   test('od basic', test_od_basic, args : [bx_exe], suite : fast_track_p2_suite)
-  test_od_smoke_differential = find_program('tests/od/test_od_smoke_differential.sh')
+  test_od_smoke_differential = find_program('tests/applets/base/od/test_od_smoke_differential.sh')
   test('od smoke differential', test_od_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
-  test_od_audit = files('tests/od/od_audit.py')
+  test_od_audit = files('tests/applets/base/od/od_audit.py')
   test('od audit differential', python3, args : [test_od_audit, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
-  test_od_fuzz = files('tests/od/test_od_fuzz.py')
+  test_od_fuzz = files('tests/applets/base/od/test_od_fuzz.py')
   test('od fuzz', python3, args : [test_od_fuzz, bx_exe, meson.current_build_dir(), '40', '0'], suite : fast_track_p2_suite)
 
-  test_paste_basic = find_program('tests/paste/test_paste_basic.sh')
+  test_paste_basic = find_program('tests/applets/base/paste/test_paste_basic.sh')
   test('paste basic', test_paste_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
-  test_md5sum_basic = find_program('tests/md5sum/test_md5sum_basic.sh')
+  test_shuf_basic = find_program('tests/applets/base/shuf/test_shuf_basic.sh')
+  test_md5sum_basic = find_program('tests/applets/base/md5sum/test_md5sum_basic.sh')
   test('md5sum basic', test_md5sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_md5sum_differential = files('tests/md5sum/test_md5sum_differential.py')
+  test_md5sum_differential = files('tests/applets/base/md5sum/test_md5sum_differential.py')
   test('md5sum differential', python3, args : [test_md5sum_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
-  test_md5sum_check = find_program('tests/md5sum/test_md5sum_check.sh')
+  test_md5sum_check = find_program('tests/applets/base/md5sum/test_md5sum_check.sh')
   test('md5sum check', test_md5sum_check, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_sha1sum_basic = find_program('tests/sha1sum/test_sha1sum_basic.sh')
+  test_sha1sum_basic = find_program('tests/applets/base/sha1sum/test_sha1sum_basic.sh')
   test('sha1sum basic', test_sha1sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_sha1sum_differential = files('tests/sha1sum/test_sha1sum_differential.py')
+  test_sha1sum_differential = files('tests/applets/base/sha1sum/test_sha1sum_differential.py')
   test('sha1sum differential', python3, args : [test_sha1sum_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
-  test_sha1sum_check = find_program('tests/sha1sum/test_sha1sum_check.sh')
+  test_sha1sum_check = find_program('tests/applets/base/sha1sum/test_sha1sum_check.sh')
   test('sha1sum check', test_sha1sum_check, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_cksum_basic = find_program('tests/cksum/test_cksum_basic.sh')
+  test_cksum_basic = find_program('tests/applets/base/cksum/test_cksum_basic.sh')
   test('cksum basic', test_cksum_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_cksum_check = find_program('tests/cksum/test_cksum_check.sh')
+  test_cksum_check = find_program('tests/applets/base/cksum/test_cksum_check.sh')
   test('cksum check', test_cksum_check, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_base64_basic = find_program('tests/base64/test_base64_basic.sh')
+  test_base64_basic = find_program('tests/applets/base/base64/test_base64_basic.sh')
   test('base64 basic', test_base64_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_base64_smoke_differential = find_program('tests/base64/test_base64_smoke_differential.sh')
+  test_base64_smoke_differential = find_program('tests/applets/base/base64/test_base64_smoke_differential.sh')
   test('base64 smoke differential', test_base64_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_shuf_basic = find_program('tests/shuf/test_shuf_basic.sh')
+  test_shuf_basic = find_program('tests/applets/base/shuf/test_shuf_basic.sh')
   test('shuf basic', test_shuf_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_shuf_smoke_differential = find_program('tests/shuf/test_shuf_smoke_differential.sh')
+  test_shuf_smoke_differential = find_program('tests/applets/base/shuf/test_shuf_smoke_differential.sh')
   test('shuf smoke differential', test_shuf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_sort_basic = find_program('tests/sort/test_sort_basic.sh')
+  test_sort_basic = find_program('tests/applets/base/sort/test_sort_basic.sh')
   test('sort basic', test_sort_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_tr_basic = find_program('tests/tr/test_tr_basic.sh')
+  test_tr_basic = find_program('tests/applets/base/tr/test_tr_basic.sh')
   test('tr basic', test_tr_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_tr_smoke_differential = find_program('tests/tr/test_tr_smoke_differential.sh')
+  test_tr_smoke_differential = find_program('tests/applets/base/tr/test_tr_smoke_differential.sh')
   test('tr smoke differential', test_tr_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_tac_basic = find_program('tests/tac/test_tac_basic.sh')
+  test_tac_basic = find_program('tests/applets/base/tac/test_tac_basic.sh')
   test('tac basic', test_tac_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_ln_basic = find_program('tests/ln/test_ln_basic.sh')
+  test_ln_basic = find_program('tests/applets/base/ln/test_ln_basic.sh')
   test('ln basic', test_ln_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_ln_smoke_differential = find_program('tests/ln/test_ln_smoke_differential.sh')
+  test_ln_smoke_differential = find_program('tests/applets/base/ln/test_ln_smoke_differential.sh')
   test('ln smoke differential', test_ln_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_link_basic = find_program('tests/link/test_link_basic.sh')
+  test_link_basic = find_program('tests/applets/base/link/test_link_basic.sh')
   test('link basic', test_link_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_link_smoke_differential = find_program('tests/link/test_link_smoke_differential.sh')
+  test_link_smoke_differential = find_program('tests/applets/base/link/test_link_smoke_differential.sh')
   test('link smoke differential', test_link_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_unlink_basic = find_program('tests/unlink/test_unlink_basic.sh')
+  test_unlink_basic = find_program('tests/applets/base/unlink/test_unlink_basic.sh')
   test('unlink basic', test_unlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_unlink_smoke_differential = find_program('tests/unlink/test_unlink_smoke_differential.sh')
+  test_unlink_smoke_differential = find_program('tests/applets/base/unlink/test_unlink_smoke_differential.sh')
   test('unlink smoke differential', test_unlink_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_readlink_basic = find_program('tests/readlink/test_readlink_basic.sh')
+  test_readlink_basic = find_program('tests/applets/base/readlink/test_readlink_basic.sh')
   test('readlink basic', test_readlink_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_readlink_smoke_differential = find_program('tests/readlink/test_readlink_smoke_differential.sh')
+  test_readlink_smoke_differential = find_program('tests/applets/base/readlink/test_readlink_smoke_differential.sh')
   test('readlink smoke differential', test_readlink_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_realpath_basic = find_program('tests/realpath/test_realpath_basic.sh')
+  test_realpath_basic = find_program('tests/applets/base/realpath/test_realpath_basic.sh')
   test('realpath basic', test_realpath_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_realpath_smoke_differential = find_program('tests/realpath/test_realpath_smoke_differential.sh')
+  test_realpath_smoke_differential = find_program('tests/applets/base/realpath/test_realpath_smoke_differential.sh')
   test('realpath smoke differential', test_realpath_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_basename_basic = find_program('tests/basename/test_basename_basic.sh')
+  test_basename_basic = find_program('tests/applets/base/basename/test_basename_basic.sh')
   test('basename basic', test_basename_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_basename_smoke_differential = find_program('tests/basename/test_basename_smoke_differential.sh')
+  test_basename_smoke_differential = find_program('tests/applets/base/basename/test_basename_smoke_differential.sh')
   test('basename smoke differential', test_basename_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_dirname_basic = find_program('tests/dirname/test_dirname_basic.sh')
+  test_dirname_basic = find_program('tests/applets/base/dirname/test_dirname_basic.sh')
   test('dirname basic', test_dirname_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_dirname_smoke_differential = find_program('tests/dirname/test_dirname_smoke_differential.sh')
+  test_dirname_smoke_differential = find_program('tests/applets/base/dirname/test_dirname_smoke_differential.sh')
   test('dirname smoke differential', test_dirname_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_dircolors_basic = find_program('tests/dircolors/test_dircolors_basic.sh')
+  test_dircolors_basic = find_program('tests/applets/base/dircolors/test_dircolors_basic.sh')
   test('dircolors basic', test_dircolors_basic, args : [bx_exe, lscolors_install_path], suite : fast_track_p0_suite)
 
-  test_pathchk_basic = find_program('tests/pathchk/test_pathchk_basic.sh')
+  test_pathchk_basic = find_program('tests/applets/base/pathchk/test_pathchk_basic.sh')
   test('pathchk basic', test_pathchk_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_pathchk_smoke_differential = find_program('tests/pathchk/test_pathchk_smoke_differential.sh')
+  test_pathchk_smoke_differential = find_program('tests/applets/base/pathchk/test_pathchk_smoke_differential.sh')
   test('pathchk smoke differential', test_pathchk_smoke_differential, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_ls_basic = find_program('tests/ls/test_ls_basic.sh')
+  test_ls_basic = find_program('tests/applets/base/ls/test_ls_basic.sh')
   test('ls basic', test_ls_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_ls_smoke_differential = find_program('tests/ls/test_ls_smoke_differential.sh')
+  test_ls_smoke_differential = find_program('tests/applets/base/ls/test_ls_smoke_differential.sh')
   test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_stat_basic = find_program('tests/stat/test_stat_basic.sh')
+  test_stat_basic = find_program('tests/applets/base/stat/test_stat_basic.sh')
   test('stat basic', test_stat_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_stat_smoke_differential = find_program('tests/stat/test_stat_smoke_differential.sh')
+  test_stat_smoke_differential = find_program('tests/applets/base/stat/test_stat_smoke_differential.sh')
   test('stat smoke differential', test_stat_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_df_basic = find_program('tests/df/test_df_basic.sh')
+  test_df_basic = find_program('tests/applets/base/df/test_df_basic.sh')
   test('df basic', test_df_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_df_smoke_differential = find_program('tests/df/test_df_smoke_differential.sh')
+  test_df_smoke_differential = find_program('tests/applets/base/df/test_df_smoke_differential.sh')
   test('df smoke differential', test_df_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_du_basic = find_program('tests/du/test_du_basic.sh')
+  test_du_basic = find_program('tests/applets/base/du/test_du_basic.sh')
   test('du basic', test_du_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_du_smoke_differential = find_program('tests/du/test_du_smoke_differential.sh')
+  test_du_smoke_differential = find_program('tests/applets/base/du/test_du_smoke_differential.sh')
   test('du smoke differential', test_du_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_sync_basic = find_program('tests/sync/test_sync_basic.sh')
+  test_sync_basic = find_program('tests/applets/base/sync/test_sync_basic.sh')
   test('sync basic', test_sync_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_sync_smoke_differential = find_program('tests/sync/test_sync_smoke_differential.sh')
+  test_sync_smoke_differential = find_program('tests/applets/base/sync/test_sync_smoke_differential.sh')
   test('sync smoke differential', test_sync_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_dd_basic = find_program('tests/dd/test_dd_basic.sh')
+  test_dd_basic = find_program('tests/applets/text/dd/test_dd_basic.sh')
   test('dd basic', test_dd_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_dd_smoke_differential = find_program('tests/dd/test_dd_smoke_differential.sh')
+  test_dd_smoke_differential = find_program('tests/applets/text/dd/test_dd_smoke_differential.sh')
   test('dd smoke differential', test_dd_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_printf_basic = find_program('tests/printf/test_printf_basic.sh')
+  test_printf_basic = find_program('tests/applets/base/printf/test_printf_basic.sh')
   test('printf basic', test_printf_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_printf_smoke_differential = find_program('tests/printf/test_printf_smoke_differential.sh')
+  test_printf_smoke_differential = find_program('tests/applets/base/printf/test_printf_smoke_differential.sh')
   test('printf smoke differential', test_printf_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_env_basic = find_program('tests/env/test_env_basic.sh')
+  test_env_basic = find_program('tests/applets/base/env/test_env_basic.sh')
   test('env basic', test_env_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_env_smoke_differential = find_program('tests/env/test_env_smoke_differential.sh')
+  test_env_smoke_differential = find_program('tests/applets/base/env/test_env_smoke_differential.sh')
   test('env smoke differential', test_env_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_printenv_basic = find_program('tests/printenv/test_printenv_basic.sh')
+  test_printenv_basic = find_program('tests/applets/base/printenv/test_printenv_basic.sh')
   test('printenv basic', test_printenv_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_printenv_smoke_differential = find_program('tests/printenv/test_printenv_smoke_differential.sh')
+  test_printenv_smoke_differential = find_program('tests/applets/base/printenv/test_printenv_smoke_differential.sh')
   test('printenv smoke differential', test_printenv_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_pwd_basic = find_program('tests/pwd/test_pwd_basic.sh')
+  test_pwd_basic = find_program('tests/applets/base/pwd/test_pwd_basic.sh')
   test('pwd basic', test_pwd_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
-  test_tty_basic = find_program('tests/tty/test_tty_basic.sh')
+  test_tty_basic = find_program('tests/applets/base/tty/test_tty_basic.sh')
   test('tty basic', test_tty_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_tty_smoke_differential = find_program('tests/tty/test_tty_smoke_differential.sh')
+  test_tty_smoke_differential = find_program('tests/applets/base/tty/test_tty_smoke_differential.sh')
   test('tty smoke differential', test_tty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_stty_basic = find_program('tests/stty/test_stty_basic.sh')
+  test_stty_basic = find_program('tests/applets/system/stty/test_stty_basic.sh')
   test('stty basic', test_stty_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_stty_smoke_differential = find_program('tests/stty/test_stty_smoke_differential.sh')
+  test_stty_smoke_differential = find_program('tests/applets/system/stty/test_stty_smoke_differential.sh')
   test('stty smoke differential', test_stty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_getty_basic = find_program('tests/getty/test_getty_basic.sh')
+  test_getty_basic = find_program('tests/applets/system/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_getty_console_vm_smoke = find_program('tests/getty/test_getty_console_vm_smoke.sh')
+  test_getty_console_vm_smoke = find_program('tests/applets/system/getty/test_getty_console_vm_smoke.sh')
   test('getty console vm smoke', test_getty_console_vm_smoke, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_setsid_basic = find_program('tests/setsid/test_setsid_basic.sh')
+  test_setsid_basic = find_program('tests/applets/system/setsid/test_setsid_basic.sh')
   test('setsid basic', test_setsid_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_dhcp_basic = files('tests/dhcp/test_dhcp_basic.py')
+  test_dhcp_basic = files('tests/applets/network/dhcp/test_dhcp_basic.py')
   test('dhcp basic', python3, args : [test_dhcp_basic, bx_exe], suite : fast_track_p1_suite)
 
-  test_udhcpc_busybox_smoke_differential = files('tests/dhcp/test_udhcpc_busybox_smoke_differential.py')
+  test_udhcpc_busybox_smoke_differential = files('tests/applets/network/dhcp/test_udhcpc_busybox_smoke_differential.py')
   test('udhcpc busybox smoke differential', python3, args : [test_udhcpc_busybox_smoke_differential, bx_exe], suite : fast_track_p1_suite)
 
-  test_ping_basic = find_program('tests/ping/test_ping_basic.sh')
+  test_ping_basic = find_program('tests/applets/network/ping/test_ping_basic.sh')
   test('ping basic', test_ping_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_init_basic = find_program('tests/init/test_init_basic.sh')
+  test_init_basic = find_program('tests/applets/system/init/test_init_basic.sh')
   test('init basic', test_init_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_ash_basic = find_program('tests/ash/test_ash_basic.sh')
+  test_ash_basic = find_program('tests/applets/shell/ash/test_ash_basic.sh')
   test('ash basic', test_ash_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_sh_busybox_smoke_differential = find_program('tests/ash/test_sh_busybox_smoke_differential.sh')
+  test_sh_busybox_smoke_differential = find_program('tests/applets/shell/ash/test_sh_busybox_smoke_differential.sh')
   test('sh busybox smoke differential', test_sh_busybox_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_ash_interactive = files('tests/ash/test_ash_interactive.py')
+  test_ash_interactive = files('tests/applets/shell/ash/test_ash_interactive.py')
   test('ash interactive startup', python3, args : [test_ash_interactive, bx_exe], suite : fast_track_p1_suite)
   test('sh interactive startup', python3, args : [test_ash_interactive, bx_exe, 'sh'], suite : fast_track_p1_suite)
 
-  test_ash_rescue_rootfs_smoke = find_program('tests/ash/test_ash_rescue_rootfs_smoke.sh')
+  test_ash_rescue_rootfs_smoke = find_program('tests/applets/shell/ash/test_ash_rescue_rootfs_smoke.sh')
   test('ash rescue rootfs smoke', test_ash_rescue_rootfs_smoke, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_nice_basic = find_program('tests/nice/test_nice_basic.sh')
+  test_nice_basic = find_program('tests/applets/system/nice/test_nice_basic.sh')
   test('nice basic', test_nice_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_nice_smoke_differential = find_program('tests/nice/test_nice_smoke_differential.sh')
+  test_nice_smoke_differential = find_program('tests/applets/system/nice/test_nice_smoke_differential.sh')
   test('nice smoke differential', test_nice_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_nohup_basic = find_program('tests/nohup/test_nohup_basic.sh')
+  test_nohup_basic = find_program('tests/applets/base/nohup/test_nohup_basic.sh')
   test('nohup basic', test_nohup_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_nohup_smoke_differential = find_program('tests/nohup/test_nohup_smoke_differential.sh')
+  test_nohup_smoke_differential = find_program('tests/applets/base/nohup/test_nohup_smoke_differential.sh')
   test('nohup smoke differential', test_nohup_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_timeout_basic = find_program('tests/timeout/test_timeout_basic.sh')
+  test_timeout_basic = find_program('tests/applets/system/timeout/test_timeout_basic.sh')
   test('timeout basic', test_timeout_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_timeout_smoke_differential = find_program('tests/timeout/test_timeout_smoke_differential.sh')
+  test_timeout_smoke_differential = find_program('tests/applets/system/timeout/test_timeout_smoke_differential.sh')
   test('timeout smoke differential', test_timeout_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_sleep_basic = find_program('tests/sleep/test_sleep_basic.sh')
+  test_sleep_basic = find_program('tests/applets/base/sleep/test_sleep_basic.sh')
   test('sleep basic', test_sleep_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_nc_basic = files('tests/nc/test_nc_basic.py')
+  test_nc_basic = files('tests/applets/network/nc/test_nc_basic.py')
   test('nc basic', python3, args : [test_nc_basic, bx_exe], suite : fast_track_p1_suite)
 
-  test_nc_busybox_smoke_differential = files('tests/nc/test_nc_busybox_smoke_differential.py')
+  test_nc_busybox_smoke_differential = files('tests/applets/network/nc/test_nc_busybox_smoke_differential.py')
   test('nc busybox smoke differential', python3, args : [test_nc_busybox_smoke_differential, bx_exe], suite : fast_track_p1_suite)
 
-  test_wget_basic = find_program('tests/wget/test_wget_basic.sh')
+  test_wget_basic = find_program('tests/applets/network/wget/test_wget_basic.sh')
   test('wget basic', test_wget_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_switch_root_basic = find_program('tests/switch_root/test_switch_root_basic.sh')
+  test_switch_root_basic = find_program('tests/applets/system/switch_root/test_switch_root_basic.sh')
   test('switch_root basic', test_switch_root_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_switch_root_initramfs_smoke = find_program('tests/switch_root/test_switch_root_initramfs_smoke.sh')
+  test_switch_root_initramfs_smoke = find_program('tests/applets/system/switch_root/test_switch_root_initramfs_smoke.sh')
   test('switch_root initramfs smoke', test_switch_root_initramfs_smoke, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_chroot_basic = find_program('tests/chroot/test_chroot_basic.sh')
+  test_chroot_basic = find_program('tests/applets/system/chroot/test_chroot_basic.sh')
   test('chroot basic', test_chroot_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_chroot_smoke_differential = find_program('tests/chroot/test_chroot_smoke_differential.sh')
+  test_chroot_smoke_differential = find_program('tests/applets/system/chroot/test_chroot_smoke_differential.sh')
   test('chroot smoke differential', test_chroot_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mount_basic = find_program('tests/mount/test_mount_basic.sh')
+  test_mount_basic = find_program('tests/applets/system/mount/test_mount_basic.sh')
   test('mount basic', test_mount_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_umount_basic = find_program('tests/umount/test_umount_basic.sh')
+  test_umount_basic = find_program('tests/applets/system/umount/test_umount_basic.sh')
   test('umount basic', test_umount_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_umount_shutdown_flow = find_program('tests/umount/test_umount_shutdown_flow.sh')
+  test_umount_shutdown_flow = find_program('tests/applets/system/umount/test_umount_shutdown_flow.sh')
   test('umount shutdown-flow integration', test_umount_shutdown_flow, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_kill_basic = find_program('tests/kill/test_kill_basic.sh')
+  test_kill_basic = find_program('tests/applets/system/kill/test_kill_basic.sh')
   test('kill basic', test_kill_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_ps_basic = find_program('tests/ps/test_ps_basic.sh')
+  test_ps_basic = find_program('tests/applets/system/ps/test_ps_basic.sh')
   test('ps basic', test_ps_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_dmesg_basic = find_program('tests/dmesg/test_dmesg_basic.sh')
+  test_dmesg_basic = find_program('tests/applets/system/dmesg/test_dmesg_basic.sh')
   test('dmesg basic', test_dmesg_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_reboot_basic = find_program('tests/reboot/test_reboot_basic.sh')
+  test_reboot_basic = find_program('tests/applets/system/reboot/test_reboot_basic.sh')
   test('reboot basic', test_reboot_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_halt_basic = find_program('tests/halt/test_halt_basic.sh')
+  test_halt_basic = find_program('tests/applets/system/halt/test_halt_basic.sh')
   test('halt basic', test_halt_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_poweroff_basic = find_program('tests/poweroff/test_poweroff_basic.sh')
+  test_poweroff_basic = find_program('tests/applets/system/poweroff/test_poweroff_basic.sh')
   test('poweroff basic', test_poweroff_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_chmod_basic = find_program('tests/chmod/test_chmod_basic.sh')
+  test_chmod_basic = find_program('tests/applets/system/chmod/test_chmod_basic.sh')
   test('chmod basic', test_chmod_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chmod_symbolic_x = find_program('tests/chmod/test_chmod_symbolic_x.sh')
+  test_chmod_symbolic_x = find_program('tests/applets/system/chmod/test_chmod_symbolic_x.sh')
   test('chmod symbolic x', test_chmod_symbolic_x, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chmod_recursive = find_program('tests/chmod/test_chmod_recursive.sh')
+  test_chmod_recursive = find_program('tests/applets/system/chmod/test_chmod_recursive.sh')
   test('chmod recursive', test_chmod_recursive, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chmod_invalid_modes = find_program('tests/chmod/test_chmod_invalid_modes.sh')
+  test_chmod_invalid_modes = find_program('tests/applets/system/chmod/test_chmod_invalid_modes.sh')
   test('chmod invalid modes', test_chmod_invalid_modes, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chmod_smoke_differential = find_program('tests/chmod/test_chmod_smoke_differential.sh')
+  test_chmod_smoke_differential = find_program('tests/applets/system/chmod/test_chmod_smoke_differential.sh')
   test('chmod smoke differential', test_chmod_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chown_basic = find_program('tests/chown/test_chown_basic.sh')
+  test_chown_basic = find_program('tests/applets/system/chown/test_chown_basic.sh')
   test('chown basic', test_chown_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chown_smoke_differential = find_program('tests/chown/test_chown_smoke_differential.sh')
+  test_chown_smoke_differential = find_program('tests/applets/system/chown/test_chown_smoke_differential.sh')
   test('chown smoke differential', test_chown_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chgrp_basic = find_program('tests/chgrp/test_chgrp_basic.sh')
+  test_chgrp_basic = find_program('tests/applets/system/chgrp/test_chgrp_basic.sh')
   test('chgrp basic', test_chgrp_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_chgrp_smoke_differential = find_program('tests/chgrp/test_chgrp_smoke_differential.sh')
+  test_chgrp_smoke_differential = find_program('tests/applets/system/chgrp/test_chgrp_smoke_differential.sh')
   test('chgrp smoke differential', test_chgrp_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_rm_basic = find_program('tests/rm/test_rm_basic.sh')
+  test_rm_basic = find_program('tests/applets/base/rm/test_rm_basic.sh')
   test('rm basic', test_rm_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_rm_smoke_differential = find_program('tests/rm/test_rm_smoke_differential.sh')
+  test_rm_smoke_differential = find_program('tests/applets/base/rm/test_rm_smoke_differential.sh')
   test('rm smoke differential', test_rm_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_mkdir_basic = find_program('tests/mkdir/test_mkdir_basic.sh')
+  test_mkdir_basic = find_program('tests/applets/base/mkdir/test_mkdir_basic.sh')
   test('mkdir basic', test_mkdir_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_mkdir_smoke_differential = find_program('tests/mkdir/test_mkdir_smoke_differential.sh')
+  test_mkdir_smoke_differential = find_program('tests/applets/base/mkdir/test_mkdir_smoke_differential.sh')
   test('mkdir smoke differential', test_mkdir_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_rmdir_basic = find_program('tests/rmdir/test_rmdir_basic.sh')
+  test_rmdir_basic = find_program('tests/applets/base/rmdir/test_rmdir_basic.sh')
   test('rmdir basic', test_rmdir_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_rmdir_smoke_differential = find_program('tests/rmdir/test_rmdir_smoke_differential.sh')
+  test_rmdir_smoke_differential = find_program('tests/applets/base/rmdir/test_rmdir_smoke_differential.sh')
   test('rmdir smoke differential', test_rmdir_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_mkfifo_basic = find_program('tests/mkfifo/test_mkfifo_basic.sh')
+  test_mkfifo_basic = find_program('tests/applets/base/mkfifo/test_mkfifo_basic.sh')
   test('mkfifo basic', test_mkfifo_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mkfifo_smoke_differential = find_program('tests/mkfifo/test_mkfifo_smoke_differential.sh')
+  test_mkfifo_smoke_differential = find_program('tests/applets/base/mkfifo/test_mkfifo_smoke_differential.sh')
   test('mkfifo smoke differential', test_mkfifo_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mknod_basic = find_program('tests/mknod/test_mknod_basic.sh')
+  test_mknod_basic = find_program('tests/applets/base/mknod/test_mknod_basic.sh')
   test('mknod basic', test_mknod_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mknod_smoke_differential = find_program('tests/mknod/test_mknod_smoke_differential.sh')
+  test_mknod_smoke_differential = find_program('tests/applets/base/mknod/test_mknod_smoke_differential.sh')
   test('mknod smoke differential', test_mknod_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mktemp_basic = find_program('tests/mktemp/test_mktemp_basic.sh')
+  test_mktemp_basic = find_program('tests/applets/base/mktemp/test_mktemp_basic.sh')
   test('mktemp basic', test_mktemp_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_mktemp_smoke_differential = find_program('tests/mktemp/test_mktemp_smoke_differential.sh')
+  test_mktemp_smoke_differential = find_program('tests/applets/base/mktemp/test_mktemp_smoke_differential.sh')
   test('mktemp smoke differential', test_mktemp_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_touch_basic = find_program('tests/touch/test_touch_basic.sh')
+  test_touch_basic = find_program('tests/applets/base/touch/test_touch_basic.sh')
   test('touch basic', test_touch_basic, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_touch_smoke_differential = find_program('tests/touch/test_touch_smoke_differential.sh')
+  test_touch_smoke_differential = find_program('tests/applets/base/touch/test_touch_smoke_differential.sh')
   test('touch smoke differential', test_touch_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
-  test_truncate_basic = find_program('tests/truncate/test_truncate_basic.sh')
+  test_truncate_basic = find_program('tests/applets/base/truncate/test_truncate_basic.sh')
   test('truncate basic', test_truncate_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_truncate_smoke_differential = find_program('tests/truncate/test_truncate_smoke_differential.sh')
+  test_truncate_smoke_differential = find_program('tests/applets/base/truncate/test_truncate_smoke_differential.sh')
   test('truncate smoke differential', test_truncate_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_shred_basic = find_program('tests/shred/test_shred_basic.sh')
+  test_shred_basic = find_program('tests/applets/base/shred/test_shred_basic.sh')
   test('shred basic', test_shred_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_shred_smoke_differential = find_program('tests/shred/test_shred_smoke_differential.sh')
+  test_shred_smoke_differential = find_program('tests/applets/base/shred/test_shred_smoke_differential.sh')
   test('shred smoke differential', test_shred_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_install_basic = find_program('tests/install/test_install_basic.sh')
+  test_install_basic = find_program('tests/applets/system/install/test_install_basic.sh')
   test('install basic', test_install_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_install_smoke_differential = find_program('tests/install/test_install_smoke_differential.sh')
+  test_install_smoke_differential = find_program('tests/applets/system/install/test_install_smoke_differential.sh')
   test('install smoke differential', test_install_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_tar_basic = find_program('tests/tar/test_tar_basic.sh')
+  test_tar_basic = find_program('tests/applets/archive/tar/test_tar_basic.sh')
   test('tar basic', test_tar_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_tar_differential = files('tests/tar/test_tar_differential.py')
+  test_tar_differential = files('tests/applets/archive/tar/test_tar_differential.py')
   tar_ref = find_program('tar', required : false)
   tar_differential_args = [test_tar_differential, bx_exe, meson.current_build_dir()]
   if tar_ref.found()
@@ -1089,10 +1089,10 @@ if get_option('tests')
   endif
   test('tar differential', python3, args : tar_differential_args)
 
-  test_cpio_basic = find_program('tests/cpio/test_cpio_basic.sh')
+  test_cpio_basic = find_program('tests/applets/archive/cpio/test_cpio_basic.sh')
   test('cpio basic', test_cpio_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
-  test_cpio_differential = files('tests/cpio/test_cpio_differential.py')
+  test_cpio_differential = files('tests/applets/archive/cpio/test_cpio_differential.py')
   cpio_ref = find_program('cpio', required : false)
   cpio_differential_args = [test_cpio_differential, bx_exe, meson.current_build_dir()]
   if cpio_ref.found()
@@ -1103,23 +1103,23 @@ if get_option('tests')
   test_tier1_safe_replace = find_program('tests/test_tier1_safe_replace.sh')
   test('tier1 safe-replace smoke', test_tier1_safe_replace, args : [bx_exe])
 
-  test_mv_cross_fs_differential = files('tests/mv/test_mv_cross_fs_differential.py')
+  test_mv_cross_fs_differential = files('tests/applets/base/mv/test_mv_cross_fs_differential.py')
   test('mv cross-fs differential', python3, args : [test_mv_cross_fs_differential, mv_ref, bx_exe, meson.current_build_dir()])
 
   dd_ref = find_program('dd')
-  test_dd_differential = files('tests/dd/test_dd_differential.py')
+  test_dd_differential = files('tests/applets/text/dd/test_dd_differential.py')
   test('dd differential', python3, args : [test_dd_differential, dd_ref, bx_exe, meson.current_build_dir()])
 
-  test_dd_fuzz = files('tests/dd/test_dd_fuzz.py')
+  test_dd_fuzz = files('tests/applets/text/dd/test_dd_fuzz.py')
   test('dd fuzz', python3, args : [test_dd_fuzz, dd_ref, bx_exe, meson.current_build_dir(), '40', '0'])
 
-  test_cp_fuzz = files('tests/cp/test_cp_fuzz.py')
+  test_cp_fuzz = files('tests/applets/base/cp/test_cp_fuzz.py')
   test('cp fuzz', python3, args : [test_cp_fuzz, cp_ref, bx_exe, meson.current_build_dir(), '20', '0'])
 
-  test_mv_fuzz = files('tests/mv/test_mv_fuzz.py')
+  test_mv_fuzz = files('tests/applets/base/mv/test_mv_fuzz.py')
   test('mv fuzz', python3, args : [test_mv_fuzz, mv_ref, bx_exe, meson.current_build_dir(), '20', '0'])
 
-  test_cp_cli_differential = files('tests/cp/test_cp_cli_differential.py')
+  test_cp_cli_differential = files('tests/applets/base/cp/test_cp_cli_differential.py')
   test('cp cli differential', python3, args : [test_cp_cli_differential, cp_ref, bx_exe, meson.current_build_dir()])
   
   test_multicall = find_program('tests/test_multicall.sh')

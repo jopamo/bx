@@ -7,7 +7,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include "which.h"
+#include "applets/base/which/which.h"
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
