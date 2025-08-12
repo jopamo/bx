@@ -75,14 +75,14 @@ static void print_one(const char* fmt, int width, unsigned long long val) {
     printf(fmt, width, buf);
 }
 
-static int compute_number_width(int num_files, char** files, int optind) {
+static int compute_number_width(int num_files, char** files, int first_file_index) {
     int width = 1;
     int minimum_width = 1;
     unsigned long long regular_total = 0;
     bool any_non_regular = false;
 
     for (int i = 0; i < num_files; i++) {
-        const char* name = files[optind + i];
+        const char* name = files[first_file_index + i];
         if (strcmp(name, "-") == 0) {
             any_non_regular = true;
             continue;
