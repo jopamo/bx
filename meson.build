@@ -668,6 +668,9 @@ if get_option('tests')
   test_echo_basic = find_program('tests/applets/base/echo/test_echo_basic.sh')
   test('echo basic', test_echo_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
+  test_echo_differential = files('tests/applets/base/echo/test_echo_differential.py')
+  test('echo differential', python3, args : [test_echo_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+
   test_bc_basic = find_program('tests/applets/base/bc/test_bc_basic.sh')
   test('bc basic', test_bc_basic, args : [bx_exe], suite : fast_track_p2_suite)
 

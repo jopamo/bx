@@ -5,6 +5,58 @@
 
 #include "applets.h"
 
+static const char* bx_echo_progname(const char* argv0) {
+    if (argv0 == NULL || argv0[0] == '\0') {
+        return "echo";
+    }
+
+    const char* base = strrchr(argv0, '/');
+    if (base != NULL && base[1] != '\0') {
+        return base + 1;
+    }
+    return argv0;
+}
+
+static void bx_echo_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [SHORT-OPTION]... [STRING]...\n", progname);
+    fprintf(stream, "  or:  %s LONG-OPTION\n", progname);
+    fprintf(stream, "Display a line of text.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  -n     do not output the trailing newline\n");
+    fprintf(stream, "  -e     enable interpretation of backslash escapes\n");
+    fprintf(stream, "  -E     disable interpretation of backslash escapes (default)\n");
+    fprintf(stream, "      --help\n");
+    fprintf(stream, "         display this help and exit\n");
+    fprintf(stream, "      --version\n");
+    fprintf(stream, "         output version information and exit\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "If -e is in effect, the following sequences are recognized:\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  \\\\      backslash\n");
+    fprintf(stream, "  \\a      alert (BEL)\n");
+    fprintf(stream, "  \\b      backspace\n");
+    fprintf(stream, "  \\c      produce no further output\n");
+    fprintf(stream, "  \\e      escape\n");
+    fprintf(stream, "  \\f      form feed\n");
+    fprintf(stream, "  \\n      new line\n");
+    fprintf(stream, "  \\r      carriage return\n");
+    fprintf(stream, "  \\t      horizontal tab\n");
+    fprintf(stream, "  \\v      vertical tab\n");
+    fprintf(stream, "  \\0NNN   byte with octal value NNN (1 to 3 digits)\n");
+    fprintf(stream, "  \\xHH    byte with hexadecimal value HH (1 to 2 digits)\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Your shell may have its own version of echo, which usually supersedes\n");
+    fprintf(stream, "the version described here. Please refer to your shell's documentation\n");
+    fprintf(stream, "for details about the options it supports.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Consider using the printf(1) command instead, as it avoids problems when\n");
+    fprintf(stream, "outputting option-like strings.\n");
+}
+
+static void bx_echo_print_version(const char* progname) {
+    printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
 static int hex_val(char c) {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -16,6 +68,18 @@ static int hex_val(char c) {
 }
 
 int bx_echo_main(int argc, char** argv) {
+    const char* progname = bx_echo_progname((argc > 0) ? argv[0] : NULL);
+
+    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
+        bx_echo_print_help(stdout, progname);
+        return 0;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        bx_echo_print_version(progname);
+        return 0;
+    }
+
     bool n_flag = false;
     bool e_flag = false;
 
@@ -99,16 +163,34 @@ int bx_echo_main(int argc, char** argv) {
                             putchar(val);
                             break;
                         }
+                        case '1':
+                        case '2':
+                        case '3':
+                        case '4':
+                        case '5':
+                        case '6':
+                        case '7': {
+                            int val = *p - '0';
+                            for (int j = 0; j < 2 && p[1] >= '0' && p[1] <= '7'; j++) {
+                                val = val * 8 + (*(++p) - '0');
+                            }
+                            putchar(val);
+                            break;
+                        }
                         case 'x': {
                             int val = 0;
                             int v;
+                            if ((v = hex_val(p[1])) == -1) {
+                                putchar('\\');
+                                putchar('x');
+                                break;
+                            }
+
+                            val = v;
+                            p++;
                             if ((v = hex_val(p[1])) != -1) {
-                                val = v;
+                                val = val * 16 + v;
                                 p++;
-                                if ((v = hex_val(p[1])) != -1) {
-                                    val = val * 16 + v;
-                                    p++;
-                                }
                             }
                             putchar(val);
                             break;
