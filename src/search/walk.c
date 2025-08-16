@@ -9,6 +9,10 @@
 #include <sys/stat.h>
 #include "walk.h"
 
+static bool walk_should_stop(const struct walk_opts *opts) {
+    return opts->stop && *opts->stop;
+}
+
 static bool is_hidden(const char *name) {
     return name[0] == '.';
 }
@@ -66,6 +70,9 @@ static bool is_ignored(const char *name, char **patterns, int n) {
 
 static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                           walk_callback cb, void *user, int depth) {
+    if (walk_should_stop(opts))
+        return 0;
+
     if (opts->max_depth >= 0 && depth > opts->max_depth)
         return 0;
 
@@ -85,6 +92,9 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
+        if (walk_should_stop(opts))
+            break;
+
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
 
@@ -112,7 +122,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         struct walk_entry entry = {.path = full, .is_dir = S_ISDIR(st.st_mode)};
         cb(&entry, user);
 
-        if (entry.is_dir) {
+        if (!walk_should_stop(opts) && entry.is_dir) {
             walk_recursive(full, opts, cb, user, depth + 1);
         }
         free(full);
@@ -125,7 +135,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user) {
     struct stat st;
-    if (lstat(root, &st) != 0) {
+    if (stat(root, &st) != 0) {
         fprintf(stderr, "walk: %s: %s\n", root, strerror(errno));
         return -1;
     }
@@ -134,6 +144,8 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
         struct walk_entry entry = {.path = strdup(root), .is_dir = true};
         cb(&entry, user);
         free(entry.path);
+        if (walk_should_stop(opts))
+            return 0;
         return walk_recursive(root, opts, cb, user, 0);
     }
 

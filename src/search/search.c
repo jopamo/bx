@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <poll.h>
+#include <unistd.h>
 #include "search.h"
 #include "options.h"
 #include "walk.h"
@@ -251,11 +253,13 @@ static int search_file_streaming(const char *filename, const char *display_name,
         if (opts->invert_match) matched = !matched;
         if (matched) {
             file_matches++; status = 0;
-            if (opts->quiet || (opts->max_count > 0 && file_matches >= opts->max_count)) break;
-            if (opts->count_only || opts->files_with_matches || opts->files_without_match) continue;
+            if (opts->quiet) break;
+            if (opts->count_only) continue;
+            if (opts->files_with_matches || opts->files_without_match) break;
             if (opts->show_filename && display_name) printf("%s:", display_name);
             if (opts->show_line_number) printf("%d:", line_num);
             print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
+            if (opts->max_count > 0 && file_matches >= opts->max_count) break;
         }
     }
 
@@ -295,6 +299,29 @@ static bool is_binary(const char *path) {
     return false;
 }
 
+static bool rg_should_search_stdin(void) {
+    if (isatty(STDIN_FILENO))
+        return false;
+
+    struct stat st;
+    if (fstat(STDIN_FILENO, &st) != 0)
+        return false;
+
+    if (S_ISCHR(st.st_mode))
+        return false;
+
+    struct pollfd pfd = {
+        .fd = STDIN_FILENO,
+        .events = POLLIN,
+    };
+
+    int rc = poll(&pfd, 1, 0);
+    if (rc <= 0)
+        return false;
+
+    return (pfd.revents & POLLIN) != 0;
+}
+
 /* --- recursive search using shared walker --- */
 
 struct grep_walk_state {
@@ -302,6 +329,7 @@ struct grep_walk_state {
     struct search_opts *opts;
     int *match_count;
     int *exit_status;
+    bool *stop;
 };
 
 static void fs_cb(const struct walk_entry *entry, void *user) {
@@ -312,6 +340,7 @@ static void fs_cb(const struct walk_entry *entry, void *user) {
 
 static void grep_walk_cb(const struct walk_entry *entry, void *user) {
     struct grep_walk_state *gs = user;
+    if (gs->stop && *gs->stop) return;
     if (entry->is_dir) return;
 
     const char *name = strrchr(entry->path, '/');
@@ -344,6 +373,7 @@ static void grep_walk_cb(const struct walk_entry *entry, void *user) {
             if (matched) {
                 printf("Binary file %s matches\n", entry->path);
                 (*gs->match_count)++; *gs->exit_status = 0;
+                if (gs->opts->quiet && gs->stop) *gs->stop = true;
             }
         }
         return;
@@ -351,7 +381,10 @@ static void grep_walk_cb(const struct walk_entry *entry, void *user) {
 
     int r = search_file(entry->path, gs->m, gs->opts, gs->match_count);
     if (r == 2) *gs->exit_status = 2;
-    else if (r == 0) *gs->exit_status = 0;
+    else if (r == 0) {
+        *gs->exit_status = 0;
+        if (gs->opts->quiet && gs->stop) *gs->stop = true;
+    }
 }
 
 /* --- main entry point --- */
@@ -434,21 +467,43 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int exit_status = 1;
 
     if (num_files == 0) {
-        exit_status = search_file(NULL, m, &opts, &global_matches);
+        if (personality == BX_SEARCH_RG && !rg_should_search_stdin()) {
+            bool stop = false;
+            struct grep_walk_state gs = {.m = m, .opts = &opts,
+                                         .match_count = &global_matches,
+                                         .exit_status = &exit_status,
+                                         .stop = &stop};
+            struct walk_opts wopts = {
+                .hidden = opts.hidden,
+                .no_ignore = opts.no_ignore,
+                .follow_symlinks = opts.follow_symlinks,
+                .stop = &stop,
+                .max_depth = -1,
+                .exclude_dirs = opts.exclude_dir_patterns,
+                .num_exclude_dirs = opts.num_exclude_dir,
+            };
+
+            walk_dir(".", &wopts, grep_walk_cb, &gs);
+        } else {
+            exit_status = search_file(NULL, m, &opts, &global_matches);
+        }
     } else if (opts.recursive) {
+        bool stop = false;
         struct grep_walk_state gs = {.m = m, .opts = &opts,
                                      .match_count = &global_matches,
-                                     .exit_status = &exit_status};
+                                     .exit_status = &exit_status,
+                                     .stop = &stop};
         struct walk_opts wopts = {
             .hidden = opts.hidden,
             .no_ignore = opts.no_ignore,
             .follow_symlinks = opts.follow_symlinks,
+            .stop = &stop,
             .max_depth = -1,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
         };
 
-        for (int j = first_file; j < argc; j++) {
+        for (int j = first_file; j < argc && !stop; j++) {
             struct stat st;
             if (stat(argv[j], &st) != 0) {
                 fprintf(stderr, "grep: %s: %s\n", argv[j], strerror(errno));

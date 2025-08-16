@@ -34,8 +34,8 @@ void bx_search_print_help(const char *progname) {
     puts("  -l            print only names of FILEs with selected lines");
     puts("  -L            print only names of FILEs with no selected lines");
     puts("  -q, --quiet   suppress all normal output");
-    puts("  -r            recursive, follow symlinks");
-    puts("  -R            recursive, do not follow symlinks");
+    puts("  -r            recursive, do not follow symlinks");
+    puts("  -R            recursive, follow symlinks");
     puts("  -a            process binary files as text");
     puts("  -I            skip binary files");
     puts("  -A NUM        print NUM lines of trailing context");
@@ -165,8 +165,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'l': opts->files_with_matches = true; break;
         case 'L': opts->files_without_match = true; break;
         case 'q': opts->quiet = true; break;
-        case 'r': opts->recursive = true; opts->follow_symlinks = true; break;
-        case 'R': opts->recursive = true; opts->follow_symlinks = false; break;
+        case 'r': opts->recursive = true; opts->follow_symlinks = false; break;
+        case 'R': opts->recursive = true; opts->follow_symlinks = true; break;
         case 'I': opts->binary_without_match = true; break;
         case 'a': opts->binary_as_text = true; break;
         case 'w': opts->word_regexp = true; break;

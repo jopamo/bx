@@ -8,6 +8,7 @@ struct walk_opts {
     bool hidden;
     bool no_ignore;
     bool follow_symlinks;
+    bool *stop;
     int  max_depth;
     const char *exclude_pattern;
     const char *type_filter;
