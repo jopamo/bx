@@ -261,8 +261,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_search_print_version(argv[0]);
             return 1;
         case '?':
-            if (optopt)
+            if (optopt) {
                 fprintf(stderr, "%s: invalid option -- '%c'\n", argv[0], optopt);
+            } else if (optind > 0 && optind <= argc) {
+                fprintf(stderr, "%s: unrecognized option '%s'\n", argv[0], argv[optind - 1]);
+            } else {
+                fprintf(stderr, "%s: unrecognized option\n", argv[0]);
+            }
             return -1;
         default:
             return -1;
@@ -274,6 +279,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     if (opts->unrestrict_level >= 3) {
         opts->binary_as_text = true;
         opts->binary_without_match = false;
+    }
+
+    if (opts->files_only) {
+        *pattern = "";
+        *first_file = optind;
+        return 0;
     }
 
     if (optind >= argc) {

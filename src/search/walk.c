@@ -13,6 +13,19 @@ static bool walk_should_stop(const struct walk_opts *opts) {
     return opts->stop && *opts->stop;
 }
 
+static const char *walk_error_prefix(const struct walk_opts *opts) {
+    return (opts && opts->error_prefix) ? opts->error_prefix : "walk";
+}
+
+static void walk_report_error(const struct walk_opts *opts, const char *path, int errnum) {
+    if (opts && opts->os_error_style)
+        fprintf(stderr, "%s: %s: %s (os error %d)\n",
+                walk_error_prefix(opts), path, strerror(errnum), errnum);
+    else
+        fprintf(stderr, "%s: %s: %s\n",
+                walk_error_prefix(opts), path, strerror(errnum));
+}
+
 static bool is_hidden(const char *name) {
     return name[0] == '.';
 }
@@ -83,13 +96,18 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
     DIR *d = opendir(dirpath);
     if (!d) {
-        if (errno != EACCES)
-            fprintf(stderr, "walk: %s: %s\n", dirpath, strerror(errno));
+        if (errno == EACCES && opts->suppress_eacces) {
+            for (int i = 0; i < ignore_n; i++) free(ignore_patterns[i]);
+            free(ignore_patterns);
+            return 0;
+        }
+        walk_report_error(opts, dirpath, errno);
         for (int i = 0; i < ignore_n; i++) free(ignore_patterns[i]);
         free(ignore_patterns);
         return -1;
     }
 
+    int status = 0;
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
         if (walk_should_stop(opts))
@@ -123,20 +141,21 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         cb(&entry, user);
 
         if (!walk_should_stop(opts) && entry.is_dir) {
-            walk_recursive(full, opts, cb, user, depth + 1);
+            if (walk_recursive(full, opts, cb, user, depth + 1) != 0)
+                status = -1;
         }
         free(full);
     }
     closedir(d);
     for (int i = 0; i < ignore_n; i++) free(ignore_patterns[i]);
     free(ignore_patterns);
-    return 0;
+    return status;
 }
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user) {
     struct stat st;
     if (stat(root, &st) != 0) {
-        fprintf(stderr, "walk: %s: %s\n", root, strerror(errno));
+        walk_report_error(opts, root, errno);
         return -1;
     }
 

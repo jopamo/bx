@@ -1,6 +1,8 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "pcre2_matcher.h"
 
 struct bx_regex {
@@ -8,7 +10,7 @@ struct bx_regex {
     pcre2_match_data *md;
 };
 
-int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags) {
+int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags, char **errmsg) {
     uint32_t pcre2_flags = 0;
     if (flags & BX_REGEX_ICASE)
         pcre2_flags |= PCRE2_CASELESS;
@@ -21,8 +23,22 @@ int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags) {
     PCRE2_SIZE erroffset;
     pcre2_code *code = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
                                       pcre2_flags, &errcode, &erroffset, NULL);
-    if (!code)
+    if (!code) {
+        if (errmsg) {
+            PCRE2_UCHAR errbuf[256];
+            int msg_rc = pcre2_get_error_message(errcode, errbuf, sizeof(errbuf));
+            const char *msg = msg_rc >= 0 ? (const char *)errbuf : "regex compile failed";
+            size_t need = snprintf(NULL, 0, "regex parse error at offset %zu: %s",
+                                   (size_t)erroffset, msg);
+            char *detail = malloc(need + 1);
+            if (detail) {
+                snprintf(detail, need + 1, "regex parse error at offset %zu: %s",
+                         (size_t)erroffset, msg);
+            }
+            *errmsg = detail;
+        }
         return -1;
+    }
 
     struct bx_regex *rx = malloc(sizeof(*rx));
     rx->code = code;

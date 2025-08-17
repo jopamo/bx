@@ -9,6 +9,9 @@ struct walk_opts {
     bool no_ignore;
     bool follow_symlinks;
     bool *stop;
+    bool suppress_eacces;
+    bool os_error_style;
+    const char *error_prefix;
     int  max_depth;
     const char *exclude_pattern;
     const char *type_filter;

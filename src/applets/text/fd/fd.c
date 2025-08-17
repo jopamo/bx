@@ -37,17 +37,44 @@ struct fd_opts {
 struct fd_state {
     struct fd_opts *opts;
     pcre2_code *regex;
+    bool *stop;
 };
+
+static pcre2_code *fd_compile_regex(const char *progname, const char *pattern,
+                                    const char *display_pattern, uint32_t flags) {
+    int errcode;
+    PCRE2_SIZE erroffset;
+    pcre2_code *re = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
+                                   flags, &errcode, &erroffset, NULL);
+    if (re)
+        return re;
+
+    PCRE2_UCHAR errbuf[256];
+    int msg_rc = pcre2_get_error_message(errcode, errbuf, sizeof(errbuf));
+    fprintf(stderr, "%s: invalid pattern '%s': regex parse error at offset %zu: %s\n",
+            progname,
+            display_pattern ? display_pattern : pattern,
+            (size_t)erroffset,
+            msg_rc >= 0 ? (const char *)errbuf : "regex compile failed");
+    return NULL;
+}
 
 static void fd_callback(const struct walk_entry *entry, void *user) {
     struct fd_state *st = user;
     struct fd_opts *opts = st->opts;
 
-    if (opts->max_results > 0 && opts->results >= opts->max_results)
+    if (st->stop && *st->stop)
         return;
 
-    if (opts->quiet && opts->results > 0)
+    if (opts->max_results > 0 && opts->results >= opts->max_results) {
+        if (st->stop) *st->stop = true;
         return;
+    }
+
+    if (opts->quiet && opts->results > 0) {
+        if (st->stop) *st->stop = true;
+        return;
+    }
 
     if (entry->is_dir) return;
 
@@ -74,10 +101,16 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
 
     if (!st->regex) {
         opts->results++;
-        if (opts->print0)
-            printf("%s%c", entry->path, '\0');
-        else
-            printf("%s\n", entry->path);
+        if (!opts->quiet) {
+            if (opts->print0)
+                printf("%s%c", entry->path, '\0');
+            else
+                printf("%s\n", entry->path);
+        }
+        if ((opts->max_results > 0 && opts->results >= opts->max_results) ||
+            (opts->quiet && opts->results > 0)) {
+            if (st->stop) *st->stop = true;
+        }
         return;
     }
 
@@ -85,10 +118,16 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
                          pcre2_match_data_create_from_pattern(st->regex, NULL), NULL);
     if (rc >= 0) {
         opts->results++;
-        if (opts->print0)
-            printf("%s%c", entry->path, '\0');
-        else
-            printf("%s\n", entry->path);
+        if (!opts->quiet) {
+            if (opts->print0)
+                printf("%s%c", entry->path, '\0');
+            else
+                printf("%s\n", entry->path);
+        }
+        if ((opts->max_results > 0 && opts->results >= opts->max_results) ||
+            (opts->quiet && opts->results > 0)) {
+            if (st->stop) *st->stop = true;
+        }
     }
 }
 
@@ -96,6 +135,7 @@ int bx_fd_main(int argc, char **argv) {
     struct fd_opts opts = {0};
     opts.max_depth = -1;
     bool show_help = false;
+    const char *progname = argv[0] ? argv[0] : "fd";
 
     int opt;
     static struct option long_opts[] = {
@@ -118,7 +158,7 @@ int bx_fd_main(int argc, char **argv) {
     };
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "hVHIpsSFgd:t:e:0qL", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hVHIpsSFgd:t:e:0qL1", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'h': show_help = true; break;
         case 'V':
@@ -137,8 +177,14 @@ int bx_fd_main(int argc, char **argv) {
         case '0': opts.print0 = true; break;
         case 'q': opts.quiet = true; break;
         case 'L': opts.follow_symlinks = true; break;
+        case '1': opts.max_results = 1; break;
         case 200: opts.max_results = atoi(optarg); break;
-        case '?': return 1;
+        case '?':
+            if (optind > 0 && optind <= argc)
+                fprintf(stderr, "%s: unrecognized option '%s'\n", progname, argv[optind - 1]);
+            else
+                fprintf(stderr, "%s: unrecognized option\n", progname);
+            return 2;
         }
     }
 
@@ -158,6 +204,7 @@ int bx_fd_main(int argc, char **argv) {
         puts("  -e, --extension EXT filter by file extension");
         puts("  -0, --print0        separate results by NUL byte");
         puts("  -q, --quiet         suppress normal output");
+        puts("  -1                  alias for --max-results=1");
         puts("  -L, --follow        follow symlinks");
         puts("      --max-results N limit number of results");
         puts("      --help           display this help and exit");
@@ -167,17 +214,16 @@ int bx_fd_main(int argc, char **argv) {
 
     opts.pattern = NULL;
     const char *search_path = ".";
-    if (optind < argc && argv[optind][0] != '.' && argv[optind][0] != '/') {
+    int positional = argc - optind;
+    if (positional == 1) {
         opts.pattern = argv[optind++];
-    }
-    if (optind < argc) {
+    } else if (positional > 1) {
+        opts.pattern = argv[optind++];
         search_path = argv[optind];
     }
 
     pcre2_code *re = NULL;
     if (opts.pattern && !opts.glob_match && !opts.fixed_strings) {
-        int errcode;
-        PCRE2_SIZE erroffset;
         uint32_t flags = PCRE2_CASELESS;
         if (opts.case_sensitive) flags = 0;
         if (opts.smart_case) {
@@ -186,8 +232,7 @@ int bx_fd_main(int argc, char **argv) {
                 if (*ch >= 'A' && *ch <= 'Z') { has_upper = true; break; }
             if (!has_upper) flags = PCRE2_CASELESS;
         }
-        re = pcre2_compile((PCRE2_SPTR)opts.pattern, PCRE2_ZERO_TERMINATED,
-                           flags, &errcode, &erroffset, NULL);
+        re = fd_compile_regex(progname, opts.pattern, opts.pattern, flags);
     } else if (opts.pattern && opts.glob_match) {
         char buf[4096];
         char *p = buf;
@@ -200,8 +245,7 @@ int bx_fd_main(int argc, char **argv) {
         }
         }
         *p = '\0';
-        int errcode; PCRE2_SIZE erroffset;
-        re = pcre2_compile((PCRE2_SPTR)buf, PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
+        re = fd_compile_regex(progname, buf, opts.pattern, 0);
     } else if (opts.pattern && opts.fixed_strings) {
         size_t len = strlen(opts.pattern);
         const char *raw = opts.pattern;
@@ -216,22 +260,31 @@ int bx_fd_main(int argc, char **argv) {
             *p++ = ch;
         }
         *p = '\0';
-        int errcode; PCRE2_SIZE erroffset;
-        re = pcre2_compile((PCRE2_SPTR)buf, PCRE2_ZERO_TERMINATED,
-                           opts.ignore_case ? PCRE2_CASELESS : 0, &errcode, &erroffset, NULL);
+        re = fd_compile_regex(progname, buf, opts.pattern,
+                              opts.ignore_case ? PCRE2_CASELESS : 0);
         free(buf);
     }
+    if (opts.pattern && !re)
+        return 1;
 
+    bool stop = false;
     struct walk_opts wopts = {
         .hidden = opts.hidden,
         .no_ignore = opts.no_ignore,
         .follow_symlinks = opts.follow_symlinks,
+        .stop = &stop,
+        .suppress_eacces = true,
+        .error_prefix = progname,
         .max_depth = opts.max_depth,
     };
 
-    struct fd_state state = {.opts = &opts, .regex = re};
-    walk_dir(search_path, &wopts, fd_callback, &state);
+    struct fd_state state = {.opts = &opts, .regex = re, .stop = &stop};
+    int walk_rc = walk_dir(search_path, &wopts, fd_callback, &state);
 
     if (re) pcre2_code_free(re);
-    return opts.results > 0 || !opts.pattern ? 0 : 1;
+    if (walk_rc != 0)
+        return 1;
+    if (opts.quiet)
+        return opts.results > 0 ? 0 : 1;
+    return 0;
 }
