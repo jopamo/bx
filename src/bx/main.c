@@ -145,6 +145,8 @@ static const struct applet applets[] = {
     {"bxgrep", bx_grep_main},
     {"bxrg", bx_rg_main},
     {"fd", bx_fd_main},
+    {"find", bx_find_main},
+    {"xargs", bx_xargs_main},
 };
 
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";

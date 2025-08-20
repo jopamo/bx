@@ -8,6 +8,8 @@ struct walk_opts {
     bool hidden;
     bool no_ignore;
     bool follow_symlinks;
+    bool follow_root_symlink;
+    bool post_order;
     bool *stop;
     bool suppress_eacces;
     bool os_error_style;
@@ -22,6 +24,7 @@ struct walk_opts {
 struct walk_entry {
     char *path;
     bool is_dir;
+    int depth;
 };
 
 typedef void (*walk_callback)(const struct walk_entry *entry, void *user);

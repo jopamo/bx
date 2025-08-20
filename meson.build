@@ -199,6 +199,7 @@ bx_base_applet_sources = [
   'src/applets/base/env/env.c',
   'src/applets/base/expand/expand.c',
   'src/applets/base/expr/expr.c',
+  'src/applets/base/find/find.c',
   'src/applets/base/fold/fold.c',
   'src/applets/base/head/head.c',
   'src/applets/base/hostid/hostid.c',
@@ -252,6 +253,7 @@ bx_base_applet_sources = [
   'src/applets/base/uniq/uniq.c',
   'src/applets/base/wc/wc.c',
   'src/applets/base/whoami/whoami.c',
+  'src/applets/base/xargs/xargs.c',
   'src/applets/base/yes/yes.c',
   'src/applets/base/which/which.c',
 ]
@@ -477,7 +479,7 @@ gnu_applet_objects = []
 gnu_applet_deps = []
 subdir('src/vendor/gnu')
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -1182,4 +1184,10 @@ if get_option('tests')
 
   test_fd_basic = find_program('tests/applets/text/fd/test_fd_basic.sh')
   test('fd basic', test_fd_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_find_basic = find_program('tests/applets/base/find/test_find_basic.sh')
+  test('find basic', test_find_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_xargs_basic = find_program('tests/applets/base/xargs/test_xargs_basic.sh')
+  test('xargs basic', test_xargs_basic, args : [bx_exe], suite : fast_track_p2_suite)
 endif

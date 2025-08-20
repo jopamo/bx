@@ -133,17 +133,25 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         char *full = malloc(plen);
         snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
 
+        if (opts->max_depth >= 0 && depth + 1 > opts->max_depth) {
+            free(full);
+            continue;
+        }
+
         struct stat st;
         int stat_rc = opts->follow_symlinks ? stat(full, &st) : lstat(full, &st);
         if (stat_rc != 0) { free(full); continue; }
 
-        struct walk_entry entry = {.path = full, .is_dir = S_ISDIR(st.st_mode)};
-        cb(&entry, user);
+        struct walk_entry entry = {.path = full, .is_dir = S_ISDIR(st.st_mode), .depth = depth + 1};
+        if (!opts->post_order || !entry.is_dir)
+            cb(&entry, user);
 
         if (!walk_should_stop(opts) && entry.is_dir) {
             if (walk_recursive(full, opts, cb, user, depth + 1) != 0)
                 status = -1;
         }
+        if (!walk_should_stop(opts) && opts->post_order && entry.is_dir)
+            cb(&entry, user);
         free(full);
     }
     closedir(d);
@@ -154,21 +162,29 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user) {
     struct stat st;
-    if (stat(root, &st) != 0) {
+    int root_stat_rc = (opts && opts->follow_root_symlink) ? stat(root, &st) : lstat(root, &st);
+    if (root_stat_rc != 0) {
         walk_report_error(opts, root, errno);
         return -1;
     }
 
     if (S_ISDIR(st.st_mode)) {
-        struct walk_entry entry = {.path = strdup(root), .is_dir = true};
-        cb(&entry, user);
+        struct walk_entry entry = {.path = strdup(root), .is_dir = true, .depth = 0};
+        if (!opts->post_order)
+            cb(&entry, user);
         free(entry.path);
         if (walk_should_stop(opts))
             return 0;
-        return walk_recursive(root, opts, cb, user, 0);
+        int rc = walk_recursive(root, opts, cb, user, 0);
+        if (!walk_should_stop(opts) && opts->post_order) {
+            struct walk_entry post = {.path = strdup(root), .is_dir = true, .depth = 0};
+            cb(&post, user);
+            free(post.path);
+        }
+        return rc;
     }
 
-    struct walk_entry entry = {.path = strdup(root), .is_dir = false};
+    struct walk_entry entry = {.path = strdup(root), .is_dir = false, .depth = 0};
     cb(&entry, user);
     free(entry.path);
     return 0;

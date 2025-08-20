@@ -16,7 +16,24 @@ enum {
     OPT_FILES,
     OPT_TYPE_LIST,
     OPT_COLOR,
+    OPT_FILES_WITH_MATCHES,
+    OPT_FILES_WITHOUT_MATCH,
+    OPT_FOLLOW,
+    OPT_MAX_DEPTH,
 };
+
+static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
+                                     const char *text, int *out) {
+    char *end = NULL;
+    long v = strtol(text, &end, 10);
+    if (!text || *text == '\0' || (end && *end != '\0') || v < 0 || v > 1<<20) {
+        fprintf(stderr, "%s: invalid argument for %s: %s\n",
+                progname, optname, text ? text : "(null)");
+        return false;
+    }
+    *out = (int)v;
+    return true;
+}
 
 void bx_search_print_help(const char *progname) {
     printf("Usage: %s [OPTION]... PATTERN [FILE]...\n", progname);
@@ -117,6 +134,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
 
     if (personality == BX_SEARCH_EGREP) opts->extended_regex = true;
     if (personality == BX_SEARCH_FGREP) opts->fixed_strings = true;
+    opts->max_depth = -1;
     if (personality == BX_SEARCH_RG) {
         opts->recursive = true;
         opts->follow_symlinks = false;
@@ -137,11 +155,15 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"exclude",      required_argument, NULL, OPT_EXCLUDE},
         {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
         {"files",        no_argument,       NULL, OPT_FILES},
+        {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
+        {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
+        {"follow",       no_argument,       NULL, OPT_FOLLOW},
         {"glob",         required_argument, NULL, 'g'},
         {"type",         required_argument, NULL, 't'},
         {"type-not",     required_argument, NULL, 'T'},
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
         {"file",         required_argument, NULL, 'f'},
+        {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
         {"color",        optional_argument, NULL, OPT_COLOR},
         {"colour",       optional_argument, NULL, OPT_COLOR},
         {NULL, 0, NULL, 0},
@@ -151,8 +173,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "EFHhinovclLqrRIaA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "0EFHhinovclLqrRId:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
         switch (c) {
+        case '0':
+            if (personality == BX_SEARCH_RG) {
+                opts->null_output = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '-0'\n", argv[0]);
+                return -1;
+            }
+            break;
         case 'E': opts->extended_regex = true; break;
         case 'F': opts->fixed_strings = true; break;
         case 'H': opts->show_filename = true; break;
@@ -163,10 +193,34 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'v': opts->invert_match = true; break;
         case 'c': opts->count_only = true; break;
         case 'l': opts->files_with_matches = true; break;
-        case 'L': opts->files_without_match = true; break;
+        case 'L':
+            if (personality == BX_SEARCH_RG)
+                opts->follow_symlinks = true;
+            else
+                opts->files_without_match = true;
+            break;
         case 'q': opts->quiet = true; break;
         case 'r': opts->recursive = true; opts->follow_symlinks = false; break;
         case 'R': opts->recursive = true; opts->follow_symlinks = true; break;
+        case 'd':
+            if (personality == BX_SEARCH_RG) {
+                if (!bx_parse_nonnegative_int(argv[0], "-d", optarg, &opts->max_depth))
+                    return -1;
+            } else {
+                if (strcmp(optarg, "read") == 0) {
+                    opts->directory_mode = BX_GREP_DIR_READ;
+                } else if (strcmp(optarg, "recurse") == 0) {
+                    opts->directory_mode = BX_GREP_DIR_RECURSE;
+                    opts->recursive = true;
+                    opts->follow_symlinks = false;
+                } else if (strcmp(optarg, "skip") == 0) {
+                    opts->directory_mode = BX_GREP_DIR_SKIP;
+                } else {
+                    fprintf(stderr, "%s: invalid argument for -d: %s\n", argv[0], optarg);
+                    return -1;
+                }
+            }
+            break;
         case 'I': opts->binary_without_match = true; break;
         case 'a': opts->binary_as_text = true; break;
         case 'w': opts->word_regexp = true; break;
@@ -247,9 +301,32 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_FILES:
             opts->files_only = true;
             break;
+        case OPT_FILES_WITH_MATCHES:
+            opts->files_with_matches = true;
+            break;
+        case OPT_FILES_WITHOUT_MATCH:
+            opts->files_without_match = true;
+            break;
+        case OPT_FOLLOW:
+            if (personality == BX_SEARCH_RG) {
+                opts->follow_symlinks = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--follow'\n", argv[0]);
+                return -1;
+            }
+            break;
         case OPT_TYPE_LIST:
             bx_search_print_type_list();
             return 1;
+        case OPT_MAX_DEPTH:
+            if (personality == BX_SEARCH_RG) {
+                if (!bx_parse_nonnegative_int(argv[0], "--max-depth", optarg, &opts->max_depth))
+                    return -1;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--max-depth'\n", argv[0]);
+                return -1;
+            }
+            break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
             bx_color_set_mode(opts->color_mode);

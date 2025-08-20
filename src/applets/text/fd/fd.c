@@ -30,6 +30,8 @@ struct fd_opts {
     const char *type_filter;
     const char *extension;
     int max_depth;
+    int min_depth;
+    int exact_depth;
     int max_results;
     int results;
 };
@@ -77,6 +79,13 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
     }
 
     if (entry->is_dir) return;
+
+    if (opts->exact_depth >= 0) {
+        if (entry->depth != opts->exact_depth)
+            return;
+    } else if (entry->depth < opts->min_depth) {
+        return;
+    }
 
     if (opts->type_filter) {
         if (opts->show_type && strcmp(opts->type_filter, "file") == 0) {
@@ -134,6 +143,7 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
 int bx_fd_main(int argc, char **argv) {
     struct fd_opts opts = {0};
     opts.max_depth = -1;
+    opts.exact_depth = -1;
     bool show_help = false;
     const char *progname = argv[0] ? argv[0] : "fd";
 
@@ -143,12 +153,15 @@ int bx_fd_main(int argc, char **argv) {
         {"version",  no_argument,       NULL, 'V'},
         {"hidden",   no_argument,       NULL, 'H'},
         {"no-ignore", no_argument,      NULL, 'I'},
+        {"follow",   no_argument,       NULL, 'L'},
         {"full-path", no_argument,      NULL, 'p'},
         {"ignore-case", no_argument,    NULL, 'i'},
         {"case-sensitive", no_argument, NULL, 's'},
         {"fixed-strings", no_argument,  NULL, 'F'},
         {"glob",      no_argument,      NULL, 'g'},
         {"max-depth", required_argument, NULL, 'd'},
+        {"min-depth", required_argument, NULL, 201},
+        {"exact-depth", required_argument, NULL, 202},
         {"type",      required_argument, NULL, 't'},
         {"extension", required_argument, NULL, 'e'},
         {"max-results", required_argument, NULL, 200},
@@ -172,6 +185,8 @@ int bx_fd_main(int argc, char **argv) {
         case 'F': opts.fixed_strings = true; break;
         case 'g': opts.glob_match = true; break;
         case 'd': opts.max_depth = atoi(optarg); break;
+        case 201: opts.min_depth = atoi(optarg); break;
+        case 202: opts.exact_depth = atoi(optarg); opts.max_depth = opts.exact_depth; break;
         case 't': opts.type_filter = optarg; break;
         case 'e': opts.extension = optarg; break;
         case '0': opts.print0 = true; break;
@@ -200,6 +215,8 @@ int bx_fd_main(int argc, char **argv) {
         puts("  -F, --fixed-strings treat pattern as literal string");
         puts("  -g, --glob          glob-based matching");
         puts("  -d, --max-depth N   limit recursive depth");
+        puts("      --min-depth N   skip matches shallower than N");
+        puts("      --exact-depth N match only entries exactly at depth N");
         puts("  -t, --type TYPE     filter by type: f(file), d(dir), l(symlink)");
         puts("  -e, --extension EXT filter by file extension");
         puts("  -0, --print0        separate results by NUL byte");
@@ -213,13 +230,16 @@ int bx_fd_main(int argc, char **argv) {
     }
 
     opts.pattern = NULL;
-    const char *search_path = ".";
+    char *default_paths[] = { "." };
+    char **search_paths = default_paths;
+    int search_path_count = 1;
     int positional = argc - optind;
     if (positional == 1) {
         opts.pattern = argv[optind++];
     } else if (positional > 1) {
         opts.pattern = argv[optind++];
-        search_path = argv[optind];
+        search_paths = &argv[optind];
+        search_path_count = argc - optind;
     }
 
     pcre2_code *re = NULL;
@@ -272,6 +292,7 @@ int bx_fd_main(int argc, char **argv) {
         .hidden = opts.hidden,
         .no_ignore = opts.no_ignore,
         .follow_symlinks = opts.follow_symlinks,
+        .follow_root_symlink = true,
         .stop = &stop,
         .suppress_eacces = true,
         .error_prefix = progname,
@@ -279,7 +300,11 @@ int bx_fd_main(int argc, char **argv) {
     };
 
     struct fd_state state = {.opts = &opts, .regex = re, .stop = &stop};
-    int walk_rc = walk_dir(search_path, &wopts, fd_callback, &state);
+    int walk_rc = 0;
+    for (int i = 0; i < search_path_count && !stop; i++) {
+        if (walk_dir(search_paths[i], &wopts, fd_callback, &state) != 0)
+            walk_rc = -1;
+    }
 
     if (re) pcre2_code_free(re);
     if (walk_rc != 0)

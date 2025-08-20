@@ -46,6 +46,14 @@ struct search_opts {
     bool binary_without_match;
     bool hidden;
     bool no_ignore;
+    bool null_output;
+    int  max_depth;
+    enum {
+        BX_GREP_DIR_DEFAULT = 0,
+        BX_GREP_DIR_READ,
+        BX_GREP_DIR_RECURSE,
+        BX_GREP_DIR_SKIP,
+    } directory_mode;
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
