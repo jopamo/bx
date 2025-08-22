@@ -1,10 +1,12 @@
 #define _GNU_SOURCE
 #include <fnmatch.h>
 #include <getopt.h>
+#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "search/walk.h"
@@ -12,6 +14,8 @@
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+
+#define FD_MAX_AND_PATTERNS 16
 
 struct fd_opts {
     bool hidden;
@@ -27,6 +31,8 @@ struct fd_opts {
     bool quiet;
     bool show_type;
     const char *pattern;
+    const char *and_patterns[FD_MAX_AND_PATTERNS];
+    int num_and_patterns;
     const char *type_filter;
     const char *extension;
     int max_depth;
@@ -38,9 +44,131 @@ struct fd_opts {
 
 struct fd_state {
     struct fd_opts *opts;
-    pcre2_code *regex;
+    pcre2_code *regexes[FD_MAX_AND_PATTERNS + 1];
+    pcre2_match_data *match_data[FD_MAX_AND_PATTERNS + 1];
+    int regex_count;
     bool *stop;
 };
+
+static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
+                                     const char *text, int *out) {
+    char *end = NULL;
+    long v = strtol(text, &end, 10);
+    if (!text || *text == '\0' || (end && *end != '\0') || v < 0 || v > (1 << 20)) {
+        fprintf(stderr, "%s: invalid argument for %s: %s\n",
+                progname, optname, text ? text : "(null)");
+        return false;
+    }
+    *out = (int)v;
+    return true;
+}
+
+static uint32_t fd_compile_flags(const struct fd_opts *opts, const char *pattern) {
+    if (opts->case_sensitive)
+        return 0;
+    if (opts->ignore_case)
+        return PCRE2_CASELESS;
+    if (opts->smart_case && pattern) {
+        for (const char *ch = pattern; *ch; ch++) {
+            if (*ch >= 'A' && *ch <= 'Z')
+                return 0;
+        }
+        return PCRE2_CASELESS;
+    }
+    return 0;
+}
+
+static const char *fd_basename(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static bool fd_entry_is_empty(const struct walk_entry *entry) {
+    if (S_ISREG(entry->mode)) {
+        struct stat st;
+        if (stat(entry->path, &st) != 0)
+            return false;
+        return st.st_size == 0;
+    }
+    if (!S_ISDIR(entry->mode))
+        return false;
+
+    DIR *dir = opendir(entry->path);
+    if (!dir)
+        return false;
+
+    bool empty = true;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
+            empty = false;
+            break;
+        }
+    }
+    closedir(dir);
+    return empty;
+}
+
+static bool fd_parse_type_filter(const char *progname, const char *text, const char **out) {
+    if (!text || *text == '\0') {
+        fprintf(stderr, "%s: invalid argument for --type: %s\n",
+                progname, text ? text : "(null)");
+        return false;
+    }
+
+    if (strcmp(text, "f") == 0 || strcmp(text, "file") == 0) {
+        *out = "f";
+    } else if (strcmp(text, "d") == 0 || strcmp(text, "directory") == 0 || strcmp(text, "dir") == 0) {
+        *out = "d";
+    } else if (strcmp(text, "l") == 0 || strcmp(text, "symlink") == 0 || strcmp(text, "link") == 0) {
+        *out = "l";
+    } else if (strcmp(text, "x") == 0 || strcmp(text, "executable") == 0) {
+        *out = "x";
+    } else if (strcmp(text, "e") == 0 || strcmp(text, "empty") == 0) {
+        *out = "e";
+    } else if (strcmp(text, "p") == 0 || strcmp(text, "pipe") == 0) {
+        *out = "p";
+    } else if (strcmp(text, "s") == 0 || strcmp(text, "socket") == 0) {
+        *out = "s";
+    } else if (strcmp(text, "b") == 0 || strcmp(text, "block") == 0 || strcmp(text, "block-device") == 0) {
+        *out = "b";
+    } else if (strcmp(text, "c") == 0 || strcmp(text, "char") == 0 || strcmp(text, "character-device") == 0) {
+        *out = "c";
+    } else {
+        fprintf(stderr, "%s: invalid argument for --type: %s\n", progname, text);
+        return false;
+    }
+
+    return true;
+}
+
+static bool fd_matches_type(const struct walk_entry *entry, const struct fd_opts *opts) {
+    if (!opts->type_filter)
+        return true;
+
+    switch (opts->type_filter[0]) {
+    case 'f':
+        return S_ISREG(entry->mode);
+    case 'd':
+        return S_ISDIR(entry->mode);
+    case 'l':
+        return S_ISLNK(entry->mode);
+    case 'x':
+        return S_ISREG(entry->mode) && access(entry->path, X_OK) == 0;
+    case 'e':
+        return fd_entry_is_empty(entry);
+    case 'p':
+        return S_ISFIFO(entry->mode);
+    case 's':
+        return S_ISSOCK(entry->mode);
+    case 'b':
+        return S_ISBLK(entry->mode);
+    case 'c':
+        return S_ISCHR(entry->mode);
+    default:
+        return false;
+    }
+}
 
 static pcre2_code *fd_compile_regex(const char *progname, const char *pattern,
                                     const char *display_pattern, uint32_t flags) {
@@ -61,6 +189,64 @@ static pcre2_code *fd_compile_regex(const char *progname, const char *pattern,
     return NULL;
 }
 
+static pcre2_code *fd_compile_pattern(const char *progname, const struct fd_opts *opts,
+                                      const char *pattern) {
+    if (!pattern)
+        return NULL;
+
+    if (!opts->glob_match && !opts->fixed_strings) {
+        uint32_t flags = fd_compile_flags(opts, pattern);
+        return fd_compile_regex(progname, pattern, pattern, flags);
+    }
+
+    if (opts->glob_match) {
+        char buf[4096];
+        char *p = buf;
+        for (const char *ch = pattern; *ch; ch++) {
+            switch (*ch) {
+            case '*': *p++ = '.'; *p++ = '*'; break;
+            case '?': *p++ = '.'; break;
+            case '.': *p++ = '\\'; *p++ = '.'; break;
+            default:  *p++ = *ch; break;
+            }
+        }
+        *p = '\0';
+        return fd_compile_regex(progname, buf, pattern, fd_compile_flags(opts, pattern));
+    }
+
+    size_t len = strlen(pattern);
+    const char *raw = pattern;
+    char *buf = malloc(len * 2 + 3);
+    if (!buf)
+        return NULL;
+    char *p = buf;
+    for (size_t i = 0; i < len; i++) {
+        char ch = raw[i];
+        if (ch == '.' || ch == '\\' || ch == '+' || ch == '*' || ch == '?' ||
+            ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == '{' ||
+            ch == '}' || ch == '^' || ch == '$' || ch == '|')
+            *p++ = '\\';
+        *p++ = ch;
+    }
+    *p = '\0';
+    pcre2_code *re = fd_compile_regex(progname, buf, pattern, fd_compile_flags(opts, pattern));
+    free(buf);
+    return re;
+}
+
+static bool fd_match_name(const struct fd_state *st, const char *name) {
+    if (st->regex_count == 0)
+        return true;
+
+    for (int i = 0; i < st->regex_count; i++) {
+        int rc = pcre2_match(st->regexes[i], (PCRE2_SPTR)name, strlen(name), 0, 0,
+                             st->match_data[i], NULL);
+        if (rc < 0)
+            return false;
+    }
+    return true;
+}
+
 static void fd_callback(const struct walk_entry *entry, void *user) {
     struct fd_state *st = user;
     struct fd_opts *opts = st->opts;
@@ -78,7 +264,8 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
         return;
     }
 
-    if (entry->is_dir) return;
+    if (entry->depth == 0 && entry->is_dir)
+        return;
 
     if (opts->exact_depth >= 0) {
         if (entry->depth != opts->exact_depth)
@@ -87,28 +274,18 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
         return;
     }
 
-    if (opts->type_filter) {
-        if (opts->show_type && strcmp(opts->type_filter, "file") == 0) {
-            printf("f %s\n", entry->path);
-        }
-    }
-
-    const char *name = entry->path;
-    if (!opts->full_path) {
-        const char *slash = strrchr(name, '/');
-        name = slash ? slash + 1 : name;
-    }
-
-    if (!opts->hidden && name[0] == '.')
+    if (!fd_matches_type(entry, opts))
         return;
 
+    const char *name = opts->full_path ? entry->path : fd_basename(entry->path);
+
     if (opts->extension) {
-        const char *dot = strrchr(name, '.');
+        const char *dot = strrchr(fd_basename(entry->path), '.');
         if (!dot || strcasecmp(dot + 1, opts->extension) != 0)
             return;
     }
 
-    if (!st->regex) {
+    if (st->regex_count == 0) {
         opts->results++;
         if (!opts->quiet) {
             if (opts->print0)
@@ -123,9 +300,7 @@ static void fd_callback(const struct walk_entry *entry, void *user) {
         return;
     }
 
-    int rc = pcre2_match(st->regex, (PCRE2_SPTR)name, strlen(name), 0, 0,
-                         pcre2_match_data_create_from_pattern(st->regex, NULL), NULL);
-    if (rc >= 0) {
+    if (fd_match_name(st, name)) {
         opts->results++;
         if (!opts->quiet) {
             if (opts->print0)
@@ -144,6 +319,7 @@ int bx_fd_main(int argc, char **argv) {
     struct fd_opts opts = {0};
     opts.max_depth = -1;
     opts.exact_depth = -1;
+    opts.smart_case = true;
     bool show_help = false;
     const char *progname = argv[0] ? argv[0] : "fd";
 
@@ -159,19 +335,21 @@ int bx_fd_main(int argc, char **argv) {
         {"case-sensitive", no_argument, NULL, 's'},
         {"fixed-strings", no_argument,  NULL, 'F'},
         {"glob",      no_argument,      NULL, 'g'},
+        {"regex",     no_argument,      NULL, 204},
         {"max-depth", required_argument, NULL, 'd'},
         {"min-depth", required_argument, NULL, 201},
         {"exact-depth", required_argument, NULL, 202},
         {"type",      required_argument, NULL, 't'},
         {"extension", required_argument, NULL, 'e'},
         {"max-results", required_argument, NULL, 200},
+        {"and",       required_argument, NULL, 203},
         {"print0",    no_argument,      NULL, '0'},
         {"quiet",     no_argument,      NULL, 'q'},
         {NULL, 0, NULL, 0},
     };
 
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "hVHIpsSFgd:t:e:0qL1", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hVHIpisSFgd:t:e:0qL1", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'h': show_help = true; break;
         case 'V':
@@ -184,16 +362,40 @@ int bx_fd_main(int argc, char **argv) {
         case 's': opts.case_sensitive = true; opts.smart_case = false; break;
         case 'F': opts.fixed_strings = true; break;
         case 'g': opts.glob_match = true; break;
-        case 'd': opts.max_depth = atoi(optarg); break;
-        case 201: opts.min_depth = atoi(optarg); break;
-        case 202: opts.exact_depth = atoi(optarg); opts.max_depth = opts.exact_depth; break;
-        case 't': opts.type_filter = optarg; break;
+        case 204:
+            opts.fixed_strings = false;
+            opts.glob_match = false;
+            break;
+        case 'd':
+            if (!fd_parse_nonnegative_int(progname, "--max-depth", optarg, &opts.max_depth))
+                return 2;
+            break;
+        case 201:
+            if (!fd_parse_nonnegative_int(progname, "--min-depth", optarg, &opts.min_depth))
+                return 2;
+            break;
+        case 202:
+            if (!fd_parse_nonnegative_int(progname, "--exact-depth", optarg, &opts.exact_depth))
+                return 2;
+            opts.max_depth = opts.exact_depth;
+            break;
+        case 't':
+            if (!fd_parse_type_filter(progname, optarg, &opts.type_filter))
+                return 2;
+            break;
         case 'e': opts.extension = optarg; break;
         case '0': opts.print0 = true; break;
         case 'q': opts.quiet = true; break;
         case 'L': opts.follow_symlinks = true; break;
         case '1': opts.max_results = 1; break;
-        case 200: opts.max_results = atoi(optarg); break;
+        case 203:
+            if (opts.num_and_patterns < FD_MAX_AND_PATTERNS)
+                opts.and_patterns[opts.num_and_patterns++] = optarg;
+            break;
+        case 200:
+            if (!fd_parse_nonnegative_int(progname, "--max-results", optarg, &opts.max_results))
+                return 2;
+            break;
         case '?':
             if (optind > 0 && optind <= argc)
                 fprintf(stderr, "%s: unrecognized option '%s'\n", progname, argv[optind - 1]);
@@ -214,10 +416,12 @@ int bx_fd_main(int argc, char **argv) {
         puts("  -s, --case-sensitive  case-sensitive matching");
         puts("  -F, --fixed-strings treat pattern as literal string");
         puts("  -g, --glob          glob-based matching");
+        puts("      --regex         treat pattern as a regular expression");
+        puts("      --and PATTERN   require PATTERN to match too");
         puts("  -d, --max-depth N   limit recursive depth");
         puts("      --min-depth N   skip matches shallower than N");
         puts("      --exact-depth N match only entries exactly at depth N");
-        puts("  -t, --type TYPE     filter by type: f(file), d(dir), l(symlink)");
+        puts("  -t, --type TYPE     filter by type: f,d,l,x,e,p,s,b,c");
         puts("  -e, --extension EXT filter by file extension");
         puts("  -0, --print0        separate results by NUL byte");
         puts("  -q, --quiet         suppress normal output");
@@ -242,51 +446,6 @@ int bx_fd_main(int argc, char **argv) {
         search_path_count = argc - optind;
     }
 
-    pcre2_code *re = NULL;
-    if (opts.pattern && !opts.glob_match && !opts.fixed_strings) {
-        uint32_t flags = PCRE2_CASELESS;
-        if (opts.case_sensitive) flags = 0;
-        if (opts.smart_case) {
-            bool has_upper = false;
-            for (const char *ch = opts.pattern; *ch; ch++)
-                if (*ch >= 'A' && *ch <= 'Z') { has_upper = true; break; }
-            if (!has_upper) flags = PCRE2_CASELESS;
-        }
-        re = fd_compile_regex(progname, opts.pattern, opts.pattern, flags);
-    } else if (opts.pattern && opts.glob_match) {
-        char buf[4096];
-        char *p = buf;
-        for (const char *ch = opts.pattern; *ch; ch++) {
-            switch (*ch) {
-            case '*': *p++ = '.'; *p++ = '*'; break;
-            case '?': *p++ = '.'; break;
-            case '.': *p++ = '\\'; *p++ = '.'; break;
-            default:  *p++ = *ch; break;
-        }
-        }
-        *p = '\0';
-        re = fd_compile_regex(progname, buf, opts.pattern, 0);
-    } else if (opts.pattern && opts.fixed_strings) {
-        size_t len = strlen(opts.pattern);
-        const char *raw = opts.pattern;
-        char *buf = malloc(len * 2 + 3);
-        char *p = buf;
-        for (size_t i = 0; i < len; i++) {
-            char ch = raw[i];
-            if (ch == '.' || ch == '\\' || ch == '+' || ch == '*' || ch == '?' ||
-                ch == '[' || ch == ']' || ch == '(' || ch == ')' || ch == '{' ||
-                ch == '}' || ch == '^' || ch == '$' || ch == '|')
-                *p++ = '\\';
-            *p++ = ch;
-        }
-        *p = '\0';
-        re = fd_compile_regex(progname, buf, opts.pattern,
-                              opts.ignore_case ? PCRE2_CASELESS : 0);
-        free(buf);
-    }
-    if (opts.pattern && !re)
-        return 1;
-
     bool stop = false;
     struct walk_opts wopts = {
         .hidden = opts.hidden,
@@ -299,14 +458,36 @@ int bx_fd_main(int argc, char **argv) {
         .max_depth = opts.max_depth,
     };
 
-    struct fd_state state = {.opts = &opts, .regex = re, .stop = &stop};
+    struct fd_state state = {.opts = &opts, .stop = &stop};
+    if (opts.pattern)
+        state.regexes[state.regex_count++] = fd_compile_pattern(progname, &opts, opts.pattern);
+    for (int i = 0; i < opts.num_and_patterns; i++)
+        state.regexes[state.regex_count++] = fd_compile_pattern(progname, &opts, opts.and_patterns[i]);
+    if (!opts.pattern && opts.num_and_patterns > 0) {
+        for (int i = 0; i < state.regex_count; i++) {
+            if (!state.regexes[i])
+                return 1;
+        }
+    } else if (opts.pattern) {
+        for (int i = 0; i < state.regex_count; i++) {
+            if (!state.regexes[i])
+                return 1;
+        }
+    }
+    for (int i = 0; i < state.regex_count; i++)
+        state.match_data[i] = pcre2_match_data_create_from_pattern(state.regexes[i], NULL);
     int walk_rc = 0;
     for (int i = 0; i < search_path_count && !stop; i++) {
         if (walk_dir(search_paths[i], &wopts, fd_callback, &state) != 0)
             walk_rc = -1;
     }
 
-    if (re) pcre2_code_free(re);
+    for (int i = 0; i < state.regex_count; i++) {
+        if (state.match_data[i])
+            pcre2_match_data_free(state.match_data[i]);
+        if (state.regexes[i])
+            pcre2_code_free(state.regexes[i]);
+    }
     if (walk_rc != 0)
         return 1;
     if (opts.quiet)

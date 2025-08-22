@@ -11,6 +11,7 @@
 
 struct search_opts {
     bool show_line_number;
+    bool show_byte_offset;
     bool show_filename;
     bool hide_filename;
     bool invert_match;
@@ -47,6 +48,10 @@ struct search_opts {
     bool hidden;
     bool no_ignore;
     bool null_output;
+    bool null_filename;
+    bool suppress_group_separator;
+    char *label;
+    char *group_separator;
     int  max_depth;
     enum {
         BX_GREP_DIR_DEFAULT = 0,

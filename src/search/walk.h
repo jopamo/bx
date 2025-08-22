@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/stat.h>
 
 struct walk_opts {
     bool hidden;
@@ -24,6 +25,7 @@ struct walk_opts {
 struct walk_entry {
     char *path;
     bool is_dir;
+    mode_t mode;
     int depth;
 };
 

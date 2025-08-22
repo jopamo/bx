@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@ enum {
     OPT_VERSION,
     OPT_INCLUDE,
     OPT_EXCLUDE,
+    OPT_EXCLUDE_FROM,
     OPT_EXCLUDE_DIR,
     OPT_FILES,
     OPT_TYPE_LIST,
@@ -20,6 +22,10 @@ enum {
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
     OPT_MAX_DEPTH,
+    OPT_LABEL,
+    OPT_GROUP_SEPARATOR,
+    OPT_NO_GROUP_SEPARATOR,
+    OPT_NULL,
 };
 
 static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
@@ -41,6 +47,7 @@ void bx_search_print_help(const char *progname) {
     puts("");
     puts("  -E            PATTERN is an extended regular expression");
     puts("  -F            PATTERN is a set of fixed strings");
+    puts("  -b            print the byte offset with output lines");
     puts("  -H            print the file name for each match");
     puts("  -h            suppress the file name prefix on output");
     puts("  -i            ignore case distinctions");
@@ -58,8 +65,13 @@ void bx_search_print_help(const char *progname) {
     puts("  -A NUM        print NUM lines of trailing context");
     puts("  -B NUM        print NUM lines of leading context");
     puts("  -C NUM        print NUM lines of output context");
+    puts("  -Z, --null    print NUL after file names");
+    puts("      --label=LABEL  use LABEL as the standard input file name");
+    puts("      --group-separator=SEP  use SEP between context groups");
+    puts("      --no-group-separator   suppress context group separators");
     puts("      --include=GLOB   search only files matching GLOB");
     puts("      --exclude=GLOB   skip files matching GLOB");
+    puts("      --exclude-from=FILE  skip files matching patterns from FILE");
     puts("      --exclude-dir=GLOB  skip directories matching GLOB");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
@@ -125,6 +137,8 @@ void bx_search_free_options(struct search_opts *opts) {
     for (int i = 0; i < opts->num_exclude; i++) free(opts->exclude_patterns[i]);
     for (int i = 0; i < opts->num_exclude_dir; i++) free(opts->exclude_dir_patterns[i]);
     for (int i = 0; i < opts->num_extra_patterns; i++) free(opts->extra_patterns[i]);
+    free(opts->label);
+    free(opts->group_separator);
 }
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
@@ -141,7 +155,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->binary_without_match = true;
         opts->hidden = false;
         opts->no_ignore = false;
-        opts->smart_case = true;
+        opts->smart_case = false;
     } else {
         opts->hidden = true;
         opts->no_ignore = true;
@@ -153,12 +167,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"quiet",        no_argument,       NULL, 'q'},
         {"include",      required_argument, NULL, OPT_INCLUDE},
         {"exclude",      required_argument, NULL, OPT_EXCLUDE},
+        {"exclude-from", required_argument, NULL, OPT_EXCLUDE_FROM},
         {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
         {"files",        no_argument,       NULL, OPT_FILES},
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
+        {"byte-offset",  no_argument,       NULL, 'b'},
         {"glob",         required_argument, NULL, 'g'},
+        {"ignore-case",  no_argument,       NULL, 'i'},
+        {"case-sensitive", no_argument,     NULL, 's'},
+        {"smart-case",   no_argument,       NULL, 'S'},
         {"type",         required_argument, NULL, 't'},
         {"type-not",     required_argument, NULL, 'T'},
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
@@ -166,6 +185,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
         {"color",        optional_argument, NULL, OPT_COLOR},
         {"colour",       optional_argument, NULL, OPT_COLOR},
+        {"label",        required_argument, NULL, OPT_LABEL},
+        {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
+        {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
+        {"null",         no_argument,       NULL, OPT_NULL},
         {NULL, 0, NULL, 0},
     };
 
@@ -173,7 +196,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "0EFHhinovclLqrRId:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIsZd:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
         switch (c) {
         case '0':
             if (personality == BX_SEARCH_RG) {
@@ -185,9 +208,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'E': opts->extended_regex = true; break;
         case 'F': opts->fixed_strings = true; break;
+        case 'b': opts->show_byte_offset = true; break;
         case 'H': opts->show_filename = true; break;
         case 'h': opts->hide_filename = true; break;
-        case 'i': opts->ignore_case = true; break;
+        case 'i':
+            opts->ignore_case = true;
+            if (personality == BX_SEARCH_RG)
+                opts->smart_case = false;
+            break;
         case 'n': opts->show_line_number = true; break;
         case 'o': opts->only_matching = true; break;
         case 'v': opts->invert_match = true; break;
@@ -226,8 +254,36 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'w': opts->word_regexp = true; break;
         case 'x': opts->line_regexp = true; break;
         case 'P': opts->perl_regexp = true; break;
-        case 'S': opts->smart_case = true; opts->ignore_case = false; break;
-        case 'm': opts->max_count = atoi(optarg); break;
+        case 's':
+            if (personality == BX_SEARCH_RG) {
+                opts->smart_case = false;
+                opts->ignore_case = false;
+            } else {
+                fprintf(stderr, "%s: invalid option -- 's'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case 'S':
+            if (personality == BX_SEARCH_RG) {
+                opts->smart_case = true;
+                opts->ignore_case = false;
+            } else {
+                fprintf(stderr, "%s: invalid option -- 'S'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case 'm':
+            if (!bx_parse_nonnegative_int(argv[0], "-m", optarg, &opts->max_count))
+                return -1;
+            break;
+        case 'Z':
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: invalid option -- 'Z'\n", argv[0]);
+                return -1;
+            }
+            opts->null_output = true;
+            opts->null_filename = true;
+            break;
         case 'g':
             if (opts->num_include < MAX_INCLUDE_PATTERNS)
                 opts->include_patterns[opts->num_include++] = strdup(optarg);
@@ -262,7 +318,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->extra_patterns[opts->num_extra_patterns++] = strdup(optarg);
             break;
         case 'f': {
-            FILE *pf = fopen(optarg, "r");
+            FILE *pf = NULL;
+            bool close_pf = false;
+            if (strcmp(optarg, "-") == 0) {
+                pf = stdin;
+            } else {
+                pf = fopen(optarg, "r");
+                close_pf = true;
+            }
             if (!pf) {
                 fprintf(stderr, "%s: %s: %s\n", argv[0], optarg, strerror(errno));
                 return -1;
@@ -272,16 +335,26 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 size_t llen = strlen(line);
                 while (llen > 0 && (line[llen-1] == '\n' || line[llen-1] == '\r'))
                     line[--llen] = '\0';
-                if (llen > 0 && opts->num_extra_patterns < 16)
+                if (opts->num_extra_patterns < 16)
                     opts->extra_patterns[opts->num_extra_patterns++] = strdup(line);
             }
-            free(line); fclose(pf);
+            free(line);
+            if (close_pf)
+                fclose(pf);
             break;
         }
-        case 'A': opts->after_context = atoi(optarg); break;
-        case 'B': opts->before_context = atoi(optarg); break;
+        case 'A':
+            if (!bx_parse_nonnegative_int(argv[0], "-A", optarg, &opts->after_context))
+                return -1;
+            break;
+        case 'B':
+            if (!bx_parse_nonnegative_int(argv[0], "-B", optarg, &opts->before_context))
+                return -1;
+            break;
         case 'C': {
-            int n = atoi(optarg);
+            int n;
+            if (!bx_parse_nonnegative_int(argv[0], "-C", optarg, &n))
+                return -1;
             opts->after_context = n;
             opts->before_context = n;
             break;
@@ -294,6 +367,27 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
                 opts->exclude_patterns[opts->num_exclude++] = strdup(optarg);
             break;
+        case OPT_EXCLUDE_FROM: {
+            FILE *ef = fopen(optarg, "r");
+            if (!ef) {
+                fprintf(stderr, "%s: %s: %s\n", argv[0], optarg, strerror(errno));
+                return -1;
+            }
+            char *line = NULL;
+            size_t cap = 0;
+            while (getline(&line, &cap, ef) != -1) {
+                size_t len = strlen(line);
+                while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+                    line[--len] = '\0';
+                if (len == 0)
+                    continue;
+                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
+                    opts->exclude_patterns[opts->num_exclude++] = strdup(line);
+            }
+            free(line);
+            fclose(ef);
+            break;
+        }
         case OPT_EXCLUDE_DIR:
             if (opts->num_exclude_dir < MAX_EXCLUDE_DIR_PATTERNS)
                 opts->exclude_dir_patterns[opts->num_exclude_dir++] = strdup(optarg);
@@ -327,6 +421,38 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             break;
+        case OPT_LABEL:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--label'\n", argv[0]);
+                return -1;
+            }
+            free(opts->label);
+            opts->label = strdup(optarg);
+            break;
+        case OPT_GROUP_SEPARATOR:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--group-separator'\n", argv[0]);
+                return -1;
+            }
+            free(opts->group_separator);
+            opts->group_separator = strdup(optarg);
+            opts->suppress_group_separator = false;
+            break;
+        case OPT_NO_GROUP_SEPARATOR:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--no-group-separator'\n", argv[0]);
+                return -1;
+            }
+            opts->suppress_group_separator = true;
+            break;
+        case OPT_NULL:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--null'\n", argv[0]);
+                return -1;
+            }
+            opts->null_output = true;
+            opts->null_filename = true;
+            break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
             bx_color_set_mode(opts->color_mode);
@@ -338,6 +464,26 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_search_print_version(argv[0]);
             return 1;
         case '?':
+            if (personality != BX_SEARCH_RG && optind > 0 && optind <= argc) {
+                const char *arg = argv[optind - 1];
+                if (arg && arg[0] == '-' && isdigit((unsigned char)arg[1])) {
+                    bool all_digits = true;
+                    for (const char *p = arg + 1; *p; p++) {
+                        if (!isdigit((unsigned char)*p)) {
+                            all_digits = false;
+                            break;
+                        }
+                    }
+                    if (all_digits) {
+                        int n;
+                        if (!bx_parse_nonnegative_int(argv[0], arg, arg + 1, &n))
+                            return -1;
+                        opts->after_context = n;
+                        opts->before_context = n;
+                        break;
+                    }
+                }
+            }
             if (optopt) {
                 fprintf(stderr, "%s: invalid option -- '%c'\n", argv[0], optopt);
             } else if (optind > 0 && optind <= argc) {

@@ -684,7 +684,8 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
             (*running)--;
         }
 
-        xargs_record_status(progname, cmdname, status, exec_failed, final_rc, abort_launch);
+        if (!exec_failed)
+            xargs_record_status(progname, cmdname, status, exec_failed, final_rc, abort_launch);
         if (!drain_all)
             return 0;
         if (*running == 0)

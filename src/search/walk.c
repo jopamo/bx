@@ -142,7 +142,12 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         int stat_rc = opts->follow_symlinks ? stat(full, &st) : lstat(full, &st);
         if (stat_rc != 0) { free(full); continue; }
 
-        struct walk_entry entry = {.path = full, .is_dir = S_ISDIR(st.st_mode), .depth = depth + 1};
+        struct walk_entry entry = {
+            .path = full,
+            .is_dir = S_ISDIR(st.st_mode),
+            .mode = st.st_mode,
+            .depth = depth + 1,
+        };
         if (!opts->post_order || !entry.is_dir)
             cb(&entry, user);
 
@@ -169,7 +174,12 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
     }
 
     if (S_ISDIR(st.st_mode)) {
-        struct walk_entry entry = {.path = strdup(root), .is_dir = true, .depth = 0};
+        struct walk_entry entry = {
+            .path = strdup(root),
+            .is_dir = true,
+            .mode = st.st_mode,
+            .depth = 0,
+        };
         if (!opts->post_order)
             cb(&entry, user);
         free(entry.path);
@@ -177,14 +187,24 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
             return 0;
         int rc = walk_recursive(root, opts, cb, user, 0);
         if (!walk_should_stop(opts) && opts->post_order) {
-            struct walk_entry post = {.path = strdup(root), .is_dir = true, .depth = 0};
+            struct walk_entry post = {
+                .path = strdup(root),
+                .is_dir = true,
+                .mode = st.st_mode,
+                .depth = 0,
+            };
             cb(&post, user);
             free(post.path);
         }
         return rc;
     }
 
-    struct walk_entry entry = {.path = strdup(root), .is_dir = false, .depth = 0};
+    struct walk_entry entry = {
+        .path = strdup(root),
+        .is_dir = false,
+        .mode = st.st_mode,
+        .depth = 0,
+    };
     cb(&entry, user);
     free(entry.path);
     return 0;
