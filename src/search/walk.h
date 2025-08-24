@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <sys/stat.h>
+#include <time.h>
 
 struct walk_opts {
     bool hidden;
@@ -26,6 +27,14 @@ struct walk_entry {
     char *path;
     bool is_dir;
     mode_t mode;
+    ino_t inode;
+    nlink_t nlink;
+    uid_t uid;
+    gid_t gid;
+    off_t size;
+    struct timespec atime;
+    struct timespec mtime;
+    struct timespec ctime;
     int depth;
 };
 

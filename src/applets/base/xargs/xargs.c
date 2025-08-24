@@ -45,6 +45,60 @@ struct xargs_items {
     int cap;
 };
 
+static size_t xargs_effective_char_limit(struct xargs_opts *opts);
+static size_t xargs_argv_bytes_from_argv(char **argv);
+
+static void xargs_warn_mutex(const char *progname, const char *left, const char *right,
+                             const char *ignored) {
+    fprintf(stderr,
+            "%s: warning: options %s and %s are mutually exclusive, ignoring previous %s value\n",
+            progname, left, right, ignored);
+}
+
+static void xargs_disable_replace(struct xargs_opts *opts) {
+    opts->replace_mode = false;
+    opts->replace_marker = NULL;
+}
+
+static void xargs_set_max_args(struct xargs_opts *opts, const char *progname, int value) {
+    if (opts->replace_mode) {
+        xargs_warn_mutex(progname, "--replace", "--max-args/-n", "--replace");
+        xargs_disable_replace(opts);
+    }
+    if (opts->max_lines > 0) {
+        xargs_warn_mutex(progname, "--max-lines", "--max-args/-n", "--max-lines");
+        opts->max_lines = 0;
+    }
+    opts->max_args = value;
+}
+
+static void xargs_set_max_lines(struct xargs_opts *opts, const char *progname,
+                                const char *optname, int value) {
+    if (opts->replace_mode) {
+        xargs_warn_mutex(progname, "--replace", optname, "--replace");
+        xargs_disable_replace(opts);
+    }
+    if (opts->max_args > 0) {
+        xargs_warn_mutex(progname, "--max-args", optname, "--max-args");
+        opts->max_args = 0;
+    }
+    opts->max_lines = value;
+}
+
+static void xargs_set_replace_mode(struct xargs_opts *opts, const char *progname,
+                                   const char *marker) {
+    if (opts->max_args > 0) {
+        xargs_warn_mutex(progname, "--max-args", "--replace/-I/-i", "--max-args");
+        opts->max_args = 0;
+    }
+    if (opts->max_lines > 0) {
+        xargs_warn_mutex(progname, "--max-lines", "--replace/-I/-i", "--max-lines");
+        opts->max_lines = 0;
+    }
+    opts->replace_mode = true;
+    opts->replace_marker = marker;
+}
+
 static void xargs_print_help(const char *progname) {
     printf("Usage: %s [OPTION]... [COMMAND [INITIAL-ARGS]...]\n", progname);
     puts("Run COMMAND with arguments read from standard input.");
@@ -440,6 +494,15 @@ static bool xargs_read_items_replace_lines(FILE *input, struct xargs_items *item
             line[--len] = '\0';
         if (logical_eof && strcmp(line, logical_eof) == 0)
             break;
+        bool blank = true;
+        for (ssize_t i = 0; i < len; i++) {
+            if (!isspace((unsigned char)line[i])) {
+                blank = false;
+                break;
+            }
+        }
+        if (blank)
+            continue;
         if (!xargs_items_append(items, line, line_group++)) {
             free(line);
             return false;
@@ -654,6 +717,15 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
     }
     argv[command_argc] = NULL;
 
+    size_t char_limit = xargs_effective_char_limit(opts);
+    if (char_limit > 0 && xargs_argv_bytes_from_argv(argv) > char_limit) {
+        fprintf(stderr, "%s: argument line too long\n", progname);
+        for (int i = 0; i < command_argc; i++)
+            free(argv[i]);
+        free(argv);
+        return 1;
+    }
+
     int rc = xargs_spawn_argv(progname, command, argv, opts, slot,
                               children, running, final_rc, abort_launch);
     for (int i = 0; i < command_argc; i++)
@@ -701,6 +773,15 @@ static size_t xargs_argv_bytes(char **command, int command_argc, struct xargs_it
         total += strlen(command[i]) + 1;
     for (int i = 0; i < count; i++)
         total += strlen(items->v[start + i]) + 1;
+    return total;
+}
+
+static size_t xargs_argv_bytes_from_argv(char **argv) {
+    size_t total = 0;
+    if (!argv)
+        return 0;
+    for (int i = 0; argv[i]; i++)
+        total += strlen(argv[i]) + 1;
     return total;
 }
 
@@ -758,10 +839,13 @@ static int xargs_select_batch_count(char **command, int command_argc,
 
 static int xargs_run_batches(const char *progname, char **command, int command_argc,
                              struct xargs_items *items, struct xargs_opts *opts) {
+    if (opts->replace_mode && items->count == 0)
+        return 0;
+
     if (items->count == 0 && opts->no_run_if_empty)
         return 0;
 
-    int max_procs = opts->max_procs > 0 ? opts->max_procs : 1;
+    int max_procs = opts->max_procs > 0 ? opts->max_procs : (items->count > 0 ? items->count : 1);
     struct xargs_child *children = calloc((size_t)max_procs, sizeof(*children));
     if (!children)
         return 1;
@@ -892,12 +976,10 @@ int bx_xargs_main(int argc, char **argv) {
             opts.delimiter_mode = true;
             break;
         case 'I':
-            opts.replace_mode = true;
-            opts.replace_marker = optarg;
+            xargs_set_replace_mode(&opts, progname, optarg);
             break;
         case 'i':
-            opts.replace_mode = true;
-            opts.replace_marker = optarg ? optarg : "{}";
+            xargs_set_replace_mode(&opts, progname, optarg ? optarg : "{}");
             break;
         case 'E':
             opts.logical_eof = optarg;
@@ -911,6 +993,7 @@ int bx_xargs_main(int argc, char **argv) {
         case 'n':
             if (!xargs_parse_int(progname, "-n", optarg, &opts.max_args, false))
                 return 1;
+            xargs_set_max_args(&opts, progname, opts.max_args);
             break;
         case 's':
             if (!xargs_parse_int(progname, "-s", optarg, &opts.max_chars, false))
@@ -919,20 +1002,20 @@ int bx_xargs_main(int argc, char **argv) {
         case 'L':
             if (!xargs_parse_int(progname, "-L", optarg, &opts.max_lines, false))
                 return 1;
+            xargs_set_max_lines(&opts, progname, "-L", opts.max_lines);
             break;
         case 'l':
             if (optarg) {
                 if (!xargs_parse_int(progname, "-l", optarg, &opts.max_lines, false))
                     return 1;
+                xargs_set_max_lines(&opts, progname, "-l", opts.max_lines);
             } else {
-                opts.max_lines = 1;
+                xargs_set_max_lines(&opts, progname, "-l", 1);
             }
             break;
         case 'P':
             if (!xargs_parse_int(progname, "-P", optarg, &opts.max_procs, true))
                 return 1;
-            if (opts.max_procs == 0)
-                opts.max_procs = 1;
             break;
         case 200:
             xargs_print_help(progname);

@@ -1,13 +1,17 @@
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
+#include <grp.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
@@ -28,6 +32,26 @@ enum find_expr_kind {
     FIND_EXPR_PATH,
     FIND_EXPR_LNAME,
     FIND_EXPR_TYPE,
+    FIND_EXPR_INUM,
+    FIND_EXPR_LINKS,
+    FIND_EXPR_UID,
+    FIND_EXPR_GID,
+    FIND_EXPR_USER,
+    FIND_EXPR_GROUP,
+    FIND_EXPR_NOUSER,
+    FIND_EXPR_NOGROUP,
+    FIND_EXPR_PERM,
+    FIND_EXPR_SIZE,
+    FIND_EXPR_AMIN,
+    FIND_EXPR_ATIME,
+    FIND_EXPR_CMIN,
+    FIND_EXPR_CTIME,
+    FIND_EXPR_MMIN,
+    FIND_EXPR_MTIME,
+    FIND_EXPR_USED,
+    FIND_EXPR_ANEWER,
+    FIND_EXPR_CNEWER,
+    FIND_EXPR_NEWER,
     FIND_EXPR_EMPTY,
     FIND_EXPR_READABLE,
     FIND_EXPR_WRITABLE,
@@ -51,6 +75,12 @@ struct find_expr {
     const char *text;
     char type_filter;
     bool ignore_case;
+    long long number;
+    int number_cmp;
+    mode_t perm_bits;
+    int perm_kind;
+    unsigned long long size_unit;
+    struct timespec ref_time;
 };
 
 struct find_parser {
@@ -59,6 +89,7 @@ struct find_parser {
     int argc;
     int pos;
     bool explicit_action;
+    struct find_opts *opts;
 };
 
 struct find_state {
@@ -67,6 +98,7 @@ struct find_state {
     struct find_expr *expr;
     bool *stop;
     int status;
+    struct timespec now;
 };
 
 static void find_report_error(const char *progname, const char *path, int errnum) {
@@ -86,6 +118,26 @@ static void find_print_help(const char *progname) {
     puts("  -name PATTERN match basename against PATTERN");
     puts("  -lname PATTERN match symlink target against PATTERN");
     puts("  -type [fdl]   match file type");
+    puts("  -inum N       match inode number");
+    puts("  -links N      match link count");
+    puts("  -uid N        match user id");
+    puts("  -gid N        match group id");
+    puts("  -user NAME    match user name or numeric uid");
+    puts("  -group NAME   match group name or numeric gid");
+    puts("  -nouser       match files whose uid has no passwd entry");
+    puts("  -nogroup      match files whose gid has no group entry");
+    puts("  -perm MODE    match permission bits");
+    puts("  -size N[cwbkMG]  match file size");
+    puts("  -amin N       match access age in minutes");
+    puts("  -atime N      match access age in 24-hour days");
+    puts("  -cmin N       match status-change age in minutes");
+    puts("  -ctime N      match status-change age in 24-hour days");
+    puts("  -mmin N       match modification age in minutes");
+    puts("  -mtime N      match modification age in 24-hour days");
+    puts("  -used N       match access age measured from last status change");
+    puts("  -anewer FILE  match entries accessed more recently than FILE was modified");
+    puts("  -cnewer FILE  match entries changed more recently than FILE was modified");
+    puts("  -newer FILE   match entries newer than FILE");
     puts("  -true         always true");
     puts("  -false        always false");
     puts("  -print        print path");
@@ -111,6 +163,258 @@ static bool parse_int_arg(const char *progname, const char *optname, const char 
     }
     *out = (int)v;
     return true;
+}
+
+static bool find_parse_numeric_test(const char *progname, const char *optname,
+                                    const char *text, long long *value, int *cmp) {
+    if (!text || *text == '\0') {
+        fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname, text ? text : "(null)");
+        return false;
+    }
+
+    *cmp = 0;
+    if (*text == '+') {
+        *cmp = 1;
+        text++;
+    } else if (*text == '-') {
+        *cmp = -1;
+        text++;
+    }
+
+    char *end = NULL;
+    errno = 0;
+    long long v = strtoll(text, &end, 10);
+    if (*text == '\0' || !end || *end != '\0' || errno != 0 || v < 0) {
+        fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname, text ? text : "(null)");
+        return false;
+    }
+    *value = v;
+    return true;
+}
+
+static bool find_numeric_match(unsigned long long actual, long long expected, int cmp) {
+    unsigned long long want = (unsigned long long)expected;
+    if (cmp > 0)
+        return actual > want;
+    if (cmp < 0)
+        return actual < want;
+    return actual == want;
+}
+
+static bool find_parse_unsigned_id(const char *text, unsigned long long *value) {
+    if (!text || *text == '\0')
+        return false;
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        if (!isdigit(*p))
+            return false;
+    }
+    char *end = NULL;
+    errno = 0;
+    unsigned long long v = strtoull(text, &end, 10);
+    if (errno != 0 || !end || *end != '\0')
+        return false;
+    *value = v;
+    return true;
+}
+
+static bool find_parse_user_id(const char *progname, const char *text, long long *value) {
+    struct passwd *pw = getpwnam(text);
+    if (pw) {
+        *value = (long long)pw->pw_uid;
+        return true;
+    }
+
+    unsigned long long numeric = 0;
+    if (find_parse_unsigned_id(text, &numeric)) {
+        *value = (long long)numeric;
+        return true;
+    }
+
+    fprintf(stderr, "%s: invalid user name or UID argument to -user: %s\n", progname, text);
+    return false;
+}
+
+static bool find_parse_group_id(const char *progname, const char *text, long long *value) {
+    struct group *gr = getgrnam(text);
+    if (gr) {
+        *value = (long long)gr->gr_gid;
+        return true;
+    }
+
+    unsigned long long numeric = 0;
+    if (find_parse_unsigned_id(text, &numeric)) {
+        *value = (long long)numeric;
+        return true;
+    }
+
+    fprintf(stderr, "%s: invalid group name or GID argument to -group: %s\n", progname, text);
+    return false;
+}
+
+static bool find_parse_perm(const char *progname, const char *text, mode_t *bits, int *kind) {
+    if (!text || *text == '\0') {
+        fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text ? text : "(null)");
+        return false;
+    }
+
+    *kind = 0;
+    if (*text == '-') {
+        *kind = 1;
+        text++;
+    } else if (*text == '/') {
+        *kind = 2;
+        text++;
+    }
+
+    if (*text == '\0') {
+        fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text);
+        return false;
+    }
+
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        if (*p < '0' || *p > '7') {
+            fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text);
+            return false;
+        }
+    }
+
+    char *end = NULL;
+    errno = 0;
+    unsigned long value = strtoul(text, &end, 8);
+    if (errno != 0 || !end || *end != '\0' || value > 07777u) {
+        fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text);
+        return false;
+    }
+
+    *bits = (mode_t)value;
+    if (*kind == 2 && *bits == 0) {
+        fprintf(stderr,
+                "%s: warning: you have specified a mode pattern /000 (which is equivalent to /000). "
+                "The meaning of -perm /000 has now been changed to be consistent with -perm -000; "
+                "that is, while it used to match no files, it now matches all files.\n",
+                progname);
+    }
+    return true;
+}
+
+static bool find_perm_match(mode_t mode, mode_t bits, int kind) {
+    mode_t actual = mode & 07777u;
+    switch (kind) {
+    case 0:
+        return actual == bits;
+    case 1:
+        return (actual & bits) == bits;
+    case 2:
+        return bits == 0 ? true : (actual & bits) != 0;
+    default:
+        return false;
+    }
+}
+
+static bool find_parse_size_arg(const char *progname, const char *text,
+                                long long *value, int *cmp, unsigned long long *unit) {
+    if (!text || *text == '\0') {
+        fprintf(stderr, "%s: invalid argument to -size: %s\n", progname, text ? text : "(null)");
+        return false;
+    }
+
+    *cmp = 0;
+    if (*text == '+') {
+        *cmp = 1;
+        text++;
+    } else if (*text == '-') {
+        *cmp = -1;
+        text++;
+    }
+
+    char *end = NULL;
+    errno = 0;
+    long long v = strtoll(text, &end, 10);
+    if (*text == '\0' || !end || errno != 0 || v < 0) {
+        fprintf(stderr, "%s: invalid argument to -size: %s\n", progname, text ? text : "(null)");
+        return false;
+    }
+
+    unsigned long long u = 512;
+    if (*end != '\0') {
+        if (end[1] != '\0') {
+            fprintf(stderr, "%s: invalid argument to -size: %s\n", progname, text);
+            return false;
+        }
+        switch (*end) {
+        case 'b': u = 512; break;
+        case 'c': u = 1; break;
+        case 'w': u = 2; break;
+        case 'k': u = 1024; break;
+        case 'M': u = 1024ULL * 1024ULL; break;
+        case 'G': u = 1024ULL * 1024ULL * 1024ULL; break;
+        default:
+            fprintf(stderr, "%s: invalid argument to -size: %s\n", progname, text);
+            return false;
+        }
+    }
+
+    *value = v;
+    *unit = u;
+    return true;
+}
+
+static bool find_size_match(off_t size, long long expected, int cmp, unsigned long long unit) {
+    unsigned long long bytes = size < 0 ? 0 : (unsigned long long)size;
+    unsigned long long quanta = unit == 0 ? 0 : (bytes + unit - 1) / unit;
+    return find_numeric_match(quanta, expected, cmp);
+}
+
+static bool find_parse_newer_ref(const char *progname, const char *path,
+                                 bool follow_root_symlink, struct timespec *out) {
+    struct stat st;
+    int rc = follow_root_symlink ? stat(path, &st) : lstat(path, &st);
+    if (rc != 0) {
+        find_report_error(progname, path, errno);
+        return false;
+    }
+    *out = st.st_mtim;
+    return true;
+}
+
+static int find_timespec_cmp(struct timespec lhs, struct timespec rhs) {
+    if (lhs.tv_sec != rhs.tv_sec)
+        return lhs.tv_sec < rhs.tv_sec ? -1 : 1;
+    if (lhs.tv_nsec != rhs.tv_nsec)
+        return lhs.tv_nsec < rhs.tv_nsec ? -1 : 1;
+    return 0;
+}
+
+static bool find_time_age_match(struct timespec now, struct timespec when,
+                                long long expected, int cmp,
+                                unsigned long long unit_seconds) {
+    time_t sec = now.tv_sec - when.tv_sec;
+    long nsec = now.tv_nsec - when.tv_nsec;
+    if (nsec < 0) {
+        sec--;
+        nsec += 1000000000L;
+    }
+    unsigned long long age = 0;
+    if (sec > 0 && unit_seconds > 0)
+        age = (unsigned long long)sec / unit_seconds;
+    return find_numeric_match(age, expected, cmp);
+}
+
+static bool find_used_match(struct timespec atime, struct timespec ctime,
+                            long long expected, int cmp) {
+    time_t sec = atime.tv_sec - ctime.tv_sec;
+    long nsec = atime.tv_nsec - ctime.tv_nsec;
+    if (nsec < 0) {
+        sec--;
+        nsec += 1000000000L;
+    }
+    if (sec < 0 || (sec == 0 && nsec <= 0))
+        return false;
+
+    unsigned long long days = (unsigned long long)(sec / 86400ULL);
+    if ((sec % 86400ULL) != 0 || nsec != 0)
+        days++;
+    return find_numeric_match(days, expected, cmp);
 }
 
 static const char *find_basename(const char *path) {
@@ -325,6 +629,141 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         expr = find_expr_new(FIND_EXPR_TYPE);
         if (expr)
             expr->type_filter = type_arg[0];
+    } else if (strcmp(arg, "-inum") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-inum'\n", parser->progname);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_INUM);
+        if (expr && !find_parse_numeric_test(parser->progname, "-inum", parser->argv[parser->pos],
+                                             &expr->number, &expr->number_cmp)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-links") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-links'\n", parser->progname);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_LINKS);
+        if (expr && !find_parse_numeric_test(parser->progname, "-links", parser->argv[parser->pos],
+                                             &expr->number, &expr->number_cmp)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-uid") == 0 || strcmp(arg, "-gid") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
+            return NULL;
+        }
+        expr = find_expr_new(strcmp(arg, "-uid") == 0 ? FIND_EXPR_UID : FIND_EXPR_GID);
+        if (expr && !find_parse_numeric_test(parser->progname, arg, parser->argv[parser->pos],
+                                             &expr->number, &expr->number_cmp)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-user") == 0 || strcmp(arg, "-group") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
+            return NULL;
+        }
+        expr = find_expr_new(strcmp(arg, "-user") == 0 ? FIND_EXPR_USER : FIND_EXPR_GROUP);
+        bool ok = false;
+        if (expr && strcmp(arg, "-user") == 0)
+            ok = find_parse_user_id(parser->progname, parser->argv[parser->pos], &expr->number);
+        else if (expr)
+            ok = find_parse_group_id(parser->progname, parser->argv[parser->pos], &expr->number);
+        if (expr && !ok) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-nouser") == 0) {
+        expr = find_expr_new(FIND_EXPR_NOUSER);
+    } else if (strcmp(arg, "-nogroup") == 0) {
+        expr = find_expr_new(FIND_EXPR_NOGROUP);
+    } else if (strcmp(arg, "-perm") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-perm'\n", parser->progname);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_PERM);
+        if (expr && !find_parse_perm(parser->progname, parser->argv[parser->pos],
+                                     &expr->perm_bits, &expr->perm_kind)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-size") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-size'\n", parser->progname);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_SIZE);
+        if (expr && !find_parse_size_arg(parser->progname, parser->argv[parser->pos],
+                                         &expr->number, &expr->number_cmp, &expr->size_unit)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-amin") == 0 || strcmp(arg, "-atime") == 0 ||
+               strcmp(arg, "-cmin") == 0 || strcmp(arg, "-ctime") == 0 ||
+               strcmp(arg, "-mmin") == 0 || strcmp(arg, "-mtime") == 0 ||
+               strcmp(arg, "-used") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
+            return NULL;
+        }
+        enum find_expr_kind kind = FIND_EXPR_AMIN;
+        if (strcmp(arg, "-atime") == 0)
+            kind = FIND_EXPR_ATIME;
+        else if (strcmp(arg, "-cmin") == 0)
+            kind = FIND_EXPR_CMIN;
+        if (strcmp(arg, "-ctime") == 0)
+            kind = FIND_EXPR_CTIME;
+        else if (strcmp(arg, "-mmin") == 0)
+            kind = FIND_EXPR_MMIN;
+        else if (strcmp(arg, "-mtime") == 0)
+            kind = FIND_EXPR_MTIME;
+        else if (strcmp(arg, "-used") == 0)
+            kind = FIND_EXPR_USED;
+        expr = find_expr_new(kind);
+        if (expr && !find_parse_numeric_test(parser->progname, arg, parser->argv[parser->pos],
+                                             &expr->number, &expr->number_cmp)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
+    } else if (strcmp(arg, "-anewer") == 0 || strcmp(arg, "-cnewer") == 0 ||
+               strcmp(arg, "-newer") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
+            return NULL;
+        }
+        enum find_expr_kind kind = FIND_EXPR_NEWER;
+        if (strcmp(arg, "-anewer") == 0)
+            kind = FIND_EXPR_ANEWER;
+        else if (strcmp(arg, "-cnewer") == 0)
+            kind = FIND_EXPR_CNEWER;
+        expr = find_expr_new(kind);
+        if (expr && !find_parse_newer_ref(parser->progname, parser->argv[parser->pos],
+                                          parser->opts && parser->opts->follow_root_symlink,
+                                          &expr->ref_time)) {
+            find_expr_free(expr);
+            return NULL;
+        }
+        if (expr)
+            parser->pos++;
     } else if (strcmp(arg, "-empty") == 0) {
         expr = find_expr_new(FIND_EXPR_EMPTY);
     } else if (strcmp(arg, "-readable") == 0) {
@@ -475,6 +914,46 @@ static bool find_eval_expr(const struct find_expr *expr, const struct walk_entry
         return find_match_link_target(entry, expr->text, expr->ignore_case);
     case FIND_EXPR_TYPE:
         return find_matches_type(entry, expr->type_filter);
+    case FIND_EXPR_INUM:
+        return find_numeric_match((unsigned long long)entry->inode, expr->number, expr->number_cmp);
+    case FIND_EXPR_LINKS:
+        return find_numeric_match((unsigned long long)entry->nlink, expr->number, expr->number_cmp);
+    case FIND_EXPR_UID:
+        return find_numeric_match((unsigned long long)entry->uid, expr->number, expr->number_cmp);
+    case FIND_EXPR_GID:
+        return find_numeric_match((unsigned long long)entry->gid, expr->number, expr->number_cmp);
+    case FIND_EXPR_USER:
+        return find_numeric_match((unsigned long long)entry->uid, expr->number, 0);
+    case FIND_EXPR_GROUP:
+        return find_numeric_match((unsigned long long)entry->gid, expr->number, 0);
+    case FIND_EXPR_NOUSER:
+        return getpwuid(entry->uid) == NULL;
+    case FIND_EXPR_NOGROUP:
+        return getgrgid(entry->gid) == NULL;
+    case FIND_EXPR_PERM:
+        return find_perm_match(entry->mode, expr->perm_bits, expr->perm_kind);
+    case FIND_EXPR_SIZE:
+        return find_size_match(entry->size, expr->number, expr->number_cmp, expr->size_unit);
+    case FIND_EXPR_AMIN:
+        return find_time_age_match(st->now, entry->atime, expr->number, expr->number_cmp, 60ULL);
+    case FIND_EXPR_ATIME:
+        return find_time_age_match(st->now, entry->atime, expr->number, expr->number_cmp, 86400ULL);
+    case FIND_EXPR_CMIN:
+        return find_time_age_match(st->now, entry->ctime, expr->number, expr->number_cmp, 60ULL);
+    case FIND_EXPR_CTIME:
+        return find_time_age_match(st->now, entry->ctime, expr->number, expr->number_cmp, 86400ULL);
+    case FIND_EXPR_MMIN:
+        return find_time_age_match(st->now, entry->mtime, expr->number, expr->number_cmp, 60ULL);
+    case FIND_EXPR_MTIME:
+        return find_time_age_match(st->now, entry->mtime, expr->number, expr->number_cmp, 86400ULL);
+    case FIND_EXPR_USED:
+        return find_used_match(entry->atime, entry->ctime, expr->number, expr->number_cmp);
+    case FIND_EXPR_ANEWER:
+        return find_timespec_cmp(entry->atime, expr->ref_time) > 0;
+    case FIND_EXPR_CNEWER:
+        return find_timespec_cmp(entry->ctime, expr->ref_time) > 0;
+    case FIND_EXPR_NEWER:
+        return find_timespec_cmp(entry->mtime, expr->ref_time) > 0;
     case FIND_EXPR_EMPTY:
         return find_is_empty(entry);
     case FIND_EXPR_READABLE:
@@ -647,6 +1126,16 @@ int bx_find_main(int argc, char **argv) {
                  strcmp(arg, "-path") == 0 || strcmp(arg, "-wholename") == 0 ||
                  strcmp(arg, "-iwholename") == 0 || strcmp(arg, "-lname") == 0 ||
                  strcmp(arg, "-ilname") == 0 || strcmp(arg, "-type") == 0 ||
+                 strcmp(arg, "-inum") == 0 || strcmp(arg, "-links") == 0 ||
+                 strcmp(arg, "-uid") == 0 || strcmp(arg, "-gid") == 0 ||
+                 strcmp(arg, "-user") == 0 || strcmp(arg, "-group") == 0 ||
+                 strcmp(arg, "-perm") == 0 || strcmp(arg, "-size") == 0 ||
+                 strcmp(arg, "-amin") == 0 || strcmp(arg, "-atime") == 0 ||
+                 strcmp(arg, "-cmin") == 0 || strcmp(arg, "-ctime") == 0 ||
+                 strcmp(arg, "-mmin") == 0 || strcmp(arg, "-mtime") == 0 ||
+                 strcmp(arg, "-used") == 0 ||
+                 strcmp(arg, "-anewer") == 0 || strcmp(arg, "-cnewer") == 0 ||
+                 strcmp(arg, "-newer") == 0 ||
                  strcmp(arg, "-fprint") == 0 || strcmp(arg, "-fprint0") == 0) && i + 1 < argc) {
                 expr_argv[expr_argc++] = argv[++i];
             }
@@ -657,6 +1146,7 @@ int bx_find_main(int argc, char **argv) {
         .progname = progname,
         .argv = expr_argv,
         .argc = expr_argc,
+        .opts = &opts,
     };
 
     struct find_expr *expr = NULL;
@@ -703,6 +1193,10 @@ int bx_find_main(int argc, char **argv) {
         .stop = &stop,
         .status = 0,
     };
+    if (clock_gettime(CLOCK_REALTIME, &st.now) != 0) {
+        st.now.tv_sec = time(NULL);
+        st.now.tv_nsec = 0;
+    }
 
     struct walk_opts wopts = {
         .hidden = true,
