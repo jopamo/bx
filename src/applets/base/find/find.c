@@ -1209,6 +1209,8 @@ int bx_find_main(int argc, char **argv) {
         .os_error_style = false,
         .error_prefix = progname,
         .max_depth = opts.max_depth,
+        .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_DIR_REPEAT : WALK_CYCLE_NONE,
+        .cycle_report = opts.follow_symlinks ? WALK_CYCLE_ERROR : WALK_CYCLE_IGNORE,
     };
 
     for (int i = 0; i < root_count && !stop; i++) {

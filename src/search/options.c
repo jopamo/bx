@@ -26,6 +26,7 @@ enum {
     OPT_GROUP_SEPARATOR,
     OPT_NO_GROUP_SEPARATOR,
     OPT_NULL,
+    OPT_BINARY_FILES,
 };
 
 static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
@@ -39,6 +40,29 @@ static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
     }
     *out = (int)v;
     return true;
+}
+
+static bool bx_set_binary_files_mode(const char *progname, struct search_opts *opts,
+                                     const char *value) {
+    if (strcmp(value, "binary") == 0) {
+        opts->binary_as_text = false;
+        opts->binary_without_match = false;
+        return true;
+    }
+    if (strcmp(value, "text") == 0) {
+        opts->binary_as_text = true;
+        opts->binary_without_match = false;
+        return true;
+    }
+    if (strcmp(value, "without-match") == 0) {
+        opts->binary_as_text = false;
+        opts->binary_without_match = true;
+        return true;
+    }
+
+    fprintf(stderr, "%s: invalid argument for --binary-files: %s\n",
+            progname, value);
+    return false;
 }
 
 void bx_search_print_help(const char *progname) {
@@ -189,6 +213,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
         {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
         {"null",         no_argument,       NULL, OPT_NULL},
+        {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
         {NULL, 0, NULL, 0},
     };
 
@@ -249,8 +274,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 }
             }
             break;
-        case 'I': opts->binary_without_match = true; break;
-        case 'a': opts->binary_as_text = true; break;
+        case 'I':
+            opts->binary_without_match = true;
+            opts->binary_as_text = false;
+            break;
+        case 'a':
+            opts->binary_as_text = true;
+            opts->binary_without_match = false;
+            break;
         case 'w': opts->word_regexp = true; break;
         case 'x': opts->line_regexp = true; break;
         case 'P': opts->perl_regexp = true; break;
@@ -452,6 +483,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             opts->null_output = true;
             opts->null_filename = true;
+            break;
+        case OPT_BINARY_FILES:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--binary-files'\n", argv[0]);
+                return -1;
+            }
+            if (!bx_set_binary_files_mode(argv[0], opts, optarg))
+                return -1;
             break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");

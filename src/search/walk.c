@@ -9,6 +9,13 @@
 #include <sys/stat.h>
 #include "walk.h"
 
+struct walk_ancestor {
+    dev_t dev;
+    ino_t ino;
+    const char *path;
+    const struct walk_ancestor *parent;
+};
+
 static bool walk_should_stop(const struct walk_opts *opts) {
     return opts->stop && *opts->stop;
 }
@@ -24,6 +31,33 @@ static void walk_report_error(const struct walk_opts *opts, const char *path, in
     else
         fprintf(stderr, "%s: %s: %s\n",
                 walk_error_prefix(opts), path, strerror(errnum));
+}
+
+static void walk_report_loop(const struct walk_opts *opts, const char *path) {
+    if (!opts || opts->cycle_report == WALK_CYCLE_IGNORE)
+        return;
+
+    if (opts->os_error_style) {
+        walk_report_error(opts, path, ELOOP);
+        return;
+    }
+
+    if (opts->cycle_report == WALK_CYCLE_WARN) {
+        fprintf(stderr, "%s: %s: warning: recursive directory loop\n",
+                walk_error_prefix(opts), path);
+        return;
+    }
+
+    fprintf(stderr, "%s: %s: file system loop detected\n",
+            walk_error_prefix(opts), path);
+}
+
+static bool walk_ancestor_contains(const struct walk_ancestor *anc, dev_t dev, ino_t ino) {
+    for (const struct walk_ancestor *it = anc; it; it = it->parent) {
+        if (it->dev == dev && it->ino == ino)
+            return true;
+    }
+    return false;
 }
 
 static bool is_hidden(const char *name) {
@@ -82,7 +116,8 @@ static bool is_ignored(const char *name, char **patterns, int n) {
 }
 
 static int walk_recursive(const char *dirpath, struct walk_opts *opts,
-                          walk_callback cb, void *user, int depth) {
+                          walk_callback cb, void *user, int depth,
+                          const struct walk_ancestor *ancestors) {
     if (walk_should_stop(opts))
         return 0;
 
@@ -139,8 +174,27 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         }
 
         struct stat st;
-        int stat_rc = opts->follow_symlinks ? stat(full, &st) : lstat(full, &st);
-        if (stat_rc != 0) { free(full); continue; }
+        struct stat lst;
+        bool have_lstat = false;
+        bool entry_was_symlink = false;
+
+        if (opts->follow_symlinks) {
+            if (lstat(full, &lst) != 0) {
+                free(full);
+                continue;
+            }
+            have_lstat = true;
+            entry_was_symlink = S_ISLNK(lst.st_mode);
+            if (stat(full, &st) != 0) {
+                free(full);
+                continue;
+            }
+        } else {
+            if (lstat(full, &st) != 0) {
+                free(full);
+                continue;
+            }
+        }
 
         struct walk_entry entry = {
             .path = full,
@@ -160,8 +214,34 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
             cb(&entry, user);
 
         if (!walk_should_stop(opts) && entry.is_dir) {
-            if (walk_recursive(full, opts, cb, user, depth + 1) != 0)
-                status = -1;
+            bool repeated_dir = false;
+            if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
+                repeated_dir = walk_ancestor_contains(ancestors, st.st_dev, st.st_ino);
+            } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
+                if (!have_lstat && opts->follow_symlinks) {
+                    if (lstat(full, &lst) == 0) {
+                        have_lstat = true;
+                        entry_was_symlink = S_ISLNK(lst.st_mode);
+                    }
+                }
+                repeated_dir = entry_was_symlink &&
+                               walk_ancestor_contains(ancestors, st.st_dev, st.st_ino);
+            }
+
+            if (repeated_dir) {
+                walk_report_loop(opts, full);
+                if (opts->cycle_report == WALK_CYCLE_ERROR)
+                    status = -1;
+            } else {
+                struct walk_ancestor next = {
+                    .dev = st.st_dev,
+                    .ino = st.st_ino,
+                    .path = full,
+                    .parent = ancestors,
+                };
+                if (walk_recursive(full, opts, cb, user, depth + 1, &next) != 0)
+                    status = -1;
+            }
         }
         if (!walk_should_stop(opts) && opts->post_order && entry.is_dir)
             cb(&entry, user);
@@ -201,7 +281,13 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
         free(entry.path);
         if (walk_should_stop(opts))
             return 0;
-        int rc = walk_recursive(root, opts, cb, user, 0);
+        struct walk_ancestor root_ancestor = {
+            .dev = st.st_dev,
+            .ino = st.st_ino,
+            .path = root,
+            .parent = NULL,
+        };
+        int rc = walk_recursive(root, opts, cb, user, 0, &root_ancestor);
         if (!walk_should_stop(opts) && opts->post_order) {
             struct walk_entry post = {
                 .path = strdup(root),

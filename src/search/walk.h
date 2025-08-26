@@ -21,6 +21,16 @@ struct walk_opts {
     const char *type_filter;
     char **exclude_dirs;
     int   num_exclude_dirs;
+    enum {
+        WALK_CYCLE_NONE = 0,
+        WALK_CYCLE_DIR_REPEAT,
+        WALK_CYCLE_SYMLINK_REPEAT,
+    } cycle_mode;
+    enum {
+        WALK_CYCLE_IGNORE = 0,
+        WALK_CYCLE_WARN,
+        WALK_CYCLE_ERROR,
+    } cycle_report;
 };
 
 struct walk_entry {

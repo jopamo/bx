@@ -456,6 +456,8 @@ int bx_fd_main(int argc, char **argv) {
         .suppress_eacces = true,
         .error_prefix = progname,
         .max_depth = opts.max_depth,
+        .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
+        .cycle_report = WALK_CYCLE_IGNORE,
     };
 
     struct fd_state state = {.opts = &opts, .stop = &stop};

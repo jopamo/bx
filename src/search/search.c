@@ -31,6 +31,10 @@ static void report_path_error(const char *progname, const char *path, int errnum
         fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errnum));
 }
 
+static void report_binary_match(const char *progname, const char *path) {
+    fprintf(stderr, "%s: %s: binary file matches\n", progname, path);
+}
+
 static const char *display_path_for_output(const char *path, bool strip_dot_prefix) {
     if (strip_dot_prefix && path && path[0] == '.' && path[1] == '/')
         return path + 2;
@@ -45,6 +49,11 @@ static const char *display_name_for_stream(const char *filename, const char *dis
         return opts->label ? opts->label : "(standard input)";
     return filename;
 }
+
+static bool is_binary(const char *path);
+static int search_binary_without_match(const char *display_name,
+                                       struct search_opts *opts,
+                                       int *match_count);
 
 /* --- unified matcher (regex or literal) --- */
 
@@ -253,8 +262,11 @@ static int search_file_buffered(const char *filename, const char *display_name,
     int file_matches = 0;
     int after_left = -1;
     size_t file_offset = 0;
+    bool saw_binary = false;
 
     while ((len = getline(&raw, &raw_cap, f)) != -1) {
+        if (memchr(raw, '\0', (size_t)len) != NULL)
+            saw_binary = true;
         if (nlines >= cap) { cap *= 2; lines = realloc(lines, (size_t)cap * sizeof(*lines)); }
         lines[nlines].text = malloc((size_t)len + 1);
         memcpy(lines[nlines].text, raw, (size_t)len + 1);
@@ -289,6 +301,48 @@ static int search_file_buffered(const char *filename, const char *display_name,
     }
     free(raw);
     if (!use_stdin) fclose(f);
+
+    if (saw_binary && !opts->binary_as_text) {
+        if (opts->binary_without_match) {
+            free_lines(lines, nlines);
+            return search_binary_without_match(display_name, opts, match_count);
+        }
+
+        if (opts->quiet && file_matches > 0) {
+            free_lines(lines, nlines);
+            *match_count += file_matches;
+            return 0;
+        }
+
+        if (opts->count_only || opts->files_with_matches || opts->files_without_match) {
+            if (opts->count_only) {
+                if (opts->show_filename && display_name)
+                    printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
+                else printf("%d\n", file_matches);
+            }
+            if (opts->files_with_matches && file_matches > 0 && display_name) {
+                if (opts->null_output) printf("%s%c", display_name, '\0');
+                else printf("%s\n", display_name);
+            }
+            if (opts->files_without_match && file_matches == 0 && display_name) {
+                if (opts->null_output) printf("%s%c", display_name, '\0');
+                else printf("%s\n", display_name);
+            }
+            *match_count += file_matches;
+            free_lines(lines, nlines);
+            return file_matches > 0 ? 0 : 1;
+        }
+
+        if (file_matches > 0) {
+            report_binary_match(progname, display_name);
+            *match_count += file_matches;
+            free_lines(lines, nlines);
+            return 0;
+        }
+
+        free_lines(lines, nlines);
+        return 1;
+    }
 
     if (opts->quiet && file_matches > 0) { free_lines(lines, nlines); *match_count += file_matches; return 0; }
 
@@ -420,10 +474,56 @@ static int search_file_streaming(const char *filename, const char *display_name,
     return status;
 }
 
+static int search_binary_without_match(const char *display_name,
+                                       struct search_opts *opts,
+                                       int *match_count) {
+    if (opts->count_only) {
+        if (opts->show_filename && display_name)
+            printf("%s%c0\n", display_name, opts->null_filename ? '\0' : ':');
+        else
+            printf("0\n");
+    }
+    if (opts->files_without_match && display_name) {
+        if (opts->null_output)
+            printf("%s%c", display_name, '\0');
+        else
+            printf("%s\n", display_name);
+    }
+    if (match_count)
+        *match_count += 0;
+    return 1;
+}
+
+static bool binary_file_matches(const char *filename, struct bx_matcher *m,
+                                struct search_opts *opts) {
+    FILE *f = fopen(filename, "r");
+    if (!f)
+        return false;
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t len;
+    bool matched = false;
+
+    while ((len = getline(&line, &cap, f)) != -1) {
+        struct bx_match bm;
+        matched = matcher_find(m, (unsigned char *)line, (size_t)len, 0, &bm) == 0;
+        if (opts->invert_match)
+            matched = !matched;
+        if (matched)
+            break;
+    }
+
+    free(line);
+    fclose(f);
+    return matched;
+}
+
 static int search_file(const char *filename, const char *display_name_override, const char *progname,
                        struct bx_matcher *m, struct search_opts *opts,
                        int *match_count) {
     const char *display_name = display_name_for_stream(filename, display_name_override, opts);
+    bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (display_name && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 && lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -431,6 +531,33 @@ static int search_file(const char *filename, const char *display_name_override, 
             return 2;
         }
     }
+
+    if (use_stdin && !opts->binary_as_text &&
+        (opts->binary_without_match ||
+         (!opts->quiet && !opts->count_only &&
+          !opts->files_with_matches && !opts->files_without_match))) {
+        return search_file_buffered(filename, display_name, progname, m, opts, match_count);
+    }
+
+    if (!use_stdin && !opts->binary_as_text && is_binary(filename)) {
+        if (opts->binary_without_match)
+            return search_binary_without_match(display_name, opts, match_count);
+
+        if (opts->quiet || opts->files_with_matches || opts->files_without_match || opts->count_only) {
+            if (needs_line_buffering(opts))
+                return search_file_buffered(filename, display_name, progname, m, opts, match_count);
+            return search_file_streaming(filename, display_name, progname, m, opts, match_count);
+        }
+
+        if (binary_file_matches(filename, m, opts)) {
+            report_binary_match(progname, display_name);
+            if (match_count)
+                (*match_count)++;
+            return 0;
+        }
+        return 1;
+    }
+
     if (needs_line_buffering(opts))
         return search_file_buffered(filename, display_name, progname, m, opts, match_count);
     return search_file_streaming(filename, display_name, progname, m, opts, match_count);
@@ -520,29 +647,6 @@ static void grep_walk_cb(const struct walk_entry *entry, void *user) {
 
     const char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix);
 
-    if (!gs->opts->binary_as_text && is_binary(entry->path)) {
-        if (!gs->opts->binary_without_match && !gs->opts->quiet) {
-            bool matched = false;
-            FILE *f = fopen(entry->path, "r");
-            if (f) {
-                char *line = NULL; size_t cap = 0; ssize_t len;
-                while ((len = getline(&line, &cap, f)) != -1) {
-                    struct bx_match bm;
-                    if (matcher_find(gs->m, (unsigned char *)line, (size_t)len, 0, &bm) == 0)
-                        { matched = true; break; }
-                }
-                free(line); fclose(f);
-            }
-            if (matched) {
-                printf("Binary file %s matches\n", display_name);
-                (*gs->match_count)++; *gs->exit_status = 0;
-                if (gs->match_seen) *gs->match_seen = true;
-                if (gs->opts->quiet && gs->stop) *gs->stop = true;
-            }
-        }
-        return;
-    }
-
     int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts, gs->match_count);
     if (r == 2) {
         *gs->exit_status = 2;
@@ -582,6 +686,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .max_depth = opts.max_depth,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
+            .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
+            .cycle_report = WALK_CYCLE_ERROR,
         };
         int num_files = argc - first_file;
         if (num_files == 0) {
@@ -680,6 +786,16 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .max_depth = opts.max_depth,
                 .exclude_dirs = opts.exclude_dir_patterns,
                 .num_exclude_dirs = opts.num_exclude_dir,
+                .cycle_mode = opts.follow_symlinks
+                                  ? ((personality == BX_SEARCH_RG)
+                                         ? WALK_CYCLE_SYMLINK_REPEAT
+                                         : WALK_CYCLE_DIR_REPEAT)
+                                  : WALK_CYCLE_NONE,
+                .cycle_report = opts.follow_symlinks
+                                    ? ((personality == BX_SEARCH_RG)
+                                           ? WALK_CYCLE_ERROR
+                                           : WALK_CYCLE_WARN)
+                                    : WALK_CYCLE_IGNORE,
             };
 
             if (walk_dir(".", &wopts, grep_walk_cb, &gs) != 0) {
@@ -712,6 +828,16 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .max_depth = opts.max_depth,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
+            .cycle_mode = opts.follow_symlinks
+                              ? ((personality == BX_SEARCH_RG)
+                                     ? WALK_CYCLE_SYMLINK_REPEAT
+                                     : WALK_CYCLE_DIR_REPEAT)
+                              : WALK_CYCLE_NONE,
+            .cycle_report = opts.follow_symlinks
+                                ? ((personality == BX_SEARCH_RG)
+                                       ? WALK_CYCLE_ERROR
+                                       : WALK_CYCLE_WARN)
+                                : WALK_CYCLE_IGNORE,
         };
 
         for (int j = first_file; j < argc && !stop; j++) {
