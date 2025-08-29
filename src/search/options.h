@@ -49,6 +49,7 @@ struct search_opts {
     bool no_ignore;
     bool null_output;
     bool null_filename;
+    bool null_data;
     bool suppress_group_separator;
     char *label;
     char *group_separator;

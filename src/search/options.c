@@ -27,6 +27,7 @@ enum {
     OPT_NO_GROUP_SEPARATOR,
     OPT_NULL,
     OPT_BINARY_FILES,
+    OPT_NULL_DATA,
 };
 
 static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
@@ -90,6 +91,7 @@ void bx_search_print_help(const char *progname) {
     puts("  -B NUM        print NUM lines of leading context");
     puts("  -C NUM        print NUM lines of output context");
     puts("  -Z, --null    print NUL after file names");
+    puts("  -z            use NUL as the record separator");
     puts("      --label=LABEL  use LABEL as the standard input file name");
     puts("      --group-separator=SEP  use SEP between context groups");
     puts("      --no-group-separator   suppress context group separators");
@@ -214,6 +216,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
         {"null",         no_argument,       NULL, OPT_NULL},
         {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
+        {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
         {NULL, 0, NULL, 0},
     };
 
@@ -221,7 +224,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIsZd:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
         switch (c) {
         case '0':
             if (personality == BX_SEARCH_RG) {
@@ -314,6 +317,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             opts->null_output = true;
             opts->null_filename = true;
+            break;
+        case 'z':
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: invalid option -- 'z'\n", argv[0]);
+                return -1;
+            }
+            opts->null_data = true;
             break;
         case 'g':
             if (opts->num_include < MAX_INCLUDE_PATTERNS)
@@ -491,6 +501,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             if (!bx_set_binary_files_mode(argv[0], opts, optarg))
                 return -1;
+            break;
+        case OPT_NULL_DATA:
+            if (personality == BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--null-data'\n", argv[0]);
+                return -1;
+            }
+            opts->null_data = true;
             break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");

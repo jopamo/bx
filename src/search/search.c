@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <poll.h>
+#include <regex.h>
 #include <unistd.h>
 #include "search.h"
 #include "options.h"
@@ -50,15 +51,24 @@ static const char *display_name_for_stream(const char *filename, const char *dis
     return filename;
 }
 
+struct bx_matcher;
+
 static bool is_binary(const char *path);
 static int search_binary_without_match(const char *display_name,
                                        struct search_opts *opts,
                                        int *match_count);
+static ssize_t read_record(FILE *f, char **buf, size_t *cap, struct search_opts *opts);
+static char record_delimiter(const struct search_opts *opts);
+static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts);
+static void write_record_terminator(const struct search_opts *opts);
+static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
+                                  size_t start, struct search_opts *opts, struct bx_match *out);
 
 /* --- unified matcher (regex or literal) --- */
 
 enum matcher_kind {
     MATCHER_REGEX,
+    MATCHER_POSIX,
     MATCHER_LITERAL,
 };
 
@@ -67,6 +77,7 @@ struct bx_matcher {
     union {
         struct bx_regex *regex;
         struct bx_literal_matcher *literal;
+        regex_t posix;
     };
 };
 
@@ -74,28 +85,78 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
                         size_t start, struct bx_match *out) {
     if (m->kind == MATCHER_LITERAL)
         return bx_literal_find(m->literal, buf, len, start, out);
+    if (m->kind == MATCHER_POSIX) {
+        if (start > len)
+            return -1;
+
+        regoff_t rc = re_search(&m->posix, (const char *)buf, (regoff_t)len,
+                                (regoff_t)start, (regoff_t)(len - start), NULL);
+        if (rc < 0)
+            return -1;
+        regoff_t match_len = re_match(&m->posix, (const char *)buf, (regoff_t)len, rc, NULL);
+        if (match_len < 0)
+            return -1;
+
+        out->start = (size_t)rc;
+        out->end = (size_t)(rc + match_len);
+        return 0;
+    }
 
     return bx_regex_find(m->regex, buf, len, start, out);
+}
+
+static bool is_word_byte(unsigned char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') ||
+           c == '_';
+}
+
+static bool match_has_word_boundaries(const unsigned char *buf, size_t len,
+                                      const struct bx_match *match) {
+    if (match->start > 0 && is_word_byte(buf[match->start - 1]))
+        return false;
+    if (match->end < len && is_word_byte(buf[match->end]))
+        return false;
+    return true;
+}
+
+static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
+                                  size_t start, struct search_opts *opts, struct bx_match *out) {
+    size_t pos = start;
+    while (pos <= len) {
+        if (matcher_find(m, buf, len, pos, out) != 0)
+            return -1;
+        if (!opts->word_regexp || match_has_word_boundaries(buf, len, out))
+            return 0;
+        pos = out->end > out->start ? out->start + 1 : out->start + 1;
+    }
+    return -1;
 }
 
 static void matcher_free(struct bx_matcher *m) {
     if (m->kind == MATCHER_LITERAL)
         bx_literal_free(m->literal);
+    else if (m->kind == MATCHER_POSIX)
+        regfree(&m->posix);
     else
         bx_regex_free(m->regex);
     free(m);
 }
 
-static struct bx_matcher *compile_matcher(const char *pattern, struct search_opts *opts,
+static struct bx_matcher *compile_matcher(const char *pattern,
+                                          enum bx_search_personality personality,
+                                          struct search_opts *opts,
                                           char **errmsg) {
     char *wrapped = NULL;
+    const char *base_pattern = pattern;
     const char *final_pattern = pattern;
     int flags = 0;
+    bool use_posix = personality != BX_SEARCH_RG && !opts->perl_regexp;
 
-    if (opts->word_regexp || opts->line_regexp) {
-        size_t plen = strlen(pattern);
+    if (opts->line_regexp) {
+        size_t plen = strlen(base_pattern);
         size_t extra = 1;
-        if (opts->word_regexp) extra += 4;
         if (opts->line_regexp) extra += 2;
         wrapped = malloc(plen + extra);
         if (!wrapped)
@@ -103,10 +164,8 @@ static struct bx_matcher *compile_matcher(const char *pattern, struct search_opt
 
         char *p = wrapped;
         if (opts->line_regexp) *p++ = '^';
-        if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
-        memcpy(p, pattern, plen);
+        memcpy(p, base_pattern, plen);
         p += plen;
-        if (opts->word_regexp) { *p++ = '\\'; *p++ = 'b'; }
         if (opts->line_regexp) *p++ = '$';
         *p = '\0';
         final_pattern = wrapped;
@@ -142,6 +201,22 @@ static struct bx_matcher *compile_matcher(const char *pattern, struct search_opt
             return NULL;
         }
         m->kind = MATCHER_LITERAL;
+    } else if (use_posix) {
+        reg_syntax_t old_syntax = re_set_syntax(opts->extended_regex
+                                                    ? RE_SYNTAX_POSIX_EXTENDED
+                                                    : RE_SYNTAX_POSIX_BASIC);
+        if (flags & BX_REGEX_ICASE)
+            re_set_syntax(re_syntax_options | RE_ICASE);
+        const char *err = re_compile_pattern(final_pattern, strlen(final_pattern), &m->posix);
+        re_set_syntax(old_syntax);
+        if (err != NULL) {
+            if (errmsg && !*errmsg)
+                *errmsg = strdup(err);
+            free(wrapped);
+            free(m);
+            return NULL;
+        }
+        m->kind = MATCHER_POSIX;
     } else {
         if (bx_regex_compile(&m->regex, final_pattern, flags, errmsg) != 0) {
             free(wrapped);
@@ -166,10 +241,11 @@ static void print_match_colored(const unsigned char *line, size_t len,
         fwrite(line + match_start, 1, match_end - match_start, stdout);
         if (bx_color_enabled()) fputs(bx_color_reset(), stdout);
         fwrite(line + match_end, 1, len - match_end, stdout);
-        if (line[len - 1] != '\n') putchar('\n');
+        if (len == 0 || line[len - 1] != record_delimiter(opts))
+            write_record_terminator(opts);
     } else {
         fwrite(line + match_start, 1, match_end - match_start, stdout);
-        putchar('\n');
+        write_record_terminator(opts);
     }
 }
 
@@ -187,14 +263,15 @@ static void print_only_matches(const unsigned char *line, size_t len,
                                const char *display_name, int line_num,
                                size_t byte_offset,
                                struct bx_matcher *m, struct search_opts *opts) {
+    size_t match_len = record_match_len(line, len, opts);
     size_t start = 0;
-    while (start <= len) {
+    while (start <= match_len) {
         struct bx_match bm;
-        if (matcher_find(m, line, len, start, &bm) != 0)
+        if (matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
             break;
         print_result_prefix(display_name, opts, line_num, byte_offset + bm.start, ':');
         fwrite(line + bm.start, 1, bm.end - bm.start, stdout);
-        putchar('\n');
+        write_record_terminator(opts);
         if (bm.end > bm.start)
             start = bm.end;
         else
@@ -219,6 +296,24 @@ static void free_lines(struct line_buf *lines, int count) {
 
 static bool needs_line_buffering(struct search_opts *opts) {
     return opts->after_context > 0 || opts->before_context > 0;
+}
+
+static char record_delimiter(const struct search_opts *opts) {
+    return opts->null_data ? '\0' : '\n';
+}
+
+static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts) {
+    if (len > 0 && buf[len - 1] == (unsigned char)record_delimiter(opts))
+        return len - 1;
+    return len;
+}
+
+static void write_record_terminator(const struct search_opts *opts) {
+    putchar((unsigned char)record_delimiter(opts));
+}
+
+static ssize_t read_record(FILE *f, char **buf, size_t *cap, struct search_opts *opts) {
+    return getdelim(buf, cap, record_delimiter(opts), f);
 }
 
 static bool search_default_show_filename(int argc, char **argv, int first_file,
@@ -264,8 +359,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
     size_t file_offset = 0;
     bool saw_binary = false;
 
-    while ((len = getline(&raw, &raw_cap, f)) != -1) {
-        if (memchr(raw, '\0', (size_t)len) != NULL)
+    while ((len = read_record(f, &raw, &raw_cap, opts)) != -1) {
+        if (!opts->null_data && memchr(raw, '\0', (size_t)len) != NULL)
             saw_binary = true;
         if (nlines >= cap) { cap *= 2; lines = realloc(lines, (size_t)cap * sizeof(*lines)); }
         lines[nlines].text = malloc((size_t)len + 1);
@@ -274,7 +369,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
         lines[nlines].byte_offset = file_offset;
         lines[nlines].print = false;
         struct bx_match bm;
-        bool matched = (matcher_find(m, (unsigned char *)raw, (size_t)len, 0, &bm) == 0);
+        size_t match_len = record_match_len((unsigned char *)raw, (size_t)len, opts);
+        bool matched = (matcher_find_with_opts(m, (unsigned char *)raw, match_len, 0, opts, &bm) == 0);
         file_offset += (size_t)len;
         if (opts->invert_match) matched = !matched;
         bool selected = matched;
@@ -392,13 +488,16 @@ static int search_file_buffered(const char *filename, const char *display_name,
                     continue;
                 }
                 struct bx_match bm;
-                matcher_find(m, (unsigned char *)lines[i].text, lines[i].len, 0, &bm);
+                matcher_find_with_opts(m, (unsigned char *)lines[i].text,
+                                       record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
+                                       0, opts, &bm);
                 print_match_colored((unsigned char *)lines[i].text, lines[i].len, bm.start, bm.end, opts);
             }
         } else {
             print_result_prefix(display_name, opts, i + 1, lines[i].byte_offset, '-');
             fwrite(lines[i].text, 1, lines[i].len, stdout);
-            if (lines[i].text[lines[i].len - 1] != '\n') putchar('\n');
+            if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
+                write_record_terminator(opts);
         }
         in_group = true; last_printed = i;
     }
@@ -426,12 +525,13 @@ static int search_file_streaming(const char *filename, const char *display_name,
     int line_num = 0, file_matches = 0, status = 1;
     size_t file_offset = 0;
 
-    while ((len = getline(&line, &cap, f)) != -1) {
+    while ((len = read_record(f, &line, &cap, opts)) != -1) {
         size_t line_offset = file_offset;
         file_offset += (size_t)len;
         line_num++;
         struct bx_match bm;
-        bool matched = (matcher_find(m, (unsigned char *)line, (size_t)len, 0, &bm) == 0);
+        size_t match_len = record_match_len((unsigned char *)line, (size_t)len, opts);
+        bool matched = (matcher_find_with_opts(m, (unsigned char *)line, match_len, 0, opts, &bm) == 0);
         if (opts->invert_match) matched = !matched;
         if (matched) {
             file_matches++; status = 0;
@@ -505,9 +605,11 @@ static bool binary_file_matches(const char *filename, struct bx_matcher *m,
     ssize_t len;
     bool matched = false;
 
-    while ((len = getline(&line, &cap, f)) != -1) {
+    while ((len = read_record(f, &line, &cap, opts)) != -1) {
         struct bx_match bm;
-        matched = matcher_find(m, (unsigned char *)line, (size_t)len, 0, &bm) == 0;
+        matched = matcher_find_with_opts(m, (unsigned char *)line,
+                                         record_match_len((unsigned char *)line, (size_t)len, opts),
+                                         0, opts, &bm) == 0;
         if (opts->invert_match)
             matched = !matched;
         if (matched)
@@ -532,14 +634,14 @@ static int search_file(const char *filename, const char *display_name_override, 
         }
     }
 
-    if (use_stdin && !opts->binary_as_text &&
+    if (use_stdin && !opts->null_data && !opts->binary_as_text &&
         (opts->binary_without_match ||
          (!opts->quiet && !opts->count_only &&
           !opts->files_with_matches && !opts->files_without_match))) {
         return search_file_buffered(filename, display_name, progname, m, opts, match_count);
     }
 
-    if (!use_stdin && !opts->binary_as_text && is_binary(filename)) {
+    if (!use_stdin && !opts->null_data && !opts->binary_as_text && is_binary(filename)) {
         if (opts->binary_without_match)
             return search_binary_without_match(display_name, opts, match_count);
 
@@ -716,25 +818,35 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     char *compile_error = NULL;
 
     if (opts.num_extra_patterns > 0) {
-        size_t total = strlen(pattern) + 4;
+        bool use_basic_grouping = personality != BX_SEARCH_RG &&
+                                  !opts.perl_regexp &&
+                                  !opts.extended_regex &&
+                                  !opts.fixed_strings;
+        const char *group_open = use_basic_grouping ? "\\(" : "(";
+        const char *group_close = use_basic_grouping ? "\\)" : ")";
+        const char *group_sep = use_basic_grouping ? "\\|" : "|";
+        size_t total = strlen(pattern) + strlen(group_open) + strlen(group_close) + 1;
         for (int k = 0; k < opts.num_extra_patterns; k++)
-            total += strlen(opts.extra_patterns[k]) + 2;
+            total += strlen(opts.extra_patterns[k]) + strlen(group_sep);
         char *combined = malloc(total);
         char *p = combined;
-        *p++ = '(';
+        memcpy(p, group_open, strlen(group_open));
+        p += strlen(group_open);
         memcpy(p, pattern, strlen(pattern)); p += strlen(pattern);
         for (int k = 0; k < opts.num_extra_patterns; k++) {
-            *p++ = '|';
+            memcpy(p, group_sep, strlen(group_sep));
+            p += strlen(group_sep);
             const char *ep = opts.extra_patterns[k];
             size_t elen = strlen(ep);
             memcpy(p, ep, elen); p += elen;
         }
-        *p++ = ')';
+        memcpy(p, group_close, strlen(group_close));
+        p += strlen(group_close);
         *p = '\0';
-        m = compile_matcher(combined, &opts, &compile_error);
+        m = compile_matcher(combined, personality, &opts, &compile_error);
         free(combined);
     } else {
-        m = compile_matcher(pattern, &opts, &compile_error);
+        m = compile_matcher(pattern, personality, &opts, &compile_error);
     }
 
     if (!m) {
