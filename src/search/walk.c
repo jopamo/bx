@@ -16,6 +16,41 @@ struct walk_ancestor {
     const struct walk_ancestor *parent;
 };
 
+static void walk_entry_fill_from_stat(struct walk_entry *entry, const struct stat *st) {
+    entry->is_dir = S_ISDIR(st->st_mode);
+    entry->metadata_loaded = true;
+    entry->metadata_tried = true;
+    entry->dev = st->st_dev;
+    entry->mode = st->st_mode;
+    entry->inode = st->st_ino;
+    entry->nlink = st->st_nlink;
+    entry->uid = st->st_uid;
+    entry->gid = st->st_gid;
+    entry->size = st->st_size;
+    entry->atime = st->st_atim;
+    entry->mtime = st->st_mtim;
+    entry->ctime = st->st_ctim;
+}
+
+bool walk_entry_load_metadata(struct walk_entry *entry) {
+    if (!entry)
+        return false;
+    if (entry->metadata_loaded)
+        return true;
+    if (entry->metadata_tried)
+        return false;
+
+    entry->metadata_tried = true;
+
+    struct stat st;
+    int rc = entry->follow_metadata ? stat(entry->path, &st) : lstat(entry->path, &st);
+    if (rc != 0)
+        return false;
+
+    walk_entry_fill_from_stat(entry, &st);
+    return true;
+}
+
 static bool walk_should_stop(const struct walk_opts *opts) {
     return opts->stop && *opts->stop;
 }
@@ -175,57 +210,59 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
         struct stat st;
         struct stat lst;
-        bool have_lstat = false;
         bool entry_was_symlink = false;
+        struct walk_entry entry = {
+            .path = full,
+            .follow_metadata = opts->follow_symlinks,
+            .depth = depth + 1,
+        };
 
-        if (opts->follow_symlinks) {
-            if (lstat(full, &lst) != 0) {
-                free(full);
-                continue;
-            }
-            have_lstat = true;
-            entry_was_symlink = S_ISLNK(lst.st_mode);
-            if (stat(full, &st) != 0) {
-                free(full);
-                continue;
+        if (!opts->follow_symlinks) {
+            if (ent->d_type == DT_DIR) {
+                entry.is_dir = true;
+            } else if (ent->d_type != DT_UNKNOWN) {
+                entry.is_dir = false;
+            } else {
+                if (lstat(full, &st) != 0) {
+                    free(full);
+                    continue;
+                }
+                walk_entry_fill_from_stat(&entry, &st);
             }
         } else {
-            if (lstat(full, &st) != 0) {
-                free(full);
-                continue;
+            if (ent->d_type == DT_DIR) {
+                entry.is_dir = true;
+            } else if (ent->d_type != DT_LNK && ent->d_type != DT_UNKNOWN) {
+                entry.is_dir = false;
+            } else {
+                if (lstat(full, &lst) != 0) {
+                    free(full);
+                    continue;
+                }
+                entry_was_symlink = S_ISLNK(lst.st_mode);
+                if (stat(full, &st) != 0) {
+                    free(full);
+                    continue;
+                }
+                walk_entry_fill_from_stat(&entry, &st);
             }
         }
 
-        struct walk_entry entry = {
-            .path = full,
-            .is_dir = S_ISDIR(st.st_mode),
-            .mode = st.st_mode,
-            .inode = st.st_ino,
-            .nlink = st.st_nlink,
-            .uid = st.st_uid,
-            .gid = st.st_gid,
-            .size = st.st_size,
-            .atime = st.st_atim,
-            .mtime = st.st_mtim,
-            .ctime = st.st_ctim,
-            .depth = depth + 1,
-        };
         if (!opts->post_order || !entry.is_dir)
             cb(&entry, user);
 
         if (!walk_should_stop(opts) && entry.is_dir) {
+            if (!walk_entry_load_metadata(&entry)) {
+                free(full);
+                continue;
+            }
+
             bool repeated_dir = false;
             if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
-                repeated_dir = walk_ancestor_contains(ancestors, st.st_dev, st.st_ino);
+                repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
             } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
-                if (!have_lstat && opts->follow_symlinks) {
-                    if (lstat(full, &lst) == 0) {
-                        have_lstat = true;
-                        entry_was_symlink = S_ISLNK(lst.st_mode);
-                    }
-                }
                 repeated_dir = entry_was_symlink &&
-                               walk_ancestor_contains(ancestors, st.st_dev, st.st_ino);
+                               walk_ancestor_contains(ancestors, entry.dev, entry.inode);
             }
 
             if (repeated_dir) {
@@ -234,8 +271,8 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                     status = -1;
             } else {
                 struct walk_ancestor next = {
-                    .dev = st.st_dev,
-                    .ino = st.st_ino,
+                    .dev = entry.dev,
+                    .ino = entry.inode,
                     .path = full,
                     .parent = ancestors,
                 };
@@ -264,18 +301,10 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
     if (S_ISDIR(st.st_mode)) {
         struct walk_entry entry = {
             .path = strdup(root),
-            .is_dir = true,
-            .mode = st.st_mode,
-            .inode = st.st_ino,
-            .nlink = st.st_nlink,
-            .uid = st.st_uid,
-            .gid = st.st_gid,
-            .size = st.st_size,
-            .atime = st.st_atim,
-            .mtime = st.st_mtim,
-            .ctime = st.st_ctim,
+            .follow_metadata = opts && opts->follow_root_symlink,
             .depth = 0,
         };
+        walk_entry_fill_from_stat(&entry, &st);
         if (!opts->post_order)
             cb(&entry, user);
         free(entry.path);
@@ -291,18 +320,10 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
         if (!walk_should_stop(opts) && opts->post_order) {
             struct walk_entry post = {
                 .path = strdup(root),
-                .is_dir = true,
-                .mode = st.st_mode,
-                .inode = st.st_ino,
-                .nlink = st.st_nlink,
-                .uid = st.st_uid,
-                .gid = st.st_gid,
-                .size = st.st_size,
-                .atime = st.st_atim,
-                .mtime = st.st_mtim,
-                .ctime = st.st_ctim,
+                .follow_metadata = opts && opts->follow_root_symlink,
                 .depth = 0,
             };
+            walk_entry_fill_from_stat(&post, &st);
             cb(&post, user);
             free(post.path);
         }
@@ -311,18 +332,10 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
 
     struct walk_entry entry = {
         .path = strdup(root),
-        .is_dir = false,
-        .mode = st.st_mode,
-        .inode = st.st_ino,
-        .nlink = st.st_nlink,
-        .uid = st.st_uid,
-        .gid = st.st_gid,
-        .size = st.st_size,
-        .atime = st.st_atim,
-        .mtime = st.st_mtim,
-        .ctime = st.st_ctim,
+        .follow_metadata = opts && opts->follow_root_symlink,
         .depth = 0,
     };
+    walk_entry_fill_from_stat(&entry, &st);
     cb(&entry, user);
     free(entry.path);
     return 0;

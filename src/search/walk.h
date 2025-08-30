@@ -36,6 +36,10 @@ struct walk_opts {
 struct walk_entry {
     char *path;
     bool is_dir;
+    bool metadata_loaded;
+    bool metadata_tried;
+    bool follow_metadata;
+    dev_t dev;
     mode_t mode;
     ino_t inode;
     nlink_t nlink;
@@ -48,7 +52,9 @@ struct walk_entry {
     int depth;
 };
 
-typedef void (*walk_callback)(const struct walk_entry *entry, void *user);
+typedef void (*walk_callback)(struct walk_entry *entry, void *user);
+
+bool walk_entry_load_metadata(struct walk_entry *entry);
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user);
 

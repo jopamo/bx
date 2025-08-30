@@ -305,6 +305,7 @@ bx_network_applet_sources = [
 ]
 
 bx_search_sources = [
+  'src/search/metadata.c',
   'src/search/literal.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
@@ -1178,16 +1179,28 @@ if get_option('tests')
   test('which parity exit status', python3, args : [test_parity_exit_status, which_ref, bx_exe, meson.current_build_dir()])
   test_grep_basic = find_program('tests/applets/text/grep/test_grep_basic.sh')
   test('grep basic', test_grep_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_grep_differential = find_program('tests/applets/text/grep/test_grep_differential.py')
+  test('grep differential', python3, args : [test_grep_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_rg_basic = find_program('tests/applets/text/rg/test_rg_basic.sh')
   test('rg basic', test_rg_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_rg_differential = find_program('tests/applets/text/rg/test_rg_differential.py')
+  test('rg differential', python3, args : [test_rg_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_fd_basic = find_program('tests/applets/text/fd/test_fd_basic.sh')
   test('fd basic', test_fd_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_fd_differential = find_program('tests/applets/text/fd/test_fd_differential.py')
+  test('fd differential', python3, args : [test_fd_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_find_basic = find_program('tests/applets/base/find/test_find_basic.sh')
   test('find basic', test_find_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_find_differential = find_program('tests/applets/base/find/test_find_differential.py')
+  test('find differential', python3, args : [test_find_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_xargs_basic = find_program('tests/applets/base/xargs/test_xargs_basic.sh')
   test('xargs basic', test_xargs_basic, args : [bx_exe], suite : fast_track_p2_suite)
+  test_xargs_differential = find_program('tests/applets/base/xargs/test_xargs_differential.py')
+  test('xargs differential', python3, args : [test_xargs_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+  test_pipeline_differential = find_program('tests/applets/base/xargs/test_pipeline_differential.py')
+  test('pipeline differential', python3, args : [test_pipeline_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 endif

@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <fnmatch.h>
 #include <getopt.h>
-#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +8,7 @@
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "search/metadata.h"
 #include "search/walk.h"
 #include "search/options.h"
 
@@ -83,32 +83,6 @@ static const char *fd_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-static bool fd_entry_is_empty(const struct walk_entry *entry) {
-    if (S_ISREG(entry->mode)) {
-        struct stat st;
-        if (stat(entry->path, &st) != 0)
-            return false;
-        return st.st_size == 0;
-    }
-    if (!S_ISDIR(entry->mode))
-        return false;
-
-    DIR *dir = opendir(entry->path);
-    if (!dir)
-        return false;
-
-    bool empty = true;
-    struct dirent *ent;
-    while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
-            empty = false;
-            break;
-        }
-    }
-    closedir(dir);
-    return empty;
-}
-
 static bool fd_parse_type_filter(const char *progname, const char *text, const char **out) {
     if (!text || *text == '\0') {
         fprintf(stderr, "%s: invalid argument for --type: %s\n",
@@ -142,32 +116,10 @@ static bool fd_parse_type_filter(const char *progname, const char *text, const c
     return true;
 }
 
-static bool fd_matches_type(const struct walk_entry *entry, const struct fd_opts *opts) {
+static bool fd_matches_type(struct walk_entry *entry, const struct fd_opts *opts) {
     if (!opts->type_filter)
         return true;
-
-    switch (opts->type_filter[0]) {
-    case 'f':
-        return S_ISREG(entry->mode);
-    case 'd':
-        return S_ISDIR(entry->mode);
-    case 'l':
-        return S_ISLNK(entry->mode);
-    case 'x':
-        return S_ISREG(entry->mode) && access(entry->path, X_OK) == 0;
-    case 'e':
-        return fd_entry_is_empty(entry);
-    case 'p':
-        return S_ISFIFO(entry->mode);
-    case 's':
-        return S_ISSOCK(entry->mode);
-    case 'b':
-        return S_ISBLK(entry->mode);
-    case 'c':
-        return S_ISCHR(entry->mode);
-    default:
-        return false;
-    }
+    return bx_walk_entry_matches_type(entry, opts->type_filter[0]);
 }
 
 static pcre2_code *fd_compile_regex(const char *progname, const char *pattern,
@@ -247,7 +199,7 @@ static bool fd_match_name(const struct fd_state *st, const char *name) {
     return true;
 }
 
-static void fd_callback(const struct walk_entry *entry, void *user) {
+static void fd_callback(struct walk_entry *entry, void *user) {
     struct fd_state *st = user;
     struct fd_opts *opts = st->opts;
 

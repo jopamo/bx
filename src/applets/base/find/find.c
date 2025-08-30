@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <grp.h>
@@ -15,6 +14,7 @@
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "search/metadata.h"
 #include "search/walk.h"
 
 struct find_opts {
@@ -192,15 +192,6 @@ static bool find_parse_numeric_test(const char *progname, const char *optname,
     return true;
 }
 
-static bool find_numeric_match(unsigned long long actual, long long expected, int cmp) {
-    unsigned long long want = (unsigned long long)expected;
-    if (cmp > 0)
-        return actual > want;
-    if (cmp < 0)
-        return actual < want;
-    return actual == want;
-}
-
 static bool find_parse_unsigned_id(const char *text, unsigned long long *value) {
     if (!text || *text == '\0')
         return false;
@@ -297,20 +288,6 @@ static bool find_parse_perm(const char *progname, const char *text, mode_t *bits
     return true;
 }
 
-static bool find_perm_match(mode_t mode, mode_t bits, int kind) {
-    mode_t actual = mode & 07777u;
-    switch (kind) {
-    case 0:
-        return actual == bits;
-    case 1:
-        return (actual & bits) == bits;
-    case 2:
-        return bits == 0 ? true : (actual & bits) != 0;
-    default:
-        return false;
-    }
-}
-
 static bool find_parse_size_arg(const char *progname, const char *text,
                                 long long *value, int *cmp, unsigned long long *unit) {
     if (!text || *text == '\0') {
@@ -359,12 +336,6 @@ static bool find_parse_size_arg(const char *progname, const char *text,
     return true;
 }
 
-static bool find_size_match(off_t size, long long expected, int cmp, unsigned long long unit) {
-    unsigned long long bytes = size < 0 ? 0 : (unsigned long long)size;
-    unsigned long long quanta = unit == 0 ? 0 : (bytes + unit - 1) / unit;
-    return find_numeric_match(quanta, expected, cmp);
-}
-
 static bool find_parse_newer_ref(const char *progname, const char *path,
                                  bool follow_root_symlink, struct timespec *out) {
     struct stat st;
@@ -397,7 +368,7 @@ static bool find_time_age_match(struct timespec now, struct timespec when,
     unsigned long long age = 0;
     if (sec > 0 && unit_seconds > 0)
         age = (unsigned long long)sec / unit_seconds;
-    return find_numeric_match(age, expected, cmp);
+    return bx_walk_numeric_match(age, expected, cmp);
 }
 
 static bool find_used_match(struct timespec atime, struct timespec ctime,
@@ -414,7 +385,7 @@ static bool find_used_match(struct timespec atime, struct timespec ctime,
     unsigned long long days = (unsigned long long)(sec / 86400ULL);
     if ((sec % 86400ULL) != 0 || nsec != 0)
         days++;
-    return find_numeric_match(days, expected, cmp);
+    return bx_walk_numeric_match(days, expected, cmp);
 }
 
 static const char *find_basename(const char *path) {
@@ -426,7 +397,9 @@ static bool find_match_pattern(const char *pattern, const char *text, bool ignor
     return fnmatch(pattern, text, ignore_case ? FNM_CASEFOLD : 0) == 0;
 }
 
-static bool find_match_link_target(const struct walk_entry *entry, const char *pattern, bool ignore_case) {
+static bool find_match_link_target(struct walk_entry *entry, const char *pattern, bool ignore_case) {
+    if (!walk_entry_load_metadata(entry))
+        return false;
     if (!S_ISLNK(entry->mode))
         return false;
 
@@ -450,52 +423,6 @@ static bool find_write_path_file(const char *progname, const char *filename, con
         find_report_error(progname, filename, errno ? errno : EIO);
     fclose(fp);
     return ok;
-}
-
-static bool find_matches_type(const struct walk_entry *entry, char type_filter) {
-    switch (type_filter) {
-    case 'f':
-        return S_ISREG(entry->mode);
-    case 'd':
-        return S_ISDIR(entry->mode);
-    case 'l':
-        return S_ISLNK(entry->mode);
-    case 'p':
-        return S_ISFIFO(entry->mode);
-    case 's':
-        return S_ISSOCK(entry->mode);
-    case 'b':
-        return S_ISBLK(entry->mode);
-    case 'c':
-        return S_ISCHR(entry->mode);
-    default:
-        return false;
-    }
-}
-
-static bool find_is_empty(const struct walk_entry *entry) {
-    if (S_ISREG(entry->mode)) {
-        struct stat st;
-        if (stat(entry->path, &st) != 0)
-            return false;
-        return st.st_size == 0;
-    }
-    if (!S_ISDIR(entry->mode))
-        return false;
-
-    DIR *dir = opendir(entry->path);
-    if (!dir)
-        return false;
-    struct dirent *ent;
-    bool empty = true;
-    while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
-            empty = false;
-            break;
-        }
-    }
-    closedir(dir);
-    return empty;
 }
 
 static struct find_expr *find_expr_new(enum find_expr_kind kind) {
@@ -894,7 +821,7 @@ static struct find_expr *find_parse_expr(struct find_parser *parser) {
     return expr;
 }
 
-static bool find_eval_expr(const struct find_expr *expr, const struct walk_entry *entry,
+static bool find_eval_expr(const struct find_expr *expr, struct walk_entry *entry,
                            struct find_state *st) {
     if (!expr)
         return true;
@@ -913,49 +840,89 @@ static bool find_eval_expr(const struct find_expr *expr, const struct walk_entry
     case FIND_EXPR_LNAME:
         return find_match_link_target(entry, expr->text, expr->ignore_case);
     case FIND_EXPR_TYPE:
-        return find_matches_type(entry, expr->type_filter);
+        return bx_walk_entry_matches_type(entry, expr->type_filter);
     case FIND_EXPR_INUM:
-        return find_numeric_match((unsigned long long)entry->inode, expr->number, expr->number_cmp);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->inode, expr->number, expr->number_cmp);
     case FIND_EXPR_LINKS:
-        return find_numeric_match((unsigned long long)entry->nlink, expr->number, expr->number_cmp);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->nlink, expr->number, expr->number_cmp);
     case FIND_EXPR_UID:
-        return find_numeric_match((unsigned long long)entry->uid, expr->number, expr->number_cmp);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->uid, expr->number, expr->number_cmp);
     case FIND_EXPR_GID:
-        return find_numeric_match((unsigned long long)entry->gid, expr->number, expr->number_cmp);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->gid, expr->number, expr->number_cmp);
     case FIND_EXPR_USER:
-        return find_numeric_match((unsigned long long)entry->uid, expr->number, 0);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->uid, expr->number, 0);
     case FIND_EXPR_GROUP:
-        return find_numeric_match((unsigned long long)entry->gid, expr->number, 0);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_numeric_match((unsigned long long)entry->gid, expr->number, 0);
     case FIND_EXPR_NOUSER:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return getpwuid(entry->uid) == NULL;
     case FIND_EXPR_NOGROUP:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return getgrgid(entry->gid) == NULL;
     case FIND_EXPR_PERM:
-        return find_perm_match(entry->mode, expr->perm_bits, expr->perm_kind);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_mode_matches_perm(entry->mode, expr->perm_bits, expr->perm_kind);
     case FIND_EXPR_SIZE:
-        return find_size_match(entry->size, expr->number, expr->number_cmp, expr->size_unit);
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return bx_walk_size_matches(entry->size, expr->number, expr->number_cmp, expr->size_unit);
     case FIND_EXPR_AMIN:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->atime, expr->number, expr->number_cmp, 60ULL);
     case FIND_EXPR_ATIME:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->atime, expr->number, expr->number_cmp, 86400ULL);
     case FIND_EXPR_CMIN:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->ctime, expr->number, expr->number_cmp, 60ULL);
     case FIND_EXPR_CTIME:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->ctime, expr->number, expr->number_cmp, 86400ULL);
     case FIND_EXPR_MMIN:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->mtime, expr->number, expr->number_cmp, 60ULL);
     case FIND_EXPR_MTIME:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_time_age_match(st->now, entry->mtime, expr->number, expr->number_cmp, 86400ULL);
     case FIND_EXPR_USED:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_used_match(entry->atime, entry->ctime, expr->number, expr->number_cmp);
     case FIND_EXPR_ANEWER:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_timespec_cmp(entry->atime, expr->ref_time) > 0;
     case FIND_EXPR_CNEWER:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_timespec_cmp(entry->ctime, expr->ref_time) > 0;
     case FIND_EXPR_NEWER:
+        if (!walk_entry_load_metadata(entry))
+            return false;
         return find_timespec_cmp(entry->mtime, expr->ref_time) > 0;
     case FIND_EXPR_EMPTY:
-        return find_is_empty(entry);
+        return bx_walk_entry_is_empty(entry);
     case FIND_EXPR_READABLE:
         return access(entry->path, R_OK) == 0;
     case FIND_EXPR_WRITABLE:
@@ -1029,7 +996,7 @@ static bool find_eval_expr(const struct find_expr *expr, const struct walk_entry
     return false;
 }
 
-static void find_walk_cb(const struct walk_entry *entry, void *user) {
+static void find_walk_cb(struct walk_entry *entry, void *user) {
     struct find_state *st = user;
     struct find_opts *opts = st->opts;
 

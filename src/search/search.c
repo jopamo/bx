@@ -24,6 +24,15 @@ static bool progname_uses_os_error_style(const char *progname) {
     return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
 }
 
+static char *bx_regex_strerror_dup(int rc, const regex_t *regex) {
+    size_t needed = regerror(rc, regex, NULL, 0);
+    char *buf = malloc(needed > 0 ? needed : 1);
+    if (!buf)
+        return NULL;
+    regerror(rc, regex, buf, needed > 0 ? needed : 1);
+    return buf;
+}
+
 static void report_path_error(const char *progname, const char *path, int errnum) {
     if (progname_uses_os_error_style(progname))
         fprintf(stderr, "%s: %s: %s (os error %d)\n",
@@ -89,17 +98,33 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
         if (start > len)
             return -1;
 
-        regoff_t rc = re_search(&m->posix, (const char *)buf, (regoff_t)len,
-                                (regoff_t)start, (regoff_t)(len - start), NULL);
-        if (rc < 0)
-            return -1;
-        regoff_t match_len = re_match(&m->posix, (const char *)buf, (regoff_t)len, rc, NULL);
-        if (match_len < 0)
-            return -1;
+        size_t chunk_start = start;
+        while (chunk_start <= len) {
+            const unsigned char *chunk_end = memchr(buf + chunk_start, '\0', len - chunk_start);
+            size_t chunk_len = chunk_end ? (size_t)(chunk_end - (buf + chunk_start))
+                                         : (len - chunk_start);
+            char *chunk = malloc(chunk_len + 1);
+            if (!chunk)
+                return -1;
+            memcpy(chunk, buf + chunk_start, chunk_len);
+            chunk[chunk_len] = '\0';
 
-        out->start = (size_t)rc;
-        out->end = (size_t)(rc + match_len);
-        return 0;
+            regmatch_t match = {0};
+            int rc = regexec(&m->posix, chunk, 1, &match, 0);
+            free(chunk);
+            if (rc == 0) {
+                if (match.rm_so < 0 || match.rm_eo < 0)
+                    return -1;
+                out->start = chunk_start + (size_t)match.rm_so;
+                out->end = chunk_start + (size_t)match.rm_eo;
+                return 0;
+            }
+
+            if (!chunk_end)
+                break;
+            chunk_start += chunk_len + 1;
+        }
+        return -1;
     }
 
     return bx_regex_find(m->regex, buf, len, start, out);
@@ -202,16 +227,16 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         }
         m->kind = MATCHER_LITERAL;
     } else if (use_posix) {
-        reg_syntax_t old_syntax = re_set_syntax(opts->extended_regex
-                                                    ? RE_SYNTAX_POSIX_EXTENDED
-                                                    : RE_SYNTAX_POSIX_BASIC);
+        int cflags = 0;
+        if (opts->extended_regex)
+            cflags |= REG_EXTENDED;
         if (flags & BX_REGEX_ICASE)
-            re_set_syntax(re_syntax_options | RE_ICASE);
-        const char *err = re_compile_pattern(final_pattern, strlen(final_pattern), &m->posix);
-        re_set_syntax(old_syntax);
-        if (err != NULL) {
+            cflags |= REG_ICASE;
+
+        int rc = regcomp(&m->posix, final_pattern, cflags);
+        if (rc != 0) {
             if (errmsg && !*errmsg)
-                *errmsg = strdup(err);
+                *errmsg = bx_regex_strerror_dup(rc, &m->posix);
             free(wrapped);
             free(m);
             return NULL;
@@ -487,6 +512,12 @@ static int search_file_buffered(const char *filename, const char *display_name,
                 if (opts->only_matching && opts->invert_match) {
                     continue;
                 }
+                if (opts->invert_match) {
+                    fwrite(lines[i].text, 1, lines[i].len, stdout);
+                    if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
+                        write_record_terminator(opts);
+                    continue;
+                }
                 struct bx_match bm;
                 matcher_find_with_opts(m, (unsigned char *)lines[i].text,
                                        record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
@@ -547,7 +578,13 @@ static int search_file_streaming(const char *filename, const char *display_name,
             } else {
                 if (!(opts->only_matching && opts->invert_match)) {
                     print_result_prefix(display_name, opts, line_num, line_offset, ':');
-                    print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
+                    if (opts->invert_match) {
+                        fwrite(line, 1, (size_t)len, stdout);
+                        if (len == 0 || line[len - 1] != record_delimiter(opts))
+                            write_record_terminator(opts);
+                    } else {
+                        print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
+                    }
                 }
             }
             if (opts->max_count > 0 && file_matches >= opts->max_count) break;
@@ -721,14 +758,14 @@ struct files_walk_state {
     bool strip_dot_prefix;
 };
 
-static void fs_cb(const struct walk_entry *entry, void *user) {
+static void fs_cb(struct walk_entry *entry, void *user) {
     struct files_walk_state *st = user;
     if (!entry->is_dir)
         printf("%s%c", display_path_for_output(entry->path, st && st->strip_dot_prefix),
                (st && st->opts && st->opts->null_output) ? '\0' : '\n');
 }
 
-static void grep_walk_cb(const struct walk_entry *entry, void *user) {
+static void grep_walk_cb(struct walk_entry *entry, void *user) {
     struct grep_walk_state *gs = user;
     if (gs->stop && *gs->stop) return;
     if (entry->is_dir) return;
