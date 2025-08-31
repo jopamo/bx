@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -11,8 +10,8 @@
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
-
-extern char **environ;
+#include "lib/argv_packer.h"
+#include "lib/child_runner.h"
 
 struct xargs_opts {
     bool no_run_if_empty;
@@ -32,21 +31,12 @@ struct xargs_opts {
     const char *process_slot_var;
 };
 
-struct xargs_child {
-    pid_t pid;
-    bool exec_failed;
-    int slot;
-};
-
 struct xargs_items {
     char **v;
     int *line_groups;
     int count;
     int cap;
 };
-
-static size_t xargs_effective_char_limit(struct xargs_opts *opts);
-static size_t xargs_argv_bytes_from_argv(char **argv);
 
 static void xargs_warn_mutex(const char *progname, const char *left, const char *right,
                              const char *ignored) {
@@ -132,25 +122,12 @@ static void xargs_print_limits(void) {
     if (arg_max < 0)
         arg_max = 0;
 
-    size_t env_bytes = 0;
-    if (environ) {
-        for (char **ep = environ; *ep; ep++)
-            env_bytes += strlen(*ep) + 1;
-    }
+    size_t env_bytes = bx_argv_environment_bytes();
 
     printf("Your environment variables take up %zu bytes\n", env_bytes);
     printf("POSIX upper limit on argument length (this system): %ld\n", arg_max);
     if (arg_max > 0 && env_bytes < (size_t)arg_max)
         printf("Maximum command length we could try to use: %ld\n", arg_max - (long)env_bytes);
-}
-
-static size_t xargs_environment_bytes(void) {
-    size_t env_bytes = 0;
-    if (environ) {
-        for (char **ep = environ; *ep; ep++)
-            env_bytes += strlen(*ep) + 1;
-    }
-    return env_bytes;
 }
 
 static bool xargs_parse_int(const char *progname, const char *optname, const char *text, int *out,
@@ -524,29 +501,6 @@ static bool xargs_read_items(FILE *input, const char *progname, struct xargs_opt
     return xargs_read_items_default(input, progname, items, opts->logical_eof);
 }
 
-static struct xargs_child *xargs_find_child(struct xargs_child *children, int count, pid_t pid) {
-    for (int i = 0; i < count; i++) {
-        if (children[i].pid == pid)
-            return &children[i];
-    }
-    return NULL;
-}
-
-static int xargs_pick_slot(struct xargs_child *children, int count, int max_procs) {
-    for (int slot = 0; slot < max_procs; slot++) {
-        bool used = false;
-        for (int i = 0; i < count; i++) {
-            if (children[i].slot == slot) {
-                used = true;
-                break;
-            }
-        }
-        if (!used)
-            return slot;
-    }
-    return 0;
-}
-
 static void xargs_record_status(const char *progname, const char *cmdname, int status,
                                 bool exec_failed, int *final_rc, bool *abort_launch) {
     int rc = 0;
@@ -616,69 +570,11 @@ static char *xargs_expand_argument(const char *arg, const char *marker,
     return out;
 }
 
-static int xargs_spawn_argv(const char *progname, char **command, char **argv,
-                            struct xargs_opts *opts,
-                            int slot,
-                            struct xargs_child *children, int *running,
-                            int *final_rc, bool *abort_launch) {
-    int errpipe[2];
-    if (pipe(errpipe) != 0) {
-        fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
-        return 1;
-    }
-    fcntl(errpipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "%s: fork failed: %s\n", progname, strerror(errno));
-        close(errpipe[0]);
-        close(errpipe[1]);
-        return 1;
-    }
-    if (pid == 0) {
-        int errnum;
-        close(errpipe[0]);
-        if (opts && opts->process_slot_var) {
-            char slot_buf[32];
-            snprintf(slot_buf, sizeof(slot_buf), "%d", slot);
-            setenv(opts->process_slot_var, slot_buf, 1);
-        }
-        execvp(argv[0], argv);
-        errnum = errno;
-        (void)!write(errpipe[1], &errnum, sizeof(errnum));
-        _exit(127);
-    }
-
-    if (opts && opts->verbose) {
-        for (int i = 0; argv[i]; i++)
-            fprintf(stderr, "%s%s", i == 0 ? "" : " ", argv[i]);
-        fputc('\n', stderr);
-    }
-
-    close(errpipe[1]);
-    children[*running].pid = pid;
-    children[*running].exec_failed = false;
-    children[*running].slot = slot;
-    (*running)++;
-
-    int exec_errno = 0;
-    ssize_t nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
-    close(errpipe[0]);
-
-    if (nread == (ssize_t)sizeof(exec_errno)) {
-        children[*running - 1].exec_failed = true;
-        xargs_record_status(progname, command[0], exec_errno, true, final_rc, abort_launch);
-    }
-
-    return 0;
-}
-
 static int xargs_spawn_batch(const char *progname, char **command, int command_argc,
                              char **items, int item_count,
                              struct xargs_opts *opts,
                              int slot,
-                             struct xargs_child *children, int *running,
+                             struct bx_child *children, int *running,
                              int *final_rc, bool *abort_launch) {
     char **argv = calloc((size_t)command_argc + (size_t)item_count + 1, sizeof(*argv));
     if (!argv) {
@@ -689,8 +585,16 @@ static int xargs_spawn_batch(const char *progname, char **command, int command_a
     for (int j = 0; j < item_count; j++)
         argv[command_argc + j] = items[j];
     argv[command_argc + item_count] = NULL;
-    int rc = xargs_spawn_argv(progname, command, argv, opts, slot,
-                              children, running, final_rc, abort_launch);
+    struct bx_child_runner_opts runner_opts = {
+        .verbose = opts && opts->verbose,
+        .process_slot_var = opts ? opts->process_slot_var : NULL,
+    };
+    bool exec_failed_now = false;
+    int exec_errno_now = 0;
+    int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,
+                                 children, running, &exec_failed_now, &exec_errno_now);
+    if (exec_failed_now)
+        xargs_record_status(progname, command[0], exec_errno_now, true, final_rc, abort_launch);
     free(argv);
     return rc;
 }
@@ -699,7 +603,7 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
                                    const char *marker, const char *item,
                                    struct xargs_opts *opts,
                                    int slot,
-                                   struct xargs_child *children, int *running,
+                                   struct bx_child *children, int *running,
                                    int *final_rc, bool *abort_launch) {
     char **argv = calloc((size_t)command_argc + 1, sizeof(*argv));
     if (!argv)
@@ -717,8 +621,8 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
     }
     argv[command_argc] = NULL;
 
-    size_t char_limit = xargs_effective_char_limit(opts);
-    if (char_limit > 0 && xargs_argv_bytes_from_argv(argv) > char_limit) {
+    size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
+    if (char_limit > 0 && bx_argv_bytes(argv) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
         for (int i = 0; i < command_argc; i++)
             free(argv[i]);
@@ -726,115 +630,59 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
         return 1;
     }
 
-    int rc = xargs_spawn_argv(progname, command, argv, opts, slot,
-                              children, running, final_rc, abort_launch);
+    struct bx_child_runner_opts runner_opts = {
+        .verbose = opts && opts->verbose,
+        .process_slot_var = opts ? opts->process_slot_var : NULL,
+    };
+    bool exec_failed_now = false;
+    int exec_errno_now = 0;
+    int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,
+                                 children, running, &exec_failed_now, &exec_errno_now);
+    if (exec_failed_now)
+        xargs_record_status(progname, command[0], exec_errno_now, true, final_rc, abort_launch);
     for (int i = 0; i < command_argc; i++)
         free(argv[i]);
     free(argv);
     return rc;
 }
 
+struct xargs_reap_ctx {
+    const char *progname;
+    const char *cmdname;
+    int *final_rc;
+    bool *abort_launch;
+};
+
+static void xargs_reap_status_cb(pid_t pid, int status, bool exec_failed, int exec_errno, void *user) {
+    (void)pid;
+    struct xargs_reap_ctx *ctx = user;
+    if (exec_failed)
+        return;
+    xargs_record_status(ctx->progname, ctx->cmdname, exec_failed ? exec_errno : status,
+                        exec_failed, ctx->final_rc, ctx->abort_launch);
+}
+
 static int xargs_reap_children(const char *progname, const char *cmdname,
-                               struct xargs_child *children, int *running,
+                               struct bx_child *children, int *running,
                                int *final_rc, bool *abort_launch,
                                bool block, bool drain_all) {
-    for (;;) {
-        int status = 0;
-        pid_t pid = waitpid(-1, &status, block ? 0 : WNOHANG);
-        if (pid == 0)
-            return 0;
-        if (pid < 0) {
-            if (!block && errno == ECHILD)
-                return 0;
-            return (errno == ECHILD) ? 0 : 1;
-        }
-
-        struct xargs_child *child = xargs_find_child(children, *running, pid);
-        bool exec_failed = child && child->exec_failed;
-        if (child) {
-            *child = children[*running - 1];
-            (*running)--;
-        }
-
-        if (!exec_failed)
-            xargs_record_status(progname, cmdname, status, exec_failed, final_rc, abort_launch);
-        if (!drain_all)
-            return 0;
-        if (*running == 0)
-            return 0;
-        block = false;
-    }
-}
-
-static size_t xargs_argv_bytes(char **command, int command_argc, struct xargs_items *items,
-                               int start, int count) {
-    size_t total = 0;
-    for (int i = 0; i < command_argc; i++)
-        total += strlen(command[i]) + 1;
-    for (int i = 0; i < count; i++)
-        total += strlen(items->v[start + i]) + 1;
-    return total;
-}
-
-static size_t xargs_argv_bytes_from_argv(char **argv) {
-    size_t total = 0;
-    if (!argv)
-        return 0;
-    for (int i = 0; argv[i]; i++)
-        total += strlen(argv[i]) + 1;
-    return total;
-}
-
-static size_t xargs_effective_char_limit(struct xargs_opts *opts) {
-    long arg_max = sysconf(_SC_ARG_MAX);
-    size_t sys_limit = 0;
-    if (arg_max > 0) {
-        size_t env_bytes = xargs_environment_bytes();
-        if ((size_t)arg_max > env_bytes)
-            sys_limit = (size_t)arg_max - env_bytes;
-    }
-
-    if (opts->max_chars > 0 && sys_limit > 0)
-        return (size_t)opts->max_chars < sys_limit ? (size_t)opts->max_chars : sys_limit;
-    if (opts->max_chars > 0)
-        return (size_t)opts->max_chars;
-    if (sys_limit > 0)
-        return sys_limit;
-    return 0;
+    struct xargs_reap_ctx ctx = {
+        .progname = progname,
+        .cmdname = cmdname,
+        .final_rc = final_rc,
+        .abort_launch = abort_launch,
+    };
+    return bx_child_reap(children, running, block, drain_all, xargs_reap_status_cb, &ctx);
 }
 
 static int xargs_select_batch_count(char **command, int command_argc,
                                     struct xargs_items *items, int start,
                                     struct xargs_opts *opts) {
-    int max_args = opts->max_args > 0 ? opts->max_args : (items->count - start);
-    int max_lines = opts->max_lines > 0 ? opts->max_lines : (items->count - start);
-    int take = 0;
-    int used_lines = 0;
-    int last_group = -1;
-    size_t char_limit = xargs_effective_char_limit(opts);
-    size_t bytes = xargs_argv_bytes(command, command_argc, items, start, 0);
-
-    if (char_limit > 0 && bytes > char_limit)
-        return -1;
-
-    while (start + take < items->count && take < max_args) {
-        int group = items->line_groups[start + take];
-        if (take == 0 || group != last_group) {
-            if (used_lines >= max_lines)
-                break;
-            used_lines++;
-            last_group = group;
-        }
-        if (char_limit > 0) {
-            size_t next_bytes = bytes + strlen(items->v[start + take]) + 1;
-            if (next_bytes > char_limit)
-                break;
-            bytes = next_bytes;
-        }
-        take++;
-    }
-
-    return take > 0 ? take : -1;
+    return bx_argv_select_batch_count(command, command_argc,
+                                      items->v, items->line_groups,
+                                      items->count, start,
+                                      opts->max_args, opts->max_lines,
+                                      bx_argv_effective_char_limit(opts->max_chars));
 }
 
 static int xargs_run_batches(const char *progname, char **command, int command_argc,
@@ -846,7 +694,7 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
         return 0;
 
     int max_procs = opts->max_procs > 0 ? opts->max_procs : (items->count > 0 ? items->count : 1);
-    struct xargs_child *children = calloc((size_t)max_procs, sizeof(*children));
+    struct bx_child *children = calloc((size_t)max_procs, sizeof(*children));
     if (!children)
         return 1;
 
@@ -854,15 +702,16 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
     bool abort_launch = false;
     int running = 0;
 
-    if (xargs_effective_char_limit(opts) > 0 &&
-        xargs_argv_bytes(command, command_argc, items, 0, 0) > xargs_effective_char_limit(opts)) {
+    size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
+    if (char_limit > 0 &&
+        bx_argv_bytes_with_items(command, command_argc, items->v, 0, 0) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
         free(children);
         return 1;
     }
 
     if (items->count == 0) {
-        int slot = xargs_pick_slot(children, running, max_procs);
+        int slot = bx_child_pick_slot(children, running, max_procs);
         if (xargs_spawn_batch(progname, command, command_argc, NULL, 0, opts, slot,
                               children, &running, &final_rc, &abort_launch) != 0) {
             free(children);
@@ -888,7 +737,7 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
             return 1;
         }
 
-        int slot = xargs_pick_slot(children, running, max_procs);
+        int slot = bx_child_pick_slot(children, running, max_procs);
         int spawn_rc;
         if (opts->replace_mode) {
             spawn_rc = xargs_spawn_replacement(progname, command, command_argc,

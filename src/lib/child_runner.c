@@ -1,0 +1,133 @@
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include "child_runner.h"
+
+static struct bx_child *bx_child_find(struct bx_child *children, int count, pid_t pid) {
+    for (int i = 0; i < count; i++) {
+        if (children[i].pid == pid)
+            return &children[i];
+    }
+    return NULL;
+}
+
+int bx_child_pick_slot(struct bx_child *children, int count, int max_procs) {
+    for (int slot = 0; slot < max_procs; slot++) {
+        bool used = false;
+        for (int i = 0; i < count; i++) {
+            if (children[i].slot == slot) {
+                used = true;
+                break;
+            }
+        }
+        if (!used)
+            return slot;
+    }
+    return 0;
+}
+
+int bx_child_spawn_argv(const char *progname, char **argv,
+                        const struct bx_child_runner_opts *opts,
+                        int slot,
+                        struct bx_child *children, int *running,
+                        bool *exec_failed_now, int *exec_errno_now) {
+    if (exec_failed_now)
+        *exec_failed_now = false;
+    if (exec_errno_now)
+        *exec_errno_now = 0;
+
+    int errpipe[2];
+    if (pipe(errpipe) != 0) {
+        fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
+        return 1;
+    }
+    fcntl(errpipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "%s: fork failed: %s\n", progname, strerror(errno));
+        close(errpipe[0]);
+        close(errpipe[1]);
+        return 1;
+    }
+    if (pid == 0) {
+        int errnum;
+        close(errpipe[0]);
+        if (opts && opts->process_slot_var) {
+            char slot_buf[32];
+            snprintf(slot_buf, sizeof(slot_buf), "%d", slot);
+            setenv(opts->process_slot_var, slot_buf, 1);
+        }
+        execvp(argv[0], argv);
+        errnum = errno;
+        (void)!write(errpipe[1], &errnum, sizeof(errnum));
+        _exit(127);
+    }
+
+    if (opts && opts->verbose) {
+        for (int i = 0; argv[i]; i++)
+            fprintf(stderr, "%s%s", i == 0 ? "" : " ", argv[i]);
+        fputc('\n', stderr);
+    }
+
+    close(errpipe[1]);
+    children[*running].pid = pid;
+    children[*running].exec_failed = false;
+    children[*running].exec_errno = 0;
+    children[*running].slot = slot;
+    (*running)++;
+
+    int exec_errno = 0;
+    ssize_t nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
+    close(errpipe[0]);
+
+    if (nread == (ssize_t)sizeof(exec_errno)) {
+        children[*running - 1].exec_failed = true;
+        children[*running - 1].exec_errno = exec_errno;
+        if (exec_failed_now)
+            *exec_failed_now = true;
+        if (exec_errno_now)
+            *exec_errno_now = exec_errno;
+    }
+
+    return 0;
+}
+
+int bx_child_reap(struct bx_child *children, int *running,
+                  bool block, bool drain_all,
+                  void (*cb)(pid_t pid, int status, bool exec_failed, int exec_errno, void *user),
+                  void *user) {
+    for (;;) {
+        int status = 0;
+        pid_t pid = waitpid(-1, &status, block ? 0 : WNOHANG);
+        if (pid == 0)
+            return 0;
+        if (pid < 0) {
+            if (!block && errno == ECHILD)
+                return 0;
+            return (errno == ECHILD) ? 0 : 1;
+        }
+
+        struct bx_child *child = bx_child_find(children, *running, pid);
+        bool exec_failed = child && child->exec_failed;
+        int exec_errno = child ? child->exec_errno : 0;
+        if (child) {
+            *child = children[*running - 1];
+            (*running)--;
+        }
+
+        if (cb)
+            cb(pid, status, exec_failed, exec_errno, user);
+        if (!drain_all)
+            return 0;
+        if (*running == 0)
+            return 0;
+        block = false;
+    }
+}

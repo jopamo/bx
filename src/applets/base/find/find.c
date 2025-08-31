@@ -1,10 +1,7 @@
 #define _GNU_SOURCE
-#include <ctype.h>
 #include <errno.h>
 #include <fnmatch.h>
-#include <grp.h>
 #include <limits.h>
-#include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,32 +189,10 @@ static bool find_parse_numeric_test(const char *progname, const char *optname,
     return true;
 }
 
-static bool find_parse_unsigned_id(const char *text, unsigned long long *value) {
-    if (!text || *text == '\0')
-        return false;
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
-        if (!isdigit(*p))
-            return false;
-    }
-    char *end = NULL;
-    errno = 0;
-    unsigned long long v = strtoull(text, &end, 10);
-    if (errno != 0 || !end || *end != '\0')
-        return false;
-    *value = v;
-    return true;
-}
-
 static bool find_parse_user_id(const char *progname, const char *text, long long *value) {
-    struct passwd *pw = getpwnam(text);
-    if (pw) {
-        *value = (long long)pw->pw_uid;
-        return true;
-    }
-
-    unsigned long long numeric = 0;
-    if (find_parse_unsigned_id(text, &numeric)) {
-        *value = (long long)numeric;
+    uid_t uid = 0;
+    if (bx_walk_resolve_user(text, &uid)) {
+        *value = (long long)uid;
         return true;
     }
 
@@ -226,15 +201,9 @@ static bool find_parse_user_id(const char *progname, const char *text, long long
 }
 
 static bool find_parse_group_id(const char *progname, const char *text, long long *value) {
-    struct group *gr = getgrnam(text);
-    if (gr) {
-        *value = (long long)gr->gr_gid;
-        return true;
-    }
-
-    unsigned long long numeric = 0;
-    if (find_parse_unsigned_id(text, &numeric)) {
-        *value = (long long)numeric;
+    gid_t gid = 0;
+    if (bx_walk_resolve_group(text, &gid)) {
+        *value = (long long)gid;
         return true;
     }
 
@@ -547,9 +516,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         }
         const char *type_arg = parser->argv[parser->pos++];
         if (type_arg[0] == '\0' || type_arg[1] != '\0' ||
-            (type_arg[0] != 'f' && type_arg[0] != 'd' && type_arg[0] != 'l' &&
-             type_arg[0] != 'p' && type_arg[0] != 's' && type_arg[0] != 'b' &&
-             type_arg[0] != 'c')) {
+            !bx_walk_type_filter_is_valid(type_arg[0], false)) {
             fprintf(stderr, "%s: unknown argument to -type: %s\n", parser->progname, type_arg);
             return NULL;
         }
@@ -868,11 +835,11 @@ static bool find_eval_expr(const struct find_expr *expr, struct walk_entry *entr
     case FIND_EXPR_NOUSER:
         if (!walk_entry_load_metadata(entry))
             return false;
-        return getpwuid(entry->uid) == NULL;
+        return !bx_walk_uid_has_passwd(entry->uid);
     case FIND_EXPR_NOGROUP:
         if (!walk_entry_load_metadata(entry))
             return false;
-        return getgrgid(entry->gid) == NULL;
+        return !bx_walk_gid_has_group(entry->gid);
     case FIND_EXPR_PERM:
         if (!walk_entry_load_metadata(entry))
             return false;

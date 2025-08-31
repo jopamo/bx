@@ -154,8 +154,10 @@ bx_core_sources = [
 
 bx_lib_sources = [
   'src/lib/args_common.c',
+  'src/lib/argv_packer.c',
   'src/lib/backup_ops.c',
   'src/lib/color.c',
+  'src/lib/child_runner.c',
   'src/lib/copy_data.c',
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',

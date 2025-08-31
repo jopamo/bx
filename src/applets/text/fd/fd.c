@@ -84,35 +84,26 @@ static const char *fd_basename(const char *path) {
 }
 
 static bool fd_parse_type_filter(const char *progname, const char *text, const char **out) {
-    if (!text || *text == '\0') {
-        fprintf(stderr, "%s: invalid argument for --type: %s\n",
-                progname, text ? text : "(null)");
-        return false;
-    }
-
-    if (strcmp(text, "f") == 0 || strcmp(text, "file") == 0) {
-        *out = "f";
-    } else if (strcmp(text, "d") == 0 || strcmp(text, "directory") == 0 || strcmp(text, "dir") == 0) {
-        *out = "d";
-    } else if (strcmp(text, "l") == 0 || strcmp(text, "symlink") == 0 || strcmp(text, "link") == 0) {
-        *out = "l";
-    } else if (strcmp(text, "x") == 0 || strcmp(text, "executable") == 0) {
-        *out = "x";
-    } else if (strcmp(text, "e") == 0 || strcmp(text, "empty") == 0) {
-        *out = "e";
-    } else if (strcmp(text, "p") == 0 || strcmp(text, "pipe") == 0) {
-        *out = "p";
-    } else if (strcmp(text, "s") == 0 || strcmp(text, "socket") == 0) {
-        *out = "s";
-    } else if (strcmp(text, "b") == 0 || strcmp(text, "block") == 0 || strcmp(text, "block-device") == 0) {
-        *out = "b";
-    } else if (strcmp(text, "c") == 0 || strcmp(text, "char") == 0 || strcmp(text, "character-device") == 0) {
-        *out = "c";
-    } else {
+    char type_filter = '\0';
+    if (!bx_walk_parse_named_type_filter(text, &type_filter)) {
         fprintf(stderr, "%s: invalid argument for --type: %s\n", progname, text);
         return false;
     }
 
+    switch (type_filter) {
+    case 'f': *out = "f"; break;
+    case 'd': *out = "d"; break;
+    case 'l': *out = "l"; break;
+    case 'x': *out = "x"; break;
+    case 'e': *out = "e"; break;
+    case 'p': *out = "p"; break;
+    case 's': *out = "s"; break;
+    case 'b': *out = "b"; break;
+    case 'c': *out = "c"; break;
+    default:
+        fprintf(stderr, "%s: invalid argument for --type: %s\n", progname, text);
+        return false;
+    }
     return true;
 }
 
