@@ -18,6 +18,8 @@ struct xargs_opts {
     bool nul_delim;
     bool delimiter_mode;
     bool exit_if_too_big;
+    bool open_tty;
+    bool interactive;
     bool verbose;
     char delimiter;
     int max_args;
@@ -102,6 +104,8 @@ static void xargs_print_help(const char *progname) {
     puts("  -l[MAX]                 like -L, defaulting MAX to 1");
     puts("  -I, --replace=R         replace R in initial arguments with each input item");
     puts("  -i[R]                   like -I, defaulting R to {}");
+    puts("  -o, --open-tty          reopen standard input as /dev/tty in the child");
+    puts("  -p, --interactive       prompt before running commands");
     puts("  -t, --verbose           print each command before running it");
     puts("      --process-slot-var=VAR  set VAR to the worker slot number in each child");
     puts("  -s, --max-chars=MAX     use at most MAX command-line bytes");
@@ -534,6 +538,40 @@ static void xargs_record_status(const char *progname, const char *cmdname, int s
         *final_rc = rc;
 }
 
+static bool xargs_prompt_argv(const char *progname, char **argv, bool *failed) {
+    if (failed)
+        *failed = false;
+    FILE *tty = fopen("/dev/tty", "r+");
+    if (!tty) {
+        fprintf(stderr, "%s: failed to open /dev/tty for reading: %s\n",
+                progname, strerror(errno));
+        if (failed)
+            *failed = true;
+        return false;
+    }
+
+    for (int i = 0; argv[i]; i++)
+        fprintf(tty, "%s%s", i == 0 ? "" : " ", argv[i]);
+    fputs("?...", tty);
+    fflush(tty);
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t len = getline(&line, &cap, tty);
+    fclose(tty);
+
+    if (len < 0) {
+        if (failed)
+            *failed = true;
+        free(line);
+        return false;
+    }
+
+    bool approved = (len > 0 && (line[0] == 'y' || line[0] == 'Y'));
+    free(line);
+    return approved;
+}
+
 static char *xargs_expand_argument(const char *arg, const char *marker,
                                    const char *replacement, bool *saw_marker) {
     size_t arg_len = strlen(arg);
@@ -585,8 +623,21 @@ static int xargs_spawn_batch(const char *progname, char **command, int command_a
     for (int j = 0; j < item_count; j++)
         argv[command_argc + j] = items[j];
     argv[command_argc + item_count] = NULL;
+    if (opts && opts->interactive) {
+        bool prompt_failed = false;
+        bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
+        if (prompt_failed) {
+            free(argv);
+            return 1;
+        }
+        if (!approved) {
+            free(argv);
+            return 0;
+        }
+    }
     struct bx_child_runner_opts runner_opts = {
         .verbose = opts && opts->verbose,
+        .reopen_stdin_tty = opts && opts->open_tty,
         .process_slot_var = opts ? opts->process_slot_var : NULL,
     };
     bool exec_failed_now = false;
@@ -630,8 +681,26 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
         return 1;
     }
 
+    if (opts && opts->interactive) {
+        bool prompt_failed = false;
+        bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
+        if (prompt_failed) {
+            for (int i = 0; i < command_argc; i++)
+                free(argv[i]);
+            free(argv);
+            return 1;
+        }
+        if (!approved) {
+            for (int i = 0; i < command_argc; i++)
+                free(argv[i]);
+            free(argv);
+            return 0;
+        }
+    }
+
     struct bx_child_runner_opts runner_opts = {
         .verbose = opts && opts->verbose,
+        .reopen_stdin_tty = opts && opts->open_tty,
         .process_slot_var = opts ? opts->process_slot_var : NULL,
     };
     bool exec_failed_now = false;
@@ -793,6 +862,8 @@ int bx_xargs_main(int argc, char **argv) {
         {"max-args", required_argument, NULL, 'n'},
         {"max-lines", required_argument, NULL, 'L'},
         {"max-chars", required_argument, NULL, 's'},
+        {"open-tty", no_argument, NULL, 'o'},
+        {"interactive", no_argument, NULL, 'p'},
         {"verbose", no_argument, NULL, 't'},
         {"replace", optional_argument, NULL, 'i'},
         {"process-slot-var", required_argument, NULL, 204},
@@ -805,10 +876,16 @@ int bx_xargs_main(int argc, char **argv) {
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "+0d:E:e::I:i::l::L:rs:txa:n:P:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "+0d:E:e::I:i::l::L:oprs:txa:n:P:", long_opts, NULL)) != -1) {
         switch (c) {
         case 'r':
             opts.no_run_if_empty = true;
+            break;
+        case 'o':
+            opts.open_tty = true;
+            break;
+        case 'p':
+            opts.interactive = true;
             break;
         case 't':
             opts.verbose = true;

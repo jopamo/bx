@@ -64,6 +64,22 @@ int bx_child_spawn_argv(const char *progname, char **argv,
             snprintf(slot_buf, sizeof(slot_buf), "%d", slot);
             setenv(opts->process_slot_var, slot_buf, 1);
         }
+        if (opts && opts->reopen_stdin_tty) {
+            int tty_fd = open("/dev/tty", O_RDONLY);
+            if (tty_fd < 0) {
+                errnum = errno;
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+            if (dup2(tty_fd, STDIN_FILENO) < 0) {
+                errnum = errno;
+                close(tty_fd);
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+            if (tty_fd != STDIN_FILENO)
+                close(tty_fd);
+        }
         execvp(argv[0], argv);
         errnum = errno;
         (void)!write(errpipe[1], &errnum, sizeof(errnum));

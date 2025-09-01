@@ -14,6 +14,7 @@ struct walk_opts {
     bool post_order;
     bool *stop;
     bool suppress_eacces;
+    bool report_eacces;
     bool os_error_style;
     const char *error_prefix;
     int  max_depth;

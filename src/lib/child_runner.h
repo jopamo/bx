@@ -6,6 +6,7 @@
 
 struct bx_child_runner_opts {
     bool verbose;
+    bool reopen_stdin_tty;
     const char *process_slot_var;
 };
 

@@ -167,6 +167,8 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
     DIR *d = opendir(dirpath);
     if (!d) {
         if (errno == EACCES && opts->suppress_eacces) {
+            if (opts->report_eacces)
+                walk_report_error(opts, dirpath, errno);
             for (int i = 0; i < ignore_n; i++) free(ignore_patterns[i]);
             free(ignore_patterns);
             return 0;
