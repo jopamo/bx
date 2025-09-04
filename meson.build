@@ -489,6 +489,7 @@ install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount']
+systemwide_disabled_applet_names = ['ps', 'grep', 'egrep', 'fgrep', 'bxgrep', 'rg', 'bxrg', 'fd', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 if install_init_shortcut and install_bindir.startswith('/usr/')
@@ -519,6 +520,9 @@ if multicall_install_mode == 'symlink'
     if applet == 'init' and not install_init_shortcut
       continue
     endif
+    if systemwide_disabled_applet_names.contains(applet)
+      continue
+    endif
     if system_conflict_applet_names.contains(applet) and not install_system_conflict_shortcuts
       continue
     endif
@@ -533,6 +537,9 @@ else
       continue
     endif
     if applet == 'init' and not install_init_shortcut
+      continue
+    endif
+    if systemwide_disabled_applet_names.contains(applet)
       continue
     endif
     if system_conflict_applet_names.contains(applet) and not install_system_conflict_shortcuts
