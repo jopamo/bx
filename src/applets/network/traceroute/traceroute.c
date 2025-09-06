@@ -27,6 +27,7 @@
 #include <netdb.h>
 #include <errno.h>
 #include <locale.h>
+#include <strings.h>
 #include <time.h>
 #include <linux/types.h>
 #include <linux/errqueue.h>

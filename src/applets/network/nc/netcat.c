@@ -42,6 +42,7 @@
 #include <getopt.h>
 #include <sched.h>
 #include <fcntl.h>
+#include <strings.h>
 #include <sys/stat.h>
 #ifdef USE_IO_URING
 #include <liburing.h>
