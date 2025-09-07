@@ -162,6 +162,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/fd_ops.c',
+  'src/lib/mount_table.c',
   'src/lib/output.c',
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
@@ -990,6 +991,12 @@ if get_option('tests')
 
   test_kill_basic = find_program('tests/applets/system/kill/test_kill_basic.sh')
   test('kill basic', test_kill_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_kill_functional = files('tests/applets/system/kill/test_kill_functional.py')
+  test('kill functional', python3, args : [test_kill_functional, bx_exe], suite : fast_track_p1_suite)
+
+  test_kill_differential = files('tests/applets/system/kill/test_kill_differential.py')
+  test('kill differential', python3, args : [test_kill_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p1_suite)
 
   test_ps_basic = find_program('tests/applets/system/ps/test_ps_basic.sh')
   test('ps basic', test_ps_basic, args : [bx_exe], suite : fast_track_p1_suite)
