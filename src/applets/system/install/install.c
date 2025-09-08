@@ -769,26 +769,15 @@ static bool bx_install_destination_matches_compare_requirements(const struct sta
     return true;
 }
 
-static bool bx_install_compare_file_contents(const char* src_path, const char* dest_path, struct bx_diag_ctx* diag, bool* equal_out) {
-    int src_fd = -1;
-    int dest_fd = -1;
+static bool bx_install_compare_file_contents_fd(int src_fd,
+                                                const char* src_path,
+                                                int dest_fd,
+                                                const char* dest_path,
+                                                struct bx_diag_ctx* diag,
+                                                bool* equal_out) {
     bool equal = false;
-
-    src_fd = open(src_path, O_RDONLY);
-    if (src_fd < 0) {
-        bx_perror_path(diag, src_path);
-        return false;
-    }
-
-    dest_fd = open(dest_path, O_RDONLY);
-    if (dest_fd < 0) {
-        bx_perror_path(diag, dest_path);
-        (void)close(src_fd);
-        return false;
-    }
-
-    unsigned char src_buf[8192];
-    unsigned char dest_buf[8192];
+    unsigned char src_buf[65536];
+    unsigned char dest_buf[65536];
     for (;;) {
         ssize_t src_read = -1;
         do {
@@ -824,31 +813,74 @@ static bool bx_install_compare_file_contents(const char* src_path, const char* d
         }
     }
 
-    if (close(dest_fd) != 0) {
-        bx_perror_path(diag, dest_path);
-        dest_fd = -1;
-        goto fail;
-    }
-    dest_fd = -1;
-
-    if (close(src_fd) != 0) {
-        bx_perror_path(diag, src_path);
-        src_fd = -1;
-        goto fail;
-    }
-    src_fd = -1;
-
     *equal_out = equal;
     return true;
 
 fail:
-    if (dest_fd >= 0) {
-        (void)close(dest_fd);
-    }
-    if (src_fd >= 0) {
-        (void)close(src_fd);
-    }
     return false;
+}
+
+static bool bx_install_apply_file_metadata_fd(int dest_fd,
+                                              const char* dest_path,
+                                              const struct stat* src_st,
+                                              const struct bx_install_options* options,
+                                              struct bx_diag_ctx* diag) {
+    if (!bx_install_apply_owner_group_fd(dest_fd, dest_path, options, diag)) {
+        return false;
+    }
+
+    mode_t file_mode = options->mode_set ? options->mode : 0755u;
+    if (fchmod(dest_fd, file_mode) != 0) {
+        bx_perror_path(diag, dest_path);
+        return false;
+    }
+
+    if (options->preserve_timestamps && src_st != NULL) {
+        struct timespec ts[2] = {src_st->st_atim, src_st->st_mtim};
+        if (futimens(dest_fd, ts) != 0) {
+            bx_perror_path(diag, dest_path);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool bx_install_update_existing_destination(const char* src_path,
+                                                   const char* dest_path,
+                                                   const struct stat* src_st,
+                                                   const struct bx_install_options* options,
+                                                   struct bx_diag_ctx* diag) {
+    int dest_fd = open(dest_path, O_WRONLY);
+    if (dest_fd < 0) {
+        bx_perror_path(diag, dest_path);
+        return false;
+    }
+
+    bool ok = bx_install_apply_file_metadata_fd(dest_fd, dest_path, src_st, options, diag);
+    if (close(dest_fd) != 0) {
+        bx_perror_path(diag, dest_path);
+        ok = false;
+    }
+
+    if (ok && options->verbose && !bx_install_emit_copy(src_path, dest_path, diag)) {
+        return false;
+    }
+
+    return ok;
+}
+
+static enum bx_sparse_mode bx_install_copy_sparse_mode_for_source(const struct stat* src_st) {
+    if (src_st == NULL || !S_ISREG(src_st->st_mode) || src_st->st_size <= 0) {
+        return BX_SPARSE_AUTO;
+    }
+
+    uintmax_t allocated_bytes = (uintmax_t)src_st->st_blocks * 512u;
+    if (allocated_bytes >= (uintmax_t)src_st->st_size) {
+        return BX_SPARSE_NEVER;
+    }
+
+    return BX_SPARSE_AUTO;
 }
 
 static bool bx_install_run_strip(const char* strip_program, const char* path, struct bx_diag_ctx* diag) {
@@ -902,37 +934,76 @@ static bool bx_install_copy_regular_file(const char* src_path,
         return false;
     }
 
-    if (lstat(dest_path, &dest_st) == 0) {
-        dest_exists = true;
-        if (S_ISDIR(dest_st.st_mode)) {
-            errno = EISDIR;
-            bx_perror_path(diag, dest_path);
-            return false;
-        }
-        if (!S_ISLNK(dest_st.st_mode) && bx_same_file(&src_st, &dest_st)) {
-            bx_diag(diag, "'%s' and '%s' are the same file", src_path, dest_path);
-            return false;
-        }
-    }
-    else if (errno != ENOENT) {
-        bx_perror_path(diag, dest_path);
-        return false;
-    }
-
-    if (options->compare && dest_exists && S_ISREG(dest_st.st_mode)) {
-        bool same_contents = false;
-        if (!bx_install_compare_file_contents(src_path, dest_path, diag, &same_contents)) {
-            return false;
-        }
-        if (same_contents && bx_install_destination_matches_compare_requirements(&src_st, &dest_st, options)) {
-            return true;
-        }
-    }
-
     src_fd = open(src_path, O_RDONLY);
     if (src_fd < 0) {
         bx_perror_path(diag, src_path);
         return false;
+    }
+
+    dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    if (dest_fd >= 0) {
+        dest_created = true;
+    }
+    else if (errno != EEXIST && errno != EISDIR) {
+        bx_perror_path(diag, dest_path);
+        goto fail_keep;
+    }
+    else if (lstat(dest_path, &dest_st) == 0) {
+        dest_exists = true;
+        if (S_ISDIR(dest_st.st_mode)) {
+            errno = EISDIR;
+            bx_perror_path(diag, dest_path);
+            goto fail_keep;
+        }
+        if (!S_ISLNK(dest_st.st_mode) && bx_same_file(&src_st, &dest_st)) {
+            bx_diag(diag, "'%s' and '%s' are the same file", src_path, dest_path);
+            goto fail_keep;
+        }
+    }
+    else if (errno != ENOENT) {
+        bx_perror_path(diag, dest_path);
+        goto fail_keep;
+    }
+
+    if (options->compare && dest_exists && S_ISREG(dest_st.st_mode) && src_st.st_size == dest_st.st_size) {
+        bool same_contents = false;
+        int compare_dest_fd = -1;
+
+        compare_dest_fd = open(dest_path, O_RDONLY);
+        if (compare_dest_fd < 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail_keep;
+        }
+
+        if (!bx_install_compare_file_contents_fd(src_fd, src_path, compare_dest_fd, dest_path, diag, &same_contents)) {
+            (void)close(compare_dest_fd);
+            goto fail_keep;
+        }
+
+        if (close(compare_dest_fd) != 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail_keep;
+        }
+
+        if (same_contents) {
+            if (close(src_fd) != 0) {
+                bx_perror_path(diag, src_path);
+                src_fd = -1;
+                goto fail_keep;
+            }
+            src_fd = -1;
+
+            if (bx_install_destination_matches_compare_requirements(&src_st, &dest_st, options)) {
+                return true;
+            }
+
+            return bx_install_update_existing_destination(src_path, dest_path, &src_st, options, diag);
+        }
+
+        if (lseek(src_fd, 0, SEEK_SET) < 0) {
+            bx_perror_path(diag, src_path);
+            goto fail_keep;
+        }
     }
 
     if (dest_exists) {
@@ -948,15 +1019,17 @@ static bool bx_install_copy_regular_file(const char* src_path,
         }
     }
 
-    dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
-    if (dest_fd < 0) {
-        bx_perror_path(diag, dest_path);
-        goto fail_keep;
+    if (!dest_created) {
+        dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+        if (dest_fd < 0) {
+            bx_perror_path(diag, dest_path);
+            goto fail_keep;
+        }
+        dest_created = true;
     }
-    dest_created = true;
 
     struct bx_copy_data_options copy_data_options = {
-        .sparse_mode = BX_SPARSE_AUTO,
+        .sparse_mode = bx_install_copy_sparse_mode_for_source(&src_st),
         .reflink_mode = BX_REFLINK_NEVER,
     };
     int copy_result = bx_copy_data(src_fd, dest_fd, &copy_data_options);
