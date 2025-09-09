@@ -9,6 +9,10 @@
 struct walk_opts {
     bool hidden;
     bool no_ignore;
+    bool no_ignore_parent;
+    bool no_ignore_vcs;
+    bool no_ignore_dot;
+    bool no_require_git;
     bool follow_symlinks;
     bool follow_root_symlink;
     bool post_order;
@@ -20,6 +24,10 @@ struct walk_opts {
     int  max_depth;
     const char *exclude_pattern;
     const char *type_filter;
+    char **exclude_patterns;
+    int   num_exclude_patterns;
+    const char *const *ignore_filenames;
+    int   num_ignore_filenames;
     char **exclude_dirs;
     int   num_exclude_dirs;
     enum {

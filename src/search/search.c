@@ -758,6 +758,12 @@ struct files_walk_state {
     bool strip_dot_prefix;
 };
 
+static const char *const rg_ignore_filenames[] = {
+    ".gitignore",
+    ".ignore",
+    ".rgignore",
+};
+
 static void fs_cb(struct walk_entry *entry, void *user) {
     struct files_walk_state *st = user;
     if (!entry->is_dir)
@@ -818,11 +824,17 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         struct walk_opts wopts = {
             .hidden = opts.hidden,
             .no_ignore = opts.no_ignore,
+            .no_ignore_parent = opts.no_ignore_parent,
+            .no_ignore_vcs = opts.no_ignore_vcs,
+            .no_ignore_dot = opts.no_ignore_dot,
+            .no_require_git = opts.no_require_git,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
             .os_error_style = progname_uses_os_error_style(progname),
             .error_prefix = progname,
             .max_depth = opts.max_depth,
+            .ignore_filenames = rg_ignore_filenames,
+            .num_ignore_filenames = 3,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
             .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
@@ -927,12 +939,18 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             struct walk_opts wopts = {
                 .hidden = opts.hidden,
                 .no_ignore = opts.no_ignore,
+                .no_ignore_parent = opts.no_ignore_parent,
+                .no_ignore_vcs = opts.no_ignore_vcs,
+                .no_ignore_dot = opts.no_ignore_dot,
+                .no_require_git = opts.no_require_git,
                 .follow_symlinks = opts.follow_symlinks,
                 .follow_root_symlink = true,
                 .stop = &stop,
                 .os_error_style = progname_uses_os_error_style(progname),
                 .error_prefix = progname,
                 .max_depth = opts.max_depth,
+                .ignore_filenames = rg_ignore_filenames,
+                .num_ignore_filenames = 3,
                 .exclude_dirs = opts.exclude_dir_patterns,
                 .num_exclude_dirs = opts.num_exclude_dir,
                 .cycle_mode = opts.follow_symlinks
@@ -969,12 +987,18 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         struct walk_opts wopts = {
             .hidden = opts.hidden,
             .no_ignore = opts.no_ignore,
+            .no_ignore_parent = opts.no_ignore_parent,
+            .no_ignore_vcs = opts.no_ignore_vcs,
+            .no_ignore_dot = opts.no_ignore_dot,
+            .no_require_git = opts.no_require_git,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
             .stop = &stop,
             .os_error_style = progname_uses_os_error_style(progname),
             .error_prefix = progname,
             .max_depth = opts.max_depth,
+            .ignore_filenames = rg_ignore_filenames,
+            .num_ignore_filenames = 3,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
             .cycle_mode = opts.follow_symlinks

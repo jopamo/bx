@@ -8,6 +8,8 @@
 #define MAX_INCLUDE_PATTERNS 32
 #define MAX_EXCLUDE_PATTERNS 32
 #define MAX_EXCLUDE_DIR_PATTERNS 32
+#define MAX_CUSTOM_TYPES 16
+#define MAX_CLEARED_TYPES 32
 
 struct search_opts {
     bool show_line_number;
@@ -43,10 +45,19 @@ struct search_opts {
     char *exclude_patterns[MAX_EXCLUDE_PATTERNS];
     int  num_exclude_dir;
     char *exclude_dir_patterns[MAX_EXCLUDE_DIR_PATTERNS];
+    char *custom_type_names[MAX_CUSTOM_TYPES];
+    char *custom_type_globs[MAX_CUSTOM_TYPES];
+    int   num_custom_types;
+    char *cleared_type_names[MAX_CLEARED_TYPES];
+    int   num_cleared_types;
     bool binary_as_text;
     bool binary_without_match;
     bool hidden;
     bool no_ignore;
+    bool no_ignore_parent;
+    bool no_ignore_vcs;
+    bool no_ignore_dot;
+    bool no_require_git;
     bool null_output;
     bool null_filename;
     bool null_data;

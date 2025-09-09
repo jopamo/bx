@@ -6,6 +6,12 @@
 
 extern char **environ;
 
+static size_t bx_argv_pointer_bytes(int argc) {
+    if (argc < 0)
+        return 0;
+    return (size_t)(argc + 1) * sizeof(char *);
+}
+
 size_t bx_argv_environment_bytes(void) {
     size_t env_bytes = 0;
     if (!environ)
@@ -21,8 +27,12 @@ size_t bx_argv_bytes(char **argv) {
     if (!argv)
         return 0;
 
-    for (int i = 0; argv[i]; i++)
+    int argc = 0;
+    for (int i = 0; argv[i]; i++) {
         total += strlen(argv[i]) + 1;
+        argc++;
+    }
+    total += bx_argv_pointer_bytes(argc);
     return total;
 }
 
@@ -33,6 +43,34 @@ size_t bx_argv_bytes_with_items(char **base_argv, int base_argc,
         total += strlen(base_argv[i]) + 1;
     for (int i = 0; i < count; i++)
         total += strlen(items[start + i]) + 1;
+    total += bx_argv_pointer_bytes(base_argc + count);
+    return total;
+}
+
+size_t bx_argv_bytes_with_replacement(char **base_argv, int base_argc,
+                                      const char *marker, const char *replacement) {
+    size_t total = 0;
+    size_t marker_len = marker ? strlen(marker) : 0;
+    size_t replacement_len = replacement ? strlen(replacement) : 0;
+
+    for (int i = 0; i < base_argc; i++) {
+        const char *arg = base_argv[i];
+        size_t arg_bytes = strlen(arg) + 1;
+
+        if (marker_len > 0) {
+            const char *p = arg;
+            while ((p = strstr(p, marker)) != NULL) {
+                arg_bytes += replacement_len;
+                arg_bytes -= marker_len;
+                p += marker_len;
+            }
+        }
+
+        total += arg_bytes;
+    }
+
+    total += bx_argv_pointer_bytes(base_argc);
+
     return total;
 }
 

@@ -656,6 +656,13 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
                                    int slot,
                                    struct bx_child *children, int *running,
                                    int *final_rc, bool *abort_launch) {
+    size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
+    if (char_limit > 0 &&
+        bx_argv_bytes_with_replacement(command, command_argc, marker, item) > char_limit) {
+        fprintf(stderr, "%s: argument line too long\n", progname);
+        return 1;
+    }
+
     char **argv = calloc((size_t)command_argc + 1, sizeof(*argv));
     if (!argv)
         return 1;
@@ -672,7 +679,6 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
     }
     argv[command_argc] = NULL;
 
-    size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
     if (char_limit > 0 && bx_argv_bytes(argv) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
         for (int i = 0; i < command_argc; i++)

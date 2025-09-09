@@ -22,12 +22,19 @@ enum {
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
     OPT_MAX_DEPTH,
+    OPT_NO_IGNORE_PARENT,
+    OPT_NO_IGNORE_VCS,
+    OPT_NO_IGNORE_DOT,
+    OPT_NO_REQUIRE_GIT,
+    OPT_HIDDEN,
     OPT_LABEL,
     OPT_GROUP_SEPARATOR,
     OPT_NO_GROUP_SEPARATOR,
     OPT_NULL,
     OPT_BINARY_FILES,
     OPT_NULL_DATA,
+    OPT_TYPE_ADD,
+    OPT_TYPE_CLEAR,
 };
 
 static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
@@ -99,6 +106,11 @@ void bx_search_print_help(const char *progname) {
     puts("      --exclude=GLOB   skip files matching GLOB");
     puts("      --exclude-from=FILE  skip files matching patterns from FILE");
     puts("      --exclude-dir=GLOB  skip directories matching GLOB");
+    puts("      --no-ignore-parent  do not use ignore files from parent directories");
+    puts("      --no-ignore-vcs  do not use VCS ignore files");
+    puts("      --no-ignore-dot  do not use .ignore or .rgignore files");
+    puts("      --no-require-git  use .gitignore outside git repositories");
+    puts("      --hidden  search hidden files and directories");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
 }
@@ -129,7 +141,7 @@ void bx_search_print_type_list(void) {
     puts("lock: *.lock");
 }
 
-static const char *bx_get_type_globs(const char *name) {
+static const char *bx_get_builtin_type_globs(const char *name) {
     static const struct { const char *name; const char *globs; } types[] = {
         {"c",    "*.c,*.h"},
         {"cpp",  "*.cpp,*.cc,*.cxx,*.c++,*.hh,*.hpp,*.hxx,*.h++"},
@@ -158,11 +170,114 @@ static const char *bx_get_type_globs(const char *name) {
     return NULL;
 }
 
+static const char *bx_get_type_globs(const struct search_opts *opts, const char *name) {
+    if (opts && name) {
+        for (int i = 0; i < opts->num_cleared_types; i++) {
+            if (opts->cleared_type_names[i] && strcmp(opts->cleared_type_names[i], name) == 0)
+                return NULL;
+        }
+    }
+    if (opts && name) {
+        for (int i = 0; i < opts->num_custom_types; i++) {
+            if (opts->custom_type_names[i] && strcmp(opts->custom_type_names[i], name) == 0)
+                return opts->custom_type_globs[i];
+        }
+    }
+    return bx_get_builtin_type_globs(name);
+}
+
+static bool bx_add_custom_type(struct search_opts *opts, const char *text) {
+    if (!opts || !text)
+        return false;
+
+    const char *colon = strchr(text, ':');
+    if (!colon || colon == text || colon[1] == '\0')
+        return false;
+
+    size_t name_len = (size_t)(colon - text);
+    char *name = strndup(text, name_len);
+    char *globs = strdup(colon + 1);
+    if (!name || !globs) {
+        free(name);
+        free(globs);
+        return false;
+    }
+
+    for (int i = 0; i < opts->num_custom_types; i++) {
+        if (strcmp(opts->custom_type_names[i], name) == 0) {
+            size_t merged_len = strlen(opts->custom_type_globs[i]) + 1 + strlen(globs) + 1;
+            char *merged = malloc(merged_len);
+            if (!merged) {
+                free(name);
+                free(globs);
+                return false;
+            }
+            snprintf(merged, merged_len, "%s,%s", opts->custom_type_globs[i], globs);
+            free(opts->custom_type_globs[i]);
+            opts->custom_type_globs[i] = merged;
+            free(name);
+            free(globs);
+            return true;
+        }
+    }
+
+    if (opts->num_custom_types >= MAX_CUSTOM_TYPES) {
+        free(name);
+        free(globs);
+        return false;
+    }
+
+    opts->custom_type_names[opts->num_custom_types] = name;
+    opts->custom_type_globs[opts->num_custom_types] = globs;
+    opts->num_custom_types++;
+    return true;
+}
+
+static bool bx_clear_type(struct search_opts *opts, const char *name) {
+    if (!opts || !name || *name == '\0')
+        return false;
+
+    for (int i = 0; i < opts->num_custom_types; i++) {
+        if (opts->custom_type_names[i] && strcmp(opts->custom_type_names[i], name) == 0) {
+            free(opts->custom_type_names[i]);
+            free(opts->custom_type_globs[i]);
+            for (int j = i + 1; j < opts->num_custom_types; j++) {
+                opts->custom_type_names[j - 1] = opts->custom_type_names[j];
+                opts->custom_type_globs[j - 1] = opts->custom_type_globs[j];
+            }
+            opts->num_custom_types--;
+            opts->custom_type_names[opts->num_custom_types] = NULL;
+            opts->custom_type_globs[opts->num_custom_types] = NULL;
+            break;
+        }
+    }
+
+    for (int i = 0; i < opts->num_cleared_types; i++) {
+        if (opts->cleared_type_names[i] && strcmp(opts->cleared_type_names[i], name) == 0)
+            return true;
+    }
+
+    if (opts->num_cleared_types >= MAX_CLEARED_TYPES)
+        return false;
+
+    opts->cleared_type_names[opts->num_cleared_types] = strdup(name);
+    if (!opts->cleared_type_names[opts->num_cleared_types])
+        return false;
+    opts->num_cleared_types++;
+    return true;
+}
+
 void bx_search_free_options(struct search_opts *opts) {
     for (int i = 0; i < opts->num_include; i++) free(opts->include_patterns[i]);
     for (int i = 0; i < opts->num_exclude; i++) free(opts->exclude_patterns[i]);
     for (int i = 0; i < opts->num_exclude_dir; i++) free(opts->exclude_dir_patterns[i]);
     for (int i = 0; i < opts->num_extra_patterns; i++) free(opts->extra_patterns[i]);
+    for (int i = 0; i < opts->num_custom_types; i++) {
+        free(opts->custom_type_names[i]);
+        free(opts->custom_type_globs[i]);
+    }
+    for (int i = 0; i < opts->num_cleared_types; i++)
+        free(opts->cleared_type_names[i]);
     free(opts->label);
     free(opts->group_separator);
 }
@@ -199,6 +314,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
+        {"no-ignore-parent", no_argument,   NULL, OPT_NO_IGNORE_PARENT},
+        {"no-ignore-vcs", no_argument,      NULL, OPT_NO_IGNORE_VCS},
+        {"no-ignore-dot", no_argument,      NULL, OPT_NO_IGNORE_DOT},
+        {"no-require-git", no_argument,     NULL, OPT_NO_REQUIRE_GIT},
+        {"hidden",       no_argument,       NULL, OPT_HIDDEN},
         {"byte-offset",  no_argument,       NULL, 'b'},
         {"glob",         required_argument, NULL, 'g'},
         {"ignore-case",  no_argument,       NULL, 'i'},
@@ -206,6 +326,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"smart-case",   no_argument,       NULL, 'S'},
         {"type",         required_argument, NULL, 't'},
         {"type-not",     required_argument, NULL, 'T'},
+        {"type-add",     required_argument, NULL, OPT_TYPE_ADD},
+        {"type-clear",   required_argument, NULL, OPT_TYPE_CLEAR},
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
         {"file",         required_argument, NULL, 'f'},
         {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
@@ -332,28 +454,61 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'u':
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;
             break;
+        case OPT_HIDDEN:
+            if (personality == BX_SEARCH_RG) {
+                opts->hidden = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--hidden'\n", argv[0]);
+                return -1;
+            }
+            break;
         case 'j':
             break;  /* thread count accepted, single-threaded for now */
         case 't':
         case 'T': {
-            const char *globs = bx_get_type_globs(optarg);
-            if (globs) {
-                char *copy = strdup(globs);
-                char *tok = strtok(copy, ",");
-                while (tok) {
-                    while (*tok == ' ') tok++;
-                    char *end = tok + strlen(tok) - 1;
-                    while (end > tok && *end == ' ') *end-- = '\0';
-                    if (c == 't' && opts->num_include < MAX_INCLUDE_PATTERNS)
-                        opts->include_patterns[opts->num_include++] = strdup(tok);
-                    else if (c == 'T' && opts->num_exclude < MAX_EXCLUDE_PATTERNS)
-                        opts->exclude_patterns[opts->num_exclude++] = strdup(tok);
-                    tok = strtok(NULL, ",");
+            const char *globs = bx_get_type_globs(opts, optarg);
+            if (!globs) {
+                if (personality == BX_SEARCH_RG) {
+                    fprintf(stderr, "%s: unrecognized file type: %s\n", argv[0], optarg);
+                    return -1;
                 }
-                free(copy);
+                break;
             }
+            char *copy = strdup(globs);
+            char *tok = strtok(copy, ",");
+            while (tok) {
+                while (*tok == ' ') tok++;
+                char *end = tok + strlen(tok) - 1;
+                while (end > tok && *end == ' ') *end-- = '\0';
+                if (c == 't' && opts->num_include < MAX_INCLUDE_PATTERNS)
+                    opts->include_patterns[opts->num_include++] = strdup(tok);
+                else if (c == 'T' && opts->num_exclude < MAX_EXCLUDE_PATTERNS)
+                    opts->exclude_patterns[opts->num_exclude++] = strdup(tok);
+                tok = strtok(NULL, ",");
+            }
+            free(copy);
             break;
         }
+        case OPT_TYPE_ADD:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--type-add'\n", argv[0]);
+                return -1;
+            }
+            if (!bx_add_custom_type(opts, optarg)) {
+                fprintf(stderr, "%s: invalid argument for --type-add: %s\n", argv[0], optarg);
+                return -1;
+            }
+            break;
+        case OPT_TYPE_CLEAR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--type-clear'\n", argv[0]);
+                return -1;
+            }
+            if (!bx_clear_type(opts, optarg)) {
+                fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", argv[0], optarg);
+                return -1;
+            }
+            break;
         case 'e':
             if (opts->num_extra_patterns < 16)
                 opts->extra_patterns[opts->num_extra_patterns++] = strdup(optarg);
@@ -447,6 +602,38 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->follow_symlinks = true;
             } else {
                 fprintf(stderr, "%s: unrecognized option '--follow'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case OPT_NO_IGNORE_PARENT:
+            if (personality == BX_SEARCH_RG) {
+                opts->no_ignore_parent = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-parent'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case OPT_NO_IGNORE_VCS:
+            if (personality == BX_SEARCH_RG) {
+                opts->no_ignore_vcs = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-vcs'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case OPT_NO_IGNORE_DOT:
+            if (personality == BX_SEARCH_RG) {
+                opts->no_ignore_dot = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-dot'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case OPT_NO_REQUIRE_GIT:
+            if (personality == BX_SEARCH_RG) {
+                opts->no_require_git = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--no-require-git'\n", argv[0]);
                 return -1;
             }
             break;

@@ -22,6 +22,13 @@
 
 #define FD_MAX_AND_PATTERNS 16
 #define FD_PLACEHOLDER "{}"
+#define FD_MAX_EXCLUDE_PATTERNS 16
+
+static const char *const fd_ignore_filenames[] = {
+    ".gitignore",
+    ".ignore",
+    ".fdignore",
+};
 
 enum fd_exec_mode {
     FD_EXEC_NONE = 0,
@@ -54,6 +61,9 @@ struct fd_exec_items {
 struct fd_opts {
     bool hidden;
     bool no_ignore;
+    bool no_ignore_parent;
+    bool no_ignore_vcs;
+    bool no_require_git;
     bool follow_symlinks;
     bool absolute_path;
     bool full_path;
@@ -71,6 +81,8 @@ struct fd_opts {
     const char *pattern;
     const char *and_patterns[FD_MAX_AND_PATTERNS];
     int num_and_patterns;
+    char *exclude_patterns[FD_MAX_EXCLUDE_PATTERNS];
+    int num_exclude_patterns;
     const char *type_filter;
     const char *extension;
     int max_depth;
@@ -78,6 +90,7 @@ struct fd_opts {
     int exact_depth;
     int max_results;
     int results;
+    int unrestrict_level;
     int batch_size;
     bool batch_size_set;
     enum fd_exec_mode exec_mode;
@@ -326,7 +339,7 @@ static bool fd_match_name(const struct fd_state *st, const char *name) {
     return true;
 }
 
-static void fd_print_path(const struct fd_state *st, const char *path);
+static void fd_print_path(const struct fd_state *st, const char *path, bool is_dir);
 
 static bool fd_match_placeholder_raw(const char *text, enum fd_placeholder_kind *kind, size_t *len) {
     if (strncmp(text, "{//}", 4) == 0) {
@@ -580,7 +593,22 @@ static bool fd_should_strip_cwd_prefix(const struct fd_state *st, bool for_exec)
     return false;
 }
 
-static char *fd_render_output_path(const struct fd_state *st, const char *path) {
+static char *fd_append_dir_suffix(const struct fd_opts *opts, char *path, bool is_dir) {
+    if (!path || !is_dir)
+        return path;
+
+    const char *sep = opts->path_separator ? opts->path_separator : "/";
+    size_t path_len = strlen(path);
+    size_t sep_len = strlen(sep);
+    char *out = realloc(path, path_len + sep_len + 1);
+    if (!out)
+        return path;
+    memcpy(out + path_len, sep, sep_len);
+    out[path_len + sep_len] = '\0';
+    return out;
+}
+
+static char *fd_render_output_path(const struct fd_state *st, const char *path, bool is_dir) {
     char *base = NULL;
     if (st->opts->absolute_path) {
         base = fd_exec_path(st, path);
@@ -595,7 +623,7 @@ static char *fd_render_output_path(const struct fd_state *st, const char *path) 
 
     char *rendered = fd_apply_path_separator(st->opts, base);
     free(base);
-    return rendered;
+    return fd_append_dir_suffix(st->opts, rendered, is_dir);
 }
 
 static char *fd_render_exec_path(const struct fd_state *st, const char *path) {
@@ -616,7 +644,7 @@ static char *fd_render_exec_path(const struct fd_state *st, const char *path) {
     return rendered;
 }
 
-static bool fd_record_match(struct fd_state *st, const char *path) {
+static bool fd_record_match(struct fd_state *st, const char *path, bool is_dir) {
     struct fd_opts *opts = st->opts;
     opts->results++;
 
@@ -630,7 +658,7 @@ static bool fd_record_match(struct fd_state *st, const char *path) {
             return false;
         }
     } else if (!opts->quiet) {
-        fd_print_path(st, path);
+        fd_print_path(st, path, is_dir);
     }
 
     if ((opts->max_results > 0 && opts->results >= opts->max_results) ||
@@ -641,10 +669,10 @@ static bool fd_record_match(struct fd_state *st, const char *path) {
     return true;
 }
 
-static void fd_print_path(const struct fd_state *st, const char *path) {
+static void fd_print_path(const struct fd_state *st, const char *path, bool is_dir) {
     const struct fd_opts *opts = st->opts;
     char terminator = opts->print0 ? '\0' : '\n';
-    char *rendered = fd_render_output_path(st, path);
+    char *rendered = fd_render_output_path(st, path, is_dir);
     if (!rendered)
         return;
     printf("%s%c", rendered, terminator);
@@ -902,12 +930,12 @@ static void fd_callback(struct walk_entry *entry, void *user) {
     }
 
     if (st->regex_count == 0) {
-        fd_record_match(st, entry->path);
+        fd_record_match(st, entry->path, entry->is_dir);
         return;
     }
 
     if (fd_match_name(st, name)) {
-        fd_record_match(st, entry->path);
+        fd_record_match(st, entry->path, entry->is_dir);
     }
 }
 
@@ -953,6 +981,9 @@ int bx_fd_main(int argc, char **argv) {
         {"version",  no_argument,       NULL, 'V'},
         {"hidden",   no_argument,       NULL, 'H'},
         {"no-ignore", no_argument,      NULL, 'I'},
+        {"no-ignore-parent", no_argument, NULL, 210},
+        {"no-ignore-vcs", no_argument,  NULL, 211},
+        {"no-require-git", no_argument, NULL, 212},
         {"absolute-path", no_argument,  NULL, 'a'},
         {"relative-path", no_argument,  NULL, 205},
         {"follow",   no_argument,       NULL, 'L'},
@@ -961,6 +992,7 @@ int bx_fd_main(int argc, char **argv) {
         {"case-sensitive", no_argument, NULL, 's'},
         {"fixed-strings", no_argument,  NULL, 'F'},
         {"glob",      no_argument,      NULL, 'g'},
+        {"exclude",   required_argument, NULL, 'E'},
         {"regex",     no_argument,      NULL, 204},
         {"max-depth", required_argument, NULL, 'd'},
         {"min-depth", required_argument, NULL, 201},
@@ -981,7 +1013,7 @@ int bx_fd_main(int argc, char **argv) {
     };
 
     opterr = 0;
-    while ((opt = getopt_long(parse_argc, argv, "hVHIapisSFgd:t:e:x:X:0qL1", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(parse_argc, argv, "hVHIuapisSFgE:d:t:e:x:X:0qL1", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'h': show_help = true; break;
         case 'V':
@@ -989,6 +1021,13 @@ int bx_fd_main(int argc, char **argv) {
             return 0;
         case 'H': opts.hidden = true; break;
         case 'I': opts.no_ignore = true; break;
+        case 'u':
+            if (opts.unrestrict_level < 3)
+                opts.unrestrict_level++;
+            break;
+        case 210: opts.no_ignore_parent = true; break;
+        case 211: opts.no_ignore_vcs = true; break;
+        case 212: opts.no_require_git = true; break;
         case 'a': opts.absolute_path = true; break;
         case 205: opts.absolute_path = false; break;
         case 'p': opts.full_path = true; break;
@@ -996,6 +1035,10 @@ int bx_fd_main(int argc, char **argv) {
         case 's': opts.case_sensitive = true; opts.smart_case = false; break;
         case 'F': opts.fixed_strings = true; break;
         case 'g': opts.glob_match = true; break;
+        case 'E':
+            if (opts.num_exclude_patterns < FD_MAX_EXCLUDE_PATTERNS)
+                opts.exclude_patterns[opts.num_exclude_patterns++] = optarg;
+            break;
         case 204:
             opts.fixed_strings = false;
             opts.glob_match = false;
@@ -1063,6 +1106,10 @@ int bx_fd_main(int argc, char **argv) {
         puts("");
         puts("  -H, --hidden        search hidden files and directories");
         puts("  -I, --no-ignore     do not respect ignore files");
+        puts("  -u                  search hidden and ignored files");
+        puts("      --no-ignore-parent do not respect ignore files in parent directories");
+        puts("      --no-ignore-vcs do not respect VCS ignore files");
+        puts("      --no-require-git use .gitignore outside git repositories");
         puts("  -a, --absolute-path show absolute paths");
         puts("      --relative-path show relative paths");
         puts("      --path-separator SEP replace '/' in rendered paths with SEP");
@@ -1073,6 +1120,7 @@ int bx_fd_main(int argc, char **argv) {
         puts("  -s, --case-sensitive  case-sensitive matching");
         puts("  -F, --fixed-strings treat pattern as literal string");
         puts("  -g, --glob          glob-based matching");
+        puts("  -E, --exclude GLOB  exclude paths matching GLOB");
         puts("      --regex         treat pattern as a regular expression");
         puts("      --and PATTERN   require PATTERN to match too");
         puts("  -d, --max-depth N   limit recursive depth");
@@ -1141,10 +1189,19 @@ int bx_fd_main(int argc, char **argv) {
         return 2;
     }
 
+    if (opts.unrestrict_level >= 1) {
+        opts.no_ignore = true;
+        opts.hidden = true;
+        opts.no_require_git = true;
+    }
+
     bool stop = false;
     struct walk_opts wopts = {
         .hidden = opts.hidden,
         .no_ignore = opts.no_ignore,
+        .no_ignore_parent = opts.no_ignore_parent,
+        .no_ignore_vcs = opts.no_ignore_vcs,
+        .no_require_git = opts.no_require_git,
         .follow_symlinks = opts.follow_symlinks,
         .follow_root_symlink = true,
         .stop = &stop,
@@ -1153,6 +1210,10 @@ int bx_fd_main(int argc, char **argv) {
         .os_error_style = opts.show_errors,
         .error_prefix = opts.show_errors ? "[fd error]" : progname,
         .max_depth = opts.max_depth,
+        .exclude_patterns = opts.exclude_patterns,
+        .num_exclude_patterns = opts.num_exclude_patterns,
+        .ignore_filenames = fd_ignore_filenames,
+        .num_ignore_filenames = 3,
         .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
         .cycle_report = WALK_CYCLE_IGNORE,
     };
