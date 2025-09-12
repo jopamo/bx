@@ -24,6 +24,8 @@ struct walk_opts {
     int  max_depth;
     const char *exclude_pattern;
     const char *type_filter;
+    char **include_patterns;
+    int   num_include_patterns;
     char **exclude_patterns;
     int   num_exclude_patterns;
     const char *const *ignore_filenames;

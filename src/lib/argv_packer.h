@@ -5,12 +5,12 @@
 
 size_t bx_argv_environment_bytes(void);
 size_t bx_argv_bytes(char **argv);
-size_t bx_argv_bytes_with_items(char **base_argv, int base_argc,
+size_t bx_argv_bytes_with_items(const char *const *base_argv, int base_argc,
                                 char **items, int start, int count);
-size_t bx_argv_bytes_with_replacement(char **base_argv, int base_argc,
+size_t bx_argv_bytes_with_replacement(const char *const *base_argv, int base_argc,
                                       const char *marker, const char *replacement);
 size_t bx_argv_effective_char_limit(int max_chars);
-int bx_argv_select_batch_count(char **base_argv, int base_argc,
+int bx_argv_select_batch_count(const char *const *base_argv, int base_argc,
                                char **items, const int *line_groups,
                                int item_count, int start,
                                int max_args, int max_lines,

@@ -835,6 +835,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .max_depth = opts.max_depth,
             .ignore_filenames = rg_ignore_filenames,
             .num_ignore_filenames = 3,
+            .include_patterns = opts.include_patterns,
+            .num_include_patterns = opts.num_include,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
             .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
@@ -951,6 +953,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .max_depth = opts.max_depth,
                 .ignore_filenames = rg_ignore_filenames,
                 .num_ignore_filenames = 3,
+                .include_patterns = opts.include_patterns,
+                .num_include_patterns = opts.num_include,
                 .exclude_dirs = opts.exclude_dir_patterns,
                 .num_exclude_dirs = opts.num_exclude_dir,
                 .cycle_mode = opts.follow_symlinks
@@ -999,6 +1003,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .max_depth = opts.max_depth,
             .ignore_filenames = rg_ignore_filenames,
             .num_ignore_filenames = 3,
+            .include_patterns = opts.include_patterns,
+            .num_include_patterns = opts.num_include,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
             .cycle_mode = opts.follow_symlinks

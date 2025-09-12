@@ -721,6 +721,20 @@ static size_t fd_batch_argv_bytes(const char **command_argv, int command_argc,
 static int fd_select_exec_batch_count(const char **command_argv, int command_argc,
                                       char **items, int item_count, int start,
                                       size_t char_limit) {
+    bool saw_placeholder = false;
+    for (int i = 0; i < command_argc; i++) {
+        if (fd_placeholder_count(command_argv[i]) > 0) {
+            saw_placeholder = true;
+            break;
+        }
+    }
+
+    if (!saw_placeholder) {
+        return bx_argv_select_batch_count(command_argv, command_argc,
+                                          items, NULL, item_count, start,
+                                          0, 0, char_limit);
+    }
+
     int take = 0;
 
     while (start + take < item_count) {
@@ -848,10 +862,16 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
             if (st->opts->batch_size > 0 && take > st->opts->batch_size)
                 take = st->opts->batch_size;
         } else if (char_limit > 0) {
-            size_t bytes = fd_batch_argv_bytes(st->opts->exec_argv, st->opts->exec_argc,
-                                               st->exec_items.v, i, 1, false, NULL);
-            if (bytes == (size_t)-1)
-                return 1;
+            size_t bytes;
+            if (fd_count_placeholder_args(st->opts) == 0) {
+                bytes = bx_argv_bytes_with_items(st->opts->exec_argv, st->opts->exec_argc,
+                                                 st->exec_items.v, i, 1);
+            } else {
+                bytes = fd_batch_argv_bytes(st->opts->exec_argv, st->opts->exec_argc,
+                                            st->exec_items.v, i, 1, false, NULL);
+                if (bytes == (size_t)-1)
+                    return 1;
+            }
             if (bytes > char_limit) {
                 fprintf(stderr, "%s: argument line too long\n", progname);
                 return 1;

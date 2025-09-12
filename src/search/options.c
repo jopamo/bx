@@ -448,8 +448,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->null_data = true;
             break;
         case 'g':
-            if (opts->num_include < MAX_INCLUDE_PATTERNS)
+            if (personality == BX_SEARCH_RG && optarg && optarg[0] == '!') {
+                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
+                    opts->exclude_patterns[opts->num_exclude++] = strdup(optarg + 1);
+            } else if (opts->num_include < MAX_INCLUDE_PATTERNS) {
                 opts->include_patterns[opts->num_include++] = strdup(optarg);
+            }
             break;
         case 'u':
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;

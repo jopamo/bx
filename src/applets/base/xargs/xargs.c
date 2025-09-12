@@ -658,7 +658,7 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
                                    int *final_rc, bool *abort_launch) {
     size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
     if (char_limit > 0 &&
-        bx_argv_bytes_with_replacement(command, command_argc, marker, item) > char_limit) {
+        bx_argv_bytes_with_replacement((const char *const *)command, command_argc, marker, item) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
         return 1;
     }
@@ -753,7 +753,7 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
 static int xargs_select_batch_count(char **command, int command_argc,
                                     struct xargs_items *items, int start,
                                     struct xargs_opts *opts) {
-    return bx_argv_select_batch_count(command, command_argc,
+    return bx_argv_select_batch_count((const char *const *)command, command_argc,
                                       items->v, items->line_groups,
                                       items->count, start,
                                       opts->max_args, opts->max_lines,
@@ -779,7 +779,7 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
 
     size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
     if (char_limit > 0 &&
-        bx_argv_bytes_with_items(command, command_argc, items->v, 0, 0) > char_limit) {
+        bx_argv_bytes_with_items((const char *const *)command, command_argc, items->v, 0, 0) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
         free(children);
         return 1;

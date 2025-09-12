@@ -374,6 +374,26 @@ static bool walk_matches_exclude_pattern(const struct walk_opts *opts,
     return false;
 }
 
+static bool walk_matches_include_pattern(const struct walk_opts *opts,
+                                         const char *name,
+                                         const char *relative_path) {
+    if (!opts || !opts->include_patterns || opts->num_include_patterns <= 0)
+        return false;
+
+    for (int i = 0; i < opts->num_include_patterns; i++) {
+        const char *pattern = opts->include_patterns[i];
+        if (!pattern || pattern[0] == '\0')
+            continue;
+        if (fnmatch(pattern, name, 0) == 0)
+            return true;
+        if (relative_path && relative_path[0] != '\0' &&
+            fnmatch(pattern, relative_path, FNM_PATHNAME) == 0)
+            return true;
+    }
+
+    return false;
+}
+
 static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                           walk_callback cb, void *user, int depth,
                           const struct walk_ancestor *ancestors,
@@ -430,24 +450,32 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
 
-        if (!opts->hidden && is_hidden(ent->d_name))
-            continue;
-
-        if (is_ignored(ent->d_name, ignore_patterns, ignore_n))
-            continue;
-
-        if (opts->exclude_dirs) {
-            bool skip = false;
-            for (int e = 0; e < opts->num_exclude_dirs; e++)
-                if (fnmatch(opts->exclude_dirs[e], ent->d_name, 0) == 0) skip = true;
-            if (skip) continue;
-        }
-
         size_t plen = strlen(dirpath) + 1 + strlen(ent->d_name) + 1;
         char *full = malloc(plen);
         snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
 
         const char *relative_path = walk_relative_path(root_path, full);
+
+        if (!opts->hidden && is_hidden(ent->d_name) &&
+            !walk_matches_include_pattern(opts, ent->d_name, relative_path)) {
+            free(full);
+            continue;
+        }
+
+        if (is_ignored(ent->d_name, ignore_patterns, ignore_n)) {
+            free(full);
+            continue;
+        }
+
+        if (opts->exclude_dirs) {
+            bool skip = false;
+            for (int e = 0; e < opts->num_exclude_dirs; e++)
+                if (fnmatch(opts->exclude_dirs[e], ent->d_name, 0) == 0) skip = true;
+            if (skip) {
+                free(full);
+                continue;
+            }
+        }
 
         if (walk_matches_exclude_pattern(opts, ent->d_name, relative_path)) {
             free(full);
