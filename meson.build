@@ -310,6 +310,7 @@ bx_network_applet_sources = [
 bx_search_sources = [
   'src/search/metadata.c',
   'src/search/literal.c',
+  'src/search/ignore.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
   'src/search/search.c',

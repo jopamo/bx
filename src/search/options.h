@@ -41,6 +41,7 @@ struct search_opts {
     bool follow_symlinks;
     int  num_include;
     char *include_patterns[MAX_INCLUDE_PATTERNS];
+    bool include_pattern_casefold[MAX_INCLUDE_PATTERNS];
     int  num_exclude;
     char *exclude_patterns[MAX_EXCLUDE_PATTERNS];
     int  num_exclude_dir;

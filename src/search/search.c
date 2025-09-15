@@ -782,7 +782,9 @@ static void grep_walk_cb(struct walk_entry *entry, void *user) {
     if (gs->opts->num_include > 0) {
         bool ok = false;
         for (int i = 0; i < gs->opts->num_include; i++)
-            if (fnmatch(gs->opts->include_patterns[i], name, 0) == 0) ok = true;
+            if (fnmatch(gs->opts->include_patterns[i], name,
+                        gs->opts->include_pattern_casefold[i] ? FNM_CASEFOLD : 0) == 0)
+                ok = true;
         if (!ok) return;
     }
     if (gs->opts->num_exclude > 0) {
@@ -836,6 +838,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .ignore_filenames = rg_ignore_filenames,
             .num_ignore_filenames = 3,
             .include_patterns = opts.include_patterns,
+            .include_pattern_casefold = opts.include_pattern_casefold,
             .num_include_patterns = opts.num_include,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
@@ -954,6 +957,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .ignore_filenames = rg_ignore_filenames,
                 .num_ignore_filenames = 3,
                 .include_patterns = opts.include_patterns,
+                .include_pattern_casefold = opts.include_pattern_casefold,
                 .num_include_patterns = opts.num_include,
                 .exclude_dirs = opts.exclude_dir_patterns,
                 .num_exclude_dirs = opts.num_exclude_dir,
@@ -1004,6 +1008,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .ignore_filenames = rg_ignore_filenames,
             .num_ignore_filenames = 3,
             .include_patterns = opts.include_patterns,
+            .include_pattern_casefold = opts.include_pattern_casefold,
             .num_include_patterns = opts.num_include,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,

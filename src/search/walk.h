@@ -13,6 +13,7 @@ struct walk_opts {
     bool no_ignore_vcs;
     bool no_ignore_dot;
     bool no_require_git;
+    bool gitignore_enabled;
     bool follow_symlinks;
     bool follow_root_symlink;
     bool post_order;
@@ -25,6 +26,7 @@ struct walk_opts {
     const char *exclude_pattern;
     const char *type_filter;
     char **include_patterns;
+    bool *include_pattern_casefold;
     int   num_include_patterns;
     char **exclude_patterns;
     int   num_exclude_patterns;

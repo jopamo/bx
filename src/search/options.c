@@ -27,6 +27,7 @@ enum {
     OPT_NO_IGNORE_DOT,
     OPT_NO_REQUIRE_GIT,
     OPT_HIDDEN,
+    OPT_IGLOB,
     OPT_LABEL,
     OPT_GROUP_SEPARATOR,
     OPT_NO_GROUP_SEPARATOR,
@@ -111,6 +112,7 @@ void bx_search_print_help(const char *progname) {
     puts("      --no-ignore-dot  do not use .ignore or .rgignore files");
     puts("      --no-require-git  use .gitignore outside git repositories");
     puts("      --hidden  search hidden files and directories");
+    puts("      --iglob=GLOB  search only files matching GLOB, case-insensitively");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
 }
@@ -321,6 +323,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"hidden",       no_argument,       NULL, OPT_HIDDEN},
         {"byte-offset",  no_argument,       NULL, 'b'},
         {"glob",         required_argument, NULL, 'g'},
+        {"iglob",        required_argument, NULL, OPT_IGLOB},
         {"ignore-case",  no_argument,       NULL, 'i'},
         {"case-sensitive", no_argument,     NULL, 's'},
         {"smart-case",   no_argument,       NULL, 'S'},
@@ -453,6 +456,21 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     opts->exclude_patterns[opts->num_exclude++] = strdup(optarg + 1);
             } else if (opts->num_include < MAX_INCLUDE_PATTERNS) {
                 opts->include_patterns[opts->num_include++] = strdup(optarg);
+            }
+            break;
+        case OPT_IGLOB:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--iglob'\n", argv[0]);
+                return -1;
+            }
+            if (optarg && optarg[0] == '!') {
+                fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", argv[0], optarg);
+                return -1;
+            }
+            if (opts->num_include < MAX_INCLUDE_PATTERNS) {
+                opts->include_patterns[opts->num_include] = strdup(optarg);
+                opts->include_pattern_casefold[opts->num_include] = true;
+                opts->num_include++;
             }
             break;
         case 'u':
