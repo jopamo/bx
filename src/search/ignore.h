@@ -5,20 +5,29 @@
 
 struct walk_opts;
 
+struct bx_ignore_state {
+    const struct bx_ignore_state *parent;
+    char **patterns;
+    int pattern_count;
+};
+
 bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern);
 
 void bx_ignore_free_patterns(char **patterns, int n);
 
-bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern);
+void bx_ignore_state_init(struct bx_ignore_state *state,
+                          const struct bx_ignore_state *parent,
+                          char **patterns, int pattern_count);
 
-bool bx_ignore_clone_patterns(char **src, int src_n,
-                              char ***dst, int *dst_n, int *dst_cap);
+void bx_ignore_state_dispose(struct bx_ignore_state *state);
 
 bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
                              char ***patterns, int *n);
 
 bool bx_ignore_load_parent_patterns(const char *root, const struct walk_opts *opts,
                                     char ***patterns, int *n);
+
+bool bx_ignore_state_matches_path(const struct bx_ignore_state *state, const char *name);
 
 bool bx_ignore_path_ignored(const char *name, char **patterns, int n);
 

@@ -44,21 +44,23 @@ void bx_ignore_free_patterns(char **patterns, int n) {
     free(patterns);
 }
 
-bool bx_ignore_clone_patterns(char **src, int src_n, char ***dst, int *dst_n, int *dst_cap) {
-    *dst = NULL;
-    *dst_n = 0;
-    *dst_cap = 0;
+void bx_ignore_state_init(struct bx_ignore_state *state,
+                          const struct bx_ignore_state *parent,
+                          char **patterns, int pattern_count) {
+    if (!state)
+        return;
+    state->parent = parent;
+    state->patterns = patterns;
+    state->pattern_count = pattern_count;
+}
 
-    for (int i = 0; i < src_n; i++) {
-        if (!bx_ignore_append_pattern(dst, dst_n, dst_cap, src[i])) {
-            bx_ignore_free_patterns(*dst, *dst_n);
-            *dst = NULL;
-            *dst_n = 0;
-            *dst_cap = 0;
-            return false;
-        }
-    }
-    return true;
+void bx_ignore_state_dispose(struct bx_ignore_state *state) {
+    if (!state)
+        return;
+    bx_ignore_free_patterns(state->patterns, state->pattern_count);
+    state->parent = NULL;
+    state->patterns = NULL;
+    state->pattern_count = 0;
 }
 
 bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
@@ -243,6 +245,14 @@ bool bx_ignore_path_ignored(const char *name, char **patterns, int n) {
             if (match_ignore_line(patterns[i], name))
                 return true;
         }
+    }
+    return false;
+}
+
+bool bx_ignore_state_matches_path(const struct bx_ignore_state *state, const char *name) {
+    for (const struct bx_ignore_state *it = state; it; it = it->parent) {
+        if (bx_ignore_path_ignored(name, it->patterns, it->pattern_count))
+            return true;
     }
     return false;
 }

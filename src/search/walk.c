@@ -1,11 +1,11 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
-#include <fnmatch.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "filter.h"
 #include "ignore.h"
 #include <sys/stat.h>
 #include "walk.h"
@@ -96,72 +96,11 @@ static bool walk_ancestor_contains(const struct walk_ancestor *anc, dev_t dev, i
     return false;
 }
 
-static bool is_hidden(const char *name) {
-    return name[0] == '.';
-}
-
-static const char *walk_relative_path(const char *root, const char *path) {
-    if (!root || !path)
-        return path;
-
-    size_t root_len = strlen(root);
-    if (strncmp(path, root, root_len) != 0)
-        return path;
-    if (path[root_len] == '/')
-        return path + root_len + 1;
-    if (path[root_len] == '\0')
-        return path + root_len;
-    return path;
-}
-
-static bool walk_matches_exclude_pattern(const struct walk_opts *opts,
-                                         const char *name,
-                                         const char *relative_path) {
-    if (!opts || !opts->exclude_patterns || opts->num_exclude_patterns <= 0)
-        return false;
-
-    for (int i = 0; i < opts->num_exclude_patterns; i++) {
-        const char *pattern = opts->exclude_patterns[i];
-        if (!pattern || pattern[0] == '\0')
-            continue;
-        if (fnmatch(pattern, name, 0) == 0)
-            return true;
-        if (relative_path && relative_path[0] != '\0' &&
-            fnmatch(pattern, relative_path, FNM_PATHNAME) == 0)
-            return true;
-    }
-
-    return false;
-}
-
-static bool walk_matches_include_pattern(const struct walk_opts *opts,
-                                         const char *name,
-                                         const char *relative_path) {
-    if (!opts || !opts->include_patterns || opts->num_include_patterns <= 0)
-        return false;
-
-    for (int i = 0; i < opts->num_include_patterns; i++) {
-        const char *pattern = opts->include_patterns[i];
-        int flags = 0;
-        if (!pattern || pattern[0] == '\0')
-            continue;
-        if (opts->include_pattern_casefold && opts->include_pattern_casefold[i])
-            flags |= FNM_CASEFOLD;
-        if (fnmatch(pattern, name, flags) == 0)
-            return true;
-        if (relative_path && relative_path[0] != '\0' &&
-            fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0)
-            return true;
-    }
-
-    return false;
-}
-
 static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                           walk_callback cb, void *user, int depth,
                           const struct walk_ancestor *ancestors,
-                          char **parent_ignore_patterns, int parent_ignore_n,
-                          const char *root_path) {
+                          const struct bx_ignore_state *parent_ignore_state,
+                          const struct bx_walk_filter_state *filters) {
     if (walk_should_stop(opts))
         return 0;
 
@@ -173,34 +112,20 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
     if (!opts->no_ignore)
         bx_ignore_load_patterns(dirpath, opts, &local_ignore_patterns, &local_ignore_n);
 
-    char **ignore_patterns = NULL;
-    int ignore_n = 0;
-    int ignore_cap = 0;
-    if (!bx_ignore_clone_patterns(parent_ignore_patterns, parent_ignore_n,
-                                  &ignore_patterns, &ignore_n, &ignore_cap)) {
-        bx_ignore_free_patterns(local_ignore_patterns, local_ignore_n);
-        return -1;
-    }
-    for (int i = 0; i < local_ignore_n; i++) {
-        if (!bx_ignore_append_pattern(&ignore_patterns, &ignore_n, &ignore_cap,
-                                      local_ignore_patterns[i])) {
-            bx_ignore_free_patterns(local_ignore_patterns, local_ignore_n);
-            bx_ignore_free_patterns(ignore_patterns, ignore_n);
-            return -1;
-        }
-    }
-    bx_ignore_free_patterns(local_ignore_patterns, local_ignore_n);
+    struct bx_ignore_state ignore_state;
+    bx_ignore_state_init(&ignore_state, parent_ignore_state,
+                         local_ignore_patterns, local_ignore_n);
 
     DIR *d = opendir(dirpath);
     if (!d) {
         if (errno == EACCES && opts->suppress_eacces) {
             if (opts->report_eacces)
                 walk_report_error(opts, dirpath, errno);
-            bx_ignore_free_patterns(ignore_patterns, ignore_n);
+            bx_ignore_state_dispose(&ignore_state);
             return 0;
         }
         walk_report_error(opts, dirpath, errno);
-        bx_ignore_free_patterns(ignore_patterns, ignore_n);
+        bx_ignore_state_dispose(&ignore_state);
         return -1;
     }
 
@@ -217,30 +142,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         char *full = malloc(plen);
         snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
 
-        const char *relative_path = walk_relative_path(root_path, full);
-
-        if (!opts->hidden && is_hidden(ent->d_name) &&
-            !walk_matches_include_pattern(opts, ent->d_name, relative_path)) {
-            free(full);
-            continue;
-        }
-
-        if (bx_ignore_path_ignored(ent->d_name, ignore_patterns, ignore_n)) {
-            free(full);
-            continue;
-        }
-
-        if (opts->exclude_dirs) {
-            bool skip = false;
-            for (int e = 0; e < opts->num_exclude_dirs; e++)
-                if (fnmatch(opts->exclude_dirs[e], ent->d_name, 0) == 0) skip = true;
-            if (skip) {
-                free(full);
-                continue;
-            }
-        }
-
-        if (walk_matches_exclude_pattern(opts, ent->d_name, relative_path)) {
+        if (bx_walk_filter_should_skip(filters, ent->d_name, full, &ignore_state)) {
             free(full);
             continue;
         }
@@ -319,7 +221,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                     .parent = ancestors,
                 };
                 if (walk_recursive(full, opts, cb, user, depth + 1, &next,
-                                   ignore_patterns, ignore_n, root_path) != 0)
+                                   &ignore_state, filters) != 0)
                     status = -1;
             }
         }
@@ -328,13 +230,15 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         free(full);
     }
     closedir(d);
-    bx_ignore_free_patterns(ignore_patterns, ignore_n);
+    bx_ignore_state_dispose(&ignore_state);
     return status;
 }
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user) {
     struct walk_opts effective_opts = *opts;
     effective_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root, opts);
+    struct bx_walk_filter_state filters;
+    bx_walk_filter_init(&filters, &effective_opts, root);
 
     struct stat st;
     int root_stat_rc = (opts && opts->follow_root_symlink) ? stat(root, &st) : lstat(root, &st);
@@ -366,9 +270,12 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
         if (!bx_ignore_load_parent_patterns(root, &effective_opts,
                                             &parent_ignore_patterns, &parent_ignore_n))
             return -1;
+        struct bx_ignore_state parent_ignore_state;
+        bx_ignore_state_init(&parent_ignore_state, NULL,
+                             parent_ignore_patterns, parent_ignore_n);
         int rc = walk_recursive(root, &effective_opts, cb, user, 0, &root_ancestor,
-                                parent_ignore_patterns, parent_ignore_n, root);
-        bx_ignore_free_patterns(parent_ignore_patterns, parent_ignore_n);
+                                &parent_ignore_state, &filters);
+        bx_ignore_state_dispose(&parent_ignore_state);
         if (!walk_should_stop(opts) && opts->post_order) {
             struct walk_entry post = {
                 .path = strdup(root),
