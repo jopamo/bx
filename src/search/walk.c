@@ -99,7 +99,7 @@ static bool walk_ancestor_contains(const struct walk_ancestor *anc, dev_t dev, i
 static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                           walk_callback cb, void *user, int depth,
                           const struct walk_ancestor *ancestors,
-                          const struct bx_ignore_state *parent_ignore_state,
+                          struct bx_ignore_state *parent_ignore_state,
                           const struct bx_walk_filter_state *filters) {
     if (walk_should_stop(opts))
         return 0;
@@ -114,6 +114,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
     struct bx_ignore_state ignore_state;
     bx_ignore_state_init(&ignore_state, parent_ignore_state,
+                         dirpath,
                          local_ignore_patterns, local_ignore_n);
 
     DIR *d = opendir(dirpath);
@@ -142,6 +143,8 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         char *full = malloc(plen);
         snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
 
+        /* Keep per-entry policy out of the walker; this loop should stay about
+         * traversal, metadata, callbacks, and cycle/error handling. */
         if (bx_walk_filter_should_skip(filters, ent->d_name, full, &ignore_state)) {
             free(full);
             continue;
@@ -265,17 +268,14 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
             .path = root,
             .parent = NULL,
         };
-        char **parent_ignore_patterns = NULL;
-        int parent_ignore_n = 0;
-        if (!bx_ignore_load_parent_patterns(root, &effective_opts,
-                                            &parent_ignore_patterns, &parent_ignore_n))
+        bool parent_ignore_ok = false;
+        struct bx_ignore_state *parent_ignore_state =
+            bx_ignore_load_parent_state(root, &effective_opts, &parent_ignore_ok);
+        if (!parent_ignore_ok)
             return -1;
-        struct bx_ignore_state parent_ignore_state;
-        bx_ignore_state_init(&parent_ignore_state, NULL,
-                             parent_ignore_patterns, parent_ignore_n);
         int rc = walk_recursive(root, &effective_opts, cb, user, 0, &root_ancestor,
-                                &parent_ignore_state, &filters);
-        bx_ignore_state_dispose(&parent_ignore_state);
+                                parent_ignore_state, &filters);
+        bx_ignore_state_dispose_chain(parent_ignore_state);
         if (!walk_should_stop(opts) && opts->post_order) {
             struct walk_entry post = {
                 .path = strdup(root),

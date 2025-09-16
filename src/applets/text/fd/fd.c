@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "fd_exec_render.h"
+#include "fd_internal.h"
 #include "lib/argv_packer.h"
 #include "lib/child_runner.h"
 #include "search/metadata.h"
@@ -20,82 +22,16 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 
-#define FD_MAX_AND_PATTERNS 16
-#define FD_PLACEHOLDER "{}"
-#define FD_MAX_EXCLUDE_PATTERNS 16
-
 static const char *const fd_ignore_filenames[] = {
     ".gitignore",
     ".ignore",
     ".fdignore",
 };
 
-enum fd_exec_mode {
-    FD_EXEC_NONE = 0,
-    FD_EXEC_EACH,
-    FD_EXEC_BATCH,
-};
-
-enum fd_strip_cwd_prefix_mode {
-    FD_STRIP_CWD_PREFIX_UNSET = 0,
-    FD_STRIP_CWD_PREFIX_AUTO,
-    FD_STRIP_CWD_PREFIX_ALWAYS,
-    FD_STRIP_CWD_PREFIX_NEVER,
-};
-
-enum fd_placeholder_kind {
-    FD_PH_NONE = 0,
-    FD_PH_PATH,
-    FD_PH_BASENAME,
-    FD_PH_DIRNAME,
-    FD_PH_PATH_STEM,
-    FD_PH_BASENAME_STEM,
-};
-
 struct fd_exec_items {
     char **v;
     int count;
     int cap;
-};
-
-struct fd_opts {
-    bool hidden;
-    bool no_ignore;
-    bool no_ignore_parent;
-    bool no_ignore_vcs;
-    bool no_require_git;
-    bool follow_symlinks;
-    bool absolute_path;
-    bool full_path;
-    bool ignore_case;
-    bool smart_case;
-    bool case_sensitive;
-    bool fixed_strings;
-    bool glob_match;
-    bool print0;
-    bool quiet;
-    bool show_errors;
-    bool show_type;
-    const char *path_separator;
-    enum fd_strip_cwd_prefix_mode strip_cwd_prefix;
-    const char *pattern;
-    const char *and_patterns[FD_MAX_AND_PATTERNS];
-    int num_and_patterns;
-    char *exclude_patterns[FD_MAX_EXCLUDE_PATTERNS];
-    int num_exclude_patterns;
-    const char *type_filter;
-    const char *extension;
-    int max_depth;
-    int min_depth;
-    int exact_depth;
-    int max_results;
-    int results;
-    int unrestrict_level;
-    int batch_size;
-    bool batch_size_set;
-    enum fd_exec_mode exec_mode;
-    const char **exec_argv;
-    int exec_argc;
 };
 
 struct fd_state {
@@ -106,6 +42,7 @@ struct fd_state {
     bool *stop;
     bool strip_implicit_dot_prefix;
     char *cwd;
+    struct fd_render_ctx render;
     struct fd_exec_items exec_items;
     bool exec_collect_failed;
 };
@@ -227,11 +164,6 @@ static uint32_t fd_compile_flags(const struct fd_opts *opts, const char *pattern
     return 0;
 }
 
-static const char *fd_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
-
 static bool fd_parse_type_filter(const char *progname, const char *text, const char **out) {
     char type_filter = '\0';
     if (!bx_walk_parse_named_type_filter(text, &type_filter)) {
@@ -339,317 +271,12 @@ static bool fd_match_name(const struct fd_state *st, const char *name) {
     return true;
 }
 
-static void fd_print_path(const struct fd_state *st, const char *path, bool is_dir);
-
-static bool fd_match_placeholder_raw(const char *text, enum fd_placeholder_kind *kind, size_t *len) {
-    if (strncmp(text, "{//}", 4) == 0) {
-        *kind = FD_PH_DIRNAME;
-        *len = 4;
-        return true;
-    }
-    if (strncmp(text, "{/.}", 4) == 0) {
-        *kind = FD_PH_BASENAME_STEM;
-        *len = 4;
-        return true;
-    }
-    if (strncmp(text, "{/}", 3) == 0) {
-        *kind = FD_PH_BASENAME;
-        *len = 3;
-        return true;
-    }
-    if (strncmp(text, "{.}", 3) == 0) {
-        *kind = FD_PH_PATH_STEM;
-        *len = 3;
-        return true;
-    }
-    if (strncmp(text, FD_PLACEHOLDER, sizeof(FD_PLACEHOLDER) - 1) == 0) {
-        *kind = FD_PH_PATH;
-        *len = sizeof(FD_PLACEHOLDER) - 1;
-        return true;
-    }
-    return false;
-}
-
-static bool fd_match_placeholder_at(const char *arg, const char *text,
-                                    enum fd_placeholder_kind *kind, size_t *len) {
-    if (!fd_match_placeholder_raw(text, kind, len))
-        return false;
-
-    if (text > arg && text[-1] == '{')
-        return false;
-    if (text[*len] == '}')
-        return false;
-    return true;
-}
-
-static size_t fd_placeholder_count(const char *arg) {
-    size_t count = 0;
-    for (const char *p = arg; *p; ) {
-        enum fd_placeholder_kind kind = FD_PH_NONE;
-        size_t len = 0;
-        if (p[0] == '{' && p[1] == '{') {
-            p += 2;
-            continue;
-        }
-        if (p[0] == '}' && p[1] == '}') {
-            p += 2;
-            continue;
-        }
-        if (fd_match_placeholder_at(arg, p, &kind, &len)) {
-            (void)kind;
-            count++;
-            p += len;
-            continue;
-        }
-        p++;
-    }
-    return count;
-}
-
-static char *fd_strndup(const char *text, size_t len) {
-    char *out = malloc(len + 1);
-    if (!out)
-        return NULL;
-    memcpy(out, text, len);
-    out[len] = '\0';
-    return out;
-}
-
-static const char *fd_stem_input_path(const char *path) {
-    if (path[0] == '.' && path[1] == '/')
-        return path + 2;
-    return path;
-}
-
-static char *fd_remove_last_extension(const char *path) {
-    const char *base = fd_basename(path);
-    const char *dot = strrchr(base, '.');
-    if (!dot || dot == base)
-        return strdup(path);
-    return fd_strndup(path, (size_t)(dot - path));
-}
-
-static char *fd_placeholder_value(enum fd_placeholder_kind kind, const char *path) {
-    switch (kind) {
-    case FD_PH_PATH:
-        return strdup(path);
-    case FD_PH_BASENAME:
-        return strdup(fd_basename(path));
-    case FD_PH_DIRNAME: {
-        const char *slash = strrchr(path, '/');
-        if (!slash)
-            return strdup(".");
-        if (slash == path)
-            return fd_strndup(path, 1);
-        return fd_strndup(path, (size_t)(slash - path));
-    }
-    case FD_PH_PATH_STEM:
-        return fd_remove_last_extension(fd_stem_input_path(path));
-    case FD_PH_BASENAME_STEM:
-        return fd_remove_last_extension(fd_basename(fd_stem_input_path(path)));
-    case FD_PH_NONE:
-        break;
-    }
-    return NULL;
-}
-
-static char *fd_expand_placeholders(const char *arg, const char *path) {
-    size_t out_len = 1;
-    for (const char *p = arg; *p; ) {
-        enum fd_placeholder_kind kind = FD_PH_NONE;
-        size_t len = 0;
-        if (p[0] == '{' && p[1] == '{') {
-            out_len++;
-            p += 2;
-            continue;
-        }
-        if (p[0] == '}' && p[1] == '}') {
-            out_len++;
-            p += 2;
-            continue;
-        }
-        if (fd_match_placeholder_at(arg, p, &kind, &len)) {
-            char *value = fd_placeholder_value(kind, path);
-            if (!value)
-                return NULL;
-            out_len += strlen(value);
-            free(value);
-            p += len;
-            continue;
-        }
-        out_len++;
-        p++;
-    }
-
-    char *out = malloc(out_len);
-    if (!out)
-        return NULL;
-
-    char *dst = out;
-    for (const char *p = arg; *p; ) {
-        enum fd_placeholder_kind kind = FD_PH_NONE;
-        size_t len = 0;
-        if (p[0] == '{' && p[1] == '{') {
-            *dst++ = '{';
-            p += 2;
-            continue;
-        }
-        if (p[0] == '}' && p[1] == '}') {
-            *dst++ = '}';
-            p += 2;
-            continue;
-        }
-        if (fd_match_placeholder_at(arg, p, &kind, &len)) {
-            char *value = fd_placeholder_value(kind, path);
-            size_t value_len;
-            if (!value) {
-                free(out);
-                return NULL;
-            }
-            value_len = strlen(value);
-            memcpy(dst, value, value_len);
-            dst += value_len;
-            free(value);
-            p += len;
-            continue;
-        }
-        *dst++ = *p++;
-    }
-    *dst = '\0';
-    return out;
-}
-
-static char *fd_exec_path(const struct fd_state *st, const char *path) {
-    const char *relative = path;
-
-    if (!st->opts->absolute_path)
-        return NULL;
-
-    if (relative[0] == '.' && relative[1] == '/')
-        relative += 2;
-    if (relative[0] == '/')
-        return strdup(relative);
-
-    if (!st->cwd || st->cwd[0] == '\0')
-        return strdup(relative);
-
-    size_t cwd_len = strlen(st->cwd);
-    size_t rel_len = strlen(relative);
-    char *out = malloc(cwd_len + 1 + rel_len + 1);
-    if (!out)
-        return NULL;
-    memcpy(out, st->cwd, cwd_len);
-    out[cwd_len] = '/';
-    memcpy(out + cwd_len + 1, relative, rel_len + 1);
-    return out;
-}
-
-static char *fd_apply_path_separator(const struct fd_opts *opts, const char *path) {
-    const char *sep = opts->path_separator;
-    if (!sep || strcmp(sep, "/") == 0)
-        return strdup(path);
-
-    size_t sep_len = strlen(sep);
-    size_t slash_count = 0;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/')
-            slash_count++;
-    }
-
-    size_t path_len = strlen(path);
-    size_t out_len = path_len + slash_count * sep_len;
-    if (slash_count > 0)
-        out_len -= slash_count;
-    char *out = malloc(out_len + 1);
-    if (!out)
-        return NULL;
-
-    char *dst = out;
-    for (const char *p = path; *p; p++) {
-        if (*p == '/') {
-            memcpy(dst, sep, sep_len);
-            dst += sep_len;
-        } else {
-            *dst++ = *p;
-        }
-    }
-    *dst = '\0';
-    return out;
-}
-
-static bool fd_should_strip_cwd_prefix(const struct fd_state *st, bool for_exec) {
-    if (st->opts->absolute_path)
-        return false;
-
-    switch (st->opts->strip_cwd_prefix) {
-    case FD_STRIP_CWD_PREFIX_ALWAYS:
-    case FD_STRIP_CWD_PREFIX_AUTO:
-        return st->strip_implicit_dot_prefix;
-    case FD_STRIP_CWD_PREFIX_NEVER:
-        return false;
-    case FD_STRIP_CWD_PREFIX_UNSET:
-        return !for_exec && st->strip_implicit_dot_prefix;
-    }
-    return false;
-}
-
-static char *fd_append_dir_suffix(const struct fd_opts *opts, char *path, bool is_dir) {
-    if (!path || !is_dir)
-        return path;
-
-    const char *sep = opts->path_separator ? opts->path_separator : "/";
-    size_t path_len = strlen(path);
-    size_t sep_len = strlen(sep);
-    char *out = realloc(path, path_len + sep_len + 1);
-    if (!out)
-        return path;
-    memcpy(out + path_len, sep, sep_len);
-    out[path_len + sep_len] = '\0';
-    return out;
-}
-
-static char *fd_render_output_path(const struct fd_state *st, const char *path, bool is_dir) {
-    char *base = NULL;
-    if (st->opts->absolute_path) {
-        base = fd_exec_path(st, path);
-    } else {
-        const char *relative = path;
-        if (fd_should_strip_cwd_prefix(st, false) && relative[0] == '.' && relative[1] == '/')
-            relative += 2;
-        base = strdup(relative);
-    }
-    if (!base)
-        return NULL;
-
-    char *rendered = fd_apply_path_separator(st->opts, base);
-    free(base);
-    return fd_append_dir_suffix(st->opts, rendered, is_dir);
-}
-
-static char *fd_render_exec_path(const struct fd_state *st, const char *path) {
-    char *base;
-    if (st->opts->absolute_path) {
-        base = fd_exec_path(st, path);
-    } else {
-        const char *relative = path;
-        if (fd_should_strip_cwd_prefix(st, true) && relative[0] == '.' && relative[1] == '/')
-            relative += 2;
-        base = strdup(relative);
-    }
-    char *rendered;
-    if (!base)
-        return NULL;
-    rendered = fd_apply_path_separator(st->opts, base);
-    free(base);
-    return rendered;
-}
-
 static bool fd_record_match(struct fd_state *st, const char *path, bool is_dir) {
     struct fd_opts *opts = st->opts;
     opts->results++;
 
     if (opts->exec_mode != FD_EXEC_NONE) {
-        char *exec_path = fd_render_exec_path(st, path);
+        char *exec_path = fd_render_exec_path(&st->render, path);
         if (!exec_path || !fd_exec_items_append(&st->exec_items, exec_path)) {
             free(exec_path);
             st->exec_collect_failed = true;
@@ -658,7 +285,7 @@ static bool fd_record_match(struct fd_state *st, const char *path, bool is_dir) 
             return false;
         }
     } else if (!opts->quiet) {
-        fd_print_path(st, path, is_dir);
+        fd_print_path(&st->render, path, is_dir);
     }
 
     if ((opts->max_results > 0 && opts->results >= opts->max_results) ||
@@ -669,53 +296,34 @@ static bool fd_record_match(struct fd_state *st, const char *path, bool is_dir) 
     return true;
 }
 
-static void fd_print_path(const struct fd_state *st, const char *path, bool is_dir) {
-    const struct fd_opts *opts = st->opts;
-    char terminator = opts->print0 ? '\0' : '\n';
-    char *rendered = fd_render_output_path(st, path, is_dir);
-    if (!rendered)
-        return;
-    printf("%s%c", rendered, terminator);
-    free(rendered);
+static size_t fd_exec_arg_marker_count(const char *arg, void *user) {
+    (void)user;
+    return fd_placeholder_count(arg);
 }
 
-static size_t fd_batch_argv_bytes(const char **command_argv, int command_argc,
-                                  char **items, int start, int count,
-                                  bool batch_mode, bool *saw_placeholder) {
-    size_t total = 0;
-    bool saw = false;
+static size_t fd_exec_arg_expanded_bytes(const char *arg, const char *item, void *user) {
+    (void)user;
+    char *expanded = fd_expand_placeholders(arg, item ? item : "");
+    if (!expanded)
+        return (size_t)-1;
+    size_t bytes = strlen(expanded) + 1;
+    free(expanded);
+    return bytes;
+}
 
-    for (int i = 0; i < command_argc; i++) {
-        size_t marker_count = fd_placeholder_count(command_argv[i]);
-        if (marker_count == 0) {
-            char *expanded = fd_expand_placeholders(command_argv[i], "");
-            if (!expanded)
-                return (size_t)-1;
-            total += strlen(expanded) + 1;
-            free(expanded);
-            continue;
-        }
+struct fd_exec_batch_ctx {
+    const char **command_argv;
+    int command_argc;
+    char **items;
+};
 
-        saw = true;
-        int item_total = batch_mode ? count : (count > 0 ? 1 : 0);
-        for (int j = 0; j < item_total; j++) {
-            char *expanded = fd_expand_placeholders(command_argv[i], items[start + j]);
-            if (!expanded)
-                return (size_t)-1;
-            total += strlen(expanded) + 1;
-            free(expanded);
-        }
-    }
-
-    if (!saw) {
-        int item_total = batch_mode ? count : (count > 0 ? 1 : 0);
-        for (int j = 0; j < item_total; j++)
-            total += strlen(items[start + j]) + 1;
-    }
-
-    if (saw_placeholder)
-        *saw_placeholder = saw;
-    return total;
+static size_t fd_exec_batch_ctx_bytes(void *user, int start, int count) {
+    struct fd_exec_batch_ctx *ctx = user;
+    return bx_argv_bytes_with_item_expansion(ctx->command_argv, ctx->command_argc,
+                                             ctx->items, start, count, true,
+                                             fd_exec_arg_marker_count,
+                                             fd_exec_arg_expanded_bytes,
+                                             NULL, NULL);
 }
 
 static int fd_select_exec_batch_count(const char **command_argv, int command_argc,
@@ -735,19 +343,13 @@ static int fd_select_exec_batch_count(const char **command_argv, int command_arg
                                           0, 0, char_limit);
     }
 
-    int take = 0;
-
-    while (start + take < item_count) {
-        size_t bytes = fd_batch_argv_bytes(command_argv, command_argc,
-                                           items, start, take + 1, true, NULL);
-        if (bytes == (size_t)-1)
-            return -1;
-        if (char_limit > 0 && bytes > char_limit)
-            break;
-        take++;
-    }
-
-    return take > 0 ? take : -1;
+    struct fd_exec_batch_ctx ctx = {
+        .command_argv = command_argv,
+        .command_argc = command_argc,
+        .items = items,
+    };
+    return bx_argv_select_batch_count_by_bytes(item_count, start, 0, 0, char_limit,
+                                               fd_exec_batch_ctx_bytes, &ctx);
 }
 
 static char **fd_build_exec_argv(const char **command_argv, int command_argc,
@@ -846,7 +448,7 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
     int final_rc = 0;
     int running = 0;
     struct bx_child child = {0};
-    struct bx_child_runner_opts runner_opts = {0};
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
     int i = 0;
 
     while (i < st->exec_items.count) {
@@ -867,8 +469,12 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
                 bytes = bx_argv_bytes_with_items(st->opts->exec_argv, st->opts->exec_argc,
                                                  st->exec_items.v, i, 1);
             } else {
-                bytes = fd_batch_argv_bytes(st->opts->exec_argv, st->opts->exec_argc,
-                                            st->exec_items.v, i, 1, false, NULL);
+                bytes = bx_argv_bytes_with_item_expansion(st->opts->exec_argv,
+                                                          st->opts->exec_argc,
+                                                          st->exec_items.v, i, 1, false,
+                                                          fd_exec_arg_marker_count,
+                                                          fd_exec_arg_expanded_bytes,
+                                                          NULL, NULL);
                 if (bytes == (size_t)-1)
                     return 1;
             }
@@ -1245,6 +851,7 @@ int bx_fd_main(int argc, char **argv) {
     };
     if (opts.absolute_path)
         state.cwd = getcwd(NULL, 0);
+    fd_render_ctx_init(&state.render, &opts, using_implicit_root, state.cwd);
     if (opts.pattern)
         state.regexes[state.regex_count++] = fd_compile_pattern(progname, &opts, opts.pattern);
     for (int i = 0; i < opts.num_and_patterns; i++)

@@ -8,15 +8,78 @@
 #include "ignore.h"
 #include "walk.h"
 
-static bool match_ignore_line(const char *line, const char *name) {
-    if (line[0] == '#' || line[0] == '\0')
-        return false;
+enum bx_ignore_match_result {
+    BX_IGNORE_NO_MATCH = 0,
+    BX_IGNORE_INCLUDE,
+    BX_IGNORE_EXCLUDE,
+};
+
+static enum bx_ignore_match_result match_ignore_line(const char *line,
+                                                     const char *name,
+                                                     const char *relative_path) {
     const char *p = line;
-    while (*p == ' ') p++;
+    while (*p == ' ')
+        p++;
+    if (*p == '#' || *p == '\0')
+        return BX_IGNORE_NO_MATCH;
+
     bool negate = false;
-    if (*p == '!') { negate = true; p++; }
-    bool match = fnmatch(p, name, FNM_PATHNAME) == 0;
-    return negate ? !match : match;
+    if (*p == '!') {
+        negate = true;
+        p++;
+    }
+    if (*p == '/')
+        p++;
+    if (*p == '\0')
+        return BX_IGNORE_NO_MATCH;
+
+    bool match = false;
+    if (strchr(p, '/')) {
+        match = relative_path && relative_path[0] != '\0' &&
+                fnmatch(p, relative_path, FNM_PATHNAME) == 0;
+    } else {
+        match = fnmatch(p, name, FNM_PATHNAME) == 0;
+    }
+
+    if (!match)
+        return BX_IGNORE_NO_MATCH;
+    return negate ? BX_IGNORE_INCLUDE : BX_IGNORE_EXCLUDE;
+}
+
+static const char *bx_ignore_state_relative_path(const struct bx_ignore_state *state,
+                                                 const char *path,
+                                                 const char *root_relative_path) {
+    if (!state || !state->dirpath || !path)
+        goto parent_prefix;
+
+    size_t dir_len = strlen(state->dirpath);
+    if (strncmp(path, state->dirpath, dir_len) != 0)
+        goto parent_prefix;
+    if (path[dir_len] == '/')
+        return path + dir_len + 1;
+    if (path[dir_len] == '\0')
+        return path + dir_len;
+
+parent_prefix:
+    if (!state || !state->root_prefix)
+        return NULL;
+    return root_relative_path;
+}
+
+static enum bx_ignore_match_result bx_ignore_match_patterns(const char *name,
+                                                            const char *relative_path,
+                                                            char **patterns,
+                                                            int n) {
+    if (!patterns || n <= 0)
+        return BX_IGNORE_NO_MATCH;
+
+    for (int i = n - 1; i >= 0; i--) {
+        enum bx_ignore_match_result result = match_ignore_line(patterns[i], name, relative_path);
+        if (result != BX_IGNORE_NO_MATCH)
+            return result;
+    }
+
+    return BX_IGNORE_NO_MATCH;
 }
 
 bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern) {
@@ -45,11 +108,16 @@ void bx_ignore_free_patterns(char **patterns, int n) {
 }
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
-                          const struct bx_ignore_state *parent,
+                          struct bx_ignore_state *parent,
+                          const char *dirpath,
                           char **patterns, int pattern_count) {
     if (!state)
         return;
     state->parent = parent;
+    state->dirpath = dirpath;
+    state->owned_dirpath = NULL;
+    state->root_prefix = NULL;
+    state->owned_root_prefix = NULL;
     state->patterns = patterns;
     state->pattern_count = pattern_count;
 }
@@ -59,8 +127,23 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state) {
         return;
     bx_ignore_free_patterns(state->patterns, state->pattern_count);
     state->parent = NULL;
+    free(state->owned_dirpath);
+    free(state->owned_root_prefix);
+    state->dirpath = NULL;
+    state->owned_dirpath = NULL;
+    state->root_prefix = NULL;
+    state->owned_root_prefix = NULL;
     state->patterns = NULL;
     state->pattern_count = 0;
+}
+
+void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
+    while (state) {
+        struct bx_ignore_state *parent = state->parent;
+        bx_ignore_state_dispose(state);
+        free(state);
+        state = parent;
+    }
 }
 
 bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
@@ -163,26 +246,29 @@ bool bx_ignore_enable_gitignore_for_root(const char *root, const struct walk_opt
     return found;
 }
 
-bool bx_ignore_load_parent_patterns(const char *root, const struct walk_opts *opts,
-                                    char ***patterns, int *n) {
-    *patterns = NULL;
-    *n = 0;
+struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
+                                                    const struct walk_opts *opts,
+                                                    bool *ok) {
+    if (ok)
+        *ok = false;
 
     if (!root || !opts || opts->no_ignore || opts->no_ignore_parent)
-        return true;
+        goto success;
 
     char *resolved_root = realpath(root, NULL);
     if (!resolved_root)
-        return true;
+        goto success;
 
     char *cursor = strdup(resolved_root);
-    free(resolved_root);
-    if (!cursor)
-        return false;
+    if (!cursor) {
+        free(resolved_root);
+        goto fail;
+    }
 
     char **dirs = NULL;
     int dir_count = 0;
     int dir_cap = 0;
+    struct bx_ignore_state *chain = NULL;
 
     while (cursor && strcmp(cursor, "/") != 0) {
         char *slash = strrchr(cursor, '/');
@@ -197,7 +283,8 @@ bool bx_ignore_load_parent_patterns(const char *root, const struct walk_opts *op
             if (!tmp) {
                 free(cursor);
                 free(dirs);
-                return false;
+                free(resolved_root);
+                goto fail;
             }
             dirs = tmp;
             dir_cap = new_cap;
@@ -208,51 +295,108 @@ bool bx_ignore_load_parent_patterns(const char *root, const struct walk_opts *op
             for (int i = 0; i < dir_count - 1; i++)
                 free(dirs[i]);
             free(dirs);
-            return false;
+            free(resolved_root);
+            goto fail;
         }
     }
     free(cursor);
 
-    int cap = 0;
     for (int i = dir_count - 1; i >= 0; i--) {
         char **loaded = NULL;
         int loaded_n = 0;
         bx_ignore_load_patterns(dirs[i], opts, &loaded, &loaded_n);
-        for (int j = 0; j < loaded_n; j++) {
-            if (!bx_ignore_append_pattern(patterns, n, &cap, loaded[j])) {
+        if (loaded_n > 0) {
+            struct bx_ignore_state *state = calloc(1, sizeof(*state));
+            if (!state) {
                 bx_ignore_free_patterns(loaded, loaded_n);
-                bx_ignore_free_patterns(*patterns, *n);
-                *patterns = NULL;
-                *n = 0;
                 for (int k = 0; k < dir_count; k++)
                     free(dirs[k]);
                 free(dirs);
-                return false;
+                bx_ignore_state_dispose_chain(chain);
+                free(resolved_root);
+                goto fail;
             }
+            bx_ignore_state_init(state, chain, NULL, loaded, loaded_n);
+            size_t dir_len = strlen(dirs[i]);
+            const char *relative_root = resolved_root;
+            if (strncmp(resolved_root, dirs[i], dir_len) == 0) {
+                if (resolved_root[dir_len] == '/')
+                    relative_root = resolved_root + dir_len + 1;
+                else if (resolved_root[dir_len] == '\0')
+                    relative_root = "";
+            }
+            state->owned_root_prefix = strdup(relative_root);
+            if (!state->owned_root_prefix) {
+                free(state);
+                bx_ignore_free_patterns(loaded, loaded_n);
+                for (int k = 0; k < dir_count; k++)
+                    free(dirs[k]);
+                free(dirs);
+                bx_ignore_state_dispose_chain(chain);
+                free(resolved_root);
+                goto fail;
+            }
+            state->root_prefix = state->owned_root_prefix;
+            chain = state;
+        } else {
+            bx_ignore_free_patterns(loaded, loaded_n);
         }
-        bx_ignore_free_patterns(loaded, loaded_n);
     }
 
     for (int i = 0; i < dir_count; i++)
         free(dirs[i]);
     free(dirs);
-    return true;
+    free(resolved_root);
+    if (ok)
+        *ok = true;
+    return chain;
+
+fail:
+    if (ok)
+        *ok = false;
+    return NULL;
+
+success:
+    if (ok)
+        *ok = true;
+    return NULL;
 }
 
 bool bx_ignore_path_ignored(const char *name, char **patterns, int n) {
-    if (patterns && n > 0) {
-        for (int i = n - 1; i >= 0; i--) {
-            if (match_ignore_line(patterns[i], name))
-                return true;
-        }
-    }
-    return false;
+    return bx_ignore_match_patterns(name, NULL, patterns, n) == BX_IGNORE_EXCLUDE;
 }
 
-bool bx_ignore_state_matches_path(const struct bx_ignore_state *state, const char *name) {
+bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
+                                  const char *name,
+                                  const char *path,
+                                  const char *root_relative_path) {
     for (const struct bx_ignore_state *it = state; it; it = it->parent) {
-        if (bx_ignore_path_ignored(name, it->patterns, it->pattern_count))
+        const char *relative_path = bx_ignore_state_relative_path(it, path, root_relative_path);
+        char *prefixed_path = NULL;
+        if (it->root_prefix && it->root_prefix[0] != '\0') {
+            size_t prefix_len = strlen(it->root_prefix);
+            size_t rel_len = relative_path ? strlen(relative_path) : 0;
+            size_t total = prefix_len + (rel_len > 0 ? 1 + rel_len : 0) + 1;
+            prefixed_path = malloc(total);
+            if (!prefixed_path)
+                return false;
+            memcpy(prefixed_path, it->root_prefix, prefix_len);
+            if (rel_len > 0) {
+                prefixed_path[prefix_len] = '/';
+                memcpy(prefixed_path + prefix_len + 1, relative_path, rel_len);
+                prefixed_path[prefix_len + 1 + rel_len] = '\0';
+            } else {
+                prefixed_path[prefix_len] = '\0';
+            }
+            relative_path = prefixed_path;
+        }
+        enum bx_ignore_match_result result =
+            bx_ignore_match_patterns(name, relative_path, it->patterns, it->pattern_count);
+        free(prefixed_path);
+        if (result == BX_IGNORE_EXCLUDE)
             return true;
+        if (result == BX_IGNORE_INCLUDE)
+            return false;
     }
     return false;
 }

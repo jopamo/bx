@@ -110,7 +110,7 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
         return true;
     }
 
-    if (bx_ignore_state_matches_path(ignore_state, name))
+    if (bx_ignore_state_matches_path(ignore_state, name, path, relative_path))
         return true;
 
     if (bx_walk_filter_matches_exclude_dir(state, name))

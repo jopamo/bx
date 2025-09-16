@@ -80,6 +80,11 @@ int bx_child_spawn_argv(const char *progname, char **argv,
             if (tty_fd != STDIN_FILENO)
                 close(tty_fd);
         }
+        if (opts && opts->cwd && chdir(opts->cwd) != 0) {
+            errnum = errno;
+            (void)!write(errpipe[1], &errnum, sizeof(errnum));
+            _exit(127);
+        }
         execvp(argv[0], argv);
         errnum = errno;
         (void)!write(errpipe[1], &errnum, sizeof(errnum));

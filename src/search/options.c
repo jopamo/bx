@@ -22,6 +22,7 @@ enum {
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
     OPT_MAX_DEPTH,
+    OPT_NO_IGNORE,
     OPT_NO_IGNORE_PARENT,
     OPT_NO_IGNORE_VCS,
     OPT_NO_IGNORE_DOT,
@@ -107,6 +108,7 @@ void bx_search_print_help(const char *progname) {
     puts("      --exclude=GLOB   skip files matching GLOB");
     puts("      --exclude-from=FILE  skip files matching patterns from FILE");
     puts("      --exclude-dir=GLOB  skip directories matching GLOB");
+    puts("      --no-ignore  do not use ignore files");
     puts("      --no-ignore-parent  do not use ignore files from parent directories");
     puts("      --no-ignore-vcs  do not use VCS ignore files");
     puts("      --no-ignore-dot  do not use .ignore or .rgignore files");
@@ -316,6 +318,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
+        {"no-ignore", no_argument,          NULL, OPT_NO_IGNORE},
         {"no-ignore-parent", no_argument,   NULL, OPT_NO_IGNORE_PARENT},
         {"no-ignore-vcs", no_argument,      NULL, OPT_NO_IGNORE_VCS},
         {"no-ignore-dot", no_argument,      NULL, OPT_NO_IGNORE_DOT},
@@ -624,6 +627,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->follow_symlinks = true;
             } else {
                 fprintf(stderr, "%s: unrecognized option '--follow'\n", argv[0]);
+                return -1;
+            }
+            break;
+        case OPT_NO_IGNORE:
+            if (personality == BX_SEARCH_RG) {
+                opts->no_ignore = true;
+            } else {
+                fprintf(stderr, "%s: unrecognized option '--no-ignore'\n", argv[0]);
                 return -1;
             }
             break;

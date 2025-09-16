@@ -8,7 +8,23 @@ struct bx_child_runner_opts {
     bool verbose;
     bool reopen_stdin_tty;
     const char *process_slot_var;
+    const char *cwd;
 };
+
+static inline struct bx_child_runner_opts bx_child_runner_opts_default(void) {
+    return (struct bx_child_runner_opts){0};
+}
+
+static inline struct bx_child_runner_opts
+bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
+                          const char *process_slot_var) {
+    return (struct bx_child_runner_opts){
+        .verbose = verbose,
+        .reopen_stdin_tty = reopen_stdin_tty,
+        .process_slot_var = process_slot_var,
+        .cwd = NULL,
+    };
+}
 
 struct bx_child {
     pid_t pid;

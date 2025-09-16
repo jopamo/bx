@@ -7,10 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/argv_packer.h"
+#include "lib/child_runner.h"
 #include "search/metadata.h"
 #include "search/walk.h"
 
@@ -59,10 +62,22 @@ enum find_expr_kind {
     FIND_EXPR_FPRINT0,
     FIND_EXPR_DELETE,
     FIND_EXPR_QUIT,
+    FIND_EXPR_EXEC,
+    FIND_EXPR_OK,
+    FIND_EXPR_EXEC_PLUS,
+    FIND_EXPR_EXECDIR,
+    FIND_EXPR_OKDIR,
+    FIND_EXPR_EXECDIR_PLUS,
     FIND_EXPR_NOT,
     FIND_EXPR_AND,
     FIND_EXPR_OR,
     FIND_EXPR_COMMA,
+};
+
+struct find_exec_items {
+    char **v;
+    int count;
+    int cap;
 };
 
 struct find_expr {
@@ -78,6 +93,9 @@ struct find_expr {
     int perm_kind;
     unsigned long long size_unit;
     struct timespec ref_time;
+    char **exec_argv;
+    int exec_argc;
+    struct find_exec_items exec_items;
 };
 
 struct find_parser {
@@ -143,6 +161,12 @@ static void find_print_help(const char *progname) {
     puts("  -fprint0 FILE write path followed by NUL to FILE");
     puts("  -delete       delete matched entries");
     puts("  -quit         stop after the first deciding result");
+    puts("  -exec CMD ... {} ;  run CMD once per matched path");
+    puts("  -ok CMD ... {} ;    prompt, then run CMD once per matched path");
+    puts("  -exec CMD ... {} +  run CMD with batched matched paths");
+    puts("  -execdir CMD ... {} ;  run CMD once per matched path from its parent directory");
+    puts("  -okdir CMD ... {} ;  prompt, then run CMD once per matched path from its parent directory");
+    puts("  -execdir CMD ... {} +  run CMD with batched matched paths from their parent directory");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
 }
@@ -402,11 +426,38 @@ static struct find_expr *find_expr_new(enum find_expr_kind kind) {
     return expr;
 }
 
+static bool find_exec_items_append(struct find_exec_items *items, char *text) {
+    if (items->count >= items->cap) {
+        int new_cap = items->cap == 0 ? 16 : items->cap * 2;
+        char **tmp = realloc(items->v, (size_t)new_cap * sizeof(*items->v));
+        if (!tmp)
+            return false;
+        items->v = tmp;
+        items->cap = new_cap;
+    }
+
+    items->v[items->count++] = text;
+    return true;
+}
+
+static void find_exec_items_free(struct find_exec_items *items) {
+    if (!items)
+        return;
+    for (int i = 0; i < items->count; i++)
+        free(items->v[i]);
+    free(items->v);
+    items->v = NULL;
+    items->count = 0;
+    items->cap = 0;
+}
+
 static void find_expr_free(struct find_expr *expr) {
     if (!expr)
         return;
     find_expr_free(expr->left);
     find_expr_free(expr->right);
+    free(expr->exec_argv);
+    find_exec_items_free(&expr->exec_items);
     free(expr);
 }
 
@@ -439,6 +490,26 @@ static bool find_is_primary_start(const char *arg) {
 }
 
 static struct find_expr *find_parse_expr(struct find_parser *parser);
+static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
+                              const char *path, const char *cwd);
+static bool find_execdir_split_path(const char *path, char **dir_out, char **arg_out);
+
+static bool find_prompt_ok(const char *cmdname, const char *path) {
+    fprintf(stderr, "< %s ... %s > ? ", cmdname, path);
+    fflush(stderr);
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t len = getline(&line, &cap, stdin);
+    if (len < 0) {
+        free(line);
+        return false;
+    }
+
+    bool approved = len > 0 && (line[0] == 'y' || line[0] == 'Y');
+    free(line);
+    return approved;
+}
 
 static struct find_expr *find_make_binary(enum find_expr_kind kind,
                                           struct find_expr *left,
@@ -687,6 +758,176 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
     } else if (strcmp(arg, "-quit") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_QUIT);
+    } else if (strcmp(arg, "-exec") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-exec'\n", parser->progname);
+            return NULL;
+        }
+        int command_start = parser->pos;
+        int command_end = -1;
+        bool per_item = false;
+        bool saw_placeholder = false;
+        for (int i = parser->pos; i < parser->argc; i++) {
+            if (strcmp(parser->argv[i], ";") == 0) {
+                command_end = i;
+                per_item = true;
+                break;
+            }
+            if (strcmp(parser->argv[i], "+") == 0) {
+                command_end = i;
+                break;
+            }
+            if (strcmp(parser->argv[i], "{}") == 0)
+                saw_placeholder = true;
+        }
+        if (command_end < 0) {
+            fprintf(stderr, "%s: missing terminating `;' or `+' for `-exec'\n",
+                    parser->progname);
+            return NULL;
+        }
+        if (!saw_placeholder) {
+            fprintf(stderr, "%s: missing '{}' in `-exec'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(per_item ? FIND_EXPR_EXEC : FIND_EXPR_EXEC_PLUS);
+        if (expr) {
+            expr->exec_argc = command_end - command_start;
+            expr->exec_argv = calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
+            if (!expr->exec_argv) {
+                find_expr_free(expr);
+                fprintf(stderr, "%s: out of memory\n", parser->progname);
+                return NULL;
+            }
+            for (int i = 0; i < expr->exec_argc; i++)
+                expr->exec_argv[i] = parser->argv[command_start + i];
+            expr->exec_argv[expr->exec_argc] = NULL;
+        }
+        parser->pos = command_end + 1;
+    } else if (strcmp(arg, "-ok") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-ok'\n", parser->progname);
+            return NULL;
+        }
+        int command_start = parser->pos;
+        int command_end = -1;
+        bool saw_placeholder = false;
+        for (int i = parser->pos; i < parser->argc; i++) {
+            if (strcmp(parser->argv[i], ";") == 0) {
+                command_end = i;
+                break;
+            }
+            if (strcmp(parser->argv[i], "{}") == 0)
+                saw_placeholder = true;
+        }
+        if (command_end < 0) {
+            fprintf(stderr, "%s: missing terminating `;' for `-ok'\n", parser->progname);
+            return NULL;
+        }
+        if (!saw_placeholder) {
+            fprintf(stderr, "%s: missing '{}' in `-ok'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_OK);
+        if (expr) {
+            expr->exec_argc = command_end - command_start;
+            expr->exec_argv = calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
+            if (!expr->exec_argv) {
+                find_expr_free(expr);
+                fprintf(stderr, "%s: out of memory\n", parser->progname);
+                return NULL;
+            }
+            for (int i = 0; i < expr->exec_argc; i++)
+                expr->exec_argv[i] = parser->argv[command_start + i];
+            expr->exec_argv[expr->exec_argc] = NULL;
+        }
+        parser->pos = command_end + 1;
+    } else if (strcmp(arg, "-okdir") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-okdir'\n", parser->progname);
+            return NULL;
+        }
+        int command_start = parser->pos;
+        int command_end = -1;
+        bool saw_placeholder = false;
+        for (int i = parser->pos; i < parser->argc; i++) {
+            if (strcmp(parser->argv[i], ";") == 0) {
+                command_end = i;
+                break;
+            }
+            if (strcmp(parser->argv[i], "{}") == 0)
+                saw_placeholder = true;
+        }
+        if (command_end < 0) {
+            fprintf(stderr, "%s: missing terminating `;' for `-okdir'\n", parser->progname);
+            return NULL;
+        }
+        if (!saw_placeholder) {
+            fprintf(stderr, "%s: missing '{}' in `-okdir'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_OKDIR);
+        if (expr) {
+            expr->exec_argc = command_end - command_start;
+            expr->exec_argv = calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
+            if (!expr->exec_argv) {
+                find_expr_free(expr);
+                fprintf(stderr, "%s: out of memory\n", parser->progname);
+                return NULL;
+            }
+            for (int i = 0; i < expr->exec_argc; i++)
+                expr->exec_argv[i] = parser->argv[command_start + i];
+            expr->exec_argv[expr->exec_argc] = NULL;
+        }
+        parser->pos = command_end + 1;
+    } else if (strcmp(arg, "-execdir") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-execdir'\n", parser->progname);
+            return NULL;
+        }
+        int command_start = parser->pos;
+        int command_end = -1;
+        bool per_item = false;
+        bool saw_placeholder = false;
+        for (int i = parser->pos; i < parser->argc; i++) {
+            if (strcmp(parser->argv[i], ";") == 0) {
+                command_end = i;
+                per_item = true;
+                break;
+            }
+            if (strcmp(parser->argv[i], "+") == 0) {
+                command_end = i;
+                break;
+            }
+            if (strcmp(parser->argv[i], "{}") == 0)
+                saw_placeholder = true;
+        }
+        if (command_end < 0) {
+            fprintf(stderr, "%s: missing terminating `;' or `+' for `-execdir'\n",
+                    parser->progname);
+            return NULL;
+        }
+        if (!saw_placeholder) {
+            fprintf(stderr, "%s: missing '{}' in `-execdir'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(per_item ? FIND_EXPR_EXECDIR : FIND_EXPR_EXECDIR_PLUS);
+        if (expr) {
+            expr->exec_argc = command_end - command_start;
+            expr->exec_argv = calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
+            if (!expr->exec_argv) {
+                find_expr_free(expr);
+                fprintf(stderr, "%s: out of memory\n", parser->progname);
+                return NULL;
+            }
+            for (int i = 0; i < expr->exec_argc; i++)
+                expr->exec_argv[i] = parser->argv[command_start + i];
+            expr->exec_argv[expr->exec_argc] = NULL;
+        }
+        parser->pos = command_end + 1;
     } else {
         fprintf(stderr, "%s: unknown predicate `%s'\n", parser->progname, arg);
         return NULL;
@@ -788,7 +1029,7 @@ static struct find_expr *find_parse_expr(struct find_parser *parser) {
     return expr;
 }
 
-static bool find_eval_expr(const struct find_expr *expr, struct walk_entry *entry,
+static bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
                            struct find_state *st) {
     if (!expr)
         return true;
@@ -939,6 +1180,75 @@ static bool find_eval_expr(const struct find_expr *expr, struct walk_entry *entr
         if (st->stop)
             *st->stop = true;
         return true;
+    case FIND_EXPR_EXEC:
+        return find_run_exec_one(st, expr, entry->path, NULL);
+    case FIND_EXPR_OK:
+        if (!find_prompt_ok(expr->exec_argv[0], entry->path))
+            return true;
+        return find_run_exec_one(st, expr, entry->path, NULL);
+    case FIND_EXPR_EXEC_PLUS: {
+        char *path = strdup(entry->path);
+        if (!path || !find_exec_items_append(&expr->exec_items, path)) {
+            free(path);
+            fprintf(stderr, "%s: out of memory\n", st->progname);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    }
+    case FIND_EXPR_EXECDIR: {
+        char *cwd = NULL;
+        char *arg = NULL;
+        if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
+            fprintf(stderr, "%s: out of memory\n", st->progname);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            free(cwd);
+            free(arg);
+            return false;
+        }
+        bool ok = find_run_exec_one(st, expr, arg, cwd);
+        free(cwd);
+        free(arg);
+        return ok;
+    }
+    case FIND_EXPR_OKDIR: {
+        char *cwd = NULL;
+        char *arg = NULL;
+        if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
+            fprintf(stderr, "%s: out of memory\n", st->progname);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            free(cwd);
+            free(arg);
+            return false;
+        }
+        if (!find_prompt_ok(expr->exec_argv[0], entry->path)) {
+            free(cwd);
+            free(arg);
+            return true;
+        }
+        bool ok = find_run_exec_one(st, expr, arg, cwd);
+        free(cwd);
+        free(arg);
+        return ok;
+    }
+    case FIND_EXPR_EXECDIR_PLUS: {
+        char *path = strdup(entry->path);
+        if (!path || !find_exec_items_append(&expr->exec_items, path)) {
+            free(path);
+            fprintf(stderr, "%s: out of memory\n", st->progname);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    }
     case FIND_EXPR_NOT:
         return !find_eval_expr(expr->left, entry, st);
     case FIND_EXPR_AND: {
@@ -961,6 +1271,351 @@ static bool find_eval_expr(const struct find_expr *expr, struct walk_entry *entr
     }
 
     return false;
+}
+
+static size_t find_exec_placeholder_count(const char *arg, void *user) {
+    (void)user;
+    return (arg && strcmp(arg, "{}") == 0) ? 1u : 0u;
+}
+
+static size_t find_exec_expanded_bytes(const char *arg, const char *item, void *user) {
+    (void)user;
+    return strlen((arg && strcmp(arg, "{}") == 0) ? item : arg) + 1;
+}
+
+static char *find_exec_expand_arg(const char *arg, const char *item, void *user) {
+    (void)user;
+    return strdup((arg && strcmp(arg, "{}") == 0) ? item : arg);
+}
+
+struct find_exec_batch_ctx {
+    struct find_expr *expr;
+};
+
+static size_t find_exec_batch_bytes(void *user, int start, int count) {
+    struct find_exec_batch_ctx *ctx = user;
+    return bx_argv_bytes_with_item_expansion((const char *const *)ctx->expr->exec_argv,
+                                             ctx->expr->exec_argc,
+                                             ctx->expr->exec_items.v, start, count, 1,
+                                             find_exec_placeholder_count,
+                                             find_exec_expanded_bytes,
+                                             NULL, NULL);
+}
+
+static int find_select_exec_batch_count(struct find_expr *expr, int start, size_t char_limit) {
+    struct find_exec_batch_ctx ctx = { .expr = expr };
+    return bx_argv_select_batch_count_by_bytes(expr->exec_items.count, start, 0, 0,
+                                               char_limit, find_exec_batch_bytes, &ctx);
+}
+
+static bool find_execdir_split_path(const char *path, char **dir_out, char **arg_out) {
+    const char *slash = strrchr(path, '/');
+    const char *base = slash ? slash + 1 : path;
+    size_t dir_len = slash ? (size_t)(slash - path) : 0;
+
+    char *dir = NULL;
+    if (dir_len == 0) {
+        dir = strdup(".");
+    } else {
+        dir = strndup(path, dir_len);
+    }
+    if (!dir)
+        return false;
+
+    size_t arg_len = strlen(base) + 3;
+    char *arg = malloc(arg_len);
+    if (!arg) {
+        free(dir);
+        return false;
+    }
+    snprintf(arg, arg_len, "./%s", base);
+
+    *dir_out = dir;
+    *arg_out = arg;
+    return true;
+}
+
+static void find_execdir_free_split_items(char **items, int count) {
+    if (!items)
+        return;
+    for (int i = 0; i < count; i++)
+        free(items[i]);
+    free(items);
+}
+
+static char **find_execdir_collect_group(struct find_expr *expr, int start,
+                                         char **dir_out, int *group_count_out) {
+    char *dir = NULL;
+    char *first_arg = NULL;
+    if (!find_execdir_split_path(expr->exec_items.v[start], &dir, &first_arg))
+        return NULL;
+
+    int group_count = 1;
+    while (start + group_count < expr->exec_items.count) {
+        char *next_dir = NULL;
+        char *next_arg = NULL;
+        if (!find_execdir_split_path(expr->exec_items.v[start + group_count], &next_dir, &next_arg)) {
+            free(dir);
+            free(first_arg);
+            return NULL;
+        }
+        bool same_dir = strcmp(dir, next_dir) == 0;
+        free(next_dir);
+        free(next_arg);
+        if (!same_dir)
+            break;
+        group_count++;
+    }
+
+    char **items = calloc((size_t)group_count, sizeof(*items));
+    if (!items) {
+        free(dir);
+        free(first_arg);
+        return NULL;
+    }
+    items[0] = first_arg;
+    for (int i = 1; i < group_count; i++) {
+        char *item_dir = NULL;
+        if (!find_execdir_split_path(expr->exec_items.v[start + i], &item_dir, &items[i])) {
+            free(item_dir);
+            find_execdir_free_split_items(items, i);
+            free(dir);
+            return NULL;
+        }
+        free(item_dir);
+    }
+
+    *dir_out = dir;
+    *group_count_out = group_count;
+    return items;
+}
+
+struct find_exec_reap_ctx {
+    const char *progname;
+    const char *cmdname;
+    int *status;
+};
+
+static void find_exec_reap_status_cb(pid_t pid, int wait_status, bool exec_failed, int exec_errno,
+                                     void *user) {
+    (void)pid;
+    struct find_exec_reap_ctx *ctx = user;
+    if (exec_failed) {
+        fprintf(stderr, "%s: failed to run command '%s': %s\n",
+                ctx->progname, ctx->cmdname, strerror(exec_errno));
+        *ctx->status = 1;
+        return;
+    }
+
+    if ((WIFEXITED(wait_status) && WEXITSTATUS(wait_status) != 0) || WIFSIGNALED(wait_status))
+        *ctx->status = 1;
+}
+
+static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
+                              const char *path, const char *cwd) {
+    size_t char_limit = bx_argv_effective_char_limit(0);
+    struct bx_child child = {0};
+    int running = 0;
+    int status = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    runner_opts.cwd = cwd;
+
+    char *item = strdup(path);
+    if (!item) {
+        fprintf(stderr, "%s: out of memory\n", st->progname);
+        st->status = 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+
+    char *items[] = { item };
+    char **argv = bx_argv_build_with_item_expansion((const char *const *)expr->exec_argv,
+                                                    expr->exec_argc,
+                                                    items, 0, 1, 0,
+                                                    find_exec_placeholder_count,
+                                                    find_exec_expand_arg,
+                                                    NULL, NULL);
+    free(item);
+    if (!argv) {
+        fprintf(stderr, "%s: out of memory\n", st->progname);
+        st->status = 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+
+    if (char_limit > 0 && bx_argv_bytes(argv) > char_limit) {
+        fprintf(stderr, "%s: argument line too long\n", st->progname);
+        bx_argv_free(argv);
+        st->status = 1;
+        return false;
+    }
+
+    bool exec_failed_now = false;
+    int exec_errno_now = 0;
+    int spawn_rc = bx_child_spawn_argv(st->progname, argv, &runner_opts, 0,
+                                       &child, &running,
+                                       &exec_failed_now, &exec_errno_now);
+    bx_argv_free(argv);
+    if (spawn_rc != 0) {
+        st->status = 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+
+    struct find_exec_reap_ctx ctx = {
+        .progname = st->progname,
+        .cmdname = expr->exec_argv[0],
+        .status = &status,
+    };
+    if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0) {
+        st->status = 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+
+    if (status != 0)
+        st->status = 1;
+    return status == 0;
+}
+
+static int find_run_exec_batches(const char *progname, struct find_expr *expr) {
+    if (!expr || expr->kind != FIND_EXPR_EXEC_PLUS || expr->exec_items.count == 0)
+        return 0;
+
+    size_t char_limit = bx_argv_effective_char_limit(0);
+    struct bx_child child = {0};
+    int running = 0;
+    int status = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+
+    for (int i = 0; i < expr->exec_items.count; ) {
+        int take = find_select_exec_batch_count(expr, i, char_limit);
+        if (take < 0) {
+            fprintf(stderr, "%s: argument line too long\n", progname);
+            return 1;
+        }
+
+        char **argv = bx_argv_build_with_item_expansion((const char *const *)expr->exec_argv,
+                                                        expr->exec_argc,
+                                                        expr->exec_items.v, i, take, 1,
+                                                        find_exec_placeholder_count,
+                                                        find_exec_expand_arg,
+                                                        NULL, NULL);
+        if (!argv) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            return 1;
+        }
+
+        bool exec_failed_now = false;
+        int exec_errno_now = 0;
+        int spawn_rc = bx_child_spawn_argv(progname, argv, &runner_opts, 0,
+                                           &child, &running,
+                                           &exec_failed_now, &exec_errno_now);
+        bx_argv_free(argv);
+        if (spawn_rc != 0)
+            return 1;
+
+        struct find_exec_reap_ctx ctx = {
+            .progname = progname,
+            .cmdname = expr->exec_argv[0],
+            .status = &status,
+        };
+        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0)
+            return 1;
+        i += take;
+    }
+
+    return status;
+}
+
+static int find_run_execdir_batches(const char *progname, struct find_expr *expr) {
+    if (!expr || expr->kind != FIND_EXPR_EXECDIR_PLUS || expr->exec_items.count == 0)
+        return 0;
+
+    size_t char_limit = bx_argv_effective_char_limit(0);
+    struct bx_child child = {0};
+    int running = 0;
+    int status = 0;
+
+    for (int i = 0; i < expr->exec_items.count; ) {
+        char *cwd = NULL;
+        int group_count = 0;
+        char **group_items = find_execdir_collect_group(expr, i, &cwd, &group_count);
+        if (!group_items || !cwd) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            free(cwd);
+            find_execdir_free_split_items(group_items, group_count);
+            return 1;
+        }
+
+        int take = bx_argv_select_batch_count((const char *const *)expr->exec_argv, expr->exec_argc,
+                                              group_items, NULL, group_count, 0, 0, 0, char_limit);
+        if (take < 0) {
+            fprintf(stderr, "%s: argument line too long\n", progname);
+            free(cwd);
+            find_execdir_free_split_items(group_items, group_count);
+            return 1;
+        }
+
+        char **argv = bx_argv_build_with_item_expansion((const char *const *)expr->exec_argv,
+                                                        expr->exec_argc,
+                                                        group_items, 0, take, 1,
+                                                        find_exec_placeholder_count,
+                                                        find_exec_expand_arg,
+                                                        NULL, NULL);
+        if (!argv) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            free(cwd);
+            find_execdir_free_split_items(group_items, group_count);
+            return 1;
+        }
+
+        struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+        runner_opts.cwd = cwd;
+
+        bool exec_failed_now = false;
+        int exec_errno_now = 0;
+        int spawn_rc = bx_child_spawn_argv(progname, argv, &runner_opts, 0,
+                                           &child, &running,
+                                           &exec_failed_now, &exec_errno_now);
+        bx_argv_free(argv);
+        free(cwd);
+        find_execdir_free_split_items(group_items, group_count);
+        if (spawn_rc != 0)
+            return 1;
+
+        struct find_exec_reap_ctx ctx = {
+            .progname = progname,
+            .cmdname = expr->exec_argv[0],
+            .status = &status,
+        };
+        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0)
+            return 1;
+
+        i += take;
+    }
+
+    return status;
+}
+
+static int find_run_pending_exec_exprs(const char *progname, struct find_expr *expr) {
+    if (!expr)
+        return 0;
+
+    int status = 0;
+    if (find_run_pending_exec_exprs(progname, expr->left) != 0)
+        status = 1;
+    if (find_run_pending_exec_exprs(progname, expr->right) != 0)
+        status = 1;
+    if (find_run_exec_batches(progname, expr) != 0)
+        status = 1;
+    if (find_run_execdir_batches(progname, expr) != 0)
+        status = 1;
+    return status;
 }
 
 static void find_walk_cb(struct walk_entry *entry, void *user) {
@@ -1151,6 +1806,9 @@ int bx_find_main(int argc, char **argv) {
         if (walk_dir(roots[i], &wopts, find_walk_cb, &st) != 0)
             st.status = 1;
     }
+
+    if (find_run_pending_exec_exprs(progname, expr) != 0)
+        st.status = 1;
 
     find_expr_free(expr);
     free(expr_argv);

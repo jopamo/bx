@@ -608,45 +608,90 @@ static char *xargs_expand_argument(const char *arg, const char *marker,
     return out;
 }
 
+struct xargs_replacement_ctx {
+    const char *marker;
+};
+
+static size_t xargs_replacement_marker_count(const char *arg, void *user) {
+    const struct xargs_replacement_ctx *ctx = user;
+    const char *marker = ctx ? ctx->marker : NULL;
+    size_t count = 0;
+    size_t marker_len = marker ? strlen(marker) : 0;
+
+    if (!arg || marker_len == 0)
+        return 0;
+
+    const char *p = arg;
+    while ((p = strstr(p, marker)) != NULL) {
+        count++;
+        p += marker_len;
+    }
+
+    return count;
+}
+
+static char *xargs_expand_replacement_arg(const char *arg, const char *item, void *user) {
+    bool saw_marker = false;
+    const struct xargs_replacement_ctx *ctx = user;
+    const char *marker = ctx ? ctx->marker : NULL;
+    return xargs_expand_argument(arg, marker, item, &saw_marker);
+}
+
+static size_t xargs_expand_replacement_bytes(const char *arg, const char *item, void *user) {
+    const struct xargs_replacement_ctx *ctx = user;
+    const char *marker = ctx ? ctx->marker : NULL;
+    size_t marker_len = marker ? strlen(marker) : 0;
+    size_t replacement_len = item ? strlen(item) : 0;
+    size_t arg_bytes = strlen(arg) + 1;
+
+    if (marker_len == 0)
+        return arg_bytes;
+
+    const char *p = arg;
+    while ((p = strstr(p, marker)) != NULL) {
+        arg_bytes += replacement_len;
+        arg_bytes -= marker_len;
+        p += marker_len;
+    }
+
+    return arg_bytes;
+}
+
 static int xargs_spawn_batch(const char *progname, char **command, int command_argc,
                              char **items, int item_count,
                              struct xargs_opts *opts,
                              int slot,
                              struct bx_child *children, int *running,
                              int *final_rc, bool *abort_launch) {
-    char **argv = calloc((size_t)command_argc + (size_t)item_count + 1, sizeof(*argv));
+    char **argv = bx_argv_build_with_item_expansion((const char *const *)command, command_argc,
+                                                    items, 0, item_count, 1,
+                                                    NULL, NULL, NULL, NULL);
     if (!argv) {
         return 1;
     }
-    for (int j = 0; j < command_argc; j++)
-        argv[j] = command[j];
-    for (int j = 0; j < item_count; j++)
-        argv[command_argc + j] = items[j];
-    argv[command_argc + item_count] = NULL;
     if (opts && opts->interactive) {
         bool prompt_failed = false;
         bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
         if (prompt_failed) {
-            free(argv);
+            bx_argv_free(argv);
             return 1;
         }
         if (!approved) {
-            free(argv);
+            bx_argv_free(argv);
             return 0;
         }
     }
-    struct bx_child_runner_opts runner_opts = {
-        .verbose = opts && opts->verbose,
-        .reopen_stdin_tty = opts && opts->open_tty,
-        .process_slot_var = opts ? opts->process_slot_var : NULL,
-    };
+    struct bx_child_runner_opts runner_opts =
+        bx_child_runner_opts_make(opts && opts->verbose,
+                                  opts && opts->open_tty,
+                                  opts ? opts->process_slot_var : NULL);
     bool exec_failed_now = false;
     int exec_errno_now = 0;
     int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,
                                  children, running, &exec_failed_now, &exec_errno_now);
     if (exec_failed_now)
         xargs_record_status(progname, command[0], exec_errno_now, true, final_rc, abort_launch);
-    free(argv);
+    bx_argv_free(argv);
     return rc;
 }
 
@@ -657,33 +702,35 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
                                    struct bx_child *children, int *running,
                                    int *final_rc, bool *abort_launch) {
     size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
+    struct xargs_replacement_ctx expand_ctx = {
+        .marker = marker,
+    };
+    char *item_argv[] = { NULL };
+    item_argv[0] = strdup(item);
+    if (!item_argv[0])
+        return 1;
     if (char_limit > 0 &&
-        bx_argv_bytes_with_replacement((const char *const *)command, command_argc, marker, item) > char_limit) {
+        bx_argv_bytes_with_item_expansion((const char *const *)command, command_argc,
+                                          item_argv, 0, 1, 0,
+                                          xargs_replacement_marker_count,
+                                          xargs_expand_replacement_bytes,
+                                          NULL, &expand_ctx) > char_limit) {
+        free(item_argv[0]);
         fprintf(stderr, "%s: argument line too long\n", progname);
         return 1;
     }
-
-    char **argv = calloc((size_t)command_argc + 1, sizeof(*argv));
+    char **argv = bx_argv_build_with_item_expansion((const char *const *)command, command_argc,
+                                                    item_argv, 0, 1, 0,
+                                                    xargs_replacement_marker_count,
+                                                    xargs_expand_replacement_arg,
+                                                    NULL, &expand_ctx);
+    free(item_argv[0]);
     if (!argv)
         return 1;
 
-    bool saw_marker = false;
-    for (int i = 0; i < command_argc; i++) {
-        argv[i] = xargs_expand_argument(command[i], marker, item, &saw_marker);
-        if (!argv[i]) {
-            for (int j = 0; j < i; j++)
-                free(argv[j]);
-            free(argv);
-            return 1;
-        }
-    }
-    argv[command_argc] = NULL;
-
     if (char_limit > 0 && bx_argv_bytes(argv) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
-        for (int i = 0; i < command_argc; i++)
-            free(argv[i]);
-        free(argv);
+        bx_argv_free(argv);
         return 1;
     }
 
@@ -691,33 +738,26 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
         bool prompt_failed = false;
         bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
         if (prompt_failed) {
-            for (int i = 0; i < command_argc; i++)
-                free(argv[i]);
-            free(argv);
+            bx_argv_free(argv);
             return 1;
         }
         if (!approved) {
-            for (int i = 0; i < command_argc; i++)
-                free(argv[i]);
-            free(argv);
+            bx_argv_free(argv);
             return 0;
         }
     }
 
-    struct bx_child_runner_opts runner_opts = {
-        .verbose = opts && opts->verbose,
-        .reopen_stdin_tty = opts && opts->open_tty,
-        .process_slot_var = opts ? opts->process_slot_var : NULL,
-    };
+    struct bx_child_runner_opts runner_opts =
+        bx_child_runner_opts_make(opts && opts->verbose,
+                                  opts && opts->open_tty,
+                                  opts ? opts->process_slot_var : NULL);
     bool exec_failed_now = false;
     int exec_errno_now = 0;
     int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,
                                  children, running, &exec_failed_now, &exec_errno_now);
     if (exec_failed_now)
         xargs_record_status(progname, command[0], exec_errno_now, true, final_rc, abort_launch);
-    for (int i = 0; i < command_argc; i++)
-        free(argv[i]);
-    free(argv);
+    bx_argv_free(argv);
     return rc;
 }
 
@@ -748,16 +788,6 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
         .abort_launch = abort_launch,
     };
     return bx_child_reap(children, running, block, drain_all, xargs_reap_status_cb, &ctx);
-}
-
-static int xargs_select_batch_count(char **command, int command_argc,
-                                    struct xargs_items *items, int start,
-                                    struct xargs_opts *opts) {
-    return bx_argv_select_batch_count((const char *const *)command, command_argc,
-                                      items->v, items->line_groups,
-                                      items->count, start,
-                                      opts->max_args, opts->max_lines,
-                                      bx_argv_effective_char_limit(opts->max_chars));
 }
 
 static int xargs_run_batches(const char *progname, char **command, int command_argc,
@@ -805,7 +835,12 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
         if (abort_launch)
             break;
 
-        int take = opts->replace_mode ? 1 : xargs_select_batch_count(command, command_argc, items, i, opts);
+        int take = opts->replace_mode ? 1 : bx_argv_select_batch_count((const char *const *)command,
+                                                                       command_argc,
+                                                                       items->v, items->line_groups,
+                                                                       items->count, i,
+                                                                       opts->max_args, opts->max_lines,
+                                                                       bx_argv_effective_char_limit(opts->max_chars));
         if (take < 0) {
             fprintf(stderr, "%s: argument line too long\n", progname);
             free(children);
@@ -917,7 +952,7 @@ int bx_xargs_main(int argc, char **argv) {
             opts.logical_eof = optarg;
             break;
         case 'e':
-            opts.logical_eof = optarg ? optarg : "_";
+            opts.logical_eof = optarg ? optarg : NULL;
             break;
         case 'a':
             opts.arg_file = optarg;
@@ -959,7 +994,7 @@ int bx_xargs_main(int argc, char **argv) {
             xargs_print_limits();
             return 0;
         case 203:
-            opts.logical_eof = optarg ? optarg : "_";
+            opts.logical_eof = optarg ? optarg : NULL;
             break;
         case 204:
             opts.process_slot_var = optarg;
