@@ -286,31 +286,15 @@ static char *fd_append_dir_suffix(const struct fd_opts *opts, char *path, bool i
     return out;
 }
 
-char *fd_render_output_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir) {
+static char *fd_render_base_path(const struct fd_render_ctx *ctx, const char *path,
+                                 bool for_exec) {
     char *base = NULL;
     if (ctx->opts->absolute_path) {
         base = fd_exec_path(ctx, path);
     } else {
         const char *relative = path;
-        if (fd_should_strip_cwd_prefix(ctx, false) && relative[0] == '.' && relative[1] == '/')
-            relative += 2;
-        base = strdup(relative);
-    }
-    if (!base)
-        return NULL;
-
-    char *rendered = fd_apply_path_separator(ctx->opts, base);
-    free(base);
-    return fd_append_dir_suffix(ctx->opts, rendered, is_dir);
-}
-
-char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path) {
-    char *base;
-    if (ctx->opts->absolute_path) {
-        base = fd_exec_path(ctx, path);
-    } else {
-        const char *relative = path;
-        if (fd_should_strip_cwd_prefix(ctx, true) && relative[0] == '.' && relative[1] == '/')
+        if (fd_should_strip_cwd_prefix(ctx, for_exec) &&
+            relative[0] == '.' && relative[1] == '/')
             relative += 2;
         base = strdup(relative);
     }
@@ -320,6 +304,19 @@ char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path) {
     char *rendered = fd_apply_path_separator(ctx->opts, base);
     free(base);
     return rendered;
+}
+
+char *fd_render_output_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir) {
+    char *rendered = fd_render_base_path(ctx, path, false);
+    return fd_append_dir_suffix(ctx->opts, rendered, is_dir);
+}
+
+char *fd_render_format_path(const struct fd_render_ctx *ctx, const char *path) {
+    return fd_render_base_path(ctx, path, false);
+}
+
+char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path) {
+    return fd_render_base_path(ctx, path, true);
 }
 
 void fd_print_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir) {

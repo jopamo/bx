@@ -45,9 +45,11 @@ struct fd_opts {
     bool glob_match;
     bool print0;
     bool quiet;
+    bool list_details;
     bool show_errors;
     bool show_type;
     const char *path_separator;
+    const char *output_format;
     enum fd_strip_cwd_prefix_mode strip_cwd_prefix;
     const char *pattern;
     const char *and_patterns[FD_MAX_AND_PATTERNS];

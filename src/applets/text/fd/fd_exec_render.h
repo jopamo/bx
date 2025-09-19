@@ -18,6 +18,7 @@ const char *fd_basename(const char *path);
 size_t fd_placeholder_count(const char *arg);
 char *fd_expand_placeholders(const char *arg, const char *path);
 char *fd_render_output_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir);
+char *fd_render_format_path(const struct fd_render_ctx *ctx, const char *path);
 char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path);
 void fd_print_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir);
 

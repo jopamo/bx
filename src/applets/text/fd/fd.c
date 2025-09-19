@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "fd_exec_render.h"
 #include "fd_internal.h"
+#include "fd_output.h"
 #include "lib/argv_packer.h"
 #include "lib/child_runner.h"
 #include "search/metadata.h"
@@ -45,6 +46,8 @@ struct fd_state {
     struct fd_render_ctx render;
     struct fd_exec_items exec_items;
     bool exec_collect_failed;
+    struct fd_detail_items detail_items;
+    bool output_collect_failed;
 };
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
@@ -284,8 +287,33 @@ static bool fd_record_match(struct fd_state *st, const char *path, bool is_dir) 
                 *st->stop = true;
             return false;
         }
+    } else if (opts->list_details) {
+        char *path_copy = strdup(path);
+        if (!path_copy) {
+            st->output_collect_failed = true;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        struct walk_entry entry = {
+            .path = path_copy,
+            .is_dir = is_dir,
+        };
+        bool ok = fd_detail_items_append(&st->detail_items, &st->render, &entry);
+        free(path_copy);
+        if (!ok) {
+            st->output_collect_failed = true;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
     } else if (!opts->quiet) {
-        fd_print_path(&st->render, path, is_dir);
+        if (!fd_print_match_output(&st->render, opts, path, is_dir)) {
+            st->output_collect_failed = true;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
     }
 
     if ((opts->max_results > 0 && opts->results >= opts->max_results) ||
@@ -631,6 +659,8 @@ int bx_fd_main(int argc, char **argv) {
         {"batch-size", required_argument, NULL, 206},
         {"show-errors", no_argument, NULL, 209},
         {"strip-cwd-prefix", optional_argument, NULL, 208},
+        {"format",    required_argument, NULL, 213},
+        {"list-details", no_argument,   NULL, 'l'},
         {"exec",      required_argument, NULL, 'x'},
         {"exec-batch", required_argument, NULL, 'X'},
         {"print0",    no_argument,      NULL, '0'},
@@ -639,7 +669,7 @@ int bx_fd_main(int argc, char **argv) {
     };
 
     opterr = 0;
-    while ((opt = getopt_long(parse_argc, argv, "hVHIuapisSFgE:d:t:e:x:X:0qL1", long_opts, NULL)) != -1) {
+    while ((opt = getopt_long(parse_argc, argv, "hVHIuaplisSFgE:d:t:e:x:X:0qL1", long_opts, NULL)) != -1) {
         switch (opt) {
         case 'h': show_help = true; break;
         case 'V':
@@ -656,6 +686,7 @@ int bx_fd_main(int argc, char **argv) {
         case 212: opts.no_require_git = true; break;
         case 'a': opts.absolute_path = true; break;
         case 205: opts.absolute_path = false; break;
+        case 'l': opts.list_details = true; break;
         case 'p': opts.full_path = true; break;
         case 'i': opts.ignore_case = true; opts.smart_case = false; break;
         case 's': opts.case_sensitive = true; opts.smart_case = false; break;
@@ -709,6 +740,9 @@ int bx_fd_main(int argc, char **argv) {
             if (!fd_parse_strip_cwd_prefix(progname, optarg, &opts.strip_cwd_prefix))
                 return 2;
             break;
+        case 213:
+            opts.output_format = optarg;
+            break;
         case 203:
             if (opts.num_and_patterns < FD_MAX_AND_PATTERNS)
                 opts.and_patterns[opts.num_and_patterns++] = optarg;
@@ -741,6 +775,8 @@ int bx_fd_main(int argc, char **argv) {
         puts("      --path-separator SEP replace '/' in rendered paths with SEP");
         puts("      --show-errors    print permission and traversal errors");
         puts("      --strip-cwd-prefix[=WHEN] control leading ./ rendering (auto, always, never)");
+        puts("      --format FMT     print results according to a template");
+        puts("  -l, --list-details   use a detailed listing format");
         puts("  -p, --full-path     match against full path, not basename");
         puts("  -i, --ignore-case   case-insensitive matching");
         puts("  -s, --case-sensitive  case-sensitive matching");
@@ -815,6 +851,34 @@ int bx_fd_main(int argc, char **argv) {
         return 2;
     }
 
+    if (opts.list_details) {
+        if (opts.output_format) {
+            fprintf(stderr, "%s: --list-details cannot be used with --format\n", progname);
+            return 2;
+        }
+        if (opts.exec_mode != FD_EXEC_NONE) {
+            fprintf(stderr, "%s: --list-details cannot be used with %s\n",
+                    progname, opts.exec_mode == FD_EXEC_BATCH ? "--exec-batch" : "--exec");
+            return 2;
+        }
+        if (opts.print0) {
+            fprintf(stderr, "%s: --list-details cannot be used with --print0\n", progname);
+            return 2;
+        }
+        if (opts.quiet) {
+            fprintf(stderr, "%s: --list-details cannot be used with --quiet\n", progname);
+            return 2;
+        }
+        if (opts.max_results > 0) {
+            fprintf(stderr, "%s: --list-details cannot be used with --max-results\n", progname);
+            return 2;
+        }
+        if (opts.absolute_path) {
+            fprintf(stderr, "%s: --list-details cannot be used with --absolute-path\n", progname);
+            return 2;
+        }
+    }
+
     if (opts.unrestrict_level >= 1) {
         opts.no_ignore = true;
         opts.hidden = true;
@@ -882,17 +946,23 @@ int bx_fd_main(int argc, char **argv) {
             pcre2_code_free(state.regexes[i]);
     }
     int exec_rc = 0;
+    int detail_rc = 0;
     if (!state.exec_collect_failed && walk_rc == 0 && opts.exec_mode != FD_EXEC_NONE)
         exec_rc = fd_run_exec_commands(progname, &state);
+    if (!state.output_collect_failed && walk_rc == 0 && opts.list_details)
+        detail_rc = fd_detail_items_print(&state.detail_items);
     fd_exec_items_free(&state.exec_items);
+    fd_detail_items_free(&state.detail_items);
     free(state.cwd);
     free(exec_argv_storage);
-    if (state.exec_collect_failed)
+    if (state.exec_collect_failed || state.output_collect_failed)
         return 1;
     if (walk_rc != 0)
         return 1;
     if (opts.exec_mode != FD_EXEC_NONE)
         return exec_rc;
+    if (opts.list_details)
+        return detail_rc;
     if (opts.quiet)
         return opts.results > 0 ? 0 : 1;
     return 0;

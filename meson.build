@@ -277,6 +277,7 @@ bx_text_applet_sources = [
   'src/applets/text/ed/signal.c',
   'src/applets/text/fd/fd.c',
   'src/applets/text/fd/fd_exec_render.c',
+  'src/applets/text/fd/fd_output.c',
   'src/applets/text/grep/grep.c',
   'src/applets/text/rg/rg.c',
 ]
