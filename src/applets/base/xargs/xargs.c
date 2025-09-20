@@ -538,20 +538,21 @@ static void xargs_record_status(const char *progname, const char *cmdname, int s
         *final_rc = rc;
 }
 
-static bool xargs_prompt_argv(const char *progname, char **argv, bool *failed) {
-    if (failed)
-        *failed = false;
+static void xargs_fprint_argv(FILE *fp, char *const *argv) {
+    for (int i = 0; argv[i]; i++)
+        fprintf(fp, "%s%s", i == 0 ? "" : " ", argv[i]);
+}
+
+static int xargs_prompt_hook(const char *progname, char *const *argv, void *user) {
+    (void)user;
     FILE *tty = fopen("/dev/tty", "r+");
     if (!tty) {
         fprintf(stderr, "%s: failed to open /dev/tty for reading: %s\n",
                 progname, strerror(errno));
-        if (failed)
-            *failed = true;
-        return false;
+        return BX_CHILD_PROMPT_ERROR;
     }
 
-    for (int i = 0; argv[i]; i++)
-        fprintf(tty, "%s%s", i == 0 ? "" : " ", argv[i]);
+    xargs_fprint_argv(tty, argv);
     fputs("?...", tty);
     fflush(tty);
 
@@ -561,15 +562,20 @@ static bool xargs_prompt_argv(const char *progname, char **argv, bool *failed) {
     fclose(tty);
 
     if (len < 0) {
-        if (failed)
-            *failed = true;
         free(line);
-        return false;
+        return BX_CHILD_PROMPT_ERROR;
     }
 
     bool approved = (len > 0 && (line[0] == 'y' || line[0] == 'Y'));
     free(line);
-    return approved;
+    return approved ? BX_CHILD_PROMPT_RUN : BX_CHILD_PROMPT_SKIP;
+}
+
+static void xargs_verbose_hook(const char *progname, char *const *argv, void *user) {
+    (void)progname;
+    (void)user;
+    xargs_fprint_argv(stderr, argv);
+    fputc('\n', stderr);
 }
 
 static char *xargs_expand_argument(const char *arg, const char *marker,
@@ -669,22 +675,14 @@ static int xargs_spawn_batch(const char *progname, char **command, int command_a
     if (!argv) {
         return 1;
     }
-    if (opts && opts->interactive) {
-        bool prompt_failed = false;
-        bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
-        if (prompt_failed) {
-            bx_argv_free(argv);
-            return 1;
-        }
-        if (!approved) {
-            bx_argv_free(argv);
-            return 0;
-        }
-    }
     struct bx_child_runner_opts runner_opts =
-        bx_child_runner_opts_make(opts && opts->verbose,
+        bx_child_runner_opts_make(false,
                                   opts && opts->open_tty,
                                   opts ? opts->process_slot_var : NULL);
+    if (opts && opts->interactive)
+        runner_opts.prompt_hook = xargs_prompt_hook;
+    if (opts && opts->verbose)
+        runner_opts.verbose_hook = xargs_verbose_hook;
     bool exec_failed_now = false;
     int exec_errno_now = 0;
     int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,
@@ -734,23 +732,14 @@ static int xargs_spawn_replacement(const char *progname, char **command, int com
         return 1;
     }
 
-    if (opts && opts->interactive) {
-        bool prompt_failed = false;
-        bool approved = xargs_prompt_argv(progname, argv, &prompt_failed);
-        if (prompt_failed) {
-            bx_argv_free(argv);
-            return 1;
-        }
-        if (!approved) {
-            bx_argv_free(argv);
-            return 0;
-        }
-    }
-
     struct bx_child_runner_opts runner_opts =
-        bx_child_runner_opts_make(opts && opts->verbose,
+        bx_child_runner_opts_make(false,
                                   opts && opts->open_tty,
                                   opts ? opts->process_slot_var : NULL);
+    if (opts && opts->interactive)
+        runner_opts.prompt_hook = xargs_prompt_hook;
+    if (opts && opts->verbose)
+        runner_opts.verbose_hook = xargs_verbose_hook;
     bool exec_failed_now = false;
     int exec_errno_now = 0;
     int rc = bx_child_spawn_argv(progname, argv, &runner_opts, slot,

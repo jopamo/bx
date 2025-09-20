@@ -41,6 +41,14 @@ int bx_child_spawn_argv(const char *progname, char **argv,
     if (exec_errno_now)
         *exec_errno_now = 0;
 
+    if (opts && opts->prompt_hook) {
+        int prompt_rc = opts->prompt_hook(progname, argv, opts->prompt_user);
+        if (prompt_rc == BX_CHILD_PROMPT_ERROR)
+            return 1;
+        if (prompt_rc == BX_CHILD_PROMPT_SKIP)
+            return 0;
+    }
+
     int errpipe[2];
     if (pipe(errpipe) != 0) {
         fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
@@ -91,7 +99,9 @@ int bx_child_spawn_argv(const char *progname, char **argv,
         _exit(127);
     }
 
-    if (opts && opts->verbose) {
+    if (opts && opts->verbose_hook) {
+        opts->verbose_hook(progname, argv, opts->verbose_user);
+    } else if (opts && opts->verbose) {
         for (int i = 0; argv[i]; i++)
             fprintf(stderr, "%s%s", i == 0 ? "" : " ", argv[i]);
         fputc('\n', stderr);

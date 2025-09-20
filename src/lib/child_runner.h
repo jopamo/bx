@@ -4,11 +4,24 @@
 #include <stdbool.h>
 #include <sys/types.h>
 
+enum bx_child_prompt_result {
+    BX_CHILD_PROMPT_ERROR = -1,
+    BX_CHILD_PROMPT_SKIP = 0,
+    BX_CHILD_PROMPT_RUN = 1,
+};
+
+typedef int (*bx_child_prompt_hook)(const char *progname, char *const *argv, void *user);
+typedef void (*bx_child_verbose_hook)(const char *progname, char *const *argv, void *user);
+
 struct bx_child_runner_opts {
     bool verbose;
     bool reopen_stdin_tty;
     const char *process_slot_var;
     const char *cwd;
+    bx_child_prompt_hook prompt_hook;
+    void *prompt_user;
+    bx_child_verbose_hook verbose_hook;
+    void *verbose_user;
 };
 
 static inline struct bx_child_runner_opts bx_child_runner_opts_default(void) {
@@ -23,6 +36,10 @@ bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
         .reopen_stdin_tty = reopen_stdin_tty,
         .process_slot_var = process_slot_var,
         .cwd = NULL,
+        .prompt_hook = NULL,
+        .prompt_user = NULL,
+        .verbose_hook = NULL,
+        .verbose_user = NULL,
     };
 }
 
