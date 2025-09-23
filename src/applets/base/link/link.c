@@ -7,23 +7,13 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_link_options {
     const char* progname;
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_link_progname(const char* argv0) {
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    if (argv0 != NULL && argv0[0] != '\0') {
-        return argv0;
-    }
-    return "link";
-}
 
 static void bx_link_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s FILE1 FILE2\n", progname);
@@ -36,14 +26,6 @@ static void bx_link_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         output version information and exit\n");
 }
 
-static void bx_link_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_link_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
 static bool bx_link_parse_options(int argc, char** argv, struct bx_link_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 1},
@@ -52,7 +34,7 @@ static bool bx_link_parse_options(int argc, char** argv, struct bx_link_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_link_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "link");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -73,15 +55,7 @@ static bool bx_link_parse_options(int argc, char** argv, struct bx_link_options*
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -103,7 +77,7 @@ int bx_link_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_link_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_link_print_try_help(diag.progname);
+        bx_cli_print_try_help(diag.progname);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -113,27 +87,27 @@ int bx_link_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_link_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     int operand_count = argc - first_operand;
     char** operands = argv + first_operand;
     if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
-        bx_link_print_try_help(options.progname);
+        bx_cli_diag_missing_operand(&diag);
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status;
     }
 
     if (operand_count == 1) {
-        bx_diag(&diag, "missing operand after '%s'", operands[0]);
-        bx_link_print_try_help(options.progname);
+        bx_cli_diag_missing_operand_after(&diag, operands[0]);
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status;
     }
 
     if (operand_count > 2) {
-        bx_diag(&diag, "extra operand '%s'", operands[2]);
-        bx_link_print_try_help(options.progname);
+        bx_cli_diag_extra_operand(&diag, operands[2]);
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status;
     }
 

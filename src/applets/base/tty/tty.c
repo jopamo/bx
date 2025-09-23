@@ -7,6 +7,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_tty_options {
     const char* progname;
@@ -14,18 +15,6 @@ struct bx_tty_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_tty_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "tty";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
 
 static void bx_tty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -39,21 +28,13 @@ static void bx_tty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         output version information and exit\n");
 }
 
-static void bx_tty_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_tty_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
 static bool bx_tty_parse_options(int argc, char** argv, struct bx_tty_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"silent", no_argument, NULL, 's'}, {"quiet", no_argument, NULL, 's'}, {"help", no_argument, NULL, 1}, {"version", no_argument, NULL, 2}, {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_tty_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tty");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -76,15 +57,7 @@ static bool bx_tty_parse_options(int argc, char** argv, struct bx_tty_options* o
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -101,20 +74,17 @@ static int bx_tty_emit_state(const struct bx_tty_options* options, bool stdin_is
     }
 
     if (stdin_is_tty) {
-        if (fputs(tty_name, stdout) == EOF || fputc('\n', stdout) == EOF) {
-            bx_diag(diag, "write error: %s", strerror(errno));
+        if (!bx_cli_emit_line(tty_name, false, diag)) {
             return diag->exit_status;
         }
     }
     else {
-        if (fputs("not a tty\n", stdout) == EOF) {
-            bx_diag(diag, "write error: %s", strerror(errno));
+        if (!bx_cli_emit_line("not a tty", false, diag)) {
             return diag->exit_status;
         }
     }
 
-    if (fflush(stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
+    if (!bx_cli_flush_stdout(diag)) {
         return diag->exit_status;
     }
 
@@ -132,7 +102,7 @@ int bx_tty_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_tty_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_tty_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 2;
     }
 
@@ -142,13 +112,13 @@ int bx_tty_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_tty_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     if (first_operand < argc) {
-        bx_diag(&diag, "extra operand '%s'", argv[first_operand]);
-        bx_tty_print_try_help(options.progname);
+        bx_cli_diag_extra_operand(&diag, argv[first_operand]);
+        bx_cli_print_try_help(options.progname);
         return 2;
     }
 

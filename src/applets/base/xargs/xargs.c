@@ -779,6 +779,17 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
     return bx_child_reap(children, running, block, drain_all, xargs_reap_status_cb, &ctx);
 }
 
+static int xargs_wait_for_running_children(const char *progname, const char *cmdname,
+                                           struct bx_child *children, int *running,
+                                           int *final_rc, bool *abort_launch) {
+    while (*running > 0) {
+        if (xargs_reap_children(progname, cmdname, children, running,
+                                final_rc, abort_launch, true, true) != 0)
+            return 1;
+    }
+    return 0;
+}
+
 static int xargs_run_batches(const char *progname, char **command, int command_argc,
                              struct xargs_items *items, struct xargs_opts *opts) {
     if (opts->replace_mode && items->count == 0)
@@ -808,6 +819,8 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
         int slot = bx_child_pick_slot(children, running, max_procs);
         if (xargs_spawn_batch(progname, command, command_argc, NULL, 0, opts, slot,
                               children, &running, &final_rc, &abort_launch) != 0) {
+            (void)xargs_wait_for_running_children(progname, command[0], children, &running,
+                                                  &final_rc, &abort_launch);
             free(children);
             return 1;
         }
@@ -832,6 +845,8 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
                                                                        bx_argv_effective_char_limit(opts->max_chars));
         if (take < 0) {
             fprintf(stderr, "%s: argument line too long\n", progname);
+            (void)xargs_wait_for_running_children(progname, command[0], children, &running,
+                                                  &final_rc, &abort_launch);
             free(children);
             return 1;
         }
@@ -848,6 +863,8 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
                                          children, &running, &final_rc, &abort_launch);
         }
         if (spawn_rc != 0) {
+            (void)xargs_wait_for_running_children(progname, command[0], children, &running,
+                                                  &final_rc, &abort_launch);
             free(children);
             return 1;
         }
@@ -863,8 +880,8 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
     }
 
     while (running > 0) {
-        if (xargs_reap_children(progname, command[0], children, &running,
-                                &final_rc, &abort_launch, true, true) != 0) {
+        if (xargs_wait_for_running_children(progname, command[0], children, &running,
+                                            &final_rc, &abort_launch) != 0) {
             free(children);
             return 1;
         }

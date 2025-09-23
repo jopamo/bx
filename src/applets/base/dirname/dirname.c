@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_dirname_options {
     const char* progname;
@@ -15,18 +16,6 @@ struct bx_dirname_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_dirname_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "dirname";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
 
 static void bx_dirname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION] NAME...\n", progname);
@@ -46,10 +35,6 @@ static void bx_dirname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  %s stdio.h            -> \".\"\n", progname);
 }
 
-static void bx_dirname_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"zero", no_argument, NULL, 'z'},
@@ -59,7 +44,7 @@ static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_op
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_dirname_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dirname");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -83,15 +68,7 @@ static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_op
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -140,24 +117,9 @@ static char* bx_dirname_component_dup(const char* name) {
     return bx_dirname_copy_range(name, dir_len);
 }
 
-static bool bx_dirname_emit(const char* value, bool zero_terminated, struct bx_diag_ctx* diag) {
-    if (fputs(value, stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-
-    int delimiter = zero_terminated ? '\0' : '\n';
-    if (fputc(delimiter, stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-
-    return true;
-}
-
 static bool bx_dirname_process_name(const char* name, bool zero_terminated, struct bx_diag_ctx* diag) {
     char* value = bx_dirname_component_dup(name);
-    bool ok = bx_dirname_emit(value, zero_terminated, diag);
+    bool ok = bx_cli_emit_line(value, zero_terminated, diag);
     free(value);
     return ok;
 }
@@ -182,13 +144,13 @@ int bx_dirname_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_dirname_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
+        bx_cli_diag_missing_operand(&diag);
         return diag.exit_status;
     }
 
@@ -198,9 +160,7 @@ int bx_dirname_main(int argc, char** argv) {
         }
     }
 
-    if (fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
-    }
+    bx_cli_flush_stdout(&diag);
 
     return diag.exit_status;
 }

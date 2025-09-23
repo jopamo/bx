@@ -10,19 +10,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-
-static const char* bx_sleep_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "sleep";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
+#include "lib/cli_common.h"
 
 static void bx_sleep_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s NUMBER[SUFFIX]...\n", progname);
@@ -34,14 +22,6 @@ static void bx_sleep_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "      --help          display this help and exit\n");
     fprintf(stream, "      --version       output version information and exit\n");
-}
-
-static void bx_sleep_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_sleep_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static bool bx_sleep_parse_interval(const char* text, double* seconds_out, bool* infinite_out) {
@@ -159,7 +139,7 @@ int bx_sleep_main(int argc, char** argv) {
         {NULL, 0, NULL, 0},
     };
 
-    const char* progname = bx_sleep_progname((argc > 0) ? argv[0] : NULL);
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sleep");
 
     opterr = 0;
     optind = 1;
@@ -175,7 +155,7 @@ int bx_sleep_main(int argc, char** argv) {
                 bx_sleep_print_help(stdout, progname);
                 return 0;
             case 2:
-                bx_sleep_print_version(progname);
+                bx_cli_print_version(progname);
                 return 0;
             case '?':
                 if (optopt != 0) {
@@ -187,10 +167,10 @@ int bx_sleep_main(int argc, char** argv) {
                 else {
                     bx_err("unrecognized option");
                 }
-                bx_sleep_print_try_help(progname);
+                bx_cli_print_try_help(progname);
                 return 1;
             default:
-                bx_sleep_print_try_help(progname);
+                bx_cli_print_try_help(progname);
                 return 1;
         }
     }
@@ -202,7 +182,7 @@ int bx_sleep_main(int argc, char** argv) {
         }
 
         bx_err("missing operand");
-        bx_sleep_print_try_help(progname);
+        bx_cli_print_try_help(progname);
         return 1;
     }
 
@@ -213,7 +193,7 @@ int bx_sleep_main(int argc, char** argv) {
         bool value_infinite = false;
         if (!bx_sleep_parse_interval(argv[i], &value_seconds, &value_infinite)) {
             bx_err("invalid time interval '%s'", argv[i]);
-            bx_sleep_print_try_help(progname);
+            bx_cli_print_try_help(progname);
             return 1;
         }
 

@@ -7,6 +7,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 extern char** environ;
 
@@ -16,18 +17,6 @@ struct bx_printenv_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_printenv_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "printenv";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
 
 static void bx_printenv_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [VARIABLE]...\n", progname);
@@ -39,10 +28,6 @@ static void bx_printenv_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version  output version information and exit\n");
 }
 
-static void bx_printenv_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"null", no_argument, NULL, '0'},
@@ -52,7 +37,7 @@ static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_printenv_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "printenv");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -75,15 +60,7 @@ static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -94,24 +71,9 @@ static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_
     return true;
 }
 
-static bool bx_printenv_emit(const char* value, bool zero_terminated, struct bx_diag_ctx* diag) {
-    if (fputs(value, stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-
-    int delimiter = zero_terminated ? '\0' : '\n';
-    if (fputc(delimiter, stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-
-    return true;
-}
-
 static bool bx_printenv_print_all(bool zero_terminated, struct bx_diag_ctx* diag) {
     for (char** entry = environ; entry != NULL && *entry != NULL; entry++) {
-        if (!bx_printenv_emit(*entry, zero_terminated, diag)) {
+        if (!bx_cli_emit_line(*entry, zero_terminated, diag)) {
             return false;
         }
     }
@@ -139,7 +101,7 @@ int bx_printenv_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_printenv_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
@@ -159,14 +121,13 @@ int bx_printenv_main(int argc, char** argv) {
                 continue;
             }
 
-            if (!bx_printenv_emit(value, options.zero_terminated, &diag)) {
+            if (!bx_cli_emit_line(value, options.zero_terminated, &diag)) {
                 return diag.exit_status;
             }
         }
     }
 
-    if (fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    if (!bx_cli_flush_stdout(&diag)) {
         return diag.exit_status;
     }
 

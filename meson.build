@@ -153,6 +153,7 @@ bx_core_sources = [
 ]
 
 bx_lib_sources = [
+  'src/lib/cli_common.c',
   'src/lib/args_common.c',
   'src/lib/argv_packer.c',
   'src/lib/backup_ops.c',
