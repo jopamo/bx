@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,21 @@ struct xargs_items {
     int count;
     int cap;
 };
+
+static volatile sig_atomic_t xargs_interrupt_signal = 0;
+
+struct xargs_signal_handlers {
+    struct sigaction old_int;
+    struct sigaction old_term;
+    struct sigaction old_hup;
+    bool has_int;
+    bool has_term;
+    bool has_hup;
+};
+
+static void xargs_handle_interrupt_signal(int signo) {
+    xargs_interrupt_signal = signo;
+}
 
 static void xargs_warn_mutex(const char *progname, const char *left, const char *right,
                              const char *ignored) {
@@ -119,6 +135,55 @@ static void xargs_print_help(const char *progname) {
 
 static void xargs_print_version(void) {
     printf("xargs (bx) %s\n", BX_VERSION);
+}
+
+static int xargs_install_one_signal_handler(int signo, struct sigaction *old_action) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = xargs_handle_interrupt_signal;
+    sigemptyset(&sa.sa_mask);
+    return sigaction(signo, &sa, old_action);
+}
+
+static int xargs_install_signal_handlers(const char *progname,
+                                         struct xargs_signal_handlers *handlers) {
+    memset(handlers, 0, sizeof(*handlers));
+    xargs_interrupt_signal = 0;
+
+    if (xargs_install_one_signal_handler(SIGINT, &handlers->old_int) != 0) {
+        fprintf(stderr, "%s: cannot install SIGINT handler: %s\n", progname, strerror(errno));
+        return 1;
+    }
+    handlers->has_int = true;
+
+    if (xargs_install_one_signal_handler(SIGTERM, &handlers->old_term) != 0) {
+        fprintf(stderr, "%s: cannot install SIGTERM handler: %s\n", progname, strerror(errno));
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_term = true;
+
+    if (xargs_install_one_signal_handler(SIGHUP, &handlers->old_hup) != 0) {
+        fprintf(stderr, "%s: cannot install SIGHUP handler: %s\n", progname, strerror(errno));
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_term = false;
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_hup = true;
+
+    return 0;
+}
+
+static void xargs_restore_signal_handlers(struct xargs_signal_handlers *handlers) {
+    if (handlers->has_hup)
+        sigaction(SIGHUP, &handlers->old_hup, NULL);
+    if (handlers->has_term)
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+    if (handlers->has_int)
+        sigaction(SIGINT, &handlers->old_int, NULL);
 }
 
 static void xargs_print_limits(void) {
@@ -779,10 +844,25 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
     return bx_child_reap(children, running, block, drain_all, xargs_reap_status_cb, &ctx);
 }
 
+static int xargs_finish_interrupted_run(struct bx_child *children, int *running) {
+    int signo = (int)xargs_interrupt_signal;
+    if (signo == 0)
+        return 0;
+
+    bx_child_signal_all(children, *running, signo);
+    while (*running > 0) {
+        if (bx_child_reap(children, running, true, true, NULL, NULL) != 0)
+            return 1;
+    }
+    return 128 + signo;
+}
+
 static int xargs_wait_for_running_children(const char *progname, const char *cmdname,
                                            struct bx_child *children, int *running,
                                            int *final_rc, bool *abort_launch) {
     while (*running > 0) {
+        if (xargs_interrupt_signal != 0)
+            return 0;
         if (xargs_reap_children(progname, cmdname, children, running,
                                 final_rc, abort_launch, true, true) != 0)
             return 1;
@@ -821,17 +901,37 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
                               children, &running, &final_rc, &abort_launch) != 0) {
             (void)xargs_wait_for_running_children(progname, command[0], children, &running,
                                                   &final_rc, &abort_launch);
+            if (xargs_interrupt_signal != 0) {
+                int rc = xargs_finish_interrupted_run(children, &running);
+                free(children);
+                return rc != 0 ? rc : 1;
+            }
             free(children);
             return 1;
+        }
+        if (xargs_interrupt_signal != 0) {
+            int rc = xargs_finish_interrupted_run(children, &running);
+            free(children);
+            return rc != 0 ? rc : 1;
         }
     }
 
     for (int i = 0; i < items->count && !abort_launch; ) {
+        if (xargs_interrupt_signal != 0) {
+            int rc = xargs_finish_interrupted_run(children, &running);
+            free(children);
+            return rc != 0 ? rc : 1;
+        }
         while (running >= max_procs) {
             if (xargs_reap_children(progname, command[0], children, &running,
                                     &final_rc, &abort_launch, true, false) != 0) {
                 free(children);
                 return 1;
+            }
+            if (xargs_interrupt_signal != 0) {
+                int rc = xargs_finish_interrupted_run(children, &running);
+                free(children);
+                return rc != 0 ? rc : 1;
             }
         }
         if (abort_launch)
@@ -847,6 +947,11 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
             fprintf(stderr, "%s: argument line too long\n", progname);
             (void)xargs_wait_for_running_children(progname, command[0], children, &running,
                                                   &final_rc, &abort_launch);
+            if (xargs_interrupt_signal != 0) {
+                int rc = xargs_finish_interrupted_run(children, &running);
+                free(children);
+                return rc != 0 ? rc : 1;
+            }
             free(children);
             return 1;
         }
@@ -865,16 +970,32 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
         if (spawn_rc != 0) {
             (void)xargs_wait_for_running_children(progname, command[0], children, &running,
                                                   &final_rc, &abort_launch);
+            if (xargs_interrupt_signal != 0) {
+                int rc = xargs_finish_interrupted_run(children, &running);
+                free(children);
+                return rc != 0 ? rc : 1;
+            }
             free(children);
             return 1;
         }
         i += take;
+
+        if (xargs_interrupt_signal != 0) {
+            int rc = xargs_finish_interrupted_run(children, &running);
+            free(children);
+            return rc != 0 ? rc : 1;
+        }
 
         if (running > 0) {
             if (xargs_reap_children(progname, command[0], children, &running,
                                     &final_rc, &abort_launch, false, true) != 0) {
                 free(children);
                 return 1;
+            }
+            if (xargs_interrupt_signal != 0) {
+                int rc = xargs_finish_interrupted_run(children, &running);
+                free(children);
+                return rc != 0 ? rc : 1;
             }
         }
     }
@@ -884,6 +1005,11 @@ static int xargs_run_batches(const char *progname, char **command, int command_a
                                             &final_rc, &abort_launch) != 0) {
             free(children);
             return 1;
+        }
+        if (xargs_interrupt_signal != 0) {
+            int rc = xargs_finish_interrupted_run(children, &running);
+            free(children);
+            return rc != 0 ? rc : 1;
         }
     }
 
@@ -1050,7 +1176,14 @@ int bx_xargs_main(int argc, char **argv) {
     if (opts.arg_file)
         fclose(input);
 
+    struct xargs_signal_handlers handlers;
+    if (xargs_install_signal_handlers(progname, &handlers) != 0) {
+        xargs_items_free(&items);
+        return 1;
+    }
+
     int rc = xargs_run_batches(progname, command, command_argc, &items, &opts);
+    xargs_restore_signal_handlers(&handlers);
     xargs_items_free(&items);
     return rc;
 }

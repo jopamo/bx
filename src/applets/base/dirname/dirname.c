@@ -7,8 +7,8 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/path_ops.h"
 
 struct bx_dirname_options {
     const char* progname;
@@ -79,46 +79,8 @@ static bool bx_dirname_parse_options(int argc, char** argv, struct bx_dirname_op
     return true;
 }
 
-static char* bx_dirname_copy_range(const char* start, size_t len) {
-    char* out = xmalloc(len + 1u);
-    memcpy(out, start, len);
-    out[len] = '\0';
-    return out;
-}
-
-static char* bx_dirname_component_dup(const char* name) {
-    if (name == NULL || name[0] == '\0') {
-        return xstrdup(".");
-    }
-
-    size_t end = strlen(name);
-    while (end > 0 && name[end - 1u] == '/') {
-        end--;
-    }
-
-    if (end == 0) {
-        return xstrdup("/");
-    }
-
-    size_t slash_index = end;
-    while (slash_index > 0 && name[slash_index - 1u] != '/') {
-        slash_index--;
-    }
-
-    if (slash_index == 0) {
-        return xstrdup(".");
-    }
-
-    size_t dir_len = slash_index;
-    while (dir_len > 1u && name[dir_len - 1u] == '/') {
-        dir_len--;
-    }
-
-    return bx_dirname_copy_range(name, dir_len);
-}
-
 static bool bx_dirname_process_name(const char* name, bool zero_terminated, struct bx_diag_ctx* diag) {
-    char* value = bx_dirname_component_dup(name);
+    char* value = bx_path_dirname_dup(name);
     bool ok = bx_cli_emit_line(value, zero_terminated, diag);
     free(value);
     return ok;

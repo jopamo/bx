@@ -217,30 +217,8 @@ static bool bx_rm_operand_is_root_directory(const struct stat* path_st, struct b
     return true;
 }
 
-static char* bx_rm_parent_path_dup(const char* path) {
-    char* stripped = bx_path_strip_trailing_slashes_dup(path);
-    const char* slash = strrchr(stripped, '/');
-    char* parent = NULL;
-
-    if (slash == NULL) {
-        parent = xstrdup(".");
-    }
-    else if (slash == stripped) {
-        parent = xstrdup("/");
-    }
-    else {
-        size_t len = (size_t)(slash - stripped);
-        parent = xmalloc(len + 1u);
-        memcpy(parent, stripped, len);
-        parent[len] = '\0';
-    }
-
-    free(stripped);
-    return parent;
-}
-
 static bool bx_rm_operand_is_separate_device_from_parent(const char* path, dev_t path_dev, struct bx_diag_ctx* diag, bool* separate_out) {
-    char* parent_path = bx_rm_parent_path_dup(path);
+    char* parent_path = bx_path_parent_dir_stripped_dup(path);
     struct stat parent_st;
     bool ok = true;
 

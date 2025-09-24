@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/syscall.h>
-#include <libgen.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -79,32 +78,14 @@ static bool bx_mv_operand_had_trailing_slashes(const char* path) {
 }
 
 static bool bx_mv_parent_exists_as_directory(const char* path) {
-    char* copy = xstrdup(path);
-    char* parent = dirname(copy);
+    char* parent = bx_path_parent_dir_dup(path);
     bool is_dir = bx_stat_is_dir_path(parent);
-    free(copy);
+    free(parent);
     return is_dir;
 }
 
-static char* bx_mv_parent_dir_dup(const char* path) {
-    char* copy = xstrdup(path);
-    char* slash = strrchr(copy, '/');
-
-    if (slash == NULL) {
-        free(copy);
-        return xstrdup(".");
-    }
-    if (slash == copy) {
-        slash[1] = '\0';
-        return copy;
-    }
-
-    *slash = '\0';
-    return copy;
-}
-
 static char* bx_mv_canonical_dest_path_no_follow(const char* dest_path) {
-    char* parent = bx_mv_parent_dir_dup(dest_path);
+    char* parent = bx_path_parent_dir_dup(dest_path);
     char* parent_real = realpath(parent, NULL);
     char* base = bx_path_basename_dup(dest_path);
     char* result = NULL;
@@ -158,27 +139,12 @@ static bool bx_mv_symlink_source_matches_destination_path(const char* src_path, 
 }
 
 static bool bx_mv_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
-    char* stripped = bx_path_strip_trailing_slashes_dup(path);
     char* parent_path = NULL;
-    char* slash = strrchr(stripped, '/');
     bool ok = false;
 
-    if (slash == NULL) {
-        parent_path = xstrdup(".");
-    }
-    else if (slash == stripped) {
-        parent_path = xstrdup("/");
-    }
-    else {
-        size_t parent_len = (size_t)(slash - stripped);
-        parent_path = xmalloc(parent_len + 1u);
-        memcpy(parent_path, stripped, parent_len);
-        parent_path[parent_len] = '\0';
-    }
-
+    parent_path = bx_path_parent_dir_stripped_dup(path);
     ok = stat(parent_path, parent_stat_out) == 0;
     free(parent_path);
-    free(stripped);
     return ok;
 }
 

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <getopt.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,21 @@ struct fd_state {
     bool output_collect_failed;
 };
 
+static volatile sig_atomic_t fd_interrupt_signal = 0;
+
+struct fd_signal_handlers {
+    struct sigaction old_int;
+    struct sigaction old_term;
+    struct sigaction old_hup;
+    bool has_int;
+    bool has_term;
+    bool has_hup;
+};
+
+static void fd_handle_interrupt_signal(int signo) {
+    fd_interrupt_signal = signo;
+}
+
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
     char *end = NULL;
@@ -61,6 +77,55 @@ static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
     }
     *out = (int)v;
     return true;
+}
+
+static int fd_install_one_signal_handler(int signo, struct sigaction *old_action) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = fd_handle_interrupt_signal;
+    sigemptyset(&sa.sa_mask);
+    return sigaction(signo, &sa, old_action);
+}
+
+static int fd_install_signal_handlers(const char *progname,
+                                      struct fd_signal_handlers *handlers) {
+    memset(handlers, 0, sizeof(*handlers));
+    fd_interrupt_signal = 0;
+
+    if (fd_install_one_signal_handler(SIGINT, &handlers->old_int) != 0) {
+        fprintf(stderr, "%s: cannot install SIGINT handler: %s\n", progname, strerror(errno));
+        return 1;
+    }
+    handlers->has_int = true;
+
+    if (fd_install_one_signal_handler(SIGTERM, &handlers->old_term) != 0) {
+        fprintf(stderr, "%s: cannot install SIGTERM handler: %s\n", progname, strerror(errno));
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_term = true;
+
+    if (fd_install_one_signal_handler(SIGHUP, &handlers->old_hup) != 0) {
+        fprintf(stderr, "%s: cannot install SIGHUP handler: %s\n", progname, strerror(errno));
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_term = false;
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_hup = true;
+
+    return 0;
+}
+
+static void fd_restore_signal_handlers(struct fd_signal_handlers *handlers) {
+    if (handlers->has_hup)
+        sigaction(SIGHUP, &handlers->old_hup, NULL);
+    if (handlers->has_term)
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+    if (handlers->has_int)
+        sigaction(SIGINT, &handlers->old_int, NULL);
 }
 
 static bool fd_parse_strip_cwd_prefix(const char *progname, const char *text,
@@ -468,6 +533,19 @@ static void fd_exec_reap_status_cb(pid_t pid, int status, bool exec_failed, int 
         *ctx->final_rc = 1;
 }
 
+static int fd_finish_interrupted_exec(struct bx_child *child, int *running) {
+    int signo = (int)fd_interrupt_signal;
+    if (signo == 0)
+        return 0;
+
+    bx_child_signal_all(child, *running, signo);
+    while (*running > 0) {
+        if (bx_child_reap(child, running, true, true, NULL, NULL) != 0)
+            return 1;
+    }
+    return 128 + signo;
+}
+
 static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
     if (st->opts->exec_mode == FD_EXEC_NONE || st->exec_items.count == 0)
         return 0;
@@ -480,6 +558,11 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
     int i = 0;
 
     while (i < st->exec_items.count) {
+        if (fd_interrupt_signal != 0) {
+            int rc = fd_finish_interrupted_exec(&child, &running);
+            return rc != 0 ? rc : 1;
+        }
+
         int take = 1;
         if (st->opts->exec_mode == FD_EXEC_BATCH) {
             take = fd_select_exec_batch_count(st->opts->exec_argv, st->opts->exec_argc,
@@ -524,8 +607,13 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
                                            &child, &running,
                                            &exec_failed_now, &exec_errno_now);
         fd_free_exec_argv(argv);
-        if (spawn_rc != 0)
+        if (spawn_rc != 0) {
+            if (fd_interrupt_signal != 0) {
+                int rc = fd_finish_interrupted_exec(&child, &running);
+                return rc != 0 ? rc : 1;
+            }
             return 1;
+        }
         if (exec_failed_now)
             final_rc = 1;
 
@@ -536,6 +624,10 @@ static int fd_run_exec_commands(const char *progname, struct fd_state *st) {
         };
         if (bx_child_reap(&child, &running, true, true, fd_exec_reap_status_cb, &ctx) != 0)
             return 1;
+        if (fd_interrupt_signal != 0) {
+            int rc = fd_finish_interrupted_exec(&child, &running);
+            return rc != 0 ? rc : 1;
+        }
 
         if (exec_failed_now)
             break;
@@ -947,8 +1039,18 @@ int bx_fd_main(int argc, char **argv) {
     }
     int exec_rc = 0;
     int detail_rc = 0;
-    if (!state.exec_collect_failed && walk_rc == 0 && opts.exec_mode != FD_EXEC_NONE)
+    if (!state.exec_collect_failed && walk_rc == 0 && opts.exec_mode != FD_EXEC_NONE) {
+        struct fd_signal_handlers handlers;
+        if (fd_install_signal_handlers(progname, &handlers) != 0) {
+            fd_exec_items_free(&state.exec_items);
+            fd_detail_items_free(&state.detail_items);
+            free(state.cwd);
+            free(exec_argv_storage);
+            return 1;
+        }
         exec_rc = fd_run_exec_commands(progname, &state);
+        fd_restore_signal_handlers(&handlers);
+    }
     if (!state.output_collect_failed && walk_rc == 0 && opts.list_details)
         detail_rc = fd_detail_items_print(&state.detail_items);
     fd_exec_items_free(&state.exec_items);

@@ -38,6 +38,10 @@ char* bx_path_strip_trailing_slashes_dup(const char* path) {
 }
 
 char* bx_path_basename_dup(const char* path) {
+    if (path[0] == '\0') {
+        return xstrdup("");
+    }
+
     const char* end = path + strlen(path);
     while (end > path + 1 && end[-1] == '/') {
         end--;
@@ -52,6 +56,62 @@ char* bx_path_basename_dup(const char* path) {
         return xstrdup("/");
     }
     return bx_path_dup_range(base, (size_t)(end - base));
+}
+
+char* bx_path_dirname_dup(const char* path) {
+    if (path[0] == '\0') {
+        return xstrdup(".");
+    }
+
+    size_t end = strlen(path);
+    while (end > 0u && path[end - 1u] == '/') {
+        end--;
+    }
+
+    if (end == 0u) {
+        return xstrdup("/");
+    }
+
+    size_t slash_index = end;
+    while (slash_index > 0u && path[slash_index - 1u] != '/') {
+        slash_index--;
+    }
+
+    if (slash_index == 0u) {
+        return xstrdup(".");
+    }
+
+    size_t dir_len = slash_index;
+    while (dir_len > 1u && path[dir_len - 1u] == '/') {
+        dir_len--;
+    }
+
+    return bx_path_dup_range(path, dir_len);
+}
+
+static char* bx_path_parent_dir_dup_impl(const char* path, bool strip_trailing) {
+    char* copy = strip_trailing ? bx_path_strip_trailing_slashes_dup(path) : xstrdup(path);
+    char* slash = strrchr(copy, '/');
+
+    if (slash == NULL) {
+        free(copy);
+        return xstrdup(".");
+    }
+    if (slash == copy) {
+        slash[1] = '\0';
+        return copy;
+    }
+
+    *slash = '\0';
+    return copy;
+}
+
+char* bx_path_parent_dir_dup(const char* path) {
+    return bx_path_parent_dir_dup_impl(path, false);
+}
+
+char* bx_path_parent_dir_stripped_dup(const char* path) {
+    return bx_path_parent_dir_dup_impl(path, true);
 }
 
 char* bx_path_parents_layout_dup(const char* source_operand) {

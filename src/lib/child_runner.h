@@ -2,6 +2,7 @@
 #define BX_LIB_CHILD_RUNNER_H
 
 #include <stdbool.h>
+#include <signal.h>
 #include <sys/types.h>
 
 enum bx_child_prompt_result {
@@ -51,6 +52,7 @@ struct bx_child {
 };
 
 int bx_child_pick_slot(struct bx_child *children, int count, int max_procs);
+void bx_child_signal_all(struct bx_child *children, int count, int signo);
 int bx_child_spawn_argv(const char *progname, char **argv,
                         const struct bx_child_runner_opts *opts,
                         int slot,

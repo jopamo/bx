@@ -315,26 +315,6 @@ static char* bx_ln_normalize_absolute_lexical(const char* path) {
     return normalized;
 }
 
-static bool bx_ln_parent_dir_dup(const char* path, char** parent_out) {
-    char* copy = xstrdup(path);
-    char* slash = strrchr(copy, '/');
-
-    if (slash == NULL) {
-        free(copy);
-        *parent_out = xstrdup(".");
-        return true;
-    }
-    if (slash == copy) {
-        slash[1] = '\0';
-        *parent_out = copy;
-        return true;
-    }
-
-    *slash = '\0';
-    *parent_out = copy;
-    return true;
-}
-
 static char* bx_ln_canonicalize_for_relative(const char* path) {
     char* canonical = realpath(path, NULL);
     if (canonical != NULL) {
@@ -348,9 +328,7 @@ static char* bx_ln_canonicalize_for_relative(const char* path) {
         char* joined = NULL;
         char* normalized = NULL;
 
-        if (!bx_ln_parent_dir_dup(path, &parent)) {
-            return NULL;
-        }
+        parent = bx_path_parent_dir_dup(path);
 
         parent_real = realpath(parent, NULL);
         if (parent_real != NULL) {
@@ -444,7 +422,7 @@ static char* bx_ln_make_relative_source_path(const char* source_path, const char
         return NULL;
     }
 
-    bx_ln_parent_dir_dup(destination_path, &destination_parent);
+    destination_parent = bx_path_parent_dir_dup(destination_path);
     destination_parent_abs = bx_ln_canonicalize_for_relative(destination_parent);
     if (destination_parent_abs == NULL) {
         saved_errno = errno;
@@ -466,15 +444,12 @@ static char* bx_ln_make_relative_source_path(const char* source_path, const char
 }
 
 static bool bx_ln_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
-    char* stripped = bx_path_strip_trailing_slashes_dup(path);
     char* parent_path = NULL;
     bool ok = false;
 
-    bx_ln_parent_dir_dup(stripped, &parent_path);
-
+    parent_path = bx_path_parent_dir_stripped_dup(path);
     ok = stat(parent_path, parent_stat_out) == 0;
     free(parent_path);
-    free(stripped);
     return ok;
 }
 

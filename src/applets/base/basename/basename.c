@@ -7,8 +7,8 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/path_ops.h"
 
 struct bx_basename_options {
     const char* progname;
@@ -96,34 +96,6 @@ static bool bx_basename_parse_options(int argc, char** argv, struct bx_basename_
     return true;
 }
 
-static char* bx_basename_copy_range(const char* start, size_t len) {
-    char* out = xmalloc(len + 1u);
-    memcpy(out, start, len);
-    out[len] = '\0';
-    return out;
-}
-
-static char* bx_basename_component_dup(const char* name) {
-    if (name == NULL || name[0] == '\0') {
-        return xstrdup("");
-    }
-
-    const char* end = name + strlen(name);
-    while (end > name + 1 && end[-1] == '/') {
-        end--;
-    }
-
-    const char* base = end;
-    while (base > name && base[-1] != '/') {
-        base--;
-    }
-
-    if (base == end) {
-        return xstrdup("/");
-    }
-    return bx_basename_copy_range(base, (size_t)(end - base));
-}
-
 static void bx_basename_strip_suffix(char* value, const char* suffix) {
     if (suffix == NULL || suffix[0] == '\0') {
         return;
@@ -142,7 +114,7 @@ static void bx_basename_strip_suffix(char* value, const char* suffix) {
 }
 
 static bool bx_basename_process_name(const char* name, const char* suffix, bool zero_terminated, struct bx_diag_ctx* diag) {
-    char* value = bx_basename_component_dup(name);
+    char* value = bx_path_basename_dup(name);
     bx_basename_strip_suffix(value, suffix);
 
     bool ok = bx_cli_emit_line(value, zero_terminated, diag);

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -116,6 +117,21 @@ struct find_state {
     struct timespec now;
 };
 
+static volatile sig_atomic_t find_interrupt_signal = 0;
+
+struct find_signal_handlers {
+    struct sigaction old_int;
+    struct sigaction old_term;
+    struct sigaction old_hup;
+    bool has_int;
+    bool has_term;
+    bool has_hup;
+};
+
+static void find_handle_interrupt_signal(int signo) {
+    find_interrupt_signal = signo;
+}
+
 static void find_report_error(const char *progname, const char *path, int errnum) {
     fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errnum));
 }
@@ -173,6 +189,72 @@ static void find_print_help(const char *progname) {
 
 static void find_print_version(const char *progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static int find_install_one_signal_handler(int signo, struct sigaction *old_action) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = find_handle_interrupt_signal;
+    sigemptyset(&sa.sa_mask);
+    return sigaction(signo, &sa, old_action);
+}
+
+static int find_install_signal_handlers(const char *progname,
+                                        struct find_signal_handlers *handlers) {
+    memset(handlers, 0, sizeof(*handlers));
+    find_interrupt_signal = 0;
+
+    if (find_install_one_signal_handler(SIGINT, &handlers->old_int) != 0) {
+        fprintf(stderr, "%s: cannot install SIGINT handler: %s\n", progname, strerror(errno));
+        return 1;
+    }
+    handlers->has_int = true;
+
+    if (find_install_one_signal_handler(SIGTERM, &handlers->old_term) != 0) {
+        fprintf(stderr, "%s: cannot install SIGTERM handler: %s\n", progname, strerror(errno));
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_term = true;
+
+    if (find_install_one_signal_handler(SIGHUP, &handlers->old_hup) != 0) {
+        fprintf(stderr, "%s: cannot install SIGHUP handler: %s\n", progname, strerror(errno));
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+        sigaction(SIGINT, &handlers->old_int, NULL);
+        handlers->has_term = false;
+        handlers->has_int = false;
+        return 1;
+    }
+    handlers->has_hup = true;
+
+    return 0;
+}
+
+static void find_restore_signal_handlers(struct find_signal_handlers *handlers) {
+    if (handlers->has_hup)
+        sigaction(SIGHUP, &handlers->old_hup, NULL);
+    if (handlers->has_term)
+        sigaction(SIGTERM, &handlers->old_term, NULL);
+    if (handlers->has_int)
+        sigaction(SIGINT, &handlers->old_int, NULL);
+}
+
+static int find_finish_interrupted_exec(struct bx_child *child, int *running) {
+    int signo = (int)find_interrupt_signal;
+    if (signo == 0)
+        return 0;
+
+    bx_child_signal_all(child, *running, signo);
+    while (*running > 0) {
+        if (bx_child_reap(child, running, true, true, NULL, NULL) != 0)
+            return 1;
+    }
+    return 128 + signo;
+}
+
+static int find_interrupt_return_code(void) {
+    return find_interrupt_signal != 0 ? 128 + (int)find_interrupt_signal : 0;
 }
 
 static bool parse_int_arg(const char *progname, const char *optname, const char *text, int *out) {
@@ -1418,6 +1500,7 @@ static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
     int running = 0;
     int status = 0;
     struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    struct find_signal_handlers handlers;
     runner_opts.cwd = cwd;
 
     char *item = strdup(path);
@@ -1452,6 +1535,14 @@ static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
         return false;
     }
 
+    if (find_install_signal_handlers(st->progname, &handlers) != 0) {
+        bx_argv_free(argv);
+        st->status = 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+
     bool exec_failed_now = false;
     int exec_errno_now = 0;
     int spawn_rc = bx_child_spawn_argv(st->progname, argv, &runner_opts, 0,
@@ -1459,6 +1550,15 @@ static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
                                        &exec_failed_now, &exec_errno_now);
     bx_argv_free(argv);
     if (spawn_rc != 0) {
+        if (find_interrupt_signal != 0) {
+            int rc = find_finish_interrupted_exec(&child, &running);
+            find_restore_signal_handlers(&handlers);
+            st->status = rc != 0 ? rc : 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        find_restore_signal_handlers(&handlers);
         st->status = 1;
         if (st->stop)
             *st->stop = true;
@@ -1471,11 +1571,21 @@ static bool find_run_exec_one(struct find_state *st, struct find_expr *expr,
         .status = &status,
     };
     if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0) {
+        find_restore_signal_handlers(&handlers);
         st->status = 1;
         if (st->stop)
             *st->stop = true;
         return false;
     }
+    if (find_interrupt_signal != 0) {
+        int rc = find_finish_interrupted_exec(&child, &running);
+        find_restore_signal_handlers(&handlers);
+        st->status = rc != 0 ? rc : 1;
+        if (st->stop)
+            *st->stop = true;
+        return false;
+    }
+    find_restore_signal_handlers(&handlers);
 
     if (status != 0)
         st->status = 1;
@@ -1510,22 +1620,43 @@ static int find_run_exec_batches(const char *progname, struct find_expr *expr) {
             return 1;
         }
 
+        struct find_signal_handlers handlers;
+        if (find_install_signal_handlers(progname, &handlers) != 0) {
+            bx_argv_free(argv);
+            return 1;
+        }
+
         bool exec_failed_now = false;
         int exec_errno_now = 0;
         int spawn_rc = bx_child_spawn_argv(progname, argv, &runner_opts, 0,
                                            &child, &running,
                                            &exec_failed_now, &exec_errno_now);
         bx_argv_free(argv);
-        if (spawn_rc != 0)
+        if (spawn_rc != 0) {
+            if (find_interrupt_signal != 0) {
+                int rc = find_finish_interrupted_exec(&child, &running);
+                find_restore_signal_handlers(&handlers);
+                return rc != 0 ? rc : 1;
+            }
+            find_restore_signal_handlers(&handlers);
             return 1;
+        }
 
         struct find_exec_reap_ctx ctx = {
             .progname = progname,
             .cmdname = expr->exec_argv[0],
             .status = &status,
         };
-        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0)
+        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0) {
+            find_restore_signal_handlers(&handlers);
             return 1;
+        }
+        if (find_interrupt_signal != 0) {
+            int rc = find_finish_interrupted_exec(&child, &running);
+            find_restore_signal_handlers(&handlers);
+            return rc != 0 ? rc : 1;
+        }
+        find_restore_signal_handlers(&handlers);
         i += take;
     }
 
@@ -1577,6 +1708,14 @@ static int find_run_execdir_batches(const char *progname, struct find_expr *expr
         struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
         runner_opts.cwd = cwd;
 
+        struct find_signal_handlers handlers;
+        if (find_install_signal_handlers(progname, &handlers) != 0) {
+            bx_argv_free(argv);
+            free(cwd);
+            find_execdir_free_split_items(group_items, group_count);
+            return 1;
+        }
+
         bool exec_failed_now = false;
         int exec_errno_now = 0;
         int spawn_rc = bx_child_spawn_argv(progname, argv, &runner_opts, 0,
@@ -1585,16 +1724,31 @@ static int find_run_execdir_batches(const char *progname, struct find_expr *expr
         bx_argv_free(argv);
         free(cwd);
         find_execdir_free_split_items(group_items, group_count);
-        if (spawn_rc != 0)
+        if (spawn_rc != 0) {
+            if (find_interrupt_signal != 0) {
+                int rc = find_finish_interrupted_exec(&child, &running);
+                find_restore_signal_handlers(&handlers);
+                return rc != 0 ? rc : 1;
+            }
+            find_restore_signal_handlers(&handlers);
             return 1;
+        }
 
         struct find_exec_reap_ctx ctx = {
             .progname = progname,
             .cmdname = expr->exec_argv[0],
             .status = &status,
         };
-        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0)
+        if (bx_child_reap(&child, &running, true, true, find_exec_reap_status_cb, &ctx) != 0) {
+            find_restore_signal_handlers(&handlers);
             return 1;
+        }
+        if (find_interrupt_signal != 0) {
+            int rc = find_finish_interrupted_exec(&child, &running);
+            find_restore_signal_handlers(&handlers);
+            return rc != 0 ? rc : 1;
+        }
+        find_restore_signal_handlers(&handlers);
 
         i += take;
     }
@@ -1607,13 +1761,34 @@ static int find_run_pending_exec_exprs(const char *progname, struct find_expr *e
         return 0;
 
     int status = 0;
-    if (find_run_pending_exec_exprs(progname, expr->left) != 0)
+    int rc = find_run_pending_exec_exprs(progname, expr->left);
+    if (rc > 1)
+        return rc;
+    if (rc != 0)
         status = 1;
-    if (find_run_pending_exec_exprs(progname, expr->right) != 0)
+    if (find_interrupt_signal != 0)
+        return find_interrupt_return_code();
+
+    rc = find_run_pending_exec_exprs(progname, expr->right);
+    if (rc > 1)
+        return rc;
+    if (rc != 0)
         status = 1;
-    if (find_run_exec_batches(progname, expr) != 0)
+    if (find_interrupt_signal != 0)
+        return find_interrupt_return_code();
+
+    rc = find_run_exec_batches(progname, expr);
+    if (rc > 1)
+        return rc;
+    if (rc != 0)
         status = 1;
-    if (find_run_execdir_batches(progname, expr) != 0)
+    if (find_interrupt_signal != 0)
+        return find_interrupt_return_code();
+
+    rc = find_run_execdir_batches(progname, expr);
+    if (rc > 1)
+        return rc;
+    if (rc != 0)
         status = 1;
     return status;
 }
@@ -1807,8 +1982,18 @@ int bx_find_main(int argc, char **argv) {
             st.status = 1;
     }
 
-    if (find_run_pending_exec_exprs(progname, expr) != 0)
-        st.status = 1;
+    if (find_interrupt_signal != 0 && st.status == 0)
+        st.status = find_interrupt_return_code();
+
+    if (find_interrupt_signal == 0) {
+        int pending_rc = find_run_pending_exec_exprs(progname, expr);
+        if (pending_rc > 1)
+            st.status = pending_rc;
+        else if (pending_rc != 0 && st.status == 0)
+            st.status = 1;
+        else if (pending_rc != 0)
+            st.status = 1;
+    }
 
     find_expr_free(expr);
     free(expr_argv);

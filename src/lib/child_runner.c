@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,16 @@ int bx_child_pick_slot(struct bx_child *children, int count, int max_procs) {
             return slot;
     }
     return 0;
+}
+
+void bx_child_signal_all(struct bx_child *children, int count, int signo) {
+    if (!children || count <= 0 || signo <= 0)
+        return;
+
+    for (int i = 0; i < count; i++) {
+        if (children[i].pid > 0 && kill(children[i].pid, signo) < 0 && errno != ESRCH)
+            continue;
+    }
 }
 
 int bx_child_spawn_argv(const char *progname, char **argv,
@@ -140,6 +151,8 @@ int bx_child_reap(struct bx_child *children, int *running,
         if (pid == 0)
             return 0;
         if (pid < 0) {
+            if (errno == EINTR)
+                return 0;
             if (!block && errno == ECHILD)
                 return 0;
             return (errno == ECHILD) ? 0 : 1;
