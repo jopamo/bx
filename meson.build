@@ -163,6 +163,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/fd_ops.c',
+  'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
   'src/lib/output.c',
   'src/lib/overwrite_ops.c',
@@ -277,6 +278,7 @@ bx_text_applet_sources = [
   'src/applets/text/ed/regex.c',
   'src/applets/text/ed/signal.c',
   'src/applets/text/fd/fd.c',
+  'src/applets/text/fd/fd_exec.c',
   'src/applets/text/fd/fd_exec_render.c',
   'src/applets/text/fd/fd_output.c',
   'src/applets/text/grep/grep.c',
@@ -1224,4 +1226,8 @@ if get_option('tests')
   test('xargs differential', python3, args : [test_xargs_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
   test_pipeline_differential = find_program('tests/applets/base/xargs/test_pipeline_differential.py')
   test('pipeline differential', python3, args : [test_pipeline_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+  test_exec_status_ownership = find_program('tests/applets/shared/test_exec_status_ownership.sh')
+  test('shared exec status ownership', test_exec_status_ownership, args : [bx_exe], suite : fast_track_p2_suite)
+  test_exec_substrate_shape = find_program('tests/applets/shared/test_exec_substrate_shape.sh')
+  test('shared exec substrate shape', test_exec_substrate_shape, args : [bx_exe], suite : fast_track_p2_suite)
 endif

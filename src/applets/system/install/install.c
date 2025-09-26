@@ -17,6 +17,7 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
+#include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
 #include "bx/diag.h"
@@ -97,258 +98,32 @@ static void bx_install_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
-enum {
-    BX_INSTALL_WHO_U = 1u << 0,
-    BX_INSTALL_WHO_G = 1u << 1,
-    BX_INSTALL_WHO_O = 1u << 2,
-    BX_INSTALL_WHO_ALL = BX_INSTALL_WHO_U | BX_INSTALL_WHO_G | BX_INSTALL_WHO_O,
-};
-
 #ifdef S_ISVTX
 #define BX_INSTALL_STICKY_BIT S_ISVTX
 #else
 #define BX_INSTALL_STICKY_BIT 01000
 #endif
-
-static mode_t bx_install_rwx_mask_from_who(unsigned int who_flags) {
-    mode_t mask = 0u;
-    if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-        mask |= S_IRWXU;
-    }
-    if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-        mask |= S_IRWXG;
-    }
-    if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-        mask |= S_IRWXO;
-    }
-    return mask;
-}
-
-static mode_t bx_install_special_mask_from_who(unsigned int who_flags) {
-    mode_t mask = 0u;
-    if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-        mask |= S_ISUID;
-    }
-    if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-        mask |= S_ISGID;
-    }
-    if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-        mask |= BX_INSTALL_STICKY_BIT;
-    }
-    return mask;
-}
-
-static mode_t bx_install_perm_bits_for_who(unsigned int who_flags, char perm) {
-    mode_t bits = 0u;
-
-    if (perm == 'r') {
-        if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-            bits |= S_IRUSR;
-        }
-        if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-            bits |= S_IRGRP;
-        }
-        if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-            bits |= S_IROTH;
-        }
-    }
-    else if (perm == 'w') {
-        if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-            bits |= S_IWUSR;
-        }
-        if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-            bits |= S_IWGRP;
-        }
-        if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-            bits |= S_IWOTH;
-        }
-    }
-    else if (perm == 'x') {
-        if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-            bits |= S_IXUSR;
-        }
-        if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-            bits |= S_IXGRP;
-        }
-        if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-            bits |= S_IXOTH;
-        }
-    }
-
-    return bits;
-}
-
-static mode_t bx_install_copy_perm_bits(mode_t mode, unsigned int who_flags, char source_class) {
-    mode_t source = 0u;
-
-    switch (source_class) {
-        case 'u':
-            source = (mode & S_IRWXU) >> 6;
-            break;
-        case 'g':
-            source = (mode & S_IRWXG) >> 3;
-            break;
-        case 'o':
-            source = mode & S_IRWXO;
-            break;
-        default:
-            return 0u;
-    }
-
-    mode_t bits = 0u;
-    if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-        bits |= source << 6;
-    }
-    if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-        bits |= source << 3;
-    }
-    if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-        bits |= source;
-    }
-    return bits;
-}
-
-static bool bx_install_mode_is_octal(const char* text) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    for (const char* p = text; *p != '\0'; p++) {
-        if (*p < '0' || *p > '7') {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool bx_install_parse_numeric_mode(const char* text, mode_t* mode_out) {
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(text, &end, 8);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0' || value > 07777ul) {
-        return false;
-    }
-
-    *mode_out = (mode_t)value;
-    return true;
-}
-
-static bool bx_install_parse_symbolic_mode(const char* text, mode_t* mode_out) {
-    mode_t mode = 0u;
-    const char* p = text;
-
-    while (*p != '\0') {
-        unsigned int who_flags = 0u;
-        bool who_specified = false;
-
-        while (*p == 'u' || *p == 'g' || *p == 'o' || *p == 'a') {
-            who_specified = true;
-            if (*p == 'u') {
-                who_flags |= BX_INSTALL_WHO_U;
-            }
-            else if (*p == 'g') {
-                who_flags |= BX_INSTALL_WHO_G;
-            }
-            else if (*p == 'o') {
-                who_flags |= BX_INSTALL_WHO_O;
-            }
-            else {
-                who_flags |= BX_INSTALL_WHO_ALL;
-            }
-            p++;
-        }
-
-        if (!who_specified) {
-            who_flags = BX_INSTALL_WHO_ALL;
-        }
-
-        char op = *p;
-        if (op != '+' && op != '-' && op != '=') {
-            return false;
-        }
-        p++;
-
-        if (*p == '\0' || *p == ',') {
-            return false;
-        }
-
-        mode_t clause_rwx_bits = 0u;
-        mode_t clause_special_bits = 0u;
-        mode_t source_mode = mode;
-        while (*p != '\0' && *p != ',') {
-            switch (*p) {
-                case 'r':
-                case 'w':
-                case 'x':
-                    clause_rwx_bits |= bx_install_perm_bits_for_who(who_flags, *p);
-                    break;
-                case 's':
-                    if ((who_flags & BX_INSTALL_WHO_U) != 0u) {
-                        clause_special_bits |= S_ISUID;
-                    }
-                    if ((who_flags & BX_INSTALL_WHO_G) != 0u) {
-                        clause_special_bits |= S_ISGID;
-                    }
-                    break;
-                case 't':
-                    if ((who_flags & BX_INSTALL_WHO_O) != 0u) {
-                        clause_special_bits |= BX_INSTALL_STICKY_BIT;
-                    }
-                    break;
-                case 'u':
-                case 'g':
-                case 'o':
-                    clause_rwx_bits |= bx_install_copy_perm_bits(source_mode, who_flags, *p);
-                    break;
-                default:
-                    return false;
-            }
-            p++;
-        }
-
-        mode_t affected_rwx_mask = bx_install_rwx_mask_from_who(who_flags);
-        mode_t affected_special_mask = who_specified ? bx_install_special_mask_from_who(who_flags) : (S_ISUID | S_ISGID | BX_INSTALL_STICKY_BIT);
-        mode_t applied_rwx_bits = clause_rwx_bits & affected_rwx_mask;
-
-        if (op == '+') {
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
-        }
-        else if (op == '-') {
-            mode &= ~applied_rwx_bits;
-            mode &= ~clause_special_bits;
-        }
-        else {
-            mode &= ~affected_rwx_mask;
-            mode &= ~affected_special_mask;
-            mode |= applied_rwx_bits;
-            mode |= clause_special_bits;
-        }
-
-        if (*p == ',') {
-            p++;
-            if (*p == '\0') {
-                return false;
-            }
-        }
-    }
-
-    *mode_out = mode & 07777u;
-    return true;
-}
-
 static bool bx_install_parse_mode(const char* text, mode_t* mode_out, struct bx_diag_ctx* diag) {
     if (text == NULL || text[0] == '\0') {
         bx_diag(diag, "invalid mode '%s'", (text != NULL) ? text : "");
         return false;
     }
 
-    if (bx_install_mode_is_octal(text)) {
-        if (bx_install_parse_numeric_mode(text, mode_out)) {
-            return true;
-        }
-    }
-    else if (bx_install_parse_symbolic_mode(text, mode_out)) {
+    struct bx_mode_parse_params params = {
+        .initial_mode = 0u,
+        .result_mask = 07777u,
+        .max_numeric_mode = 07777u,
+        .umask_value = 0u,
+        .sticky_bit = BX_INSTALL_STICKY_BIT,
+        .x_policy = BX_MODE_X_DISABLED,
+        .is_directory = false,
+        .apply_umask_when_who_omitted = false,
+        .allow_setuid = true,
+        .allow_setgid = true,
+        .allow_sticky = true,
+    };
+
+    if (bx_mode_parse(text, &params, mode_out)) {
         return true;
     }
 
