@@ -198,25 +198,28 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         if (!opts->post_order || !entry.is_dir)
             cb(&entry, user);
 
-        if (!walk_should_stop(opts) && entry.is_dir) {
+        if (!walk_should_stop(opts) && entry.is_dir && !entry.prune) {
             if (!walk_entry_load_metadata(&entry)) {
                 free(full);
                 continue;
             }
 
+            bool crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
             bool repeated_dir = false;
-            if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
-                repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
-            } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
-                repeated_dir = entry_was_symlink &&
-                               walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+            if (!crosses_filesystem) {
+                if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
+                    repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
+                    repeated_dir = entry_was_symlink &&
+                                   walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                }
             }
 
             if (repeated_dir) {
                 walk_report_loop(opts, full);
                 if (opts->cycle_report == WALK_CYCLE_ERROR)
                     status = -1;
-            } else {
+            } else if (!crosses_filesystem) {
                 struct walk_ancestor next = {
                     .dev = entry.dev,
                     .ino = entry.inode,
@@ -239,16 +242,18 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
 
 int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *user) {
     struct walk_opts effective_opts = *opts;
-    effective_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root, opts);
-    struct bx_walk_filter_state filters;
-    bx_walk_filter_init(&filters, &effective_opts, root);
-
     struct stat st;
     int root_stat_rc = (opts && opts->follow_root_symlink) ? stat(root, &st) : lstat(root, &st);
     if (root_stat_rc != 0) {
         walk_report_error(opts, root, errno);
         return -1;
     }
+
+    effective_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root, opts);
+    if (effective_opts.stay_on_filesystem)
+        effective_opts.root_device = st.st_dev;
+    struct bx_walk_filter_state filters;
+    bx_walk_filter_init(&filters, &effective_opts, root);
 
     if (S_ISDIR(st.st_mode)) {
         struct walk_entry entry = {
@@ -260,7 +265,7 @@ int walk_dir(const char *root, struct walk_opts *opts, walk_callback cb, void *u
         if (!opts->post_order)
             cb(&entry, user);
         free(entry.path);
-        if (walk_should_stop(opts))
+        if (walk_should_stop(opts) || entry.prune)
             return 0;
         struct walk_ancestor root_ancestor = {
             .dev = st.st_dev,

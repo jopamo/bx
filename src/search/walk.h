@@ -17,6 +17,7 @@ struct walk_opts {
     bool follow_symlinks;
     bool follow_root_symlink;
     bool post_order;
+    bool stay_on_filesystem;
     bool *stop;
     bool suppress_eacces;
     bool report_eacces;
@@ -44,11 +45,13 @@ struct walk_opts {
         WALK_CYCLE_WARN,
         WALK_CYCLE_ERROR,
     } cycle_report;
+    dev_t root_device;
 };
 
 struct walk_entry {
     char *path;
     bool is_dir;
+    bool prune;
     bool metadata_loaded;
     bool metadata_tried;
     bool follow_metadata;

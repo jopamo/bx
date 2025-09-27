@@ -1,10 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
-#include <grp.h>
-#include <pwd.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +14,7 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
+#include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
@@ -131,59 +129,6 @@ static bool bx_install_parse_mode(const char* text, mode_t* mode_out, struct bx_
     return false;
 }
 
-static bool bx_install_parse_id_numeric(const char* text, uintmax_t max_value, uintmax_t* value_out) {
-    if (text == NULL || text[0] == '\0' || text[0] == '-') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long long value = strtoull(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0') {
-        return false;
-    }
-    if ((uintmax_t)value > max_value) {
-        return false;
-    }
-
-    *value_out = (uintmax_t)value;
-    return true;
-}
-
-static bool bx_install_parse_owner(const char* text, uid_t* owner_out, struct bx_diag_ctx* diag) {
-    uintmax_t numeric_id = 0;
-    if (bx_install_parse_id_numeric(text, (uintmax_t)((uid_t)-1), &numeric_id)) {
-        *owner_out = (uid_t)numeric_id;
-        return true;
-    }
-
-    struct passwd* passwd_entry = getpwnam(text);
-    if (passwd_entry != NULL) {
-        *owner_out = passwd_entry->pw_uid;
-        return true;
-    }
-
-    bx_diag(diag, "invalid user '%s'", (text != NULL) ? text : "");
-    return false;
-}
-
-static bool bx_install_parse_group(const char* text, gid_t* group_out, struct bx_diag_ctx* diag) {
-    uintmax_t numeric_id = 0;
-    if (bx_install_parse_id_numeric(text, (uintmax_t)((gid_t)-1), &numeric_id)) {
-        *group_out = (gid_t)numeric_id;
-        return true;
-    }
-
-    struct group* group_entry = getgrnam(text);
-    if (group_entry != NULL) {
-        *group_out = group_entry->gr_gid;
-        return true;
-    }
-
-    bx_diag(diag, "invalid group '%s'", (text != NULL) ? text : "");
-    return false;
-}
-
 static bool bx_install_apply_owner_group_fd(int fd, const char* path, const struct bx_install_options* options, struct bx_diag_ctx* diag) {
     if (!options->owner_set && !options->group_set) {
         return true;
@@ -287,7 +232,7 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 options->verbose = true;
                 break;
             case 'g':
-                if (!bx_install_parse_group(optarg, &options->group, diag)) {
+                if (!bx_id_parse_group(optarg, &options->group, diag)) {
                     return false;
                 }
                 options->group_set = true;
@@ -299,7 +244,7 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
                 options->mode_set = true;
                 break;
             case 'o':
-                if (!bx_install_parse_owner(optarg, &options->owner, diag)) {
+                if (!bx_id_parse_owner(optarg, &options->owner, diag)) {
                     return false;
                 }
                 options->owner_set = true;

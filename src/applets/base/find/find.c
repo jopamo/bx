@@ -24,6 +24,8 @@ struct find_opts {
     int min_depth;
     bool follow_symlinks;
     bool follow_root_symlink;
+    bool stay_on_filesystem;
+    const char *files0_from;
 };
 
 enum find_expr_kind {
@@ -62,6 +64,7 @@ enum find_expr_kind {
     FIND_EXPR_FPRINT,
     FIND_EXPR_FPRINT0,
     FIND_EXPR_DELETE,
+    FIND_EXPR_PRUNE,
     FIND_EXPR_QUIT,
     FIND_EXPR_EXEC,
     FIND_EXPR_OK,
@@ -76,6 +79,12 @@ enum find_expr_kind {
 };
 
 struct find_exec_items {
+    char **v;
+    int count;
+    int cap;
+};
+
+struct find_root_list {
     char **v;
     int count;
     int cap;
@@ -144,8 +153,11 @@ static void find_print_help(const char *progname) {
     puts("  -L            follow all symlinks");
     puts("  -P            never follow symlinks");
     puts("  -depth        process directory contents before the directory");
+    puts("  -files0-from FILE  read starting points from a NUL-delimited FILE");
+    puts("  -mount        do not descend directories on other filesystems");
     puts("  -maxdepth N   descend at most N levels below the roots");
     puts("  -mindepth N   do not act on levels less than N");
+    puts("  -xdev         same as -mount");
     puts("  -name PATTERN match basename against PATTERN");
     puts("  -lname PATTERN match symlink target against PATTERN");
     puts("  -type [fdl]   match file type");
@@ -176,6 +188,7 @@ static void find_print_help(const char *progname) {
     puts("  -fprint FILE  write path to FILE");
     puts("  -fprint0 FILE write path followed by NUL to FILE");
     puts("  -delete       delete matched entries");
+    puts("  -prune        do not descend into matched directories");
     puts("  -quit         stop after the first deciding result");
     puts("  -exec CMD ... {} ;  run CMD once per matched path");
     puts("  -ok CMD ... {} ;    prompt, then run CMD once per matched path");
@@ -266,6 +279,75 @@ static bool parse_int_arg(const char *progname, const char *optname, const char 
     }
     *out = (int)v;
     return true;
+}
+
+static bool find_root_list_append_copy(struct find_root_list *roots, const char *text, size_t len) {
+    if (roots->count >= roots->cap) {
+        int new_cap = roots->cap == 0 ? 8 : roots->cap * 2;
+        char **tmp = realloc(roots->v, (size_t)new_cap * sizeof(*roots->v));
+        if (!tmp)
+            return false;
+        roots->v = tmp;
+        roots->cap = new_cap;
+    }
+
+    char *copy = strndup(text, len);
+    if (!copy)
+        return false;
+    roots->v[roots->count++] = copy;
+    return true;
+}
+
+static void find_root_list_free(struct find_root_list *roots) {
+    if (!roots)
+        return;
+    for (int i = 0; i < roots->count; i++)
+        free(roots->v[i]);
+    free(roots->v);
+    roots->v = NULL;
+    roots->count = 0;
+    roots->cap = 0;
+}
+
+static bool find_load_files0_roots(const char *progname, const char *source,
+                                   struct find_root_list *roots) {
+    FILE *fp = NULL;
+    if (strcmp(source, "-") == 0) {
+        fp = stdin;
+    } else {
+        fp = fopen(source, "rb");
+        if (!fp) {
+            find_report_error(progname, source, errno);
+            return false;
+        }
+    }
+
+    char *item = NULL;
+    size_t cap = 0;
+    ssize_t len = 0;
+    bool ok = true;
+    while ((len = getdelim(&item, &cap, '\0', fp)) != -1) {
+        size_t item_len = (size_t)len;
+        if (item_len > 0 && item[item_len - 1] == '\0')
+            item_len--;
+        if (item_len == 0)
+            continue;
+        if (!find_root_list_append_copy(roots, item, item_len)) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok && ferror(fp)) {
+        find_report_error(progname, source, errno ? errno : EIO);
+        ok = false;
+    }
+
+    free(item);
+    if (fp != stdin)
+        fclose(fp);
+    return ok;
 }
 
 static bool find_parse_numeric_test(const char *progname, const char *optname,
@@ -837,6 +919,8 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
     } else if (strcmp(arg, "-delete") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_DELETE);
+    } else if (strcmp(arg, "-prune") == 0) {
+        expr = find_expr_new(FIND_EXPR_PRUNE);
     } else if (strcmp(arg, "-quit") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_QUIT);
@@ -1257,6 +1341,10 @@ static bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
                 *st->stop = true;
             return false;
         }
+        return true;
+    case FIND_EXPR_PRUNE:
+        if (entry->is_dir)
+            entry->prune = true;
         return true;
     case FIND_EXPR_QUIT:
         if (st->stop)
@@ -1846,13 +1934,8 @@ int bx_find_main(int argc, char **argv) {
     while (expr_index < argc && !token_starts_expression(argv[expr_index]))
         expr_index++;
 
-    int root_count = expr_index - argi;
-    char **roots = argv + argi;
-    if (root_count == 0) {
-        static char *default_root[] = { "." };
-        roots = default_root;
-        root_count = 1;
-    }
+    int explicit_root_count = expr_index - argi;
+    char **explicit_roots = argv + argi;
 
     char **expr_argv = calloc((size_t)(argc - expr_index + 1), sizeof(*expr_argv));
     if (!expr_argv) {
@@ -1884,6 +1967,15 @@ int bx_find_main(int argc, char **argv) {
                 free(expr_argv);
                 return 1;
             }
+        } else if (strcmp(arg, "-files0-from") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "%s: missing argument to `-files0-from'\n", progname);
+                free(expr_argv);
+                return 1;
+            }
+            opts.files0_from = argv[i];
+        } else if (strcmp(arg, "-mount") == 0 || strcmp(arg, "-xdev") == 0) {
+            opts.stay_on_filesystem = true;
         } else {
             expr_argv[expr_argc++] = argv[i];
             if ((strcmp(arg, "-name") == 0 || strcmp(arg, "-iname") == 0 ||
@@ -1906,6 +1998,29 @@ int bx_find_main(int argc, char **argv) {
         }
     }
 
+    struct find_root_list root_list = {0};
+    char **roots = explicit_roots;
+    int root_count = explicit_root_count;
+    if (opts.files0_from) {
+        if (explicit_root_count > 0) {
+            fprintf(stderr, "%s: extra operand `%s'\n", progname, explicit_roots[0]);
+            fprintf(stderr, "%s: file operands cannot be combined with -files0-from\n", progname);
+            free(expr_argv);
+            return 1;
+        }
+        if (!find_load_files0_roots(progname, opts.files0_from, &root_list)) {
+            free(expr_argv);
+            find_root_list_free(&root_list);
+            return 1;
+        }
+        roots = root_list.v;
+        root_count = root_list.count;
+    } else if (root_count == 0) {
+        static char *default_root[] = { "." };
+        roots = default_root;
+        root_count = 1;
+    }
+
     struct find_parser parser = {
         .progname = progname,
         .argv = expr_argv,
@@ -1919,6 +2034,7 @@ int bx_find_main(int argc, char **argv) {
         if (!expr || parser.pos != parser.argc) {
             find_expr_free(expr);
             free(expr_argv);
+            find_root_list_free(&root_list);
             return 1;
         }
     } else {
@@ -1927,6 +2043,7 @@ int bx_find_main(int argc, char **argv) {
 
     if (!expr) {
         free(expr_argv);
+        find_root_list_free(&root_list);
         return 1;
     }
 
@@ -1936,6 +2053,7 @@ int bx_find_main(int argc, char **argv) {
         if (!expr) {
             fprintf(stderr, "%s: out of memory\n", progname);
             free(expr_argv);
+            find_root_list_free(&root_list);
             return 1;
         }
     }
@@ -1968,6 +2086,7 @@ int bx_find_main(int argc, char **argv) {
         .follow_symlinks = opts.follow_symlinks,
         .follow_root_symlink = opts.follow_root_symlink,
         .post_order = opts.depth_first,
+        .stay_on_filesystem = opts.stay_on_filesystem,
         .stop = &stop,
         .suppress_eacces = false,
         .os_error_style = false,
@@ -1997,5 +2116,6 @@ int bx_find_main(int argc, char **argv) {
 
     find_expr_free(expr);
     free(expr_argv);
+    find_root_list_free(&root_list);
     return st.status;
 }

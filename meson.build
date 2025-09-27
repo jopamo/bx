@@ -163,6 +163,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/fd_ops.c',
+  'src/lib/id_parse.c',
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
   'src/lib/output.c',

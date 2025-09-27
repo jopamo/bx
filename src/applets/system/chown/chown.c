@@ -1,9 +1,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
-#include <grp.h>
 #include <inttypes.h>
-#include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +11,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
@@ -21,13 +20,6 @@ enum bx_chown_report_mode {
     BX_CHOWN_REPORT_NONE = 0,
     BX_CHOWN_REPORT_CHANGES,
     BX_CHOWN_REPORT_VERBOSE,
-};
-
-struct bx_chown_owner_group {
-    bool owner_set;
-    bool group_set;
-    uid_t owner;
-    gid_t group;
 };
 
 enum bx_chown_symlink_traversal {
@@ -46,12 +38,6 @@ enum {
     BX_CHOWN_OPT_PRESERVE_ROOT,
 };
 
-struct bx_chown_parsed_owner {
-    uid_t owner;
-    bool symbolic;
-    gid_t login_group;
-};
-
 struct bx_chown_options {
     const char* progname;
     bool recursive;
@@ -63,7 +49,7 @@ struct bx_chown_options {
     enum bx_chown_symlink_traversal symlink_traversal;
     const char* reference_path;
     bool from_filter_set;
-    struct bx_chown_owner_group from_owner_group;
+    struct bx_id_owner_group from_owner_group;
     bool show_help;
     bool show_version;
 };
@@ -73,8 +59,6 @@ struct bx_chown_dir_stack_entry {
     ino_t ino;
     const struct bx_chown_dir_stack_entry* next;
 };
-
-static bool bx_chown_parse_owner_group(const char* text, struct bx_chown_owner_group* parsed, struct bx_diag_ctx* diag);
 
 static const char* bx_chown_progname(const char* argv0) {
     if (argv0 == NULL || argv0[0] == '\0') {
@@ -179,7 +163,7 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
                 options->reference_path = optarg;
                 break;
             case BX_CHOWN_OPT_FROM:
-                if (!bx_chown_parse_owner_group(optarg, &options->from_owner_group, diag)) {
+                if (!bx_id_parse_owner_group(optarg, &options->from_owner_group, diag)) {
                     return false;
                 }
                 options->from_filter_set = true;
@@ -268,122 +252,7 @@ static bool bx_chown_emit_report(const struct bx_chown_options* options, const c
     return true;
 }
 
-static bool bx_chown_parse_id_numeric(const char* text, uintmax_t max_value, uintmax_t* value_out) {
-    if (text == NULL || text[0] == '\0' || text[0] == '-') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long long value = strtoull(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0') {
-        return false;
-    }
-    if ((uintmax_t)value > max_value) {
-        return false;
-    }
-
-    *value_out = (uintmax_t)value;
-    return true;
-}
-
-static bool bx_chown_parse_owner(const char* text, struct bx_chown_parsed_owner* owner_out, struct bx_diag_ctx* diag) {
-    uintmax_t numeric_id = 0;
-    if (bx_chown_parse_id_numeric(text, (uintmax_t)((uid_t)-1), &numeric_id)) {
-        owner_out->owner = (uid_t)numeric_id;
-        owner_out->symbolic = false;
-        owner_out->login_group = 0;
-        return true;
-    }
-
-    struct passwd* passwd_entry = getpwnam(text);
-    if (passwd_entry != NULL) {
-        owner_out->owner = passwd_entry->pw_uid;
-        owner_out->symbolic = true;
-        owner_out->login_group = passwd_entry->pw_gid;
-        return true;
-    }
-
-    bx_diag(diag, "invalid user '%s'", (text != NULL) ? text : "");
-    return false;
-}
-
-static bool bx_chown_parse_group(const char* text, gid_t* group_out, struct bx_diag_ctx* diag) {
-    uintmax_t numeric_id = 0;
-    if (bx_chown_parse_id_numeric(text, (uintmax_t)((gid_t)-1), &numeric_id)) {
-        *group_out = (gid_t)numeric_id;
-        return true;
-    }
-
-    struct group* group_entry = getgrnam(text);
-    if (group_entry != NULL) {
-        *group_out = group_entry->gr_gid;
-        return true;
-    }
-
-    bx_diag(diag, "invalid group '%s'", (text != NULL) ? text : "");
-    return false;
-}
-
-static bool bx_chown_parse_owner_group(const char* text, struct bx_chown_owner_group* parsed, struct bx_diag_ctx* diag) {
-    memset(parsed, 0, sizeof(*parsed));
-
-    if (text == NULL) {
-        bx_diag(diag, "missing operand");
-        return false;
-    }
-
-    char* spec = xstrdup(text);
-    char* separator = strchr(spec, ':');
-    if (separator == NULL) {
-        if (spec[0] != '\0') {
-            struct bx_chown_parsed_owner owner;
-            if (!bx_chown_parse_owner(spec, &owner, diag)) {
-                free(spec);
-                return false;
-            }
-            parsed->owner = owner.owner;
-            parsed->owner_set = true;
-        }
-
-        free(spec);
-        return true;
-    }
-
-    *separator = '\0';
-    const char* owner_text = spec;
-    const char* group_text = separator + 1;
-    bool owner_is_symbolic = false;
-    gid_t owner_login_group = 0;
-
-    if (owner_text[0] != '\0') {
-        struct bx_chown_parsed_owner owner;
-        if (!bx_chown_parse_owner(owner_text, &owner, diag)) {
-            free(spec);
-            return false;
-        }
-        parsed->owner = owner.owner;
-        parsed->owner_set = true;
-        owner_is_symbolic = owner.symbolic;
-        owner_login_group = owner.login_group;
-    }
-    if (group_text[0] != '\0') {
-        if (!bx_chown_parse_group(group_text, &parsed->group, diag)) {
-            free(spec);
-            return false;
-        }
-        parsed->group_set = true;
-    }
-    else if (owner_is_symbolic) {
-        parsed->group = owner_login_group;
-        parsed->group_set = true;
-    }
-
-    free(spec);
-    return true;
-}
-
-static bool bx_chown_parse_reference_owner_group(const char* reference_path, struct bx_chown_owner_group* parsed, struct bx_diag_ctx* diag) {
+static bool bx_chown_parse_reference_owner_group(const char* reference_path, struct bx_id_owner_group* parsed, struct bx_diag_ctx* diag) {
     struct stat st;
     if (stat(reference_path, &st) != 0) {
         bx_perror_path(diag, reference_path);
@@ -635,7 +504,7 @@ int bx_chown_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    struct bx_chown_owner_group owner_group;
+    struct bx_id_owner_group owner_group;
     int operand_count = argc - first_operand;
     int file_start = first_operand;
 
@@ -659,7 +528,7 @@ int bx_chown_main(int argc, char** argv) {
             return diag.exit_status;
         }
 
-        if (!bx_chown_parse_owner_group(argv[first_operand], &owner_group, &diag)) {
+        if (!bx_id_parse_owner_group(argv[first_operand], &owner_group, &diag)) {
             return diag.exit_status;
         }
 
