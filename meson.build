@@ -174,6 +174,7 @@ bx_lib_sources = [
   'src/lib/same_file.c',
   'src/lib/size_parse.c',
   'src/lib/stat_ops.c',
+  'src/lib/time_parse.c',
   'src/lib/update_policy.c',
   'src/lib/xreadwrite.c',
 ]

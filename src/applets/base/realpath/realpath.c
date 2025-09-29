@@ -26,11 +26,6 @@ enum bx_realpath_symlink_mode {
     BX_REALPATH_SYMLINK_NONE,
 };
 
-struct bx_realpath_components {
-    char** parts;
-    size_t count;
-};
-
 struct bx_realpath_options {
     const char* progname;
     enum bx_realpath_canonicalization_mode canonicalization_mode;
@@ -169,246 +164,6 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
     return true;
 }
 
-static void bx_realpath_components_push(struct bx_realpath_components* components, const char* part) {
-    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + 1u));
-    components->parts[components->count++] = xstrdup(part);
-}
-
-static void bx_realpath_components_pop(struct bx_realpath_components* components) {
-    if (components->count == 0) {
-        return;
-    }
-
-    free(components->parts[components->count - 1u]);
-    components->count--;
-}
-
-static void bx_realpath_components_free(struct bx_realpath_components* components) {
-    for (size_t i = 0; i < components->count; i++) {
-        free(components->parts[i]);
-    }
-
-    free(components->parts);
-    components->parts = NULL;
-    components->count = 0;
-}
-
-static void bx_realpath_components_clear(struct bx_realpath_components* components) {
-    bx_realpath_components_free(components);
-}
-
-static void bx_realpath_components_append_raw(struct bx_realpath_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
-
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        bx_realpath_components_push(components, token);
-    }
-
-    free(copy);
-}
-
-static void bx_realpath_components_insert_raw_path(struct bx_realpath_components* components, size_t index, const char* path) {
-    struct bx_realpath_components inserted = {0};
-
-    bx_realpath_components_append_raw(&inserted, path);
-    if (inserted.count == 0) {
-        return;
-    }
-
-    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + inserted.count));
-    memmove(&components->parts[index + inserted.count], &components->parts[index], sizeof(*components->parts) * (components->count - index));
-    memcpy(&components->parts[index], inserted.parts, sizeof(*components->parts) * inserted.count);
-    components->count += inserted.count;
-    free(inserted.parts);
-}
-
-static void bx_realpath_components_append_normalized(struct bx_realpath_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
-
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        if (strcmp(token, ".") == 0 || token[0] == '\0') {
-            continue;
-        }
-        if (strcmp(token, "..") == 0) {
-            bx_realpath_components_pop(components);
-            continue;
-        }
-
-        bx_realpath_components_push(components, token);
-    }
-
-    free(copy);
-}
-
-static void bx_realpath_components_append_normalized_part(struct bx_realpath_components* components, const char* part) {
-    if (strcmp(part, ".") == 0 || part[0] == '\0') {
-        return;
-    }
-    if (strcmp(part, "..") == 0) {
-        bx_realpath_components_pop(components);
-        return;
-    }
-
-    bx_realpath_components_push(components, part);
-}
-
-static char* bx_realpath_components_to_absolute_path(const struct bx_realpath_components* components, size_t count) {
-    if (count == 0) {
-        return xstrdup("/");
-    }
-
-    size_t len = 2u;
-    for (size_t i = 0; i < count; i++) {
-        len += strlen(components->parts[i]);
-        if (i + 1u < count) {
-            len++;
-        }
-    }
-
-    char* path = xmalloc(len);
-    size_t pos = 0;
-    path[pos++] = '/';
-
-    for (size_t i = 0; i < count; i++) {
-        size_t part_len = strlen(components->parts[i]);
-        memcpy(path + pos, components->parts[i], part_len);
-        pos += part_len;
-        if (i + 1u < count) {
-            path[pos++] = '/';
-        }
-    }
-
-    path[pos] = '\0';
-    return path;
-}
-
-static char* bx_realpath_getcwd_dup(void) {
-    size_t size = 128u;
-    char* cwd = xmalloc(size);
-
-    while (getcwd(cwd, size) == NULL) {
-        if (errno != ERANGE) {
-            free(cwd);
-            return NULL;
-        }
-
-        size *= 2u;
-        cwd = xrealloc(cwd, size);
-    }
-
-    return cwd;
-}
-
-static char* bx_realpath_make_absolute_input(const char* path) {
-    if (path[0] == '/') {
-        return xstrdup(path);
-    }
-
-    char* cwd = bx_realpath_getcwd_dup();
-    if (cwd == NULL) {
-        return NULL;
-    }
-
-    char* absolute = bx_path_join(cwd, path);
-    free(cwd);
-    return absolute;
-}
-
-static char* bx_realpath_normalize_absolute_lexical_dup(const char* absolute_path) {
-    struct bx_realpath_components components = {0};
-    char* normalized;
-
-    bx_realpath_components_append_normalized(&components, absolute_path);
-    normalized = bx_realpath_components_to_absolute_path(&components, components.count);
-    bx_realpath_components_free(&components);
-    return normalized;
-}
-
-static bool bx_realpath_path_is_within(const char* path, const char* base) {
-    size_t base_len;
-
-    if (path == NULL || base == NULL || path[0] != '/' || base[0] != '/') {
-        return false;
-    }
-
-    if (strcmp(base, "/") == 0) {
-        return true;
-    }
-
-    base_len = strlen(base);
-    if (strncmp(path, base, base_len) != 0) {
-        return false;
-    }
-    return path[base_len] == '\0' || path[base_len] == '/';
-}
-
-static char* bx_realpath_relative_path_between(const char* from_abs, const char* to_abs) {
-    struct bx_realpath_components from_components = {0};
-    struct bx_realpath_components to_components = {0};
-    size_t common = 0;
-    size_t up_count;
-    size_t down_count;
-    size_t segment_count;
-    size_t len;
-    size_t pos = 0;
-    char* relative;
-
-    if (from_abs == NULL || to_abs == NULL || from_abs[0] != '/' || to_abs[0] != '/') {
-        errno = EINVAL;
-        return NULL;
-    }
-
-    bx_realpath_components_append_normalized(&from_components, from_abs);
-    bx_realpath_components_append_normalized(&to_components, to_abs);
-
-    while (common < from_components.count && common < to_components.count && strcmp(from_components.parts[common], to_components.parts[common]) == 0) {
-        common++;
-    }
-
-    up_count = from_components.count - common;
-    down_count = to_components.count - common;
-    segment_count = up_count + down_count;
-    if (segment_count == 0) {
-        relative = xstrdup(".");
-        bx_realpath_components_free(&from_components);
-        bx_realpath_components_free(&to_components);
-        return relative;
-    }
-
-    len = 1u;
-    if (segment_count > 1u) {
-        len += segment_count - 1u;
-    }
-    len += up_count * 2u;
-    for (size_t i = common; i < to_components.count; i++) {
-        len += strlen(to_components.parts[i]);
-    }
-
-    relative = xmalloc(len);
-    for (size_t i = 0; i < up_count; i++) {
-        if (pos > 0) {
-            relative[pos++] = '/';
-        }
-        relative[pos++] = '.';
-        relative[pos++] = '.';
-    }
-    for (size_t i = common; i < to_components.count; i++) {
-        size_t part_len = strlen(to_components.parts[i]);
-        if (pos > 0) {
-            relative[pos++] = '/';
-        }
-        memcpy(relative + pos, to_components.parts[i], part_len);
-        pos += part_len;
-    }
-    relative[pos] = '\0';
-
-    bx_realpath_components_free(&from_components);
-    bx_realpath_components_free(&to_components);
-    return relative;
-}
-
 static char* bx_realpath_readlink_dup(const char* path) {
     size_t size = 128u;
 
@@ -430,16 +185,16 @@ static char* bx_realpath_readlink_dup(const char* path) {
 }
 
 static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_realpath_canonicalization_mode canonicalization_mode) {
-    char* absolute_input = bx_realpath_make_absolute_input(path);
-    struct bx_realpath_components pending = {0};
-    struct bx_realpath_components resolved_components = {0};
+    char* absolute_input = bx_path_make_absolute_dup(path);
+    struct bx_path_components pending = {0};
+    struct bx_path_components resolved_components = {0};
     char* resolved = NULL;
 
     if (absolute_input == NULL) {
         return NULL;
     }
 
-    bx_realpath_components_append_raw(&pending, absolute_input);
+    bx_path_components_append_raw(&pending, absolute_input);
     free(absolute_input);
 
     for (size_t i = 0; i < pending.count; i++) {
@@ -451,11 +206,11 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
             continue;
         }
         if (strcmp(part, "..") == 0) {
-            bx_realpath_components_pop(&resolved_components);
+            bx_path_components_pop(&resolved_components);
             continue;
         }
 
-        current_path = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+        current_path = bx_path_components_to_absolute_path(&resolved_components, resolved_components.count);
         char* next_path = bx_path_join(current_path, part);
         free(current_path);
 
@@ -463,8 +218,8 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
             int saved_errno = errno;
             if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING) {
                 free(next_path);
-                bx_realpath_components_free(&pending);
-                bx_realpath_components_free(&resolved_components);
+                bx_path_components_free(&pending);
+                bx_path_components_free(&resolved_components);
                 errno = saved_errno;
                 return NULL;
             }
@@ -472,25 +227,25 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
             if (saved_errno == ENOENT || (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING && saved_errno == ENOTDIR)) {
                 if (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST && i + 1u < pending.count) {
                     free(next_path);
-                    bx_realpath_components_free(&pending);
-                    bx_realpath_components_free(&resolved_components);
+                    bx_path_components_free(&pending);
+                    bx_path_components_free(&resolved_components);
                     errno = saved_errno;
                     return NULL;
                 }
-                bx_realpath_components_push(&resolved_components, part);
+                bx_path_components_push_dup(&resolved_components, part);
                 for (size_t j = i + 1u; j < pending.count; j++) {
-                    bx_realpath_components_append_normalized_part(&resolved_components, pending.parts[j]);
+                    bx_path_components_append_normalized_part(&resolved_components, pending.parts[j]);
                 }
-                resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
+                resolved = bx_path_components_to_absolute_path(&resolved_components, resolved_components.count);
                 free(next_path);
-                bx_realpath_components_free(&pending);
-                bx_realpath_components_free(&resolved_components);
+                bx_path_components_free(&pending);
+                bx_path_components_free(&resolved_components);
                 return resolved;
             }
 
             free(next_path);
-            bx_realpath_components_free(&pending);
-            bx_realpath_components_free(&resolved_components);
+            bx_path_components_free(&pending);
+            bx_path_components_free(&resolved_components);
             errno = saved_errno;
             return NULL;
         }
@@ -500,8 +255,8 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
             free(next_path);
             if (target == NULL) {
                 int saved_errno = errno;
-                bx_realpath_components_free(&pending);
-                bx_realpath_components_free(&resolved_components);
+                bx_path_components_free(&pending);
+                bx_path_components_free(&resolved_components);
                 errno = saved_errno;
                 return NULL;
             }
@@ -510,41 +265,41 @@ static char* bx_realpath_canonicalize_path_physical(const char* path, enum bx_re
             memmove(&pending.parts[i], &pending.parts[i + 1u], sizeof(*pending.parts) * (pending.count - (i + 1u)));
             pending.count--;
             if (target[0] == '/') {
-                bx_realpath_components_clear(&resolved_components);
+                bx_path_components_free(&resolved_components);
             }
-            bx_realpath_components_insert_raw_path(&pending, i, target);
+            bx_path_components_insert_raw_path(&pending, i, target);
             free(target);
             i--;
             continue;
         }
 
-        bx_realpath_components_push(&resolved_components, part);
+        bx_path_components_push_dup(&resolved_components, part);
         free(next_path);
         if (i + 1u < pending.count && !S_ISDIR(st.st_mode)) {
             if (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING) {
                 for (size_t j = i + 1u; j < pending.count; j++) {
-                    bx_realpath_components_append_normalized_part(&resolved_components, pending.parts[j]);
+                    bx_path_components_append_normalized_part(&resolved_components, pending.parts[j]);
                 }
-                resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
-                bx_realpath_components_free(&pending);
-                bx_realpath_components_free(&resolved_components);
+                resolved = bx_path_components_to_absolute_path(&resolved_components, resolved_components.count);
+                bx_path_components_free(&pending);
+                bx_path_components_free(&resolved_components);
                 return resolved;
             }
-            bx_realpath_components_free(&pending);
-            bx_realpath_components_free(&resolved_components);
+            bx_path_components_free(&pending);
+            bx_path_components_free(&resolved_components);
             errno = ENOTDIR;
             return NULL;
         }
     }
 
-    resolved = bx_realpath_components_to_absolute_path(&resolved_components, resolved_components.count);
-    bx_realpath_components_free(&pending);
-    bx_realpath_components_free(&resolved_components);
+    resolved = bx_path_components_to_absolute_path(&resolved_components, resolved_components.count);
+    bx_path_components_free(&pending);
+    bx_path_components_free(&resolved_components);
     return resolved;
 }
 
 static bool bx_realpath_validate_no_symlinks_path(const char* normalized_path, enum bx_realpath_canonicalization_mode canonicalization_mode) {
-    struct bx_realpath_components components = {0};
+    struct bx_path_components components = {0};
     char* current = xstrdup("/");
 
     if (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING) {
@@ -552,7 +307,7 @@ static bool bx_realpath_validate_no_symlinks_path(const char* normalized_path, e
         return true;
     }
 
-    bx_realpath_components_append_raw(&components, normalized_path);
+    bx_path_components_append_raw(&components, normalized_path);
 
     for (size_t i = 0; i < components.count; i++) {
         char* next = bx_path_join(current, components.parts[i]);
@@ -572,34 +327,34 @@ static bool bx_realpath_validate_no_symlinks_path(const char* normalized_path, e
                 break;
             }
 
-            bx_realpath_components_free(&components);
+            bx_path_components_free(&components);
             free(current);
             errno = saved_errno;
             return false;
         }
 
         if (!is_last && !S_ISDIR(st.st_mode)) {
-            bx_realpath_components_free(&components);
+            bx_path_components_free(&components);
             free(current);
             errno = ENOTDIR;
             return false;
         }
     }
 
-    bx_realpath_components_free(&components);
+    bx_path_components_free(&components);
     free(current);
     return true;
 }
 
 static char* bx_realpath_canonicalize_path_no_symlinks(const char* path, enum bx_realpath_canonicalization_mode canonicalization_mode) {
-    char* absolute_input = bx_realpath_make_absolute_input(path);
+    char* absolute_input = bx_path_make_absolute_dup(path);
     char* normalized;
 
     if (absolute_input == NULL) {
         return NULL;
     }
 
-    normalized = bx_realpath_normalize_absolute_lexical_dup(absolute_input);
+    normalized = bx_path_normalize_absolute_lexical_dup(absolute_input);
     free(absolute_input);
     if (normalized == NULL) {
         return NULL;
@@ -614,14 +369,14 @@ static char* bx_realpath_canonicalize_path_no_symlinks(const char* path, enum bx
 }
 
 static bool bx_realpath_validate_logical_input_path(const char* absolute_input, enum bx_realpath_canonicalization_mode canonicalization_mode) {
-    struct bx_realpath_components input_components = {0};
-    struct bx_realpath_components logical_components = {0};
+    struct bx_path_components input_components = {0};
+    struct bx_path_components logical_components = {0};
 
     if (canonicalization_mode == BX_REALPATH_CANONICALIZE_MISSING) {
         return true;
     }
 
-    bx_realpath_components_append_raw(&input_components, absolute_input);
+    bx_path_components_append_raw(&input_components, absolute_input);
 
     for (size_t i = 0; i < input_components.count; i++) {
         const char* part = input_components.parts[i];
@@ -633,30 +388,30 @@ static bool bx_realpath_validate_logical_input_path(const char* absolute_input, 
             continue;
         }
         if (strcmp(part, "..") == 0) {
-            bx_realpath_components_pop(&logical_components);
+            bx_path_components_pop(&logical_components);
             continue;
         }
 
-        bx_realpath_components_push(&logical_components, part);
+        bx_path_components_push_dup(&logical_components, part);
         must_check = (canonicalization_mode == BX_REALPATH_CANONICALIZE_EXISTING) || (i + 1u < input_components.count);
         if (!must_check) {
             continue;
         }
 
-        current_path = bx_realpath_components_to_absolute_path(&logical_components, logical_components.count);
+        current_path = bx_path_components_to_absolute_path(&logical_components, logical_components.count);
         if (stat(current_path, &st) != 0) {
             int saved_errno = errno;
             free(current_path);
-            bx_realpath_components_free(&input_components);
-            bx_realpath_components_free(&logical_components);
+            bx_path_components_free(&input_components);
+            bx_path_components_free(&logical_components);
             errno = saved_errno;
             return false;
         }
         free(current_path);
     }
 
-    bx_realpath_components_free(&input_components);
-    bx_realpath_components_free(&logical_components);
+    bx_path_components_free(&input_components);
+    bx_path_components_free(&logical_components);
     return true;
 }
 
@@ -674,7 +429,7 @@ static char* bx_realpath_canonicalize_path(const char* path, enum bx_realpath_ca
         case BX_REALPATH_SYMLINK_PHYSICAL:
             return bx_realpath_canonicalize_path_physical(path, canonicalization_mode);
         case BX_REALPATH_SYMLINK_LOGICAL:
-            absolute_input = bx_realpath_make_absolute_input(path);
+            absolute_input = bx_path_make_absolute_dup(path);
             if (absolute_input == NULL) {
                 return NULL;
             }
@@ -686,7 +441,7 @@ static char* bx_realpath_canonicalize_path(const char* path, enum bx_realpath_ca
                 return NULL;
             }
 
-            normalized_input = bx_realpath_normalize_absolute_lexical_dup(absolute_input);
+            normalized_input = bx_path_normalize_absolute_lexical_dup(absolute_input);
             free(absolute_input);
             if (normalized_input == NULL) {
                 return NULL;
@@ -708,11 +463,11 @@ static char* bx_realpath_format_output_path(const char* resolved_path, const cha
         return xstrdup(resolved_path);
     }
 
-    if (relative_base != NULL && !bx_realpath_path_is_within(resolved_path, relative_base)) {
+    if (relative_base != NULL && !bx_path_is_within(resolved_path, relative_base)) {
         return xstrdup(resolved_path);
     }
 
-    return bx_realpath_relative_path_between(relative_to, resolved_path);
+    return bx_path_relative_path_between(relative_to, resolved_path);
 }
 
 static bool bx_realpath_emit_path(const char* path, bool zero, struct bx_diag_ctx* diag) {

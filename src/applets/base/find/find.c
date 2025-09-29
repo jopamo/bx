@@ -1,13 +1,18 @@
 #define _GNU_SOURCE
+#include <grp.h>
+#include <inttypes.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <limits.h>
+#include <pwd.h>
+#include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -33,8 +38,10 @@ enum find_expr_kind {
     FIND_EXPR_FALSE,
     FIND_EXPR_NAME,
     FIND_EXPR_PATH,
+    FIND_EXPR_REGEX,
     FIND_EXPR_LNAME,
     FIND_EXPR_TYPE,
+    FIND_EXPR_XTYPE,
     FIND_EXPR_INUM,
     FIND_EXPR_LINKS,
     FIND_EXPR_UID,
@@ -61,6 +68,10 @@ enum find_expr_kind {
     FIND_EXPR_EXECUTABLE,
     FIND_EXPR_PRINT,
     FIND_EXPR_PRINT0,
+    FIND_EXPR_PRINTF,
+    FIND_EXPR_LS,
+    FIND_EXPR_FPRINTF,
+    FIND_EXPR_FLS,
     FIND_EXPR_FPRINT,
     FIND_EXPR_FPRINT0,
     FIND_EXPR_DELETE,
@@ -95,6 +106,7 @@ struct find_expr {
     struct find_expr *left;
     struct find_expr *right;
     const char *text;
+    const char *text2;
     char type_filter;
     bool ignore_case;
     long long number;
@@ -106,6 +118,8 @@ struct find_expr {
     char **exec_argv;
     int exec_argc;
     struct find_exec_items exec_items;
+    regex_t regex;
+    bool regex_compiled;
 };
 
 struct find_parser {
@@ -160,7 +174,11 @@ static void find_print_help(const char *progname) {
     puts("  -xdev         same as -mount");
     puts("  -name PATTERN match basename against PATTERN");
     puts("  -lname PATTERN match symlink target against PATTERN");
+    puts("  -regex PATTERN match whole path against PATTERN");
+    puts("  -iregex PATTERN match whole path against PATTERN, case-insensitively");
+    puts("  -regextype TYPE  select regex syntax (currently: posix-extended)");
     puts("  -type [fdl]   match file type");
+    puts("  -xtype [fdl]  match the alternate type across symlink dereference");
     puts("  -inum N       match inode number");
     puts("  -links N      match link count");
     puts("  -uid N        match user id");
@@ -185,6 +203,10 @@ static void find_print_help(const char *progname) {
     puts("  -false        always false");
     puts("  -print        print path");
     puts("  -print0       print path followed by NUL");
+    puts("  -printf FORMAT  write formatted output");
+    puts("  -ls           list entry in a GNU find -ls style format");
+    puts("  -fprintf FILE FORMAT  write formatted output to FILE");
+    puts("  -fls FILE     write -ls style output to FILE");
     puts("  -fprint FILE  write path to FILE");
     puts("  -fprint0 FILE write path followed by NUL to FILE");
     puts("  -delete       delete matched entries");
@@ -505,6 +527,46 @@ static bool find_parse_newer_ref(const char *progname, const char *path,
     return true;
 }
 
+static bool find_compile_regex(const char *progname, const char *optname,
+                               const char *pattern, bool ignore_case,
+                               regex_t *out) {
+    int flags = REG_EXTENDED;
+#ifdef REG_ICASE
+    if (ignore_case)
+        flags |= REG_ICASE;
+#else
+    (void)ignore_case;
+#endif
+    int rc = regcomp(out, pattern, flags);
+    if (rc == 0)
+        return true;
+
+    char errbuf[256];
+    regerror(rc, out, errbuf, sizeof(errbuf));
+    fprintf(stderr, "%s: invalid argument to %s: %s (%s)\n",
+            progname, optname, pattern ? pattern : "(null)", errbuf);
+    return false;
+}
+
+static bool find_match_regex(regex_t *regex, const char *text) {
+    regmatch_t match;
+    if (!regex || !text)
+        return false;
+    if (regexec(regex, text, 1, &match, 0) != 0)
+        return false;
+    return match.rm_so == 0 && (size_t)match.rm_eo == strlen(text);
+}
+
+static bool find_parse_regextype(const char *progname, const char *text) {
+    if (text && strcmp(text, "posix-extended") == 0) {
+        return true;
+    }
+
+    fprintf(stderr, "%s: unsupported argument to -regextype: %s\n",
+            progname, text ? text : "(null)");
+    return false;
+}
+
 static int find_timespec_cmp(struct timespec lhs, struct timespec rhs) {
     if (lhs.tv_sec != rhs.tv_sec)
         return lhs.tv_sec < rhs.tv_sec ? -1 : 1;
@@ -568,6 +630,43 @@ static bool find_match_link_target(struct walk_entry *entry, const char *pattern
     return find_match_pattern(pattern, buf, ignore_case);
 }
 
+static bool find_stat_matches_type(const struct stat *st, char type_filter) {
+    switch (type_filter) {
+    case 'f':
+        return S_ISREG(st->st_mode);
+    case 'd':
+        return S_ISDIR(st->st_mode);
+    case 'l':
+        return S_ISLNK(st->st_mode);
+    case 'p':
+        return S_ISFIFO(st->st_mode);
+    case 's':
+        return S_ISSOCK(st->st_mode);
+    case 'b':
+        return S_ISBLK(st->st_mode);
+    case 'c':
+        return S_ISCHR(st->st_mode);
+    default:
+        return false;
+    }
+}
+
+static bool find_match_xtype(struct walk_entry *entry, char type_filter) {
+    struct stat lst;
+    if (lstat(entry->path, &lst) != 0)
+        return false;
+    if (!S_ISLNK(lst.st_mode))
+        return find_stat_matches_type(&lst, type_filter);
+
+    struct stat st;
+    if (stat(entry->path, &st) != 0)
+        return type_filter == 'l';
+
+    if (entry->follow_metadata)
+        return type_filter == 'l';
+    return find_stat_matches_type(&st, type_filter);
+}
+
 static bool find_write_path_file(const char *progname, const char *filename, const char *path, char terminator) {
     FILE *fp = fopen(filename, "ab");
     if (!fp) {
@@ -580,6 +679,242 @@ static bool find_write_path_file(const char *progname, const char *filename, con
         find_report_error(progname, filename, errno ? errno : EIO);
     fclose(fp);
     return ok;
+}
+
+static bool find_write_stream_bytes(FILE *fp, const void *data, size_t len) {
+    return len == 0 || fwrite(data, 1, len, fp) == len;
+}
+
+static bool find_write_stream_char(FILE *fp, char ch) {
+    return fputc((unsigned char)ch, fp) != EOF;
+}
+
+static bool find_write_printf_format(FILE *fp, const char *format, const struct walk_entry *entry) {
+    if (!format || !entry)
+        return false;
+
+    for (size_t i = 0; format[i] != '\0'; i++) {
+        if (format[i] == '\\') {
+            i++;
+            if (format[i] == '\0')
+                return find_write_stream_char(fp, '\\');
+            switch (format[i]) {
+            case '\\':
+                if (!find_write_stream_char(fp, '\\'))
+                    return false;
+                break;
+            case '0':
+                if (!find_write_stream_char(fp, '\0'))
+                    return false;
+                break;
+            case 'a':
+                if (!find_write_stream_char(fp, '\a'))
+                    return false;
+                break;
+            case 'b':
+                if (!find_write_stream_char(fp, '\b'))
+                    return false;
+                break;
+            case 'f':
+                if (!find_write_stream_char(fp, '\f'))
+                    return false;
+                break;
+            case 'n':
+                if (!find_write_stream_char(fp, '\n'))
+                    return false;
+                break;
+            case 'r':
+                if (!find_write_stream_char(fp, '\r'))
+                    return false;
+                break;
+            case 't':
+                if (!find_write_stream_char(fp, '\t'))
+                    return false;
+                break;
+            case 'v':
+                if (!find_write_stream_char(fp, '\v'))
+                    return false;
+                break;
+            case 'c':
+                return true;
+            default:
+                if (!find_write_stream_char(fp, '\\') ||
+                    !find_write_stream_char(fp, format[i]))
+                    return false;
+                break;
+            }
+            continue;
+        }
+
+        if (format[i] == '%') {
+            i++;
+            if (format[i] == '\0')
+                return find_write_stream_char(fp, '%');
+            switch (format[i]) {
+            case '%':
+                if (!find_write_stream_char(fp, '%'))
+                    return false;
+                break;
+            case 'p':
+                if (!find_write_stream_bytes(fp, entry->path, strlen(entry->path)))
+                    return false;
+                break;
+            default:
+                if (!find_write_stream_char(fp, '%') ||
+                    !find_write_stream_char(fp, format[i]))
+                    return false;
+                break;
+            }
+            continue;
+        }
+
+        if (!find_write_stream_char(fp, format[i]))
+            return false;
+    }
+
+    return true;
+}
+
+static char find_mode_type_char(mode_t mode) {
+    if (S_ISREG(mode))
+        return '-';
+    if (S_ISDIR(mode))
+        return 'd';
+    if (S_ISLNK(mode))
+        return 'l';
+    if (S_ISCHR(mode))
+        return 'c';
+    if (S_ISBLK(mode))
+        return 'b';
+    if (S_ISFIFO(mode))
+        return 'p';
+#ifdef S_ISSOCK
+    if (S_ISSOCK(mode))
+        return 's';
+#endif
+    return '?';
+}
+
+static void find_mode_to_string(mode_t mode, char out[11]) {
+    out[0] = find_mode_type_char(mode);
+    out[1] = (mode & S_IRUSR) ? 'r' : '-';
+    out[2] = (mode & S_IWUSR) ? 'w' : '-';
+    out[3] = (mode & S_IXUSR) ? 'x' : '-';
+    out[4] = (mode & S_IRGRP) ? 'r' : '-';
+    out[5] = (mode & S_IWGRP) ? 'w' : '-';
+    out[6] = (mode & S_IXGRP) ? 'x' : '-';
+    out[7] = (mode & S_IROTH) ? 'r' : '-';
+    out[8] = (mode & S_IWOTH) ? 'w' : '-';
+    out[9] = (mode & S_IXOTH) ? 'x' : '-';
+
+    if (mode & S_ISUID)
+        out[3] = (mode & S_IXUSR) ? 's' : 'S';
+    if (mode & S_ISGID)
+        out[6] = (mode & S_IXGRP) ? 's' : 'S';
+#ifdef S_ISVTX
+    if (mode & S_ISVTX)
+        out[9] = (mode & S_IXOTH) ? 't' : 'T';
+#endif
+    out[10] = '\0';
+}
+
+static const char *find_user_name(uid_t uid, char numeric_buffer[32]) {
+    struct passwd *pw = getpwuid(uid);
+    if (pw && pw->pw_name && pw->pw_name[0] != '\0')
+        return pw->pw_name;
+    snprintf(numeric_buffer, 32, "%" PRIuMAX, (uintmax_t)uid);
+    return numeric_buffer;
+}
+
+static const char *find_group_name(gid_t gid, char numeric_buffer[32]) {
+    struct group *gr = getgrgid(gid);
+    if (gr && gr->gr_name && gr->gr_name[0] != '\0')
+        return gr->gr_name;
+    snprintf(numeric_buffer, 32, "%" PRIuMAX, (uintmax_t)gid);
+    return numeric_buffer;
+}
+
+static void find_format_timestamp(time_t timestamp, char buffer[32]) {
+    time_t now = time(NULL);
+    if (now == (time_t)-1)
+        now = timestamp;
+
+    struct tm tm_value;
+    if (!localtime_r(&timestamp, &tm_value)) {
+        snprintf(buffer, 32, "??? ?? ??:??");
+        return;
+    }
+
+    double delta = difftime(now, timestamp);
+    if (delta < 0.0)
+        delta = -delta;
+
+    const char *fmt = (delta > (365.0 / 2.0) * 24.0 * 60.0 * 60.0 ||
+                       timestamp > now + 3600)
+        ? "%b %e  %Y"
+        : "%b %e %H:%M";
+    if (strftime(buffer, 32, fmt, &tm_value) == 0)
+        snprintf(buffer, 32, "??? ?? ??:??");
+}
+
+static bool find_write_ls_entry(FILE *fp, const struct walk_entry *entry) {
+    if (!fp || !entry)
+        return false;
+
+    struct stat lst;
+    struct stat st;
+    bool have_lstat = lstat(entry->path, &lst) == 0;
+    bool have_stat = entry->follow_metadata && stat(entry->path, &st) == 0;
+    const struct stat *display = NULL;
+    if (have_stat)
+        display = &st;
+    else if (have_lstat)
+        display = &lst;
+    else
+        return false;
+
+    char mode[11];
+    char user_numeric[32];
+    char group_numeric[32];
+    char timestamp[32];
+    find_mode_to_string(display->st_mode, mode);
+    const char *user_name = find_user_name(display->st_uid, user_numeric);
+    const char *group_name = find_group_name(display->st_gid, group_numeric);
+    find_format_timestamp(display->st_mtime, timestamp);
+
+    uintmax_t blocks = 0;
+    if (display->st_blocks > 0)
+        blocks = (uintmax_t)display->st_blocks / 2u;
+
+    if (fprintf(fp, "%10" PRIuMAX " %6" PRIuMAX " %s %3" PRIuMAX " %-8s %-8s ",
+                (uintmax_t)display->st_ino, blocks, mode,
+                (uintmax_t)display->st_nlink, user_name, group_name) < 0) {
+        return false;
+    }
+
+    if (S_ISCHR(display->st_mode) || S_ISBLK(display->st_mode)) {
+        if (fprintf(fp, "%3" PRIuMAX ", %3" PRIuMAX " %s %s",
+                    (uintmax_t)major(display->st_rdev),
+                    (uintmax_t)minor(display->st_rdev),
+                    timestamp, entry->path) < 0) {
+            return false;
+        }
+    } else if (fprintf(fp, "%8jd %s %s",
+                       (intmax_t)display->st_size, timestamp, entry->path) < 0) {
+        return false;
+    }
+
+    if (have_lstat && S_ISLNK(lst.st_mode) && (!entry->follow_metadata || !have_stat)) {
+        char link_target[PATH_MAX + 1];
+        ssize_t len = readlink(entry->path, link_target, PATH_MAX);
+        if (len >= 0) {
+            link_target[len] = '\0';
+            if (fprintf(fp, " -> %s", link_target) < 0)
+                return false;
+        }
+    }
+
+    return fputc('\n', fp) != EOF;
 }
 
 static struct find_expr *find_expr_new(enum find_expr_kind kind) {
@@ -620,6 +955,8 @@ static void find_expr_free(struct find_expr *expr) {
         return;
     find_expr_free(expr->left);
     find_expr_free(expr->right);
+    if (expr->regex_compiled)
+        regfree(&expr->regex);
     free(expr->exec_argv);
     find_exec_items_free(&expr->exec_items);
     free(expr);
@@ -724,6 +1061,32 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
             expr->text = parser->argv[parser->pos++];
             expr->ignore_case = strcmp(arg, "-iname") == 0;
         }
+    } else if (strcmp(arg, "-regex") == 0 || strcmp(arg, "-iregex") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_REGEX);
+        if (expr) {
+            expr->text = parser->argv[parser->pos++];
+            expr->ignore_case = strcmp(arg, "-iregex") == 0;
+            if (!find_compile_regex(parser->progname, arg, expr->text,
+                                    expr->ignore_case, &expr->regex)) {
+                find_expr_free(expr);
+                return NULL;
+            }
+            expr->regex_compiled = true;
+        }
+    } else if (strcmp(arg, "-regextype") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-regextype'\n", parser->progname);
+            return NULL;
+        }
+        if (!find_parse_regextype(parser->progname, parser->argv[parser->pos])) {
+            return NULL;
+        }
+        parser->pos++;
+        expr = find_expr_new(FIND_EXPR_TRUE);
     } else if (strcmp(arg, "-path") == 0 || strcmp(arg, "-wholename") == 0 || strcmp(arg, "-iwholename") == 0) {
         if (parser->pos >= parser->argc) {
             fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
@@ -756,6 +1119,20 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
             return NULL;
         }
         expr = find_expr_new(FIND_EXPR_TYPE);
+        if (expr)
+            expr->type_filter = type_arg[0];
+    } else if (strcmp(arg, "-xtype") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-xtype'\n", parser->progname);
+            return NULL;
+        }
+        const char *type_arg = parser->argv[parser->pos++];
+        if (type_arg[0] == '\0' || type_arg[1] != '\0' ||
+            !bx_walk_type_filter_is_valid(type_arg[0], false)) {
+            fprintf(stderr, "%s: unknown argument to -xtype: %s\n", parser->progname, type_arg);
+            return NULL;
+        }
+        expr = find_expr_new(FIND_EXPR_XTYPE);
         if (expr)
             expr->type_filter = type_arg[0];
     } else if (strcmp(arg, "-inum") == 0) {
@@ -907,6 +1284,38 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
     } else if (strcmp(arg, "-print0") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_PRINT0);
+    } else if (strcmp(arg, "-printf") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-printf'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_PRINTF);
+        if (expr)
+            expr->text = parser->argv[parser->pos++];
+    } else if (strcmp(arg, "-ls") == 0) {
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_LS);
+    } else if (strcmp(arg, "-fprintf") == 0) {
+        if (parser->pos + 1 >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-fprintf'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_FPRINTF);
+        if (expr) {
+            expr->text = parser->argv[parser->pos++];
+            expr->text2 = parser->argv[parser->pos++];
+        }
+    } else if (strcmp(arg, "-fls") == 0) {
+        if (parser->pos >= parser->argc) {
+            fprintf(stderr, "%s: missing argument to `-fls'\n", parser->progname);
+            return NULL;
+        }
+        parser->explicit_action = true;
+        expr = find_expr_new(FIND_EXPR_FLS);
+        if (expr)
+            expr->text = parser->argv[parser->pos++];
     } else if (strcmp(arg, "-fprint") == 0 || strcmp(arg, "-fprint0") == 0) {
         if (parser->pos >= parser->argc) {
             fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname, arg);
@@ -1209,12 +1618,16 @@ static bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
         return false;
     case FIND_EXPR_NAME:
         return find_match_pattern(expr->text, find_basename(entry->path), expr->ignore_case);
+    case FIND_EXPR_REGEX:
+        return find_match_regex(&expr->regex, entry->path);
     case FIND_EXPR_PATH:
         return find_match_pattern(expr->text, entry->path, expr->ignore_case);
     case FIND_EXPR_LNAME:
         return find_match_link_target(entry, expr->text, expr->ignore_case);
     case FIND_EXPR_TYPE:
         return bx_walk_entry_matches_type(entry, expr->type_filter);
+    case FIND_EXPR_XTYPE:
+        return find_match_xtype(entry, expr->type_filter);
     case FIND_EXPR_INUM:
         if (!walk_entry_load_metadata(entry))
             return false;
@@ -1309,6 +1722,66 @@ static bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
     case FIND_EXPR_PRINT0:
         printf("%s%c", entry->path, '\0');
         return true;
+    case FIND_EXPR_PRINTF:
+        if (!find_write_printf_format(stdout, expr->text, entry)) {
+            find_report_error(st->progname, "stdout", errno ? errno : EIO);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    case FIND_EXPR_LS:
+        if (!find_write_ls_entry(stdout, entry)) {
+            find_report_error(st->progname, entry->path, errno ? errno : EIO);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    case FIND_EXPR_FPRINTF: {
+        FILE *fp = fopen(expr->text, "ab");
+        if (!fp) {
+            find_report_error(st->progname, expr->text, errno);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        bool ok = find_write_printf_format(fp, expr->text2, entry);
+        if (!ok)
+            find_report_error(st->progname, expr->text, errno ? errno : EIO);
+        fclose(fp);
+        if (!ok) {
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    }
+    case FIND_EXPR_FLS: {
+        FILE *fp = fopen(expr->text, "ab");
+        if (!fp) {
+            find_report_error(st->progname, expr->text, errno);
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        bool ok = find_write_ls_entry(fp, entry);
+        if (!ok)
+            find_report_error(st->progname, expr->text, errno ? errno : EIO);
+        fclose(fp);
+        if (!ok) {
+            st->status = 1;
+            if (st->stop)
+                *st->stop = true;
+            return false;
+        }
+        return true;
+    }
     case FIND_EXPR_FPRINT:
         if (!find_write_path_file(st->progname, expr->text, entry->path, '\n')) {
             st->status = 1;
@@ -1979,9 +2452,12 @@ int bx_find_main(int argc, char **argv) {
         } else {
             expr_argv[expr_argc++] = argv[i];
             if ((strcmp(arg, "-name") == 0 || strcmp(arg, "-iname") == 0 ||
+                 strcmp(arg, "-regex") == 0 || strcmp(arg, "-iregex") == 0 ||
+                 strcmp(arg, "-regextype") == 0 ||
                  strcmp(arg, "-path") == 0 || strcmp(arg, "-wholename") == 0 ||
                  strcmp(arg, "-iwholename") == 0 || strcmp(arg, "-lname") == 0 ||
                  strcmp(arg, "-ilname") == 0 || strcmp(arg, "-type") == 0 ||
+                 strcmp(arg, "-xtype") == 0 ||
                  strcmp(arg, "-inum") == 0 || strcmp(arg, "-links") == 0 ||
                  strcmp(arg, "-uid") == 0 || strcmp(arg, "-gid") == 0 ||
                  strcmp(arg, "-user") == 0 || strcmp(arg, "-group") == 0 ||
@@ -1992,8 +2468,13 @@ int bx_find_main(int argc, char **argv) {
                  strcmp(arg, "-used") == 0 ||
                  strcmp(arg, "-anewer") == 0 || strcmp(arg, "-cnewer") == 0 ||
                  strcmp(arg, "-newer") == 0 ||
+                 strcmp(arg, "-fprintf") == 0 ||
+                 strcmp(arg, "-fls") == 0 ||
+                 strcmp(arg, "-printf") == 0 ||
                  strcmp(arg, "-fprint") == 0 || strcmp(arg, "-fprint0") == 0) && i + 1 < argc) {
                 expr_argv[expr_argc++] = argv[++i];
+                if (strcmp(arg, "-fprintf") == 0 && i + 1 < argc)
+                    expr_argv[expr_argc++] = argv[++i];
             }
         }
     }

@@ -12,6 +12,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/time_parse.h"
 
 enum bx_touch_time_source {
     BX_TOUCH_TIME_SOURCE_NOW = 0,
@@ -74,85 +75,6 @@ static void bx_touch_set_explicit_times(struct bx_touch_options* options, const 
     options->explicit_mtime = *mtime;
 }
 
-static bool bx_touch_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out) {
-    int value = 0;
-    for (size_t i = 0; i < width; i++) {
-        unsigned char ch = (unsigned char)text[start + i];
-        if (!isdigit(ch)) {
-            return false;
-        }
-        value = (value * 10) + (int)(ch - '0');
-    }
-    *value_out = value;
-    return true;
-}
-
-static bool bx_touch_parse_optional_fraction(const char** text, long* nsec_out) {
-    const char* p = *text;
-    long nsec = 0;
-    size_t digits = 0;
-
-    if (*p != '.') {
-        *nsec_out = 0;
-        return true;
-    }
-
-    p++;
-    if (!isdigit((unsigned char)*p)) {
-        return false;
-    }
-
-    while (isdigit((unsigned char)*p)) {
-        if (digits < 9u) {
-            nsec = (nsec * 10L) + (long)(*p - '0');
-        }
-        digits++;
-        p++;
-    }
-
-    while (digits < 9u) {
-        nsec *= 10L;
-        digits++;
-    }
-
-    *text = p;
-    *nsec_out = nsec;
-    return true;
-}
-
-static bool bx_touch_build_local_timestamp(int year, int month, int day, int hour, int minute, int second, long nsec, struct timespec* timestamp_out) {
-    if (year < 0 || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60 || nsec < 0 || nsec > 999999999L) {
-        return false;
-    }
-
-    struct tm tm_value;
-    memset(&tm_value, 0, sizeof(tm_value));
-    tm_value.tm_year = year - 1900;
-    tm_value.tm_mon = month - 1;
-    tm_value.tm_mday = day;
-    tm_value.tm_hour = hour;
-    tm_value.tm_min = minute;
-    tm_value.tm_sec = second;
-    tm_value.tm_isdst = -1;
-
-    int expected_year = tm_value.tm_year;
-    int expected_mon = tm_value.tm_mon;
-    int expected_day = tm_value.tm_mday;
-    int expected_hour = tm_value.tm_hour;
-    int expected_minute = tm_value.tm_min;
-    int expected_second = tm_value.tm_sec;
-
-    time_t seconds = mktime(&tm_value);
-    if (tm_value.tm_year != expected_year || tm_value.tm_mon != expected_mon || tm_value.tm_mday != expected_day || tm_value.tm_hour != expected_hour || tm_value.tm_min != expected_minute ||
-        tm_value.tm_sec != expected_second) {
-        return false;
-    }
-
-    timestamp_out->tv_sec = seconds;
-    timestamp_out->tv_nsec = nsec;
-    return true;
-}
-
 static bool bx_touch_parse_date_literal(const char* value, struct timespec* timestamp_out) {
     const char* p = value;
     int year = 0;
@@ -172,7 +94,7 @@ static bool bx_touch_parse_date_literal(const char* value, struct timespec* time
         return false;
     }
 
-    if (!bx_touch_parse_fixed_width_int(p, 0, 4, &year) || p[4] != '-' || !bx_touch_parse_fixed_width_int(p, 5, 2, &month) || p[7] != '-' || !bx_touch_parse_fixed_width_int(p, 8, 2, &day)) {
+    if (!bx_time_parse_fixed_width_int(p, 0, 4, &year) || p[4] != '-' || !bx_time_parse_fixed_width_int(p, 5, 2, &month) || p[7] != '-' || !bx_time_parse_fixed_width_int(p, 8, 2, &day)) {
         return false;
     }
     p += 10;
@@ -182,7 +104,7 @@ static bool bx_touch_parse_date_literal(const char* value, struct timespec* time
         if (strlen(p) < 5) {
             return false;
         }
-        if (!bx_touch_parse_fixed_width_int(p, 0, 2, &hour) || p[2] != ':' || !bx_touch_parse_fixed_width_int(p, 3, 2, &minute)) {
+        if (!bx_time_parse_fixed_width_int(p, 0, 2, &hour) || p[2] != ':' || !bx_time_parse_fixed_width_int(p, 3, 2, &minute)) {
             return false;
         }
         p += 5;
@@ -192,7 +114,7 @@ static bool bx_touch_parse_date_literal(const char* value, struct timespec* time
             if (strlen(p) < 2) {
                 return false;
             }
-            if (!bx_touch_parse_fixed_width_int(p, 0, 2, &second)) {
+            if (!bx_time_parse_fixed_width_int(p, 0, 2, &second)) {
                 return false;
             }
             p += 2;
@@ -207,7 +129,7 @@ static bool bx_touch_parse_date_literal(const char* value, struct timespec* time
         if (!have_seconds) {
             return false;
         }
-        if (!bx_touch_parse_optional_fraction(&p, &nsec)) {
+        if (!bx_time_parse_fractional_nanoseconds(&p, &nsec)) {
             return false;
         }
     }
@@ -219,44 +141,15 @@ static bool bx_touch_parse_date_literal(const char* value, struct timespec* time
         return false;
     }
 
-    return bx_touch_build_local_timestamp(year, month, day, hour, minute, second, nsec, timestamp_out);
+    return bx_time_build_local_timestamp(year, month, day, hour, minute, second, nsec, timestamp_out);
 }
 
 static bool bx_touch_parse_epoch_literal(const char* value, struct timespec* timestamp_out) {
-    if (value == NULL || value[0] != '@' || value[1] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    long long seconds_ll = strtoll(value + 1, &end, 10);
-    if (errno != 0 || end == value + 1) {
-        return false;
-    }
-
-    const char* tail = end;
-    long nsec = 0;
-    if (*tail == '.') {
-        if (!bx_touch_parse_optional_fraction(&tail, &nsec)) {
-            return false;
-        }
-    }
-    if (*tail != '\0') {
-        return false;
-    }
-
-    time_t seconds = (time_t)seconds_ll;
-    if ((long long)seconds != seconds_ll) {
-        return false;
-    }
-
-    if (seconds_ll < 0 && nsec != 0) {
-        return false;
-    }
-
-    timestamp_out->tv_sec = seconds;
-    timestamp_out->tv_nsec = nsec;
-    return true;
+    struct bx_time_epoch_parse_options options = {
+        .allow_trailing_space = false,
+        .normalize_negative_fraction = false,
+    };
+    return bx_time_parse_epoch_literal(value, &options, timestamp_out);
 }
 
 static bool bx_touch_parse_date_argument(const char* value, struct timespec* timestamp_out) {
@@ -264,18 +157,6 @@ static bool bx_touch_parse_date_argument(const char* value, struct timespec* tim
         return bx_touch_parse_epoch_literal(value, timestamp_out);
     }
     return bx_touch_parse_date_literal(value, timestamp_out);
-}
-
-static bool bx_touch_current_local_year(int* year_out) {
-    time_t now = time(NULL);
-    struct tm local_tm;
-
-    if (localtime_r(&now, &local_tm) == NULL) {
-        return false;
-    }
-
-    *year_out = local_tm.tm_year + 1900;
-    return true;
 }
 
 static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* timestamp_out) {
@@ -296,7 +177,7 @@ static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* ti
     int second = 0;
     if (dot != NULL) {
         const char* seconds_text = dot + 1;
-        if (strlen(seconds_text) != 2 || !bx_touch_parse_fixed_width_int(seconds_text, 0, 2, &second)) {
+        if (strlen(seconds_text) != 2 || !bx_time_parse_fixed_width_int(seconds_text, 0, 2, &second)) {
             return false;
         }
     }
@@ -308,27 +189,27 @@ static bool bx_touch_parse_stamp_argument(const char* value, struct timespec* ti
     int minute = 0;
 
     if (main_len == 12) {
-        if (!bx_touch_parse_fixed_width_int(value, 0, 4, &year) || !bx_touch_parse_fixed_width_int(value, 4, 2, &month) || !bx_touch_parse_fixed_width_int(value, 6, 2, &day) ||
-            !bx_touch_parse_fixed_width_int(value, 8, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 10, 2, &minute)) {
+        if (!bx_time_parse_fixed_width_int(value, 0, 4, &year) || !bx_time_parse_fixed_width_int(value, 4, 2, &month) || !bx_time_parse_fixed_width_int(value, 6, 2, &day) ||
+            !bx_time_parse_fixed_width_int(value, 8, 2, &hour) || !bx_time_parse_fixed_width_int(value, 10, 2, &minute)) {
             return false;
         }
     }
     else if (main_len == 10) {
         int yy = 0;
-        if (!bx_touch_parse_fixed_width_int(value, 0, 2, &yy) || !bx_touch_parse_fixed_width_int(value, 2, 2, &month) || !bx_touch_parse_fixed_width_int(value, 4, 2, &day) ||
-            !bx_touch_parse_fixed_width_int(value, 6, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 8, 2, &minute)) {
+        if (!bx_time_parse_fixed_width_int(value, 0, 2, &yy) || !bx_time_parse_fixed_width_int(value, 2, 2, &month) || !bx_time_parse_fixed_width_int(value, 4, 2, &day) ||
+            !bx_time_parse_fixed_width_int(value, 6, 2, &hour) || !bx_time_parse_fixed_width_int(value, 8, 2, &minute)) {
             return false;
         }
         year = (yy >= 69) ? (1900 + yy) : (2000 + yy);
     }
     else {
-        if (!bx_touch_current_local_year(&year) || !bx_touch_parse_fixed_width_int(value, 0, 2, &month) || !bx_touch_parse_fixed_width_int(value, 2, 2, &day) ||
-            !bx_touch_parse_fixed_width_int(value, 4, 2, &hour) || !bx_touch_parse_fixed_width_int(value, 6, 2, &minute)) {
+        if (!bx_time_current_local_year(&year) || !bx_time_parse_fixed_width_int(value, 0, 2, &month) || !bx_time_parse_fixed_width_int(value, 2, 2, &day) ||
+            !bx_time_parse_fixed_width_int(value, 4, 2, &hour) || !bx_time_parse_fixed_width_int(value, 6, 2, &minute)) {
             return false;
         }
     }
 
-    return bx_touch_build_local_timestamp(year, month, day, hour, minute, second, 0, timestamp_out);
+    return bx_time_build_local_timestamp(year, month, day, hour, minute, second, 0, timestamp_out);
 }
 
 static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_options* options, int* first_operand, struct bx_diag_ctx* diag) {

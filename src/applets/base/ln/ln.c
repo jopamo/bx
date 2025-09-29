@@ -205,116 +205,6 @@ static bool bx_ln_path_is_directory(const char* path, bool follow_symlinks) {
     return rc == 0 && S_ISDIR(st.st_mode);
 }
 
-struct bx_ln_components {
-    char** parts;
-    size_t count;
-};
-
-static void bx_ln_components_push(struct bx_ln_components* components, const char* part) {
-    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + 1u));
-    components->parts[components->count++] = xstrdup(part);
-}
-
-static void bx_ln_components_pop(struct bx_ln_components* components) {
-    if (components->count == 0) {
-        return;
-    }
-    free(components->parts[components->count - 1u]);
-    components->count--;
-}
-
-static void bx_ln_components_free(struct bx_ln_components* components) {
-    for (size_t i = 0; i < components->count; i++) {
-        free(components->parts[i]);
-    }
-    free(components->parts);
-    components->parts = NULL;
-    components->count = 0;
-}
-
-static void bx_ln_components_append_normalized(struct bx_ln_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
-
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        if (strcmp(token, ".") == 0 || token[0] == '\0') {
-            continue;
-        }
-        if (strcmp(token, "..") == 0) {
-            bx_ln_components_pop(components);
-            continue;
-        }
-        bx_ln_components_push(components, token);
-    }
-
-    free(copy);
-}
-
-static char* bx_ln_components_to_absolute_path(const struct bx_ln_components* components) {
-    if (components->count == 0) {
-        return xstrdup("/");
-    }
-
-    size_t len = 2u;
-    for (size_t i = 0; i < components->count; i++) {
-        len += strlen(components->parts[i]);
-        if (i + 1u < components->count) {
-            len++;
-        }
-    }
-
-    char* path = xmalloc(len);
-    size_t pos = 0;
-    path[pos++] = '/';
-    for (size_t i = 0; i < components->count; i++) {
-        size_t part_len = strlen(components->parts[i]);
-        memcpy(path + pos, components->parts[i], part_len);
-        pos += part_len;
-        if (i + 1u < components->count) {
-            path[pos++] = '/';
-        }
-    }
-    path[pos] = '\0';
-    return path;
-}
-
-static char* bx_ln_getcwd_dup(void) {
-    size_t size = 128u;
-    char* cwd = xmalloc(size);
-
-    while (getcwd(cwd, size) == NULL) {
-        if (errno != ERANGE) {
-            free(cwd);
-            return NULL;
-        }
-        size *= 2u;
-        cwd = xrealloc(cwd, size);
-    }
-
-    return cwd;
-}
-
-static char* bx_ln_normalize_absolute_lexical(const char* path) {
-    struct bx_ln_components components = {0};
-    char* cwd = NULL;
-    char* normalized = NULL;
-
-    if (path[0] != '/') {
-        cwd = bx_ln_getcwd_dup();
-        if (cwd == NULL) {
-            return NULL;
-        }
-        bx_ln_components_append_normalized(&components, cwd);
-    }
-
-    bx_ln_components_append_normalized(&components, path);
-    normalized = bx_ln_components_to_absolute_path(&components);
-
-    free(cwd);
-    bx_ln_components_free(&components);
-    return normalized;
-}
-
 static char* bx_ln_canonicalize_for_relative(const char* path) {
     char* canonical = realpath(path, NULL);
     if (canonical != NULL) {
@@ -334,7 +224,7 @@ static char* bx_ln_canonicalize_for_relative(const char* path) {
         if (parent_real != NULL) {
             base = bx_path_basename_dup(path);
             joined = bx_path_join(parent_real, base);
-            normalized = bx_ln_normalize_absolute_lexical(joined);
+            normalized = bx_path_normalize_absolute_lexical_dup(joined);
             free(joined);
             free(base);
             free(parent_real);
@@ -343,69 +233,10 @@ static char* bx_ln_canonicalize_for_relative(const char* path) {
         }
 
         free(parent);
-        return bx_ln_normalize_absolute_lexical(path);
+        return bx_path_normalize_absolute_lexical_dup(path);
     }
 
     return NULL;
-}
-
-static char* bx_ln_relative_path_between(const char* from_abs, const char* to_abs) {
-    struct bx_ln_components from_components = {0};
-    struct bx_ln_components to_components = {0};
-    char* relative = NULL;
-    size_t common = 0;
-
-    if (from_abs[0] != '/' || to_abs[0] != '/') {
-        return NULL;
-    }
-
-    bx_ln_components_append_normalized(&from_components, from_abs);
-    bx_ln_components_append_normalized(&to_components, to_abs);
-
-    while (common < from_components.count && common < to_components.count && strcmp(from_components.parts[common], to_components.parts[common]) == 0) {
-        common++;
-    }
-
-    size_t up_count = from_components.count - common;
-    size_t down_count = to_components.count - common;
-    size_t segment_count = up_count + down_count;
-    if (segment_count == 0) {
-        relative = xstrdup(".");
-        goto out;
-    }
-
-    size_t len = 1u;
-    if (segment_count > 1u) {
-        len += segment_count - 1u;
-    }
-    len += up_count * 2u;
-    for (size_t i = common; i < to_components.count; i++) {
-        len += strlen(to_components.parts[i]);
-    }
-
-    relative = xmalloc(len);
-    size_t pos = 0;
-    for (size_t i = 0; i < up_count; i++) {
-        if (pos > 0) {
-            relative[pos++] = '/';
-        }
-        relative[pos++] = '.';
-        relative[pos++] = '.';
-    }
-    for (size_t i = common; i < to_components.count; i++) {
-        if (pos > 0) {
-            relative[pos++] = '/';
-        }
-        size_t part_len = strlen(to_components.parts[i]);
-        memcpy(relative + pos, to_components.parts[i], part_len);
-        pos += part_len;
-    }
-    relative[pos] = '\0';
-
-out:
-    bx_ln_components_free(&from_components);
-    bx_ln_components_free(&to_components);
-    return relative;
 }
 
 static char* bx_ln_make_relative_source_path(const char* source_path, const char* destination_path, struct bx_diag_ctx* diag) {
@@ -432,7 +263,7 @@ static char* bx_ln_make_relative_source_path(const char* source_path, const char
         return NULL;
     }
 
-    relative = bx_ln_relative_path_between(destination_parent_abs, source_abs);
+    relative = bx_path_relative_path_between(destination_parent_abs, source_abs);
     if (relative == NULL) {
         bx_diag(diag, "cannot build relative path from '%s' to '%s'", destination_parent_abs, source_abs);
     }

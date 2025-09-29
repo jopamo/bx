@@ -21,11 +21,6 @@ enum bx_readlink_mode {
     BX_READLINK_MODE_CANONICALIZE_MISSING,
 };
 
-struct bx_readlink_components {
-    char** parts;
-    size_t count;
-};
-
 struct bx_readlink_options {
     const char* progname;
     enum bx_readlink_mode mode;
@@ -175,159 +170,11 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
     return true;
 }
 
-static void bx_readlink_components_push(struct bx_readlink_components* components, const char* part) {
-    components->parts = xrealloc(components->parts, (components->count + 1u) * sizeof(*components->parts));
-    components->parts[components->count++] = xstrdup(part);
-}
-
-static void bx_readlink_components_pop(struct bx_readlink_components* components) {
-    if (components->count == 0u) {
-        return;
-    }
-
-    free(components->parts[components->count - 1u]);
-    components->count--;
-}
-
-static void bx_readlink_components_free(struct bx_readlink_components* components) {
-    for (size_t i = 0; i < components->count; i++) {
-        free(components->parts[i]);
-    }
-
-    free(components->parts);
-    components->parts = NULL;
-    components->count = 0u;
-}
-
-static void bx_readlink_components_clear(struct bx_readlink_components* components) {
-    bx_readlink_components_free(components);
-}
-
-static bool bx_readlink_components_shift(struct bx_readlink_components* components, char** part_out) {
-    if (components->count == 0u) {
-        return false;
-    }
-
-    char* part = components->parts[0];
-    if (components->count > 1u) {
-        memmove(components->parts, components->parts + 1u, (components->count - 1u) * sizeof(*components->parts));
-    }
-    components->count--;
-    *part_out = part;
-    return true;
-}
-
-static void bx_readlink_components_append_raw(struct bx_readlink_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
-
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        bx_readlink_components_push(components, token);
-    }
-
-    free(copy);
-}
-
-static void bx_readlink_components_append_normalized_part(struct bx_readlink_components* components, const char* part) {
-    if (strcmp(part, ".") == 0 || part[0] == '\0') {
-        return;
-    }
-    if (strcmp(part, "..") == 0) {
-        bx_readlink_components_pop(components);
-        return;
-    }
-
-    bx_readlink_components_push(components, part);
-}
-
-static void bx_readlink_components_append_normalized_and_clear(struct bx_readlink_components* components, struct bx_readlink_components* remainder) {
+static void bx_readlink_components_append_normalized_and_clear(struct bx_path_components* components, struct bx_path_components* remainder) {
     for (size_t i = 0; i < remainder->count; i++) {
-        bx_readlink_components_append_normalized_part(components, remainder->parts[i]);
+        bx_path_components_append_normalized_part(components, remainder->parts[i]);
     }
-    bx_readlink_components_clear(remainder);
-}
-
-static void bx_readlink_components_prepend_path(struct bx_readlink_components* components, const char* path) {
-    struct bx_readlink_components head = {0};
-    bx_readlink_components_append_raw(&head, path);
-
-    if (head.count == 0u) {
-        bx_readlink_components_free(&head);
-        return;
-    }
-
-    char** merged = xmalloc((head.count + components->count) * sizeof(*merged));
-    memcpy(merged, head.parts, head.count * sizeof(*merged));
-    if (components->count > 0u) {
-        memcpy(merged + head.count, components->parts, components->count * sizeof(*merged));
-    }
-
-    free(head.parts);
-    free(components->parts);
-    components->parts = merged;
-    components->count += head.count;
-}
-
-static char* bx_readlink_components_to_absolute_path(const struct bx_readlink_components* components, size_t count) {
-    if (count == 0u) {
-        return xstrdup("/");
-    }
-
-    size_t len = 2u;
-    for (size_t i = 0; i < count; i++) {
-        len += strlen(components->parts[i]);
-        if (i + 1u < count) {
-            len++;
-        }
-    }
-
-    char* path = xmalloc(len);
-    size_t pos = 0u;
-    path[pos++] = '/';
-
-    for (size_t i = 0; i < count; i++) {
-        size_t part_len = strlen(components->parts[i]);
-        memcpy(path + pos, components->parts[i], part_len);
-        pos += part_len;
-        if (i + 1u < count) {
-            path[pos++] = '/';
-        }
-    }
-
-    path[pos] = '\0';
-    return path;
-}
-
-static char* bx_readlink_getcwd_dup(void) {
-    size_t size = 128u;
-    char* cwd = xmalloc(size);
-
-    while (getcwd(cwd, size) == NULL) {
-        if (errno != ERANGE) {
-            free(cwd);
-            return NULL;
-        }
-
-        size *= 2u;
-        cwd = xrealloc(cwd, size);
-    }
-
-    return cwd;
-}
-
-static char* bx_readlink_make_absolute_input(const char* path) {
-    if (path[0] == '/') {
-        return xstrdup(path);
-    }
-
-    char* cwd = bx_readlink_getcwd_dup();
-    if (cwd == NULL) {
-        return NULL;
-    }
-
-    char* absolute = bx_path_join(cwd, path);
-    free(cwd);
-    return absolute;
+    bx_path_components_free(remainder);
 }
 
 static bool bx_readlink_readlink_alloc(const char* path, char** target_out) {
@@ -372,8 +219,8 @@ static bool bx_readlink_has_non_root_trailing_slash(const char* path) {
 }
 
 static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mode mode) {
-    struct bx_readlink_components pending = {0};
-    struct bx_readlink_components resolved = {0};
+    struct bx_path_components pending = {0};
+    struct bx_path_components resolved = {0};
     char* absolute_input = NULL;
     char* output = NULL;
     bool require_directory_if_existing = false;
@@ -384,13 +231,13 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
         return NULL;
     }
 
-    absolute_input = bx_readlink_make_absolute_input(path);
+    absolute_input = bx_path_make_absolute_dup(path);
     if (absolute_input == NULL) {
         return NULL;
     }
 
     require_directory_if_existing = bx_readlink_has_non_root_trailing_slash(path);
-    bx_readlink_components_append_raw(&pending, absolute_input);
+    bx_path_components_append_raw(&pending, absolute_input);
     free(absolute_input);
 
     while (pending.count > 0u) {
@@ -401,7 +248,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
         bool has_more = false;
         int saved_errno = 0;
 
-        (void)bx_readlink_components_shift(&pending, &part);
+        (void)bx_path_components_shift(&pending, &part);
         has_more = (pending.count > 0u);
 
         if (strcmp(part, ".") == 0 || part[0] == '\0') {
@@ -409,12 +256,12 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
             continue;
         }
         if (strcmp(part, "..") == 0) {
-            bx_readlink_components_pop(&resolved);
+            bx_path_components_pop(&resolved);
             free(part);
             continue;
         }
 
-        base = bx_readlink_components_to_absolute_path(&resolved, resolved.count);
+        base = bx_path_components_to_absolute_path(&resolved, resolved.count);
         candidate = bx_path_join(base, part);
         free(base);
 
@@ -424,7 +271,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
 
                 if (symlink_expansions >= 40u) {
                     if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
-                        bx_readlink_components_append_normalized_part(&resolved, part);
+                        bx_path_components_append_normalized_part(&resolved, part);
                         bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
                         free(candidate);
                         free(part);
@@ -447,9 +294,9 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
                 }
 
                 if (target[0] == '/') {
-                    bx_readlink_components_clear(&resolved);
+                    bx_path_components_free(&resolved);
                 }
-                bx_readlink_components_prepend_path(&pending, target);
+                bx_path_components_prepend_raw_path(&pending, target);
 
                 free(target);
                 free(candidate);
@@ -459,7 +306,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
 
             if (has_more && !S_ISDIR(st.st_mode)) {
                 if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
-                    bx_readlink_components_append_normalized_part(&resolved, part);
+                    bx_path_components_append_normalized_part(&resolved, part);
                     bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
                     free(candidate);
                     free(part);
@@ -472,7 +319,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
                 goto fail;
             }
 
-            bx_readlink_components_append_normalized_part(&resolved, part);
+            bx_path_components_append_normalized_part(&resolved, part);
             free(candidate);
             free(part);
             continue;
@@ -480,7 +327,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
 
         saved_errno = errno;
         if (mode == BX_READLINK_MODE_CANONICALIZE_MISSING) {
-            bx_readlink_components_append_normalized_part(&resolved, part);
+            bx_path_components_append_normalized_part(&resolved, part);
             bx_readlink_components_append_normalized_and_clear(&resolved, &pending);
             free(candidate);
             free(part);
@@ -488,7 +335,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
         }
 
         if (mode == BX_READLINK_MODE_CANONICALIZE_EXISTING_BUT_LAST && !has_more && saved_errno == ENOENT) {
-            bx_readlink_components_append_normalized_part(&resolved, part);
+            bx_path_components_append_normalized_part(&resolved, part);
             free(candidate);
             free(part);
             break;
@@ -500,7 +347,7 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
         goto fail;
     }
 
-    output = bx_readlink_components_to_absolute_path(&resolved, resolved.count);
+    output = bx_path_components_to_absolute_path(&resolved, resolved.count);
 
     if (require_directory_if_existing && mode != BX_READLINK_MODE_CANONICALIZE_MISSING) {
         struct stat st;
@@ -522,13 +369,13 @@ static char* bx_readlink_canonicalize_path(const char* path, enum bx_readlink_mo
         }
     }
 
-    bx_readlink_components_free(&pending);
-    bx_readlink_components_free(&resolved);
+    bx_path_components_free(&pending);
+    bx_path_components_free(&resolved);
     return output;
 
 fail:
-    bx_readlink_components_free(&pending);
-    bx_readlink_components_free(&resolved);
+    bx_path_components_free(&pending);
+    bx_path_components_free(&resolved);
     return NULL;
 }
 

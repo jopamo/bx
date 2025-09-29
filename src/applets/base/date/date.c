@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/time_parse.h"
 
 struct bx_date_options {
     const char* progname;
@@ -342,82 +343,12 @@ static bool bx_date_validate_option_combinations(const struct bx_date_options* o
     return true;
 }
 
-static bool bx_date_parse_fractional_nanoseconds(const char** text, long* nsec_out) {
-    const char* p = *text;
-    long nsec = 0;
-    size_t digits = 0;
-
-    if (*p != '.') {
-        *nsec_out = 0;
-        return true;
-    }
-
-    p++;
-    if (!isdigit((unsigned char)*p)) {
-        return false;
-    }
-
-    while (isdigit((unsigned char)*p)) {
-        if (digits < 9u) {
-            nsec = (nsec * 10L) + (long)(*p - '0');
-        }
-        digits++;
-        p++;
-    }
-
-    while (digits < 9u) {
-        nsec *= 10L;
-        digits++;
-    }
-
-    *text = p;
-    *nsec_out = nsec;
-    return true;
-}
-
 static bool bx_date_parse_epoch_literal(const char* text, struct timespec* ts) {
-    if (text == NULL || text[0] != '@' || text[1] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    long long seconds_ll = strtoll(text + 1, &end, 10);
-    if (errno != 0 || end == text + 1) {
-        return false;
-    }
-
-    const char* tail = end;
-    long nsec = 0;
-    if (*tail == '.') {
-        if (!bx_date_parse_fractional_nanoseconds(&tail, &nsec)) {
-            return false;
-        }
-    }
-
-    while (isspace((unsigned char)*tail)) {
-        tail++;
-    }
-    if (*tail != '\0') {
-        return false;
-    }
-
-    if (seconds_ll < 0 && nsec != 0) {
-        if (seconds_ll == LLONG_MIN) {
-            return false;
-        }
-        seconds_ll -= 1;
-        nsec = 1000000000L - nsec;
-    }
-
-    time_t seconds = (time_t)seconds_ll;
-    if ((long long)seconds != seconds_ll) {
-        return false;
-    }
-
-    ts->tv_sec = seconds;
-    ts->tv_nsec = nsec;
-    return true;
+    struct bx_time_epoch_parse_options options = {
+        .allow_trailing_space = true,
+        .normalize_negative_fraction = true,
+    };
+    return bx_time_parse_epoch_literal(text, &options, ts);
 }
 
 struct bx_date_parse_pattern {

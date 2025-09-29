@@ -158,6 +158,9 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         struct stat st;
         struct stat lst;
         bool entry_was_symlink = false;
+        bool cycle_check_ready = false;
+        bool crosses_filesystem = false;
+        bool repeated_dir = false;
         struct walk_entry entry = {
             .path = full,
             .follow_metadata = opts->follow_symlinks,
@@ -187,31 +190,50 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                     continue;
                 }
                 entry_was_symlink = S_ISLNK(lst.st_mode);
-                if (stat(full, &st) != 0) {
-                    free(full);
-                    continue;
+                if (!entry_was_symlink) {
+                    if (stat(full, &st) != 0) {
+                        free(full);
+                        continue;
+                    }
+                    walk_entry_fill_from_stat(&entry, &st);
+                } else if (stat(full, &st) == 0) {
+                    walk_entry_fill_from_stat(&entry, &st);
+                } else {
+                    walk_entry_fill_from_stat(&entry, &lst);
                 }
-                walk_entry_fill_from_stat(&entry, &st);
             }
         }
 
-        if (!opts->post_order || !entry.is_dir)
-            cb(&entry, user);
-
-        if (!walk_should_stop(opts) && entry.is_dir && !entry.prune) {
-            if (!walk_entry_load_metadata(&entry)) {
-                free(full);
-                continue;
-            }
-
-            bool crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
-            bool repeated_dir = false;
+        if (entry_was_symlink && entry.is_dir && entry.metadata_loaded) {
+            cycle_check_ready = true;
+            crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
             if (!crosses_filesystem) {
                 if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
                     repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
                 } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
-                    repeated_dir = entry_was_symlink &&
-                                   walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                    repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                }
+            }
+        }
+
+        if ((!opts->post_order || !entry.is_dir) && !repeated_dir)
+            cb(&entry, user);
+
+        if (!walk_should_stop(opts) && entry.is_dir && !entry.prune) {
+            if (!cycle_check_ready) {
+                if (!walk_entry_load_metadata(&entry)) {
+                    free(full);
+                    continue;
+                }
+
+                crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
+                if (!crosses_filesystem) {
+                    if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
+                        repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                    } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
+                        repeated_dir = entry_was_symlink &&
+                                       walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                    }
                 }
             }
 
@@ -231,7 +253,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                     status = -1;
             }
         }
-        if (!walk_should_stop(opts) && opts->post_order && entry.is_dir)
+        if (!walk_should_stop(opts) && opts->post_order && entry.is_dir && !repeated_dir)
             cb(&entry, user);
         free(full);
     }

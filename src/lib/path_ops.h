@@ -1,7 +1,30 @@
 #ifndef BX_COMMON_PATH_OPS_H
 #define BX_COMMON_PATH_OPS_H
 
+#include <stddef.h>
 #include <stdbool.h>
+
+struct bx_path_components {
+    char** parts;
+    size_t count;
+};
+
+void bx_path_components_push_dup(struct bx_path_components* components, const char* part);
+void bx_path_components_pop(struct bx_path_components* components);
+void bx_path_components_free(struct bx_path_components* components);
+bool bx_path_components_shift(struct bx_path_components* components, char** part_out);
+void bx_path_components_append_raw(struct bx_path_components* components, const char* path);
+void bx_path_components_insert_raw_path(struct bx_path_components* components, size_t index, const char* path);
+void bx_path_components_append_normalized(struct bx_path_components* components, const char* path);
+void bx_path_components_append_normalized_part(struct bx_path_components* components, const char* part);
+void bx_path_components_prepend_raw_path(struct bx_path_components* components, const char* path);
+char* bx_path_components_to_absolute_path(const struct bx_path_components* components, size_t count);
+
+char* bx_path_getcwd_dup(void);
+char* bx_path_make_absolute_dup(const char* path);
+char* bx_path_normalize_absolute_lexical_dup(const char* path);
+bool bx_path_is_within(const char* path, const char* base);
+char* bx_path_relative_path_between(const char* from_abs, const char* to_abs);
 
 char* bx_path_join(const char* left, const char* right);
 char* bx_path_strip_trailing_slashes_dup(const char* path);
