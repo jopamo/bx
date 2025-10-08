@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+#include <ctype.h>
 #include <errno.h>
 #include <fnmatch.h>
 #include <limits.h>
@@ -60,7 +62,34 @@ static const char *find_basename(const char *path) {
 
 static bool find_match_pattern(const char *pattern, const char *text,
                                bool ignore_case) {
+#ifdef FNM_CASEFOLD
     return fnmatch(pattern, text, ignore_case ? FNM_CASEFOLD : 0) == 0;
+#else
+    if (!ignore_case)
+        return fnmatch(pattern, text, 0) == 0;
+
+    size_t pattern_len = strlen(pattern);
+    size_t text_len = strlen(text);
+    char *lower_pattern = malloc(pattern_len + 1);
+    char *lower_text = malloc(text_len + 1);
+    if (!lower_pattern || !lower_text) {
+        free(lower_pattern);
+        free(lower_text);
+        return false;
+    }
+
+    for (size_t i = 0; i < pattern_len; i++)
+        lower_pattern[i] = (char)tolower((unsigned char)pattern[i]);
+    lower_pattern[pattern_len] = '\0';
+    for (size_t i = 0; i < text_len; i++)
+        lower_text[i] = (char)tolower((unsigned char)text[i]);
+    lower_text[text_len] = '\0';
+
+    bool matched = fnmatch(lower_pattern, lower_text, 0) == 0;
+    free(lower_pattern);
+    free(lower_text);
+    return matched;
+#endif
 }
 
 static bool find_match_link_target(struct walk_entry *entry, const char *pattern,
