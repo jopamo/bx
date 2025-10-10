@@ -213,6 +213,7 @@ bx_base_applet_sources = [
   'src/applets/base/find/find_output.c',
   'src/applets/base/find/find_parse.c',
   'src/applets/base/find/find_regex.c',
+  'src/applets/base/find/find_run.c',
   'src/applets/base/fold/fold.c',
   'src/applets/base/head/head.c',
   'src/applets/base/hostid/hostid.c',
@@ -267,6 +268,9 @@ bx_base_applet_sources = [
   'src/applets/base/wc/wc.c',
   'src/applets/base/whoami/whoami.c',
   'src/applets/base/xargs/xargs.c',
+  'src/applets/base/xargs/xargs_exec.c',
+  'src/applets/base/xargs/xargs_input.c',
+  'src/applets/base/xargs/xargs_parse.c',
   'src/applets/base/yes/yes.c',
   'src/applets/base/which/which.c',
 ]
@@ -287,8 +291,10 @@ bx_text_applet_sources = [
   'src/applets/text/ed/signal.c',
   'src/applets/text/fd/fd.c',
   'src/applets/text/fd/fd_exec.c',
+  'src/applets/text/fd/fd_match.c',
   'src/applets/text/fd/fd_exec_render.c',
   'src/applets/text/fd/fd_output.c',
+  'src/applets/text/fd/fd_parse.c',
   'src/applets/text/grep/grep.c',
   'src/applets/text/rg/rg.c',
 ]

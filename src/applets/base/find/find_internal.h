@@ -140,5 +140,17 @@ void find_expr_free(struct find_expr *expr);
 struct find_expr *find_parse_expr(struct find_parser *parser);
 bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
                     struct find_state *st);
+bool find_token_starts_expression(const char *arg);
+bool find_collect_expression_argv(const char *progname, int argc, char **argv,
+                                  int start, struct find_opts *opts,
+                                  char ***expr_argv_out, int *expr_argc_out);
+bool find_prepare_expression(const char *progname, struct find_opts *opts,
+                             char **expr_argv, int expr_argc,
+                             struct find_expr **expr_out);
+int find_run_search(const char *progname, struct find_opts *opts,
+                    struct find_expr *expr, char **roots, int root_count);
+bool find_load_files0_roots(const char *progname, const char *source,
+                            struct find_root_list *roots);
+void find_root_list_free(struct find_root_list *roots);
 
 #endif
