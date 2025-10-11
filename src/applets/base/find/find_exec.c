@@ -9,6 +9,7 @@
 
 #include "lib/argv_packer.h"
 #include "lib/child_runner.h"
+#include "lib/path_ops.h"
 #include "find_exec.h"
 
 static volatile sig_atomic_t find_interrupt_signal = 0;
@@ -151,15 +152,8 @@ static int find_select_exec_batch_count(struct find_expr *expr, int start,
 }
 
 bool find_execdir_split_path(const char *path, char **dir_out, char **arg_out) {
-    const char *slash = strrchr(path, '/');
-    const char *base = slash ? slash + 1 : path;
-    size_t dir_len = slash ? (size_t)(slash - path) : 0;
-
-    char *dir = NULL;
-    if (dir_len == 0)
-        dir = strdup(".");
-    else
-        dir = strndup(path, dir_len);
+    const char *base = bx_path_basename_ptr(path);
+    char *dir = bx_path_dirname_dup(path);
     if (!dir)
         return false;
 

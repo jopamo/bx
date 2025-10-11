@@ -3,11 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #include "fd_exec_render.h"
+#include "lib/path_ops.h"
 
 const char *fd_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
+    return bx_path_basename_ptr(path);
 }
 
 static bool fd_match_placeholder_raw(const char *text, enum fd_placeholder_kind *kind, size_t *len) {
@@ -75,15 +76,6 @@ size_t fd_placeholder_count(const char *arg) {
     return count;
 }
 
-static char *fd_strndup(const char *text, size_t len) {
-    char *out = malloc(len + 1);
-    if (!out)
-        return NULL;
-    memcpy(out, text, len);
-    out[len] = '\0';
-    return out;
-}
-
 static const char *fd_stem_input_path(const char *path) {
     if (path[0] == '.' && path[1] == '/')
         return path + 2;
@@ -91,11 +83,7 @@ static const char *fd_stem_input_path(const char *path) {
 }
 
 static char *fd_remove_last_extension(const char *path) {
-    const char *base = fd_basename(path);
-    const char *dot = strrchr(base, '.');
-    if (!dot || dot == base)
-        return strdup(path);
-    return fd_strndup(path, (size_t)(dot - path));
+    return bx_path_remove_last_extension_dup(path);
 }
 
 static char *fd_placeholder_value(enum fd_placeholder_kind kind, const char *path) {
@@ -104,14 +92,8 @@ static char *fd_placeholder_value(enum fd_placeholder_kind kind, const char *pat
         return strdup(path);
     case FD_PH_BASENAME:
         return strdup(fd_basename(path));
-    case FD_PH_DIRNAME: {
-        const char *slash = strrchr(path, '/');
-        if (!slash)
-            return strdup(".");
-        if (slash == path)
-            return fd_strndup(path, 1);
-        return fd_strndup(path, (size_t)(slash - path));
-    }
+    case FD_PH_DIRNAME:
+        return bx_path_dirname_dup(path);
     case FD_PH_PATH_STEM:
         return fd_remove_last_extension(fd_stem_input_path(path));
     case FD_PH_BASENAME_STEM:

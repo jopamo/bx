@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "fd_match.h"
+#include "lib/path_ops.h"
 #include "search/metadata.h"
 
 static uint32_t fd_compile_flags(const struct fd_opts *opts,
@@ -259,7 +260,7 @@ void fd_walk_callback(struct walk_entry *entry, void *user) {
     const char *name = opts->full_path ? entry->path : fd_basename(entry->path);
 
     if (opts->extension) {
-        const char *dot = strrchr(fd_basename(entry->path), '.');
+        const char *dot = bx_path_extension_ptr(entry->path);
         if (!dot || strcasecmp(dot + 1, opts->extension) != 0)
             return;
     }

@@ -9,6 +9,8 @@
 #include <poll.h>
 #include <regex.h>
 #include <unistd.h>
+
+#include "lib/path_ops.h"
 #include "search.h"
 #include "options.h"
 #include "walk.h"
@@ -19,8 +21,7 @@
 
 static bool progname_uses_os_error_style(const char *progname) {
     if (!progname) return false;
-    const char *base = strrchr(progname, '/');
-    if (base) progname = base + 1;
+    progname = bx_path_basename_ptr(progname);
     return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
 }
 
@@ -776,8 +777,7 @@ static void grep_walk_cb(struct walk_entry *entry, void *user) {
     if (gs->stop && *gs->stop) return;
     if (entry->is_dir) return;
 
-    const char *name = strrchr(entry->path, '/');
-    name = name ? name + 1 : entry->path;
+    const char *name = bx_path_basename_ptr(entry->path);
 
     if (gs->opts->num_include > 0) {
         bool ok = false;

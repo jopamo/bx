@@ -1,13 +1,10 @@
 #define _GNU_SOURCE
-#include <ctype.h>
 #include <dirent.h>
-#include <errno.h>
-#include <grp.h>
-#include <pwd.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "lib/id_parse.h"
 #include "metadata.h"
 
 bool bx_walk_numeric_match(unsigned long long actual, long long expected, int cmp) {
@@ -87,65 +84,31 @@ bool bx_walk_parse_named_type_filter(const char *text, char *type_filter) {
 }
 
 bool bx_walk_parse_unsigned_id(const char *text, unsigned long long *value) {
-    if (!text || *text == '\0')
-        return false;
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
-        if (!isdigit(*p))
-            return false;
-    }
-
-    char *end = NULL;
-    errno = 0;
-    unsigned long long v = strtoull(text, &end, 10);
-    if (errno != 0 || !end || *end != '\0')
+    if (!text || !value)
         return false;
 
-    *value = v;
+    uintmax_t parsed = 0;
+    if (!bx_id_parse_numeric(text, UINTMAX_MAX, &parsed))
+        return false;
+
+    *value = (unsigned long long)parsed;
     return true;
 }
 
 bool bx_walk_resolve_user(const char *text, uid_t *value) {
-    if (!text || !value)
-        return false;
-
-    struct passwd *pw = getpwnam(text);
-    if (pw) {
-        *value = pw->pw_uid;
-        return true;
-    }
-
-    unsigned long long numeric = 0;
-    if (!bx_walk_parse_unsigned_id(text, &numeric))
-        return false;
-
-    *value = (uid_t)numeric;
-    return true;
+    return bx_id_lookup_user(text, value);
 }
 
 bool bx_walk_resolve_group(const char *text, gid_t *value) {
-    if (!text || !value)
-        return false;
-
-    struct group *gr = getgrnam(text);
-    if (gr) {
-        *value = gr->gr_gid;
-        return true;
-    }
-
-    unsigned long long numeric = 0;
-    if (!bx_walk_parse_unsigned_id(text, &numeric))
-        return false;
-
-    *value = (gid_t)numeric;
-    return true;
+    return bx_id_lookup_group(text, value);
 }
 
 bool bx_walk_uid_has_passwd(uid_t uid) {
-    return getpwuid(uid) != NULL;
+    return bx_id_uid_exists(uid);
 }
 
 bool bx_walk_gid_has_group(gid_t gid) {
-    return getgrgid(gid) != NULL;
+    return bx_id_gid_exists(gid);
 }
 
 bool bx_walk_entry_is_empty(struct walk_entry *entry) {

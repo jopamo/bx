@@ -1,6 +1,8 @@
+#include <inttypes.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -134,4 +136,60 @@ bool bx_id_parse_owner_group(const char* text, struct bx_id_owner_group* parsed,
     }
 
     return true;
+}
+
+bool bx_id_lookup_user(const char* text, uid_t* uid_out) {
+    if (text == NULL || uid_out == NULL) {
+        return false;
+    }
+
+    struct bx_id_user user;
+    struct bx_diag_ctx ignored_diag = {.progname = "", .exit_status = 0};
+    if (!bx_id_parse_user(text, &user, &ignored_diag)) {
+        return false;
+    }
+
+    *uid_out = user.uid;
+    return true;
+}
+
+bool bx_id_lookup_group(const char* text, gid_t* gid_out) {
+    if (text == NULL || gid_out == NULL) {
+        return false;
+    }
+
+    struct bx_diag_ctx ignored_diag = {.progname = "", .exit_status = 0};
+    if (!bx_id_parse_group(text, gid_out, &ignored_diag)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool bx_id_uid_exists(uid_t uid) {
+    return getpwuid(uid) != NULL;
+}
+
+bool bx_id_gid_exists(gid_t gid) {
+    return getgrgid(gid) != NULL;
+}
+
+const char* bx_id_user_name(uid_t uid, char numeric_buffer[32]) {
+    struct passwd* passwd_entry = getpwuid(uid);
+    if (passwd_entry != NULL && passwd_entry->pw_name != NULL && passwd_entry->pw_name[0] != '\0') {
+        return passwd_entry->pw_name;
+    }
+
+    snprintf(numeric_buffer, 32, "%" PRIuMAX, (uintmax_t)uid);
+    return numeric_buffer;
+}
+
+const char* bx_id_group_name(gid_t gid, char numeric_buffer[32]) {
+    struct group* group_entry = getgrgid(gid);
+    if (group_entry != NULL && group_entry->gr_name != NULL && group_entry->gr_name[0] != '\0') {
+        return group_entry->gr_name;
+    }
+
+    snprintf(numeric_buffer, 32, "%" PRIuMAX, (uintmax_t)gid);
+    return numeric_buffer;
 }

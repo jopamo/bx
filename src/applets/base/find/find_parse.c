@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 
 #include "find_internal.h"
+#include "lib/id_parse.h"
+#include "lib/mode_parse.h"
 #include "search/metadata.h"
 
 static bool find_parse_main_int_arg(const char *progname, const char *optname,
@@ -57,7 +59,7 @@ static bool find_parse_numeric_test(const char *progname, const char *optname,
 static bool find_parse_user_id(const char *progname, const char *text,
                                long long *value) {
     uid_t uid = 0;
-    if (bx_walk_resolve_user(text, &uid)) {
+    if (bx_id_lookup_user(text, &uid)) {
         *value = (long long)uid;
         return true;
     }
@@ -70,7 +72,7 @@ static bool find_parse_user_id(const char *progname, const char *text,
 static bool find_parse_group_id(const char *progname, const char *text,
                                 long long *value) {
     gid_t gid = 0;
-    if (bx_walk_resolve_group(text, &gid)) {
+    if (bx_id_lookup_group(text, &gid)) {
         *value = (long long)gid;
         return true;
     }
@@ -102,23 +104,10 @@ static bool find_parse_perm(const char *progname, const char *text,
         return false;
     }
 
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
-        if (*p < '0' || *p > '7') {
-            fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname,
-                    text);
-            return false;
-        }
-    }
-
-    char *end = NULL;
-    errno = 0;
-    unsigned long value = strtoul(text, &end, 8);
-    if (errno != 0 || !end || *end != '\0' || value > 07777u) {
+    if (!bx_mode_parse_numeric(text, 07777u, bits)) {
         fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text);
         return false;
     }
-
-    *bits = (mode_t)value;
     if (*kind == 2 && *bits == 0) {
         fprintf(stderr,
                 "%s: warning: you have specified a mode pattern /000 (which is equivalent to /000). "

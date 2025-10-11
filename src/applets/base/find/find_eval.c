@@ -13,6 +13,7 @@
 #include "find_exec.h"
 #include "find_internal.h"
 #include "find_output.h"
+#include "lib/path_ops.h"
 #include "search/metadata.h"
 
 static int find_timespec_cmp(struct timespec lhs, struct timespec rhs) {
@@ -55,11 +56,6 @@ static bool find_used_match(struct timespec atime, struct timespec ctime,
     return bx_walk_numeric_match(days, expected, cmp);
 }
 
-static const char *find_basename(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
-
 static bool find_match_pattern(const char *pattern, const char *text,
                                bool ignore_case) {
 #ifdef FNM_CASEFOLD
@@ -99,12 +95,12 @@ static bool find_match_link_target(struct walk_entry *entry, const char *pattern
     if (!S_ISLNK(entry->mode))
         return false;
 
-    char buf[PATH_MAX + 1];
-    ssize_t len = readlink(entry->path, buf, PATH_MAX);
-    if (len < 0)
+    char *target = bx_path_readlink_dup(entry->path);
+    if (!target)
         return false;
-    buf[len] = '\0';
-    return find_match_pattern(pattern, buf, ignore_case);
+    bool matched = find_match_pattern(pattern, target, ignore_case);
+    free(target);
+    return matched;
 }
 
 static bool find_stat_matches_type(const struct stat *st, char type_filter) {
@@ -157,7 +153,7 @@ bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
     case FIND_EXPR_FALSE:
         return false;
     case FIND_EXPR_NAME:
-        return find_match_pattern(expr->text, find_basename(entry->path),
+        return find_match_pattern(expr->text, bx_path_basename_ptr(entry->path),
                                   expr->ignore_case);
     case FIND_EXPR_REGEX:
         return find_match_regex(&expr->regex, entry->path);

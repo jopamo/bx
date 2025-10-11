@@ -128,6 +128,8 @@ struct find_state {
 };
 
 void find_report_error(const char *progname, const char *path, int errnum);
+void find_print_help(const char *progname);
+void find_print_version(const char *progname);
 
 struct find_expr *find_expr_new(enum find_expr_kind kind);
 struct find_expr *find_make_binary(enum find_expr_kind kind,
@@ -141,6 +143,11 @@ struct find_expr *find_parse_expr(struct find_parser *parser);
 bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
                     struct find_state *st);
 bool find_token_starts_expression(const char *arg);
+bool find_parse_command_line(const char *progname, int argc, char **argv,
+                             struct find_opts *opts,
+                             struct find_root_list *root_list,
+                             char ***roots_out, int *root_count_out,
+                             char ***expr_argv_out, int *expr_argc_out);
 bool find_collect_expression_argv(const char *progname, int argc, char **argv,
                                   int start, struct find_opts *opts,
                                   char ***expr_argv_out, int *expr_argc_out);

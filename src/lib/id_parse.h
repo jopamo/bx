@@ -25,5 +25,11 @@ bool bx_id_parse_user(const char* text, struct bx_id_user* user_out, struct bx_d
 bool bx_id_parse_owner(const char* text, uid_t* owner_out, struct bx_diag_ctx* diag);
 bool bx_id_parse_group(const char* text, gid_t* group_out, struct bx_diag_ctx* diag);
 bool bx_id_parse_owner_group(const char* text, struct bx_id_owner_group* parsed, struct bx_diag_ctx* diag);
+bool bx_id_lookup_user(const char* text, uid_t* uid_out);
+bool bx_id_lookup_group(const char* text, gid_t* gid_out);
+bool bx_id_uid_exists(uid_t uid);
+bool bx_id_gid_exists(gid_t gid);
+const char* bx_id_user_name(uid_t uid, char numeric_buffer[32]);
+const char* bx_id_group_name(gid_t gid, char numeric_buffer[32]);
 
 #endif /* BX_COMMON_ID_PARSE_H */

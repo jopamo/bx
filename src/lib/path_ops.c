@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -315,6 +316,20 @@ char* bx_path_strip_trailing_slashes_dup(const char* path) {
     return bx_path_dup_range(path, len);
 }
 
+const char* bx_path_basename_ptr(const char* path) {
+    const char* slash = strrchr(path, '/');
+    return slash != NULL ? slash + 1 : path;
+}
+
+const char* bx_path_extension_ptr(const char* path) {
+    const char* base = bx_path_basename_ptr(path);
+    const char* dot = strrchr(base, '.');
+    if (dot == NULL || dot == base) {
+        return NULL;
+    }
+    return dot;
+}
+
 char* bx_path_basename_dup(const char* path) {
     if (path[0] == '\0') {
         return xstrdup("");
@@ -334,6 +349,39 @@ char* bx_path_basename_dup(const char* path) {
         return xstrdup("/");
     }
     return bx_path_dup_range(base, (size_t)(end - base));
+}
+
+char* bx_path_remove_last_extension_dup(const char* path) {
+    const char* dot = bx_path_extension_ptr(path);
+    if (dot == NULL) {
+        return xstrdup(path);
+    }
+    return bx_path_dup_range(path, (size_t)(dot - path));
+}
+
+char* bx_path_readlink_dup(const char* path) {
+    size_t cap = 128u;
+    char* target = xmalloc(cap + 1u);
+
+    for (;;) {
+        ssize_t nread = readlink(path, target, cap);
+        if (nread < 0) {
+            free(target);
+            return NULL;
+        }
+        if ((size_t)nread < cap) {
+            target[nread] = '\0';
+            return target;
+        }
+
+        if (cap > (SIZE_MAX / 2u) - 1u) {
+            free(target);
+            errno = ENOMEM;
+            return NULL;
+        }
+        cap *= 2u;
+        target = xrealloc(target, cap + 1u);
+    }
 }
 
 char* bx_path_dirname_dup(const char* path) {

@@ -28,8 +28,12 @@ char* bx_path_relative_path_between(const char* from_abs, const char* to_abs);
 
 char* bx_path_join(const char* left, const char* right);
 char* bx_path_strip_trailing_slashes_dup(const char* path);
+const char* bx_path_basename_ptr(const char* path);
+const char* bx_path_extension_ptr(const char* path);
 char* bx_path_basename_dup(const char* path);
+char* bx_path_remove_last_extension_dup(const char* path);
 char* bx_path_dirname_dup(const char* path);
+char* bx_path_readlink_dup(const char* path);
 char* bx_path_parent_dir_dup(const char* path);
 char* bx_path_parent_dir_stripped_dup(const char* path);
 char* bx_path_parents_layout_dup(const char* source_operand);
