@@ -4,9 +4,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bx/diag.h"
+#include "lib/cli_common.h"
 #include "options.h"
 #include "search.h"
-#include "bx/diag.h"
 
 enum {
     OPT_HELP = 256,
@@ -290,6 +291,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                              enum bx_search_personality personality,
                              const char **pattern, int *first_file) {
     memset(opts, 0, sizeof(*opts));
+    const char *progname = bx_cli_progname(argv[0], "grep");
 
     if (personality == BX_SEARCH_EGREP) opts->extended_regex = true;
     if (personality == BX_SEARCH_FGREP) opts->fixed_strings = true;
@@ -358,7 +360,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->null_output = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '-0'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '-0'\n", progname);
                 return -1;
             }
             break;
@@ -388,7 +390,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'R': opts->recursive = true; opts->follow_symlinks = true; break;
         case 'd':
             if (personality == BX_SEARCH_RG) {
-                if (!bx_parse_nonnegative_int(argv[0], "-d", optarg, &opts->max_depth))
+                if (!bx_parse_nonnegative_int(progname, "-d", optarg, &opts->max_depth))
                     return -1;
             } else {
                 if (strcmp(optarg, "read") == 0) {
@@ -400,7 +402,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 } else if (strcmp(optarg, "skip") == 0) {
                     opts->directory_mode = BX_GREP_DIR_SKIP;
                 } else {
-                    fprintf(stderr, "%s: invalid argument for -d: %s\n", argv[0], optarg);
+                    fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, optarg);
                     return -1;
                 }
             }
@@ -421,7 +423,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->smart_case = false;
                 opts->ignore_case = false;
             } else {
-                fprintf(stderr, "%s: invalid option -- 's'\n", argv[0]);
+                fprintf(stderr, "%s: invalid option -- 's'\n", progname);
                 return -1;
             }
             break;
@@ -430,17 +432,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->smart_case = true;
                 opts->ignore_case = false;
             } else {
-                fprintf(stderr, "%s: invalid option -- 'S'\n", argv[0]);
+                fprintf(stderr, "%s: invalid option -- 'S'\n", progname);
                 return -1;
             }
             break;
         case 'm':
-            if (!bx_parse_nonnegative_int(argv[0], "-m", optarg, &opts->max_count))
+            if (!bx_parse_nonnegative_int(progname, "-m", optarg, &opts->max_count))
                 return -1;
             break;
         case 'Z':
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: invalid option -- 'Z'\n", argv[0]);
+                fprintf(stderr, "%s: invalid option -- 'Z'\n", progname);
                 return -1;
             }
             opts->null_output = true;
@@ -448,7 +450,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'z':
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: invalid option -- 'z'\n", argv[0]);
+                fprintf(stderr, "%s: invalid option -- 'z'\n", progname);
                 return -1;
             }
             opts->null_data = true;
@@ -463,11 +465,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_IGLOB:
             if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--iglob'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--iglob'\n", progname);
                 return -1;
             }
             if (optarg && optarg[0] == '!') {
-                fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", argv[0], optarg);
+                fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, optarg);
                 return -1;
             }
             if (opts->num_include < MAX_INCLUDE_PATTERNS) {
@@ -483,7 +485,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->hidden = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--hidden'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--hidden'\n", progname);
                 return -1;
             }
             break;
@@ -494,7 +496,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             const char *globs = bx_get_type_globs(opts, optarg);
             if (!globs) {
                 if (personality == BX_SEARCH_RG) {
-                    fprintf(stderr, "%s: unrecognized file type: %s\n", argv[0], optarg);
+                    fprintf(stderr, "%s: unrecognized file type: %s\n", progname, optarg);
                     return -1;
                 }
                 break;
@@ -516,21 +518,21 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         }
         case OPT_TYPE_ADD:
             if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--type-add'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--type-add'\n", progname);
                 return -1;
             }
             if (!bx_add_custom_type(opts, optarg)) {
-                fprintf(stderr, "%s: invalid argument for --type-add: %s\n", argv[0], optarg);
+                fprintf(stderr, "%s: invalid argument for --type-add: %s\n", progname, optarg);
                 return -1;
             }
             break;
         case OPT_TYPE_CLEAR:
             if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--type-clear'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--type-clear'\n", progname);
                 return -1;
             }
             if (!bx_clear_type(opts, optarg)) {
-                fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", argv[0], optarg);
+                fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", progname, optarg);
                 return -1;
             }
             break;
@@ -548,7 +550,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 close_pf = true;
             }
             if (!pf) {
-                fprintf(stderr, "%s: %s: %s\n", argv[0], optarg, strerror(errno));
+                fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
                 return -1;
             }
             char *line = NULL; size_t cap = 0;
@@ -565,16 +567,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         }
         case 'A':
-            if (!bx_parse_nonnegative_int(argv[0], "-A", optarg, &opts->after_context))
+            if (!bx_parse_nonnegative_int(progname, "-A", optarg, &opts->after_context))
                 return -1;
             break;
         case 'B':
-            if (!bx_parse_nonnegative_int(argv[0], "-B", optarg, &opts->before_context))
+            if (!bx_parse_nonnegative_int(progname, "-B", optarg, &opts->before_context))
                 return -1;
             break;
         case 'C': {
             int n;
-            if (!bx_parse_nonnegative_int(argv[0], "-C", optarg, &n))
+            if (!bx_parse_nonnegative_int(progname, "-C", optarg, &n))
                 return -1;
             opts->after_context = n;
             opts->before_context = n;
@@ -591,7 +593,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_EXCLUDE_FROM: {
             FILE *ef = fopen(optarg, "r");
             if (!ef) {
-                fprintf(stderr, "%s: %s: %s\n", argv[0], optarg, strerror(errno));
+                fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
                 return -1;
             }
             char *line = NULL;
@@ -626,7 +628,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->follow_symlinks = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--follow'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--follow'\n", progname);
                 return -1;
             }
             break;
@@ -634,7 +636,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->no_ignore = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--no-ignore'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-ignore'\n", progname);
                 return -1;
             }
             break;
@@ -642,7 +644,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->no_ignore_parent = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--no-ignore-parent'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-parent'\n", progname);
                 return -1;
             }
             break;
@@ -650,7 +652,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->no_ignore_vcs = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--no-ignore-vcs'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-vcs'\n", progname);
                 return -1;
             }
             break;
@@ -658,7 +660,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->no_ignore_dot = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--no-ignore-dot'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-ignore-dot'\n", progname);
                 return -1;
             }
             break;
@@ -666,7 +668,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (personality == BX_SEARCH_RG) {
                 opts->no_require_git = true;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--no-require-git'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-require-git'\n", progname);
                 return -1;
             }
             break;
@@ -675,16 +677,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             return 1;
         case OPT_MAX_DEPTH:
             if (personality == BX_SEARCH_RG) {
-                if (!bx_parse_nonnegative_int(argv[0], "--max-depth", optarg, &opts->max_depth))
+                if (!bx_parse_nonnegative_int(progname, "--max-depth", optarg, &opts->max_depth))
                     return -1;
             } else {
-                fprintf(stderr, "%s: unrecognized option '--max-depth'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--max-depth'\n", progname);
                 return -1;
             }
             break;
         case OPT_LABEL:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--label'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--label'\n", progname);
                 return -1;
             }
             free(opts->label);
@@ -692,7 +694,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_GROUP_SEPARATOR:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--group-separator'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--group-separator'\n", progname);
                 return -1;
             }
             free(opts->group_separator);
@@ -701,14 +703,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_NO_GROUP_SEPARATOR:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--no-group-separator'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--no-group-separator'\n", progname);
                 return -1;
             }
             opts->suppress_group_separator = true;
             break;
         case OPT_NULL:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--null'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--null'\n", progname);
                 return -1;
             }
             opts->null_output = true;
@@ -716,15 +718,15 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_BINARY_FILES:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--binary-files'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--binary-files'\n", progname);
                 return -1;
             }
-            if (!bx_set_binary_files_mode(argv[0], opts, optarg))
+            if (!bx_set_binary_files_mode(progname, opts, optarg))
                 return -1;
             break;
         case OPT_NULL_DATA:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--null-data'\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option '--null-data'\n", progname);
                 return -1;
             }
             opts->null_data = true;
@@ -734,10 +736,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_color_set_mode(opts->color_mode);
             break;
         case OPT_HELP:
-            bx_search_print_help(argv[0]);
+            bx_search_print_help(progname);
             return 1;
         case OPT_VERSION:
-            bx_search_print_version(argv[0]);
+            bx_search_print_version(progname);
             return 1;
         case '?':
             if (personality != BX_SEARCH_RG && optind > 0 && optind <= argc) {
@@ -752,7 +754,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     }
                     if (all_digits) {
                         int n;
-                        if (!bx_parse_nonnegative_int(argv[0], arg, arg + 1, &n))
+                        if (!bx_parse_nonnegative_int(progname, arg, arg + 1, &n))
                             return -1;
                         opts->after_context = n;
                         opts->before_context = n;
@@ -761,11 +763,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 }
             }
             if (optopt) {
-                fprintf(stderr, "%s: invalid option -- '%c'\n", argv[0], optopt);
+                fprintf(stderr, "%s: invalid option -- '%c'\n", progname, optopt);
             } else if (optind > 0 && optind <= argc) {
-                fprintf(stderr, "%s: unrecognized option '%s'\n", argv[0], argv[optind - 1]);
+                fprintf(stderr, "%s: unrecognized option '%s'\n", progname, argv[optind - 1]);
             } else {
-                fprintf(stderr, "%s: unrecognized option\n", argv[0]);
+                fprintf(stderr, "%s: unrecognized option\n", progname);
             }
             return -1;
         default:
@@ -788,7 +790,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
 
     if (optind >= argc) {
         if (!opts->files_only && opts->num_extra_patterns == 0) {
-            fprintf(stderr, "%s: missing pattern\n", argv[0]);
+            fprintf(stderr, "%s: missing pattern\n", progname);
             return -1;
         }
         *pattern = opts->num_extra_patterns > 0 ? opts->extra_patterns[--opts->num_extra_patterns] : "";

@@ -10,6 +10,7 @@
 #include <regex.h>
 #include <unistd.h>
 
+#include "lib/cli_common.h"
 #include "lib/path_ops.h"
 #include "search.h"
 #include "options.h"
@@ -21,7 +22,7 @@
 
 static bool progname_uses_os_error_style(const char *progname) {
     if (!progname) return false;
-    progname = bx_path_basename_ptr(progname);
+    progname = bx_cli_progname(progname, "grep");
     return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
 }
 
@@ -47,8 +48,8 @@ static void report_binary_match(const char *progname, const char *path) {
 }
 
 static const char *display_path_for_output(const char *path, bool strip_dot_prefix) {
-    if (strip_dot_prefix && path && path[0] == '.' && path[1] == '/')
-        return path + 2;
+    if (strip_dot_prefix)
+        return bx_path_strip_dot_slash_prefix_ptr(path);
     return path;
 }
 

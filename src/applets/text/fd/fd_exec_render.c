@@ -77,9 +77,7 @@ size_t fd_placeholder_count(const char *arg) {
 }
 
 static const char *fd_stem_input_path(const char *path) {
-    if (path[0] == '.' && path[1] == '/')
-        return path + 2;
-    return path;
+    return bx_path_strip_dot_slash_prefix_ptr(path);
 }
 
 static char *fd_remove_last_extension(const char *path) {
@@ -185,23 +183,13 @@ static char *fd_exec_path(const struct fd_render_ctx *ctx, const char *path) {
     if (!ctx->opts->absolute_path)
         return NULL;
 
-    if (relative[0] == '.' && relative[1] == '/')
-        relative += 2;
+    relative = bx_path_strip_dot_slash_prefix_ptr(relative);
     if (relative[0] == '/')
         return strdup(relative);
 
     if (!ctx->cwd || ctx->cwd[0] == '\0')
         return strdup(relative);
-
-    size_t cwd_len = strlen(ctx->cwd);
-    size_t rel_len = strlen(relative);
-    char *out = malloc(cwd_len + 1 + rel_len + 1);
-    if (!out)
-        return NULL;
-    memcpy(out, ctx->cwd, cwd_len);
-    out[cwd_len] = '/';
-    memcpy(out + cwd_len + 1, relative, rel_len + 1);
-    return out;
+    return bx_path_join(ctx->cwd, relative);
 }
 
 static char *fd_apply_path_separator(const struct fd_opts *opts, const char *path) {
@@ -276,8 +264,8 @@ static char *fd_render_base_path(const struct fd_render_ctx *ctx, const char *pa
     } else {
         const char *relative = path;
         if (fd_should_strip_cwd_prefix(ctx, for_exec) &&
-            relative[0] == '.' && relative[1] == '/')
-            relative += 2;
+            relative != NULL)
+            relative = bx_path_strip_dot_slash_prefix_ptr(relative);
         base = strdup(relative);
     }
     if (!base)

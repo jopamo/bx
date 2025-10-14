@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+
 #include "ignore.h"
+#include "lib/path_ops.h"
 #include "walk.h"
 
 enum bx_ignore_match_result {
@@ -203,11 +205,9 @@ bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
 }
 
 static bool path_has_git_dir(const char *dirpath) {
-    size_t plen = strlen(dirpath) + strlen("/.git") + 1;
-    char *git_path = malloc(plen);
+    char *git_path = bx_path_join(dirpath, ".git");
     if (!git_path)
         return false;
-    snprintf(git_path, plen, "%s/.git", dirpath);
     struct stat st;
     bool found = lstat(git_path, &st) == 0;
     free(git_path);
@@ -220,28 +220,29 @@ bool bx_ignore_enable_gitignore_for_root(const char *root, const struct walk_opt
     if (opts->no_require_git)
         return true;
 
-    char *resolved = realpath(root, NULL);
+    char *resolved = bx_path_realpath_dup(root);
     if (!resolved)
         return false;
 
     bool found = false;
     char *cursor = resolved;
+    bool cursor_owned = false;
     while (cursor && cursor[0] != '\0') {
         if (path_has_git_dir(cursor)) {
             found = true;
             break;
         }
-        char *slash = strrchr(cursor, '/');
-        if (!slash)
+        if (strcmp(cursor, "/") == 0)
             break;
-        if (slash == cursor) {
-            if (path_has_git_dir("/"))
-                found = true;
-            break;
-        }
-        *slash = '\0';
+        char *parent = bx_path_parent_dir_stripped_dup(cursor);
+        if (cursor_owned)
+            free(cursor);
+        cursor = parent;
+        cursor_owned = true;
     }
 
+    if (cursor_owned)
+        free(cursor);
     free(resolved);
     return found;
 }
@@ -255,11 +256,11 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
     if (!root || !opts || opts->no_ignore || opts->no_ignore_parent)
         goto success;
 
-    char *resolved_root = realpath(root, NULL);
+    char *resolved_root = bx_path_realpath_dup(root);
     if (!resolved_root)
         goto success;
 
-    char *cursor = strdup(resolved_root);
+    char *cursor = bx_path_parent_dir_stripped_dup(resolved_root);
     if (!cursor) {
         free(resolved_root);
         goto fail;
@@ -271,12 +272,6 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
     struct bx_ignore_state *chain = NULL;
 
     while (cursor && strcmp(cursor, "/") != 0) {
-        char *slash = strrchr(cursor, '/');
-        if (!slash)
-            break;
-        if (slash == cursor)
-            break;
-        *slash = '\0';
         if (dir_count >= dir_cap) {
             int new_cap = dir_cap == 0 ? 8 : dir_cap * 2;
             char **tmp = realloc(dirs, (size_t)new_cap * sizeof(*dirs));
@@ -298,6 +293,9 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
             free(resolved_root);
             goto fail;
         }
+        char *parent = bx_path_parent_dir_stripped_dup(cursor);
+        free(cursor);
+        cursor = parent;
     }
     free(cursor);
 

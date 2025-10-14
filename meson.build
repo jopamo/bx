@@ -651,6 +651,9 @@ if get_option('tests')
   test_fuzz_reference_resolution = files('tests/test_fuzz_reference_resolution.py')
   test('fuzz reference resolution', python3, args : [test_fuzz_reference_resolution])
 
+  test_covering_generator = files('tests/test_covering_generator.py')
+  test('covering generator', python3, args : [test_covering_generator])
+
   test_cp_preserve_metadata = files('tests/applets/base/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 

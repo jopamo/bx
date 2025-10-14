@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -167,6 +168,15 @@ char* bx_path_getcwd_dup(void) {
     return cwd;
 }
 
+char* bx_path_realpath_dup(const char* path) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    return realpath(path, NULL);
+}
+
 char* bx_path_make_absolute_dup(const char* path) {
     if (path == NULL) {
         errno = EINVAL;
@@ -314,6 +324,13 @@ char* bx_path_strip_trailing_slashes_dup(const char* path) {
         len--;
     }
     return bx_path_dup_range(path, len);
+}
+
+const char* bx_path_strip_dot_slash_prefix_ptr(const char* path) {
+    if (path != NULL && path[0] == '.' && path[1] == '/') {
+        return path + 2;
+    }
+    return path;
 }
 
 const char* bx_path_basename_ptr(const char* path) {

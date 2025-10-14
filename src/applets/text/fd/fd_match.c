@@ -186,7 +186,7 @@ bool fd_state_init(struct fd_state *st, const char *progname,
     st->strip_implicit_dot_prefix = using_implicit_root;
 
     if (opts->absolute_path)
-        st->cwd = getcwd(NULL, 0);
+        st->cwd = bx_path_getcwd_dup();
 
     fd_render_ctx_init(&st->render, opts, using_implicit_root, st->cwd);
 
