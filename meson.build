@@ -1236,7 +1236,7 @@ if get_option('tests')
 
   test_find_basic = find_program('tests/applets/base/find/test_find_basic.sh')
   test('find basic', test_find_basic, args : [bx_exe], suite : fast_track_p2_suite)
-  test_find_differential = find_program('tests/applets/base/find/test_find_differential.py')
+  test_find_differential = files('tests/applets/base/find/test_find_differential.py')
   test('find differential', python3, args : [test_find_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
 
   test_xargs_basic = find_program('tests/applets/base/xargs/test_xargs_basic.sh')

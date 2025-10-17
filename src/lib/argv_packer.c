@@ -11,7 +11,7 @@ extern char **environ;
 static size_t bx_argv_pointer_bytes(int argc) {
     if (argc < 0)
         return 0;
-    return (size_t)(argc + 1) * sizeof(char *);
+    return (size_t)argc * sizeof(char *);
 }
 
 size_t bx_argv_environment_bytes(void) {
@@ -238,30 +238,33 @@ int bx_argv_select_batch_count(const char *const *base_argv, int base_argc,
                                int max_args, int max_lines,
                                size_t char_limit) {
     int capped_args = max_args > 0 ? max_args : (item_count - start);
+    int capped_lines = max_lines > 0 ? max_lines : (item_count - start);
     int take = 0;
     int used_lines = 0;
     int last_group = -1;
+    struct bx_argv_select_batch_ctx ctx = {
+        .base_argv = base_argv,
+        .base_argc = base_argc,
+        .items = items,
+    };
 
     while (start + take < item_count && take < capped_args) {
         int group = line_groups ? line_groups[start + take] : (start + take);
-        if (take == 0 || group != last_group) {
-            int capped_lines = max_lines > 0 ? max_lines : (item_count - start);
-            if (used_lines >= capped_lines)
-                break;
+        bool new_group = (take == 0 || group != last_group);
+        if (new_group && used_lines >= capped_lines)
+            break;
+
+        size_t bytes = bx_argv_select_batch_ctx_bytes(&ctx, start, take + 1);
+        if (bytes == (size_t)-1)
+            return -1;
+        if (char_limit > 0 && bytes > char_limit)
+            break;
+
+        take++;
+        if (new_group) {
             used_lines++;
             last_group = group;
         }
-        struct bx_argv_select_batch_ctx ctx = {
-            .base_argv = base_argv,
-            .base_argc = base_argc,
-            .items = items,
-        };
-        int next_take = bx_argv_select_batch_count_by_bytes(
-            item_count, start, take + 1, used_lines, char_limit,
-            bx_argv_select_batch_ctx_bytes, &ctx);
-        if (next_take < 0 || next_take == take)
-            break;
-        take = next_take;
     }
 
     return take > 0 ? take : -1;

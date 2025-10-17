@@ -469,11 +469,7 @@ static char* bx_copy_required_self_copy_child(struct bx_copy_context* ctx, const
 
     const char* suffix = dest_realpath + src_len + 1;
     const char* slash = strchr(suffix, '/');
-    if (slash == NULL) {
-        free(src_realpath);
-        return NULL;
-    }
-    size_t component_len = (size_t)(slash - suffix);
+    size_t component_len = slash ? (size_t)(slash - suffix) : strlen(suffix);
 
     char* component = xmalloc(component_len + 1);
     memcpy(component, suffix, component_len);
