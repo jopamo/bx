@@ -729,6 +729,9 @@ static bool rg_should_search_stdin(void) {
     if (S_ISCHR(st.st_mode))
         return false;
 
+    if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode))
+        return true;
+
     struct pollfd pfd = {
         .fd = STDIN_FILENO,
         .events = POLLIN,

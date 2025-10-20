@@ -55,6 +55,16 @@ static bool fd_detail_items_reserve(struct fd_detail_items *items, int needed) {
     return true;
 }
 
+static off_t fd_detail_display_size(const struct walk_entry *entry) {
+    if (!entry)
+        return 0;
+
+    if (entry->is_dir && entry->block_size > 0 && entry->size < (off_t)entry->block_size)
+        return (off_t)entry->block_size;
+
+    return entry->size;
+}
+
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
                             struct walk_entry *entry) {
@@ -83,7 +93,7 @@ bool fd_detail_items_append(struct fd_detail_items *items,
         .nlink = entry->nlink,
         .uid = entry->uid,
         .gid = entry->gid,
-        .size = entry->size,
+        .size = fd_detail_display_size(entry),
         .mtime_sec = entry->mtime.tv_sec,
     };
     return true;

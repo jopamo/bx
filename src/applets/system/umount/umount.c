@@ -146,6 +146,61 @@ static bool bx_umount_type_matches(const char* pattern, const char* type) {
     return !saw_positive || matched_positive;
 }
 
+static bool bx_umount_target_is_path_or_child(const char* target, const char* root) {
+    size_t root_len;
+
+    if (target == NULL || root == NULL) {
+        return false;
+    }
+    if (strcmp(target, root) == 0) {
+        return true;
+    }
+
+    root_len = strlen(root);
+    if (strncmp(target, root, root_len) != 0) {
+        return false;
+    }
+    return target[root_len] == '/';
+}
+
+static bool bx_umount_skip_all_target(const char* target) {
+    static const char* const exact_skips[] = {
+        "/",
+        "/dev",
+        "/dev/shm",
+        "/run",
+        "/sys",
+        "/tmp",
+        "/var/cache",
+        "/var/log",
+        "/var/tmp",
+    };
+    static const char* const subtree_skips[] = {
+        "/proc",
+        "/run/credentials",
+        "/run/host",
+        "/run/user",
+    };
+
+    if (target == NULL || target[0] == '\0') {
+        return true;
+    }
+
+    for (size_t i = 0; i < sizeof(exact_skips) / sizeof(exact_skips[0]); i++) {
+        if (strcmp(target, exact_skips[i]) == 0) {
+            return true;
+        }
+    }
+
+    for (size_t i = 0; i < sizeof(subtree_skips) / sizeof(subtree_skips[0]); i++) {
+        if (bx_umount_target_is_path_or_child(target, subtree_skips[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool bx_umount_skip_all_entry(const struct bx_mount_entry* entry, const struct bx_umount_options* options) {
     static const char* const default_skipped_types[] = {
         "proc",
@@ -175,6 +230,10 @@ static bool bx_umount_skip_all_entry(const struct bx_mount_entry* entry, const s
         return true;
     }
     if (strcmp(entry->target, "/") == 0) {
+        return true;
+    }
+
+    if (bx_umount_skip_all_target(entry->target)) {
         return true;
     }
 
@@ -392,10 +451,14 @@ static int bx_umount_perform_one(const struct bx_umount_options* options, const 
 }
 
 struct bx_target_list {
-    char** items;
-    char** sources;
+    struct bx_target_item* items;
     size_t len;
     size_t cap;
+};
+
+struct bx_target_item {
+    char* target;
+    char* source;
 };
 
 static void bx_target_list_free(struct bx_target_list* list) {
@@ -403,17 +466,16 @@ static void bx_target_list_free(struct bx_target_list* list) {
         return;
     }
     for (size_t i = 0; i < list->len; i++) {
-        free(list->items[i]);
-        free(list->sources[i]);
+        free(list->items[i].target);
+        free(list->items[i].source);
     }
     free(list->items);
-    free(list->sources);
     memset(list, 0, sizeof(*list));
 }
 
 static bool bx_target_list_contains(const struct bx_target_list* list, const char* target) {
     for (size_t i = 0; i < list->len; i++) {
-        if (strcmp(list->items[i], target) == 0) {
+        if (strcmp(list->items[i].target, target) == 0) {
             return true;
         }
     }
@@ -427,12 +489,54 @@ static void bx_target_list_push(struct bx_target_list* list, const char* target,
     if (list->len == list->cap) {
         size_t new_cap = list->cap == 0 ? 8 : list->cap * 2;
         list->items = xrealloc(list->items, new_cap * sizeof(*list->items));
-        list->sources = xrealloc(list->sources, new_cap * sizeof(*list->sources));
         list->cap = new_cap;
     }
-    list->items[list->len] = xstrdup(target);
-    list->sources[list->len] = source != NULL ? xstrdup(source) : NULL;
+    list->items[list->len].target = xstrdup(target);
+    list->items[list->len].source = source != NULL ? xstrdup(source) : NULL;
     list->len++;
+}
+
+static size_t bx_target_depth(const char* target) {
+    size_t depth = 0;
+
+    if (target == NULL) {
+        return 0;
+    }
+
+    for (const char* p = target; *p != '\0'; p++) {
+        if (*p == '/') {
+            depth++;
+        }
+    }
+
+    return depth;
+}
+
+static int bx_target_item_compare_desc(const void* left, const void* right) {
+    const struct bx_target_item* a = left;
+    const struct bx_target_item* b = right;
+    size_t a_depth = bx_target_depth(a->target);
+    size_t b_depth = bx_target_depth(b->target);
+
+    if (a_depth != b_depth) {
+        return a_depth < b_depth ? 1 : -1;
+    }
+
+    size_t a_len = strlen(a->target);
+    size_t b_len = strlen(b->target);
+    if (a_len != b_len) {
+        return a_len < b_len ? 1 : -1;
+    }
+
+    return strcmp(a->target, b->target);
+}
+
+static void bx_target_list_sort_desc(struct bx_target_list* list) {
+    if (list == NULL || list->len < 2) {
+        return;
+    }
+
+    qsort(list->items, list->len, sizeof(*list->items), bx_target_item_compare_desc);
 }
 
 static int bx_umount_recursive(const struct bx_umount_options* options, const char* spec, struct bx_diag_ctx* diag) {
@@ -457,9 +561,10 @@ static int bx_umount_recursive(const struct bx_umount_options* options, const ch
     }
 
     bx_mount_table_free(&table);
+    bx_target_list_sort_desc(&list);
 
     for (size_t i = 0; i < list.len; i++) {
-        int rc = bx_umount_perform_one(options, list.items[i], list.sources[i], diag);
+        int rc = bx_umount_perform_one(options, list.items[i].target, list.items[i].source, diag);
         if (rc != 0) {
             bx_target_list_free(&list);
             return rc;
@@ -472,6 +577,7 @@ static int bx_umount_recursive(const struct bx_umount_options* options, const ch
 
 static int bx_umount_all(const struct bx_umount_options* options, struct bx_diag_ctx* diag) {
     struct bx_mount_table table;
+    struct bx_target_list list = {0};
     int successes = 0;
     int failures = 0;
 
@@ -485,8 +591,14 @@ static int bx_umount_all(const struct bx_umount_options* options, struct bx_diag
         if (bx_umount_skip_all_entry(entry, options)) {
             continue;
         }
+        bx_target_list_push(&list, entry->target, entry->source);
+    }
 
-        int rc = bx_umount_perform_one(options, entry->target, entry->source, diag);
+    bx_mount_table_free(&table);
+    bx_target_list_sort_desc(&list);
+
+    for (size_t i = 0; i < list.len; i++) {
+        int rc = bx_umount_perform_one(options, list.items[i].target, list.items[i].source, diag);
         if (rc == 0) {
             successes++;
         }
@@ -495,7 +607,7 @@ static int bx_umount_all(const struct bx_umount_options* options, struct bx_diag
         }
     }
 
-    bx_mount_table_free(&table);
+    bx_target_list_free(&list);
 
     if (failures == 0) {
         return 0;

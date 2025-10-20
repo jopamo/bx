@@ -17,6 +17,17 @@ struct walk_ancestor {
     const struct walk_ancestor *parent;
 };
 
+struct walk_dirent_item {
+    char *name;
+    unsigned char d_type;
+};
+
+struct walk_dirent_list {
+    struct walk_dirent_item *items;
+    size_t len;
+    size_t cap;
+};
+
 static void walk_entry_fill_from_stat(struct walk_entry *entry, const struct stat *st) {
     entry->is_dir = S_ISDIR(st->st_mode);
     entry->metadata_loaded = true;
@@ -28,9 +39,66 @@ static void walk_entry_fill_from_stat(struct walk_entry *entry, const struct sta
     entry->uid = st->st_uid;
     entry->gid = st->st_gid;
     entry->size = st->st_size;
+    entry->block_size = st->st_blksize;
     entry->atime = st->st_atim;
     entry->mtime = st->st_mtim;
     entry->ctime = st->st_ctim;
+}
+
+static void walk_dirent_list_free(struct walk_dirent_list *list) {
+    if (!list)
+        return;
+
+    for (size_t i = 0; i < list->len; i++)
+        free(list->items[i].name);
+    free(list->items);
+    memset(list, 0, sizeof(*list));
+}
+
+static bool walk_dirent_list_reserve(struct walk_dirent_list *list, size_t needed) {
+    if (list->cap >= needed)
+        return true;
+
+    size_t new_cap = list->cap == 0 ? 16 : list->cap * 2;
+    while (new_cap < needed)
+        new_cap *= 2;
+
+    struct walk_dirent_item *tmp = realloc(list->items, new_cap * sizeof(*list->items));
+    if (!tmp)
+        return false;
+
+    list->items = tmp;
+    list->cap = new_cap;
+    return true;
+}
+
+static int walk_dirent_item_compare(const void *left, const void *right) {
+    const struct walk_dirent_item *a = left;
+    const struct walk_dirent_item *b = right;
+    return strcmp(a->name, b->name);
+}
+
+static bool walk_dirent_list_read_sorted(DIR *dir, struct walk_dirent_list *list) {
+    struct dirent *ent;
+
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+
+        if (!walk_dirent_list_reserve(list, list->len + 1))
+            return false;
+
+        list->items[list->len].name = strdup(ent->d_name);
+        if (!list->items[list->len].name)
+            return false;
+        list->items[list->len].d_type = ent->d_type;
+        list->len++;
+    }
+
+    if (list->len > 1)
+        qsort(list->items, list->len, sizeof(*list->items), walk_dirent_item_compare);
+
+    return true;
 }
 
 bool walk_entry_load_metadata(struct walk_entry *entry) {
@@ -131,21 +199,26 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
     }
 
     int status = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
+    struct walk_dirent_list dirents = {0};
+    if (!walk_dirent_list_read_sorted(d, &dirents)) {
+        walk_report_error(opts, dirpath, ENOMEM);
+        closedir(d);
+        bx_ignore_state_dispose(&ignore_state);
+        return -1;
+    }
+
+    for (size_t dirent_index = 0; dirent_index < dirents.len; dirent_index++) {
+        const struct walk_dirent_item *dirent_item = &dirents.items[dirent_index];
         if (walk_should_stop(opts))
             break;
 
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-            continue;
-
-        size_t plen = strlen(dirpath) + 1 + strlen(ent->d_name) + 1;
+        size_t plen = strlen(dirpath) + 1 + strlen(dirent_item->name) + 1;
         char *full = malloc(plen);
-        snprintf(full, plen, "%s/%s", dirpath, ent->d_name);
+        snprintf(full, plen, "%s/%s", dirpath, dirent_item->name);
 
         /* Keep per-entry policy out of the walker; this loop should stay about
          * traversal, metadata, callbacks, and cycle/error handling. */
-        if (bx_walk_filter_should_skip(filters, ent->d_name, full, &ignore_state)) {
+        if (bx_walk_filter_should_skip(filters, dirent_item->name, full, &ignore_state)) {
             free(full);
             continue;
         }
@@ -168,9 +241,9 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         };
 
         if (!opts->follow_symlinks) {
-            if (ent->d_type == DT_DIR) {
+            if (dirent_item->d_type == DT_DIR) {
                 entry.is_dir = true;
-            } else if (ent->d_type != DT_UNKNOWN) {
+            } else if (dirent_item->d_type != DT_UNKNOWN) {
                 entry.is_dir = false;
             } else {
                 if (lstat(full, &st) != 0) {
@@ -180,9 +253,9 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                 walk_entry_fill_from_stat(&entry, &st);
             }
         } else {
-            if (ent->d_type == DT_DIR) {
+            if (dirent_item->d_type == DT_DIR) {
                 entry.is_dir = true;
-            } else if (ent->d_type != DT_LNK && ent->d_type != DT_UNKNOWN) {
+            } else if (dirent_item->d_type != DT_LNK && dirent_item->d_type != DT_UNKNOWN) {
                 entry.is_dir = false;
             } else {
                 if (lstat(full, &lst) != 0) {
@@ -258,6 +331,7 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         free(full);
     }
     closedir(d);
+    walk_dirent_list_free(&dirents);
     bx_ignore_state_dispose(&ignore_state);
     return status;
 }

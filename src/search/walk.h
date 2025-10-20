@@ -62,6 +62,7 @@ struct walk_entry {
     uid_t uid;
     gid_t gid;
     off_t size;
+    blksize_t block_size;
     struct timespec atime;
     struct timespec mtime;
     struct timespec ctime;
