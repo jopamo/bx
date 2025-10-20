@@ -7,6 +7,10 @@
 
 #include "xargs_input.h"
 
+struct xargs_collect_ctx {
+    struct xargs_items *items;
+};
+
 static bool xargs_items_append(struct xargs_items *items, const char *text,
                                int line_group) {
     if (items->count >= items->cap) {
@@ -29,6 +33,11 @@ static bool xargs_items_append(struct xargs_items *items, const char *text,
     items->line_groups[items->count] = line_group;
     items->count++;
     return true;
+}
+
+static bool xargs_collect_sink(const char *text, int line_group, void *user) {
+    struct xargs_collect_ctx *ctx = user;
+    return xargs_items_append(ctx->items, text, line_group);
 }
 
 void xargs_items_free(struct xargs_items *items) {
@@ -58,9 +67,10 @@ static bool xargs_buf_append(char **buf, size_t *len, size_t *cap, int ch) {
     return true;
 }
 
-static bool xargs_finalize_item(struct xargs_items *items, const char *buf,
-                                bool have_item, const char *logical_eof,
-                                bool *stop, int line_group) {
+static bool xargs_emit_item(const char *buf, bool have_item,
+                            const char *logical_eof, bool *stop,
+                            int line_group, xargs_item_sink_fn sink,
+                            void *user) {
     if (!have_item)
         return true;
     if (logical_eof && strcmp(buf ? buf : "", logical_eof) == 0) {
@@ -68,17 +78,19 @@ static bool xargs_finalize_item(struct xargs_items *items, const char *buf,
             *stop = true;
         return true;
     }
-    return xargs_items_append(items, buf ? buf : "", line_group);
+    return sink(buf ? buf : "", line_group, user);
 }
 
-static bool xargs_read_items_null(FILE *input, struct xargs_items *items) {
+static bool xargs_read_items_null(FILE *input, xargs_item_sink_fn sink,
+                                  void *user) {
     char *buf = NULL;
     size_t len = 0, cap = 0;
+    int line_group = 1;
     int ch;
 
     while ((ch = fgetc(input)) != EOF) {
         if (ch == '\0') {
-            if (!xargs_items_append(items, buf ? buf : "", items->count + 1)) {
+            if (!sink(buf ? buf : "", line_group++, user)) {
                 free(buf);
                 return false;
             }
@@ -95,7 +107,7 @@ static bool xargs_read_items_null(FILE *input, struct xargs_items *items) {
     }
 
     if (buf && len > 0) {
-        if (!xargs_items_append(items, buf, items->count + 1)) {
+        if (!sink(buf, line_group, user)) {
             free(buf);
             return false;
         }
@@ -104,18 +116,20 @@ static bool xargs_read_items_null(FILE *input, struct xargs_items *items) {
     return true;
 }
 
-static bool xargs_read_items_delim(FILE *input, struct xargs_items *items,
-                                   char delimiter, const char *logical_eof) {
+static bool xargs_read_items_delim(FILE *input, char delimiter,
+                                   const char *logical_eof,
+                                   xargs_item_sink_fn sink, void *user) {
     char *buf = NULL;
     size_t len = 0, cap = 0;
     bool have_item = false;
     bool stop = false;
+    int line_group = 1;
     int ch;
 
     while (!stop && (ch = fgetc(input)) != EOF) {
         if ((char)ch == delimiter) {
-            if (!xargs_finalize_item(items, buf, true, logical_eof, &stop,
-                                     items->count + 1)) {
+            if (!xargs_emit_item(buf, true, logical_eof, &stop, line_group++,
+                                 sink, user)) {
                 free(buf);
                 return false;
             }
@@ -134,8 +148,8 @@ static bool xargs_read_items_delim(FILE *input, struct xargs_items *items,
     }
 
     if (!stop && have_item) {
-        if (!xargs_finalize_item(items, buf, true, logical_eof, &stop,
-                                 items->count + 1)) {
+        if (!xargs_emit_item(buf, true, logical_eof, &stop, line_group, sink,
+                             user)) {
             free(buf);
             return false;
         }
@@ -146,8 +160,8 @@ static bool xargs_read_items_delim(FILE *input, struct xargs_items *items,
 }
 
 static bool xargs_read_items_default(FILE *input, const char *progname,
-                                     struct xargs_items *items,
-                                     const char *logical_eof) {
+                                     const char *logical_eof,
+                                     xargs_item_sink_fn sink, void *user) {
     char *buf = NULL;
     size_t len = 0, cap = 0;
     int quote = 0;
@@ -231,10 +245,10 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
         }
         if (isspace((unsigned char)ch)) {
             if (have_item) {
-                if (!xargs_finalize_item(items, buf, true, logical_eof, &stop,
-                                         current_line_group
-                                             ? current_line_group
-                                             : next_line_group))
+                if (!xargs_emit_item(buf, true, logical_eof, &stop,
+                                     current_line_group ? current_line_group
+                                                        : next_line_group,
+                                     sink, user))
                     goto oom;
                 len = 0;
                 if (buf)
@@ -264,9 +278,10 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
     }
 
     if (!stop && have_item) {
-        if (!xargs_finalize_item(items, buf, true, logical_eof, &stop,
-                                 current_line_group ? current_line_group
-                                                    : next_line_group))
+        if (!xargs_emit_item(buf, true, logical_eof, &stop,
+                             current_line_group ? current_line_group
+                                                : next_line_group,
+                             sink, user))
             goto oom;
     }
 
@@ -278,8 +293,10 @@ oom:
     return false;
 }
 
-static bool xargs_read_items_replace_lines(FILE *input, struct xargs_items *items,
-                                           const char *logical_eof) {
+static bool xargs_read_items_replace_lines(FILE *input,
+                                           const char *logical_eof,
+                                           xargs_item_sink_fn sink,
+                                           void *user) {
     char *line = NULL;
     size_t cap = 0;
     ssize_t len;
@@ -300,7 +317,7 @@ static bool xargs_read_items_replace_lines(FILE *input, struct xargs_items *item
         }
         if (blank)
             continue;
-        if (!xargs_items_append(items, line, line_group++)) {
+        if (!sink(line, line_group++, user)) {
             free(line);
             return false;
         }
@@ -310,15 +327,25 @@ static bool xargs_read_items_replace_lines(FILE *input, struct xargs_items *item
     return true;
 }
 
+bool xargs_read_stream(FILE *input, const char *progname,
+                       struct xargs_opts *opts, xargs_item_sink_fn sink,
+                       void *user) {
+    if (!sink)
+        return false;
+
+    if (opts->replace_mode)
+        return xargs_read_items_replace_lines(input, opts->logical_eof, sink,
+                                              user);
+    if (opts->nul_delim)
+        return xargs_read_items_null(input, sink, user);
+    if (opts->delimiter_mode)
+        return xargs_read_items_delim(input, opts->delimiter, NULL, sink, user);
+    return xargs_read_items_default(input, progname, opts->logical_eof, sink,
+                                    user);
+}
+
 bool xargs_read_items(FILE *input, const char *progname, struct xargs_opts *opts,
                       struct xargs_items *items) {
-    if (opts->replace_mode)
-        return xargs_read_items_replace_lines(input, items,
-                                              opts->logical_eof);
-    if (opts->nul_delim)
-        return xargs_read_items_null(input, items);
-    if (opts->delimiter_mode)
-        return xargs_read_items_delim(input, items, opts->delimiter, NULL);
-    return xargs_read_items_default(input, progname, items,
-                                    opts->logical_eof);
+    struct xargs_collect_ctx ctx = {.items = items};
+    return xargs_read_stream(input, progname, opts, xargs_collect_sink, &ctx);
 }

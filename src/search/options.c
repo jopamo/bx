@@ -36,6 +36,7 @@ enum {
     OPT_NULL,
     OPT_BINARY_FILES,
     OPT_NULL_DATA,
+    OPT_STOP_ON_NONMATCH,
     OPT_TYPE_ADD,
     OPT_TYPE_CLEAR,
 };
@@ -116,6 +117,7 @@ void bx_search_print_help(const char *progname) {
     puts("      --no-require-git  use .gitignore outside git repositories");
     puts("      --hidden  search hidden files and directories");
     puts("      --iglob=GLOB  search only files matching GLOB, case-insensitively");
+    puts("      --stop-on-nonmatch  stop reading a file after a non-matching record follows a match");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
 }
@@ -347,6 +349,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"null",         no_argument,       NULL, OPT_NULL},
         {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
         {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
+        {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
         {NULL, 0, NULL, 0},
     };
 
@@ -725,11 +728,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             break;
         case OPT_NULL_DATA:
-            if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--null-data'\n", progname);
+            opts->null_data = true;
+            break;
+        case OPT_STOP_ON_NONMATCH:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--stop-on-nonmatch'\n", progname);
                 return -1;
             }
-            opts->null_data = true;
+            opts->stop_on_nonmatch = true;
             break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");

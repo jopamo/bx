@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -307,6 +308,193 @@ static int xargs_finish_interrupted_run(volatile sig_atomic_t *interrupt_signal,
     return 128 + signo;
 }
 
+struct xargs_stream_batch {
+    char **items;
+    int *line_groups;
+    int count;
+    int cap;
+    int used_lines;
+    int last_group;
+};
+
+struct xargs_stream_ctx {
+    const char *progname;
+    char **command;
+    int command_argc;
+    struct xargs_opts *opts;
+    struct bx_child *children;
+    int max_procs;
+    int *running;
+    int *final_rc;
+    bool *abort_launch;
+    volatile sig_atomic_t *interrupt_signal;
+    struct xargs_stream_batch batch;
+    bool saw_item;
+    bool failed;
+};
+
+static void xargs_stream_batch_reset(struct xargs_stream_batch *batch) {
+    for (int i = 0; i < batch->count; i++)
+        free(batch->items[i]);
+    batch->count = 0;
+    batch->used_lines = 0;
+    batch->last_group = -1;
+}
+
+static void xargs_stream_batch_free(struct xargs_stream_batch *batch) {
+    xargs_stream_batch_reset(batch);
+    free(batch->items);
+    free(batch->line_groups);
+    batch->items = NULL;
+    batch->line_groups = NULL;
+    batch->cap = 0;
+}
+
+static bool xargs_stream_batch_append(struct xargs_stream_batch *batch,
+                                      const char *item, int line_group) {
+    if (batch->count >= batch->cap) {
+        int new_cap = batch->cap == 0 ? 16 : batch->cap * 2;
+        char **new_items =
+            realloc(batch->items, (size_t)new_cap * sizeof(*batch->items));
+        if (!new_items)
+            return false;
+        batch->items = new_items;
+        int *new_groups = realloc(batch->line_groups,
+                                  (size_t)new_cap * sizeof(*batch->line_groups));
+        if (!new_groups)
+            return false;
+        batch->line_groups = new_groups;
+        batch->cap = new_cap;
+    }
+
+    batch->items[batch->count] = strdup(item);
+    if (!batch->items[batch->count])
+        return false;
+    batch->line_groups[batch->count] = line_group;
+    batch->count++;
+    if (batch->used_lines == 0 || line_group != batch->last_group) {
+        batch->used_lines++;
+        batch->last_group = line_group;
+    }
+    return true;
+}
+
+static int xargs_stream_flush(struct xargs_stream_ctx *ctx) {
+    if (ctx->batch.count == 0)
+        return 0;
+
+    while (*ctx->running >= ctx->max_procs) {
+        if (xargs_reap_children(ctx->progname, ctx->command[0], ctx->children,
+                                ctx->running, ctx->final_rc, ctx->abort_launch,
+                                true, false) != 0) {
+            ctx->failed = true;
+            return 1;
+        }
+        if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
+            return 0;
+    }
+
+    int slot = bx_child_pick_slot(ctx->children, *ctx->running, ctx->max_procs);
+    if (xargs_spawn_batch(ctx->progname, ctx->command, ctx->command_argc,
+                          ctx->batch.items, ctx->batch.count, ctx->opts, slot,
+                          ctx->children, ctx->running, ctx->final_rc,
+                          ctx->abort_launch) != 0) {
+        ctx->failed = true;
+        return 1;
+    }
+
+    xargs_stream_batch_reset(&ctx->batch);
+
+    if (*ctx->running > 0 &&
+        xargs_reap_children(ctx->progname, ctx->command[0], ctx->children,
+                            ctx->running, ctx->final_rc, ctx->abort_launch,
+                            false, true) != 0) {
+        ctx->failed = true;
+        return 1;
+    }
+
+    return 0;
+}
+
+static bool xargs_stream_sink(const char *item, int line_group, void *user) {
+    struct xargs_stream_ctx *ctx = user;
+    struct xargs_stream_batch *batch = &ctx->batch;
+    int max_args = ctx->opts->max_args > 0 ? ctx->opts->max_args : INT_MAX;
+    int max_lines = ctx->opts->max_lines > 0 ? ctx->opts->max_lines : INT_MAX;
+    size_t char_limit = bx_argv_effective_char_limit(ctx->opts->max_chars);
+
+    ctx->saw_item = true;
+
+    if (ctx->opts->replace_mode) {
+        while (*ctx->running >= ctx->max_procs) {
+            if (xargs_reap_children(ctx->progname, ctx->command[0],
+                                    ctx->children, ctx->running,
+                                    ctx->final_rc, ctx->abort_launch, true,
+                                    false) != 0) {
+                ctx->failed = true;
+                return false;
+            }
+            if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
+                return false;
+        }
+
+        int slot =
+            bx_child_pick_slot(ctx->children, *ctx->running, ctx->max_procs);
+        if (xargs_spawn_replacement(
+                ctx->progname, ctx->command, ctx->command_argc,
+                ctx->opts->replace_marker ? ctx->opts->replace_marker : "{}",
+                item, ctx->opts, slot, ctx->children, ctx->running,
+                ctx->final_rc, ctx->abort_launch) != 0) {
+            ctx->failed = true;
+            return false;
+        }
+
+        if (*ctx->running > 0 &&
+            xargs_reap_children(ctx->progname, ctx->command[0], ctx->children,
+                                ctx->running, ctx->final_rc,
+                                ctx->abort_launch, false, true) != 0) {
+            ctx->failed = true;
+            return false;
+        }
+        return true;
+    }
+
+    bool new_group = (batch->count == 0 || line_group != batch->last_group);
+
+    if (batch->count > 0 &&
+        (batch->count >= max_args ||
+         (new_group && batch->used_lines >= max_lines) ||
+         (char_limit > 0 &&
+          (bx_argv_bytes_with_items((const char *const *)ctx->command,
+                                    ctx->command_argc, batch->items, 0,
+                                    batch->count) +
+           strlen(item) + 1 + sizeof(char *)) > char_limit))) {
+        if (xargs_stream_flush(ctx) != 0)
+            return false;
+        if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
+            return false;
+        batch = &ctx->batch;
+    }
+
+    if (char_limit > 0) {
+        size_t single_item_bytes =
+            bx_argv_bytes_with_items((const char *const *)ctx->command,
+                                     ctx->command_argc, NULL, 0, 0) +
+            strlen(item) + 1 + sizeof(char *);
+        if (single_item_bytes > char_limit) {
+            fprintf(stderr, "%s: argument line too long\n", ctx->progname);
+            ctx->failed = true;
+            return false;
+        }
+    }
+
+    if (!xargs_stream_batch_append(batch, item, line_group)) {
+        ctx->failed = true;
+        return false;
+    }
+    return true;
+}
+
 static int xargs_wait_for_running_children(
     volatile sig_atomic_t *interrupt_signal, const char *progname,
     const char *cmdname, struct bx_child *children, int *running,
@@ -491,4 +679,74 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
 
     free(children);
     return final_rc;
+}
+
+int xargs_run_streaming_batches(const char *progname, char **command,
+                                int command_argc, FILE *input,
+                                struct xargs_opts *opts,
+                                volatile sig_atomic_t *interrupt_signal) {
+    int max_procs = opts->max_procs > 0 ? opts->max_procs : 1;
+    struct bx_child *children = calloc((size_t)max_procs, sizeof(*children));
+    if (!children)
+        return 1;
+
+    size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
+    if (char_limit > 0 &&
+        bx_argv_bytes_with_items((const char *const *)command, command_argc,
+                                 NULL, 0, 0) > char_limit) {
+        fprintf(stderr, "%s: argument line too long\n", progname);
+        free(children);
+        return 1;
+    }
+
+    int running = 0;
+    int final_rc = 0;
+    bool abort_launch = false;
+    struct xargs_stream_ctx ctx = {
+        .progname = progname,
+        .command = command,
+        .command_argc = command_argc,
+        .opts = opts,
+        .children = children,
+        .max_procs = max_procs,
+        .running = &running,
+        .final_rc = &final_rc,
+        .abort_launch = &abort_launch,
+        .interrupt_signal = interrupt_signal,
+        .batch = {.last_group = -1},
+    };
+
+    bool read_ok = xargs_read_stream(input, progname, opts, xargs_stream_sink, &ctx);
+    if (!read_ok && !ctx.failed &&
+        (abort_launch || *interrupt_signal != 0))
+        read_ok = true;
+    if (read_ok && ctx.batch.count > 0 && !abort_launch && *interrupt_signal == 0 &&
+        xargs_stream_flush(&ctx) != 0)
+        read_ok = false;
+
+    if (read_ok && !ctx.saw_item && !opts->no_run_if_empty &&
+        !opts->replace_mode) {
+        int slot = bx_child_pick_slot(children, running, max_procs);
+        if (xargs_spawn_batch(progname, command, command_argc, NULL, 0, opts,
+                              slot, children, &running, &final_rc,
+                              &abort_launch) != 0)
+            read_ok = false;
+    }
+
+    if (read_ok &&
+        xargs_wait_for_running_children(interrupt_signal, progname, command[0],
+                                        children, &running, &final_rc,
+                                        &abort_launch) != 0)
+        read_ok = false;
+
+    if (*interrupt_signal != 0) {
+        int rc = xargs_finish_interrupted_run(interrupt_signal, children, &running);
+        xargs_stream_batch_free(&ctx.batch);
+        free(children);
+        return rc != 0 ? rc : 1;
+    }
+
+    xargs_stream_batch_free(&ctx.batch);
+    free(children);
+    return (read_ok && !ctx.failed) ? final_rc : 1;
 }

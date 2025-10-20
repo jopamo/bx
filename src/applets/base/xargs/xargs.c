@@ -87,24 +87,16 @@ int bx_xargs_main(int argc, char **argv) {
 
     const char *progname = args.progname;
 
-    struct xargs_items items = {0};
-    if (!xargs_read_items(args.input, progname, &args.opts, &items)) {
-        xargs_free_main_args(&args);
-        xargs_items_free(&items);
-        return 1;
-    }
-    xargs_free_main_args(&args);
-
     struct xargs_signal_handlers handlers;
     if (xargs_install_signal_handlers(progname, &handlers) != 0) {
-        xargs_items_free(&items);
+        xargs_free_main_args(&args);
         return 1;
     }
 
-    int rc = xargs_run_batches(progname, args.command, args.command_argc,
-                               &items, &args.opts,
-                               &xargs_interrupt_signal);
+    int rc = xargs_run_streaming_batches(progname, args.command,
+                                         args.command_argc, args.input,
+                                         &args.opts, &xargs_interrupt_signal);
     xargs_restore_signal_handlers(&handlers);
-    xargs_items_free(&items);
+    xargs_free_main_args(&args);
     return rc;
 }

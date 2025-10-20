@@ -62,6 +62,7 @@ struct search_opts {
     bool null_output;
     bool null_filename;
     bool null_data;
+    bool stop_on_nonmatch;
     bool suppress_group_separator;
     char *label;
     char *group_separator;
