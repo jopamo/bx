@@ -62,7 +62,16 @@ struct search_opts {
     bool null_output;
     bool null_filename;
     bool null_data;
+    bool multiline;
+    bool multiline_dotall;
     bool stop_on_nonmatch;
+    bool pcre2_version;
+    enum {
+        BX_RG_ENGINE_UNSPECIFIED = 0,
+        BX_RG_ENGINE_DEFAULT,
+        BX_RG_ENGINE_PCRE2,
+        BX_RG_ENGINE_AUTO,
+    } rg_engine;
     bool suppress_group_separator;
     char *label;
     char *group_separator;

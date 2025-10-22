@@ -68,3 +68,16 @@ void bx_regex_free(struct bx_regex *rx) {
     pcre2_code_free(rx->code);
     free(rx);
 }
+
+void bx_regex_print_version(void) {
+    PCRE2_UCHAR *version = NULL;
+    int jit = 0;
+
+    if (pcre2_config(PCRE2_CONFIG_VERSION, &version) != 0 || !version) {
+        puts("PCRE2 is available");
+        return;
+    }
+    (void)pcre2_config(PCRE2_CONFIG_JIT, &jit);
+    printf("%s is available (JIT is %savailable)\n", (char *)version,
+           jit ? "" : "not ");
+}

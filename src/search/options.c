@@ -7,6 +7,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "options.h"
+#include "pcre2_matcher.h"
 #include "search.h"
 
 enum {
@@ -36,7 +37,11 @@ enum {
     OPT_NULL,
     OPT_BINARY_FILES,
     OPT_NULL_DATA,
+    OPT_MULTILINE,
+    OPT_MULTILINE_DOTALL,
     OPT_STOP_ON_NONMATCH,
+    OPT_ENGINE,
+    OPT_PCRE2_VERSION,
     OPT_TYPE_ADD,
     OPT_TYPE_CLEAR,
 };
@@ -117,6 +122,10 @@ void bx_search_print_help(const char *progname) {
     puts("      --no-require-git  use .gitignore outside git repositories");
     puts("      --hidden  search hidden files and directories");
     puts("      --iglob=GLOB  search only files matching GLOB, case-insensitively");
+    puts("  -U, --multiline  allow matches to span line terminators");
+    puts("      --multiline-dotall  make . match line terminators in multiline mode");
+    puts("      --engine=ENGINE  choose regex engine: default, pcre2, or auto");
+    puts("      --pcre2-version  print PCRE2 version information and exit");
     puts("      --stop-on-nonmatch  stop reading a file after a non-matching record follows a match");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
@@ -349,7 +358,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"null",         no_argument,       NULL, OPT_NULL},
         {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
         {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
+        {"multiline",    no_argument,       NULL, OPT_MULTILINE},
+        {"multiline-dotall", no_argument,   NULL, OPT_MULTILINE_DOTALL},
         {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
+        {"engine",       required_argument, NULL, OPT_ENGINE},
+        {"pcre2-version", no_argument,      NULL, OPT_PCRE2_VERSION},
         {NULL, 0, NULL, 0},
     };
 
@@ -357,7 +370,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:U", long_opts, NULL)) != -1) {
         switch (c) {
         case '0':
             if (personality == BX_SEARCH_RG) {
@@ -483,6 +496,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'u':
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;
+            break;
+        case 'U':
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: invalid option -- 'U'\n", progname);
+                return -1;
+            }
+            opts->multiline = true;
             break;
         case OPT_HIDDEN:
             if (personality == BX_SEARCH_RG) {
@@ -730,6 +750,21 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_NULL_DATA:
             opts->null_data = true;
             break;
+        case OPT_MULTILINE:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--multiline'\n", progname);
+                return -1;
+            }
+            opts->multiline = true;
+            break;
+        case OPT_MULTILINE_DOTALL:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--multiline-dotall'\n", progname);
+                return -1;
+            }
+            opts->multiline = true;
+            opts->multiline_dotall = true;
+            break;
         case OPT_STOP_ON_NONMATCH:
             if (personality != BX_SEARCH_RG) {
                 fprintf(stderr, "%s: unrecognized option '--stop-on-nonmatch'\n", progname);
@@ -737,6 +772,32 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             opts->stop_on_nonmatch = true;
             break;
+        case OPT_ENGINE:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--engine'\n", progname);
+                return -1;
+            }
+            if (strcmp(optarg, "default") == 0)
+                opts->rg_engine = BX_RG_ENGINE_DEFAULT;
+            else if (strcmp(optarg, "pcre2") == 0)
+                opts->rg_engine = BX_RG_ENGINE_PCRE2;
+            else if (strcmp(optarg, "auto") == 0)
+                opts->rg_engine = BX_RG_ENGINE_AUTO;
+            else {
+                fprintf(stderr,
+                        "%s: error parsing flag --engine: unrecognized regex engine '%s'\n",
+                        progname, optarg);
+                return -1;
+            }
+            break;
+        case OPT_PCRE2_VERSION:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--pcre2-version'\n", progname);
+                return -1;
+            }
+            opts->pcre2_version = true;
+            bx_regex_print_version();
+            return 1;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
             bx_color_set_mode(opts->color_mode);
@@ -786,6 +847,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     if (opts->unrestrict_level >= 3) {
         opts->binary_as_text = true;
         opts->binary_without_match = false;
+    }
+
+    if (personality == BX_SEARCH_RG) {
+        if (opts->perl_regexp)
+            opts->rg_engine = BX_RG_ENGINE_PCRE2;
+        if (opts->rg_engine == BX_RG_ENGINE_PCRE2)
+            opts->perl_regexp = true;
     }
 
     if (opts->files_only) {

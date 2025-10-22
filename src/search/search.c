@@ -213,6 +213,11 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             flags |= BX_REGEX_ICASE;
     }
 
+    if (opts->multiline)
+        flags |= BX_REGEX_MULTILINE;
+    if (opts->multiline_dotall)
+        flags |= BX_REGEX_DOTALL;
+
     struct bx_matcher *m = calloc(1, sizeof(*m));
     if (!m) {
         free(wrapped);
@@ -343,6 +348,153 @@ static ssize_t read_record(FILE *f, char **buf, size_t *cap, struct search_opts 
     return getdelim(buf, cap, record_delimiter(opts), f);
 }
 
+static unsigned char *read_stream_all(FILE *f, size_t *out_len) {
+    size_t cap = 4096;
+    size_t len = 0;
+    unsigned char *buf = malloc(cap + 1);
+    if (!buf)
+        return NULL;
+
+    for (;;) {
+        if (len == cap) {
+            size_t new_cap = cap * 2;
+            unsigned char *tmp = realloc(buf, new_cap + 1);
+            if (!tmp) {
+                free(buf);
+                return NULL;
+            }
+            buf = tmp;
+            cap = new_cap;
+        }
+
+        size_t nread = fread(buf + len, 1, cap - len, f);
+        len += nread;
+        if (nread == 0)
+            break;
+    }
+
+    if (ferror(f)) {
+        free(buf);
+        return NULL;
+    }
+
+    buf[len] = '\0';
+    if (out_len)
+        *out_len = len;
+    return buf;
+}
+
+static size_t line_number_for_offset(const unsigned char *buf, size_t offset) {
+    size_t line = 1;
+    for (size_t i = 0; i < offset; i++) {
+        if (buf[i] == '\n')
+            line++;
+    }
+    return line;
+}
+
+static size_t line_start_offset(const unsigned char *buf, size_t offset) {
+    while (offset > 0 && buf[offset - 1] != '\n')
+        offset--;
+    return offset;
+}
+
+static size_t line_end_offset(const unsigned char *buf, size_t len, size_t offset) {
+    while (offset < len && buf[offset] != '\n')
+        offset++;
+    if (offset < len)
+        offset++;
+    return offset;
+}
+
+static int search_file_multiline(const char *filename, const char *display_name,
+                                 const char *progname, struct bx_matcher *m,
+                                 struct search_opts *opts, int *match_count) {
+    FILE *f = stdin;
+    bool use_stdin = (!filename || strcmp(filename, "-") == 0);
+    if (!use_stdin) {
+        f = fopen(filename, "r");
+        if (!f) {
+            report_path_error(progname, filename, errno);
+            return 2;
+        }
+    }
+
+    size_t len = 0;
+    unsigned char *buf = read_stream_all(f, &len);
+    if (!use_stdin)
+        fclose(f);
+    if (!buf)
+        return 2;
+
+    size_t start = 0;
+    int file_matches = 0;
+    int status = 1;
+
+    while (start <= len) {
+        struct bx_match bm;
+        if (matcher_find_with_opts(m, buf, len, start, opts, &bm) != 0)
+            break;
+
+        file_matches++;
+        status = 0;
+
+        if (opts->quiet)
+            break;
+        if (opts->count_only) {
+            start = bm.end > bm.start ? bm.end : bm.start + 1;
+            if (opts->max_count > 0 && file_matches >= opts->max_count)
+                break;
+            continue;
+        }
+        if (opts->files_with_matches || opts->files_without_match)
+            break;
+
+        size_t line_num = line_number_for_offset(buf, bm.start);
+        if (opts->only_matching && !opts->invert_match) {
+            print_result_prefix(display_name, opts, (int)line_num, bm.start, ':');
+            fwrite(buf + bm.start, 1, bm.end - bm.start, stdout);
+            write_record_terminator(opts);
+        } else {
+            size_t out_start = line_start_offset(buf, bm.start);
+            size_t out_end = line_end_offset(buf, len, bm.end);
+            print_result_prefix(display_name, opts, (int)line_number_for_offset(buf, out_start),
+                                out_start, ':');
+            fwrite(buf + out_start, 1, out_end - out_start, stdout);
+            if (out_end == out_start || buf[out_end - 1] != record_delimiter(opts))
+                write_record_terminator(opts);
+        }
+
+        if (opts->max_count > 0 && file_matches >= opts->max_count)
+            break;
+        start = bm.end > bm.start ? bm.end : bm.start + 1;
+    }
+
+    if (opts->count_only) {
+        if (opts->show_filename && display_name)
+            printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
+        else
+            printf("%d\n", file_matches);
+    }
+    if (opts->files_with_matches && file_matches > 0 && display_name) {
+        if (opts->null_output)
+            printf("%s%c", display_name, '\0');
+        else
+            printf("%s\n", display_name);
+    }
+    if (opts->files_without_match && file_matches == 0 && display_name) {
+        if (opts->null_output)
+            printf("%s%c", display_name, '\0');
+        else
+            printf("%s\n", display_name);
+    }
+
+    if (match_count)
+        *match_count += file_matches;
+    free(buf);
+    return status;
+}
+
 static bool search_default_show_filename(int argc, char **argv, int first_file,
                                          enum bx_search_personality personality,
                                          struct search_opts *opts,
@@ -385,6 +537,7 @@ static int search_file_buffered(const char *filename, const char *display_name,
     int after_left = -1;
     size_t file_offset = 0;
     bool saw_binary = false;
+    bool saw_match_record = false;
 
     while ((len = read_record(f, &raw, &raw_cap, opts)) != -1) {
         if (!opts->null_data && memchr(raw, '\0', (size_t)len) != NULL)
@@ -406,6 +559,7 @@ static int search_file_buffered(const char *filename, const char *display_name,
         lines[nlines].match = selected;
         if (selected) {
             file_matches++;
+            saw_match_record = true;
             if (opts->max_count > 0 && file_matches >= opts->max_count) {
                 after_left = opts->after_context;
                 nlines++;
@@ -413,6 +567,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
                     break;
                 continue;
             }
+        } else if (opts->stop_on_nonmatch && saw_match_record) {
+            break;
         } else if (after_left > 0) {
             after_left--;
             nlines++;
@@ -557,6 +713,7 @@ static int search_file_streaming(const char *filename, const char *display_name,
     ssize_t len;
     int line_num = 0, file_matches = 0, status = 1;
     size_t file_offset = 0;
+    bool saw_match_record = false;
 
     while ((len = read_record(f, &line, &cap, opts)) != -1) {
         size_t line_offset = file_offset;
@@ -568,6 +725,7 @@ static int search_file_streaming(const char *filename, const char *display_name,
         if (opts->invert_match) matched = !matched;
         if (matched) {
             file_matches++; status = 0;
+            saw_match_record = true;
             if (opts->quiet) break;
             if (opts->count_only) {
                 if (opts->max_count > 0 && file_matches >= opts->max_count) break;
@@ -590,6 +748,8 @@ static int search_file_streaming(const char *filename, const char *display_name,
                 }
             }
             if (opts->max_count > 0 && file_matches >= opts->max_count) break;
+        } else if (opts->stop_on_nonmatch && saw_match_record) {
+            break;
         }
     }
 
@@ -646,11 +806,33 @@ static bool binary_file_matches(const char *filename, struct bx_matcher *m,
 
     while ((len = read_record(f, &line, &cap, opts)) != -1) {
         struct bx_match bm;
-        matched = matcher_find_with_opts(m, (unsigned char *)line,
-                                         record_match_len((unsigned char *)line, (size_t)len, opts),
-                                         0, opts, &bm) == 0;
-        if (opts->invert_match)
-            matched = !matched;
+        size_t match_len = record_match_len((unsigned char *)line, (size_t)len, opts);
+        if (!opts->null_data && memchr(line, '\0', match_len) != NULL) {
+            size_t chunk_start = 0;
+            matched = false;
+            while (chunk_start <= match_len) {
+                size_t chunk_len = 0;
+                while (chunk_start + chunk_len < match_len &&
+                       line[chunk_start + chunk_len] != '\0') {
+                    chunk_len++;
+                }
+                matched = matcher_find_with_opts(
+                              m, (unsigned char *)line + chunk_start, chunk_len, 0,
+                              opts, &bm) == 0;
+                if (opts->invert_match)
+                    matched = !matched;
+                if (matched)
+                    break;
+                if (chunk_start + chunk_len >= match_len)
+                    break;
+                chunk_start += chunk_len + 1;
+            }
+        } else {
+            matched = matcher_find_with_opts(m, (unsigned char *)line, match_len,
+                                             0, opts, &bm) == 0;
+            if (opts->invert_match)
+                matched = !matched;
+        }
         if (matched)
             break;
     }
@@ -665,6 +847,8 @@ static int search_file(const char *filename, const char *display_name_override, 
                        int *match_count) {
     const char *display_name = display_name_for_stream(filename, display_name_override, opts);
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
+    if (opts->multiline)
+        return search_file_multiline(filename, display_name, progname, m, opts, match_count);
     if (display_name && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 && lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
