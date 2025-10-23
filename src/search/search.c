@@ -64,16 +64,29 @@ static const char *display_name_for_stream(const char *filename, const char *dis
 
 struct bx_matcher;
 
+struct bx_search_stats {
+    int matches;
+    int matched_lines;
+    int files_with_matches;
+    int files_searched;
+    size_t bytes_printed;
+    size_t bytes_searched;
+};
+
+static struct bx_search_stats *current_stats = NULL;
+
 static bool is_binary(const char *path);
 static int search_binary_without_match(const char *display_name,
                                        struct search_opts *opts,
-                                       int *match_count);
+                                       int *match_count,
+                                       struct bx_search_stats *stats);
 static ssize_t read_record(FILE *f, char **buf, size_t *cap, struct search_opts *opts);
 static char record_delimiter(const struct search_opts *opts);
 static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts);
 static void write_record_terminator(const struct search_opts *opts);
 static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
                                   size_t start, struct search_opts *opts, struct bx_match *out);
+static void stats_count_bytes(size_t count);
 
 /* --- unified matcher (regex or literal) --- */
 
@@ -91,6 +104,60 @@ struct bx_matcher {
         regex_t posix;
     };
 };
+
+static bool rg_pattern_requires_pcre2(const char *pattern, const struct search_opts *opts) {
+    if (!pattern)
+        return false;
+
+    if (opts && (opts->multiline || opts->multiline_dotall))
+        return true;
+
+    for (const char *p = pattern; *p; ++p) {
+        if (*p == '\\') {
+            ++p;
+            if (!*p)
+                break;
+            if (*p >= '1' && *p <= '9')
+                return true;
+            if (*p == 'g' || *p == 'k')
+                return true;
+            continue;
+        }
+
+        if (*p != '(' || p[1] != '?')
+            continue;
+
+        if (p[2] == '=' || p[2] == '!' || p[2] == '>')
+            return true;
+        if (p[2] == '<' && (p[3] == '=' || p[3] == '!'))
+            return true;
+        if (p[2] == '(' || p[2] == 'R' || p[2] == '&')
+            return true;
+    }
+
+    return false;
+}
+
+static bool matcher_uses_posix(const char *pattern,
+                               enum bx_search_personality personality,
+                               const struct search_opts *opts) {
+    if (opts->fixed_strings)
+        return false;
+
+    if (personality != BX_SEARCH_RG)
+        return !opts->perl_regexp;
+
+    switch (opts->rg_engine) {
+    case BX_RG_ENGINE_DEFAULT:
+        return true;
+    case BX_RG_ENGINE_AUTO:
+        return !rg_pattern_requires_pcre2(pattern, opts);
+    case BX_RG_ENGINE_PCRE2:
+    case BX_RG_ENGINE_UNSPECIFIED:
+    default:
+        return false;
+    }
+}
 
 static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t len,
                         size_t start, struct bx_match *out) {
@@ -179,7 +246,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     const char *base_pattern = pattern;
     const char *final_pattern = pattern;
     int flags = 0;
-    bool use_posix = personality != BX_SEARCH_RG && !opts->perl_regexp;
+    bool use_posix = matcher_uses_posix(pattern, personality, opts);
 
     if (opts->line_regexp) {
         size_t plen = strlen(base_pattern);
@@ -235,7 +302,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         m->kind = MATCHER_LITERAL;
     } else if (use_posix) {
         int cflags = 0;
-        if (opts->extended_regex)
+        if (personality == BX_SEARCH_RG || opts->extended_regex)
             cflags |= REG_EXTENDED;
         if (flags & BX_REGEX_ICASE)
             cflags |= REG_ICASE;
@@ -269,26 +336,120 @@ static void print_match_colored(const unsigned char *line, size_t len,
                                  struct search_opts *opts) {
     if (!opts->only_matching) {
         fwrite(line, 1, match_start, stdout);
+        stats_count_bytes(match_start);
         if (bx_color_enabled()) fputs(bx_color_red(), stdout);
         fwrite(line + match_start, 1, match_end - match_start, stdout);
+        stats_count_bytes(match_end - match_start);
         if (bx_color_enabled()) fputs(bx_color_reset(), stdout);
         fwrite(line + match_end, 1, len - match_end, stdout);
+        stats_count_bytes(len - match_end);
         if (len == 0 || line[len - 1] != record_delimiter(opts))
             write_record_terminator(opts);
     } else {
         fwrite(line + match_start, 1, match_end - match_start, stdout);
+        stats_count_bytes(match_end - match_start);
         write_record_terminator(opts);
     }
 }
 
+static void print_replacement_piece(const char *replace, const unsigned char *match, size_t match_len) {
+    if (!replace) {
+        fwrite(match, 1, match_len, stdout);
+        stats_count_bytes(match_len);
+        return;
+    }
+
+    for (const char *p = replace; *p; ++p) {
+        if (p[0] == '$' && p[1] == '0') {
+            fwrite(match, 1, match_len, stdout);
+            stats_count_bytes(match_len);
+            ++p;
+            continue;
+        }
+        putchar((unsigned char)*p);
+        stats_count_bytes(1);
+    }
+}
+
+static void print_replaced_record(const unsigned char *line, size_t len,
+                                  struct bx_matcher *m, struct search_opts *opts) {
+    size_t match_len = record_match_len(line, len, opts);
+    size_t start = 0;
+    size_t cursor = 0;
+
+    while (start <= match_len) {
+        struct bx_match bm;
+        if (matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
+            break;
+        fwrite(line + cursor, 1, bm.start - cursor, stdout);
+        stats_count_bytes(bm.start - cursor);
+        print_replacement_piece(opts->replace, line + bm.start, bm.end - bm.start);
+        cursor = bm.end;
+        start = bm.end > bm.start ? bm.end : bm.start + 1;
+    }
+
+    fwrite(line + cursor, 1, match_len - cursor, stdout);
+    stats_count_bytes(match_len - cursor);
+    write_record_terminator(opts);
+}
+
+static bool should_omit_long_match_line(const struct search_opts *opts, size_t record_len) {
+    return opts->max_columns > 0 && !opts->only_matching && (int)record_len > opts->max_columns;
+}
+
+static void print_omitted_long_line(struct search_opts *opts) {
+    fputs("[Omitted long matching line]", stdout);
+    stats_count_bytes(strlen("[Omitted long matching line]"));
+    write_record_terminator(opts);
+}
+
+static const char *match_field_separator(struct search_opts *opts) {
+    return opts->field_match_separator ? opts->field_match_separator : ":";
+}
+
+static const char *context_field_separator(struct search_opts *opts) {
+    return opts->field_context_separator ? opts->field_context_separator : "-";
+}
+
 static void print_result_prefix(const char *display_name, struct search_opts *opts,
-                                int line_num, size_t byte_offset, char sep) {
-    if (opts->show_filename && display_name)
-        printf("%s%c", display_name, opts->null_filename ? '\0' : sep);
-    if (opts->show_line_number)
-        printf("%d%c", line_num, sep);
-    if (opts->show_byte_offset)
-        printf("%zu%c", byte_offset, sep);
+                                int line_num, size_t column, bool has_column,
+                                size_t byte_offset, const char *sep) {
+    if (opts->show_filename && display_name) {
+        fputs(display_name, stdout);
+        stats_count_bytes(strlen(display_name));
+        if (opts->null_filename)
+            putchar('\0');
+        else
+            fputs(sep, stdout);
+        stats_count_bytes(opts->null_filename ? 1 : strlen(sep));
+    }
+    if (opts->show_line_number) {
+        int n = printf("%d%s", line_num, sep);
+        if (n > 0) stats_count_bytes((size_t)n);
+    }
+    if (opts->show_column && has_column) {
+        int n = printf("%zu%s", column, sep);
+        if (n > 0) stats_count_bytes((size_t)n);
+    }
+    if (opts->show_byte_offset) {
+        int n = printf("%zu%s", byte_offset, sep);
+        if (n > 0) stats_count_bytes((size_t)n);
+    }
+}
+
+static bool use_heading_output(const char *display_name, const struct search_opts *opts) {
+    return opts->heading && opts->show_filename && display_name && display_name[0] != '\0';
+}
+
+static void maybe_print_heading(const char *display_name, struct search_opts *opts,
+                                bool *heading_printed_for_file) {
+    if (!use_heading_output(display_name, opts) || *heading_printed_for_file)
+        return;
+    if (opts->heading_output_started)
+        putchar('\n');
+    printf("%s\n", display_name);
+    *heading_printed_for_file = true;
+    opts->heading_output_started = true;
 }
 
 static void print_only_matches(const unsigned char *line, size_t len,
@@ -301,8 +462,11 @@ static void print_only_matches(const unsigned char *line, size_t len,
         struct bx_match bm;
         if (matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
             break;
-        print_result_prefix(display_name, opts, line_num, byte_offset + bm.start, ':');
+        print_result_prefix(display_name, opts, line_num, bm.start + 1, true,
+                            byte_offset + bm.start,
+                            match_field_separator(opts));
         fwrite(line + bm.start, 1, bm.end - bm.start, stdout);
+        stats_count_bytes(bm.end - bm.start);
         write_record_terminator(opts);
         if (bm.end > bm.start)
             start = bm.end;
@@ -319,6 +483,7 @@ struct line_buf {
     size_t byte_offset;
     bool   match;
     bool   print;
+    int    match_count;
 };
 
 static void free_lines(struct line_buf *lines, int count) {
@@ -342,6 +507,49 @@ static size_t record_match_len(const unsigned char *buf, size_t len, const struc
 
 static void write_record_terminator(const struct search_opts *opts) {
     putchar((unsigned char)record_delimiter(opts));
+    stats_count_bytes(1);
+}
+
+static void print_count_result(const char *display_name, struct search_opts *opts, int file_matches) {
+    if (opts->omit_zero_count_output && file_matches == 0)
+        return;
+    if (opts->show_filename && display_name)
+        printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
+    else
+        printf("%d\n", file_matches);
+}
+
+static void print_stats_summary(struct bx_search_stats *stats) {
+    printf("\n%d matches\n", stats->matches);
+    printf("%d matched lines\n", stats->matched_lines);
+    printf("%d files contained matches\n", stats->files_with_matches);
+    printf("%d files searched\n", stats->files_searched);
+    printf("%zu bytes printed\n", stats->bytes_printed);
+    printf("%zu bytes searched\n", stats->bytes_searched);
+    printf("0.000000 seconds spent searching\n");
+    printf("0.000000 seconds total\n");
+}
+
+static void stats_count_bytes(size_t count) {
+    if (current_stats)
+        current_stats->bytes_printed += count;
+}
+
+static int count_record_matches(struct bx_matcher *m, const unsigned char *buf, size_t len,
+                                struct search_opts *opts) {
+    size_t start = 0;
+    int count = 0;
+    while (start <= len) {
+        struct bx_match bm;
+        if (matcher_find_with_opts(m, buf, len, start, opts, &bm) != 0)
+            break;
+        count++;
+        if (bm.end > bm.start)
+            start = bm.end;
+        else
+            start = bm.start + 1;
+    }
+    return count;
 }
 
 static ssize_t read_record(FILE *f, char **buf, size_t *cap, struct search_opts *opts) {
@@ -399,6 +607,10 @@ static size_t line_start_offset(const unsigned char *buf, size_t offset) {
     return offset;
 }
 
+static size_t column_number_for_offset(const unsigned char *buf, size_t offset) {
+    return offset - line_start_offset(buf, offset) + 1;
+}
+
 static size_t line_end_offset(const unsigned char *buf, size_t len, size_t offset) {
     while (offset < len && buf[offset] != '\n')
         offset++;
@@ -409,7 +621,8 @@ static size_t line_end_offset(const unsigned char *buf, size_t len, size_t offse
 
 static int search_file_multiline(const char *filename, const char *display_name,
                                  const char *progname, struct bx_matcher *m,
-                                 struct search_opts *opts, int *match_count) {
+                                 struct search_opts *opts, int *match_count,
+                                 struct bx_search_stats *stats) {
     FILE *f = stdin;
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
@@ -426,10 +639,15 @@ static int search_file_multiline(const char *filename, const char *display_name,
         fclose(f);
     if (!buf)
         return 2;
+    if (stats) {
+        stats->files_searched++;
+        stats->bytes_searched += len;
+    }
 
     size_t start = 0;
     int file_matches = 0;
     int status = 1;
+    bool heading_printed_for_file = false;
 
     while (start <= len) {
         struct bx_match bm;
@@ -438,6 +656,10 @@ static int search_file_multiline(const char *filename, const char *display_name,
 
         file_matches++;
         status = 0;
+        if (stats) {
+            stats->matches++;
+            stats->matched_lines++;
+        }
 
         if (opts->quiet)
             break;
@@ -447,22 +669,40 @@ static int search_file_multiline(const char *filename, const char *display_name,
                 break;
             continue;
         }
-        if (opts->files_with_matches || opts->files_without_match)
-            break;
+        if (opts->files_with_matches || opts->files_without_match) {
+            if (!opts->stats)
+                break;
+            start = bm.end > bm.start ? bm.end : bm.start + 1;
+            if (opts->max_count > 0 && file_matches >= opts->max_count)
+                break;
+            continue;
+        }
 
         size_t line_num = line_number_for_offset(buf, bm.start);
         if (opts->only_matching && !opts->invert_match) {
-            print_result_prefix(display_name, opts, (int)line_num, bm.start, ':');
+            maybe_print_heading(display_name, opts, &heading_printed_for_file);
+            print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                opts, (int)line_num, column_number_for_offset(buf, bm.start), true,
+                                bm.start, match_field_separator(opts));
             fwrite(buf + bm.start, 1, bm.end - bm.start, stdout);
             write_record_terminator(opts);
         } else {
             size_t out_start = line_start_offset(buf, bm.start);
             size_t out_end = line_end_offset(buf, len, bm.end);
-            print_result_prefix(display_name, opts, (int)line_number_for_offset(buf, out_start),
-                                out_start, ':');
-            fwrite(buf + out_start, 1, out_end - out_start, stdout);
-            if (out_end == out_start || buf[out_end - 1] != record_delimiter(opts))
-                write_record_terminator(opts);
+            maybe_print_heading(display_name, opts, &heading_printed_for_file);
+            print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                opts, (int)line_number_for_offset(buf, out_start),
+                                column_number_for_offset(buf, bm.start), true,
+                                out_start, match_field_separator(opts));
+            if (should_omit_long_match_line(opts, out_end - out_start))
+                print_omitted_long_line(opts);
+            else if (opts->replace) {
+                print_replaced_record(buf + out_start, out_end - out_start, m, opts);
+            } else {
+                fwrite(buf + out_start, 1, out_end - out_start, stdout);
+                if (out_end == out_start || buf[out_end - 1] != record_delimiter(opts))
+                    write_record_terminator(opts);
+            }
         }
 
         if (opts->max_count > 0 && file_matches >= opts->max_count)
@@ -470,12 +710,8 @@ static int search_file_multiline(const char *filename, const char *display_name,
         start = bm.end > bm.start ? bm.end : bm.start + 1;
     }
 
-    if (opts->count_only) {
-        if (opts->show_filename && display_name)
-            printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
-        else
-            printf("%d\n", file_matches);
-    }
+        if (opts->count_only)
+            print_count_result(display_name, opts, file_matches);
     if (opts->files_with_matches && file_matches > 0 && display_name) {
         if (opts->null_output)
             printf("%s%c", display_name, '\0');
@@ -489,6 +725,8 @@ static int search_file_multiline(const char *filename, const char *display_name,
             printf("%s\n", display_name);
     }
 
+    if (stats && file_matches > 0)
+        stats->files_with_matches++;
     if (match_count)
         *match_count += file_matches;
     free(buf);
@@ -519,7 +757,7 @@ static bool search_default_show_filename(int argc, char **argv, int first_file,
 static int search_file_buffered(const char *filename, const char *display_name,
                                   const char *progname,
                                   struct bx_matcher *m, struct search_opts *opts,
-                                int *match_count) {
+                                int *match_count, struct bx_search_stats *stats) {
     FILE *f = stdin;
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
@@ -538,6 +776,7 @@ static int search_file_buffered(const char *filename, const char *display_name,
     size_t file_offset = 0;
     bool saw_binary = false;
     bool saw_match_record = false;
+    bool heading_printed_for_file = false;
 
     while ((len = read_record(f, &raw, &raw_cap, opts)) != -1) {
         if (!opts->null_data && memchr(raw, '\0', (size_t)len) != NULL)
@@ -548,17 +787,29 @@ static int search_file_buffered(const char *filename, const char *display_name,
         lines[nlines].len = (size_t)len;
         lines[nlines].byte_offset = file_offset;
         lines[nlines].print = false;
+        if (stats)
+            stats->bytes_searched += (size_t)len;
         struct bx_match bm;
         size_t match_len = record_match_len((unsigned char *)raw, (size_t)len, opts);
         bool matched = (matcher_find_with_opts(m, (unsigned char *)raw, match_len, 0, opts, &bm) == 0);
         file_offset += (size_t)len;
         if (opts->invert_match) matched = !matched;
         bool selected = matched;
+        int record_match_count = 0;
+        if (matched && !opts->invert_match)
+            record_match_count = opts->count_matches
+                                     ? count_record_matches(m, (unsigned char *)raw, match_len, opts)
+                                     : 1;
         if (matched && opts->max_count > 0 && file_matches >= opts->max_count)
             selected = false;
         lines[nlines].match = selected;
+        lines[nlines].match_count = record_match_count;
         if (selected) {
-            file_matches++;
+            file_matches += opts->count_matches ? record_match_count : 1;
+            if (stats) {
+                stats->matches += opts->count_matches ? record_match_count : 1;
+                stats->matched_lines++;
+            }
             saw_match_record = true;
             if (opts->max_count > 0 && file_matches >= opts->max_count) {
                 after_left = opts->after_context;
@@ -580,25 +831,26 @@ static int search_file_buffered(const char *filename, const char *display_name,
     }
     free(raw);
     if (!use_stdin) fclose(f);
+    if (stats)
+        stats->files_searched++;
 
     if (saw_binary && !opts->binary_as_text) {
         if (opts->binary_without_match) {
             free_lines(lines, nlines);
-            return search_binary_without_match(display_name, opts, match_count);
+            return search_binary_without_match(display_name, opts, match_count, stats);
         }
 
         if (opts->quiet && file_matches > 0) {
+            if (stats && file_matches > 0)
+                stats->files_with_matches++;
             free_lines(lines, nlines);
             *match_count += file_matches;
             return 0;
         }
 
         if (opts->count_only || opts->files_with_matches || opts->files_without_match) {
-            if (opts->count_only) {
-                if (opts->show_filename && display_name)
-                    printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
-                else printf("%d\n", file_matches);
-            }
+            if (opts->count_only)
+                print_count_result(display_name, opts, file_matches);
             if (opts->files_with_matches && file_matches > 0 && display_name) {
                 if (opts->null_output) printf("%s%c", display_name, '\0');
                 else printf("%s\n", display_name);
@@ -607,6 +859,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
                 if (opts->null_output) printf("%s%c", display_name, '\0');
                 else printf("%s\n", display_name);
             }
+            if (stats && file_matches > 0)
+                stats->files_with_matches++;
             *match_count += file_matches;
             free_lines(lines, nlines);
             return file_matches > 0 ? 0 : 1;
@@ -614,6 +868,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
 
         if (file_matches > 0) {
             report_binary_match(progname, display_name);
+            if (stats)
+                stats->files_with_matches++;
             *match_count += file_matches;
             free_lines(lines, nlines);
             return 0;
@@ -623,14 +879,17 @@ static int search_file_buffered(const char *filename, const char *display_name,
         return 1;
     }
 
-    if (opts->quiet && file_matches > 0) { free_lines(lines, nlines); *match_count += file_matches; return 0; }
+    if (opts->quiet && file_matches > 0) {
+        if (stats)
+            stats->files_with_matches++;
+        free_lines(lines, nlines);
+        *match_count += file_matches;
+        return 0;
+    }
 
     if (opts->count_only || opts->files_with_matches || opts->files_without_match) {
-        if (opts->count_only) {
-            if (opts->show_filename && display_name)
-                printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
-            else printf("%d\n", file_matches);
-        }
+        if (opts->count_only)
+            print_count_result(display_name, opts, file_matches);
         if (opts->files_with_matches && file_matches > 0 && display_name) {
             if (opts->null_output) printf("%s%c", display_name, '\0');
             else printf("%s\n", display_name);
@@ -639,6 +898,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
             if (opts->null_output) printf("%s%c", display_name, '\0');
             else printf("%s\n", display_name);
         }
+        if (stats && file_matches > 0)
+            stats->files_with_matches++;
         *match_count += file_matches;
         free_lines(lines, nlines);
         return file_matches > 0 ? 0 : 1;
@@ -663,10 +924,19 @@ static int search_file_buffered(const char *filename, const char *display_name,
         }
         if (lines[i].match) {
             if (opts->only_matching && !opts->invert_match) {
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 print_only_matches((unsigned char *)lines[i].text, lines[i].len,
-                                   display_name, i + 1, lines[i].byte_offset, m, opts);
+                                   heading_printed_for_file ? NULL : display_name,
+                                   i + 1, lines[i].byte_offset, m, opts);
             } else {
-                print_result_prefix(display_name, opts, i + 1, lines[i].byte_offset, ':');
+                struct bx_match bm;
+                matcher_find_with_opts(m, (unsigned char *)lines[i].text,
+                                       record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
+                                       0, opts, &bm);
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
+                print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                    opts, i + 1, bm.start + 1, true, lines[i].byte_offset,
+                                    match_field_separator(opts));
                 if (opts->only_matching && opts->invert_match) {
                     continue;
                 }
@@ -676,20 +946,26 @@ static int search_file_buffered(const char *filename, const char *display_name,
                         write_record_terminator(opts);
                     continue;
                 }
-                struct bx_match bm;
-                matcher_find_with_opts(m, (unsigned char *)lines[i].text,
-                                       record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
-                                       0, opts, &bm);
-                print_match_colored((unsigned char *)lines[i].text, lines[i].len, bm.start, bm.end, opts);
+                if (should_omit_long_match_line(opts, lines[i].len))
+                    print_omitted_long_line(opts);
+                else if (opts->replace)
+                    print_replaced_record((unsigned char *)lines[i].text, lines[i].len, m, opts);
+                else
+                    print_match_colored((unsigned char *)lines[i].text, lines[i].len, bm.start, bm.end, opts);
             }
         } else {
-            print_result_prefix(display_name, opts, i + 1, lines[i].byte_offset, '-');
+            maybe_print_heading(display_name, opts, &heading_printed_for_file);
+            print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                opts, i + 1, 0, false, lines[i].byte_offset,
+                                context_field_separator(opts));
             fwrite(lines[i].text, 1, lines[i].len, stdout);
             if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
         }
         in_group = true; last_printed = i;
     }
+    if (stats && file_matches > 0)
+        stats->files_with_matches++;
     *match_count += file_matches;
     free_lines(lines, nlines);
     return file_matches > 0 ? 0 : 1;
@@ -700,7 +976,7 @@ static int search_file_buffered(const char *filename, const char *display_name,
 static int search_file_streaming(const char *filename, const char *display_name,
                                 const char *progname,
                                 struct bx_matcher *m, struct search_opts *opts,
-                                  int *match_count) {
+                                  int *match_count, struct bx_search_stats *stats) {
     FILE *f = stdin;
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
@@ -714,51 +990,81 @@ static int search_file_streaming(const char *filename, const char *display_name,
     int line_num = 0, file_matches = 0, status = 1;
     size_t file_offset = 0;
     bool saw_match_record = false;
+    bool heading_printed_for_file = false;
+    if (stats)
+        stats->files_searched++;
 
     while ((len = read_record(f, &line, &cap, opts)) != -1) {
         size_t line_offset = file_offset;
         file_offset += (size_t)len;
+        if (stats)
+            stats->bytes_searched += (size_t)len;
         line_num++;
         struct bx_match bm;
         size_t match_len = record_match_len((unsigned char *)line, (size_t)len, opts);
         bool matched = (matcher_find_with_opts(m, (unsigned char *)line, match_len, 0, opts, &bm) == 0);
         if (opts->invert_match) matched = !matched;
         if (matched) {
-            file_matches++; status = 0;
+            int record_match_count = (!opts->invert_match && opts->count_matches)
+                                         ? count_record_matches(m, (unsigned char *)line, match_len, opts)
+                                         : 1;
+            file_matches += record_match_count;
+            if (stats) {
+                stats->matches += record_match_count;
+                stats->matched_lines++;
+            }
+            status = 0;
             saw_match_record = true;
             if (opts->quiet) break;
             if (opts->count_only) {
                 if (opts->max_count > 0 && file_matches >= opts->max_count) break;
                 continue;
             }
-            if (opts->files_with_matches || opts->files_without_match) break;
+            if (opts->files_with_matches || opts->files_without_match) {
+                if (!opts->stats) break;
+                if (opts->max_count > 0 && file_matches >= opts->max_count) break;
+                continue;
+            }
             if (opts->only_matching && !opts->invert_match) {
-                print_only_matches((unsigned char *)line, (size_t)len, display_name, line_num,
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
+                print_only_matches((unsigned char *)line, (size_t)len,
+                                   heading_printed_for_file ? NULL : display_name, line_num,
                                    line_offset, m, opts);
             } else {
                 if (!(opts->only_matching && opts->invert_match)) {
-                    print_result_prefix(display_name, opts, line_num, line_offset, ':');
+                    maybe_print_heading(display_name, opts, &heading_printed_for_file);
+                    print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                        opts, line_num, bm.start + 1, true, line_offset,
+                                        match_field_separator(opts));
                     if (opts->invert_match) {
                         fwrite(line, 1, (size_t)len, stdout);
                         if (len == 0 || line[len - 1] != record_delimiter(opts))
                             write_record_terminator(opts);
+                    } else if (opts->replace) {
+                        print_replaced_record((unsigned char *)line, (size_t)len, m, opts);
                     } else {
-                        print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
+                        if (should_omit_long_match_line(opts, (size_t)len))
+                            print_omitted_long_line(opts);
+                        else
+                            print_match_colored((unsigned char *)line, (size_t)len, bm.start, bm.end, opts);
                     }
                 }
             }
             if (opts->max_count > 0 && file_matches >= opts->max_count) break;
+        } else if (opts->passthru) {
+            print_result_prefix(display_name, opts, line_num, 0, false, line_offset,
+                                context_field_separator(opts));
+            fwrite(line, 1, (size_t)len, stdout);
+            if (len == 0 || line[len - 1] != record_delimiter(opts))
+                write_record_terminator(opts);
         } else if (opts->stop_on_nonmatch && saw_match_record) {
             break;
         }
     }
 
     if (opts->quiet && file_matches > 0) status = 0;
-    if (opts->count_only) {
-        if (opts->show_filename && display_name)
-            printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
-        else printf("%d\n", file_matches);
-    }
+    if (opts->count_only)
+        print_count_result(display_name, opts, file_matches);
     if (opts->files_with_matches && file_matches > 0 && display_name) {
         if (opts->null_output) printf("%s%c", display_name, '\0');
         else printf("%s\n", display_name);
@@ -767,6 +1073,8 @@ static int search_file_streaming(const char *filename, const char *display_name,
         if (opts->null_output) printf("%s%c", display_name, '\0');
         else printf("%s\n", display_name);
     }
+    if (stats && file_matches > 0)
+        stats->files_with_matches++;
     if (match_count) *match_count += file_matches;
     free(line);
     if (!use_stdin) fclose(f);
@@ -775,13 +1083,12 @@ static int search_file_streaming(const char *filename, const char *display_name,
 
 static int search_binary_without_match(const char *display_name,
                                        struct search_opts *opts,
-                                       int *match_count) {
-    if (opts->count_only) {
-        if (opts->show_filename && display_name)
-            printf("%s%c0\n", display_name, opts->null_filename ? '\0' : ':');
-        else
-            printf("0\n");
-    }
+                                       int *match_count,
+                                       struct bx_search_stats *stats) {
+    if (stats)
+        stats->files_searched++;
+    if (opts->count_only)
+        print_count_result(display_name, opts, 0);
     if (opts->files_without_match && display_name) {
         if (opts->null_output)
             printf("%s%c", display_name, '\0');
@@ -844,11 +1151,11 @@ static bool binary_file_matches(const char *filename, struct bx_matcher *m,
 
 static int search_file(const char *filename, const char *display_name_override, const char *progname,
                        struct bx_matcher *m, struct search_opts *opts,
-                       int *match_count) {
+                       int *match_count, struct bx_search_stats *stats) {
     const char *display_name = display_name_for_stream(filename, display_name_override, opts);
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (opts->multiline)
-        return search_file_multiline(filename, display_name, progname, m, opts, match_count);
+        return search_file_multiline(filename, display_name, progname, m, opts, match_count, stats);
     if (display_name && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 && lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -861,17 +1168,17 @@ static int search_file(const char *filename, const char *display_name_override, 
         (opts->binary_without_match ||
          (!opts->quiet && !opts->count_only &&
           !opts->files_with_matches && !opts->files_without_match))) {
-        return search_file_buffered(filename, display_name, progname, m, opts, match_count);
+        return search_file_buffered(filename, display_name, progname, m, opts, match_count, stats);
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text && is_binary(filename)) {
         if (opts->binary_without_match)
-            return search_binary_without_match(display_name, opts, match_count);
+            return search_binary_without_match(display_name, opts, match_count, stats);
 
         if (opts->quiet || opts->files_with_matches || opts->files_without_match || opts->count_only) {
             if (needs_line_buffering(opts))
-                return search_file_buffered(filename, display_name, progname, m, opts, match_count);
-            return search_file_streaming(filename, display_name, progname, m, opts, match_count);
+                return search_file_buffered(filename, display_name, progname, m, opts, match_count, stats);
+            return search_file_streaming(filename, display_name, progname, m, opts, match_count, stats);
         }
 
         if (binary_file_matches(filename, m, opts)) {
@@ -884,8 +1191,8 @@ static int search_file(const char *filename, const char *display_name_override, 
     }
 
     if (needs_line_buffering(opts))
-        return search_file_buffered(filename, display_name, progname, m, opts, match_count);
-    return search_file_streaming(filename, display_name, progname, m, opts, match_count);
+        return search_file_buffered(filename, display_name, progname, m, opts, match_count, stats);
+    return search_file_streaming(filename, display_name, progname, m, opts, match_count, stats);
 }
 
 /* --- binary detection --- */
@@ -935,6 +1242,7 @@ struct grep_walk_state {
     struct search_opts *opts;
     const char *progname;
     int *match_count;
+    struct bx_search_stats *stats;
     int *exit_status;
     bool *match_seen;
     bool *error_seen;
@@ -982,7 +1290,7 @@ static void grep_walk_cb(struct walk_entry *entry, void *user) {
 
     const char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix);
 
-    int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts, gs->match_count);
+    int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts, gs->match_count, gs->stats);
     if (r == 2) {
         *gs->exit_status = 2;
         if (gs->error_seen) *gs->error_seen = true;
@@ -1116,6 +1424,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int exit_status = 1;
     bool match_seen = false;
     bool error_seen = false;
+    struct bx_search_stats stats = {0};
+    current_stats = opts.stats ? &stats : NULL;
 
     if (num_files == 0) {
         if ((personality == BX_SEARCH_RG && !rg_searches_stdin) ||
@@ -1124,6 +1434,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             struct grep_walk_state gs = {.m = m, .opts = &opts,
                                          .progname = progname,
                                          .match_count = &global_matches,
+                                         .stats = &stats,
                                          .exit_status = &exit_status,
                                          .match_seen = &match_seen,
                                          .error_seen = &error_seen,
@@ -1166,7 +1477,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 error_seen = true;
             }
         } else {
-            exit_status = search_file(NULL, NULL, progname, m, &opts, &global_matches);
+            exit_status = search_file(NULL, NULL, progname, m, &opts, &global_matches, &stats);
             if (exit_status == 0) match_seen = true;
             else if (exit_status == 2) error_seen = true;
         }
@@ -1175,6 +1486,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         struct grep_walk_state gs = {.m = m, .opts = &opts,
                                      .progname = progname,
                                      .match_count = &global_matches,
+                                     .stats = &stats,
                                      .exit_status = &exit_status,
                                      .match_seen = &match_seen,
                                      .error_seen = &error_seen,
@@ -1242,7 +1554,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     continue;
                 }
             }
-            int r = search_file(argv[j], NULL, progname, m, &opts, &global_matches);
+            int r = search_file(argv[j], NULL, progname, m, &opts, &global_matches, &stats);
             if (r == 2) {
                 exit_status = 2;
                 error_seen = true;
@@ -1252,8 +1564,10 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             }
         }
     }
-
     matcher_free(m);
+    if (opts.stats)
+        print_stats_summary(&stats);
+    current_stats = NULL;
     bx_search_free_options(&opts);
     if (opts.quiet && match_seen)
         return 0;

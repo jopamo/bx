@@ -1,6 +1,8 @@
 #include <ctype.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,10 +22,16 @@ enum {
     OPT_FILES,
     OPT_TYPE_LIST,
     OPT_COLOR,
+    OPT_COLUMN,
+    OPT_COUNT_MATCHES,
+    OPT_PASSTHRU,
+    OPT_REPLACE,
+    OPT_STATS,
     OPT_FILES_WITH_MATCHES,
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
     OPT_MAX_DEPTH,
+    OPT_MAX_COLUMNS,
     OPT_NO_IGNORE,
     OPT_NO_IGNORE_PARENT,
     OPT_NO_IGNORE_VCS,
@@ -34,6 +42,12 @@ enum {
     OPT_LABEL,
     OPT_GROUP_SEPARATOR,
     OPT_NO_GROUP_SEPARATOR,
+    OPT_CONTEXT_SEPARATOR,
+    OPT_NO_CONTEXT_SEPARATOR,
+    OPT_FIELD_CONTEXT_SEPARATOR,
+    OPT_FIELD_MATCH_SEPARATOR,
+    OPT_HEADING,
+    OPT_NO_HEADING,
     OPT_NULL,
     OPT_BINARY_FILES,
     OPT_NULL_DATA,
@@ -42,6 +56,8 @@ enum {
     OPT_STOP_ON_NONMATCH,
     OPT_ENGINE,
     OPT_PCRE2_VERSION,
+    OPT_REGEX_SIZE_LIMIT,
+    OPT_DFA_SIZE_LIMIT,
     OPT_TYPE_ADD,
     OPT_TYPE_CLEAR,
 };
@@ -56,6 +72,58 @@ static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
         return false;
     }
     *out = (int)v;
+    return true;
+}
+
+static bool bx_rg_size_limit_parse_failed(const char *progname, const char *optname,
+                                          const char *text) {
+    fprintf(stderr,
+            "%s: error parsing flag %s: invalid size: invalid format for size '%s', which should be a non-empty sequence of digits followed by an optional 'K', 'M' or 'G' suffix\n",
+            progname, optname, text ? text : "");
+    return false;
+}
+
+static bool bx_parse_rg_size_limit(const char *progname, const char *optname,
+                                   const char *text, size_t *out) {
+    if (!text || !*text)
+        return bx_rg_size_limit_parse_failed(progname, optname, text);
+
+    unsigned long long value = 0;
+    size_t pos = 0;
+    while (text[pos] >= '0' && text[pos] <= '9') {
+        unsigned int digit = (unsigned int)(text[pos] - '0');
+        if (value > (ULLONG_MAX - digit) / 10ULL)
+            return bx_rg_size_limit_parse_failed(progname, optname, text);
+        value = value * 10ULL + digit;
+        pos++;
+    }
+
+    if (pos == 0)
+        return bx_rg_size_limit_parse_failed(progname, optname, text);
+
+    unsigned long long multiplier = 1;
+    if (text[pos] != '\0') {
+        if (text[pos + 1] != '\0')
+            return bx_rg_size_limit_parse_failed(progname, optname, text);
+        switch (text[pos]) {
+        case 'K':
+            multiplier = 1024ULL;
+            break;
+        case 'M':
+            multiplier = 1024ULL * 1024ULL;
+            break;
+        case 'G':
+            multiplier = 1024ULL * 1024ULL * 1024ULL;
+            break;
+        default:
+            return bx_rg_size_limit_parse_failed(progname, optname, text);
+        }
+    }
+
+    if (value > (unsigned long long)SIZE_MAX / multiplier)
+        return bx_rg_size_limit_parse_failed(progname, optname, text);
+
+    *out = (size_t)(value * multiplier);
     return true;
 }
 
@@ -89,6 +157,7 @@ void bx_search_print_help(const char *progname) {
     puts("  -E            PATTERN is an extended regular expression");
     puts("  -F            PATTERN is a set of fixed strings");
     puts("  -b            print the byte offset with output lines");
+    puts("      --column  print the column number with output lines");
     puts("  -H            print the file name for each match");
     puts("  -h            suppress the file name prefix on output");
     puts("  -i            ignore case distinctions");
@@ -96,6 +165,10 @@ void bx_search_print_help(const char *progname) {
     puts("  -o            show only the part of a line matching PATTERN");
     puts("  -v            select non-matching lines");
     puts("  -c            print only a count of matching lines per FILE");
+    puts("      --count-matches  print only a count of individual matches per FILE");
+    puts("      --passthru  print both matching and non-matching lines");
+    puts("      --replace=TEXT  replace each match with TEXT in printed output");
+    puts("      --stats  print a search summary after all results");
     puts("  -l            print only names of FILEs with selected lines");
     puts("  -L            print only names of FILEs with no selected lines");
     puts("  -q, --quiet   suppress all normal output");
@@ -111,6 +184,13 @@ void bx_search_print_help(const char *progname) {
     puts("      --label=LABEL  use LABEL as the standard input file name");
     puts("      --group-separator=SEP  use SEP between context groups");
     puts("      --no-group-separator   suppress context group separators");
+    puts("      --context-separator=SEP  use SEP between ripgrep context groups");
+    puts("      --no-context-separator  suppress ripgrep context group separators");
+    puts("      --field-context-separator=SEP  use SEP between fields on context lines");
+    puts("      --field-match-separator=SEP  use SEP between fields on matching lines");
+    puts("      --heading  show file names above matches instead of as prefixes");
+    puts("      --max-columns=NUM  omit long matching lines wider than NUM bytes");
+    puts("      --no-heading  show file names as prefixes");
     puts("      --include=GLOB   search only files matching GLOB");
     puts("      --exclude=GLOB   skip files matching GLOB");
     puts("      --exclude-from=FILE  skip files matching patterns from FILE");
@@ -125,6 +205,8 @@ void bx_search_print_help(const char *progname) {
     puts("  -U, --multiline  allow matches to span line terminators");
     puts("      --multiline-dotall  make . match line terminators in multiline mode");
     puts("      --engine=ENGINE  choose regex engine: default, pcre2, or auto");
+    puts("      --regex-size-limit=NUM[KMG]  accept ripgrep's regex size limit flag");
+    puts("      --dfa-size-limit=NUM[KMG]  accept ripgrep's DFA size limit flag");
     puts("      --pcre2-version  print PCRE2 version information and exit");
     puts("      --stop-on-nonmatch  stop reading a file after a non-matching record follows a match");
     puts("      --help    display this help and exit");
@@ -296,6 +378,9 @@ void bx_search_free_options(struct search_opts *opts) {
         free(opts->cleared_type_names[i]);
     free(opts->label);
     free(opts->group_separator);
+    free(opts->replace);
+    free(opts->field_match_separator);
+    free(opts->field_context_separator);
 }
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
@@ -328,6 +413,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"exclude-from", required_argument, NULL, OPT_EXCLUDE_FROM},
         {"exclude-dir",  required_argument, NULL, OPT_EXCLUDE_DIR},
         {"files",        no_argument,       NULL, OPT_FILES},
+        {"column",       no_argument,       NULL, OPT_COLUMN},
+        {"count-matches", no_argument,      NULL, OPT_COUNT_MATCHES},
+        {"passthru",     no_argument,       NULL, OPT_PASSTHRU},
+        {"replace",      required_argument, NULL, OPT_REPLACE},
+        {"stats",        no_argument,       NULL, OPT_STATS},
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
@@ -350,11 +440,18 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
         {"file",         required_argument, NULL, 'f'},
         {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
+        {"max-columns",  required_argument, NULL, OPT_MAX_COLUMNS},
         {"color",        optional_argument, NULL, OPT_COLOR},
         {"colour",       optional_argument, NULL, OPT_COLOR},
         {"label",        required_argument, NULL, OPT_LABEL},
         {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
         {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
+        {"context-separator", required_argument, NULL, OPT_CONTEXT_SEPARATOR},
+        {"no-context-separator", no_argument, NULL, OPT_NO_CONTEXT_SEPARATOR},
+        {"field-context-separator", required_argument, NULL, OPT_FIELD_CONTEXT_SEPARATOR},
+        {"field-match-separator", required_argument, NULL, OPT_FIELD_MATCH_SEPARATOR},
+        {"heading",      no_argument,       NULL, OPT_HEADING},
+        {"no-heading",   no_argument,       NULL, OPT_NO_HEADING},
         {"null",         no_argument,       NULL, OPT_NULL},
         {"binary-files", required_argument, NULL, OPT_BINARY_FILES},
         {"null-data",    no_argument,       NULL, OPT_NULL_DATA},
@@ -362,6 +459,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"multiline-dotall", no_argument,   NULL, OPT_MULTILINE_DOTALL},
         {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
         {"engine",       required_argument, NULL, OPT_ENGINE},
+        {"regex-size-limit", required_argument, NULL, OPT_REGEX_SIZE_LIMIT},
+        {"dfa-size-limit", required_argument, NULL, OPT_DFA_SIZE_LIMIT},
         {"pcre2-version", no_argument,      NULL, OPT_PCRE2_VERSION},
         {NULL, 0, NULL, 0},
     };
@@ -383,6 +482,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'E': opts->extended_regex = true; break;
         case 'F': opts->fixed_strings = true; break;
         case 'b': opts->show_byte_offset = true; break;
+        case OPT_COLUMN:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--column'\n", progname);
+                return -1;
+            }
+            opts->show_column = true;
+            break;
         case 'H': opts->show_filename = true; break;
         case 'h': opts->hide_filename = true; break;
         case 'i':
@@ -394,6 +500,38 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'o': opts->only_matching = true; break;
         case 'v': opts->invert_match = true; break;
         case 'c': opts->count_only = true; break;
+        case OPT_COUNT_MATCHES:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--count-matches'\n", progname);
+                return -1;
+            }
+            opts->count_matches = true;
+            opts->count_only = true;
+            break;
+        case OPT_PASSTHRU:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--passthru'\n", progname);
+                return -1;
+            }
+            opts->passthru = true;
+            break;
+        case OPT_REPLACE:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--replace'\n", progname);
+                return -1;
+            }
+            free(opts->replace);
+            opts->replace = strdup(optarg);
+            if (!opts->replace)
+                return -1;
+            break;
+        case OPT_STATS:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--stats'\n", progname);
+                return -1;
+            }
+            opts->stats = true;
+            break;
         case 'l': opts->files_with_matches = true; break;
         case 'L':
             if (personality == BX_SEARCH_RG)
@@ -422,6 +560,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     return -1;
                 }
             }
+            break;
+        case OPT_MAX_COLUMNS:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--max-columns'\n", progname);
+                return -1;
+            }
+            if (!bx_parse_nonnegative_int(progname, "--max-columns", optarg, &opts->max_columns))
+                return -1;
             break;
         case 'I':
             opts->binary_without_match = true;
@@ -731,10 +877,57 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             opts->suppress_group_separator = true;
             break;
+        case OPT_CONTEXT_SEPARATOR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--context-separator'\n", progname);
+                return -1;
+            }
+            free(opts->group_separator);
+            opts->group_separator = strdup(optarg);
+            opts->suppress_group_separator = false;
+            break;
+        case OPT_NO_CONTEXT_SEPARATOR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--no-context-separator'\n", progname);
+                return -1;
+            }
+            opts->suppress_group_separator = true;
+            break;
+        case OPT_FIELD_CONTEXT_SEPARATOR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--field-context-separator'\n", progname);
+                return -1;
+            }
+            free(opts->field_context_separator);
+            opts->field_context_separator = strdup(optarg);
+            break;
+        case OPT_FIELD_MATCH_SEPARATOR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--field-match-separator'\n", progname);
+                return -1;
+            }
+            free(opts->field_match_separator);
+            opts->field_match_separator = strdup(optarg);
+            break;
+        case OPT_HEADING:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--heading'\n", progname);
+                return -1;
+            }
+            opts->heading = true;
+            break;
+        case OPT_NO_HEADING:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--no-heading'\n", progname);
+                return -1;
+            }
+            opts->heading = false;
+            break;
         case OPT_NULL:
             if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--null'\n", progname);
-                return -1;
+                opts->null_output = true;
+                opts->null_filename = true;
+                break;
             }
             opts->null_output = true;
             opts->null_filename = true;
@@ -798,6 +991,26 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->pcre2_version = true;
             bx_regex_print_version();
             return 1;
+        case OPT_REGEX_SIZE_LIMIT:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--regex-size-limit'\n", progname);
+                return -1;
+            }
+            if (!bx_parse_rg_size_limit(progname, "--regex-size-limit", optarg,
+                                        &opts->regex_size_limit))
+                return -1;
+            opts->regex_size_limit_set = true;
+            break;
+        case OPT_DFA_SIZE_LIMIT:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--dfa-size-limit'\n", progname);
+                return -1;
+            }
+            if (!bx_parse_rg_size_limit(progname, "--dfa-size-limit", optarg,
+                                        &opts->dfa_size_limit))
+                return -1;
+            opts->dfa_size_limit_set = true;
+            break;
         case OPT_COLOR:
             opts->color_mode = bx_color_parse(optarg ? optarg : "auto");
             bx_color_set_mode(opts->color_mode);
@@ -850,6 +1063,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     }
 
     if (personality == BX_SEARCH_RG) {
+        if (opts->files_with_matches || opts->files_without_match)
+            opts->count_only = false;
+        if (opts->count_only)
+            opts->omit_zero_count_output = true;
+        if (opts->show_column)
+            opts->show_line_number = true;
         if (opts->perl_regexp)
             opts->rg_engine = BX_RG_ENGINE_PCRE2;
         if (opts->rg_engine == BX_RG_ENGINE_PCRE2)

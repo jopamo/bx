@@ -2,6 +2,7 @@
 #define BX_SEARCH_OPTIONS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include "search.h"
 #include "lib/color.h"
 
@@ -13,13 +14,17 @@
 
 struct search_opts {
     bool show_line_number;
+    bool show_column;
     bool show_byte_offset;
     bool show_filename;
     bool hide_filename;
     bool invert_match;
     bool count_only;
+    bool omit_zero_count_output;
+    bool count_matches;
     bool files_with_matches;
     bool files_without_match;
+    bool passthru;
     bool quiet;
     bool ignore_case;
     bool smart_case;
@@ -31,6 +36,7 @@ struct search_opts {
     bool line_regexp;
     bool files_only;
     int  max_count;
+    int  max_columns;
     int  unrestrict_level;
     char *extra_patterns[16];
     int   num_extra_patterns;
@@ -65,7 +71,17 @@ struct search_opts {
     bool multiline;
     bool multiline_dotall;
     bool stop_on_nonmatch;
+    bool stats;
     bool pcre2_version;
+    bool heading;
+    bool heading_output_started;
+    char *replace;
+    char *field_match_separator;
+    char *field_context_separator;
+    bool regex_size_limit_set;
+    size_t regex_size_limit;
+    bool dfa_size_limit_set;
+    size_t dfa_size_limit;
     enum {
         BX_RG_ENGINE_UNSPECIFIED = 0,
         BX_RG_ENGINE_DEFAULT,
