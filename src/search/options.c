@@ -925,6 +925,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             opts->heading = true;
+            opts->heading_set = true;
             break;
         case OPT_NO_HEADING:
             if (personality != BX_SEARCH_RG) {
@@ -932,6 +933,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             opts->heading = false;
+            opts->heading_set = true;
             break;
         case OPT_NULL:
             if (personality == BX_SEARCH_RG) {

@@ -30,7 +30,12 @@ void bx_color_set_mode(enum bx_color_mode mode) {
 bool bx_color_enabled(void) {
     if (color_mode == BX_COLOR_ALWAYS) return true;
     if (color_mode == BX_COLOR_NEVER) return false;
-    return check_tty();
+    if (!check_tty())
+        return false;
+    const char *term = getenv("TERM");
+    if (term && strcmp(term, "dumb") == 0)
+        return false;
+    return true;
 }
 
 #define SGR(code) (bx_color_enabled() ? "\033[" #code "m" : "")

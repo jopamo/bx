@@ -754,6 +754,13 @@ static bool search_default_show_filename(int argc, char **argv, int first_file,
     return false;
 }
 
+static bool search_default_heading(enum bx_search_personality personality,
+                                   const struct search_opts *opts) {
+    if (personality != BX_SEARCH_RG || !isatty(STDOUT_FILENO))
+        return false;
+    return opts->show_filename;
+}
+
 static int search_file_buffered(const char *filename, const char *display_name,
                                   const char *progname,
                                   struct bx_matcher *m, struct search_opts *opts,
@@ -1472,6 +1479,10 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                                           &opts, rg_searches_stdin);
     if (opts.hide_filename)
         opts.show_filename = false;
+    if (personality == BX_SEARCH_RG && !opts.show_line_number && isatty(STDOUT_FILENO))
+        opts.show_line_number = true;
+    if (!opts.heading_set)
+        opts.heading = search_default_heading(personality, &opts);
 
     int global_matches = 0;
     int exit_status = 1;

@@ -76,6 +76,7 @@ struct search_opts {
     bool stats;
     bool pcre2_version;
     bool heading;
+    bool heading_set;
     bool heading_output_started;
     char *replace;
     char *field_match_separator;
