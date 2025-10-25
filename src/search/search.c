@@ -1261,6 +1261,41 @@ static const char *const rg_ignore_filenames[] = {
     ".rgignore",
 };
 
+struct bx_search_operand_ref {
+    const char *path;
+    int index;
+};
+
+static int bx_search_operand_ref_compare(const void *left, const void *right) {
+    const struct bx_search_operand_ref *a = left;
+    const struct bx_search_operand_ref *b = right;
+    int cmp = strcmp(a->path, b->path);
+    if (cmp != 0)
+        return cmp;
+    return (a->index > b->index) - (a->index < b->index);
+}
+
+static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
+    int argc, char **argv, int first_file, int *out_count
+) {
+    int count = argc - first_file;
+    if (out_count)
+        *out_count = count;
+    if (count <= 0)
+        return NULL;
+
+    struct bx_search_operand_ref *refs = calloc((size_t)count, sizeof(*refs));
+    if (!refs)
+        return NULL;
+
+    for (int i = 0; i < count; i++) {
+        refs[i].path = argv[first_file + i];
+        refs[i].index = first_file + i;
+    }
+    qsort(refs, (size_t)count, sizeof(*refs), bx_search_operand_ref_compare);
+    return refs;
+}
+
 static void fs_cb(struct walk_entry *entry, void *user) {
     struct files_walk_state *st = user;
     if (!entry->is_dir)
@@ -1326,6 +1361,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
+            .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
             .os_error_style = progname_uses_os_error_style(progname),
@@ -1342,12 +1378,23 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .cycle_report = WALK_CYCLE_ERROR,
         };
         int num_files = argc - first_file;
+        int sorted_operand_count = 0;
+        struct bx_search_operand_ref *sorted_operands =
+            opts.sort_paths
+                ? bx_search_collect_sorted_operands(argc, argv, first_file, &sorted_operand_count)
+                : NULL;
         if (num_files == 0) {
             fstate.strip_dot_prefix = true;
             if (walk_dir(".", &wopts, fs_cb, &fstate) != 0)
                 error_seen = true;
         } else {
-            for (int j = first_file; j < argc; j++) {
+            for (int operand_i = 0; operand_i < num_files; operand_i++) {
+                int j = sorted_operands
+                            ? sorted_operands[opts.sort_paths_reverse
+                                                  ? (sorted_operand_count - 1 - operand_i)
+                                                  : operand_i]
+                                  .index
+                            : (first_file + operand_i);
                 struct stat st;
                 if (stat(argv[j], &st) != 0) {
                     report_path_error(progname, argv[j], errno);
@@ -1360,6 +1407,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     printf("%s%c", argv[j], opts.null_output ? '\0' : '\n');
             }
         }
+        free(sorted_operands);
         bx_search_free_options(&opts);
         return error_seen ? 2 : 0;
     }
@@ -1413,6 +1461,11 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     }
 
     int num_files = argc - first_file;
+    int sorted_operand_count = 0;
+    struct bx_search_operand_ref *sorted_operands =
+        opts.sort_paths
+            ? bx_search_collect_sorted_operands(argc, argv, first_file, &sorted_operand_count)
+            : NULL;
     bool rg_searches_stdin = (personality == BX_SEARCH_RG && num_files == 0 && rg_should_search_stdin());
     if (!opts.show_filename && !opts.hide_filename)
         opts.show_filename = search_default_show_filename(argc, argv, first_file, personality,
@@ -1447,6 +1500,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .no_ignore_vcs = opts.no_ignore_vcs,
                 .no_ignore_dot = opts.no_ignore_dot,
                 .no_require_git = opts.no_require_git,
+                .reverse_sort = opts.sort_paths_reverse,
                 .follow_symlinks = opts.follow_symlinks,
                 .follow_root_symlink = true,
                 .stop = &stop,
@@ -1499,6 +1553,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
+            .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
             .stop = &stop,
@@ -1524,7 +1579,13 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                 : WALK_CYCLE_IGNORE,
         };
 
-        for (int j = first_file; j < argc && !stop; j++) {
+        for (int operand_i = 0; operand_i < num_files && !stop; operand_i++) {
+            int j = sorted_operands
+                        ? sorted_operands[opts.sort_paths_reverse
+                                              ? (sorted_operand_count - 1 - operand_i)
+                                              : operand_i]
+                              .index
+                        : (first_file + operand_i);
             struct stat st;
             if (stat(argv[j], &st) != 0) {
                 report_path_error(progname, argv[j], errno);
@@ -1542,7 +1603,13 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             }
         }
     } else {
-        for (int j = first_file; j < argc; j++) {
+        for (int operand_i = 0; operand_i < num_files; operand_i++) {
+            int j = sorted_operands
+                        ? sorted_operands[opts.sort_paths_reverse
+                                              ? (sorted_operand_count - 1 - operand_i)
+                                              : operand_i]
+                              .index
+                        : (first_file + operand_i);
             if (argv[j] && strcmp(argv[j], "-") != 0) {
                 struct stat st;
                 if (lstat(argv[j], &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -1561,10 +1628,13 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             } else if (r == 0) {
                 exit_status = 0;
                 match_seen = true;
+                if (opts.quiet)
+                    break;
             }
         }
     }
     matcher_free(m);
+    free(sorted_operands);
     if (opts.stats)
         print_stats_summary(&stats);
     current_stats = NULL;

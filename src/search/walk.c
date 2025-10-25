@@ -207,7 +207,8 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
         return -1;
     }
 
-    for (size_t dirent_index = 0; dirent_index < dirents.len; dirent_index++) {
+    for (size_t iter_index = 0; iter_index < dirents.len; iter_index++) {
+        size_t dirent_index = opts->reverse_sort ? (dirents.len - 1 - iter_index) : iter_index;
         const struct walk_dirent_item *dirent_item = &dirents.items[dirent_index];
         if (walk_should_stop(opts))
             break;

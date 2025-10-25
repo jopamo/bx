@@ -58,6 +58,10 @@ enum {
     OPT_PCRE2_VERSION,
     OPT_REGEX_SIZE_LIMIT,
     OPT_DFA_SIZE_LIMIT,
+    OPT_JSON,
+    OPT_DEBUG,
+    OPT_SORT,
+    OPT_SORTR,
     OPT_TYPE_ADD,
     OPT_TYPE_CLEAR,
 };
@@ -209,6 +213,8 @@ void bx_search_print_help(const char *progname) {
     puts("      --dfa-size-limit=NUM[KMG]  accept ripgrep's DFA size limit flag");
     puts("      --pcre2-version  print PCRE2 version information and exit");
     puts("      --stop-on-nonmatch  stop reading a file after a non-matching record follows a match");
+    puts("      --sort=TYPE  sort results ascending by TYPE; path is supported");
+    puts("      --sortr=TYPE  sort results descending by TYPE; path is supported");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
 }
@@ -458,6 +464,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"multiline",    no_argument,       NULL, OPT_MULTILINE},
         {"multiline-dotall", no_argument,   NULL, OPT_MULTILINE_DOTALL},
         {"stop-on-nonmatch", no_argument,   NULL, OPT_STOP_ON_NONMATCH},
+        {"json",         no_argument,       NULL, OPT_JSON},
+        {"debug",        no_argument,       NULL, OPT_DEBUG},
+        {"sort",         required_argument, NULL, OPT_SORT},
+        {"sortr",        required_argument, NULL, OPT_SORTR},
         {"engine",       required_argument, NULL, OPT_ENGINE},
         {"regex-size-limit", required_argument, NULL, OPT_REGEX_SIZE_LIMIT},
         {"dfa-size-limit", required_argument, NULL, OPT_DFA_SIZE_LIMIT},
@@ -964,6 +974,38 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             opts->stop_on_nonmatch = true;
+            break;
+        case OPT_JSON:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--json'\n", progname);
+                return -1;
+            }
+            fprintf(stderr, "%s: unsupported option '--json'\n", progname);
+            return -1;
+        case OPT_DEBUG:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '--debug'\n", progname);
+                return -1;
+            }
+            fprintf(stderr, "%s: unsupported option '--debug'\n", progname);
+            return -1;
+        case OPT_SORT:
+        case OPT_SORTR:
+            if (personality != BX_SEARCH_RG) {
+                fprintf(stderr, "%s: unrecognized option '%s'\n",
+                        progname, c == OPT_SORT ? "--sort" : "--sortr");
+                return -1;
+            }
+            if (strcmp(optarg, "path") != 0) {
+                fprintf(stderr,
+                        "%s: unsupported argument for %s: %s\n",
+                        progname,
+                        c == OPT_SORT ? "--sort" : "--sortr",
+                        optarg);
+                return -1;
+            }
+            opts->sort_paths = true;
+            opts->sort_paths_reverse = (c == OPT_SORTR);
             break;
         case OPT_ENGINE:
             if (personality != BX_SEARCH_RG) {

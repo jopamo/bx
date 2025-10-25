@@ -67,6 +67,8 @@ struct search_opts {
     bool no_require_git;
     bool null_output;
     bool null_filename;
+    bool sort_paths;
+    bool sort_paths_reverse;
     bool null_data;
     bool multiline;
     bool multiline_dotall;
