@@ -79,6 +79,30 @@ static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
     return true;
 }
 
+static void bx_grep_print_usage_try_help(const char *progname) {
+    fprintf(stderr, "Usage: %s [OPTION]... PATTERNS [FILE]...\n", progname);
+    bx_cli_print_try_help(progname);
+}
+
+static bool bx_search_parse_nonnegative_int(const char *progname,
+                                            enum bx_search_personality personality,
+                                            const char *optname,
+                                            const char *text,
+                                            int *out) {
+    if (personality == BX_SEARCH_GREP && strcmp(optname, "-m") == 0) {
+        char *end = NULL;
+        long v = strtol(text, &end, 10);
+        if (!text || *text == '\0' || (end && *end != '\0') || v < 0 || v > 1<<20) {
+            fprintf(stderr, "%s: invalid max count\n", progname);
+            return false;
+        }
+        *out = (int)v;
+        return true;
+    }
+
+    return bx_parse_nonnegative_int(progname, optname, text, out);
+}
+
 static bool bx_rg_size_limit_parse_failed(const char *progname, const char *optname,
                                           const char *text) {
     fprintf(stderr,
@@ -609,7 +633,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case 'm':
-            if (!bx_parse_nonnegative_int(progname, "-m", optarg, &opts->max_count))
+            if (!bx_search_parse_nonnegative_int(progname, personality, "-m", optarg, &opts->max_count))
                 return -1;
             break;
         case 'Z':
@@ -1093,6 +1117,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             } else {
                 fprintf(stderr, "%s: unrecognized option\n", progname);
             }
+            if (personality == BX_SEARCH_GREP) {
+                bx_grep_print_usage_try_help(progname);
+            }
             return -1;
         default:
             return -1;
@@ -1127,7 +1154,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
 
     if (optind >= argc) {
         if (!opts->files_only && opts->num_extra_patterns == 0) {
-            fprintf(stderr, "%s: missing pattern\n", progname);
+            if (personality == BX_SEARCH_GREP) {
+                bx_grep_print_usage_try_help(progname);
+            } else {
+                fprintf(stderr, "%s: missing pattern\n", progname);
+            }
             return -1;
         }
         *pattern = opts->num_extra_patterns > 0 ? opts->extra_patterns[--opts->num_extra_patterns] : "";

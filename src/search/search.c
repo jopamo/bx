@@ -415,8 +415,12 @@ static void print_result_prefix(const char *display_name, struct search_opts *op
                                 int line_num, size_t column, bool has_column,
                                 size_t byte_offset, const char *sep) {
     if (opts->show_filename && display_name) {
+        if (bx_color_enabled())
+            fputs(bx_color_magenta(), stdout);
         fputs(display_name, stdout);
         stats_count_bytes(strlen(display_name));
+        if (bx_color_enabled())
+            fputs(bx_color_reset(), stdout);
         if (opts->null_filename)
             putchar('\0');
         else
@@ -424,16 +428,34 @@ static void print_result_prefix(const char *display_name, struct search_opts *op
         stats_count_bytes(opts->null_filename ? 1 : strlen(sep));
     }
     if (opts->show_line_number) {
-        int n = printf("%d%s", line_num, sep);
+        if (bx_color_enabled())
+            fputs(bx_color_green(), stdout);
+        int n = printf("%d", line_num);
         if (n > 0) stats_count_bytes((size_t)n);
+        if (bx_color_enabled())
+            fputs(bx_color_reset(), stdout);
+        fputs(sep, stdout);
+        stats_count_bytes(strlen(sep));
     }
     if (opts->show_column && has_column) {
-        int n = printf("%zu%s", column, sep);
+        if (bx_color_enabled())
+            fputs(bx_color_green(), stdout);
+        int n = printf("%zu", column);
         if (n > 0) stats_count_bytes((size_t)n);
+        if (bx_color_enabled())
+            fputs(bx_color_reset(), stdout);
+        fputs(sep, stdout);
+        stats_count_bytes(strlen(sep));
     }
     if (opts->show_byte_offset) {
-        int n = printf("%zu%s", byte_offset, sep);
+        if (bx_color_enabled())
+            fputs(bx_color_green(), stdout);
+        int n = printf("%zu", byte_offset);
         if (n > 0) stats_count_bytes((size_t)n);
+        if (bx_color_enabled())
+            fputs(bx_color_reset(), stdout);
+        fputs(sep, stdout);
+        stats_count_bytes(strlen(sep));
     }
 }
 
@@ -447,7 +469,12 @@ static void maybe_print_heading(const char *display_name, struct search_opts *op
         return;
     if (opts->heading_output_started)
         putchar('\n');
-    printf("%s\n", display_name);
+    if (bx_color_enabled())
+        fputs(bx_color_magenta(), stdout);
+    printf("%s", display_name);
+    if (bx_color_enabled())
+        fputs(bx_color_reset(), stdout);
+    putchar('\n');
     *heading_printed_for_file = true;
     opts->heading_output_started = true;
 }
@@ -1456,8 +1483,14 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
 
     if (!m) {
         if (compile_error) {
-            fprintf(stderr, "%s: invalid pattern '%s': %s\n",
-                    argv[0] ? argv[0] : "grep", pattern, compile_error);
+            if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
+                || personality == BX_SEARCH_FGREP) {
+                fprintf(stderr, "%s: Invalid regular expression\n",
+                        argv[0] ? argv[0] : "grep");
+            } else {
+                fprintf(stderr, "%s: invalid pattern '%s': %s\n",
+                        argv[0] ? argv[0] : "grep", pattern, compile_error);
+            }
             free(compile_error);
         } else {
             fprintf(stderr, "%s: invalid pattern: %s\n",
