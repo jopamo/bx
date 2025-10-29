@@ -168,6 +168,150 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
                           walk_callback cb, void *user, int depth,
                           const struct walk_ancestor *ancestors,
                           struct bx_ignore_state *parent_ignore_state,
+                          const struct bx_walk_filter_state *filters);
+
+static int walk_recursive_visit_entry(const char *dirpath,
+                                      const char *name,
+                                      unsigned char d_type,
+                                      struct walk_opts *opts,
+                                      walk_callback cb,
+                                      void *user,
+                                      int depth,
+                                      const struct walk_ancestor *ancestors,
+                                      struct bx_ignore_state *ignore_state,
+                                      const struct bx_walk_filter_state *filters) {
+    if (walk_should_stop(opts))
+        return 0;
+
+    size_t plen = strlen(dirpath) + 1 + strlen(name) + 1;
+    char *full = malloc(plen);
+    if (!full) {
+        walk_report_error(opts, dirpath, ENOMEM);
+        return -1;
+    }
+    snprintf(full, plen, "%s/%s", dirpath, name);
+
+    /* Keep per-entry policy out of the walker; this loop should stay about
+     * traversal, metadata, callbacks, and cycle/error handling. */
+    if (bx_walk_filter_should_skip(filters, name, full, ignore_state)) {
+        free(full);
+        return 0;
+    }
+
+    if (opts->max_depth >= 0 && depth + 1 > opts->max_depth) {
+        free(full);
+        return 0;
+    }
+
+    struct stat st;
+    struct stat lst;
+    bool entry_was_symlink = false;
+    bool cycle_check_ready = false;
+    bool crosses_filesystem = false;
+    bool repeated_dir = false;
+    int status = 0;
+    struct walk_entry entry = {
+        .path = full,
+        .follow_metadata = opts->follow_symlinks,
+        .depth = depth + 1,
+    };
+
+    if (!opts->follow_symlinks) {
+        if (d_type == DT_DIR) {
+            entry.is_dir = true;
+        } else if (d_type != DT_UNKNOWN) {
+            entry.is_dir = false;
+        } else {
+            if (lstat(full, &st) != 0) {
+                free(full);
+                return 0;
+            }
+            walk_entry_fill_from_stat(&entry, &st);
+        }
+    } else {
+        if (d_type == DT_DIR) {
+            entry.is_dir = true;
+        } else if (d_type != DT_LNK && d_type != DT_UNKNOWN) {
+            entry.is_dir = false;
+        } else {
+            if (lstat(full, &lst) != 0) {
+                free(full);
+                return 0;
+            }
+            entry_was_symlink = S_ISLNK(lst.st_mode);
+            if (!entry_was_symlink) {
+                if (stat(full, &st) != 0) {
+                    free(full);
+                    return 0;
+                }
+                walk_entry_fill_from_stat(&entry, &st);
+            } else if (stat(full, &st) == 0) {
+                walk_entry_fill_from_stat(&entry, &st);
+            } else {
+                walk_entry_fill_from_stat(&entry, &lst);
+            }
+        }
+    }
+
+    if (entry_was_symlink && entry.is_dir && entry.metadata_loaded) {
+        cycle_check_ready = true;
+        crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
+        if (!crosses_filesystem) {
+            if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
+                repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+            } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
+                repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+            }
+        }
+    }
+
+    if ((!opts->post_order || !entry.is_dir) && !repeated_dir)
+        cb(&entry, user);
+
+    if (!walk_should_stop(opts) && entry.is_dir && !entry.prune) {
+        if (!cycle_check_ready) {
+            if (!walk_entry_load_metadata(&entry)) {
+                free(full);
+                return 0;
+            }
+
+            crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
+            if (!crosses_filesystem) {
+                if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
+                    repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
+                    repeated_dir = entry_was_symlink &&
+                                   walk_ancestor_contains(ancestors, entry.dev, entry.inode);
+                }
+            }
+        }
+
+        if (repeated_dir) {
+            walk_report_loop(opts, full);
+            if (opts->cycle_report == WALK_CYCLE_ERROR)
+                status = -1;
+        } else if (!crosses_filesystem) {
+            struct walk_ancestor next = {
+                .dev = entry.dev,
+                .ino = entry.inode,
+                .path = full,
+                .parent = ancestors,
+            };
+            if (walk_recursive(full, opts, cb, user, depth + 1, &next,
+                               ignore_state, filters) != 0)
+                status = -1;
+        }
+    }
+    if (!walk_should_stop(opts) && opts->post_order && entry.is_dir && !repeated_dir)
+        cb(&entry, user);
+    free(full);
+    return status;
+}
+
+static int walk_recursive(const char *dirpath, struct walk_opts *opts,
+                          walk_callback cb, void *user, int depth,
+                          const struct walk_ancestor *ancestors,
+                          struct bx_ignore_state *parent_ignore_state,
                           const struct bx_walk_filter_state *filters) {
     if (walk_should_stop(opts))
         return 0;
@@ -199,140 +343,40 @@ static int walk_recursive(const char *dirpath, struct walk_opts *opts,
     }
 
     int status = 0;
-    struct walk_dirent_list dirents = {0};
-    if (!walk_dirent_list_read_sorted(d, &dirents)) {
-        walk_report_error(opts, dirpath, ENOMEM);
-        closedir(d);
-        bx_ignore_state_dispose(&ignore_state);
-        return -1;
-    }
-
-    for (size_t iter_index = 0; iter_index < dirents.len; iter_index++) {
-        size_t dirent_index = opts->reverse_sort ? (dirents.len - 1 - iter_index) : iter_index;
-        const struct walk_dirent_item *dirent_item = &dirents.items[dirent_index];
-        if (walk_should_stop(opts))
-            break;
-
-        size_t plen = strlen(dirpath) + 1 + strlen(dirent_item->name) + 1;
-        char *full = malloc(plen);
-        snprintf(full, plen, "%s/%s", dirpath, dirent_item->name);
-
-        /* Keep per-entry policy out of the walker; this loop should stay about
-         * traversal, metadata, callbacks, and cycle/error handling. */
-        if (bx_walk_filter_should_skip(filters, dirent_item->name, full, &ignore_state)) {
-            free(full);
-            continue;
+    if (opts->sort_entries || opts->reverse_sort) {
+        struct walk_dirent_list dirents = {0};
+        if (!walk_dirent_list_read_sorted(d, &dirents)) {
+            walk_report_error(opts, dirpath, ENOMEM);
+            closedir(d);
+            bx_ignore_state_dispose(&ignore_state);
+            return -1;
         }
 
-        if (opts->max_depth >= 0 && depth + 1 > opts->max_depth) {
-            free(full);
-            continue;
+        for (size_t iter_index = 0; iter_index < dirents.len; iter_index++) {
+            size_t dirent_index = opts->reverse_sort ? (dirents.len - 1 - iter_index) : iter_index;
+            const struct walk_dirent_item *dirent_item = &dirents.items[dirent_index];
+            if (walk_recursive_visit_entry(dirpath, dirent_item->name, dirent_item->d_type,
+                                           opts, cb, user, depth, ancestors,
+                                           &ignore_state, filters) != 0)
+                status = -1;
+            if (walk_should_stop(opts))
+                break;
         }
-
-        struct stat st;
-        struct stat lst;
-        bool entry_was_symlink = false;
-        bool cycle_check_ready = false;
-        bool crosses_filesystem = false;
-        bool repeated_dir = false;
-        struct walk_entry entry = {
-            .path = full,
-            .follow_metadata = opts->follow_symlinks,
-            .depth = depth + 1,
-        };
-
-        if (!opts->follow_symlinks) {
-            if (dirent_item->d_type == DT_DIR) {
-                entry.is_dir = true;
-            } else if (dirent_item->d_type != DT_UNKNOWN) {
-                entry.is_dir = false;
-            } else {
-                if (lstat(full, &st) != 0) {
-                    free(full);
-                    continue;
-                }
-                walk_entry_fill_from_stat(&entry, &st);
-            }
-        } else {
-            if (dirent_item->d_type == DT_DIR) {
-                entry.is_dir = true;
-            } else if (dirent_item->d_type != DT_LNK && dirent_item->d_type != DT_UNKNOWN) {
-                entry.is_dir = false;
-            } else {
-                if (lstat(full, &lst) != 0) {
-                    free(full);
-                    continue;
-                }
-                entry_was_symlink = S_ISLNK(lst.st_mode);
-                if (!entry_was_symlink) {
-                    if (stat(full, &st) != 0) {
-                        free(full);
-                        continue;
-                    }
-                    walk_entry_fill_from_stat(&entry, &st);
-                } else if (stat(full, &st) == 0) {
-                    walk_entry_fill_from_stat(&entry, &st);
-                } else {
-                    walk_entry_fill_from_stat(&entry, &lst);
-                }
-            }
+        walk_dirent_list_free(&dirents);
+    } else {
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+                continue;
+            if (walk_recursive_visit_entry(dirpath, ent->d_name, ent->d_type,
+                                           opts, cb, user, depth, ancestors,
+                                           &ignore_state, filters) != 0)
+                status = -1;
+            if (walk_should_stop(opts))
+                break;
         }
-
-        if (entry_was_symlink && entry.is_dir && entry.metadata_loaded) {
-            cycle_check_ready = true;
-            crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
-            if (!crosses_filesystem) {
-                if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
-                    repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
-                } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
-                    repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
-                }
-            }
-        }
-
-        if ((!opts->post_order || !entry.is_dir) && !repeated_dir)
-            cb(&entry, user);
-
-        if (!walk_should_stop(opts) && entry.is_dir && !entry.prune) {
-            if (!cycle_check_ready) {
-                if (!walk_entry_load_metadata(&entry)) {
-                    free(full);
-                    continue;
-                }
-
-                crosses_filesystem = opts->stay_on_filesystem && entry.dev != opts->root_device;
-                if (!crosses_filesystem) {
-                    if (opts->cycle_mode == WALK_CYCLE_DIR_REPEAT) {
-                        repeated_dir = walk_ancestor_contains(ancestors, entry.dev, entry.inode);
-                    } else if (opts->cycle_mode == WALK_CYCLE_SYMLINK_REPEAT) {
-                        repeated_dir = entry_was_symlink &&
-                                       walk_ancestor_contains(ancestors, entry.dev, entry.inode);
-                    }
-                }
-            }
-
-            if (repeated_dir) {
-                walk_report_loop(opts, full);
-                if (opts->cycle_report == WALK_CYCLE_ERROR)
-                    status = -1;
-            } else if (!crosses_filesystem) {
-                struct walk_ancestor next = {
-                    .dev = entry.dev,
-                    .ino = entry.inode,
-                    .path = full,
-                    .parent = ancestors,
-                };
-                if (walk_recursive(full, opts, cb, user, depth + 1, &next,
-                                   &ignore_state, filters) != 0)
-                    status = -1;
-            }
-        }
-        if (!walk_should_stop(opts) && opts->post_order && entry.is_dir && !repeated_dir)
-            cb(&entry, user);
-        free(full);
     }
     closedir(d);
-    walk_dirent_list_free(&dirents);
     bx_ignore_state_dispose(&ignore_state);
     return status;
 }

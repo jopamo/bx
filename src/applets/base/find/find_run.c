@@ -88,6 +88,7 @@ int find_run_search(const char *progname, struct find_opts *opts,
     struct walk_opts wopts = {
         .hidden = true,
         .no_ignore = true,
+        .sort_entries = true,
         .follow_symlinks = opts->follow_symlinks,
         .follow_root_symlink = opts->follow_root_symlink,
         .post_order = opts->depth_first,

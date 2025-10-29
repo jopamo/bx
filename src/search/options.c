@@ -30,6 +30,7 @@ enum {
     OPT_FILES_WITH_MATCHES,
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
+    OPT_DIRECTORIES,
     OPT_MAX_DEPTH,
     OPT_MAX_COLUMNS,
     OPT_NO_IGNORE,
@@ -82,6 +83,30 @@ static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
 static void bx_grep_print_usage_try_help(const char *progname) {
     fprintf(stderr, "Usage: %s [OPTION]... PATTERNS [FILE]...\n", progname);
     bx_cli_print_try_help(progname);
+}
+
+static int bx_grep_invalid_directories_mode(const char *progname, const char *value) {
+    fprintf(stderr, "%s: invalid argument '%s' for '--directories'\n", progname, value);
+    fputs("Valid arguments are:\n", stderr);
+    fputs("  - 'read'\n", stderr);
+    fputs("  - 'recurse'\n", stderr);
+    fputs("  - 'skip'\n", stderr);
+    bx_grep_print_usage_try_help(progname);
+    return 3;
+}
+
+static int bx_grep_missing_option_argument(const char *progname, int missing_opt,
+                                           int parse_optind, int argc, char **argv) {
+    if (parse_optind > 0 && parse_optind <= argc && argv[parse_optind - 1] != NULL
+        && strncmp(argv[parse_optind - 1], "--", 2) == 0) {
+        fprintf(stderr, "%s: option '%s' requires an argument\n", progname, argv[parse_optind - 1]);
+    } else if (missing_opt != 0) {
+        fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, missing_opt);
+    } else {
+        fprintf(stderr, "%s: option requires an argument\n", progname);
+    }
+    bx_grep_print_usage_try_help(progname);
+    return -1;
 }
 
 static bool bx_search_parse_nonnegative_int(const char *progname,
@@ -155,7 +180,9 @@ static bool bx_parse_rg_size_limit(const char *progname, const char *optname,
     return true;
 }
 
-static bool bx_set_binary_files_mode(const char *progname, struct search_opts *opts,
+static bool bx_set_binary_files_mode(const char *progname,
+                                     enum bx_search_personality personality,
+                                     struct search_opts *opts,
                                      const char *value) {
     if (strcmp(value, "binary") == 0) {
         opts->binary_as_text = false;
@@ -173,8 +200,13 @@ static bool bx_set_binary_files_mode(const char *progname, struct search_opts *o
         return true;
     }
 
-    fprintf(stderr, "%s: invalid argument for --binary-files: %s\n",
-            progname, value);
+    if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
+        || personality == BX_SEARCH_FGREP) {
+        fprintf(stderr, "%s: unknown binary-files type\n", progname);
+    } else {
+        fprintf(stderr, "%s: invalid argument for --binary-files: %s\n",
+                progname, value);
+    }
     return false;
 }
 
@@ -438,6 +470,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"help",         no_argument,       NULL, OPT_HELP},
         {"version",      no_argument,       NULL, OPT_VERSION},
         {"quiet",        no_argument,       NULL, 'q'},
+        {"regexp",       required_argument, NULL, 'e'},
         {"include",      required_argument, NULL, OPT_INCLUDE},
         {"exclude",      required_argument, NULL, OPT_EXCLUDE},
         {"exclude-from", required_argument, NULL, OPT_EXCLUDE_FROM},
@@ -450,7 +483,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"stats",        no_argument,       NULL, OPT_STATS},
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
+        {"directories", required_argument, NULL, OPT_DIRECTORIES},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
+        {"after-context", required_argument, NULL, 'A'},
+        {"before-context", required_argument, NULL, 'B'},
+        {"context",      required_argument, NULL, 'C'},
         {"no-ignore", no_argument,          NULL, OPT_NO_IGNORE},
         {"no-ignore-parent", no_argument,   NULL, OPT_NO_IGNORE_PARENT},
         {"no-ignore-vcs", no_argument,      NULL, OPT_NO_IGNORE_VCS},
@@ -469,6 +506,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"type-clear",   required_argument, NULL, OPT_TYPE_CLEAR},
         {"type-list",    no_argument,       NULL, OPT_TYPE_LIST},
         {"file",         required_argument, NULL, 'f'},
+        {"max-count",    required_argument, NULL, 'm'},
         {"max-depth",    required_argument, NULL, OPT_MAX_DEPTH},
         {"max-columns",  required_argument, NULL, OPT_MAX_COLUMNS},
         {"color",        optional_argument, NULL, OPT_COLOR},
@@ -503,8 +541,21 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
 
     int c;
-    while ((c = getopt_long(argc, argv, "0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:U", long_opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, ":0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:U", long_opts, NULL)) != -1) {
         switch (c) {
+        case ':':
+            if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
+                || personality == BX_SEARCH_FGREP) {
+                return bx_grep_missing_option_argument(progname, optopt, optind, argc, argv);
+            }
+            if (optopt != 0) {
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n", progname, optopt);
+            } else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                fprintf(stderr, "%s: option requires an argument -- '%s'\n", progname, argv[optind - 1]);
+            } else {
+                fprintf(stderr, "%s: option requires an argument\n", progname);
+            }
+            return -1;
         case '0':
             if (personality == BX_SEARCH_RG) {
                 opts->null_output = true;
@@ -577,6 +628,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'r': opts->recursive = true; opts->follow_symlinks = false; break;
         case 'R': opts->recursive = true; opts->follow_symlinks = true; break;
         case 'd':
+        case OPT_DIRECTORIES:
             if (personality == BX_SEARCH_RG) {
                 if (!bx_parse_nonnegative_int(progname, "-d", optarg, &opts->max_depth))
                     return -1;
@@ -590,6 +642,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 } else if (strcmp(optarg, "skip") == 0) {
                     opts->directory_mode = BX_GREP_DIR_SKIP;
                 } else {
+                    if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
+                        || personality == BX_SEARCH_FGREP) {
+                        return bx_grep_invalid_directories_mode(progname, optarg);
+                    }
                     fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, optarg);
                     return -1;
                 }
@@ -973,7 +1029,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 fprintf(stderr, "%s: unrecognized option '--binary-files'\n", progname);
                 return -1;
             }
-            if (!bx_set_binary_files_mode(progname, opts, optarg))
+            if (!bx_set_binary_files_mode(progname, personality, opts, optarg))
                 return -1;
             break;
         case OPT_NULL_DATA:

@@ -14,6 +14,7 @@ struct walk_opts {
     bool no_ignore_dot;
     bool no_require_git;
     bool gitignore_enabled;
+    bool sort_entries;
     bool reverse_sort;
     bool follow_symlinks;
     bool follow_root_symlink;

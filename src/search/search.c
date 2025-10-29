@@ -138,6 +138,35 @@ static bool rg_pattern_requires_pcre2(const char *pattern, const struct search_o
     return false;
 }
 
+static bool pattern_is_plain_literal(const char *pattern) {
+    if (!pattern || !*pattern)
+        return false;
+
+    for (const unsigned char *p = (const unsigned char *)pattern; *p; ++p) {
+        switch (*p) {
+        case '\\':
+        case '.':
+        case '^':
+        case '$':
+        case '*':
+        case '+':
+        case '?':
+        case '(':
+        case ')':
+        case '[':
+        case ']':
+        case '{':
+        case '}':
+        case '|':
+            return false;
+        default:
+            break;
+        }
+    }
+
+    return true;
+}
+
 static bool matcher_uses_posix(const char *pattern,
                                enum bx_search_personality personality,
                                const struct search_opts *opts) {
@@ -166,6 +195,20 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
     if (m->kind == MATCHER_POSIX) {
         if (start > len)
             return -1;
+
+        const unsigned char *remaining = buf + start;
+        size_t remaining_len = len - start;
+        if (memchr(remaining, '\0', remaining_len) == NULL) {
+            regmatch_t match = {0};
+            int rc = regexec(&m->posix, (const char *)remaining, 1, &match, 0);
+            if (rc != 0)
+                return -1;
+            if (match.rm_so < 0 || match.rm_eo < 0)
+                return -1;
+            out->start = start + (size_t)match.rm_so;
+            out->end = start + (size_t)match.rm_eo;
+            return 0;
+        }
 
         size_t chunk_start = start;
         while (chunk_start <= len) {
@@ -291,7 +334,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         return NULL;
     }
 
-    if (opts->fixed_strings) {
+    if (opts->fixed_strings ||
+        (!opts->line_regexp && pattern_is_plain_literal(final_pattern))) {
         if (bx_literal_compile(&m->literal, final_pattern, (flags & BX_REGEX_ICASE) != 0) != 0) {
             if (errmsg && !*errmsg)
                 *errmsg = strdup("empty fixed-string pattern is not supported");
@@ -304,6 +348,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         int cflags = 0;
         if (personality == BX_SEARCH_RG || opts->extended_regex)
             cflags |= REG_EXTENDED;
+        if (personality != BX_SEARCH_RG)
+            cflags |= REG_NEWLINE;
         if (flags & BX_REGEX_ICASE)
             cflags |= REG_ICASE;
 
@@ -1382,7 +1428,11 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int rc = bx_search_parse_options(argc, argv, &opts, personality, &pattern, &first_file);
     if (rc != 0) {
         bx_search_free_options(&opts);
-        return rc == 1 ? 0 : 2;
+        if (rc == 1)
+            return 0;
+        if (rc == 3)
+            return 1;
+        return 2;
     }
 
     if (opts.files_only) {
@@ -1395,6 +1445,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
+            .sort_entries = personality != BX_SEARCH_RG || opts.sort_paths || opts.sort_paths_reverse,
             .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
@@ -1544,6 +1595,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .no_ignore_vcs = opts.no_ignore_vcs,
                 .no_ignore_dot = opts.no_ignore_dot,
                 .no_require_git = opts.no_require_git,
+                .sort_entries = personality != BX_SEARCH_RG ||
+                                opts.sort_paths || opts.sort_paths_reverse,
                 .reverse_sort = opts.sort_paths_reverse,
                 .follow_symlinks = opts.follow_symlinks,
                 .follow_root_symlink = true,
@@ -1597,6 +1650,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
+            .sort_entries = personality != BX_SEARCH_RG || opts.sort_paths || opts.sort_paths_reverse,
             .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,

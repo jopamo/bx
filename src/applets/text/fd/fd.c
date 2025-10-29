@@ -37,6 +37,7 @@ int bx_fd_main(int argc, char **argv) {
         .no_ignore_parent = opts->no_ignore_parent,
         .no_ignore_vcs = opts->no_ignore_vcs,
         .no_require_git = opts->no_require_git,
+        .sort_entries = true,
         .follow_symlinks = opts->follow_symlinks,
         .follow_root_symlink = true,
         .stop = &stop,
