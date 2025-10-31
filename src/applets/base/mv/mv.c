@@ -666,7 +666,7 @@ finish:
 int bx_mv_main(int argc, char** argv) {
     struct bx_mv_options options;
     struct bx_diag_ctx diag = {0};
-    int first_operand;
+    int first_operand = 0;
     struct bx_mv_context ctx;
     int exit_status = 0;
 

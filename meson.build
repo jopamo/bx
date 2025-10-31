@@ -307,13 +307,21 @@ bx_system_applet_sources = [
   'src/applets/system/chown/chown.c',
   'src/applets/system/chroot/chroot.c',
   'src/applets/system/dmesg/dmesg.c',
+  'src/applets/system/fuser/fuser.c',
   'src/applets/system/getty/getty.c',
   'src/applets/system/init/init.c',
   'src/applets/system/install/install.c',
   'src/applets/system/kill/kill.c',
+  'src/applets/system/killall/killall.c',
   'src/applets/system/mount/mount.c',
   'src/applets/system/nice/nice.c',
+  'src/applets/system/peekfd/peekfd.c',
+  'src/applets/system/prtstat/prtstat.c',
   'src/applets/system/ps/ps.c',
+  'src/applets/system/pslog/pslog.c',
+  'src/applets/system/psmisc/psmisc_signals.c',
+  'src/applets/system/psmisc/psmisc_wrapper.c',
+  'src/applets/system/pstree/pstree.c',
   'src/applets/system/reboot/reboot.c',
   'src/applets/system/setsid/setsid.c',
   'src/applets/system/stty/stty.c',
@@ -502,11 +510,160 @@ bc_lib = static_library('bx_bc',
   c_args : bc_c_args,
 )
 
+psmisc_reference_include = include_directories('src/applets/system/psmisc/reference')
+
+psmisc_common_c_args = [
+  '-std=gnu11',
+  '-O2',
+  '-D_GNU_SOURCE',
+  '-D_DEFAULT_SOURCE',
+]
+psmisc_common_c_args += cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-cast-qual',
+  '-Wno-shadow',
+  '-Wno-missing-prototypes',
+  '-Wno-strict-prototypes',
+  '-Wno-sign-compare',
+  '-Wno-unused-parameter',
+  '-Wno-old-style-declaration',
+  '-Wno-pedantic',
+])
+
+peekfd_arch_c_args = []
+peekfd_cpu_family = host_machine.cpu_family()
+if peekfd_cpu_family == 'x86_64'
+  peekfd_arch_c_args += ['-DX86_64']
+elif peekfd_cpu_family == 'x86'
+  peekfd_arch_c_args += ['-DI386']
+elif peekfd_cpu_family == 'aarch64'
+  peekfd_arch_c_args += ['-DARM64']
+elif peekfd_cpu_family == 'arm'
+  peekfd_arch_c_args += ['-DARM']
+elif peekfd_cpu_family == 'm68k'
+  peekfd_arch_c_args += ['-DM68K']
+elif peekfd_cpu_family == 'ppc' or peekfd_cpu_family == 'ppc64'
+  peekfd_arch_c_args += ['-DPPC']
+elif peekfd_cpu_family == 'mips'
+  peekfd_arch_c_args += ['-DMIPS']
+  if host_machine.endian() == 'little'
+    peekfd_arch_c_args += ['-DMIPSEL']
+  endif
+else
+  error('peekfd reference integration needs an architecture mapping for ' + peekfd_cpu_family)
+endif
+
+psmisc_killall_lib = static_library('bx_psmisc_killall',
+  'src/applets/system/psmisc/reference/killall.c',
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_killall_reference_main',
+    '-Dprint_version=bx_killall_reference_print_version',
+    '-Dget_ns_name=bx_killall_reference_get_ns_name',
+    '-Dget_signal=bx_psmisc_get_signal',
+    '-Dlist_signals=bx_psmisc_list_signals',
+  ],
+)
+
+psmisc_fuser_lib = static_library('bx_psmisc_fuser',
+  [
+    'src/applets/system/psmisc/reference/fuser.c',
+    'src/applets/system/psmisc/reference/statx.c',
+  ],
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_fuser_reference_main',
+    '-Dprint_version=bx_fuser_reference_print_version',
+    '-Dfind_net_sockets=bx_fuser_reference_find_net_sockets',
+    '-Dparse_file=bx_fuser_reference_parse_file',
+    '-Dparse_inet=bx_fuser_reference_parse_inet',
+    '-Dparse_mounts=bx_fuser_reference_parse_mounts',
+    '-Dparse_unixsockets=bx_fuser_reference_parse_unixsockets',
+    '-Dget_signal=bx_psmisc_get_signal',
+    '-Dlist_signals=bx_psmisc_list_signals',
+    '-DWITH_STATX',
+    '-DHAS_FDINFO=1',
+    '-DHAS_MOUNTINFO=1',
+    '-DHAS_NAME_TO_HANDLE_AT=1',
+  ],
+)
+
+psmisc_peekfd_lib = static_library('bx_psmisc_peekfd',
+  'src/applets/system/psmisc/reference/peekfd.c',
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + peekfd_arch_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_peekfd_reference_main',
+    '-Dattach=bx_peekfd_reference_attach',
+    '-Ddetach=bx_peekfd_reference_detach',
+    '-Dbufdiff=bx_peekfd_reference_bufdiff',
+    '-Dprint_version=bx_peekfd_reference_print_version',
+    '-Dusage=bx_peekfd_reference_usage',
+    '-Dattached_pids=bx_peekfd_reference_attached_pids',
+    '-Dnum_attached_pids=bx_peekfd_reference_num_attached_pids',
+    '-Dfds=bx_peekfd_reference_fds',
+    '-include',
+    'signal.h',
+  ],
+)
+
+psmisc_prtstat_lib = static_library('bx_psmisc_prtstat',
+  'src/applets/system/psmisc/reference/prtstat.c',
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_prtstat_reference_main',
+  ],
+)
+
+psmisc_pslog_lib = static_library('bx_psmisc_pslog',
+  'src/applets/system/psmisc/reference/pslog.c',
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_pslog_reference_main',
+    '-Dprint_version=bx_pslog_reference_print_version',
+  ],
+)
+
+psmisc_pstree_lib = static_library('bx_psmisc_pstree',
+  [
+    'src/applets/system/psmisc/reference/pstree.c',
+    'src/applets/system/psmisc/pstree_term_stub.c',
+  ],
+  include_directories : psmisc_reference_include,
+  c_args : psmisc_common_c_args + [
+    '-DVERSION=BX_VERSION',
+    '-Dmain=bx_pstree_reference_main',
+    '-Dprint_version=bx_pstree_reference_print_version',
+    '-Dget_ns_name=bx_pstree_reference_get_ns_name',
+    '-Dage_to_color=bx_pstree_reference_age_to_color',
+    '-Dtgetent=bx_pstree_no_termcap_tgetent',
+    '-Dtgetstr=bx_pstree_no_termcap_tgetstr',
+    '-Dtputs=bx_pstree_no_termcap_tputs',
+    '-Dsetupterm=bx_pstree_no_termcap_setupterm',
+    '-Dtigetstr=bx_pstree_no_termcap_tigetstr',
+    '-include',
+    'strings.h',
+  ],
+)
+
+psmisc_reference_libs = [
+  psmisc_killall_lib,
+  psmisc_fuser_lib,
+  psmisc_peekfd_lib,
+  psmisc_prtstat_lib,
+  psmisc_pslog_lib,
+  psmisc_pstree_lib,
+]
+
 gnu_applet_objects = []
 gnu_applet_deps = []
 subdir('src/vendor/gnu')
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'kill', 'ps', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -530,7 +687,7 @@ bx_exe = executable('bx',
   objects : gnu_applet_objects,
   include_directories : include_directories('src', 'src/dispatch'),
   dependencies : bx_deps + gnu_applet_deps,
-  link_whole : [nc_lib, traceroute_lib, bc_lib],
+  link_whole : [nc_lib, traceroute_lib, bc_lib] + psmisc_reference_libs,
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
