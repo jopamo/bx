@@ -319,7 +319,7 @@ bx_system_applet_sources = [
   'src/applets/system/prtstat/prtstat.c',
   'src/applets/system/ps/ps.c',
   'src/applets/system/pslog/pslog.c',
-  'src/applets/system/psmisc/psmisc_signals.c',
+  'src/applets/system/psmisc/signals.c',
   'src/applets/system/psmisc/psmisc_wrapper.c',
   'src/applets/system/pstree/pstree.c',
   'src/applets/system/reboot/reboot.c',
@@ -510,7 +510,7 @@ bc_lib = static_library('bx_bc',
   c_args : bc_c_args,
 )
 
-psmisc_reference_include = include_directories('src/applets/system/psmisc/reference')
+psmisc_shared_include = include_directories('src/applets/system/psmisc')
 
 psmisc_common_c_args = [
   '-std=gnu11',
@@ -554,24 +554,22 @@ else
 endif
 
 psmisc_killall_lib = static_library('bx_psmisc_killall',
-  'src/applets/system/psmisc/reference/killall.c',
-  include_directories : psmisc_reference_include,
+  'src/applets/system/killall/killall_upstream.c',
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_killall_reference_main',
     '-Dprint_version=bx_killall_reference_print_version',
     '-Dget_ns_name=bx_killall_reference_get_ns_name',
-    '-Dget_signal=bx_psmisc_get_signal',
-    '-Dlist_signals=bx_psmisc_list_signals',
   ],
 )
 
 psmisc_fuser_lib = static_library('bx_psmisc_fuser',
   [
-    'src/applets/system/psmisc/reference/fuser.c',
-    'src/applets/system/psmisc/reference/statx.c',
+    'src/applets/system/fuser/fuser_upstream.c',
+    'src/applets/system/psmisc/statx.c',
   ],
-  include_directories : psmisc_reference_include,
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_fuser_reference_main',
@@ -581,8 +579,6 @@ psmisc_fuser_lib = static_library('bx_psmisc_fuser',
     '-Dparse_inet=bx_fuser_reference_parse_inet',
     '-Dparse_mounts=bx_fuser_reference_parse_mounts',
     '-Dparse_unixsockets=bx_fuser_reference_parse_unixsockets',
-    '-Dget_signal=bx_psmisc_get_signal',
-    '-Dlist_signals=bx_psmisc_list_signals',
     '-DWITH_STATX',
     '-DHAS_FDINFO=1',
     '-DHAS_MOUNTINFO=1',
@@ -591,8 +587,8 @@ psmisc_fuser_lib = static_library('bx_psmisc_fuser',
 )
 
 psmisc_peekfd_lib = static_library('bx_psmisc_peekfd',
-  'src/applets/system/psmisc/reference/peekfd.c',
-  include_directories : psmisc_reference_include,
+  'src/applets/system/peekfd/peekfd_upstream.c',
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + peekfd_arch_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_peekfd_reference_main',
@@ -610,8 +606,8 @@ psmisc_peekfd_lib = static_library('bx_psmisc_peekfd',
 )
 
 psmisc_prtstat_lib = static_library('bx_psmisc_prtstat',
-  'src/applets/system/psmisc/reference/prtstat.c',
-  include_directories : psmisc_reference_include,
+  'src/applets/system/prtstat/prtstat_upstream.c',
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_prtstat_reference_main',
@@ -619,8 +615,8 @@ psmisc_prtstat_lib = static_library('bx_psmisc_prtstat',
 )
 
 psmisc_pslog_lib = static_library('bx_psmisc_pslog',
-  'src/applets/system/psmisc/reference/pslog.c',
-  include_directories : psmisc_reference_include,
+  'src/applets/system/pslog/pslog_upstream.c',
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_pslog_reference_main',
@@ -630,10 +626,10 @@ psmisc_pslog_lib = static_library('bx_psmisc_pslog',
 
 psmisc_pstree_lib = static_library('bx_psmisc_pstree',
   [
-    'src/applets/system/psmisc/reference/pstree.c',
+    'src/applets/system/pstree/pstree_upstream.c',
     'src/applets/system/psmisc/pstree_term_stub.c',
   ],
-  include_directories : psmisc_reference_include,
+  include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
     '-DVERSION=BX_VERSION',
     '-Dmain=bx_pstree_reference_main',
@@ -650,7 +646,7 @@ psmisc_pstree_lib = static_library('bx_psmisc_pstree',
   ],
 )
 
-psmisc_reference_libs = [
+psmisc_imported_libs = [
   psmisc_killall_lib,
   psmisc_fuser_lib,
   psmisc_peekfd_lib,
@@ -687,7 +683,7 @@ bx_exe = executable('bx',
   objects : gnu_applet_objects,
   include_directories : include_directories('src', 'src/dispatch'),
   dependencies : bx_deps + gnu_applet_deps,
-  link_whole : [nc_lib, traceroute_lib, bc_lib] + psmisc_reference_libs,
+  link_whole : [nc_lib, traceroute_lib, bc_lib] + psmisc_imported_libs,
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

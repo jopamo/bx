@@ -800,6 +800,19 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;  /* thread count accepted, single-threaded for now */
         case 't':
         case 'T': {
+            if (personality != BX_SEARCH_RG) {
+                const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);
+                if (arg && (strcmp(arg, "--type") == 0 || strcmp(arg, "--type-not") == 0
+                            || strncmp(arg, "--type=", 7) == 0
+                            || strncmp(arg, "--type-not=", 11) == 0)) {
+                    return bx_grep_unrecognized_option(progname, arg);
+                }
+                if (c == 't') {
+                    fprintf(stderr, "%s: invalid option -- 't'\n", progname);
+                    bx_grep_print_usage_try_help(progname);
+                    return -1;
+                }
+            }
             const char *globs = bx_get_type_globs(opts, optarg);
             if (!globs) {
                 if (personality == BX_SEARCH_RG) {
@@ -825,8 +838,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         }
         case OPT_TYPE_ADD:
             if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--type-add'\n", progname);
-                return -1;
+                return bx_grep_unrecognized_option(
+                    progname,
+                    bx_search_current_option_token(optind, argc, argv, "--type-add"));
             }
             if (!bx_add_custom_type(opts, optarg)) {
                 fprintf(stderr, "%s: invalid argument for --type-add: %s\n", progname, optarg);
@@ -835,8 +849,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_TYPE_CLEAR:
             if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--type-clear'\n", progname);
-                return -1;
+                return bx_grep_unrecognized_option(
+                    progname,
+                    bx_search_current_option_token(optind, argc, argv, "--type-clear"));
             }
             if (!bx_clear_type(opts, optarg)) {
                 fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", progname, optarg);
