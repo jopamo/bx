@@ -155,29 +155,6 @@ static const struct applet applets[] = {
     {"xargs", bx_xargs_main},
 };
 
-static bool applet_install_disabled_systemwide(const char* name) {
-    static const char* const disabled[] = {
-        "ps",
-        "grep",
-        "egrep",
-        "fgrep",
-        "bxgrep",
-        "rg",
-        "bxrg",
-        "fd",
-        "find",
-        "xargs",
-    };
-
-    for (size_t i = 0; i < sizeof(disabled) / sizeof(disabled[0]); i++) {
-        if (strcmp(disabled[i], name) == 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";
 
 static const char* get_basename(const char* path) {
@@ -303,9 +280,6 @@ static int install_missing_applets(const char* bx_path, const char* install_dir,
         }
     }
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
-        if (applet_install_disabled_systemwide(applets[i].name)) {
-            continue;
-        }
         if (install_one_applet_shortcut(bx_path, install_dir, applets[i].name, symlink_mode) != 0) {
             status = 1;
         }
