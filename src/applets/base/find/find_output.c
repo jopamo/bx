@@ -42,7 +42,7 @@ bool find_write_path_file(const char *progname, const char *filename,
 }
 
 bool find_write_printf_format(FILE *fp, const char *format,
-                              const struct walk_entry *entry) {
+                              struct walk_entry *entry) {
     if (!format || !entry)
         return false;
 
@@ -112,6 +112,37 @@ bool find_write_printf_format(FILE *fp, const char *format,
                 if (!find_write_stream_bytes(fp, entry->path, strlen(entry->path)))
                     return false;
                 break;
+            case 'l': {
+                if (!walk_entry_load_metadata(entry))
+                    return false;
+                if (!S_ISLNK(entry->mode))
+                    break;
+                char *target = bx_path_readlink_dup(entry->path);
+                if (!target)
+                    return false;
+                bool ok = find_write_stream_bytes(fp, target, strlen(target));
+                free(target);
+                if (!ok)
+                    return false;
+                break;
+            }
+            case 'm': {
+                if (!walk_entry_load_metadata(entry))
+                    return false;
+                if (fprintf(fp, "%o", entry->mode & 07777u) < 0)
+                    return false;
+                break;
+            }
+            case 'h': {
+                char *dir = bx_path_dirname_dup(entry->path);
+                if (!dir)
+                    return false;
+                bool ok = find_write_stream_bytes(fp, dir, strlen(dir));
+                free(dir);
+                if (!ok)
+                    return false;
+                break;
+            }
             default:
                 if (!find_write_stream_char(fp, '%') ||
                     !find_write_stream_char(fp, format[i]))

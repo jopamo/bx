@@ -260,6 +260,10 @@ bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
         if (!walk_entry_load_metadata(entry))
             return false;
         return find_timespec_cmp(entry->mtime, expr->ref_time) > 0;
+    case FIND_EXPR_NEWERCM:
+        if (!walk_entry_load_metadata(entry))
+            return false;
+        return find_timespec_cmp(entry->ctime, expr->ref_time) > 0;
     case FIND_EXPR_EMPTY:
         return bx_walk_entry_is_empty(entry);
     case FIND_EXPR_READABLE:

@@ -22,6 +22,7 @@ struct walk_opts {
     bool stay_on_filesystem;
     bool *stop;
     bool suppress_eacces;
+    bool suppress_errors;
     bool report_eacces;
     bool os_error_style;
     const char *error_prefix;

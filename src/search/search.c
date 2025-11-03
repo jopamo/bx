@@ -35,7 +35,11 @@ static char *bx_regex_strerror_dup(int rc, const regex_t *regex) {
     return buf;
 }
 
-static void report_path_error(const char *progname, const char *path, int errnum) {
+static void report_path_error(const char *progname, const char *path, int errnum,
+                              const struct search_opts *opts) {
+    if (opts && opts->suppress_errors)
+        return;
+
     if (progname_uses_os_error_style(progname))
         fprintf(stderr, "%s: %s: %s (os error %d)\n",
                 progname, path, strerror(errnum), errnum);
@@ -701,7 +705,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
     if (!use_stdin) {
         f = fopen(filename, "r");
         if (!f) {
-            report_path_error(progname, filename, errno);
+            report_path_error(progname, filename, errno, opts);
             return 2;
         }
     }
@@ -842,7 +846,7 @@ static int search_file_buffered(const char *filename, const char *display_name,
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
         f = fopen(filename, "r");
-        if (!f) { report_path_error(progname, filename, errno); return 2; }
+        if (!f) { report_path_error(progname, filename, errno, opts); return 2; }
     }
 
     int cap = 256;
@@ -1061,7 +1065,7 @@ static int search_file_streaming(const char *filename, const char *display_name,
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
         f = fopen(filename, "r");
-        if (!f) { report_path_error(progname, filename, errno); return 2; }
+        if (!f) { report_path_error(progname, filename, errno, opts); return 2; }
     }
 
     char *line = NULL;
@@ -1239,7 +1243,7 @@ static int search_file(const char *filename, const char *display_name_override, 
     if (display_name && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 && lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
-            report_path_error(progname, filename, EISDIR);
+            report_path_error(progname, filename, EISDIR, opts);
             return 2;
         }
     }
@@ -1449,6 +1453,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
+            .suppress_errors = opts.suppress_errors,
             .os_error_style = progname_uses_os_error_style(progname),
             .error_prefix = progname,
             .max_depth = opts.max_depth,
@@ -1482,7 +1487,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                             : (first_file + operand_i);
                 struct stat st;
                 if (stat(argv[j], &st) != 0) {
-                    report_path_error(progname, argv[j], errno);
+                    report_path_error(progname, argv[j], errno, &opts);
                     error_seen = true;
                     continue;
                 }
@@ -1601,6 +1606,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .follow_symlinks = opts.follow_symlinks,
                 .follow_root_symlink = true,
                 .stop = &stop,
+                .suppress_errors = opts.suppress_errors,
                 .os_error_style = progname_uses_os_error_style(progname),
                 .error_prefix = progname,
                 .max_depth = opts.max_depth,
@@ -1655,6 +1661,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
             .stop = &stop,
+            .suppress_errors = opts.suppress_errors,
             .os_error_style = progname_uses_os_error_style(progname),
             .error_prefix = progname,
             .max_depth = opts.max_depth,
@@ -1686,7 +1693,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                         : (first_file + operand_i);
             struct stat st;
             if (stat(argv[j], &st) != 0) {
-                report_path_error(progname, argv[j], errno);
+                report_path_error(progname, argv[j], errno, &opts);
                 exit_status = 2;
                 error_seen = true;
                 continue;
@@ -1713,7 +1720,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 if (lstat(argv[j], &st) == 0 && S_ISDIR(st.st_mode)) {
                     if (opts.directory_mode == BX_GREP_DIR_SKIP)
                         continue;
-                    report_path_error(progname, argv[j], EISDIR);
+                    report_path_error(progname, argv[j], EISDIR, &opts);
                     exit_status = 2;
                     error_seen = true;
                     continue;

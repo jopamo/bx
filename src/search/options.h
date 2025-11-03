@@ -26,6 +26,7 @@ struct search_opts {
     bool files_without_match;
     bool passthru;
     bool quiet;
+    bool suppress_errors;
     bool ignore_case;
     bool smart_case;
     bool only_matching;

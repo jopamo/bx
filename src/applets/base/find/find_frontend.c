@@ -20,7 +20,10 @@ void find_print_help(const char *progname) {
     puts("  -mindepth N   do not act on levels less than N");
     puts("  -xdev         same as -mount");
     puts("  -name PATTERN match basename against PATTERN");
+    puts("  -iname PATTERN match basename against PATTERN, case-insensitively");
+    puts("  -path PATTERN match whole path against PATTERN");
     puts("  -lname PATTERN match symlink target against PATTERN");
+    puts("  -ilname PATTERN match symlink target against PATTERN, case-insensitively");
     puts("  -regex PATTERN match whole path against PATTERN");
     puts("  -iregex PATTERN match whole path against PATTERN, case-insensitively");
     puts("  -regextype TYPE  select regex syntax (currently: default, posix-extended)");
@@ -46,11 +49,12 @@ void find_print_help(const char *progname) {
     puts("  -anewer FILE  match entries accessed more recently than FILE was modified");
     puts("  -cnewer FILE  match entries changed more recently than FILE was modified");
     puts("  -newer FILE   match entries newer than FILE");
+    puts("  -newercm FILE  match entries whose ctime is newer than FILE's mtime");
     puts("  -true         always true");
     puts("  -false        always false");
     puts("  -print        print path");
     puts("  -print0       print path followed by NUL");
-    puts("  -printf FORMAT  write formatted output");
+    puts("  -printf FORMAT  write formatted output (%p, %l, %m, %h, \\n, \\0)");
     puts("  -ls           list entry in a GNU find -ls style format");
     puts("  -fprintf FILE FORMAT  write formatted output to FILE");
     puts("  -fls FILE     write -ls style output to FILE");

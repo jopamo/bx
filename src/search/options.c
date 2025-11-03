@@ -59,6 +59,7 @@ enum {
     OPT_PCRE2_VERSION,
     OPT_REGEX_SIZE_LIMIT,
     OPT_DFA_SIZE_LIMIT,
+    OPT_NO_MESSAGES,
     OPT_JSON,
     OPT_DEBUG,
     OPT_SORT,
@@ -257,6 +258,9 @@ static bool bx_set_binary_files_mode(const char *progname,
 }
 
 void bx_search_print_help(const char *progname) {
+    const char *base = bx_cli_progname(progname, "grep");
+    bool is_rg = strcmp(base, "rg") == 0 || strcmp(base, "bxrg") == 0;
+
     printf("Usage: %s [OPTION]... PATTERN [FILE]...\n", progname);
     puts("Search for PATTERN in each FILE.");
     puts("");
@@ -278,6 +282,10 @@ void bx_search_print_help(const char *progname) {
     puts("  -l            print only names of FILEs with selected lines");
     puts("  -L            print only names of FILEs with no selected lines");
     puts("  -q, --quiet   suppress all normal output");
+    if (is_rg)
+        puts("  -s            search case-sensitively");
+    else
+        puts("  -s, --no-messages  suppress error messages");
     puts("  -r            recursive, do not follow symlinks");
     puts("  -R            recursive, follow symlinks");
     puts("  -a            process binary files as text");
@@ -545,6 +553,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"iglob",        required_argument, NULL, OPT_IGLOB},
         {"ignore-case",  no_argument,       NULL, 'i'},
         {"case-sensitive", no_argument,     NULL, 's'},
+        {"no-messages",  no_argument,       NULL, OPT_NO_MESSAGES},
         {"smart-case",   no_argument,       NULL, 'S'},
         {"type",         required_argument, NULL, 't'},
         {"type-not",     required_argument, NULL, 'T'},
@@ -723,8 +732,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 opts->smart_case = false;
                 opts->ignore_case = false;
             } else {
-                fprintf(stderr, "%s: invalid option -- 's'\n", progname);
-                return -1;
+                const char *token =
+                    bx_search_current_option_token(optind, argc, argv, "-s");
+                if (token && strncmp(token, "--case-sensitive", 16) == 0)
+                    return bx_grep_unrecognized_option(progname, token);
+                opts->suppress_errors = true;
             }
             break;
         case 'S':
@@ -1094,6 +1106,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case OPT_NULL_DATA:
             opts->null_data = true;
+            break;
+        case OPT_NO_MESSAGES:
+            if (personality == BX_SEARCH_RG) {
+                return bx_grep_unrecognized_option(
+                    progname,
+                    bx_search_current_option_token(optind, argc, argv, "--no-messages"));
+            }
+            opts->suppress_errors = true;
             break;
         case OPT_MULTILINE:
             if (personality != BX_SEARCH_RG) {

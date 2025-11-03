@@ -129,6 +129,9 @@ static const char *walk_error_prefix(const struct walk_opts *opts) {
 }
 
 static void walk_report_error(const struct walk_opts *opts, const char *path, int errnum) {
+    if (opts && opts->suppress_errors)
+        return;
+
     if (opts && opts->os_error_style)
         fprintf(stderr, "%s: %s: %s (os error %d)\n",
                 walk_error_prefix(opts), path, strerror(errnum), errnum);
@@ -139,6 +142,8 @@ static void walk_report_error(const struct walk_opts *opts, const char *path, in
 
 static void walk_report_loop(const struct walk_opts *opts, const char *path) {
     if (!opts || opts->cycle_report == WALK_CYCLE_IGNORE)
+        return;
+    if (opts->suppress_errors)
         return;
 
     if (opts->os_error_style) {

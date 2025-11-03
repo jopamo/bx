@@ -104,7 +104,31 @@ static bool find_parse_perm(const char *progname, const char *text,
         return false;
     }
 
-    if (!bx_mode_parse_numeric(text, 07777u, bits)) {
+    if (bx_mode_parse_numeric(text, 07777u, bits)) {
+        if (*kind == 2 && *bits == 0) {
+            fprintf(stderr,
+                    "%s: warning: you have specified a mode pattern /000 (which is equivalent to /000). "
+                    "The meaning of -perm /000 has now been changed to be consistent with -perm -000; "
+                    "that is, while it used to match no files, it now matches all files.\n",
+                    progname);
+        }
+        return true;
+    }
+
+    struct bx_mode_parse_params params = {
+        .initial_mode = 0u,
+        .result_mask = 07777u,
+        .max_numeric_mode = 07777u,
+        .umask_value = 0u,
+        .sticky_bit = 01000u,
+        .x_policy = BX_MODE_X_DISABLED,
+        .is_directory = false,
+        .apply_umask_when_who_omitted = false,
+        .allow_setuid = true,
+        .allow_setgid = true,
+        .allow_sticky = true,
+    };
+    if (!bx_mode_parse_symbolic(text, &params, bits)) {
         fprintf(stderr, "%s: invalid argument to -perm: %s\n", progname, text);
         return false;
     }
@@ -321,6 +345,7 @@ static int find_expr_fixed_arg_count(const char *arg) {
         strcmp(arg, "-mmin") == 0 || strcmp(arg, "-mtime") == 0 ||
         strcmp(arg, "-used") == 0 || strcmp(arg, "-anewer") == 0 ||
         strcmp(arg, "-cnewer") == 0 || strcmp(arg, "-newer") == 0 ||
+        strcmp(arg, "-newercm") == 0 ||
         strcmp(arg, "-printf") == 0 || strcmp(arg, "-fls") == 0 ||
         strcmp(arg, "-fprint") == 0 || strcmp(arg, "-fprint0") == 0)
         return 1;
@@ -680,7 +705,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         if (expr)
             parser->pos++;
     } else if (strcmp(arg, "-anewer") == 0 || strcmp(arg, "-cnewer") == 0 ||
-               strcmp(arg, "-newer") == 0) {
+               strcmp(arg, "-newer") == 0 || strcmp(arg, "-newercm") == 0) {
         if (parser->pos >= parser->argc) {
             fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
                     arg);
@@ -691,6 +716,8 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
             kind = FIND_EXPR_ANEWER;
         else if (strcmp(arg, "-cnewer") == 0)
             kind = FIND_EXPR_CNEWER;
+        else if (strcmp(arg, "-newercm") == 0)
+            kind = FIND_EXPR_NEWERCM;
         expr = find_expr_new(kind);
         if (expr &&
             !find_parse_newer_ref(parser->progname, parser->argv[parser->pos],
