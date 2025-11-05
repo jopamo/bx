@@ -21,6 +21,42 @@ void bx_cli_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
+int bx_cli_maybe_handle_help_or_version(
+    int argc,
+    char** argv,
+    const char* fallback,
+    const char* short_help_opt,
+    const char* short_version_opt,
+    bx_cli_help_fn print_help
+) {
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, fallback);
+
+    for (int i = 1; i < argc; i++) {
+        const char* arg = argv[i];
+
+        if (arg == NULL) {
+            continue;
+        }
+
+        if (strcmp(arg, "--") == 0) {
+            break;
+        }
+
+        if (strcmp(arg, "--help") == 0 || (short_help_opt != NULL && strcmp(arg, short_help_opt) == 0)) {
+            print_help(stdout, progname);
+            return 0;
+        }
+
+        if (strcmp(arg, "--version") == 0
+            || (short_version_opt != NULL && strcmp(arg, short_version_opt) == 0)) {
+            bx_cli_print_version(progname);
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 void bx_cli_print_try_help(const char* progname) {
     fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }

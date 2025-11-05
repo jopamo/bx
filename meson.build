@@ -191,6 +191,15 @@ bx_crypto_sources = [
   'src/crypto/sha512.c',
 ]
 
+bx_archive_applet_sources = [
+  'src/applets/archive/archive_common.c',
+  'src/applets/archive/archive_fs.c',
+  'src/applets/archive/cpio/cpio.c',
+  'src/applets/archive/cpio/cpio_backend.c',
+  'src/applets/archive/tar/tar.c',
+  'src/applets/archive/tar/tar_backend.c',
+]
+
 # applet groups
 bx_base_applet_sources = [
   'src/applets/base/base64/base64.c',
@@ -352,6 +361,7 @@ bx_search_sources = [
 sources = bx_core_sources
 sources += bx_lib_sources
 sources += bx_crypto_sources
+sources += bx_archive_applet_sources
 sources += bx_base_applet_sources
 sources += bx_shell_applet_sources
 sources += bx_text_applet_sources
@@ -656,10 +666,6 @@ psmisc_imported_libs = [
   psmisc_pstree_lib,
 ]
 
-gnu_applet_objects = []
-gnu_applet_deps = []
-subdir('src/vendor/gnu')
-
 applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
@@ -681,9 +687,8 @@ endif
 
 bx_exe = executable('bx',
   sources,
-  objects : gnu_applet_objects,
   include_directories : include_directories('src', 'src/dispatch'),
-  dependencies : bx_deps + gnu_applet_deps,
+  dependencies : bx_deps,
   link_whole : [nc_lib, traceroute_lib, bc_lib] + psmisc_imported_libs,
   link_args : bx_link_args,
   install : true,
