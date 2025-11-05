@@ -173,8 +173,10 @@ bx_lib_sources = [
   'src/lib/prompt_ops.c',
   'src/lib/remove_ops.c',
   'src/lib/same_file.c',
+  'src/lib/signal_names.c',
   'src/lib/size_parse.c',
   'src/lib/stat_ops.c',
+  'src/lib/statx_compat.c',
   'src/lib/time_parse.c',
   'src/lib/update_policy.c',
   'src/lib/xreadwrite.c',
@@ -510,7 +512,7 @@ bc_lib = static_library('bx_bc',
   c_args : bc_c_args,
 )
 
-psmisc_shared_include = include_directories('src/applets/system/psmisc')
+psmisc_shared_include = include_directories('src')
 
 psmisc_common_c_args = [
   '-std=gnu11',
@@ -567,7 +569,6 @@ psmisc_killall_lib = static_library('bx_psmisc_killall',
 psmisc_fuser_lib = static_library('bx_psmisc_fuser',
   [
     'src/applets/system/fuser/fuser_upstream.c',
-    'src/applets/system/psmisc/statx.c',
   ],
   include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [
@@ -627,7 +628,7 @@ psmisc_pslog_lib = static_library('bx_psmisc_pslog',
 psmisc_pstree_lib = static_library('bx_psmisc_pstree',
   [
     'src/applets/system/pstree/pstree_upstream.c',
-    'src/applets/system/psmisc/pstree_term_stub.c',
+    'src/applets/system/pstree/pstree_term_stub.c',
   ],
   include_directories : psmisc_shared_include,
   c_args : psmisc_common_c_args + [

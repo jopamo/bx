@@ -39,7 +39,7 @@
 #include <errno.h>
 #include <string.h>
 
-#include "i18n.h"
+#include "applets/system/psmisc/i18n.h"
 
 #ifdef ARM64
 #include <sys/uio.h>

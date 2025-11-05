@@ -1,0 +1,169 @@
+#include <ctype.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "lib/signal_names.h"
+
+struct bx_signal_name_entry {
+    int number;
+    const char* name;
+};
+
+static const struct bx_signal_name_entry bx_signal_names[] = {
+#ifdef SIGHUP
+    {SIGHUP, "HUP"},
+#endif
+#ifdef SIGINT
+    {SIGINT, "INT"},
+#endif
+#ifdef SIGQUIT
+    {SIGQUIT, "QUIT"},
+#endif
+#ifdef SIGILL
+    {SIGILL, "ILL"},
+#endif
+#ifdef SIGTRAP
+    {SIGTRAP, "TRAP"},
+#endif
+#ifdef SIGABRT
+    {SIGABRT, "ABRT"},
+#endif
+#ifdef SIGIOT
+    {SIGIOT, "IOT"},
+#endif
+#ifdef SIGBUS
+    {SIGBUS, "BUS"},
+#endif
+#ifdef SIGFPE
+    {SIGFPE, "FPE"},
+#endif
+#ifdef SIGKILL
+    {SIGKILL, "KILL"},
+#endif
+#ifdef SIGUSR1
+    {SIGUSR1, "USR1"},
+#endif
+#ifdef SIGSEGV
+    {SIGSEGV, "SEGV"},
+#endif
+#ifdef SIGUSR2
+    {SIGUSR2, "USR2"},
+#endif
+#ifdef SIGPIPE
+    {SIGPIPE, "PIPE"},
+#endif
+#ifdef SIGALRM
+    {SIGALRM, "ALRM"},
+#endif
+#ifdef SIGTERM
+    {SIGTERM, "TERM"},
+#endif
+#ifdef SIGSTKFLT
+    {SIGSTKFLT, "STKFLT"},
+#endif
+#ifdef SIGCHLD
+    {SIGCHLD, "CHLD"},
+#endif
+#ifdef SIGCLD
+    {SIGCLD, "CLD"},
+#endif
+#ifdef SIGCONT
+    {SIGCONT, "CONT"},
+#endif
+#ifdef SIGSTOP
+    {SIGSTOP, "STOP"},
+#endif
+#ifdef SIGTSTP
+    {SIGTSTP, "TSTP"},
+#endif
+#ifdef SIGTTIN
+    {SIGTTIN, "TTIN"},
+#endif
+#ifdef SIGTTOU
+    {SIGTTOU, "TTOU"},
+#endif
+#ifdef SIGURG
+    {SIGURG, "URG"},
+#endif
+#ifdef SIGXCPU
+    {SIGXCPU, "XCPU"},
+#endif
+#ifdef SIGXFSZ
+    {SIGXFSZ, "XFSZ"},
+#endif
+#ifdef SIGVTALRM
+    {SIGVTALRM, "VTALRM"},
+#endif
+#ifdef SIGPROF
+    {SIGPROF, "PROF"},
+#endif
+#ifdef SIGWINCH
+    {SIGWINCH, "WINCH"},
+#endif
+#ifdef SIGIO
+    {SIGIO, "IO"},
+#endif
+#ifdef SIGPOLL
+    {SIGPOLL, "POLL"},
+#endif
+#ifdef SIGPWR
+    {SIGPWR, "PWR"},
+#endif
+#ifdef SIGSYS
+    {SIGSYS, "SYS"},
+#endif
+#ifdef SIGUNUSED
+    {SIGUNUSED, "UNUSED"},
+#endif
+#ifdef SIGEMT
+    {SIGEMT, "EMT"},
+#endif
+#ifdef SIGINFO
+    {SIGINFO, "INFO"},
+#endif
+};
+
+bool bx_signal_name_lookup(const char* name, int* number_out) {
+    if (name == NULL || name[0] == '\0') {
+        return false;
+    }
+
+    if (isdigit((unsigned char)name[0])) {
+        *number_out = atoi(name);
+        return true;
+    }
+
+    if (strncmp(name, "SIG", 3) == 0) {
+        name += 3;
+    }
+
+    for (size_t i = 0; i < (sizeof(bx_signal_names) / sizeof(bx_signal_names[0])); i++) {
+        if (strcmp(bx_signal_names[i].name, name) == 0) {
+            *number_out = bx_signal_names[i].number;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void bx_signal_name_list(FILE* stream) {
+    int col = 0;
+
+    for (size_t i = 0; i < (sizeof(bx_signal_names) / sizeof(bx_signal_names[0])); i++) {
+        const char* name = bx_signal_names[i].name;
+        size_t len = strlen(name);
+
+        if (col + (int)len + 1 > 80) {
+            fputc('\n', stream);
+            col = 0;
+        }
+
+        fprintf(stream, "%s%s", col ? " " : "", name);
+        col += (int)len + 1;
+    }
+
+    fputc('\n', stream);
+}

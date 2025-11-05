@@ -2,18 +2,10 @@
 #include <string.h>
 
 #include "applets/system/psmisc/psmisc_wrapper.h"
+#include "lib/cli_common.h"
 
 const char* bx_psmisc_progname(const char* argv0, const char* fallback) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return fallback;
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
+    return bx_cli_progname(argv0, fallback);
 }
 
 int bx_psmisc_maybe_handle_help_or_version(int argc, char** argv, const char* fallback,
@@ -37,7 +29,7 @@ int bx_psmisc_maybe_handle_help_or_version(int argc, char** argv, const char* fa
         }
 
         if (strcmp(arg, "--version") == 0 || strcmp(arg, "-V") == 0) {
-            printf("%s (bx) %s\n", progname, BX_VERSION);
+            bx_cli_print_version(progname);
             return 0;
         }
     }

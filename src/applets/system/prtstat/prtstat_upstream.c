@@ -36,7 +36,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "i18n.h"
+#include "applets/system/psmisc/i18n.h"
 #include "prtstat.h"
 
 #define NORETURN __attribute__((__noreturn__))
@@ -336,6 +336,5 @@ int main(int argc, char *argv[])
 
   return 0;
 }
-
 
 

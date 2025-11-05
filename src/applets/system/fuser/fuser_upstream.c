@@ -63,10 +63,10 @@
 #endif
 
 #include "fuser.h"
-#include "signals.h"
-#include "i18n.h"
-#include "statx.h"
-#include "comm.h"
+#include "applets/system/psmisc/signals.h"
+#include "applets/system/psmisc/i18n.h"
+#include "applets/system/psmisc/statx.h"
+#include "applets/system/psmisc/comm.h"
 
 //#define DEBUG 1
 

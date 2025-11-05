@@ -47,8 +47,8 @@
 #include <time.h>
 #include <err.h>
 
-#include "i18n.h"
-#include "comm.h"
+#include "applets/system/psmisc/i18n.h"
+#include "applets/system/psmisc/comm.h"
 
 #ifdef WITH_SELINUX
 #include <dlfcn.h>

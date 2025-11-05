@@ -39,7 +39,7 @@
 #include <unistd.h>
 #include <stdio.h>
 
-#include "i18n.h"
+#include "applets/system/psmisc/i18n.h"
 
 
 #ifndef PATH_MAX

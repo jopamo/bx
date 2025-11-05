@@ -59,9 +59,9 @@
 #include <locale.h>
 #endif /* HAVE_LOCALE_H */
 
-#include "i18n.h"
-#include "comm.h"
-#include "signals.h"
+#include "applets/system/psmisc/i18n.h"
+#include "applets/system/psmisc/comm.h"
+#include "applets/system/psmisc/signals.h"
 
 #define PROC_BASE "/proc"
 #define MAX_NAMES (int)(sizeof(unsigned long)*8)
