@@ -36,6 +36,8 @@
 #ifndef BC_STATUS_H
 #define BC_STATUS_H
 
+#include <bx_bc_config.h>
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <BaseTsd.h>

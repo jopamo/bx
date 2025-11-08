@@ -36,6 +36,8 @@
 #ifndef BC_DC_H
 #define BC_DC_H
 
+#include <bx_bc_config.h>
+
 #if DC_ENABLED
 
 #include <status.h>

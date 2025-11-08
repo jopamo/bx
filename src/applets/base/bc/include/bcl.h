@@ -36,6 +36,8 @@
 #ifndef BC_BCL_H
 #define BC_BCL_H
 
+#include <bx_bc_config.h>
+
 #include <stdbool.h>
 #include <stdlib.h>
 #include <limits.h>

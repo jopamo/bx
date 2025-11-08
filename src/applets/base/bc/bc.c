@@ -33,6 +33,8 @@
  *
  */
 
+#include <bx_bc_config.h>
+
 #if BC_ENABLED
 
 #include <string.h>

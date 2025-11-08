@@ -36,6 +36,8 @@
 #ifndef BC_BC_H
 #define BC_BC_H
 
+#include <bx_bc_config.h>
+
 #if BC_ENABLED
 
 #include <limits.h>

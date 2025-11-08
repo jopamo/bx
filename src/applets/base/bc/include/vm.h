@@ -36,6 +36,8 @@
 #ifndef BC_VM_H
 #define BC_VM_H
 
+#include <bx_bc_config.h>
+
 #include <assert.h>
 #include <stddef.h>
 #include <limits.h>

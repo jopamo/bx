@@ -70,7 +70,8 @@ static const char* const bc_gen_ex_end = "{{ end }}";
 static const char* const bc_gen_header =
 	"// Copyright (c) 2018-2026 Gavin D. Howard and contributors.\n"
 	"// Licensed under the 2-clause BSD license.\n"
-	"// *** AUTOMATICALLY GENERATED FROM %s. DO NOT MODIFY. ***\n\n";
+	"// *** AUTOMATICALLY GENERATED FROM %s. DO NOT MODIFY. ***\n"
+	"#include <bx_bc_config.h>\n\n";
 // clang-format on
 
 // These are just format strings used to generate the C source.

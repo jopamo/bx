@@ -47,17 +47,24 @@
 
 #include <setjmp.h>
 
+#include "applets.h"
+
 #include <status.h>
 #include <vm.h>
 #include <bc.h>
 #include <dc.h>
 
 int
-main(int argc, const char* argv[])
+bx_bc_main(int argc, char** argv)
 {
 	BcStatus s;
 	char* name;
+	int i;
 	size_t len = strlen(BC_EXECPREFIX);
+	const char* argv2[argc + 1];
+
+	for (i = 0; i < argc; ++i) argv2[i] = argv[i];
+	argv2[argc] = NULL;
 
 #if BC_ENABLE_NLS
 	// Must set the locale properly in order to have the right error messages.
@@ -104,13 +111,13 @@ main(int argc, const char* argv[])
 #pragma clang diagnostic ignored "-Wcast-qual"
 #endif // BC_CLANG
 #if !DC_ENABLED
-	s = bc_main(argc, (const char**) argv);
+	s = bc_main(argc, argv2);
 #elif !BC_ENABLED
-	s = dc_main(argc, (const char**) argv);
+	s = dc_main(argc, argv2);
 #else
 	// BC_IS_BC uses vm->name, which was set above. So we're good.
-	if (BC_IS_BC) s = bc_main(argc, (const char**) argv);
-	else s = dc_main(argc, (const char**) argv);
+	if (BC_IS_BC) s = bc_main(argc, argv2);
+	else s = dc_main(argc, argv2);
 #endif
 #if BC_CLANG
 #pragma clang diagnostic pop
