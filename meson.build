@@ -204,6 +204,23 @@ bx_archive_applet_sources = [
 bx_base_applet_sources = [
   'src/applets/base/base64/base64.c',
   'src/applets/base/basename/basename.c',
+  'src/applets/base/bc/args.c',
+  'src/applets/base/bc/bc.c',
+  'src/applets/base/bc/bc_lex.c',
+  'src/applets/base/bc/bc_parse.c',
+  'src/applets/base/bc/data.c',
+  'src/applets/base/bc/file.c',
+  'src/applets/base/bc/lang.c',
+  'src/applets/base/bc/lex.c',
+  'src/applets/base/bc/main.c',
+  'src/applets/base/bc/num.c',
+  'src/applets/base/bc/opt.c',
+  'src/applets/base/bc/parse.c',
+  'src/applets/base/bc/program.c',
+  'src/applets/base/bc/rand.c',
+  'src/applets/base/bc/read.c',
+  'src/applets/base/bc/vector.c',
+  'src/applets/base/bc/vm.c',
   'src/applets/base/cat/cat.c',
   'src/applets/base/cksum/cksum.c',
   'src/applets/base/comm/comm.c',
@@ -438,8 +455,6 @@ traceroute_lib = static_library('bx_traceroute',
   c_args : traceroute_c_args,
 )
 
-bc_version = '7.2.0'
-
 bc_host_c_args = cc.get_supported_arguments([
   '-Wno-error',
 ])
@@ -472,56 +487,7 @@ bc_lib2_src = custom_target(
   command : [bc_strgen, '@INPUT@', '@OUTPUT@', '0', 'bc_lib2', 'bc_lib2_name', 'BC_ENABLED && BC_ENABLE_EXTRA_MATH', '1'],
 )
 
-bc_sources = files(
-  'src/applets/base/bc/args.c',
-  'src/applets/base/bc/bc.c',
-  'src/applets/base/bc/bc_lex.c',
-  'src/applets/base/bc/bc_parse.c',
-  'src/applets/base/bc/data.c',
-  'src/applets/base/bc/file.c',
-  'src/applets/base/bc/lang.c',
-  'src/applets/base/bc/lex.c',
-  'src/applets/base/bc/main.c',
-  'src/applets/base/bc/num.c',
-  'src/applets/base/bc/opt.c',
-  'src/applets/base/bc/parse.c',
-  'src/applets/base/bc/program.c',
-  'src/applets/base/bc/rand.c',
-  'src/applets/base/bc/read.c',
-  'src/applets/base/bc/vector.c',
-  'src/applets/base/bc/vm.c',
-)
-
-bc_c_args = [
-  '-DBC_ENABLED=1',
-  '-DDC_ENABLED=0',
-  '-DBC_ENABLE_EXTRA_MATH=1',
-  '-DBC_ENABLE_HISTORY=0',
-  '-DBC_ENABLE_EDITLINE=0',
-  '-DBC_ENABLE_READLINE=0',
-  '-DBC_ENABLE_NLS=0',
-  '-DBC_ENABLE_LIBRARY=0',
-  '-DBC_ENABLE_MEMCHECK=0',
-  '-DBC_ENABLE_AFL=0',
-  '-DBC_ENABLE_OSSFUZZ=0',
-  '-DVERSION=' + bc_version,
-  '-DBUILD_TYPE=release',
-  '-DMAINEXEC=bc',
-  '-Dmain=bx_bc_main',
-]
-bc_c_args += cc.get_supported_arguments([
-  '-Wno-error',
-  '-Wno-cast-qual',
-  '-Wno-shadow',
-  '-Wno-missing-prototypes',
-  '-Wno-strict-prototypes',
-])
-
-bc_lib = static_library('bx_bc',
-  [bc_help_src, bc_lib_src, bc_lib2_src, bc_sources],
-  include_directories : include_directories('src', 'src/dispatch', 'src/applets/base/bc/include'),
-  c_args : bc_c_args,
-)
+sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
 applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
@@ -542,11 +508,13 @@ if install_bx_bindir != install_bindir
   applet_link_target = install_bx_path
 endif
 
+bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/bc/include')
+
 bx_exe = executable('bx',
   sources,
-  include_directories : include_directories('src', 'src/dispatch'),
+  include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib, bc_lib],
+  link_whole : [nc_lib, traceroute_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
