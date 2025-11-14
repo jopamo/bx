@@ -10,6 +10,10 @@ lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
 lscolors_install_path = join_paths(join_paths(get_option('prefix'), lscolors_install_subdir), 'lscolors.dircolors')
 add_project_arguments('-DBX_LSCOLORS_FILE="' + lscolors_install_path + '"', language : 'c')
 
+screen_utf8_install_subdir = join_paths(get_option('datadir'), 'bx', 'screen', 'utf8encodings')
+screen_utf8_install_path = join_paths(get_option('prefix'), screen_utf8_install_subdir)
+screen_system_rc_path = join_paths(get_option('prefix'), get_option('sysconfdir'), 'bx', 'screenrc')
+
 cc = meson.get_compiler('c')
 warn_flags = [
   '-Wshadow',
@@ -352,6 +356,7 @@ bx_system_applet_sources = [
   'src/applets/system/psmisc/psmisc_wrapper.c',
   'src/applets/system/pstree/pstree.c',
   'src/applets/system/reboot/reboot.c',
+  'src/applets/system/screen/screen_applet.c',
   'src/applets/system/setsid/setsid.c',
   'src/applets/system/stty/stty.c',
   'src/applets/system/switch_root/switch_root.c',
@@ -375,6 +380,46 @@ bx_search_sources = [
   'src/search/search.c',
   'src/search/walk.c',
 ]
+
+screen_native_sources = files(
+  'src/applets/system/screen/acls.c',
+  'src/applets/system/screen/ansi.c',
+  'src/applets/system/screen/attacher.c',
+  'src/applets/system/screen/backtick.c',
+  'src/applets/system/screen/canvas.c',
+  'src/applets/system/screen/comm.c',
+  'src/applets/system/screen/display.c',
+  'src/applets/system/screen/encoding.c',
+  'src/applets/system/screen/fileio.c',
+  'src/applets/system/screen/help.c',
+  'src/applets/system/screen/input.c',
+  'src/applets/system/screen/kmapdef.c',
+  'src/applets/system/screen/layer.c',
+  'src/applets/system/screen/layout.c',
+  'src/applets/system/screen/list_display.c',
+  'src/applets/system/screen/list_generic.c',
+  'src/applets/system/screen/list_license.c',
+  'src/applets/system/screen/list_window.c',
+  'src/applets/system/screen/logfile.c',
+  'src/applets/system/screen/mark.c',
+  'src/applets/system/screen/misc.c',
+  'src/applets/system/screen/process.c',
+  'src/applets/system/screen/pty.c',
+  'src/applets/system/screen/resize.c',
+  'src/applets/system/screen/sched.c',
+  'src/applets/system/screen/screen.c',
+  'src/applets/system/screen/search.c',
+  'src/applets/system/screen/socket.c',
+  'src/applets/system/screen/term.c',
+  'src/applets/system/screen/termcap.c',
+  'src/applets/system/screen/tty.c',
+  'src/applets/system/screen/utmp.c',
+  'src/applets/system/screen/viewport.c',
+  'src/applets/system/screen/window.c',
+  'src/applets/system/screen/winmsg.c',
+  'src/applets/system/screen/winmsgbuf.c',
+  'src/applets/system/screen/winmsgcond.c',
+)
 
 sources = bx_core_sources
 sources += bx_lib_sources
@@ -455,6 +500,78 @@ traceroute_lib = static_library('bx_traceroute',
   c_args : traceroute_c_args,
 )
 
+screen_termcap_dep = declare_dependency()
+screen_termcap_found = cc.has_function('tgetent')
+if not screen_termcap_found
+  foreach lib : ['curses', 'termcap', 'termlib', 'ncursesw', 'tinfow', 'ncurses', 'tinfo']
+    dep = cc.find_library(lib, required : false)
+    if dep.found() and cc.has_function('tgetent', dependencies : dep)
+      screen_termcap_dep = dep
+      screen_termcap_found = true
+      break
+    endif
+  endforeach
+endif
+if not screen_termcap_found
+  error('screen requires tgetent()')
+endif
+
+screen_openpty_dep = declare_dependency()
+screen_openpty_found = cc.has_function('openpty')
+if not screen_openpty_found
+  foreach lib : ['util', 'openpty', 'bsd']
+    dep = cc.find_library(lib, required : false)
+    if dep.found() and cc.has_function('openpty', dependencies : dep)
+      screen_openpty_dep = dep
+      screen_openpty_found = true
+      break
+    endif
+  endforeach
+endif
+if not screen_openpty_found
+  error('screen requires openpty()')
+endif
+
+screen_deps = [screen_termcap_dep, screen_openpty_dep]
+screen_crypt_dep = cc.find_library('crypt', required : false)
+if screen_crypt_dep.found()
+  screen_deps += [screen_crypt_dep]
+endif
+
+screen_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+])
+screen_c_args += [
+  '-D_GNU_SOURCE',
+  '-D_DEFAULT_SOURCE',
+  '-Ddflag=screen_dflag',
+  '-Diflag=screen_iflag',
+  '-Dmain=bx_screen_main_impl',
+  '-Drflag=screen_rflag',
+  '-DSCREENENCODINGS="' + screen_utf8_install_path + '"',
+  '-DSYSTEM_SCREENRC="' + screen_system_rc_path + '"',
+  '-Dxflag=screen_xflag',
+  '-Dxrealloc=screen_xrealloc',
+]
+
+if use_static_binary
+  screen_termcap_static_ok = cc.links(
+    'int tgetent(char *, const char *); int main(void) { return tgetent(0, 0); }',
+    dependencies : [screen_termcap_dep],
+    args : bx_static_link_args,
+    name : 'screen termcap static linkability probe',
+  )
+  if not screen_termcap_static_ok
+    error('screen requires a static-capable termcap library when static_binary is enabled')
+  endif
+endif
+
+screen_lib = static_library('bx_screen',
+  screen_native_sources,
+  dependencies : screen_deps,
+  c_args : screen_c_args,
+)
+
 bc_host_c_args = cc.get_supported_arguments([
   '-Wno-error',
 ])
@@ -489,13 +606,13 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'grep', 'egrep', 'fgrep', 'bxgrep', 'rg', 'bxrg', 'fd', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
@@ -514,10 +631,14 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib],
+  link_whole : [nc_lib, traceroute_lib, screen_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
+)
+
+install_subdir('src/applets/system/screen/utf8encodings',
+  install_dir : join_paths(get_option('datadir'), 'bx', 'screen')
 )
 
 if multicall_install_mode == 'symlink'
@@ -913,6 +1034,9 @@ if get_option('tests')
 
   test_stty_smoke_differential = find_program('tests/applets/system/stty/test_stty_smoke_differential.sh')
   test('stty smoke differential', test_stty_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_screen_basic = find_program('tests/applets/system/screen/test_screen_basic.sh')
+  test('screen basic', test_screen_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_getty_basic = find_program('tests/applets/system/getty/test_getty_basic.sh')
   test('getty basic', test_getty_basic, args : [bx_exe], suite : fast_track_p1_suite)

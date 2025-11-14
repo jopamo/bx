@@ -1,0 +1,15 @@
+GNU Screen sources here were trimmed from ref/screen/src for bx's native
+screen applet.
+
+Kept:
+- runtime C sources needed for the no-PAM, no-telnet build
+- private headers plus generated comm.h, term.h, and kmapdef.c
+- utf8encodings runtime data
+
+Dropped:
+- autotools/build scripts
+- docs, tests, and example config payloads
+- the telnet backend source
+
+Further refactoring should move only proven shared mechanics out of this applet
+family helper set.

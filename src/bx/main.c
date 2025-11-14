@@ -61,6 +61,7 @@ static const struct applet applets[] = {
     {"pwd", bx_pwd_main},
     {"tty", bx_tty_main},
     {"stty", bx_stty_main},
+    {"screen", bx_screen_main},
     {"getty", bx_getty_main},
     {"setsid", bx_setsid_main},
     {"dhcp", bx_dhcp_main},
