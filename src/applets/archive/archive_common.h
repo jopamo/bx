@@ -20,6 +20,7 @@ bool bx_archive_buffer_append_byte(struct bx_archive_buffer* buffer, unsigned ch
 bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len);
 bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
+bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer);
 
 bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
                                 struct bx_archive_buffer* output,

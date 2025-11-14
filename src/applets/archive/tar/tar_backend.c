@@ -687,7 +687,10 @@ static bool bx_tar_read_archive_input(const struct bx_tar_options* options,
         return false;
     }
 
-    if (options->gzip || (options->auto_compress && bx_archive_path_has_gzip_suffix(options->archive_path))) {
+    if (options->gzip
+        || (options->auto_compress && bx_archive_path_has_gzip_suffix(options->archive_path))
+        || ((options->mode == BX_TAR_MODE_LIST || options->mode == BX_TAR_MODE_EXTRACT)
+            && bx_archive_buffer_has_gzip_magic(archive))) {
         struct bx_archive_buffer decompressed = {0};
         bx_archive_buffer_init(&decompressed);
         if (!bx_archive_run_gzip_filter(archive, &decompressed, true, diag)) {
@@ -1533,6 +1536,11 @@ static bool bx_tar_parse_time_arg(const char* text, struct timespec* out) {
     return true;
 }
 
+static bool bx_tar_warning_keyword_supported(const char* text) {
+    return strcmp(text, "decompress-program") == 0
+        || strcmp(text, "no-decompress-program") == 0;
+}
+
 static bool bx_tar_parse_options(struct bx_tar_options* options,
                                  int argc,
                                  char** argv,
@@ -1625,6 +1633,17 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             else if (strcmp(arg, "--acls") == 0) {
                 options->acls = true;
             }
+            else if (strncmp(arg, "--warning", name_len) == 0 && name_len == 9u) {
+                if (value == NULL && ++i >= argc) {
+                    bx_diag(diag, "option '--warning' requires an argument");
+                    return false;
+                }
+                value = value ? value + 1 : argv[i];
+                if (!bx_tar_warning_keyword_supported(value)) {
+                    bx_diag(diag, "invalid argument '%s' for '--warning'", value);
+                    return false;
+                }
+            }
             else {
                 bx_diag(diag, "unrecognized option '%s'", arg);
                 return false;
@@ -1645,6 +1664,12 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
                     case 'x': options->mode = BX_TAR_MODE_EXTRACT; break;
                     case 'r': options->mode = BX_TAR_MODE_APPEND; break;
                     case 'O': options->to_stdout = true; break;
+                    case 'o':
+                        if (options->mode != BX_TAR_MODE_EXTRACT) {
+                            bx_diag(diag, "invalid option -- '%c'", ch);
+                            return false;
+                        }
+                        break;
                     case 'k': options->keep_old_files = true; break;
                     case 'z': options->gzip = true; break;
                     case 'a': options->auto_compress = true; break;

@@ -39,7 +39,6 @@
 #include "screen.h"
 
 #include "process.h"
-#include "telnet.h"
 
 /* maximum window width */
 #define MAXWIDTH 1000

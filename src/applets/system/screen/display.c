@@ -2991,7 +2991,7 @@ void RunBlanker(char **cmdv)
 	termname[ARRAY_SIZE(termname) - 1] = 0;
 	KillBlanker();
 	D_blankerpid = -1;
-	if ((D_blankerev.fd = OpenDevice(cmdv, 0, &ptype, &m)) == -1) {
+	if ((D_blankerev.fd = OpenDevice(cmdv, &ptype, &m)) == -1) {
 		Msg(0, "OpenDevice failed");
 		return;
 	}

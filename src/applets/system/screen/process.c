@@ -61,10 +61,8 @@
 #include "resize.h"
 #include "search.h"
 #include "socket.h"
-#include "telnet.h"
 #include "termcap.h"
 #include "tty.h"
-#include "utmp.h"
 #include "viewport.h"
 #include "winmsg.h"
 
@@ -456,9 +454,6 @@ void InitKeytab(void)
 	ktab['i'].nr = ktab[Ctrl('i')].nr = RC_INFO;
 	ktab['m'].nr = ktab[Ctrl('m')].nr = RC_LASTMSG;
 	ktab['A'].nr = RC_TITLE;
-#if defined(ENABLE_UTMP)
-	ktab['L'].nr = RC_LOGIN;
-#endif
 	ktab[','].nr = RC_LICENSE;
 	ktab['W'].nr = RC_WIDTH;
 	ktab['.'].nr = RC_DUMPTERMCAP;
@@ -832,6 +827,11 @@ int FindCommnr(const char *str)
 			return m;
 	}
 	return RC_ILLEGAL;
+}
+
+static bool IsUnsupportedUtmpCommand(const char *str)
+{
+	return !strcmp(str, "deflogin") || !strcmp(str, "login");
 }
 
 static int CheckArgNum(int nr, char **args)
@@ -2763,43 +2763,6 @@ static void DoCommandPow_detach_msg(struct action *act)
 	(void)ParseSaveStr(act, &PowDetachString);
 }
 
-#if defined(ENABLE_UTMP) && defined(LOGOUTOK)
-static void DoCommandLogin(struct action *act)
-{
-	char **args = act->args;
-	bool b = fore->w_slot != (slot_t)(-1);
-
-	if (*args && !strcmp(*args, "always")) {
-		fore->w_lflag = 3;
-		if (!displays && b)
-			SlotToggle(b);
-		return;
-	}
-	if (*args && !strcmp(*args, "attached")) {
-		fore->w_lflag = 1;
-		if (!displays && b)
-			SlotToggle(0);
-		return;
-	}
-	if (ParseSwitch(act, &b) == 0)
-		SlotToggle(b);
-}
-
-static void DoCommandDeflogin(struct action *act)
-{
-	char **args = act->args;
-	bool b;
-
-	if (!strcmp(*args, "always"))
-		nwin_default.lflag |= 2;
-	else if (!strcmp(*args, "attached"))
-		nwin_default.lflag &= ~2;
-	else if (ParseOnOff(act, &b) == 0)
-		nwin_default.lflag = b ? 1 : 0;
-}
-
-#endif
-
 static void DoCommandDefflow(struct action *act)
 {
 	char **args = act->args;
@@ -3482,6 +3445,10 @@ static void DoCommandBind(struct action *act)
 
 	if (args[1]) {
 		int i;
+		if (IsUnsupportedUtmpCommand(args[1])) {
+			OutputMsg(0, "error: login/deflogin are not supported: this build has no utmp support");
+			return;
+		}
 		if ((i = FindCommnr(args[1])) == RC_ILLEGAL) {
 			OutputMsg(0, "%s: bind: unknown command '%s'", rc_name, args[1]);
 			return;
@@ -3596,6 +3563,10 @@ static void DoCommandBindkey(struct action *act)
 		newact = df ? &dmtab[i] : mf ? &mmtab[i] : &umtab[i];
 	}
 	if (args[1]) {
+		if (IsUnsupportedUtmpCommand(args[1])) {
+			OutputMsg(0, "error: login/deflogin are not supported: this build has no utmp support");
+			return;
+		}
 		if ((newnr = FindCommnr(args[1])) == RC_ILLEGAL) {
 			OutputMsg(0, "%s: bindkey: unknown command '%s'", rc_name, args[1]);
 			return;
@@ -4387,6 +4358,10 @@ static void DoCommandIdle(struct action *act)
 			idletimo = atoi(*args) * 1000;
 		if (argc > 1) {
 			int i;
+			if (IsUnsupportedUtmpCommand(args[1])) {
+				OutputMsg(0, "error: login/deflogin are not supported: this build has no utmp support");
+				return;
+			}
 			if ((i = FindCommnr(args[1])) == RC_ILLEGAL) {
 				OutputMsg(0, "%s: idle: unknown command '%s'", rc_name, args[1]);
 				return;
@@ -4980,14 +4955,6 @@ void DoAction(struct action *act)
 	case RC_POW_DETACH_MSG:
 		DoCommandPow_detach_msg(act);
 		break;
-#if defined(ENABLE_UTMP) && defined(LOGOUTOK)
-	case RC_LOGIN:
-		DoCommandLogin(act);
-		break;
-	case RC_DEFLOGIN:
-		DoCommandDeflogin(act);
-		break;
-#endif
 	case RC_DEFFLOW:
 		DoCommandDefflow(act);
 		break;
@@ -5309,6 +5276,10 @@ void DoCommand(char **argv, int *argl)
 		cmd++;
 	}
 
+	if (IsUnsupportedUtmpCommand(cmd)) {
+		Msg(0, "error: login/deflogin are not supported: this build has no utmp support");
+		return;
+	}
 	if ((act.nr = FindCommnr(cmd)) == RC_ILLEGAL) {
 		Msg(0, "%s: unknown command '%s'", rc_name, cmd);
 		return;
@@ -6076,10 +6047,6 @@ char *AddWindowFlags(char *buf, int len, Window *p)
 		*s++ = '@';
 	if (p->w_bell == BELL_DONE)
 		*s++ = '!';
-#ifdef ENABLE_UTMP
-	if (p->w_slot != (slot_t) 0 && p->w_slot != (slot_t) - 1)
-		*s++ = '$';
-#endif
 	if (p->w_log != NULL) {
 		strcpy(s, "(L)");
 		s += 3;
@@ -6484,8 +6451,7 @@ static void InputSetenv(char *arg)
 /*
  * the following options are understood by this parser:
  * -f, -f0, -f1, -fy, -fa
- * -t title, -T terminal-type, -h height-of-scrollback,
- * -ln, -l0, -ly, -l1, -l
+ * -t title, -T terminal-type, -h height-of-scrollback
  * -a, -M, -L
  */
 void DoScreen(char *fn, char **av)
@@ -6543,26 +6509,9 @@ void DoScreen(char *fn, char **av)
 			else
 				--av;
 			break;
-#if defined(ENABLE_UTMP)
 		case 'l':
-			switch (av[0][2]) {
-			case 'n':
-			case '0':
-				nwin.lflag = 0;
-				break;
-			case 'y':
-			case '1':
-			case '\0':
-				nwin.lflag = 1;
-				break;
-			case 'a':
-				nwin.lflag = 3;
-				break;
-			default:
-				break;
-			}
-			break;
-#endif
+			Msg(0, "This build does not support utmp.");
+			return;
 		case 'a':
 			nwin.aflag = true;
 			break;

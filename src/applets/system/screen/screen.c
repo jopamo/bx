@@ -56,7 +56,6 @@
 #include "fileio.h"
 #include "list_generic.h"
 #include "mark.h"
-#include "utmp.h"
 #include "winmsg.h"
 
 extern char **environ;
@@ -270,9 +269,6 @@ static void exit_with_usage(char *myname, char *message, char *arg)
 	printf("-f            Flow control on, -fn = off, -fa = auto.\n");
 	printf("-h lines      Set the size of the scrollback history buffer.\n");
 	printf("-i            Interrupt output sooner when flow control is on.\n");
-#if defined(ENABLE_UTMP)
-	printf("-l            Login mode on (update %s), -ln = off.\n", UTMPXFILE);
-#endif
 	printf("-ls [match]   or\n");
 	printf("-list         Do nothing, just list our SocketDir [on possible matches].\n");
 	printf("-L            Turn on output logging.\n");
@@ -485,20 +481,6 @@ int main(int argc, char **argv)
 				case 'l':
 					ap++;
 					switch (*ap++) {
-					case 'n':
-					case '0':
-						nwin_options.lflag = 0;
-						break;
-					case '\0':
-						ap--;
-						/* FALLTHROUGH */
-					case 'y':
-					case '1':
-						nwin_options.lflag = 1;
-						break;
-					case 'a':
-						nwin_options.lflag = 3;
-						break;
 					case 's':	/* -ls */
 					case 'i':	/* -list */
 						lsflag = true;
@@ -509,7 +491,7 @@ int main(int argc, char **argv)
 						ap = NULL;
 						break;
 					default:
-						exit_with_usage(myname, "%s: Unknown suboption to -l", --ap);
+						Panic(0, "This build does not support utmp.");
 					}
 					break;
 				case 'w':
@@ -1069,9 +1051,6 @@ int main(int argc, char **argv)
 	(void)StartRc(SYSTEM_SCREENRC, 0);
 #endif
 	(void)StartRc(RcFileName, 0);
-#ifdef ENABLE_UTMP
-	InitUtmp();
-#endif				/* ENABLE_UTMP */
 	if (display) {
 		if (InitTermcap(0, 0)) {
 			fcntl(D_userfd, F_SETFL, 0);	/* Flush sets FNBLOCK */
@@ -1082,9 +1061,6 @@ int main(int argc, char **argv)
 		}
 		MakeDefaultCanvas();
 		InitTerm(0);
-#ifdef ENABLE_UTMP
-		RemoveLoginSlot();
-#endif
 	} else
 		MakeTermcap(1);
 	InitKeytab();
@@ -1307,9 +1283,6 @@ void Finit(int i)
 		if (D_status)
 			RemoveStatus();
 		FinitTerm();
-#ifdef ENABLE_UTMP
-		RestoreLoginSlot();
-#endif
 		AddStr("[screen is terminating]\r\n");
 		Flush(3);
 		SetTTY(D_userfd, &D_OldMode);
@@ -1361,7 +1334,6 @@ void Hangup(void)
  *D_REMOTE_POWER SIG_POWER_BYE	remote power detach -- both
  *D_LOCK	 SIG_LOCK	lock the attacher
  * (jw)
- * we always remove our utmp slots. (even when "lock" or "stop")
  * Note: Take extra care here, we may be called by interrupt!
  */
 void Detach(int mode)
@@ -1429,22 +1401,6 @@ void Detach(int mode)
 		/* tell attacher to lock terminal with a lockprg. */
 		break;
 	}
-#ifdef ENABLE_UTMP
-	if (displays->d_next == NULL) {
-		for (p = mru_window; p; p = p->w_prev_mru) {
-			if (p->w_slot != (slot_t) - 1 && !(p->w_lflag & 2)) {
-				RemoveUtmp(p);
-				/*
-				 * Set the slot to 0 to get the window
-				 * logged in again.
-				 */
-				p->w_slot = (slot_t) 0;
-			}
-		}
-	}
-	if (mode != D_HANGUP)
-		RestoreLoginSlot();
-#endif
 	if (displays->d_next == NULL && console_window) {
 		if (TtyGrabConsole(console_window->w_ptyfd, false, "detach")) {
 			KillWindow(console_window);
@@ -1585,9 +1541,6 @@ void Panic(int err, const char *fmt, ...)
 				RemoveStatus();
 			FinitTerm();
 			Flush(3);
-#ifdef ENABLE_UTMP
-			RestoreLoginSlot();
-#endif
 			SetTTY(D_userfd, &D_OldMode);
 			fcntl(D_userfd, F_SETFL, 0);
 			write(D_userfd, buf, strlen(buf));

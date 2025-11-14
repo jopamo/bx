@@ -112,6 +112,13 @@ bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* b
     return true;
 }
 
+bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer) {
+    return buffer != NULL
+        && buffer->len >= 2u
+        && buffer->data[0] == 0x1fu
+        && buffer->data[1] == 0x8bu;
+}
+
 static bool bx_archive_tempfile_from_buffer(const struct bx_archive_buffer* input, char** path_out, struct bx_diag_ctx* diag) {
     char* path = xstrdup("/tmp/bx-archive-filter-XXXXXX");
     int fd = mkstemp(path);

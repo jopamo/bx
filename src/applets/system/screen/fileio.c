@@ -44,7 +44,7 @@
 #include "misc.h"
 #include "process.h"
 #include "termcap.h"
-#include "dumptermcap.h"
+#include "termcap.h"
 #include "encoding.h"
 
 static char *CatExtra(char *, char *);

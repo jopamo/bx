@@ -50,7 +50,6 @@
 #include "fileio.h"
 #include "misc.h"
 #include "pty.h"
-#include "telnet.h"
 #include "tty.h"
 
 static void consredir_readev_fn(Event *, void *);

@@ -2,6 +2,7 @@
 #define SCREEN_TERMCAP_H
 
 #include <stdbool.h>
+#include <stdio.h>
 
 int   InitTermcap (int, int);
 char *MakeTermcap (bool);
@@ -10,6 +11,7 @@ int   remap (int, int);
 void  CheckEscape (void);
 int   CreateTransTable (char *);
 void  FreeTransTable (void);
+void  DumpTermcap (int, FILE *);
 
 /* global variables */
 

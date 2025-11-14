@@ -88,9 +88,6 @@ struct comm comms[RC_LAST + 1] =
   { "defhstatus",	ARGS_01,			{NULL} },
   { "defkanji",		ARGS_1,				{NULL} },
   { "deflog",		ARGS_1,				{NULL} },
-#if defined(ENABLE_UTMP)
-  { "deflogin",		ARGS_1,				{NULL} },
-#endif
   { "defmode",		ARGS_1,				{NULL} },
   { "defmonitor",	ARGS_1,				{NULL} },
   { "defmousetrack",	ARGS_1,				{NULL} },
@@ -139,9 +136,6 @@ struct comm comms[RC_LAST + 1] =
   { "lockscreen",	NEED_DISPLAY|ARGS_0,		{NULL} },
   { "log",		NEED_FORE|ARGS_01,		{NULL} },
   { "logfile",		ARGS_012,			{NULL} },
-#if defined(ENABLE_UTMP)
-  { "login",		NEED_FORE|ARGS_01,		{NULL} },
-#endif
   { "logtstamp",	ARGS_012,			{NULL} },
   { "mapdefault",	NEED_DISPLAY|ARGS_0,		{NULL} },
   { "mapnotnext",	NEED_DISPLAY|ARGS_0,		{NULL} },

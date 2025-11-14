@@ -52,7 +52,6 @@ struct NewWindow {
 	int	flowflag;
 	bool	list_order;	/* list order for window groups */
 	bool	list_nested;	/* show nested children in window groups */
-	int	lflag;
 	int	histheight;
 	int	monitor;
 	int	wlock;		/* default writelock setting */
@@ -241,12 +240,6 @@ struct Window {
 	char	*w_dir;			/* directory for chdir */
 	char	*w_term;		/* TERM to be set instead of "screen" */
 
-#if defined (ENABLE_UTMP)
-	int	 w_lflag;		/* login flag */
-	slot_t	 w_slot;		/* utmp slot */
-	struct	 utmpx w_savut;		/* utmp entry of this window */
-#endif
-
 	char	 w_tty[MAXSTR];
 
 	int    w_zauto;
@@ -331,7 +324,7 @@ void  nwin_compose (struct NewWindow *, struct NewWindow *, struct NewWindow *);
 int   DoStartLog (Window *, char *, int);
 int   ReleaseAutoWritelock (Display *, Window *);
 int   ObtainAutoWritelock (Display *, Window *);
-int   OpenDevice(char **, int, int *, char **);
+int   OpenDevice(char **, int *, char **);
 void  CloseDevice (Window *);
 void  zmodem_abort(Window *, Display *);
 void  WindowDied (Window *, int, int);

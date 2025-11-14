@@ -176,11 +176,6 @@ struct Display {
 	int	d_UPcost, d_DOcost, d_LEcost, d_NDcost;
 	int	d_CRcost, d_IMcost, d_EIcost, d_NLcost;
 	int   d_printfd;		/* fd for vt100 print sequence */
-#ifdef ENABLE_UTMP
-	slot_t d_loginslot;		/* offset, where utmp_logintty belongs */
-	struct utmpx d_utmp_logintty;	/* here the original utmp structure is stored */
-	int   d_loginttymode;
-#endif
 	int   d_blocked;
 	int   d_blocked_fuzz;
 	Event d_idleev;		/* screen blanker */
@@ -289,10 +284,6 @@ struct Display {
 #define D_EIcost	DISPLAY(d_EIcost)
 #define D_NLcost	DISPLAY(d_NLcost)
 #define D_printfd	DISPLAY(d_printfd)
-#define D_loginslot	DISPLAY(d_loginslot)
-#define D_utmp_logintty	DISPLAY(d_utmp_logintty)
-#define D_loginttymode	DISPLAY(d_loginttymode)
-#define D_loginhost	DISPLAY(d_loginhost)
 #define D_readev	DISPLAY(d_readev)
 #define D_writeev	DISPLAY(d_writeev)
 #define D_blockedev	DISPLAY(d_blockedev)

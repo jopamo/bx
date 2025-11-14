@@ -50,10 +50,8 @@
 #include "process.h"
 #include "pty.h"
 #include "resize.h"
-#include "telnet.h"
 #include "termcap.h"
 #include "tty.h"
-#include "utmp.h"
 #include "winmsg.h"
 
 static void WinProcess(char **, size_t *);
@@ -96,7 +94,6 @@ struct NewWindow nwin_undef = {
 	.flowflag            = -1,
 	.list_order          = false,
 	.list_nested         = false,
-	.lflag               = -1,
 	.histheight          = -1,
 	.monitor             = -1,
 	.wlock               = -1,
@@ -124,7 +121,6 @@ struct NewWindow nwin_default = {
 	.flowflag   = FLOW_ON,
 	.list_order   = false,
 	.list_nested = false,
-	.lflag      = 1,
 	.histheight = DEFAULTHISTHEIGHT,
 	.monitor    = MON_OFF,
 	.wlock      = WLOCK_OFF,
@@ -158,7 +154,6 @@ void nwin_compose(struct NewWindow *def, struct NewWindow *new, struct NewWindow
 	COMPOSE(flowflag);
 	COMPOSE(list_order);
 	COMPOSE(list_nested);
-	COMPOSE(lflag);
 	COMPOSE(histheight);
 	COMPOSE(monitor);
 	COMPOSE(wlock);
@@ -505,7 +500,7 @@ int MakeWindow(struct NewWindow *newwin)
 		TtyName = "telnet";
 	} else
 #endif
-	if ((f = OpenDevice(nwin.args, nwin.lflag, &type, &TtyName)) < 0)
+	if ((f = OpenDevice(nwin.args, &type, &TtyName)) < 0)
 		return -1;
 	if (type == W_TYPE_GROUP)
 		f = -1;
@@ -518,10 +513,6 @@ int MakeWindow(struct NewWindow *newwin)
 		Msg(0, "%s", strnomem);
 		return -1;
 	}
-#ifdef ENABLE_UTMP
-	if (type != W_TYPE_PTY)
-		nwin.lflag = 0;
-#endif
 
 	p->w_type = type;
 
@@ -667,19 +658,6 @@ int MakeWindow(struct NewWindow *newwin)
 		return startat;
 	}
 
-#ifdef ENABLE_UTMP
-	p->w_lflag = nwin.lflag;
-	p->w_slot = (slot_t) - 1;
-	if (nwin.lflag & 1) {
-		p->w_slot = (slot_t) 0;
-		if (display || (p->w_lflag & 2))
-			SetUtmp(p);
-	}
-#ifdef CAREFULUTMP
-	CarefulUtmp();		/* If all 've been zombies, we've had no slot */
-#endif
-#endif				/* ENABLE_UTMP */
-
 	if (nwin.Lflag) {
 		char buf[1024];
 		DoStartLog(p, buf, ARRAY_SIZE(buf));
@@ -733,10 +711,8 @@ int MakeWindow(struct NewWindow *newwin)
 int RemakeWindow(Window *window)
 {
 	char *TtyName;
-	int lflag;
 	int fd = -1;
 
-	lflag = nwin_default.lflag;
 #ifdef ENABLE_TELNET
 	if (!strcmp(window->w_cmdargs[0], "//telnet")) {
 		window->w_type = W_TYPE_TELNET;
@@ -744,7 +720,7 @@ int RemakeWindow(Window *window)
 	} else
 #endif
 	{ /* see above #ifdef */
-		if ((fd = OpenDevice(window->w_cmdargs, lflag, &window->w_type, &TtyName)) < 0)
+		if ((fd = OpenDevice(window->w_cmdargs, &window->w_type, &TtyName)) < 0)
 			return -1;
 	}
 
@@ -785,13 +761,6 @@ int RemakeWindow(Window *window)
 		if (window->w_pid < 0)
 			return -1;
 	}
-#ifdef ENABLE_UTMP
-	if (window->w_slot == (slot_t) 0 && (display || (window->w_lflag & 2)))
-		SetUtmp(window);
-#ifdef CAREFULUTMP
-	CarefulUtmp();		/* If all 've been zombies, we've had no slot */
-#endif
-#endif
 	WindowChanged(window, WINESC_WFLAGS);
 	return window->w_number;
 }
@@ -829,9 +798,6 @@ void FreeWindow(Window *window)
 {
 	if (window->w_pwin)
 		FreePseudowin(window);
-#ifdef ENABLE_UTMP
-	RemoveUtmp(window);
-#endif
 	CloseDevice(window);
 
 	if (window == console_window) {
@@ -900,15 +866,11 @@ void FreeWindow(Window *window)
 	free((char *)window);
 }
 
-int OpenDevice(char **args, int lflag, int *typep, char **namep)
+int OpenDevice(char **args, int *typep, char **namep)
 {
 	char *arg = args[0];
 	struct stat st;
 	int fd;
-
-#ifndef ENABLE_UTMP
-	(void)lflag; /* unused */
-#endif
 
 	if (!arg)
 		return -1;
@@ -927,9 +889,6 @@ int OpenDevice(char **args, int lflag, int *typep, char **namep)
 		}
 		if ((fd = OpenTTY(arg, args[1])) < 0)
 			return -1;
-#ifdef ENABLE_UTMP
-		lflag = 0;
-#endif
 		*typep = W_TYPE_PLAIN;
 		*namep = arg;
 	} else {
@@ -987,11 +946,7 @@ int OpenDevice(char **args, int lflag, int *typep, char **namep)
 			close(fd);
 		return -1;
 	}
-#ifdef ENABLE_UTMP
-	if (chmod(*namep, lflag ? TtyMode : (TtyMode & ~022)) && !eff_uid)
-#else
 	if (chmod(*namep, TtyMode) && !eff_uid)
-#endif
 	{
 		Msg(errno, "chmod tty");
 		if (*typep == W_TYPE_PTY)
@@ -1306,7 +1261,7 @@ int winexec(char **av)
 	}
 	*--t = '\0';
 
-	if ((pwin->p_ptyfd = OpenDevice(av, 0, &type, &t)) < 0) {
+	if ((pwin->p_ptyfd = OpenDevice(av, &type, &t)) < 0) {
 		free((char *)pwin);
 		return -1;
 	}
@@ -1869,18 +1824,6 @@ int SwapWindows(int old, int dest)
 	}
 
 	/* exchange the acls for these windows. */
-#ifdef ENABLE_UTMP
-	/* exchange the utmp-slots for these windows */
-	if ((win_a->w_slot != (slot_t) - 1) && (win_a->w_slot != (slot_t) 0)) {
-		RemoveUtmp(win_a);
-		SetUtmp(win_a);
-	}
-	if (win_b && (win_b->w_slot != (slot_t) - 1) && (win_b->w_slot != (slot_t) 0)) {
-		display = win_a->w_layer.l_cvlist ? win_a->w_layer.l_cvlist->c_display : NULL;
-		RemoveUtmp(win_b);
-		SetUtmp(win_b);
-	}
-#endif
 
 	WindowChanged(win_a, WINESC_WIN_NUM);
 	WindowChanged(NULL, WINESC_WIN_NAMES);
@@ -1934,12 +1877,6 @@ void WindowDied(Window *p, int wstat, int wstat_valid)
 		s = ctime(&now);
 		if (s && *s)
 			s[strlen(s) - 1] = '\0';
-#ifdef ENABLE_UTMP
-		if (p->w_slot != (slot_t) 0 && p->w_slot != (slot_t) - 1) {
-			RemoveUtmp(p);
-			p->w_slot = NULL;	/* "detached" */
-		}
-#endif
 		CloseDevice(p);
 
 		p->w_deadpid = p->w_pid;
@@ -1956,9 +1893,6 @@ void WindowDied(Window *p, int wstat, int wstat_valid)
 		WindowChanged(p, WINESC_WFLAGS);
 	} else
 		KillWindow(p);
-#ifdef ENABLE_UTMP
-	CarefulUtmp();
-#endif
 }
 
 void ResetWindow(Window *win)

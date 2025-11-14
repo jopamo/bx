@@ -413,7 +413,6 @@ screen_native_sources = files(
   'src/applets/system/screen/term.c',
   'src/applets/system/screen/termcap.c',
   'src/applets/system/screen/tty.c',
-  'src/applets/system/screen/utmp.c',
   'src/applets/system/screen/viewport.c',
   'src/applets/system/screen/window.c',
   'src/applets/system/screen/winmsg.c',
@@ -613,7 +612,7 @@ install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
-systemwide_disabled_applet_names = ['ps', 'grep', 'egrep', 'fgrep', 'bxgrep', 'rg', 'bxrg', 'fd', 'find', 'xargs']
+systemwide_disabled_applet_names = ['ps', 'grep', 'egrep', 'fgrep', 'bxgrep', 'rg', 'bxrg', 'fd', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 if install_init_shortcut and install_bindir.startswith('/usr/')

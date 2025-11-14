@@ -80,7 +80,6 @@
 #include "resize.h"
 #include "termcap.h"
 #include "tty.h"
-#include "utmp.h"
 
 static int CheckPid(pid_t);
 static int ValidateDetachRequest(Message *);
@@ -476,7 +475,6 @@ void SendCreateMsg(char *sty, struct NewWindow *nwin)
 	m.m.create.nargs = n;
 	m.m.create.aflag = nwin->aflag;
 	m.m.create.flowflag = nwin->flowflag;
-	m.m.create.lflag = nwin->lflag;
 	m.m.create.Lflag = nwin->Lflag;
 	m.m.create.hheight = nwin->histheight;
 	if (getcwd(m.m.create.dir, ARRAY_SIZE(m.m.create.dir)) == NULL) {
@@ -555,7 +553,6 @@ static void ExecCreate(Message *mp)
 	nwin.flowflag = mp->m.create.flowflag;
 	if (*mp->m.create.dir)
 		nwin.dir = mp->m.create.dir;
-	nwin.lflag = mp->m.create.lflag;
 	nwin.Lflag = mp->m.create.Lflag;
 	nwin.histheight = mp->m.create.hheight;
 	if (*mp->m.create.screenterm)
@@ -1020,18 +1017,6 @@ static void FinishAttach(Message *m)
 		D_user->u_Esc = m->m.attach.esc;
 		D_user->u_MetaEsc = m->m.attach.meta_esc;
 	}
-#ifdef ENABLE_UTMP
-	/*
-	 * we set the Utmp slots again, if we were detached normally
-	 * and if we were detached by ^Z.
-	 * don't log zomies back in!
-	 */
-	RemoveLoginSlot();
-	if (displays->d_next == NULL)
-		for (Window *win = mru_window; win; win = win->w_prev_mru)
-			if (win->w_ptyfd >= 0 && win->w_slot != (slot_t) - 1)
-				SetUtmp(win);
-#endif
 
 	D_fore = NULL;
 	if (layout_attach) {
