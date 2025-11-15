@@ -149,10 +149,10 @@ static int bx_grep_unrecognized_option(const char *progname, const char *arg) {
     return -1;
 }
 
-static const char *bx_search_current_option_token(int optind, int argc, char **argv,
+static const char *bx_search_current_option_token(int option_index, int argc, char **argv,
                                                   const char *fallback) {
-    if (optind > 0 && optind <= argc && argv[optind - 1] != NULL)
-        return argv[optind - 1];
+    if (option_index > 0 && option_index <= argc && argv[option_index - 1] != NULL)
+        return argv[option_index - 1];
     return fallback;
 }
 

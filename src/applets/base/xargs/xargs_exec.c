@@ -333,6 +333,42 @@ struct xargs_stream_ctx {
     bool failed;
 };
 
+static bool xargs_stream_grow_children(struct xargs_stream_ctx *ctx) {
+    int new_max_procs = ctx->max_procs < 4 ? 4 : ctx->max_procs * 2;
+    struct bx_child *new_children = realloc(
+        ctx->children, (size_t)new_max_procs * sizeof(*new_children));
+    if (!new_children) {
+        fprintf(stderr, "%s: out of memory\n", ctx->progname);
+        ctx->failed = true;
+        return false;
+    }
+
+    memset(new_children + ctx->max_procs, 0,
+           (size_t)(new_max_procs - ctx->max_procs) * sizeof(*new_children));
+    ctx->children = new_children;
+    ctx->max_procs = new_max_procs;
+    return true;
+}
+
+static bool xargs_stream_wait_for_slot(struct xargs_stream_ctx *ctx) {
+    while (*ctx->running >= ctx->max_procs) {
+        if (ctx->opts->max_procs == 0) {
+            return xargs_stream_grow_children(ctx);
+        }
+
+        if (xargs_reap_children(ctx->progname, ctx->command[0], ctx->children,
+                                ctx->running, ctx->final_rc, ctx->abort_launch,
+                                true, false) != 0) {
+            ctx->failed = true;
+            return false;
+        }
+        if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
+            return false;
+    }
+
+    return true;
+}
+
 static void xargs_stream_batch_reset(struct xargs_stream_batch *batch) {
     for (int i = 0; i < batch->count; i++)
         free(batch->items[i]);
@@ -383,16 +419,8 @@ static int xargs_stream_flush(struct xargs_stream_ctx *ctx) {
     if (ctx->batch.count == 0)
         return 0;
 
-    while (*ctx->running >= ctx->max_procs) {
-        if (xargs_reap_children(ctx->progname, ctx->command[0], ctx->children,
-                                ctx->running, ctx->final_rc, ctx->abort_launch,
-                                true, false) != 0) {
-            ctx->failed = true;
-            return 1;
-        }
-        if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
-            return 0;
-    }
+    if (!xargs_stream_wait_for_slot(ctx))
+        return ctx->failed ? 1 : 0;
 
     int slot = bx_child_pick_slot(ctx->children, *ctx->running, ctx->max_procs);
     if (xargs_spawn_batch(ctx->progname, ctx->command, ctx->command_argc,
@@ -426,17 +454,8 @@ static bool xargs_stream_sink(const char *item, int line_group, void *user) {
     ctx->saw_item = true;
 
     if (ctx->opts->replace_mode) {
-        while (*ctx->running >= ctx->max_procs) {
-            if (xargs_reap_children(ctx->progname, ctx->command[0],
-                                    ctx->children, ctx->running,
-                                    ctx->final_rc, ctx->abort_launch, true,
-                                    false) != 0) {
-                ctx->failed = true;
-                return false;
-            }
-            if (*ctx->interrupt_signal != 0 || *ctx->abort_launch)
-                return false;
-        }
+        if (!xargs_stream_wait_for_slot(ctx))
+            return false;
 
         int slot =
             bx_child_pick_slot(ctx->children, *ctx->running, ctx->max_procs);
@@ -685,8 +704,9 @@ int xargs_run_streaming_batches(const char *progname, char **command,
                                 int command_argc, FILE *input,
                                 struct xargs_opts *opts,
                                 volatile sig_atomic_t *interrupt_signal) {
-    int max_procs = opts->max_procs > 0 ? opts->max_procs : 1;
-    struct bx_child *children = calloc((size_t)max_procs, sizeof(*children));
+    int initial_max_procs = opts->max_procs > 0 ? opts->max_procs : 1;
+    struct bx_child *children =
+        calloc((size_t)initial_max_procs, sizeof(*children));
     if (!children)
         return 1;
 
@@ -708,7 +728,7 @@ int xargs_run_streaming_batches(const char *progname, char **command,
         .command_argc = command_argc,
         .opts = opts,
         .children = children,
-        .max_procs = max_procs,
+        .max_procs = initial_max_procs,
         .running = &running,
         .final_rc = &final_rc,
         .abort_launch = &abort_launch,
@@ -726,27 +746,29 @@ int xargs_run_streaming_batches(const char *progname, char **command,
 
     if (read_ok && !ctx.saw_item && !opts->no_run_if_empty &&
         !opts->replace_mode) {
-        int slot = bx_child_pick_slot(children, running, max_procs);
+        int slot =
+            bx_child_pick_slot(ctx.children, running, ctx.max_procs);
         if (xargs_spawn_batch(progname, command, command_argc, NULL, 0, opts,
-                              slot, children, &running, &final_rc,
+                              slot, ctx.children, &running, &final_rc,
                               &abort_launch) != 0)
             read_ok = false;
     }
 
     if (read_ok &&
         xargs_wait_for_running_children(interrupt_signal, progname, command[0],
-                                        children, &running, &final_rc,
+                                        ctx.children, &running, &final_rc,
                                         &abort_launch) != 0)
         read_ok = false;
 
     if (*interrupt_signal != 0) {
-        int rc = xargs_finish_interrupted_run(interrupt_signal, children, &running);
+        int rc =
+            xargs_finish_interrupted_run(interrupt_signal, ctx.children, &running);
         xargs_stream_batch_free(&ctx.batch);
-        free(children);
+        free(ctx.children);
         return rc != 0 ? rc : 1;
     }
 
     xargs_stream_batch_free(&ctx.batch);
-    free(children);
+    free(ctx.children);
     return (read_ok && !ctx.failed) ? final_rc : 1;
 }

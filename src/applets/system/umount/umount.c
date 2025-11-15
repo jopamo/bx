@@ -179,6 +179,7 @@ static bool bx_umount_skip_all_target(const char* target) {
         "/proc",
         "/run/credentials",
         "/run/host",
+        "/run/systemd",
         "/run/user",
     };
 
