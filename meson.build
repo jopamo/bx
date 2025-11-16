@@ -4,8 +4,6 @@ project('bx', 'c',
   default_options : ['warning_level=3', 'c_std=c11', 'werror=true']
 )
 
-fs = import('fs')
-
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', '-DBX_VERSION="' + meson.project_version() + '"', language : 'c')
 
 lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
@@ -503,21 +501,23 @@ traceroute_lib = static_library('bx_traceroute',
 
 screen_termcap_dep = declare_dependency()
 screen_termcap_found = false
-screen_termcap_exact_archive = '/usr/lib/libtinfotw_p.a'
-if fs.exists(screen_termcap_exact_archive)
-  screen_termcap_exact_dep = declare_dependency(
-    link_args : [screen_termcap_exact_archive],
+foreach dep_name : ['tinfotw', 'ncursestw', 'tinfo', 'ncurses', 'tinfow', 'ncursesw']
+  dep = dependency(dep_name,
+    method : 'pkg-config',
+    required : false,
+    static : use_static_binary,
   )
-  if cc.has_function('tgetent', dependencies : screen_termcap_exact_dep)
-    screen_termcap_dep = screen_termcap_exact_dep
+  if dep.found() and cc.has_function('tgetent', dependencies : dep)
+    screen_termcap_dep = dep
     screen_termcap_found = true
+    break
   endif
-endif
+endforeach
 if not screen_termcap_found
   screen_termcap_found = cc.has_function('tgetent')
 endif
 if not screen_termcap_found
-  foreach lib : ['curses', 'termcap', 'termlib', 'ncursesw', 'tinfow', 'ncurses', 'tinfo']
+  foreach lib : ['tinfotw', 'ncursestw', 'curses', 'termcap', 'termlib', 'ncursesw', 'tinfow', 'ncurses', 'tinfo']
     dep = cc.find_library(lib, required : false)
     if dep.found() and cc.has_function('tgetent', dependencies : dep)
       screen_termcap_dep = dep
