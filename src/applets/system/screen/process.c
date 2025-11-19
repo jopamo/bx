@@ -80,6 +80,7 @@ static void ShowInfo(void);
 static void ShowDInfo(void);
 static Window *WindowByName(char *);
 static int WindowByNumber(char *);
+static int MsgOk(void);
 static int ParseSwitch(struct action *, bool *);
 static int ParseOnOff(struct action *, bool *);
 static int ParseWinNum(struct action *, int *);
@@ -965,7 +966,7 @@ static void DoCommandMultiinput(struct action *act)
 
 static void DoCommandDefautonuke(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseOnOff(act, &defautonuke) == 0 && msgok)
 		OutputMsg(0, "Default autonuke turned %s", defautonuke ? "on" : "off");
@@ -976,7 +977,7 @@ static void DoCommandDefautonuke(struct action *act)
 
 static void DoCommandAutonuke(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseOnOff(act, &D_auto_nuke) == 0 && msgok)
 		OutputMsg(0, "Autonuke turned %s", D_auto_nuke ? "on" : "off");
@@ -984,7 +985,7 @@ static void DoCommandAutonuke(struct action *act)
 
 static void DoCommandDefobuflimit(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseNum(act, &defobuflimit) == 0 && msgok)
 		OutputMsg(0, "Default limit set to %d", defobuflimit);
@@ -996,7 +997,7 @@ static void DoCommandDefobuflimit(struct action *act)
 
 static void DoCommandObuflimit(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	char **args = act->args;
 
 	if (*args == NULL)
@@ -1166,7 +1167,7 @@ static void DoCommandPow_detach(struct action *act)
 static void DoCommandZmodem(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args && !strcmp(*args, "sendcmd")) {
 		if (args[1]) {
@@ -1972,7 +1973,7 @@ static void DoCommandScreen(struct action *act)
 
 static void DoCommandWrap(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &fore->w_wrap) == 0 && msgok)
 		OutputMsg(0, "%cwrap", fore->w_wrap ? '+' : '-');
@@ -1981,7 +1982,7 @@ static void DoCommandWrap(struct action *act)
 static void DoCommandFlow(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b;
 
 	if (*args) {
@@ -2104,7 +2105,7 @@ static void DoCommandWindowlist(struct action *act)
 {
 	char **args = act->args;
 	int argc = CheckArgNum(act->nr, args);
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (!*args)
 		display_windows(0, WLIST_NUM, NULL);
@@ -2524,7 +2525,7 @@ static void DoCommandRemovebuf(struct action *act)
 
 static void DoCommandIgnorecase(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	(void)ParseSwitch(act, &search_ic);
 	if (msgok)
@@ -2592,7 +2593,7 @@ static void DoCommandShell(struct action *act)
 static void DoCommandHardcopydir(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args)
 		(void)ParseSaveStr(act, &hardcopydir);
@@ -2603,7 +2604,7 @@ static void DoCommandHardcopydir(struct action *act)
 static void DoCommandLogfile(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args) {
 		char buf[MAXPATHLEN];
@@ -2627,7 +2628,7 @@ static void DoCommandLogfile(struct action *act)
 static void DoCommandLogtstamp(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (!*args || !strcmp(*args, "on") || !strcmp(*args, "off")) {
 		if (ParseSwitch(act, &logtstamp_on) == 0 && msgok)
@@ -2690,7 +2691,7 @@ static void DoCommandEcho(struct action *act)
 {
 	char **args = act->args;
 	int argc = CheckArgNum(act->nr, args);
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	char *s = NULL;
 
 	if (!msgok && (!rc_name || strcmp(rc_name, "-X")))
@@ -2735,7 +2736,7 @@ static void DoCommandBell(struct action *act)
 static void DoCommandBufferfile(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args == NULL)
 		BufferFile = SaveStr(DEFAULT_BUFFERFILE);
@@ -2861,7 +2862,7 @@ static void DoCommandVerbose(struct action *act)
 static void DoCommandHardstatus(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	char *s = NULL;
 
 	if (display) {
@@ -3016,7 +3017,7 @@ static void DoCommandConsole(struct action *act)
 
 static void DoCommandAllpartial(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseOnOff(act, &all_norefresh))
 		return;
@@ -3037,7 +3038,7 @@ static void DoCommandPartial(struct action *act)
 
 static void DoCommandVbell(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &visual_bell) || !msgok)
 		return;
@@ -3049,7 +3050,7 @@ static void DoCommandVbell(struct action *act)
 
 static void DoCommandVbellwait(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseNum1000(act, &VBellWait) == 0 && msgok)
 		OutputMsg(0, "vbellwait set to %.10g seconds", VBellWait / 1000.);
@@ -3057,7 +3058,7 @@ static void DoCommandVbellwait(struct action *act)
 
 static void DoCommandMsgwait(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseNum1000(act, &MsgWait) == 0 && msgok)
 		OutputMsg(0, "msgwait set to %.10g seconds", MsgWait / 1000.);
@@ -3065,7 +3066,7 @@ static void DoCommandMsgwait(struct action *act)
 
 static void DoCommandMsgminwait(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseNum1000(act, &MsgMinWait) == 0 && msgok)
 		OutputMsg(0, "msgminwait set to %.10g seconds", MsgMinWait / 1000.);
@@ -3073,7 +3074,7 @@ static void DoCommandMsgminwait(struct action *act)
 
 static void DoCommandSilencewait(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseNum(act, &SilenceWait))
 		return;
@@ -3189,7 +3190,7 @@ static void DoCommandSort(struct action *act)
 static void DoCommandSilence(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b = fore->w_silence != 0;
 	int i = fore->w_silencewait;
 
@@ -3240,7 +3241,7 @@ static void DoCommandDefscrollback(struct action *act)
 
 static void DoCommandScrollback(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	int n = 0;
 
 	if (flayer->l_layfn == &MarkLf) {
@@ -3316,7 +3317,7 @@ static void DoCommandDefslowpaste(struct action *act)
 static void DoCommandSlowpaste(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args == NULL)
 		OutputMsg(0, fore->w_slowpaste ?
@@ -3339,7 +3340,7 @@ static void DoCommandMarkkeys(struct action *act)
 
 static void DoCommandPastefont(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &pastefont) == 0 && msgok)
 		OutputMsg(0, "Will %spaste font settings", pastefont ? "" : "not ");
@@ -3352,7 +3353,7 @@ static void DoCommandCrlf(struct action *act)
 
 static void DoCommandCompacthist(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &compacthist) == 0 && msgok)
 		OutputMsg(0, "%scompacting history lines", compacthist ? "" : "not ");
@@ -3379,7 +3380,7 @@ static void DoCommandVbell_msg(struct action *act)
 static void DoCommandDefmode(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	int n = 0;
 
 	if (ParseBase(act, *args, &n, 8, "octal"))
@@ -3598,7 +3599,7 @@ static void DoCommandBindkey(struct action *act)
 static void DoCommandMaptimeout(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	int n = 0;
 
 	if (*args) {
@@ -3639,7 +3640,7 @@ static void DoCommandAclchg(struct action *act)
 static void DoCommandAcldel(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (UserDel(args[0], NULL))
 		return;
@@ -3650,7 +3651,7 @@ static void DoCommandAcldel(struct action *act)
 static void DoCommandAclgrp(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	/*
 	 * modify a user to gain or lose rights granted to a group.
@@ -3718,7 +3719,7 @@ static void DoCommandAclumask(struct action *act)
 
 static void DoCommandMultiuser(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b;
 
 	if (ParseOnOff(act, &b))
@@ -3739,7 +3740,7 @@ static void DoCommandExec(struct action *act)
 static void DoCommandNonblock(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b = D_nonblock >= 0;
 	int n = 0;
 
@@ -3782,7 +3783,7 @@ static void DoCommandDefnonblock(struct action *act)
 
 static void DoCommandGr(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b;
 
 	if (fore->w_gr == 2)
@@ -3798,7 +3799,7 @@ static void DoCommandGr(struct action *act)
 
 static void DoCommandC1(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &fore->w_c1) == 0 && msgok)
 		OutputMsg(0, "Will %suse C1", fore->w_c1 ? "" : "not ");
@@ -3807,7 +3808,7 @@ static void DoCommandC1(struct action *act)
 static void DoCommandEncoding(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args && !strcmp(args[0], "-d")) {
 		if (!args[1])
@@ -3862,7 +3863,7 @@ static void DoCommandDefencoding(struct action *act)
 
 static void DoCommandDefutf8(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	bool b = nwin_default.encoding == UTF8;
 
 	if (ParseSwitch(act, &b) == 0) {
@@ -3875,7 +3876,7 @@ static void DoCommandDefutf8(struct action *act)
 static void DoCommandUtf8(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	for (int i = 0; i < 2; i++) {
 		int n;
@@ -3905,7 +3906,7 @@ static void DoCommandUtf8(struct action *act)
 static void DoCommandPrintcmd(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args) {
 		if (printcmd)
@@ -4052,7 +4053,7 @@ static void DoCommandRendition(struct action *act)
 {
 	char **args = act->args;
 	int *argl = act->argl;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	int i = -1;
 
 	if (!*args)
@@ -4097,7 +4098,7 @@ static void DoCommandRendition(struct action *act)
 static void DoCommandSorendition(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (args[0]) {
 		uint64_t i = ParseAttrColor(args[0], 1);
@@ -4259,7 +4260,7 @@ static void DoCommandEval(struct action *act)
 
 static void DoCommandAltscreen(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 
 	(void)ParseSwitch(act, &use_altscreen);
@@ -4270,7 +4271,7 @@ static void DoCommandAltscreen(struct action *act)
 
 static void DoCommandAuth(struct action *act)
 {
-        int msgok = display && !*rc_name;
+        int msgok = MsgOk();
 
         (void)ParseSwitch(act, &do_auth);
         if (msgok)
@@ -4348,7 +4349,7 @@ static void DoCommandIdle(struct action *act)
 	char **args = act->args;
 	int *argl = act->argl;
 	int argc = CheckArgNum(act->nr, args);
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args) {
 		Display *olddisplay = display;
@@ -4386,7 +4387,7 @@ static void DoCommandIdle(struct action *act)
 static void DoCommandFocusminsize(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 	int n = 0;
 
 	for (int i = 0; i < 2 && args[i]; i++) {
@@ -4415,7 +4416,7 @@ static void DoCommandFocusminsize(struct action *act)
 static void DoCommandGroup(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (*args) {
 		fore->w_group = NULL;
@@ -4440,7 +4441,7 @@ static void DoCommandGroup(struct action *act)
 static void DoCommandLayout(struct action *act)
 {
 	char **args = act->args;
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (!*args)
 		return;
@@ -4636,7 +4637,7 @@ static void DoCommandLayout(struct action *act)
 
 static void DoCommandCjkwidth(struct action *act)
 {
-	int msgok = display && !*rc_name;
+	int msgok = MsgOk();
 
 	if (ParseSwitch(act, &cjkwidth) == 0) {
 		if (msgok)
@@ -5541,6 +5542,11 @@ static int ParseSwitch(struct action *act, bool *var)
 		return 0;
 	}
 	return ParseOnOff(act, var);
+}
+
+static int MsgOk(void)
+{
+	return display && !*rc_name;
 }
 
 static int ParseOnOff(struct action *act, bool *var)

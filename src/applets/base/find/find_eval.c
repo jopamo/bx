@@ -140,6 +140,88 @@ static bool find_match_xtype(struct walk_entry *entry, char type_filter) {
     return find_stat_matches_type(&st, type_filter);
 }
 
+static bool find_eval_require_metadata(struct walk_entry *entry) {
+    return walk_entry_load_metadata(entry);
+}
+
+static bool find_eval_fail(struct find_state *st) {
+    st->status = 1;
+    if (st->stop)
+        *st->stop = true;
+    return false;
+}
+
+static bool find_eval_file_output(struct find_state *st, const char *path,
+                                  struct walk_entry *entry,
+                                  bool (*writer)(FILE *, const char *,
+                                                 struct walk_entry *),
+                                  const char *text) {
+    FILE *fp = fopen(path, "ab");
+    if (!fp) {
+        find_report_error(st->progname, path, errno);
+        return find_eval_fail(st);
+    }
+
+    bool ok = writer(fp, text, entry);
+    if (!ok)
+        find_report_error(st->progname, path, errno ? errno : EIO);
+    fclose(fp);
+    if (!ok)
+        return find_eval_fail(st);
+    return true;
+}
+
+static bool find_eval_printf_writer(FILE *fp, const char *text,
+                                    struct walk_entry *entry) {
+    return find_write_printf_format(fp, text, entry);
+}
+
+static bool find_eval_ls_writer(FILE *fp, const char *text,
+                                struct walk_entry *entry) {
+    (void)text;
+    return find_write_ls_entry(fp, entry);
+}
+
+static bool find_eval_path_output(struct find_state *st, const char *path,
+                                  struct walk_entry *entry, int terminator) {
+    if (!find_write_path_file(st->progname, path, entry->path, terminator))
+        return find_eval_fail(st);
+    return true;
+}
+
+static bool find_eval_append_exec_item(struct find_state *st,
+                                       struct find_expr *expr,
+                                       struct walk_entry *entry) {
+    char *path = strdup(entry->path);
+    if (!path || !find_exec_items_append(&expr->exec_items, path)) {
+        free(path);
+        fprintf(stderr, "%s: out of memory\n", st->progname);
+        return find_eval_fail(st);
+    }
+    return true;
+}
+
+static bool find_eval_execdir(struct find_state *st, struct find_expr *expr,
+                              struct walk_entry *entry, bool prompt) {
+    char *cwd = NULL;
+    char *arg = NULL;
+    if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
+        fprintf(stderr, "%s: out of memory\n", st->progname);
+        free(cwd);
+        free(arg);
+        return find_eval_fail(st);
+    }
+    if (prompt && !find_prompt_ok(expr->exec_argv[0], entry->path)) {
+        free(cwd);
+        free(arg);
+        return true;
+    }
+    bool ok = find_run_exec_one(st, expr, arg, cwd);
+    free(cwd);
+    free(arg);
+    return ok;
+}
+
 bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
                     struct find_state *st) {
     if (!expr)
@@ -166,102 +248,102 @@ bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
     case FIND_EXPR_XTYPE:
         return find_match_xtype(entry, expr->type_filter);
     case FIND_EXPR_INUM:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->inode,
                                      expr->number, expr->number_cmp);
     case FIND_EXPR_LINKS:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->nlink,
                                      expr->number, expr->number_cmp);
     case FIND_EXPR_UID:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->uid,
                                      expr->number, expr->number_cmp);
     case FIND_EXPR_GID:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->gid,
                                      expr->number, expr->number_cmp);
     case FIND_EXPR_USER:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->uid,
                                      expr->number, 0);
     case FIND_EXPR_GROUP:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_numeric_match((unsigned long long)entry->gid,
                                      expr->number, 0);
     case FIND_EXPR_NOUSER:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return !bx_walk_uid_has_passwd(entry->uid);
     case FIND_EXPR_NOGROUP:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return !bx_walk_gid_has_group(entry->gid);
     case FIND_EXPR_PERM:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_mode_matches_perm(entry->mode, expr->perm_bits,
                                          expr->perm_kind);
     case FIND_EXPR_SIZE:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return bx_walk_size_matches(entry->size, expr->number,
                                     expr->number_cmp, expr->size_unit);
     case FIND_EXPR_AMIN:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->atime, expr->number,
                                    expr->number_cmp, 60ULL);
     case FIND_EXPR_ATIME:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->atime, expr->number,
                                    expr->number_cmp, 86400ULL);
     case FIND_EXPR_CMIN:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->ctime, expr->number,
                                    expr->number_cmp, 60ULL);
     case FIND_EXPR_CTIME:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->ctime, expr->number,
                                    expr->number_cmp, 86400ULL);
     case FIND_EXPR_MMIN:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->mtime, expr->number,
                                    expr->number_cmp, 60ULL);
     case FIND_EXPR_MTIME:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_time_age_match(st->now, entry->mtime, expr->number,
                                    expr->number_cmp, 86400ULL);
     case FIND_EXPR_USED:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_used_match(entry->atime, entry->ctime, expr->number,
                                expr->number_cmp);
     case FIND_EXPR_ANEWER:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_timespec_cmp(entry->atime, expr->ref_time) > 0;
     case FIND_EXPR_CNEWER:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_timespec_cmp(entry->ctime, expr->ref_time) > 0;
     case FIND_EXPR_NEWER:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_timespec_cmp(entry->mtime, expr->ref_time) > 0;
     case FIND_EXPR_NEWERCM:
-        if (!walk_entry_load_metadata(entry))
+        if (!find_eval_require_metadata(entry))
             return false;
         return find_timespec_cmp(entry->ctime, expr->ref_time) > 0;
     case FIND_EXPR_EMPTY:
@@ -281,95 +363,37 @@ bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
     case FIND_EXPR_PRINTF:
         if (!find_write_printf_format(stdout, expr->text, entry)) {
             find_report_error(st->progname, "stdout", errno ? errno : EIO);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
+            return find_eval_fail(st);
         }
         return true;
     case FIND_EXPR_LS:
         if (!find_write_ls_entry(stdout, entry)) {
             find_report_error(st->progname, entry->path,
                               errno ? errno : EIO);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
+            return find_eval_fail(st);
         }
         return true;
     case FIND_EXPR_FPRINTF: {
-        FILE *fp = fopen(expr->text, "ab");
-        if (!fp) {
-            find_report_error(st->progname, expr->text, errno);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        bool ok = find_write_printf_format(fp, expr->text2, entry);
-        if (!ok)
-            find_report_error(st->progname, expr->text, errno ? errno : EIO);
-        fclose(fp);
-        if (!ok) {
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
+        return find_eval_file_output(st, expr->text, entry,
+                                     find_eval_printf_writer, expr->text2);
     }
     case FIND_EXPR_FLS: {
-        FILE *fp = fopen(expr->text, "ab");
-        if (!fp) {
-            find_report_error(st->progname, expr->text, errno);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        bool ok = find_write_ls_entry(fp, entry);
-        if (!ok)
-            find_report_error(st->progname, expr->text, errno ? errno : EIO);
-        fclose(fp);
-        if (!ok) {
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
+        return find_eval_file_output(st, expr->text, entry,
+                                     find_eval_ls_writer, NULL);
     }
     case FIND_EXPR_FPRINT:
-        if (!find_write_path_file(st->progname, expr->text, entry->path, '\n')) {
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
+        return find_eval_path_output(st, expr->text, entry, '\n');
     case FIND_EXPR_FPRINT0:
-        if (!find_write_path_file(st->progname, expr->text, entry->path, '\0')) {
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
+        return find_eval_path_output(st, expr->text, entry, '\0');
     case FIND_EXPR_DELETE:
         if (strcmp(entry->path, ".") == 0) {
             errno = EBUSY;
             find_report_error(st->progname, entry->path, errno);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
+            return find_eval_fail(st);
         }
         if ((entry->is_dir ? rmdir(entry->path) : unlink(entry->path)) != 0) {
             find_report_error(st->progname, entry->path, errno);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
+            return find_eval_fail(st);
         }
         return true;
     case FIND_EXPR_PRUNE:
@@ -386,69 +410,14 @@ bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
         if (!find_prompt_ok(expr->exec_argv[0], entry->path))
             return true;
         return find_run_exec_one(st, expr, entry->path, NULL);
-    case FIND_EXPR_EXEC_PLUS: {
-        char *path = strdup(entry->path);
-        if (!path || !find_exec_items_append(&expr->exec_items, path)) {
-            free(path);
-            fprintf(stderr, "%s: out of memory\n", st->progname);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
-    }
-    case FIND_EXPR_EXECDIR: {
-        char *cwd = NULL;
-        char *arg = NULL;
-        if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
-            fprintf(stderr, "%s: out of memory\n", st->progname);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            free(cwd);
-            free(arg);
-            return false;
-        }
-        bool ok = find_run_exec_one(st, expr, arg, cwd);
-        free(cwd);
-        free(arg);
-        return ok;
-    }
-    case FIND_EXPR_OKDIR: {
-        char *cwd = NULL;
-        char *arg = NULL;
-        if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
-            fprintf(stderr, "%s: out of memory\n", st->progname);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            free(cwd);
-            free(arg);
-            return false;
-        }
-        if (!find_prompt_ok(expr->exec_argv[0], entry->path)) {
-            free(cwd);
-            free(arg);
-            return true;
-        }
-        bool ok = find_run_exec_one(st, expr, arg, cwd);
-        free(cwd);
-        free(arg);
-        return ok;
-    }
-    case FIND_EXPR_EXECDIR_PLUS: {
-        char *path = strdup(entry->path);
-        if (!path || !find_exec_items_append(&expr->exec_items, path)) {
-            free(path);
-            fprintf(stderr, "%s: out of memory\n", st->progname);
-            st->status = 1;
-            if (st->stop)
-                *st->stop = true;
-            return false;
-        }
-        return true;
-    }
+    case FIND_EXPR_EXEC_PLUS:
+        return find_eval_append_exec_item(st, expr, entry);
+    case FIND_EXPR_EXECDIR:
+        return find_eval_execdir(st, expr, entry, false);
+    case FIND_EXPR_OKDIR:
+        return find_eval_execdir(st, expr, entry, true);
+    case FIND_EXPR_EXECDIR_PLUS:
+        return find_eval_append_exec_item(st, expr, entry);
     case FIND_EXPR_NOT:
         return !find_eval_expr(expr->left, entry, st);
     case FIND_EXPR_AND: {

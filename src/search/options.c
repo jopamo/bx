@@ -156,6 +156,21 @@ static const char *bx_search_current_option_token(int option_index, int argc, ch
     return fallback;
 }
 
+static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
+    return personality == BX_SEARCH_RG;
+}
+
+static int bx_search_require_rg_option(const char *progname,
+                                       enum bx_search_personality personality,
+                                       int option_index, int argc, char **argv,
+                                       const char *fallback) {
+    if (bx_search_personality_is_rg(personality))
+        return 0;
+    return bx_grep_unrecognized_option(
+        progname,
+        bx_search_current_option_token(option_index, argc, argv, fallback));
+}
+
 static bool bx_search_parse_nonnegative_int(const char *progname,
                                             enum bx_search_personality personality,
                                             const char *optname,
@@ -616,21 +631,18 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             return -1;
         case '0':
-            if (personality == BX_SEARCH_RG) {
-                opts->null_output = true;
-            } else {
-                fprintf(stderr, "%s: unrecognized option '-0'\n", progname);
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "-0") != 0)
                 return -1;
-            }
+            opts->null_output = true;
             break;
         case 'E': opts->extended_regex = true; break;
         case 'F': opts->fixed_strings = true; break;
         case 'b': opts->show_byte_offset = true; break;
         case OPT_COLUMN:
-            if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--column'\n", progname);
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--column") != 0)
                 return -1;
-            }
             opts->show_column = true;
             break;
         case 'H': opts->show_filename = true; break;
@@ -645,33 +657,31 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'v': opts->invert_match = true; break;
         case 'c': opts->count_only = true; break;
         case OPT_COUNT_MATCHES:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--count-matches");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--count-matches") != 0)
+                return -1;
             opts->count_matches = true;
             opts->count_only = true;
             break;
         case OPT_PASSTHRU:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--passthru");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--passthru") != 0)
+                return -1;
             opts->passthru = true;
             break;
         case OPT_REPLACE:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--replace"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--replace") != 0)
+                return -1;
             free(opts->replace);
             opts->replace = strdup(optarg);
             if (!opts->replace)
                 return -1;
             break;
         case OPT_STATS:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--stats");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--stats") != 0)
+                return -1;
             opts->stats = true;
             break;
         case 'l': opts->files_with_matches = true; break;
@@ -686,7 +696,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'R': opts->recursive = true; opts->follow_symlinks = true; break;
         case 'd':
         case OPT_DIRECTORIES:
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 if (!bx_parse_nonnegative_int(progname, "-d", optarg, &opts->max_depth))
                     return -1;
             } else {
@@ -776,11 +786,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case OPT_IGLOB:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--iglob"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--iglob") != 0)
+                return -1;
             if (optarg && optarg[0] == '!') {
                 fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, optarg);
                 return -1;
@@ -795,24 +803,23 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;
             break;
         case 'U':
-            if (personality != BX_SEARCH_RG) {
+            if (!bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: invalid option -- 'U'\n", progname);
                 return -1;
             }
             opts->multiline = true;
             break;
         case OPT_HIDDEN:
-            if (personality == BX_SEARCH_RG) {
-                opts->hidden = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--hidden");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--hidden") != 0)
+                return -1;
+            opts->hidden = true;
             break;
         case 'j':
             break;  /* thread count accepted, single-threaded for now */
         case 't':
         case 'T': {
-            if (personality != BX_SEARCH_RG) {
+            if (!bx_search_personality_is_rg(personality)) {
                 const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);
                 if (arg && (strcmp(arg, "--type") == 0 || strcmp(arg, "--type-not") == 0
                             || strncmp(arg, "--type=", 7) == 0
@@ -849,22 +856,18 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         }
         case OPT_TYPE_ADD:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--type-add"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--type-add") != 0)
+                return -1;
             if (!bx_add_custom_type(opts, optarg)) {
                 fprintf(stderr, "%s: invalid argument for --type-add: %s\n", progname, optarg);
                 return -1;
             }
             break;
         case OPT_TYPE_CLEAR:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--type-clear"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--type-clear") != 0)
+                return -1;
             if (!bx_clear_type(opts, optarg)) {
                 fprintf(stderr, "%s: invalid argument for --type-clear: %s\n", progname, optarg);
                 return -1;
@@ -959,60 +962,51 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->files_without_match = true;
             break;
         case OPT_FOLLOW:
-            if (personality == BX_SEARCH_RG) {
-                opts->follow_symlinks = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--follow");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--follow") != 0)
+                return -1;
+            opts->follow_symlinks = true;
             break;
         case OPT_NO_IGNORE:
-            if (personality == BX_SEARCH_RG) {
-                opts->no_ignore = true;
-            } else {
+            if (!bx_search_personality_is_rg(personality)) {
                 bx_grep_print_usage_try_help(progname);
                 return -1;
             }
+            opts->no_ignore = true;
             break;
         case OPT_NO_IGNORE_PARENT:
-            if (personality == BX_SEARCH_RG) {
-                opts->no_ignore_parent = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--no-ignore-parent");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-ignore-parent") != 0)
+                return -1;
+            opts->no_ignore_parent = true;
             break;
         case OPT_NO_IGNORE_VCS:
-            if (personality == BX_SEARCH_RG) {
-                opts->no_ignore_vcs = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--no-ignore-vcs");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-ignore-vcs") != 0)
+                return -1;
+            opts->no_ignore_vcs = true;
             break;
         case OPT_NO_IGNORE_DOT:
-            if (personality == BX_SEARCH_RG) {
-                opts->no_ignore_dot = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--no-ignore-dot");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-ignore-dot") != 0)
+                return -1;
+            opts->no_ignore_dot = true;
             break;
         case OPT_NO_REQUIRE_GIT:
-            if (personality == BX_SEARCH_RG) {
-                opts->no_require_git = true;
-            } else {
-                return bx_grep_unrecognized_option(progname, "--no-require-git");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-require-git") != 0)
+                return -1;
+            opts->no_require_git = true;
             break;
         case OPT_TYPE_LIST:
             bx_search_print_type_list();
             return 1;
         case OPT_MAX_DEPTH:
-            if (personality == BX_SEARCH_RG) {
-                if (!bx_parse_nonnegative_int(progname, "--max-depth", optarg, &opts->max_depth))
-                    return -1;
-            } else {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--max-depth"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--max-depth") != 0)
+                return -1;
+            if (!bx_parse_nonnegative_int(progname, "--max-depth", optarg, &opts->max_depth))
+                return -1;
             break;
         case OPT_LABEL:
             if (personality == BX_SEARCH_RG) {
@@ -1039,51 +1033,45 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->suppress_group_separator = true;
             break;
         case OPT_CONTEXT_SEPARATOR:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--context-separator"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--context-separator") != 0)
+                return -1;
             free(opts->group_separator);
             opts->group_separator = strdup(optarg);
             opts->suppress_group_separator = false;
             break;
         case OPT_NO_CONTEXT_SEPARATOR:
-            if (personality != BX_SEARCH_RG) {
+            if (!bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: unrecognized option '--no-context-separator'\n", progname);
                 return -1;
             }
             opts->suppress_group_separator = true;
             break;
         case OPT_FIELD_CONTEXT_SEPARATOR:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--field-context-separator"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--field-context-separator") != 0)
+                return -1;
             free(opts->field_context_separator);
             opts->field_context_separator = strdup(optarg);
             break;
         case OPT_FIELD_MATCH_SEPARATOR:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--field-match-separator"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--field-match-separator") != 0)
+                return -1;
             free(opts->field_match_separator);
             opts->field_match_separator = strdup(optarg);
             break;
         case OPT_HEADING:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--heading");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--heading") != 0)
+                return -1;
             opts->heading = true;
             opts->heading_set = true;
             break;
         case OPT_NO_HEADING:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--no-heading");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-heading") != 0)
+                return -1;
             opts->heading = false;
             opts->heading_set = true;
             break;
@@ -1116,44 +1104,41 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->suppress_errors = true;
             break;
         case OPT_MULTILINE:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--multiline");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--multiline") != 0)
+                return -1;
             opts->multiline = true;
             break;
         case OPT_MULTILINE_DOTALL:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--multiline-dotall");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--multiline-dotall") != 0)
+                return -1;
             opts->multiline = true;
             opts->multiline_dotall = true;
             break;
         case OPT_STOP_ON_NONMATCH:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--stop-on-nonmatch");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--stop-on-nonmatch") != 0)
+                return -1;
             opts->stop_on_nonmatch = true;
             break;
         case OPT_JSON:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--json");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--json") != 0)
+                return -1;
             fprintf(stderr, "%s: unsupported option '--json'\n", progname);
             return -1;
         case OPT_DEBUG:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--debug");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--debug") != 0)
+                return -1;
             fprintf(stderr, "%s: unsupported option '--debug'\n", progname);
             return -1;
         case OPT_SORT:
         case OPT_SORTR:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv,
-                                                   c == OPT_SORT ? "--sort" : "--sortr"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, c == OPT_SORT ? "--sort" : "--sortr") != 0)
+                return -1;
             if (strcmp(optarg, "path") != 0) {
                 fprintf(stderr,
                         "%s: unsupported argument for %s: %s\n",
@@ -1166,11 +1151,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->sort_paths_reverse = (c == OPT_SORTR);
             break;
         case OPT_ENGINE:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(
-                    progname,
-                    bx_search_current_option_token(optind, argc, argv, "--engine"));
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--engine") != 0)
+                return -1;
             if (strcmp(optarg, "default") == 0)
                 opts->rg_engine = BX_RG_ENGINE_DEFAULT;
             else if (strcmp(optarg, "pcre2") == 0)
@@ -1185,9 +1168,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case OPT_PCRE2_VERSION:
-            if (personality != BX_SEARCH_RG) {
-                return bx_grep_unrecognized_option(progname, "--pcre2-version");
-            }
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--pcre2-version") != 0)
+                return -1;
             opts->pcre2_version = true;
             bx_regex_print_version();
             return 1;
@@ -1265,7 +1248,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->binary_without_match = false;
     }
 
-    if (personality == BX_SEARCH_RG) {
+    if (bx_search_personality_is_rg(personality)) {
         if (opts->files_with_matches || opts->files_without_match)
             opts->count_only = false;
         if (opts->count_only)

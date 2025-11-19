@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 
 #include "find_internal.h"
+#include "find_parse_helpers.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "search/metadata.h"
@@ -24,35 +25,6 @@ static bool find_parse_main_int_arg(const char *progname, const char *optname,
         return false;
     }
     *out = (int)v;
-    return true;
-}
-
-static bool find_parse_numeric_test(const char *progname, const char *optname,
-                                    const char *text, long long *value, int *cmp) {
-    if (!text || *text == '\0') {
-        fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname,
-                text ? text : "(null)");
-        return false;
-    }
-
-    *cmp = 0;
-    if (*text == '+') {
-        *cmp = 1;
-        text++;
-    } else if (*text == '-') {
-        *cmp = -1;
-        text++;
-    }
-
-    char *end = NULL;
-    errno = 0;
-    long long v = strtoll(text, &end, 10);
-    if (*text == '\0' || !end || *end != '\0' || errno != 0 || v < 0) {
-        fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname,
-                text ? text : "(null)");
-        return false;
-    }
-    *value = v;
     return true;
 }
 
@@ -474,20 +446,11 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
     } else if (strcmp(arg, "-false") == 0) {
         expr = find_expr_new(FIND_EXPR_FALSE);
     } else if (strcmp(arg, "-name") == 0 || strcmp(arg, "-iname") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        expr = find_parse_text_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(FIND_EXPR_NAME);
-        if (expr) {
-            expr->text = parser->argv[parser->pos++];
-            expr->ignore_case = strcmp(arg, "-iname") == 0;
-        }
     } else if (strcmp(arg, "-regex") == 0 || strcmp(arg, "-iregex") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        if (!find_parse_require_arguments(parser, arg, 1)) {
             return NULL;
         }
         expr = find_expr_new(FIND_EXPR_REGEX);
@@ -503,9 +466,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
             expr->regex_compiled = true;
         }
     } else if (strcmp(arg, "-regextype") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-regextype'\n",
-                    parser->progname);
+        if (!find_parse_require_arguments(parser, "-regextype", 1)) {
             return NULL;
         }
         if (!find_parse_regextype(parser->progname, parser->argv[parser->pos],
@@ -516,31 +477,15 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         expr = find_expr_new(FIND_EXPR_TRUE);
     } else if (strcmp(arg, "-path") == 0 || strcmp(arg, "-wholename") == 0 ||
                strcmp(arg, "-iwholename") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        expr = find_parse_text_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(FIND_EXPR_PATH);
-        if (expr) {
-            expr->text = parser->argv[parser->pos++];
-            expr->ignore_case = strcmp(arg, "-iwholename") == 0;
-        }
     } else if (strcmp(arg, "-lname") == 0 || strcmp(arg, "-ilname") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        expr = find_parse_text_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(FIND_EXPR_LNAME);
-        if (expr) {
-            expr->text = parser->argv[parser->pos++];
-            expr->ignore_case = strcmp(arg, "-ilname") == 0;
-        }
     } else if (strcmp(arg, "-type") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-type'\n",
-                    parser->progname);
+        if (!find_parse_require_arguments(parser, "-type", 1)) {
             return NULL;
         }
         const char *type_arg = parser->argv[parser->pos++];
@@ -554,9 +499,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         if (expr)
             expr->type_filter = type_arg[0];
     } else if (strcmp(arg, "-xtype") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-xtype'\n",
-                    parser->progname);
+        if (!find_parse_require_arguments(parser, "-xtype", 1)) {
             return NULL;
         }
         const char *type_arg = parser->argv[parser->pos++];
@@ -570,58 +513,19 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         if (expr)
             expr->type_filter = type_arg[0];
     } else if (strcmp(arg, "-inum") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-inum'\n",
-                    parser->progname);
+        expr = find_parse_numeric_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(FIND_EXPR_INUM);
-        if (expr && !find_parse_numeric_test(parser->progname, "-inum",
-                                             parser->argv[parser->pos],
-                                             &expr->number,
-                                             &expr->number_cmp)) {
-            find_expr_free(expr);
-            return NULL;
-        }
-        if (expr)
-            parser->pos++;
     } else if (strcmp(arg, "-links") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-links'\n",
-                    parser->progname);
+        expr = find_parse_numeric_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(FIND_EXPR_LINKS);
-        if (expr && !find_parse_numeric_test(parser->progname, "-links",
-                                             parser->argv[parser->pos],
-                                             &expr->number,
-                                             &expr->number_cmp)) {
-            find_expr_free(expr);
-            return NULL;
-        }
-        if (expr)
-            parser->pos++;
     } else if (strcmp(arg, "-uid") == 0 || strcmp(arg, "-gid") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        expr = find_parse_numeric_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        expr = find_expr_new(strcmp(arg, "-uid") == 0 ? FIND_EXPR_UID
-                                                        : FIND_EXPR_GID);
-        if (expr &&
-            !find_parse_numeric_test(parser->progname, arg,
-                                     parser->argv[parser->pos], &expr->number,
-                                     &expr->number_cmp)) {
-            find_expr_free(expr);
-            return NULL;
-        }
-        if (expr)
-            parser->pos++;
     } else if (strcmp(arg, "-user") == 0 || strcmp(arg, "-group") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        if (!find_parse_require_arguments(parser, arg, 1)) {
             return NULL;
         }
         expr = find_expr_new(strcmp(arg, "-user") == 0 ? FIND_EXPR_USER
@@ -644,9 +548,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
     } else if (strcmp(arg, "-nogroup") == 0) {
         expr = find_expr_new(FIND_EXPR_NOGROUP);
     } else if (strcmp(arg, "-perm") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-perm'\n",
-                    parser->progname);
+        if (!find_parse_require_arguments(parser, "-perm", 1)) {
             return NULL;
         }
         expr = find_expr_new(FIND_EXPR_PERM);
@@ -658,9 +560,7 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         if (expr)
             parser->pos++;
     } else if (strcmp(arg, "-size") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-size'\n",
-                    parser->progname);
+        if (!find_parse_require_arguments(parser, "-size", 1)) {
             return NULL;
         }
         expr = find_expr_new(FIND_EXPR_SIZE);
@@ -676,39 +576,12 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
                strcmp(arg, "-cmin") == 0 || strcmp(arg, "-ctime") == 0 ||
                strcmp(arg, "-mmin") == 0 || strcmp(arg, "-mtime") == 0 ||
                strcmp(arg, "-used") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        expr = find_parse_numeric_predicate(parser, arg);
+        if (!expr)
             return NULL;
-        }
-        enum find_expr_kind kind = FIND_EXPR_AMIN;
-        if (strcmp(arg, "-atime") == 0)
-            kind = FIND_EXPR_ATIME;
-        else if (strcmp(arg, "-cmin") == 0)
-            kind = FIND_EXPR_CMIN;
-        if (strcmp(arg, "-ctime") == 0)
-            kind = FIND_EXPR_CTIME;
-        else if (strcmp(arg, "-mmin") == 0)
-            kind = FIND_EXPR_MMIN;
-        else if (strcmp(arg, "-mtime") == 0)
-            kind = FIND_EXPR_MTIME;
-        else if (strcmp(arg, "-used") == 0)
-            kind = FIND_EXPR_USED;
-        expr = find_expr_new(kind);
-        if (expr && !find_parse_numeric_test(parser->progname, arg,
-                                             parser->argv[parser->pos],
-                                             &expr->number,
-                                             &expr->number_cmp)) {
-            find_expr_free(expr);
-            return NULL;
-        }
-        if (expr)
-            parser->pos++;
     } else if (strcmp(arg, "-anewer") == 0 || strcmp(arg, "-cnewer") == 0 ||
                strcmp(arg, "-newer") == 0 || strcmp(arg, "-newercm") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
+        if (!find_parse_require_arguments(parser, arg, 1)) {
             return NULL;
         }
         enum find_expr_kind kind = FIND_EXPR_NEWER;
@@ -743,51 +616,28 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_PRINT0);
     } else if (strcmp(arg, "-printf") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-printf'\n",
-                    parser->progname);
-            return NULL;
-        }
         parser->explicit_action = true;
-        expr = find_expr_new(FIND_EXPR_PRINTF);
-        if (expr)
-            expr->text = parser->argv[parser->pos++];
+        expr = find_parse_output_action(parser, arg);
+        if (!expr)
+            return NULL;
     } else if (strcmp(arg, "-ls") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_LS);
     } else if (strcmp(arg, "-fprintf") == 0) {
-        if (parser->pos + 1 >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-fprintf'\n",
-                    parser->progname);
-            return NULL;
-        }
         parser->explicit_action = true;
-        expr = find_expr_new(FIND_EXPR_FPRINTF);
-        if (expr) {
-            expr->text = parser->argv[parser->pos++];
-            expr->text2 = parser->argv[parser->pos++];
-        }
+        expr = find_parse_output_action(parser, arg);
+        if (!expr)
+            return NULL;
     } else if (strcmp(arg, "-fls") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `-fls'\n",
-                    parser->progname);
-            return NULL;
-        }
         parser->explicit_action = true;
-        expr = find_expr_new(FIND_EXPR_FLS);
-        if (expr)
-            expr->text = parser->argv[parser->pos++];
+        expr = find_parse_output_action(parser, arg);
+        if (!expr)
+            return NULL;
     } else if (strcmp(arg, "-fprint") == 0 || strcmp(arg, "-fprint0") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
-            return NULL;
-        }
         parser->explicit_action = true;
-        expr = find_expr_new(strcmp(arg, "-fprint") == 0 ? FIND_EXPR_FPRINT
-                                                           : FIND_EXPR_FPRINT0);
-        if (expr)
-            expr->text = parser->argv[parser->pos++];
+        expr = find_parse_output_action(parser, arg);
+        if (!expr)
+            return NULL;
     } else if (strcmp(arg, "-delete") == 0) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_DELETE);
@@ -797,103 +647,15 @@ static struct find_expr *find_parse_primary(struct find_parser *parser) {
         parser->explicit_action = true;
         expr = find_expr_new(FIND_EXPR_QUIT);
     } else if (strcmp(arg, "-exec") == 0 || strcmp(arg, "-execdir") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
-            return NULL;
-        }
-        int command_start = parser->pos;
-        int command_end = -1;
-        bool per_item = false;
-        bool saw_placeholder = false;
-        for (int i = parser->pos; i < parser->argc; i++) {
-            if (strcmp(parser->argv[i], ";") == 0) {
-                command_end = i;
-                per_item = true;
-                break;
-            }
-            if (strcmp(parser->argv[i], "+") == 0) {
-                command_end = i;
-                break;
-            }
-            if (strcmp(parser->argv[i], "{}") == 0)
-                saw_placeholder = true;
-        }
-        if (command_end < 0) {
-            fprintf(stderr,
-                    "%s: missing terminating `;' or `+' for `%s'\n",
-                    parser->progname, arg);
-            return NULL;
-        }
-        if (!saw_placeholder) {
-            fprintf(stderr, "%s: missing '{}' in `%s'\n", parser->progname,
-                    arg);
-            return NULL;
-        }
         parser->explicit_action = true;
-        if (strcmp(arg, "-exec") == 0)
-            expr = find_expr_new(per_item ? FIND_EXPR_EXEC : FIND_EXPR_EXEC_PLUS);
-        else
-            expr = find_expr_new(per_item ? FIND_EXPR_EXECDIR
-                                          : FIND_EXPR_EXECDIR_PLUS);
-        if (expr) {
-            expr->exec_argc = command_end - command_start;
-            expr->exec_argv =
-                calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
-            if (!expr->exec_argv) {
-                find_expr_free(expr);
-                fprintf(stderr, "%s: out of memory\n", parser->progname);
-                return NULL;
-            }
-            for (int i = 0; i < expr->exec_argc; i++)
-                expr->exec_argv[i] = parser->argv[command_start + i];
-            expr->exec_argv[expr->exec_argc] = NULL;
-        }
-        parser->pos = command_end + 1;
+        expr = find_parse_command_predicate(parser, arg);
+        if (!expr)
+            return NULL;
     } else if (strcmp(arg, "-ok") == 0 || strcmp(arg, "-okdir") == 0) {
-        if (parser->pos >= parser->argc) {
-            fprintf(stderr, "%s: missing argument to `%s'\n", parser->progname,
-                    arg);
-            return NULL;
-        }
-        int command_start = parser->pos;
-        int command_end = -1;
-        bool saw_placeholder = false;
-        for (int i = parser->pos; i < parser->argc; i++) {
-            if (strcmp(parser->argv[i], ";") == 0) {
-                command_end = i;
-                break;
-            }
-            if (strcmp(parser->argv[i], "{}") == 0)
-                saw_placeholder = true;
-        }
-        if (command_end < 0) {
-            fprintf(stderr, "%s: missing terminating `;' for `%s'\n",
-                    parser->progname, arg);
-            return NULL;
-        }
-        if (!saw_placeholder) {
-            fprintf(stderr, "%s: missing '{}' in `%s'\n", parser->progname,
-                    arg);
-            return NULL;
-        }
         parser->explicit_action = true;
-        expr = find_expr_new(strcmp(arg, "-ok") == 0 ? FIND_EXPR_OK
-                                                       : FIND_EXPR_OKDIR);
-        if (expr) {
-            expr->exec_argc = command_end - command_start;
-            expr->exec_argv =
-                calloc((size_t)expr->exec_argc + 1, sizeof(*expr->exec_argv));
-            if (!expr->exec_argv) {
-                find_expr_free(expr);
-                fprintf(stderr, "%s: out of memory\n", parser->progname);
-                return NULL;
-            }
-            for (int i = 0; i < expr->exec_argc; i++)
-                expr->exec_argv[i] = parser->argv[command_start + i];
-            expr->exec_argv[expr->exec_argc] = NULL;
-        }
-        parser->pos = command_end + 1;
+        expr = find_parse_command_predicate(parser, arg);
+        if (!expr)
+            return NULL;
     } else {
         fprintf(stderr, "%s: unknown predicate `%s'\n", parser->progname, arg);
         return NULL;

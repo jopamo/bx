@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/fopen_dash.h"
 
 struct bx_fold_options {
     const char* progname;
@@ -215,14 +216,14 @@ int bx_fold_main(int argc, char** argv) {
     int num_files = argc - first_operand;
     for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
-        FILE* f = strcmp(filename, "-") == 0 ? stdin : fopen(filename, "r");
+        bool is_stdio = false;
+        FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
         if (!f) {
             bx_diag(&diag, "%s: %s", filename, strerror(errno));
             continue;
         }
         fold_file(f, &options);
-        if (f != stdin)
-            fclose(f);
+        bx_fclose_nonstdio(f, is_stdio);
     }
 
     return diag.exit_status;

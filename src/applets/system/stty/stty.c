@@ -551,6 +551,58 @@ static bool bx_stty_plan_append_op(struct bx_stty_plan* plan, const struct bx_st
     return true;
 }
 
+static struct bx_stty_op bx_stty_make_op(enum bx_stty_op_kind kind) {
+    struct bx_stty_op op;
+    memset(&op, 0, sizeof(op));
+    op.kind = kind;
+    return op;
+}
+
+static bool bx_stty_plan_append_simple_op(struct bx_stty_plan* plan, enum bx_stty_op_kind kind) {
+    struct bx_stty_op op = bx_stty_make_op(kind);
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_numeric_op(struct bx_stty_plan* plan, enum bx_stty_op_kind kind, unsigned value) {
+    struct bx_stty_op op = bx_stty_make_op(kind);
+    op.u.num.value = value;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_line_op(struct bx_stty_plan* plan, int value) {
+    struct bx_stty_op op = bx_stty_make_op(BX_STTY_OP_LINE_DISC);
+    op.u.line.value = value;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_speed_op(struct bx_stty_plan* plan, enum bx_stty_op_kind kind, speed_t speed) {
+    struct bx_stty_op op = bx_stty_make_op(kind);
+    op.u.speed.speed = speed;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_composite_op(struct bx_stty_plan* plan, enum bx_stty_composite id) {
+    struct bx_stty_op op = bx_stty_make_op(BX_STTY_OP_COMPOSITE);
+    op.u.composite.id = id;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_flag_op(struct bx_stty_plan* plan, enum bx_stty_field field, tcflag_t bit, bool enable) {
+    struct bx_stty_op op = bx_stty_make_op(BX_STTY_OP_FLAG);
+    op.u.flag.field = field;
+    op.u.flag.bit = bit;
+    op.u.flag.enable = enable;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
+static bool bx_stty_plan_append_flag_mask_op(struct bx_stty_plan* plan, enum bx_stty_field field, tcflag_t mask, tcflag_t value) {
+    struct bx_stty_op op = bx_stty_make_op(BX_STTY_OP_FLAG_MASK);
+    op.u.flag_mask.field = field;
+    op.u.flag_mask.mask = mask;
+    op.u.flag_mask.value = value;
+    return bx_stty_plan_append_op(plan, &op);
+}
+
 static void bx_stty_tokens_init(struct bx_stty_setting_tokens* tokens) {
     memset(tokens, 0, sizeof(*tokens));
 }
@@ -945,9 +997,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
 
     struct bx_stty_g_state gstate;
     if (bx_stty_parse_save_state(token, &gstate)) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_GSTATE;
+        struct bx_stty_op op = bx_stty_make_op(BX_STTY_OP_GSTATE);
         op.u.gstate = gstate;
         return bx_stty_plan_append_op(plan, &op);
     }
@@ -965,17 +1015,11 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
     }
 
     if (!negated && strcmp(name, "size") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_PRINT_SIZE;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_simple_op(plan, BX_STTY_OP_PRINT_SIZE);
     }
 
     if (!negated && strcmp(name, "speed") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_PRINT_SPEED;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_simple_op(plan, BX_STTY_OP_PRINT_SPEED);
     }
 
     if (!negated && (strcmp(name, "rows") == 0 || strcmp(name, "row") == 0)) {
@@ -991,11 +1035,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         }
 
         *index += 1;
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_ROWS;
-        op.u.num.value = value;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_numeric_op(plan, BX_STTY_OP_ROWS, value);
     }
 
     if (!negated && (strcmp(name, "cols") == 0 || strcmp(name, "columns") == 0)) {
@@ -1011,11 +1051,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         }
 
         *index += 1;
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COLS;
-        op.u.num.value = value;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_numeric_op(plan, BX_STTY_OP_COLS, value);
     }
 
     if (!negated && strcmp(name, "line") == 0) {
@@ -1032,11 +1068,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         }
 
         *index += 1;
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_LINE_DISC;
-        op.u.line.value = value;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_line_op(plan, value);
 #else
         bx_diag(diag, "line discipline setting is not supported on this platform");
         return false;
@@ -1056,11 +1088,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         }
 
         *index += 1;
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_ISPEED;
-        op.u.speed.speed = speed;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_speed_op(plan, BX_STTY_OP_ISPEED, speed);
     }
 
     if (!negated && strcmp(name, "ospeed") == 0) {
@@ -1076,11 +1104,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
         }
 
         *index += 1;
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_OSPEED;
-        op.u.speed.speed = speed;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_speed_op(plan, BX_STTY_OP_OSPEED, speed);
     }
 
     const struct bx_stty_cc_spec* cc_spec = bx_stty_lookup_cc_spec(name);
@@ -1125,135 +1149,69 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
     }
 
     if (strcmp(name, "raw") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_COOKED : BX_STTY_COMPOSITE_RAW;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_COOKED : BX_STTY_COMPOSITE_RAW);
     }
 
     if (!negated && strcmp(name, "cooked") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_COOKED;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_COOKED);
     }
 
     if (negated && strcmp(name, "cooked") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_RAW;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_RAW);
     }
 
     if (strcmp(name, "cbreak") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNCBREAK : BX_STTY_COMPOSITE_CBREAK;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNCBREAK : BX_STTY_COMPOSITE_CBREAK);
     }
 
     if (!negated && strcmp(name, "sane") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_SANE;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_SANE);
     }
 
     if (!negated && strcmp(name, "ek") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_EK;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_EK);
     }
 
     if (strcmp(name, "nl") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNNL : BX_STTY_COMPOSITE_NL;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNNL : BX_STTY_COMPOSITE_NL);
     }
 
     if (strcmp(name, "pass8") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNPASS8 : BX_STTY_COMPOSITE_PASS8;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNPASS8 : BX_STTY_COMPOSITE_PASS8);
     }
 
     if (strcmp(name, "litout") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNLITOUT : BX_STTY_COMPOSITE_LITOUT;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNLITOUT : BX_STTY_COMPOSITE_LITOUT);
     }
 
     if (strcmp(name, "evenp") == 0 || strcmp(name, "parity") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNEVENP : BX_STTY_COMPOSITE_EVENP;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNEVENP : BX_STTY_COMPOSITE_EVENP);
     }
 
     if (strcmp(name, "oddp") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNODDP : BX_STTY_COMPOSITE_ODDP;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNODDP : BX_STTY_COMPOSITE_ODDP);
     }
 
     if (!negated && strcmp(name, "crt") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_CRT;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_CRT);
     }
 
     if (!negated && strcmp(name, "dec") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = BX_STTY_COMPOSITE_DEC;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, BX_STTY_COMPOSITE_DEC);
     }
 
     if (strcmp(name, "decctlq") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNDECCTLQ : BX_STTY_COMPOSITE_DECCTLQ;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNDECCTLQ : BX_STTY_COMPOSITE_DECCTLQ);
     }
 
     if (strcmp(name, "lcase") == 0 || strcmp(name, "LCASE") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_COMPOSITE;
-        op.u.composite.id = negated ? BX_STTY_COMPOSITE_UNLCASE : BX_STTY_COMPOSITE_LCASE;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_composite_op(plan, negated ? BX_STTY_COMPOSITE_UNLCASE : BX_STTY_COMPOSITE_LCASE);
     }
 
 #ifdef CSIZE
     if (!negated && strcmp(name, "cs5") == 0) {
 #ifdef CS5
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG_MASK;
-        op.u.flag_mask.field = BX_STTY_FIELD_CFLAG;
-        op.u.flag_mask.mask = CSIZE;
-        op.u.flag_mask.value = CS5;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_mask_op(plan, BX_STTY_FIELD_CFLAG, CSIZE, CS5);
 #else
         bx_diag(diag, "cs5 is not supported on this platform");
         return false;
@@ -1262,13 +1220,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
 
     if (!negated && strcmp(name, "cs6") == 0) {
 #ifdef CS6
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG_MASK;
-        op.u.flag_mask.field = BX_STTY_FIELD_CFLAG;
-        op.u.flag_mask.mask = CSIZE;
-        op.u.flag_mask.value = CS6;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_mask_op(plan, BX_STTY_FIELD_CFLAG, CSIZE, CS6);
 #else
         bx_diag(diag, "cs6 is not supported on this platform");
         return false;
@@ -1277,13 +1229,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
 
     if (!negated && strcmp(name, "cs7") == 0) {
 #ifdef CS7
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG_MASK;
-        op.u.flag_mask.field = BX_STTY_FIELD_CFLAG;
-        op.u.flag_mask.mask = CSIZE;
-        op.u.flag_mask.value = CS7;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_mask_op(plan, BX_STTY_FIELD_CFLAG, CSIZE, CS7);
 #else
         bx_diag(diag, "cs7 is not supported on this platform");
         return false;
@@ -1292,13 +1238,7 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
 
     if (!negated && strcmp(name, "cs8") == 0) {
 #ifdef CS8
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG_MASK;
-        op.u.flag_mask.field = BX_STTY_FIELD_CFLAG;
-        op.u.flag_mask.mask = CSIZE;
-        op.u.flag_mask.value = CS8;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_mask_op(plan, BX_STTY_FIELD_CFLAG, CSIZE, CS8);
 #else
         bx_diag(diag, "cs8 is not supported on this platform");
         return false;
@@ -1308,48 +1248,32 @@ static bool bx_stty_parse_setting_token(const struct bx_stty_setting_tokens* set
 
 #if defined(TABDLY)
     if (strcmp(name, "tabs") == 0) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG_MASK;
-        op.u.flag_mask.field = BX_STTY_FIELD_OFLAG;
-        op.u.flag_mask.mask = TABDLY;
-
+        tcflag_t value = (tcflag_t)0;
 #if defined(TAB3)
-        op.u.flag_mask.value = negated ? TAB3 : (tcflag_t)0;
+        value = negated ? TAB3 : (tcflag_t)0;
 #elif defined(XTABS)
-        op.u.flag_mask.value = negated ? XTABS : (tcflag_t)0;
+        value = negated ? XTABS : (tcflag_t)0;
 #else
-        op.u.flag_mask.value = (tcflag_t)0;
         if (negated) {
             bx_diag(diag, "-tabs is not supported on this platform");
             return false;
         }
 #endif
 
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_mask_op(plan, BX_STTY_FIELD_OFLAG, TABDLY, value);
     }
 #endif
 
     const char* flag_name = bx_stty_resolve_alias(name);
     const struct bx_stty_flag_spec* flag_spec = bx_stty_lookup_flag_spec(flag_name);
     if (flag_spec != NULL) {
-        struct bx_stty_op op;
-        memset(&op, 0, sizeof(op));
-        op.kind = BX_STTY_OP_FLAG;
-        op.u.flag.field = flag_spec->field;
-        op.u.flag.bit = flag_spec->bit;
-        op.u.flag.enable = !negated;
-        return bx_stty_plan_append_op(plan, &op);
+        return bx_stty_plan_append_flag_op(plan, flag_spec->field, flag_spec->bit, !negated);
     }
 
     if (!negated) {
         speed_t speed = 0;
         if (bx_stty_parse_speed(name, &speed)) {
-            struct bx_stty_op op;
-            memset(&op, 0, sizeof(op));
-            op.kind = BX_STTY_OP_SPEED_BOTH;
-            op.u.speed.speed = speed;
-            return bx_stty_plan_append_op(plan, &op);
+            return bx_stty_plan_append_speed_op(plan, BX_STTY_OP_SPEED_BOTH, speed);
         }
     }
 
