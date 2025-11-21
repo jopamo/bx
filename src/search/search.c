@@ -26,6 +26,35 @@ static bool progname_uses_os_error_style(const char *progname) {
     return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
 }
 
+static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
+    return personality == BX_SEARCH_RG;
+}
+
+static bool bx_search_use_rg_sort_policy(enum bx_search_personality personality,
+                                         const struct search_opts *opts) {
+    return !bx_search_personality_is_rg(personality)
+        || opts->sort_paths
+        || opts->sort_paths_reverse;
+}
+
+static int bx_search_cycle_mode(enum bx_search_personality personality,
+                                const struct search_opts *opts) {
+    if (!opts->follow_symlinks)
+        return WALK_CYCLE_NONE;
+    return bx_search_personality_is_rg(personality)
+        ? WALK_CYCLE_SYMLINK_REPEAT
+        : WALK_CYCLE_DIR_REPEAT;
+}
+
+static int bx_search_cycle_report(enum bx_search_personality personality,
+                                  const struct search_opts *opts) {
+    if (!opts->follow_symlinks)
+        return WALK_CYCLE_IGNORE;
+    return bx_search_personality_is_rg(personality)
+        ? WALK_CYCLE_ERROR
+        : WALK_CYCLE_WARN;
+}
+
 static char *bx_regex_strerror_dup(int rc, const regex_t *regex) {
     size_t needed = regerror(rc, regex, NULL, 0);
     char *buf = malloc(needed > 0 ? needed : 1);
@@ -350,9 +379,9 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         m->kind = MATCHER_LITERAL;
     } else if (use_posix) {
         int cflags = 0;
-        if (personality == BX_SEARCH_RG || opts->extended_regex)
+        if (bx_search_personality_is_rg(personality) || opts->extended_regex)
             cflags |= REG_EXTENDED;
-        if (personality != BX_SEARCH_RG)
+        if (!bx_search_personality_is_rg(personality))
             cflags |= REG_NEWLINE;
         if (flags & BX_REGEX_ICASE)
             cflags |= REG_ICASE;
@@ -816,7 +845,7 @@ static bool search_default_show_filename(int argc, char **argv, int first_file,
                                          bool rg_searches_stdin) {
     int num_files = argc - first_file;
     if (num_files == 0) {
-        if (personality == BX_SEARCH_RG)
+        if (bx_search_personality_is_rg(personality))
             return !rg_searches_stdin;
         return opts->recursive;
     }
@@ -833,7 +862,7 @@ static bool search_default_show_filename(int argc, char **argv, int first_file,
 
 static bool search_default_heading(enum bx_search_personality personality,
                                    const struct search_opts *opts) {
-    if (personality != BX_SEARCH_RG || !isatty(STDOUT_FILENO))
+    if (!bx_search_personality_is_rg(personality) || !isatty(STDOUT_FILENO))
         return false;
     return opts->show_filename;
 }
@@ -1449,7 +1478,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
-            .sort_entries = personality != BX_SEARCH_RG || opts.sort_paths || opts.sort_paths_reverse,
+            .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
             .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
@@ -1506,7 +1535,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     char *compile_error = NULL;
 
     if (opts.num_extra_patterns > 0) {
-        bool use_basic_grouping = personality != BX_SEARCH_RG &&
+        bool use_basic_grouping = !bx_search_personality_is_rg(personality) &&
                                   !opts.perl_regexp &&
                                   !opts.extended_regex &&
                                   !opts.fixed_strings;
@@ -1539,8 +1568,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
 
     if (!m) {
         if (compile_error) {
-            if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
-                || personality == BX_SEARCH_FGREP) {
+            if (!bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: Invalid regular expression\n",
                         argv[0] ? argv[0] : "grep");
             } else {
@@ -1562,13 +1590,16 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         opts.sort_paths
             ? bx_search_collect_sorted_operands(argc, argv, first_file, &sorted_operand_count)
             : NULL;
-    bool rg_searches_stdin = (personality == BX_SEARCH_RG && num_files == 0 && rg_should_search_stdin());
+    bool rg_searches_stdin = (bx_search_personality_is_rg(personality)
+                              && num_files == 0
+                              && rg_should_search_stdin());
     if (!opts.show_filename && !opts.hide_filename)
         opts.show_filename = search_default_show_filename(argc, argv, first_file, personality,
                                                           &opts, rg_searches_stdin);
     if (opts.hide_filename)
         opts.show_filename = false;
-    if (personality == BX_SEARCH_RG && !opts.show_line_number && isatty(STDOUT_FILENO))
+    if (bx_search_personality_is_rg(personality)
+        && !opts.show_line_number && isatty(STDOUT_FILENO))
         opts.show_line_number = true;
     if (!opts.heading_set)
         opts.heading = search_default_heading(personality, &opts);
@@ -1581,8 +1612,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     current_stats = opts.stats ? &stats : NULL;
 
     if (num_files == 0) {
-        if ((personality == BX_SEARCH_RG && !rg_searches_stdin) ||
-            (personality != BX_SEARCH_RG && opts.recursive)) {
+        if ((bx_search_personality_is_rg(personality) && !rg_searches_stdin) ||
+            (!bx_search_personality_is_rg(personality) && opts.recursive)) {
             bool stop = false;
             struct grep_walk_state gs = {.m = m, .opts = &opts,
                                          .progname = progname,
@@ -1600,8 +1631,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .no_ignore_vcs = opts.no_ignore_vcs,
                 .no_ignore_dot = opts.no_ignore_dot,
                 .no_require_git = opts.no_require_git,
-                .sort_entries = personality != BX_SEARCH_RG ||
-                                opts.sort_paths || opts.sort_paths_reverse,
+                .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
                 .reverse_sort = opts.sort_paths_reverse,
                 .follow_symlinks = opts.follow_symlinks,
                 .follow_root_symlink = true,
@@ -1617,16 +1647,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 .num_include_patterns = opts.num_include,
                 .exclude_dirs = opts.exclude_dir_patterns,
                 .num_exclude_dirs = opts.num_exclude_dir,
-                .cycle_mode = opts.follow_symlinks
-                                  ? ((personality == BX_SEARCH_RG)
-                                         ? WALK_CYCLE_SYMLINK_REPEAT
-                                         : WALK_CYCLE_DIR_REPEAT)
-                                  : WALK_CYCLE_NONE,
-                .cycle_report = opts.follow_symlinks
-                                    ? ((personality == BX_SEARCH_RG)
-                                           ? WALK_CYCLE_ERROR
-                                           : WALK_CYCLE_WARN)
-                                    : WALK_CYCLE_IGNORE,
+                .cycle_mode = bx_search_cycle_mode(personality, &opts),
+                .cycle_report = bx_search_cycle_report(personality, &opts),
             };
 
             if (walk_dir(".", &wopts, grep_walk_cb, &gs) != 0) {
@@ -1656,7 +1678,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .no_ignore_vcs = opts.no_ignore_vcs,
             .no_ignore_dot = opts.no_ignore_dot,
             .no_require_git = opts.no_require_git,
-            .sort_entries = personality != BX_SEARCH_RG || opts.sort_paths || opts.sort_paths_reverse,
+            .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
             .reverse_sort = opts.sort_paths_reverse,
             .follow_symlinks = opts.follow_symlinks,
             .follow_root_symlink = true,
@@ -1672,16 +1694,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             .num_include_patterns = opts.num_include,
             .exclude_dirs = opts.exclude_dir_patterns,
             .num_exclude_dirs = opts.num_exclude_dir,
-            .cycle_mode = opts.follow_symlinks
-                              ? ((personality == BX_SEARCH_RG)
-                                     ? WALK_CYCLE_SYMLINK_REPEAT
-                                     : WALK_CYCLE_DIR_REPEAT)
-                              : WALK_CYCLE_NONE,
-            .cycle_report = opts.follow_symlinks
-                                ? ((personality == BX_SEARCH_RG)
-                                       ? WALK_CYCLE_ERROR
-                                       : WALK_CYCLE_WARN)
-                                : WALK_CYCLE_IGNORE,
+            .cycle_mode = bx_search_cycle_mode(personality, &opts),
+            .cycle_report = bx_search_cycle_report(personality, &opts),
         };
 
         for (int operand_i = 0; operand_i < num_files && !stop; operand_i++) {

@@ -7,6 +7,40 @@
 #include "lib/id_parse.h"
 #include "metadata.h"
 
+static bool bx_walk_entry_mode_matches(struct walk_entry *entry, bool (*predicate)(mode_t)) {
+    if (!entry || !predicate)
+        return false;
+
+    if (!walk_entry_load_metadata(entry))
+        return false;
+
+    return predicate(entry->mode);
+}
+
+static bool bx_walk_mode_is_regular(mode_t mode) {
+    return S_ISREG(mode);
+}
+
+static bool bx_walk_mode_is_symlink(mode_t mode) {
+    return S_ISLNK(mode);
+}
+
+static bool bx_walk_mode_is_fifo(mode_t mode) {
+    return S_ISFIFO(mode);
+}
+
+static bool bx_walk_mode_is_socket(mode_t mode) {
+    return S_ISSOCK(mode);
+}
+
+static bool bx_walk_mode_is_block(mode_t mode) {
+    return S_ISBLK(mode);
+}
+
+static bool bx_walk_mode_is_char(mode_t mode) {
+    return S_ISCHR(mode);
+}
+
 bool bx_walk_numeric_match(unsigned long long actual, long long expected, int cmp) {
     unsigned long long want = (unsigned long long)expected;
     if (cmp > 0)
@@ -132,9 +166,7 @@ bool bx_walk_entry_is_empty(struct walk_entry *entry) {
         return empty;
     }
 
-    if (!walk_entry_load_metadata(entry))
-        return false;
-    if (!S_ISREG(entry->mode))
+    if (!bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular))
         return false;
     return entry->size == 0;
 }
@@ -145,15 +177,11 @@ bool bx_walk_entry_matches_type(struct walk_entry *entry, char type_filter) {
 
     switch (type_filter) {
     case 'f':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISREG(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular);
     case 'd':
         return entry->is_dir;
     case 'l':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISLNK(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_symlink);
     case 'x':
         if (!walk_entry_load_metadata(entry))
             return false;
@@ -161,21 +189,13 @@ bool bx_walk_entry_matches_type(struct walk_entry *entry, char type_filter) {
     case 'e':
         return bx_walk_entry_is_empty(entry);
     case 'p':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISFIFO(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_fifo);
     case 's':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISSOCK(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_socket);
     case 'b':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISBLK(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_block);
     case 'c':
-        if (!walk_entry_load_metadata(entry))
-            return false;
-        return S_ISCHR(entry->mode);
+        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_char);
     default:
         return false;
     }

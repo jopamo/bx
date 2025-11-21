@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/fopen_dash.h"
 
 struct bx_comm_options {
     const char* progname;
@@ -211,17 +212,18 @@ int bx_comm_main(int argc, char** argv) {
         return 1;
     }
 
-    FILE* f1 = strcmp(file1_name, "-") == 0 ? stdin : fopen(file1_name, "r");
+    bool f1_is_stdio = false;
+    FILE* f1 = bx_fopen_dash(file1_name, "r", &f1_is_stdio);
     if (!f1) {
         bx_diag(&diag, "%s: %s", file1_name, strerror(errno));
         return 1;
     }
 
-    FILE* f2 = strcmp(file2_name, "-") == 0 ? stdin : fopen(file2_name, "r");
+    bool f2_is_stdio = false;
+    FILE* f2 = bx_fopen_dash(file2_name, "r", &f2_is_stdio);
     if (!f2) {
         bx_diag(&diag, "%s: %s", file2_name, strerror(errno));
-        if (f1 != stdin)
-            fclose(f1);
+        bx_fclose_nonstdio(f1, f1_is_stdio);
         return 1;
     }
 
@@ -337,10 +339,8 @@ cleanup:
     free_line_buffer(&lb2);
     free_line_buffer(&prev1);
     free_line_buffer(&prev2);
-    if (f1 != stdin)
-        fclose(f1);
-    if (f2 != stdin)
-        fclose(f2);
+    bx_fclose_nonstdio(f1, f1_is_stdio);
+    bx_fclose_nonstdio(f2, f2_is_stdio);
 
     return diag.exit_status;
 }

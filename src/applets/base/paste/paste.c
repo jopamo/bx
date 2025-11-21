@@ -9,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/fopen_dash.h"
 
 struct bx_paste_options {
     const char* progname;
@@ -163,7 +164,8 @@ static void paste_serial(int num_files, char** filenames, struct bx_paste_option
     int delimiter = options->zero_terminated ? '\0' : '\n';
 
     for (int i = 0; i < num_files; i++) {
-        FILE* f = strcmp(filenames[i], "-") == 0 ? stdin : fopen(filenames[i], "r");
+        bool is_stdio = false;
+        FILE* f = bx_fopen_dash(filenames[i], "r", &is_stdio);
         if (!f) {
             bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
             continue;
@@ -186,15 +188,15 @@ static void paste_serial(int num_files, char** filenames, struct bx_paste_option
         }
         putchar(delimiter);
         free(line);
-        if (f != stdin)
-            fclose(f);
+        bx_fclose_nonstdio(f, is_stdio);
     }
 }
 
 static void paste_parallel(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
     FILE** files = xmalloc(num_files * sizeof(FILE*));
+    bool* is_stdio = xmalloc(num_files * sizeof(bool));
     for (int i = 0; i < num_files; i++) {
-        files[i] = strcmp(filenames[i], "-") == 0 ? stdin : fopen(filenames[i], "r");
+        files[i] = bx_fopen_dash(filenames[i], "r", &is_stdio[i]);
         if (!files[i]) {
             bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
         }
@@ -219,8 +221,7 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
                     row_fields[i] = xstrdup(line);
                 }
                 else {
-                    if (files[i] != stdin)
-                        fclose(files[i]);
+                    bx_fclose_nonstdio(files[i], is_stdio[i]);
                     files[i] = NULL;
                 }
             }
@@ -241,9 +242,9 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
     }
 
     for (int i = 0; i < num_files; i++)
-        if (files[i] && files[i] != stdin)
-            fclose(files[i]);
+        bx_fclose_nonstdio(files[i], is_stdio[i]);
     free(files);
+    free(is_stdio);
     free(line);
     free(row_fields);
 }

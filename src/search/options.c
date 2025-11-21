@@ -160,11 +160,28 @@ static bool bx_search_personality_is_rg(enum bx_search_personality personality) 
     return personality == BX_SEARCH_RG;
 }
 
+static bool bx_search_personality_is_grep_family(enum bx_search_personality personality) {
+    return personality == BX_SEARCH_GREP
+        || personality == BX_SEARCH_EGREP
+        || personality == BX_SEARCH_FGREP;
+}
+
 static int bx_search_require_rg_option(const char *progname,
                                        enum bx_search_personality personality,
                                        int option_index, int argc, char **argv,
                                        const char *fallback) {
     if (bx_search_personality_is_rg(personality))
+        return 0;
+    return bx_grep_unrecognized_option(
+        progname,
+        bx_search_current_option_token(option_index, argc, argv, fallback));
+}
+
+static int bx_search_reject_rg_option(const char *progname,
+                                      enum bx_search_personality personality,
+                                      int option_index, int argc, char **argv,
+                                      const char *fallback) {
+    if (!bx_search_personality_is_rg(personality))
         return 0;
     return bx_grep_unrecognized_option(
         progname,
@@ -262,8 +279,7 @@ static bool bx_set_binary_files_mode(const char *progname,
         return true;
     }
 
-    if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
-        || personality == BX_SEARCH_FGREP) {
+    if (bx_search_personality_is_grep_family(personality)) {
         fprintf(stderr, "%s: unknown binary-files type\n", progname);
     } else {
         fprintf(stderr, "%s: invalid argument for --binary-files: %s\n",
@@ -614,8 +630,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     while ((c = getopt_long(argc, argv, ":0EFHbhinovclLqrRIszZd:aA:B:C:e:f:g:j:t:T:uwPxSm:U", long_opts, NULL)) != -1) {
         switch (c) {
         case ':':
-            if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
-                || personality == BX_SEARCH_FGREP) {
+            if (bx_search_personality_is_grep_family(personality)) {
                 if (optind > 0 && optind <= argc
                     && bx_grep_unsupported_required_long_option(argv[optind - 1])) {
                     return bx_grep_unrecognized_option(progname, argv[optind - 1]);
@@ -649,7 +664,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'h': opts->hide_filename = true; break;
         case 'i':
             opts->ignore_case = true;
-            if (personality == BX_SEARCH_RG)
+            if (bx_search_personality_is_rg(personality))
                 opts->smart_case = false;
             break;
         case 'n': opts->show_line_number = true; break;
@@ -686,7 +701,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'l': opts->files_with_matches = true; break;
         case 'L':
-            if (personality == BX_SEARCH_RG)
+            if (bx_search_personality_is_rg(personality))
                 opts->follow_symlinks = true;
             else
                 opts->files_without_match = true;
@@ -709,8 +724,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 } else if (strcmp(optarg, "skip") == 0) {
                     opts->directory_mode = BX_GREP_DIR_SKIP;
                 } else {
-                    if (personality == BX_SEARCH_GREP || personality == BX_SEARCH_EGREP
-                        || personality == BX_SEARCH_FGREP) {
+                    if (bx_search_personality_is_grep_family(personality)) {
                         return bx_grep_invalid_directories_mode(progname, optarg);
                     }
                     fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, optarg);
@@ -719,10 +733,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case OPT_MAX_COLUMNS:
-            if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--max-columns'\n", progname);
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--max-columns") != 0)
                 return -1;
-            }
             if (!bx_parse_nonnegative_int(progname, "--max-columns", optarg, &opts->max_columns))
                 return -1;
             break;
@@ -738,7 +751,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'x': opts->line_regexp = true; break;
         case 'P': opts->perl_regexp = true; break;
         case 's':
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 opts->smart_case = false;
                 opts->ignore_case = false;
             } else {
@@ -750,7 +763,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case 'S':
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 opts->smart_case = true;
                 opts->ignore_case = false;
             } else {
@@ -763,7 +776,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             break;
         case 'Z':
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: invalid option -- 'Z'\n", progname);
                 return -1;
             }
@@ -771,14 +784,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->null_filename = true;
             break;
         case 'z':
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 fprintf(stderr, "%s: invalid option -- 'z'\n", progname);
                 return -1;
             }
             opts->null_data = true;
             break;
         case 'g':
-            if (personality == BX_SEARCH_RG && optarg && optarg[0] == '!') {
+            if (bx_search_personality_is_rg(personality) && optarg && optarg[0] == '!') {
                 if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
                     opts->exclude_patterns[opts->num_exclude++] = strdup(optarg + 1);
             } else if (opts->num_include < MAX_INCLUDE_PATTERNS) {
@@ -834,7 +847,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             const char *globs = bx_get_type_globs(opts, optarg);
             if (!globs) {
-                if (personality == BX_SEARCH_RG) {
+                if (bx_search_personality_is_rg(personality)) {
                     fprintf(stderr, "%s: unrecognized file type: %s\n", progname, optarg);
                     return -1;
                 }
@@ -1009,16 +1022,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             break;
         case OPT_LABEL:
-            if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--label'\n", progname);
+            if (bx_search_reject_rg_option(progname, personality, optind, argc,
+                                           argv, "--label") != 0) {
                 return -1;
             }
             free(opts->label);
             opts->label = strdup(optarg);
             break;
         case OPT_GROUP_SEPARATOR:
-            if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--group-separator'\n", progname);
+            if (bx_search_reject_rg_option(progname, personality, optind, argc,
+                                           argv, "--group-separator") != 0) {
                 return -1;
             }
             free(opts->group_separator);
@@ -1026,8 +1039,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->suppress_group_separator = false;
             break;
         case OPT_NO_GROUP_SEPARATOR:
-            if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--no-group-separator'\n", progname);
+            if (bx_search_reject_rg_option(progname, personality, optind, argc,
+                                           argv, "--no-group-separator") != 0) {
                 return -1;
             }
             opts->suppress_group_separator = true;
@@ -1076,17 +1089,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->heading_set = true;
             break;
         case OPT_NULL:
-            if (personality == BX_SEARCH_RG) {
-                opts->null_output = true;
-                opts->null_filename = true;
-                break;
-            }
             opts->null_output = true;
             opts->null_filename = true;
             break;
         case OPT_BINARY_FILES:
-            if (personality == BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--binary-files'\n", progname);
+            if (bx_search_reject_rg_option(progname, personality, optind, argc,
+                                           argv, "--binary-files") != 0) {
                 return -1;
             }
             if (!bx_set_binary_files_mode(progname, personality, opts, optarg))
@@ -1096,7 +1104,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->null_data = true;
             break;
         case OPT_NO_MESSAGES:
-            if (personality == BX_SEARCH_RG) {
+            if (bx_search_personality_is_rg(personality)) {
                 return bx_grep_unrecognized_option(
                     progname,
                     bx_search_current_option_token(optind, argc, argv, "--no-messages"));
@@ -1175,20 +1183,18 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_regex_print_version();
             return 1;
         case OPT_REGEX_SIZE_LIMIT:
-            if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--regex-size-limit'\n", progname);
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--regex-size-limit") != 0)
                 return -1;
-            }
             if (!bx_parse_rg_size_limit(progname, "--regex-size-limit", optarg,
                                         &opts->regex_size_limit))
                 return -1;
             opts->regex_size_limit_set = true;
             break;
         case OPT_DFA_SIZE_LIMIT:
-            if (personality != BX_SEARCH_RG) {
-                fprintf(stderr, "%s: unrecognized option '--dfa-size-limit'\n", progname);
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--dfa-size-limit") != 0)
                 return -1;
-            }
             if (!bx_parse_rg_size_limit(progname, "--dfa-size-limit", optarg,
                                         &opts->dfa_size_limit))
                 return -1;
@@ -1205,7 +1211,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             bx_search_print_version(progname);
             return 1;
         case '?':
-            if (personality != BX_SEARCH_RG && optind > 0 && optind <= argc) {
+            if (!bx_search_personality_is_rg(personality) && optind > 0 && optind <= argc) {
                 const char *arg = argv[optind - 1];
                 if (arg && arg[0] == '-' && isdigit((unsigned char)arg[1])) {
                     bool all_digits = true;

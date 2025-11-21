@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/fopen_dash.h"
 
 struct bx_join_options {
     const char* progname;
@@ -289,16 +290,17 @@ int bx_join_main(int argc, char** argv) {
         return 1;
     }
 
-    FILE* f1 = strcmp(argv[first_operand], "-") == 0 ? stdin : fopen(argv[first_operand], "r");
+    bool f1_is_stdio = false;
+    FILE* f1 = bx_fopen_dash(argv[first_operand], "r", &f1_is_stdio);
     if (!f1) {
         bx_diag(&diag, "%s: %s", argv[first_operand], strerror(errno));
         return 1;
     }
-    FILE* f2 = strcmp(argv[first_operand + 1], "-") == 0 ? stdin : fopen(argv[first_operand + 1], "r");
+    bool f2_is_stdio = false;
+    FILE* f2 = bx_fopen_dash(argv[first_operand + 1], "r", &f2_is_stdio);
     if (!f2) {
         bx_diag(&diag, "%s: %s", argv[first_operand + 1], strerror(errno));
-        if (f1 != stdin)
-            fclose(f1);
+        bx_fclose_nonstdio(f1, f1_is_stdio);
         return 1;
     }
 
@@ -409,9 +411,7 @@ int bx_join_main(int argc, char** argv) {
 
     free(data1);
     free(data2);
-    if (f1 != stdin)
-        fclose(f1);
-    if (f2 != stdin)
-        fclose(f2);
+    bx_fclose_nonstdio(f1, f1_is_stdio);
+    bx_fclose_nonstdio(f2, f2_is_stdio);
     return diag.exit_status;
 }

@@ -58,6 +58,8 @@
 #include "logfile.h"
 #include "mark.h"
 #include "misc.h"
+#include "process_lookup.h"
+#include "process_parse.h"
 #include "resize.h"
 #include "search.h"
 #include "socket.h"
@@ -78,18 +80,8 @@ static void CollapseWindowlist(void);
 static void LogToggle(bool);
 static void ShowInfo(void);
 static void ShowDInfo(void);
-static Window *WindowByName(char *);
-static int WindowByNumber(char *);
-static int MsgOk(void);
-static int ParseSwitch(struct action *, bool *);
-static int ParseOnOff(struct action *, bool *);
-static int ParseWinNum(struct action *, int *);
-static int ParseBase(struct action *, char *, int *, int, char *);
-static int ParseSaveStr(struct action *, char **);
-static int ParseNum(struct action *, int *);
-static int ParseNum1000(struct action *, int *);
+static void OutputNum1000Setting(struct action *, int *, const char *);
 static char **SaveArgs(char **);
-static bool IsNum(char *);
 static void ColonFin(char *, size_t, void *);
 static void InputSelect(void);
 static void InputSetenv(char *);
@@ -916,6 +908,14 @@ static void StuffFin(char *buf, size_t len, void *data)
  * If the command is quieted, and it's not a remote query, then just don't print the message.
  */
 #define OutputMsg	(!act->quiet ? Msg : queryflag >= 0 ? QueryMsg : Dummy)
+
+static void OutputNum1000Setting(struct action *act, int *var, const char *name)
+{
+	int msgok = MsgOk();
+
+	if (ParseNum1000(act, var) == 0 && msgok)
+		OutputMsg(0, "%s set to %.10g seconds", name, *var / 1000.);
+}
 
 static void DoCommandSelect(struct action *act)
 {
@@ -2797,34 +2797,22 @@ static void DoCommandDefc1(struct action *act)
 
 static void DoCommandDefbce(struct action *act)
 {
-	bool b;
-
-	if (ParseOnOff(act, &b) == 0)
-		nwin_default.bce = b ? 1 : 0;
+	(void)ParseOnOffMapped(act, &nwin_default.bce, 0, 1);
 }
 
 static void DoCommandDefgr(struct action *act)
 {
-	bool b;
-
-	if (ParseOnOff(act, &b) == 0)
-		nwin_default.gr = b ? 1 : 0;
+	(void)ParseOnOffMapped(act, &nwin_default.gr, 0, 1);
 }
 
 static void DoCommandDefmonitor(struct action *act)
 {
-	bool b;
-
-	if (ParseOnOff(act, &b) == 0)
-		nwin_default.monitor = b ? MON_ON : MON_OFF;
+	(void)ParseOnOffMapped(act, &nwin_default.monitor, MON_OFF, MON_ON);
 }
 
 static void DoCommandDefmousetrack(struct action *act)
 {
-	bool b;
-
-	if (ParseOnOff(act, &b) == 0)
-		defmousetrack = b ? 1000 : 0;
+	(void)ParseOnOffMapped(act, &defmousetrack, 0, 1000);
 }
 
 static void DoCommandMousetrack(struct action *act)
@@ -2843,10 +2831,7 @@ static void DoCommandMousetrack(struct action *act)
 
 static void DoCommandDefsilence(struct action *act)
 {
-	bool b;
-
-	if (ParseOnOff(act, &b) == 0)
-		nwin_default.silence = b ? SILENCE_ON : SILENCE_OFF;
+	(void)ParseOnOffMapped(act, &nwin_default.silence, SILENCE_OFF, SILENCE_ON);
 }
 
 static void DoCommandVerbose(struct action *act)
@@ -3050,26 +3035,17 @@ static void DoCommandVbell(struct action *act)
 
 static void DoCommandVbellwait(struct action *act)
 {
-	int msgok = MsgOk();
-
-	if (ParseNum1000(act, &VBellWait) == 0 && msgok)
-		OutputMsg(0, "vbellwait set to %.10g seconds", VBellWait / 1000.);
+	OutputNum1000Setting(act, &VBellWait, "vbellwait");
 }
 
 static void DoCommandMsgwait(struct action *act)
 {
-	int msgok = MsgOk();
-
-	if (ParseNum1000(act, &MsgWait) == 0 && msgok)
-		OutputMsg(0, "msgwait set to %.10g seconds", MsgWait / 1000.);
+	OutputNum1000Setting(act, &MsgWait, "msgwait");
 }
 
 static void DoCommandMsgminwait(struct action *act)
 {
-	int msgok = MsgOk();
-
-	if (ParseNum1000(act, &MsgMinWait) == 0 && msgok)
-		OutputMsg(0, "msgminwait set to %.10g seconds", MsgMinWait / 1000.);
+	OutputNum1000Setting(act, &MsgMinWait, "msgminwait");
 }
 
 static void DoCommandSilencewait(struct action *act)
@@ -5533,223 +5509,6 @@ void SetEscape(struct acluser *u, int e, int me)
 			}
 		}
 	}
-}
-
-static int ParseSwitch(struct action *act, bool *var)
-{
-	if (*act->args == NULL) {
-		*var ^= true;
-		return 0;
-	}
-	return ParseOnOff(act, var);
-}
-
-static int MsgOk(void)
-{
-	return display && !*rc_name;
-}
-
-static int ParseOnOff(struct action *act, bool *var)
-{
-	int num = -1;
-	char **args = act->args;
-
-	if (*args && args[1] == NULL) {
-		if (strcmp(args[0], "on") == 0)
-			num = true;
-		else if (strcmp(args[0], "off") == 0)
-			num = false;
-	}
-	if (num < 0) {
-		Msg(0, "%s: %s: invalid argument. Give 'on' or 'off'", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	*var = num;
-	return 0;
-}
-
-static int ParseSaveStr(struct action *act, char **var)
-{
-	char **args = act->args;
-	if (*args == NULL || args[1]) {
-		Msg(0, "%s: %s: one argument required.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	if (*var)
-		free(*var);
-	*var = SaveStr(*args);
-	return 0;
-}
-
-static int ParseNum(struct action *act, int *var)
-{
-	int i;
-	char *p, **args = act->args;
-
-	p = *args;
-	if (p == NULL || *p == 0 || args[1]) {
-		Msg(0, "%s: %s: invalid argument. Give one argument.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	i = 0;
-	while (*p) {
-		if (*p >= '0' && *p <= '9')
-			i = 10 * i + (*p - '0');
-		else {
-			Msg(0, "%s: %s: invalid argument. Give numeric argument.", rc_name, comms[act->nr].name);
-			return -1;
-		}
-		p++;
-	}
-	*var = i;
-	return 0;
-}
-
-static int ParseNum1000(struct action *act, int *var)
-{
-	int i;
-	char *p, **args = act->args;
-	int dig = 0;
-
-	p = *args;
-	if (p == NULL || *p == 0 || args[1]) {
-		Msg(0, "%s: %s: invalid argument. Give one argument.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	i = 0;
-	while (*p) {
-		if (*p >= '0' && *p <= '9') {
-			if (dig < 4)
-				i = 10 * i + (*p - '0');
-			else if (dig == 4 && *p >= '5')
-				i++;
-			if (dig)
-				dig++;
-		} else if (*p == '.' && !dig)
-			dig++;
-		else {
-			Msg(0, "%s: %s: invalid argument. Give floating point argument.", rc_name, comms[act->nr].name);
-			return -1;
-		}
-		p++;
-	}
-	if (dig == 0)
-		i *= 1000;
-	else
-		while (dig++ < 4)
-			i *= 10;
-	if (i < 0)
-		i = (int)((unsigned int)~0 >> 1);
-	*var = i;
-	return 0;
-}
-
-static Window *WindowByName(char *s)
-{
-	Window *window;
-
-	for (window = mru_window; window; window = window->w_prev_mru)
-		if (!strcmp(window->w_title, s))
-			return window;
-	for (window = mru_window; window; window = window->w_prev_mru)
-		if (!strncmp(window->w_title, s, strlen(s)))
-			return window;
-	return NULL;
-}
-
-static int WindowByNumber(char *string)
-{
-	int i;
-	char *s;
-
-	for (i = 0, s = string; *s; s++) {
-		if (*s < '0' || *s > '9')
-			break;
-		i = i * 10 + (*s - '0');
-	}
-	return *s ? -1 : i;
-}
-
-/*
- * Get window number from Name or Number string.
- * Numbers are tried first, then names, a prefix match suffices.
- * Be careful when assigning numeric strings as WindowTitles.
- */
-int WindowByNoN(char *string)
-{
-	int i;
-	Window *window;
-
-	if ((i = WindowByNumber(string)) < 0 || i > last_window->w_number) {
-		if ((window = WindowByName(string)))
-			return window->w_number;
-		return -1;
-	}
-	return i;
-}
-
-static int ParseWinNum(struct action *act, int *var)
-{
-	char **args = act->args;
-	int i = 0;
-
-	if (*args == NULL || args[1]) {
-		Msg(0, "%s: %s: one argument required.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-
-	i = WindowByNoN(*args);
-	if (i < 0) {
-		Msg(0, "%s: %s: invalid argument. Give window number or name.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	*var = i;
-	return 0;
-}
-
-static int ParseBase(struct action *act, char *p, int *var, int base, char *bname)
-{
-	int i = 0;
-	int c;
-
-	if (!p || *p == 0) {
-		Msg(0, "%s: %s: empty argument.", rc_name, comms[act->nr].name);
-		return -1;
-	}
-	while ((c = *p++)) {
-		if (c >= 'a' && c <= 'z')
-			c -= 'a' - 'A';
-		if (c >= 'A' && c <= 'Z')
-			c -= 'A' - ('0' + 10);
-		c -= '0';
-		if (c < 0 || c >= base) {
-			Msg(0, "%s: %s: argument is not %s.", rc_name, comms[act->nr].name, bname);
-			return -1;
-		}
-		i = base * i + c;
-	}
-	*var = i;
-	return 0;
-}
-
-static bool IsNum(char *s)
-{
-	for (; *s; ++s)
-		if (*s < '0' || *s > '9')
-			return false;
-	return true;
-}
-
-int IsNumColon(char *s, char *p, int psize)
-{
-	char *q;
-	if ((q = strrchr(s, ':')) != NULL) {
-		strncpy(p, q + 1, psize - 1);
-		p[psize - 1] = '\0';
-		*q = '\0';
-	} else
-		*p = '\0';
-	return IsNum(s);
 }
 
 void SwitchWindow(Window *window)

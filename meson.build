@@ -406,6 +406,8 @@ screen_native_sources = files(
   'src/applets/system/screen/mark.c',
   'src/applets/system/screen/misc.c',
   'src/applets/system/screen/process.c',
+  'src/applets/system/screen/process_lookup.c',
+  'src/applets/system/screen/process_parse.c',
   'src/applets/system/screen/pty.c',
   'src/applets/system/screen/resize.c',
   'src/applets/system/screen/sched.c',

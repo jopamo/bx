@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/fopen_dash.h"
 #include "lib/time_parse.h"
 
 struct bx_date_options {
@@ -872,7 +873,8 @@ int bx_date_main(int argc, char** argv) {
     }
 
     if (options.file) {
-        FILE* f = strcmp(options.file, "-") == 0 ? stdin : fopen(options.file, "r");
+        bool is_stdio = false;
+        FILE* f = bx_fopen_dash(options.file, "r", &is_stdio);
         if (!f) {
             bx_diag(&diag, "%s: %s", options.file, strerror(errno));
             return 1;
@@ -888,8 +890,7 @@ int bx_date_main(int argc, char** argv) {
             }
         }
         free(line);
-        if (f != stdin)
-            fclose(f);
+        bx_fclose_nonstdio(f, is_stdio);
         return diag.exit_status;
     }
 
