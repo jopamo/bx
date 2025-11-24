@@ -58,8 +58,12 @@
 #include "logfile.h"
 #include "mark.h"
 #include "misc.h"
+#include "process_action_store.h"
 #include "process_lookup.h"
 #include "process_parse.h"
+#include "process_prompts.h"
+#include "process_resize_prompt.h"
+#include "process_window_nav.h"
 #include "resize.h"
 #include "search.h"
 #include "socket.h"
@@ -70,37 +74,15 @@
 
 
 static int CheckArgNum(int, char **);
-static void ClearAction(struct action *);
-static void SaveAction(struct action *, int, char **, int *);
-static Window *NextWindow(void);
-static Window *PreviousWindow(void);
-static Window *ParentWindow(void);
-static int MoreWindows(void);
 static void CollapseWindowlist(void);
 static void LogToggle(bool);
 static void ShowInfo(void);
 static void ShowDInfo(void);
 static void OutputNum1000Setting(struct action *, int *, const char *);
-static char **SaveArgs(char **);
 static void ColonFin(char *, size_t, void *);
-static void InputSelect(void);
-static void InputSetenv(char *);
-static void InputAKA(void);
-static int InputSu(struct acluser **, char *);
-static void suFin(char *, size_t, void *);
-static void AKAFin(char *, size_t, void *);
-static void copy_reg_fn(char *, size_t, void *);
-static void ins_reg_fn(char *, size_t, void *);
-static void process_fn(char *, size_t, void *);
 static void digraph_fn(char *, size_t, void *);
 static int digraph_find(const char *buf);
-static void confirm_fn(char *, size_t, void *);
 static int IsOnDisplay(Window *);
-static void ResizeRegions(char *, int);
-static void ResizeFin(char *, size_t, void *);
-static struct action *FindKtab(char *, int);
-static void SelectFin(char *, size_t, void *);
-static void SelectLayoutFin(char *, size_t, void *);
 static void ShowWindowsX(char *);
 
 char NullStr[] = "";
@@ -124,13 +106,6 @@ struct action idleaction;
 char **blankerprg;
 
 struct action ktab[256 + KMAP_KEYS];	/* command key translation table */
-struct kclass {
-	struct kclass *next;
-	char *name;
-	struct action ktab[256 + KMAP_KEYS];
-};
-struct kclass *kclasses;
-
 struct action umtab[KMAP_KEYS + KMAP_AKEYS];
 struct action dmtab[KMAP_KEYS + KMAP_AKEYS];
 struct action mmtab[KMAP_KEYS + KMAP_AKEYS];
@@ -320,21 +295,6 @@ static struct digraph digraphs[MAX_DIGRAPH + 1] = {
 	{{'"', '|'}, 246},	/* ö */
 	{{'"', '}'}, 252},	/* ü */
 	{{'"', '~'}, 223}	/* ß */
-};
-
-#define RESIZE_FLAG_H 1
-#define RESIZE_FLAG_V 2
-#define RESIZE_FLAG_L 4
-
-static char *resizeprompts[] = {
-	"resize # lines: ",
-	"resize -h # columns: ",
-	"resize -v # lines: ",
-	"resize -b # columns: ",
-	"resize -l # lines: ",
-	"resize -l -h # columns: ",
-	"resize -l -v # lines: ",
-	"resize -l -b # columns: ",
 };
 
 static int parse_input_int(const char *buf, size_t len, int *val)
@@ -540,57 +500,6 @@ void InitKeytab(void)
 	idleaction.nr = RC_BLANKER;
 	idleaction.args = noargs;
 	idleaction.argl = NULL;
-}
-
-static struct action *FindKtab(char *class, int create)
-{
-	struct kclass *kp, **kpp;
-	int i;
-
-	if (class == NULL)
-		return ktab;
-	for (kpp = &kclasses; (kp = *kpp) != NULL; kpp = &kp->next)
-		if (!strcmp(kp->name, class))
-			break;
-	if (kp == NULL) {
-		if (!create)
-			return NULL;
-		if (strlen(class) > 80) {
-			Msg(0, "Command class name too long.");
-			return NULL;
-		}
-		kp = malloc(sizeof(struct kclass));
-		if (kp == NULL) {
-			Msg(0, "%s", strnomem);
-			return NULL;
-		}
-		kp->name = SaveStr(class);
-		for (i = 0; i < (int)(ARRAY_SIZE(kp->ktab)); i++) {
-			kp->ktab[i].nr = RC_ILLEGAL;
-			kp->ktab[i].args = noargs;
-			kp->ktab[i].argl = NULL;
-			kp->ktab[i].quiet = 0;
-		}
-		kp->next = NULL;
-		*kpp = kp;
-	}
-	return kp->ktab;
-}
-
-static void ClearAction(struct action *act)
-{
-	char **p;
-
-	if (act->nr == RC_ILLEGAL)
-		return;
-	act->nr = RC_ILLEGAL;
-	if (act->args == noargs)
-		return;
-	for (p = act->args; *p; p++)
-		free(*p);
-	free((char *)act->args);
-	act->args = noargs;
-	act->argl = NULL;
 }
 
 /*
@@ -4213,7 +4122,7 @@ static void DoCommandResize(struct action *act)
 	if (*args)
 		ResizeRegions(*args, i);
 	else
-		Input(resizeprompts[i], 20, INP_EVERY, ResizeFin, NULL, i);
+		Input(ResizePrompt(i), 20, INP_EVERY, ResizeFin, NULL, i);
 }
 
 static void DoCommandSetsid(struct action *act)
@@ -5266,50 +5175,6 @@ void DoCommand(char **argv, int *argl)
 	DoAction(&act);
 }
 
-static void SaveAction(struct action *act, int nr, char **args, int *argl)
-{
-	int argc = 0;
-	char **pp;
-	int *lp;
-
-	if (args)
-		while (args[argc])
-			argc++;
-	if (argc == 0) {
-		act->nr = nr;
-		act->args = noargs;
-		act->argl = NULL;
-		return;
-	}
-	if ((pp = malloc((unsigned)(argc + 1) * sizeof(char *))) == NULL)
-		Panic(0, "%s", strnomem);
-	if ((lp = malloc((unsigned)(argc) * sizeof(int))) == NULL)
-		Panic(0, "%s", strnomem);
-	act->nr = nr;
-	act->args = pp;
-	act->argl = lp;
-	while (argc--) {
-		*lp = argl ? *argl++ : (int)strlen(*args);
-		*pp++ = SaveStrn(*args++, *lp++);
-	}
-	*pp = NULL;
-}
-
-static char **SaveArgs(char **args)
-{
-	char **ap, **pp;
-	int argc = 0;
-
-	while (args[argc])
-		argc++;
-	if ((pp = ap = malloc((unsigned)(argc + 1) * sizeof(char *))) == NULL)
-		Panic(0, "%s", strnomem);
-	while (argc--)
-		*pp++ = SaveStr(*args++);
-	*pp = NULL;
-	return ap;
-}
-
 /*
  * buf is split into argument vector args.
  * leading whitespace is removed.
@@ -5583,53 +5448,6 @@ void Activate(int norefresh)
 		WindowChanged(fore, WINESC_WFLAGS);
 	}
 	Redisplay(norefresh + all_norefresh);
-}
-
-static Window *NextWindow(void)
-{
-	Window *w;
-	Window *group = fore ? fore->w_group : NULL;
-
-	for (w = fore ? fore->w_next : first_window; w != fore; w = w->w_next) {
-		if (w == NULL)
-			w = first_window;
-		if (!fore || group == w->w_group)
-			break;
-	}
-	return w;
-}
-
-static Window *PreviousWindow(void)
-{
-	Window *w;
-	Window *group = fore ? fore->w_group : NULL;
-
-	for (w = fore ? fore->w_prev : last_window; w != fore; w = w->w_prev) {
-		if (w == NULL)
-			w = last_window;
-		if (!fore || group == w->w_group)
-			break;
-	}
-	return w;
-}
-
-static Window *ParentWindow(void)
-{
-	Window *w = fore ? fore->w_group : NULL;
-	return w;
-}
-
-static int MoreWindows(void)
-{
-	char *m = "No other window.";
-	if (mru_window && (fore == NULL || mru_window->w_prev_mru))
-		return 1;
-	if (fore == NULL) {
-		Msg(0, "No window available");
-		return 0;
-	}
-	Msg(0, m, fore->w_number);
-	return 0;
 }
 
 void KillWindow(Window *window)
@@ -6035,39 +5853,6 @@ static void ShowDInfo(void)
 	Msg(0, "%s", buf);
 }
 
-static void AKAFin(char *buf, size_t len, void *data)
-{
-	(void)data; /* unused */
-
-	if (len && fore)
-		ChangeAKA(fore, buf, strlen(buf));
-
-	enter_window_name_mode = 0;
-}
-
-static void InputAKA(void)
-{
-	char *s, *ss;
-	size_t len;
-
-	if (enter_window_name_mode == 1)
-		return;
-
-	enter_window_name_mode = 1;
-
-	Input("Set window's title to: ", ARRAY_SIZE(fore->w_akabuf) - 1, INP_COOKED, AKAFin, NULL, 0);
-	s = fore->w_title;
-	if (!s)
-		return;
-	for (; *s; s++) {
-		if ((*(unsigned char *)s & 0x7f) < 0x20 || *s == 0x7f)
-			continue;
-		ss = s;
-		len = 1;
-		LayProcess(&ss, &len);
-	}
-}
-
 static void ColonFin(char *buf, size_t len, void *data)
 {
 	char mbuf[256];
@@ -6131,86 +5916,6 @@ static void ColonFin(char *buf, size_t len, void *data)
 		memmove(mbuf, buf, len);
 		RcLine(mbuf, ARRAY_SIZE(mbuf));
 	}
-}
-
-static void SelectFin(char *buf, size_t len, void *data)
-{
-	int n;
-
-	(void)data; /* unused */
-
-	if (!len || !display)
-		return;
-	if (len == 1 && *buf == '-') {
-		SetForeWindow(NULL);
-		Activate(0);
-		return;
-	}
-	if ((n = WindowByNoN(buf)) < 0)
-		return;
-	SwitchWindow(GetWindowByNumber(n));
-}
-
-static void SelectLayoutFin(char *buf, size_t len, void *data)
-{
-	Layout *lay;
-
-	(void)data; /* unused */
-
-	if (!len || !display)
-		return;
-	if (len == 1 && *buf == '-') {
-		LoadLayout(NULL);
-		Activate(0);
-		return;
-	}
-	lay = FindLayout(buf);
-	if (!lay)
-		Msg(0, "No such layout\n");
-	else if (lay == D_layout)
-		Msg(0, "This IS layout %d (%s).\n", lay->lay_number, lay->lay_title);
-	else {
-		LoadLayout(lay);
-		Activate(0);
-	}
-}
-
-static void InputSelect(void)
-{
-	Input("Switch to window: ", 20, INP_COOKED, SelectFin, NULL, 0);
-}
-
-static char setenv_var[31];
-
-static void SetenvFin1(char *buf, size_t len, void *data)
-{
-	(void)data; /* unused */
-
-	if (!len || !display)
-		return;
-	InputSetenv(buf);
-}
-
-static void SetenvFin2(char *buf, size_t len, void *data)
-{
-	(void)data; /* unused */
-
-	if (!len || !display)
-		return;
-	setenv(setenv_var, buf, 1);
-	MakeNewEnv();
-}
-
-static void InputSetenv(char *arg)
-{
-	static char setenv_buf[50 + ARRAY_SIZE(setenv_var)];	/* need to be static here, cannot be freed */
-
-	if (arg) {
-		strncpy(setenv_var, arg, ARRAY_SIZE(setenv_var) - 1);
-		sprintf(setenv_buf, "Enter value for %s: ", setenv_var);
-		Input(setenv_buf, 30, INP_COOKED, SetenvFin2, NULL, 0);
-	} else
-		Input("Setenv: Enter variable name: ", 30, INP_COOKED, SetenvFin1, NULL, 0);
 }
 
 /*
@@ -6354,138 +6059,6 @@ int CompileKeys(char *s, int sl, unsigned char *array)
 /*
  *  Asynchronous input functions
  */
-
-static void copy_reg_fn(char *buf, size_t len, void *data)
-{
-	(void)data; /* unused */
-
-	struct plop *pp = plop_tab + (int)(unsigned char)*buf;
-
-	if (len) {
-		memset(buf, 0, len);
-		return;
-	}
-	if (pp->buf)
-		free(pp->buf);
-	pp->buf = NULL;
-	pp->len = 0;
-	if (D_user->u_plop.len) {
-		if ((pp->buf = malloc(D_user->u_plop.len)) == NULL) {
-			Msg(0, "%s", strnomem);
-			return;
-		}
-		memmove(pp->buf, D_user->u_plop.buf, D_user->u_plop.len);
-	}
-	pp->len = D_user->u_plop.len;
-	pp->enc = D_user->u_plop.enc;
-	Msg(0, "Copied %zu characters into register %c", D_user->u_plop.len, *buf);
-}
-
-static void ins_reg_fn(char *buf, size_t len, void *data)
-{
-	(void)data; /* unused */
-
-	struct plop *pp = plop_tab + (int)(unsigned char)*buf;
-
-	if (len) {
-		memset(buf, 0, len);
-		return;
-	}
-	if (!fore)
-		return;		/* Input() should not call us w/o fore, but you never know... */
-	if (*buf == '.')
-		Msg(0, "ins_reg_fn: Warning: pasting real register '.'!");
-	if (pp->buf) {
-		MakePaster(&fore->w_paster, pp->buf, pp->len, 0);
-		return;
-	}
-	Msg(0, "Empty register.");
-}
-
-static void process_fn(char *buf, size_t len, void *data)
-{
-	struct plop *pp = plop_tab + (int)(unsigned char)*buf;
-
-	(void)data; /* unused */
-
-	if (len) {
-		memset(buf, 0, len);
-		return;
-	}
-	if (pp->buf) {
-		ProcessInput(pp->buf, pp->len);
-		return;
-	}
-	Msg(0, "Empty register.");
-}
-
-static void confirm_fn(char *buf, size_t len, void *data)
-{
-	struct action act;
-
-	if (len || (*buf != 'y' && *buf != 'Y')) {
-		memset(buf, 0, len);
-		return;
-	}
-	act.nr = *(int *)data;
-	act.args = noargs;
-	act.argl = NULL;
-	act.quiet = 0;
-	DoAction(&act);
-}
-
-struct inputsu {
-	struct acluser **up;
-	char name[24];
-	char pw1[130];		/* FreeBSD crypts to 128 bytes */
-	char pw2[130];
-};
-
-static void suFin(char *buf, size_t len, void *data)
-{
-	struct inputsu *i = (struct inputsu *)data;
-	char *p;
-	size_t l;
-
-	if (!*i->name) {
-		p = i->name;
-		l = ARRAY_SIZE(i->name) - 1;
-	} else if (!*i->pw1) {
-		strcpy(p = i->pw1, "\377");
-		l = ARRAY_SIZE(i->pw1) - 1;
-	} else {
-		strcpy(p = i->pw2, "\377");
-		l = ARRAY_SIZE(i->pw2) - 1;
-	}
-	if (buf && len)
-		strncpy(p, buf, 1 + ((l < len) ? l : len));
-	if (!*i->name)
-		Input("Screen User: ", ARRAY_SIZE(i->name) - 1, INP_COOKED, suFin, (char *)i, 0);
-	else if (!*i->pw1)
-		Input("User's UNIX Password: ", ARRAY_SIZE(i->pw1) - 1, INP_COOKED | INP_NOECHO, suFin, (char *)i, 0);
-	else if (!*i->pw2)
-		Input("User's Screen Password: ", ARRAY_SIZE(i->pw2) - 1, INP_COOKED | INP_NOECHO, suFin, (char *)i, 0);
-	else {
-		if ((p = DoSu(i->up, i->name, i->pw2, i->pw1)))
-			Msg(0, "%s", p);
-		free((char *)i);
-	}
-}
-
-static int InputSu(struct acluser **up, char *name)
-{
-	struct inputsu *i;
-
-	if (!(i = (struct inputsu *)calloc(1, sizeof(struct inputsu))))
-		return -1;
-
-	i->up = up;
-	if (name && *name)
-		suFin(name, (int)strlen(name), (char *)i);	/* can also initialise stuff */
-	else
-		suFin(NULL, 0, (char *)i);
-	return 0;
-}
 
 static int digraph_find(const char *buf)
 {
@@ -6658,228 +6231,6 @@ Window *FindNiceWindow(Window *win, char *presel)
 	if (win && AclCheckPermWin(D_user, ACL_READ, win))
 		win = NULL;
 	return win;
-}
-
-static int CalcSlicePercent(Canvas *cv, int percent)
-{
-	int w, wsum, up;
-	if (!cv || !cv->c_slback)
-		return percent;
-	up = CalcSlicePercent(cv->c_slback->c_slback, percent);
-	w = cv->c_slweight;
-	for (cv = cv->c_slback->c_slperp, wsum = 0; cv; cv = cv->c_slnext)
-		wsum += cv->c_slweight;
-	if (wsum == 0)
-		return 0;
-	return (up * w) / wsum;
-}
-
-static int ChangeCanvasSize(Canvas *fcv, int abs, int diff, bool gflag, int percent)
-/* Canvas *fcv;	 make this canvas bigger
-   int abs;		 mode: 0:rel 1:abs 2:max
-   int diff;		 change this much
-   bool gflag;		 go up if neccessary
-   int percent; */
-{
-	Canvas *cv;
-	int done, have, m, dir;
-
-	if (abs == 0 && diff == 0)
-		return 0;
-	if (abs == 2) {
-		if (diff == 0)
-			fcv->c_slweight = 0;
-		else {
-			for (cv = fcv->c_slback->c_slperp; cv; cv = cv->c_slnext)
-				cv->c_slweight = 0;
-			fcv->c_slweight = 1;
-			cv = fcv->c_slback->c_slback;
-			if (gflag && cv && cv->c_slback)
-				ChangeCanvasSize(cv, abs, diff, gflag, percent);
-		}
-		return diff;
-	}
-	if (abs) {
-		if (diff < 0)
-			diff = 0;
-		if (percent && diff > percent)
-			diff = percent;
-	}
-	if (percent) {
-		int wsum, up;
-		for (cv = fcv->c_slback->c_slperp, wsum = 0; cv; cv = cv->c_slnext)
-			wsum += cv->c_slweight;
-		if (wsum) {
-			up = gflag ? CalcSlicePercent(fcv->c_slback->c_slback, percent) : percent;
-			if (wsum < 1000) {
-				int scale = wsum < 10 ? 1000 : 100;
-				for (cv = fcv->c_slback->c_slperp; cv; cv = cv->c_slnext)
-					cv->c_slweight *= scale;
-				wsum *= scale;
-			}
-			for (cv = fcv->c_slback->c_slperp; cv; cv = cv->c_slnext) {
-				if (cv->c_slweight) {
-					cv->c_slweight = (cv->c_slweight * up) / percent;
-					if (cv->c_slweight == 0)
-						cv->c_slweight = 1;
-				}
-			}
-			diff = (diff * wsum) / percent;
-			percent = wsum;
-		}
-	} else {
-		if (abs
-		    && diff == (fcv->c_slorient == SLICE_VERT ? fcv->c_ye - fcv->c_ys + 2 : fcv->c_xe - fcv->c_xs + 2))
-			return 0;
-		/* fix weights to real size (can't be helped, sorry) */
-		for (cv = fcv->c_slback->c_slperp; cv; cv = cv->c_slnext) {
-			cv->c_slweight =
-			    cv->c_slorient == SLICE_VERT ? cv->c_ye - cv->c_ys + 2 : cv->c_xe - cv->c_xs + 2;
-		}
-	}
-	if (abs)
-		diff = diff - fcv->c_slweight;
-	if (diff == 0)
-		return 0;
-	if (diff < 0) {
-		cv = fcv->c_slnext ? fcv->c_slnext : fcv->c_slprev;
-		fcv->c_slweight += diff;
-		cv->c_slweight -= diff;
-		return diff;
-	}
-	done = 0;
-	dir = 1;
-	for (cv = fcv->c_slnext; diff > 0; cv = dir > 0 ? cv->c_slnext : cv->c_slprev) {
-		if (!cv) {
-			if (dir == -1)
-				break;
-			dir = -1;
-			cv = fcv;
-			continue;
-		}
-		if (percent)
-			m = 1;
-		else
-			m = cv->c_slperp ? CountCanvasPerp(cv) * 2 : 2;
-		if (cv->c_slweight > m) {
-			have = cv->c_slweight - m;
-			if (have > diff)
-				have = diff;
-			cv->c_slweight -= have;
-			done += have;
-			diff -= have;
-		}
-	}
-	if (diff && gflag) {
-		/* need more room! */
-		cv = fcv->c_slback->c_slback;
-		if (cv && cv->c_slback)
-			done += ChangeCanvasSize(fcv->c_slback->c_slback, 0, diff, gflag, percent);
-	}
-	fcv->c_slweight += done;
-	return done;
-}
-
-static void ResizeRegions(char *arg, int flags)
-{
-	Canvas *cv;
-	int diff, l;
-	bool gflag = 0;
-	int abs = 0, percent = 0;
-	int orient = 0;
-
-	if (!*arg)
-		return;
-	if (D_forecv->c_slorient == SLICE_UNKN) {
-		Msg(0, "resize: need more than one region");
-		return;
-	}
-	gflag = flags & RESIZE_FLAG_L ? 0 : 1;
-	orient |= flags & RESIZE_FLAG_H ? SLICE_HORI : 0;
-	orient |= flags & RESIZE_FLAG_V ? SLICE_VERT : 0;
-	if (orient == 0)
-		orient = D_forecv->c_slorient;
-	l = strlen(arg);
-	if (*arg == '=') {
-		/* make all regions the same height */
-		Canvas *cv = gflag ? &D_canvas : D_forecv->c_slback;
-		if (cv->c_slperp->c_slorient & orient)
-			EqualizeCanvas(cv->c_slperp, gflag);
-		/* can't use cv->c_slorient directly as it can be D_canvas */
-		if ((cv->c_slperp->c_slorient ^ (SLICE_HORI ^ SLICE_VERT)) & orient) {
-			if (cv->c_slback) {
-				cv = cv->c_slback;
-				EqualizeCanvas(cv->c_slperp, gflag);
-			} else
-				EqualizeCanvas(cv, gflag);
-		}
-		ResizeCanvas(cv);
-		RecreateCanvasChain();
-		RethinkDisplayViewports();
-		ResizeLayersToCanvases();
-		return;
-	}
-	if (!strcmp(arg, "min") || !strcmp(arg, "0")) {
-		abs = 2;
-		diff = 0;
-	} else if (!strcmp(arg, "max") || !strcmp(arg, "_")) {
-		abs = 2;
-		diff = 1;
-	} else {
-		if (l > 0 && arg[l - 1] == '%')
-			percent = 1000;
-		if (*arg == '+')
-			diff = atoi(arg + 1);
-		else if (*arg == '-')
-			diff = -atoi(arg + 1);
-		else {
-			diff = atoi(arg);	/* +1 because of caption line */
-			if (diff < 0)
-				diff = 0;
-			abs = diff == 0 ? 2 : 1;
-		}
-	}
-	if (!abs && !diff)
-		return;
-	if (percent)
-		diff = diff * percent / 100;
-	cv = D_forecv;
-	if (cv->c_slorient & orient)
-		ChangeCanvasSize(cv, abs, diff, gflag, percent);
-	if (cv->c_slback->c_slorient & orient)
-		ChangeCanvasSize(cv->c_slback, abs, diff, gflag, percent);
-
-	ResizeCanvas(&D_canvas);
-	RecreateCanvasChain();
-	RethinkDisplayViewports();
-	ResizeLayersToCanvases();
-	return;
-}
-
-static void ResizeFin(char *buf, size_t len, void *data)
-{
-	int ch;
-	int flags = *(int *)data;
-	ch = ((unsigned char *)buf)[len];
-	if (ch == 0) {
-		ResizeRegions(buf, flags);
-		return;
-	}
-	if (ch == 'h')
-		flags ^= RESIZE_FLAG_H;
-	else if (ch == 'v')
-		flags ^= RESIZE_FLAG_V;
-	else if (ch == 'b')
-		flags |= RESIZE_FLAG_H | RESIZE_FLAG_V;
-	else if (ch == 'p')
-		flags ^= D_forecv->c_slorient == SLICE_VERT ? RESIZE_FLAG_H : RESIZE_FLAG_V;
-	else if (ch == 'l')
-		flags ^= RESIZE_FLAG_L;
-	else
-		return;
-	inp_setprompt(resizeprompts[flags], NULL);
-	*(int *)data = flags;
-	buf[len] = '\034';
 }
 
 void SetForeCanvas(Display *d, Canvas *cv)

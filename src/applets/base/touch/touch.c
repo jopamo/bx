@@ -12,6 +12,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 #include "lib/time_parse.h"
 
 enum bx_touch_time_source {
@@ -34,19 +35,6 @@ struct bx_touch_options {
     bool show_version;
 };
 
-static const char* bx_touch_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "touch";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Update the access and modification times of each FILE to now.\n");
@@ -60,10 +48,6 @@ static void bx_touch_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -c, --no-create  do not create any files\n");
     fprintf(stream, "      --help       display this help and exit\n");
     fprintf(stream, "      --version    output version information and exit\n");
-}
-
-static void bx_touch_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_touch_time_source_is_compatible(enum bx_touch_time_source current, enum bx_touch_time_source requested) {
@@ -224,7 +208,7 @@ static bool bx_touch_parse_options(int argc, char** argv, struct bx_touch_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_touch_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "touch");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -423,7 +407,7 @@ int bx_touch_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_touch_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

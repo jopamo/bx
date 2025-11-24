@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 static void bx_logname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]\n", progname);
@@ -15,10 +16,6 @@ static void bx_logname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_logname_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 int bx_logname_main(int argc, char** argv) {
@@ -35,7 +32,7 @@ int bx_logname_main(int argc, char** argv) {
                 bx_logname_print_help(stdout, "logname");
                 return 0;
             case 2:
-                bx_logname_print_version("logname");
+                bx_cli_print_version("logname");
                 return 0;
             default:
                 return 1;

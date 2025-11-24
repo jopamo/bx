@@ -23,6 +23,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_stat_options {
     const char* progname;
@@ -51,18 +52,6 @@ typedef bool (*bx_stat_format_conversion_fn)(char conv, void* ctx, struct bx_dia
 static const char* const BX_STAT_TERSE_FILE_FORMAT = "%n %s %b %f %u %g %D %i %h %t %T %X %Y %Z %W %o";
 static const char* const BX_STAT_TERSE_FILESYSTEM_FORMAT = "%n %i %l %t %s %S %b %f %a %c %d";
 
-static const char* bx_stat_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "stat";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_stat_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Display file status.\n");
@@ -76,10 +65,6 @@ static void bx_stat_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version        output version information and exit\n");
 }
 
-static void bx_stat_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"format", required_argument, NULL, 'c'}, {"printf", required_argument, NULL, 3}, {"file-system", no_argument, NULL, 'f'}, {"dereference", no_argument, NULL, 'L'},
@@ -87,7 +72,7 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_stat_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "stat");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -124,15 +109,7 @@ static bool bx_stat_parse_options(int argc, char** argv, struct bx_stat_options*
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -828,7 +805,7 @@ int bx_stat_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_stat_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

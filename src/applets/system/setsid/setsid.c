@@ -7,6 +7,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_setsid_options {
     const char* progname;
@@ -15,33 +16,12 @@ struct bx_setsid_options {
     int command_index;
 };
 
-static const char* bx_setsid_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "setsid";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_setsid_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... COMMAND [ARG]...\n", progname);
     fprintf(stream, "Run COMMAND in a new session.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -h, --help     display this help and exit\n");
     fprintf(stream, "  -V, --version  output version information and exit\n");
-}
-
-static void bx_setsid_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_setsid_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static bool bx_setsid_parse_options(int argc, char** argv, struct bx_setsid_options* options, struct bx_diag_ctx* diag) {
@@ -52,7 +32,7 @@ static bool bx_setsid_parse_options(int argc, char** argv, struct bx_setsid_opti
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_setsid_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "setsid");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -72,15 +52,7 @@ static bool bx_setsid_parse_options(int argc, char** argv, struct bx_setsid_opti
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -101,7 +73,7 @@ int bx_setsid_main(int argc, char** argv) {
     };
 
     if (!bx_setsid_parse_options(argc, argv, &options, &diag)) {
-        bx_setsid_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 
@@ -111,13 +83,13 @@ int bx_setsid_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_setsid_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     if (options.command_index >= argc) {
         bx_diag(&diag, "missing command operand");
-        bx_setsid_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 

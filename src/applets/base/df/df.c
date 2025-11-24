@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum bx_df_size_mode {
     BX_DF_SIZE_1K = 0,
@@ -103,18 +104,6 @@ enum {
     BX_DF_OPT_TOTAL = 4,
 };
 
-static const char* bx_df_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "df";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_df_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Show file system space usage for each FILE.\n");
@@ -131,10 +120,6 @@ static void bx_df_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --output[=FIELD_LIST]  use the output format defined by FIELD_LIST\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_df_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_df_parse_output_field_name(const char* name, enum bx_df_output_field* field_out) {
@@ -296,7 +281,7 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_df_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "df");
     options->size_mode = BX_DF_SIZE_1K;
     diag->progname = options->progname;
 
@@ -355,26 +340,10 @@ static bool bx_df_parse_options(int argc, char** argv, struct bx_df_options* opt
                 options->show_version = true;
                 return true;
             case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -1017,7 +986,7 @@ int bx_df_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_df_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         bx_df_free_options(&options);
         return 0;
     }

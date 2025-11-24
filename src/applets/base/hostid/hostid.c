@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 static bool bx_hostid_try_file(uint32_t* id_out) {
     int fd = open("/etc/hostid", O_RDONLY);
@@ -84,10 +85,6 @@ static void bx_hostid_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version  output version information and exit\n");
 }
 
-static void bx_hostid_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 int bx_hostid_main(int argc, char** argv) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 1},
@@ -102,7 +99,7 @@ int bx_hostid_main(int argc, char** argv) {
                 bx_hostid_print_help(stdout, "hostid");
                 return 0;
             case 2:
-                bx_hostid_print_version("hostid");
+                bx_cli_print_version("hostid");
                 return 0;
             default:
                 return 1;

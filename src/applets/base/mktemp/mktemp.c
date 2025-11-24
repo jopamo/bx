@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum {
     BX_MKTEMP_OPT_TMPDIR = 256,
@@ -30,19 +31,6 @@ struct bx_mktemp_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_mktemp_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "mktemp";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
 
 static void bx_mktemp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [TEMPLATE]\n", progname);
@@ -64,10 +52,6 @@ static void bx_mktemp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "TEMPLATE must contain at least 3 consecutive 'X' in the last component.\n");
 }
 
-static void bx_mktemp_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"directory", no_argument, NULL, 'd'},
@@ -81,7 +65,7 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_mktemp_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mktemp");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -125,15 +109,7 @@ static bool bx_mktemp_parse_options(int argc, char** argv, struct bx_mktemp_opti
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -367,7 +343,7 @@ int bx_mktemp_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_mktemp_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

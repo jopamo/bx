@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
 
 struct bx_cat_options {
@@ -28,18 +29,6 @@ struct bx_cat_state {
     bool previous_output_line_blank;
 };
 
-static const char* bx_cat_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "cat";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_cat_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Concatenate FILE(s), or standard input, to standard output.\n");
@@ -56,10 +45,6 @@ static void bx_cat_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -v, --show-nonprinting   use ^ and M- notation, except for LFD and TAB\n");
     fprintf(stream, "      --help               display this help and exit\n");
     fprintf(stream, "      --version            output version information and exit\n");
-}
-
-static void bx_cat_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static void bx_cat_print_file_error(const struct bx_cat_options* options, const char* path) {
@@ -240,7 +225,7 @@ static bool bx_cat_parse_options(int argc, char** argv, struct bx_cat_options* o
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_cat_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "cat");
 
     opterr = 0;
     optind = 1;
@@ -326,7 +311,7 @@ int bx_cat_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_cat_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

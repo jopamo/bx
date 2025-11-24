@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_nohup_options {
     const char* progname;
@@ -21,18 +22,6 @@ struct bx_nohup_options {
     int first_operand;
 };
 
-static const char* bx_nohup_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "nohup";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_nohup_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s COMMAND [ARG]...\n", progname);
     fprintf(stream, "  or:  %s OPTION\n", progname);
@@ -40,14 +29,6 @@ static void bx_nohup_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_nohup_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_nohup_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static void bx_nohup_notice(const char* progname, const char* fmt, ...) {
@@ -67,7 +48,7 @@ static bool bx_nohup_parse_options(int argc, char** argv, struct bx_nohup_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_nohup_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "nohup");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -87,15 +68,7 @@ static bool bx_nohup_parse_options(int argc, char** argv, struct bx_nohup_option
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -230,7 +203,7 @@ int bx_nohup_main(int argc, char** argv) {
     };
 
     if (!bx_nohup_parse_options(argc, argv, &options, &diag)) {
-        bx_nohup_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 125;
     }
 
@@ -240,13 +213,13 @@ int bx_nohup_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_nohup_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     if (options.first_operand >= argc) {
         bx_diag(&diag, "missing operand");
-        bx_nohup_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 125;
     }
 

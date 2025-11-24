@@ -13,6 +13,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 enum bx_truncate_size_mode {
     BX_TRUNCATE_SIZE_SET = 0,
@@ -40,19 +41,6 @@ struct bx_truncate_options {
     bool show_version;
 };
 
-static const char* bx_truncate_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "truncate";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_truncate_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Shrink or extend the size of each FILE to the specified size.\n");
@@ -65,10 +53,6 @@ static void bx_truncate_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                         and suffixes K, M, ... and KB/MB/... or KiB/MiB/...\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
-}
-
-static void bx_truncate_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_truncate_parse_size_suffix(const char* suffix, uintmax_t* multiplier_out) {
@@ -196,7 +180,7 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_truncate_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "truncate");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -233,26 +217,10 @@ static bool bx_truncate_parse_options(int argc, char** argv, struct bx_truncate_
                 options->show_version = true;
                 break;
             case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -491,7 +459,7 @@ int bx_truncate_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_truncate_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

@@ -4,18 +4,7 @@
 #include <stdlib.h>
 
 #include "applets.h"
-
-static const char* bx_echo_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "echo";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
+#include "lib/cli_common.h"
 
 static void bx_echo_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [SHORT-OPTION]... [STRING]...\n", progname);
@@ -53,10 +42,6 @@ static void bx_echo_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "outputting option-like strings.\n");
 }
 
-static void bx_echo_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static int hex_val(char c) {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -68,7 +53,7 @@ static int hex_val(char c) {
 }
 
 int bx_echo_main(int argc, char** argv) {
-    const char* progname = bx_echo_progname((argc > 0) ? argv[0] : NULL);
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "echo");
 
     if (argc == 2 && strcmp(argv[1], "--help") == 0) {
         bx_echo_print_help(stdout, progname);
@@ -76,7 +61,7 @@ int bx_echo_main(int argc, char** argv) {
     }
 
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-        bx_echo_print_version(progname);
+        bx_cli_print_version(progname);
         return 0;
     }
 

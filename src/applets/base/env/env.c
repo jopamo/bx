@@ -9,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 extern char** environ;
 
@@ -22,17 +23,6 @@ struct bx_env_options {
     size_t unset_count;
 };
 
-static const char* bx_env_progname(const char* argv0) {
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    if (argv0 != NULL && argv0[0] != '\0') {
-        return argv0;
-    }
-    return "env";
-}
-
 static void bx_env_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [-] [NAME=VALUE]... [COMMAND [ARG]...]\n", progname);
     fprintf(stream, "Set each NAME to VALUE in the environment and run COMMAND.\n");
@@ -43,10 +33,6 @@ static void bx_env_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -u, --unset=NAME          remove variable NAME from the environment\n");
     fprintf(stream, "      --help                display this help and exit\n");
     fprintf(stream, "      --version             output version information and exit\n");
-}
-
-static void bx_env_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static void bx_env_options_cleanup(struct bx_env_options* options) {
@@ -85,7 +71,7 @@ static bool bx_env_parse_options(int argc, char** argv, struct bx_env_options* o
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_env_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "env");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -116,15 +102,7 @@ static bool bx_env_parse_options(int argc, char** argv, struct bx_env_options* o
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -240,7 +218,7 @@ int bx_env_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_env_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         bx_env_options_cleanup(&options);
         return 0;
     }

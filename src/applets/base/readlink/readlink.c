@@ -11,6 +11,7 @@
 #include "lib/path_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -31,18 +32,6 @@ struct bx_readlink_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_readlink_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "readlink";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
 
 static void bx_readlink_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
@@ -77,14 +66,6 @@ static void bx_readlink_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         output version information and exit\n");
 }
 
-static void bx_readlink_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_readlink_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
 static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"canonicalize", no_argument, NULL, 'f'},
@@ -101,7 +82,7 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_readlink_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "readlink");
     options->mode = BX_READLINK_MODE_READ_SYMLINK;
     options->posixly_correct = (getenv("POSIXLY_CORRECT") != NULL);
     options->verbose_errors = options->posixly_correct;
@@ -151,15 +132,7 @@ static bool bx_readlink_parse_options(int argc, char** argv, struct bx_readlink_
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -439,7 +412,7 @@ int bx_readlink_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_readlink_parse_options(argc, argv, &options, &first_operand, &diag)) {
-        bx_readlink_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -449,14 +422,14 @@ int bx_readlink_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_readlink_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
         bx_diag(&diag, "missing operand");
-        bx_readlink_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status;
     }
 

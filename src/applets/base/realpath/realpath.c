@@ -11,6 +11,7 @@
 #include "lib/path_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -38,19 +39,6 @@ struct bx_realpath_options {
     bool show_version;
 };
 
-static const char* bx_realpath_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "realpath";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_realpath_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Print the resolved absolute file name.\n");
@@ -67,10 +55,6 @@ static void bx_realpath_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -z, --zero     end each output line with NUL, not newline\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_realpath_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -92,7 +76,7 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_realpath_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "realpath");
     options->canonicalization_mode = BX_REALPATH_CANONICALIZE_EXISTING_BUT_LAST;
     options->symlink_mode = BX_REALPATH_SYMLINK_PHYSICAL;
     diag->progname = options->progname;
@@ -145,15 +129,7 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -542,7 +518,7 @@ int bx_realpath_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_realpath_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

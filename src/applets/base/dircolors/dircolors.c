@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 #ifndef BX_LSCOLORS_FILE
 #define BX_LSCOLORS_FILE "/usr/share/bx/lscolors.dircolors"
@@ -75,19 +76,6 @@ static const struct bx_dircolors_keyword_map bx_dircolors_keyword_map[] = {
     {"CAPABILITY", "ca"},
 };
 
-static const char* bx_dircolors_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "dircolors";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static enum bx_dircolors_shell_mode bx_dircolors_default_shell_mode(void) {
     const char* shell = getenv("SHELL");
     if (shell == NULL) {
@@ -113,10 +101,6 @@ static void bx_dircolors_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version        output version information and exit\n");
 }
 
-static void bx_dircolors_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolors_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"bourne-shell", no_argument, NULL, 'b'},
@@ -127,7 +111,7 @@ static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolor
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_dircolors_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dircolors");
     options->shell_mode = bx_dircolors_default_shell_mode();
     diag->progname = options->progname;
 
@@ -154,15 +138,7 @@ static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolor
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -462,7 +438,7 @@ int bx_dircolors_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_dircolors_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

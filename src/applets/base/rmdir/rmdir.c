@@ -9,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum {
     BX_RMDIR_OPT_IGNORE_FAIL_ON_NON_EMPTY = 256,
@@ -23,18 +24,6 @@ struct bx_rmdir_options {
     bool show_version;
 };
 
-static const char* bx_rmdir_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "rmdir";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_rmdir_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... DIRECTORY...\n", progname);
     fprintf(stream, "Remove the DIRECTORY(ies), if they are empty.\n");
@@ -44,10 +33,6 @@ static void bx_rmdir_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -v, --verbose                   output a diagnostic for every directory processed\n");
     fprintf(stream, "      --help                      display this help and exit\n");
     fprintf(stream, "      --version                   output version information and exit\n");
-}
-
-static void bx_rmdir_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_rmdir_parse_options(int argc, char** argv, struct bx_rmdir_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -61,7 +46,7 @@ static bool bx_rmdir_parse_options(int argc, char** argv, struct bx_rmdir_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_rmdir_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "rmdir");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -91,15 +76,7 @@ static bool bx_rmdir_parse_options(int argc, char** argv, struct bx_rmdir_option
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -225,13 +202,13 @@ int bx_rmdir_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_rmdir_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        bx_diag(&diag, "missing operand");
+        bx_cli_diag_missing_operand(&diag);
         return diag.exit_status;
     }
 
