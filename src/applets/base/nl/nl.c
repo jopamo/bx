@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 enum numbering_style { STYLE_ALL, STYLE_NONEMPTY, STYLE_NONE, STYLE_REGEX };
@@ -67,10 +68,6 @@ static void bx_nl_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  ln      left justified, no leading zeros\n");
     fprintf(stream, "  rn      right justified, no leading zeros\n");
     fprintf(stream, "  rz      right justified, leading zeros\n");
-}
-
-static void bx_nl_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool parse_style(const char* str, struct section_style* style, struct bx_diag_ctx* diag) {
@@ -318,7 +315,7 @@ int bx_nl_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_nl_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

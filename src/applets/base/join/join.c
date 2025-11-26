@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 struct bx_join_options {
@@ -59,10 +60,6 @@ static void bx_join_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -z, --zero-terminated  line delimiter is NUL, not newline\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_join_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -281,7 +278,7 @@ int bx_join_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_join_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
