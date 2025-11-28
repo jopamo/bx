@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 enum cut_mode { CUT_MODE_BYTES, CUT_MODE_CHARS, CUT_MODE_FIELDS, CUT_MODE_NONE };
@@ -65,10 +66,6 @@ static void bx_cut_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  N-    from N'th byte, character or field, to end of line\n");
     fprintf(stream, "  N-M   from N'th to M'th (inclusive) byte, character or field\n");
     fprintf(stream, "  -M    from first to M'th (inclusive) byte, character or field\n");
-}
-
-static void bx_cut_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static int compare_ranges(const void* a, const void* b) {
@@ -365,7 +362,7 @@ int bx_cut_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_cut_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

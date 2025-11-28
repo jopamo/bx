@@ -14,6 +14,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_timeout_options {
     const char* progname;
@@ -26,18 +27,6 @@ struct bx_timeout_options {
     double duration_seconds;
     int first_operand;
 };
-
-static const char* bx_timeout_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "timeout";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
 
 static void bx_timeout_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION] DURATION COMMAND [ARG]...\n", progname);
@@ -52,14 +41,6 @@ static void bx_timeout_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -v, --verbose           diagnose to stderr any signal sent upon timeout\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_timeout_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_timeout_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static bool bx_timeout_parse_duration(const char* text, double* seconds_out) {
@@ -205,7 +186,7 @@ static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_op
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_timeout_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "timeout");
     options->timeout_signal = SIGTERM;
     diag->progname = options->progname;
 
@@ -513,7 +494,7 @@ int bx_timeout_main(int argc, char** argv) {
     };
 
     if (!bx_timeout_parse_options(argc, argv, &options, &diag)) {
-        bx_timeout_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 125;
     }
 
@@ -523,7 +504,7 @@ int bx_timeout_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_timeout_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

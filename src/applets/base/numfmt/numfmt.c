@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum unit_type { UNIT_NONE, UNIT_SI, UNIT_IEC, UNIT_IEC_I, UNIT_AUTO };
 
@@ -60,10 +61,6 @@ static void bx_numfmt_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "               1K = 1024, 1M = 1048576, ...\n");
     fprintf(stream, "  iec-i      accept optional two-letter suffix:\n");
     fprintf(stream, "               1Ki = 1024, 1Mi = 1048576, ...\n");
-}
-
-static void bx_numfmt_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static enum unit_type parse_unit(const char* str, struct bx_diag_ctx* diag) {
@@ -256,7 +253,7 @@ int bx_numfmt_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_numfmt_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

@@ -6,6 +6,7 @@
 
 #include "applets.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum {
     BX_CHGRP_OPT_HELP = 1,
@@ -24,19 +25,6 @@ struct bx_chgrp_parse_result {
     bool reference_mode;
     int group_operand_index;
 };
-
-static const char* bx_chgrp_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "chgrp";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
 
 static void bx_chgrp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... GROUP FILE...\n", progname);
@@ -63,10 +51,6 @@ static void bx_chgrp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Examples:\n");
     fprintf(stream, "  %s staff /u      Change the group of /u to \"staff\".\n", progname);
     fprintf(stream, "  %s -hR staff /u  Change the group of /u and subfiles to \"staff\".\n", progname);
-}
-
-static void bx_chgrp_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static char* bx_chgrp_to_chown_group_spec(const char* group_text) {
@@ -146,7 +130,7 @@ static void bx_chgrp_parse_options(int argc, char** argv, struct bx_chgrp_parse_
 }
 
 int bx_chgrp_main(int argc, char** argv) {
-    const char* progname = bx_chgrp_progname((argc > 0) ? argv[0] : NULL);
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chgrp");
 
     struct bx_chgrp_parse_result parse_result;
     bx_chgrp_parse_options(argc, argv, &parse_result);
@@ -156,7 +140,7 @@ int bx_chgrp_main(int argc, char** argv) {
         return 0;
     }
     if (parse_result.ok && parse_result.show_version) {
-        bx_chgrp_print_version(progname);
+        bx_cli_print_version(progname);
         return 0;
     }
 

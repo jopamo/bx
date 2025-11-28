@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
+#include "lib/cli_common.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/same_file.h"
@@ -41,11 +42,6 @@ enum {
     BX_LN_OPT_BACKUP = 256,
 };
 
-static const char* bx_ln_progname(const char* argv0) {
-    const char* base = strrchr(argv0, '/');
-    return base ? base + 1 : argv0;
-}
-
 static void bx_ln_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... TARGET [LINK_NAME]\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... TARGET\n", progname);
@@ -71,10 +67,6 @@ static void bx_ln_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version              output version information and exit\n");
 }
 
-static void bx_ln_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"backup", optional_argument, NULL, BX_LN_OPT_BACKUP},
@@ -97,7 +89,7 @@ static bool bx_ln_parse_options(int argc, char** argv, struct bx_ln_options* opt
     char short_opts[] = "+:bdFfiLnPrsS:t:Tv";
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_ln_progname(argv[0]);
+    options->progname = bx_cli_progname(argv[0], "ln");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -499,7 +491,7 @@ int bx_ln_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_ln_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
     bx_backup_get_params(options.backup_mode, options.suffix, &backup_params);

@@ -12,6 +12,7 @@
 
 #include "applets.h"
 #include "lib/id_parse.h"
+#include "lib/cli_common.h"
 #include "lib/path_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
@@ -60,19 +61,6 @@ struct bx_chown_dir_stack_entry {
     const struct bx_chown_dir_stack_entry* next;
 };
 
-static const char* bx_chown_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "chown";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_chown_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [OWNER][:[GROUP]] FILE...\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... --reference=RFILE FILE...\n", progname);
@@ -101,10 +89,6 @@ static void bx_chown_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  %s -hR root /u    Change the owner of /u and subfiles to \"root\".\n", progname);
 }
 
-static void bx_chown_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"changes", no_argument, NULL, 'c'},
@@ -124,7 +108,7 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_chown_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chown");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -495,7 +479,7 @@ int bx_chown_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_chown_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

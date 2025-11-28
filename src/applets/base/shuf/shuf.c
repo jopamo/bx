@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum {
     BX_SHUF_OPT_HELP = 256,
@@ -53,19 +54,6 @@ struct bx_shuf_rng {
     const char* source_path;
 };
 
-static const char* bx_shuf_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "shuf";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_shuf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]\n", progname);
     fprintf(stream, "  or:  %s -e [OPTION]... [ARG]...\n", progname);
@@ -81,10 +69,6 @@ static void bx_shuf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -z, --zero-terminated      line delimiter is NUL, not newline\n");
     fprintf(stream, "      --help                 display this help and exit\n");
     fprintf(stream, "      --version              output version information and exit\n");
-}
-
-static void bx_shuf_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_shuf_parse_uintmax(const char* text, uintmax_t* value_out) {
@@ -151,7 +135,7 @@ static bool bx_shuf_parse_options(int argc, char** argv, struct bx_shuf_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_shuf_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "shuf");
     options->random_source_path = "/dev/urandom";
     diag->progname = options->progname;
 
@@ -574,7 +558,7 @@ int bx_shuf_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_shuf_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

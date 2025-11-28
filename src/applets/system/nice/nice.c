@@ -11,6 +11,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_nice_options {
     const char* progname;
@@ -21,18 +22,6 @@ struct bx_nice_options {
     int first_operand;
 };
 
-static const char* bx_nice_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "nice";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_nice_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION] [COMMAND [ARG]...]\n", progname);
     fprintf(stream, "Run COMMAND with an adjusted scheduling priority.\n");
@@ -41,14 +30,6 @@ static void bx_nice_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -n, --adjustment=N  add integer N to niceness (default 10)\n");
     fprintf(stream, "      --help          display this help and exit\n");
     fprintf(stream, "      --version       output version information and exit\n");
-}
-
-static void bx_nice_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_nice_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static bool bx_nice_parse_int(const char* text, int* value_out) {
@@ -90,7 +71,7 @@ static bool bx_nice_parse_options(int argc, char** argv, struct bx_nice_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_nice_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "nice");
     options->adjustment = 10;
     diag->progname = options->progname;
 
@@ -211,7 +192,7 @@ int bx_nice_main(int argc, char** argv) {
     };
 
     if (!bx_nice_parse_options(argc, argv, &options, &diag)) {
-        bx_nice_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 125;
     }
 
@@ -221,14 +202,14 @@ int bx_nice_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_nice_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     if (options.first_operand >= argc) {
         if (options.adjustment_specified) {
             bx_diag(&diag, "a command is required when an adjustment is specified");
-            bx_nice_print_try_help(options.progname);
+            bx_cli_print_try_help(options.progname);
             return 125;
         }
 

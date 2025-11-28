@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 struct bx_expand_options {
@@ -36,10 +37,6 @@ static void bx_expand_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        specified tab stop.  Or '+' to specify relative to previous.\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_expand_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool parse_tabs(const char* list, struct bx_expand_options* options, struct bx_diag_ctx* diag) {
@@ -229,7 +226,7 @@ int bx_expand_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_expand_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

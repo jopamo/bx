@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/cli_common.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/remove_ops.h"
@@ -41,18 +42,6 @@ struct bx_rm_options {
     bool show_version;
 };
 
-static const char* bx_rm_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "rm";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_rm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Remove (unlink) the FILE(s).\n");
@@ -71,10 +60,6 @@ static void bx_rm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -x, --one-file-system  when removing a hierarchy recursively, skip directories on different file systems\n");
     fprintf(stream, "      --help       display this help and exit\n");
     fprintf(stream, "      --version    output version information and exit\n");
-}
-
-static void bx_rm_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_rm_parse_interactive_mode(const char* value, enum bx_rm_interactive_mode* mode_out) {
@@ -109,7 +94,7 @@ static bool bx_rm_parse_options(int argc, char** argv, struct bx_rm_options* opt
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_rm_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "rm");
     options->preserve_root = true;
     diag->progname = options->progname;
 
@@ -409,7 +394,7 @@ int bx_rm_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_rm_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

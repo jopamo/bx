@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 struct bx_comm_options {
@@ -52,10 +53,6 @@ static void bx_comm_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Examples:\n");
     fprintf(stream, "  %s -12 file1 file2  Print only lines present in both file1 and file2.\n", progname);
     fprintf(stream, "  %s -3 file1 file2   Print lines in file1 not in file2, and vice versa.\n", progname);
-}
-
-static void bx_comm_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_comm_parse_options(int argc, char** argv, struct bx_comm_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -192,7 +189,7 @@ int bx_comm_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_comm_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

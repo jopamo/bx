@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_id_options {
     const char* progname;
@@ -44,10 +45,6 @@ static void bx_id_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version       output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "Without any OPTION, print uid/gid/groups summary information.\n");
-}
-
-static void bx_id_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_id_parse_options(int argc, char** argv, struct bx_id_options* options, int* first_operand, struct bx_diag_ctx* diag) {
@@ -392,7 +389,7 @@ int bx_id_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_id_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

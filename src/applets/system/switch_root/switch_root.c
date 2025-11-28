@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_switch_root_options {
     const char* progname;
@@ -34,19 +35,6 @@ static const struct bx_switch_root_pseudo_mount bx_switch_root_pseudo_mounts[] =
     {"/run", "run"},
 };
 
-static const char* bx_switch_root_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "switch_root";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_switch_root_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... NEW_ROOT INIT [ARG]...\n", progname);
     fprintf(stream, "Move into NEW_ROOT and exec INIT directly.\n");
@@ -57,10 +45,6 @@ static void bx_switch_root_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -V, --version  output version information and exit\n");
 }
 
-static void bx_switch_root_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_switch_root_parse_options(int argc, char** argv, struct bx_switch_root_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
@@ -69,7 +53,7 @@ static bool bx_switch_root_parse_options(int argc, char** argv, struct bx_switch
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_switch_root_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "switch_root");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -412,7 +396,7 @@ int bx_switch_root_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_switch_root_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
