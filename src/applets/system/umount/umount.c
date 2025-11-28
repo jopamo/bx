@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/mount_table.h"
 
 #ifndef MNT_FORCE
@@ -34,19 +35,6 @@ struct bx_umount_options {
     int operand_index;
 };
 
-static const char* bx_umount_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "umount";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_umount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [-hV]\n", progname);
     fprintf(stream, "       %s -a [options]\n", progname);
@@ -66,14 +54,6 @@ static void bx_umount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -n, --no-mtab  accepted for compatibility; ignored\n");
     fprintf(stream, "      --help     display this help and exit\n");
     fprintf(stream, "      --version  output version information and exit\n");
-}
-
-static void bx_umount_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_umount_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static char* bx_umount_trim_token(char* text) {
@@ -268,7 +248,7 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_umount_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "umount");
     diag->progname = options->progname;
     diag->verbose = false;
 
@@ -319,15 +299,7 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -629,7 +601,7 @@ int bx_umount_main(int argc, char** argv) {
     };
 
     if (!bx_umount_parse_options(argc, argv, &options, &diag)) {
-        bx_umount_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 
@@ -639,12 +611,12 @@ int bx_umount_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_umount_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 
     if (!bx_umount_validate_request(argc, argv, &options, &diag)) {
-        bx_umount_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 

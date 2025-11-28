@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum bx_getty_clocal_mode {
     BX_GETTY_CLOCAL_AUTO = 0,
@@ -101,15 +102,6 @@ static const struct bx_getty_baud_entry bx_getty_baud_table[] = {
 #endif
 };
 
-static const char* bx_getty_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "getty";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    return (base != NULL && base[1] != '\0') ? base + 1 : argv0;
-}
-
 static void bx_getty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage:\n");
     fprintf(stream, " %s [options] <line> [<baud_rate>,...] [<termtype>]\n", progname);
@@ -132,14 +124,6 @@ static void bx_getty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "     --list-speeds          display supported baud rates\n");
     fprintf(stream, "     --help                 display this help\n");
     fprintf(stream, "     --version              display version\n");
-}
-
-static void bx_getty_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_getty_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_getty_parse_baud_rate(const char* text, speed_t* speed_out) {
@@ -296,7 +280,7 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_getty_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "getty");
     options->login_program = "/bin/login";
     options->clocal_mode = BX_GETTY_CLOCAL_AUTO;
     diag->progname = options->progname;
@@ -364,20 +348,10 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
                 options->show_version = true;
                 return true;
             case '?':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             case ':':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -770,7 +744,7 @@ int bx_getty_main(int argc, char** argv) {
     };
 
     if (!bx_getty_parse_options(argc, argv, &options, &diag)) {
-        bx_getty_print_try_help(options.progname != NULL ? options.progname : "getty");
+        bx_cli_print_try_help(options.progname != NULL ? options.progname : "getty");
         return 1;
     }
 
@@ -779,7 +753,7 @@ int bx_getty_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_getty_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
     if (options.list_speeds) {

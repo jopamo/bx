@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_printf_options {
     const char* progname;
@@ -71,18 +72,6 @@ enum bx_printf_position_parse_result {
     BX_PRINTF_POSITION_INVALID,
 };
 
-static const char* bx_printf_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "printf";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_printf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s FORMAT [ARGUMENT]...\n", progname);
     fprintf(stream, "  or:  %s OPTION\n", progname);
@@ -122,22 +111,14 @@ static void bx_printf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "for details about the options it supports.\n");
 }
 
-static void bx_printf_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_printf_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
 static bool bx_printf_parse_options(int argc, char** argv, struct bx_printf_options* options, struct bx_diag_ctx* diag) {
     memset(options, 0, sizeof(*options));
-    options->progname = bx_printf_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "printf");
     diag->progname = options->progname;
 
     if (argc < 2) {
         bx_diag(diag, "missing operand");
-        bx_printf_print_try_help(options->progname);
+        bx_cli_print_try_help(options->progname);
         return false;
     }
 
@@ -158,7 +139,7 @@ static bool bx_printf_parse_options(int argc, char** argv, struct bx_printf_opti
 
     if (format_index >= argc) {
         bx_diag(diag, "missing operand");
-        bx_printf_print_try_help(options->progname);
+        bx_cli_print_try_help(options->progname);
         return false;
     }
 
@@ -1654,7 +1635,7 @@ int bx_printf_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_printf_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

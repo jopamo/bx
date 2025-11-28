@@ -15,6 +15,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_chroot_name_or_id {
     char* raw;
@@ -60,19 +61,6 @@ struct bx_chroot_options {
     struct bx_chroot_cred_spec cred_spec;
 };
 
-static const char* bx_chroot_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "chroot";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_chroot_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... NEWROOT [COMMAND [ARG]...]\n", progname);
     fprintf(stream, "Run COMMAND with root directory set to NEWROOT.\n");
@@ -84,10 +72,6 @@ static void bx_chroot_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version  output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "If no command is given, run '$SHELL -i' (default: '/bin/sh -i').\n");
-}
-
-static void bx_chroot_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static void bx_chroot_free_userspec_arg(struct bx_chroot_userspec_arg* userspec) {
@@ -482,10 +466,6 @@ static bool bx_chroot_apply_creds(const struct bx_chroot_resolved_creds* creds, 
     return true;
 }
 
-static void bx_chroot_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_chroot_newroot_is_old_root(const char* newroot) {
     if (newroot == NULL) {
         return false;
@@ -510,7 +490,7 @@ static bool bx_chroot_parse_options(int argc, char** argv, struct bx_chroot_opti
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_chroot_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chroot");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -543,23 +523,10 @@ static bool bx_chroot_parse_options(int argc, char** argv, struct bx_chroot_opti
                 options->show_version = true;
                 return true;
             case ':':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -567,7 +534,7 @@ static bool bx_chroot_parse_options(int argc, char** argv, struct bx_chroot_opti
     }
 
     if (optind >= argc) {
-        bx_diag(diag, "missing operand");
+        bx_cli_diag_missing_operand(diag);
         return false;
     }
 
@@ -623,7 +590,7 @@ int bx_chroot_main(int argc, char** argv) {
 
     if (!bx_chroot_parse_options(argc, argv, &options, &diag)) {
         bx_chroot_free_cred_spec(&options.cred_spec);
-        bx_chroot_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 125;
     }
 
@@ -634,7 +601,7 @@ int bx_chroot_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_chroot_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         bx_chroot_free_cred_spec(&options.cred_spec);
         return 0;
     }

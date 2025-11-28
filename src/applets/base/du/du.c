@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum bx_du_symlink_mode {
     BX_DU_SYMLINK_NEVER = 0,
@@ -76,18 +77,6 @@ struct bx_du_dir_stack_entry {
     const struct bx_du_dir_stack_entry* next;
 };
 
-static const char* bx_du_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "du";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static void bx_du_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Summarize device usage of the set of FILEs, recursively for directories.\n");
@@ -112,10 +101,6 @@ static void bx_du_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -s, --summarize       display only a total for each argument\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
-}
-
-static void bx_du_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_du_parse_max_depth(const char* text, uintmax_t* depth_out, struct bx_diag_ctx* diag) {
@@ -244,7 +229,7 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_du_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "du");
     options->output_block_size = 1024u;
     options->output_mode = BX_DU_OUTPUT_BLOCKS;
     options->symlink_mode = BX_DU_SYMLINK_NEVER;
@@ -733,7 +718,7 @@ int bx_du_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_du_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

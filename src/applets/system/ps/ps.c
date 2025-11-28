@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct bx_ps_options {
     const char* progname;
@@ -33,19 +34,6 @@ enum bx_ps_row_status {
     BX_PS_ROW_SKIP,
 };
 
-static const char* bx_ps_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "ps";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_ps_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
     fprintf(stream, "Display a simple /proc process listing.\n");
@@ -56,14 +44,6 @@ static void bx_ps_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -V, --version  output version information and exit\n");
 }
 
-static void bx_ps_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_ps_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
@@ -72,7 +52,7 @@ static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* opt
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_ps_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "ps");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -92,15 +72,7 @@ static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* opt
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -494,7 +466,7 @@ int bx_ps_main(int argc, char** argv) {
     };
 
     if (!bx_ps_parse_options(argc, argv, &options, &diag)) {
-        bx_ps_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return (diag.exit_status != 0) ? diag.exit_status : 1;
     }
 
@@ -504,7 +476,7 @@ int bx_ps_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_ps_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

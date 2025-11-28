@@ -21,6 +21,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 #ifndef SYS_pidfd_open
 #if defined(__x86_64__)
@@ -153,19 +154,6 @@ static const struct bx_kill_signal_alias bx_kill_signal_aliases[] = {
 #endif
 };
 
-static const char* bx_kill_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "kill";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_kill_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [options] pid|name...\n", progname);
     fprintf(stream, "Send signals to processes or process groups.\n");
@@ -182,14 +170,6 @@ static void bx_kill_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --verbose                print each target before signaling\n");
     fprintf(stream, "  -h, --help                   display this help and exit\n");
     fprintf(stream, "  -V, --version                output version information and exit\n");
-}
-
-static void bx_kill_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_kill_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_kill_uint_list_append(struct bx_kill_uint_list* list, uintmax_t value) {
@@ -1171,7 +1151,7 @@ static bool bx_kill_execute_targets(const struct bx_kill_options* options, int a
 
 static bool bx_kill_parse_options(int argc, char** argv, struct bx_kill_options* options, struct bx_diag_ctx* diag) {
     memset(options, 0, sizeof(*options));
-    options->progname = bx_kill_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "kill");
     options->signal_number = SIGTERM;
     options->action = BX_KILL_ACTION_SEND;
     options->first_operand_index = argc;
@@ -1514,7 +1494,7 @@ int bx_kill_main(int argc, char** argv) {
 
     if (!bx_kill_parse_options(argc, argv, &options, &diag)) {
         free(options.timeouts);
-        bx_kill_print_try_help(options.progname != NULL ? options.progname : "kill");
+        bx_cli_print_try_help(options.progname != NULL ? options.progname : "kill");
         return 1;
     }
 
@@ -1525,14 +1505,14 @@ int bx_kill_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_kill_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         free(options.timeouts);
         return 0;
     }
 
     if (!bx_kill_validate_options(&options, argc, &diag)) {
         free(options.timeouts);
-        bx_kill_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 

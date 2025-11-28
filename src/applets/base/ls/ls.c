@@ -19,6 +19,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum bx_ls_variant {
     BX_LS_VARIANT_LS,
@@ -126,19 +127,6 @@ static const char* bx_ls_variant_name(enum bx_ls_variant variant) {
         default:
             return "ls";
     }
-}
-
-static const char* bx_ls_progname(const char* argv0, enum bx_ls_variant variant) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return bx_ls_variant_name(variant);
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
 }
 
 static void bx_ls_print_help(FILE* stream, const struct bx_ls_options* options) {
@@ -315,10 +303,6 @@ static void bx_ls_print_help(FILE* stream, const struct bx_ls_options* options) 
     fputs(" 2  if serious trouble (e.g., cannot access command-line argument).\n", stream);
 }
 
-static void bx_ls_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static enum bx_ls_format bx_ls_default_format(enum bx_ls_variant variant) {
     switch (variant) {
         case BX_LS_VARIANT_DIR:
@@ -333,7 +317,7 @@ static enum bx_ls_format bx_ls_default_format(enum bx_ls_variant variant) {
 
 static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant variant, const char* argv0) {
     memset(options, 0, sizeof(*options));
-    options->progname = bx_ls_progname(argv0, variant);
+    options->progname = bx_cli_progname(argv0, bx_ls_variant_name(variant));
     options->variant = variant;
     options->format = bx_ls_default_format(variant);
     options->sort_entries = true;
@@ -1906,7 +1890,7 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
     }
 
     if (options.show_version) {
-        bx_ls_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

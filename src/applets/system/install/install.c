@@ -18,6 +18,7 @@
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
+#include "lib/cli_common.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 
@@ -44,19 +45,6 @@ struct bx_install_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_install_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "install";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
 
 static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [-T] SOURCE DEST\n", progname);
@@ -90,10 +78,6 @@ static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Backup suffix is '~' unless overridden by -S/--suffix or SIMPLE_BACKUP_SUFFIX.\n");
     fprintf(stream, "Backup control for --backup follows VERSION_CONTROL values:\n");
     fprintf(stream, "  none/off, numbered/t, existing/nil, simple/never.\n");
-}
-
-static void bx_install_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 #ifdef S_ISVTX
@@ -187,7 +171,7 @@ static bool bx_install_parse_options(int argc, char** argv, struct bx_install_op
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_install_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "install");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -863,7 +847,7 @@ int bx_install_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_install_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

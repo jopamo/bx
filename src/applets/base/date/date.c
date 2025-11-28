@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/time_parse.h"
 
@@ -33,19 +34,6 @@ struct bx_date_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_date_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "date";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
 
 static void bx_date_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [+FORMAT]\n", progname);
@@ -169,10 +157,6 @@ static void bx_date_print_help(FILE* stream, const char* progname) {
 
 }
 
-static void bx_date_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_date_normalize_precision(const char* arg,
                                         const char* const* allowed,
                                         size_t allowed_count,
@@ -224,7 +208,7 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_date_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "date");
     diag->progname = options->progname;
 
     opterr = 0;
@@ -817,7 +801,7 @@ int bx_date_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_date_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
     if (!bx_date_validate_option_combinations(&options, &diag)) {

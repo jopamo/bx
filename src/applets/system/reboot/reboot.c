@@ -11,6 +11,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 struct bx_reboot_options {
     const char* progname;
@@ -19,19 +20,6 @@ struct bx_reboot_options {
     bool show_help;
     bool show_version;
 };
-
-static const char* bx_reboot_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "reboot";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
 
 static void bx_reboot_set_action(struct bx_reboot_options* options) {
     options->action_text = "reboot";
@@ -61,14 +49,6 @@ static void bx_reboot_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "  -h, --help     display this help and exit\n");
     fprintf(stream, "  -V, --version  output version information and exit\n");
-}
-
-static void bx_reboot_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_reboot_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 enum bx_reboot_backend_kind {
@@ -119,7 +99,7 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_reboot_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "reboot");
     bx_reboot_set_action(options);
     diag->progname = options->progname;
 
@@ -140,15 +120,7 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -156,7 +128,7 @@ static bool bx_reboot_parse_options(int argc, char** argv, struct bx_reboot_opti
     }
 
     if (optind < argc) {
-        bx_diag(diag, "extra operand '%s'", argv[optind]);
+        bx_cli_diag_extra_operand(diag, argv[optind]);
         return false;
     }
 
@@ -173,7 +145,7 @@ int bx_reboot_main(int argc, char** argv) {
     };
 
     if (!bx_reboot_parse_options(argc, argv, &options, &diag)) {
-        bx_reboot_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return (diag.exit_status != 0) ? diag.exit_status : 1;
     }
 
@@ -183,7 +155,7 @@ int bx_reboot_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_reboot_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

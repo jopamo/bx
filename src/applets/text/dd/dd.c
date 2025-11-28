@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 
@@ -140,13 +141,6 @@ static volatile sig_atomic_t bx_dd_usr1_requested = 0;
 
 static void bx_dd_maybe_warn_truncated_records(const struct bx_dd_ctx* ctx);
 
-static const char* bx_dd_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "dd";
-    }
-    return argv0;
-}
-
 static void bx_dd_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPERAND]...\n", progname);
     fprintf(stream, "  or:  %s OPTION\n", progname);
@@ -219,10 +213,6 @@ static void bx_dd_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "         display this help and exit\n");
     fprintf(stream, "      --version\n");
     fprintf(stream, "         output version information and exit\n");
-}
-
-static void bx_dd_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static void bx_dd_vdiag(const char* progname, const char* fmt, va_list ap) {
@@ -1953,7 +1943,7 @@ int bx_dd_main(int argc, char** argv) {
     struct bx_dd_ctx ctx;
     memset(&ctx, 0, sizeof(ctx));
 
-    ctx.progname = bx_dd_progname((argc > 0) ? argv[0] : NULL);
+    ctx.progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dd");
     ctx.infd = -1;
     ctx.outfd = -1;
 
@@ -1968,7 +1958,7 @@ int bx_dd_main(int argc, char** argv) {
     }
 
     if (mode == BX_DD_MODE_VERSION) {
-        bx_dd_print_version(ctx.progname);
+        bx_cli_print_version(ctx.progname);
         return 0;
     }
 

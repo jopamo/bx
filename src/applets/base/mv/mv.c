@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
@@ -66,11 +67,6 @@ struct bx_mv_options {
     bool no_target_directory;
     bool backup_conflict_warning;
 };
-
-static const char* bx_mv_progname(const char* argv0) {
-    const char* base = strrchr(argv0, '/');
-    return base ? base + 1 : argv0;
-}
 
 static bool bx_mv_operand_had_trailing_slashes(const char* path) {
     size_t len = strlen(path);
@@ -268,7 +264,7 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
     char short_opts[] = "bfint:TuvS:";
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_mv_progname(argv[0]);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mv");
     diag->progname = options->progname;
     options->update_mode = BX_UPDATE_ALL;
 
@@ -683,7 +679,7 @@ int bx_mv_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        printf("bx mv version %s\n", BX_VERSION);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

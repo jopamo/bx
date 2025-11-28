@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/mount_table.h"
 
 #ifndef MS_MANDLOCK
@@ -58,19 +59,6 @@ struct bx_mount_options {
     int operand_index;
 };
 
-static const char* bx_mount_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "mount";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [-hV]\n", progname);
     fprintf(stream, "       %s [options]\n", progname);
@@ -98,14 +86,6 @@ static void bx_mount_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "With no operands, print mounted filesystems from /proc/self/mounts.\n");
-}
-
-static void bx_mount_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_mount_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static void bx_mount_set_flag(struct bx_mount_options* options, unsigned long flag) {
@@ -356,7 +336,7 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_mount_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mount");
     diag->progname = options->progname;
     diag->verbose = false;
 
@@ -447,23 +427,10 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
                 options->show_version = true;
                 return true;
             case ':':
-                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -947,7 +914,7 @@ int bx_mount_main(int argc, char** argv) {
     if (!bx_mount_parse_options(argc, argv, &options, &diag)) {
         free(options.owned_source);
         free(options.data);
-        bx_mount_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 
@@ -959,7 +926,7 @@ int bx_mount_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_mount_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         free(options.owned_source);
         free(options.data);
         return 0;
@@ -968,7 +935,7 @@ int bx_mount_main(int argc, char** argv) {
     if (!bx_mount_validate_request(argc, argv, &options, &diag, &print_only, &single_target)) {
         free(options.owned_source);
         free(options.data);
-        bx_mount_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return 1;
     }
 

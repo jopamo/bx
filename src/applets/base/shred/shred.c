@@ -13,6 +13,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 enum bx_shred_remove_mode {
     BX_SHRED_REMOVE_UNLINK = 0,
@@ -44,19 +45,6 @@ struct bx_shred_options {
     bool show_version;
 };
 
-static const char* bx_shred_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "shred";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_shred_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... FILE...\n", progname);
     fprintf(stream, "Overwrite the specified FILE(s), then optionally remove them.\n");
@@ -72,10 +60,6 @@ static void bx_shred_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -z, --zero            add a final overwrite with zeros\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
-}
-
-static void bx_shred_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_shred_parse_size_suffix(const char* suffix, uintmax_t* multiplier_out) {
@@ -238,7 +222,7 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_shred_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "shred");
     options->iterations = 3u;
     options->random_source_path = "/dev/urandom";
     options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
@@ -546,7 +530,7 @@ int bx_shred_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_shred_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

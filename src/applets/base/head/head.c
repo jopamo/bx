@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 
 struct bx_head_options {
@@ -46,10 +47,6 @@ static void bx_head_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "NUM may have a multiplier suffix:\n");
     fprintf(stream, "b 512, kB 1000, K 1024, MB 1000*1000, M 1024*1024,\n");
     fprintf(stream, "GB 1000*1000*1000, G 1024*1024*1024, and so on for T, P, E, Z, Y.\n");
-}
-
-static void bx_head_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 // Simplified suffix parser for now
@@ -128,7 +125,7 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = "head";
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "head");
     options->lines = 10;
     diag->progname = options->progname;
 
@@ -293,7 +290,7 @@ int bx_head_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_head_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

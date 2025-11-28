@@ -784,12 +784,18 @@ if get_option('tests')
   test_cp_preserve_metadata = files('tests/applets/base/cp/test_cp_preserve_metadata.py')
   test('cp preserve metadata', python3, args : [test_cp_preserve_metadata, bx_exe, meson.current_build_dir()])
 
+  test_cp_basic = find_program('tests/applets/base/cp/test_cp_basic.sh')
+  test('cp basic', test_cp_basic, args : [bx_exe], suite : ['fast-track', 'fast-track-p1'])
+
   test_security_context_unsupported = files('tests/test_security_context_unsupported.py')
   test('security-context unsupported', python3, args : [test_security_context_unsupported, bx_exe])
 
   test_mv_differential = files('tests/applets/base/mv/test_mv_differential.py')
   mv_ref = find_program('mv')
   test('mv differential', python3, args : [test_mv_differential, mv_ref, bx_exe, meson.current_build_dir()])
+
+  test_mv_basic = find_program('tests/applets/base/mv/test_mv_basic.sh')
+  test('mv basic', test_mv_basic, args : [bx_exe], suite : ['fast-track', 'fast-track-p1'])
 
   test_mv_cli_differential = files('tests/applets/base/mv/test_mv_cli_differential.py')
   test('mv cli differential', python3, args : [test_mv_cli_differential, mv_ref, bx_exe, meson.current_build_dir()])
@@ -1252,6 +1258,9 @@ if get_option('tests')
 
   test_shred_smoke_differential = find_program('tests/applets/base/shred/test_shred_smoke_differential.sh')
   test('shred smoke differential', test_shred_smoke_differential, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_test_basic = find_program('tests/applets/base/test/test_test_basic.sh')
+  test('test basic', test_test_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_install_basic = find_program('tests/applets/system/install/test_install_basic.sh')
   test('install basic', test_install_basic, args : [bx_exe], suite : fast_track_p1_suite)

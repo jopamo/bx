@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 enum bx_init_mode {
     BX_INIT_MODE_EXEC = 0,
@@ -78,19 +79,6 @@ static const struct bx_init_pseudo_mount bx_init_pseudo_mounts[] = {
     {"tmpfs", "/run", "tmpfs", "mode=0755,nosuid,nodev"},
 };
 
-static const char* bx_init_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "init";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_init_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... PROGRAM [ARG]...\n", progname);
     fprintf(stream, "       %s [OPTION]... --switch-root=NEW_ROOT INIT [ARG]...\n", progname);
@@ -112,14 +100,6 @@ static void bx_init_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --shutdown-umount-lazy=TARGET\n");
     fprintf(stream, "                            lazy-unmount TARGET during service shutdown\n");
     fprintf(stream, "  -V, --version             output version information and exit\n");
-}
-
-static void bx_init_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_init_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static void bx_init_cleanup_options(struct bx_init_options* options) {
@@ -210,7 +190,7 @@ static bool bx_init_parse_options(int argc, char** argv, struct bx_init_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_init_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "init");
     options->mode = BX_INIT_MODE_EXEC;
     diag->progname = options->progname;
 
@@ -274,15 +254,7 @@ static bool bx_init_parse_options(int argc, char** argv, struct bx_init_options*
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -901,7 +873,7 @@ int bx_init_main(int argc, char** argv) {
     };
 
     if (!bx_init_parse_options(argc, argv, &options, &diag)) {
-        bx_init_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         bx_init_cleanup_options(&options);
         return 2;
     }
@@ -913,7 +885,7 @@ int bx_init_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_init_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         bx_init_cleanup_options(&options);
         return 0;
     }

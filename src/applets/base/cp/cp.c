@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/cli_common.h"
 #include "lib/copy_metadata.h"
 #include "lib/copy_tree.h"
 #include "lib/path_ops.h"
@@ -44,10 +45,6 @@ enum bx_cp_longopt {
     BX_CP_OPT_UPDATE,
 };
 
-static const char* bx_cp_progname(const char* argv0) {
-    return (argv0 && argv0[0] != '\0') ? argv0 : "cp";
-}
-
 static void bx_cp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [-T] SOURCE DEST\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... SOURCE... DIRECTORY\n", progname);
@@ -81,10 +78,6 @@ static void bx_cp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -x, --one-file-system      stay on this file system\n");
     fprintf(stream, "      --help                 display this help and exit\n");
     fprintf(stream, "      --version              output version information and exit\n");
-}
-
-static void bx_cp_print_version(void) {
-    printf("cp (bx) %s\n", BX_VERSION);
 }
 
 static bool bx_cp_parse_preserve_list(struct bx_diag_ctx* diag, const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out) {
@@ -141,7 +134,7 @@ static bool bx_cp_parse_options(int argc, char** argv, struct bx_cp_options* opt
     char short_buf[] = ":abdfHiLPlnpRrsS:t:Tuvx";
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_cp_progname(argv[0]);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "cp");
     options->copy.deref_mode = BX_DEREF_DEFAULT;
     options->copy.sparse_mode = BX_SPARSE_AUTO;
     options->copy.reflink_mode = BX_REFLINK_NEVER;
@@ -413,7 +406,7 @@ int bx_cp_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_cp_print_version();
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

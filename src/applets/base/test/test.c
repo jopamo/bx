@@ -7,6 +7,7 @@
 #include <errno.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 static int pos;
 static int argc_val;
@@ -93,19 +94,6 @@ static void bx_test_print_bracket_help(void) {
 
 static void bx_test_print_bracket_version(void) {
     printf("[ (bx) %s\n", BX_VERSION);
-}
-
-static const char* bx_test_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "test";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
 }
 
 static bool is_file_type(const char* op, const char* path) {
@@ -245,7 +233,7 @@ static bool or_expr(void) {
 }
 
 int bx_test_main(int argc, char** argv) {
-    const char* progname = bx_test_progname((argc > 0) ? argv[0] : NULL);
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "test");
     bool bracket = (progname[0] == '[' && progname[1] == '\0');
 
     if (bracket && argc == 2 && strcmp(argv[1], "--help") == 0) {
