@@ -6,12 +6,15 @@
 
 #include "bx/diag.h"
 
+/* Applets own help text, exit policy, and compatibility quirks. */
 const char* bx_cli_progname(const char* argv0, const char* fallback);
 void bx_cli_print_version(const char* progname);
 void bx_cli_print_try_help(const char* progname);
 
 typedef void (*bx_cli_help_fn)(FILE* stream, const char* progname);
 
+/* Fast-paths only mechanical help/version dispatch to an applet-owned printer. */
+/* They do not assign canonical failure statuses; applets keep that policy. */
 int bx_cli_maybe_handle_help_or_version(
     int argc,
     char** argv,
@@ -21,6 +24,7 @@ int bx_cli_maybe_handle_help_or_version(
     bx_cli_help_fn print_help
 );
 
+/* These cover only shared mechanical wordings. Applet-specific diagnostics stay local. */
 void bx_cli_diag_option_requires_arg(
     struct bx_diag_ctx* diag,
     int optopt,

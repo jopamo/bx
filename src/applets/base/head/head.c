@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/size_parse.h"
 
 struct bx_head_options {
     const char* progname;
@@ -49,63 +50,24 @@ static void bx_head_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "GB 1000*1000*1000, G 1024*1024*1024, and so on for T, P, E, Z, Y.\n");
 }
 
-// Simplified suffix parser for now
-static bool bx_head_apply_multiplier(long long* value, long long multiplier) {
-    if (*value > LLONG_MAX / multiplier) {
-        return false;
-    }
-
-    *value *= multiplier;
-    return true;
-}
-
-// Simplified suffix parser for now
 static bool bx_head_parse_num(const char* str, long long* value_out) {
-    char* endptr = NULL;
-    bool negative = false;
-    const char* magnitude = str;
-
-    if (magnitude == NULL || magnitude[0] == '\0') {
+    if (str == NULL || str[0] == '\0') {
         return false;
     }
 
-    if (magnitude[0] == '-') {
-        negative = true;
-        magnitude++;
-        if (magnitude[0] == '\0') {
-            return false;
-        }
-    }
-
-    errno = 0;
-    long long val = strtoll(magnitude, &endptr, 10);
-    if (errno != 0 || endptr == magnitude) {
+    if (str[0] == '+') {
         return false;
     }
 
-    if (*endptr != '\0') {
-        // Multiplier suffixes
-        if (strcmp(endptr, "K") == 0) {
-            if (!bx_head_apply_multiplier(&val, 1024LL)) {
-                return false;
-            }
-        }
-        else if (strcmp(endptr, "M") == 0) {
-            if (!bx_head_apply_multiplier(&val, 1024LL * 1024LL)) {
-                return false;
-            }
-        }
-        else if (strcmp(endptr, "G") == 0) {
-            if (!bx_head_apply_multiplier(&val, 1024LL * 1024LL * 1024LL)) {
-                return false;
-            }
-        }
-        else {
-            return false;
-        }
+    intmax_t value = 0;
+    if (!bx_size_parse_scaled_count(str, &value)) {
+        return false;
+    }
+    if (value < (intmax_t)LLONG_MIN || value > (intmax_t)LLONG_MAX) {
+        return false;
     }
 
-    *value_out = negative ? -val : val;
+    *value_out = (long long)value;
     return true;
 }
 

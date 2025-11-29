@@ -14,6 +14,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 enum bx_du_symlink_mode {
     BX_DU_SYMLINK_NEVER = 0,
@@ -121,88 +122,11 @@ static bool bx_du_parse_max_depth(const char* text, uintmax_t* depth_out, struct
     return true;
 }
 
-static bool bx_du_parse_size_suffix(const char* suffix, uintmax_t* multiplier_out) {
-    if (suffix == NULL || multiplier_out == NULL) {
-        return false;
-    }
-
-    if (suffix[0] == '\0') {
-        *multiplier_out = 1u;
-        return true;
-    }
-
-    if (suffix[1] == '\0') {
-        if (suffix[0] == 'B') {
-            *multiplier_out = 1u;
-            return true;
-        }
-        if (suffix[0] == 'b') {
-            *multiplier_out = 512u;
-            return true;
-        }
-    }
-
-    static const char scale_letters[] = "KMGTPEZYRQ";
-    char normalized = (char)toupper((unsigned char)suffix[0]);
-    const char* letter_pos = strchr(scale_letters, normalized);
-    if (letter_pos == NULL) {
-        return false;
-    }
-
-    uintmax_t base = 0u;
-    size_t suffix_len = strlen(suffix);
-    if (suffix_len == 1u) {
-        base = 1024u;
-    }
-    else if (suffix_len == 2u && (suffix[1] == 'B' || suffix[1] == 'b')) {
-        base = 1000u;
-    }
-    else if (suffix_len == 3u && (suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b')) {
-        base = 1024u;
-    }
-    else {
-        return false;
-    }
-
-    unsigned int power = (unsigned int)(letter_pos - scale_letters) + 1u;
-    uintmax_t multiplier = 1u;
-    for (unsigned int i = 0u; i < power; i++) {
-        if (multiplier > UINTMAX_MAX / base) {
-            return false;
-        }
-        multiplier *= base;
-    }
-
-    *multiplier_out = multiplier;
-    return true;
-}
-
 static bool bx_du_parse_block_size(const char* text, uintmax_t* size_out, struct bx_diag_ctx* diag) {
-    if (text == NULL || text[0] == '\0' || !isdigit((unsigned char)text[0])) {
-        bx_diag(diag, "invalid --block-size argument '%s'", text != NULL ? text : "");
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL) {
+    if (!bx_size_parse_block_size(text, size_out)) {
         bx_diag(diag, "invalid --block-size argument '%s'", text);
         return false;
     }
-
-    uintmax_t multiplier = 1u;
-    if (!bx_du_parse_size_suffix(end, &multiplier)) {
-        bx_diag(diag, "invalid --block-size argument '%s'", text);
-        return false;
-    }
-
-    if (value == 0u || value > UINTMAX_MAX / multiplier) {
-        bx_diag(diag, "invalid --block-size argument '%s'", text);
-        return false;
-    }
-
-    *size_out = value * multiplier;
     return true;
 }
 

@@ -18,6 +18,145 @@ static bool bx_size_safe_mul(uintmax_t a, uintmax_t b, uintmax_t* out) {
     return true;
 }
 
+bool bx_size_parse_uint(const char* text, uintmax_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    uintmax_t value = 0;
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        unsigned char ch = (unsigned char)text[i];
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+
+        unsigned int digit = (unsigned int)(ch - '0');
+        if (value > (UINTMAX_MAX - digit) / 10u) {
+            return false;
+        }
+
+        value = (value * 10u) + (uintmax_t)digit;
+    }
+
+    *value_out = value;
+    return true;
+}
+
+bool bx_size_parse_signed_count(const char* text, intmax_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    bool negative = false;
+    const char* magnitude = text;
+    if (magnitude[0] == '-') {
+        negative = true;
+        magnitude++;
+    }
+    else if (magnitude[0] == '+') {
+        magnitude++;
+    }
+
+    if (magnitude[0] == '\0') {
+        return false;
+    }
+
+    uintmax_t parsed = 0;
+    if (!bx_size_parse_uint(magnitude, &parsed)) {
+        return false;
+    }
+
+    if (negative) {
+        uintmax_t negative_limit = (uintmax_t)INTMAX_MAX + 1u;
+        if (parsed > negative_limit) {
+            return false;
+        }
+        if (parsed == negative_limit) {
+            *value_out = INTMAX_MIN;
+            return true;
+        }
+        *value_out = -(intmax_t)parsed;
+        return true;
+    }
+
+    if (parsed > (uintmax_t)INTMAX_MAX) {
+        return false;
+    }
+
+    *value_out = (intmax_t)parsed;
+    return true;
+}
+
+bool bx_size_parse_scaled_count(const char* text, intmax_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    bool negative = false;
+    const char* magnitude = text;
+    if (magnitude[0] == '-') {
+        negative = true;
+        magnitude++;
+    }
+    else if (magnitude[0] == '+') {
+        magnitude++;
+    }
+
+    if (magnitude[0] == '\0') {
+        return false;
+    }
+
+    size_t pos = 0;
+    while (magnitude[pos] >= '0' && magnitude[pos] <= '9') {
+        pos++;
+    }
+    if (pos == 0) {
+        return false;
+    }
+
+    char digits[64];
+    if (pos >= sizeof(digits)) {
+        return false;
+    }
+    memcpy(digits, magnitude, pos);
+    digits[pos] = '\0';
+
+    uintmax_t parsed = 0;
+    if (!bx_size_parse_uint(digits, &parsed)) {
+        return false;
+    }
+
+    uintmax_t multiplier = 0;
+    if (!bx_size_suffix_multiplier(magnitude + pos, &multiplier)) {
+        return false;
+    }
+
+    uintmax_t scaled = 0;
+    if (!bx_size_safe_mul(parsed, multiplier, &scaled)) {
+        return false;
+    }
+
+    if (negative) {
+        uintmax_t negative_limit = (uintmax_t)INTMAX_MAX + 1u;
+        if (scaled > negative_limit) {
+            return false;
+        }
+        if (scaled == negative_limit) {
+            *value_out = INTMAX_MIN;
+            return true;
+        }
+        *value_out = -(intmax_t)scaled;
+        return true;
+    }
+
+    if (scaled > (uintmax_t)INTMAX_MAX) {
+        return false;
+    }
+
+    *value_out = (intmax_t)scaled;
+    return true;
+}
+
 static bool bx_size_pow(uintmax_t base, unsigned int power, uintmax_t* out) {
     uintmax_t value = 1;
 
@@ -31,7 +170,7 @@ static bool bx_size_pow(uintmax_t base, unsigned int power, uintmax_t* out) {
     return true;
 }
 
-static bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_out) {
+bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_out) {
     if (suffix == NULL || multiplier_out == NULL) {
         return false;
     }
@@ -86,23 +225,66 @@ static bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_
     return false;
 }
 
+bool bx_size_parse_block_size(const char* text, uintmax_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    size_t pos = 0;
+    while (text[pos] >= '0' && text[pos] <= '9') {
+        pos++;
+    }
+
+    if (pos == 0) {
+        return false;
+    }
+
+    char digits[64];
+    if (pos >= sizeof(digits)) {
+        return false;
+    }
+    memcpy(digits, text, pos);
+    digits[pos] = '\0';
+
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(digits, &value)) {
+        return false;
+    }
+
+    uintmax_t multiplier = 0;
+    if (!bx_size_suffix_multiplier(text + pos, &multiplier)) {
+        return false;
+    }
+
+    if (value == 0 || !bx_size_safe_mul(value, multiplier, value_out)) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool bx_size_parse_factor(const char* text, size_t len, uintmax_t* value_out) {
     if (text == NULL || len == 0 || value_out == NULL) {
         return false;
     }
 
     size_t pos = 0;
-    uintmax_t value = 0;
     while (pos < len && text[pos] >= '0' && text[pos] <= '9') {
-        unsigned int digit = (unsigned int)(text[pos] - '0');
-        if (value > (UINTMAX_MAX - digit) / 10) {
-            return false;
-        }
-        value = value * 10 + digit;
         pos++;
     }
 
     if (pos == 0) {
+        return false;
+    }
+
+    uintmax_t value = 0;
+    char digits[64];
+    if (pos >= sizeof(digits)) {
+        return false;
+    }
+    memcpy(digits, text, pos);
+    digits[pos] = '\0';
+    if (!bx_size_parse_uint(digits, &value)) {
         return false;
     }
 

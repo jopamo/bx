@@ -15,6 +15,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -485,18 +486,6 @@ static const struct bx_stty_flag_spec bx_stty_flag_table[] = {
 #endif
 };
 
-static const char* bx_stty_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "stty";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-    return argv0;
-}
-
 static cc_t bx_stty_vdisable(void) {
 #ifdef _POSIX_VDISABLE
     return (cc_t)_POSIX_VDISABLE;
@@ -516,14 +505,6 @@ static void bx_stty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -F, --file=DEVICE  open and use DEVICE instead of standard input\n");
     fprintf(stream, "      --help         display this help and exit\n");
     fprintf(stream, "      --version      output version information and exit\n");
-}
-
-static void bx_stty_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
-static void bx_stty_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
 }
 
 static void bx_stty_plan_init(struct bx_stty_plan* plan) {
@@ -2343,7 +2324,7 @@ static int bx_stty_execute_plan(int fd, const struct bx_stty_plan* plan, struct 
 
 int bx_stty_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {
-        .progname = bx_stty_progname((argc > 0) ? argv[0] : NULL),
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "stty"),
         .exit_status = 0,
         .verbose = false,
         .debug = false,
@@ -2361,7 +2342,7 @@ int bx_stty_main(int argc, char** argv) {
             diag.exit_status = 1;
         }
         if (plan.special_mode == BX_STTY_SPECIAL_NONE) {
-            bx_stty_print_try_help(diag.progname);
+            bx_cli_print_try_help(diag.progname);
         }
         rc = diag.exit_status;
         goto out;
@@ -2374,7 +2355,7 @@ int bx_stty_main(int argc, char** argv) {
     }
 
     if (plan.special_mode == BX_STTY_SPECIAL_VERSION) {
-        bx_stty_print_version(diag.progname);
+        bx_cli_print_version(diag.progname);
         rc = 0;
         goto out;
     }

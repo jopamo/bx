@@ -18,6 +18,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
 #define BX_PING_DEFAULT_TIMEOUT_MS 1000u
@@ -46,19 +47,6 @@ struct bx_ping_reply {
     double rtt_ms;
 };
 
-static const char* bx_ping_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "ping";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_ping_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... HOST\n", progname);
     fprintf(stream, "Send ICMP ECHO_REQUEST packets to an IPv4 host.\n");
@@ -69,14 +57,6 @@ static void bx_ping_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -s, --size=BYTES      ICMP payload size (default: %u)\n", BX_PING_DEFAULT_PAYLOAD_SIZE);
     fprintf(stream, "  -h, --help            display this help and exit\n");
     fprintf(stream, "  -V, --version         output version information and exit\n");
-}
-
-static void bx_ping_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_ping_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_ping_parse_uint(const char* text, unsigned int min_value, unsigned int max_value, unsigned int* out_value) {
@@ -110,7 +90,7 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_ping_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "ping");
     options->count = BX_PING_DEFAULT_COUNT;
     options->timeout_ms = BX_PING_DEFAULT_TIMEOUT_MS;
     options->payload_size = BX_PING_DEFAULT_PAYLOAD_SIZE;
@@ -157,26 +137,10 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
                 options->show_version = true;
                 return true;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -455,7 +419,7 @@ int bx_ping_main(int argc, char** argv) {
 
     struct bx_ping_options options;
     if (!bx_ping_parse_options(argc, argv, &options, &diag)) {
-        bx_ping_print_try_help(diag.progname);
+        bx_cli_print_try_help(diag.progname);
         return diag.exit_status ? diag.exit_status : 1;
     }
 
@@ -464,7 +428,7 @@ int bx_ping_main(int argc, char** argv) {
         return 0;
     }
     if (options.show_version) {
-        bx_ping_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

@@ -818,6 +818,13 @@ if get_option('tests')
   )
   test('sha1 vectors', test_sha1_vectors)
 
+  test_size_parse = executable(
+    'test-size-parse',
+    ['tests/src/lib/test_size_parse.c', 'src/lib/size_parse.c'],
+    include_directories : include_directories('src', 'src/dispatch'),
+  )
+  test('size parse', test_size_parse)
+
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
   fast_track_p2_suite = ['fast-track', 'fast-track-p2']
@@ -1074,6 +1081,12 @@ if get_option('tests')
 
   test_setsid_basic = find_program('tests/applets/system/setsid/test_setsid_basic.sh')
   test('setsid basic', test_setsid_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_cli_exit_status_basic = find_program('tests/applets/system/test_cli_exit_status_basic.sh')
+  test('cli exit status basic', test_cli_exit_status_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_cli_diagnostic_wording_basic = find_program('tests/applets/system/test_cli_diagnostic_wording_basic.sh')
+  test('cli diagnostic wording basic', test_cli_diagnostic_wording_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_dhcp_basic = files('tests/applets/network/dhcp/test_dhcp_basic.py')
   test('dhcp basic', python3, args : [test_dhcp_basic, bx_exe], suite : fast_track_p1_suite)

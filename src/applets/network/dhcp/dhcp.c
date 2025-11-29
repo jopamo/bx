@@ -20,6 +20,7 @@
 
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
 #define BX_DHCP_PACKET_MIN_LEN 240u
@@ -101,19 +102,6 @@ static const unsigned char bx_dhcp_parameter_request_list[] = {
     BX_DHCP_OPTION_SUBNET_MASK, BX_DHCP_OPTION_ROUTER, BX_DHCP_OPTION_DNS, BX_DHCP_OPTION_LEASE_TIME, BX_DHCP_OPTION_SERVER_ID,
 };
 
-static const char* bx_dhcp_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "dhcp";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
-}
-
 static void bx_dhcp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... IFACE\n", progname);
     fprintf(stream, "Acquire an IPv4 lease with a minimal one-shot DHCP client.\n");
@@ -128,14 +116,6 @@ static void bx_dhcp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -V, --version                output version information and exit\n");
     fprintf(stream, "\n");
     fprintf(stream, "On success, prints lease details as KEY=VALUE lines.\n");
-}
-
-static void bx_dhcp_print_try_help(const char* progname) {
-    fprintf(stderr, "Try '%s --help' for more information.\n", progname);
-}
-
-static void bx_dhcp_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
 }
 
 static bool bx_dhcp_parse_uint(const char* text, unsigned int min_value, unsigned int max_value, unsigned int* out_value) {
@@ -192,7 +172,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = bx_dhcp_progname((argc > 0) ? argv[0] : NULL);
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "dhcp");
     options->timeout_ms = BX_DHCP_DEFAULT_TIMEOUT_MS;
     options->retries = BX_DHCP_DEFAULT_RETRIES;
     options->server_port = BX_DHCP_DEFAULT_SERVER_PORT;
@@ -255,26 +235,10 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
                 options->show_version = true;
                 return true;
             case ':':
-                if (optopt != 0) {
-                    bx_diag(diag, "option requires an argument -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "option requires an argument -- '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "option requires an argument");
-                }
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
                 return false;
             case '?':
-                if (optopt != 0) {
-                    bx_diag(diag, "invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_diag(diag, "unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_diag(diag, "unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;
             default:
                 return false;
@@ -864,7 +828,7 @@ int bx_dhcp_main(int argc, char** argv) {
     };
 
     if (!bx_dhcp_parse_options(argc, argv, &options, &diag)) {
-        bx_dhcp_print_try_help(options.progname);
+        bx_cli_print_try_help(options.progname);
         return (diag.exit_status != 0) ? diag.exit_status : 1;
     }
 
@@ -874,7 +838,7 @@ int bx_dhcp_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_dhcp_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         return 0;
     }
 

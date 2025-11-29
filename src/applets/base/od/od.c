@@ -17,9 +17,10 @@
 #include <unistd.h>
 
 #include "applets.h"
-#include "lib/xreadwrite.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
+#include "lib/xreadwrite.h"
 
 enum bx_od_endian_mode {
     BX_OD_ENDIAN_NATIVE = 0,
@@ -1093,10 +1094,6 @@ static void bx_od_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Binary prefixes can be used, too: KiB=K, MiB=M, and so on.\n");
 }
 
-static void bx_od_print_version(const char* progname) {
-    printf("%s (bx) %s\n", progname, BX_VERSION);
-}
-
 static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     enum {
         BX_OD_OPT_HELP = 256,
@@ -1122,7 +1119,7 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = "od";
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "od");
     options->width_option_name = "-w";
     options->address_radix = 'o';
     options->width = 16u;
@@ -2332,7 +2329,7 @@ int bx_od_main(int argc, char** argv) {
     }
 
     if (options.show_version) {
-        bx_od_print_version(options.progname);
+        bx_cli_print_version(options.progname);
         free(options.formats);
         return 0;
     }

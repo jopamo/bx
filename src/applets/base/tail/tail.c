@@ -11,6 +11,7 @@
 #include <time.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/size_parse.h"
 
 typedef struct {
     long long lines;
@@ -22,49 +23,20 @@ typedef struct {
     double sleep_interval;
 } tail_opts_t;
 
-static bool bx_tail_apply_multiplier(long long* value, long long multiplier) {
-    if (*value > LLONG_MAX / multiplier) {
-        return false;
-    }
-
-    *value *= multiplier;
-    return true;
-}
-
 static bool bx_tail_parse_magnitude(const char* text, long long* value_out) {
     if (text == NULL || text[0] == '\0') {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    long long value = strtoll(text, &end, 10);
-    if (errno != 0 || end == text) {
+    intmax_t value = 0;
+    if (!bx_size_parse_scaled_count(text, &value)) {
+        return false;
+    }
+    if (value < 0 || value > (intmax_t)LLONG_MAX) {
         return false;
     }
 
-    if (*end != '\0') {
-        if (strcmp(end, "K") == 0) {
-            if (!bx_tail_apply_multiplier(&value, 1024LL)) {
-                return false;
-            }
-        }
-        else if (strcmp(end, "M") == 0) {
-            if (!bx_tail_apply_multiplier(&value, 1024LL * 1024LL)) {
-                return false;
-            }
-        }
-        else if (strcmp(end, "G") == 0) {
-            if (!bx_tail_apply_multiplier(&value, 1024LL * 1024LL * 1024LL)) {
-                return false;
-            }
-        }
-        else {
-            return false;
-        }
-    }
-
-    *value_out = value;
+    *value_out = (long long)value;
     return true;
 }
 
@@ -89,12 +61,15 @@ static bool bx_tail_parse_count_argument(const char* text, long long* value_out)
         }
     }
 
-    long long value = 0;
-    if (!bx_tail_parse_magnitude(magnitude, &value)) {
+    intmax_t value = 0;
+    if (!bx_size_parse_scaled_count(magnitude, &value)) {
+        return false;
+    }
+    if (value < 0 || value > (intmax_t)LLONG_MAX) {
         return false;
     }
 
-    *value_out = from_start ? value : -value;
+    *value_out = from_start ? (long long)value : -(long long)value;
     return true;
 }
 
