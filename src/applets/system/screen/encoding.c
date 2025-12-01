@@ -1305,7 +1305,7 @@ int EncodeChar(char *bp, int c, int encoding, int *fontp)
 	if (encoding == EUC) {
 		if (f == KANA) {
 			if (bp) {
-				*bp++ = 0x8e;
+				*bp++ = (char)0x8e;
 				*bp++ = c | 0x80;
 			}
 			return 2;
@@ -1319,7 +1319,7 @@ int EncodeChar(char *bp, int c, int encoding, int *fontp)
 		}
 		if (f == KANJI0212) {
 			if (bp) {
-				*bp++ = 0x8f;
+				*bp++ = (char)0x8f;
 				*bp++ = c >> 8;
 				*bp++ = c;
 			}
@@ -1420,7 +1420,7 @@ int PrepareEncodedChar(int c)
 	}
 	if (encoding == EUC) {
 		if (f == KANA) {
-			AddChar(0x8e);
+			AddChar((char)0x8e);
 			return c | 0x80;
 		}
 		if (f == KANJI) {
@@ -1428,7 +1428,7 @@ int PrepareEncodedChar(int c)
 			return c | 0x80;
 		}
 		if (f == KANJI0212) {
-			AddChar(0x8f);
+			AddChar((char)0x8f);
 			D_mbcs = t | 0x80;
 			return c | 0x80;
 		}

@@ -266,9 +266,9 @@ void LPutChar(Layer *l, struct mchar *c, int x, int y)
 	}
 }
 
-void LPutStr(Layer *l, char *s, int n, struct mchar *r, int x, int y)
+void LPutStr(Layer *l, const char *s, int n, struct mchar *r, int x, int y)
 {
-	char *s2;
+	const char *s2;
 	int xs2, xe2, y2;
 
 	if (x + n > l->l_width)
@@ -790,12 +790,12 @@ int InitOverlayPage(int datasize, const struct LayFuncs *lf, int block)
 {
 	char *data;
 	Layer *newlay;
-	Canvas *cv, *cvp, **cvpp;
+	Canvas *focus_cv, *cvp, **cvpp;
 	Window *win;
 
-	cv = NULL;
+	focus_cv = NULL;
 	if (display && D_forecv->c_layer == flayer)
-		cv = D_forecv;	/* work only on this cv! */
+		focus_cv = D_forecv;	/* work only on this cv! */
 
 	if ((newlay = calloc(1, sizeof(Layer))) == NULL) {
 		Msg(0, "No memory for layer struct");
@@ -818,20 +818,20 @@ int InitOverlayPage(int datasize, const struct LayFuncs *lf, int block)
 		win->w_savelayer = newlay;
 	}
 
-	if (cv && flayer->l_next == NULL && !block) {
+	if (focus_cv && flayer->l_next == NULL && !block) {
 		Display *olddisplay = display;
-		display = cv->c_display;
+		display = focus_cv->c_display;
 		RemoveStatus();
 		display = olddisplay;
 
 		/* new branch -> just get canvas vps */
 		for (cvpp = &flayer->l_cvlist; (cvp = *cvpp); cvpp = &cvp->c_lnext)
-			if (cvp == cv)
+			if (cvp == focus_cv)
 				break;
-		*cvpp = cv->c_lnext;
-		newlay->l_cvlist = cv;
-		cv->c_lnext = NULL;
-		cv->c_layer = newlay;
+		*cvpp = focus_cv->c_lnext;
+		newlay->l_cvlist = focus_cv;
+		focus_cv->c_lnext = NULL;
+		focus_cv->c_layer = newlay;
 	} else {
 		LAY_DISPLAYS(flayer, RemoveStatus());
 		if (block && flayer->l_layfn == &WinLf) {

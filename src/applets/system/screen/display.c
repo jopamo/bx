@@ -169,7 +169,7 @@ static int BlankResize(int wi, int he)
  *  The new display is placed in the displays list.
  */
 
-Display *MakeDisplay(char *uname, char *utty, char *term, int fd, pid_t pid, struct mode *Mode)
+Display *MakeDisplay(char *uname, char *utty, char *term_name, int fd, pid_t pid, struct mode *Mode)
 {
 	struct acluser **u;
 
@@ -228,7 +228,7 @@ Display *MakeDisplay(char *uname, char *utty, char *term, int fd, pid_t pid, str
 	D_userpid = pid;
 	strncpy(D_usertty, utty, ARRAY_SIZE(D_usertty) - 1);
 	D_usertty[ARRAY_SIZE(D_usertty) - 1] = 0;
-	strncpy(D_termname, term, MAXTERMLEN);
+	strncpy(D_termname, term_name, MAXTERMLEN);
 	D_termname[MAXTERMLEN] = 0;
 	D_user = *u;
 	D_processinput = ProcessInput;
@@ -359,7 +359,7 @@ void FinitTerm(void)
 		BracketedPasteMode(false);
 		CursorStyle(0);
 		SetRendition(&mchar_null);
-		SetFlow(FLOW_ON);
+		SetFlow(true);
 		AddCStr(D_KE);
 		AddCStr(D_CCE);
 		if (D_hstatus)
@@ -952,7 +952,7 @@ void Redisplay(int cur_only)
 	BracketedPasteMode(false);
 	CursorStyle(0);
 	SetRendition(&mchar_null);
-	SetFlow(FLOW_ON);
+	SetFlow(true);
 
 	ClearAll();
 	RefreshXtermOSC();
@@ -1157,7 +1157,7 @@ void ScrollV(int xs, int ys, int xe, int ye, int n, int bce)
 */
 }
 
-void SetAttr(int new)
+static void SetAttr(int new)
 {
 	int i, j, old, typ;
 	old = D_rend.attr;
@@ -1200,7 +1200,7 @@ void SetAttr(int new)
 	D_atyp = typ;
 }
 
-void SetFont(int new)
+static void SetFont(int new)
 {
 	int old = D_rend.font;
 	if (!display || old == new)
@@ -1233,7 +1233,7 @@ void SetFont(int new)
 		AddCStr2(D_CS0, new);
 }
 
-int color256to16(int color)
+static int color256to16(int color)
 {
 	int min, max;
 	int r, g, b;
@@ -1259,7 +1259,7 @@ int color256to16(int color)
 	return color;
 }
 
-int color256to88(int color)
+static int color256to88(int color)
 {
 	int r, g, b;
 
@@ -1283,7 +1283,7 @@ int color256to88(int color)
  * 0x020000xx <- 256 color
  * 0x04xxxxxx <- truecolor
  */
-void SetColor(uint32_t foreground, uint32_t background)
+static void SetColor(uint32_t foreground, uint32_t background)
 {
 	uint32_t f, b, of, ob;
 	static unsigned char sftrans[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
@@ -2749,9 +2749,9 @@ static void disp_readev_fn(Event *event, void *data)
 					else
 						focus = (D_mouse_parse.params[CSI_PB] == '#');
 
-					Canvas *cv = FindCanvas(x, y);
-					if (focus && cv) {
-						SetForeCanvas(display, cv);
+					Canvas *focus_cv = FindCanvas(x, y);
+					if (focus && focus_cv) {
+						SetForeCanvas(display, focus_cv);
 						/* XXX: Do we want to reset the input buffer? */
 					}
 				}
@@ -2770,8 +2770,9 @@ static void disp_readev_fn(Event *event, void *data)
 		disp_processinput(display, buf, size);
 }
 
-static void disp_processinput(Display * display, unsigned char *buf, size_t size)
+static void disp_processinput(Display *dpy, unsigned char *buf, size_t size)
 {
+#define display dpy
 	if (D_encoding != (D_forecv ? D_forecv->c_layer->l_encoding : 0)) {
 		int c, enc;
 		ptrdiff_t i, j;
@@ -2797,6 +2798,7 @@ static void disp_processinput(Display * display, unsigned char *buf, size_t size
 		return;
 	}
 	(*D_processinput) ((char *)buf, size);
+#undef display
 }
 
 static void disp_mousetimeout_fn(Event *event, void *data)

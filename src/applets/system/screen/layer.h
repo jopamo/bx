@@ -164,7 +164,7 @@ void LayerCleanupMemory (Layer *layer);
 void  LGotoPos (Layer *, int, int);
 void  LPutChar (Layer *, struct mchar *, int, int);
 void  LInsChar (Layer *, struct mchar *, int, int, struct mline *);
-void  LPutStr (Layer *, char *, int, struct mchar *, int, int);
+void  LPutStr (Layer *, const char *, int, struct mchar *, int, int);
 void  LPutWinMsg (Layer *, char *, int, struct mchar *, int, int);
 void  LScrollH (Layer *, int, int, int, int, int, struct mline *);
 void  LScrollV (Layer *, int, int, int, int);

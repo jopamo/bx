@@ -293,10 +293,10 @@ int UserDel(char *name, struct acluser **up)
 
 		while (*g) {
 			if ((*g)->u == u) {
-				struct aclusergroup *next = (*g)->next;
+				struct aclusergroup *group_next = (*g)->next;
 
 				free((char *)(*g));
-				*g = next;
+				*g = group_next;
 			} else
 				g = &(*g)->next;
 		}

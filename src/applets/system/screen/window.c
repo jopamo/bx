@@ -822,12 +822,12 @@ void FreeWindow(Window *window)
 		free(window->w_dir);
 	if (window->w_term)
 		free(window->w_term);
-	for (Display *display = displays; display; display = display->d_next) {
-		if (display->d_other == window)
-			display->d_other = display->d_fore && display->d_fore->w_prev_mru != window ? display->d_fore->w_prev_mru : window->w_prev_mru;
-		if (display->d_fore == window)
-			display->d_fore = NULL;
-		for (Canvas *canvas = display->d_cvlist; canvas; canvas = canvas->c_next) {
+	for (Display *dpy = displays; dpy; dpy = dpy->d_next) {
+		if (dpy->d_other == window)
+			dpy->d_other = dpy->d_fore && dpy->d_fore->w_prev_mru != window ? dpy->d_fore->w_prev_mru : window->w_prev_mru;
+		if (dpy->d_fore == window)
+			dpy->d_fore = NULL;
+		for (Canvas *canvas = dpy->d_cvlist; canvas; canvas = canvas->c_next) {
 			Layer *layer;
 			for (layer = canvas->c_layer; layer; layer = layer->l_next)
 				if (layer->l_layfn == &WinLf)

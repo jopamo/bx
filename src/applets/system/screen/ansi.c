@@ -1222,7 +1222,7 @@ static void StringChar(Window *win, int c)
  */
 static int StringEnd(Window *win)
 {
-	Canvas *cv;
+	Canvas *status_cv;
 	char *p;
 	int typ;
 	char *t;
@@ -1307,10 +1307,10 @@ static int StringEnd(Window *win)
 	case PM:
 	case GM:
 		for (display = displays; display; display = display->d_next) {
-			for (cv = D_cvlist; cv; cv = cv->c_next)
-				if (cv->c_layer->l_bottom == &win->w_layer)
+			for (status_cv = D_cvlist; status_cv; status_cv = status_cv->c_next)
+				if (status_cv->c_layer->l_bottom == &win->w_layer)
 					break;
-			if (cv || win->w_StringType == GM)
+			if (status_cv || win->w_StringType == GM)
 				MakeStatus(win->w_string);
 		}
 		return -1;
@@ -2370,4 +2370,3 @@ static void WChangeSize(Window *win, int w, int h)
 			Redisplay(0);
 	}
 }
-

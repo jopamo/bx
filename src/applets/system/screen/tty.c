@@ -804,7 +804,7 @@ static void consredir_readev_fn(Event * event, void *data)
 		WriteString(console_window, p, n - p);
 }
 
-int TtyGrabConsole(int fd, bool on, char *rc_name)
+int TtyGrabConsole(int fd, bool on, char *source_name)
 {
 	Display *d;
 #ifdef SRIOCSREDIR
@@ -860,11 +860,11 @@ int TtyGrabConsole(int fd, bool on, char *rc_name)
 #else
 	/* special linux workaround for a too restrictive kernel */
 	if ((consredirfd[0] = OpenPTY(&slave)) < 0) {
-		Msg(errno, "%s: could not open detach pty master", rc_name);
+		Msg(errno, "%s: could not open detach pty master", source_name);
 		return -1;
 	}
 	if ((consredirfd[1] = open(slave, O_RDWR | O_NOCTTY)) < 0) {
-		Msg(errno, "%s: could not open detach pty slave", rc_name);
+		Msg(errno, "%s: could not open detach pty slave", source_name);
 		close(consredirfd[0]);
 		return -1;
 	}
@@ -874,7 +874,7 @@ int TtyGrabConsole(int fd, bool on, char *rc_name)
 	if (UserContext() == 1)
 		UserReturn(ioctl(consredirfd[1], TIOCCONS, (char *)&on));
 	if (UserStatus()) {
-		Msg(errno, "%s: ioctl TIOCCONS failed", rc_name);
+		Msg(errno, "%s: ioctl TIOCCONS failed", source_name);
 		close(consredirfd[0]);
 		close(consredirfd[1]);
 		return -1;

@@ -1295,6 +1295,17 @@ static void bx_dd_handle_usr1(int signo) {
     bx_dd_usr1_requested = 1;
 }
 
+static void bx_dd_install_usr1_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = bx_dd_handle_usr1;
+    sigemptyset(&sa.sa_mask);
+#ifdef SA_RESTART
+    sa.sa_flags = SA_RESTART;
+#endif
+    (void)sigaction(SIGUSR1, &sa, NULL);
+}
+
 static void bx_dd_maybe_print_usr1_stats(const struct bx_dd_ctx* ctx) {
     if (bx_dd_usr1_requested == 0) {
         return;
@@ -1962,6 +1973,8 @@ int bx_dd_main(int argc, char** argv) {
         return 0;
     }
 
+    bx_dd_install_usr1_handler();
+
     int rc = 1;
 
     if (!bx_dd_open_files(&ctx)) {
@@ -1980,12 +1993,6 @@ int bx_dd_main(int argc, char** argv) {
     if (ctx.time_ready) {
         ctx.last_progress_time = ctx.start_time;
     }
-
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = bx_dd_handle_usr1;
-    sigemptyset(&sa.sa_mask);
-    (void)sigaction(SIGUSR1, &sa, NULL);
 
     ctx.should_print_stats = true;
     rc = bx_dd_run(&ctx);

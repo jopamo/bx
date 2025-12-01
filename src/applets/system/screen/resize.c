@@ -247,23 +247,23 @@ do {												\
 	LayResize(wi, he);									\
 } while (0)
 
-void ResizeLayer(Layer *l, int wi, int he, Display *norefdisp)
+void ResizeLayer(Layer *layer, int wi, int he, Display *norefdisp)
 {
 	Window *p;
 	Canvas *cv;
-	Layer *oldflayer = flayer;
-	Display *d, *olddisplay = display;
+	Layer *saved_flayer = flayer;
+	Display *d, *saved_display = display;
 
-	if (l->l_width == wi && l->l_height == he)
+	if (layer->l_width == wi && layer->l_height == he)
 		return;
-	p = Layer2Window(l);
+	p = Layer2Window(layer);
 
-	/* If 'flayer' and 'l' are for the same window, then we will not
+	/* If 'flayer' and 'layer' are for the same window, then we will not
 	 * restore 'flayer'. */
-	if (oldflayer && (l == oldflayer || Layer2Window(oldflayer) == p))
-		oldflayer = NULL;
+	if (saved_flayer && (layer == saved_flayer || Layer2Window(saved_flayer) == p))
+		saved_flayer = NULL;
 
-	flayer = l;
+	flayer = layer;
 
 	if (p) {
 		/* It's a window layer. Kill the overlays on it in all displays. */
@@ -296,9 +296,9 @@ void ResizeLayer(Layer *l, int wi, int he, Display *norefdisp)
 
 	/* If we started resizing a non-flayer layer, then restore the flayer.
 	 * Otherwise, flayer should already be updated to the topmost foreground layer. */
-	if (oldflayer)
-		flayer = oldflayer;
-	display = olddisplay;
+	if (saved_flayer)
+		flayer = saved_flayer;
+	display = saved_display;
 }
 
 static void FreeMline(struct mline *ml)

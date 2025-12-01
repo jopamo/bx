@@ -97,14 +97,14 @@ static char *findrcfile(char *rcfile)
 			}
 			snprintf(rcfilename_tilde_exp, MAXPATHLEN, "%s/%s", home, rcfile + 2);
 		} else if (slash_position) {
-			struct passwd *p;
+			struct passwd *pwd;
 			*slash_position = 0;
-			p = getpwnam(rcfile + 1);
-			if (!p) {
+			pwd = getpwnam(rcfile + 1);
+			if (!pwd) {
 				Msg(0, "%s: source: tilde expansion failed for user %s", rc_name, rcfile + 1);
 				return NULL;
 			}
-			snprintf(rcfilename_tilde_exp, MAXPATHLEN, "%s/%s", p->pw_dir, slash_position + 1);
+			snprintf(rcfilename_tilde_exp, MAXPATHLEN, "%s/%s", pwd->pw_dir, slash_position + 1);
 		} else {
 			Msg(0, "%s: source: illegal tilde expression.", rc_name);
 			return NULL;

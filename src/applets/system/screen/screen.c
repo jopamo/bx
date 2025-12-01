@@ -85,6 +85,7 @@ static int    IsSymbol(char *, char *);
 static char  *ParseChar(char *, char *);
 static int    ParseEscape(char *);
 static void   SetTtyname(bool fatal, struct stat *st);
+int           main(int argc, char **argv);
 
 int nversion;			/* numerical version, used for secondary DA */
 
@@ -210,30 +211,30 @@ static int lf_secreopen(char *name, int wantfd, struct Log *l)
 }
 
 
-static struct passwd *getpwbyname(char *name, struct passwd *ppp)
+static struct passwd *getpwbyname(char *name, struct passwd *pwd)
 {
 	int n;
 
-	if (!ppp && !(ppp = getpwnam(name)))
+	if (!pwd && !(pwd = getpwnam(name)))
 		return NULL;
 
 	/* Do password sanity check..., allow ##user for SUN_C2 security */
 	n = 0;
-	if (ppp->pw_passwd[0] == '#' && ppp->pw_passwd[1] == '#' && strcmp(ppp->pw_passwd + 2, ppp->pw_name) == 0)
+	if (pwd->pw_passwd[0] == '#' && pwd->pw_passwd[1] == '#' && strcmp(pwd->pw_passwd + 2, pwd->pw_name) == 0)
 		n = 13;
 	for (; n < 13; n++) {
-		char c = ppp->pw_passwd[n];
+		char c = pwd->pw_passwd[n];
 		if (!(c == '.' || c == '/' || c == '$' ||
 		      (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
 			break;
 	}
 
 	if (n < 13)
-		ppp->pw_passwd = NULL;
-	if (ppp->pw_passwd && strlen(ppp->pw_passwd) == 13 + 11)
-		ppp->pw_passwd[13] = 0;	/* beware of linux's long passwords */
+		pwd->pw_passwd = NULL;
+	if (pwd->pw_passwd && strlen(pwd->pw_passwd) == 13 + 11)
+		pwd->pw_passwd[13] = 0;	/* beware of linux's long passwords */
 
-	return ppp;
+	return pwd;
 }
 
 static char *locale_name(void)

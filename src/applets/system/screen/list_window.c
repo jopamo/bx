@@ -31,6 +31,7 @@
 
 #include "screen.h"
 
+#include "help.h"
 #include "input.h"
 #include "layer.h"
 #include "misc.h"
@@ -600,7 +601,7 @@ void WListUpdatecv(Canvas *cv, Window *p)
 
 void WListLinkChanged(void)
 {
-	Display *olddisplay = display;
+	Display *saved_display = display;
 	Canvas *cv;
 	ListData *ldata;
 	struct gl_Window_Data *wdata;
@@ -617,5 +618,5 @@ void WListLinkChanged(void)
 				continue;
 			CV_CALL(cv, WListUpdate(NULL, ldata));
 		}
-	display = olddisplay;
+	display = saved_display;
 }

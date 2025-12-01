@@ -1899,7 +1899,7 @@ static void DoCommandFlow(struct action *act)
 			fore->w_flow =
 			    (fore->w_flow & FLOW_AUTO) ? FLOW_AUTOFLAG | FLOW_AUTO | FLOW_ON : FLOW_AUTOFLAG;
 		} else 	if (ParseOnOff(act, &b) == 0)
-			fore->w_flow = (fore->w_flow & FLOW_AUTO) | b ? FLOW_ON : FLOW_OFF;
+			fore->w_flow = (fore->w_flow & FLOW_AUTO) | (b ? FLOW_ON : FLOW_OFF);
 	} else {
 		if (fore->w_flow & FLOW_AUTOFLAG)
 			fore->w_flow = (fore->w_flow & FLOW_AUTO) | FLOW_ON;
@@ -2036,7 +2036,7 @@ static void DoCommandWindowlist(struct action *act)
 			OutputMsg(0, "windowlist title is '%s'", wlisttit);
 	} else {
 		int flag = 0;
-		int blank = 0;
+		int blank_flag = 0;
 		int i;
 		for (i = 0; i < argc; i++)
 			if (!args[i])
@@ -2044,7 +2044,7 @@ static void DoCommandWindowlist(struct action *act)
 			else if (!strcmp(args[i], "-m"))
 				flag |= WLIST_MRU;
 			else if (!strcmp(args[i], "-b"))
-				blank = 1;
+				blank_flag = 1;
 			else if (!strcmp(args[i], "-g"))
 				flag |= WLIST_NESTED;
 			else {
@@ -2053,7 +2053,7 @@ static void DoCommandWindowlist(struct action *act)
 				return;
 			}
 		if (i == argc)
-			display_windows(blank, flag, NULL);
+			display_windows(blank_flag, flag, NULL);
 	}
 }
 
@@ -3352,7 +3352,7 @@ static void DoCommandBindkey(struct action *act)
 	char **args = act->args;
 	int *argl = act->argl;
 	struct action *newact;
-	int newnr, fl = 0, kf = 0, af = 0, df = 0, mf = 0;
+	int newnr, fl = 0, kf = 0, aflag = 0, df = 0, mf = 0;
 	Display *olddisplay = display;
 	int used = 0;
 	struct kmap_ext *kme = NULL;
@@ -3364,7 +3364,7 @@ static void DoCommandBindkey(struct action *act)
 		else if (strcmp(*args, "-k") == 0)
 			kf = 1;
 		else if (strcmp(*args, "-a") == 0)
-			af = 1;
+			aflag = 1;
 		else if (strcmp(*args, "-d") == 0)
 			df = 1;
 		else if (strcmp(*args, "-m") == 0)
@@ -3392,7 +3392,7 @@ static void DoCommandBindkey(struct action *act)
 		return;
 	}
 	if (kf == 0) {
-		if (af) {
+		if (aflag) {
 			OutputMsg(0, "%s: bindkey: -a only works with -k", rc_name);
 			return;
 		}
@@ -3442,7 +3442,7 @@ static void DoCommandBindkey(struct action *act)
 			OutputMsg(0, "%s: bindkey: unknown key '%s'", rc_name, *args);
 			return;
 		}
-		if (af && i >= T_CURSOR && i < T_OCAPS)
+		if (aflag && i >= T_CURSOR && i < T_OCAPS)
 			i -= T_CURSOR - KMAP_KEYS;
 		else
 			i -= T_CAPS;
@@ -3937,7 +3937,6 @@ static void DoCommandCharset(struct action *act)
 static void DoCommandRendition(struct action *act)
 {
 	char **args = act->args;
-	int *argl = act->argl;
 	int msgok = MsgOk();
 	int i = -1;
 
@@ -3956,7 +3955,6 @@ static void DoCommandRendition(struct action *act)
 	}
 
 	++args;
-	++argl;
 
 	if (i != -1) {
 		renditions[i] = ParseAttrColor(args[0], 1);
@@ -3968,10 +3966,10 @@ static void DoCommandRendition(struct action *act)
 
 	/* sorendition */
 	if (args[0]) {
-		uint64_t i = ParseAttrColor(args[0], 1);
-		if (i == 0)
+		uint64_t attr = ParseAttrColor(args[0], 1);
+		if (attr == 0)
 			return;
-		ApplyAttrColor(i, &mchar_so);
+		ApplyAttrColor(attr, &mchar_so);
 		WindowChanged(NULL, 0);
 	}
 	if (msgok)
@@ -6135,7 +6133,7 @@ int StuffKey(int i)
 	int keyno = i;
 
 	if (i < KMAP_KEYS && D_ESCseen) {
-		struct action *act = &D_ESCseen[i + 256];
+		act = &D_ESCseen[i + 256];
 		if (act->nr != RC_ILLEGAL) {
 			D_ESCseen = NULL;
 			WindowChanged(fore, WINESC_ESC_SEEN);

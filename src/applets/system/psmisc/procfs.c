@@ -20,6 +20,10 @@ struct bx_proc_buffer {
     size_t cap;
 };
 
+static bool bx_proc_errno_is_vanished(int errnum) {
+    return errnum == ENOENT || errnum == ESRCH;
+}
+
 static void bx_proc_buffer_init(struct bx_proc_buffer* buffer) {
     buffer->data = NULL;
     buffer->len = 0u;
@@ -124,7 +128,7 @@ static bool bx_proc_read_open_fd(int fd, struct bx_proc_buffer* buffer, bool* va
             if (errno == EINTR) {
                 continue;
             }
-            if (errno == ENOENT) {
+            if (bx_proc_errno_is_vanished(errno)) {
                 *vanished_out = true;
             }
             return false;
@@ -148,7 +152,7 @@ bool bx_proc_read_text_file(pid_t pid, const char* leaf, char** text_out, bool* 
     }
     fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        if (errno == ENOENT) {
+        if (bx_proc_errno_is_vanished(errno)) {
             *vanished_out = true;
         }
         return false;
@@ -185,7 +189,7 @@ static bool bx_proc_readlink_path(const char* path, char** target_out, bool* van
         target = xrealloc(target, cap + 1u);
         len = readlink(path, target, cap);
         if (len < 0) {
-            if (errno == ENOENT) {
+            if (bx_proc_errno_is_vanished(errno)) {
                 *vanished_out = true;
             }
             free(target);
@@ -425,7 +429,7 @@ bool bx_proc_read_cmdline(pid_t pid, char** cmdline_out, bool* vanished_out) {
     }
     fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        if (errno == ENOENT) {
+        if (bx_proc_errno_is_vanished(errno)) {
             *vanished_out = true;
         }
         return false;
@@ -777,7 +781,7 @@ bool bx_proc_read_fds(pid_t pid, struct bx_proc_fd_list* list, bool* vanished_ou
     }
     dir = opendir(dir_path);
     if (dir == NULL) {
-        if (errno == ENOENT) {
+        if (bx_proc_errno_is_vanished(errno)) {
             *vanished_out = true;
         }
         return false;

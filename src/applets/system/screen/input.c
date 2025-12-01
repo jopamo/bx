@@ -58,7 +58,7 @@ static struct inpline inphist;
 struct inpdata {
 	struct inpline inp;
 	size_t inpmaxlen;		/* MAXSTR, or less, if caller has shorter buffer */
-	char *inpstring;	/* the prompt */
+	const char *inpstring;	/* the prompt */
 	size_t inpstringlen;	/* length of the prompt */
 	int inpmode;		/* INP_NOECHO, INP_RAW, INP_EVERY */
 	void (*inpfinfunc) (char *buf, size_t len, void *priv);
@@ -82,7 +82,7 @@ static const struct LayFuncs InpLf = {
 */
 
 /* called once, after InitOverlayPage in Input() or Isearch() */
-void inp_setprompt(char *p, char *s)
+void inp_setprompt(const char *p, const char *s)
 {
 	struct inpdata *inpdata;
 
@@ -112,7 +112,7 @@ void inp_setprompt(char *p, char *s)
  * INP_RAW    == raw mode. call finfunc after each character typed.
  * INP_EVERY  == digraph mode.
  */
-void Input(char *istr, size_t len, int mode, void (*finfunc) (char *buf, size_t len, void *priv), char *priv, int data)
+void Input(const char *istr, size_t len, int mode, void (*finfunc) (char *buf, size_t len, void *priv), char *priv, int data)
 {
 	size_t maxlen;
 	struct inpdata *inpdata;

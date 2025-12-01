@@ -465,19 +465,19 @@ void SendCmdMessage(char *sty, char *match, char **av, int query)
 	if (query) {
 		/* Create a server socket so we can get back the result */
 		char *sp = SocketPath + strlen(SocketPath);
-		char query[] = "-queryX";
+		char query_name[] = "-queryX";
 		char c;
 		int r = -1;
 		for (c = 'A'; c <= 'Z'; c++) {
-			query[6] = c;
-			strncpy(sp, query, strlen(SocketPath));
+			query_name[6] = c;
+			strncpy(sp, query_name, strlen(SocketPath));
 			if ((r = MakeServerSocket()) >= 0)
 				break;
 		}
 		if (r < 0) {
 			for (c = '0'; c <= '9'; c++) {
-				query[6] = c;
-				strncpy(sp, query, strlen(SocketPath));
+				query_name[6] = c;
+				strncpy(sp, query_name, strlen(SocketPath));
 				if ((r = MakeServerSocket()) >= 0)
 					break;
 			}

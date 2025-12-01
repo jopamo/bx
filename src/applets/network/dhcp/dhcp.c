@@ -111,7 +111,7 @@ static void bx_dhcp_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -r, --retries=COUNT          discovery attempts (default: 3)\n");
     fprintf(stream, "      --server-address=ADDR    server destination address (default: 255.255.255.255)\n");
     fprintf(stream, "      --server-port=PORT       server UDP port (default: 67)\n");
-    fprintf(stream, "      --client-port=PORT       client UDP port (default: 68)\n");
+    fprintf(stream, "      --client-port=PORT       client UDP port (default: 68; use 0 for an ephemeral port)\n");
     fprintf(stream, "  -h, --help                   display this help and exit\n");
     fprintf(stream, "  -V, --version                output version information and exit\n");
     fprintf(stream, "\n");
@@ -216,7 +216,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
                 options->server_port = (uint16_t)value;
                 break;
             case BX_DHCP_OPT_CLIENT_PORT:
-                if (!bx_dhcp_parse_uint(optarg, 1u, 65535u, &value)) {
+                if (!bx_dhcp_parse_uint(optarg, 0u, 65535u, &value)) {
                     bx_diag(diag, "invalid client port '%s'", optarg != NULL ? optarg : "");
                     return false;
                 }
