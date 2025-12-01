@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 enum bx_shred_remove_mode {
     BX_SHRED_REMOVE_UNLINK = 0,
@@ -62,74 +63,8 @@ static void bx_shred_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
 }
 
-static bool bx_shred_parse_size_suffix(const char* suffix, uintmax_t* multiplier_out) {
-    if (suffix == NULL || multiplier_out == NULL) {
-        return false;
-    }
-
-    if (suffix[0] == '\0') {
-        *multiplier_out = 1;
-        return true;
-    }
-
-    static const char scale_letters[] = "KMGTPEZYRQ";
-    char normalized = (char)toupper((unsigned char)suffix[0]);
-    const char* letter_pos = strchr(scale_letters, normalized);
-    if (letter_pos == NULL) {
-        return false;
-    }
-
-    size_t suffix_len = strlen(suffix);
-    uintmax_t base = 0;
-    if (suffix_len == 1) {
-        base = 1024;
-    }
-    else if (suffix_len == 2 && (suffix[1] == 'B' || suffix[1] == 'b')) {
-        base = 1000;
-    }
-    else if (suffix_len == 3 && (suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b')) {
-        base = 1024;
-    }
-    else {
-        return false;
-    }
-
-    unsigned int power = (unsigned int)(letter_pos - scale_letters) + 1u;
-    uintmax_t multiplier = 1;
-    for (unsigned int i = 0; i < power; i++) {
-        if (multiplier > UINTMAX_MAX / base) {
-            return false;
-        }
-        multiplier *= base;
-    }
-
-    *multiplier_out = multiplier;
-    return true;
-}
-
 static bool bx_shred_parse_size(const char* text, uintmax_t* size_out) {
-    if (text == NULL || text[0] == '\0' || size_out == NULL) {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL) {
-        return false;
-    }
-
-    uintmax_t multiplier = 1;
-    if (!bx_shred_parse_size_suffix(end, &multiplier)) {
-        return false;
-    }
-
-    if (value > UINTMAX_MAX / multiplier) {
-        return false;
-    }
-
-    *size_out = value * multiplier;
-    return true;
+    return bx_size_parse_block_size(text, size_out);
 }
 
 static bool bx_shred_parse_iterations(const char* text, unsigned int* iterations_out) {

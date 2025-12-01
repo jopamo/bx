@@ -1,5 +1,3 @@
-#include <ctype.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -14,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 enum bx_truncate_size_mode {
     BX_TRUNCATE_SIZE_SET = 0,
@@ -55,48 +54,41 @@ static void bx_truncate_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
 }
 
-static bool bx_truncate_parse_size_suffix(const char* suffix, uintmax_t* multiplier_out) {
-    if (suffix == NULL || multiplier_out == NULL) {
+static bool bx_truncate_parse_size_magnitude(const char* text, uintmax_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
         return false;
     }
 
-    if (suffix[0] == '\0') {
-        *multiplier_out = 1;
-        return true;
+    size_t pos = 0;
+    while (text[pos] >= '0' && text[pos] <= '9') {
+        pos++;
     }
-
-    static const char scale_letters[] = "KMGTPEZYRQ";
-    char normalized = (char)toupper((unsigned char)suffix[0]);
-    const char* letter_pos = strchr(scale_letters, normalized);
-    if (letter_pos == NULL) {
+    if (pos == 0) {
         return false;
     }
 
-    size_t suffix_len = strlen(suffix);
-    uintmax_t base = 0;
-    if (suffix_len == 1) {
-        base = 1024;
+    char digits[64];
+    if (pos >= sizeof(digits)) {
+        return false;
     }
-    else if (suffix_len == 2 && (suffix[1] == 'B' || suffix[1] == 'b')) {
-        base = 1000;
-    }
-    else if (suffix_len == 3 && (suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b')) {
-        base = 1024;
-    }
-    else {
+    memcpy(digits, text, pos);
+    digits[pos] = '\0';
+
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(digits, &value)) {
         return false;
     }
 
-    unsigned int power = (unsigned int)(letter_pos - scale_letters) + 1u;
-    uintmax_t multiplier = 1;
-    for (unsigned int i = 0; i < power; i++) {
-        if (multiplier > UINTMAX_MAX / base) {
-            return false;
-        }
-        multiplier *= base;
+    uintmax_t multiplier = 0;
+    if (!bx_size_suffix_multiplier(text + pos, &multiplier)) {
+        return false;
     }
 
-    *multiplier_out = multiplier;
+    if (value != 0 && multiplier > UINTMAX_MAX / value) {
+        return false;
+    }
+
+    *value_out = value * multiplier;
     return true;
 }
 
@@ -139,26 +131,9 @@ static bool bx_truncate_parse_size_spec(const char* text, struct bx_truncate_siz
             break;
     }
 
-    if (!isdigit((unsigned char)*p)) {
+    if (!bx_truncate_parse_size_magnitude(p, &spec.value)) {
         return false;
     }
-
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(p, &end, 10);
-    if (errno == ERANGE || end == p || end == NULL) {
-        return false;
-    }
-
-    uintmax_t multiplier = 1;
-    if (!bx_truncate_parse_size_suffix(end, &multiplier)) {
-        return false;
-    }
-
-    if (value > UINTMAX_MAX / multiplier) {
-        return false;
-    }
-    spec.value = value * multiplier;
 
     if ((spec.mode == BX_TRUNCATE_SIZE_ROUND_DOWN || spec.mode == BX_TRUNCATE_SIZE_ROUND_UP) && spec.value == 0) {
         return false;

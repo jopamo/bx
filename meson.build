@@ -829,6 +829,15 @@ if get_option('tests')
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
   fast_track_p2_suite = ['fast-track', 'fast-track-p2']
 
+  test_size_suffix_shared_basic = find_program('tests/applets/base/test_size_suffix_shared_basic.sh')
+  test('size suffix shared basic', test_size_suffix_shared_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_size_parse_grammar_policy_basic = find_program('tests/applets/base/test_size_parse_grammar_policy_basic.sh')
+  test('size parse grammar policy basic', test_size_parse_grammar_policy_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_size_parse_overflow_basic = find_program('tests/applets/base/test_size_parse_overflow_basic.sh')
+  test('size parse overflow basic', test_size_parse_overflow_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_cat_basic = find_program('tests/applets/base/cat/test_cat_basic.sh')
   test('cat basic', test_cat_basic, args : [bx_exe], suite : fast_track_p2_suite)
 

@@ -6,6 +6,7 @@
 
 bool bx_size_parse_uint(const char* text, uintmax_t* value_out);
 bool bx_size_parse_signed_count(const char* text, intmax_t* value_out);
+/* Shared suffix multiplier ownership lives here; applets keep only grammar policy. */
 bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_out);
 /* Applet-specific prefixes and legacy +/- count spellings stay applet-local. */
 bool bx_size_parse_scaled_count(const char* text, intmax_t* value_out);
