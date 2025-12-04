@@ -651,7 +651,9 @@ static bool bx_kill_resolve_name_to_pids(const struct bx_kill_options* options, 
     }
 
     closedir(dir);
-    qsort(pids->items, pids->len, sizeof(*pids->items), bx_kill_compare_uintmax);
+    if (pids->len > 1) {
+        qsort(pids->items, pids->len, sizeof(*pids->items), bx_kill_compare_uintmax);
+    }
     return true;
 }
 

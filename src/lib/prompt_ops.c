@@ -20,6 +20,7 @@ bool bx_prompt_confirm(const char* prompt) {
     char* line = NULL;
     size_t len = 0;
     if (getline(&line, &len, stdin) == -1) {
+        free(line);
         return false;
     }
 

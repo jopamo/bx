@@ -227,6 +227,7 @@ int bx_ed_main( int argc, char ** argv )
   {
   bool initial_error = false;		/* fatal error reading file */
   bool loose = false;
+  int exit_status = 0;
   enum { opt_cr = 256, opt_un };
   const ap_Option options[] =
     {
@@ -245,13 +246,13 @@ int bx_ed_main( int argc, char ** argv )
     { opt_un, "unsafe-names",      ap_no  },
     { 0, 0,                        ap_no  } };
 
-  Arg_parser parser;
+  Arg_parser parser = { 0 };
   if( argc > 0 ) invocation_name = argv[0];
 
   if( !ap_init( &parser, argc, (const char * const *)argv, options, 0 ) )
-    { show_error( "Memory exhausted.", 0, false ); return 1; }
+    { show_error( "Memory exhausted.", 0, false ); exit_status = 1; goto out; }
   if( ap_error( &parser ) )				/* bad option */
-    { show_error( ap_error( &parser ), 0, true ); return 1; }
+    { show_error( ap_error( &parser ), 0, true ); exit_status = 1; goto out; }
 
   int argind = 0;
   for( ; argind < ap_arguments( &parser ); ++argind )
@@ -263,23 +264,24 @@ int bx_ed_main( int argc, char ** argv )
       {
       case 'E': extended_regexp_ = true; break;
       case 'G': traditional_ = true; break;	/* backward compatibility */
-      case 'h': show_help(); return 0;
+      case 'h': show_help(); exit_status = 0; goto out;
       case 'l': loose = true; break;
-      case 'p': if( set_prompt( arg ) ) break; else return 1;
+      case 'p': if( set_prompt( arg ) ) break; else
+                  { exit_status = 1; goto out; }
       case 'q': quiet = true; break;
       case 'r': restricted_ = true; break;
       case 's': scripted_ = true; break;
       case 'v': set_verbose(); break;
-      case 'V': show_version(); return 0;
+      case 'V': show_version(); exit_status = 0; goto out;
       case opt_cr: strip_cr_ = true; break;
       case opt_un: safe_names = false; break;
       default: show_error( "internal error: uncaught option.", 0, false );
-               return 3;
+               exit_status = 3; goto out;
       }
     } /* end process options */
 
   setlocale( LC_ALL, "" );
-  if( !init_buffers() ) return 1;
+  if( !init_buffers() ) { exit_status = 1; goto out; }
 
   const char * start_re_arg = 0;		/* '+/RE' or '+?RE' */
   int start_addr = 0;				/* '+line' */
@@ -298,16 +300,17 @@ int bx_ed_main( int argc, char ** argv )
         if( !quiet )
           fprintf( stderr, "%s: %s: Invalid line number or regular expression.\n",
                    program_name, arg );
-        return 1;
+        exit_status = 1; goto out;
         }
       continue;
       }
     if( may_access_filename( arg ) )
       {
-      if( arg[0] != '!' && !set_def_filename( arg ) ) return 1;
+      if( arg[0] != '!' && !set_def_filename( arg ) )
+        { exit_status = 1; goto out; }
       /* first e can't be undone because u_current_addr = u_last_addr = -1 */
       const int ret = first_e_command( arg );	/* line count, < 0 if error */
-      if( ret < 0 && !interactive() ) return 2;
+      if( ret < 0 && !interactive() ) { exit_status = 2; goto out; }
       if( ret == -2 ) initial_error = true;
       if( ret > 0 && start_addr > 0 )
         { if( start_addr <= last_addr() ) set_current_addr( start_addr ); }
@@ -322,14 +325,21 @@ int bx_ed_main( int argc, char ** argv )
           set_current_addr( ( start_re_arg[1] == '/' ) ? 1 : last_addr() );
           if( !quiet )
             fprintf( stderr, "%s: %s: No match found.\n", start_re_arg, arg );
-          if( !interactive() ) return 1;
+          if( !interactive() ) { exit_status = 1; goto out; }
           }
         }
       }
-    else { initial_error = true; if( !interactive() ) return 2; }
+    else
+      {
+      initial_error = true;
+      if( !interactive() ) { exit_status = 2; goto out; }
+      }
     if( initial_error ) show_warning( arg, error_msg() );
     break;		/* extra arguments after file are ignored */
     }
+  exit_status = main_loop( initial_error, loose );
+
+out:
   ap_free( &parser );
-  return main_loop( initial_error, loose );
+  return exit_status;
   }

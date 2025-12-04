@@ -70,10 +70,11 @@ void bx_regex_free(struct bx_regex *rx) {
 }
 
 void bx_regex_print_version(void) {
-    PCRE2_UCHAR *version = NULL;
+    PCRE2_UCHAR version[128];
     int jit = 0;
 
-    if (pcre2_config(PCRE2_CONFIG_VERSION, &version) != 0 || !version) {
+    memset(version, 0, sizeof(version));
+    if (pcre2_config(PCRE2_CONFIG_VERSION, version) != 0 || version[0] == 0) {
         puts("PCRE2 is available");
         return;
     }

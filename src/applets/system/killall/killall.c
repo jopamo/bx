@@ -238,18 +238,20 @@ static bool bx_killall_name_equals(const char* left, const char* right, bool ign
 }
 
 static bool bx_killall_name_prefix_match(const char* pattern, const char* candidate, bool ignore_case) {
+    size_t pattern_len;
     size_t candidate_len;
     if (pattern == NULL || candidate == NULL) {
         return false;
     }
+    pattern_len = strlen(pattern);
     candidate_len = strlen(candidate);
-    if (candidate_len == 0u) {
+    if (pattern_len == 0u || candidate_len == 0u) {
         return false;
     }
-    if (strlen(pattern) < candidate_len) {
+    if (candidate_len < pattern_len) {
         return false;
     }
-    return ignore_case ? strncasecmp(pattern, candidate, candidate_len) == 0 : strncmp(pattern, candidate, candidate_len) == 0;
+    return ignore_case ? strncasecmp(candidate, pattern, pattern_len) == 0 : strncmp(candidate, pattern, pattern_len) == 0;
 }
 
 #define BX_KILLALL_CMD_STORAGE 256u

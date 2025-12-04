@@ -99,6 +99,7 @@ struct bx_od_input {
     int current_fd;
     const char* current_name;
     bool current_is_stdin;
+    bool retried_current_stdin_error;
     bool had_error;
     struct bx_diag_ctx* diag;
 };
@@ -1450,6 +1451,7 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
             input->current_fd = STDIN_FILENO;
             input->current_name = "-";
             input->current_is_stdin = true;
+            input->retried_current_stdin_error = false;
             input->next_index = 1u;
             return true;
         }
@@ -1462,12 +1464,14 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
         if (strcmp(input->current_name, "-") == 0) {
             input->current_fd = STDIN_FILENO;
             input->current_is_stdin = true;
+            input->retried_current_stdin_error = false;
             return true;
         }
 
         input->current_fd = open(input->current_name, O_RDONLY);
         if (input->current_fd >= 0) {
             input->current_is_stdin = false;
+            input->retried_current_stdin_error = false;
             return true;
         }
 
@@ -1484,6 +1488,7 @@ static void bx_od_input_close_current(struct bx_od_input* input) {
     input->current_fd = -1;
     input->current_name = NULL;
     input->current_is_stdin = false;
+    input->retried_current_stdin_error = false;
 }
 
 static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer, size_t count) {
@@ -1503,6 +1508,10 @@ static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer,
         }
 
         if (nread < 0) {
+            if (input->current_is_stdin && !input->retried_current_stdin_error) {
+                input->retried_current_stdin_error = true;
+                continue;
+            }
             input->had_error = true;
             bx_diag(input->diag, "%s: %s", input->current_name, strerror(errno));
         }

@@ -78,6 +78,12 @@ static int compare_ranges(const void* a, const void* b) {
     return 0;
 }
 
+static void bx_cut_free_ranges(struct bx_cut_options* options) {
+    free(options->ranges);
+    options->ranges = NULL;
+    options->num_ranges = 0;
+}
+
 static bool parse_list(const char* list, struct bx_cut_options* options, struct bx_diag_ctx* diag) {
     char* copy = xstrdup(list);
     size_t count = 1;
@@ -107,6 +113,7 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
                     unsigned long long val = strtoull(start_s, &endptr, 10);
                     if (*endptr != '\0' || val == 0) {
                         bx_diag(diag, "invalid byte, character or field list");
+                        bx_cut_free_ranges(options);
                         free(copy);
                         return false;
                     }
@@ -121,6 +128,7 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
                     unsigned long long val = strtoull(end_s, &endptr, 10);
                     if (*endptr != '\0' || val == 0) {
                         bx_diag(diag, "invalid byte, character or field list");
+                        bx_cut_free_ranges(options);
                         free(copy);
                         return false;
                     }
@@ -132,6 +140,7 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
                 unsigned long long val = strtoull(tok_start, &endptr, 10);
                 if (*endptr != '\0' || val == 0) {
                     bx_diag(diag, "invalid byte, character or field list");
+                    bx_cut_free_ranges(options);
                     free(copy);
                     return false;
                 }
@@ -140,6 +149,7 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
 
             if (r.start > r.end && r.end != SIZE_MAX) {
                 bx_diag(diag, "invalid decreasing range");
+                bx_cut_free_ranges(options);
                 free(copy);
                 return false;
             }
@@ -154,6 +164,7 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
 
     if (options->num_ranges == 0) {
         bx_diag(diag, "missing list of fields");
+        bx_cut_free_ranges(options);
         return false;
     }
 
@@ -390,6 +401,6 @@ int bx_cut_main(int argc, char** argv) {
     }
 
     free(line);
-    free(options.ranges);
+    bx_cut_free_ranges(&options);
     return diag.exit_status;
 }

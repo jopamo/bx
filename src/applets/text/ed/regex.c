@@ -373,7 +373,8 @@ static int line_replace( char ** txtbufp, int * const txtbufszp,
         changed = true; i = rm[0].rm_so;
         if( !resize_buffer( txtbufp, txtbufszp, offset + i ) ) return -1;
         if( isbinary() ) newline_to_nul( txt, rm[0].rm_eo );
-        memcpy( *txtbufp + offset, txt, i ); offset += i;
+        if( i > 0 ) memcpy( *txtbufp + offset, txt, i );
+        offset += i;
         offset = replace_matched_text( txtbufp, txtbufszp, txt, rm, offset,
                                        subst_regexp->re_nsub );
         if( offset < 0 ) return -1;
@@ -383,7 +384,8 @@ static int line_replace( char ** txtbufp, int * const txtbufszp,
         i = rm[0].rm_eo;
         if( !resize_buffer( txtbufp, txtbufszp, offset + i ) ) return -1;
         if( isbinary() ) newline_to_nul( txt, i );
-        memcpy( *txtbufp + offset, txt, i ); offset += i;
+        if( i > 0 ) memcpy( *txtbufp + offset, txt, i );
+        offset += i;
         }
       txt += rm[0].rm_eo;
       if( global && rm[0].rm_eo == 0 )

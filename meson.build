@@ -555,9 +555,12 @@ if not screen_openpty_found
 endif
 
 screen_deps = [screen_termcap_dep, screen_openpty_dep]
-screen_crypt_dep = cc.find_library('crypt', required : false)
-if screen_crypt_dep.found()
-  screen_deps += [screen_crypt_dep]
+screen_crypt_dep = declare_dependency()
+if not cc.has_function('crypt')
+  if cc.has_function('crypt', args : ['-lcrypt'])
+    screen_crypt_dep = declare_dependency(link_args : ['-lcrypt'])
+    screen_deps += [screen_crypt_dep]
+  endif
 endif
 
 screen_c_args = cc.get_supported_arguments([
