@@ -113,6 +113,7 @@ static const struct applet applets[] = {
     {"fold", bx_fold_main},
     {"head", bx_head_main},
     {"hostid", bx_hostid_main},
+    {"hostname", bx_hostname_main},
     {"echo", bx_echo_main},
     {"expand", bx_expand_main},
     {"id", bx_id_main},
