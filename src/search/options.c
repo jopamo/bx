@@ -516,7 +516,7 @@ void bx_search_free_options(struct search_opts *opts) {
     for (int i = 0; i < opts->num_include; i++) free(opts->include_patterns[i]);
     for (int i = 0; i < opts->num_exclude; i++) free(opts->exclude_patterns[i]);
     for (int i = 0; i < opts->num_exclude_dir; i++) free(opts->exclude_dir_patterns[i]);
-    for (int i = 0; i < opts->num_extra_patterns; i++) free(opts->extra_patterns[i]);
+    for (int i = 0; i < 16; i++) free(opts->extra_patterns[i]);
     for (int i = 0; i < opts->num_custom_types; i++) {
         free(opts->custom_type_names[i]);
         free(opts->custom_type_globs[i]);

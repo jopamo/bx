@@ -932,6 +932,8 @@ static int search_file_buffered(const char *filename, const char *display_name,
                 continue;
             }
         } else if (opts->stop_on_nonmatch && saw_match_record) {
+            free(lines[nlines].text);
+            lines[nlines].text = NULL;
             break;
         } else if (after_left > 0) {
             after_left--;
