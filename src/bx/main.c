@@ -123,6 +123,7 @@ static const struct applet applets[] = {
     {"cksum", bx_cksum_main},
     {"md5sum", bx_md5sum_main},
     {"sha1sum", bx_sha1sum_main},
+    {"sha256sum", bx_sha256sum_main},
     {"base64", bx_base64_main},
     {"shuf", bx_shuf_main},
     {"yes", bx_yes_main},

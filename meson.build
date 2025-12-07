@@ -282,6 +282,7 @@ bx_base_applet_sources = [
   'src/applets/base/rmdir/rmdir.c',
   'src/applets/base/seq/seq.c',
   'src/applets/base/sha1sum/sha1sum.c',
+  'src/applets/base/sha256sum/sha256sum.c',
   'src/applets/base/shred/shred.c',
   'src/applets/base/shuf/shuf.c',
   'src/applets/base/sleep/sleep.c',
@@ -632,7 +633,7 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -819,6 +820,13 @@ if get_option('tests')
   )
   test('sha1 vectors', test_sha1_vectors)
 
+  test_sha256_vectors = executable(
+    'test-sha256-vectors',
+    ['tests/applets/base/sha256sum/test_sha256_vectors.c', 'src/crypto/sha256.c'],
+    include_directories : include_directories('src', 'src/dispatch'),
+  )
+  test('sha256 vectors', test_sha256_vectors)
+
   test_size_parse = executable(
     'test-size-parse',
     ['tests/src/lib/test_size_parse.c', 'src/lib/size_parse.c'],
@@ -932,6 +940,15 @@ if get_option('tests')
 
   test_sha1sum_check = find_program('tests/applets/base/sha1sum/test_sha1sum_check.sh')
   test('sha1sum check', test_sha1sum_check, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_sha256sum_basic = find_program('tests/applets/base/sha256sum/test_sha256sum_basic.sh')
+  test('sha256sum basic', test_sha256sum_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_sha256sum_differential = files('tests/applets/base/sha256sum/test_sha256sum_differential.py')
+  test('sha256sum differential', python3, args : [test_sha256sum_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+
+  test_sha256sum_check = find_program('tests/applets/base/sha256sum/test_sha256sum_check.sh')
+  test('sha256sum check', test_sha256sum_check, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_cksum_basic = find_program('tests/applets/base/cksum/test_cksum_basic.sh')
   test('cksum basic', test_cksum_basic, args : [bx_exe], suite : fast_track_p2_suite)
