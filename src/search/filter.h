@@ -4,16 +4,20 @@
 #include <stdbool.h>
 
 struct bx_ignore_state;
-struct walk_opts;
+#include "fswalk/walk.h"
 
 struct bx_walk_filter_state {
-    const struct walk_opts *opts;
+    const struct bx_walk_filter_opts *opts;
     const char *root_path;
 };
 
 void bx_walk_filter_init(struct bx_walk_filter_state *state,
-                         const struct walk_opts *opts,
+                         const struct bx_walk_filter_opts *opts,
                          const char *root_path);
+
+bool bx_walk_filter_matches_include(const struct bx_walk_filter_state *state,
+                                    const char *name,
+                                    const char *path);
 
 bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
                                 const char *name,

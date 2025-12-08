@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include "fd_exec_render.h"
 #include "fd_internal.h"
-#include "search/walk.h"
+#include "fswalk/walk.h"
 
 struct fd_detail_item {
     char *display_path;
@@ -27,7 +27,7 @@ bool fd_print_match_output(const struct fd_render_ctx *ctx, const struct fd_opts
                            const char *path, bool is_dir);
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
-                            struct walk_entry *entry);
+                            struct bx_walk_entry *entry);
 int fd_detail_items_print(struct fd_detail_items *items);
 void fd_detail_items_free(struct fd_detail_items *items);
 

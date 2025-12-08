@@ -26,7 +26,7 @@ static uint32_t fd_compile_flags(const struct fd_opts *opts,
     return 0;
 }
 
-static bool fd_matches_type(struct walk_entry *entry,
+static bool fd_matches_type(struct bx_walk_entry *entry,
                             const struct fd_opts *opts) {
     if (!opts->type_filter)
         return true;
@@ -147,7 +147,7 @@ static bool fd_record_match(struct fd_state *st, const char *path,
             return false;
         }
 
-        struct walk_entry entry = {
+        struct bx_walk_entry entry = {
             .path = path_copy,
             .is_dir = is_dir,
         };
@@ -225,51 +225,52 @@ void fd_state_cleanup(struct fd_state *st) {
     memset(st, 0, sizeof(*st));
 }
 
-void fd_walk_callback(struct walk_entry *entry, void *user) {
+enum bx_walk_action fd_walk_callback(struct bx_walk_entry *entry, void *user) {
     struct fd_state *st = user;
     struct fd_opts *opts = st->opts;
 
     if (st->stop && *st->stop)
-        return;
+        return BX_WALK_STOP;
 
     if (opts->max_results > 0 && opts->results >= opts->max_results) {
         if (st->stop)
             *st->stop = true;
-        return;
+        return BX_WALK_STOP;
     }
 
     if (opts->quiet && opts->results > 0) {
         if (st->stop)
             *st->stop = true;
-        return;
+        return BX_WALK_STOP;
     }
 
     if (entry->depth == 0 && entry->is_dir)
-        return;
+        return BX_WALK_CONTINUE;
 
     if (opts->exact_depth >= 0) {
         if (entry->depth != opts->exact_depth)
-            return;
+            return BX_WALK_CONTINUE;
     } else if (entry->depth < opts->min_depth) {
-        return;
+        return BX_WALK_CONTINUE;
     }
 
     if (!fd_matches_type(entry, opts))
-        return;
+        return BX_WALK_CONTINUE;
 
     const char *name = opts->full_path ? entry->path : fd_basename(entry->path);
 
     if (opts->extension) {
         const char *dot = bx_path_extension_ptr(entry->path);
         if (!dot || strcasecmp(dot + 1, opts->extension) != 0)
-            return;
+            return BX_WALK_CONTINUE;
     }
 
     if (st->regex_count == 0) {
         fd_record_match(st, entry->path, entry->is_dir);
-        return;
+        return (st->stop && *st->stop) ? BX_WALK_STOP : BX_WALK_CONTINUE;
     }
 
     if (fd_match_name(st, name))
         fd_record_match(st, entry->path, entry->is_dir);
+    return (st->stop && *st->stop) ? BX_WALK_STOP : BX_WALK_CONTINUE;
 }

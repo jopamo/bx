@@ -88,9 +88,9 @@ static bool find_match_pattern(const char *pattern, const char *text,
 #endif
 }
 
-static bool find_match_link_target(struct walk_entry *entry, const char *pattern,
+static bool find_match_link_target(struct bx_walk_entry *entry, const char *pattern,
                                    bool ignore_case) {
-    if (!walk_entry_load_metadata(entry))
+    if (!bx_walk_entry_load_metadata(entry))
         return false;
     if (!S_ISLNK(entry->mode))
         return false;
@@ -124,7 +124,7 @@ static bool find_stat_matches_type(const struct stat *st, char type_filter) {
     }
 }
 
-static bool find_match_xtype(struct walk_entry *entry, char type_filter) {
+static bool find_match_xtype(struct bx_walk_entry *entry, char type_filter) {
     struct stat lst;
     if (lstat(entry->path, &lst) != 0)
         return false;
@@ -140,8 +140,8 @@ static bool find_match_xtype(struct walk_entry *entry, char type_filter) {
     return find_stat_matches_type(&st, type_filter);
 }
 
-static bool find_eval_require_metadata(struct walk_entry *entry) {
-    return walk_entry_load_metadata(entry);
+static bool find_eval_require_metadata(struct bx_walk_entry *entry) {
+    return bx_walk_entry_load_metadata(entry);
 }
 
 static bool find_eval_fail(struct find_state *st) {
@@ -152,9 +152,9 @@ static bool find_eval_fail(struct find_state *st) {
 }
 
 static bool find_eval_file_output(struct find_state *st, const char *path,
-                                  struct walk_entry *entry,
+                                  struct bx_walk_entry *entry,
                                   bool (*writer)(FILE *, const char *,
-                                                 struct walk_entry *),
+                                                 struct bx_walk_entry *),
                                   const char *text) {
     FILE *fp = fopen(path, "ab");
     if (!fp) {
@@ -172,18 +172,18 @@ static bool find_eval_file_output(struct find_state *st, const char *path,
 }
 
 static bool find_eval_printf_writer(FILE *fp, const char *text,
-                                    struct walk_entry *entry) {
+                                    struct bx_walk_entry *entry) {
     return find_write_printf_format(fp, text, entry);
 }
 
 static bool find_eval_ls_writer(FILE *fp, const char *text,
-                                struct walk_entry *entry) {
+                                struct bx_walk_entry *entry) {
     (void)text;
     return find_write_ls_entry(fp, entry);
 }
 
 static bool find_eval_path_output(struct find_state *st, const char *path,
-                                  struct walk_entry *entry, int terminator) {
+                                  struct bx_walk_entry *entry, int terminator) {
     if (!find_write_path_file(st->progname, path, entry->path, terminator))
         return find_eval_fail(st);
     return true;
@@ -191,7 +191,7 @@ static bool find_eval_path_output(struct find_state *st, const char *path,
 
 static bool find_eval_append_exec_item(struct find_state *st,
                                        struct find_expr *expr,
-                                       struct walk_entry *entry) {
+                                       struct bx_walk_entry *entry) {
     char *path = strdup(entry->path);
     if (!path || !find_exec_items_append(&expr->exec_items, path)) {
         free(path);
@@ -202,7 +202,7 @@ static bool find_eval_append_exec_item(struct find_state *st,
 }
 
 static bool find_eval_execdir(struct find_state *st, struct find_expr *expr,
-                              struct walk_entry *entry, bool prompt) {
+                              struct bx_walk_entry *entry, bool prompt) {
     char *cwd = NULL;
     char *arg = NULL;
     if (!find_execdir_split_path(entry->path, &cwd, &arg)) {
@@ -222,7 +222,7 @@ static bool find_eval_execdir(struct find_state *st, struct find_expr *expr,
     return ok;
 }
 
-bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
+bool find_eval_expr(struct find_expr *expr, struct bx_walk_entry *entry,
                     struct find_state *st) {
     if (!expr)
         return true;

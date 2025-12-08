@@ -55,7 +55,7 @@ static bool fd_detail_items_reserve(struct fd_detail_items *items, int needed) {
     return true;
 }
 
-static off_t fd_detail_display_size(const struct walk_entry *entry) {
+static off_t fd_detail_display_size(const struct bx_walk_entry *entry) {
     if (!entry)
         return 0;
 
@@ -67,8 +67,8 @@ static off_t fd_detail_display_size(const struct walk_entry *entry) {
 
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
-                            struct walk_entry *entry) {
-    if (!walk_entry_load_metadata(entry))
+                            struct bx_walk_entry *entry) {
+    if (!bx_walk_entry_load_metadata(entry))
         return false;
     if (!fd_detail_items_reserve(items, items->count + 1))
         return false;

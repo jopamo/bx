@@ -7,7 +7,7 @@
 #include "fd_exec_render.h"
 #include "fd_internal.h"
 #include "fd_output.h"
-#include "search/walk.h"
+#include "fswalk/walk.h"
 
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
@@ -31,6 +31,6 @@ bool fd_state_init(struct fd_state *st, const char *progname,
                    struct fd_opts *opts, bool *stop,
                    bool using_implicit_root);
 void fd_state_cleanup(struct fd_state *st);
-void fd_walk_callback(struct walk_entry *entry, void *user);
+enum bx_walk_action fd_walk_callback(struct bx_walk_entry *entry, void *user);
 
 #endif

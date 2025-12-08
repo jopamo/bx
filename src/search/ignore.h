@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 
-struct walk_opts;
+#include "fswalk/walk.h"
 
 struct bx_ignore_state {
     struct bx_ignore_state *parent;
@@ -28,11 +28,11 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state);
 
 void bx_ignore_state_dispose_chain(struct bx_ignore_state *state);
 
-bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
+bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
                              char ***patterns, int *n);
 
 struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
-                                                    const struct walk_opts *opts,
+                                                    const struct bx_walk_ignore_opts *opts,
                                                     bool *ok);
 
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
@@ -42,6 +42,6 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
 
 bool bx_ignore_path_ignored(const char *name, char **patterns, int n);
 
-bool bx_ignore_enable_gitignore_for_root(const char *root, const struct walk_opts *opts);
+bool bx_ignore_enable_gitignore_for_root(const char *root, const struct bx_walk_ignore_opts *opts);
 
 #endif

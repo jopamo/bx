@@ -12,7 +12,8 @@
 #include "fd_internal.h"
 #include "fd_match.h"
 #include "fd_parse.h"
-#include "search/walk.h"
+#include "fswalk/walk.h"
+#include "search/traverse.h"
 
 static const char *const fd_ignore_filenames[] = {
     ".gitignore",
@@ -31,28 +32,42 @@ int bx_fd_main(int argc, char **argv) {
     const char *progname = args.progname;
 
     bool stop = false;
-    struct walk_opts wopts = {
-        .hidden = opts->hidden,
-        .no_ignore = opts->no_ignore,
-        .no_ignore_parent = opts->no_ignore_parent,
-        .no_ignore_vcs = opts->no_ignore_vcs,
-        .no_require_git = opts->no_require_git,
+    struct bx_walk_opts wopts = {
         .sort_entries = true,
         .follow_symlinks = opts->follow_symlinks,
         .follow_root_symlink = true,
         .stop = &stop,
         .suppress_eacces = true,
+        .suppress_errors = false,
         .report_eacces = opts->show_errors,
         .os_error_style = opts->show_errors,
         .error_prefix = opts->show_errors ? "[fd error]" : progname,
         .max_depth = opts->max_depth,
+        .cycle_mode = opts->follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
+                                            : BX_WALK_CYCLE_NONE,
+        .cycle_report = BX_WALK_CYCLE_IGNORE,
+    };
+    struct bx_walk_filter_opts filter_opts = {
+        .hidden = opts->hidden,
         .exclude_patterns = opts->exclude_patterns,
         .num_exclude_patterns = opts->num_exclude_patterns,
+    };
+    struct bx_walk_ignore_opts ignore_opts = {
+        .no_ignore = opts->no_ignore,
+        .no_ignore_parent = opts->no_ignore_parent,
+        .no_ignore_vcs = opts->no_ignore_vcs,
+        .no_ignore_dot = false,
+        .no_require_git = opts->no_require_git,
+        .gitignore_enabled = false,
         .ignore_filenames = fd_ignore_filenames,
         .num_ignore_filenames = 3,
-        .cycle_mode = opts->follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT
-                                            : WALK_CYCLE_NONE,
-        .cycle_report = WALK_CYCLE_IGNORE,
+    };
+    struct bx_search_walk_config walk_config = {
+        .walk_opts = &wopts,
+        .filter_opts = &filter_opts,
+        .ignore_opts = &ignore_opts,
+        .visit = fd_walk_callback,
+        .error = NULL,
     };
 
     struct fd_state state;
@@ -62,8 +77,7 @@ int bx_fd_main(int argc, char **argv) {
 
     int walk_rc = 0;
     for (int i = 0; i < args.search_path_count && !stop; i++) {
-        if (walk_dir(args.search_paths[i], &wopts, fd_walk_callback, &state) !=
-            0)
+        if (bx_search_walk(args.search_paths[i], &walk_config, &state) != 0)
             walk_rc = -1;
     }
     int exec_rc = 0;

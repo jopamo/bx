@@ -14,9 +14,11 @@
 #include "lib/path_ops.h"
 #include "search.h"
 #include "options.h"
-#include "walk.h"
+#include "fswalk/walk.h"
+#include "filter.h"
 #include "pcre2_matcher.h"
 #include "literal.h"
+#include "traverse.h"
 #include "lib/color.h"
 #include "bx/diag.h"
 
@@ -40,19 +42,19 @@ static bool bx_search_use_rg_sort_policy(enum bx_search_personality personality,
 static int bx_search_cycle_mode(enum bx_search_personality personality,
                                 const struct search_opts *opts) {
     if (!opts->follow_symlinks)
-        return WALK_CYCLE_NONE;
+        return BX_WALK_CYCLE_NONE;
     return bx_search_personality_is_rg(personality)
-        ? WALK_CYCLE_SYMLINK_REPEAT
-        : WALK_CYCLE_DIR_REPEAT;
+        ? BX_WALK_CYCLE_SYMLINK_REPEAT
+        : BX_WALK_CYCLE_DIR_REPEAT;
 }
 
 static int bx_search_cycle_report(enum bx_search_personality personality,
                                   const struct search_opts *opts) {
     if (!opts->follow_symlinks)
-        return WALK_CYCLE_IGNORE;
+        return BX_WALK_CYCLE_IGNORE;
     return bx_search_personality_is_rg(personality)
-        ? WALK_CYCLE_ERROR
-        : WALK_CYCLE_WARN;
+        ? BX_WALK_CYCLE_ERROR
+        : BX_WALK_CYCLE_WARN;
 }
 
 static char *bx_regex_strerror_dup(int rc, const regex_t *regex) {
@@ -1367,6 +1369,8 @@ struct grep_walk_state {
 
 struct files_walk_state {
     struct search_opts *opts;
+    const char *progname;
+    bool *error_seen;
     bool strip_dot_prefix;
 };
 
@@ -1375,6 +1379,55 @@ static const char *const rg_ignore_filenames[] = {
     ".ignore",
     ".rgignore",
 };
+
+static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
+                                                    enum bx_search_personality personality,
+                                                    const struct search_opts *opts,
+                                                    bool *stop) {
+    return (struct bx_walk_opts){
+        .sort_entries = bx_search_use_rg_sort_policy(personality, opts),
+        .reverse_sort = opts->sort_paths_reverse,
+        .follow_symlinks = opts->follow_symlinks,
+        .follow_root_symlink = true,
+        .post_order = false,
+        .stay_on_filesystem = false,
+        .stop = stop,
+        .suppress_eacces = false,
+        .suppress_errors = opts->suppress_errors,
+        .report_eacces = false,
+        .os_error_style = progname_uses_os_error_style(progname),
+        .error_prefix = progname,
+        .max_depth = opts->max_depth,
+        .cycle_mode = bx_search_cycle_mode(personality, opts),
+        .cycle_report = bx_search_cycle_report(personality, opts),
+    };
+}
+
+static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts) {
+    return (struct bx_walk_filter_opts){
+        .hidden = opts->hidden,
+        .include_patterns = opts->include_patterns,
+        .include_pattern_casefold = opts->include_pattern_casefold,
+        .num_include_patterns = opts->num_include,
+        .exclude_patterns = opts->exclude_patterns,
+        .num_exclude_patterns = opts->num_exclude,
+        .exclude_dirs = opts->exclude_dir_patterns,
+        .num_exclude_dirs = opts->num_exclude_dir,
+    };
+}
+
+static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const struct search_opts *opts) {
+    return (struct bx_walk_ignore_opts){
+        .no_ignore = opts->no_ignore,
+        .no_ignore_parent = opts->no_ignore_parent,
+        .no_ignore_vcs = opts->no_ignore_vcs,
+        .no_ignore_dot = opts->no_ignore_dot,
+        .no_require_git = opts->no_require_git,
+        .gitignore_enabled = false,
+        .ignore_filenames = rg_ignore_filenames,
+        .num_ignore_filenames = 3,
+    };
+}
 
 struct bx_search_operand_ref {
     const char *path;
@@ -1411,32 +1464,62 @@ static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
     return refs;
 }
 
-static void fs_cb(struct walk_entry *entry, void *user) {
+static enum bx_walk_action fs_cb(struct bx_walk_entry *entry, void *user) {
     struct files_walk_state *st = user;
     if (!entry->is_dir)
         printf("%s%c", display_path_for_output(entry->path, st && st->strip_dot_prefix),
                (st && st->opts && st->opts->null_output) ? '\0' : '\n');
+    return BX_WALK_CONTINUE;
 }
 
-static void grep_walk_cb(struct walk_entry *entry, void *user) {
+static enum bx_walk_action grep_walk_error_cb(const char *path, int errnum, void *user) {
     struct grep_walk_state *gs = user;
-    if (gs->stop && *gs->stop) return;
-    if (entry->is_dir) return;
+    report_path_error(gs->progname, path, errnum, gs->opts);
+    *gs->exit_status = 2;
+    if (gs->error_seen)
+        *gs->error_seen = true;
+    return BX_WALK_CONTINUE;
+}
 
-    const char *name = bx_path_basename_ptr(entry->path);
+static enum bx_walk_action files_walk_error_cb(const char *path, int errnum, void *user) {
+    struct files_walk_state *st = user;
+    report_path_error(st->progname, path, errnum, st->opts);
+    if (st->error_seen)
+        *st->error_seen = true;
+    return BX_WALK_CONTINUE;
+}
+
+static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
+                                         const char *path) {
+    const char *name = bx_path_basename_ptr(path);
 
     if (gs->opts->num_include > 0) {
-        bool ok = false;
-        for (int i = 0; i < gs->opts->num_include; i++)
-            if (fnmatch(gs->opts->include_patterns[i], name,
-                        gs->opts->include_pattern_casefold[i] ? FNM_CASEFOLD : 0) == 0)
-                ok = true;
-        if (!ok) return;
+        struct bx_walk_filter_opts filter_opts = {
+            .hidden = gs->opts->hidden,
+            .include_patterns = gs->opts->include_patterns,
+            .include_pattern_casefold = gs->opts->include_pattern_casefold,
+            .num_include_patterns = gs->opts->num_include,
+        };
+        struct bx_walk_filter_state filter_state;
+        bx_walk_filter_init(&filter_state, &filter_opts, path);
+        if (!bx_walk_filter_matches_include(&filter_state, name, path))
+            return false;
     }
-    if (gs->opts->num_exclude > 0) {
-        for (int i = 0; i < gs->opts->num_exclude; i++)
-            if (fnmatch(gs->opts->exclude_patterns[i], name, 0) == 0) return;
+
+    for (int i = 0; i < gs->opts->num_exclude; i++) {
+        if (fnmatch(gs->opts->exclude_patterns[i], name, 0) == 0)
+            return false;
     }
+
+    return true;
+}
+
+static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user) {
+    struct grep_walk_state *gs = user;
+    if (gs->stop && *gs->stop)
+        return BX_WALK_STOP;
+    if (entry->is_dir)
+        return BX_WALK_CONTINUE;
 
     const char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix);
 
@@ -1444,12 +1527,15 @@ static void grep_walk_cb(struct walk_entry *entry, void *user) {
     if (r == 2) {
         *gs->exit_status = 2;
         if (gs->error_seen) *gs->error_seen = true;
+        return BX_WALK_CONTINUE;
     }
-    else if (r == 0) {
+    if (r == 0) {
         *gs->exit_status = 0;
         if (gs->match_seen) *gs->match_seen = true;
-        if (gs->opts->quiet && gs->stop) *gs->stop = true;
+        if (gs->opts->quiet && gs->stop)
+            return BX_WALK_STOP;
     }
+    return BX_WALK_CONTINUE;
 }
 
 /* --- main entry point --- */
@@ -1472,31 +1558,23 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
 
     if (opts.files_only) {
         bool error_seen = false;
-        struct files_walk_state fstate = { .opts = &opts };
-        struct walk_opts wopts = {
-            .hidden = opts.hidden,
-            .no_ignore = opts.no_ignore,
-            .no_ignore_parent = opts.no_ignore_parent,
-            .no_ignore_vcs = opts.no_ignore_vcs,
-            .no_ignore_dot = opts.no_ignore_dot,
-            .no_require_git = opts.no_require_git,
-            .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
-            .reverse_sort = opts.sort_paths_reverse,
-            .follow_symlinks = opts.follow_symlinks,
-            .follow_root_symlink = true,
-            .suppress_errors = opts.suppress_errors,
-            .os_error_style = progname_uses_os_error_style(progname),
-            .error_prefix = progname,
-            .max_depth = opts.max_depth,
-            .ignore_filenames = rg_ignore_filenames,
-            .num_ignore_filenames = 3,
-            .include_patterns = opts.include_patterns,
-            .include_pattern_casefold = opts.include_pattern_casefold,
-            .num_include_patterns = opts.num_include,
-            .exclude_dirs = opts.exclude_dir_patterns,
-            .num_exclude_dirs = opts.num_exclude_dir,
-            .cycle_mode = opts.follow_symlinks ? WALK_CYCLE_SYMLINK_REPEAT : WALK_CYCLE_NONE,
-            .cycle_report = WALK_CYCLE_ERROR,
+        struct files_walk_state fstate = {
+            .opts = &opts,
+            .progname = progname,
+            .error_seen = &error_seen,
+        };
+        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, NULL);
+        walk_opts.cycle_mode = opts.follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
+                                                    : BX_WALK_CYCLE_NONE;
+        walk_opts.cycle_report = BX_WALK_CYCLE_ERROR;
+        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+        struct bx_search_walk_config walk_config = {
+            .walk_opts = &walk_opts,
+            .filter_opts = &filter_opts,
+            .ignore_opts = &ignore_opts,
+            .visit = fs_cb,
+            .error = files_walk_error_cb,
         };
         int num_files = argc - first_file;
         int sorted_operand_count = 0;
@@ -1506,7 +1584,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 : NULL;
         if (num_files == 0) {
             fstate.strip_dot_prefix = true;
-            if (walk_dir(".", &wopts, fs_cb, &fstate) != 0)
+            if (bx_search_walk(".", &walk_config, &fstate) != 0)
                 error_seen = true;
         } else {
             for (int operand_i = 0; operand_i < num_files; operand_i++) {
@@ -1523,7 +1601,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     continue;
                 }
                 if (S_ISDIR(st.st_mode))
-                    error_seen |= walk_dir(argv[j], &wopts, fs_cb, &fstate) != 0;
+                    error_seen |= bx_search_walk(argv[j], &walk_config, &fstate) != 0;
                 else
                     printf("%s%c", argv[j], opts.null_output ? '\0' : '\n');
             }
@@ -1626,34 +1704,18 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                          .error_seen = &error_seen,
                                          .stop = &stop,
                                          .strip_dot_prefix = true};
-            struct walk_opts wopts = {
-                .hidden = opts.hidden,
-                .no_ignore = opts.no_ignore,
-                .no_ignore_parent = opts.no_ignore_parent,
-                .no_ignore_vcs = opts.no_ignore_vcs,
-                .no_ignore_dot = opts.no_ignore_dot,
-                .no_require_git = opts.no_require_git,
-                .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
-                .reverse_sort = opts.sort_paths_reverse,
-                .follow_symlinks = opts.follow_symlinks,
-                .follow_root_symlink = true,
-                .stop = &stop,
-                .suppress_errors = opts.suppress_errors,
-                .os_error_style = progname_uses_os_error_style(progname),
-                .error_prefix = progname,
-                .max_depth = opts.max_depth,
-                .ignore_filenames = rg_ignore_filenames,
-                .num_ignore_filenames = 3,
-                .include_patterns = opts.include_patterns,
-                .include_pattern_casefold = opts.include_pattern_casefold,
-                .num_include_patterns = opts.num_include,
-                .exclude_dirs = opts.exclude_dir_patterns,
-                .num_exclude_dirs = opts.num_exclude_dir,
-                .cycle_mode = bx_search_cycle_mode(personality, &opts),
-                .cycle_report = bx_search_cycle_report(personality, &opts),
+            struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
+            struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
+            struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+            struct bx_search_walk_config walk_config = {
+                .walk_opts = &walk_opts,
+                .filter_opts = &filter_opts,
+                .ignore_opts = &ignore_opts,
+                .visit = grep_walk_cb,
+                .error = grep_walk_error_cb,
             };
 
-            if (walk_dir(".", &wopts, grep_walk_cb, &gs) != 0) {
+            if (bx_search_walk(".", &walk_config, &gs) != 0) {
                 exit_status = 2;
                 error_seen = true;
             }
@@ -1673,31 +1735,15 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                      .error_seen = &error_seen,
                                      .stop = &stop,
                                      .strip_dot_prefix = false};
-        struct walk_opts wopts = {
-            .hidden = opts.hidden,
-            .no_ignore = opts.no_ignore,
-            .no_ignore_parent = opts.no_ignore_parent,
-            .no_ignore_vcs = opts.no_ignore_vcs,
-            .no_ignore_dot = opts.no_ignore_dot,
-            .no_require_git = opts.no_require_git,
-            .sort_entries = bx_search_use_rg_sort_policy(personality, &opts),
-            .reverse_sort = opts.sort_paths_reverse,
-            .follow_symlinks = opts.follow_symlinks,
-            .follow_root_symlink = true,
-            .stop = &stop,
-            .suppress_errors = opts.suppress_errors,
-            .os_error_style = progname_uses_os_error_style(progname),
-            .error_prefix = progname,
-            .max_depth = opts.max_depth,
-            .ignore_filenames = rg_ignore_filenames,
-            .num_ignore_filenames = 3,
-            .include_patterns = opts.include_patterns,
-            .include_pattern_casefold = opts.include_pattern_casefold,
-            .num_include_patterns = opts.num_include,
-            .exclude_dirs = opts.exclude_dir_patterns,
-            .num_exclude_dirs = opts.num_exclude_dir,
-            .cycle_mode = bx_search_cycle_mode(personality, &opts),
-            .cycle_report = bx_search_cycle_report(personality, &opts),
+        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
+        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+        struct bx_search_walk_config walk_config = {
+            .walk_opts = &walk_opts,
+            .filter_opts = &filter_opts,
+            .ignore_opts = &ignore_opts,
+            .visit = grep_walk_cb,
+            .error = grep_walk_error_cb,
         };
 
         for (int operand_i = 0; operand_i < num_files && !stop; operand_i++) {
@@ -1715,12 +1761,17 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (walk_dir(argv[j], &wopts, grep_walk_cb, &gs) != 0) {
+                if (bx_search_walk(argv[j], &walk_config, &gs) != 0) {
                     exit_status = 2;
                     error_seen = true;
                 }
             } else if (S_ISREG(st.st_mode)) {
-                grep_walk_cb(&(struct walk_entry){.path = argv[j], .is_dir = false, .mode = st.st_mode}, &gs);
+                if (grep_explicit_entry_selected(&gs, argv[j])) {
+                    struct bx_walk_entry entry = {.path = argv[j], .is_dir = false, .mode = st.st_mode};
+                    enum bx_walk_action action = grep_walk_cb(&entry, &gs);
+                    if (action == BX_WALK_STOP)
+                        stop = true;
+                }
             }
         }
     } else {

@@ -3,7 +3,7 @@
 
 #include <stdbool.h>
 #include <sys/stat.h>
-#include "walk.h"
+#include "fswalk/walk.h"
 
 bool bx_walk_numeric_match(unsigned long long actual, long long expected, int cmp);
 bool bx_walk_mode_matches_perm(mode_t mode, mode_t bits, int kind);
@@ -15,7 +15,7 @@ bool bx_walk_resolve_user(const char *text, uid_t *value);
 bool bx_walk_resolve_group(const char *text, gid_t *value);
 bool bx_walk_uid_has_passwd(uid_t uid);
 bool bx_walk_gid_has_group(gid_t gid);
-bool bx_walk_entry_is_empty(struct walk_entry *entry);
-bool bx_walk_entry_matches_type(struct walk_entry *entry, char type_filter);
+bool bx_walk_entry_is_empty(struct bx_walk_entry *entry);
+bool bx_walk_entry_matches_type(struct bx_walk_entry *entry, char type_filter);
 
 #endif

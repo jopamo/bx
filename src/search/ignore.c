@@ -6,9 +6,9 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "fswalk/walk.h"
 #include "ignore.h"
 #include "lib/path_ops.h"
-#include "walk.h"
 
 enum bx_ignore_match_result {
     BX_IGNORE_NO_MATCH = 0,
@@ -148,7 +148,7 @@ void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
     }
 }
 
-bool bx_ignore_load_patterns(const char *dirpath, const struct walk_opts *opts,
+bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
                              char ***patterns, int *n) {
     *patterns = NULL;
     *n = 0;
@@ -214,7 +214,7 @@ static bool path_has_git_dir(const char *dirpath) {
     return found;
 }
 
-bool bx_ignore_enable_gitignore_for_root(const char *root, const struct walk_opts *opts) {
+bool bx_ignore_enable_gitignore_for_root(const char *root, const struct bx_walk_ignore_opts *opts) {
     if (!opts || opts->no_ignore || opts->no_ignore_vcs)
         return false;
     if (opts->no_require_git)
@@ -248,7 +248,7 @@ bool bx_ignore_enable_gitignore_for_root(const char *root, const struct walk_opt
 }
 
 struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
-                                                    const struct walk_opts *opts,
+                                                    const struct bx_walk_ignore_opts *opts,
                                                     bool *ok) {
     if (ok)
         *ok = false;

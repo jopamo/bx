@@ -5,20 +5,20 @@
 
 #include "find_exec.h"
 #include "find_internal.h"
-#include "search/walk.h"
 
-static void find_walk_cb(struct walk_entry *entry, void *user) {
+static enum bx_walk_action find_walk_cb(struct bx_walk_entry *entry, void *user) {
     struct find_state *st = user;
     struct find_opts *opts = st->opts;
 
     if (st->stop && *st->stop)
-        return;
+        return BX_WALK_STOP;
     if (entry->depth < opts->min_depth)
-        return;
+        return BX_WALK_CONTINUE;
     if (opts->max_depth >= 0 && entry->depth > opts->max_depth)
-        return;
+        return BX_WALK_CONTINUE;
 
     (void)find_eval_expr(st->expr, entry, st);
+    return (st->stop && *st->stop) ? BX_WALK_STOP : BX_WALK_CONTINUE;
 }
 
 static bool find_expr_argv_has_delete(char **expr_argv, int expr_argc) {
@@ -85,9 +85,7 @@ int find_run_search(const char *progname, struct find_opts *opts,
         st.now.tv_nsec = 0;
     }
 
-    struct walk_opts wopts = {
-        .hidden = true,
-        .no_ignore = true,
+    struct bx_walk_opts wopts = {
         .sort_entries = true,
         .follow_symlinks = opts->follow_symlinks,
         .follow_root_symlink = opts->follow_root_symlink,
@@ -95,17 +93,23 @@ int find_run_search(const char *progname, struct find_opts *opts,
         .stay_on_filesystem = opts->stay_on_filesystem,
         .stop = &stop,
         .suppress_eacces = false,
+        .suppress_errors = false,
+        .report_eacces = false,
         .os_error_style = false,
         .error_prefix = progname,
         .max_depth = opts->max_depth,
-        .cycle_mode = opts->follow_symlinks ? WALK_CYCLE_DIR_REPEAT
-                                            : WALK_CYCLE_NONE,
-        .cycle_report = opts->follow_symlinks ? WALK_CYCLE_ERROR
-                                              : WALK_CYCLE_IGNORE,
+        .cycle_mode = opts->follow_symlinks ? BX_WALK_CYCLE_DIR_REPEAT
+                                            : BX_WALK_CYCLE_NONE,
+        .cycle_report = opts->follow_symlinks ? BX_WALK_CYCLE_ERROR
+                                              : BX_WALK_CYCLE_IGNORE,
+    };
+    struct bx_walk_ops ops = {
+        .visit = find_walk_cb,
+        .error = NULL,
     };
 
     for (int i = 0; i < root_count && !stop; i++) {
-        if (walk_dir(roots[i], &wopts, find_walk_cb, &st) != 0)
+        if (bx_walk(roots[i], &wopts, &ops, &st) != 0)
             st.status = 1;
     }
 

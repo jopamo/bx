@@ -296,6 +296,9 @@ bx_base_applet_sources = [
   'src/applets/base/tee/tee.c',
   'src/applets/base/test/test.c',
   'src/applets/base/touch/touch.c',
+  'src/applets/base/tree/tree.c',
+  'src/applets/base/tree/tree_collect.c',
+  'src/applets/base/tree/tree_render.c',
   'src/applets/base/tr/tr.c',
   'src/applets/base/truncate/truncate.c',
   'src/applets/base/tty/tty.c',
@@ -375,6 +378,12 @@ bx_network_applet_sources = [
 ]
 
 bx_search_sources = [
+  'src/fswalk/walk_cycle.c',
+  'src/fswalk/walk_dirent.c',
+  'src/fswalk/walk_entry.c',
+  'src/fswalk/walk_error.c',
+  'src/fswalk/walk_path.c',
+  'src/fswalk/walk.c',
   'src/search/filter.c',
   'src/search/metadata.c',
   'src/search/literal.c',
@@ -382,7 +391,7 @@ bx_search_sources = [
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
   'src/search/search.c',
-  'src/search/walk.c',
+  'src/search/traverse.c',
 ]
 
 screen_native_sources = files(
@@ -633,7 +642,7 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -833,6 +842,21 @@ if get_option('tests')
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('size parse', test_size_parse)
+
+  test_fswalk = executable(
+    'test-fswalk',
+    [
+      'tests/src/fswalk/test_fswalk.c',
+      'src/fswalk/walk_cycle.c',
+      'src/fswalk/walk_dirent.c',
+      'src/fswalk/walk_entry.c',
+      'src/fswalk/walk_error.c',
+      'src/fswalk/walk_path.c',
+      'src/fswalk/walk.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+  )
+  test('fswalk', test_fswalk)
 
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
@@ -1036,6 +1060,9 @@ if get_option('tests')
 
   test_ls_smoke_differential = find_program('tests/applets/base/ls/test_ls_smoke_differential.sh')
   test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
+
+  test_tree_basic = find_program('tests/applets/base/tree/test_tree_basic.sh')
+  test('tree basic', test_tree_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_stat_basic = find_program('tests/applets/base/stat/test_stat_basic.sh')
   test('stat basic', test_stat_basic, args : [bx_exe], suite : fast_track_p0_suite)
@@ -1434,4 +1461,6 @@ if get_option('tests')
   test('shared exec status ownership', test_exec_status_ownership, args : [bx_exe], suite : fast_track_p2_suite)
   test_exec_substrate_shape = find_program('tests/applets/shared/test_exec_substrate_shape.sh')
   test('shared exec substrate shape', test_exec_substrate_shape, args : [bx_exe], suite : fast_track_p2_suite)
+  test_fswalk_shared_consumers = find_program('tests/applets/shared/test_fswalk_shared_consumers.sh')
+  test('shared fswalk consumers', test_fswalk_shared_consumers, args : [bx_exe], suite : fast_track_p2_suite)
 endif

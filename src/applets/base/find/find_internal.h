@@ -7,7 +7,7 @@
 #include <time.h>
 
 #include "find_regex.h"
-#include "search/walk.h"
+#include "fswalk/walk.h"
 
 struct find_opts {
     bool depth_first;
@@ -141,7 +141,7 @@ void find_exec_items_free(struct find_exec_items *items);
 void find_expr_free(struct find_expr *expr);
 
 struct find_expr *find_parse_expr(struct find_parser *parser);
-bool find_eval_expr(struct find_expr *expr, struct walk_entry *entry,
+bool find_eval_expr(struct find_expr *expr, struct bx_walk_entry *entry,
                     struct find_state *st);
 bool find_token_starts_expression(const char *arg);
 bool find_parse_command_line(const char *progname, int argc, char **argv,

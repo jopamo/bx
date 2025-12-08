@@ -3,9 +3,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+
+#include "fswalk/walk.h"
 #include "filter.h"
 #include "ignore.h"
-#include "walk.h"
 
 static bool bx_walk_filter_is_hidden(const char *name) {
     return name[0] == '.';
@@ -26,9 +27,9 @@ static const char *bx_walk_filter_relative_path(const struct bx_walk_filter_stat
     return path;
 }
 
-static bool bx_walk_filter_matches_include(const struct bx_walk_filter_state *state,
-                                           const char *name,
-                                           const char *relative_path) {
+static bool bx_walk_filter_matches_include_relative(const struct bx_walk_filter_state *state,
+                                                    const char *name,
+                                                    const char *relative_path) {
     if (!state || !state->opts || !state->opts->include_patterns ||
         state->opts->num_include_patterns <= 0) {
         return false;
@@ -91,7 +92,7 @@ static bool bx_walk_filter_matches_exclude_dir(const struct bx_walk_filter_state
 }
 
 void bx_walk_filter_init(struct bx_walk_filter_state *state,
-                         const struct walk_opts *opts,
+                         const struct bx_walk_filter_opts *opts,
                          const char *root_path) {
     if (!state)
         return;
@@ -106,7 +107,7 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     const char *relative_path = bx_walk_filter_relative_path(state, path);
 
     if (state && state->opts && !state->opts->hidden && bx_walk_filter_is_hidden(name) &&
-        !bx_walk_filter_matches_include(state, name, relative_path)) {
+        !bx_walk_filter_matches_include_relative(state, name, relative_path)) {
         return true;
     }
 
@@ -120,4 +121,11 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
         return true;
 
     return false;
+}
+
+bool bx_walk_filter_matches_include(const struct bx_walk_filter_state *state,
+                                    const char *name,
+                                    const char *path) {
+    const char *relative_path = bx_walk_filter_relative_path(state, path);
+    return bx_walk_filter_matches_include_relative(state, name, relative_path);
 }

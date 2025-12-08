@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -11,10 +12,10 @@
 #include <unistd.h>
 
 #include "find_output.h"
+#include "fswalk/walk.h"
 #include "lib/file_info_fmt.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
-#include "search/walk.h"
 
 static bool find_write_stream_bytes(FILE *fp, const void *data, size_t len) {
     return len == 0 || fwrite(data, 1, len, fp) == len;
@@ -42,7 +43,7 @@ bool find_write_path_file(const char *progname, const char *filename,
 }
 
 bool find_write_printf_format(FILE *fp, const char *format,
-                              struct walk_entry *entry) {
+                              struct bx_walk_entry *entry) {
     if (!format || !entry)
         return false;
 
@@ -113,7 +114,7 @@ bool find_write_printf_format(FILE *fp, const char *format,
                     return false;
                 break;
             case 'l': {
-                if (!walk_entry_load_metadata(entry))
+                if (!bx_walk_entry_load_metadata(entry))
                     return false;
                 if (!S_ISLNK(entry->mode))
                     break;
@@ -127,7 +128,7 @@ bool find_write_printf_format(FILE *fp, const char *format,
                 break;
             }
             case 'm': {
-                if (!walk_entry_load_metadata(entry))
+                if (!bx_walk_entry_load_metadata(entry))
                     return false;
                 if (fprintf(fp, "%o", entry->mode & 07777u) < 0)
                     return false;
@@ -167,7 +168,7 @@ static const char *find_group_name(gid_t gid, char numeric_buffer[32]) {
     return bx_id_group_name(gid, numeric_buffer);
 }
 
-bool find_write_ls_entry(FILE *fp, const struct walk_entry *entry) {
+bool find_write_ls_entry(FILE *fp, const struct bx_walk_entry *entry) {
     if (!fp || !entry)
         return false;
 

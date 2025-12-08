@@ -7,11 +7,11 @@
 #include "lib/id_parse.h"
 #include "metadata.h"
 
-static bool bx_walk_entry_mode_matches(struct walk_entry *entry, bool (*predicate)(mode_t)) {
+static bool bx_walk_entry_mode_matches(struct bx_walk_entry *entry, bool (*predicate)(mode_t)) {
     if (!entry || !predicate)
         return false;
 
-    if (!walk_entry_load_metadata(entry))
+    if (!bx_walk_entry_load_metadata(entry))
         return false;
 
     return predicate(entry->mode);
@@ -145,7 +145,7 @@ bool bx_walk_gid_has_group(gid_t gid) {
     return bx_id_gid_exists(gid);
 }
 
-bool bx_walk_entry_is_empty(struct walk_entry *entry) {
+bool bx_walk_entry_is_empty(struct bx_walk_entry *entry) {
     if (!entry)
         return false;
 
@@ -171,7 +171,7 @@ bool bx_walk_entry_is_empty(struct walk_entry *entry) {
     return entry->size == 0;
 }
 
-bool bx_walk_entry_matches_type(struct walk_entry *entry, char type_filter) {
+bool bx_walk_entry_matches_type(struct bx_walk_entry *entry, char type_filter) {
     if (!entry)
         return false;
 
@@ -183,7 +183,7 @@ bool bx_walk_entry_matches_type(struct walk_entry *entry, char type_filter) {
     case 'l':
         return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_symlink);
     case 'x':
-        if (!walk_entry_load_metadata(entry))
+        if (!bx_walk_entry_load_metadata(entry))
             return false;
         return S_ISREG(entry->mode) && access(entry->path, X_OK) == 0;
     case 'e':
