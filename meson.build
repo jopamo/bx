@@ -1440,6 +1440,8 @@ if get_option('tests')
   test('rg basic', test_rg_basic, args : [bx_exe], suite : fast_track_p2_suite)
   test_rg_differential = find_program('tests/applets/text/rg/test_rg_differential.py')
   test('rg differential', python3, args : [test_rg_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+  test_rg_hotpath_harness = files('tests/applets/text/rg/test_rg_hotpath_harness.py')
+  test('rg hotpath harness', python3, args : [test_rg_hotpath_harness, bx_exe], suite : fast_track_p2_suite)
 
   test_fd_basic = find_program('tests/applets/text/fd/test_fd_basic.sh')
   test('fd basic', test_fd_basic, args : [bx_exe], suite : fast_track_p2_suite)
