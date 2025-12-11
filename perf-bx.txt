@@ -1,0 +1,395 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+# comm: bx
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:u'
+# Event count (approx.): 10651069470
+#
+# Overhead  Shared Object  Symbol                          IPC   [IPC Coverage]
+# ........  .............  ..............................  ....................
+#
+    25.23%  libc.so.6      [.] memmem                      -      -            
+            |
+            ---memmem
+               |          
+                --1.53%--matcher_find (inlined)
+                          matcher_find_with_opts
+                          search_file_streaming
+                          search_file
+                          grep_walk_cb
+                          bx_search_walk_visit
+                          bx_walk_apply_visit_action
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk
+                          bx_search_walk
+                          bx_search_main
+
+     7.23%  libc.so.6      [.] __getdelim                  -      -            
+            |
+            ---__getdelim
+               |          
+                --1.48%--search_file
+                          grep_walk_cb
+                          bx_search_walk_visit
+                          bx_walk_apply_visit_action
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk
+                          bx_search_walk
+                          bx_search_main
+
+     4.95%  bx             [.] search_file_streaming       -      -            
+            |          
+            |--3.09%--search_file_streaming
+            |          |          
+            |           --3.05%--search_file
+            |                     grep_walk_cb
+            |                     bx_search_walk_visit
+            |                     bx_walk_apply_visit_action
+            |                     bx_walk_recursive_visit_entry
+            |                     bx_walk_recursive
+            |                     bx_walk_recursive_visit_entry
+            |                     bx_walk_recursive
+            |                     bx_walk
+            |                     bx_search_walk
+            |                     bx_search_main
+            |          
+            |--0.82%--read_record (inlined)
+            |          search_file_streaming
+            |          search_file
+            |          grep_walk_cb
+            |          bx_search_walk_visit
+            |          bx_walk_apply_visit_action
+            |          bx_walk_recursive_visit_entry
+            |          bx_walk_recursive
+            |          bx_walk_recursive_visit_entry
+            |          bx_walk_recursive
+            |          bx_walk
+            |          bx_search_walk
+            |          bx_search_main
+            |          
+             --0.60%--record_match_len (inlined)
+                       search_file_streaming
+                       search_file
+                       grep_walk_cb
+                       bx_search_walk_visit
+                       bx_walk_apply_visit_action
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk
+                       bx_search_walk
+                       bx_search_main
+
+     2.98%  bx             [.] matcher_find_with_opts      -      -            
+            |          
+            |--2.03%--matcher_find_with_opts
+            |          |          
+            |           --1.81%--search_file_streaming
+            |                     search_file
+            |                     grep_walk_cb
+            |                     bx_search_walk_visit
+            |                     bx_walk_apply_visit_action
+            |                     bx_walk_recursive_visit_entry
+            |                     bx_walk_recursive
+            |                     bx_walk_recursive_visit_entry
+            |                     bx_walk_recursive
+            |                     bx_walk
+            |                     bx_search_walk
+            |                     bx_search_main
+            |          
+             --0.95%--matcher_find (inlined)
+                       matcher_find_with_opts
+                       search_file_streaming
+                       search_file
+                       grep_walk_cb
+                       bx_search_walk_visit
+                       bx_walk_apply_visit_action
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk
+                       bx_search_walk
+                       bx_search_main
+
+     2.86%  libc.so.6      [.] _IO_file_xsputn             -      -            
+            |
+            ---_IO_file_xsputn
+               |          
+               |--1.08%--_IO_fputs
+               |          |          
+               |           --0.67%--0x642f6c6172657469
+               |          
+               |--0.88%--_IO_fwrite
+               |          search_file_streaming
+               |          search_file
+               |          grep_walk_cb
+               |          bx_search_walk_visit
+               |          bx_walk_apply_visit_action
+               |          bx_walk_recursive_visit_entry
+               |          bx_walk_recursive
+               |          bx_walk_recursive_visit_entry
+               |          bx_walk_recursive
+               |          bx_walk
+               |          bx_search_walk
+               |          bx_search_main
+               |          
+                --0.62%--0x642f6c6172657469
+
+     1.97%  libc.so.6      [.] _IO_fwrite                  -      -            
+            |
+            ---_IO_fwrite
+               search_file_streaming
+               search_file
+               grep_walk_cb
+               bx_search_walk_visit
+               bx_walk_apply_visit_action
+               bx_walk_recursive_visit_entry
+               bx_walk_recursive
+               bx_walk_recursive_visit_entry
+               bx_walk_recursive
+               bx_walk
+               bx_search_walk
+               bx_search_main
+
+     1.88%  bx             [.] bx_literal_find             -      -            
+            |
+            ---bx_literal_find
+               |          
+                --1.50%--matcher_find (inlined)
+                          matcher_find_with_opts
+                          search_file_streaming
+                          search_file
+                          grep_walk_cb
+                          bx_search_walk_visit
+                          bx_walk_apply_visit_action
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk_recursive_visit_entry
+                          bx_walk_recursive
+                          bx_walk
+                          bx_search_walk
+                          bx_search_main
+
+     1.42%  bx             [.] print_result_prefix         -      -            
+            |          
+             --1.38%--print_result_prefix
+                       |          
+                        --1.37%--search_file_streaming
+                                  search_file
+                                  grep_walk_cb
+                                  bx_search_walk_visit
+                                  bx_walk_apply_visit_action
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk
+                                  bx_search_walk
+                                  bx_search_main
+
+     1.36%  bx             [.] print_match_colored         -      -            
+            |          
+             --1.20%--print_match_colored
+                       |          
+                        --1.13%--search_file_streaming
+                                  search_file
+                                  grep_walk_cb
+                                  bx_search_walk_visit
+                                  bx_walk_apply_visit_action
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk
+                                  bx_search_walk
+                                  bx_search_main
+
+     1.34%  bx             [.] bx_color_enabled            -      -            
+            |          
+             --1.24%--bx_color_enabled
+                       |          
+                        --0.74%--search_file_streaming
+                                  search_file
+                                  grep_walk_cb
+                                  bx_search_walk_visit
+                                  bx_walk_apply_visit_action
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk_recursive_visit_entry
+                                  bx_walk_recursive
+                                  bx_walk
+                                  bx_search_walk
+                                  bx_search_main
+
+     1.24%  bx             [.] search_file                 -      -            
+            |          
+             --0.98%--is_binary (inlined)
+                       search_file
+                       grep_walk_cb
+                       bx_search_walk_visit
+                       bx_walk_apply_visit_action
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk_recursive_visit_entry
+                       bx_walk_recursive
+                       bx_walk
+                       bx_search_walk
+                       bx_search_main
+
+     1.02%  libc.so.6      [.] _IO_fputs                   -      -            
+            |
+            ---_IO_fputs
+
+     0.75%  libc.so.6      [.] 0x000000000018e6b0          -      -            
+     0.75%  libc.so.6      [.] 0x0000000000191ddd          -      -            
+     0.61%  libc.so.6      [.] 0x000000000018e6d3          -      -            
+     0.54%  libc.so.6      [.] 0x000000000018e68e          -      -            
+     0.46%  libc.so.6      [.] 0x000000000018f0a7          -      -            
+     0.41%  libc.so.6      [.] 0x000000000018e6a4          -      -            
+     0.38%  libc.so.6      [.] __underflow                 -      -            
+     0.38%  libc.so.6      [.] 0x000000000018f08d          -      -            
+     0.37%  libc.so.6      [.] 0x0000000000191de3          -      -            
+     0.36%  libc.so.6      [.] 0x000000000018f0a1          -      -            
+     0.26%  libc.so.6      [.] _IO_link_in                 -      -            
+     0.23%  libc.so.6      [.] 0x0000000000191dc0          -      -            
+     0.23%  libc.so.6      [.] 0x000000000018ec1d          -      -            
+     0.22%  libc.so.6      [.] 0x000000000018f0c2          -      -            
+     0.22%  libc.so.6      [.] 0x000000000018f09d          -      -            
+     0.22%  libc.so.6      [.] 0x000000000018e73a          -      -            
+     0.21%  libc.so.6      [.] 0x000000000018f0bd          -      -            
+     0.18%  libc.so.6      [.] 0x000000000018e680          -      -            
+     0.18%  libc.so.6      [.] 0x000000000018f0c6          -      -            
+     0.18%  libc.so.6      [.] 0x000000000018f0d9          -      -            
+     0.17%  libc.so.6      [.] 0x000000000018ec23          -      -            
+     0.16%  bx             [.] memmem@plt                  -      -            
+     0.16%  libc.so.6      [.] 0x000000000018e7c2          -      -            
+     0.15%  bx             [.] maybe_print_heading         -      -            
+     0.15%  libc.so.6      [.] 0x000000000018e9f4          -      -            
+     0.13%  bx             [.] grep_walk_cb                -      -            
+     0.13%  libc.so.6      [.] __mempcpy@plt               -      -            
+     0.12%  libc.so.6      [.] _IO_file_open               -      -            
+     0.12%  libc.so.6      [.] closedir                    -      -            
+     0.12%  libc.so.6      [.] 0x000000000018f030          -      -            
+     0.12%  bx             [.] bx_walk_apply_visit_action  -      -            
+     0.11%  libc.so.6      [.] memcmp@plt                  -      -            
+     0.11%  libc.so.6      [.] 0x000000000018ec0e          -      -            
+     0.11%  libc.so.6      [.] 0x000000000009d356          -      -            
+     0.11%  libc.so.6      [.] 0x000000000018e920          -      -            
+     0.11%  libc.so.6      [.] 0x00000000000b26db          -      -            
+     0.10%  libc.so.6      [.] 0x000000000018ec03          -      -            
+     0.10%  libc.so.6      [.] _IO_file_close_it           -      -            
+     0.10%  libc.so.6      [.] 0x000000000009bb40          -      -            
+     0.10%  libc.so.6      [.] 0x0000000000193c82          -      -            
+     0.10%  libc.so.6      [.] 0x000000000018e6e4          -      -            
+     0.10%  libc.so.6      [.] 0x000000000018f087          -      -            
+     0.10%  libc.so.6      [.] readdir64                   -      -            
+     0.10%  libc.so.6      [.] open64                      -      -            
+     0.09%  libc.so.6      [.] _IO_setb                    -      -            
+     0.09%  libc.so.6      [.] 0x000000000018e712          -      -            
+     0.09%  libc.so.6      [.] 0x000000000018e73e          -      -            
+     0.09%  libc.so.6      [.] 0x000000000018ec19          -      -            
+     0.09%  libc.so.6      [.] 0x0000000000191df8          -      -            
+     0.09%  bx             [.] bx_search_walk_visit        -      -            
+     0.09%  libc.so.6      [.] memcpy@plt                  -      -            
+     0.09%  libc.so.6      [.] cfree                       -      -            
+     0.09%  libc.so.6      [.] 0x000000000018e733          -      -            
+     0.07%  libc.so.6      [.] 0x000000000018e740          -      -            
+     0.07%  libc.so.6      [.] 0x000000000018e72b          -      -            
+     0.07%  libc.so.6      [.] 0x000000000009bb0b          -      -            
+     0.07%  libc.so.6      [.] strlen@plt                  -      -            
+     0.07%  bx             [.] fwrite@plt                  -      -            
+     0.07%  libc.so.6      [.] 0x00000000000b2636          -      -            
+     0.06%  libc.so.6      [.] malloc                      -      -            
+     0.06%  bx             [.] bx_walk_path_join           -      -            
+     0.05%  libc.so.6      [.] _IO_default_finish          -      -            
+     0.05%  libc.so.6      [.] 0x000000000018e6eb          -      -            
+     0.04%  libc.so.6      [.] _IO_file_underflow          -      -            
+     0.04%  libc.so.6      [.] 0x00000000000b2637          -      -            
+     0.04%  libc.so.6      [.] 0x000000000018e683          -      -            
+     0.04%  libc.so.6      [.] 0x000000000009bb82          -      -            
+     0.04%  libc.so.6      [.] 0x000000000018e9fe          -      -            
+     0.04%  libc.so.6      [.] 0x000000000018e6d9          -      -            
+     0.04%  libc.so.6      [.] 0x000000000018e7d7          -      -            
+     0.03%  libc.so.6      [.] fopen                       -      -            
+     0.03%  libc.so.6      [.] read                        -      -            
+     0.03%  libc.so.6      [.] _IO_file_fopen              -      -            
+     0.03%  libc.so.6      [.] 0x000000000018e724          -      -            
+     0.03%  libc.so.6      [.] 0x000000000018e9f8          -      -            
+     0.03%  libc.so.6      [.] 0x000000000018ec13          -      -            
+     0.03%  libc.so.6      [.] 0x0000000000191e4f          -      -            
+     0.03%  libc.so.6      [.] _IO_switch_to_get_mode      -      -            
+     0.03%  bx             [.] fputs@plt                   -      -            
+     0.03%  bx             [.] bx_walk_recursive           -      -            
+     0.03%  libc.so.6      [.] _IO_do_write                -      -            
+     0.03%  libc.so.6      [.] 0x000000000018e8e3          -      -            
+     0.03%  libc.so.6      [.] __call_tls_dtors            -      -            
+     0.02%  libc.so.6      [.] 0x000000000009d3f4          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018e924          -      -            
+     0.02%  libc.so.6      [.] fclose                      -      -            
+     0.02%  libc.so.6      [.] exit                        -      -            
+     0.02%  libc.so.6      [.] 0x000000000018f0b3          -      -            
+     0.02%  libc.so.6      [.] 0x000000000009bd3a          -      -            
+     0.02%  libc.so.6      [.] 0x00000000000b2592          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018f080          -      -            
+     0.02%  libc.so.6      [.] __libc_calloc               -      -            
+     0.02%  libc.so.6      [.] 0x00000000000a0359          -      -            
+     0.02%  libc.so.6      [.] 0x000000000009bb79          -      -            
+     0.02%  libc.so.6      [.] 0x00000000000a03c1          -      -            
+     0.02%  libc.so.6      [.] 0x000000000009bda6          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018f105          -      -            
+     0.02%  libc.so.6      [.] _IO_unsave_markers          -      -            
+     0.02%  libc.so.6      [.] 0x000000000009bb72          -      -            
+     0.02%  libc.so.6      [.] 0x00000000000b23c8          -      -            
+     0.02%  libc.so.6      [.] 0x00000000000b2494          -      -            
+     0.02%  libc.so.6      [.] 0x0000000000191de9          -      -            
+     0.02%  libc.so.6      [.] realpath                    -      -            
+     0.02%  libc.so.6      [.] 0x000000000018ec2e          -      -            
+     0.02%  libc.so.6      [.] 0x00000000000b2632          -      -            
+     0.02%  libc.so.6      [.] 0x000000000009bbd5          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018f245          -      -            
+     0.02%  libc.so.6      [.] 0x0000000000191dce          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018e907          -      -            
+     0.02%  libc.so.6      [.] 0x000000000018f1cb          -      -            
+     0.02%  libc.so.6      [.] _IO_un_link                 -      -            
+     0.02%  libc.so.6      [.] 0x000000000018ec28          -      -            
+     0.02%  libc.so.6      [.] _IO_file_finish             -      -            
+     0.01%  libc.so.6      [.] 0x00000000000be330          -      -            
+     0.01%  libc.so.6      [.] _IO_default_xsputn          -      -            
+     0.01%  bx             [.] bx_path_basename_ptr        -      -            
+     0.01%  libc.so.6      [.] 0x000000000009d3c3          -      -            
+     0.01%  libc.so.6      [.] 0x000000000018e6d6          -      -            
+     0.01%  libc.so.6      [.] 0x000000000018f0aa          -      -            
+     0.01%  libc.so.6      [.] 0x0000000000191dc2          -      -            
+     0.01%  libc.so.6      [.] 0x00000000000a03a0          -      -            
+     0.01%  libc.so.6      [.] 0x0000000000191dd3          -      -            
+     0.01%  libc.so.6      [.] 0x0000000000193d46          -      -            
+     0.01%  libc.so.6      [.] 0x00000000000b256c          -      -            
+     0.01%  libc.so.6      [.] _IO_file_close              -      -            
+     0.01%  bx             [.] bx_walk_filter_should_skip  -      -            
+     0.01%  libc.so.6      [.] 0x00000000000b2558          -      -            
+     0.01%  libc.so.6      [.] write                       -      -            
+     0.01%  libc.so.6      [.] 0x000000000018f0e6          -      -            
+     0.01%  libc.so.6      [.] 0x000000000019164b          -      -            
+     0.01%  libc.so.6      [.] __close_nocancel            -      -            
+     0.01%  libc.so.6      [.] tcgetattr                   -      -            
+     0.01%  libc.so.6      [.] _IO_file_overflow           -      -            
+     0.01%  bx             [.] bx_search_main              -      -            
+     0.01%  libc.so.6      [.] readlink                    -      -            
+     0.01%  libc.so.6      [.] 0x000000000018e7c7          -      -            
+     0.01%  libc.so.6      [.] __memcpy_chk                -      -            
+     0.01%  libc.so.6      [.] getrandom                   -      -            
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

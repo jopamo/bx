@@ -390,6 +390,7 @@ bx_search_sources = [
   'src/search/ignore.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
+  'src/search/record_stream.c',
   'src/search/search.c',
   'src/search/traverse.c',
 ]
