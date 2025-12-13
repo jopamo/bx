@@ -1001,6 +1001,7 @@ static void FinishAttach(Message *m)
 	if (extra_incap)
 		free(extra_incap);
 	extra_incap = extra_outcap = NULL;
+	StartRcDefaults();
 	StartRc(SYSTEM_SCREENRC, 1);
 	StartRc(RcFileName, 1);
 	if (InitTermcap(m->m.attach.columns, m->m.attach.lines)) {

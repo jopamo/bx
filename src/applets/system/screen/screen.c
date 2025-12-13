@@ -84,6 +84,7 @@ static void   logflush_fn(Event *, void *);
 static int    IsSymbol(char *, char *);
 static char  *ParseChar(char *, char *);
 static int    ParseEscape(char *);
+static char  *MakeDefaultShellProg(const char *);
 static void   SetTtyname(bool fatal, struct stat *st);
 int           main(int argc, char **argv);
 
@@ -192,6 +193,23 @@ char strnomem[] = "Out of memory.";
 
 static int InterruptPlease;
 static int GotSigChld;
+
+static char *MakeDefaultShellProg(const char *shell)
+{
+	const char *resolved = (shell && *shell) ? shell : DefaultShell;
+	size_t len;
+	char *prog;
+
+	if (*resolved == '-')
+		resolved++;
+	len = strlen(resolved);
+	prog = malloc(len + 2);
+	if (!prog)
+		Panic(0, "%s", strnomem);
+	prog[0] = '-';
+	memcpy(prog + 1, resolved, len + 1);
+	return prog;
+}
 
 /********************************************************************/
 /********************************************************************/
@@ -353,7 +371,7 @@ int main(int argc, char **argv)
 	cjkwidth          = 0;
 	nwin              = nwin_undef;
 	nwin_options      = nwin_undef;
-	strncpy(screenterm, "screen", MAXTERMLEN);
+	strncpy(screenterm, "screen-256color", MAXTERMLEN);
 	screenterm[MAXTERMLEN] = '\0';
 #ifdef ENABLE_TELNET
 	af                = AF_UNSPEC;
@@ -373,7 +391,7 @@ int main(int argc, char **argv)
 	if (*av0 == '-') {
 		rflag = 4;
 		xflag = true;
-		ShellProg = SaveStr(DefaultShell);	/* to prevent nasty circles */
+		ShellProg = MakeDefaultShellProg(DefaultShell);	/* to prevent nasty circles */
 	}
 
 	while (argc > 0) {
@@ -658,10 +676,7 @@ int main(int argc, char **argv)
 
 
 	if (!ShellProg) {
-		char *sh;
-
-		sh = getenv("SHELL");
-		ShellProg = SaveStr(sh ? sh : DefaultShell);
+		ShellProg = MakeDefaultShellProg(getenv("SHELL"));
 	}
 	ShellArgs[0] = ShellProg;
 	home = getenv("HOME");
@@ -1048,6 +1063,7 @@ int main(int argc, char **argv)
 	snprintf(SocketPath + strlen(SocketPath), sizeof(SocketPath) - strlen(SocketPath), "/%s", socknamebuf);
 
 	ServerSocket = MakeServerSocket();
+	StartRcDefaults();
 #ifdef SYSTEM_SCREENRC
 	(void)StartRc(SYSTEM_SCREENRC, 0);
 #endif
@@ -1083,6 +1099,7 @@ int main(int argc, char **argv)
 	} else
 		brktty(-1);	/* just try */
 	xsignal(SIGCHLD, SigChld);
+	FinishRcDefaults();
 #ifdef SYSTEM_SCREENRC
 	FinishRc(SYSTEM_SCREENRC);
 #endif

@@ -4,7 +4,9 @@
 #include "window.h"
 
 int   StartRc (char *, int);
+void  StartRcDefaults (void);
 void  FinishRc (char *);
+void  FinishRcDefaults (void);
 void  RcLine (char *, int);
 FILE *secfopen (char *, char *);
 int   secopen (char *, int, int);

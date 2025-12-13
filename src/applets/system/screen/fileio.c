@@ -47,13 +47,50 @@
 #include "termcap.h"
 #include "encoding.h"
 
-static char *CatExtra(char *, char *);
+static char *CatExtra(const char *, char *);
 static char *findrcfile(char *);
+static void ProcessStartRcLine(char *, int);
+static void RunRcBuffer(const char *, const char *, bool);
+
+static const char default_start_rc_name[] = "<bx built-in screen defaults>";
+static const char default_finish_rc_name[] = "<bx built-in screen defaults>";
+
+static const char default_start_rc[] =
+	"termcapinfo xterm* 'hs:ts=\\E]0;:fs=\\007:ds=\\E]0;\\007'\n"
+	"termcapinfo xterm* ti@:te@\n"
+	"termcapinfo * Km@\n"
+	"termcapinfo * XM@\n";
+
+static const char default_finish_rc[] =
+	"activity \"activity in %n\"\n"
+	"altscreen on\n"
+	"autodetach on\n"
+	"# attrcolor b \".I\" (unsupported in this build)\n"
+	"defbce on\n"
+	"defc1 off\n"
+	"defencoding utf8\n"
+	"defflow off\n"
+	"defhstatus \"screen ^E (^Et) | $USER@^EH\"\n"
+	"defmonitor on\n"
+	"defmousetrack off\n"
+	"defnonblock 1\n"
+	"defscrollback 100000\n"
+	"defutf8 on\n"
+	"hardstatus off\n"
+	"ignorecase on\n"
+	"msgwait 3\n"
+	"# nethack off (effective default in this build)\n"
+	"setenv DISPLAY ':0'\n"
+	"shelltitle \"$ |bash\"\n"
+	"startup_message off\n"
+	"truecolor on\n"
+	"vbell off\n"
+	"vbell_msg \"\"\n";
 
 char *rc_name = "";
 int rc_recursion = 0;
 
-static char *CatExtra(char *str1, char *str2)
+static char *CatExtra(const char *str1, char *str2)
 {
 	char *cp;
 	size_t len1, len2;
@@ -78,6 +115,33 @@ static char *CatExtra(char *str1, char *str2)
 		cp[len1] = ':';
 
 	return cp;
+}
+
+static void RunRcBuffer(const char *name, const char *contents, bool start_phase)
+{
+	char buf[2048];
+	const char *line = contents;
+	char *oldrc_name = rc_name;
+
+	rc_name = SaveStr(name);
+	while (*line) {
+		const char *next = strchr(line, '\n');
+		size_t len = next ? (size_t)(next - line) : strlen(line);
+
+		if (len >= ARRAY_SIZE(buf))
+			Panic(0, "%s: built-in rc line too long", name);
+		memcpy(buf, line, len);
+		buf[len] = '\0';
+		if (start_phase)
+			ProcessStartRcLine(buf, ARRAY_SIZE(buf));
+		else
+			RcLine(buf, ARRAY_SIZE(buf));
+		if (!next)
+			break;
+		line = next + 1;
+	}
+	Free(rc_name);
+	rc_name = oldrc_name;
 }
 
 static char *findrcfile(char *rcfile)
@@ -139,23 +203,21 @@ static char *findrcfile(char *rcfile)
  */
 int StartRc(char *rcfilename, int nopanic)
 {
-	int argc, len;
-	char *p, *cp;
 	char buf[2048];
-	char *args[MAXARGS];
-	int argl[MAXARGS];
 	FILE *fp;
 	char *oldrc_name = rc_name;
 
 	/* always fix termcap/info capabilities */
-	extra_incap = CatExtra("TF", extra_incap);
+	if (extra_incap == NULL && extra_outcap == NULL) {
+		extra_incap = CatExtra("TF", extra_incap);
 
-	/* Special settings for vt100 and others */
-	if (display && (!strncmp(D_termname, "vt", 2) || !strncmp(D_termname, "xterm", 5)))
-		extra_incap =
-		    CatExtra
-		    ("xn:f0=\033Op:f1=\033Oq:f2=\033Or:f3=\033Os:f4=\033Ot:f5=\033Ou:f6=\033Ov:f7=\033Ow:f8=\033Ox:f9=\033Oy:f.=\033On:f,=\033Ol:fe=\033OM:f+=\033Ok:f-=\033Om:f*=\033Oj:f/=\033Oo:fq=\033OX",
-		     extra_incap);
+		/* Special settings for vt100 and others */
+		if (display && (!strncmp(D_termname, "vt", 2) || !strncmp(D_termname, "xterm", 5)))
+			extra_incap =
+			    CatExtra
+			    ("xn:f0=\033Op:f1=\033Oq:f2=\033Or:f3=\033Os:f4=\033Ot:f5=\033Ou:f6=\033Ov:f7=\033Ow:f8=\033Ox:f9=\033Oy:f.=\033On:f,=\033Ol:fe=\033OM:f+=\033Ok:f-=\033Om:f*=\033Oj:f/=\033Oo:fq=\033OX",
+			     extra_incap);
+	}
 
 	rc_name = findrcfile(rcfilename);
 
@@ -176,67 +238,17 @@ int StartRc(char *rcfilename, int nopanic)
 		rc_name = oldrc_name;
 		return 1;
 	}
-	while (fgets(buf, ARRAY_SIZE(buf), fp) != NULL) {
-		if ((p = strrchr(buf, '\n')) != NULL)
-			*p = '\0';
-		if ((argc = Parse(buf, ARRAY_SIZE(buf), args, argl)) == 0)
-			continue;
-		if (strcmp(args[0], "echo") == 0) {
-			if (!display)
-				continue;
-			if (argc < 2 || (argc == 3 && strcmp(args[1], "-n")) || argc > 3) {
-				Msg(0, "%s: 'echo [-n] \"string\"' expected.", rc_name);
-				continue;
-			}
-			AddStr(args[argc - 1]);
-			if (argc != 3) {
-				AddStr("\r\n");
-				Flush(0);
-			}
-		} else if (strcmp(args[0], "sleep") == 0) {
-			if (!display)
-				continue;
-			if (argc != 2) {
-				Msg(0, "%s: sleep: one numeric argument expected.", rc_name);
-				continue;
-			}
-			DisplaySleep1000(1000 * atoi(args[1]), 1);
-		}
-		else if (!strcmp(args[0], "termcapinfo") || !strcmp(args[0], "terminfo"))
-		{
-			if (!display)
-				continue;
-			if (argc < 3 || argc > 4) {
-				Msg(0, "%s: %s: incorrect number of arguments.", rc_name, args[0]);
-				continue;
-			}
-			for (p = args[1]; p && *p; p = cp) {
-				if ((cp = strchr(p, '|')) != NULL)
-					*cp++ = '\0';
-				len = strlen(p);
-				if (p[len - 1] == '*') {
-					if (!(len - 1) || !strncmp(p, D_termname, len - 1))
-						break;
-				} else if (!strcmp(p, D_termname))
-					break;
-			}
-			if (!(p && *p))
-				continue;
-			extra_incap = CatExtra(args[2], extra_incap);
-			if (argc == 4)
-				extra_outcap = CatExtra(args[3], extra_outcap);
-		} else if (!strcmp(args[0], "source")) {
-			if (rc_recursion <= 10) {
-				rc_recursion++;
-				(void)StartRc(args[1], 0);
-				rc_recursion--;
-			}
-		}
-	}
+	while (fgets(buf, ARRAY_SIZE(buf), fp) != NULL)
+		ProcessStartRcLine(buf, ARRAY_SIZE(buf));
 	fclose(fp);
 	Free(rc_name);
 	rc_name = oldrc_name;
 	return 0;
+}
+
+void StartRcDefaults(void)
+{
+	RunRcBuffer(default_start_rc_name, default_start_rc, true);
 }
 
 void FinishRc(char *rcfilename)
@@ -273,6 +285,11 @@ void FinishRc(char *rcfilename)
 	rc_name = oldrc_name;
 }
 
+void FinishRcDefaults(void)
+{
+	RunRcBuffer(default_finish_rc_name, default_finish_rc, false);
+}
+
 void do_source(char *rcfilename)
 {
 	if (rc_recursion > 10) {
@@ -282,6 +299,72 @@ void do_source(char *rcfilename)
 	rc_recursion++;
 	FinishRc(rcfilename);
 	rc_recursion--;
+}
+
+static void ProcessStartRcLine(char *buf, int buflen)
+{
+	int argc, len;
+	char *p, *cp;
+	char *args[MAXARGS];
+	int argl[MAXARGS];
+
+	if ((p = strrchr(buf, '\n')) != NULL)
+		*p = '\0';
+	if ((argc = Parse(buf, buflen, args, argl)) == 0)
+		return;
+	if (strcmp(args[0], "echo") == 0) {
+		if (!display)
+			return;
+		if (argc < 2 || (argc == 3 && strcmp(args[1], "-n")) || argc > 3) {
+			Msg(0, "%s: 'echo [-n] \"string\"' expected.", rc_name);
+			return;
+		}
+		AddStr(args[argc - 1]);
+		if (argc != 3) {
+			AddStr("\r\n");
+			Flush(0);
+		}
+		return;
+	}
+	if (strcmp(args[0], "sleep") == 0) {
+		if (!display)
+			return;
+		if (argc != 2) {
+			Msg(0, "%s: sleep: one numeric argument expected.", rc_name);
+			return;
+		}
+		DisplaySleep1000(1000 * atoi(args[1]), 1);
+		return;
+	}
+	if (!strcmp(args[0], "termcapinfo") || !strcmp(args[0], "terminfo")) {
+		if (!display)
+			return;
+		if (argc < 3 || argc > 4) {
+			Msg(0, "%s: %s: incorrect number of arguments.", rc_name, args[0]);
+			return;
+		}
+		for (p = args[1]; p && *p; p = cp) {
+			if ((cp = strchr(p, '|')) != NULL)
+				*cp++ = '\0';
+			len = strlen(p);
+			if (p[len - 1] == '*') {
+				if (!(len - 1) || !strncmp(p, D_termname, len - 1))
+					break;
+			} else if (!strcmp(p, D_termname))
+				break;
+		}
+		if (!(p && *p))
+			return;
+		extra_incap = CatExtra(args[2], extra_incap);
+		if (argc == 4)
+			extra_outcap = CatExtra(args[3], extra_outcap);
+		return;
+	}
+	if (!strcmp(args[0], "source") && rc_recursion <= 10) {
+		rc_recursion++;
+		(void)StartRc(args[1], 0);
+		rc_recursion--;
+	}
 }
 
 /*
