@@ -1404,8 +1404,12 @@ static void SetBackColor(int new)
 
 void SetRendition(struct mchar *mc)
 {
+	struct mchar effective;
+
 	if (!display)
 		return;
+	AttrColorApply(&effective, mc);
+	mc = &effective;
 	if (D_rend.attr != mc->attr)
 		SetAttr(mc->attr);
 	if (D_rend.colorbg != mc->colorbg || D_rend.colorfg != mc->colorfg)

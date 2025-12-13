@@ -67,6 +67,12 @@ int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size
     return 0;
 }
 
+bool bx_literal_contains_byte(const struct bx_literal_matcher *m, unsigned char byte) {
+    if (!m || !m->pattern_raw)
+        return false;
+    return memchr(m->pattern_raw, byte, m->plen) != NULL;
+}
+
 void bx_literal_free(struct bx_literal_matcher *m) {
     if (!m) return;
     free(m->pattern_raw);

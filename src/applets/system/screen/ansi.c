@@ -31,8 +31,10 @@
 #include "ansi.h"
 
 #include <sys/types.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <string.h>
 
 #include "screen.h"
 
@@ -68,6 +70,8 @@ struct mchar mchar_blank = { ' ', 0, 0, 0, 0, 0 };
 struct mchar mchar_so = { ' ', A_RV, 0, 0, 0, 0};
 
 uint64_t renditions[NUM_RENDS] = { 65529 /* =ub */ , 65531 /* =b */ , 65533 /* =u */  };
+
+static char *attrcolor_specs[ATTRCOLOR_COUNT];
 
 /* keep string_t and string_t_string in sync! */
 static char *string_t_string[] = {
@@ -108,6 +112,334 @@ static void DesignateCharset(Window *, int, int);
 static void MapCharset(Window *, int);
 static void MapCharsetR(Window *, int);
 static void SaveCursor(Window *, struct cursor *);
+static void attrcolor_skip_spaces(const char **);
+static bool attrcolor_parse_attr_mask(const char **, uint32_t *);
+static int attrcolor_legacy_color(int);
+static bool attrcolor_parse_truecolor(const char **, uint32_t *);
+static bool attrcolor_parse_color_channel(const char **, uint32_t, uint32_t *);
+static bool attrcolor_apply_spec(struct mchar *, const char *);
+static bool attrcolor_target_active(const struct mchar *, int);
+static bool attrcolor_color_is_bright(uint32_t);
+static uint32_t attrcolor_make_bright(uint32_t);
+
+int AttrColorTargetIndex(int c)
+{
+	switch (c) {
+	case 'd':
+		return ATTRCOLOR_DIM;
+	case 'u':
+		return ATTRCOLOR_UNDERSCORE;
+	case 'b':
+		return ATTRCOLOR_BOLD;
+	case 'r':
+		return ATTRCOLOR_REVERSE;
+	case 's':
+		return ATTRCOLOR_STANDOUT;
+	case 'B':
+	case 'l':
+		return ATTRCOLOR_BLINK;
+	case 'i':
+		return ATTRCOLOR_BRIGHTFG;
+	case 'I':
+		return ATTRCOLOR_BRIGHTBG;
+	case 't':
+		return ATTRCOLOR_ITALIC;
+	default:
+		return -1;
+	}
+}
+
+int AttrColorSet(int target, const char *spec)
+{
+	if (target < 0 || target >= ATTRCOLOR_COUNT)
+		return -1;
+	if (attrcolor_specs[target]) {
+		free(attrcolor_specs[target]);
+		attrcolor_specs[target] = NULL;
+	}
+	if (spec && *spec)
+		attrcolor_specs[target] = SaveStr(spec);
+	return 0;
+}
+
+bool AttrColorValidate(const char *spec)
+{
+	struct mchar mc = mchar_blank;
+
+	if (spec == NULL || *spec == '\0')
+		return true;
+	return attrcolor_apply_spec(&mc, spec);
+}
+
+void AttrColorApply(struct mchar *dst, const struct mchar *src)
+{
+	*dst = *src;
+	for (int pass = 0; pass < ATTRCOLOR_COUNT; pass++) {
+		bool changed = false;
+
+		for (int i = 0; i < ATTRCOLOR_COUNT; i++) {
+			struct mchar before;
+			char *spec = attrcolor_specs[i];
+
+			if (!spec || !attrcolor_target_active(dst, i))
+				continue;
+			before = *dst;
+			if (!attrcolor_apply_spec(dst, spec))
+				continue;
+			if (!cmp_mchar(&before, dst))
+				changed = true;
+		}
+		if (!changed)
+			break;
+	}
+}
+
+static void attrcolor_skip_spaces(const char **pp)
+{
+	while (**pp && isspace((unsigned char)**pp))
+		(*pp)++;
+}
+
+static bool attrcolor_parse_attr_mask(const char **pp, uint32_t *mask)
+{
+	const char *p = *pp;
+	uint32_t value = 0;
+
+	if (*p == '\0' || isspace((unsigned char)*p))
+		return false;
+	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+		char *end;
+		unsigned long parsed = strtoul(p, &end, 16);
+
+		if (end == p + 2)
+			return false;
+		*mask = (uint32_t)parsed;
+		*pp = end;
+		return true;
+	}
+	while (*p && !isspace((unsigned char)*p)) {
+		switch (*p) {
+		case 'd':
+			value |= A_DI;
+			break;
+		case 'u':
+			value |= A_US;
+			break;
+		case 'b':
+			value |= A_BD;
+			break;
+		case 'r':
+			value |= A_RV;
+			break;
+		case 's':
+			value |= A_SO;
+			break;
+		case 'B':
+		case 'l':
+			value |= A_BL;
+			break;
+		case 'i':
+		case 't':
+			value |= A_IT;
+			break;
+		default:
+			return false;
+		}
+		p++;
+	}
+	*mask = value;
+	*pp = p;
+	return true;
+}
+
+static int attrcolor_legacy_color(int c)
+{
+	switch (tolower((unsigned char)c)) {
+	case 'k':
+		return 0;
+	case 'r':
+		return 1;
+	case 'g':
+		return 2;
+	case 'y':
+		return 3;
+	case 'b':
+		return 4;
+	case 'm':
+		return 5;
+	case 'c':
+		return 6;
+	case 'w':
+		return 7;
+	default:
+		return -1;
+	}
+}
+
+static bool attrcolor_parse_truecolor(const char **pp, uint32_t *color)
+{
+	const char *p = *pp;
+	uint32_t value = 0;
+	int digits = 0;
+
+	if (*p != '#' && *p != 'x')
+		return false;
+	p++;
+	while (isxdigit((unsigned char)*p) && digits < 6) {
+		value <<= 4;
+		if (*p >= '0' && *p <= '9')
+			value |= (uint32_t)(*p - '0');
+		else if (*p >= 'a' && *p <= 'f')
+			value |= (uint32_t)(*p - 'a' + 10);
+		else
+			value |= (uint32_t)(*p - 'A' + 10);
+		digits++;
+		p++;
+	}
+	if (digits != 3 && digits != 6)
+		return false;
+	if (digits == 3) {
+		value = ((value & 0x0F00) << 8) | ((value & 0x00F0) << 4) | (value & 0x000F);
+		value |= value << 4;
+	}
+	*color = 0x04000000 | value;
+	*pp = p;
+	return true;
+}
+
+static bool attrcolor_parse_color_channel(const char **pp, uint32_t current, uint32_t *color)
+{
+	const char *p = *pp;
+	bool brighten = false;
+	uint32_t value;
+
+	if (*p == 'i' || *p == 'I') {
+		brighten = true;
+		p++;
+		if (*p == '\0' || *p == ';' || isspace((unsigned char)*p)) {
+			*color = attrcolor_make_bright(current);
+			*pp = p;
+			return true;
+		}
+	}
+	if (attrcolor_parse_truecolor(&p, &value)) {
+		/* parsed */
+	} else if (isdigit((unsigned char)*p)) {
+		char *end;
+		unsigned long n = strtoul(p, &end, 10);
+
+		if (end == p || n > 255)
+			return false;
+		value = (n <= 15 ? 0x01000000 : 0x02000000) | (uint32_t)n;
+		p = end;
+	} else {
+		int legacy = attrcolor_legacy_color(*p);
+
+		if (legacy < 0)
+			return false;
+		value = 0x01000000 | (uint32_t)legacy;
+		if (isupper((unsigned char)*p))
+			value = attrcolor_make_bright(value);
+		p++;
+	}
+	if (brighten)
+		value = attrcolor_make_bright(value);
+	*color = value;
+	*pp = p;
+	return true;
+}
+
+static bool attrcolor_apply_spec(struct mchar *mc, const char *spec)
+{
+	const char *p = spec;
+
+	attrcolor_skip_spaces(&p);
+	if (*p == '+' || *p == '-' || *p == '!' || *p == '=') {
+		uint32_t mask;
+		char op = *p++;
+
+		if (!attrcolor_parse_attr_mask(&p, &mask))
+			return false;
+		switch (op) {
+		case '+':
+			mc->attr |= mask;
+			break;
+		case '-':
+			mc->attr &= ~mask;
+			break;
+		case '!':
+			mc->attr ^= mask;
+			break;
+		case '=':
+			mc->attr = mask;
+			break;
+		}
+		attrcolor_skip_spaces(&p);
+	}
+	if (*p == '.') {
+		p++;
+		attrcolor_skip_spaces(&p);
+	}
+	if (*p == '\0')
+		return true;
+	if (*p != ';') {
+		if (!attrcolor_parse_color_channel(&p, mc->colorfg, &mc->colorfg))
+			return false;
+	}
+	if (*p == ';') {
+		p++;
+		attrcolor_skip_spaces(&p);
+		if (*p != '\0' && !attrcolor_parse_color_channel(&p, mc->colorbg, &mc->colorbg))
+			return false;
+	}
+	attrcolor_skip_spaces(&p);
+	return *p == '\0';
+}
+
+static bool attrcolor_target_active(const struct mchar *mc, int target)
+{
+	switch (target) {
+	case ATTRCOLOR_DIM:
+		return (mc->attr & A_DI) != 0;
+	case ATTRCOLOR_UNDERSCORE:
+		return (mc->attr & A_US) != 0;
+	case ATTRCOLOR_BOLD:
+		return (mc->attr & A_BD) != 0;
+	case ATTRCOLOR_REVERSE:
+		return (mc->attr & A_RV) != 0;
+	case ATTRCOLOR_STANDOUT:
+		return (mc->attr & A_SO) != 0;
+	case ATTRCOLOR_BLINK:
+		return (mc->attr & A_BL) != 0;
+	case ATTRCOLOR_BRIGHTFG:
+		return attrcolor_color_is_bright(mc->colorfg);
+	case ATTRCOLOR_BRIGHTBG:
+		return attrcolor_color_is_bright(mc->colorbg);
+	case ATTRCOLOR_ITALIC:
+		return (mc->attr & A_IT) != 0;
+	default:
+		return false;
+	}
+}
+
+static bool attrcolor_color_is_bright(uint32_t color)
+{
+	if ((color & 0x01000000) != 0 || (color & 0x02000000) != 0)
+		return (color & 0xff) >= 8 && (color & 0xff) <= 15;
+	return false;
+}
+
+static uint32_t attrcolor_make_bright(uint32_t color)
+{
+	uint32_t base = color & 0x0f000000;
+	uint32_t value = color & 0x00ffffff;
+
+	if (base != 0x01000000 && base != 0x02000000)
+		return color;
+	if (value <= 7)
+		return base | (value + 8);
+	return color;
+}
 static void RestoreCursor(Window *, struct cursor *);
 static void BackSpace(Window *);
 static void Return(Window *);

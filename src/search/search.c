@@ -19,6 +19,7 @@
 #include "pcre2_matcher.h"
 #include "literal.h"
 #include "record_stream.h"
+#include "scanner.h"
 #include "traverse.h"
 #include "lib/color.h"
 #include "bx/diag.h"
@@ -411,6 +412,13 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     return m;
 }
 
+static bool matcher_is_scanner_literal_eligible(const struct bx_matcher *m,
+                                                const struct search_opts *opts) {
+    if (!m || !opts || m->kind != MATCHER_LITERAL)
+        return false;
+    return !bx_literal_contains_byte(m->literal, (unsigned char)record_delimiter(opts));
+}
+
 /* --- match output helpers --- */
 
 static void print_match_colored(const unsigned char *line, size_t len,
@@ -600,7 +608,7 @@ static void free_lines(struct line_buf *lines, int count) {
     free(lines);
 }
 
-static bool needs_line_buffering(struct search_opts *opts) {
+static bool needs_line_buffering(const struct search_opts *opts) {
     return opts->after_context > 0 || opts->before_context > 0;
 }
 
@@ -894,6 +902,42 @@ static bool search_default_heading(enum bx_search_personality personality,
     return opts->show_filename;
 }
 
+#define BX_SEARCH_SCANNER_MIN_FILE_SIZE 65536u
+
+static bool search_file_scanner_stream_is_eligible(FILE *f) {
+    if (!f)
+        return false;
+
+    int fd = fileno(f);
+    if (fd < 0)
+        return false;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0)
+        return false;
+    if (!S_ISREG(st.st_mode))
+        return false;
+    if (st.st_size < (off_t)BX_SEARCH_SCANNER_MIN_FILE_SIZE)
+        return false;
+    return true;
+}
+
+static bool search_file_can_use_scanner(const struct bx_matcher *m,
+                                        const struct search_opts *opts,
+                                        bool use_stdin) {
+    if (!m || !opts || use_stdin)
+        return false;
+    if (!opts->recursive || opts->multiline || opts->invert_match)
+        return false;
+    if (needs_line_buffering(opts) || opts->replace || opts->only_matching || opts->passthru)
+        return false;
+    if (opts->stop_on_nonmatch)
+        return false;
+    if (bx_color_enabled())
+        return false;
+    return matcher_is_scanner_literal_eligible(m, opts);
+}
+
 static int search_file_buffered_opened(FILE *f,
                                        bool use_stdin,
                                        const char *display_name,
@@ -1124,6 +1168,139 @@ static int search_file_buffered(const char *filename, const char *display_name,
                                        match_count, record_stream, stats);
 }
 
+static int search_file_scanner_opened(FILE *f,
+                                      bool use_stdin,
+                                      const char *display_name,
+                                      const char *progname,
+                                      struct bx_matcher *m,
+                                      struct search_opts *opts,
+                                      int *match_count,
+                                      struct bx_search_scanner *scanner,
+                                      struct bx_search_stats *stats) {
+    int file_matches = 0;
+    int status = 1;
+    bool heading_printed_for_file = false;
+    bool stop = false;
+
+    if (stats)
+        stats->files_searched++;
+
+    bx_search_scanner_begin_file(scanner, record_delimiter(opts));
+    while (!stop && bx_search_scanner_read_chunk(scanner, f)) {
+        if (stats)
+            stats->bytes_searched += scanner->scan_len;
+
+        size_t cursor = 0u;
+        while (!stop) {
+            struct bx_search_candidate candidate;
+            if (!bx_search_scanner_next_literal_candidate(scanner, m->literal, &cursor, &candidate))
+                break;
+
+            struct bx_search_record_slice record;
+            if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
+                continue;
+
+            struct bx_match bm;
+            size_t match_len = record_match_len(record.data, record.len, opts);
+            if (matcher_find_with_opts(m, record.data, match_len, 0, opts, &bm) != 0)
+                continue;
+
+            cursor = record.chunk_off + record.len;
+            size_t line_num = bx_search_scanner_record_number(scanner, &record);
+            int record_match_count = opts->count_matches
+                                         ? count_record_matches(m, record.data, match_len, opts)
+                                         : 1;
+            file_matches += record_match_count;
+            if (stats) {
+                stats->matches += record_match_count;
+                stats->matched_lines++;
+            }
+            status = 0;
+
+            if (opts->quiet) {
+                stop = true;
+                break;
+            }
+            if (opts->count_only) {
+                if (opts->max_count > 0 && file_matches >= opts->max_count)
+                    stop = true;
+                continue;
+            }
+            if (opts->files_with_matches || opts->files_without_match) {
+                if (!opts->stats) {
+                    stop = true;
+                    break;
+                }
+                if (opts->max_count > 0 && file_matches >= opts->max_count)
+                    stop = true;
+                continue;
+            }
+
+            maybe_print_heading(display_name, opts, &heading_printed_for_file);
+            print_result_prefix(heading_printed_for_file ? NULL : display_name,
+                                opts, (int)line_num, bm.start + 1u, true,
+                                (size_t)record.file_off,
+                                match_field_separator(opts));
+            if (should_omit_long_match_line(opts, record.len))
+                print_omitted_long_line(opts);
+            else
+                print_match_colored(record.data, record.len, bm.start, bm.end, opts);
+
+            if (opts->max_count > 0 && file_matches >= opts->max_count)
+                stop = true;
+        }
+    }
+
+    if (ferror(f)) {
+        report_path_error(progname, display_name, errno ? errno : EIO, opts);
+        if (!use_stdin)
+            fclose(f);
+        return 2;
+    }
+
+    if (opts->quiet && file_matches > 0)
+        status = 0;
+    if (opts->count_only)
+        print_count_result(display_name, opts, file_matches);
+    if (opts->files_with_matches && file_matches > 0 && display_name) {
+        if (opts->null_output)
+            printf("%s%c", display_name, '\0');
+        else
+            printf("%s\n", display_name);
+    }
+    if (opts->files_without_match && file_matches == 0 && display_name) {
+        if (opts->null_output)
+            printf("%s%c", display_name, '\0');
+        else
+            printf("%s\n", display_name);
+    }
+    if (stats && file_matches > 0)
+        stats->files_with_matches++;
+    if (match_count)
+        *match_count += file_matches;
+    if (!use_stdin)
+        fclose(f);
+    return status;
+}
+
+static int search_file_scanner(const char *filename,
+                               const char *display_name,
+                               const char *progname,
+                               struct bx_matcher *m,
+                               struct search_opts *opts,
+                               int *match_count,
+                               struct bx_search_scanner *scanner,
+                               struct bx_record_stream *record_stream,
+                               struct bx_search_stats *stats) {
+    bool use_stdin = false;
+    FILE *f = open_search_input_stream(filename, progname, opts, record_stream, &use_stdin);
+    if (!f)
+        return 2;
+
+    return search_file_scanner_opened(f, use_stdin, display_name, progname, m, opts,
+                                      match_count, scanner, stats);
+}
+
 /* --- streaming search (no context) --- */
 
 static int search_file_streaming_opened(FILE *f,
@@ -1324,6 +1501,7 @@ static bool binary_file_matches(const char *filename,
 static int search_file(const char *filename, const char *display_name_override, const char *progname,
                        struct bx_matcher *m, struct search_opts *opts,
                        int *match_count,
+                       struct bx_search_scanner *scanner,
                        struct bx_record_stream *record_stream,
                        struct bx_search_stats *stats) {
     const char *display_name = display_name_for_stream(filename, display_name_override, opts);
@@ -1381,6 +1559,9 @@ static int search_file(const char *filename, const char *display_name_override, 
             if (needs_line_buffering(opts))
                 return search_file_buffered_opened(f, false, display_name, progname, m, opts,
                                                    match_count, record_stream, stats);
+            if (search_file_can_use_scanner(m, opts, false))
+                return search_file_scanner_opened(f, false, display_name, progname, m, opts,
+                                                  match_count, scanner, stats);
             return search_file_streaming_opened(f, false, display_name, m, opts,
                                                 match_count, record_stream, stats);
         }
@@ -1412,6 +1593,9 @@ static int search_file(const char *filename, const char *display_name_override, 
     if (needs_line_buffering(opts))
         return search_file_buffered(filename, display_name, progname, m, opts,
                                     match_count, record_stream, stats);
+    if (search_file_can_use_scanner(m, opts, use_stdin))
+        return search_file_scanner(filename, display_name, progname, m, opts,
+                                   match_count, scanner, record_stream, stats);
     return search_file_streaming(filename, display_name, progname, m, opts,
                                  match_count, record_stream, stats);
 }
@@ -1463,6 +1647,7 @@ struct grep_walk_state {
     struct search_opts *opts;
     const char *progname;
     int *match_count;
+    struct bx_search_scanner *scanner;
     struct bx_record_stream *record_stream;
     struct bx_search_stats *stats;
     int *exit_status;
@@ -1629,7 +1814,7 @@ static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user)
     const char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix);
 
     int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts,
-                        gs->match_count, gs->record_stream, gs->stats);
+                        gs->match_count, gs->scanner, gs->record_stream, gs->stats);
     if (r == 2) {
         *gs->exit_status = 2;
         if (gs->error_seen) *gs->error_seen = true;
@@ -1719,6 +1904,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
 
     struct bx_matcher *m;
     char *compile_error = NULL;
+    struct bx_search_scanner scanner = {0};
     struct bx_record_stream record_stream = {0};
 
     if (opts.num_extra_patterns > 0) {
@@ -1767,6 +1953,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             fprintf(stderr, "%s: invalid pattern: %s\n",
                     argv[0] ? argv[0] : "grep", pattern);
         }
+        bx_search_scanner_dispose(&scanner);
         bx_record_stream_dispose(&record_stream);
         bx_search_free_options(&opts);
         return 2;
@@ -1806,6 +1993,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             struct grep_walk_state gs = {.m = m, .opts = &opts,
                                          .progname = progname,
                                          .match_count = &global_matches,
+                                         .scanner = &scanner,
                                          .record_stream = &record_stream,
                                          .stats = &stats,
                                          .exit_status = &exit_status,
@@ -1830,7 +2018,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             }
         } else {
             exit_status = search_file(NULL, NULL, progname, m, &opts, &global_matches,
-                                      &record_stream, &stats);
+                                      &scanner, &record_stream, &stats);
             if (exit_status == 0) match_seen = true;
             else if (exit_status == 2) error_seen = true;
         }
@@ -1839,6 +2027,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         struct grep_walk_state gs = {.m = m, .opts = &opts,
                                      .progname = progname,
                                      .match_count = &global_matches,
+                                     .scanner = &scanner,
                                      .record_stream = &record_stream,
                                      .stats = &stats,
                                      .exit_status = &exit_status,
@@ -1905,7 +2094,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                 }
             }
             int r = search_file(argv[j], NULL, progname, m, &opts, &global_matches,
-                                &record_stream, &stats);
+                                &scanner, &record_stream, &stats);
             if (r == 2) {
                 exit_status = 2;
                 error_seen = true;
@@ -1919,6 +2108,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     }
     matcher_free(m);
     free(sorted_operands);
+    bx_search_scanner_dispose(&scanner);
     bx_record_stream_dispose(&record_stream);
     if (opts.stats)
         print_stats_summary(&stats);

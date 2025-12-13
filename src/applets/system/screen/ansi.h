@@ -34,6 +34,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+struct mchar;
+
 #define NATTR		7
 
 				/*			Capname	TCapCode */
@@ -52,6 +54,19 @@
 #define A_SO	(1<<ATTR_SO)
 #define A_BL	(1<<ATTR_BL)
 #define A_IT	(1<<ATTR_IT)
+
+enum attrcolor_target {
+	ATTRCOLOR_DIM = 0,
+	ATTRCOLOR_UNDERSCORE,
+	ATTRCOLOR_BOLD,
+	ATTRCOLOR_REVERSE,
+	ATTRCOLOR_STANDOUT,
+	ATTRCOLOR_BLINK,
+	ATTRCOLOR_BRIGHTFG,
+	ATTRCOLOR_BRIGHTBG,
+	ATTRCOLOR_ITALIC,
+	ATTRCOLOR_COUNT
+};
 
 #define ATYP_M		(1<<0)
 #define ATYP_S		(1<<1)
@@ -167,6 +182,10 @@ int   MFindUsedLine (Window *, int, int);
 extern bool visual_bell;
 extern bool use_altscreen;
 extern bool use_hardstatus;
+int   AttrColorTargetIndex (int);
+int   AttrColorSet (int, const char *);
+bool  AttrColorValidate (const char *);
+void  AttrColorApply (struct mchar *, const struct mchar *);
 
 extern char *printcmd;
 
