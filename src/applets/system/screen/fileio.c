@@ -65,7 +65,7 @@ static const char default_finish_rc[] =
 	"activity \"activity in %n\"\n"
 	"altscreen on\n"
 	"autodetach on\n"
-	"# attrcolor b \".I\" (unsupported in this build)\n"
+	"attrcolor b \".I\"\n"
 	"defbce on\n"
 	"defc1 off\n"
 	"defencoding utf8\n"

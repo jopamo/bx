@@ -84,6 +84,7 @@ static void digraph_fn(char *, size_t, void *);
 static int digraph_find(const char *buf);
 static int IsOnDisplay(Window *);
 static void ShowWindowsX(char *);
+static void DoCommandAttrcolor(struct action *act);
 
 char NullStr[] = "";
 
@@ -2430,6 +2431,34 @@ static void DoCommandRemovebuf(struct action *act)
 	(void)act; /* unused */
 
 	KillBuffers();
+}
+
+static void DoCommandAttrcolor(struct action *act)
+{
+	char **args = act->args;
+	Display *olddisplay = display;
+	int target;
+
+	if (!args[0]) {
+		OutputMsg(0, "%s: attrcolor: attribute required", rc_name);
+		return;
+	}
+	if (args[0][1] != '\0' || (target = AttrColorTargetIndex((unsigned char)args[0][0])) < 0) {
+		OutputMsg(0, "%s: attrcolor: invalid attribute '%s'", rc_name, args[0]);
+		return;
+	}
+	if (args[2] != NULL) {
+		OutputMsg(0, "%s: attrcolor: too many arguments", rc_name);
+		return;
+	}
+	if (args[1] != NULL && !AttrColorValidate(args[1])) {
+		OutputMsg(0, "%s: attrcolor: invalid modifier '%s'", rc_name, args[1]);
+		return;
+	}
+	AttrColorSet(target, (args[1] && args[1][0]) ? args[1] : NULL);
+	for (display = displays; display; display = display->d_next)
+		Activate(-1);
+	display = olddisplay;
 }
 
 static void DoCommandIgnorecase(struct action *act)
@@ -4783,6 +4812,9 @@ void DoAction(struct action *act)
 		break;
 	case RC_REMOVEBUF:
 		DoCommandRemovebuf(act);
+		break;
+	case RC_ATTRCOLOR:
+		DoCommandAttrcolor(act);
 		break;
 	case RC_IGNORECASE:
 		DoCommandIgnorecase(act);

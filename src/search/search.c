@@ -117,6 +117,14 @@ static int search_binary_without_match(const char *display_name,
                                        struct search_opts *opts,
                                        int *match_count,
                                        struct bx_search_stats *stats);
+static int search_file_streaming_opened(FILE *f,
+                                        bool use_stdin,
+                                        const char *display_name,
+                                        struct bx_matcher *m,
+                                        struct search_opts *opts,
+                                        int *match_count,
+                                        struct bx_record_stream *record_stream,
+                                        struct bx_search_stats *stats);
 static ssize_t read_record(FILE *f, struct bx_record_stream *stream, struct search_opts *opts);
 static char record_delimiter(const struct search_opts *opts);
 static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts);
@@ -1296,6 +1304,9 @@ static int search_file_scanner(const char *filename,
     FILE *f = open_search_input_stream(filename, progname, opts, record_stream, &use_stdin);
     if (!f)
         return 2;
+    if (!search_file_scanner_stream_is_eligible(f))
+        return search_file_streaming_opened(f, use_stdin, display_name, m, opts,
+                                            match_count, record_stream, stats);
 
     return search_file_scanner_opened(f, use_stdin, display_name, progname, m, opts,
                                       match_count, scanner, stats);
@@ -1559,9 +1570,11 @@ static int search_file(const char *filename, const char *display_name_override, 
             if (needs_line_buffering(opts))
                 return search_file_buffered_opened(f, false, display_name, progname, m, opts,
                                                    match_count, record_stream, stats);
-            if (search_file_can_use_scanner(m, opts, false))
+            if (search_file_can_use_scanner(m, opts, false)
+                && search_file_scanner_stream_is_eligible(f)) {
                 return search_file_scanner_opened(f, false, display_name, progname, m, opts,
                                                   match_count, scanner, stats);
+            }
             return search_file_streaming_opened(f, false, display_name, m, opts,
                                                 match_count, record_stream, stats);
         }
