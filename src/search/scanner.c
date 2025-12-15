@@ -155,14 +155,13 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
     if (*cursor > scanner->scan_len)
         return false;
 
-    struct bx_match match = {0};
-    if (bx_literal_find(literal, scanner->buf, scanner->scan_len, *cursor, &match) != 0)
+    size_t candidate_start = 0u;
+    if (!bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len, cursor, &candidate_start))
         return false;
 
-    candidate->chunk_off = match.start;
-    candidate->file_off = scanner->file_off + (off_t)match.start;
-    candidate->anchor_len = match.end - match.start;
-    *cursor = match.start + 1u;
+    candidate->chunk_off = candidate_start;
+    candidate->file_off = scanner->file_off + (off_t)candidate_start;
+    candidate->anchor_len = bx_literal_len(literal);
     return true;
 }
 
