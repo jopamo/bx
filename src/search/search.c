@@ -316,6 +316,21 @@ static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf
     return -1;
 }
 
+static bool matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
+                                                       const unsigned char *buf,
+                                                       size_t len,
+                                                       size_t candidate_start,
+                                                       struct search_opts *opts,
+                                                       struct bx_match *out) {
+    if (!m || m->kind != MATCHER_LITERAL || !opts || opts->line_regexp)
+        return false;
+    if (!bx_literal_verify_at(m->literal, buf, len, candidate_start, out))
+        return false;
+    if (opts->word_regexp && !match_has_word_boundaries(buf, len, out))
+        return false;
+    return true;
+}
+
 static void matcher_free(struct bx_matcher *m) {
     if (m->kind == MATCHER_LITERAL)
         bx_literal_free(m->literal);
@@ -946,6 +961,16 @@ static bool search_file_can_use_scanner(const struct bx_matcher *m,
     return matcher_is_scanner_literal_eligible(m, opts);
 }
 
+static bool search_file_scanner_can_shortcut_file_presence(const struct search_opts *opts) {
+    if (!opts || opts->count_matches)
+        return false;
+    if (opts->quiet)
+        return true;
+    if (opts->count_only)
+        return false;
+    return (opts->files_with_matches || opts->files_without_match) && !opts->stats;
+}
+
 static int search_file_buffered_opened(FILE *f,
                                        bool use_stdin,
                                        const char *display_name,
@@ -1204,14 +1229,34 @@ static int search_file_scanner_opened(FILE *f,
             if (!bx_search_scanner_next_literal_candidate(scanner, m->literal, &cursor, &candidate))
                 break;
 
+            struct bx_match bm;
+            if (search_file_scanner_can_shortcut_file_presence(opts)) {
+                if (!matcher_verify_literal_candidate_with_opts(m, scanner->buf, scanner->scan_len,
+                                                                candidate.chunk_off, opts, &bm)) {
+                    continue;
+                }
+
+                file_matches++;
+                if (stats) {
+                    stats->matches++;
+                    stats->matched_lines++;
+                }
+                status = 0;
+                stop = true;
+                break;
+            }
+
             struct bx_search_record_slice record;
             if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
                 continue;
 
-            struct bx_match bm;
             size_t match_len = record_match_len(record.data, record.len, opts);
-            if (matcher_find_with_opts(m, record.data, match_len, 0, opts, &bm) != 0)
-                continue;
+            size_t candidate_record_off = candidate.chunk_off - record.chunk_off;
+            if (!matcher_verify_literal_candidate_with_opts(m, record.data, match_len,
+                                                            candidate_record_off, opts, &bm)) {
+                if (matcher_find_with_opts(m, record.data, match_len, 0, opts, &bm) != 0)
+                    continue;
+            }
 
             cursor = record.chunk_off + record.len;
             size_t line_num = bx_search_scanner_record_number(scanner, &record);
