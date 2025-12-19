@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "dev_counters.h"
 #include "record_stream.h"
 
 #define BX_RECORD_STREAM_IO_CAP 65536u
@@ -45,6 +46,7 @@ bool bx_record_stream_probe_binary_prefix(FILE *f, bool *is_binary_out) {
     ssize_t n = pread(fd, buf, sizeof(buf), 0);
     if (n < 0)
         return false;
+    bx_search_dev_counters_note_bytes_read((size_t)n);
 
     if (is_binary_out)
         *is_binary_out = (memchr(buf, '\0', (size_t)n) != NULL);
@@ -55,5 +57,10 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
     if (!stream)
         return -1;
 
-    return getdelim(&stream->record, &stream->record_cap, delimiter, f);
+    ssize_t nread = getdelim(&stream->record, &stream->record_cap, delimiter, f);
+    if (nread > 0) {
+        bx_search_dev_counters_note_bytes_read((size_t)nread);
+        bx_search_dev_counters_note_record_materialized();
+    }
+    return nread;
 }

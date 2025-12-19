@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "dev_counters.h"
 #include "literal.h"
 #include "scanner.h"
 
@@ -120,6 +121,7 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
 
             size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, stream);
             scanner->len += nread;
+            bx_search_dev_counters_note_bytes_read(nread);
             if (nread == 0u) {
                 if (ferror(stream))
                     return false;
@@ -159,6 +161,7 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
     if (!bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len, cursor, &candidate_start))
         return false;
 
+    bx_search_dev_counters_note_candidate_hit();
     candidate->chunk_off = candidate_start;
     candidate->file_off = scanner->file_off + (off_t)candidate_start;
     candidate->anchor_len = bx_literal_len(literal);

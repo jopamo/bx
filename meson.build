@@ -386,6 +386,7 @@ bx_search_sources = [
   'src/fswalk/walk.c',
   'src/search/filter.c',
   'src/search/metadata.c',
+  'src/search/dev_counters.c',
   'src/search/literal.c',
   'src/search/ignore.c',
   'src/search/options.c',

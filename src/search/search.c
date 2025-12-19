@@ -18,6 +18,7 @@
 #include "filter.h"
 #include "pcre2_matcher.h"
 #include "literal.h"
+#include "dev_counters.h"
 #include "record_stream.h"
 #include "scanner.h"
 #include "traverse.h"
@@ -305,6 +306,7 @@ static bool match_has_word_boundaries(const unsigned char *buf, size_t len,
 
 static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
                                   size_t start, struct search_opts *opts, struct bx_match *out) {
+    bx_search_dev_counters_note_matcher_invocation();
     size_t pos = start;
     while (pos <= len) {
         if (matcher_find(m, buf, len, pos, out) != 0)
@@ -324,6 +326,7 @@ static bool matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
                                                        struct bx_match *out) {
     if (!m || m->kind != MATCHER_LITERAL || !opts || opts->line_regexp)
         return false;
+    bx_search_dev_counters_note_matcher_invocation();
     if (!bx_literal_verify_at(m->literal, buf, len, candidate_start, out))
         return false;
     if (opts->word_regexp && !match_has_word_boundaries(buf, len, out))
@@ -463,6 +466,7 @@ static void print_match_colored(const unsigned char *line, size_t len,
         stats_count_bytes(match_end - match_start);
         write_record_terminator(opts);
     }
+    bx_search_dev_counters_note_output_line_emitted();
 }
 
 static void print_replacement_piece(const char *replace, const unsigned char *match, size_t match_len) {
@@ -504,6 +508,7 @@ static void print_replaced_record(const unsigned char *line, size_t len,
     fwrite(line + cursor, 1, match_len - cursor, stdout);
     stats_count_bytes(match_len - cursor);
     write_record_terminator(opts);
+    bx_search_dev_counters_note_output_line_emitted();
 }
 
 static bool should_omit_long_match_line(const struct search_opts *opts, size_t record_len) {
@@ -514,6 +519,7 @@ static void print_omitted_long_line(struct search_opts *opts) {
     fputs("[Omitted long matching line]", stdout);
     stats_count_bytes(strlen("[Omitted long matching line]"));
     write_record_terminator(opts);
+    bx_search_dev_counters_note_output_line_emitted();
 }
 
 static const char *match_field_separator(struct search_opts *opts) {
@@ -588,6 +594,7 @@ static void maybe_print_heading(const char *display_name, struct search_opts *op
     if (bx_color_enabled())
         fputs(bx_color_reset(), stdout);
     putchar('\n');
+    bx_search_dev_counters_note_output_line_emitted();
     *heading_printed_for_file = true;
     opts->heading_output_started = true;
 }
@@ -608,6 +615,7 @@ static void print_only_matches(const unsigned char *line, size_t len,
         fwrite(line + bm.start, 1, bm.end - bm.start, stdout);
         stats_count_bytes(bm.end - bm.start);
         write_record_terminator(opts);
+        bx_search_dev_counters_note_output_line_emitted();
         if (bm.end > bm.start)
             start = bm.end;
         else
@@ -657,6 +665,7 @@ static void print_count_result(const char *display_name, struct search_opts *opt
         printf("%s%c%d\n", display_name, opts->null_filename ? '\0' : ':', file_matches);
     else
         printf("%d\n", file_matches);
+    bx_search_dev_counters_note_output_line_emitted();
 }
 
 static void print_stats_summary(struct bx_search_stats *stats) {
@@ -668,11 +677,19 @@ static void print_stats_summary(struct bx_search_stats *stats) {
     printf("%zu bytes searched\n", stats->bytes_searched);
     printf("0.000000 seconds spent searching\n");
     printf("0.000000 seconds total\n");
+    for (int i = 0; i < 8; ++i)
+        bx_search_dev_counters_note_output_line_emitted();
 }
 
 static void stats_count_bytes(size_t count) {
     if (current_stats)
         current_stats->bytes_printed += count;
+}
+
+static int finish_search_main(int status) {
+    bx_search_dev_counters_report(stderr);
+    bx_search_dev_counters_reset();
+    return status;
 }
 
 static int count_record_matches(struct bx_matcher *m, const unsigned char *buf, size_t len,
@@ -709,6 +726,7 @@ static FILE *open_search_input_stream(const char *filename,
         report_path_error(progname, filename, errno, opts);
         return NULL;
     }
+    bx_search_dev_counters_note_file_opened();
 
     bx_record_stream_prepare_file(f, stream);
     if (use_stdin_out)
@@ -741,6 +759,7 @@ static unsigned char *read_stream_all(FILE *f, size_t *out_len) {
 
         size_t nread = fread(buf + len, 1, cap - len, f);
         len += nread;
+        bx_search_dev_counters_note_bytes_read(nread);
         if (nread == 0)
             break;
     }
@@ -795,6 +814,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
             report_path_error(progname, filename, errno, opts);
             return 2;
         }
+        bx_search_dev_counters_note_file_opened();
     }
 
     size_t len = 0;
@@ -850,6 +870,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
                                 bm.start, match_field_separator(opts));
             fwrite(buf + bm.start, 1, bm.end - bm.start, stdout);
             write_record_terminator(opts);
+            bx_search_dev_counters_note_output_line_emitted();
         } else {
             size_t out_start = line_start_offset(buf, bm.start);
             size_t out_end = line_end_offset(buf, len, bm.end);
@@ -866,6 +887,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
                 fwrite(buf + out_start, 1, out_end - out_start, stdout);
                 if (out_end == out_start || buf[out_end - 1] != record_delimiter(opts))
                     write_record_terminator(opts);
+                bx_search_dev_counters_note_output_line_emitted();
             }
         }
 
@@ -881,12 +903,14 @@ static int search_file_multiline(const char *filename, const char *display_name,
             printf("%s%c", display_name, '\0');
         else
             printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (opts->files_without_match && file_matches == 0 && display_name) {
         if (opts->null_output)
             printf("%s%c", display_name, '\0');
         else
             printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
 
     if (stats && file_matches > 0)
@@ -1069,10 +1093,12 @@ static int search_file_buffered_opened(FILE *f,
             if (opts->files_with_matches && file_matches > 0 && display_name) {
                 if (opts->null_output) printf("%s%c", display_name, '\0');
                 else printf("%s\n", display_name);
+                bx_search_dev_counters_note_output_line_emitted();
             }
             if (opts->files_without_match && file_matches == 0 && display_name) {
                 if (opts->null_output) printf("%s%c", display_name, '\0');
                 else printf("%s\n", display_name);
+                bx_search_dev_counters_note_output_line_emitted();
             }
             if (stats && file_matches > 0)
                 stats->files_with_matches++;
@@ -1108,10 +1134,12 @@ static int search_file_buffered_opened(FILE *f,
         if (opts->files_with_matches && file_matches > 0 && display_name) {
             if (opts->null_output) printf("%s%c", display_name, '\0');
             else printf("%s\n", display_name);
+            bx_search_dev_counters_note_output_line_emitted();
         }
         if (opts->files_without_match && file_matches == 0 && display_name) {
             if (opts->null_output) printf("%s%c", display_name, '\0');
             else printf("%s\n", display_name);
+            bx_search_dev_counters_note_output_line_emitted();
         }
         if (stats && file_matches > 0)
             stats->files_with_matches++;
@@ -1134,8 +1162,10 @@ static int search_file_buffered_opened(FILE *f,
     for (int i = 0; i < nlines; i++) {
         if (!lines[i].print) { in_group = false; continue; }
         if (!in_group && last_printed >= 0 && i > last_printed + 1) {
-            if (!opts->suppress_group_separator)
+            if (!opts->suppress_group_separator) {
                 printf("%s\n", opts->group_separator ? opts->group_separator : "--");
+                bx_search_dev_counters_note_output_line_emitted();
+            }
         }
         if (lines[i].match) {
             if (opts->only_matching && !opts->invert_match) {
@@ -1159,6 +1189,7 @@ static int search_file_buffered_opened(FILE *f,
                     fwrite(lines[i].text, 1, lines[i].len, stdout);
                     if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                         write_record_terminator(opts);
+                    bx_search_dev_counters_note_output_line_emitted();
                     continue;
                 }
                 if (should_omit_long_match_line(opts, lines[i].len))
@@ -1176,6 +1207,7 @@ static int search_file_buffered_opened(FILE *f,
             fwrite(lines[i].text, 1, lines[i].len, stdout);
             if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
+            bx_search_dev_counters_note_output_line_emitted();
         }
         in_group = true; last_printed = i;
     }
@@ -1320,12 +1352,14 @@ static int search_file_scanner_opened(FILE *f,
             printf("%s%c", display_name, '\0');
         else
             printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (opts->files_without_match && file_matches == 0 && display_name) {
         if (opts->null_output)
             printf("%s%c", display_name, '\0');
         else
             printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (stats && file_matches > 0)
         stats->files_with_matches++;
@@ -1422,6 +1456,7 @@ static int search_file_streaming_opened(FILE *f,
                         fwrite(line, 1, (size_t)len, stdout);
                         if (len == 0 || line[len - 1] != record_delimiter(opts))
                             write_record_terminator(opts);
+                        bx_search_dev_counters_note_output_line_emitted();
                     } else if (opts->replace) {
                         print_replaced_record((unsigned char *)line, (size_t)len, m, opts);
                     } else {
@@ -1439,6 +1474,7 @@ static int search_file_streaming_opened(FILE *f,
             fwrite(line, 1, (size_t)len, stdout);
             if (len == 0 || line[len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
+            bx_search_dev_counters_note_output_line_emitted();
         } else if (opts->stop_on_nonmatch && saw_match_record) {
             break;
         }
@@ -1450,10 +1486,12 @@ static int search_file_streaming_opened(FILE *f,
     if (opts->files_with_matches && file_matches > 0 && display_name) {
         if (opts->null_output) printf("%s%c", display_name, '\0');
         else printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (opts->files_without_match && file_matches == 0 && display_name) {
         if (opts->null_output) printf("%s%c", display_name, '\0');
         else printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (stats && file_matches > 0)
         stats->files_with_matches++;
@@ -1490,6 +1528,7 @@ static int search_binary_without_match(const char *display_name,
             printf("%s%c", display_name, '\0');
         else
             printf("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
     }
     if (match_count)
         *match_count += 0;
@@ -1547,6 +1586,7 @@ static bool binary_file_matches(const char *filename,
     FILE *f = fopen(filename, "r");
     if (!f)
         return false;
+    bx_search_dev_counters_note_file_opened();
 
     bx_record_stream_prepare_file(f, record_stream);
     bool matched = binary_file_matches_opened(f, m, opts, record_stream);
@@ -1663,8 +1703,10 @@ static int search_file(const char *filename, const char *display_name_override, 
 static bool is_binary(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) return false;
+    bx_search_dev_counters_note_file_opened();
     unsigned char buf[1024];
     size_t n = fread(buf, 1, sizeof(buf), f);
+    bx_search_dev_counters_note_bytes_read(n);
     fclose(f);
     if (n == 0) return false;
     for (size_t i = 0; i < n; i++)
@@ -1895,14 +1937,16 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int first_file;
     const char *progname = argv[0] ? argv[0] : "grep";
 
+    bx_search_dev_counters_begin_from_env();
+
     int rc = bx_search_parse_options(argc, argv, &opts, personality, &pattern, &first_file);
     if (rc != 0) {
         bx_search_free_options(&opts);
         if (rc == 1)
-            return 0;
+            return finish_search_main(0);
         if (rc == 3)
-            return 1;
-        return 2;
+            return finish_search_main(1);
+        return finish_search_main(2);
     }
 
     if (opts.files_only) {
@@ -1957,7 +2001,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         }
         free(sorted_operands);
         bx_search_free_options(&opts);
-        return error_seen ? 2 : 0;
+        return finish_search_main(error_seen ? 2 : 0);
     }
 
     struct bx_matcher *m;
@@ -2014,7 +2058,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         bx_search_scanner_dispose(&scanner);
         bx_record_stream_dispose(&record_stream);
         bx_search_free_options(&opts);
-        return 2;
+        return finish_search_main(2);
     }
 
     int num_files = argc - first_file;
@@ -2173,8 +2217,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     current_stats = NULL;
     bx_search_free_options(&opts);
     if (opts.quiet && match_seen)
-        return 0;
+        return finish_search_main(0);
     if (error_seen)
-        return 2;
-    return match_seen ? 0 : 1;
+        return finish_search_main(2);
+    return finish_search_main(match_seen ? 0 : 1);
 }
