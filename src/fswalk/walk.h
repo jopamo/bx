@@ -39,6 +39,7 @@ struct bx_walk_opts {
 
 struct bx_walk_filter_opts {
     bool hidden;
+    bool glob_case_insensitive;
     char *const *include_patterns;
     const bool *include_pattern_casefold;
     int num_include_patterns;
@@ -53,8 +54,18 @@ struct bx_walk_ignore_opts {
     bool no_ignore_parent;
     bool no_ignore_vcs;
     bool no_ignore_dot;
+    bool no_ignore_exclude;
+    bool no_ignore_files;
+    bool no_ignore_global;
     bool no_require_git;
     bool gitignore_enabled;
+    bool ignore_file_case_insensitive;
+    bool suppress_ignore_messages;
+    bool os_error_style;
+    const char *error_prefix;
+    const char *git_root;
+    char *const *extra_ignore_files;
+    int num_extra_ignore_files;
     const char *const *ignore_filenames;
     int num_ignore_filenames;
 };

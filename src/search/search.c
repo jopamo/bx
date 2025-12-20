@@ -16,10 +16,14 @@
 #include "options.h"
 #include "fswalk/walk.h"
 #include "filter.h"
+#include "ignore.h"
 #include "pcre2_matcher.h"
 #include "literal.h"
 #include "dev_counters.h"
 #include "record_stream.h"
+#include "rg_output.h"
+#include "rg_text.h"
+#include "rg_transform.h"
 #include "scanner.h"
 #include "traverse.h"
 #include "lib/color.h"
@@ -29,6 +33,27 @@ static bool progname_uses_os_error_style(const char *progname) {
     if (!progname) return false;
     progname = bx_cli_progname(progname, "grep");
     return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
+}
+
+static bool bx_search_path_exceeds_max_filesize(const char *path,
+                                                const struct search_opts *opts) {
+    if (!path || !opts || !opts->max_filesize_set)
+        return false;
+
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return false;
+    return S_ISREG(st.st_mode) && st.st_size > (off_t)opts->max_filesize;
+}
+
+static bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
+                                                 const struct search_opts *opts) {
+    if (!entry || !opts || !opts->max_filesize_set || entry->is_dir)
+        return false;
+    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+        return false;
+    return entry->metadata_loaded && S_ISREG(entry->mode)
+        && entry->size > (off_t)opts->max_filesize;
 }
 
 static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
@@ -85,10 +110,10 @@ static void report_binary_match(const char *progname, const char *path) {
     fprintf(stderr, "%s: %s: binary file matches\n", progname, path);
 }
 
-static const char *display_path_for_output(const char *path, bool strip_dot_prefix) {
-    if (strip_dot_prefix)
-        return bx_path_strip_dot_slash_prefix_ptr(path);
-    return path;
+static char *display_path_for_output(const char *path, bool strip_dot_prefix,
+                                     const struct search_opts *opts) {
+    return bx_rg_display_path_dup(path, strip_dot_prefix,
+                                  opts ? opts->path_separator : '/');
 }
 
 static const char *display_name_for_stream(const char *filename, const char *display_name_override,
@@ -288,20 +313,11 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
     return bx_regex_find(m->regex, buf, len, start, out);
 }
 
-static bool is_word_byte(unsigned char c) {
-    return (c >= '0' && c <= '9') ||
-           (c >= 'A' && c <= 'Z') ||
-           (c >= 'a' && c <= 'z') ||
-           c == '_';
-}
-
 static bool match_has_word_boundaries(const unsigned char *buf, size_t len,
-                                      const struct bx_match *match) {
-    if (match->start > 0 && is_word_byte(buf[match->start - 1]))
-        return false;
-    if (match->end < len && is_word_byte(buf[match->end]))
-        return false;
-    return true;
+                                      const struct bx_match *match,
+                                      const struct search_opts *opts) {
+    return bx_rg_match_has_word_boundaries(buf, len, match->start, match->end,
+                                           opts && opts->unicode);
 }
 
 static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
@@ -311,7 +327,7 @@ static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf
     while (pos <= len) {
         if (matcher_find(m, buf, len, pos, out) != 0)
             return -1;
-        if (!opts->word_regexp || match_has_word_boundaries(buf, len, out))
+        if (!opts->word_regexp || match_has_word_boundaries(buf, len, out, opts))
             return 0;
         pos = out->end > out->start ? out->start + 1 : out->start + 1;
     }
@@ -329,7 +345,7 @@ static bool matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
     bx_search_dev_counters_note_matcher_invocation();
     if (!bx_literal_verify_at(m->literal, buf, len, candidate_start, out))
         return false;
-    if (opts->word_regexp && !match_has_word_boundaries(buf, len, out))
+    if (opts->word_regexp && !match_has_word_boundaries(buf, len, out, opts))
         return false;
     return true;
 }
@@ -447,16 +463,34 @@ static bool matcher_is_scanner_literal_eligible(const struct bx_matcher *m,
 
 /* --- match output helpers --- */
 
+static size_t printable_trim_prefix(const unsigned char *line, size_t len,
+                                    const struct search_opts *opts) {
+    size_t match_len = record_match_len(line, len, opts);
+    if (!opts || !opts->trim)
+        return 0u;
+    return bx_rg_trim_leading_ascii_space(line, match_len);
+}
+
+static void print_plain_record_contents(const unsigned char *line, size_t len,
+                                        struct search_opts *opts) {
+    size_t trim_prefix = printable_trim_prefix(line, len, opts);
+    fwrite(line + trim_prefix, 1, len - trim_prefix, stdout);
+    stats_count_bytes(len - trim_prefix);
+}
+
 static void print_match_colored(const unsigned char *line, size_t len,
                                  size_t match_start, size_t match_end,
                                  struct search_opts *opts) {
+    size_t trim_prefix = printable_trim_prefix(line, len, opts);
+    if (trim_prefix > match_start)
+        trim_prefix = match_start;
     if (!opts->only_matching) {
-        fwrite(line, 1, match_start, stdout);
-        stats_count_bytes(match_start);
-        if (bx_color_enabled()) fputs(bx_color_red(), stdout);
+        fwrite(line + trim_prefix, 1, match_start - trim_prefix, stdout);
+        stats_count_bytes(match_start - trim_prefix);
+        bx_rg_emit_color_style_start(&opts->rg_colors.match);
         fwrite(line + match_start, 1, match_end - match_start, stdout);
         stats_count_bytes(match_end - match_start);
-        if (bx_color_enabled()) fputs(bx_color_reset(), stdout);
+        bx_rg_emit_color_reset();
         fwrite(line + match_end, 1, len - match_end, stdout);
         stats_count_bytes(len - match_end);
         if (len == 0 || line[len - 1] != record_delimiter(opts))
@@ -491,8 +525,9 @@ static void print_replacement_piece(const char *replace, const unsigned char *ma
 static void print_replaced_record(const unsigned char *line, size_t len,
                                   struct bx_matcher *m, struct search_opts *opts) {
     size_t match_len = record_match_len(line, len, opts);
-    size_t start = 0;
-    size_t cursor = 0;
+    size_t trim_prefix = printable_trim_prefix(line, len, opts);
+    size_t start = trim_prefix;
+    size_t cursor = trim_prefix;
 
     while (start <= match_len) {
         struct bx_match bm;
@@ -534,12 +569,23 @@ static void print_result_prefix(const char *display_name, struct search_opts *op
                                 int line_num, size_t column, bool has_column,
                                 size_t byte_offset, const char *sep) {
     if (opts->show_filename && display_name) {
-        if (bx_color_enabled())
-            fputs(bx_color_magenta(), stdout);
+        char *hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
+                                                   opts->hostname_bin,
+                                                   display_name,
+                                                   (size_t)line_num,
+                                                   column,
+                                                   opts->show_line_number,
+                                                   has_column && opts->show_column);
+        if (hyperlink)
+            fputs(hyperlink, stdout);
+        bx_rg_emit_color_style_start(&opts->rg_colors.path);
         fputs(display_name, stdout);
         stats_count_bytes(strlen(display_name));
-        if (bx_color_enabled())
-            fputs(bx_color_reset(), stdout);
+        bx_rg_emit_color_reset();
+        if (hyperlink) {
+            fputs(bx_rg_hyperlink_close(), stdout);
+            free(hyperlink);
+        }
         if (opts->null_filename)
             putchar('\0');
         else
@@ -547,32 +593,26 @@ static void print_result_prefix(const char *display_name, struct search_opts *op
         stats_count_bytes(opts->null_filename ? 1 : strlen(sep));
     }
     if (opts->show_line_number) {
-        if (bx_color_enabled())
-            fputs(bx_color_green(), stdout);
+        bx_rg_emit_color_style_start(&opts->rg_colors.line);
         int n = printf("%d", line_num);
         if (n > 0) stats_count_bytes((size_t)n);
-        if (bx_color_enabled())
-            fputs(bx_color_reset(), stdout);
+        bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
     }
     if (opts->show_column && has_column) {
-        if (bx_color_enabled())
-            fputs(bx_color_green(), stdout);
+        bx_rg_emit_color_style_start(&opts->rg_colors.column);
         int n = printf("%zu", column);
         if (n > 0) stats_count_bytes((size_t)n);
-        if (bx_color_enabled())
-            fputs(bx_color_reset(), stdout);
+        bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
     }
     if (opts->show_byte_offset) {
-        if (bx_color_enabled())
-            fputs(bx_color_green(), stdout);
+        bx_rg_emit_color_style_start(&opts->rg_colors.line);
         int n = printf("%zu", byte_offset);
         if (n > 0) stats_count_bytes((size_t)n);
-        if (bx_color_enabled())
-            fputs(bx_color_reset(), stdout);
+        bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
     }
@@ -588,11 +628,18 @@ static void maybe_print_heading(const char *display_name, struct search_opts *op
         return;
     if (opts->heading_output_started)
         putchar('\n');
-    if (bx_color_enabled())
-        fputs(bx_color_magenta(), stdout);
+    char *hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
+                                               opts->hostname_bin,
+                                               display_name, 1u, 1u, false, false);
+    if (hyperlink)
+        fputs(hyperlink, stdout);
+    bx_rg_emit_color_style_start(&opts->rg_colors.path);
     printf("%s", display_name);
-    if (bx_color_enabled())
-        fputs(bx_color_reset(), stdout);
+    bx_rg_emit_color_reset();
+    if (hyperlink) {
+        fputs(bx_rg_hyperlink_close(), stdout);
+        free(hyperlink);
+    }
     putchar('\n');
     bx_search_dev_counters_note_output_line_emitted();
     *heading_printed_for_file = true;
@@ -648,9 +695,7 @@ static char record_delimiter(const struct search_opts *opts) {
 }
 
 static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts) {
-    if (len > 0 && buf[len - 1] == (unsigned char)record_delimiter(opts))
-        return len - 1;
-    return len;
+    return bx_rg_record_match_len(buf, len, record_delimiter(opts), opts->crlf);
 }
 
 static void write_record_terminator(const struct search_opts *opts) {
@@ -802,29 +847,12 @@ static size_t line_end_offset(const unsigned char *buf, size_t len, size_t offse
     return offset;
 }
 
-static int search_file_multiline(const char *filename, const char *display_name,
-                                 const char *progname, struct bx_matcher *m,
-                                 struct search_opts *opts, int *match_count,
-                                 struct bx_search_stats *stats) {
-    FILE *f = stdin;
-    bool use_stdin = (!filename || strcmp(filename, "-") == 0);
-    if (!use_stdin) {
-        f = fopen(filename, "r");
-        if (!f) {
-            report_path_error(progname, filename, errno, opts);
-            return 2;
-        }
-        bx_search_dev_counters_note_file_opened();
-    }
-
-    size_t len = 0;
-    unsigned char *buf = read_stream_all(f, &len);
-    if (!use_stdin)
-        fclose(f);
-    if (!buf)
-        return 2;
+static int search_buffer_multiline(unsigned char *buf, size_t len,
+                                   const char *display_name,
+                                   struct bx_matcher *m,
+                                   struct search_opts *opts, int *match_count,
+                                   struct bx_search_stats *stats) {
     if (stats) {
-        stats->files_searched++;
         stats->bytes_searched += len;
     }
 
@@ -884,7 +912,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
             else if (opts->replace) {
                 print_replaced_record(buf + out_start, out_end - out_start, m, opts);
             } else {
-                fwrite(buf + out_start, 1, out_end - out_start, stdout);
+                print_plain_record_contents(buf + out_start, out_end - out_start, opts);
                 if (out_end == out_start || buf[out_end - 1] != record_delimiter(opts))
                     write_record_terminator(opts);
                 bx_search_dev_counters_note_output_line_emitted();
@@ -919,6 +947,32 @@ static int search_file_multiline(const char *filename, const char *display_name,
         *match_count += file_matches;
     free(buf);
     return status;
+}
+
+static int search_file_multiline(const char *filename, const char *display_name,
+                                 const char *progname, struct bx_matcher *m,
+                                 struct search_opts *opts, int *match_count,
+                                 struct bx_search_stats *stats) {
+    FILE *f = stdin;
+    bool use_stdin = (!filename || strcmp(filename, "-") == 0);
+    if (!use_stdin) {
+        f = fopen(filename, "r");
+        if (!f) {
+            report_path_error(progname, filename, errno, opts);
+            return 2;
+        }
+        bx_search_dev_counters_note_file_opened();
+    }
+
+    size_t len = 0;
+    unsigned char *buf = read_stream_all(f, &len);
+    if (!use_stdin)
+        fclose(f);
+    if (!buf)
+        return 2;
+    if (stats)
+        stats->files_searched++;
+    return search_buffer_multiline(buf, len, display_name, m, opts, match_count, stats);
 }
 
 static bool search_default_show_filename(int argc, char **argv, int first_file,
@@ -1186,7 +1240,7 @@ static int search_file_buffered_opened(FILE *f,
                     continue;
                 }
                 if (opts->invert_match) {
-                    fwrite(lines[i].text, 1, lines[i].len, stdout);
+                    print_plain_record_contents((unsigned char *)lines[i].text, lines[i].len, opts);
                     if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                         write_record_terminator(opts);
                     bx_search_dev_counters_note_output_line_emitted();
@@ -1204,7 +1258,7 @@ static int search_file_buffered_opened(FILE *f,
             print_result_prefix(heading_printed_for_file ? NULL : display_name,
                                 opts, i + 1, 0, false, lines[i].byte_offset,
                                 context_field_separator(opts));
-            fwrite(lines[i].text, 1, lines[i].len, stdout);
+            print_plain_record_contents((unsigned char *)lines[i].text, lines[i].len, opts);
             if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
             bx_search_dev_counters_note_output_line_emitted();
@@ -1453,7 +1507,7 @@ static int search_file_streaming_opened(FILE *f,
                                         opts, line_num, bm.start + 1, true, line_offset,
                                         match_field_separator(opts));
                     if (opts->invert_match) {
-                        fwrite(line, 1, (size_t)len, stdout);
+                        print_plain_record_contents((unsigned char *)line, (size_t)len, opts);
                         if (len == 0 || line[len - 1] != record_delimiter(opts))
                             write_record_terminator(opts);
                         bx_search_dev_counters_note_output_line_emitted();
@@ -1471,7 +1525,7 @@ static int search_file_streaming_opened(FILE *f,
         } else if (opts->passthru) {
             print_result_prefix(display_name, opts, line_num, 0, false, line_offset,
                                 context_field_separator(opts));
-            fwrite(line, 1, (size_t)len, stdout);
+            print_plain_record_contents((unsigned char *)line, (size_t)len, opts);
             if (len == 0 || line[len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
             bx_search_dev_counters_note_output_line_emitted();
@@ -1594,21 +1648,93 @@ static bool binary_file_matches(const char *filename,
     return matched;
 }
 
+static int search_transformed_buffer(unsigned char *buf, size_t len,
+                                     const char *display_name,
+                                     const char *progname,
+                                     struct bx_matcher *m,
+                                     struct search_opts *opts,
+                                     int *match_count,
+                                     struct bx_record_stream *record_stream,
+                                     struct bx_search_stats *stats) {
+    FILE *mem;
+    int rc;
+
+    if (opts->multiline) {
+        if (stats)
+            stats->files_searched++;
+        return search_buffer_multiline(buf, len, display_name, m, opts, match_count, stats);
+    }
+
+    mem = fmemopen(buf, len, "r");
+    if (!mem) {
+        free(buf);
+        report_path_error(progname, display_name ? display_name : "(memory)", errno, opts);
+        return 2;
+    }
+
+    if (needs_line_buffering(opts) ||
+        (!opts->null_data && !opts->binary_as_text &&
+         (opts->binary_without_match ||
+          (!opts->quiet && !opts->count_only &&
+           !opts->files_with_matches && !opts->files_without_match)))) {
+        rc = search_file_buffered_opened(mem, false, display_name, progname, m, opts,
+                                         match_count, record_stream, stats);
+    } else {
+        rc = search_file_streaming_opened(mem, false, display_name, m, opts,
+                                          match_count, record_stream, stats);
+    }
+    free(buf);
+    return rc;
+}
+
 static int search_file(const char *filename, const char *display_name_override, const char *progname,
                        struct bx_matcher *m, struct search_opts *opts,
                        int *match_count,
                        struct bx_search_scanner *scanner,
                        struct bx_record_stream *record_stream,
                        struct bx_search_stats *stats) {
-    const char *display_name = display_name_for_stream(filename, display_name_override, opts);
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
-    if (opts->multiline)
-        return search_file_multiline(filename, display_name, progname, m, opts, match_count, stats);
+    char *owned_display_name = NULL;
+    const char *display_name = display_name_for_stream(filename, display_name_override, opts);
+    int result = 1;
+
+    if (!display_name_override && filename && strcmp(filename, "-") != 0) {
+        owned_display_name = bx_rg_display_path_dup(filename, false, opts->path_separator);
+        if (owned_display_name)
+            display_name = owned_display_name;
+    }
+
+    bx_rg_tracef(opts, "search: %s", display_name ? display_name : "(stdin)");
+
+    if (bx_rg_transform_maybe_needed(opts, filename, use_stdin,
+                                     use_stdin ? fileno(stdin) : -1)) {
+        unsigned char *transformed = NULL;
+        size_t transformed_len = 0u;
+        enum bx_rg_transform_result transform_rc =
+            bx_rg_load_transformed_input(filename, progname, opts, &transformed, &transformed_len);
+        if (transform_rc == BX_RG_TRANSFORM_NO_MATCH) {
+            result = 1;
+            goto out;
+        }
+        if (transform_rc == BX_RG_TRANSFORM_ERROR) {
+            result = 2;
+            goto out;
+        }
+        result = search_transformed_buffer(transformed, transformed_len, display_name, progname,
+                                           m, opts, match_count, record_stream, stats);
+        goto out;
+    }
+
+    if (opts->multiline) {
+        result = search_file_multiline(filename, display_name, progname, m, opts, match_count, stats);
+        goto out;
+    }
     if (display_name && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 && lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
             report_path_error(progname, filename, EISDIR, opts);
-            return 2;
+            result = 2;
+            goto out;
         }
     }
 
@@ -1616,29 +1742,33 @@ static int search_file(const char *filename, const char *display_name_override, 
         (opts->binary_without_match ||
          (!opts->quiet && !opts->count_only &&
           !opts->files_with_matches && !opts->files_without_match))) {
-        return search_file_buffered(filename, display_name, progname, m, opts,
-                                    match_count, record_stream, stats);
+        result = search_file_buffered(filename, display_name, progname, m, opts,
+                                      match_count, record_stream, stats);
+        goto out;
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
         FILE *f = open_search_input_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
-            return 2;
+            goto out_error;
 
         bool is_binary_file = false;
         if (bx_record_stream_probe_binary_prefix(f, &is_binary_file)) {
             if (is_binary_file) {
                 if (opts->binary_without_match) {
                     fclose(f);
-                    return search_binary_without_match(display_name, opts, match_count, stats);
+                    result = search_binary_without_match(display_name, opts, match_count, stats);
+                    goto out;
                 }
 
                 if (opts->quiet || opts->files_with_matches || opts->files_without_match || opts->count_only) {
                     if (needs_line_buffering(opts))
-                        return search_file_buffered_opened(f, false, display_name, progname, m, opts,
-                                                           match_count, record_stream, stats);
-                    return search_file_streaming_opened(f, false, display_name, m, opts,
-                                                        match_count, record_stream, stats);
+                        result = search_file_buffered_opened(f, false, display_name, progname, m, opts,
+                                                             match_count, record_stream, stats);
+                    else
+                        result = search_file_streaming_opened(f, false, display_name, m, opts,
+                                                              match_count, record_stream, stats);
+                    goto out;
                 }
 
                 bool matched = binary_file_matches_opened(f, m, opts, record_stream);
@@ -1647,21 +1777,27 @@ static int search_file(const char *filename, const char *display_name_override, 
                     report_binary_match(progname, display_name);
                     if (match_count)
                         (*match_count)++;
-                    return 0;
+                    result = 0;
+                    goto out;
                 }
-                return 1;
+                result = 1;
+                goto out;
             }
 
             if (needs_line_buffering(opts))
-                return search_file_buffered_opened(f, false, display_name, progname, m, opts,
-                                                   match_count, record_stream, stats);
+                result = search_file_buffered_opened(f, false, display_name, progname, m, opts,
+                                                     match_count, record_stream, stats);
             if (search_file_can_use_scanner(m, opts, false)
                 && search_file_scanner_stream_is_eligible(f)) {
-                return search_file_scanner_opened(f, false, display_name, progname, m, opts,
-                                                  match_count, scanner, stats);
+                result = search_file_scanner_opened(f, false, display_name, progname, m, opts,
+                                                    match_count, scanner, stats);
+                goto out;
             }
-            return search_file_streaming_opened(f, false, display_name, m, opts,
-                                                match_count, record_stream, stats);
+            if (needs_line_buffering(opts))
+                goto out;
+            result = search_file_streaming_opened(f, false, display_name, m, opts,
+                                                  match_count, record_stream, stats);
+            goto out;
         }
 
         fclose(f);
@@ -1669,33 +1805,48 @@ static int search_file(const char *filename, const char *display_name_override, 
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text && is_binary(filename)) {
         if (opts->binary_without_match)
-            return search_binary_without_match(display_name, opts, match_count, stats);
+            result = search_binary_without_match(display_name, opts, match_count, stats);
+
+        if (result != 1)
+            goto out;
 
         if (opts->quiet || opts->files_with_matches || opts->files_without_match || opts->count_only) {
             if (needs_line_buffering(opts))
-                return search_file_buffered(filename, display_name, progname, m, opts,
-                                            match_count, record_stream, stats);
-            return search_file_streaming(filename, display_name, progname, m, opts,
-                                         match_count, record_stream, stats);
+                result = search_file_buffered(filename, display_name, progname, m, opts,
+                                              match_count, record_stream, stats);
+            else
+                result = search_file_streaming(filename, display_name, progname, m, opts,
+                                               match_count, record_stream, stats);
+            goto out;
         }
 
         if (binary_file_matches(filename, m, opts, record_stream)) {
             report_binary_match(progname, display_name);
             if (match_count)
                 (*match_count)++;
-            return 0;
+            result = 0;
+            goto out;
         }
-        return 1;
+        result = 1;
+        goto out;
     }
 
     if (needs_line_buffering(opts))
-        return search_file_buffered(filename, display_name, progname, m, opts,
-                                    match_count, record_stream, stats);
-    if (search_file_can_use_scanner(m, opts, use_stdin))
-        return search_file_scanner(filename, display_name, progname, m, opts,
-                                   match_count, scanner, record_stream, stats);
-    return search_file_streaming(filename, display_name, progname, m, opts,
-                                 match_count, record_stream, stats);
+        result = search_file_buffered(filename, display_name, progname, m, opts,
+                                      match_count, record_stream, stats);
+    else if (search_file_can_use_scanner(m, opts, use_stdin))
+        result = search_file_scanner(filename, display_name, progname, m, opts,
+                                     match_count, scanner, record_stream, stats);
+    else
+        result = search_file_streaming(filename, display_name, progname, m, opts,
+                                       match_count, record_stream, stats);
+    goto out;
+
+out_error:
+    result = 2;
+out:
+    free(owned_display_name);
+    return result;
 }
 
 /* --- binary detection --- */
@@ -1780,7 +1931,7 @@ static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
         .follow_symlinks = opts->follow_symlinks,
         .follow_root_symlink = true,
         .post_order = false,
-        .stay_on_filesystem = false,
+        .stay_on_filesystem = opts->stay_on_filesystem,
         .stop = stop,
         .suppress_eacces = false,
         .suppress_errors = opts->suppress_errors,
@@ -1796,6 +1947,7 @@ static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
 static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts) {
     return (struct bx_walk_filter_opts){
         .hidden = opts->hidden,
+        .glob_case_insensitive = opts->glob_case_insensitive,
         .include_patterns = opts->include_patterns,
         .include_pattern_casefold = opts->include_pattern_casefold,
         .num_include_patterns = opts->num_include,
@@ -1806,13 +1958,24 @@ static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search
     };
 }
 
-static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const struct search_opts *opts) {
+static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
+                                                             const struct search_opts *opts) {
     return (struct bx_walk_ignore_opts){
         .no_ignore = opts->no_ignore,
         .no_ignore_parent = opts->no_ignore_parent,
         .no_ignore_vcs = opts->no_ignore_vcs,
         .no_ignore_dot = opts->no_ignore_dot,
+        .no_ignore_exclude = opts->no_ignore_exclude,
+        .no_ignore_files = opts->no_ignore_files,
+        .no_ignore_global = opts->no_ignore_global,
         .no_require_git = opts->no_require_git,
+        .ignore_file_case_insensitive = opts->ignore_file_case_insensitive,
+        .suppress_ignore_messages = opts->suppress_ignore_messages,
+        .os_error_style = progname_uses_os_error_style(progname),
+        .error_prefix = progname,
+        .git_root = NULL,
+        .extra_ignore_files = opts->ignore_files,
+        .num_extra_ignore_files = opts->num_ignore_files,
         .gitignore_enabled = false,
         .ignore_filenames = rg_ignore_filenames,
         .num_ignore_filenames = 3,
@@ -1856,9 +2019,15 @@ static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
 
 static enum bx_walk_action fs_cb(struct bx_walk_entry *entry, void *user) {
     struct files_walk_state *st = user;
-    if (!entry->is_dir)
-        printf("%s%c", display_path_for_output(entry->path, st && st->strip_dot_prefix),
+    if (bx_search_entry_exceeds_max_filesize(entry, st ? st->opts : NULL))
+        return BX_WALK_CONTINUE;
+    if (!entry->is_dir) {
+        char *display = display_path_for_output(entry->path, st && st->strip_dot_prefix,
+                                                st ? st->opts : NULL);
+        printf("%s%c", display ? display : entry->path,
                (st && st->opts && st->opts->null_output) ? '\0' : '\n');
+        free(display);
+    }
     return BX_WALK_CONTINUE;
 }
 
@@ -1886,6 +2055,7 @@ static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
     if (gs->opts->num_include > 0) {
         struct bx_walk_filter_opts filter_opts = {
             .hidden = gs->opts->hidden,
+            .glob_case_insensitive = gs->opts->glob_case_insensitive,
             .include_patterns = gs->opts->include_patterns,
             .include_pattern_casefold = gs->opts->include_pattern_casefold,
             .num_include_patterns = gs->opts->num_include,
@@ -1897,7 +2067,8 @@ static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
     }
 
     for (int i = 0; i < gs->opts->num_exclude; i++) {
-        if (fnmatch(gs->opts->exclude_patterns[i], name, 0) == 0)
+        int flags = gs->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
+        if (fnmatch(gs->opts->exclude_patterns[i], name, flags) == 0)
             return false;
     }
 
@@ -1910,11 +2081,14 @@ static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user)
         return BX_WALK_STOP;
     if (entry->is_dir)
         return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, gs ? gs->opts : NULL))
+        return BX_WALK_CONTINUE;
 
-    const char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix);
+    char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix, gs->opts);
 
     int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts,
                         gs->match_count, gs->scanner, gs->record_stream, gs->stats);
+    free(display_name);
     if (r == 2) {
         *gs->exit_status = 2;
         if (gs->error_seen) *gs->error_seen = true;
@@ -1949,6 +2123,17 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         return finish_search_main(2);
     }
 
+    if (opts.line_buffered) {
+        setvbuf(stdout, NULL, _IOLBF, 0);
+    } else if (opts.block_buffered) {
+        setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
+    }
+
+    if (bx_search_personality_is_rg(personality)) {
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
+        bx_ignore_validate_explicit_ignore_files(&ignore_opts);
+    }
+
     if (opts.files_only) {
         bool error_seen = false;
         struct files_walk_state fstate = {
@@ -1961,7 +2146,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                                     : BX_WALK_CYCLE_NONE;
         walk_opts.cycle_report = BX_WALK_CYCLE_ERROR;
         struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
             .filter_opts = &filter_opts,
@@ -1993,6 +2178,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     error_seen = true;
                     continue;
                 }
+                if (bx_search_path_exceeds_max_filesize(argv[j], &opts))
+                    continue;
                 if (S_ISDIR(st.st_mode))
                     error_seen |= bx_search_walk(argv[j], &walk_config, &fstate) != 0;
                 else
@@ -2105,7 +2292,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                          .strip_dot_prefix = true};
             struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
             struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-            struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+            struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
             struct bx_search_walk_config walk_config = {
                 .walk_opts = &walk_opts,
                 .filter_opts = &filter_opts,
@@ -2139,7 +2326,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                                      .strip_dot_prefix = false};
         struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
         struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(&opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
             .filter_opts = &filter_opts,
@@ -2194,6 +2381,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     error_seen = true;
                     continue;
                 }
+                if (bx_search_path_exceeds_max_filesize(argv[j], &opts))
+                    continue;
             }
             int r = search_file(argv[j], NULL, progname, m, &opts, &global_matches,
                                 &scanner, &record_stream, &stats);

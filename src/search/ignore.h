@@ -13,6 +13,7 @@ struct bx_ignore_state {
     char *owned_root_prefix;
     char **patterns;
     int pattern_count;
+    bool casefold;
 };
 
 bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern);
@@ -30,6 +31,7 @@ void bx_ignore_state_dispose_chain(struct bx_ignore_state *state);
 
 bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
                              char ***patterns, int *n);
+void bx_ignore_validate_explicit_ignore_files(const struct bx_walk_ignore_opts *opts);
 
 struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                                                     const struct bx_walk_ignore_opts *opts,
@@ -43,5 +45,6 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
 bool bx_ignore_path_ignored(const char *name, char **patterns, int n);
 
 bool bx_ignore_enable_gitignore_for_root(const char *root, const struct bx_walk_ignore_opts *opts);
+char *bx_ignore_find_git_root(const char *root, const struct bx_walk_ignore_opts *opts);
 
 #endif

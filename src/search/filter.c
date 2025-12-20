@@ -37,7 +37,7 @@ static bool bx_walk_filter_matches_include_relative(const struct bx_walk_filter_
 
     for (int i = 0; i < state->opts->num_include_patterns; i++) {
         const char *pattern = state->opts->include_patterns[i];
-        int flags = 0;
+        int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
         if (!pattern || pattern[0] == '\0')
             continue;
         if (state->opts->include_pattern_casefold &&
@@ -65,12 +65,13 @@ static bool bx_walk_filter_matches_exclude(const struct bx_walk_filter_state *st
 
     for (int i = 0; i < state->opts->num_exclude_patterns; i++) {
         const char *pattern = state->opts->exclude_patterns[i];
+        int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
         if (!pattern || pattern[0] == '\0')
             continue;
-        if (fnmatch(pattern, name, 0) == 0)
+        if (fnmatch(pattern, name, flags) == 0)
             return true;
         if (relative_path && relative_path[0] != '\0' &&
-            fnmatch(pattern, relative_path, FNM_PATHNAME) == 0) {
+            fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0) {
             return true;
         }
     }
@@ -84,7 +85,8 @@ static bool bx_walk_filter_matches_exclude_dir(const struct bx_walk_filter_state
         return false;
 
     for (int i = 0; i < state->opts->num_exclude_dirs; i++) {
-        if (fnmatch(state->opts->exclude_dirs[i], name, 0) == 0)
+        int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
+        if (fnmatch(state->opts->exclude_dirs[i], name, flags) == 0)
             return true;
     }
 

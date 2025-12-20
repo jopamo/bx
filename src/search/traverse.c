@@ -20,6 +20,7 @@ struct bx_search_walk_state {
     struct bx_walk_filter_state filter_state;
     struct bx_walk_ignore_opts ignore_opts;
     bool have_ignore_opts;
+    char *git_root_owned;
     struct bx_ignore_state *parent_ignore_state;
     struct bx_search_walk_stack_entry *stack;
     size_t stack_len;
@@ -79,6 +80,14 @@ static enum bx_walk_action bx_search_walk_push_dir_state(struct bx_search_walk_s
                 return BX_WALK_ERROR;
             }
             bx_ignore_state_init(owned, parent, entry->path, patterns, pattern_count);
+            owned->owned_dirpath = strdup(entry->path);
+            if (!owned->owned_dirpath) {
+                bx_ignore_state_dispose(owned);
+                free(owned);
+                return BX_WALK_ERROR;
+            }
+            owned->dirpath = owned->owned_dirpath;
+            owned->casefold = state->ignore_opts.ignore_file_case_insensitive;
             head = owned;
         }
     }
@@ -153,11 +162,14 @@ int bx_search_walk(const char *root,
     if (config->ignore_opts) {
         state.ignore_opts = *config->ignore_opts;
         state.ignore_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root, &state.ignore_opts);
+        state.git_root_owned = bx_ignore_find_git_root(root, &state.ignore_opts);
+        state.ignore_opts.git_root = state.git_root_owned;
         state.have_ignore_opts = true;
         bool ok = false;
         state.parent_ignore_state = bx_ignore_load_parent_state(root, &state.ignore_opts, &ok);
         if (!ok) {
             bx_ignore_state_dispose_chain(state.parent_ignore_state);
+            free(state.git_root_owned);
             free(state.stack);
             return -1;
         }
@@ -171,6 +183,7 @@ int bx_search_walk(const char *root,
 
     bx_search_walk_stack_pop_to_depth(&state, 0);
     bx_ignore_state_dispose_chain(state.parent_ignore_state);
+    free(state.git_root_owned);
     free(state.stack);
     return rc;
 }

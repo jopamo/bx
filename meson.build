@@ -392,6 +392,10 @@ bx_search_sources = [
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
   'src/search/record_stream.c',
+  'src/search/rg_generate.c',
+  'src/search/rg_output.c',
+  'src/search/rg_text.c',
+  'src/search/rg_transform.c',
   'src/search/scanner.c',
   'src/search/search.c',
   'src/search/traverse.c',
@@ -1443,6 +1447,12 @@ if get_option('tests')
   test('rg basic', test_rg_basic, args : [bx_exe], suite : fast_track_p2_suite)
   test_rg_differential = find_program('tests/applets/text/rg/test_rg_differential.py')
   test('rg differential', python3, args : [test_rg_differential, bx_exe, meson.current_build_dir()], suite : fast_track_p2_suite)
+  test_rg_option_matrix_coverage_audit = files('tests/test_rg_option_matrix_coverage_audit.py')
+  test('rg option matrix coverage audit', python3, args : [test_rg_option_matrix_coverage_audit], suite : fast_track_p2_suite)
+  test_rg_upstream_option_case_coverage_audit = files('tests/test_rg_upstream_option_case_coverage_audit.py')
+  test('rg upstream option case coverage audit', python3, args : [test_rg_upstream_option_case_coverage_audit], suite : fast_track_p2_suite)
+  test_rg_upstream_option_gap_audit = files('tests/test_rg_upstream_option_gap_audit.py')
+  test('rg upstream option gap audit', python3, args : [test_rg_upstream_option_gap_audit], suite : fast_track_p2_suite)
   test_rg_hotpath_harness = files('tests/applets/text/rg/test_rg_hotpath_harness.py')
   test('rg hotpath harness', python3, args : [test_rg_hotpath_harness, bx_exe], suite : fast_track_p2_suite)
 

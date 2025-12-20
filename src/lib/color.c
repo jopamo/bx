@@ -19,6 +19,7 @@ static bool check_tty(void) {
 enum bx_color_mode bx_color_parse(const char *s) {
     if (!s || strcmp(s, "never") == 0) return BX_COLOR_NEVER;
     if (strcmp(s, "always") == 0) return BX_COLOR_ALWAYS;
+    if (strcmp(s, "ansi") == 0) return BX_COLOR_ALWAYS;
     if (strcmp(s, "auto") == 0) return BX_COLOR_AUTO;
     return BX_COLOR_AUTO;
 }

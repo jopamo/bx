@@ -5,12 +5,16 @@
 #include <stddef.h>
 #include "search.h"
 #include "lib/color.h"
+#include "rg_output.h"
+#include "rg_text.h"
 
 #define MAX_INCLUDE_PATTERNS 32
 #define MAX_EXCLUDE_PATTERNS 32
 #define MAX_EXCLUDE_DIR_PATTERNS 32
 #define MAX_CUSTOM_TYPES 16
 #define MAX_CLEARED_TYPES 32
+#define MAX_RG_IGNORE_FILES 32
+#define MAX_PRE_GLOBS 16
 
 struct search_opts {
     bool show_line_number;
@@ -21,6 +25,7 @@ struct search_opts {
     bool invert_match;
     bool count_only;
     bool omit_zero_count_output;
+    bool include_zero;
     bool count_matches;
     bool files_with_matches;
     bool files_without_match;
@@ -51,6 +56,7 @@ struct search_opts {
     bool include_pattern_casefold[MAX_INCLUDE_PATTERNS];
     int  num_exclude;
     char *exclude_patterns[MAX_EXCLUDE_PATTERNS];
+    bool exclude_pattern_casefold[MAX_EXCLUDE_PATTERNS];
     int  num_exclude_dir;
     char *exclude_dir_patterns[MAX_EXCLUDE_DIR_PATTERNS];
     char *custom_type_names[MAX_CUSTOM_TYPES];
@@ -65,20 +71,45 @@ struct search_opts {
     bool no_ignore_parent;
     bool no_ignore_vcs;
     bool no_ignore_dot;
+    bool no_ignore_exclude;
+    bool no_ignore_files;
+    bool no_ignore_global;
     bool no_require_git;
+    bool ignore_file_case_insensitive;
+    bool suppress_ignore_messages;
+    bool glob_case_insensitive;
+    char *ignore_files[MAX_RG_IGNORE_FILES];
+    int   num_ignore_files;
     bool null_output;
     bool null_filename;
     bool sort_paths;
     bool sort_paths_reverse;
+    bool stay_on_filesystem;
     bool null_data;
     bool multiline;
     bool multiline_dotall;
     bool stop_on_nonmatch;
     bool stats;
+    bool line_buffered;
+    bool block_buffered;
+    bool crlf;
+    bool trim;
+    bool unicode;
+    bool trace;
+    bool search_zip;
     bool pcre2_version;
     bool heading;
     bool heading_set;
     bool heading_output_started;
+    enum bx_rg_encoding_mode encoding_mode;
+    char *encoding_name;
+    char *hostname_bin;
+    char *hyperlink_format;
+    char path_separator;
+    struct bx_rg_color_settings rg_colors;
+    char *pre_command;
+    char *pre_globs[MAX_PRE_GLOBS];
+    int   num_pre_globs;
     char *replace;
     char *field_match_separator;
     char *field_context_separator;
@@ -86,6 +117,8 @@ struct search_opts {
     size_t regex_size_limit;
     bool dfa_size_limit_set;
     size_t dfa_size_limit;
+    bool max_filesize_set;
+    size_t max_filesize;
     enum {
         BX_RG_ENGINE_UNSPECIFIED = 0,
         BX_RG_ENGINE_DEFAULT,
