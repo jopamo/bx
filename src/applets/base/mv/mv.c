@@ -261,12 +261,15 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
                                                  {"help", no_argument, NULL, 1},
                                                  {"version", no_argument, NULL, 2},
                                                  {NULL, 0, NULL, 0}};
-    char short_opts[] = "bfint:TuvS:";
+    char short_opts[] = ":bfint:TuvS:";
 
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "mv");
     diag->progname = options->progname;
     options->update_mode = BX_UPDATE_ALL;
+
+    opterr = 0;
+    optind = 1;
 
     int c;
     while ((c = getopt_long(argc, argv, short_opts, long_options, NULL)) != -1) {
@@ -341,6 +344,12 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
             case 2:
                 options->show_version = true;
                 return true;
+            case ':':
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
+                return false;
+            case '?':
+                bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
+                return false;
             default:
                 return false;
         }
