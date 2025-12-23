@@ -152,8 +152,6 @@ static const struct applet applets[] = {
     {"egrep", bx_grep_main},
     {"fgrep", bx_grep_main},
     {"rg", bx_rg_main},
-    {"bxgrep", bx_grep_main},
-    {"bxrg", bx_rg_main},
     {"fd", bx_fd_main},
     {"find", bx_find_main},
     {"xargs", bx_xargs_main},

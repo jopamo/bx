@@ -17,6 +17,7 @@ enum {
     OPT_HELP = 256,
     OPT_VERSION,
     OPT_NO_FILENAME,
+    OPT_NO_IGNORE_CASE,
     OPT_NO_LINE_NUMBER,
     OPT_INCLUDE,
     OPT_EXCLUDE,
@@ -34,6 +35,7 @@ enum {
     OPT_FILES_WITHOUT_MATCH,
     OPT_FOLLOW,
     OPT_DIRECTORIES,
+    OPT_DEVICES,
     OPT_MAX_DEPTH,
     OPT_MAX_COLUMNS,
     OPT_MAX_COLUMNS_PREVIEW,
@@ -395,13 +397,20 @@ static bool bx_set_binary_files_mode(const char *progname,
 
 void bx_search_print_help(const char *progname) {
     const char *base = bx_cli_progname(progname, "grep");
-    bool is_rg = strcmp(base, "rg") == 0 || strcmp(base, "bxrg") == 0;
+    bool is_rg = strcmp(base, "rg") == 0;
 
     printf("Usage: %s [OPTION]... PATTERN [FILE]...\n", progname);
     puts("Search for PATTERN in each FILE.");
     puts("");
-    puts("  -E            PATTERN is an extended regular expression");
+    if (!is_rg)
+        puts("  -G, --basic-regexp  PATTERN is a basic regular expression");
+    puts("  -E, --extended-regexp  PATTERN is an extended regular expression");
     puts("  -F, --fixed-strings  PATTERN is a set of fixed strings");
+    if (!is_rg) {
+        puts("  -P, --perl-regexp  PATTERN is a Perl regular expression");
+        puts("  -e, --regexp=PATTERN  use PATTERN for matching");
+        puts("  -f, --file=FILE  read PATTERNs from FILE");
+    }
     puts("  -b, --byte-offset  print the byte offset with output lines");
     puts("      --column  print the column number with output lines");
     puts("  -H, --with-filename  print the file name for each match");
@@ -411,6 +420,8 @@ void bx_search_print_help(const char *progname) {
     else
         puts("  -h            suppress the file name prefix on output");
     puts("  -i, --ignore-case  ignore case distinctions");
+    if (!is_rg)
+        puts("      --no-ignore-case  restore case-sensitive matching");
     puts("  -n, --line-number  print line number with output lines");
     puts("      --no-line-number  suppress line numbers");
     puts("  -o, --only-matching  show only the part of a line matching PATTERN");
@@ -430,10 +441,23 @@ void bx_search_print_help(const char *progname) {
     }
     else
         puts("  -s, --no-messages  suppress error messages");
-    puts("  -r            recursive, do not follow symlinks");
-    puts("  -R            recursive, follow symlinks");
+    if (!is_rg)
+        puts("      --silent  suppress all normal output and diagnostics");
+    if (is_rg) {
+        puts("  -r            recursive, do not follow symlinks");
+        puts("  -R            recursive, follow symlinks");
+    } else {
+        puts("  -r, --recursive  recursive, do not follow symlinks");
+        puts("  -R, --dereference-recursive  recursive, follow symlinks");
+    }
     puts("  -a, --text    process binary files as text");
+    if (!is_rg)
+        puts("  -U, --binary  do not strip CR characters at EOL");
     puts("  -I            skip binary files");
+    if (!is_rg) {
+        puts("      --binary-files=TYPE  set binary file handling mode");
+        puts("  -D ACTION, --devices=ACTION  set device, FIFO, and socket handling");
+    }
     puts("  -A NUM, --after-context=NUM  print NUM lines of trailing context");
     puts("  -B NUM, --before-context=NUM  print NUM lines of leading context");
     puts("  -C NUM, --context=NUM  print NUM lines of output context");
@@ -442,6 +466,10 @@ void bx_search_print_help(const char *progname) {
     puts("      --label=LABEL  use LABEL as the standard input file name");
     puts("      --group-separator=SEP  use SEP between context groups");
     puts("      --no-group-separator   suppress context group separators");
+    if (!is_rg)
+        puts("  -T, --initial-tab  align output prefixes on tab stops");
+    if (!is_rg)
+        puts("      --line-buffered  flush output on every line");
     puts("      --context-separator=SEP  use SEP between ripgrep context groups");
     puts("      --no-context-separator  suppress ripgrep context group separators");
     puts("      --field-context-separator=SEP  use SEP between fields on context lines");
@@ -688,7 +716,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     static struct option long_opts[] = {
         {"help",         no_argument,       NULL, OPT_HELP},
         {"version",      no_argument,       NULL, OPT_VERSION},
+        {"basic-regexp", no_argument,       NULL, 'G'},
+        {"extended-regexp", no_argument,    NULL, 'E'},
+        {"perl-regexp",  no_argument,       NULL, 'P'},
         {"quiet",        no_argument,       NULL, 'q'},
+        {"silent",       no_argument,       NULL, 'q'},
         {"regexp",       required_argument, NULL, 'e'},
         {"fixed-strings", no_argument,      NULL, 'F'},
         {"invert-match", no_argument,       NULL, 'v'},
@@ -707,7 +739,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"stats",        no_argument,       NULL, OPT_STATS},
         {"files-with-matches", no_argument, NULL, OPT_FILES_WITH_MATCHES},
         {"files-without-match", no_argument, NULL, OPT_FILES_WITHOUT_MATCH},
+        {"recursive",    no_argument,       NULL, 'r'},
+        {"dereference-recursive", no_argument, NULL, 'R'},
         {"directories", required_argument, NULL, OPT_DIRECTORIES},
+        {"devices",      required_argument, NULL, OPT_DEVICES},
         {"follow",       no_argument,       NULL, OPT_FOLLOW},
         {"after-context", required_argument, NULL, 'A'},
         {"before-context", required_argument, NULL, 'B'},
@@ -742,6 +777,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"glob-case-insensitive", no_argument, NULL, OPT_GLOB_CASE_INSENSITIVE},
         {"no-glob-case-insensitive", no_argument, NULL, OPT_NO_GLOB_CASE_INSENSITIVE},
         {"ignore-case",  no_argument,       NULL, 'i'},
+        {"no-ignore-case", no_argument,     NULL, OPT_NO_IGNORE_CASE},
         {"case-sensitive", no_argument,     NULL, 's'},
         {"no-messages",  no_argument,       NULL, OPT_NO_MESSAGES},
         {"messages",     no_argument,       NULL, OPT_MESSAGES},
@@ -773,6 +809,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         {"line-number",  no_argument,       NULL, 'n'},
         {"no-line-number", no_argument,     NULL, OPT_NO_LINE_NUMBER},
         {"no-column",    no_argument,       NULL, OPT_NO_COLUMN},
+        {"initial-tab",  no_argument,       NULL, 'T'},
         {"label",        required_argument, NULL, OPT_LABEL},
         {"group-separator", required_argument, NULL, OPT_GROUP_SEPARATOR},
         {"no-group-separator", no_argument, NULL, OPT_NO_GROUP_SEPARATOR},
@@ -852,7 +889,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     optind = 1;
     const char *short_opts = bx_search_personality_is_rg(personality)
                                  ? ":0.E:FHbhinovclLqr:RIszZd:M:aA:B:C:e:f:g:j:t:T:uwPxSm:UVNp"
-                                 : ":0.EFHbhinovclLqrRIszZd:M:aA:B:C:e:f:g:j:t:T:uwPxSm:UVNp";
+                                 : ":0.EFGFHbhinovclLqrRIszZD:d:M:aA:B:C:e:f:g:j:t:uwPxSm:UVNpT";
 
     int c;
     while ((c = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
@@ -887,6 +924,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'E':
             if (bx_search_personality_is_rg(personality)) {
+                const char *token =
+                    bx_search_current_option_token(optind, argc, argv, "-E");
+                if (token && strcmp(token, "--extended-regexp") == 0)
+                    return bx_grep_unrecognized_option(progname, token);
                 if (!bx_rg_parse_encoding_name(progname, optarg, &opts->encoding_mode,
                                                &opts->encoding_name)) {
                     return -1;
@@ -894,8 +935,23 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 break;
             }
             opts->extended_regex = true;
+            opts->fixed_strings = false;
+            opts->perl_regexp = false;
             break;
-        case 'F': opts->fixed_strings = true; break;
+        case 'G':
+            if (bx_search_personality_is_rg(personality)) {
+                fprintf(stderr, "%s: invalid option -- 'G'\n", progname);
+                return -1;
+            }
+            opts->extended_regex = false;
+            opts->fixed_strings = false;
+            opts->perl_regexp = false;
+            break;
+        case 'F':
+            opts->fixed_strings = true;
+            opts->extended_regex = false;
+            opts->perl_regexp = false;
+            break;
         case 'b': opts->show_byte_offset = true; break;
         case OPT_NO_BYTE_OFFSET:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
@@ -930,6 +986,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'i':
             opts->ignore_case = true;
+            if (bx_search_personality_is_rg(personality))
+                opts->smart_case = false;
+            break;
+        case OPT_NO_IGNORE_CASE:
+            opts->ignore_case = false;
             if (bx_search_personality_is_rg(personality))
                 opts->smart_case = false;
             break;
@@ -1001,6 +1062,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 c == OPT_PRETTY ? "--pretty" : "-p");
         case 'r':
             if (bx_search_personality_is_rg(personality)) {
+                const char *token =
+                    bx_search_current_option_token(optind, argc, argv, "-r");
+                if (token && strcmp(token, "--recursive") == 0)
+                    return bx_grep_unrecognized_option(progname, token);
                 free(opts->replace);
                 opts->replace = strdup(optarg);
                 if (!opts->replace)
@@ -1012,7 +1077,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'R':
             if (bx_search_personality_is_rg(personality)) {
-                fprintf(stderr, "%s: unrecognized flag -R\n", progname);
+                const char *token =
+                    bx_search_current_option_token(optind, argc, argv, "-R");
+                fprintf(stderr, "%s: unrecognized flag %s\n",
+                        progname, token ? token : "-R");
                 return -1;
             }
             opts->recursive = true;
@@ -1044,6 +1112,31 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     fprintf(stderr, "%s: invalid argument for -d: %s\n", progname, optarg);
                     return -1;
                 }
+            }
+            break;
+        case 'D':
+        case OPT_DEVICES:
+            if (bx_search_personality_is_rg(personality)) {
+                const char *fallback = c == OPT_DEVICES ? "--devices" : "-D";
+                if (bx_search_current_option_is_long(optind, argc, argv, "--devices")) {
+                    fprintf(stderr, "%s: unrecognized flag --devices\n", progname);
+                    return -1;
+                }
+                return bx_search_require_rg_option(progname, personality, optind, argc,
+                                                   argv, fallback);
+            }
+            if (strcmp(optarg, "read") == 0) {
+                opts->device_mode = BX_GREP_DEVICE_READ;
+            } else if (strcmp(optarg, "skip") == 0) {
+                opts->device_mode = BX_GREP_DEVICE_SKIP;
+            } else {
+                fprintf(stderr, "%s: invalid argument '%s' for '--devices'\n",
+                        progname, optarg);
+                fputs("Valid arguments are:\n", stderr);
+                fputs("  - 'read'\n", stderr);
+                fputs("  - 'skip'\n", stderr);
+                bx_grep_print_usage_try_help(progname);
+                return 3;
             }
             break;
         case OPT_MAX_COLUMNS:
@@ -1086,11 +1179,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->binary_without_match = true;
             break;
         case OPT_BINARY:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--binary") != 0)
-                return -1;
-            opts->binary_as_text = false;
-            opts->binary_without_match = false;
+            if (bx_search_personality_is_rg(personality)) {
+                opts->binary_as_text = false;
+                opts->binary_without_match = false;
+            } else {
+                opts->crlf = false;
+            }
             break;
         case OPT_NO_BINARY:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
@@ -1101,7 +1195,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'w': opts->word_regexp = true; break;
         case 'x': opts->line_regexp = true; break;
-        case 'P': opts->perl_regexp = true; break;
+        case 'P':
+            if (bx_search_personality_is_rg(personality)) {
+                const char *token =
+                    bx_search_current_option_token(optind, argc, argv, "-P");
+                if (token && strcmp(token, "--perl-regexp") == 0)
+                    return bx_grep_unrecognized_option(progname, token);
+            }
+            opts->perl_regexp = true;
+            opts->extended_regex = false;
+            opts->fixed_strings = false;
+            break;
         case OPT_NO_PCRE2:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, "--no-pcre2") != 0)
@@ -1186,8 +1290,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'U':
             if (!bx_search_personality_is_rg(personality)) {
-                fprintf(stderr, "%s: invalid option -- 'U'\n", progname);
-                return -1;
+                opts->crlf = false;
+                break;
             }
             opts->multiline = true;
             break;
@@ -1213,8 +1317,18 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;  /* thread count accepted, single-threaded for now */
         case 't':
         case 'T': {
+            const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);
+            if (bx_search_personality_is_rg(personality) && c == 'T'
+                && arg && strcmp(arg, "--initial-tab") == 0) {
+                return bx_grep_unrecognized_option(progname, arg);
+            }
             if (!bx_search_personality_is_rg(personality)) {
-                const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);
+                if (c == 'T' && arg
+                    && (strcmp(arg, "-T") == 0
+                        || strcmp(arg, "--initial-tab") == 0)) {
+                    opts->initial_tab = true;
+                    break;
+                }
                 if (arg && (strcmp(arg, "--type") == 0 || strcmp(arg, "--type-not") == 0
                             || strncmp(arg, "--type=", 7) == 0
                             || strncmp(arg, "--type-not=", 11) == 0)) {
@@ -1222,6 +1336,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 }
                 if (c == 't') {
                     fprintf(stderr, "%s: invalid option -- 't'\n", progname);
+                    bx_grep_print_usage_try_help(progname);
+                    return -1;
+                }
+                if (c == 'T') {
+                    fprintf(stderr, "%s: invalid option -- 'T'\n", progname);
                     bx_grep_print_usage_try_help(progname);
                     return -1;
                 }
@@ -1839,14 +1958,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->unicode = false;
             break;
         case OPT_LINE_BUFFERED:
-            if (bx_search_require_rg_option(progname, personality, optind, argc,
-                                            argv, "--line-buffered") != 0)
-                return -1;
+            opts->line_buffered = true;
             break;
         case OPT_NO_LINE_BUFFERED:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, "--no-line-buffered") != 0)
                 return -1;
+            opts->line_buffered = false;
             break;
         case OPT_BLOCK_BUFFERED:
             if (bx_search_require_rg_option(progname, personality, optind, argc,

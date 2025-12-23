@@ -32,7 +32,7 @@
 static bool progname_uses_os_error_style(const char *progname) {
     if (!progname) return false;
     progname = bx_cli_progname(progname, "grep");
-    return strcmp(progname, "rg") == 0 || strcmp(progname, "bxrg") == 0;
+    return strcmp(progname, "rg") == 0;
 }
 
 static bool bx_search_path_exceeds_max_filesize(const char *path,
@@ -108,6 +108,16 @@ static void report_path_error(const char *progname, const char *path, int errnum
 
 static void report_binary_match(const char *progname, const char *path) {
     fprintf(stderr, "%s: %s: binary file matches\n", progname, path);
+}
+
+static bool bx_search_mode_is_special_input(mode_t mode) {
+    return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode);
+}
+
+static bool bx_search_should_skip_special_input_mode(mode_t mode,
+                                                     const struct search_opts *opts) {
+    return opts && opts->device_mode == BX_GREP_DEVICE_SKIP
+        && bx_search_mode_is_special_input(mode);
 }
 
 static char *display_path_for_output(const char *path, bool strip_dot_prefix,
@@ -565,9 +575,10 @@ static const char *context_field_separator(struct search_opts *opts) {
     return opts->field_context_separator ? opts->field_context_separator : "-";
 }
 
-static void print_result_prefix(const char *display_name, struct search_opts *opts,
+static bool print_result_prefix(const char *display_name, struct search_opts *opts,
                                 int line_num, size_t column, bool has_column,
                                 size_t byte_offset, const char *sep) {
+    bool printed = false;
     if (opts->show_filename && display_name) {
         char *hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
                                                    opts->hostname_bin,
@@ -591,31 +602,43 @@ static void print_result_prefix(const char *display_name, struct search_opts *op
         else
             fputs(sep, stdout);
         stats_count_bytes(opts->null_filename ? 1 : strlen(sep));
+        printed = true;
     }
     if (opts->show_line_number) {
         bx_rg_emit_color_style_start(&opts->rg_colors.line);
-        int n = printf("%d", line_num);
+        int n = printf(opts->initial_tab ? "%2d" : "%d", line_num);
         if (n > 0) stats_count_bytes((size_t)n);
         bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
+        printed = true;
     }
     if (opts->show_column && has_column) {
         bx_rg_emit_color_style_start(&opts->rg_colors.column);
-        int n = printf("%zu", column);
+        int n = printf(opts->initial_tab ? "%2zu" : "%zu", column);
         if (n > 0) stats_count_bytes((size_t)n);
         bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
+        printed = true;
     }
     if (opts->show_byte_offset) {
         bx_rg_emit_color_style_start(&opts->rg_colors.line);
-        int n = printf("%zu", byte_offset);
+        int n = printf(opts->initial_tab ? "%2zu" : "%zu", byte_offset);
         if (n > 0) stats_count_bytes((size_t)n);
         bx_rg_emit_color_reset();
         fputs(sep, stdout);
         stats_count_bytes(strlen(sep));
+        printed = true;
     }
+    return printed;
+}
+
+static void maybe_emit_initial_tab(const struct search_opts *opts, bool prefix_printed) {
+    if (!opts || !opts->initial_tab || !prefix_printed)
+        return;
+    putchar('\t');
+    stats_count_bytes(1);
 }
 
 static bool use_heading_output(const char *display_name, const struct search_opts *opts) {
@@ -656,9 +679,11 @@ static void print_only_matches(const unsigned char *line, size_t len,
         struct bx_match bm;
         if (matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
             break;
-        print_result_prefix(display_name, opts, line_num, bm.start + 1, true,
-                            byte_offset + bm.start,
-                            match_field_separator(opts));
+        bool prefix_printed = print_result_prefix(display_name, opts, line_num,
+                                                  bm.start + 1, true,
+                                                  byte_offset + bm.start,
+                                                  match_field_separator(opts));
+        maybe_emit_initial_tab(opts, prefix_printed);
         fwrite(line + bm.start, 1, bm.end - bm.start, stdout);
         stats_count_bytes(bm.end - bm.start);
         write_record_terminator(opts);
@@ -893,9 +918,11 @@ static int search_buffer_multiline(unsigned char *buf, size_t len,
         size_t line_num = line_number_for_offset(buf, bm.start);
         if (opts->only_matching && !opts->invert_match) {
             maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                opts, (int)line_num, column_number_for_offset(buf, bm.start), true,
-                                bm.start, match_field_separator(opts));
+            bool prefix_printed = print_result_prefix(
+                heading_printed_for_file ? NULL : display_name,
+                opts, (int)line_num, column_number_for_offset(buf, bm.start), true,
+                bm.start, match_field_separator(opts));
+            maybe_emit_initial_tab(opts, prefix_printed);
             fwrite(buf + bm.start, 1, bm.end - bm.start, stdout);
             write_record_terminator(opts);
             bx_search_dev_counters_note_output_line_emitted();
@@ -903,10 +930,12 @@ static int search_buffer_multiline(unsigned char *buf, size_t len,
             size_t out_start = line_start_offset(buf, bm.start);
             size_t out_end = line_end_offset(buf, len, bm.end);
             maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                opts, (int)line_number_for_offset(buf, out_start),
-                                column_number_for_offset(buf, bm.start), true,
-                                out_start, match_field_separator(opts));
+            bool prefix_printed = print_result_prefix(
+                heading_printed_for_file ? NULL : display_name,
+                opts, (int)line_number_for_offset(buf, out_start),
+                column_number_for_offset(buf, bm.start), true,
+                out_start, match_field_separator(opts));
+            maybe_emit_initial_tab(opts, prefix_printed);
             if (should_omit_long_match_line(opts, out_end - out_start))
                 print_omitted_long_line(opts);
             else if (opts->replace) {
@@ -1233,12 +1262,14 @@ static int search_file_buffered_opened(FILE *f,
                                        record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
                                        0, opts, &bm);
                 maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                    opts, i + 1, bm.start + 1, true, lines[i].byte_offset,
-                                    match_field_separator(opts));
+                bool prefix_printed = print_result_prefix(
+                    heading_printed_for_file ? NULL : display_name,
+                    opts, i + 1, bm.start + 1, true, lines[i].byte_offset,
+                    match_field_separator(opts));
                 if (opts->only_matching && opts->invert_match) {
                     continue;
                 }
+                maybe_emit_initial_tab(opts, prefix_printed);
                 if (opts->invert_match) {
                     print_plain_record_contents((unsigned char *)lines[i].text, lines[i].len, opts);
                     if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
@@ -1255,9 +1286,11 @@ static int search_file_buffered_opened(FILE *f,
             }
         } else {
             maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                opts, i + 1, 0, false, lines[i].byte_offset,
-                                context_field_separator(opts));
+            bool prefix_printed = print_result_prefix(
+                heading_printed_for_file ? NULL : display_name,
+                opts, i + 1, 0, false, lines[i].byte_offset,
+                context_field_separator(opts));
+            maybe_emit_initial_tab(opts, prefix_printed);
             print_plain_record_contents((unsigned char *)lines[i].text, lines[i].len, opts);
             if (lines[i].len == 0 || lines[i].text[lines[i].len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
@@ -1376,10 +1409,12 @@ static int search_file_scanner_opened(FILE *f,
             }
 
             maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                opts, (int)line_num, bm.start + 1u, true,
-                                (size_t)record.file_off,
-                                match_field_separator(opts));
+            bool prefix_printed = print_result_prefix(
+                heading_printed_for_file ? NULL : display_name,
+                opts, (int)line_num, bm.start + 1u, true,
+                (size_t)record.file_off,
+                match_field_separator(opts));
+            maybe_emit_initial_tab(opts, prefix_printed);
             if (should_omit_long_match_line(opts, record.len))
                 print_omitted_long_line(opts);
             else
@@ -1503,9 +1538,11 @@ static int search_file_streaming_opened(FILE *f,
             } else {
                 if (!(opts->only_matching && opts->invert_match)) {
                     maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                    print_result_prefix(heading_printed_for_file ? NULL : display_name,
-                                        opts, line_num, bm.start + 1, true, line_offset,
-                                        match_field_separator(opts));
+                    bool prefix_printed = print_result_prefix(
+                        heading_printed_for_file ? NULL : display_name,
+                        opts, line_num, bm.start + 1, true, line_offset,
+                        match_field_separator(opts));
+                    maybe_emit_initial_tab(opts, prefix_printed);
                     if (opts->invert_match) {
                         print_plain_record_contents((unsigned char *)line, (size_t)len, opts);
                         if (len == 0 || line[len - 1] != record_delimiter(opts))
@@ -1523,8 +1560,10 @@ static int search_file_streaming_opened(FILE *f,
             }
             if (opts->max_count > 0 && file_matches >= opts->max_count) break;
         } else if (opts->passthru) {
-            print_result_prefix(display_name, opts, line_num, 0, false, line_offset,
-                                context_field_separator(opts));
+            bool prefix_printed = print_result_prefix(display_name, opts, line_num,
+                                                      0, false, line_offset,
+                                                      context_field_separator(opts));
+            maybe_emit_initial_tab(opts, prefix_printed);
             print_plain_record_contents((unsigned char *)line, (size_t)len, opts);
             if (len == 0 || line[len - 1] != record_delimiter(opts))
                 write_record_terminator(opts);
@@ -2083,6 +2122,8 @@ static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user)
         return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, gs ? gs->opts : NULL))
         return BX_WALK_CONTINUE;
+    if (bx_search_should_skip_special_input_mode(entry->mode, gs ? gs->opts : NULL))
+        return BX_WALK_CONTINUE;
 
     char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix, gs->opts);
 
@@ -2354,7 +2395,9 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                     exit_status = 2;
                     error_seen = true;
                 }
-            } else if (S_ISREG(st.st_mode)) {
+            } else {
+                if (bx_search_should_skip_special_input_mode(st.st_mode, &opts))
+                    continue;
                 if (grep_explicit_entry_selected(&gs, argv[j])) {
                     struct bx_walk_entry entry = {.path = argv[j], .is_dir = false, .mode = st.st_mode};
                     enum bx_walk_action action = grep_walk_cb(&entry, &gs);
@@ -2373,13 +2416,17 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
                         : (first_file + operand_i);
             if (argv[j] && strcmp(argv[j], "-") != 0) {
                 struct stat st;
-                if (lstat(argv[j], &st) == 0 && S_ISDIR(st.st_mode)) {
-                    if (opts.directory_mode == BX_GREP_DIR_SKIP)
+                if (lstat(argv[j], &st) == 0) {
+                    if (S_ISDIR(st.st_mode)) {
+                        if (opts.directory_mode == BX_GREP_DIR_SKIP)
+                            continue;
+                        report_path_error(progname, argv[j], EISDIR, &opts);
+                        exit_status = 2;
+                        error_seen = true;
                         continue;
-                    report_path_error(progname, argv[j], EISDIR, &opts);
-                    exit_status = 2;
-                    error_seen = true;
-                    continue;
+                    }
+                    if (bx_search_should_skip_special_input_mode(st.st_mode, &opts))
+                        continue;
                 }
                 if (bx_search_path_exceeds_max_filesize(argv[j], &opts))
                     continue;

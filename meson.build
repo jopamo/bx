@@ -649,14 +649,14 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'bxgrep', 'bxrg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
-systemwide_disabled_applet_names = ['ps', 'grep', 'egrep', 'fgrep', 'bxgrep', 'rg', 'bxrg', 'fd', 'tar', 'cpio', 'find', 'xargs']
+systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
 if install_init_shortcut and install_bindir.startswith('/usr/')

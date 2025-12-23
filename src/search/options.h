@@ -92,6 +92,7 @@ struct search_opts {
     bool stats;
     bool line_buffered;
     bool block_buffered;
+    bool initial_tab;
     bool crlf;
     bool trim;
     bool unicode;
@@ -135,6 +136,10 @@ struct search_opts {
         BX_GREP_DIR_RECURSE,
         BX_GREP_DIR_SKIP,
     } directory_mode;
+    enum {
+        BX_GREP_DEVICE_READ = 0,
+        BX_GREP_DEVICE_SKIP,
+    } device_mode;
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
