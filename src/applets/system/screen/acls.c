@@ -88,13 +88,21 @@ static int AclSetPermWin(struct acluser *, struct acluser *, char *, Window *);
 static int UserAcl(struct acluser *, struct acluser **, int, char **);
 static int UserAclCopy(struct acluser **, struct acluser **);
 
+static size_t AclBytesForBits(int bit_count)
+{
+	if (bit_count <= 0)
+		return 1;
+	return (size_t)(((unsigned int)bit_count - 1U) >> 3) + 1U;
+}
+
 static int GrowBitfield(AclBits * bfp, int len, int delta, int defaultbit)
 {
 	AclBits n, o = *bfp;
+	int new_len = len + delta;
 
-	if (!(n = (AclBits) calloc(1, (unsigned long)(&ACLBYTE((char *)NULL, len + delta) + 1))))
+	if (!(n = (AclBits) calloc(1, AclBytesForBits(new_len))))
 		return -1;
-	for (int i = 0; i < (len + delta); i++) {
+	for (int i = 0; i < new_len; i++) {
 		if (((i < len) && (ACLBIT(i) & ACLBYTE(o, i))) || ((i >= len) && (defaultbit)))
 			ACLBYTE(n, i) |= ACLBIT(i);
 	}
