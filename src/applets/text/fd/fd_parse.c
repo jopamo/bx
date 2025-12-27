@@ -378,7 +378,7 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
     optind = 1;
     opterr = 0;
     while ((opt = getopt_long(parse_argc, argv,
-                              "hVHIuaplisSFgE:d:t:e:x:X:0qL1", long_opts,
+                              "hVHIuaplisFgE:d:t:e:x:X:0qL1", long_opts,
                               NULL)) != -1) {
         switch (opt) {
         case 'h':

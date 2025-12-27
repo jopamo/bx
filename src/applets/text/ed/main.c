@@ -190,7 +190,7 @@ static int parse_addr( const char * const arg )
 
 /* Return true if stdin is not a regular file.
    Piped scripts count as interactive (do not force ed to exit on error). */
-bool interactive()
+bool interactive( void )
   {
   struct stat st;
   return fstat( 0, &st ) == 0 && !S_ISREG( st.st_mode );
