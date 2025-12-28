@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 struct bx_rg_basic_color {
     bool set;
@@ -44,6 +45,9 @@ struct bx_rg_color_settings {
 void bx_rg_color_settings_init_defaults(struct bx_rg_color_settings *settings);
 bool bx_rg_parse_colors_spec(const char *progname, const char *spec,
                              struct bx_rg_color_settings *settings);
+void bx_rg_emit_color_style_start_file(FILE *stream,
+                                       const struct bx_rg_color_style *style);
+void bx_rg_emit_color_reset_file(FILE *stream);
 void bx_rg_emit_color_style_start(const struct bx_rg_color_style *style);
 void bx_rg_emit_color_reset(void);
 

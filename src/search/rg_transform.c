@@ -338,13 +338,14 @@ fail:
 static enum bx_rg_transform_result bx_rg_load_file_bytes(const char *filename,
                                                          const char *progname,
                                                          const struct search_opts *opts,
+                                                         FILE *err_stream,
                                                          unsigned char **output,
                                                          size_t *output_len) {
     FILE *f;
     f = fopen(filename, "r");
     if (!f) {
         if (!opts || !opts->suppress_errors) {
-            fprintf(stderr, "%s: %s: %s (os error %d)\n",
+            fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
                     progname, filename, strerror(errno), errno);
         }
         return BX_RG_TRANSFORM_ERROR;
@@ -402,32 +403,41 @@ bool bx_rg_transform_maybe_needed(const struct search_opts *opts,
            (prefix[0] == 0xFEu && prefix[1] == 0xFFu);
 }
 
-static void bx_rg_report_pre_exec_error(const char *progname, const char *filename,
-                                        const char *command, int errnum) {
-    fprintf(stderr,
+static void bx_rg_report_pre_exec_error(FILE *err_stream,
+                                        const char *progname,
+                                        const char *filename,
+                                        const char *command,
+                                        int errnum) {
+    fprintf(err_stream ? err_stream : stderr,
             "%s: %s: preprocessor command could not start: '\"%s\" \"%s\"': %s (os error %d)\n",
             progname, filename, command, filename, strerror(errnum), errnum);
 }
 
-static void bx_rg_report_pre_failure(const char *progname, const char *filename,
-                                     const char *command, const char *stderr_text) {
-    fprintf(stderr, "%s: %s: preprocessor command failed: '\"%s\" \"%s\"': ",
+static void bx_rg_report_pre_failure(FILE *err_stream,
+                                     const char *progname,
+                                     const char *filename,
+                                     const char *command,
+                                     const char *stderr_text) {
+    FILE *stream = err_stream ? err_stream : stderr;
+
+    fprintf(stream, "%s: %s: preprocessor command failed: '\"%s\" \"%s\"': ",
             progname, filename, command, filename);
     if (!stderr_text || *stderr_text == '\0') {
-        fputs("<stderr is empty>\n", stderr);
+        fputs("<stderr is empty>\n", stream);
         return;
     }
-    fputc('\n', stderr);
-    fputs("-------------------------------------------------------------------------------\n", stderr);
-    fputs(stderr_text, stderr);
+    fputc('\n', stream);
+    fputs("-------------------------------------------------------------------------------\n", stream);
+    fputs(stderr_text, stream);
     if (stderr_text[strlen(stderr_text) - 1] != '\n')
-        fputc('\n', stderr);
-    fputs("-------------------------------------------------------------------------------\n", stderr);
+        fputc('\n', stream);
+    fputs("-------------------------------------------------------------------------------\n", stream);
 }
 
 static enum bx_rg_transform_result bx_rg_run_preprocessor(const char *filename,
                                                           const char *progname,
                                                           const struct search_opts *opts,
+                                                          FILE *err_stream,
                                                           unsigned char **output,
                                                           size_t *output_len) {
     const char *argv[3];
@@ -444,7 +454,7 @@ static enum bx_rg_transform_result bx_rg_run_preprocessor(const char *filename,
     stdin_fd = open(filename, O_RDONLY);
     if (stdin_fd < 0) {
         if (!opts->suppress_errors) {
-            fprintf(stderr, "%s: %s: %s (os error %d)\n",
+            fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
                     progname, filename, strerror(errno), errno);
         }
         return BX_RG_TRANSFORM_ERROR;
@@ -457,12 +467,14 @@ static enum bx_rg_transform_result bx_rg_run_preprocessor(const char *filename,
         return BX_RG_TRANSFORM_ERROR;
     }
     if (exec_failed) {
-        bx_rg_report_pre_exec_error(progname, filename, opts->pre_command, exec_errno);
+        bx_rg_report_pre_exec_error(err_stream, progname, filename,
+                                    opts->pre_command, exec_errno);
         free(stderr_text);
         return BX_RG_TRANSFORM_ERROR;
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        bx_rg_report_pre_failure(progname, filename, opts->pre_command, stderr_text);
+        bx_rg_report_pre_failure(err_stream, progname, filename,
+                                 opts->pre_command, stderr_text);
         free(stderr_text);
         free(*output);
         *output = NULL;
@@ -508,6 +520,7 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
     const char *filename,
     const char *progname,
     const struct search_opts *opts,
+    FILE *err_stream,
     unsigned char **output,
     size_t *output_len) {
     enum bx_rg_transform_result rc = BX_RG_TRANSFORM_ERROR;
@@ -524,7 +537,7 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
 
     if (!use_stdin && filename && opts->pre_command && *opts->pre_command &&
         bx_rg_pre_glob_matches(opts, filename)) {
-        rc = bx_rg_run_preprocessor(filename, progname, opts, &raw, &raw_len);
+        rc = bx_rg_run_preprocessor(filename, progname, opts, err_stream, &raw, &raw_len);
     } else if (!use_stdin && filename && opts->search_zip) {
         const char *const *zip_argv = NULL;
         if (bx_rg_search_zip_program(filename, &zip_argv) != NULL) {
@@ -532,14 +545,14 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
             if (rc != BX_RG_TRANSFORM_OK)
                 return rc;
         } else {
-            rc = bx_rg_load_file_bytes(filename, progname, opts, &raw, &raw_len);
+            rc = bx_rg_load_file_bytes(filename, progname, opts, err_stream, &raw, &raw_len);
         }
     } else if (use_stdin) {
         if (!bx_rg_slurp_stream(stdin, &raw, &raw_len))
             return BX_RG_TRANSFORM_ERROR;
         rc = BX_RG_TRANSFORM_OK;
     } else {
-        rc = bx_rg_load_file_bytes(filename, progname, opts, &raw, &raw_len);
+        rc = bx_rg_load_file_bytes(filename, progname, opts, err_stream, &raw, &raw_len);
     }
 
     if (rc != BX_RG_TRANSFORM_OK)

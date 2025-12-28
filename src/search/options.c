@@ -8,6 +8,7 @@
 #include <string.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/thread_count.h"
 #include "options.h"
 #include "pcre2_matcher.h"
 #include "rg_generate.h"
@@ -488,7 +489,7 @@ void bx_search_print_help(const char *progname) {
     puts("      --no-require-git  use .gitignore outside git repositories");
     puts("      --hidden  search hidden files and directories");
     puts("      --iglob=GLOB  search only files matching GLOB, case-insensitively");
-    puts("  -j NUM, --threads=NUM  accept a thread count");
+    puts("  -j NUM, --threads=NUM  set worker threads (0 uses available CPUs)");
     puts("  -t TYPE, --type=TYPE  search only files matching TYPE");
     puts("  -T TYPE, --type-not=TYPE  skip files matching TYPE");
     puts("  -u, --unrestricted  reduce ignore filtering");
@@ -1480,7 +1481,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->hidden = false;
             break;
         case 'j':
-            break;  /* thread count accepted, single-threaded for now */
+            if (!bx_thread_count_parse(progname, "--threads", optarg, &opts->threads))
+                return -1;
+            break;
         case 't':
         case 'T': {
             const char *arg = bx_search_current_option_token(optind, argc, argv, NULL);

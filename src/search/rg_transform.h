@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 struct search_opts;
 
@@ -24,6 +25,7 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
     const char *filename,
     const char *progname,
     const struct search_opts *opts,
+    FILE *err_stream,
     unsigned char **output,
     size_t *output_len);
 

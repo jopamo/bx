@@ -276,41 +276,51 @@ bool bx_rg_parse_colors_spec(const char *progname, const char *spec,
     return false;
 }
 
-static void bx_rg_emit_single_color(const struct bx_rg_basic_color *basic,
+static void bx_rg_emit_single_color(FILE *stream,
+                                    const struct bx_rg_basic_color *basic,
                                     const struct bx_rg_ansi_color *ansi256,
                                     const struct bx_rg_rgb_color *rgb,
                                     bool foreground) {
     if (basic && basic->set) {
-        printf("\033[%dm", basic->code);
+        fprintf(stream, "\033[%dm", basic->code);
         return;
     }
     if (ansi256 && ansi256->set) {
-        printf("\033[%d;5;%um", foreground ? 38 : 48, ansi256->index);
+        fprintf(stream, "\033[%d;5;%um", foreground ? 38 : 48, ansi256->index);
         return;
     }
     if (rgb && rgb->set) {
-        printf("\033[%d;2;%u;%u;%um", foreground ? 38 : 48,
-               rgb->red, rgb->green, rgb->blue);
+        fprintf(stream, "\033[%d;2;%u;%u;%um", foreground ? 38 : 48,
+                rgb->red, rgb->green, rgb->blue);
     }
 }
 
-void bx_rg_emit_color_style_start(const struct bx_rg_color_style *style) {
-    if (!style || style->none || !bx_color_enabled())
+void bx_rg_emit_color_style_start_file(FILE *stream,
+                                       const struct bx_rg_color_style *style) {
+    if (!stream || !style || style->none || !bx_color_enabled())
         return;
     if (style->bold)
-        fputs("\033[1m", stdout);
+        fputs("\033[1m", stream);
     if (style->dim)
-        fputs("\033[2m", stdout);
+        fputs("\033[2m", stream);
     if (style->underline)
-        fputs("\033[4m", stdout);
-    bx_rg_emit_single_color(&style->fg_basic, &style->fg_ansi256, &style->fg_rgb, true);
-    bx_rg_emit_single_color(&style->bg_basic, &style->bg_ansi256, &style->bg_rgb, false);
+        fputs("\033[4m", stream);
+    bx_rg_emit_single_color(stream, &style->fg_basic, &style->fg_ansi256, &style->fg_rgb, true);
+    bx_rg_emit_single_color(stream, &style->bg_basic, &style->bg_ansi256, &style->bg_rgb, false);
+}
+
+void bx_rg_emit_color_reset_file(FILE *stream) {
+    if (!stream || !bx_color_enabled())
+        return;
+    fputs("\033[0m", stream);
+}
+
+void bx_rg_emit_color_style_start(const struct bx_rg_color_style *style) {
+    bx_rg_emit_color_style_start_file(stdout, style);
 }
 
 void bx_rg_emit_color_reset(void) {
-    if (!bx_color_enabled())
-        return;
-    fputs("\033[0m", stdout);
+    bx_rg_emit_color_reset_file(stdout);
 }
 
 char *bx_rg_display_path_dup(const char *path, bool strip_dot_prefix,

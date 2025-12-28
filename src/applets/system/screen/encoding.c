@@ -485,15 +485,17 @@ struct mline *recode_mline(struct mline *ml, int w, int from, int to)
 	if (ml->font == null && encodings[from].deffont == 0)
 		return ml;
 	if (w > maxlen) {
+		size_t bytes = (size_t)(w + 1) * 4;
+
 		for (i = 0; i < 2; i++) {
 			if (rml[i].image == NULL)
-				rml[i].image = malloc(w * 4);
+				rml[i].image = malloc(bytes);
 			else
-				rml[i].image = realloc(rml[i].image, w * 4);
+				rml[i].image = realloc(rml[i].image, bytes);
 			if (rml[i].font == NULL)
-				rml[i].font = malloc(w * 4);
+				rml[i].font = malloc(bytes);
 			else
-				rml[i].font = realloc(rml[i].font, w * 4);
+				rml[i].font = realloc(rml[i].font, bytes);
 			if (rml[i].image == NULL || rml[i].font == NULL) {
 				maxlen = 0;
 				return ml;	/* sorry */
@@ -528,6 +530,8 @@ struct mline *recode_mline(struct mline *ml, int w, int from, int to)
 		rl->font[i] = c >> 8 & 255;
 	}
 	last ^= 1;
+	rl->image[w] = 0;
+	rl->font[w] = 0;
 	return rl;
 }
 

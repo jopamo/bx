@@ -90,6 +90,7 @@ struct search_opts {
     bool multiline_dotall;
     bool stop_on_nonmatch;
     bool stats;
+    int  threads;
     bool line_buffered;
     bool block_buffered;
     bool initial_tab;
@@ -101,7 +102,6 @@ struct search_opts {
     bool pcre2_version;
     bool heading;
     bool heading_set;
-    bool heading_output_started;
     enum bx_rg_encoding_mode encoding_mode;
     char *encoding_name;
     char *hostname_bin;

@@ -161,6 +161,7 @@ bx_lib_sources = [
   'src/lib/args_common.c',
   'src/lib/argv_packer.c',
   'src/lib/backup_ops.c',
+  'src/lib/cancel_state.c',
   'src/lib/color.c',
   'src/lib/child_runner.c',
   'src/lib/copy_data.c',
@@ -172,6 +173,7 @@ bx_lib_sources = [
   'src/lib/id_parse.c',
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
+  'src/lib/output_sink.c',
   'src/lib/output.c',
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
@@ -182,8 +184,10 @@ bx_lib_sources = [
   'src/lib/size_parse.c',
   'src/lib/stat_ops.c',
   'src/lib/statx_compat.c',
+  'src/lib/thread_count.c',
   'src/lib/time_parse.c',
   'src/lib/update_policy.c',
+  'src/lib/work_pool.c',
   'src/lib/xreadwrite.c',
 ]
 
@@ -1455,6 +1459,8 @@ if get_option('tests')
   test('rg upstream option gap audit', python3, args : [test_rg_upstream_option_gap_audit], suite : fast_track_p2_suite)
   test_rg_hotpath_harness = files('tests/applets/text/rg/test_rg_hotpath_harness.py')
   test('rg hotpath harness', python3, args : [test_rg_hotpath_harness, bx_exe], suite : fast_track_p2_suite)
+  test_rg_threads = files('tests/applets/text/rg/test_rg_threads.py')
+  test('rg threads', python3, args : [test_rg_threads, bx_exe], suite : fast_track_p2_suite)
 
   test_fd_basic = find_program('tests/applets/text/fd/test_fd_basic.sh')
   test('fd basic', test_fd_basic, args : [bx_exe], suite : fast_track_p2_suite)
