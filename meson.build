@@ -529,6 +529,31 @@ traceroute_lib = static_library('bx_traceroute',
   c_args : traceroute_c_args,
 )
 
+hdparm_sources = files(
+  'src/applets/system/hdparm/apt.c',
+  'src/applets/system/hdparm/dvdspeed.c',
+  'src/applets/system/hdparm/fallocate.c',
+  'src/applets/system/hdparm/fibmap.c',
+  'src/applets/system/hdparm/fwdownload.c',
+  'src/applets/system/hdparm/geom.c',
+  'src/applets/system/hdparm/hdparm.c',
+  'src/applets/system/hdparm/identify.c',
+  'src/applets/system/hdparm/sgio.c',
+  'src/applets/system/hdparm/sysfs.c',
+  'src/applets/system/hdparm/wdidle3.c',
+)
+
+hdparm_c_args = cc.get_supported_arguments([
+  '-D_DEFAULT_SOURCE',
+  '-Wno-overlength-strings',
+  '-Wno-pedantic',
+])
+
+hdparm_lib = static_library('bx_hdparm',
+  hdparm_sources,
+  c_args : hdparm_c_args,
+)
+
 screen_termcap_dep = declare_dependency()
 screen_termcap_found = false
 foreach dep_name : ['tinfotw', 'ncursestw', 'tinfo', 'ncurses', 'tinfow', 'ncursesw']
@@ -653,13 +678,13 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_init_shortcut = get_option('install_init_shortcut')
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
@@ -678,7 +703,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib, screen_lib],
+  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
@@ -1249,6 +1274,9 @@ if get_option('tests')
 
   test_dmesg_basic = find_program('tests/applets/system/dmesg/test_dmesg_basic.sh')
   test('dmesg basic', test_dmesg_basic, args : [bx_exe], suite : fast_track_p1_suite)
+
+  test_hdparm_basic = find_program('tests/applets/system/hdparm/test_hdparm_basic.sh')
+  test('hdparm basic', test_hdparm_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
   test_reboot_basic = find_program('tests/applets/system/reboot/test_reboot_basic.sh')
   test('reboot basic', test_reboot_basic, args : [bx_exe], suite : fast_track_p1_suite)

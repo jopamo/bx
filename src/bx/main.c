@@ -73,6 +73,7 @@ static const struct applet applets[] = {
     {"mount", bx_mount_main},
     {"umount", bx_umount_main},
     {"fuser", bx_fuser_main},
+    {"hdparm", bx_hdparm_main},
     {"kill", bx_kill_main},
     {"killall", bx_killall_main},
     {"peekfd", bx_peekfd_main},
