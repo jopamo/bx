@@ -1387,6 +1387,10 @@ if get_option('tests')
     tar_differential_args += [tar_ref.full_path()]
   endif
   test('tar differential', python3, args : tar_differential_args)
+  test_tar_option_matrix_coverage_audit = files('tests/test_tar_option_matrix_coverage_audit.py')
+  test('tar option matrix coverage audit', python3, args : [test_tar_option_matrix_coverage_audit], suite : fast_track_p1_suite)
+  test_tar_option_surface_parity = find_program('tests/applets/archive/tar/test_tar_option_surface_parity.py')
+  test('tar option surface parity', test_tar_option_surface_parity, args : [bx_exe], suite : ['archive-gap', 'parity-gap'])
 
   test_cpio_basic = find_program('tests/applets/archive/cpio/test_cpio_basic.sh')
   test('cpio basic', test_cpio_basic, args : [bx_exe], suite : fast_track_p1_suite)
