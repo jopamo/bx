@@ -60,6 +60,9 @@ void bx_archive_buffer_free(struct bx_archive_buffer* buffer) {
 }
 
 bool bx_archive_buffer_append(struct bx_archive_buffer* buffer, const void* data, size_t len) {
+    if (len == 0u) {
+        return true;
+    }
     if (!bx_archive_buffer_reserve(buffer, len)) {
         return false;
     }

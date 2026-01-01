@@ -1,13 +1,18 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "applets/archive/tar/tar_backend.h"
 #include "dispatch/applets.h"
 #include "lib/cli_common.h"
 
-static void bx_tar_print_help(FILE* stream, const char* progname) {
+static void bx_tar_print_usage(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s -cf ARCHIVE [OPTION]... FILE...\n", progname);
     fprintf(stream, "       %s -tf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
     fprintf(stream, "       %s -xf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
+}
+
+static void bx_tar_print_help(FILE* stream, const char* progname) {
+    bx_tar_print_usage(stream, progname);
     fprintf(stream, "Manipulate tar archives.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -c                    create a new archive\n");
@@ -24,8 +29,34 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
 }
 
+static int bx_tar_maybe_handle_usage(int argc, char** argv) {
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar");
+
+    for (int i = 1; i < argc; i++) {
+        const char* arg = argv[i];
+
+        if (arg == NULL) {
+            continue;
+        }
+        if (strcmp(arg, "--") == 0) {
+            break;
+        }
+        if (strcmp(arg, "--usage") == 0) {
+            bx_tar_print_usage(stdout, progname);
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 int bx_tar_main(int argc, char** argv) {
-    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "tar", NULL, NULL, bx_tar_print_help);
+    int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "tar", "-?", NULL, bx_tar_print_help);
+    if (handled >= 0) {
+        return handled;
+    }
+
+    handled = bx_tar_maybe_handle_usage(argc, argv);
     if (handled >= 0) {
         return handled;
     }
