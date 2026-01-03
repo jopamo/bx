@@ -13,6 +13,12 @@ struct bx_archive_buffer {
     size_t cap;
 };
 
+struct bx_archive_name_list {
+    char** items;
+    size_t len;
+    size_t cap;
+};
+
 void bx_archive_buffer_init(struct bx_archive_buffer* buffer);
 void bx_archive_buffer_free(struct bx_archive_buffer* buffer);
 bool bx_archive_buffer_append(struct bx_archive_buffer* buffer, const void* data, size_t len);
@@ -21,6 +27,17 @@ bool bx_archive_buffer_append_zeros(struct bx_archive_buffer* buffer, size_t len
 bool bx_archive_buffer_read_all(FILE* stream, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_write_all(FILE* stream, const struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag);
 bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer);
+
+void bx_archive_name_list_free(struct bx_archive_name_list* list);
+bool bx_archive_name_list_append(struct bx_archive_name_list* list, const char* name);
+bool bx_archive_name_list_read_stream(FILE* stream,
+                                      unsigned char separator,
+                                      struct bx_archive_name_list* list,
+                                      struct bx_diag_ctx* diag);
+bool bx_archive_name_list_read_path(const char* path,
+                                    unsigned char separator,
+                                    struct bx_archive_name_list* list,
+                                    struct bx_diag_ctx* diag);
 
 bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
                                 struct bx_archive_buffer* output,

@@ -339,42 +339,18 @@ static bool bx_cpio_read_name_list(const struct bx_cpio_options* options,
                                    char*** names_out,
                                    size_t* count_out,
                                    struct bx_diag_ctx* diag) {
-    struct bx_archive_buffer input = {0};
-    char** names = NULL;
-    size_t len = 0u;
-    size_t cap = 0u;
-    size_t start = 0u;
-    size_t i;
+    struct bx_archive_name_list names = {0};
 
-    bx_archive_buffer_init(&input);
-    if (!bx_archive_buffer_read_all(stdin, &input, diag)) {
+    if (!bx_archive_name_list_read_stream(
+            stdin,
+            options->null_input ? '\0' : '\n',
+            &names,
+            diag)) {
         return false;
     }
 
-    for (i = 0u; i <= input.len; i++) {
-        bool at_end = (i == input.len);
-        bool is_sep = !at_end && (options->null_input ? input.data[i] == '\0' : input.data[i] == '\n');
-        if (!at_end && !is_sep) {
-            continue;
-        }
-        if (i > start) {
-            size_t item_len = i - start;
-            char* item = xmalloc(item_len + 1u);
-            if (len == cap) {
-                size_t next_cap = cap ? cap * 2u : 16u;
-                names = xrealloc(names, next_cap * sizeof(*names));
-                cap = next_cap;
-            }
-            memcpy(item, input.data + start, item_len);
-            item[item_len] = '\0';
-            names[len++] = item;
-        }
-        start = i + 1u;
-    }
-
-    bx_archive_buffer_free(&input);
-    *names_out = names;
-    *count_out = len;
+    *names_out = names.items;
+    *count_out = names.len;
     return true;
 }
 

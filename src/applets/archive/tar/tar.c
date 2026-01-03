@@ -20,6 +20,11 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -x                    extract archive members\n");
     fprintf(stream, "  -f ARCHIVE            use ARCHIVE instead of standard input/output\n");
     fprintf(stream, "  -C DIR                change to DIR before processing files\n");
+    fprintf(stream, "  -T FILE               read create inputs from FILE\n");
+    fprintf(stream, "  -X FILE               exclude create inputs matching patterns from FILE\n");
+    fprintf(stream, "      --exclude=PATTERN skip matching paths during archive creation\n");
+    fprintf(stream, "      --no-recursion    archive directory entries without descending\n");
+    fprintf(stream, "      --remove-files    delete archived source files after success\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "  -r                    append files to an existing archive\n");
     fprintf(stream, "      --delete          remove named members from an archive\n");

@@ -105,18 +105,25 @@ static bool bx_archive_read_children(const char* dir_path,
     return true;
 }
 
-bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
-                            const char* source_path,
-                            const char* archive_path,
-                            bool recurse,
-                            bool sort_children,
-                            struct bx_diag_ctx* diag) {
+bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
+                                     const char* source_path,
+                                     const char* archive_path,
+                                     bool recurse,
+                                     bool sort_children,
+                                     bx_archive_fs_include_fn include_fn,
+                                     void* include_user_data,
+                                     struct bx_diag_ctx* diag) {
     struct stat st;
     char* link_target = NULL;
 
     if (lstat(source_path, &st) != 0) {
         bx_diag(diag, "%s: %s", source_path, strerror(errno));
         return false;
+    }
+
+    if (include_fn != NULL
+        && !include_fn(source_path, archive_path, &st, include_user_data)) {
+        return true;
     }
 
     if (S_ISLNK(st.st_mode)) {
@@ -142,12 +149,14 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
         for (i = 0u; i < child_count; i++) {
             char* child_source = bx_path_join(source_path, children[i]);
             char* child_archive = bx_path_join(archive_path, children[i]);
-            bool ok = bx_archive_fs_add_path(list,
-                                             child_source,
-                                             child_archive,
-                                             true,
-                                             sort_children,
-                                             diag);
+            bool ok = bx_archive_fs_add_path_filtered(list,
+                                                      child_source,
+                                                      child_archive,
+                                                      true,
+                                                      sort_children,
+                                                      include_fn,
+                                                      include_user_data,
+                                                      diag);
             free(child_source);
             free(child_archive);
             free(children[i]);
@@ -163,6 +172,22 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
     }
 
     return true;
+}
+
+bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
+                            const char* source_path,
+                            const char* archive_path,
+                            bool recurse,
+                            bool sort_children,
+                            struct bx_diag_ctx* diag) {
+    return bx_archive_fs_add_path_filtered(list,
+                                           source_path,
+                                           archive_path,
+                                           recurse,
+                                           sort_children,
+                                           NULL,
+                                           NULL,
+                                           diag);
 }
 
 bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {

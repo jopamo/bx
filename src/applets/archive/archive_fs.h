@@ -21,6 +21,11 @@ struct bx_archive_fs_list {
     size_t cap;
 };
 
+typedef bool (*bx_archive_fs_include_fn)(const char* source_path,
+                                         const char* archive_path,
+                                         const struct stat* st,
+                                         void* user_data);
+
 struct bx_archive_pending_dir {
     char* path;
     mode_t mode;
@@ -35,6 +40,14 @@ struct bx_archive_pending_dirs {
 };
 
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
+bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
+                                     const char* source_path,
+                                     const char* archive_path,
+                                     bool recurse,
+                                     bool sort_children,
+                                     bx_archive_fs_include_fn include_fn,
+                                     void* include_user_data,
+                                     struct bx_diag_ctx* diag);
 bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             const char* source_path,
                             const char* archive_path,

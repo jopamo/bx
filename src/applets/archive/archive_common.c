@@ -122,6 +122,108 @@ bool bx_archive_buffer_has_gzip_magic(const struct bx_archive_buffer* buffer) {
         && buffer->data[1] == 0x8bu;
 }
 
+void bx_archive_name_list_free(struct bx_archive_name_list* list) {
+    size_t i;
+
+    for (i = 0u; i < list->len; i++) {
+        free(list->items[i]);
+    }
+    free(list->items);
+    list->items = NULL;
+    list->len = 0u;
+    list->cap = 0u;
+}
+
+bool bx_archive_name_list_append(struct bx_archive_name_list* list, const char* name) {
+    char** next_items;
+
+    if (list->len == list->cap) {
+        size_t next_cap = list->cap ? list->cap * 2u : 16u;
+        next_items = xrealloc(list->items, next_cap * sizeof(*list->items));
+        list->items = next_items;
+        list->cap = next_cap;
+    }
+
+    list->items[list->len++] = xstrdup(name);
+    return true;
+}
+
+static bool bx_archive_name_list_split_buffer(const struct bx_archive_buffer* input,
+                                              unsigned char separator,
+                                              struct bx_archive_name_list* list,
+                                              struct bx_diag_ctx* diag) {
+    size_t start = 0u;
+    size_t i;
+
+    for (i = 0u; i <= input->len; i++) {
+        bool at_end = (i == input->len);
+        bool is_sep = !at_end && input->data[i] == separator;
+
+        if (!at_end && !is_sep) {
+            continue;
+        }
+        if (i > start) {
+            size_t item_len = i - start;
+            char* item = xmalloc(item_len + 1u);
+
+            memcpy(item, input->data + start, item_len);
+            item[item_len] = '\0';
+            if (!bx_archive_name_list_append(list, item)) {
+                free(item);
+                bx_diag(diag, "buffer growth failed: %s", strerror(errno));
+                return false;
+            }
+            free(item);
+        }
+        start = i + 1u;
+    }
+
+    return true;
+}
+
+bool bx_archive_name_list_read_stream(FILE* stream,
+                                      unsigned char separator,
+                                      struct bx_archive_name_list* list,
+                                      struct bx_diag_ctx* diag) {
+    struct bx_archive_buffer input = {0};
+    bool ok;
+
+    bx_archive_buffer_init(&input);
+    if (!bx_archive_buffer_read_all(stream, &input, diag)) {
+        bx_archive_buffer_free(&input);
+        return false;
+    }
+
+    ok = bx_archive_name_list_split_buffer(&input, separator, list, diag);
+    bx_archive_buffer_free(&input);
+    return ok;
+}
+
+bool bx_archive_name_list_read_path(const char* path,
+                                    unsigned char separator,
+                                    struct bx_archive_name_list* list,
+                                    struct bx_diag_ctx* diag) {
+    FILE* stream;
+    bool ok;
+
+    if (strcmp(path, "-") == 0) {
+        return bx_archive_name_list_read_stream(stdin, separator, list, diag);
+    }
+
+    stream = fopen(path, "rb");
+    if (stream == NULL) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+
+    ok = bx_archive_name_list_read_stream(stream, separator, list, diag);
+    if (fclose(stream) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    return ok;
+}
+
 static bool bx_archive_tempfile_from_buffer(const struct bx_archive_buffer* input, char** path_out, struct bx_diag_ctx* diag) {
     char* path = xstrdup("/tmp/bx-archive-filter-XXXXXX");
     int fd = mkstemp(path);

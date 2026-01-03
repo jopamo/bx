@@ -12,6 +12,7 @@
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/tar/tar_backend.h"
+#include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_names.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
@@ -100,6 +101,7 @@ struct bx_tar_options {
     size_t strip_components;
     const char* one_top_level;
     struct bx_tar_transform_rule name_transform;
+    struct bx_tar_create_options create_options;
     int operand_index;
 };
 
@@ -120,6 +122,14 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_DIRECTORY,
     BX_TAR_OPT_TO_STDOUT,
     BX_TAR_OPT_KEEP_OLD_FILES,
+    BX_TAR_OPT_EXCLUDE,
+    BX_TAR_OPT_EXCLUDE_FROM,
+    BX_TAR_OPT_FILES_FROM,
+    BX_TAR_OPT_FILES_FROM_NULL_ON,
+    BX_TAR_OPT_FILES_FROM_NULL_OFF,
+    BX_TAR_OPT_NO_RECURSION,
+    BX_TAR_OPT_RECURSION,
+    BX_TAR_OPT_REMOVE_FILES,
     BX_TAR_OPT_GZIP_ON,
     BX_TAR_OPT_AUTO_COMPRESS_ON,
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
@@ -180,7 +190,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--directory", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
-    {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE},
     {"--exclude-backups", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--exclude-caches", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--exclude-caches-all", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -192,16 +202,16 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--exclude-tag-under", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--exclude-vcs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--exclude-vcs-ignores", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--no-null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--exclude-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
+    {"--no-null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_NULL_OFF},
     {"--no-unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--files-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_NULL_ON},
+    {"--files-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FILES_FROM},
     {"--unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_RECURSION},
+    {"--recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSION},
     {"--anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -218,7 +228,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--remove-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--remove-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REMOVE_FILES},
     {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--verify", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -339,8 +349,8 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'C', "-C", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
-    {'X', "-X", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {'T', "-T", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {'X', "-X", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
+    {'T', "-T", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FILES_FROM},
     {'k', "-k", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_OLD_FILES},
     {'U', "-U", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'W', "-W", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -896,44 +906,64 @@ static bool bx_tar_finish_archive(struct bx_archive_buffer* archive) {
     return bx_archive_buffer_append_zeros(archive, padded - archive->len);
 }
 
-static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
-                                        const struct bx_tar_options* options,
-                                        int argc,
-                                        char** argv,
-                                        struct bx_diag_ctx* diag) {
-    struct bx_archive_fs_list files = {0};
+static bool bx_tar_build_create_archive_from_files(struct bx_archive_buffer* archive,
+                                                   const struct bx_tar_options* options,
+                                                   const struct bx_archive_fs_list* files,
+                                                   struct bx_diag_ctx* diag) {
     struct bx_tar_hardlink_seen_list seen = {0};
-    int i;
+    size_t i;
 
     bx_archive_buffer_init(archive);
 
-    for (i = options->operand_index; i < argc; i++) {
-        const char* operand = argv[i];
-        char* source = options->create_cwd ? bx_path_join(options->create_cwd, operand) : xstrdup(operand);
-        bool ok = bx_archive_fs_add_path(&files, source, operand, true, options->sort_name, diag);
-        free(source);
-        if (!ok) {
-            bx_archive_fs_list_free(&files);
-            return false;
-        }
-    }
-
-    for (i = 0; (size_t)i < files.len; i++) {
-        if (!bx_tar_write_fs_entry(archive, &files.entries[i], options, &seen, diag)) {
-            bx_archive_fs_list_free(&files);
+    for (i = 0u; i < files->len; i++) {
+        if (!bx_tar_write_fs_entry(archive, &files->entries[i], options, &seen, diag)) {
             bx_tar_seen_list_free(&seen);
             bx_archive_buffer_free(archive);
             return false;
         }
     }
 
-    bx_archive_fs_list_free(&files);
     bx_tar_seen_list_free(&seen);
     if (!bx_tar_finish_archive(archive)) {
         bx_archive_buffer_free(archive);
         bx_diag(diag, "archive write failed: %s", strerror(errno));
         return false;
     }
+    return true;
+}
+
+static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
+                                        struct bx_archive_fs_list* files_out,
+                                        const struct bx_tar_options* options,
+                                        int argc,
+                                        char** argv,
+                                        struct bx_diag_ctx* diag) {
+    struct bx_archive_fs_list files = {0};
+    bool ok;
+
+    if (!bx_tar_create_collect_fs_entries(&files,
+                                          &options->create_options,
+                                          options->create_cwd,
+                                          argc,
+                                          argv,
+                                          options->operand_index,
+                                          options->sort_name,
+                                          diag)) {
+        return false;
+    }
+
+    ok = bx_tar_build_create_archive_from_files(archive, options, &files, diag);
+    if (!ok) {
+        bx_archive_fs_list_free(&files);
+        return false;
+    }
+
+    if (files_out != NULL) {
+        *files_out = files;
+        return true;
+    }
+
+    bx_archive_fs_list_free(&files);
     return true;
 }
 
@@ -1717,6 +1747,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     struct bx_archive_buffer input = {0};
     struct bx_tar_entry_list parsed = {0};
     struct bx_archive_buffer output = {0};
+    struct bx_archive_fs_list appended_files = {0};
     int rc = 2;
     size_t i;
 
@@ -1745,13 +1776,14 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         struct bx_tar_options create_options = *options;
         struct bx_archive_buffer appended = {0};
         create_options.mode = BX_TAR_MODE_CREATE;
-        if (!bx_tar_build_create_archive(&appended, &create_options, argc, argv, diag)) {
+        if (!bx_tar_build_create_archive(&appended, &appended_files, &create_options, argc, argv, diag)) {
             goto out;
         }
         if (appended.len >= 2u * BX_TAR_BLOCK_SIZE) {
             appended.len -= 2u * BX_TAR_BLOCK_SIZE;
         }
         if (!bx_archive_buffer_append(&output, appended.data, appended.len)) {
+            bx_archive_fs_list_free(&appended_files);
             bx_archive_buffer_free(&appended);
             bx_diag(diag, "archive write failed: %s", strerror(errno));
             goto out;
@@ -1767,7 +1799,14 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         goto out;
     }
     rc = 0;
+    if (options->mode == BX_TAR_MODE_APPEND
+        && options->create_options.remove_files
+        && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
+        fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+        rc = 2;
+    }
 out:
+    bx_archive_fs_list_free(&appended_files);
     bx_archive_buffer_free(&output);
     bx_tar_entry_list_free(&parsed);
     return rc;
@@ -1806,6 +1845,12 @@ static const struct bx_tar_short_option_spec* bx_tar_find_short_option(char ch) 
         }
     }
     return NULL;
+}
+
+static bool bx_tar_create_has_inputs(const struct bx_tar_options* options,
+                                     int argc) {
+    return options->create_options.files_from_sources.len > 0u
+        || options->operand_index < argc;
 }
 
 static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
@@ -1857,6 +1902,35 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_KEEP_OLD_FILES:
             options->keep_old_files = true;
+            return true;
+        case BX_TAR_OPT_EXCLUDE:
+            return bx_tar_create_options_add_exclude_pattern(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_FROM:
+            return bx_tar_create_options_add_exclude_from(
+                &options->create_options,
+                value,
+                options->create_cwd
+            );
+        case BX_TAR_OPT_FILES_FROM:
+            return bx_tar_create_options_add_files_from(
+                &options->create_options,
+                value,
+                options->create_cwd
+            );
+        case BX_TAR_OPT_FILES_FROM_NULL_ON:
+            options->create_options.files_from_separator = '\0';
+            return true;
+        case BX_TAR_OPT_FILES_FROM_NULL_OFF:
+            options->create_options.files_from_separator = '\n';
+            return true;
+        case BX_TAR_OPT_NO_RECURSION:
+            options->create_options.recurse = false;
+            return true;
+        case BX_TAR_OPT_RECURSION:
+            options->create_options.recurse = true;
+            return true;
+        case BX_TAR_OPT_REMOVE_FILES:
+            options->create_options.remove_files = true;
             return true;
         case BX_TAR_OPT_GZIP_ON:
             options->gzip = true;
@@ -1942,6 +2016,7 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
 
 static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_tar_transform_rule_cleanup(&options->name_transform);
+    bx_tar_create_options_cleanup(&options->create_options);
 }
 
 static bool bx_tar_parse_options(struct bx_tar_options* options,
@@ -1953,6 +2028,8 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
 
     memset(options, 0, sizeof(*options));
     options->operand_index = argc;
+    options->create_options.recurse = true;
+    options->create_options.files_from_separator = '\n';
 
     if (i < argc && argv[i][0] != '-' && argv[i][0] != '\0') {
         oldstyle = true;
@@ -2052,7 +2129,8 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         bx_diag(diag, "archive file not specified; use -f");
         return false;
     }
-    if ((options->mode == BX_TAR_MODE_CREATE || options->mode == BX_TAR_MODE_APPEND) && options->operand_index >= argc) {
+    if ((options->mode == BX_TAR_MODE_CREATE || options->mode == BX_TAR_MODE_APPEND)
+        && !bx_tar_create_has_inputs(options, argc)) {
         bx_diag(diag, "missing file operand");
         return false;
     }
@@ -2076,11 +2154,20 @@ int bx_tar_run(int argc, char** argv) {
 
     if (options.mode == BX_TAR_MODE_CREATE) {
         struct bx_archive_buffer archive = {0};
-        if (!bx_tar_build_create_archive(&archive, &options, argc, argv, &diag)) {
+        struct bx_archive_fs_list files = {0};
+
+        if (!bx_tar_build_create_archive(&archive, &files, &options, argc, argv, &diag)) {
             bx_tar_options_cleanup(&options);
             return 2;
         }
         rc = bx_tar_write_archive_output(&options, &archive, &diag) ? 0 : 2;
+        if (rc == 0 && options.create_options.remove_files) {
+            if (!bx_tar_create_remove_archived_sources(&files, &diag)) {
+                fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag.progname);
+                rc = 2;
+            }
+        }
+        bx_archive_fs_list_free(&files);
         bx_archive_buffer_free(&archive);
         bx_tar_options_cleanup(&options);
         return rc;

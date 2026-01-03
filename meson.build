@@ -207,6 +207,7 @@ bx_archive_applet_sources = [
   'src/applets/archive/cpio/cpio_backend.c',
   'src/applets/archive/tar/tar.c',
   'src/applets/archive/tar/tar_backend.c',
+  'src/applets/archive/tar/tar_create.c',
   'src/applets/archive/tar/tar_names.c',
 ]
 
