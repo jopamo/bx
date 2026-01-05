@@ -21,10 +21,26 @@ struct bx_archive_fs_list {
     size_t cap;
 };
 
+enum bx_archive_fs_error_op {
+    BX_ARCHIVE_FS_ERROR_LSTAT = 0,
+    BX_ARCHIVE_FS_ERROR_READLINK,
+    BX_ARCHIVE_FS_ERROR_OPENDIR,
+    BX_ARCHIVE_FS_ERROR_CLOSEDIR,
+};
+
+enum bx_archive_fs_error_action {
+    BX_ARCHIVE_FS_ERROR_ABORT = 0,
+    BX_ARCHIVE_FS_ERROR_SKIP,
+};
+
 typedef bool (*bx_archive_fs_include_fn)(const char* source_path,
                                          const char* archive_path,
                                          const struct stat* st,
                                          void* user_data);
+typedef enum bx_archive_fs_error_action (*bx_archive_fs_error_fn)(const char* source_path,
+                                                                  enum bx_archive_fs_error_op op,
+                                                                  int errnum,
+                                                                  void* user_data);
 
 struct bx_archive_pending_dir {
     char* path;
@@ -47,6 +63,8 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      bool sort_children,
                                      bx_archive_fs_include_fn include_fn,
                                      void* include_user_data,
+                                     bx_archive_fs_error_fn error_fn,
+                                     void* error_user_data,
                                      struct bx_diag_ctx* diag);
 bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             const char* source_path,

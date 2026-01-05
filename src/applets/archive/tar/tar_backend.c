@@ -906,6 +906,10 @@ static bool bx_tar_finish_archive(struct bx_archive_buffer* archive) {
     return bx_archive_buffer_append_zeros(archive, padded - archive->len);
 }
 
+static void bx_tar_report_previous_errors(const struct bx_diag_ctx* diag) {
+    fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+}
+
 static bool bx_tar_build_create_archive_from_files(struct bx_archive_buffer* archive,
                                                    const struct bx_tar_options* options,
                                                    const struct bx_archive_fs_list* files,
@@ -934,11 +938,13 @@ static bool bx_tar_build_create_archive_from_files(struct bx_archive_buffer* arc
 
 static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
                                         struct bx_archive_fs_list* files_out,
+                                        bool* had_create_errors_out,
                                         const struct bx_tar_options* options,
                                         int argc,
                                         char** argv,
                                         struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list files = {0};
+    bool had_create_errors = false;
     bool ok;
 
     if (!bx_tar_create_collect_fs_entries(&files,
@@ -948,6 +954,7 @@ static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
                                           argv,
                                           options->operand_index,
                                           options->sort_name,
+                                          &had_create_errors,
                                           diag)) {
         return false;
     }
@@ -958,6 +965,9 @@ static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
         return false;
     }
 
+    if (had_create_errors_out != NULL) {
+        *had_create_errors_out = had_create_errors;
+    }
     if (files_out != NULL) {
         *files_out = files;
         return true;
@@ -1684,7 +1694,7 @@ static int bx_tar_extract_entries(const struct bx_tar_entry_list* entries,
     }
     bx_archive_pending_dirs_free(&dirs);
     if (status == 2) {
-        fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+        bx_tar_report_previous_errors(diag);
     }
     return status;
 }
@@ -1802,7 +1812,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     if (options->mode == BX_TAR_MODE_APPEND
         && options->create_options.remove_files
         && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
-        fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+        bx_tar_report_previous_errors(diag);
         rc = 2;
     }
 out:

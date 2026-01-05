@@ -59,10 +59,27 @@ static int bx_archive_name_compare(const void* left, const void* right) {
     return strcmp(*a, *b);
 }
 
+static enum bx_archive_fs_error_action
+bx_archive_fs_handle_error(const char* path,
+                           enum bx_archive_fs_error_op op,
+                           int errnum,
+                           bx_archive_fs_error_fn error_fn,
+                           void* error_user_data,
+                           struct bx_diag_ctx* diag) {
+    if (error_fn != NULL) {
+        return error_fn(path, op, errnum, error_user_data);
+    }
+
+    bx_diag(diag, "%s: %s", path, strerror(errnum));
+    return BX_ARCHIVE_FS_ERROR_ABORT;
+}
+
 static bool bx_archive_read_children(const char* dir_path,
                                      bool sort_children,
                                      char*** names_out,
                                      size_t* count_out,
+                                     bx_archive_fs_error_fn error_fn,
+                                     void* error_user_data,
                                      struct bx_diag_ctx* diag) {
     DIR* dir = opendir(dir_path);
     struct dirent* ent;
@@ -71,7 +88,16 @@ static bool bx_archive_read_children(const char* dir_path,
     size_t cap = 0u;
 
     if (dir == NULL) {
-        bx_diag(diag, "%s: %s", dir_path, strerror(errno));
+        if (bx_archive_fs_handle_error(dir_path,
+                                       BX_ARCHIVE_FS_ERROR_OPENDIR,
+                                       errno,
+                                       error_fn,
+                                       error_user_data,
+                                       diag) == BX_ARCHIVE_FS_ERROR_SKIP) {
+            *names_out = NULL;
+            *count_out = 0u;
+            return true;
+        }
         return false;
     }
 
@@ -88,7 +114,16 @@ static bool bx_archive_read_children(const char* dir_path,
     }
 
     if (closedir(dir) != 0) {
-        bx_diag(diag, "%s: %s", dir_path, strerror(errno));
+        if (bx_archive_fs_handle_error(dir_path,
+                                       BX_ARCHIVE_FS_ERROR_CLOSEDIR,
+                                       errno,
+                                       error_fn,
+                                       error_user_data,
+                                       diag) == BX_ARCHIVE_FS_ERROR_SKIP) {
+            *names_out = names;
+            *count_out = len;
+            return true;
+        }
         while (len > 0u) {
             free(names[--len]);
         }
@@ -112,13 +147,19 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      bool sort_children,
                                      bx_archive_fs_include_fn include_fn,
                                      void* include_user_data,
+                                     bx_archive_fs_error_fn error_fn,
+                                     void* error_user_data,
                                      struct bx_diag_ctx* diag) {
     struct stat st;
     char* link_target = NULL;
 
     if (lstat(source_path, &st) != 0) {
-        bx_diag(diag, "%s: %s", source_path, strerror(errno));
-        return false;
+        return bx_archive_fs_handle_error(source_path,
+                                          BX_ARCHIVE_FS_ERROR_LSTAT,
+                                          errno,
+                                          error_fn,
+                                          error_user_data,
+                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
     }
 
     if (include_fn != NULL
@@ -129,8 +170,12 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
     if (S_ISLNK(st.st_mode)) {
         link_target = bx_path_readlink_dup(source_path);
         if (link_target == NULL) {
-            bx_diag(diag, "%s: %s", source_path, strerror(errno));
-            return false;
+            return bx_archive_fs_handle_error(source_path,
+                                              BX_ARCHIVE_FS_ERROR_READLINK,
+                                              errno,
+                                              error_fn,
+                                              error_user_data,
+                                              diag) == BX_ARCHIVE_FS_ERROR_SKIP;
         }
     }
 
@@ -142,7 +187,13 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
         size_t child_count = 0u;
         size_t i;
 
-        if (!bx_archive_read_children(source_path, sort_children, &children, &child_count, diag)) {
+        if (!bx_archive_read_children(source_path,
+                                      sort_children,
+                                      &children,
+                                      &child_count,
+                                      error_fn,
+                                      error_user_data,
+                                      diag)) {
             return false;
         }
 
@@ -156,6 +207,8 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                                       sort_children,
                                                       include_fn,
                                                       include_user_data,
+                                                      error_fn,
+                                                      error_user_data,
                                                       diag);
             free(child_source);
             free(child_archive);
@@ -185,6 +238,8 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                                            archive_path,
                                            recurse,
                                            sort_children,
+                                           NULL,
+                                           NULL,
                                            NULL,
                                            NULL,
                                            diag);

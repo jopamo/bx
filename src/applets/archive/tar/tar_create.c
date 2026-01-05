@@ -264,6 +264,8 @@ static bool bx_tar_create_path_excluded(const struct bx_archive_name_list* patte
 
 struct bx_tar_create_filter_state {
     const struct bx_archive_name_list* exclude_patterns;
+    const struct bx_diag_ctx* diag;
+    bool had_create_errors;
 };
 
 static bool bx_tar_create_include_path(const char* source_path,
@@ -277,6 +279,38 @@ static bool bx_tar_create_include_path(const char* source_path,
     return !bx_tar_create_path_excluded(state->exclude_patterns, archive_path);
 }
 
+static const char* bx_tar_create_error_verb(enum bx_archive_fs_error_op op) {
+    switch (op) {
+        case BX_ARCHIVE_FS_ERROR_LSTAT:
+            return "stat";
+        case BX_ARCHIVE_FS_ERROR_READLINK:
+            return "readlink";
+        case BX_ARCHIVE_FS_ERROR_OPENDIR:
+            return "open";
+        case BX_ARCHIVE_FS_ERROR_CLOSEDIR:
+            return "close";
+    }
+
+    return "access";
+}
+
+static enum bx_archive_fs_error_action
+bx_tar_create_handle_fs_error(const char* source_path,
+                              enum bx_archive_fs_error_op op,
+                              int errnum,
+                              void* user_data) {
+    struct bx_tar_create_filter_state* state = user_data;
+
+    fprintf(stderr,
+            "%s: %s: Cannot %s: %s\n",
+            state->diag->progname,
+            source_path,
+            bx_tar_create_error_verb(op),
+            strerror(errnum));
+    state->had_create_errors = true;
+    return BX_ARCHIVE_FS_ERROR_SKIP;
+}
+
 bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
                                       const struct bx_tar_create_options* create_options,
                                       const char* create_cwd,
@@ -284,10 +318,15 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
                                       char** argv,
                                       int operand_index,
                                       bool sort_children,
+                                      bool* had_create_errors,
                                       struct bx_diag_ctx* diag) {
     struct bx_tar_create_input_list inputs = {0};
     struct bx_archive_name_list exclude_patterns = {0};
-    struct bx_tar_create_filter_state filter_state;
+    struct bx_tar_create_filter_state filter_state = {
+        .exclude_patterns = NULL,
+        .diag = diag,
+        .had_create_errors = false,
+    };
     int i;
 
     if (!bx_tar_create_load_names_from_sources(&inputs, &create_options->files_from_sources, diag)) {
@@ -319,6 +358,8 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
             sort_children,
             bx_tar_create_include_path,
             &filter_state,
+            bx_tar_create_handle_fs_error,
+            &filter_state,
             diag
         );
 
@@ -332,6 +373,9 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
 
     bx_tar_create_input_list_free(&inputs);
     bx_archive_name_list_free(&exclude_patterns);
+    if (had_create_errors != NULL) {
+        *had_create_errors = filter_state.had_create_errors;
+    }
     return true;
 }
 

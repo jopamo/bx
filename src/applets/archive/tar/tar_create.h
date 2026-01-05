@@ -56,6 +56,7 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
                                       char** argv,
                                       int operand_index,
                                       bool sort_children,
+                                      bool* had_create_errors,
                                       struct bx_diag_ctx* diag);
 
 bool bx_tar_create_remove_archived_sources(const struct bx_archive_fs_list* list,
