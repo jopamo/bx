@@ -1758,6 +1758,8 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     struct bx_tar_entry_list parsed = {0};
     struct bx_archive_buffer output = {0};
     struct bx_archive_fs_list appended_files = {0};
+    bool had_append_errors = false;
+    bool had_postwrite_errors = false;
     int rc = 2;
     size_t i;
 
@@ -1786,7 +1788,13 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         struct bx_tar_options create_options = *options;
         struct bx_archive_buffer appended = {0};
         create_options.mode = BX_TAR_MODE_CREATE;
-        if (!bx_tar_build_create_archive(&appended, &appended_files, &create_options, argc, argv, diag)) {
+        if (!bx_tar_build_create_archive(&appended,
+                                         &appended_files,
+                                         &had_append_errors,
+                                         &create_options,
+                                         argc,
+                                         argv,
+                                         diag)) {
             goto out;
         }
         if (appended.len >= 2u * BX_TAR_BLOCK_SIZE) {
@@ -1809,9 +1817,15 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         goto out;
     }
     rc = 0;
+    if (options->mode == BX_TAR_MODE_APPEND && had_append_errors) {
+        had_postwrite_errors = true;
+    }
     if (options->mode == BX_TAR_MODE_APPEND
         && options->create_options.remove_files
         && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
+        had_postwrite_errors = true;
+    }
+    if (rc == 0 && had_postwrite_errors) {
         bx_tar_report_previous_errors(diag);
         rc = 2;
     }
@@ -2165,17 +2179,31 @@ int bx_tar_run(int argc, char** argv) {
     if (options.mode == BX_TAR_MODE_CREATE) {
         struct bx_archive_buffer archive = {0};
         struct bx_archive_fs_list files = {0};
+        bool had_create_errors = false;
+        bool had_postwrite_errors = false;
 
-        if (!bx_tar_build_create_archive(&archive, &files, &options, argc, argv, &diag)) {
+        if (!bx_tar_build_create_archive(&archive,
+                                         &files,
+                                         &had_create_errors,
+                                         &options,
+                                         argc,
+                                         argv,
+                                         &diag)) {
             bx_tar_options_cleanup(&options);
             return 2;
         }
         rc = bx_tar_write_archive_output(&options, &archive, &diag) ? 0 : 2;
         if (rc == 0 && options.create_options.remove_files) {
             if (!bx_tar_create_remove_archived_sources(&files, &diag)) {
-                fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag.progname);
-                rc = 2;
+                had_postwrite_errors = true;
             }
+        }
+        if (rc == 0 && had_create_errors) {
+            had_postwrite_errors = true;
+        }
+        if (rc == 0 && had_postwrite_errors) {
+            bx_tar_report_previous_errors(&diag);
+            rc = 2;
         }
         bx_archive_fs_list_free(&files);
         bx_archive_buffer_free(&archive);
