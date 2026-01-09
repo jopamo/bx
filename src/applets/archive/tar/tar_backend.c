@@ -124,9 +124,14 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_KEEP_OLD_FILES,
     BX_TAR_OPT_EXCLUDE,
     BX_TAR_OPT_EXCLUDE_FROM,
+    BX_TAR_OPT_ADD_FILE,
     BX_TAR_OPT_FILES_FROM,
     BX_TAR_OPT_FILES_FROM_NULL_ON,
     BX_TAR_OPT_FILES_FROM_NULL_OFF,
+    BX_TAR_OPT_FILES_FROM_VERBATIM_ON,
+    BX_TAR_OPT_FILES_FROM_VERBATIM_OFF,
+    BX_TAR_OPT_UNQUOTE_ON,
+    BX_TAR_OPT_UNQUOTE_OFF,
     BX_TAR_OPT_NO_RECURSION,
     BX_TAR_OPT_RECURSION,
     BX_TAR_OPT_REMOVE_FILES,
@@ -188,7 +193,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--occurrence", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sparse-version", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ADD_FILE},
     {"--directory", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE},
     {"--exclude-backups", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -204,12 +209,12 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--exclude-vcs-ignores", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--exclude-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
     {"--no-null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_NULL_OFF},
-    {"--no-unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNQUOTE_OFF},
+    {"--no-verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_VERBATIM_OFF},
     {"--null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_NULL_ON},
     {"--files-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_FILES_FROM},
-    {"--unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNQUOTE_ON},
+    {"--verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_VERBATIM_ON},
     {"--no-recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_RECURSION},
     {"--recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSION},
     {"--anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -949,7 +954,7 @@ static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
 
     if (!bx_tar_create_collect_fs_entries(&files,
                                           &options->create_options,
-                                          options->create_cwd,
+                                          NULL,
                                           argc,
                                           argv,
                                           options->operand_index,
@@ -1873,7 +1878,7 @@ static const struct bx_tar_short_option_spec* bx_tar_find_short_option(char ch) 
 
 static bool bx_tar_create_has_inputs(const struct bx_tar_options* options,
                                      int argc) {
-    return options->create_options.files_from_sources.len > 0u
+    return bx_tar_create_options_has_inputs(&options->create_options)
         || options->operand_index < argc;
 }
 
@@ -1919,6 +1924,7 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             }
             else {
                 options->create_cwd = value;
+                return bx_tar_create_options_add_chdir(&options->create_options, value);
             }
             return true;
         case BX_TAR_OPT_TO_STDOUT:
@@ -1930,29 +1936,27 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_EXCLUDE:
             return bx_tar_create_options_add_exclude_pattern(&options->create_options, value);
         case BX_TAR_OPT_EXCLUDE_FROM:
-            return bx_tar_create_options_add_exclude_from(
-                &options->create_options,
-                value,
-                options->create_cwd
-            );
+            return bx_tar_create_options_add_exclude_from(&options->create_options, value);
+        case BX_TAR_OPT_ADD_FILE:
+            return bx_tar_create_options_add_add_file(&options->create_options, value);
         case BX_TAR_OPT_FILES_FROM:
-            return bx_tar_create_options_add_files_from(
-                &options->create_options,
-                value,
-                options->create_cwd
-            );
+            return bx_tar_create_options_add_files_from(&options->create_options, value);
         case BX_TAR_OPT_FILES_FROM_NULL_ON:
-            options->create_options.files_from_separator = '\0';
-            return true;
+            return bx_tar_create_options_set_files_from_null(&options->create_options, true);
         case BX_TAR_OPT_FILES_FROM_NULL_OFF:
-            options->create_options.files_from_separator = '\n';
-            return true;
+            return bx_tar_create_options_set_files_from_null(&options->create_options, false);
+        case BX_TAR_OPT_FILES_FROM_VERBATIM_ON:
+            return bx_tar_create_options_set_files_from_verbatim(&options->create_options, true);
+        case BX_TAR_OPT_FILES_FROM_VERBATIM_OFF:
+            return bx_tar_create_options_set_files_from_verbatim(&options->create_options, false);
+        case BX_TAR_OPT_UNQUOTE_ON:
+            return bx_tar_create_options_set_files_from_unquote(&options->create_options, true);
+        case BX_TAR_OPT_UNQUOTE_OFF:
+            return bx_tar_create_options_set_files_from_unquote(&options->create_options, false);
         case BX_TAR_OPT_NO_RECURSION:
-            options->create_options.recurse = false;
-            return true;
+            return bx_tar_create_options_set_recurse(&options->create_options, false);
         case BX_TAR_OPT_RECURSION:
-            options->create_options.recurse = true;
-            return true;
+            return bx_tar_create_options_set_recurse(&options->create_options, true);
         case BX_TAR_OPT_REMOVE_FILES:
             options->create_options.remove_files = true;
             return true;
@@ -2052,8 +2056,6 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
 
     memset(options, 0, sizeof(*options));
     options->operand_index = argc;
-    options->create_options.recurse = true;
-    options->create_options.files_from_separator = '\n';
 
     if (i < argc && argv[i][0] != '-' && argv[i][0] != '\0') {
         oldstyle = true;
@@ -2061,12 +2063,29 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
 
     while (i < argc) {
         char* arg = argv[i];
-        if (!oldstyle && arg[0] != '-') {
-            options->operand_index = i;
+        if (!oldstyle && strcmp(arg, "--") == 0) {
+            if (options->mode == BX_TAR_MODE_CREATE || options->mode == BX_TAR_MODE_APPEND) {
+                int j;
+                for (j = i + 1; j < argc; j++) {
+                    if (!bx_tar_create_options_add_add_file(&options->create_options, argv[j])) {
+                        return false;
+                    }
+                }
+                options->operand_index = argc;
+                break;
+            }
+            options->operand_index = i + 1;
             break;
         }
-        if (!oldstyle && strcmp(arg, "--") == 0) {
-            options->operand_index = i + 1;
+        if (!oldstyle && arg[0] != '-') {
+            if (options->mode == BX_TAR_MODE_CREATE || options->mode == BX_TAR_MODE_APPEND) {
+                if (!bx_tar_create_options_add_add_file(&options->create_options, arg)) {
+                    return false;
+                }
+                i++;
+                continue;
+            }
+            options->operand_index = i;
             break;
         }
         if (!oldstyle && strncmp(arg, "--", 2u) == 0) {

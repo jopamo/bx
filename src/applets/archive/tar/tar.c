@@ -21,6 +21,11 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -f ARCHIVE            use ARCHIVE instead of standard input/output\n");
     fprintf(stream, "  -C DIR                change to DIR before processing files\n");
     fprintf(stream, "  -T FILE               read create inputs from FILE\n");
+    fprintf(stream, "      --add-file=FILE   add FILE even when its name begins with '-'\n");
+    fprintf(stream, "      --null            read -T input as NUL-delimited names\n");
+    fprintf(stream, "      --verbatim-files-from\n");
+    fprintf(stream, "                        read -T names literally without option parsing\n");
+    fprintf(stream, "      --no-unquote      disable backslash escape decoding in -T names\n");
     fprintf(stream, "  -X FILE               exclude create inputs matching patterns from FILE\n");
     fprintf(stream, "      --exclude=PATTERN skip matching paths during archive creation\n");
     fprintf(stream, "      --no-recursion    archive directory entries without descending\n");
