@@ -176,10 +176,11 @@ static char* bx_tar_create_resolve_input_path(const char* cwd, const char* path)
 }
 
 static char* bx_tar_create_resolve_list_path(const char* cwd, const char* path) {
+    (void)cwd;
     if (strcmp(path, "-") == 0) {
         return xstrdup(path);
     }
-    return bx_tar_create_resolve_input_path(cwd, path);
+    return xstrdup(path);
 }
 
 static bool bx_tar_create_set_cwd(struct bx_tar_files_from_state* state, const char* path) {
@@ -507,6 +508,95 @@ static bool bx_tar_create_process_option_record(struct bx_tar_create_collect_ctx
     if (strcmp(record, "--no-unquote") == 0) {
         state->unquote = false;
         return true;
+    }
+    if (strcmp(record, "--no-recursion") == 0) {
+        state->recurse = false;
+        return true;
+    }
+    if (strcmp(record, "--recursion") == 0) {
+        state->recurse = true;
+        return true;
+    }
+
+    if (strncmp(record, "--exclude=", strlen("--exclude=")) == 0) {
+        arg = record + strlen("--exclude=");
+    }
+    else if (strncmp(record, "--exclude", strlen("--exclude")) == 0) {
+        const char* rest = record + strlen("--exclude");
+        if (*rest == '\0') {
+            return bx_tar_create_note_list_option_error(
+                ctx,
+                list_path,
+                record_no,
+                "unrecognized option"
+            );
+        }
+        if (*rest != ' ' && *rest != '\t') {
+            return bx_tar_create_note_list_option_error(
+                ctx,
+                list_path,
+                record_no,
+                "unrecognized option"
+            );
+        }
+        arg = bx_tar_create_skip_inline_space(rest);
+    }
+
+    if (arg != NULL) {
+        bool ok;
+
+        decoded = bx_tar_create_decode_record_text(state, arg);
+        ok = bx_archive_name_list_append(&state->exclude_patterns, decoded);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-from=", strlen("--exclude-from=")) == 0) {
+        arg = record + strlen("--exclude-from=");
+    }
+    else if (strncmp(record, "--exclude-from", strlen("--exclude-from")) == 0) {
+        const char* rest = record + strlen("--exclude-from");
+        if (*rest == '\0') {
+            return bx_tar_create_note_list_option_error(
+                ctx,
+                list_path,
+                record_no,
+                "unrecognized option"
+            );
+        }
+        if (*rest != ' ' && *rest != '\t') {
+            return bx_tar_create_note_list_option_error(
+                ctx,
+                list_path,
+                record_no,
+                "unrecognized option"
+            );
+        }
+        arg = bx_tar_create_skip_inline_space(rest);
+    }
+    else if (record[0] == '-' && record[1] == 'X') {
+        arg = record + 2u;
+        if (*arg == ' ' || *arg == '\t') {
+            arg = bx_tar_create_skip_inline_space(arg);
+        }
+        if (*arg == '\0') {
+            return bx_tar_create_note_list_option_error(
+                ctx,
+                list_path,
+                record_no,
+                "unrecognized option"
+            );
+        }
+    }
+
+    if (arg != NULL) {
+        bool ok;
+
+        decoded = bx_tar_create_decode_record_text(state, arg);
+        ok = bx_tar_create_add_exclude_from_path(state, decoded, ctx->diag);
+        free(decoded);
+        return ok;
     }
 
     if (strncmp(record, "--directory=", strlen("--directory=")) == 0) {
