@@ -208,7 +208,10 @@ bx_archive_applet_sources = [
   'src/applets/archive/tar/tar.c',
   'src/applets/archive/tar/tar_backend.c',
   'src/applets/archive/tar/tar_create.c',
+  'src/applets/archive/tar/tar_files_from.c',
   'src/applets/archive/tar/tar_names.c',
+  'src/applets/archive/tar/tar_patterns.c',
+  'src/applets/archive/tar/tar_select.c',
 ]
 
 # applet groups

@@ -62,10 +62,6 @@ bool bx_tar_create_options_set_files_from_unquote(struct bx_tar_create_options* 
 
 bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
                                       const struct bx_tar_create_options* create_options,
-                                      const char* create_cwd,
-                                      int argc,
-                                      char** argv,
-                                      int operand_index,
                                       bool sort_children,
                                       bool* had_create_errors,
                                       struct bx_diag_ctx* diag);
