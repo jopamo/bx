@@ -436,8 +436,8 @@ static size_t bx_tar_select_trimmed_len(const char* name) {
     return len;
 }
 
-static bool bx_tar_select_member_matches(const struct bx_tar_select_member* member,
-                                         const char* name) {
+bool bx_tar_select_member_matches_name(const struct bx_tar_select_member* member,
+                                       const char* name) {
     size_t member_len = bx_tar_select_trimmed_len(member->name);
     size_t name_len = bx_tar_select_trimmed_len(name);
 
@@ -460,7 +460,7 @@ bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
     bool selected = default_select_all;
 
     for (i = 0u; i < plan->len; i++) {
-        if (bx_tar_select_member_matches(&plan->members[i], name)) {
+        if (bx_tar_select_member_matches_name(&plan->members[i], name)) {
             if (matched_members != NULL) {
                 matched_members[i] = true;
             }

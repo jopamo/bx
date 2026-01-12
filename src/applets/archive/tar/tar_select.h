@@ -28,6 +28,9 @@ bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
                               bool* had_errors,
                               struct bx_diag_ctx* diag);
 
+bool bx_tar_select_member_matches_name(const struct bx_tar_select_member* member,
+                                       const char* name);
+
 bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
                               const char* name,
                               bool default_select_all,

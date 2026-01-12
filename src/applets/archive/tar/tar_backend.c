@@ -1788,7 +1788,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     struct bx_archive_buffer output = {0};
     struct bx_archive_fs_list appended_files = {0};
     struct bx_tar_select_plan select_plan = {0};
-    bool* matched_members = NULL;
+    bool* removed_entries = NULL;
     bool had_append_errors = false;
     bool had_postwrite_errors = false;
     bool had_selection_errors = false;
@@ -1802,10 +1802,6 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
                                      diag)) {
         return 2;
     }
-    if (options->mode == BX_TAR_MODE_DELETE && select_plan.len > 0u) {
-        matched_members = xmalloc(select_plan.len * sizeof(*matched_members));
-        memset(matched_members, 0, select_plan.len * sizeof(*matched_members));
-    }
 
     if (!bx_tar_read_archive_input(options, &input, diag)) {
         goto out;
@@ -1817,14 +1813,35 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     bx_archive_buffer_free(&input);
     bx_archive_buffer_init(&output);
 
+    if (options->mode == BX_TAR_MODE_DELETE && parsed.len > 0u) {
+        removed_entries = xmalloc(parsed.len * sizeof(*removed_entries));
+        memset(removed_entries, 0, parsed.len * sizeof(*removed_entries));
+        for (i = 0u; i < select_plan.len; i++) {
+            bool matched = false;
+            size_t j;
+
+            for (j = 0u; j < parsed.len; j++) {
+                if (removed_entries[j]) {
+                    continue;
+                }
+                if (bx_tar_select_member_matches_name(&select_plan.members[i], parsed.items[j].name)) {
+                    removed_entries[j] = true;
+                    matched = true;
+                }
+            }
+
+            if (!matched) {
+                fprintf(stderr, "%s: %s: Not found in archive\n", diag->progname, select_plan.members[i].name);
+                had_selection_errors = true;
+            }
+        }
+    }
+
     for (i = 0u; i < parsed.len; i++) {
-        const struct bx_tar_entry* entry = &parsed.items[i];
-        bool selected = options->mode == BX_TAR_MODE_DELETE
-            && bx_tar_select_plan_match(&select_plan, entry->name, false, matched_members, NULL);
-        if (selected) {
+        if (options->mode == BX_TAR_MODE_DELETE && removed_entries != NULL && removed_entries[i]) {
             continue;
         }
-        if (!bx_tar_write_parsed_entry(&output, entry, diag)) {
+        if (!bx_tar_write_parsed_entry(&output, &parsed.items[i], diag)) {
             goto out;
         }
     }
@@ -1868,10 +1885,6 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         && !bx_tar_create_remove_archived_sources(&appended_files, diag)) {
         had_postwrite_errors = true;
     }
-    if (options->mode == BX_TAR_MODE_DELETE
-        && bx_tar_select_plan_report_unmatched(&select_plan, matched_members, diag)) {
-        had_selection_errors = true;
-    }
     if (rc == 0 && options->mode == BX_TAR_MODE_DELETE && had_selection_errors) {
         had_postwrite_errors = true;
     }
@@ -1880,7 +1893,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         rc = 2;
     }
 out:
-    free(matched_members);
+    free(removed_entries);
     bx_tar_select_plan_cleanup(&select_plan);
     bx_archive_fs_list_free(&appended_files);
     bx_archive_buffer_free(&output);
