@@ -80,6 +80,7 @@ struct bx_tar_pax_info {
 struct bx_tar_options {
     enum bx_tar_mode mode;
     const char* unsupported_mode;
+    bool saw_mode_option;
     const char* archive_path;
     bool to_stdout;
     bool keep_old_files;
@@ -1942,6 +1943,42 @@ static bool bx_tar_create_has_inputs(const struct bx_tar_options* options,
     return bx_tar_create_options_has_inputs(&options->create_options);
 }
 
+static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
+    fprintf(stderr,
+            "%s: You must specify one of the '-Acdtrux', '--delete' or '--test-label' options\n",
+            diag->progname);
+    fprintf(stderr,
+            "Try '%s --help' or '%s --usage' for more information.\n",
+            diag->progname,
+            diag->progname);
+    return false;
+}
+
+static bool bx_tar_report_mode_conflict(const struct bx_diag_ctx* diag) {
+    fprintf(stderr,
+            "%s: You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option\n",
+            diag->progname);
+    fprintf(stderr,
+            "Try '%s --help' or '%s --usage' for more information.\n",
+            diag->progname,
+            diag->progname);
+    return false;
+}
+
+static bool bx_tar_set_mode_option(struct bx_tar_options* options,
+                                   enum bx_tar_mode mode,
+                                   const char* unsupported_display,
+                                   struct bx_diag_ctx* diag) {
+    if (options->saw_mode_option) {
+        return bx_tar_report_mode_conflict(diag);
+    }
+
+    options->saw_mode_option = true;
+    options->mode = mode;
+    options->unsupported_mode = unsupported_display;
+    return true;
+}
+
 static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                                        enum bx_tar_option_effect effect,
                                        const char* display,
@@ -1951,30 +1988,17 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_NOOP:
             return true;
         case BX_TAR_OPT_MODE_CREATE:
-            options->mode = BX_TAR_MODE_CREATE;
-            options->unsupported_mode = NULL;
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
         case BX_TAR_OPT_MODE_LIST:
-            options->mode = BX_TAR_MODE_LIST;
-            options->unsupported_mode = NULL;
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag);
         case BX_TAR_OPT_MODE_EXTRACT:
-            options->mode = BX_TAR_MODE_EXTRACT;
-            options->unsupported_mode = NULL;
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_EXTRACT, NULL, diag);
         case BX_TAR_OPT_MODE_APPEND:
-            options->mode = BX_TAR_MODE_APPEND;
-            options->unsupported_mode = NULL;
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_APPEND, NULL, diag);
         case BX_TAR_OPT_MODE_DELETE:
-            options->mode = BX_TAR_MODE_DELETE;
-            options->unsupported_mode = NULL;
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_DELETE, NULL, diag);
         case BX_TAR_OPT_MODE_UNSUPPORTED:
-            if (options->mode == BX_TAR_MODE_NONE) {
-                options->unsupported_mode = display;
-            }
-            return true;
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_NONE, display, diag);
         case BX_TAR_OPT_ARCHIVE_PATH:
             options->archive_path = value;
             return true;
@@ -2205,8 +2229,7 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
             bx_diag(diag, "%s is not yet supported", options->unsupported_mode);
             return false;
         }
-        bx_diag(diag, "you must specify one of the '-c', '-t', '-x', '-r', or '--delete' options");
-        return false;
+        return bx_tar_report_missing_mode(diag);
     }
     if (options->archive_path == NULL) {
         bx_diag(diag, "archive file not specified; use -f");
