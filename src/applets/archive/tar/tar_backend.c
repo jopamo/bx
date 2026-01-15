@@ -16,6 +16,7 @@
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_select.h"
+#include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/copy_data.h"
@@ -25,8 +26,6 @@
 #include "lib/xreadwrite.h"
 
 #define BX_TAR_BLOCK_SIZE 512u
-#define BX_TAR_RECORD_BLOCKS 20u
-
 enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
     BX_TAR_MODE_CREATE,
@@ -405,18 +404,6 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'\0', NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
 };
 
-struct bx_tar_hardlink_seen {
-    dev_t dev;
-    ino_t ino;
-    char* first_name;
-};
-
-struct bx_tar_hardlink_seen_list {
-    struct bx_tar_hardlink_seen* items;
-    size_t len;
-    size_t cap;
-};
-
 static const char* bx_tar_progname(char** argv, int argc) {
     return bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar");
 }
@@ -500,456 +487,40 @@ static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, siz
     return true;
 }
 
-static void bx_tar_format_octal_field(unsigned char* field, size_t len, size_t value) {
-    char text[32];
-    size_t text_len;
-    memset(field, 0, len);
-    snprintf(text, sizeof(text), "%0*lo", (int)(len - 1u), (unsigned long)value);
-    text_len = strlen(text);
-    if (text_len >= len) {
-        memcpy(field, text + (text_len - (len - 1u)), len - 1u);
-    }
-    else {
-        memcpy(field + (len - 1u - text_len), text, text_len);
-    }
-}
-
-static void bx_tar_write_checksum(unsigned char* header) {
-    unsigned int sum = 0u;
-    size_t i;
-    memset(header + 148, ' ', 8u);
-    for (i = 0u; i < BX_TAR_BLOCK_SIZE; i++) {
-        sum += header[i];
-    }
-    snprintf((char*)header + 148, 8u, "%06o", sum);
-    header[154] = '\0';
-    header[155] = ' ';
-}
-
-static bool bx_tar_split_ustar_name(const char* path,
-                                    bool directory,
-                                    unsigned char* name_out,
-                                    unsigned char* prefix_out) {
-    char* stored = NULL;
-    const char* slash;
-    size_t len;
-    bool ok = false;
-
-    memset(name_out, 0, 100u);
-    memset(prefix_out, 0, 155u);
-
-    if (directory) {
-        size_t path_len = strlen(path);
-        stored = xmalloc(path_len + 2u);
-        memcpy(stored, path, path_len);
-        stored[path_len] = '/';
-        stored[path_len + 1u] = '\0';
-    }
-    else {
-        stored = xstrdup(path);
-    }
-
-    len = strlen(stored);
-    if (len <= 100u) {
-        memcpy(name_out, stored, len);
-        ok = true;
-        goto out;
-    }
-
-    slash = strrchr(stored, '/');
-    while (slash != NULL) {
-        size_t prefix_len = (size_t)(slash - stored);
-        size_t name_len = len - prefix_len - 1u;
-        if (prefix_len <= 155u && name_len <= 100u) {
-            memcpy(prefix_out, stored, prefix_len);
-            memcpy(name_out, slash + 1, name_len);
-            ok = true;
-            goto out;
-        }
-        if (slash == stored) {
-            break;
-        }
-        {
-            char* tmp = xmalloc(prefix_len + 1u);
-            memcpy(tmp, stored, prefix_len);
-            tmp[prefix_len] = '\0';
-            slash = strrchr(tmp, '/');
-            if (slash != NULL) {
-                size_t next_offset = (size_t)(slash - tmp);
-                free(tmp);
-                slash = stored + next_offset;
-            }
-            else {
-                free(tmp);
-                slash = NULL;
-            }
-        }
-    }
-
-out:
-    free(stored);
-    return ok;
-}
-
-static size_t bx_tar_decimal_digits(size_t value) {
-    size_t digits = 1u;
-    while (value >= 10u) {
-        value /= 10u;
-        digits++;
-    }
-    return digits;
-}
-
-static bool bx_tar_pax_append_record(struct bx_archive_buffer* buffer, const char* key, const char* value) {
-    size_t payload_len = strlen(key) + 1u + strlen(value) + 1u;
-    size_t digits = bx_tar_decimal_digits(payload_len + 2u);
-    size_t total;
-    char prefix[32];
-
-    while (true) {
-        total = payload_len + digits + 1u;
-        if (bx_tar_decimal_digits(total) == digits) {
-            break;
-        }
-        digits = bx_tar_decimal_digits(total);
-    }
-
-    snprintf(prefix, sizeof(prefix), "%zu ", total);
-    return bx_archive_buffer_append(buffer, prefix, strlen(prefix))
-        && bx_archive_buffer_append(buffer, key, strlen(key))
-        && bx_archive_buffer_append_byte(buffer, '=')
-        && bx_archive_buffer_append(buffer, value, strlen(value))
-        && bx_archive_buffer_append_byte(buffer, '\n');
-}
-
-static bool bx_tar_append_raw_header(struct bx_archive_buffer* archive,
-                                     const char* path,
-                                     const char* linkname,
-                                     char typeflag,
-                                     mode_t mode,
-                                     uid_t uid,
-                                     gid_t gid,
-                                     size_t size,
-                                     struct timespec mtime,
-                                     bool directory) {
-    unsigned char header[BX_TAR_BLOCK_SIZE];
-    unsigned char name[100u];
-    unsigned char prefix[155u];
-
-    if (!bx_tar_split_ustar_name(path, directory, name, prefix)) {
-        return false;
-    }
-
-    memset(header, 0, sizeof(header));
-    memcpy(header, name, sizeof(name));
-    bx_tar_format_octal_field(header + 100, 8u, mode & 07777u);
-    bx_tar_format_octal_field(header + 108, 8u, uid);
-    bx_tar_format_octal_field(header + 116, 8u, gid);
-    bx_tar_format_octal_field(header + 124, 12u, size);
-    bx_tar_format_octal_field(header + 136, 12u, (size_t)mtime.tv_sec);
-    header[156] = (unsigned char)typeflag;
-    if (linkname != NULL) {
-        size_t link_len = strlen(linkname);
-        if (link_len > 100u) {
-            link_len = 100u;
-        }
-        memcpy(header + 157, linkname, link_len);
-    }
-    memcpy(header + 257, "ustar", 5u);
-    memcpy(header + 263, "00", 2u);
-    memcpy(header + 345, prefix, sizeof(prefix));
-    bx_tar_write_checksum(header);
-    return bx_archive_buffer_append(archive, header, sizeof(header));
-}
-
-static bool bx_tar_write_header(struct bx_archive_buffer* archive,
-                                const char* path,
-                                const char* linkname,
-                                enum bx_tar_kind kind,
-                                mode_t mode,
-                                uid_t uid,
-                                gid_t gid,
-                                size_t size,
-                                struct timespec mtime,
-                                bool allow_pax) {
-    struct bx_archive_buffer pax = {0};
-    bool is_dir = kind == BX_TAR_KIND_DIR;
-    bool need_path_pax;
-    bool need_link_pax = false;
-    const char* stored_link = linkname;
-    const char* actual_header_path = path;
-    char typeflag;
-
-    bx_archive_buffer_init(&pax);
-
-    need_path_pax = !bx_tar_split_ustar_name(path, is_dir, (unsigned char[100]){0}, (unsigned char[155]){0});
-    if (linkname != NULL && strlen(linkname) > 100u) {
-        need_link_pax = true;
-    }
-
-    if ((need_path_pax || need_link_pax) && !allow_pax) {
-        bx_archive_buffer_free(&pax);
-        return false;
-    }
-
-    if (need_path_pax || need_link_pax) {
-        struct timespec zero_time = {0, 0};
-        struct bx_archive_buffer pax_data = {0};
-        size_t pax_size;
-
-        bx_archive_buffer_init(&pax_data);
-        if (need_path_pax && !bx_tar_pax_append_record(&pax_data, "path", path)) {
-            bx_archive_buffer_free(&pax_data);
-            bx_archive_buffer_free(&pax);
-            return false;
-        }
-        if (need_link_pax && !bx_tar_pax_append_record(&pax_data, "linkpath", linkname)) {
-            bx_archive_buffer_free(&pax_data);
-            bx_archive_buffer_free(&pax);
-            return false;
-        }
-        if (!bx_tar_append_raw_header(&pax,
-                                      "./PaxHeaders/bx",
-                                      NULL,
-                                      'x',
-                                      0644u,
-                                      0u,
-                                      0u,
-                                      pax_data.len,
-                                      zero_time,
-                                      false)) {
-            bx_archive_buffer_free(&pax_data);
-            bx_archive_buffer_free(&pax);
-            return false;
-        }
-        pax_size = bx_tar_round_up(pax_data.len, BX_TAR_BLOCK_SIZE);
-        bx_archive_buffer_append(&pax, pax_data.data, pax_data.len);
-        bx_archive_buffer_append_zeros(&pax, pax_size - pax_data.len);
-        bx_archive_buffer_free(&pax_data);
-
-        actual_header_path = need_path_pax ? "PaxPayload" : path;
-        if (need_link_pax) {
-            stored_link = "";
-        }
-    }
-
-    switch (kind) {
-        case BX_TAR_KIND_REG: typeflag = '0'; break;
-        case BX_TAR_KIND_DIR: typeflag = '5'; break;
-        case BX_TAR_KIND_SYMLINK: typeflag = '2'; break;
-        case BX_TAR_KIND_HARDLINK: typeflag = '1'; break;
-        case BX_TAR_KIND_FIFO: typeflag = '6'; break;
-        default: typeflag = '0'; break;
-    }
-
-    if (pax.len > 0u && !bx_archive_buffer_append(archive, pax.data, pax.len)) {
-        bx_archive_buffer_free(&pax);
-        return false;
-    }
-    bx_archive_buffer_free(&pax);
-    return bx_tar_append_raw_header(archive,
-                                    actual_header_path,
-                                    stored_link,
-                                    typeflag,
-                                    mode,
-                                    uid,
-                                    gid,
-                                    kind == BX_TAR_KIND_REG ? size : 0u,
-                                    mtime,
-                                    is_dir);
-}
-
-static bool bx_tar_write_entry_data(struct bx_archive_buffer* archive,
-                                    const unsigned char* data,
-                                    size_t len) {
-    size_t padded = bx_tar_round_up(len, BX_TAR_BLOCK_SIZE);
-    return bx_archive_buffer_append(archive, data, len)
-        && bx_archive_buffer_append_zeros(archive, padded - len);
-}
-
-static bool bx_tar_read_file(const char* path, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
-    FILE* stream = fopen(path, "rb");
-    if (stream == NULL) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-    bx_archive_buffer_init(buffer);
-    if (!bx_archive_buffer_read_all(stream, buffer, diag)) {
-        fclose(stream);
-        return false;
-    }
-    if (fclose(stream) != 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
-        return false;
-    }
-    return true;
-}
-
-static ssize_t bx_tar_find_seen_hardlink(const struct bx_tar_hardlink_seen_list* seen, dev_t dev, ino_t ino) {
-    size_t i;
-    for (i = 0u; i < seen->len; i++) {
-        if (seen->items[i].dev == dev && seen->items[i].ino == ino) {
-            return (ssize_t)i;
-        }
-    }
-    return -1;
-}
-
-static bool bx_tar_record_seen_hardlink(struct bx_tar_hardlink_seen_list* seen,
-                                        dev_t dev,
-                                        ino_t ino,
-                                        const char* name) {
-    struct bx_tar_hardlink_seen* slot;
-    if (seen->len == seen->cap) {
-        size_t next_cap = seen->cap ? seen->cap * 2u : 16u;
-        seen->items = xrealloc(seen->items, next_cap * sizeof(*seen->items));
-        seen->cap = next_cap;
-    }
-    slot = &seen->items[seen->len++];
-    slot->dev = dev;
-    slot->ino = ino;
-    slot->first_name = xstrdup(name);
-    return true;
-}
-
-static void bx_tar_seen_list_free(struct bx_tar_hardlink_seen_list* seen) {
-    size_t i;
-    for (i = 0u; i < seen->len; i++) {
-        free(seen->items[i].first_name);
-    }
-    free(seen->items);
-    seen->items = NULL;
-    seen->len = 0u;
-    seen->cap = 0u;
-}
-
-static bool bx_tar_write_fs_entry(struct bx_archive_buffer* archive,
-                                  const struct bx_archive_fs_entry* fs_entry,
-                                  const struct bx_tar_options* options,
-                                  struct bx_tar_hardlink_seen_list* seen,
-                                  struct bx_diag_ctx* diag) {
-    enum bx_tar_kind kind;
-    mode_t mode = fs_entry->st.st_mode & 07777u;
-    uid_t uid = options->owner_set ? options->owner : fs_entry->st.st_uid;
-    gid_t gid = options->group_set ? options->group : fs_entry->st.st_gid;
-    struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st.st_mtim;
-    struct bx_archive_buffer file_data;
-
-    if (S_ISDIR(fs_entry->st.st_mode)) {
-        kind = BX_TAR_KIND_DIR;
-        return bx_tar_write_header(archive,
-                                   fs_entry->archive_path,
-                                   NULL,
-                                   kind,
-                                   mode,
-                                   uid,
-                                   gid,
-                                   0u,
-                                   mtime,
-                                   !options->format_ustar);
-    }
-    if (S_ISLNK(fs_entry->st.st_mode)) {
-        kind = BX_TAR_KIND_SYMLINK;
-        return bx_tar_write_header(archive,
-                                   fs_entry->archive_path,
-                                   fs_entry->link_target,
-                                   kind,
-                                   mode,
-                                   uid,
-                                   gid,
-                                   0u,
-                                   mtime,
-                                   !options->format_ustar);
-    }
-    if (S_ISFIFO(fs_entry->st.st_mode)) {
-        kind = BX_TAR_KIND_FIFO;
-        return bx_tar_write_header(archive,
-                                   fs_entry->archive_path,
-                                   NULL,
-                                   kind,
-                                   mode,
-                                   uid,
-                                   gid,
-                                   0u,
-                                   mtime,
-                                   !options->format_ustar);
-    }
-    if (!S_ISREG(fs_entry->st.st_mode)) {
-        bx_diag(diag, "%s: unsupported file type", fs_entry->source_path);
-        return false;
-    }
-
-    if (fs_entry->st.st_nlink > 1) {
-        ssize_t index = bx_tar_find_seen_hardlink(seen, fs_entry->st.st_dev, fs_entry->st.st_ino);
-        if (index >= 0) {
-            return bx_tar_write_header(archive,
-                                       fs_entry->archive_path,
-                                       seen->items[index].first_name,
-                                       BX_TAR_KIND_HARDLINK,
-                                       mode,
-                                       uid,
-                                       gid,
-                                       0u,
-                                       mtime,
-                                       !options->format_ustar);
-        }
-        bx_tar_record_seen_hardlink(seen, fs_entry->st.st_dev, fs_entry->st.st_ino, fs_entry->archive_path);
-    }
-
-    bx_archive_buffer_init(&file_data);
-    if (!bx_tar_read_file(fs_entry->source_path, &file_data, diag)) {
-        return false;
-    }
-    if (!bx_tar_write_header(archive,
-                             fs_entry->archive_path,
-                             NULL,
-                             BX_TAR_KIND_REG,
-                             mode,
-                             uid,
-                             gid,
-                             file_data.len,
-                             mtime,
-                             !options->format_ustar)
-        || !bx_tar_write_entry_data(archive, file_data.data, file_data.len)) {
-        bx_archive_buffer_free(&file_data);
-        bx_diag(diag, "archive write failed: %s", strerror(errno));
-        return false;
-    }
-    bx_archive_buffer_free(&file_data);
-    return true;
-}
-
-static bool bx_tar_finish_archive(struct bx_archive_buffer* archive) {
-    size_t with_trailer = archive->len + 2u * BX_TAR_BLOCK_SIZE;
-    size_t padded = bx_tar_round_up(with_trailer, BX_TAR_BLOCK_SIZE * BX_TAR_RECORD_BLOCKS);
-    return bx_archive_buffer_append_zeros(archive, padded - archive->len);
-}
-
 static void bx_tar_report_previous_errors(const struct bx_diag_ctx* diag) {
     fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+}
+
+static struct bx_tar_stream_options
+bx_tar_make_stream_options(const struct bx_tar_options* options) {
+    return (struct bx_tar_stream_options){
+        .format_ustar = options->format_ustar,
+        .owner_set = options->owner_set,
+        .group_set = options->group_set,
+        .fixed_mtime = options->fixed_mtime,
+        .owner = options->owner,
+        .group = options->group,
+        .mtime = options->mtime,
+    };
+}
+
+static bool bx_tar_buffer_sink_write(void* user, const void* data, size_t len) {
+    return bx_archive_buffer_append(user, data, len);
 }
 
 static bool bx_tar_build_create_archive_from_files(struct bx_archive_buffer* archive,
                                                    const struct bx_tar_options* options,
                                                    const struct bx_archive_fs_list* files,
                                                    struct bx_diag_ctx* diag) {
-    struct bx_tar_hardlink_seen_list seen = {0};
-    size_t i;
+    struct bx_tar_stream_options stream_options = bx_tar_make_stream_options(options);
+    struct bx_tar_stream_sink sink = {
+        .user = archive,
+        .write = bx_tar_buffer_sink_write,
+    };
 
     bx_archive_buffer_init(archive);
-
-    for (i = 0u; i < files->len; i++) {
-        if (!bx_tar_write_fs_entry(archive, &files->entries[i], options, &seen, diag)) {
-            bx_tar_seen_list_free(&seen);
-            bx_archive_buffer_free(archive);
-            return false;
-        }
-    }
-
-    bx_tar_seen_list_free(&seen);
-    if (!bx_tar_finish_archive(archive)) {
+    if (!bx_tar_stream_encode_fs_list(files, &stream_options, &sink, diag)) {
         bx_archive_buffer_free(archive);
-        bx_diag(diag, "archive write failed: %s", strerror(errno));
         return false;
     }
     return true;
@@ -988,6 +559,50 @@ static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
 
     bx_archive_fs_list_free(&files);
     return true;
+}
+
+static bool bx_tar_file_sink_write(void* user, const void* data, size_t len) {
+    FILE* stream = user;
+    return fwrite(data, 1u, len, stream) == len;
+}
+
+static bool bx_tar_write_create_archive_direct(const struct bx_archive_fs_list* files,
+                                               const struct bx_tar_options* options,
+                                               struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_options stream_options = bx_tar_make_stream_options(options);
+    struct bx_tar_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
+    bool ok;
+
+    if (strcmp(options->archive_path, "-") == 0) {
+        stream = stdout;
+    }
+    else {
+        stream = fopen(options->archive_path, "wb");
+        if (stream == NULL) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    sink.user = stream;
+    ok = bx_tar_stream_encode_fs_list(files, &stream_options, &sink, diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (stream != stdout) {
+        if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 static bool bx_tar_read_archive_input(const struct bx_tar_options* options,
@@ -1790,24 +1405,42 @@ static int bx_tar_list_entries(const struct bx_tar_entry_list* entries,
 static bool bx_tar_write_parsed_entry(struct bx_archive_buffer* archive,
                                       const struct bx_tar_entry* entry,
                                       struct bx_diag_ctx* diag) {
-    if (!bx_tar_write_header(archive,
-                             entry->name,
-                             entry->linkname,
-                             entry->kind,
-                             entry->mode,
-                             entry->uid,
-                             entry->gid,
-                             entry->kind == BX_TAR_KIND_REG ? entry->data_len : 0u,
-                             entry->mtime,
-                             true)) {
-        bx_diag(diag, "archive write failed: unsupported pathname");
-        return false;
+    struct bx_tar_stream_sink sink = {
+        .user = archive,
+        .write = bx_tar_buffer_sink_write,
+    };
+    enum bx_tar_stream_kind kind = BX_TAR_STREAM_KIND_REG;
+
+    switch (entry->kind) {
+        case BX_TAR_KIND_REG:
+            kind = BX_TAR_STREAM_KIND_REG;
+            break;
+        case BX_TAR_KIND_DIR:
+            kind = BX_TAR_STREAM_KIND_DIR;
+            break;
+        case BX_TAR_KIND_SYMLINK:
+            kind = BX_TAR_STREAM_KIND_SYMLINK;
+            break;
+        case BX_TAR_KIND_HARDLINK:
+            kind = BX_TAR_STREAM_KIND_HARDLINK;
+            break;
+        case BX_TAR_KIND_FIFO:
+            kind = BX_TAR_STREAM_KIND_FIFO;
+            break;
     }
-    if (entry->kind == BX_TAR_KIND_REG && !bx_tar_write_entry_data(archive, entry->data, entry->data_len)) {
-        bx_diag(diag, "archive write failed: %s", strerror(errno));
-        return false;
-    }
-    return true;
+
+    return bx_tar_stream_write_raw_entry(&sink,
+                                         entry->name,
+                                         entry->linkname,
+                                         kind,
+                                         entry->mode,
+                                         entry->uid,
+                                         entry->gid,
+                                         entry->data,
+                                         entry->data_len,
+                                         entry->mtime,
+                                         true,
+                                         diag);
 }
 
 static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
@@ -1898,8 +1531,12 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         bx_archive_buffer_free(&appended);
     }
 
-    if (!bx_tar_finish_archive(&output)) {
-        bx_diag(diag, "archive write failed: %s", strerror(errno));
+    if (!bx_tar_stream_write_trailer(&(struct bx_tar_stream_sink){
+                                         .user = &output,
+                                         .write = bx_tar_buffer_sink_write,
+                                     },
+                                     output.len,
+                                     diag)) {
         goto out;
     }
     if (!bx_tar_write_archive_output(options, &output, diag)) {
@@ -2305,20 +1942,35 @@ int bx_tar_run(int argc, char** argv) {
     }
 
     if (options.mode == BX_TAR_MODE_CREATE) {
-        struct bx_archive_buffer archive = {0};
         struct bx_archive_fs_list files = {0};
         bool had_create_errors = false;
         bool had_postwrite_errors = false;
+        bool needs_archive_buffer = options.gzip
+            || (options.auto_compress
+                && options.archive_path != NULL
+                && bx_archive_path_has_gzip_suffix(options.archive_path));
 
-        if (!bx_tar_build_create_archive(&archive,
-                                         &files,
-                                         &had_create_errors,
-                                         &options,
-                                         &diag)) {
+        if (!bx_tar_create_collect_fs_entries(&files,
+                                              &options.create_options,
+                                              options.sort_name,
+                                              &had_create_errors,
+                                              &diag)) {
             bx_tar_options_cleanup(&options);
             return 2;
         }
-        rc = bx_tar_write_archive_output(&options, &archive, &diag) ? 0 : 2;
+        if (needs_archive_buffer) {
+            struct bx_archive_buffer archive = {0};
+            if (!bx_tar_build_create_archive_from_files(&archive, &options, &files, &diag)) {
+                bx_archive_fs_list_free(&files);
+                bx_tar_options_cleanup(&options);
+                return 2;
+            }
+            rc = bx_tar_write_archive_output(&options, &archive, &diag) ? 0 : 2;
+            bx_archive_buffer_free(&archive);
+        }
+        else {
+            rc = bx_tar_write_create_archive_direct(&files, &options, &diag) ? 0 : 2;
+        }
         if (rc == 0 && options.create_options.remove_files) {
             if (!bx_tar_create_remove_archived_sources(&files, &diag)) {
                 had_postwrite_errors = true;
@@ -2332,7 +1984,6 @@ int bx_tar_run(int argc, char** argv) {
             rc = 2;
         }
         bx_archive_fs_list_free(&files);
-        bx_archive_buffer_free(&archive);
         bx_tar_options_cleanup(&options);
         return rc;
     }
