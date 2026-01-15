@@ -1,14 +1,10 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
@@ -222,121 +218,6 @@ bool bx_archive_name_list_read_path(const char* path,
         return false;
     }
     return ok;
-}
-
-static bool bx_archive_tempfile_from_buffer(const struct bx_archive_buffer* input, char** path_out, struct bx_diag_ctx* diag) {
-    char* path = xstrdup("/tmp/bx-archive-filter-XXXXXX");
-    int fd = mkstemp(path);
-    if (fd < 0) {
-        bx_diag(diag, "mkstemp failed: %s", strerror(errno));
-        free(path);
-        return false;
-    }
-
-    if (!bx_xwrite_all(fd, input->data, input->len)) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        close(fd);
-        unlink(path);
-        free(path);
-        return false;
-    }
-
-    if (close(fd) != 0) {
-        bx_diag(diag, "close failed: %s", strerror(errno));
-        unlink(path);
-        free(path);
-        return false;
-    }
-
-    *path_out = path;
-    return true;
-}
-
-bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
-                                struct bx_archive_buffer* output,
-                                bool decompress,
-                                struct bx_diag_ctx* diag) {
-    char* tmp_path = NULL;
-    int pipefd[2] = {-1, -1};
-    pid_t pid;
-    int status;
-
-    if (!bx_archive_tempfile_from_buffer(input, &tmp_path, diag)) {
-        return false;
-    }
-
-    if (pipe(pipefd) != 0) {
-        bx_diag(diag, "pipe failed: %s", strerror(errno));
-        unlink(tmp_path);
-        free(tmp_path);
-        return false;
-    }
-
-    pid = fork();
-    if (pid < 0) {
-        bx_diag(diag, "fork failed: %s", strerror(errno));
-        close(pipefd[0]);
-        close(pipefd[1]);
-        unlink(tmp_path);
-        free(tmp_path);
-        return false;
-    }
-
-    if (pid == 0) {
-        char* const argv_compress[] = {"gzip", "-c", tmp_path, NULL};
-        char* const argv_decompress[] = {"gzip", "-cd", tmp_path, NULL};
-        char* const* argv = decompress ? argv_decompress : argv_compress;
-
-        close(pipefd[0]);
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
-            _exit(127);
-        }
-        close(pipefd[1]);
-        execvp("gzip", argv);
-        _exit(127);
-    }
-
-    close(pipefd[1]);
-    while (true) {
-        unsigned char chunk[8192];
-        ssize_t nread = bx_xread(pipefd[0], chunk, sizeof(chunk));
-        if (nread == 0) {
-            break;
-        }
-        if (nread < 0) {
-            bx_diag(diag, "read error: %s", strerror(errno));
-            close(pipefd[0]);
-            waitpid(pid, NULL, 0);
-            unlink(tmp_path);
-            free(tmp_path);
-            return false;
-        }
-        if (!bx_archive_buffer_append(output, chunk, (size_t)nread)) {
-            bx_diag(diag, "buffer growth failed: %s", strerror(errno));
-            close(pipefd[0]);
-            waitpid(pid, NULL, 0);
-            unlink(tmp_path);
-            free(tmp_path);
-            return false;
-        }
-    }
-    close(pipefd[0]);
-
-    if (waitpid(pid, &status, 0) < 0) {
-        bx_diag(diag, "waitpid failed: %s", strerror(errno));
-        unlink(tmp_path);
-        free(tmp_path);
-        return false;
-    }
-
-    unlink(tmp_path);
-    free(tmp_path);
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        bx_diag(diag, "gzip failed");
-        return false;
-    }
-    return true;
 }
 
 bool bx_archive_write_regular_payload(int fd,

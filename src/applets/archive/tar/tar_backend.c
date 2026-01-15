@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
+#include "applets/archive/archive_gzip.h"
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
@@ -19,6 +20,8 @@
 #include "lib/cli_common.h"
 #include "lib/copy_data.h"
 #include "lib/path_ops.h"
+#include "lib/size_parse.h"
+#include "lib/thread_count.h"
 #include "lib/xreadwrite.h"
 
 #define BX_TAR_BLOCK_SIZE 512u
@@ -98,7 +101,11 @@ struct bx_tar_options {
     struct timespec mtime;
     bool xattrs;
     bool acls;
+    bool no_mt;
     size_t strip_components;
+    int threads;
+    int compress_threads;
+    uintmax_t mt_chunk_size;
     const char* one_top_level;
     struct bx_tar_transform_rule name_transform;
     struct bx_tar_create_options create_options;
@@ -134,6 +141,10 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_NO_RECURSION,
     BX_TAR_OPT_RECURSION,
     BX_TAR_OPT_REMOVE_FILES,
+    BX_TAR_OPT_THREADS,
+    BX_TAR_OPT_COMPRESS_THREADS,
+    BX_TAR_OPT_MT_CHUNK_SIZE,
+    BX_TAR_OPT_NO_MT,
     BX_TAR_OPT_GZIP_ON,
     BX_TAR_OPT_AUTO_COMPRESS_ON,
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
@@ -233,6 +244,10 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--remove-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REMOVE_FILES},
+    {"--threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_THREADS},
+    {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
+    {"--mt-chunk-size", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MT_CHUNK_SIZE},
+    {"--no-mt", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_MT},
     {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--verify", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -1030,8 +1045,21 @@ static bool bx_tar_write_archive_output(const struct bx_tar_options* options,
     bool ok;
 
     if (options->gzip || (options->auto_compress && options->archive_path != NULL && bx_archive_path_has_gzip_suffix(options->archive_path))) {
+        size_t compress_threads = 1u;
+        size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
+
+        if (!options->no_mt) {
+            if (options->compress_threads >= 0) {
+                compress_threads = bx_thread_count_resolve(options->compress_threads);
+            }
+            else if (options->threads >= 0) {
+                compress_threads = bx_thread_count_resolve(options->threads);
+            }
+        }
         bx_archive_buffer_init(&compressed);
-        if (!bx_archive_run_gzip_filter(archive, &compressed, false, diag)) {
+        if (compress_threads > 1u
+            ? !bx_archive_run_gzip_filter_mt(archive, &compressed, compress_threads, chunk_size, diag)
+            : !bx_archive_run_gzip_filter(archive, &compressed, false, diag)) {
             return false;
         }
         output = &compressed;
@@ -2037,6 +2065,22 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_REMOVE_FILES:
             options->create_options.remove_files = true;
             return true;
+        case BX_TAR_OPT_THREADS:
+            return bx_thread_count_parse(diag->progname, "--threads", value, &options->threads);
+        case BX_TAR_OPT_COMPRESS_THREADS:
+            return bx_thread_count_parse(diag->progname, "--compress-threads", value, &options->compress_threads);
+        case BX_TAR_OPT_MT_CHUNK_SIZE: {
+            uintmax_t parsed = 0u;
+            if (!bx_size_parse_block_size(value, &parsed) || parsed == 0u || parsed > SIZE_MAX) {
+                bx_diag(diag, "invalid chunk size '%s'", value);
+                return false;
+            }
+            options->mt_chunk_size = parsed;
+            return true;
+        }
+        case BX_TAR_OPT_NO_MT:
+            options->no_mt = true;
+            return true;
         case BX_TAR_OPT_GZIP_ON:
             options->gzip = true;
             return true;
@@ -2132,6 +2176,8 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
     bool oldstyle = false;
 
     memset(options, 0, sizeof(*options));
+    options->threads = -1;
+    options->compress_threads = -1;
 
     if (i < argc && argv[i][0] != '-' && argv[i][0] != '\0') {
         oldstyle = true;

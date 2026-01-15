@@ -39,11 +39,6 @@ bool bx_archive_name_list_read_path(const char* path,
                                     struct bx_archive_name_list* list,
                                     struct bx_diag_ctx* diag);
 
-bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
-                                struct bx_archive_buffer* output,
-                                bool decompress,
-                                struct bx_diag_ctx* diag);
-
 bool bx_archive_write_regular_payload(int fd,
                                       const unsigned char* data,
                                       size_t len,

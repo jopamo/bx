@@ -143,8 +143,12 @@ endif
 
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
+zlib_dep = dependency('zlib', required : false, static: use_static_binary)
+if not zlib_dep.found()
+  zlib_dep = cc.find_library('z', required : true)
+endif
 
-bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep]
+bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep]
 if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
@@ -202,6 +206,7 @@ bx_crypto_sources = [
 
 bx_archive_applet_sources = [
   'src/applets/archive/archive_common.c',
+  'src/applets/archive/archive_gzip.c',
   'src/applets/archive/archive_fs.c',
   'src/applets/archive/cpio/cpio.c',
   'src/applets/archive/cpio/cpio_backend.c',

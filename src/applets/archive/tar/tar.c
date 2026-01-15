@@ -35,6 +35,12 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --delete          remove named members from an archive\n");
     fprintf(stream, "  -z                    filter the archive through gzip\n");
     fprintf(stream, "  -a                    choose compression from the archive suffix\n");
+    fprintf(stream, "      --threads=N       use N gzip compression workers (0 uses online CPUs)\n");
+    fprintf(stream, "      --compress-threads=N\n");
+    fprintf(stream, "                        override gzip compression workers for archive output\n");
+    fprintf(stream, "      --mt-chunk-size=SIZE\n");
+    fprintf(stream, "                        set multithreaded gzip member chunk size\n");
+    fprintf(stream, "      --no-mt           disable multithreaded gzip archive output\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
 }
