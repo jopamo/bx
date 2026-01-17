@@ -33,6 +33,13 @@ struct bx_tar_stream_sink {
     bool callback_owns_errors;
 };
 
+struct bx_tar_stream_live_entry {
+    const struct bx_tar_stream_sink* sink;
+    size_t data_remaining;
+    size_t padding_remaining;
+    bool active;
+};
+
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
@@ -49,6 +56,27 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
 bool bx_tar_stream_write_trailer(const struct bx_tar_stream_sink* sink,
                                  size_t bytes_written,
                                  struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
+                                   const struct bx_tar_stream_sink* sink,
+                                   const char* path,
+                                   const char* linkname,
+                                   enum bx_tar_stream_kind kind,
+                                   mode_t mode,
+                                   uid_t uid,
+                                   gid_t gid,
+                                   size_t data_len,
+                                   struct timespec mtime,
+                                   bool allow_pax,
+                                   struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
+                                         const void* data,
+                                         size_t len,
+                                         struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_finish_raw_entry(struct bx_tar_stream_live_entry* entry,
+                                    struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
                                       const struct bx_tar_stream_options* options,

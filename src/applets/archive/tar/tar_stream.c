@@ -607,6 +607,119 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
     return true;
 }
 
+bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
+                                   const struct bx_tar_stream_sink* sink,
+                                   const char* path,
+                                   const char* linkname,
+                                   enum bx_tar_stream_kind kind,
+                                   mode_t mode,
+                                   uid_t uid,
+                                   gid_t gid,
+                                   size_t data_len,
+                                   struct timespec mtime,
+                                   bool allow_pax,
+                                   struct bx_diag_ctx* diag) {
+    bool is_dir = false;
+    char typeflag = '0';
+
+    if (entry == NULL || sink == NULL) {
+        bx_diag(diag, "invalid tar stream live entry");
+        return false;
+    }
+
+    memset(entry, 0, sizeof(*entry));
+    switch (kind) {
+        case BX_TAR_STREAM_KIND_REG:
+            typeflag = '0';
+            break;
+        case BX_TAR_STREAM_KIND_DIR:
+            typeflag = '5';
+            is_dir = true;
+            data_len = 0u;
+            break;
+        case BX_TAR_STREAM_KIND_SYMLINK:
+            typeflag = '2';
+            data_len = 0u;
+            break;
+        case BX_TAR_STREAM_KIND_HARDLINK:
+            typeflag = '1';
+            data_len = 0u;
+            break;
+        case BX_TAR_STREAM_KIND_FIFO:
+            typeflag = '6';
+            data_len = 0u;
+            break;
+    }
+
+    if (!bx_tar_stream_write_header(sink,
+                                    path,
+                                    linkname,
+                                    typeflag,
+                                    is_dir,
+                                    mode,
+                                    uid,
+                                    gid,
+                                    data_len,
+                                    mtime,
+                                    allow_pax,
+                                    diag)) {
+        return false;
+    }
+
+    entry->sink = sink;
+    entry->data_remaining = data_len;
+    entry->padding_remaining = bx_tar_stream_round_up(data_len, BX_TAR_STREAM_BLOCK_SIZE) - data_len;
+    entry->active = true;
+    return true;
+}
+
+bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
+                                         const void* data,
+                                         size_t len,
+                                         struct bx_diag_ctx* diag) {
+    if (entry == NULL || !entry->active) {
+        bx_diag(diag, "invalid tar stream live entry state");
+        return false;
+    }
+    if (len > entry->data_remaining) {
+        bx_diag(diag, "tar entry payload overflow");
+        return false;
+    }
+    if (!bx_tar_stream_sink_write(entry->sink, data, len, diag)) {
+        return false;
+    }
+    entry->data_remaining -= len;
+    return true;
+}
+
+bool bx_tar_stream_finish_raw_entry(struct bx_tar_stream_live_entry* entry,
+                                    struct bx_diag_ctx* diag) {
+    unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
+
+    if (entry == NULL || !entry->active) {
+        bx_diag(diag, "invalid tar stream live entry state");
+        return false;
+    }
+    if (entry->data_remaining != 0u) {
+        bx_diag(diag, "truncated tar entry payload");
+        return false;
+    }
+
+    while (entry->padding_remaining > 0u) {
+        size_t chunk = entry->padding_remaining > sizeof(zeros)
+            ? sizeof(zeros)
+            : entry->padding_remaining;
+
+        if (!bx_tar_stream_sink_write(entry->sink, zeros, chunk, diag)) {
+            return false;
+        }
+        entry->padding_remaining -= chunk;
+    }
+
+    memset(entry, 0, sizeof(*entry));
+    return true;
+}
+
 bool bx_tar_stream_write_trailer(const struct bx_tar_stream_sink* sink,
                                  size_t bytes_written,
                                  struct bx_diag_ctx* diag) {
