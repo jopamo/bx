@@ -51,7 +51,9 @@ static bool bx_tar_stream_sink_write(const struct bx_tar_stream_sink* sink,
     if (sink->write(sink->user, data, len)) {
         return true;
     }
-    bx_diag(diag, "write error: %s", strerror(errno));
+    if (!sink->callback_owns_errors) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+    }
     return false;
 }
 
@@ -536,7 +538,15 @@ static bool bx_tar_stream_finish_archive(const struct bx_tar_stream_sink* sink,
     size_t zeros_needed = padded - bytes_written;
     unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE * BX_TAR_STREAM_RECORD_BLOCKS] = {0};
 
-    return bx_tar_stream_sink_write(sink, zeros, zeros_needed, diag);
+    while (zeros_needed > 0u) {
+        size_t chunk = zeros_needed > sizeof(zeros) ? sizeof(zeros) : zeros_needed;
+
+        if (!bx_tar_stream_sink_write(sink, zeros, chunk, diag)) {
+            return false;
+        }
+        zeros_needed -= chunk;
+    }
+    return true;
 }
 
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
@@ -603,10 +613,11 @@ bool bx_tar_stream_write_trailer(const struct bx_tar_stream_sink* sink,
     return bx_tar_stream_finish_archive(sink, bytes_written, diag);
 }
 
-bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
-                                  const struct bx_tar_stream_options* options,
-                                  const struct bx_tar_stream_sink* sink,
-                                  struct bx_diag_ctx* diag) {
+bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
+                                      const struct bx_tar_stream_options* options,
+                                      const struct bx_tar_stream_sink* sink,
+                                      size_t* bytes_written_io,
+                                      struct bx_diag_ctx* diag) {
     struct bx_tar_hardlink_seen_list seen = {0};
     struct bx_tar_stream_counting_sink counting_user = {
         .inner = sink,
@@ -617,9 +628,12 @@ bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
         .write = bx_tar_stream_counting_sink_write,
     };
     size_t i;
-    size_t bytes_written = 0u;
 
-    counting_user.bytes_written = &bytes_written;
+    if (bytes_written_io == NULL) {
+        bx_diag(diag, "invalid tar stream byte counter");
+        return false;
+    }
+    counting_user.bytes_written = bytes_written_io;
 
     for (i = 0u; i < files->len; i++) {
         if (!bx_tar_stream_write_fs_entry(&counting_sink, &files->entries[i], options, &seen, diag)) {
@@ -629,5 +643,17 @@ bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
     }
 
     bx_tar_stream_seen_list_free(&seen);
+    return true;
+}
+
+bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
+                                  const struct bx_tar_stream_options* options,
+                                  const struct bx_tar_stream_sink* sink,
+                                  struct bx_diag_ctx* diag) {
+    size_t bytes_written = 0u;
+
+    if (!bx_tar_stream_write_fs_list_body(files, options, sink, &bytes_written, diag)) {
+        return false;
+    }
     return bx_tar_stream_finish_archive(sink, bytes_written, diag);
 }

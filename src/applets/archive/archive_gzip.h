@@ -20,11 +20,10 @@ bool bx_archive_run_gzip_filter(const struct bx_archive_buffer* input,
                                 bool decompress,
                                 struct bx_diag_ctx* diag);
 
-bool bx_archive_run_gzip_filter_mt(const struct bx_archive_buffer* input,
-                                   struct bx_archive_buffer* output,
-                                   size_t thread_count,
-                                   size_t chunk_size,
-                                   struct bx_diag_ctx* diag);
+bool bx_archive_run_gzip_filter_stream(bx_archive_gzip_stream_producer_fn producer,
+                                       void* producer_user,
+                                       const struct bx_archive_gzip_stream_sink* output_sink,
+                                       struct bx_diag_ctx* diag);
 
 bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn producer,
                                           void* producer_user,

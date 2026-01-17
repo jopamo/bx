@@ -1,0 +1,990 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#ifndef ZLIB_CONST
+#define ZLIB_CONST 1
+#endif
+#include <zlib.h>
+
+#include "applets/archive/tar/tar_reader.h"
+#include "bx/libbx.h"
+
+#define BX_TAR_READER_FILE_CHUNK_SIZE (256u * 1024u)
+
+struct bx_tar_pax_info {
+    char* path;
+    char* linkpath;
+    int sparse_major;
+    int sparse_minor;
+    size_t sparse_realsize;
+    bool sparse_enabled;
+};
+
+struct bx_tar_stream_input {
+    gzFile stream;
+    bool require_gzip;
+    bool checked_mode;
+};
+
+void bx_tar_entry_free(struct bx_tar_entry* entry) {
+    free(entry->name);
+    free(entry->linkname);
+    free(entry->data);
+    free(entry->extents);
+    entry->name = NULL;
+    entry->linkname = NULL;
+    entry->data = NULL;
+    entry->extents = NULL;
+}
+
+void bx_tar_entry_list_free(struct bx_tar_entry_list* list) {
+    size_t i;
+
+    for (i = 0u; i < list->len; i++) {
+        bx_tar_entry_free(&list->items[i]);
+    }
+    free(list->items);
+    list->items = NULL;
+    list->len = 0u;
+    list->cap = 0u;
+}
+
+bool bx_tar_entry_list_push(struct bx_tar_entry_list* list, const struct bx_tar_entry* entry) {
+    struct bx_tar_entry* slot;
+
+    if (list->len == list->cap) {
+        size_t next_cap = list->cap ? list->cap * 2u : 16u;
+        list->items = xrealloc(list->items, next_cap * sizeof(*list->items));
+        list->cap = next_cap;
+    }
+    slot = &list->items[list->len++];
+    memset(slot, 0, sizeof(*slot));
+    *slot = *entry;
+    return true;
+}
+
+static void bx_tar_pax_info_clear(struct bx_tar_pax_info* pax) {
+    free(pax->path);
+    free(pax->linkpath);
+    memset(pax, 0, sizeof(*pax));
+}
+
+static size_t bx_tar_round_up(size_t value, size_t align) {
+    size_t rem = value % align;
+
+    if (rem == 0u) {
+        return value;
+    }
+    return value + (align - rem);
+}
+
+static bool bx_tar_block_is_zero(const unsigned char* block) {
+    size_t i;
+
+    for (i = 0u; i < BX_TAR_BLOCK_SIZE; i++) {
+        if (block[i] != 0u) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
+    size_t value = 0u;
+    size_t i = 0u;
+
+    while (i < len && (field[i] == ' ' || field[i] == '\0')) {
+        i++;
+    }
+    for (; i < len; i++) {
+        unsigned char ch = field[i];
+
+        if (ch == '\0' || ch == ' ') {
+            break;
+        }
+        if (ch < '0' || ch > '7') {
+            return false;
+        }
+        value = (value << 3) + (size_t)(ch - '0');
+    }
+    *value_out = value;
+    return true;
+}
+
+static bool bx_tar_parse_sparse_map(const unsigned char* payload,
+                                    size_t payload_size,
+                                    struct bx_tar_entry* entry,
+                                    struct bx_diag_ctx* diag) {
+    size_t values[128];
+    size_t value_count = 0u;
+    size_t i = 0u;
+    size_t data_start;
+    size_t extent_count;
+    size_t j;
+    (void)diag;
+
+    while (i < payload_size && value_count < sizeof(values) / sizeof(values[0])) {
+        size_t start = i;
+        size_t value = 0u;
+        bool have_digit = false;
+
+        while (i < payload_size && payload[i] != '\n') {
+            if (payload[i] >= '0' && payload[i] <= '9') {
+                have_digit = true;
+                value = value * 10u + (size_t)(payload[i] - '0');
+            }
+            i++;
+        }
+        if (!have_digit) {
+            break;
+        }
+        values[value_count++] = value;
+        if (i < payload_size && payload[i] == '\n') {
+            i++;
+        }
+        if (start == i) {
+            break;
+        }
+        if (value_count >= 1u && value_count == (1u + values[0] * 2u)) {
+            break;
+        }
+    }
+
+    if (value_count < 1u) {
+        return false;
+    }
+    extent_count = values[0];
+    if (value_count < 1u + extent_count * 2u) {
+        return false;
+    }
+
+    entry->extents = xrealloc(entry->extents, extent_count * sizeof(*entry->extents));
+    entry->extent_count = 0u;
+    for (j = 0u; j < extent_count; j++) {
+        size_t offset = values[1u + j * 2u];
+        size_t size = values[2u + j * 2u];
+
+        entry->extents[entry->extent_count].offset = offset;
+        entry->extents[entry->extent_count].size = size;
+        entry->extent_count++;
+    }
+
+    data_start = bx_tar_round_up(i, BX_TAR_BLOCK_SIZE);
+    if (data_start > payload_size) {
+        data_start = payload_size;
+    }
+    entry->data_len = payload_size - data_start;
+    entry->data = xmalloc(entry->data_len ? entry->data_len : 1u);
+    memcpy(entry->data, payload + data_start, entry->data_len);
+    return true;
+}
+
+static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax, const unsigned char* data, size_t len) {
+    size_t pos = 0u;
+
+    while (pos < len) {
+        size_t line_len = 0u;
+        size_t digits_end = pos;
+        size_t field_start;
+        size_t field_len;
+        const char* key;
+        const char* value;
+        char* record;
+        char* equal;
+
+        while (digits_end < len && data[digits_end] != ' ') {
+            if (data[digits_end] < '0' || data[digits_end] > '9') {
+                return false;
+            }
+            if (line_len > (SIZE_MAX - 9u) / 10u) {
+                return false;
+            }
+            line_len = line_len * 10u + (size_t)(data[digits_end] - '0');
+            digits_end++;
+        }
+        if (digits_end == pos || digits_end >= len || data[digits_end] != ' '
+            || line_len == 0u || pos + line_len > len || data[pos + line_len - 1u] != '\n') {
+            return false;
+        }
+        field_start = digits_end + 1u;
+        if (field_start > pos + line_len - 1u) {
+            return false;
+        }
+        field_len = (pos + line_len - 1u) - field_start;
+        record = xmalloc(field_len + 1u);
+        memcpy(record, data + field_start, field_len);
+        record[field_len] = '\0';
+        equal = strchr(record, '=');
+        if (equal == NULL) {
+            free(record);
+            return false;
+        }
+        *equal = '\0';
+        key = record;
+        value = equal + 1;
+        if (strcmp(key, "path") == 0) {
+            free(pax->path);
+            pax->path = xstrdup(value);
+        }
+        else if (strcmp(key, "linkpath") == 0) {
+            free(pax->linkpath);
+            pax->linkpath = xstrdup(value);
+        }
+        else if (strcmp(key, "GNU.sparse.name") == 0) {
+            free(pax->path);
+            pax->path = xstrdup(value);
+            pax->sparse_enabled = true;
+        }
+        else if (strcmp(key, "GNU.sparse.major") == 0) {
+            pax->sparse_major = atoi(value);
+            pax->sparse_enabled = true;
+        }
+        else if (strcmp(key, "GNU.sparse.minor") == 0) {
+            pax->sparse_minor = atoi(value);
+            pax->sparse_enabled = true;
+        }
+        else if (strcmp(key, "GNU.sparse.realsize") == 0) {
+            pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
+            pax->sparse_enabled = true;
+        }
+        free(record);
+        pos += line_len;
+    }
+    return true;
+}
+
+static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
+                                             size_t size,
+                                             unsigned char typeflag,
+                                             const struct bx_tar_pax_info* pax,
+                                             char** gnu_long_name,
+                                             char** gnu_long_link,
+                                             struct bx_tar_entry* entry,
+                                             struct bx_diag_ctx* diag) {
+    char name_buf[256];
+    char prefix_buf[156];
+    char* name = NULL;
+
+    memset(entry, 0, sizeof(*entry));
+    memcpy(name_buf, header, 100u);
+    name_buf[100] = '\0';
+    memcpy(prefix_buf, header + 345, 155u);
+    prefix_buf[155] = '\0';
+    {
+        const char* raw_name = (const char*)name_buf;
+        const char* raw_prefix = (const char*)prefix_buf;
+
+        if (raw_prefix[0] != '\0') {
+            size_t full_len = strlen(raw_prefix) + 1u + strlen(raw_name);
+            name = xmalloc(full_len + 1u);
+            snprintf(name, full_len + 1u, "%s/%s", raw_prefix, raw_name);
+        }
+        else {
+            name = xstrdup(raw_name);
+        }
+    }
+
+    if (pax->path != NULL) {
+        free(name);
+        name = xstrdup(pax->path);
+    }
+    else if (*gnu_long_name != NULL) {
+        free(name);
+        name = *gnu_long_name;
+        *gnu_long_name = NULL;
+    }
+    if (typeflag == '5') {
+        size_t name_len = strlen(name);
+        while (name_len > 0u && name[name_len - 1u] == '/') {
+            name[--name_len] = '\0';
+        }
+    }
+    entry->name = name;
+    entry->mode = 0644u;
+    entry->size = size;
+    {
+        size_t parsed_mode = 0u;
+        size_t parsed_uid = 0u;
+        size_t parsed_gid = 0u;
+        size_t parsed_mtime = 0u;
+
+        bx_tar_parse_octal_field(header + 100, 8u, &parsed_mode);
+        bx_tar_parse_octal_field(header + 108, 8u, &parsed_uid);
+        bx_tar_parse_octal_field(header + 116, 8u, &parsed_gid);
+        bx_tar_parse_octal_field(header + 136, 12u, &parsed_mtime);
+        entry->mode = (mode_t)parsed_mode;
+        entry->uid = (uid_t)parsed_uid;
+        entry->gid = (gid_t)parsed_gid;
+        entry->mtime.tv_sec = (time_t)parsed_mtime;
+        entry->mtime.tv_nsec = 0;
+    }
+    if (pax->linkpath != NULL) {
+        entry->linkname = xstrdup(pax->linkpath);
+    }
+    else if ((typeflag == '1' || typeflag == '2') && *gnu_long_link != NULL) {
+        entry->linkname = *gnu_long_link;
+        *gnu_long_link = NULL;
+    }
+    else if (typeflag == '1' || typeflag == '2') {
+        char linkbuf[101];
+
+        memcpy(linkbuf, header + 157, 100u);
+        linkbuf[100] = '\0';
+        entry->linkname = xstrdup(linkbuf);
+    }
+
+    switch (typeflag) {
+        case '\0':
+        case '0':
+            entry->kind = BX_TAR_KIND_REG;
+            break;
+        case '5':
+            entry->kind = BX_TAR_KIND_DIR;
+            break;
+        case '2':
+            entry->kind = BX_TAR_KIND_SYMLINK;
+            break;
+        case '1':
+            entry->kind = BX_TAR_KIND_HARDLINK;
+            break;
+        case '6':
+            entry->kind = BX_TAR_KIND_FIFO;
+            break;
+        default:
+            bx_tar_entry_free(entry);
+            bx_diag(diag, "unsupported tar entry type");
+            return false;
+    }
+
+    return true;
+}
+
+bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
+                                 struct bx_tar_entry_list* entries,
+                                 struct bx_diag_ctx* diag) {
+    size_t pos = 0u;
+    struct bx_tar_pax_info pax = {0};
+    char* gnu_long_name = NULL;
+    char* gnu_long_link = NULL;
+
+    while (pos + BX_TAR_BLOCK_SIZE <= archive->len) {
+        const unsigned char* header = archive->data + pos;
+        size_t size = 0u;
+        size_t payload_start;
+        size_t payload_padded;
+        unsigned char typeflag;
+        struct bx_tar_entry entry;
+
+        if (bx_tar_block_is_zero(header)) {
+            if (pos + 2u * BX_TAR_BLOCK_SIZE <= archive->len
+                && bx_tar_block_is_zero(archive->data + pos + BX_TAR_BLOCK_SIZE)) {
+                break;
+            }
+            pos += BX_TAR_BLOCK_SIZE;
+            continue;
+        }
+
+        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
+            bx_tar_pax_info_clear(&pax);
+            free(gnu_long_name);
+            free(gnu_long_link);
+            bx_diag(diag, "invalid tar header");
+            return false;
+        }
+        typeflag = header[156];
+        payload_start = pos + BX_TAR_BLOCK_SIZE;
+        payload_padded = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE);
+        if (payload_start + payload_padded > archive->len) {
+            bx_tar_pax_info_clear(&pax);
+            free(gnu_long_name);
+            free(gnu_long_link);
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+
+        if (typeflag == 'x') {
+            if (!bx_tar_parse_pax_records(&pax, archive->data + payload_start, size)) {
+                bx_tar_pax_info_clear(&pax);
+                free(gnu_long_name);
+                free(gnu_long_link);
+                bx_diag(diag, "invalid pax header");
+                return false;
+            }
+            pos = payload_start + payload_padded;
+            continue;
+        }
+        if (typeflag == 'g') {
+            pos = payload_start + payload_padded;
+            continue;
+        }
+        if (typeflag == 'L' || typeflag == 'K') {
+            char** target = (typeflag == 'L') ? &gnu_long_name : &gnu_long_link;
+            size_t text_len = size;
+
+            while (text_len > 0u && archive->data[payload_start + text_len - 1u] == '\0') {
+                text_len--;
+            }
+            free(*target);
+            *target = xmalloc(text_len + 1u);
+            memcpy(*target, archive->data + payload_start, text_len);
+            (*target)[text_len] = '\0';
+            pos = payload_start + payload_padded;
+            continue;
+        }
+
+        if (!bx_tar_prepare_entry_from_header(header,
+                                              size,
+                                              typeflag,
+                                              &pax,
+                                              &gnu_long_name,
+                                              &gnu_long_link,
+                                              &entry,
+                                              diag)) {
+            bx_tar_pax_info_clear(&pax);
+            free(gnu_long_name);
+            free(gnu_long_link);
+            return false;
+        }
+
+        if (entry.kind == BX_TAR_KIND_REG) {
+            if (pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
+                entry.sparse = true;
+                entry.size = pax.sparse_realsize;
+                if (!bx_tar_parse_sparse_map(archive->data + payload_start, size, &entry, diag)) {
+                    bx_tar_entry_free(&entry);
+                    bx_tar_pax_info_clear(&pax);
+                    free(gnu_long_name);
+                    free(gnu_long_link);
+                    bx_diag(diag, "invalid sparse payload");
+                    return false;
+                }
+            }
+            else {
+                entry.data_len = size;
+                entry.data = xmalloc(size ? size : 1u);
+                memcpy(entry.data, archive->data + payload_start, size);
+            }
+        }
+
+        bx_tar_entry_list_push(entries, &entry);
+        pos = payload_start + payload_padded;
+        bx_tar_pax_info_clear(&pax);
+    }
+
+    bx_tar_pax_info_clear(&pax);
+    free(gnu_long_name);
+    free(gnu_long_link);
+    return true;
+}
+
+static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
+                                     const struct bx_tar_reader_stream_options* options,
+                                     struct bx_diag_ctx* diag) {
+    int fd;
+
+    memset(input, 0, sizeof(*input));
+    input->require_gzip = options->require_gzip;
+
+    if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
+        fd = dup(STDIN_FILENO);
+        if (fd < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+    }
+    else {
+        fd = open(options->archive_path, O_RDONLY);
+        if (fd < 0) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    input->stream = gzdopen(fd, "rb");
+    if (input->stream == NULL) {
+        close(fd);
+        bx_diag(diag, "failed to initialize archive reader");
+        return false;
+    }
+    return true;
+}
+
+static bool bx_tar_stream_input_check_mode(struct bx_tar_stream_input* input,
+                                           struct bx_diag_ctx* diag) {
+    int direct;
+
+    if (input->checked_mode) {
+        return true;
+    }
+
+    direct = gzdirect(input->stream);
+    if (direct < 0) {
+        bx_diag(diag, "gzip decompression failed");
+        return false;
+    }
+    if (input->require_gzip && direct == 1) {
+        bx_diag(diag, "gzip decompression failed");
+        return false;
+    }
+    input->checked_mode = true;
+    return true;
+}
+
+static bool bx_tar_stream_input_read_some(struct bx_tar_stream_input* input,
+                                          unsigned char* buffer,
+                                          size_t len,
+                                          size_t* nread_out,
+                                          struct bx_diag_ctx* diag) {
+    unsigned int request = len > INT_MAX ? INT_MAX : (unsigned int)len;
+    int nread = gzread(input->stream, buffer, request);
+
+    if (nread < 0) {
+        int errnum = 0;
+        const char* msg = gzerror(input->stream, &errnum);
+
+        if (errnum == Z_ERRNO) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+        }
+        else {
+            bx_diag(diag,
+                    "gzip decompression failed%s%s",
+                    msg != NULL ? ": " : "",
+                    msg != NULL ? msg : "");
+        }
+        return false;
+    }
+
+    if (!bx_tar_stream_input_check_mode(input, diag)) {
+        return false;
+    }
+
+    *nread_out = (size_t)nread;
+    return true;
+}
+
+static bool bx_tar_stream_input_read_exact(struct bx_tar_stream_input* input,
+                                           unsigned char* buffer,
+                                           size_t len,
+                                           bool* eof_out,
+                                           struct bx_diag_ctx* diag) {
+    size_t total = 0u;
+
+    while (total < len) {
+        size_t nread = 0u;
+
+        if (!bx_tar_stream_input_read_some(input, buffer + total, len - total, &nread, diag)) {
+            return false;
+        }
+        if (nread == 0u) {
+            if (total == 0u) {
+                *eof_out = true;
+                return true;
+            }
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+        total += nread;
+    }
+
+    *eof_out = false;
+    return true;
+}
+
+static bool bx_tar_stream_input_skip(struct bx_tar_stream_input* input,
+                                     size_t len,
+                                     struct bx_diag_ctx* diag) {
+    unsigned char buffer[8192];
+
+    while (len > 0u) {
+        size_t chunk = len > sizeof(buffer) ? sizeof(buffer) : len;
+        bool eof = false;
+
+        if (!bx_tar_stream_input_read_exact(input, buffer, chunk, &eof, diag)) {
+            return false;
+        }
+        if (eof) {
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+        len -= chunk;
+    }
+
+    return true;
+}
+
+static bool bx_tar_stream_input_read_payload(struct bx_tar_stream_input* input,
+                                             size_t size,
+                                             unsigned char** data_out,
+                                             struct bx_diag_ctx* diag) {
+    unsigned char* data = xmalloc(size ? size : 1u);
+    bool eof = false;
+    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
+
+    if (size > 0u && !bx_tar_stream_input_read_exact(input, data, size, &eof, diag)) {
+        free(data);
+        return false;
+    }
+    if (eof) {
+        free(data);
+        bx_diag(diag, "truncated archive");
+        return false;
+    }
+    if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
+        free(data);
+        return false;
+    }
+    *data_out = data;
+    return true;
+}
+
+static bool bx_tar_stream_input_skip_payload(struct bx_tar_stream_input* input,
+                                             size_t size,
+                                             struct bx_diag_ctx* diag) {
+    size_t total = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE);
+    return bx_tar_stream_input_skip(input, total, diag);
+}
+
+static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
+                                              const struct bx_tar_entry* entry,
+                                              size_t size,
+                                              const struct bx_tar_stream_visitor_ops* visitor_ops,
+                                              struct bx_diag_ctx* diag) {
+    unsigned char* buffer = NULL;
+    size_t remaining = size;
+    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
+
+    if (size == 0u) {
+        return padding == 0u || bx_tar_stream_input_skip(input, padding, diag);
+    }
+
+    buffer = xmalloc(BX_TAR_READER_FILE_CHUNK_SIZE);
+    while (remaining > 0u) {
+        bool eof = false;
+        size_t chunk = remaining > BX_TAR_READER_FILE_CHUNK_SIZE ? BX_TAR_READER_FILE_CHUNK_SIZE : remaining;
+
+        if (!bx_tar_stream_input_read_exact(input, buffer, chunk, &eof, diag)) {
+            free(buffer);
+            return false;
+        }
+        if (eof) {
+            free(buffer);
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+        if (visitor_ops->visit_payload != NULL
+            && !visitor_ops->visit_payload(visitor_ops->user, entry, buffer, chunk, diag)) {
+            free(buffer);
+            return false;
+        }
+        remaining -= chunk;
+    }
+
+    free(buffer);
+    if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
+        return false;
+    }
+    return true;
+}
+
+static void bx_tar_stream_input_close(struct bx_tar_stream_input* input) {
+    if (input->stream != NULL) {
+        gzclose(input->stream);
+        input->stream = NULL;
+    }
+}
+
+struct bx_tar_collect_stream_state {
+    struct bx_tar_entry_list* entries;
+    struct bx_tar_entry current;
+    struct bx_archive_buffer current_payload;
+    bool have_current;
+    bool collecting_payload;
+};
+
+static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
+                               const struct bx_tar_entry* src,
+                               bool copy_data,
+                               struct bx_diag_ctx* diag) {
+    memset(dst, 0, sizeof(*dst));
+    dst->kind = src->kind;
+    dst->mode = src->mode;
+    dst->uid = src->uid;
+    dst->gid = src->gid;
+    dst->mtime = src->mtime;
+    dst->data_len = src->data_len;
+    dst->size = src->size;
+    dst->sparse = src->sparse;
+    dst->extent_count = src->extent_count;
+
+    if (src->name != NULL) {
+        dst->name = xstrdup(src->name);
+    }
+    if (src->linkname != NULL) {
+        dst->linkname = xstrdup(src->linkname);
+    }
+    if (src->extent_count > 0u) {
+        dst->extents = xmalloc(src->extent_count * sizeof(*dst->extents));
+        memcpy(dst->extents, src->extents, src->extent_count * sizeof(*dst->extents));
+    }
+    if (copy_data && src->data_len > 0u) {
+        dst->data = xmalloc(src->data_len);
+        memcpy(dst->data, src->data, src->data_len);
+    }
+    if (copy_data && src->data_len == 0u && src->data != NULL) {
+        dst->data = xmalloc(1u);
+    }
+    (void)diag;
+    return true;
+}
+
+static bool bx_tar_collect_stream_begin_entry(void* user,
+                                              const struct bx_tar_entry* entry,
+                                              struct bx_diag_ctx* diag) {
+    struct bx_tar_collect_stream_state* state = user;
+    bool copy_data = !(entry->kind == BX_TAR_KIND_REG && !entry->sparse);
+
+    bx_archive_buffer_free(&state->current_payload);
+    bx_archive_buffer_init(&state->current_payload);
+    bx_tar_entry_free(&state->current);
+    state->have_current = false;
+    state->collecting_payload = false;
+
+    if (!bx_tar_clone_entry(&state->current, entry, copy_data, diag)) {
+        return false;
+    }
+    if (entry->kind == BX_TAR_KIND_REG && !entry->sparse) {
+        state->current.data = NULL;
+        state->current.data_len = 0u;
+        state->collecting_payload = true;
+    }
+    state->have_current = true;
+    return true;
+}
+
+static bool bx_tar_collect_stream_visit_payload(void* user,
+                                                const struct bx_tar_entry* entry,
+                                                const unsigned char* data,
+                                                size_t len,
+                                                struct bx_diag_ctx* diag) {
+    struct bx_tar_collect_stream_state* state = user;
+
+    (void)entry;
+    if (!state->collecting_payload) {
+        return true;
+    }
+    if (!bx_archive_buffer_append(&state->current_payload, data, len)) {
+        bx_diag(diag, "buffer growth failed: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_tar_collect_stream_end_entry(void* user,
+                                            const struct bx_tar_entry* entry,
+                                            struct bx_diag_ctx* diag) {
+    struct bx_tar_collect_stream_state* state = user;
+
+    (void)entry;
+    if (!state->have_current) {
+        return true;
+    }
+    if (state->collecting_payload) {
+        state->current.data = state->current_payload.data;
+        state->current.data_len = state->current_payload.len;
+        state->current_payload.data = NULL;
+        state->current_payload.len = 0u;
+        state->current_payload.cap = 0u;
+    }
+    if (!bx_tar_entry_list_push(state->entries, &state->current)) {
+        bx_diag(diag, "buffer growth failed: %s", strerror(errno));
+        return false;
+    }
+    memset(&state->current, 0, sizeof(state->current));
+    state->have_current = false;
+    state->collecting_payload = false;
+    return true;
+}
+
+bool bx_tar_collect_archive_stream(const struct bx_tar_reader_stream_options* options,
+                                   struct bx_tar_entry_list* entries,
+                                   struct bx_diag_ctx* diag) {
+    struct bx_tar_collect_stream_state state;
+    struct bx_tar_stream_visitor_ops visitor_ops = {
+        .user = &state,
+        .begin_entry = bx_tar_collect_stream_begin_entry,
+        .visit_payload = bx_tar_collect_stream_visit_payload,
+        .end_entry = bx_tar_collect_stream_end_entry,
+    };
+    bool ok;
+
+    memset(&state, 0, sizeof(state));
+    state.entries = entries;
+    bx_archive_buffer_init(&state.current_payload);
+    ok = bx_tar_visit_archive_stream(options, &visitor_ops, diag);
+    if (!ok && state.have_current) {
+        bx_tar_entry_free(&state.current);
+    }
+    bx_archive_buffer_free(&state.current_payload);
+    return ok;
+}
+
+bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* options,
+                                 const struct bx_tar_stream_visitor_ops* visitor_ops,
+                                 struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_input input;
+    struct bx_tar_pax_info pax = {0};
+    char* gnu_long_name = NULL;
+    char* gnu_long_link = NULL;
+    unsigned char header[BX_TAR_BLOCK_SIZE];
+    bool have_header = false;
+    bool ok = false;
+
+    if (options == NULL || visitor_ops == NULL || visitor_ops->begin_entry == NULL) {
+        bx_diag(diag, "invalid tar stream reader configuration");
+        return false;
+    }
+    if (!bx_tar_stream_input_open(&input, options, diag)) {
+        return false;
+    }
+
+    while (true) {
+        size_t size = 0u;
+        unsigned char typeflag;
+        struct bx_tar_entry entry;
+        bool eof = false;
+
+        if (!have_header) {
+            if (!bx_tar_stream_input_read_exact(&input, header, sizeof(header), &eof, diag)) {
+                goto out;
+            }
+            if (eof) {
+                ok = true;
+                goto out;
+            }
+        }
+        have_header = false;
+
+        if (bx_tar_block_is_zero(header)) {
+            if (!bx_tar_stream_input_read_exact(&input, header, sizeof(header), &eof, diag)) {
+                goto out;
+            }
+            if (eof || bx_tar_block_is_zero(header)) {
+                ok = true;
+                goto out;
+            }
+            have_header = true;
+            continue;
+        }
+
+        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
+            bx_diag(diag, "invalid tar header");
+            goto out;
+        }
+        typeflag = header[156];
+
+        if (typeflag == 'x') {
+            unsigned char* payload = NULL;
+
+            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
+                goto out;
+            }
+            if (!bx_tar_parse_pax_records(&pax, payload, size)) {
+                free(payload);
+                bx_diag(diag, "invalid pax header");
+                goto out;
+            }
+            free(payload);
+            continue;
+        }
+        if (typeflag == 'g') {
+            if (!bx_tar_stream_input_skip_payload(&input, size, diag)) {
+                goto out;
+            }
+            continue;
+        }
+        if (typeflag == 'L' || typeflag == 'K') {
+            char** target = (typeflag == 'L') ? &gnu_long_name : &gnu_long_link;
+            unsigned char* payload = NULL;
+            size_t text_len = size;
+
+            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
+                goto out;
+            }
+            while (text_len > 0u && payload[text_len - 1u] == '\0') {
+                text_len--;
+            }
+            free(*target);
+            *target = xmalloc(text_len + 1u);
+            memcpy(*target, payload, text_len);
+            (*target)[text_len] = '\0';
+            free(payload);
+            continue;
+        }
+
+        if (!bx_tar_prepare_entry_from_header(header,
+                                              size,
+                                              typeflag,
+                                              &pax,
+                                              &gnu_long_name,
+                                              &gnu_long_link,
+                                              &entry,
+                                              diag)) {
+            goto out;
+        }
+
+        if (entry.kind == BX_TAR_KIND_REG
+            && pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
+            unsigned char* payload = NULL;
+
+            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
+                bx_tar_entry_free(&entry);
+                goto out;
+            }
+            entry.sparse = true;
+            entry.size = pax.sparse_realsize;
+            if (!bx_tar_parse_sparse_map(payload, size, &entry, diag)) {
+                free(payload);
+                bx_tar_entry_free(&entry);
+                bx_diag(diag, "invalid sparse payload");
+                goto out;
+            }
+            free(payload);
+        }
+        if (!visitor_ops->begin_entry(visitor_ops->user, &entry, diag)) {
+            bx_tar_entry_free(&entry);
+            goto out;
+        }
+        if (entry.kind == BX_TAR_KIND_REG && !entry.sparse) {
+            if (!bx_tar_stream_input_visit_payload(&input, &entry, size, visitor_ops, diag)) {
+                bx_tar_entry_free(&entry);
+                goto out;
+            }
+        }
+        else if (entry.kind != BX_TAR_KIND_REG && !bx_tar_stream_input_skip_payload(&input, size, diag)) {
+            bx_tar_entry_free(&entry);
+            goto out;
+        }
+        if (visitor_ops->end_entry != NULL
+            && !visitor_ops->end_entry(visitor_ops->user, &entry, diag)) {
+            bx_tar_entry_free(&entry);
+            goto out;
+        }
+        bx_tar_entry_free(&entry);
+        bx_tar_pax_info_clear(&pax);
+    }
+
+out:
+    bx_tar_pax_info_clear(&pax);
+    free(gnu_long_name);
+    free(gnu_long_link);
+    bx_tar_stream_input_close(&input);
+    return ok;
+}

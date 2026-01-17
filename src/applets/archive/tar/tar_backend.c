@@ -15,6 +15,7 @@
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_names.h"
+#include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_select.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
@@ -25,7 +26,6 @@
 #include "lib/thread_count.h"
 #include "lib/xreadwrite.h"
 
-#define BX_TAR_BLOCK_SIZE 512u
 enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
     BX_TAR_MODE_CREATE,
@@ -33,50 +33,6 @@ enum bx_tar_mode {
     BX_TAR_MODE_EXTRACT,
     BX_TAR_MODE_APPEND,
     BX_TAR_MODE_DELETE,
-};
-
-enum bx_tar_kind {
-    BX_TAR_KIND_REG = 0,
-    BX_TAR_KIND_DIR,
-    BX_TAR_KIND_SYMLINK,
-    BX_TAR_KIND_HARDLINK,
-    BX_TAR_KIND_FIFO,
-};
-
-struct bx_tar_sparse_extent {
-    size_t offset;
-    size_t size;
-};
-
-struct bx_tar_entry {
-    char* name;
-    char* linkname;
-    enum bx_tar_kind kind;
-    mode_t mode;
-    uid_t uid;
-    gid_t gid;
-    struct timespec mtime;
-    unsigned char* data;
-    size_t data_len;
-    size_t size;
-    bool sparse;
-    struct bx_tar_sparse_extent* extents;
-    size_t extent_count;
-};
-
-struct bx_tar_entry_list {
-    struct bx_tar_entry* items;
-    size_t len;
-    size_t cap;
-};
-
-struct bx_tar_pax_info {
-    char* path;
-    char* linkpath;
-    int sparse_major;
-    int sparse_minor;
-    size_t sparse_realsize;
-    bool sparse_enabled;
 };
 
 struct bx_tar_options {
@@ -408,85 +364,6 @@ static const char* bx_tar_progname(char** argv, int argc) {
     return bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar");
 }
 
-static void bx_tar_entry_free(struct bx_tar_entry* entry) {
-    free(entry->name);
-    free(entry->linkname);
-    free(entry->data);
-    free(entry->extents);
-    entry->name = NULL;
-    entry->linkname = NULL;
-    entry->data = NULL;
-    entry->extents = NULL;
-}
-
-static void bx_tar_entry_list_free(struct bx_tar_entry_list* list) {
-    size_t i;
-    for (i = 0u; i < list->len; i++) {
-        bx_tar_entry_free(&list->items[i]);
-    }
-    free(list->items);
-    list->items = NULL;
-    list->len = 0u;
-    list->cap = 0u;
-}
-
-static bool bx_tar_entry_list_push(struct bx_tar_entry_list* list, const struct bx_tar_entry* entry) {
-    struct bx_tar_entry* slot;
-    if (list->len == list->cap) {
-        size_t next_cap = list->cap ? list->cap * 2u : 16u;
-        list->items = xrealloc(list->items, next_cap * sizeof(*list->items));
-        list->cap = next_cap;
-    }
-    slot = &list->items[list->len++];
-    memset(slot, 0, sizeof(*slot));
-    *slot = *entry;
-    return true;
-}
-
-static void bx_tar_pax_info_clear(struct bx_tar_pax_info* pax) {
-    free(pax->path);
-    free(pax->linkpath);
-    memset(pax, 0, sizeof(*pax));
-}
-
-static size_t bx_tar_round_up(size_t value, size_t align) {
-    size_t rem = value % align;
-    if (rem == 0u) {
-        return value;
-    }
-    return value + (align - rem);
-}
-
-static bool bx_tar_block_is_zero(const unsigned char* block) {
-    size_t i;
-    for (i = 0u; i < BX_TAR_BLOCK_SIZE; i++) {
-        if (block[i] != 0u) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
-    size_t value = 0u;
-    size_t i = 0u;
-    while (i < len && (field[i] == ' ' || field[i] == '\0')) {
-        i++;
-    }
-    for (; i < len; i++) {
-        unsigned char ch = field[i];
-        if (ch == '\0' || ch == ' ') {
-            break;
-        }
-        if (ch < '0' || ch > '7') {
-            return false;
-        }
-        value = (value << 3) + (size_t)(ch - '0');
-    }
-    *value_out = value;
-    return true;
-}
-
 static void bx_tar_report_previous_errors(const struct bx_diag_ctx* diag) {
     fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
 }
@@ -504,66 +381,60 @@ bx_tar_make_stream_options(const struct bx_tar_options* options) {
     };
 }
 
-static bool bx_tar_buffer_sink_write(void* user, const void* data, size_t len) {
-    return bx_archive_buffer_append(user, data, len);
+static bool bx_tar_output_uses_gzip(const struct bx_tar_options* options) {
+    return options->gzip
+        || (options->auto_compress
+            && options->archive_path != NULL
+            && bx_archive_path_has_gzip_suffix(options->archive_path));
 }
 
-static bool bx_tar_build_create_archive_from_files(struct bx_archive_buffer* archive,
-                                                   const struct bx_tar_options* options,
-                                                   const struct bx_archive_fs_list* files,
-                                                   struct bx_diag_ctx* diag) {
-    struct bx_tar_stream_options stream_options = bx_tar_make_stream_options(options);
-    struct bx_tar_stream_sink sink = {
-        .user = archive,
-        .write = bx_tar_buffer_sink_write,
-    };
-
-    bx_archive_buffer_init(archive);
-    if (!bx_tar_stream_encode_fs_list(files, &stream_options, &sink, diag)) {
-        bx_archive_buffer_free(archive);
-        return false;
+static size_t bx_tar_effective_compress_threads(const struct bx_tar_options* options) {
+    if (options->no_mt) {
+        return 1u;
     }
-    return true;
-}
-
-static bool bx_tar_build_create_archive(struct bx_archive_buffer* archive,
-                                        struct bx_archive_fs_list* files_out,
-                                        bool* had_create_errors_out,
-                                        const struct bx_tar_options* options,
-                                        struct bx_diag_ctx* diag) {
-    struct bx_archive_fs_list files = {0};
-    bool had_create_errors = false;
-    bool ok;
-
-    if (!bx_tar_create_collect_fs_entries(&files,
-                                          &options->create_options,
-                                          options->sort_name,
-                                          &had_create_errors,
-                                          diag)) {
-        return false;
+    if (options->compress_threads >= 0) {
+        return bx_thread_count_resolve(options->compress_threads);
     }
-
-    ok = bx_tar_build_create_archive_from_files(archive, options, &files, diag);
-    if (!ok) {
-        bx_archive_fs_list_free(&files);
-        return false;
+    if (options->threads >= 0) {
+        return bx_thread_count_resolve(options->threads);
     }
-
-    if (had_create_errors_out != NULL) {
-        *had_create_errors_out = had_create_errors;
-    }
-    if (files_out != NULL) {
-        *files_out = files;
-        return true;
-    }
-
-    bx_archive_fs_list_free(&files);
-    return true;
+    return 1u;
 }
 
 static bool bx_tar_file_sink_write(void* user, const void* data, size_t len) {
     FILE* stream = user;
     return fwrite(data, 1u, len, stream) == len;
+}
+
+struct bx_tar_gzip_stream_create_ctx {
+    const struct bx_archive_fs_list* files;
+    const struct bx_tar_options* options;
+};
+
+struct bx_tar_gzip_stream_sink_adapter {
+    const struct bx_archive_gzip_stream_sink* sink;
+};
+
+static bool bx_tar_gzip_stream_sink_write(void* user, const void* data, size_t len) {
+    const struct bx_tar_gzip_stream_sink_adapter* adapter = user;
+    return adapter->sink->write(adapter->sink->user, data, len);
+}
+
+static bool bx_tar_gzip_stream_produce(void* user,
+                                       const struct bx_archive_gzip_stream_sink* sink,
+                                       struct bx_diag_ctx* diag) {
+    const struct bx_tar_gzip_stream_create_ctx* ctx = user;
+    struct bx_tar_gzip_stream_sink_adapter adapter = {
+        .sink = sink,
+    };
+    struct bx_tar_stream_options stream_options = bx_tar_make_stream_options(ctx->options);
+    struct bx_tar_stream_sink tar_sink = {
+        .user = &adapter,
+        .write = bx_tar_gzip_stream_sink_write,
+        .callback_owns_errors = true,
+    };
+
+    return bx_tar_stream_encode_fs_list(ctx->files, &stream_options, &tar_sink, diag);
 }
 
 static bool bx_tar_write_create_archive_direct(const struct bx_archive_fs_list* files,
@@ -605,437 +476,97 @@ static bool bx_tar_write_create_archive_direct(const struct bx_archive_fs_list* 
     return ok;
 }
 
-static bool bx_tar_read_archive_input(const struct bx_tar_options* options,
-                                      struct bx_archive_buffer* archive,
-                                      struct bx_diag_ctx* diag) {
-    FILE* stream;
-
-    bx_archive_buffer_init(archive);
-    if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        stream = stdin;
-    }
-    else {
-        stream = fopen(options->archive_path, "rb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    if (!bx_archive_buffer_read_all(stream, archive, diag)) {
-        if (stream != stdin) {
-            fclose(stream);
-        }
-        bx_archive_buffer_free(archive);
-        return false;
-    }
-    if (stream != stdin && fclose(stream) != 0) {
-        bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-        bx_archive_buffer_free(archive);
-        return false;
-    }
-
-    if (options->gzip
-        || (options->auto_compress && bx_archive_path_has_gzip_suffix(options->archive_path))
-        || ((options->mode == BX_TAR_MODE_LIST || options->mode == BX_TAR_MODE_EXTRACT)
-            && bx_archive_buffer_has_gzip_magic(archive))) {
-        struct bx_archive_buffer decompressed = {0};
-        bx_archive_buffer_init(&decompressed);
-        if (!bx_archive_run_gzip_filter(archive, &decompressed, true, diag)) {
-            bx_archive_buffer_free(archive);
-            return false;
-        }
-        bx_archive_buffer_free(archive);
-        *archive = decompressed;
-    }
-    return true;
-}
-
-static bool bx_tar_write_archive_output(const struct bx_tar_options* options,
-                                        const struct bx_archive_buffer* archive,
-                                        struct bx_diag_ctx* diag) {
-    struct bx_archive_buffer compressed = {0};
-    const struct bx_archive_buffer* output = archive;
-    FILE* stream;
+static bool bx_tar_write_create_archive_gzip_direct(const struct bx_archive_fs_list* files,
+                                                    const struct bx_tar_options* options,
+                                                    struct bx_diag_ctx* diag) {
+    struct bx_tar_gzip_stream_create_ctx create_ctx = {
+        .files = files,
+        .options = options,
+    };
+    struct bx_archive_gzip_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
     bool ok;
 
-    if (options->gzip || (options->auto_compress && options->archive_path != NULL && bx_archive_path_has_gzip_suffix(options->archive_path))) {
-        size_t compress_threads = 1u;
-        size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
-
-        if (!options->no_mt) {
-            if (options->compress_threads >= 0) {
-                compress_threads = bx_thread_count_resolve(options->compress_threads);
-            }
-            else if (options->threads >= 0) {
-                compress_threads = bx_thread_count_resolve(options->threads);
-            }
-        }
-        bx_archive_buffer_init(&compressed);
-        if (compress_threads > 1u
-            ? !bx_archive_run_gzip_filter_mt(archive, &compressed, compress_threads, chunk_size, diag)
-            : !bx_archive_run_gzip_filter(archive, &compressed, false, diag)) {
-            return false;
-        }
-        output = &compressed;
-    }
-
-    if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
+    if (strcmp(options->archive_path, "-") == 0) {
         stream = stdout;
     }
     else {
         stream = fopen(options->archive_path, "wb");
         if (stream == NULL) {
-            bx_archive_buffer_free(&compressed);
             bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
             return false;
         }
     }
 
-    ok = bx_archive_buffer_write_all(stream, output, diag);
+    sink.user = stream;
+    ok = bx_archive_run_gzip_filter_stream(bx_tar_gzip_stream_produce, &create_ctx, &sink, diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
     if (stream != stdout) {
         if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
             ok = false;
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
         }
     }
-    bx_archive_buffer_free(&compressed);
     return ok;
 }
 
-static bool bx_tar_parse_sparse_map(const unsigned char* payload,
-                                    size_t payload_size,
-                                    struct bx_tar_entry* entry,
-                                    struct bx_diag_ctx* diag) {
-    size_t values[128];
-    size_t value_count = 0u;
-    size_t i = 0u;
-    size_t data_start;
-    size_t extent_count;
-    size_t j;
-    (void)diag;
+static bool bx_tar_write_create_archive_gzip_mt_direct(const struct bx_archive_fs_list* files,
+                                                       const struct bx_tar_options* options,
+                                                       size_t compress_threads,
+                                                       struct bx_diag_ctx* diag) {
+    struct bx_tar_gzip_stream_create_ctx create_ctx = {
+        .files = files,
+        .options = options,
+    };
+    struct bx_archive_gzip_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
+    size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
+    size_t max_inflight = compress_threads > (SIZE_MAX / 4u) ? compress_threads : compress_threads * 4u;
+    bool ok;
 
-    while (i < payload_size && value_count < sizeof(values) / sizeof(values[0])) {
-        size_t start = i;
-        size_t value = 0u;
-        bool have_digit = false;
-        while (i < payload_size && payload[i] != '\n') {
-            if (payload[i] >= '0' && payload[i] <= '9') {
-                have_digit = true;
-                value = value * 10u + (size_t)(payload[i] - '0');
-            }
-            i++;
-        }
-        if (!have_digit) {
-            break;
-        }
-        values[value_count++] = value;
-        if (i < payload_size && payload[i] == '\n') {
-            i++;
-        }
-        if (start == i) {
-            break;
-        }
-        if (value_count >= 1u && value_count == (1u + values[0] * 2u)) {
-            break;
-        }
+    if (strcmp(options->archive_path, "-") == 0) {
+        stream = stdout;
     }
-
-    if (value_count < 1u) {
-        return false;
-    }
-    extent_count = values[0];
-    if (value_count < 1u + extent_count * 2u) {
-        return false;
-    }
-
-    entry->extents = xrealloc(entry->extents, extent_count * sizeof(*entry->extents));
-    entry->extent_count = 0u;
-    for (j = 0u; j < extent_count; j++) {
-        size_t offset = values[1u + j * 2u];
-        size_t size = values[2u + j * 2u];
-        entry->extents[entry->extent_count].offset = offset;
-        entry->extents[entry->extent_count].size = size;
-        entry->extent_count++;
-    }
-
-    data_start = bx_tar_round_up(i, BX_TAR_BLOCK_SIZE);
-    if (data_start > payload_size) {
-        data_start = payload_size;
-    }
-    entry->data_len = payload_size - data_start;
-    entry->data = xmalloc(entry->data_len ? entry->data_len : 1u);
-    memcpy(entry->data, payload + data_start, entry->data_len);
-    return true;
-}
-
-static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax, const unsigned char* data, size_t len) {
-    size_t pos = 0u;
-    while (pos < len) {
-        size_t line_len = 0u;
-        size_t digits_end = pos;
-        size_t field_start;
-        size_t field_len;
-        const char* key;
-        const char* value;
-        char* record;
-        char* equal;
-        while (digits_end < len && data[digits_end] != ' ') {
-            if (data[digits_end] < '0' || data[digits_end] > '9') {
-                return false;
-            }
-            if (line_len > (SIZE_MAX - 9u) / 10u) {
-                return false;
-            }
-            line_len = line_len * 10u + (size_t)(data[digits_end] - '0');
-            digits_end++;
-        }
-        if (digits_end == pos || digits_end >= len || data[digits_end] != ' '
-            || line_len == 0u || pos + line_len > len || data[pos + line_len - 1u] != '\n') {
+    else {
+        stream = fopen(options->archive_path, "wb");
+        if (stream == NULL) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
             return false;
         }
-        field_start = digits_end + 1u;
-        if (field_start > pos + line_len - 1u) {
-            return false;
-        }
-        field_len = (pos + line_len - 1u) - field_start;
-        record = xmalloc(field_len + 1u);
-        memcpy(record, data + field_start, field_len);
-        record[field_len] = '\0';
-        equal = strchr(record, '=');
-        if (equal == NULL) {
-            free(record);
-            return false;
-        }
-        *equal = '\0';
-        key = record;
-        value = equal + 1;
-        if (strcmp(key, "path") == 0) {
-            free(pax->path);
-            pax->path = xstrdup(value);
-        }
-        else if (strcmp(key, "linkpath") == 0) {
-            free(pax->linkpath);
-            pax->linkpath = xstrdup(value);
-        }
-        else if (strcmp(key, "GNU.sparse.name") == 0) {
-            free(pax->path);
-            pax->path = xstrdup(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.major") == 0) {
-            pax->sparse_major = atoi(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.minor") == 0) {
-            pax->sparse_minor = atoi(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.realsize") == 0) {
-            pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
-            pax->sparse_enabled = true;
-        }
-        free(record);
-        pos += line_len;
-    }
-    return true;
-}
-
-static bool bx_tar_parse_archive(const struct bx_archive_buffer* archive,
-                                 struct bx_tar_entry_list* entries,
-                                 struct bx_diag_ctx* diag) {
-    size_t pos = 0u;
-    struct bx_tar_pax_info pax = {0};
-    char* gnu_long_name = NULL;
-    char* gnu_long_link = NULL;
-
-    while (pos + BX_TAR_BLOCK_SIZE <= archive->len) {
-        const unsigned char* header = archive->data + pos;
-        size_t size = 0u;
-        size_t payload_start;
-        size_t payload_padded;
-        unsigned char typeflag;
-        char name_buf[256];
-        char prefix_buf[156];
-        char* name = NULL;
-        struct bx_tar_entry entry;
-
-        if (bx_tar_block_is_zero(header)) {
-            if (pos + 2u * BX_TAR_BLOCK_SIZE <= archive->len
-                && bx_tar_block_is_zero(archive->data + pos + BX_TAR_BLOCK_SIZE)) {
-                break;
-            }
-            pos += BX_TAR_BLOCK_SIZE;
-            continue;
-        }
-
-        if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
-            bx_tar_pax_info_clear(&pax);
-            free(gnu_long_name);
-            free(gnu_long_link);
-            bx_diag(diag, "invalid tar header");
-            return false;
-        }
-        typeflag = header[156];
-        payload_start = pos + BX_TAR_BLOCK_SIZE;
-        payload_padded = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE);
-        if (payload_start + payload_padded > archive->len) {
-            bx_tar_pax_info_clear(&pax);
-            free(gnu_long_name);
-            free(gnu_long_link);
-            bx_diag(diag, "truncated archive");
-            return false;
-        }
-
-        if (typeflag == 'x') {
-            if (!bx_tar_parse_pax_records(&pax, archive->data + payload_start, size)) {
-                bx_tar_pax_info_clear(&pax);
-                free(gnu_long_name);
-                free(gnu_long_link);
-                bx_diag(diag, "invalid pax header");
-                return false;
-            }
-            pos = payload_start + payload_padded;
-            continue;
-        }
-        if (typeflag == 'g') {
-            pos = payload_start + payload_padded;
-            continue;
-        }
-        if (typeflag == 'L' || typeflag == 'K') {
-            char** target = (typeflag == 'L') ? &gnu_long_name : &gnu_long_link;
-            size_t text_len = size;
-            while (text_len > 0u && archive->data[payload_start + text_len - 1u] == '\0') {
-                text_len--;
-            }
-            free(*target);
-            *target = xmalloc(text_len + 1u);
-            memcpy(*target, archive->data + payload_start, text_len);
-            (*target)[text_len] = '\0';
-            pos = payload_start + payload_padded;
-            continue;
-        }
-
-        memset(&entry, 0, sizeof(entry));
-        memcpy(name_buf, header, 100u);
-        name_buf[100] = '\0';
-        memcpy(prefix_buf, header + 345, 155u);
-        prefix_buf[155] = '\0';
-        {
-            const char* raw_name = (const char*)name_buf;
-            const char* raw_prefix = (const char*)prefix_buf;
-            if (raw_prefix[0] != '\0') {
-                size_t full_len = strlen(raw_prefix) + 1u + strlen(raw_name);
-                name = xmalloc(full_len + 1u);
-                snprintf(name, full_len + 1u, "%s/%s", raw_prefix, raw_name);
-            }
-            else {
-                name = xstrdup(raw_name);
-            }
-        }
-
-        if (pax.path != NULL) {
-            free(name);
-            name = xstrdup(pax.path);
-        }
-        else if (gnu_long_name != NULL) {
-            free(name);
-            name = gnu_long_name;
-            gnu_long_name = NULL;
-        }
-        if (typeflag == '5') {
-            size_t name_len = strlen(name);
-            while (name_len > 0u && name[name_len - 1u] == '/') {
-                name[--name_len] = '\0';
-            }
-        }
-        entry.name = name;
-        entry.mode = 0644u;
-        {
-            size_t parsed_mode = 0u;
-            size_t parsed_uid = 0u;
-            size_t parsed_gid = 0u;
-            size_t parsed_mtime = 0u;
-            bx_tar_parse_octal_field(header + 100, 8u, &parsed_mode);
-            bx_tar_parse_octal_field(header + 108, 8u, &parsed_uid);
-            bx_tar_parse_octal_field(header + 116, 8u, &parsed_gid);
-            bx_tar_parse_octal_field(header + 136, 12u, &parsed_mtime);
-            entry.mode = (mode_t)parsed_mode;
-            entry.uid = (uid_t)parsed_uid;
-            entry.gid = (gid_t)parsed_gid;
-            entry.mtime.tv_sec = (time_t)parsed_mtime;
-            entry.mtime.tv_nsec = 0;
-        }
-        if (pax.linkpath != NULL) {
-            entry.linkname = xstrdup(pax.linkpath);
-        }
-        else if ((typeflag == '1' || typeflag == '2') && gnu_long_link != NULL) {
-            entry.linkname = gnu_long_link;
-            gnu_long_link = NULL;
-        }
-        else if (typeflag == '1' || typeflag == '2') {
-            char linkbuf[101];
-            memcpy(linkbuf, header + 157, 100u);
-            linkbuf[100] = '\0';
-            entry.linkname = xstrdup(linkbuf);
-        }
-
-        switch (typeflag) {
-            case '\0':
-            case '0':
-                entry.kind = BX_TAR_KIND_REG;
-                break;
-            case '5':
-                entry.kind = BX_TAR_KIND_DIR;
-                break;
-            case '2':
-                entry.kind = BX_TAR_KIND_SYMLINK;
-                break;
-            case '1':
-                entry.kind = BX_TAR_KIND_HARDLINK;
-                break;
-            case '6':
-                entry.kind = BX_TAR_KIND_FIFO;
-                break;
-            default:
-                bx_tar_entry_free(&entry);
-                bx_tar_pax_info_clear(&pax);
-                free(gnu_long_name);
-                free(gnu_long_link);
-                bx_diag(diag, "unsupported tar entry type");
-                return false;
-        }
-
-        if (entry.kind == BX_TAR_KIND_REG) {
-            if (pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
-                entry.sparse = true;
-                entry.size = pax.sparse_realsize;
-                if (!bx_tar_parse_sparse_map(archive->data + payload_start, size, &entry, diag)) {
-                    bx_tar_entry_free(&entry);
-                    bx_tar_pax_info_clear(&pax);
-                    free(gnu_long_name);
-                    free(gnu_long_link);
-                    bx_diag(diag, "invalid sparse payload");
-                    return false;
-                }
-            }
-            else {
-                entry.size = size;
-                entry.data_len = size;
-                entry.data = xmalloc(size ? size : 1u);
-                memcpy(entry.data, archive->data + payload_start, size);
-            }
-        }
-
-        bx_tar_entry_list_push(entries, &entry);
-        pos = payload_start + payload_padded;
-        bx_tar_pax_info_clear(&pax);
     }
 
-    bx_tar_pax_info_clear(&pax);
-    free(gnu_long_name);
-    free(gnu_long_link);
-    return true;
+    sink.user = stream;
+    ok = bx_archive_run_gzip_filter_mt_stream(bx_tar_gzip_stream_produce,
+                                              &create_ctx,
+                                              &sink,
+                                              compress_threads,
+                                              chunk_size,
+                                              max_inflight,
+                                              diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (stream != stdout) {
+        if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 static bool bx_tar_write_sparse_file(const char* dest_path,
@@ -1083,356 +614,554 @@ static bool bx_tar_write_sparse_file(const char* dest_path,
     return true;
 }
 
-static int bx_tar_extract_entries(const struct bx_tar_entry_list* entries,
-                                  const struct bx_tar_options* options,
-                                  const struct bx_tar_select_plan* select_plan,
-                                  struct bx_diag_ctx* diag) {
-    struct bx_archive_pending_dirs dirs = {0};
-    bool* matched_members = NULL;
-    struct bx_tar_name_policy name_policy = {
+struct bx_tar_extract_state {
+    const struct bx_tar_options* options;
+    const struct bx_tar_select_plan* select_plan;
+    struct bx_archive_pending_dirs dirs;
+    struct bx_tar_name_policy name_policy;
+    bool warned_absolute;
+    bool warned_dotdot;
+    bool* matched_members;
+    int status;
+    int current_fd;
+    char* current_dest_path;
+    mode_t current_mode_bits;
+    struct timespec current_mtime;
+    enum {
+        BX_TAR_EXTRACT_STREAM_NONE = 0,
+        BX_TAR_EXTRACT_STREAM_STDOUT,
+        BX_TAR_EXTRACT_STREAM_FILE,
+    } current_stream_mode;
+};
+
+struct bx_tar_list_state {
+    const struct bx_tar_select_plan* select_plan;
+    bool* matched_members;
+};
+
+static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* select_plan) {
+    bool* matched_members;
+
+    if (select_plan->len == 0u) {
+        return NULL;
+    }
+    matched_members = xmalloc(select_plan->len * sizeof(*matched_members));
+    memset(matched_members, 0, select_plan->len * sizeof(*matched_members));
+    return matched_members;
+}
+
+static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
+                                      const struct bx_tar_options* options,
+                                      const struct bx_tar_select_plan* select_plan) {
+    memset(state, 0, sizeof(*state));
+    state->options = options;
+    state->select_plan = select_plan;
+    state->matched_members = bx_tar_alloc_matched_members(select_plan);
+    state->name_policy = (struct bx_tar_name_policy){
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
         .one_top_level = options->one_top_level,
         .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
-    bool warned_absolute = false;
-    bool warned_dotdot = false;
-    int status = 0;
-    size_t i;
-
-    if (select_plan->len > 0u) {
-        matched_members = xmalloc(select_plan->len * sizeof(*matched_members));
-        memset(matched_members, 0, select_plan->len * sizeof(*matched_members));
-    }
-
-    for (i = 0u; i < entries->len; i++) {
-        const struct bx_tar_entry* entry = &entries->items[i];
-        char* clean_name;
-        char* dest_path;
-        const char* extract_dir = NULL;
-        bool stripped_absolute;
-        bool stripped_dotdot;
-
-        if (!bx_tar_select_plan_match(select_plan,
-                                      entry->name,
-                                      select_plan->len == 0u,
-                                      matched_members,
-                                      &extract_dir)) {
-            continue;
-        }
-
-        clean_name = bx_tar_map_member_name(entry->name, &name_policy, &stripped_absolute, &stripped_dotdot);
-        if (stripped_absolute && !warned_absolute) {
-            fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
-            warned_absolute = true;
-        }
-        if (stripped_dotdot && !warned_dotdot) {
-            fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
-            warned_dotdot = true;
-        }
-        if (clean_name[0] == '\0') {
-            free(clean_name);
-            continue;
-        }
-
-        if (options->to_stdout) {
-            if (entry->kind == BX_TAR_KIND_REG) {
-                if (entry->sparse) {
-                    size_t logical = 0u;
-                    size_t data_offset = 0u;
-                    size_t j;
-                    for (j = 0u; j < entry->extent_count; j++) {
-                        size_t zero_len;
-                        if (entry->extents[j].offset > logical) {
-                            zero_len = entry->extents[j].offset - logical;
-                            while (zero_len > 0u) {
-                                unsigned char zeros[4096] = {0};
-                                size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
-                                if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
-                                    bx_diag(diag, "write error: %s", strerror(errno));
-                                    free(clean_name);
-                                    free(matched_members);
-                                    bx_archive_pending_dirs_free(&dirs);
-                                    return 2;
-                                }
-                                zero_len -= chunk;
-                            }
-                            logical = entry->extents[j].offset;
-                        }
-                        if (!bx_xwrite_all(STDOUT_FILENO, entry->data + data_offset, entry->extents[j].size)) {
-                            bx_diag(diag, "write error: %s", strerror(errno));
-                            free(clean_name);
-                            free(matched_members);
-                            bx_archive_pending_dirs_free(&dirs);
-                            return 2;
-                        }
-                        data_offset += entry->extents[j].size;
-                        logical = entry->extents[j].offset + entry->extents[j].size;
-                    }
-                    if (entry->size > logical) {
-                        size_t zero_len = entry->size - logical;
-                        while (zero_len > 0u) {
-                            unsigned char zeros[4096] = {0};
-                            size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
-                            if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
-                                bx_diag(diag, "write error: %s", strerror(errno));
-                                free(clean_name);
-                                free(matched_members);
-                                bx_archive_pending_dirs_free(&dirs);
-                                return 2;
-                            }
-                            zero_len -= chunk;
-                        }
-                    }
-                }
-                else if (!bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len)) {
-                    bx_diag(diag, "write error: %s", strerror(errno));
-                    free(clean_name);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-            }
-            free(clean_name);
-            continue;
-        }
-
-        dest_path = extract_dir ? bx_path_join(extract_dir, clean_name) : xstrdup(clean_name);
-        free(clean_name);
-
-        if (options->keep_old_files && access(dest_path, F_OK) == 0 && entry->kind != BX_TAR_KIND_DIR) {
-            fprintf(stderr, "%s: %s: Cannot open: File exists\n", diag->progname, entry->name);
-            status = 2;
-            free(dest_path);
-            continue;
-        }
-
-        if (entry->kind == BX_TAR_KIND_DIR) {
-            if (mkdir(dest_path, 0777u) != 0 && errno != EEXIST) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                free(matched_members);
-                bx_archive_pending_dirs_free(&dirs);
-                return 2;
-            }
-            bx_archive_pending_dirs_record(&dirs, dest_path, entry->mode, !options->touch_mtime, entry->mtime);
-        }
-        else {
-            if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
-                free(dest_path);
-                free(matched_members);
-                bx_archive_pending_dirs_free(&dirs);
-                return 2;
-            }
-            if (entry->kind == BX_TAR_KIND_REG) {
-                if (entry->sparse) {
-                    if (!bx_tar_write_sparse_file(dest_path, entry, entry->mode, diag)) {
-                        free(dest_path);
-                        free(matched_members);
-                        bx_archive_pending_dirs_free(&dirs);
-                        return 2;
-                    }
-                }
-                else {
-                    int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
-                    if (fd < 0) {
-                        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                        free(dest_path);
-                        free(matched_members);
-                        bx_archive_pending_dirs_free(&dirs);
-                        return 2;
-                    }
-                    if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, false, diag)) {
-                        close(fd);
-                        free(dest_path);
-                        free(matched_members);
-                        bx_archive_pending_dirs_free(&dirs);
-                        return 2;
-                    }
-                    if (close(fd) != 0) {
-                        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                        free(dest_path);
-                        free(matched_members);
-                        bx_archive_pending_dirs_free(&dirs);
-                        return 2;
-                    }
-                }
-                if (chmod(dest_path, entry->mode & 07777u) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-                if (!options->touch_mtime
-                    && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-            }
-            else if (entry->kind == BX_TAR_KIND_SYMLINK) {
-                unlink(dest_path);
-                if (symlink(entry->linkname, dest_path) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-                if (!options->touch_mtime
-                    && !bx_archive_set_path_mtime(dest_path, entry->mtime, true, diag)) {
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-            }
-            else if (entry->kind == BX_TAR_KIND_HARDLINK) {
-                bool target_stripped_absolute = false;
-                bool target_stripped_dotdot = false;
-                char* mapped_target = bx_tar_map_member_name(
-                    entry->linkname,
-                    &name_policy,
-                    &target_stripped_absolute,
-                    &target_stripped_dotdot
-                );
-                char* target = extract_dir ? bx_path_join(extract_dir, mapped_target) : xstrdup(mapped_target);
-                (void)target_stripped_absolute;
-                (void)target_stripped_dotdot;
-                free(mapped_target);
-                if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
-                    free(dest_path);
-                    free(target);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-                unlink(dest_path);
-                if (link(target, dest_path) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    free(target);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-                free(target);
-            }
-            else if (entry->kind == BX_TAR_KIND_FIFO) {
-                unlink(dest_path);
-                if (mkfifo(dest_path, entry->mode & 07777u) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-                if (!options->touch_mtime
-                    && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
-                    free(dest_path);
-                    free(matched_members);
-                    bx_archive_pending_dirs_free(&dirs);
-                    return 2;
-                }
-            }
-        }
-        free(dest_path);
-    }
-
-    if (bx_tar_select_plan_report_unmatched(select_plan, matched_members, diag)) {
-        status = 2;
-    }
-    if (!bx_archive_pending_dirs_apply(&dirs, diag)) {
-        free(matched_members);
-        bx_archive_pending_dirs_free(&dirs);
-        return 2;
-    }
-    bx_archive_pending_dirs_free(&dirs);
-    free(matched_members);
-    if (status == 2) {
-        bx_tar_report_previous_errors(diag);
-    }
-    return status;
+    state->current_fd = -1;
 }
 
-static int bx_tar_list_entries(const struct bx_tar_entry_list* entries,
-                               const struct bx_tar_options* options,
-                               const struct bx_tar_select_plan* select_plan,
-                               struct bx_diag_ctx* diag) {
-    bool* matched_members = NULL;
-    size_t i;
-    (void)options;
-
-    if (select_plan->len > 0u) {
-        matched_members = xmalloc(select_plan->len * sizeof(*matched_members));
-        memset(matched_members, 0, select_plan->len * sizeof(*matched_members));
+static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
+    if (state->current_fd >= 0) {
+        close(state->current_fd);
+        state->current_fd = -1;
     }
-    for (i = 0u; i < entries->len; i++) {
-        const struct bx_tar_entry* entry = &entries->items[i];
-        if (!bx_tar_select_plan_match(select_plan,
-                                      entry->name,
-                                      select_plan->len == 0u,
-                                      matched_members,
-                                      NULL)) {
-            continue;
-        }
-        if (entry->kind == BX_TAR_KIND_DIR) {
-            if (printf("%s/\n", entry->name) < 0) {
+    free(state->current_dest_path);
+    state->current_dest_path = NULL;
+    free(state->matched_members);
+    bx_archive_pending_dirs_free(&state->dirs);
+}
+
+static void bx_tar_list_state_init(struct bx_tar_list_state* state,
+                                   const struct bx_tar_select_plan* select_plan) {
+    state->select_plan = select_plan;
+    state->matched_members = bx_tar_alloc_matched_members(select_plan);
+}
+
+static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
+    free(state->matched_members);
+}
+
+static bool bx_tar_extract_entry_to_stdout(const struct bx_tar_entry* entry,
+                                           struct bx_diag_ctx* diag) {
+    if (entry->kind != BX_TAR_KIND_REG) {
+        return true;
+    }
+    if (entry->sparse) {
+        size_t logical = 0u;
+        size_t data_offset = 0u;
+        size_t i;
+
+        for (i = 0u; i < entry->extent_count; i++) {
+            size_t zero_len;
+
+            if (entry->extents[i].offset > logical) {
+                zero_len = entry->extents[i].offset - logical;
+                while (zero_len > 0u) {
+                    unsigned char zeros[4096] = {0};
+                    size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
+
+                    if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
+                        bx_diag(diag, "write error: %s", strerror(errno));
+                        return false;
+                    }
+                    zero_len -= chunk;
+                }
+                logical = entry->extents[i].offset;
+            }
+            if (!bx_xwrite_all(STDOUT_FILENO, entry->data + data_offset, entry->extents[i].size)) {
                 bx_diag(diag, "write error: %s", strerror(errno));
-                free(matched_members);
-                return 2;
+                return false;
+            }
+            data_offset += entry->extents[i].size;
+            logical = entry->extents[i].offset + entry->extents[i].size;
+        }
+        if (entry->size > logical) {
+            size_t zero_len = entry->size - logical;
+            while (zero_len > 0u) {
+                unsigned char zeros[4096] = {0};
+                size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
+
+                if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
+                    bx_diag(diag, "write error: %s", strerror(errno));
+                    return false;
+                }
+                zero_len -= chunk;
+            }
+        }
+        return true;
+    }
+    if (entry->data != NULL && !bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len)) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* state) {
+    if (state->current_fd >= 0) {
+        close(state->current_fd);
+        state->current_fd = -1;
+    }
+    state->current_stream_mode = BX_TAR_EXTRACT_STREAM_NONE;
+    state->current_mode_bits = 0u;
+    state->current_mtime.tv_sec = 0;
+    state->current_mtime.tv_nsec = 0;
+    free(state->current_dest_path);
+    state->current_dest_path = NULL;
+}
+
+static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
+                                     const struct bx_tar_entry* entry,
+                                     struct bx_diag_ctx* diag) {
+    char* clean_name;
+    char* dest_path = NULL;
+    const char* extract_dir = NULL;
+    bool stripped_absolute;
+    bool stripped_dotdot;
+
+    if (!bx_tar_select_plan_match(state->select_plan,
+                                  entry->name,
+                                  state->select_plan->len == 0u,
+                                  state->matched_members,
+                                  &extract_dir)) {
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
+
+    clean_name = bx_tar_map_member_name(entry->name,
+                                        &state->name_policy,
+                                        &stripped_absolute,
+                                        &stripped_dotdot);
+    if (stripped_absolute && !state->warned_absolute) {
+        fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
+        state->warned_absolute = true;
+    }
+    if (stripped_dotdot && !state->warned_dotdot) {
+        fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
+        state->warned_dotdot = true;
+    }
+    if (clean_name[0] == '\0') {
+        free(clean_name);
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
+
+    if (state->options->to_stdout) {
+        bool ok = true;
+        bx_tar_extract_clear_current_stream(state);
+        if (entry->kind == BX_TAR_KIND_REG) {
+            if (entry->sparse) {
+                ok = bx_tar_extract_entry_to_stdout(entry, diag);
+            }
+            else {
+                state->current_stream_mode = BX_TAR_EXTRACT_STREAM_STDOUT;
+            }
+        }
+        free(clean_name);
+        return ok;
+    }
+
+    dest_path = extract_dir ? bx_path_join(extract_dir, clean_name) : xstrdup(clean_name);
+    free(clean_name);
+
+    if (state->options->keep_old_files
+        && access(dest_path, F_OK) == 0
+        && entry->kind != BX_TAR_KIND_DIR) {
+        fprintf(stderr, "%s: %s: Cannot open: File exists\n", diag->progname, entry->name);
+        state->status = 2;
+        free(dest_path);
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
+
+    if (entry->kind == BX_TAR_KIND_DIR) {
+        if (mkdir(dest_path, 0777u) != 0 && errno != EEXIST) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
+        bx_archive_pending_dirs_record(&state->dirs,
+                                       dest_path,
+                                       entry->mode,
+                                       !state->options->touch_mtime,
+                                       entry->mtime);
+        free(dest_path);
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
+
+    if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
+        free(dest_path);
+        return false;
+    }
+
+    if (entry->kind == BX_TAR_KIND_REG) {
+        if (entry->sparse) {
+            if (!bx_tar_write_sparse_file(dest_path, entry, entry->mode, diag)) {
+                free(dest_path);
+                return false;
             }
         }
         else {
-            if (printf("%s\n", entry->name) < 0) {
-                bx_diag(diag, "write error: %s", strerror(errno));
-                free(matched_members);
-                return 2;
+            int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
+            if (fd < 0) {
+                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+                free(dest_path);
+                return false;
             }
+            bx_tar_extract_clear_current_stream(state);
+            state->current_fd = fd;
+            state->current_dest_path = dest_path;
+            state->current_mode_bits = entry->mode;
+            state->current_mtime = entry->mtime;
+            state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
+            return true;
+        }
+        if (chmod(dest_path, entry->mode & 07777u) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
+        if (!state->options->touch_mtime
+            && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
+            free(dest_path);
+            return false;
         }
     }
-    if (bx_tar_select_plan_report_unmatched(select_plan, matched_members, diag)) {
-        free(matched_members);
+    else if (entry->kind == BX_TAR_KIND_SYMLINK) {
+        unlink(dest_path);
+        if (symlink(entry->linkname, dest_path) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
+        if (!state->options->touch_mtime
+            && !bx_archive_set_path_mtime(dest_path, entry->mtime, true, diag)) {
+            free(dest_path);
+            return false;
+        }
+    }
+    else if (entry->kind == BX_TAR_KIND_HARDLINK) {
+        bool target_stripped_absolute = false;
+        bool target_stripped_dotdot = false;
+        char* mapped_target = bx_tar_map_member_name(entry->linkname,
+                                                     &state->name_policy,
+                                                     &target_stripped_absolute,
+                                                     &target_stripped_dotdot);
+        char* target = extract_dir ? bx_path_join(extract_dir, mapped_target) : xstrdup(mapped_target);
+        (void)target_stripped_absolute;
+        (void)target_stripped_dotdot;
+        free(mapped_target);
+        if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
+            free(dest_path);
+            free(target);
+            return false;
+        }
+        unlink(dest_path);
+        if (link(target, dest_path) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            free(target);
+            return false;
+        }
+        free(target);
+    }
+    else if (entry->kind == BX_TAR_KIND_FIFO) {
+        unlink(dest_path);
+        if (mkfifo(dest_path, entry->mode & 07777u) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
+        if (!state->options->touch_mtime
+            && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
+            free(dest_path);
+            return false;
+        }
+    }
+
+    free(dest_path);
+    bx_tar_extract_clear_current_stream(state);
+    return true;
+}
+
+static bool bx_tar_extract_entry_payload(struct bx_tar_extract_state* state,
+                                         const struct bx_tar_entry* entry,
+                                         const unsigned char* data,
+                                         size_t len,
+                                         struct bx_diag_ctx* diag) {
+    (void)entry;
+
+    if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_NONE || len == 0u) {
+        return true;
+    }
+    if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_STDOUT) {
+        if (!bx_xwrite_all(STDOUT_FILENO, data, len)) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+        return true;
+    }
+    return bx_archive_write_regular_payload(state->current_fd, data, len, false, diag);
+}
+
+static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
+                                     const struct bx_tar_entry* entry,
+                                     struct bx_diag_ctx* diag) {
+    char* dest_path = state->current_dest_path;
+    int fd = state->current_fd;
+    mode_t mode = state->current_mode_bits;
+    struct timespec mtime = state->current_mtime;
+
+    (void)entry;
+
+    if (state->current_stream_mode != BX_TAR_EXTRACT_STREAM_FILE) {
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
+
+    state->current_fd = -1;
+    state->current_dest_path = NULL;
+    state->current_stream_mode = BX_TAR_EXTRACT_STREAM_NONE;
+    state->current_mode_bits = 0u;
+    state->current_mtime.tv_sec = 0;
+    state->current_mtime.tv_nsec = 0;
+
+    if (close(fd) != 0) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        free(dest_path);
+        return false;
+    }
+    if (chmod(dest_path, mode & 07777u) != 0) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        free(dest_path);
+        return false;
+    }
+    if (!state->options->touch_mtime
+        && !bx_archive_set_path_mtime(dest_path, mtime, false, diag)) {
+        free(dest_path);
+        return false;
+    }
+    free(dest_path);
+    return true;
+}
+
+static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
+                                 struct bx_diag_ctx* diag) {
+    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
+        state->status = 2;
+    }
+    if (!bx_archive_pending_dirs_apply(&state->dirs, diag)) {
+        return 2;
+    }
+    if (state->status == 2) {
+        bx_tar_report_previous_errors(diag);
+    }
+    return state->status;
+}
+
+static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
+                                  const struct bx_tar_entry* entry,
+                                  struct bx_diag_ctx* diag) {
+    if (!bx_tar_select_plan_match(state->select_plan,
+                                  entry->name,
+                                  state->select_plan->len == 0u,
+                                  state->matched_members,
+                                  NULL)) {
+        return true;
+    }
+    if (entry->kind == BX_TAR_KIND_DIR) {
+        if (printf("%s/\n", entry->name) < 0) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+    }
+    else if (printf("%s\n", entry->name) < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static int bx_tar_list_finish(struct bx_tar_list_state* state,
+                              struct bx_diag_ctx* diag) {
+    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
         bx_tar_report_previous_errors(diag);
         return 2;
     }
-    free(matched_members);
     return 0;
 }
 
-static bool bx_tar_write_parsed_entry(struct bx_archive_buffer* archive,
-                                      const struct bx_tar_entry* entry,
-                                      struct bx_diag_ctx* diag) {
-    struct bx_tar_stream_sink sink = {
-        .user = archive,
-        .write = bx_tar_buffer_sink_write,
+static bool bx_tar_extract_stream_visit(void* user,
+                                        const struct bx_tar_entry* entry,
+                                        struct bx_diag_ctx* diag) {
+    return bx_tar_extract_one_entry(user, entry, diag);
+}
+
+static bool bx_tar_extract_stream_payload_visit(void* user,
+                                                const struct bx_tar_entry* entry,
+                                                const unsigned char* data,
+                                                size_t len,
+                                                struct bx_diag_ctx* diag) {
+    return bx_tar_extract_entry_payload(user, entry, data, len, diag);
+}
+
+static bool bx_tar_extract_stream_end_visit(void* user,
+                                            const struct bx_tar_entry* entry,
+                                            struct bx_diag_ctx* diag) {
+    return bx_tar_extract_end_entry(user, entry, diag);
+}
+
+static bool bx_tar_list_stream_visit(void* user,
+                                     const struct bx_tar_entry* entry,
+                                     struct bx_diag_ctx* diag) {
+    return bx_tar_list_one_entry(user, entry, diag);
+}
+
+static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
+                                         const struct bx_tar_select_plan* select_plan,
+                                         struct bx_diag_ctx* diag) {
+    struct bx_tar_reader_stream_options reader_options = {
+        .archive_path = options->archive_path,
+        .require_gzip = options->gzip
+            || (options->auto_compress
+                && options->archive_path != NULL
+                && bx_archive_path_has_gzip_suffix(options->archive_path)),
     };
-    enum bx_tar_stream_kind kind = BX_TAR_STREAM_KIND_REG;
 
-    switch (entry->kind) {
-        case BX_TAR_KIND_REG:
-            kind = BX_TAR_STREAM_KIND_REG;
-            break;
-        case BX_TAR_KIND_DIR:
-            kind = BX_TAR_STREAM_KIND_DIR;
-            break;
-        case BX_TAR_KIND_SYMLINK:
-            kind = BX_TAR_STREAM_KIND_SYMLINK;
-            break;
-        case BX_TAR_KIND_HARDLINK:
-            kind = BX_TAR_STREAM_KIND_HARDLINK;
-            break;
-        case BX_TAR_KIND_FIFO:
-            kind = BX_TAR_STREAM_KIND_FIFO;
-            break;
+    if (options->mode == BX_TAR_MODE_LIST) {
+        struct bx_tar_list_state state;
+        struct bx_tar_stream_visitor_ops visitor_ops = {
+            .user = &state,
+            .begin_entry = bx_tar_list_stream_visit,
+        };
+        int rc;
+
+        bx_tar_list_state_init(&state, select_plan);
+        if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
+            bx_tar_list_state_cleanup(&state);
+            return 2;
+        }
+        rc = bx_tar_list_finish(&state, diag);
+        bx_tar_list_state_cleanup(&state);
+        return rc;
     }
+    else {
+        struct bx_tar_extract_state state;
+        struct bx_tar_stream_visitor_ops visitor_ops = {
+            .user = &state,
+            .begin_entry = bx_tar_extract_stream_visit,
+            .visit_payload = bx_tar_extract_stream_payload_visit,
+            .end_entry = bx_tar_extract_stream_end_visit,
+        };
+        int rc;
 
-    return bx_tar_stream_write_raw_entry(&sink,
+        bx_tar_extract_state_init(&state, options, select_plan);
+        if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
+            bx_tar_extract_state_cleanup(&state);
+            return 2;
+        }
+        rc = bx_tar_extract_finish(&state, diag);
+        bx_tar_extract_state_cleanup(&state);
+        return rc;
+    }
+}
+
+static enum bx_tar_stream_kind bx_tar_stream_kind_from_entry_kind(enum bx_tar_kind kind) {
+    switch (kind) {
+        case BX_TAR_KIND_REG:
+            return BX_TAR_STREAM_KIND_REG;
+        case BX_TAR_KIND_DIR:
+            return BX_TAR_STREAM_KIND_DIR;
+        case BX_TAR_KIND_SYMLINK:
+            return BX_TAR_STREAM_KIND_SYMLINK;
+        case BX_TAR_KIND_HARDLINK:
+            return BX_TAR_STREAM_KIND_HARDLINK;
+        case BX_TAR_KIND_FIFO:
+            return BX_TAR_STREAM_KIND_FIFO;
+    }
+    return BX_TAR_STREAM_KIND_REG;
+}
+
+struct bx_tar_stream_counting_sink_user {
+    const struct bx_tar_stream_sink* inner;
+    size_t* bytes_written;
+};
+
+static bool bx_tar_stream_counting_sink_write(void* user, const void* data, size_t len) {
+    struct bx_tar_stream_counting_sink_user* counting_user = user;
+
+    if (!counting_user->inner->write(counting_user->inner->user, data, len)) {
+        return false;
+    }
+    *counting_user->bytes_written += len;
+    return true;
+}
+
+static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink,
+                                           size_t* bytes_written_io,
+                                           const struct bx_tar_entry* entry,
+                                           struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_counting_sink_user counting_user = {
+        .inner = sink,
+        .bytes_written = bytes_written_io,
+    };
+    struct bx_tar_stream_sink counting_sink = {
+        .user = &counting_user,
+        .write = bx_tar_stream_counting_sink_write,
+        .callback_owns_errors = sink->callback_owns_errors,
+    };
+
+    return bx_tar_stream_write_raw_entry(&counting_sink,
                                          entry->name,
                                          entry->linkname,
-                                         kind,
+                                         bx_tar_stream_kind_from_entry_kind(entry->kind),
                                          entry->mode,
                                          entry->uid,
                                          entry->gid,
@@ -1443,12 +1172,197 @@ static bool bx_tar_write_parsed_entry(struct bx_archive_buffer* archive,
                                          diag);
 }
 
+struct bx_tar_rewrite_stream_ctx {
+    const struct bx_tar_entry_list* parsed;
+    const bool* removed_entries;
+    const struct bx_archive_fs_list* appended_files;
+    const struct bx_tar_options* options;
+};
+
+static bool bx_tar_write_rewrite_stream_body(const struct bx_tar_rewrite_stream_ctx* ctx,
+                                             const struct bx_tar_stream_sink* sink,
+                                             struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_options stream_options = bx_tar_make_stream_options(ctx->options);
+    size_t bytes_written = 0u;
+    size_t i;
+
+    for (i = 0u; i < ctx->parsed->len; i++) {
+        if (ctx->removed_entries != NULL && ctx->removed_entries[i]) {
+            continue;
+        }
+        if (!bx_tar_write_parsed_entry_sink(sink, &bytes_written, &ctx->parsed->items[i], diag)) {
+            return false;
+        }
+    }
+    if (ctx->options->mode == BX_TAR_MODE_APPEND
+        && !bx_tar_stream_write_fs_list_body(ctx->appended_files,
+                                             &stream_options,
+                                             sink,
+                                             &bytes_written,
+                                             diag)) {
+        return false;
+    }
+    return bx_tar_stream_write_trailer(sink, bytes_written, diag);
+}
+
+static bool bx_tar_rewrite_stream_produce(void* user,
+                                          const struct bx_archive_gzip_stream_sink* sink,
+                                          struct bx_diag_ctx* diag) {
+    const struct bx_tar_rewrite_stream_ctx* ctx = user;
+    struct bx_tar_gzip_stream_sink_adapter adapter = {
+        .sink = sink,
+    };
+    struct bx_tar_stream_sink tar_sink = {
+        .user = &adapter,
+        .write = bx_tar_gzip_stream_sink_write,
+        .callback_owns_errors = true,
+    };
+
+    return bx_tar_write_rewrite_stream_body(ctx, &tar_sink, diag);
+}
+
+static bool bx_tar_write_rewrite_archive_direct(const struct bx_tar_rewrite_stream_ctx* ctx,
+                                                const struct bx_tar_options* options,
+                                                struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
+    bool ok;
+
+    if (strcmp(options->archive_path, "-") == 0) {
+        stream = stdout;
+    }
+    else {
+        stream = fopen(options->archive_path, "wb");
+        if (stream == NULL) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    sink.user = stream;
+    ok = bx_tar_write_rewrite_stream_body(ctx, &sink, diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (stream != stdout) {
+        if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static bool bx_tar_write_rewrite_archive_gzip_direct(const struct bx_tar_rewrite_stream_ctx* ctx,
+                                                     const struct bx_tar_options* options,
+                                                     struct bx_diag_ctx* diag) {
+    struct bx_tar_rewrite_stream_ctx producer_ctx = *ctx;
+    struct bx_archive_gzip_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
+    bool ok;
+
+    if (strcmp(options->archive_path, "-") == 0) {
+        stream = stdout;
+    }
+    else {
+        stream = fopen(options->archive_path, "wb");
+        if (stream == NULL) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    sink.user = stream;
+    ok = bx_archive_run_gzip_filter_stream(bx_tar_rewrite_stream_produce, &producer_ctx, &sink, diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (stream != stdout) {
+        if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static bool bx_tar_write_rewrite_archive_gzip_mt_direct(const struct bx_tar_rewrite_stream_ctx* ctx,
+                                                        const struct bx_tar_options* options,
+                                                        size_t compress_threads,
+                                                        struct bx_diag_ctx* diag) {
+    struct bx_tar_rewrite_stream_ctx producer_ctx = *ctx;
+    struct bx_archive_gzip_stream_sink sink = {
+        .user = NULL,
+        .write = bx_tar_file_sink_write,
+    };
+    FILE* stream = NULL;
+    size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
+    size_t max_inflight = compress_threads > (SIZE_MAX / 4u) ? compress_threads : compress_threads * 4u;
+    bool ok;
+
+    if (strcmp(options->archive_path, "-") == 0) {
+        stream = stdout;
+    }
+    else {
+        stream = fopen(options->archive_path, "wb");
+        if (stream == NULL) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    sink.user = stream;
+    ok = bx_archive_run_gzip_filter_mt_stream(bx_tar_rewrite_stream_produce,
+                                              &producer_ctx,
+                                              &sink,
+                                              compress_threads,
+                                              chunk_size,
+                                              max_inflight,
+                                              diag);
+    if (ok && fflush(stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (stream != stdout) {
+        if (fclose(stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
                                   struct bx_diag_ctx* diag) {
-    struct bx_archive_buffer input = {0};
     struct bx_tar_entry_list parsed = {0};
-    struct bx_archive_buffer output = {0};
     struct bx_archive_fs_list appended_files = {0};
+    struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
+        .parsed = &parsed,
+        .removed_entries = NULL,
+        .appended_files = &appended_files,
+        .options = options,
+    };
+    struct bx_tar_reader_stream_options reader_options = {
+        .archive_path = options->archive_path,
+        .require_gzip = options->gzip
+            || (options->auto_compress
+                && options->archive_path != NULL
+                && bx_archive_path_has_gzip_suffix(options->archive_path)),
+    };
     struct bx_tar_select_plan select_plan = {0};
     bool* removed_entries = NULL;
     bool had_append_errors = false;
@@ -1465,15 +1379,9 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         return 2;
     }
 
-    if (!bx_tar_read_archive_input(options, &input, diag)) {
+    if (!bx_tar_collect_archive_stream(&reader_options, &parsed, diag)) {
         goto out;
     }
-    if (!bx_tar_parse_archive(&input, &parsed, diag)) {
-        bx_archive_buffer_free(&input);
-        goto out;
-    }
-    bx_archive_buffer_free(&input);
-    bx_archive_buffer_init(&output);
 
     if (options->mode == BX_TAR_MODE_DELETE && parsed.len > 0u) {
         removed_entries = xmalloc(parsed.len * sizeof(*removed_entries));
@@ -1498,48 +1406,30 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
             }
         }
     }
-
-    for (i = 0u; i < parsed.len; i++) {
-        if (options->mode == BX_TAR_MODE_DELETE && removed_entries != NULL && removed_entries[i]) {
-            continue;
-        }
-        if (!bx_tar_write_parsed_entry(&output, &parsed.items[i], diag)) {
-            goto out;
-        }
-    }
+    rewrite_ctx.removed_entries = removed_entries;
 
     if (options->mode == BX_TAR_MODE_APPEND) {
-        struct bx_tar_options create_options = *options;
-        struct bx_archive_buffer appended = {0};
-        create_options.mode = BX_TAR_MODE_CREATE;
-        if (!bx_tar_build_create_archive(&appended,
-                                         &appended_files,
-                                         &had_append_errors,
-                                         &create_options,
-                                         diag)) {
+        if (!bx_tar_create_collect_fs_entries(&appended_files,
+                                              &options->create_options,
+                                              options->sort_name,
+                                              &had_append_errors,
+                                              diag)) {
             goto out;
         }
-        if (appended.len >= 2u * BX_TAR_BLOCK_SIZE) {
-            appended.len -= 2u * BX_TAR_BLOCK_SIZE;
-        }
-        if (!bx_archive_buffer_append(&output, appended.data, appended.len)) {
-            bx_archive_fs_list_free(&appended_files);
-            bx_archive_buffer_free(&appended);
-            bx_diag(diag, "archive write failed: %s", strerror(errno));
-            goto out;
-        }
-        bx_archive_buffer_free(&appended);
     }
+    if (bx_tar_output_uses_gzip(options)) {
+        size_t compress_threads = bx_tar_effective_compress_threads(options);
 
-    if (!bx_tar_stream_write_trailer(&(struct bx_tar_stream_sink){
-                                         .user = &output,
-                                         .write = bx_tar_buffer_sink_write,
-                                     },
-                                     output.len,
-                                     diag)) {
-        goto out;
+        if (!(compress_threads > 1u
+                  ? bx_tar_write_rewrite_archive_gzip_mt_direct(&rewrite_ctx,
+                                                                options,
+                                                                compress_threads,
+                                                                diag)
+                  : bx_tar_write_rewrite_archive_gzip_direct(&rewrite_ctx, options, diag))) {
+            goto out;
+        }
     }
-    if (!bx_tar_write_archive_output(options, &output, diag)) {
+    else if (!bx_tar_write_rewrite_archive_direct(&rewrite_ctx, options, diag)) {
         goto out;
     }
     rc = 0;
@@ -1562,7 +1452,6 @@ out:
     free(removed_entries);
     bx_tar_select_plan_cleanup(&select_plan);
     bx_archive_fs_list_free(&appended_files);
-    bx_archive_buffer_free(&output);
     bx_tar_entry_list_free(&parsed);
     return rc;
 }
@@ -1945,10 +1834,8 @@ int bx_tar_run(int argc, char** argv) {
         struct bx_archive_fs_list files = {0};
         bool had_create_errors = false;
         bool had_postwrite_errors = false;
-        bool needs_archive_buffer = options.gzip
-            || (options.auto_compress
-                && options.archive_path != NULL
-                && bx_archive_path_has_gzip_suffix(options.archive_path));
+        bool gzip_output = bx_tar_output_uses_gzip(&options);
+        size_t compress_threads = bx_tar_effective_compress_threads(&options);
 
         if (!bx_tar_create_collect_fs_entries(&files,
                                               &options.create_options,
@@ -1958,15 +1845,11 @@ int bx_tar_run(int argc, char** argv) {
             bx_tar_options_cleanup(&options);
             return 2;
         }
-        if (needs_archive_buffer) {
-            struct bx_archive_buffer archive = {0};
-            if (!bx_tar_build_create_archive_from_files(&archive, &options, &files, &diag)) {
-                bx_archive_fs_list_free(&files);
-                bx_tar_options_cleanup(&options);
-                return 2;
-            }
-            rc = bx_tar_write_archive_output(&options, &archive, &diag) ? 0 : 2;
-            bx_archive_buffer_free(&archive);
+        if (gzip_output && compress_threads > 1u) {
+            rc = bx_tar_write_create_archive_gzip_mt_direct(&files, &options, compress_threads, &diag) ? 0 : 2;
+        }
+        else if (gzip_output) {
+            rc = bx_tar_write_create_archive_gzip_direct(&files, &options, &diag) ? 0 : 2;
         }
         else {
             rc = bx_tar_write_create_archive_direct(&files, &options, &diag) ? 0 : 2;
@@ -1993,40 +1876,21 @@ int bx_tar_run(int argc, char** argv) {
         return rc;
     }
     else {
-        struct bx_archive_buffer archive = {0};
-        struct bx_tar_entry_list entries = {0};
         struct bx_tar_select_plan select_plan = {0};
         bool had_selection_errors = false;
-        if (!bx_tar_read_archive_input(&options, &archive, &diag)) {
-            bx_tar_options_cleanup(&options);
-            return 2;
-        }
-        if (!bx_tar_parse_archive(&archive, &entries, &diag)) {
-            bx_archive_buffer_free(&archive);
-            bx_tar_options_cleanup(&options);
-            return 2;
-        }
-        bx_archive_buffer_free(&archive);
         if (!bx_tar_select_plan_build(&select_plan,
                                       &options.create_options,
                                       &had_selection_errors,
                                       &diag)) {
-            bx_tar_entry_list_free(&entries);
             bx_tar_options_cleanup(&options);
             return 2;
         }
-        if (options.mode == BX_TAR_MODE_LIST) {
-            rc = bx_tar_list_entries(&entries, &options, &select_plan, &diag);
-        }
-        else {
-            rc = bx_tar_extract_entries(&entries, &options, &select_plan, &diag);
-        }
+        rc = bx_tar_process_archive_stream(&options, &select_plan, &diag);
         if (rc == 0 && had_selection_errors) {
             bx_tar_report_previous_errors(&diag);
             rc = 2;
         }
         bx_tar_select_plan_cleanup(&select_plan);
-        bx_tar_entry_list_free(&entries);
         bx_tar_options_cleanup(&options);
         return rc;
     }

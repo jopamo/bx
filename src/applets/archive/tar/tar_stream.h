@@ -30,6 +30,7 @@ enum bx_tar_stream_kind {
 struct bx_tar_stream_sink {
     void* user;
     bool (*write)(void* user, const void* data, size_t len);
+    bool callback_owns_errors;
 };
 
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
@@ -48,6 +49,12 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
 bool bx_tar_stream_write_trailer(const struct bx_tar_stream_sink* sink,
                                  size_t bytes_written,
                                  struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
+                                      const struct bx_tar_stream_options* options,
+                                      const struct bx_tar_stream_sink* sink,
+                                      size_t* bytes_written_io,
+                                      struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
                                   const struct bx_tar_stream_options* options,
