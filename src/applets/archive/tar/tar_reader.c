@@ -187,6 +187,45 @@ static bool bx_tar_parse_sparse_map(const unsigned char* payload,
     return true;
 }
 
+static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax, char* record) {
+    const char* key;
+    const char* value;
+    char* equal = strchr(record, '=');
+
+    if (equal == NULL) {
+        return false;
+    }
+    *equal = '\0';
+    key = record;
+    value = equal + 1;
+    if (strcmp(key, "path") == 0) {
+        free(pax->path);
+        pax->path = xstrdup(value);
+    }
+    else if (strcmp(key, "linkpath") == 0) {
+        free(pax->linkpath);
+        pax->linkpath = xstrdup(value);
+    }
+    else if (strcmp(key, "GNU.sparse.name") == 0) {
+        free(pax->path);
+        pax->path = xstrdup(value);
+        pax->sparse_enabled = true;
+    }
+    else if (strcmp(key, "GNU.sparse.major") == 0) {
+        pax->sparse_major = atoi(value);
+        pax->sparse_enabled = true;
+    }
+    else if (strcmp(key, "GNU.sparse.minor") == 0) {
+        pax->sparse_minor = atoi(value);
+        pax->sparse_enabled = true;
+    }
+    else if (strcmp(key, "GNU.sparse.realsize") == 0) {
+        pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
+        pax->sparse_enabled = true;
+    }
+    return true;
+}
+
 static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax, const unsigned char* data, size_t len) {
     size_t pos = 0u;
 
@@ -195,10 +234,7 @@ static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax, const unsigned
         size_t digits_end = pos;
         size_t field_start;
         size_t field_len;
-        const char* key;
-        const char* value;
         char* record;
-        char* equal;
 
         while (digits_end < len && data[digits_end] != ' ') {
             if (data[digits_end] < '0' || data[digits_end] > '9') {
@@ -222,38 +258,9 @@ static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax, const unsigned
         record = xmalloc(field_len + 1u);
         memcpy(record, data + field_start, field_len);
         record[field_len] = '\0';
-        equal = strchr(record, '=');
-        if (equal == NULL) {
+        if (!bx_tar_apply_pax_record(pax, record)) {
             free(record);
             return false;
-        }
-        *equal = '\0';
-        key = record;
-        value = equal + 1;
-        if (strcmp(key, "path") == 0) {
-            free(pax->path);
-            pax->path = xstrdup(value);
-        }
-        else if (strcmp(key, "linkpath") == 0) {
-            free(pax->linkpath);
-            pax->linkpath = xstrdup(value);
-        }
-        else if (strcmp(key, "GNU.sparse.name") == 0) {
-            free(pax->path);
-            pax->path = xstrdup(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.major") == 0) {
-            pax->sparse_major = atoi(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.minor") == 0) {
-            pax->sparse_minor = atoi(value);
-            pax->sparse_enabled = true;
-        }
-        else if (strcmp(key, "GNU.sparse.realsize") == 0) {
-            pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
-            pax->sparse_enabled = true;
         }
         free(record);
         pos += line_len;
@@ -645,11 +652,116 @@ static bool bx_tar_stream_input_read_payload(struct bx_tar_stream_input* input,
     return true;
 }
 
+static bool bx_tar_stream_input_read_text_payload(struct bx_tar_stream_input* input,
+                                                  size_t size,
+                                                  char** text_io,
+                                                  struct bx_diag_ctx* diag) {
+    char* text = xmalloc(size + 1u);
+    bool eof = false;
+    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
+    size_t text_len = size;
+
+    if (size > 0u && !bx_tar_stream_input_read_exact(input, (unsigned char*)text, size, &eof, diag)) {
+        free(text);
+        return false;
+    }
+    if (eof) {
+        free(text);
+        bx_diag(diag, "truncated archive");
+        return false;
+    }
+    if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
+        free(text);
+        return false;
+    }
+
+    while (text_len > 0u && text[text_len - 1u] == '\0') {
+        text_len--;
+    }
+    text[text_len] = '\0';
+    free(*text_io);
+    *text_io = text;
+    return true;
+}
+
 static bool bx_tar_stream_input_skip_payload(struct bx_tar_stream_input* input,
                                              size_t size,
                                              struct bx_diag_ctx* diag) {
     size_t total = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE);
     return bx_tar_stream_input_skip(input, total, diag);
+}
+
+static bool bx_tar_stream_input_read_pax_records(struct bx_tar_stream_input* input,
+                                                 size_t size,
+                                                 struct bx_tar_pax_info* pax,
+                                                 struct bx_diag_ctx* diag) {
+    size_t remaining = size;
+    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
+
+    while (remaining > 0u) {
+        size_t line_len = 0u;
+        size_t consumed = 0u;
+        bool have_digits = false;
+        char* record = NULL;
+
+        while (true) {
+            unsigned char ch = '\0';
+            bool eof = false;
+
+            if (!bx_tar_stream_input_read_exact(input, &ch, 1u, &eof, diag)) {
+                return false;
+            }
+            if (eof) {
+                bx_diag(diag, "truncated archive");
+                return false;
+            }
+            consumed++;
+            if (ch == ' ') {
+                break;
+            }
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+            if (line_len > (SIZE_MAX - 9u) / 10u) {
+                return false;
+            }
+            line_len = line_len * 10u + (size_t)(ch - '0');
+            have_digits = true;
+        }
+
+        if (!have_digits || line_len == 0u || line_len > remaining || consumed >= line_len) {
+            return false;
+        }
+
+        record = xmalloc(line_len - consumed + 1u);
+        {
+            bool eof = false;
+            size_t record_len = line_len - consumed;
+
+            if (!bx_tar_stream_input_read_exact(input, (unsigned char*)record, record_len, &eof, diag)) {
+                free(record);
+                return false;
+            }
+            if (eof) {
+                free(record);
+                bx_diag(diag, "truncated archive");
+                return false;
+            }
+            if (record_len == 0u || record[record_len - 1u] != '\n') {
+                free(record);
+                return false;
+            }
+            record[record_len - 1u] = '\0';
+        }
+        if (!bx_tar_apply_pax_record(pax, record)) {
+            free(record);
+            return false;
+        }
+        free(record);
+        remaining -= line_len;
+    }
+
+    return padding == 0u || bx_tar_stream_input_skip(input, padding, diag);
 }
 
 static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
@@ -891,17 +1003,10 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
         typeflag = header[156];
 
         if (typeflag == 'x') {
-            unsigned char* payload = NULL;
-
-            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
-                goto out;
-            }
-            if (!bx_tar_parse_pax_records(&pax, payload, size)) {
-                free(payload);
+            if (!bx_tar_stream_input_read_pax_records(&input, size, &pax, diag)) {
                 bx_diag(diag, "invalid pax header");
                 goto out;
             }
-            free(payload);
             continue;
         }
         if (typeflag == 'g') {
@@ -912,20 +1017,10 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
         }
         if (typeflag == 'L' || typeflag == 'K') {
             char** target = (typeflag == 'L') ? &gnu_long_name : &gnu_long_link;
-            unsigned char* payload = NULL;
-            size_t text_len = size;
 
-            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
+            if (!bx_tar_stream_input_read_text_payload(&input, size, target, diag)) {
                 goto out;
             }
-            while (text_len > 0u && payload[text_len - 1u] == '\0') {
-                text_len--;
-            }
-            free(*target);
-            *target = xmalloc(text_len + 1u);
-            memcpy(*target, payload, text_len);
-            (*target)[text_len] = '\0';
-            free(payload);
             continue;
         }
 
