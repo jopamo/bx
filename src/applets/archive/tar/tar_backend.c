@@ -445,33 +445,19 @@ static bool bx_tar_write_create_archive_direct(const struct bx_archive_fs_list* 
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
+    }
+    sink.user = output.stream;
+    ok = bx_tar_stream_encode_fs_list(files, &stream_options, &sink, diag);
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
     else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
-    ok = bx_tar_stream_encode_fs_list(files, &stream_options, &sink, diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
-    }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -487,33 +473,19 @@ static bool bx_tar_write_create_archive_gzip_direct(const struct bx_archive_fs_l
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
+    }
+    sink.user = output.stream;
+    ok = bx_archive_run_gzip_filter_stream(bx_tar_gzip_stream_produce, &create_ctx, &sink, diag);
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
     else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
-    ok = bx_archive_run_gzip_filter_stream(bx_tar_gzip_stream_produce, &create_ctx, &sink, diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
-    }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -530,23 +502,15 @@ static bool bx_tar_write_create_archive_gzip_mt_direct(const struct bx_archive_f
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
     size_t max_inflight = compress_threads > (SIZE_MAX / 4u) ? compress_threads : compress_threads * 4u;
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
     }
-    else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
+    sink.user = output.stream;
     ok = bx_archive_run_gzip_filter_mt_stream(bx_tar_gzip_stream_produce,
                                               &create_ctx,
                                               &sink,
@@ -554,17 +518,11 @@ static bool bx_tar_write_create_archive_gzip_mt_direct(const struct bx_archive_f
                                               chunk_size,
                                               max_inflight,
                                               diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+    else {
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -1172,92 +1130,6 @@ static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink
                                          diag);
 }
 
-static bool bx_tar_copy_rewrite_snapshot_fd(int src_fd,
-                                            const char* src_path,
-                                            int dest_fd,
-                                            struct bx_diag_ctx* diag) {
-    unsigned char buffer[65536];
-
-    while (true) {
-        ssize_t nread = read(src_fd, buffer, sizeof(buffer));
-
-        if (nread == 0) {
-            return true;
-        }
-        if (nread < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (src_path != NULL) {
-                bx_diag(diag, "%s: %s", src_path, strerror(errno));
-            }
-            else {
-                bx_diag(diag, "read error: %s", strerror(errno));
-            }
-            return false;
-        }
-        if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
-            bx_diag(diag, "write error: %s", strerror(errno));
-            return false;
-        }
-    }
-}
-
-static bool bx_tar_make_rewrite_snapshot(const char* archive_path,
-                                         char** snapshot_path_out,
-                                         struct bx_diag_ctx* diag) {
-    char* snapshot_path = xstrdup("/tmp/bx-tar-rewrite.XXXXXX");
-    int src_fd = -1;
-    int dest_fd = -1;
-    bool ok = false;
-
-    if (strcmp(archive_path, "-") == 0) {
-        src_fd = STDIN_FILENO;
-    }
-    else {
-        src_fd = open(archive_path, O_RDONLY);
-        if (src_fd < 0) {
-            bx_diag(diag, "%s: %s", archive_path, strerror(errno));
-            goto out;
-        }
-    }
-
-    dest_fd = mkstemp(snapshot_path);
-    if (dest_fd < 0) {
-        bx_diag(diag, "failed to create temporary archive snapshot: %s", strerror(errno));
-        goto out;
-    }
-
-    if (!bx_tar_copy_rewrite_snapshot_fd(src_fd,
-                                         strcmp(archive_path, "-") == 0 ? NULL : archive_path,
-                                         dest_fd,
-                                         diag)) {
-        goto out;
-    }
-    if (close(dest_fd) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        dest_fd = -1;
-        goto out;
-    }
-    dest_fd = -1;
-    ok = true;
-    *snapshot_path_out = snapshot_path;
-    snapshot_path = NULL;
-
-out:
-    if (dest_fd >= 0) {
-        close(dest_fd);
-    }
-    if (src_fd >= 0 && src_fd != STDIN_FILENO) {
-        close(src_fd);
-    }
-    if (snapshot_path != NULL) {
-        unlink(snapshot_path);
-        free(snapshot_path);
-    }
-    return ok;
-}
-
 struct bx_tar_rewrite_stream_ctx {
     const struct bx_tar_reader_stream_options* reader_options;
     const struct bx_tar_select_plan* delete_plan;
@@ -1424,33 +1296,19 @@ static bool bx_tar_write_rewrite_archive_direct(const struct bx_tar_rewrite_stre
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
+    }
+    sink.user = output.stream;
+    ok = bx_tar_write_rewrite_stream_body(ctx, &sink, diag);
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
     else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
-    ok = bx_tar_write_rewrite_stream_body(ctx, &sink, diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
-    }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -1463,33 +1321,19 @@ static bool bx_tar_write_rewrite_archive_gzip_direct(const struct bx_tar_rewrite
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
+    }
+    sink.user = output.stream;
+    ok = bx_archive_run_gzip_filter_stream(bx_tar_rewrite_stream_produce, &producer_ctx, &sink, diag);
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
     else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
-    ok = bx_archive_run_gzip_filter_stream(bx_tar_rewrite_stream_produce, &producer_ctx, &sink, diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
-    }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -1503,23 +1347,15 @@ static bool bx_tar_write_rewrite_archive_gzip_mt_direct(const struct bx_tar_rewr
         .user = NULL,
         .write = bx_tar_file_sink_write,
     };
-    FILE* stream = NULL;
+    struct bx_archive_output_file output = {0};
     size_t chunk_size = options->mt_chunk_size != 0u ? (size_t)options->mt_chunk_size : (1u << 20);
     size_t max_inflight = compress_threads > (SIZE_MAX / 4u) ? compress_threads : compress_threads * 4u;
     bool ok;
 
-    if (strcmp(options->archive_path, "-") == 0) {
-        stream = stdout;
+    if (!bx_archive_output_file_open(&output, options->archive_path, diag)) {
+        return false;
     }
-    else {
-        stream = fopen(options->archive_path, "wb");
-        if (stream == NULL) {
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
-
-    sink.user = stream;
+    sink.user = output.stream;
     ok = bx_archive_run_gzip_filter_mt_stream(bx_tar_rewrite_stream_produce,
                                               &producer_ctx,
                                               &sink,
@@ -1527,17 +1363,11 @@ static bool bx_tar_write_rewrite_archive_gzip_mt_direct(const struct bx_tar_rewr
                                               chunk_size,
                                               max_inflight,
                                               diag);
-    if (ok && fflush(stream) != 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        ok = false;
+    if (ok) {
+        ok = bx_archive_output_file_finish(&output, diag);
     }
-    if (stream != stdout) {
-        if (fclose(stream) != 0) {
-            if (ok) {
-                bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            }
-            ok = false;
-        }
+    else {
+        bx_archive_output_file_discard(&output);
     }
     return ok;
 }
@@ -1576,7 +1406,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
         return 2;
     }
 
-    if (!bx_tar_make_rewrite_snapshot(options->archive_path, &snapshot_path, diag)) {
+    if (!bx_archive_snapshot_input_path(options->archive_path, &snapshot_path, diag)) {
         goto out;
     }
     reader_options.archive_path = snapshot_path;

@@ -1,3 +1,4 @@
+#include <fcntl.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -5,10 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
 #include "bx/libbx.h"
+#include "lib/mode_parse.h"
+#include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
 
 static bool bx_archive_buffer_reserve(struct bx_archive_buffer* buffer, size_t extra) {
@@ -262,6 +267,255 @@ bool bx_archive_write_regular_payload(int fd,
         return false;
     }
     return true;
+}
+
+static bool bx_archive_output_file_open_direct(struct bx_archive_output_file* out,
+                                               const char* archive_path,
+                                               struct bx_diag_ctx* diag) {
+    out->stream = fopen(archive_path, "wb");
+    if (out->stream == NULL) {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
+        return false;
+    }
+    out->display_path = archive_path;
+    return true;
+}
+
+static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
+                                             const char* archive_path) {
+    struct stat path_lstat;
+    struct stat target_stat;
+    bool target_exists = false;
+    char* publish_path = xstrdup(archive_path);
+    char* target_dir = NULL;
+    char* temp_path = NULL;
+    FILE* stream = NULL;
+    int fd = -1;
+    mode_t mode_bits;
+    bool ok = false;
+
+    if (lstat(archive_path, &path_lstat) == 0 && S_ISLNK(path_lstat.st_mode)) {
+        free(publish_path);
+        publish_path = bx_path_realpath_dup(archive_path);
+        if (publish_path == NULL) {
+            goto out;
+        }
+    }
+
+    if (stat(publish_path, &target_stat) == 0) {
+        target_exists = true;
+        if (!S_ISREG(target_stat.st_mode) || target_stat.st_nlink != 1) {
+            goto out;
+        }
+        mode_bits = target_stat.st_mode & 07777u;
+    }
+    else if (errno == ENOENT) {
+        mode_bits = 0666u & ~bx_mode_current_umask();
+    }
+    else {
+        goto out;
+    }
+
+    target_dir = bx_path_dirname_dup(publish_path);
+    temp_path = bx_path_join(target_dir, ".bx-archive-stage.XXXXXX");
+    fd = mkstemp(temp_path);
+    if (fd < 0) {
+        goto out;
+    }
+    if (fchmod(fd, mode_bits) != 0) {
+        goto out;
+    }
+    if (target_exists && fchown(fd, target_stat.st_uid, target_stat.st_gid) != 0) {
+        goto out;
+    }
+    stream = fdopen(fd, "wb");
+    if (stream == NULL) {
+        goto out;
+    }
+    fd = -1;
+
+    out->stream = stream;
+    out->publish_path = publish_path;
+    out->temp_path = temp_path;
+    out->display_path = archive_path;
+    out->transactional = true;
+    stream = NULL;
+    publish_path = NULL;
+    temp_path = NULL;
+    ok = true;
+
+out:
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (stream != NULL) {
+        fclose(stream);
+    }
+    if (temp_path != NULL) {
+        unlink(temp_path);
+    }
+    free(temp_path);
+    free(target_dir);
+    free(publish_path);
+    return ok;
+}
+
+bool bx_archive_output_file_open(struct bx_archive_output_file* out,
+                                 const char* archive_path,
+                                 struct bx_diag_ctx* diag) {
+    memset(out, 0, sizeof(*out));
+    out->display_path = archive_path;
+
+    if (strcmp(archive_path, "-") == 0) {
+        out->stream = stdout;
+        out->is_stdout = true;
+        return true;
+    }
+    if (bx_archive_output_file_try_stage(out, archive_path)) {
+        return true;
+    }
+    return bx_archive_output_file_open_direct(out, archive_path, diag);
+}
+
+bool bx_archive_output_file_finish(struct bx_archive_output_file* out,
+                                   struct bx_diag_ctx* diag) {
+    bool ok = true;
+    int fd = -1;
+
+    if (out->stream == NULL) {
+        return false;
+    }
+
+    if (fflush(out->stream) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        ok = false;
+    }
+    if (ok && out->transactional) {
+        fd = fileno(out->stream);
+        if (fd < 0 || fsync(fd) != 0) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            ok = false;
+        }
+    }
+    if (!out->is_stdout) {
+        if (fclose(out->stream) != 0) {
+            if (ok) {
+                bx_diag(diag, "%s: %s", out->display_path, strerror(errno));
+            }
+            ok = false;
+        }
+    }
+    out->stream = NULL;
+    if (ok && out->transactional && rename(out->temp_path, out->publish_path) != 0) {
+        bx_diag(diag, "%s: %s", out->display_path, strerror(errno));
+        ok = false;
+    }
+    if (!ok && out->transactional && out->temp_path != NULL) {
+        unlink(out->temp_path);
+    }
+    free(out->publish_path);
+    free(out->temp_path);
+    out->publish_path = NULL;
+    out->temp_path = NULL;
+    return ok;
+}
+
+void bx_archive_output_file_discard(struct bx_archive_output_file* out) {
+    if (out->stream != NULL && !out->is_stdout) {
+        fclose(out->stream);
+    }
+    if (out->temp_path != NULL) {
+        unlink(out->temp_path);
+    }
+    free(out->publish_path);
+    free(out->temp_path);
+    memset(out, 0, sizeof(*out));
+}
+
+static bool bx_archive_copy_snapshot_fd(int src_fd,
+                                        const char* src_path,
+                                        int dest_fd,
+                                        struct bx_diag_ctx* diag) {
+    unsigned char buffer[65536];
+
+    while (true) {
+        ssize_t nread = read(src_fd, buffer, sizeof(buffer));
+
+        if (nread == 0) {
+            return true;
+        }
+        if (nread < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (src_path != NULL) {
+                bx_diag(diag, "%s: %s", src_path, strerror(errno));
+            }
+            else {
+                bx_diag(diag, "read error: %s", strerror(errno));
+            }
+            return false;
+        }
+        if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+    }
+}
+
+bool bx_archive_snapshot_input_path(const char* archive_path,
+                                    char** snapshot_path_out,
+                                    struct bx_diag_ctx* diag) {
+    char* snapshot_path = xstrdup("/tmp/bx-archive-snapshot.XXXXXX");
+    int src_fd = -1;
+    int dest_fd = -1;
+    bool ok = false;
+
+    if (strcmp(archive_path, "-") == 0) {
+        src_fd = STDIN_FILENO;
+    }
+    else {
+        src_fd = open(archive_path, O_RDONLY);
+        if (src_fd < 0) {
+            bx_diag(diag, "%s: %s", archive_path, strerror(errno));
+            goto out;
+        }
+    }
+
+    dest_fd = mkstemp(snapshot_path);
+    if (dest_fd < 0) {
+        bx_diag(diag, "failed to create temporary archive snapshot: %s", strerror(errno));
+        goto out;
+    }
+
+    if (!bx_archive_copy_snapshot_fd(src_fd,
+                                     strcmp(archive_path, "-") == 0 ? NULL : archive_path,
+                                     dest_fd,
+                                     diag)) {
+        goto out;
+    }
+    if (close(dest_fd) != 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        dest_fd = -1;
+        goto out;
+    }
+    dest_fd = -1;
+    ok = true;
+    *snapshot_path_out = snapshot_path;
+    snapshot_path = NULL;
+
+out:
+    if (dest_fd >= 0) {
+        close(dest_fd);
+    }
+    if (src_fd >= 0 && src_fd != STDIN_FILENO) {
+        close(src_fd);
+    }
+    if (snapshot_path != NULL) {
+        unlink(snapshot_path);
+        free(snapshot_path);
+    }
+    return ok;
 }
 
 bool bx_archive_path_has_gzip_suffix(const char* path) {

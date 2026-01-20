@@ -627,31 +627,6 @@ static bool bx_tar_stream_input_skip(struct bx_tar_stream_input* input,
     return true;
 }
 
-static bool bx_tar_stream_input_read_payload(struct bx_tar_stream_input* input,
-                                             size_t size,
-                                             unsigned char** data_out,
-                                             struct bx_diag_ctx* diag) {
-    unsigned char* data = xmalloc(size ? size : 1u);
-    bool eof = false;
-    size_t padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
-
-    if (size > 0u && !bx_tar_stream_input_read_exact(input, data, size, &eof, diag)) {
-        free(data);
-        return false;
-    }
-    if (eof) {
-        free(data);
-        bx_diag(diag, "truncated archive");
-        return false;
-    }
-    if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
-        free(data);
-        return false;
-    }
-    *data_out = data;
-    return true;
-}
-
 static bool bx_tar_stream_input_read_text_payload(struct bx_tar_stream_input* input,
                                                   size_t size,
                                                   char** text_io,
@@ -762,6 +737,150 @@ static bool bx_tar_stream_input_read_pax_records(struct bx_tar_stream_input* inp
     }
 
     return padding == 0u || bx_tar_stream_input_skip(input, padding, diag);
+}
+
+static bool bx_tar_stream_input_read_sparse_number_line(struct bx_tar_stream_input* input,
+                                                        size_t* bytes_read_out,
+                                                        size_t* value_out,
+                                                        bool* diagnosed_out,
+                                                        struct bx_diag_ctx* diag) {
+    size_t bytes_read = 0u;
+    size_t value = 0u;
+    bool have_digit = false;
+
+    *diagnosed_out = false;
+    while (true) {
+        unsigned char ch = '\0';
+        bool eof = false;
+
+        if (!bx_tar_stream_input_read_exact(input, &ch, 1u, &eof, diag)) {
+            *diagnosed_out = true;
+            return false;
+        }
+        if (eof) {
+            bx_diag(diag, "truncated archive");
+            *diagnosed_out = true;
+            return false;
+        }
+        bytes_read++;
+        if (ch == '\n') {
+            break;
+        }
+        if (ch >= '0' && ch <= '9') {
+            if (value > (SIZE_MAX - 9u) / 10u) {
+                return false;
+            }
+            value = value * 10u + (size_t)(ch - '0');
+            have_digit = true;
+        }
+    }
+
+    if (!have_digit) {
+        return false;
+    }
+    *bytes_read_out = bytes_read;
+    *value_out = value;
+    return true;
+}
+
+static bool bx_tar_stream_input_read_sparse_payload(struct bx_tar_stream_input* input,
+                                                    size_t size,
+                                                    struct bx_tar_entry* entry,
+                                                    struct bx_diag_ctx* diag) {
+    size_t map_bytes = 0u;
+    size_t extent_count = 0u;
+    size_t padded_map_bytes;
+    size_t archive_padding = bx_tar_round_up(size, BX_TAR_BLOCK_SIZE) - size;
+    size_t i;
+    bool diagnosed = false;
+
+    if (!bx_tar_stream_input_read_sparse_number_line(input,
+                                                     &map_bytes,
+                                                     &extent_count,
+                                                     &diagnosed,
+                                                     diag)) {
+        if (!diagnosed) {
+            bx_diag(diag, "invalid sparse payload");
+        }
+        return false;
+    }
+    if (map_bytes > size) {
+        bx_diag(diag, "invalid sparse payload");
+        return false;
+    }
+    if (extent_count > SIZE_MAX / sizeof(*entry->extents)) {
+        bx_diag(diag, "invalid sparse payload");
+        return false;
+    }
+
+    entry->extents = xrealloc(entry->extents, extent_count * sizeof(*entry->extents));
+    entry->extent_count = extent_count;
+    for (i = 0u; i < extent_count; i++) {
+        size_t bytes_read = 0u;
+        size_t offset = 0u;
+        size_t chunk_size = 0u;
+
+        if (!bx_tar_stream_input_read_sparse_number_line(input,
+                                                         &bytes_read,
+                                                         &offset,
+                                                         &diagnosed,
+                                                         diag)) {
+            if (!diagnosed) {
+                bx_diag(diag, "invalid sparse payload");
+            }
+            return false;
+        }
+        if (map_bytes > size - bytes_read) {
+            bx_diag(diag, "invalid sparse payload");
+            return false;
+        }
+        map_bytes += bytes_read;
+
+        if (!bx_tar_stream_input_read_sparse_number_line(input,
+                                                         &bytes_read,
+                                                         &chunk_size,
+                                                         &diagnosed,
+                                                         diag)) {
+            if (!diagnosed) {
+                bx_diag(diag, "invalid sparse payload");
+            }
+            return false;
+        }
+        if (map_bytes > size - bytes_read) {
+            bx_diag(diag, "invalid sparse payload");
+            return false;
+        }
+        map_bytes += bytes_read;
+
+        entry->extents[i].offset = offset;
+        entry->extents[i].size = chunk_size;
+    }
+
+    padded_map_bytes = bx_tar_round_up(map_bytes, BX_TAR_BLOCK_SIZE);
+    if (padded_map_bytes > size) {
+        bx_diag(diag, "invalid sparse payload");
+        return false;
+    }
+    if (padded_map_bytes > map_bytes
+        && !bx_tar_stream_input_skip(input, padded_map_bytes - map_bytes, diag)) {
+        return false;
+    }
+
+    entry->data_len = size - padded_map_bytes;
+    entry->data = xmalloc(entry->data_len ? entry->data_len : 1u);
+    if (entry->data_len > 0u) {
+        bool eof = false;
+
+        if (!bx_tar_stream_input_read_exact(input, entry->data, entry->data_len, &eof, diag)) {
+            return false;
+        }
+        if (eof) {
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+    }
+
+    return archive_padding == 0u || bx_tar_stream_input_skip(input, archive_padding, diag);
 }
 
 static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
@@ -1037,21 +1156,12 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
 
         if (entry.kind == BX_TAR_KIND_REG
             && pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
-            unsigned char* payload = NULL;
-
-            if (!bx_tar_stream_input_read_payload(&input, size, &payload, diag)) {
-                bx_tar_entry_free(&entry);
-                goto out;
-            }
             entry.sparse = true;
             entry.size = pax.sparse_realsize;
-            if (!bx_tar_parse_sparse_map(payload, size, &entry, diag)) {
-                free(payload);
+            if (!bx_tar_stream_input_read_sparse_payload(&input, size, &entry, diag)) {
                 bx_tar_entry_free(&entry);
-                bx_diag(diag, "invalid sparse payload");
                 goto out;
             }
-            free(payload);
         }
         if (!visitor_ops->begin_entry(visitor_ops->user, &entry, diag)) {
             bx_tar_entry_free(&entry);
