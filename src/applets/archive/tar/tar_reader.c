@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #ifndef ZLIB_CONST
@@ -32,6 +33,10 @@ struct bx_tar_stream_input {
     gzFile stream;
     bool require_gzip;
     bool checked_mode;
+    bool direct_mode;
+    bool plain_seekable;
+    uint64_t plain_size;
+    uint64_t logical_offset;
 };
 
 void bx_tar_entry_free(struct bx_tar_entry* entry) {
@@ -515,6 +520,17 @@ static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
         }
     }
 
+    {
+        struct stat st;
+
+        if (fstat(fd, &st) == 0
+            && S_ISREG(st.st_mode)
+            && st.st_size >= 0) {
+            input->plain_seekable = true;
+            input->plain_size = (uint64_t)st.st_size;
+        }
+    }
+
     input->stream = gzdopen(fd, "rb");
     if (input->stream == NULL) {
         close(fd);
@@ -541,6 +557,7 @@ static bool bx_tar_stream_input_check_mode(struct bx_tar_stream_input* input,
         bx_diag(diag, "gzip decompression failed");
         return false;
     }
+    input->direct_mode = direct == 1;
     input->checked_mode = true;
     return true;
 }
@@ -574,6 +591,29 @@ static bool bx_tar_stream_input_read_some(struct bx_tar_stream_input* input,
     }
 
     *nread_out = (size_t)nread;
+    input->logical_offset += (uint64_t)(size_t)nread;
+    return true;
+}
+
+static bool bx_tar_stream_input_skip_plain_seek(struct bx_tar_stream_input* input,
+                                                size_t len,
+                                                struct bx_diag_ctx* diag) {
+    while (len > 0u) {
+        size_t chunk = len > (size_t)LONG_MAX ? (size_t)LONG_MAX : len;
+
+        if (input->logical_offset > input->plain_size
+            || chunk > input->plain_size - input->logical_offset) {
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+        if (gzseek(input->stream, (z_off_t)chunk, SEEK_CUR) < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+        input->logical_offset += chunk;
+        len -= chunk;
+    }
+
     return true;
 }
 
@@ -605,10 +645,41 @@ static bool bx_tar_stream_input_read_exact(struct bx_tar_stream_input* input,
     return true;
 }
 
+static bool bx_tar_stream_input_drain_to_eof(struct bx_tar_stream_input* input,
+                                             struct bx_diag_ctx* diag) {
+    unsigned char buffer[8192];
+
+    while (true) {
+        size_t nread = 0u;
+
+        if (!bx_tar_stream_input_read_some(input, buffer, sizeof(buffer), &nread, diag)) {
+            return false;
+        }
+        if (nread == 0u) {
+            return true;
+        }
+    }
+}
+
+static bool bx_tar_stream_input_finish_success(struct bx_tar_stream_input* input,
+                                               struct bx_diag_ctx* diag) {
+    if (input->plain_seekable) {
+        return true;
+    }
+    return bx_tar_stream_input_drain_to_eof(input, diag);
+}
+
 static bool bx_tar_stream_input_skip(struct bx_tar_stream_input* input,
                                      size_t len,
                                      struct bx_diag_ctx* diag) {
     unsigned char buffer[8192];
+
+    if (len == 0u) {
+        return true;
+    }
+    if (input->checked_mode && input->direct_mode && input->plain_seekable) {
+        return bx_tar_stream_input_skip_plain_seek(input, len, diag);
+    }
 
     while (len > 0u) {
         size_t chunk = len > sizeof(buffer) ? sizeof(buffer) : len;
@@ -895,6 +966,12 @@ static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
     if (size == 0u) {
         return padding == 0u || bx_tar_stream_input_skip(input, padding, diag);
     }
+    if (visitor_ops->visit_payload == NULL
+        && input->checked_mode
+        && input->direct_mode
+        && input->plain_seekable) {
+        return bx_tar_stream_input_skip_payload(input, size, diag);
+    }
 
     buffer = xmalloc(BX_TAR_READER_FILE_CHUNK_SIZE);
     while (remaining > 0u) {
@@ -1108,6 +1185,9 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
                 goto out;
             }
             if (eof || bx_tar_block_is_zero(header)) {
+                if (!bx_tar_stream_input_finish_success(&input, diag)) {
+                    goto out;
+                }
                 ok = true;
                 goto out;
             }
