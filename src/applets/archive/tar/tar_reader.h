@@ -60,6 +60,7 @@ struct bx_tar_stream_visitor_ops {
                           size_t len,
                           struct bx_diag_ctx* diag);
     bool (*end_entry)(void* user, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag);
+    bool stream_sparse_payload;
 };
 
 void bx_tar_entry_free(struct bx_tar_entry* entry);

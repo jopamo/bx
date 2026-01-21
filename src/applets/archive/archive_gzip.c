@@ -1,11 +1,11 @@
 #include <errno.h>
 #include <limits.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef ZLIB_CONST
 #define ZLIB_CONST 1
@@ -13,6 +13,7 @@
 #include <zlib.h>
 
 #include "applets/archive/archive_gzip.h"
+#include "applets/archive/archive_ordered.h"
 #include "bx/libbx.h"
 #include "lib/cancel_state.h"
 #include "lib/work_pool.h"
@@ -29,14 +30,12 @@ enum bx_archive_gzip_packet_status {
 struct bx_archive_gzip_stream_state;
 
 struct bx_archive_gzip_stream_job {
-    struct bx_archive_gzip_stream_state* state;
-    uint64_t seq;
+    struct bx_archive_ordered_packet ordered;
     unsigned char* input;
     size_t input_len;
     unsigned char* compressed;
     size_t compressed_len;
     enum bx_archive_gzip_packet_status status;
-    struct bx_archive_gzip_stream_job* next;
 };
 
 struct bx_archive_gzip_stream_state {
@@ -45,17 +44,11 @@ struct bx_archive_gzip_stream_state {
     struct bx_work_pool pool;
     struct bx_work_pool_opts pool_opts;
     struct bx_cancel_state cancel;
-    pthread_mutex_t lock;
-    pthread_cond_t cond;
+    struct bx_archive_ordered_state ordered;
     struct bx_archive_buffer current_chunk;
-    struct bx_archive_gzip_stream_job* pending_head;
     size_t chunk_size;
     size_t max_inflight_chunks;
-    size_t inflight_chunks;
-    uint64_t next_submit_seq;
-    uint64_t next_write_seq;
-    bool lock_initialized;
-    bool cond_initialized;
+    unsigned int test_delay_first_chunk_ms;
     bool pool_initialized;
 };
 
@@ -71,6 +64,38 @@ static void bx_archive_gzip_diag_compression_failed(struct bx_diag_ctx* diag, co
             "gzip compression failed%s%s",
             zmsg != NULL ? ": " : "",
             zmsg != NULL ? zmsg : "");
+}
+
+static unsigned int bx_archive_gzip_test_delay_first_chunk_ms(void) {
+    const char* value = getenv("BX_TAR_TEST_GZIP_DELAY_FIRST_CHUNK_MS");
+    char* end = NULL;
+    unsigned long parsed;
+
+    if (value == NULL || *value == '\0') {
+        return 0u;
+    }
+
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed > UINT_MAX) {
+        return 0u;
+    }
+
+    return (unsigned int)parsed;
+}
+
+static void bx_archive_gzip_test_delay_job(const struct bx_archive_gzip_stream_state* state,
+                                           const struct bx_archive_gzip_stream_job* job) {
+    struct timespec ts;
+
+    if (state->test_delay_first_chunk_ms == 0u || job->ordered.seq != 0u) {
+        return;
+    }
+
+    ts.tv_sec = (time_t)(state->test_delay_first_chunk_ms / 1000u);
+    ts.tv_nsec = (long)((state->test_delay_first_chunk_ms % 1000u) * 1000000u);
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+    }
 }
 
 static bool bx_archive_gzip_compress_member(const unsigned char* input,
@@ -366,15 +391,28 @@ static void bx_archive_gzip_stream_dispose_job(void* user, void* job_ptr) {
     bx_archive_gzip_stream_job_free(job_ptr);
 }
 
-static void bx_archive_gzip_stream_insert_pending(struct bx_archive_gzip_stream_state* state,
-                                                  struct bx_archive_gzip_stream_job* job) {
-    struct bx_archive_gzip_stream_job** link = &state->pending_head;
+static void bx_archive_gzip_stream_dispose_packet(void* user,
+                                                  struct bx_archive_ordered_packet* packet) {
+    (void)user;
+    bx_archive_gzip_stream_job_free((struct bx_archive_gzip_stream_job*)packet);
+}
 
-    while (*link != NULL && (*link)->seq < job->seq) {
-        link = &(*link)->next;
+static bool bx_archive_gzip_stream_publish_packet(void* user,
+                                                  struct bx_archive_ordered_packet* packet) {
+    struct bx_archive_gzip_stream_state* state = user;
+    struct bx_archive_gzip_stream_job* job = (struct bx_archive_gzip_stream_job*)packet;
+
+    if (job->status != BX_ARCHIVE_GZIP_PACKET_OK) {
+        bx_diag(state->diag, "gzip compression failed");
+        return false;
     }
-    job->next = *link;
-    *link = job;
+
+    if (!state->output_sink->write(state->output_sink->user, job->compressed, job->compressed_len)) {
+        bx_diag(state->diag, "write error: %s", strerror(errno));
+        return false;
+    }
+
+    return true;
 }
 
 static void bx_archive_gzip_stream_process_job(void* user,
@@ -402,121 +440,37 @@ static void bx_archive_gzip_stream_process_job(void* user,
             job->compressed = output.data;
             job->compressed_len = output.len;
             job->status = BX_ARCHIVE_GZIP_PACKET_OK;
+            bx_archive_gzip_test_delay_job(state, job);
         }
     }
 
-    pthread_mutex_lock(&state->lock);
-    bx_archive_gzip_stream_insert_pending(state, job);
-    pthread_cond_broadcast(&state->cond);
-    pthread_mutex_unlock(&state->lock);
-}
-
-static bool bx_archive_gzip_stream_flush_ready(struct bx_archive_gzip_stream_state* state) {
-    for (;;) {
-        struct bx_archive_gzip_stream_job* job = NULL;
-
-        pthread_mutex_lock(&state->lock);
-        if (state->pending_head != NULL && state->pending_head->seq == state->next_write_seq) {
-            job = state->pending_head;
-            state->pending_head = job->next;
-            job->next = NULL;
-            state->next_write_seq++;
-        }
-        pthread_mutex_unlock(&state->lock);
-
-        if (job == NULL) {
-            return true;
-        }
-
-        if (job->status != BX_ARCHIVE_GZIP_PACKET_OK) {
-            bx_cancel_state_request(&state->cancel);
-            bx_diag(state->diag, "gzip compression failed");
-            pthread_mutex_lock(&state->lock);
-            state->inflight_chunks--;
-            pthread_cond_broadcast(&state->cond);
-            pthread_mutex_unlock(&state->lock);
-            bx_archive_gzip_stream_job_free(job);
-            return false;
-        }
-
-        if (!state->output_sink->write(state->output_sink->user, job->compressed, job->compressed_len)) {
-            bx_cancel_state_request(&state->cancel);
-            bx_diag(state->diag, "write error: %s", strerror(errno));
-            pthread_mutex_lock(&state->lock);
-            state->inflight_chunks--;
-            pthread_cond_broadcast(&state->cond);
-            pthread_mutex_unlock(&state->lock);
-            bx_archive_gzip_stream_job_free(job);
-            return false;
-        }
-
-        pthread_mutex_lock(&state->lock);
-        state->inflight_chunks--;
-        pthread_cond_broadcast(&state->cond);
-        pthread_mutex_unlock(&state->lock);
-        bx_archive_gzip_stream_job_free(job);
-    }
-}
-
-static void bx_archive_gzip_stream_wait_for_ready(struct bx_archive_gzip_stream_state* state) {
-    pthread_mutex_lock(&state->lock);
-    while ((state->pending_head == NULL || state->pending_head->seq != state->next_write_seq)
-           && state->inflight_chunks > 0u) {
-        pthread_cond_wait(&state->cond, &state->lock);
-    }
-    pthread_mutex_unlock(&state->lock);
-}
-
-static bool bx_archive_gzip_stream_wait_for_space(struct bx_archive_gzip_stream_state* state) {
-    while (true) {
-        size_t inflight;
-
-        if (!bx_archive_gzip_stream_flush_ready(state)) {
-            return false;
-        }
-
-        pthread_mutex_lock(&state->lock);
-        inflight = state->inflight_chunks;
-        pthread_mutex_unlock(&state->lock);
-        if (inflight < state->max_inflight_chunks) {
-            return true;
-        }
-
-        bx_archive_gzip_stream_wait_for_ready(state);
-    }
+    bx_archive_ordered_publish_packet(&state->ordered, &job->ordered);
 }
 
 static bool bx_archive_gzip_stream_submit_chunk(struct bx_archive_gzip_stream_state* state) {
     struct bx_archive_gzip_stream_job* job;
+    uint64_t seq;
 
     if (state->current_chunk.len == 0u) {
         return true;
     }
-    if (!bx_archive_gzip_stream_wait_for_space(state)) {
+    if (!bx_archive_ordered_reserve_slot(&state->ordered, &seq)) {
         return false;
     }
 
     job = xmalloc(sizeof(*job));
     memset(job, 0, sizeof(*job));
-    job->state = state;
-    job->seq = state->next_submit_seq++;
+    job->ordered.seq = seq;
     job->input = state->current_chunk.data;
     job->input_len = state->current_chunk.len;
     state->current_chunk.data = NULL;
     state->current_chunk.len = 0u;
     state->current_chunk.cap = 0u;
 
-    pthread_mutex_lock(&state->lock);
-    state->inflight_chunks++;
-    pthread_mutex_unlock(&state->lock);
-
     if (!bx_work_pool_submit(&state->pool, job)) {
         bx_cancel_state_request(&state->cancel);
         bx_diag(state->diag, "failed to submit gzip compression work");
-        pthread_mutex_lock(&state->lock);
-        state->inflight_chunks--;
-        pthread_cond_broadcast(&state->cond);
-        pthread_mutex_unlock(&state->lock);
+        bx_archive_ordered_release_slot(&state->ordered);
         bx_archive_gzip_stream_job_free(job);
         return false;
     }
@@ -549,21 +503,10 @@ static bool bx_archive_gzip_stream_input_write(void* user, const void* data, siz
 }
 
 static void bx_archive_gzip_stream_state_cleanup(struct bx_archive_gzip_stream_state* state) {
-    struct bx_archive_gzip_stream_job* job;
-
     if (state->pool_initialized) {
         bx_work_pool_dispose(&state->pool);
     }
-    while ((job = state->pending_head) != NULL) {
-        state->pending_head = job->next;
-        bx_archive_gzip_stream_job_free(job);
-    }
-    if (state->cond_initialized) {
-        pthread_cond_destroy(&state->cond);
-    }
-    if (state->lock_initialized) {
-        pthread_mutex_destroy(&state->lock);
-    }
+    bx_archive_ordered_cleanup(&state->ordered);
     bx_archive_buffer_free(&state->current_chunk);
 }
 
@@ -589,22 +532,12 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     state.diag = diag;
     state.chunk_size = chunk_size;
     state.max_inflight_chunks = max_inflight_chunks != 0u ? max_inflight_chunks : thread_count * 4u;
+    state.test_delay_first_chunk_ms = bx_archive_gzip_test_delay_first_chunk_ms();
     if (state.max_inflight_chunks < thread_count) {
         state.max_inflight_chunks = thread_count;
     }
     bx_cancel_state_init(&state.cancel);
     bx_archive_buffer_init(&state.current_chunk);
-
-    if (pthread_mutex_init(&state.lock, NULL) != 0) {
-        bx_diag(diag, "failed to initialize gzip stream lock");
-        goto out;
-    }
-    state.lock_initialized = true;
-    if (pthread_cond_init(&state.cond, NULL) != 0) {
-        bx_diag(diag, "failed to initialize gzip stream condition");
-        goto out;
-    }
-    state.cond_initialized = true;
 
     state.pool_opts = (struct bx_work_pool_opts){
         .thread_count = thread_count,
@@ -622,6 +555,18 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     }
     state.pool_initialized = true;
 
+    if (!bx_archive_ordered_init(&state.ordered,
+                                 &(struct bx_archive_ordered_opts){
+                                     .cancel = &state.cancel,
+                                     .max_inflight = state.max_inflight_chunks,
+                                     .user = &state,
+                                     .publish = bx_archive_gzip_stream_publish_packet,
+                                     .dispose = bx_archive_gzip_stream_dispose_packet,
+                                 })) {
+        bx_diag(diag, "failed to initialize ordered gzip publication");
+        goto out;
+    }
+
     input_sink.user = &state;
     input_sink.write = bx_archive_gzip_stream_input_write;
     if (!producer(producer_user, &input_sink, diag)) {
@@ -633,19 +578,8 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     }
 
     bx_work_pool_close(&state.pool);
-    while (true) {
-        size_t inflight;
-
-        if (!bx_archive_gzip_stream_flush_ready(&state)) {
-            goto out_join_no_ok;
-        }
-        pthread_mutex_lock(&state.lock);
-        inflight = state.inflight_chunks;
-        pthread_mutex_unlock(&state.lock);
-        if (inflight == 0u) {
-            break;
-        }
-        bx_archive_gzip_stream_wait_for_ready(&state);
+    if (!bx_archive_ordered_drain(&state.ordered)) {
+        goto out_join_no_ok;
     }
     ok = true;
 

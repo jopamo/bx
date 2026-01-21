@@ -527,51 +527,6 @@ static bool bx_tar_write_create_archive_gzip_mt_direct(const struct bx_archive_f
     return ok;
 }
 
-static bool bx_tar_write_sparse_file(const char* dest_path,
-                                     const struct bx_tar_entry* entry,
-                                     mode_t mode,
-                                     struct bx_diag_ctx* diag) {
-    int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, mode & 07777u);
-    size_t data_offset = 0u;
-    size_t i;
-    if (fd < 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-        return false;
-    }
-    for (i = 0u; i < entry->extent_count; i++) {
-        size_t chunk = entry->extents[i].size;
-        if (chunk == 0u) {
-            continue;
-        }
-        if (lseek(fd, (off_t)entry->extents[i].offset, SEEK_SET) < 0) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            close(fd);
-            return false;
-        }
-        if (data_offset + chunk > entry->data_len) {
-            bx_diag(diag, "%s: sparse data truncated", dest_path);
-            close(fd);
-            return false;
-        }
-        if (!bx_xwrite_all(fd, entry->data + data_offset, chunk)) {
-            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-            close(fd);
-            return false;
-        }
-        data_offset += chunk;
-    }
-    if (ftruncate(fd, (off_t)entry->size) != 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-        close(fd);
-        return false;
-    }
-    if (close(fd) != 0) {
-        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-        return false;
-    }
-    return true;
-}
-
 struct bx_tar_extract_state {
     const struct bx_tar_options* options;
     const struct bx_tar_select_plan* select_plan;
@@ -585,6 +540,10 @@ struct bx_tar_extract_state {
     char* current_dest_path;
     mode_t current_mode_bits;
     struct timespec current_mtime;
+    bool current_sparse;
+    size_t current_sparse_extent_index;
+    size_t current_sparse_extent_offset;
+    size_t current_sparse_logical_offset;
     enum {
         BX_TAR_EXTRACT_STREAM_NONE = 0,
         BX_TAR_EXTRACT_STREAM_STDOUT,
@@ -645,62 +604,6 @@ static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
     free(state->matched_members);
 }
 
-static bool bx_tar_extract_entry_to_stdout(const struct bx_tar_entry* entry,
-                                           struct bx_diag_ctx* diag) {
-    if (entry->kind != BX_TAR_KIND_REG) {
-        return true;
-    }
-    if (entry->sparse) {
-        size_t logical = 0u;
-        size_t data_offset = 0u;
-        size_t i;
-
-        for (i = 0u; i < entry->extent_count; i++) {
-            size_t zero_len;
-
-            if (entry->extents[i].offset > logical) {
-                zero_len = entry->extents[i].offset - logical;
-                while (zero_len > 0u) {
-                    unsigned char zeros[4096] = {0};
-                    size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
-
-                    if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
-                        bx_diag(diag, "write error: %s", strerror(errno));
-                        return false;
-                    }
-                    zero_len -= chunk;
-                }
-                logical = entry->extents[i].offset;
-            }
-            if (!bx_xwrite_all(STDOUT_FILENO, entry->data + data_offset, entry->extents[i].size)) {
-                bx_diag(diag, "write error: %s", strerror(errno));
-                return false;
-            }
-            data_offset += entry->extents[i].size;
-            logical = entry->extents[i].offset + entry->extents[i].size;
-        }
-        if (entry->size > logical) {
-            size_t zero_len = entry->size - logical;
-            while (zero_len > 0u) {
-                unsigned char zeros[4096] = {0};
-                size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
-
-                if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
-                    bx_diag(diag, "write error: %s", strerror(errno));
-                    return false;
-                }
-                zero_len -= chunk;
-            }
-        }
-        return true;
-    }
-    if (entry->data != NULL && !bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len)) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    return true;
-}
-
 static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* state) {
     if (state->current_fd >= 0) {
         close(state->current_fd);
@@ -710,8 +613,104 @@ static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* sta
     state->current_mode_bits = 0u;
     state->current_mtime.tv_sec = 0;
     state->current_mtime.tv_nsec = 0;
+    state->current_sparse = false;
+    state->current_sparse_extent_index = 0u;
+    state->current_sparse_extent_offset = 0u;
+    state->current_sparse_logical_offset = 0u;
     free(state->current_dest_path);
     state->current_dest_path = NULL;
+}
+
+static bool bx_tar_extract_write_zero_bytes(size_t zero_len,
+                                            struct bx_diag_ctx* diag) {
+    unsigned char zeros[4096] = {0};
+
+    while (zero_len > 0u) {
+        size_t chunk = zero_len > sizeof(zeros) ? sizeof(zeros) : zero_len;
+
+        if (!bx_xwrite_all(STDOUT_FILENO, zeros, chunk)) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+        zero_len -= chunk;
+    }
+    return true;
+}
+
+static bool bx_tar_extract_sparse_payload_complete(const struct bx_tar_extract_state* state,
+                                                   const struct bx_tar_entry* entry) {
+    size_t extent_index = state->current_sparse_extent_index;
+    size_t extent_offset = state->current_sparse_extent_offset;
+
+    while (extent_index < entry->extent_count
+           && extent_offset == entry->extents[extent_index].size) {
+        extent_index++;
+        extent_offset = 0u;
+    }
+    return extent_index == entry->extent_count && extent_offset == 0u;
+}
+
+static bool bx_tar_extract_sparse_payload(struct bx_tar_extract_state* state,
+                                          const struct bx_tar_entry* entry,
+                                          const unsigned char* data,
+                                          size_t len,
+                                          struct bx_diag_ctx* diag) {
+    const unsigned char* cursor = data;
+
+    while (len > 0u) {
+        const struct bx_tar_sparse_extent* extent;
+        size_t chunk;
+
+        while (state->current_sparse_extent_index < entry->extent_count
+               && state->current_sparse_extent_offset
+                   == entry->extents[state->current_sparse_extent_index].size) {
+            state->current_sparse_extent_index++;
+            state->current_sparse_extent_offset = 0u;
+        }
+        if (state->current_sparse_extent_index >= entry->extent_count) {
+            bx_diag(diag, "invalid sparse payload");
+            return false;
+        }
+
+        extent = &entry->extents[state->current_sparse_extent_index];
+        if (state->current_sparse_extent_offset == 0u) {
+            if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_STDOUT) {
+                if (extent->offset > state->current_sparse_logical_offset
+                    && !bx_tar_extract_write_zero_bytes(extent->offset
+                                                            - state->current_sparse_logical_offset,
+                                                        diag)) {
+                    return false;
+                }
+                state->current_sparse_logical_offset = extent->offset;
+            }
+            else if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_FILE
+                     && lseek(state->current_fd, (off_t)extent->offset, SEEK_SET) < 0) {
+                bx_diag(diag, "%s: %s", state->current_dest_path, strerror(errno));
+                return false;
+            }
+        }
+
+        chunk = extent->size - state->current_sparse_extent_offset;
+        if (chunk > len) {
+            chunk = len;
+        }
+        if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_STDOUT) {
+            if (!bx_xwrite_all(STDOUT_FILENO, cursor, chunk)) {
+                bx_diag(diag, "write error: %s", strerror(errno));
+                return false;
+            }
+            state->current_sparse_logical_offset += chunk;
+        }
+        else if (!bx_archive_write_regular_payload(state->current_fd, cursor, chunk, false, diag)) {
+            return false;
+        }
+
+        cursor += chunk;
+        len -= chunk;
+        state->current_sparse_extent_offset += chunk;
+    }
+
+    return true;
 }
 
 static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
@@ -754,12 +753,8 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         bool ok = true;
         bx_tar_extract_clear_current_stream(state);
         if (entry->kind == BX_TAR_KIND_REG) {
-            if (entry->sparse) {
-                ok = bx_tar_extract_entry_to_stdout(entry, diag);
-            }
-            else {
-                state->current_stream_mode = BX_TAR_EXTRACT_STREAM_STDOUT;
-            }
+            state->current_stream_mode = BX_TAR_EXTRACT_STREAM_STDOUT;
+            state->current_sparse = entry->sparse;
         }
         free(clean_name);
         return ok;
@@ -800,37 +795,20 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     }
 
     if (entry->kind == BX_TAR_KIND_REG) {
-        if (entry->sparse) {
-            if (!bx_tar_write_sparse_file(dest_path, entry, entry->mode, diag)) {
-                free(dest_path);
-                return false;
-            }
-        }
-        else {
-            int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
-            if (fd < 0) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                return false;
-            }
-            bx_tar_extract_clear_current_stream(state);
-            state->current_fd = fd;
-            state->current_dest_path = dest_path;
-            state->current_mode_bits = entry->mode;
-            state->current_mtime = entry->mtime;
-            state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
-            return true;
-        }
-        if (chmod(dest_path, entry->mode & 07777u) != 0) {
+        int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
+        if (fd < 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
             return false;
         }
-        if (!state->options->touch_mtime
-            && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
-            free(dest_path);
-            return false;
-        }
+        bx_tar_extract_clear_current_stream(state);
+        state->current_fd = fd;
+        state->current_dest_path = dest_path;
+        state->current_mode_bits = entry->mode;
+        state->current_mtime = entry->mtime;
+        state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
+        state->current_sparse = entry->sparse;
+        return true;
     }
     else if (entry->kind == BX_TAR_KIND_SYMLINK) {
         unlink(dest_path);
@@ -894,10 +872,11 @@ static bool bx_tar_extract_entry_payload(struct bx_tar_extract_state* state,
                                          const unsigned char* data,
                                          size_t len,
                                          struct bx_diag_ctx* diag) {
-    (void)entry;
-
     if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_NONE || len == 0u) {
         return true;
+    }
+    if (state->current_sparse) {
+        return bx_tar_extract_sparse_payload(state, entry, data, len, diag);
     }
     if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_STDOUT) {
         if (!bx_xwrite_all(STDOUT_FILENO, data, len)) {
@@ -920,8 +899,35 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
     (void)entry;
 
     if (state->current_stream_mode != BX_TAR_EXTRACT_STREAM_FILE) {
+        if (state->current_stream_mode == BX_TAR_EXTRACT_STREAM_STDOUT && state->current_sparse) {
+            if (!bx_tar_extract_sparse_payload_complete(state, entry)) {
+                bx_diag(diag, "invalid sparse payload");
+                bx_tar_extract_clear_current_stream(state);
+                return false;
+            }
+            if (entry->size > state->current_sparse_logical_offset
+                && !bx_tar_extract_write_zero_bytes(entry->size
+                                                        - state->current_sparse_logical_offset,
+                                                    diag)) {
+                bx_tar_extract_clear_current_stream(state);
+                return false;
+            }
+        }
         bx_tar_extract_clear_current_stream(state);
         return true;
+    }
+
+    if (state->current_sparse) {
+        if (!bx_tar_extract_sparse_payload_complete(state, entry)) {
+            bx_diag(diag, "invalid sparse payload");
+            bx_tar_extract_clear_current_stream(state);
+            return false;
+        }
+        if (ftruncate(fd, (off_t)entry->size) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            bx_tar_extract_clear_current_stream(state);
+            return false;
+        }
     }
 
     state->current_fd = -1;
@@ -930,6 +936,10 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
     state->current_mode_bits = 0u;
     state->current_mtime.tv_sec = 0;
     state->current_mtime.tv_nsec = 0;
+    state->current_sparse = false;
+    state->current_sparse_extent_index = 0u;
+    state->current_sparse_extent_offset = 0u;
+    state->current_sparse_logical_offset = 0u;
 
     if (close(fd) != 0) {
         bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -1038,6 +1048,7 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         struct bx_tar_stream_visitor_ops visitor_ops = {
             .user = &state,
             .begin_entry = bx_tar_list_stream_visit,
+            .stream_sparse_payload = true,
         };
         int rc;
 
@@ -1057,6 +1068,7 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
             .begin_entry = bx_tar_extract_stream_visit,
             .visit_payload = bx_tar_extract_stream_payload_visit,
             .end_entry = bx_tar_extract_stream_end_visit,
+            .stream_sparse_payload = true,
         };
         int rc;
 
@@ -1195,6 +1207,20 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                              true,
                                              diag);
     }
+    if (entry->kind == BX_TAR_KIND_REG && entry->sparse) {
+        return bx_tar_stream_start_sparse_v1_entry(&state->current_live_entry,
+                                                   &state->counting_sink,
+                                                   entry->name,
+                                                   entry->mode,
+                                                   entry->uid,
+                                                   entry->gid,
+                                                   entry->extents,
+                                                   entry->extent_count,
+                                                   entry->size,
+                                                   entry->data_len,
+                                                   entry->mtime,
+                                                   diag);
+    }
 
     return bx_tar_write_parsed_entry_sink(state->sink, &state->bytes_written, entry, diag);
 }
@@ -1238,6 +1264,7 @@ static bool bx_tar_write_rewrite_stream_body(const struct bx_tar_rewrite_stream_
         .begin_entry = bx_tar_rewrite_stream_begin_entry,
         .visit_payload = bx_tar_rewrite_stream_visit_payload,
         .end_entry = bx_tar_rewrite_stream_end_entry,
+        .stream_sparse_payload = true,
     };
 
     memset(&state, 0, sizeof(state));

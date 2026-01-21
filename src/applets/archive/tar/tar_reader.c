@@ -18,6 +18,7 @@
 #include "applets/archive/tar/tar_reader.h"
 #include "bx/libbx.h"
 
+#define BX_TAR_GZIP_STREAM_BUFFER_SIZE (1024u * 1024u)
 #define BX_TAR_READER_FILE_CHUNK_SIZE (256u * 1024u)
 
 struct bx_tar_pax_info {
@@ -501,6 +502,7 @@ static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
                                      const struct bx_tar_reader_stream_options* options,
                                      struct bx_diag_ctx* diag) {
     int fd;
+    bool tune_gzip_buffer = false;
 
     memset(input, 0, sizeof(*input));
     input->require_gzip = options->require_gzip;
@@ -530,10 +532,27 @@ static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
             input->plain_size = (uint64_t)st.st_size;
         }
     }
+    if (options->require_gzip) {
+        tune_gzip_buffer = true;
+    }
+    else if (input->plain_seekable) {
+        unsigned char magic[2];
+        ssize_t nread = pread(fd, magic, sizeof(magic), 0);
+
+        if (nread == (ssize_t)sizeof(magic) && magic[0] == 0x1fu && magic[1] == 0x8bu) {
+            tune_gzip_buffer = true;
+        }
+    }
 
     input->stream = gzdopen(fd, "rb");
     if (input->stream == NULL) {
         close(fd);
+        bx_diag(diag, "failed to initialize archive reader");
+        return false;
+    }
+    if (tune_gzip_buffer && gzbuffer(input->stream, BX_TAR_GZIP_STREAM_BUFFER_SIZE) != 0) {
+        gzclose(input->stream);
+        memset(input, 0, sizeof(*input));
         bx_diag(diag, "failed to initialize archive reader");
         return false;
     }
@@ -854,10 +873,11 @@ static bool bx_tar_stream_input_read_sparse_number_line(struct bx_tar_stream_inp
     return true;
 }
 
-static bool bx_tar_stream_input_read_sparse_payload(struct bx_tar_stream_input* input,
-                                                    size_t size,
-                                                    struct bx_tar_entry* entry,
-                                                    struct bx_diag_ctx* diag) {
+static bool bx_tar_stream_input_prepare_sparse_payload(struct bx_tar_stream_input* input,
+                                                       size_t size,
+                                                       struct bx_tar_entry* entry,
+                                                       size_t* archive_padding_out,
+                                                       struct bx_diag_ctx* diag) {
     size_t map_bytes = 0u;
     size_t extent_count = 0u;
     size_t padded_map_bytes;
@@ -938,6 +958,14 @@ static bool bx_tar_stream_input_read_sparse_payload(struct bx_tar_stream_input* 
     }
 
     entry->data_len = size - padded_map_bytes;
+    *archive_padding_out = archive_padding;
+    return true;
+}
+
+static bool bx_tar_stream_input_read_sparse_payload_buffered(struct bx_tar_stream_input* input,
+                                                             struct bx_tar_entry* entry,
+                                                             size_t archive_padding,
+                                                             struct bx_diag_ctx* diag) {
     entry->data = xmalloc(entry->data_len ? entry->data_len : 1u);
     if (entry->data_len > 0u) {
         bool eof = false;
@@ -997,6 +1025,52 @@ static bool bx_tar_stream_input_visit_payload(struct bx_tar_stream_input* input,
 
     free(buffer);
     if (padding > 0u && !bx_tar_stream_input_skip(input, padding, diag)) {
+        return false;
+    }
+    return true;
+}
+
+static bool bx_tar_stream_input_visit_sparse_payload(struct bx_tar_stream_input* input,
+                                                     const struct bx_tar_entry* entry,
+                                                     size_t archive_padding,
+                                                     const struct bx_tar_stream_visitor_ops* visitor_ops,
+                                                     struct bx_diag_ctx* diag) {
+    unsigned char* buffer = NULL;
+    size_t remaining = entry->data_len;
+
+    if (remaining == 0u) {
+        return archive_padding == 0u || bx_tar_stream_input_skip(input, archive_padding, diag);
+    }
+    if (visitor_ops->visit_payload == NULL) {
+        if (!bx_tar_stream_input_skip(input, remaining, diag)) {
+            return false;
+        }
+        return archive_padding == 0u || bx_tar_stream_input_skip(input, archive_padding, diag);
+    }
+
+    buffer = xmalloc(BX_TAR_READER_FILE_CHUNK_SIZE);
+    while (remaining > 0u) {
+        bool eof = false;
+        size_t chunk = remaining > BX_TAR_READER_FILE_CHUNK_SIZE ? BX_TAR_READER_FILE_CHUNK_SIZE : remaining;
+
+        if (!bx_tar_stream_input_read_exact(input, buffer, chunk, &eof, diag)) {
+            free(buffer);
+            return false;
+        }
+        if (eof) {
+            free(buffer);
+            bx_diag(diag, "truncated archive");
+            return false;
+        }
+        if (!visitor_ops->visit_payload(visitor_ops->user, entry, buffer, chunk, diag)) {
+            free(buffer);
+            return false;
+        }
+        remaining -= chunk;
+    }
+
+    free(buffer);
+    if (archive_padding > 0u && !bx_tar_stream_input_skip(input, archive_padding, diag)) {
         return false;
     }
     return true;
@@ -1165,6 +1239,7 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
 
     while (true) {
         size_t size = 0u;
+        size_t sparse_archive_padding = 0u;
         unsigned char typeflag;
         struct bx_tar_entry entry;
         bool eof = false;
@@ -1238,7 +1313,19 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
             && pax.sparse_enabled && pax.sparse_major == 1 && pax.sparse_minor == 0) {
             entry.sparse = true;
             entry.size = pax.sparse_realsize;
-            if (!bx_tar_stream_input_read_sparse_payload(&input, size, &entry, diag)) {
+            if (!bx_tar_stream_input_prepare_sparse_payload(&input,
+                                                            size,
+                                                            &entry,
+                                                            &sparse_archive_padding,
+                                                            diag)) {
+                bx_tar_entry_free(&entry);
+                goto out;
+            }
+            if (!visitor_ops->stream_sparse_payload
+                && !bx_tar_stream_input_read_sparse_payload_buffered(&input,
+                                                                     &entry,
+                                                                     sparse_archive_padding,
+                                                                     diag)) {
                 bx_tar_entry_free(&entry);
                 goto out;
             }
@@ -1249,6 +1336,16 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
         }
         if (entry.kind == BX_TAR_KIND_REG && !entry.sparse) {
             if (!bx_tar_stream_input_visit_payload(&input, &entry, size, visitor_ops, diag)) {
+                bx_tar_entry_free(&entry);
+                goto out;
+            }
+        }
+        else if (entry.kind == BX_TAR_KIND_REG && entry.sparse && visitor_ops->stream_sparse_payload) {
+            if (!bx_tar_stream_input_visit_sparse_payload(&input,
+                                                          &entry,
+                                                          sparse_archive_padding,
+                                                          visitor_ops,
+                                                          diag)) {
                 bx_tar_entry_free(&entry);
                 goto out;
             }

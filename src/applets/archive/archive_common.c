@@ -12,6 +12,8 @@
 
 #include "applets/archive/archive_common.h"
 #include "bx/libbx.h"
+
+#define BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE (1024u * 1024u)
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
@@ -277,6 +279,7 @@ static bool bx_archive_output_file_open_direct(struct bx_archive_output_file* ou
         bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         return false;
     }
+    setvbuf(out->stream, NULL, _IOFBF, BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE);
     out->display_path = archive_path;
     return true;
 }
@@ -332,6 +335,7 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
     if (stream == NULL) {
         goto out;
     }
+    setvbuf(stream, NULL, _IOFBF, BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE);
     fd = -1;
 
     out->stream = stream;

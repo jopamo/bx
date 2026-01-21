@@ -207,6 +207,7 @@ bx_crypto_sources = [
 bx_archive_applet_sources = [
   'src/applets/archive/archive_common.c',
   'src/applets/archive/archive_gzip.c',
+  'src/applets/archive/archive_ordered.c',
   'src/applets/archive/archive_fs.c',
   'src/applets/archive/cpio/cpio.c',
   'src/applets/archive/cpio/cpio_backend.c',
@@ -905,6 +906,33 @@ if get_option('tests')
     include_directories : include_directories('src', 'src/dispatch'),
   )
   test('fswalk', test_fswalk)
+
+  test_archive_ordered = executable(
+    'test-archive-ordered',
+    [
+      'tests/src/archive/test_archive_ordered.c',
+      'src/applets/archive/archive_ordered.c',
+      'src/lib/cancel_state.c',
+      'src/lib/work_pool.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+    dependencies : [threads_dep],
+  )
+  test('archive ordered', test_archive_ordered)
+
+  test_archive_gzip_mt = executable(
+    'test-archive-gzip-mt',
+    [
+      'tests/src/archive/test_archive_gzip_mt.c',
+      'src/applets/archive/archive_gzip.c',
+      'src/applets/archive/archive_ordered.c',
+      'src/lib/cancel_state.c',
+      'src/lib/work_pool.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+    dependencies : [threads_dep, zlib_dep],
+  )
+  test('archive gzip mt', test_archive_gzip_mt)
 
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']

@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,11 +10,13 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
+#include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
 
 #define BX_TAR_STREAM_BLOCK_SIZE 512u
 #define BX_TAR_STREAM_RECORD_BLOCKS 20u
+#define BX_TAR_STREAM_FILE_BUFFER_SIZE (1024u * 1024u)
 #define BX_TAR_STREAM_FILE_CHUNK_SIZE (256u * 1024u)
 
 struct bx_tar_hardlink_seen {
@@ -32,6 +35,11 @@ struct bx_tar_stream_counting_sink {
     const struct bx_tar_stream_sink* inner;
     size_t* bytes_written;
 };
+
+bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
+                                         const void* data,
+                                         size_t len,
+                                         struct bx_diag_ctx* diag);
 
 static size_t bx_tar_stream_round_up(size_t value, size_t align) {
     size_t rem = value % align;
@@ -191,6 +199,15 @@ static bool bx_tar_stream_pax_append_record(struct bx_archive_buffer* buffer,
         && bx_archive_buffer_append_byte(buffer, '\n');
 }
 
+static bool bx_tar_stream_pax_append_size_record(struct bx_archive_buffer* buffer,
+                                                 const char* key,
+                                                 size_t value) {
+    char text[32];
+
+    snprintf(text, sizeof(text), "%zu", value);
+    return bx_tar_stream_pax_append_record(buffer, key, text);
+}
+
 static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sink,
                                             const char* path,
                                             const char* linkname,
@@ -338,6 +355,45 @@ static bool bx_tar_stream_write_entry_data(const struct bx_tar_stream_sink* sink
     return true;
 }
 
+static size_t bx_tar_stream_sparse_map_size(const struct bx_tar_sparse_extent* extents,
+                                            size_t extent_count,
+                                            bool* overflow_out) {
+    size_t total = bx_tar_stream_decimal_digits(extent_count) + 1u;
+    size_t i;
+
+    *overflow_out = false;
+    for (i = 0u; i < extent_count; i++) {
+        size_t line_size = bx_tar_stream_decimal_digits(extents[i].offset) + 1u;
+
+        if (line_size > SIZE_MAX - total) {
+            *overflow_out = true;
+            return 0u;
+        }
+        total += line_size;
+        line_size = bx_tar_stream_decimal_digits(extents[i].size) + 1u;
+        if (line_size > SIZE_MAX - total) {
+            *overflow_out = true;
+            return 0u;
+        }
+        total += line_size;
+    }
+
+    return total;
+}
+
+static bool bx_tar_stream_write_sparse_number_line(struct bx_tar_stream_live_entry* entry,
+                                                   size_t value,
+                                                   struct bx_diag_ctx* diag) {
+    char line[64];
+    int len = snprintf(line, sizeof(line), "%zu\n", value);
+
+    if (len < 0 || (size_t)len >= sizeof(line)) {
+        bx_diag(diag, "invalid sparse map");
+        return false;
+    }
+    return bx_tar_stream_write_raw_entry_chunk(entry, line, (size_t)len, diag);
+}
+
 static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
                                           const char* path,
                                           size_t expected_size,
@@ -350,6 +406,7 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
+    setvbuf(stream, NULL, _IOFBF, BX_TAR_STREAM_FILE_BUFFER_SIZE);
 
     while (total < expected_size) {
         size_t chunk = expected_size - total;
@@ -670,6 +727,135 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
     entry->data_remaining = data_len;
     entry->padding_remaining = bx_tar_stream_round_up(data_len, BX_TAR_STREAM_BLOCK_SIZE) - data_len;
     entry->active = true;
+    return true;
+}
+
+bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
+                                         const struct bx_tar_stream_sink* sink,
+                                         const char* path,
+                                         mode_t mode,
+                                         uid_t uid,
+                                         gid_t gid,
+                                         const struct bx_tar_sparse_extent* extents,
+                                         size_t extent_count,
+                                         size_t logical_size,
+                                         size_t compact_size,
+                                         struct timespec mtime,
+                                         struct bx_diag_ctx* diag) {
+    struct bx_archive_buffer pax_data = {0};
+    struct timespec zero_time = {0, 0};
+    size_t map_size;
+    size_t padded_map_size;
+    size_t payload_size;
+    size_t expected_compact_size = 0u;
+    size_t i;
+    bool overflow = false;
+
+    if (entry == NULL || sink == NULL || (extent_count > 0u && extents == NULL)) {
+        bx_diag(diag, "invalid sparse tar stream live entry");
+        return false;
+    }
+
+    for (i = 0u; i < extent_count; i++) {
+        if (extents[i].size > SIZE_MAX - expected_compact_size) {
+            bx_diag(diag, "invalid sparse map");
+            return false;
+        }
+        expected_compact_size += extents[i].size;
+    }
+    if (expected_compact_size != compact_size) {
+        bx_diag(diag, "invalid sparse payload");
+        return false;
+    }
+
+    bx_archive_buffer_init(&pax_data);
+    if (!bx_tar_stream_pax_append_record(&pax_data, "path", path)
+        || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.major", "1")
+        || !bx_tar_stream_pax_append_record(&pax_data, "GNU.sparse.minor", "0")
+        || !bx_tar_stream_pax_append_size_record(&pax_data, "GNU.sparse.realsize", logical_size)) {
+        bx_archive_buffer_free(&pax_data);
+        bx_diag(diag, "archive write failed: %s", strerror(errno));
+        return false;
+    }
+    if (!bx_tar_stream_append_raw_header(sink,
+                                         "./PaxHeaders/bx",
+                                         NULL,
+                                         'x',
+                                         0644u,
+                                         0u,
+                                         0u,
+                                         pax_data.len,
+                                         zero_time,
+                                         false,
+                                         diag)) {
+        bx_archive_buffer_free(&pax_data);
+        return false;
+    }
+    if (!bx_tar_stream_sink_write(sink, pax_data.data, pax_data.len, diag)) {
+        bx_archive_buffer_free(&pax_data);
+        return false;
+    }
+    {
+        size_t pax_size = bx_tar_stream_round_up(pax_data.len, BX_TAR_STREAM_BLOCK_SIZE);
+
+        if (pax_size > pax_data.len) {
+            unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
+            if (!bx_tar_stream_sink_write(sink, zeros, pax_size - pax_data.len, diag)) {
+                bx_archive_buffer_free(&pax_data);
+                return false;
+            }
+        }
+    }
+    bx_archive_buffer_free(&pax_data);
+
+    map_size = bx_tar_stream_sparse_map_size(extents, extent_count, &overflow);
+    if (overflow) {
+        bx_diag(diag, "invalid sparse map");
+        return false;
+    }
+    padded_map_size = bx_tar_stream_round_up(map_size, BX_TAR_STREAM_BLOCK_SIZE);
+    if (padded_map_size < map_size || compact_size > SIZE_MAX - padded_map_size) {
+        bx_diag(diag, "invalid sparse payload");
+        return false;
+    }
+    payload_size = padded_map_size + compact_size;
+
+    if (!bx_tar_stream_start_raw_entry(entry,
+                                       sink,
+                                       "PaxPayload",
+                                       NULL,
+                                       BX_TAR_STREAM_KIND_REG,
+                                       mode,
+                                       uid,
+                                       gid,
+                                       payload_size,
+                                       mtime,
+                                       true,
+                                       diag)) {
+        return false;
+    }
+    if (!bx_tar_stream_write_sparse_number_line(entry, extent_count, diag)) {
+        return false;
+    }
+    for (i = 0u; i < extent_count; i++) {
+        if (!bx_tar_stream_write_sparse_number_line(entry, extents[i].offset, diag)
+            || !bx_tar_stream_write_sparse_number_line(entry, extents[i].size, diag)) {
+            return false;
+        }
+    }
+    if (padded_map_size > map_size) {
+        unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
+        size_t remaining = padded_map_size - map_size;
+
+        while (remaining > 0u) {
+            size_t chunk = remaining > sizeof(zeros) ? sizeof(zeros) : remaining;
+
+            if (!bx_tar_stream_write_raw_entry_chunk(entry, zeros, chunk, diag)) {
+                return false;
+            }
+            remaining -= chunk;
+        }
+    }
     return true;
 }
 

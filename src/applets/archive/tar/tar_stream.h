@@ -19,6 +19,8 @@ struct bx_tar_stream_options {
     struct timespec mtime;
 };
 
+struct bx_tar_sparse_extent;
+
 enum bx_tar_stream_kind {
     BX_TAR_STREAM_KIND_REG = 0,
     BX_TAR_STREAM_KIND_DIR,
@@ -69,6 +71,19 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                    struct timespec mtime,
                                    bool allow_pax,
                                    struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
+                                         const struct bx_tar_stream_sink* sink,
+                                         const char* path,
+                                         mode_t mode,
+                                         uid_t uid,
+                                         gid_t gid,
+                                         const struct bx_tar_sparse_extent* extents,
+                                         size_t extent_count,
+                                         size_t logical_size,
+                                         size_t compact_size,
+                                         struct timespec mtime,
+                                         struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
                                          const void* data,
