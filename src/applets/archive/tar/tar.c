@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "applets/archive/archive_temp.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "dispatch/applets.h"
 #include "lib/cli_common.h"
@@ -41,6 +42,10 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --mt-chunk-size=SIZE\n");
     fprintf(stream, "                        set multithreaded gzip member chunk size\n");
     fprintf(stream, "      --no-mt           disable multithreaded gzip archive output\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "Regular archive-file output uses best-effort staged-temp cleanup on HUP/INT/TERM.\n");
+    fprintf(stream, "SIGKILL cannot be intercepted, so it may still leave a staged temp file behind.\n");
+    fprintf(stream, "\n");
     fprintf(stream, "      --help            display this help and exit\n");
     fprintf(stream, "      --version         output version information and exit\n");
 }
@@ -67,6 +72,9 @@ static int bx_tar_maybe_handle_usage(int argc, char** argv) {
 }
 
 int bx_tar_main(int argc, char** argv) {
+    int rc;
+    int pending_signal;
+
     int handled = bx_cli_maybe_handle_help_or_version(argc, argv, "tar", "-?", NULL, bx_tar_print_help);
     if (handled >= 0) {
         return handled;
@@ -77,5 +85,18 @@ int bx_tar_main(int argc, char** argv) {
         return handled;
     }
 
-    return bx_tar_run(argc, argv);
+    if (!bx_archive_temp_install_signal_cleanup()) {
+        fprintf(stderr, "%s: failed to install archive temp signal cleanup\n",
+                bx_cli_progname((argc > 0) ? argv[0] : NULL, "tar"));
+        return 2;
+    }
+
+    rc = bx_tar_run(argc, argv);
+    pending_signal = bx_archive_temp_pending_signal();
+    if (pending_signal != 0) {
+        bx_archive_temp_cleanup_all();
+        bx_archive_temp_clear_pending_signal();
+        return 128 + pending_signal;
+    }
+    return rc;
 }

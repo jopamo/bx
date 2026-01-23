@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_common.h"
+#include "applets/archive/archive_temp.h"
 #include "bx/libbx.h"
 
 #define BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE (1024u * 1024u)
@@ -325,6 +326,9 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
     if (fd < 0) {
         goto out;
     }
+    if (!bx_archive_temp_track(temp_path)) {
+        goto out;
+    }
     if (fchmod(fd, mode_bits) != 0) {
         goto out;
     }
@@ -357,6 +361,7 @@ out:
     }
     if (temp_path != NULL) {
         unlink(temp_path);
+        bx_archive_temp_untrack(temp_path);
     }
     free(temp_path);
     free(target_dir);
@@ -401,6 +406,10 @@ bool bx_archive_output_file_finish(struct bx_archive_output_file* out,
             ok = false;
         }
     }
+    if (ok && out->transactional && bx_archive_temp_pending_signal() != 0) {
+        bx_diag(diag, "interrupted before staged archive publish");
+        ok = false;
+    }
     if (!out->is_stdout) {
         if (fclose(out->stream) != 0) {
             if (ok) {
@@ -414,8 +423,11 @@ bool bx_archive_output_file_finish(struct bx_archive_output_file* out,
         bx_diag(diag, "%s: %s", out->display_path, strerror(errno));
         ok = false;
     }
-    if (!ok && out->transactional && out->temp_path != NULL) {
-        unlink(out->temp_path);
+    if (out->transactional && out->temp_path != NULL) {
+        if (!ok) {
+            unlink(out->temp_path);
+        }
+        bx_archive_temp_untrack(out->temp_path);
     }
     free(out->publish_path);
     free(out->temp_path);
@@ -430,6 +442,7 @@ void bx_archive_output_file_discard(struct bx_archive_output_file* out) {
     }
     if (out->temp_path != NULL) {
         unlink(out->temp_path);
+        bx_archive_temp_untrack(out->temp_path);
     }
     free(out->publish_path);
     free(out->temp_path);

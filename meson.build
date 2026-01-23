@@ -208,6 +208,7 @@ bx_archive_applet_sources = [
   'src/applets/archive/archive_common.c',
   'src/applets/archive/archive_gzip.c',
   'src/applets/archive/archive_ordered.c',
+  'src/applets/archive/archive_temp.c',
   'src/applets/archive/archive_fs.c',
   'src/applets/archive/cpio/cpio.c',
   'src/applets/archive/cpio/cpio_backend.c',
@@ -933,6 +934,30 @@ if get_option('tests')
     dependencies : [threads_dep, zlib_dep],
   )
   test('archive gzip mt', test_archive_gzip_mt)
+
+  test_archive_temp = executable(
+    'test-archive-temp',
+    [
+      'tests/src/archive/test_archive_temp.c',
+      'src/applets/archive/archive_temp.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+  )
+  test('archive temp', test_archive_temp)
+
+  test_archive_output_cleanup = executable(
+    'test-archive-output-cleanup',
+    [
+      'tests/src/archive/test_archive_output_cleanup.c',
+      'src/applets/archive/archive_common.c',
+      'src/applets/archive/archive_temp.c',
+      'src/lib/path_ops.c',
+      'src/lib/mode_parse.c',
+      'src/lib/xreadwrite.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+  )
+  test('archive output cleanup', test_archive_output_cleanup)
 
   fast_track_p0_suite = ['fast-track', 'fast-track-p0']
   fast_track_p1_suite = ['fast-track', 'fast-track-p1']
