@@ -285,8 +285,16 @@ static bool bx_archive_output_file_open_direct(struct bx_archive_output_file* ou
     return true;
 }
 
-static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
-                                             const char* archive_path) {
+enum bx_archive_output_stage_result {
+    BX_ARCHIVE_OUTPUT_STAGE_READY = 0,
+    BX_ARCHIVE_OUTPUT_STAGE_BYPASS,
+    BX_ARCHIVE_OUTPUT_STAGE_ERROR,
+};
+
+static enum bx_archive_output_stage_result bx_archive_output_file_try_stage(
+    struct bx_archive_output_file* out,
+    const char* archive_path,
+    struct bx_diag_ctx* diag) {
     struct stat path_lstat;
     struct stat target_stat;
     bool target_exists = false;
@@ -297,18 +305,21 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
     int fd = -1;
     mode_t mode_bits;
     bool ok = false;
+    enum bx_archive_output_stage_result result = BX_ARCHIVE_OUTPUT_STAGE_ERROR;
 
     if (lstat(archive_path, &path_lstat) == 0 && S_ISLNK(path_lstat.st_mode)) {
         free(publish_path);
         publish_path = bx_path_realpath_dup(archive_path);
         if (publish_path == NULL) {
+            result = BX_ARCHIVE_OUTPUT_STAGE_BYPASS;
             goto out;
         }
     }
 
     if (stat(publish_path, &target_stat) == 0) {
         target_exists = true;
-        if (!S_ISREG(target_stat.st_mode) || target_stat.st_nlink != 1) {
+        if (!S_ISREG(target_stat.st_mode)) {
+            result = BX_ARCHIVE_OUTPUT_STAGE_BYPASS;
             goto out;
         }
         mode_bits = target_stat.st_mode & 07777u;
@@ -317,6 +328,7 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
         mode_bits = 0666u & ~bx_mode_current_umask();
     }
     else {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         goto out;
     }
 
@@ -324,19 +336,24 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
     temp_path = bx_path_join(target_dir, ".bx-archive-stage.XXXXXX");
     fd = mkstemp(temp_path);
     if (fd < 0) {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         goto out;
     }
     if (!bx_archive_temp_track(temp_path)) {
+        bx_diag(diag, "failed to track temporary archive path");
         goto out;
     }
     if (fchmod(fd, mode_bits) != 0) {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         goto out;
     }
     if (target_exists && fchown(fd, target_stat.st_uid, target_stat.st_gid) != 0) {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         goto out;
     }
     stream = fdopen(fd, "wb");
     if (stream == NULL) {
+        bx_diag(diag, "%s: %s", archive_path, strerror(errno));
         goto out;
     }
     setvbuf(stream, NULL, _IOFBF, BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE);
@@ -351,6 +368,7 @@ static bool bx_archive_output_file_try_stage(struct bx_archive_output_file* out,
     publish_path = NULL;
     temp_path = NULL;
     ok = true;
+    result = BX_ARCHIVE_OUTPUT_STAGE_READY;
 
 out:
     if (fd >= 0) {
@@ -366,12 +384,17 @@ out:
     free(temp_path);
     free(target_dir);
     free(publish_path);
-    return ok;
+    if (!ok && result == BX_ARCHIVE_OUTPUT_STAGE_READY) {
+        result = BX_ARCHIVE_OUTPUT_STAGE_ERROR;
+    }
+    return result;
 }
 
 bool bx_archive_output_file_open(struct bx_archive_output_file* out,
                                  const char* archive_path,
                                  struct bx_diag_ctx* diag) {
+    enum bx_archive_output_stage_result stage_result;
+
     memset(out, 0, sizeof(*out));
     out->display_path = archive_path;
 
@@ -380,8 +403,13 @@ bool bx_archive_output_file_open(struct bx_archive_output_file* out,
         out->is_stdout = true;
         return true;
     }
-    if (bx_archive_output_file_try_stage(out, archive_path)) {
+
+    stage_result = bx_archive_output_file_try_stage(out, archive_path, diag);
+    if (stage_result == BX_ARCHIVE_OUTPUT_STAGE_READY) {
         return true;
+    }
+    if (stage_result == BX_ARCHIVE_OUTPUT_STAGE_ERROR) {
+        return false;
     }
     return bx_archive_output_file_open_direct(out, archive_path, diag);
 }

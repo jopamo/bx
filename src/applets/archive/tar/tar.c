@@ -8,6 +8,7 @@
 
 static void bx_tar_print_usage(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s -cf ARCHIVE [OPTION]... FILE...\n", progname);
+    fprintf(stream, "       %s -Af ARCHIVE [OPTION]... SOURCE_ARCHIVE...\n", progname);
     fprintf(stream, "       %s -tf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
     fprintf(stream, "       %s -xf ARCHIVE [OPTION]... [MEMBER...]\n", progname);
 }
@@ -32,7 +33,9 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --no-recursion    archive directory entries without descending\n");
     fprintf(stream, "      --remove-files    delete archived source files after success\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
+    fprintf(stream, "  -A                    append members from source archives\n");
     fprintf(stream, "  -r                    append files to an existing archive\n");
+    fprintf(stream, "  -u                    append files only when newer than the archived copy\n");
     fprintf(stream, "      --delete          remove named members from an archive\n");
     fprintf(stream, "  -z                    filter the archive through gzip\n");
     fprintf(stream, "  -a                    choose compression from the archive suffix\n");
