@@ -6,10 +6,12 @@
 
 #include "applets/archive/archive_common.h"
 #include "applets/archive/tar/tar_create.h"
+#include "applets/archive/tar/tar_patterns.h"
 
 struct bx_tar_select_member {
     char* name;
     char* extract_dir;
+    struct bx_tar_match_policy policy;
     bool recurse;
 };
 
@@ -17,7 +19,7 @@ struct bx_tar_select_plan {
     struct bx_tar_select_member* members;
     size_t len;
     size_t cap;
-    struct bx_archive_name_list exclude_patterns;
+    struct bx_tar_match_pattern_list exclude_patterns;
     char* default_extract_dir;
 };
 

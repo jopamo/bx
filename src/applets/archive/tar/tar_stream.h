@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "applets/archive/archive_fs.h"
+#include "applets/archive/tar/tar_id_map.h"
 #include "bx/diag.h"
 
 struct bx_tar_stream_options {
@@ -14,9 +15,12 @@ struct bx_tar_stream_options {
     bool owner_set;
     bool group_set;
     bool fixed_mtime;
+    const char* mode_text;
     uid_t owner;
     gid_t group;
     struct timespec mtime;
+    const struct bx_tar_id_map* owner_map;
+    const struct bx_tar_id_map* group_map;
 };
 
 struct bx_tar_sparse_extent;
@@ -45,6 +49,8 @@ struct bx_tar_stream_live_entry {
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
+                                   const char* uname,
+                                   const char* gname,
                                    enum bx_tar_stream_kind kind,
                                    mode_t mode,
                                    uid_t uid,
@@ -63,6 +69,8 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                    const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
+                                   const char* uname,
+                                   const char* gname,
                                    enum bx_tar_stream_kind kind,
                                    mode_t mode,
                                    uid_t uid,
@@ -75,6 +83,8 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
 bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                          const struct bx_tar_stream_sink* sink,
                                          const char* path,
+                                         const char* uname,
+                                         const char* gname,
                                          mode_t mode,
                                          uid_t uid,
                                          gid_t gid,

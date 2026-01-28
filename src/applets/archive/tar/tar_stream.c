@@ -13,6 +13,16 @@
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
+#include "lib/id_parse.h"
+#include "lib/mode_parse.h"
+
+#ifdef S_ISVTX
+#define BX_TAR_STICKY_BIT S_ISVTX
+#elif defined(S_ISTXT)
+#define BX_TAR_STICKY_BIT S_ISTXT
+#else
+#define BX_TAR_STICKY_BIT 01000
+#endif
 
 #define BX_TAR_STREAM_BLOCK_SIZE 512u
 #define BX_TAR_STREAM_RECORD_BLOCKS 20u
@@ -211,6 +221,8 @@ static bool bx_tar_stream_pax_append_size_record(struct bx_archive_buffer* buffe
 static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sink,
                                             const char* path,
                                             const char* linkname,
+                                            const char* uname,
+                                            const char* gname,
                                             char typeflag,
                                             mode_t mode,
                                             uid_t uid,
@@ -245,6 +257,20 @@ static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sin
     }
     memcpy(header + 257, "ustar", 5u);
     memcpy(header + 263, "00", 2u);
+    if (uname != NULL) {
+        size_t owner_len = strlen(uname);
+        if (owner_len > 32u) {
+            owner_len = 32u;
+        }
+        memcpy(header + 265, uname, owner_len);
+    }
+    if (gname != NULL) {
+        size_t group_len = strlen(gname);
+        if (group_len > 32u) {
+            group_len = 32u;
+        }
+        memcpy(header + 297, gname, group_len);
+    }
     memcpy(header + 345, prefix, sizeof(prefix));
     bx_tar_stream_write_checksum(header);
     return bx_tar_stream_sink_write(sink, header, sizeof(header), diag);
@@ -253,6 +279,8 @@ static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sin
 static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
                                        const char* path,
                                        const char* linkname,
+                                       const char* uname,
+                                       const char* gname,
                                        char typeflag,
                                        bool is_dir,
                                        mode_t mode,
@@ -295,6 +323,8 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         if (!bx_tar_stream_append_raw_header(sink,
                                              "./PaxHeaders/bx",
                                              NULL,
+                                             NULL,
+                                             NULL,
                                              'x',
                                              0644u,
                                              0u,
@@ -329,6 +359,8 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
     return bx_tar_stream_append_raw_header(sink,
                                            actual_header_path,
                                            stored_link,
+                                           uname,
+                                           gname,
                                            typeflag,
                                            mode,
                                            uid,
@@ -480,6 +512,45 @@ static void bx_tar_stream_seen_list_free(struct bx_tar_hardlink_seen_list* seen)
     seen->cap = 0u;
 }
 
+static const char* bx_tar_stream_effective_owner_name(uid_t uid,
+                                                      const char* mapped_name,
+                                                      char numeric_buffer[32]) {
+    if (mapped_name != NULL) {
+        return mapped_name;
+    }
+    return bx_id_user_name(uid, numeric_buffer);
+}
+
+static const char* bx_tar_stream_effective_group_name(gid_t gid,
+                                                      const char* mapped_name,
+                                                      char numeric_buffer[32]) {
+    if (mapped_name != NULL) {
+        return mapped_name;
+    }
+    return bx_id_group_name(gid, numeric_buffer);
+}
+
+static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
+                                          bool is_directory,
+                                          const char* mode_text,
+                                          mode_t* mode_out) {
+    struct bx_mode_parse_params params = {
+        .initial_mode = initial_mode & 07777u,
+        .result_mask = 07777u,
+        .max_numeric_mode = 07777u,
+        .umask_value = bx_mode_current_umask(),
+        .sticky_bit = BX_TAR_STICKY_BIT,
+        .x_policy = BX_MODE_X_IF_DIRECTORY_OR_ANY_EXEC,
+        .is_directory = is_directory,
+        .apply_umask_when_who_omitted = true,
+        .allow_setuid = true,
+        .allow_setgid = true,
+        .allow_sticky = true,
+    };
+
+    return bx_mode_parse(mode_text, &params, mode_out);
+}
+
 static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                          const struct bx_archive_fs_entry* fs_entry,
                                          const struct bx_tar_stream_options* options,
@@ -488,15 +559,60 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
     mode_t mode = fs_entry->st.st_mode & 07777u;
     uid_t uid = options->owner_set ? options->owner : fs_entry->st.st_uid;
     gid_t gid = options->group_set ? options->group : fs_entry->st.st_gid;
+    const char* mapped_uname = NULL;
+    const char* mapped_gname = NULL;
+    char owner_name_buf[32];
+    char group_name_buf[32];
+    const char* uname = NULL;
+    const char* gname = NULL;
     struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st.st_mtim;
     unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
     size_t file_size = (size_t)fs_entry->st.st_size;
     size_t padded_size = bx_tar_stream_round_up(file_size, BX_TAR_STREAM_BLOCK_SIZE);
 
+    if (!options->owner_set && options->owner_map != NULL) {
+        const char* source_name = bx_id_user_name(fs_entry->st.st_uid, owner_name_buf);
+
+        if (bx_tar_id_map_apply_owner(options->owner_map,
+                                      fs_entry->st.st_uid,
+                                      source_name,
+                                      &uid,
+                                      &mapped_uname)) {
+            uname = bx_tar_stream_effective_owner_name(uid, mapped_uname, owner_name_buf);
+        }
+    }
+    if (!options->group_set && options->group_map != NULL) {
+        const char* source_name = bx_id_group_name(fs_entry->st.st_gid, group_name_buf);
+
+        if (bx_tar_id_map_apply_group(options->group_map,
+                                      fs_entry->st.st_gid,
+                                      source_name,
+                                      &gid,
+                                      &mapped_gname)) {
+            gname = bx_tar_stream_effective_group_name(gid, mapped_gname, group_name_buf);
+        }
+    }
+    if (uname == NULL) {
+        uname = bx_id_user_name(uid, owner_name_buf);
+    }
+    if (gname == NULL) {
+        gname = bx_id_group_name(gid, group_name_buf);
+    }
+    if (options->mode_text != NULL
+        && !bx_tar_stream_apply_mode_text(mode,
+                                          S_ISDIR(fs_entry->st.st_mode),
+                                          options->mode_text,
+                                          &mode)) {
+        bx_diag(diag, "invalid mode '%s'", options->mode_text);
+        return false;
+    }
+
     if (S_ISDIR(fs_entry->st.st_mode)) {
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              NULL,
+                                             uname,
+                                             gname,
                                              BX_TAR_STREAM_KIND_DIR,
                                              mode,
                                              uid,
@@ -511,6 +627,8 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              fs_entry->link_target,
+                                             uname,
+                                             gname,
                                              BX_TAR_STREAM_KIND_SYMLINK,
                                              mode,
                                              uid,
@@ -525,6 +643,8 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              NULL,
+                                             uname,
+                                             gname,
                                              BX_TAR_STREAM_KIND_FIFO,
                                              mode,
                                              uid,
@@ -546,6 +666,8 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
             return bx_tar_stream_write_raw_entry(sink,
                                                  fs_entry->archive_path,
                                                  seen->items[index].first_name,
+                                                 uname,
+                                                 gname,
                                                  BX_TAR_STREAM_KIND_HARDLINK,
                                                  mode,
                                                  uid,
@@ -565,6 +687,8 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
     if (!bx_tar_stream_write_raw_entry(sink,
                                        fs_entry->archive_path,
                                        NULL,
+                                       uname,
+                                       gname,
                                        BX_TAR_STREAM_KIND_REG,
                                        mode,
                                        uid,
@@ -609,6 +733,8 @@ static bool bx_tar_stream_finish_archive(const struct bx_tar_stream_sink* sink,
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
+                                   const char* uname,
+                                   const char* gname,
                                    enum bx_tar_stream_kind kind,
                                    mode_t mode,
                                    uid_t uid,
@@ -647,6 +773,8 @@ bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
     if (!bx_tar_stream_write_header(sink,
                                     path,
                                     linkname,
+                                    uname,
+                                    gname,
                                     typeflag,
                                     is_dir,
                                     mode,
@@ -668,6 +796,8 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
                                    const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
+                                   const char* uname,
+                                   const char* gname,
                                    enum bx_tar_stream_kind kind,
                                    mode_t mode,
                                    uid_t uid,
@@ -711,6 +841,8 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
     if (!bx_tar_stream_write_header(sink,
                                     path,
                                     linkname,
+                                    uname,
+                                    gname,
                                     typeflag,
                                     is_dir,
                                     mode,
@@ -733,6 +865,8 @@ bool bx_tar_stream_start_raw_entry(struct bx_tar_stream_live_entry* entry,
 bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                          const struct bx_tar_stream_sink* sink,
                                          const char* path,
+                                         const char* uname,
+                                         const char* gname,
                                          mode_t mode,
                                          uid_t uid,
                                          gid_t gid,
@@ -780,6 +914,8 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
     if (!bx_tar_stream_append_raw_header(sink,
                                          "./PaxHeaders/bx",
                                          NULL,
+                                         NULL,
+                                         NULL,
                                          'x',
                                          0644u,
                                          0u,
@@ -824,6 +960,8 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
                                        sink,
                                        "PaxPayload",
                                        NULL,
+                                       uname,
+                                       gname,
                                        BX_TAR_STREAM_KIND_REG,
                                        mode,
                                        uid,

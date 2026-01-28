@@ -27,6 +27,8 @@ struct bx_tar_sparse_extent {
 struct bx_tar_entry {
     char* name;
     char* linkname;
+    char* uname;
+    char* gname;
     enum bx_tar_kind kind;
     mode_t mode;
     uid_t uid;

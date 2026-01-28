@@ -24,6 +24,8 @@
 struct bx_tar_pax_info {
     char* path;
     char* linkpath;
+    char* uname;
+    char* gname;
     int sparse_major;
     int sparse_minor;
     size_t sparse_realsize;
@@ -43,10 +45,14 @@ struct bx_tar_stream_input {
 void bx_tar_entry_free(struct bx_tar_entry* entry) {
     free(entry->name);
     free(entry->linkname);
+    free(entry->uname);
+    free(entry->gname);
     free(entry->data);
     free(entry->extents);
     entry->name = NULL;
     entry->linkname = NULL;
+    entry->uname = NULL;
+    entry->gname = NULL;
     entry->data = NULL;
     entry->extents = NULL;
 }
@@ -80,6 +86,8 @@ bool bx_tar_entry_list_push(struct bx_tar_entry_list* list, const struct bx_tar_
 static void bx_tar_pax_info_clear(struct bx_tar_pax_info* pax) {
     free(pax->path);
     free(pax->linkpath);
+    free(pax->uname);
+    free(pax->gname);
     memset(pax, 0, sizeof(*pax));
 }
 
@@ -212,6 +220,14 @@ static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax, char* record) {
         free(pax->linkpath);
         pax->linkpath = xstrdup(value);
     }
+    else if (strcmp(key, "uname") == 0) {
+        free(pax->uname);
+        pax->uname = xstrdup(value);
+    }
+    else if (strcmp(key, "gname") == 0) {
+        free(pax->gname);
+        pax->gname = xstrdup(value);
+    }
     else if (strcmp(key, "GNU.sparse.name") == 0) {
         free(pax->path);
         pax->path = xstrdup(value);
@@ -338,6 +354,30 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         entry->gid = (gid_t)parsed_gid;
         entry->mtime.tv_sec = (time_t)parsed_mtime;
         entry->mtime.tv_nsec = 0;
+    }
+    if (pax->uname != NULL) {
+        entry->uname = xstrdup(pax->uname);
+    }
+    else {
+        char owner_buf[33];
+
+        memcpy(owner_buf, header + 265, 32u);
+        owner_buf[32] = '\0';
+        if (owner_buf[0] != '\0') {
+            entry->uname = xstrdup(owner_buf);
+        }
+    }
+    if (pax->gname != NULL) {
+        entry->gname = xstrdup(pax->gname);
+    }
+    else {
+        char group_buf[33];
+
+        memcpy(group_buf, header + 297, 32u);
+        group_buf[32] = '\0';
+        if (group_buf[0] != '\0') {
+            entry->gname = xstrdup(group_buf);
+        }
     }
     if (pax->linkpath != NULL) {
         entry->linkname = xstrdup(pax->linkpath);
@@ -1100,6 +1140,8 @@ static bool bx_tar_clone_entry(struct bx_tar_entry* dst,
     dst->mode = src->mode;
     dst->uid = src->uid;
     dst->gid = src->gid;
+    dst->uname = src->uname ? xstrdup(src->uname) : NULL;
+    dst->gname = src->gname ? xstrdup(src->gname) : NULL;
     dst->mtime = src->mtime;
     dst->data_len = src->data_len;
     dst->size = src->size;

@@ -18,12 +18,48 @@ struct bx_tar_files_from_state {
     bool verbatim;
     bool unquote;
     bool recurse;
-    struct bx_archive_name_list exclude_patterns;
+    struct bx_tar_match_policy member_policy;
+    struct bx_tar_match_policy exclude_policy;
+    struct bx_tar_match_pattern_list exclude_patterns;
+    struct bx_archive_name_list exclude_ignore_files;
+    struct bx_archive_name_list exclude_ignore_recursive_files;
+    struct bx_archive_name_list exclude_tag_files;
+    struct bx_archive_name_list exclude_tag_all_files;
+    struct bx_archive_name_list exclude_tag_under_files;
+    bool exclude_caches;
+    bool exclude_caches_all;
+    bool exclude_caches_under;
+    bool exclude_vcs;
+    bool exclude_vcs_ignores;
+};
+
+struct bx_tar_create_dir_policy {
+    char* source_path;
+    char* archive_path;
+    struct bx_tar_match_pattern_list local_patterns;
+    struct bx_tar_match_pattern_list recursive_patterns;
+    struct bx_archive_name_list keep_names;
+    bool exclude_under;
+    bool exclude_except_keep;
 };
 
 struct bx_tar_create_filter_state {
-    const struct bx_archive_name_list* exclude_patterns;
-    const struct bx_diag_ctx* diag;
+    const struct bx_tar_match_pattern_list* exclude_patterns;
+    const struct bx_archive_name_list* exclude_ignore_files;
+    const struct bx_archive_name_list* exclude_ignore_recursive_files;
+    const struct bx_archive_name_list* exclude_tag_files;
+    const struct bx_archive_name_list* exclude_tag_all_files;
+    const struct bx_archive_name_list* exclude_tag_under_files;
+    const struct bx_tar_match_policy* exclude_policy;
+    struct bx_tar_create_dir_policy* dir_policies;
+    size_t dir_policies_len;
+    size_t dir_policies_cap;
+    bool exclude_caches;
+    bool exclude_caches_all;
+    bool exclude_caches_under;
+    bool exclude_vcs;
+    bool exclude_vcs_ignores;
+    struct bx_diag_ctx* diag;
     bool* had_create_errors;
 };
 
@@ -169,6 +205,115 @@ bool bx_tar_create_options_set_files_from_unquote(struct bx_tar_create_options* 
     );
 }
 
+bool bx_tar_create_options_set_anchored(struct bx_tar_create_options* options,
+                                        bool enabled) {
+    return bx_tar_create_directive_list_append(
+        &options->directives,
+        enabled
+            ? BX_TAR_CREATE_DIRECTIVE_ANCHORED_ON
+            : BX_TAR_CREATE_DIRECTIVE_ANCHORED_OFF,
+        NULL
+    );
+}
+
+bool bx_tar_create_options_set_ignore_case(struct bx_tar_create_options* options,
+                                           bool enabled) {
+    return bx_tar_create_directive_list_append(
+        &options->directives,
+        enabled
+            ? BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_ON
+            : BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_OFF,
+        NULL
+    );
+}
+
+bool bx_tar_create_options_set_wildcards(struct bx_tar_create_options* options,
+                                         bool enabled) {
+    return bx_tar_create_directive_list_append(
+        &options->directives,
+        enabled
+            ? BX_TAR_CREATE_DIRECTIVE_WILDCARDS_ON
+            : BX_TAR_CREATE_DIRECTIVE_WILDCARDS_OFF,
+        NULL
+    );
+}
+
+bool bx_tar_create_options_set_wildcards_match_slash(struct bx_tar_create_options* options,
+                                                     bool enabled) {
+    return bx_tar_create_directive_list_append(
+        &options->directives,
+        enabled
+            ? BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_ON
+            : BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_OFF,
+        NULL
+    );
+}
+
+bool bx_tar_create_options_set_exclude_caches(struct bx_tar_create_options* options) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES,
+                                               NULL);
+}
+
+bool bx_tar_create_options_set_exclude_caches_all(struct bx_tar_create_options* options) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_ALL,
+                                               NULL);
+}
+
+bool bx_tar_create_options_set_exclude_caches_under(struct bx_tar_create_options* options) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_UNDER,
+                                               NULL);
+}
+
+bool bx_tar_create_options_add_exclude_ignore(struct bx_tar_create_options* options,
+                                              const char* path) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE,
+                                               path);
+}
+
+bool bx_tar_create_options_add_exclude_ignore_recursive(struct bx_tar_create_options* options,
+                                                        const char* path) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE_RECURSIVE,
+                                               path);
+}
+
+bool bx_tar_create_options_add_exclude_tag(struct bx_tar_create_options* options,
+                                           const char* path) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG,
+                                               path);
+}
+
+bool bx_tar_create_options_add_exclude_tag_all(struct bx_tar_create_options* options,
+                                               const char* path) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_ALL,
+                                               path);
+}
+
+bool bx_tar_create_options_add_exclude_tag_under(struct bx_tar_create_options* options,
+                                                 const char* path) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_UNDER,
+                                               path);
+}
+
+bool bx_tar_create_options_set_exclude_vcs(struct bx_tar_create_options* options) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS,
+                                               NULL);
+}
+
+bool bx_tar_create_options_set_exclude_vcs_ignores(struct bx_tar_create_options* options) {
+    return bx_tar_create_directive_list_append(&options->directives,
+                                               BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS_IGNORES,
+                                               NULL);
+}
+
 static char* bx_tar_create_resolve_input_path(const char* cwd, const char* path) {
     if (path[0] == '/' || cwd == NULL) {
         return xstrdup(path);
@@ -196,12 +341,13 @@ static void bx_tar_create_state_set_null(struct bx_tar_files_from_state* state, 
     state->verbatim = enabled;
 }
 
-static bool bx_tar_create_append_name_list(struct bx_archive_name_list* dest,
-                                           const struct bx_archive_name_list* src) {
+static bool bx_tar_create_append_exclude_name_list(struct bx_tar_match_pattern_list* dest,
+                                                   const struct bx_archive_name_list* src,
+                                                   const struct bx_tar_match_policy* policy) {
     size_t i;
 
     for (i = 0u; i < src->len; i++) {
-        if (!bx_archive_name_list_append(dest, src->items[i])) {
+        if (!bx_tar_match_pattern_list_append(dest, src->items[i], policy)) {
             return false;
         }
     }
@@ -220,20 +366,384 @@ static bool bx_tar_create_add_exclude_from_path(struct bx_tar_files_from_state* 
         bx_archive_name_list_free(&loaded);
         return false;
     }
-    ok = bx_tar_create_append_name_list(&state->exclude_patterns, &loaded);
+    ok = bx_tar_create_append_exclude_name_list(&state->exclude_patterns,
+                                                &loaded,
+                                                &state->exclude_policy);
     bx_archive_name_list_free(&loaded);
     return ok;
+}
+
+static void bx_tar_create_dir_policy_free(struct bx_tar_create_dir_policy* policy) {
+    free(policy->source_path);
+    free(policy->archive_path);
+    bx_tar_match_pattern_list_free(&policy->local_patterns);
+    bx_tar_match_pattern_list_free(&policy->recursive_patterns);
+    bx_archive_name_list_free(&policy->keep_names);
+    memset(policy, 0, sizeof(*policy));
+}
+
+static void bx_tar_create_filter_state_cleanup(struct bx_tar_create_filter_state* state) {
+    while (state->dir_policies_len > 0u) {
+        bx_tar_create_dir_policy_free(&state->dir_policies[--state->dir_policies_len]);
+    }
+    free(state->dir_policies);
+    state->dir_policies = NULL;
+    state->dir_policies_cap = 0u;
+}
+
+static bool bx_tar_create_name_list_append_unique(struct bx_archive_name_list* list,
+                                                  const char* name) {
+    size_t i;
+
+    for (i = 0u; i < list->len; i++) {
+        if (strcmp(list->items[i], name) == 0) {
+            return true;
+        }
+    }
+    return bx_archive_name_list_append(list, name);
+}
+
+static bool bx_tar_create_name_list_contains(const struct bx_archive_name_list* list,
+                                             const char* name) {
+    size_t i;
+
+    for (i = 0u; i < list->len; i++) {
+        if (strcmp(list->items[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bx_tar_create_dir_policy_append(struct bx_tar_create_filter_state* state,
+                                            const char* source_path,
+                                            const char* archive_path,
+                                            struct bx_tar_create_dir_policy** policy_out) {
+    struct bx_tar_create_dir_policy* slot;
+
+    if (state->dir_policies_len == state->dir_policies_cap) {
+        size_t next_cap = state->dir_policies_cap ? state->dir_policies_cap * 2u : 8u;
+        state->dir_policies = xrealloc(state->dir_policies,
+                                       next_cap * sizeof(*state->dir_policies));
+        state->dir_policies_cap = next_cap;
+    }
+
+    slot = &state->dir_policies[state->dir_policies_len++];
+    memset(slot, 0, sizeof(*slot));
+    slot->source_path = xstrdup(source_path);
+    slot->archive_path = xstrdup(archive_path);
+    *policy_out = slot;
+    return true;
+}
+
+static const char* bx_tar_create_relative_child_path(const char* dir_path,
+                                                     const char* path) {
+    size_t dir_len = strlen(dir_path);
+
+    if (strncmp(dir_path, path, dir_len) != 0 || path[dir_len] != '/') {
+        return NULL;
+    }
+    return path + dir_len + 1u;
+}
+
+static bool bx_tar_create_path_contains_sep(const char* path) {
+    return strchr(path, '/') != NULL;
+}
+
+static bool bx_tar_create_path_exists(const char* dir_path,
+                                      const char* name) {
+    char* full_path = bx_path_join(dir_path, name);
+    bool exists = (access(full_path, F_OK) == 0);
+
+    free(full_path);
+    return exists;
+}
+
+static bool bx_tar_create_load_pattern_file(const char* path,
+                                            struct bx_tar_match_pattern_list* out,
+                                            const struct bx_tar_match_policy* policy,
+                                            struct bx_diag_ctx* diag) {
+    struct bx_archive_name_list loaded = {0};
+    bool ok = true;
+    size_t i;
+
+    if (access(path, F_OK) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    if (!bx_archive_name_list_read_path(path, '\n', &loaded, diag)) {
+        return false;
+    }
+
+    for (i = 0u; i < loaded.len; i++) {
+        if (!bx_tar_match_pattern_list_append(out, loaded.items[i], policy)) {
+            ok = false;
+            break;
+        }
+    }
+    bx_archive_name_list_free(&loaded);
+    return ok;
+}
+
+static bool bx_tar_create_record_ignore_file_patterns(struct bx_tar_create_dir_policy* policy,
+                                                      const char* dir_path,
+                                                      const struct bx_archive_name_list* names,
+                                                      bool recursive,
+                                                      const struct bx_tar_match_policy* match_policy,
+                                                      struct bx_diag_ctx* diag) {
+    size_t i;
+
+    for (i = 0u; i < names->len; i++) {
+        char* full_path = bx_path_join(dir_path, names->items[i]);
+        bool ok = bx_tar_create_load_pattern_file(full_path,
+                                                  recursive
+                                                      ? &policy->recursive_patterns
+                                                      : &policy->local_patterns,
+                                                  match_policy,
+                                                  diag);
+        free(full_path);
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool bx_tar_create_is_vcs_dir_name(const char* name) {
+    static const char* const names[] = {
+        "CVS",
+        "RCS",
+        "SCCS",
+        ".git",
+        ".hg",
+        ".svn",
+        ".bzr",
+        "_darcs",
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strcmp(name, names[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bx_tar_create_record_vcs_ignore_patterns(struct bx_tar_create_dir_policy* policy,
+                                                     const char* dir_path,
+                                                     const struct bx_tar_match_policy* match_policy,
+                                                     struct bx_diag_ctx* diag) {
+    static const struct {
+        const char* name;
+        bool recursive;
+    } files[] = {
+        {".cvsignore", false},
+        {".gitignore", true},
+        {".hgignore", true},
+        {".bzrignore", true},
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(files) / sizeof(files[0]); i++) {
+        char* full_path = bx_path_join(dir_path, files[i].name);
+        bool ok = bx_tar_create_load_pattern_file(full_path,
+                                                  files[i].recursive
+                                                      ? &policy->recursive_patterns
+                                                      : &policy->local_patterns,
+                                                  match_policy,
+                                                  diag);
+        free(full_path);
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool bx_tar_create_policy_matches_relative(const struct bx_tar_create_dir_policy* policy,
+                                                  const char* archive_path) {
+    return strcmp(policy->archive_path, archive_path) == 0;
+}
+
+static bool bx_tar_create_check_ancestor_policies(const struct bx_tar_create_filter_state* state,
+                                                  const char* source_path,
+                                                  const char* archive_path) {
+    size_t i;
+
+    for (i = 0u; i < state->dir_policies_len; i++) {
+        const struct bx_tar_create_dir_policy* policy = &state->dir_policies[i];
+        const char* rel_source = bx_tar_create_relative_child_path(policy->source_path, source_path);
+        const char* rel_archive;
+
+        if (rel_source == NULL || bx_tar_create_policy_matches_relative(policy, archive_path)) {
+            continue;
+        }
+        rel_archive = bx_tar_create_relative_child_path(policy->archive_path, archive_path);
+        if (rel_archive == NULL) {
+            continue;
+        }
+        if (policy->exclude_under) {
+            return false;
+        }
+        if (policy->exclude_except_keep) {
+            if (bx_tar_create_path_contains_sep(rel_source)
+                || !bx_tar_create_name_list_contains(&policy->keep_names,
+                                                     bx_path_basename_ptr(rel_source))) {
+                return false;
+            }
+        }
+        if (bx_tar_path_excluded(&policy->recursive_patterns, rel_archive)) {
+            return false;
+        }
+        if (!bx_tar_create_path_contains_sep(rel_source)
+            && bx_tar_path_excluded(&policy->local_patterns, rel_archive)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool bx_tar_create_dir_has_any_marker(const char* dir_path,
+                                             const struct bx_archive_name_list* names,
+                                             struct bx_archive_name_list* found_names) {
+    size_t i;
+
+    for (i = 0u; i < names->len; i++) {
+        if (bx_tar_create_path_exists(dir_path, names->items[i])) {
+            if (found_names != NULL
+                && !bx_archive_name_list_append(found_names, names->items[i])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool bx_tar_create_maybe_record_dir_policy(struct bx_tar_create_filter_state* state,
+                                                  const char* source_path,
+                                                  const char* archive_path) {
+    struct bx_tar_create_dir_policy* policy = NULL;
+    struct bx_archive_name_list keep_names = {0};
+    bool exclude_all = false;
+    bool exclude_under = false;
+    bool exclude_except_keep = false;
+    bool need_policy = false;
+    bool ok = true;
+
+    size_t i;
+
+    if (state->exclude_caches_all && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+        exclude_all = true;
+    }
+    for (i = 0u; !exclude_all && i < state->exclude_tag_all_files->len; i++) {
+        if (bx_tar_create_path_exists(source_path, state->exclude_tag_all_files->items[i])) {
+            exclude_all = true;
+        }
+    }
+    if (exclude_all) {
+        bx_archive_name_list_free(&keep_names);
+        return false;
+    }
+
+    if (state->exclude_caches_under && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+        exclude_under = true;
+    }
+    for (i = 0u; !exclude_under && i < state->exclude_tag_under_files->len; i++) {
+        if (bx_tar_create_path_exists(source_path, state->exclude_tag_under_files->items[i])) {
+            exclude_under = true;
+        }
+    }
+
+    if (!exclude_under) {
+        if (state->exclude_caches && bx_tar_create_path_exists(source_path, "CACHEDIR.TAG")) {
+            exclude_except_keep = true;
+            if (!bx_tar_create_name_list_append_unique(&keep_names, "CACHEDIR.TAG")) {
+                ok = false;
+            }
+        }
+        if (ok
+            && !bx_tar_create_dir_has_any_marker(source_path,
+                                                 state->exclude_tag_files,
+                                                 &keep_names)) {
+            ok = false;
+        }
+        exclude_except_keep = exclude_except_keep || keep_names.len > 0u;
+    }
+
+    if (!ok) {
+        bx_archive_name_list_free(&keep_names);
+        return false;
+    }
+
+    need_policy = exclude_under
+        || exclude_except_keep
+        || state->exclude_ignore_files->len > 0u
+        || state->exclude_ignore_recursive_files->len > 0u
+        || state->exclude_vcs_ignores;
+    if (!need_policy) {
+        bx_archive_name_list_free(&keep_names);
+        return true;
+    }
+
+    if (!bx_tar_create_dir_policy_append(state, source_path, archive_path, &policy)) {
+        bx_archive_name_list_free(&keep_names);
+        return false;
+    }
+    policy->keep_names = keep_names;
+    policy->exclude_under = exclude_under;
+    policy->exclude_except_keep = exclude_except_keep;
+
+    if (!bx_tar_create_record_ignore_file_patterns(policy,
+                                                   source_path,
+                                                   state->exclude_ignore_files,
+                                                   false,
+                                                   state->exclude_policy,
+                                                   state->diag)
+        || !bx_tar_create_record_ignore_file_patterns(policy,
+                                                      source_path,
+                                                      state->exclude_ignore_recursive_files,
+                                                      true,
+                                                      state->exclude_policy,
+                                                      state->diag)) {
+        return false;
+    }
+    if (state->exclude_vcs_ignores
+        && !bx_tar_create_record_vcs_ignore_patterns(policy,
+                                                     source_path,
+                                                     state->exclude_policy,
+                                                     state->diag)) {
+        return false;
+    }
+
+    return true;
 }
 
 static bool bx_tar_create_include_path(const char* source_path,
                                        const char* archive_path,
                                        const struct stat* st,
                                        void* user_data) {
-    const struct bx_tar_create_filter_state* state = user_data;
+    struct bx_tar_create_filter_state* state = user_data;
 
-    (void)source_path;
-    (void)st;
-    return !bx_tar_path_excluded(state->exclude_patterns, archive_path);
+    if (!bx_tar_create_check_ancestor_policies(state, source_path, archive_path)) {
+        return false;
+    }
+    if (bx_tar_path_excluded(state->exclude_patterns, archive_path)) {
+        return false;
+    }
+    if (state->exclude_vcs
+        && S_ISDIR(st->st_mode)
+        && bx_tar_create_is_vcs_dir_name(bx_path_basename_ptr(archive_path))) {
+        return false;
+    }
+    if (S_ISDIR(st->st_mode)
+        && !bx_tar_create_maybe_record_dir_policy(state, source_path, archive_path)) {
+        return false;
+    }
+    return true;
 }
 
 static const char* bx_tar_create_error_verb(enum bx_archive_fs_error_op op) {
@@ -273,6 +783,17 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
                                    const char* name) {
     struct bx_tar_create_filter_state filter_state = {
         .exclude_patterns = &state->exclude_patterns,
+        .exclude_ignore_files = &state->exclude_ignore_files,
+        .exclude_ignore_recursive_files = &state->exclude_ignore_recursive_files,
+        .exclude_tag_files = &state->exclude_tag_files,
+        .exclude_tag_all_files = &state->exclude_tag_all_files,
+        .exclude_tag_under_files = &state->exclude_tag_under_files,
+        .exclude_policy = &state->exclude_policy,
+        .exclude_caches = state->exclude_caches,
+        .exclude_caches_all = state->exclude_caches_all,
+        .exclude_caches_under = state->exclude_caches_under,
+        .exclude_vcs = state->exclude_vcs,
+        .exclude_vcs_ignores = state->exclude_vcs_ignores,
         .diag = ctx->diag,
         .had_create_errors = &ctx->had_create_errors,
     };
@@ -288,6 +809,7 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
                                               &filter_state,
                                               ctx->diag);
 
+    bx_tar_create_filter_state_cleanup(&filter_state);
     free(source_path);
     return ok;
 }
@@ -346,6 +868,66 @@ static bool bx_tar_create_process_option_record(struct bx_tar_create_collect_ctx
         state->recurse = true;
         return true;
     }
+    if (strcmp(record, "--anchored") == 0) {
+        return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                &state->exclude_policy,
+                                                true);
+    }
+    if (strcmp(record, "--no-anchored") == 0) {
+        return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                &state->exclude_policy,
+                                                false);
+    }
+    if (strcmp(record, "--ignore-case") == 0) {
+        return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                   &state->exclude_policy,
+                                                   true);
+    }
+    if (strcmp(record, "--no-ignore-case") == 0) {
+        return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                   &state->exclude_policy,
+                                                   false);
+    }
+    if (strcmp(record, "--wildcards") == 0) {
+        return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                 &state->exclude_policy,
+                                                 true);
+    }
+    if (strcmp(record, "--no-wildcards") == 0) {
+        return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                 &state->exclude_policy,
+                                                 false);
+    }
+    if (strcmp(record, "--wildcards-match-slash") == 0) {
+        return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                             &state->exclude_policy,
+                                                             true);
+    }
+    if (strcmp(record, "--no-wildcards-match-slash") == 0) {
+        return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                             &state->exclude_policy,
+                                                             false);
+    }
+    if (strcmp(record, "--exclude-caches") == 0) {
+        state->exclude_caches = true;
+        return true;
+    }
+    if (strcmp(record, "--exclude-caches-all") == 0) {
+        state->exclude_caches_all = true;
+        return true;
+    }
+    if (strcmp(record, "--exclude-caches-under") == 0) {
+        state->exclude_caches_under = true;
+        return true;
+    }
+    if (strcmp(record, "--exclude-vcs") == 0) {
+        state->exclude_vcs = true;
+        return true;
+    }
+    if (strcmp(record, "--exclude-vcs-ignores") == 0) {
+        state->exclude_vcs_ignores = true;
+        return true;
+    }
 
     if (strncmp(record, "--exclude=", strlen("--exclude=")) == 0) {
         arg = record + strlen("--exclude=");
@@ -375,7 +957,9 @@ static bool bx_tar_create_process_option_record(struct bx_tar_create_collect_ctx
         bool ok;
 
         decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
-        ok = bx_archive_name_list_append(&state->exclude_patterns, decoded);
+        ok = bx_tar_match_pattern_list_append(&state->exclude_patterns,
+                                              decoded,
+                                              &state->exclude_policy);
         free(decoded);
         return ok;
     }
@@ -424,6 +1008,101 @@ static bool bx_tar_create_process_option_record(struct bx_tar_create_collect_ctx
 
         decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
         ok = bx_tar_create_add_exclude_from_path(state, decoded, ctx->diag);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-ignore=", strlen("--exclude-ignore=")) == 0) {
+        arg = record + strlen("--exclude-ignore=");
+    }
+    else if (strncmp(record, "--exclude-ignore", strlen("--exclude-ignore")) == 0) {
+        const char* rest = record + strlen("--exclude-ignore");
+        if (*rest == '\0' || (*rest != ' ' && *rest != '\t')) {
+            return bx_tar_create_note_list_option_error(ctx, list_path, record_no, "unrecognized option");
+        }
+        arg = bx_tar_files_from_skip_inline_space(rest);
+    }
+    if (arg != NULL) {
+        bool ok;
+        decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
+        ok = bx_archive_name_list_append(&state->exclude_ignore_files, decoded);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-ignore-recursive=", strlen("--exclude-ignore-recursive=")) == 0) {
+        arg = record + strlen("--exclude-ignore-recursive=");
+    }
+    else if (strncmp(record, "--exclude-ignore-recursive", strlen("--exclude-ignore-recursive")) == 0) {
+        const char* rest = record + strlen("--exclude-ignore-recursive");
+        if (*rest == '\0' || (*rest != ' ' && *rest != '\t')) {
+            return bx_tar_create_note_list_option_error(ctx, list_path, record_no, "unrecognized option");
+        }
+        arg = bx_tar_files_from_skip_inline_space(rest);
+    }
+    if (arg != NULL) {
+        bool ok;
+        decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
+        ok = bx_archive_name_list_append(&state->exclude_ignore_recursive_files, decoded);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-tag=", strlen("--exclude-tag=")) == 0) {
+        arg = record + strlen("--exclude-tag=");
+    }
+    else if (strncmp(record, "--exclude-tag", strlen("--exclude-tag")) == 0) {
+        const char* rest = record + strlen("--exclude-tag");
+        if (*rest == '\0' || (*rest != ' ' && *rest != '\t')) {
+            return bx_tar_create_note_list_option_error(ctx, list_path, record_no, "unrecognized option");
+        }
+        arg = bx_tar_files_from_skip_inline_space(rest);
+    }
+    if (arg != NULL) {
+        bool ok;
+        decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
+        ok = bx_archive_name_list_append(&state->exclude_tag_files, decoded);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-tag-all=", strlen("--exclude-tag-all=")) == 0) {
+        arg = record + strlen("--exclude-tag-all=");
+    }
+    else if (strncmp(record, "--exclude-tag-all", strlen("--exclude-tag-all")) == 0) {
+        const char* rest = record + strlen("--exclude-tag-all");
+        if (*rest == '\0' || (*rest != ' ' && *rest != '\t')) {
+            return bx_tar_create_note_list_option_error(ctx, list_path, record_no, "unrecognized option");
+        }
+        arg = bx_tar_files_from_skip_inline_space(rest);
+    }
+    if (arg != NULL) {
+        bool ok;
+        decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
+        ok = bx_archive_name_list_append(&state->exclude_tag_all_files, decoded);
+        free(decoded);
+        return ok;
+    }
+
+    arg = NULL;
+    if (strncmp(record, "--exclude-tag-under=", strlen("--exclude-tag-under=")) == 0) {
+        arg = record + strlen("--exclude-tag-under=");
+    }
+    else if (strncmp(record, "--exclude-tag-under", strlen("--exclude-tag-under")) == 0) {
+        const char* rest = record + strlen("--exclude-tag-under");
+        if (*rest == '\0' || (*rest != ' ' && *rest != '\t')) {
+            return bx_tar_create_note_list_option_error(ctx, list_path, record_no, "unrecognized option");
+        }
+        arg = bx_tar_files_from_skip_inline_space(rest);
+    }
+    if (arg != NULL) {
+        bool ok;
+        decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
+        ok = bx_archive_name_list_append(&state->exclude_tag_under_files, decoded);
         free(decoded);
         return ok;
     }
@@ -640,7 +1319,9 @@ static bool bx_tar_create_apply_directive(struct bx_tar_create_collect_ctx* ctx,
         case BX_TAR_CREATE_DIRECTIVE_ADD_PATH:
             return bx_tar_create_add_path(ctx, state, directive->text);
         case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_PATTERN:
-            return bx_archive_name_list_append(&state->exclude_patterns, directive->text);
+            return bx_tar_match_pattern_list_append(&state->exclude_patterns,
+                                                    directive->text,
+                                                    &state->exclude_policy);
         case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_FROM:
             return bx_tar_create_add_exclude_from_path(state, directive->text, ctx->diag);
         case BX_TAR_CREATE_DIRECTIVE_RECURSE_ON:
@@ -673,6 +1354,63 @@ static bool bx_tar_create_apply_directive(struct bx_tar_create_collect_ctx* ctx,
         case BX_TAR_CREATE_DIRECTIVE_FILES_FROM_UNQUOTE_OFF:
             state->unquote = false;
             return true;
+        case BX_TAR_CREATE_DIRECTIVE_ANCHORED_ON:
+            return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                    &state->exclude_policy,
+                                                    true);
+        case BX_TAR_CREATE_DIRECTIVE_ANCHORED_OFF:
+            return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                    &state->exclude_policy,
+                                                    false);
+        case BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_ON:
+            return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                       &state->exclude_policy,
+                                                       true);
+        case BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_OFF:
+            return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                       &state->exclude_policy,
+                                                       false);
+        case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_ON:
+            return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                     &state->exclude_policy,
+                                                     true);
+        case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_OFF:
+            return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                     &state->exclude_policy,
+                                                     false);
+        case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_ON:
+            return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                                 &state->exclude_policy,
+                                                                 true);
+        case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_OFF:
+            return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                                 &state->exclude_policy,
+                                                                 false);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES:
+            state->exclude_caches = true;
+            return true;
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_ALL:
+            state->exclude_caches_all = true;
+            return true;
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_UNDER:
+            state->exclude_caches_under = true;
+            return true;
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE:
+            return bx_archive_name_list_append(&state->exclude_ignore_files, directive->text);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE_RECURSIVE:
+            return bx_archive_name_list_append(&state->exclude_ignore_recursive_files, directive->text);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG:
+            return bx_archive_name_list_append(&state->exclude_tag_files, directive->text);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_ALL:
+            return bx_archive_name_list_append(&state->exclude_tag_all_files, directive->text);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_UNDER:
+            return bx_archive_name_list_append(&state->exclude_tag_under_files, directive->text);
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS:
+            state->exclude_vcs = true;
+            return true;
+        case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS_IGNORES:
+            state->exclude_vcs_ignores = true;
+            return true;
     }
 
     return true;
@@ -690,6 +1428,11 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
         .unquote = true,
         .recurse = true,
         .exclude_patterns = {0},
+        .exclude_ignore_files = {0},
+        .exclude_ignore_recursive_files = {0},
+        .exclude_tag_files = {0},
+        .exclude_tag_all_files = {0},
+        .exclude_tag_under_files = {0},
     };
     struct bx_tar_create_collect_ctx ctx = {
         .list = list,
@@ -700,6 +1443,8 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
     size_t i;
     bool ok = true;
 
+    bx_tar_match_policy_init_member_default(&state.member_policy);
+    bx_tar_match_policy_init_exclude_default(&state.exclude_policy);
     for (i = 0u; i < create_options->directives.len; i++) {
         if (!bx_tar_create_apply_directive(&ctx, &state, &create_options->directives.items[i])) {
             ok = false;
@@ -711,7 +1456,12 @@ out:
     if (had_create_errors != NULL) {
         *had_create_errors = ctx.had_create_errors;
     }
-    bx_archive_name_list_free(&state.exclude_patterns);
+    bx_tar_match_pattern_list_free(&state.exclude_patterns);
+    bx_archive_name_list_free(&state.exclude_ignore_files);
+    bx_archive_name_list_free(&state.exclude_ignore_recursive_files);
+    bx_archive_name_list_free(&state.exclude_tag_files);
+    bx_archive_name_list_free(&state.exclude_tag_all_files);
+    bx_archive_name_list_free(&state.exclude_tag_under_files);
     free(state.cwd);
     return ok;
 }

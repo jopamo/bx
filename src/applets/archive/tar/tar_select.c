@@ -16,6 +16,8 @@ struct bx_tar_select_state {
     bool verbatim;
     bool unquote;
     bool recurse;
+    struct bx_tar_match_policy member_policy;
+    struct bx_tar_match_policy exclude_policy;
     bool had_errors;
     struct bx_tar_select_plan* plan;
     struct bx_diag_ctx* diag;
@@ -24,6 +26,7 @@ struct bx_tar_select_state {
 static bool bx_tar_select_plan_append_member(struct bx_tar_select_plan* plan,
                                              const char* name,
                                              const char* extract_dir,
+                                             const struct bx_tar_match_policy* policy,
                                              bool recurse) {
     struct bx_tar_select_member* slot;
 
@@ -36,6 +39,7 @@ static bool bx_tar_select_plan_append_member(struct bx_tar_select_plan* plan,
     slot = &plan->members[plan->len++];
     slot->name = xstrdup(name);
     slot->extract_dir = extract_dir ? xstrdup(extract_dir) : NULL;
+    slot->policy = *policy;
     slot->recurse = recurse;
     return true;
 }
@@ -56,12 +60,13 @@ static bool bx_tar_select_set_extract_dir(struct bx_tar_select_state* state,
     return true;
 }
 
-static bool bx_tar_select_append_name_list(struct bx_archive_name_list* dest,
-                                           const struct bx_archive_name_list* src) {
+static bool bx_tar_select_append_name_list(struct bx_tar_match_pattern_list* dest,
+                                           const struct bx_archive_name_list* src,
+                                           const struct bx_tar_match_policy* policy) {
     size_t i;
 
     for (i = 0u; i < src->len; i++) {
-        if (!bx_archive_name_list_append(dest, src->items[i])) {
+        if (!bx_tar_match_pattern_list_append(dest, src->items[i], policy)) {
             return false;
         }
     }
@@ -77,7 +82,9 @@ static bool bx_tar_select_add_exclude_from_path(struct bx_tar_select_state* stat
         bx_archive_name_list_free(&loaded);
         return false;
     }
-    ok = bx_tar_select_append_name_list(&state->plan->exclude_patterns, &loaded);
+    ok = bx_tar_select_append_name_list(&state->plan->exclude_patterns,
+                                        &loaded,
+                                        &state->exclude_policy);
     bx_archive_name_list_free(&loaded);
     return ok;
 }
@@ -136,6 +143,46 @@ static bool bx_tar_select_process_option_record(struct bx_tar_select_state* stat
         state->recurse = true;
         return true;
     }
+    if (strcmp(record, "--anchored") == 0) {
+        return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                &state->exclude_policy,
+                                                true);
+    }
+    if (strcmp(record, "--no-anchored") == 0) {
+        return bx_tar_match_policy_set_anchored(&state->member_policy,
+                                                &state->exclude_policy,
+                                                false);
+    }
+    if (strcmp(record, "--ignore-case") == 0) {
+        return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                   &state->exclude_policy,
+                                                   true);
+    }
+    if (strcmp(record, "--no-ignore-case") == 0) {
+        return bx_tar_match_policy_set_ignore_case(&state->member_policy,
+                                                   &state->exclude_policy,
+                                                   false);
+    }
+    if (strcmp(record, "--wildcards") == 0) {
+        return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                 &state->exclude_policy,
+                                                 true);
+    }
+    if (strcmp(record, "--no-wildcards") == 0) {
+        return bx_tar_match_policy_set_wildcards(&state->member_policy,
+                                                 &state->exclude_policy,
+                                                 false);
+    }
+    if (strcmp(record, "--wildcards-match-slash") == 0) {
+        return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                             &state->exclude_policy,
+                                                             true);
+    }
+    if (strcmp(record, "--no-wildcards-match-slash") == 0) {
+        return bx_tar_match_policy_set_wildcards_match_slash(&state->member_policy,
+                                                             &state->exclude_policy,
+                                                             false);
+    }
 
     if (strncmp(record, "--exclude=", strlen("--exclude=")) == 0) {
         arg = record + strlen("--exclude=");
@@ -152,7 +199,9 @@ static bool bx_tar_select_process_option_record(struct bx_tar_select_state* stat
         bool ok;
 
         decoded = bx_tar_files_from_decode_text(state->verbatim, state->unquote, arg);
-        ok = bx_archive_name_list_append(&state->plan->exclude_patterns, decoded);
+        ok = bx_tar_match_pattern_list_append(&state->plan->exclude_patterns,
+                                              decoded,
+                                              &state->exclude_policy);
         free(decoded);
         return ok;
     }
@@ -254,6 +303,7 @@ static bool bx_tar_select_add_member_record(struct bx_tar_select_state* state,
     bool ok = bx_tar_select_plan_append_member(state->plan,
                                                decoded,
                                                state->extract_dir,
+                                               &state->member_policy,
                                                state->recurse);
     free(decoded);
     return ok;
@@ -333,7 +383,7 @@ void bx_tar_select_plan_cleanup(struct bx_tar_select_plan* plan) {
     plan->cap = 0u;
     free(plan->default_extract_dir);
     plan->default_extract_dir = NULL;
-    bx_archive_name_list_free(&plan->exclude_patterns);
+    bx_tar_match_pattern_list_free(&plan->exclude_patterns);
 }
 
 bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
@@ -346,6 +396,8 @@ bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
         .verbatim = false,
         .unquote = true,
         .recurse = true,
+        .member_policy = {0},
+        .exclude_policy = {0},
         .had_errors = false,
         .plan = plan,
         .diag = diag,
@@ -353,6 +405,8 @@ bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
     size_t i;
 
     memset(plan, 0, sizeof(*plan));
+    bx_tar_match_policy_init_member_default(&state.member_policy);
+    bx_tar_match_policy_init_exclude_default(&state.exclude_policy);
     for (i = 0u; i < directives->directives.len; i++) {
         const struct bx_tar_create_directive* directive = &directives->directives.items[i];
 
@@ -366,12 +420,15 @@ bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
                 if (!bx_tar_select_plan_append_member(plan,
                                                       directive->text,
                                                       state.extract_dir,
+                                                      &state.member_policy,
                                                       state.recurse)) {
                     goto fail;
                 }
                 break;
             case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_PATTERN:
-                if (!bx_archive_name_list_append(&plan->exclude_patterns, directive->text)) {
+                if (!bx_tar_match_pattern_list_append(&plan->exclude_patterns,
+                                                      directive->text,
+                                                      &state.exclude_policy)) {
                     goto fail;
                 }
                 break;
@@ -411,6 +468,45 @@ bool bx_tar_select_plan_build(struct bx_tar_select_plan* plan,
             case BX_TAR_CREATE_DIRECTIVE_FILES_FROM_UNQUOTE_OFF:
                 state.unquote = false;
                 break;
+            case BX_TAR_CREATE_DIRECTIVE_ANCHORED_ON:
+                bx_tar_match_policy_set_anchored(&state.member_policy, &state.exclude_policy, true);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_ANCHORED_OFF:
+                bx_tar_match_policy_set_anchored(&state.member_policy, &state.exclude_policy, false);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_ON:
+                bx_tar_match_policy_set_ignore_case(&state.member_policy, &state.exclude_policy, true);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_IGNORE_CASE_OFF:
+                bx_tar_match_policy_set_ignore_case(&state.member_policy, &state.exclude_policy, false);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_ON:
+                bx_tar_match_policy_set_wildcards(&state.member_policy, &state.exclude_policy, true);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_OFF:
+                bx_tar_match_policy_set_wildcards(&state.member_policy, &state.exclude_policy, false);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_ON:
+                bx_tar_match_policy_set_wildcards_match_slash(&state.member_policy,
+                                                              &state.exclude_policy,
+                                                              true);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_WILDCARDS_MATCH_SLASH_OFF:
+                bx_tar_match_policy_set_wildcards_match_slash(&state.member_policy,
+                                                              &state.exclude_policy,
+                                                              false);
+                break;
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_ALL:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_CACHES_UNDER:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_IGNORE_RECURSIVE:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_ALL:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_TAG_UNDER:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS:
+            case BX_TAR_CREATE_DIRECTIVE_EXCLUDE_VCS_IGNORES:
+                break;
         }
     }
 
@@ -427,27 +523,9 @@ fail:
     return false;
 }
 
-static size_t bx_tar_select_trimmed_len(const char* name) {
-    size_t len = strlen(name);
-
-    while (len > 0u && name[len - 1u] == '/') {
-        len--;
-    }
-    return len;
-}
-
 bool bx_tar_select_member_matches_name(const struct bx_tar_select_member* member,
                                        const char* name) {
-    size_t member_len = bx_tar_select_trimmed_len(member->name);
-    size_t name_len = bx_tar_select_trimmed_len(name);
-
-    if (member_len == name_len && strncmp(member->name, name, member_len) == 0) {
-        return true;
-    }
-    if (!member->recurse || name_len <= member_len) {
-        return false;
-    }
-    return strncmp(member->name, name, member_len) == 0 && name[member_len] == '/';
+    return bx_tar_match_member_name(member->name, &member->policy, member->recurse, name);
 }
 
 bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,

@@ -34,9 +34,15 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --remove-files    delete archived source files after success\n");
     fprintf(stream, "  -O                    write extracted file data to standard output\n");
     fprintf(stream, "  -A                    append members from source archives\n");
+    fprintf(stream, "  -d                    compare archive members against the filesystem\n");
     fprintf(stream, "  -r                    append files to an existing archive\n");
     fprintf(stream, "  -u                    append files only when newer than the archived copy\n");
     fprintf(stream, "      --delete          remove named members from an archive\n");
+    fprintf(stream, "  -N DATE               include only files newer than DATE during filesystem input collection\n");
+    fprintf(stream, "      --newer=DATE      compare by status change or modification time\n");
+    fprintf(stream, "      --newer-mtime=DATE\n");
+    fprintf(stream, "                        compare by modification time only\n");
+    fprintf(stream, "  -K FILE               start list or extract at member FILE\n");
     fprintf(stream, "  -z                    filter the archive through gzip\n");
     fprintf(stream, "  -a                    choose compression from the archive suffix\n");
     fprintf(stream, "      --threads=N       use N gzip compression workers (0 uses online CPUs)\n");

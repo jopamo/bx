@@ -14,6 +14,7 @@
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
+#include "applets/archive/tar/tar_id_map.h"
 #include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_select.h"
@@ -21,15 +22,26 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/copy_data.h"
+#include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
+#include "lib/time_parse.h"
 #include "lib/thread_count.h"
 #include "lib/xreadwrite.h"
+
+#ifdef S_ISVTX
+#define BX_TAR_STICKY_BIT S_ISVTX
+#elif defined(S_ISTXT)
+#define BX_TAR_STICKY_BIT S_ISTXT
+#else
+#define BX_TAR_STICKY_BIT 01000
+#endif
 
 enum bx_tar_mode {
     BX_TAR_MODE_NONE = 0,
     BX_TAR_MODE_CATENATE,
     BX_TAR_MODE_CREATE,
+    BX_TAR_MODE_COMPARE,
     BX_TAR_MODE_LIST,
     BX_TAR_MODE_EXTRACT,
     BX_TAR_MODE_APPEND,
@@ -49,16 +61,23 @@ struct bx_tar_options {
     bool absolute_names;
     bool touch_mtime;
     bool sort_name;
+    const char* starting_file;
     bool format_ustar;
     bool owner_set;
     bool group_set;
     uid_t owner;
     gid_t group;
+    struct bx_tar_id_map owner_map;
+    struct bx_tar_id_map group_map;
     bool fixed_mtime;
     struct timespec mtime;
     bool xattrs;
     bool acls;
     bool no_mt;
+    char* mode_text;
+    bool newer_active;
+    bool newer_use_ctime;
+    struct timespec newer_time;
     size_t strip_components;
     int threads;
     int compress_threads;
@@ -78,6 +97,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_NOOP = 0,
     BX_TAR_OPT_MODE_CATENATE,
     BX_TAR_OPT_MODE_CREATE,
+    BX_TAR_OPT_MODE_COMPARE,
     BX_TAR_OPT_MODE_LIST,
     BX_TAR_OPT_MODE_EXTRACT,
     BX_TAR_OPT_MODE_APPEND,
@@ -100,6 +120,24 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_UNQUOTE_OFF,
     BX_TAR_OPT_NO_RECURSION,
     BX_TAR_OPT_RECURSION,
+    BX_TAR_OPT_ANCHORED_ON,
+    BX_TAR_OPT_ANCHORED_OFF,
+    BX_TAR_OPT_IGNORE_CASE_ON,
+    BX_TAR_OPT_IGNORE_CASE_OFF,
+    BX_TAR_OPT_WILDCARDS_ON,
+    BX_TAR_OPT_WILDCARDS_OFF,
+    BX_TAR_OPT_WILDCARDS_MATCH_SLASH_ON,
+    BX_TAR_OPT_WILDCARDS_MATCH_SLASH_OFF,
+    BX_TAR_OPT_EXCLUDE_CACHES,
+    BX_TAR_OPT_EXCLUDE_CACHES_ALL,
+    BX_TAR_OPT_EXCLUDE_CACHES_UNDER,
+    BX_TAR_OPT_EXCLUDE_IGNORE,
+    BX_TAR_OPT_EXCLUDE_IGNORE_RECURSIVE,
+    BX_TAR_OPT_EXCLUDE_TAG,
+    BX_TAR_OPT_EXCLUDE_TAG_ALL,
+    BX_TAR_OPT_EXCLUDE_TAG_UNDER,
+    BX_TAR_OPT_EXCLUDE_VCS,
+    BX_TAR_OPT_EXCLUDE_VCS_IGNORES,
     BX_TAR_OPT_REMOVE_FILES,
     BX_TAR_OPT_THREADS,
     BX_TAR_OPT_COMPRESS_THREADS,
@@ -110,14 +148,20 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
     BX_TAR_OPT_ABSOLUTE_NAMES_ON,
     BX_TAR_OPT_TOUCH_MTIME_ON,
+    BX_TAR_OPT_NEWER,
+    BX_TAR_OPT_NEWER_MTIME,
+    BX_TAR_OPT_STARTING_FILE,
     BX_TAR_OPT_STRIP_COMPONENTS,
     BX_TAR_OPT_ONE_TOP_LEVEL,
     BX_TAR_OPT_TRANSFORM,
     BX_TAR_OPT_FORMAT,
     BX_TAR_OPT_SORT,
     BX_TAR_OPT_MTIME,
+    BX_TAR_OPT_MODE,
     BX_TAR_OPT_OWNER,
     BX_TAR_OPT_GROUP,
+    BX_TAR_OPT_GROUP_MAP,
+    BX_TAR_OPT_OWNER_MAP,
     BX_TAR_OPT_XATTRS_ON,
     BX_TAR_OPT_XATTRS_OFF,
     BX_TAR_OPT_ACLS_ON,
@@ -143,8 +187,8 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--concatenate", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CATENATE},
     {"--create", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
     {"--delete", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_DELETE},
-    {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UNSUPPORTED},
-    {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UNSUPPORTED},
+    {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
+    {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--append", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_APPEND},
     {"--test-label", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UNSUPPORTED},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
@@ -167,16 +211,16 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--directory", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {"--exclude", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE},
     {"--exclude-backups", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-caches", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-caches-all", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-caches-under", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-ignore", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--exclude-ignore-recursive", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--exclude-tag", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--exclude-tag-all", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--exclude-tag-under", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--exclude-vcs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--exclude-vcs-ignores", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--exclude-caches", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES},
+    {"--exclude-caches-all", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES_ALL},
+    {"--exclude-caches-under", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_CACHES_UNDER},
+    {"--exclude-ignore", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_IGNORE},
+    {"--exclude-ignore-recursive", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_IGNORE_RECURSIVE},
+    {"--exclude-tag", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_TAG},
+    {"--exclude-tag-all", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_TAG_ALL},
+    {"--exclude-tag-under", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_TAG_UNDER},
+    {"--exclude-vcs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_VCS},
+    {"--exclude-vcs-ignores", BX_TAR_OPTARG_NONE, BX_TAR_OPT_EXCLUDE_VCS_IGNORES},
     {"--exclude-from", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
     {"--no-null", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_NULL_OFF},
     {"--no-unquote", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNQUOTE_OFF},
@@ -187,14 +231,14 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--verbatim-files-from", BX_TAR_OPTARG_NONE, BX_TAR_OPT_FILES_FROM_VERBATIM_ON},
     {"--no-recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_RECURSION},
     {"--recursion", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSION},
-    {"--anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-wildcards", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--wildcards", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ANCHORED_ON},
+    {"--ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_CASE_ON},
+    {"--no-anchored", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ANCHORED_OFF},
+    {"--no-ignore-case", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_CASE_OFF},
+    {"--no-wildcards", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_OFF},
+    {"--no-wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_MATCH_SLASH_OFF},
+    {"--wildcards", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_ON},
+    {"--wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_MATCH_SLASH_ON},
     {"--keep-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_OLD_FILES},
     {"--keep-directory-symlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--keep-newer-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -222,9 +266,9 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--group", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP},
     {"--numeric-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--owner", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER},
-    {"--group-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--owner-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--mode", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--group-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP_MAP},
+    {"--owner-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER_MAP},
+    {"--mode", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MODE},
     {"--mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MTIME},
     {"--touch", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
     {"--no-same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -282,10 +326,10 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--suffix", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--hard-dereference", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--dereference", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--starting-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--newer-mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--newer", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--after-date", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--starting-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STARTING_FILE},
+    {"--newer-mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER_MTIME},
+    {"--newer", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
+    {"--after-date", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
     {"--one-file-system", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--absolute-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {"--strip-components", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STRIP_COMPONENTS},
@@ -318,7 +362,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
 static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'A', "-A", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CATENATE},
     {'c', "-c", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_CREATE},
-    {'d', "-d", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UNSUPPORTED},
+    {'d', "-d", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {'r', "-r", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_APPEND},
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {'u', "-u", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
@@ -351,8 +395,8 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'Z', "-Z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'z', "-z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
     {'h', "-h", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'K', "-K", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {'N', "-N", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {'K', "-K", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_STARTING_FILE},
+    {'N', "-N", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NEWER},
     {'l', "-l", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'P', "-P", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {'s', "-s", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -380,10 +424,36 @@ bx_tar_make_stream_options(const struct bx_tar_options* options) {
         .owner_set = options->owner_set,
         .group_set = options->group_set,
         .fixed_mtime = options->fixed_mtime,
+        .mode_text = options->mode_text,
         .owner = options->owner,
         .group = options->group,
         .mtime = options->mtime,
+        .owner_map = &options->owner_map,
+        .group_map = &options->group_map,
     };
+}
+
+static bool bx_tar_validate_mode_arg(const char* text, struct bx_diag_ctx* diag) {
+    struct bx_mode_parse_params params = {
+        .initial_mode = 07777u,
+        .result_mask = 07777u,
+        .max_numeric_mode = 07777u,
+        .umask_value = 0u,
+        .sticky_bit = BX_TAR_STICKY_BIT,
+        .x_policy = BX_MODE_X_IF_DIRECTORY_OR_ANY_EXEC,
+        .is_directory = true,
+        .apply_umask_when_who_omitted = true,
+        .allow_setuid = true,
+        .allow_setgid = true,
+        .allow_sticky = true,
+    };
+    mode_t parsed = 0u;
+
+    if (bx_mode_parse(text, &params, &parsed)) {
+        return true;
+    }
+    bx_diag(diag, "invalid mode '%s'", text);
+    return false;
 }
 
 static bool bx_tar_output_uses_gzip(const struct bx_tar_options* options) {
@@ -539,12 +609,17 @@ struct bx_tar_extract_state {
     struct bx_tar_name_policy name_policy;
     bool warned_absolute;
     bool warned_dotdot;
+    bool starting_file_reached;
     bool* matched_members;
     int status;
     int current_fd;
     char* current_dest_path;
     mode_t current_mode_bits;
     struct timespec current_mtime;
+    uid_t current_owner;
+    gid_t current_group;
+    bool current_owner_mapped;
+    bool current_group_mapped;
     bool current_sparse;
     size_t current_sparse_extent_index;
     size_t current_sparse_extent_offset;
@@ -557,8 +632,29 @@ struct bx_tar_extract_state {
 };
 
 struct bx_tar_list_state {
+    const struct bx_tar_options* options;
+    bool starting_file_reached;
     const struct bx_tar_select_plan* select_plan;
     bool* matched_members;
+};
+
+struct bx_tar_compare_state {
+    const struct bx_tar_options* options;
+    const struct bx_tar_select_plan* select_plan;
+    struct bx_tar_name_policy name_policy;
+    bool warned_absolute;
+    bool warned_dotdot;
+    bool* matched_members;
+    int status;
+    int current_fd;
+    char* current_fs_path;
+    bool current_skip;
+    bool current_compare_contents;
+    bool current_sparse;
+    bool current_reported_content_diff;
+    size_t current_sparse_extent_index;
+    size_t current_sparse_extent_offset;
+    size_t current_sparse_logical_offset;
 };
 
 static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* select_plan) {
@@ -572,12 +668,15 @@ static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* selec
     return matched_members;
 }
 
+static int bx_tar_timespec_compare(struct timespec left, struct timespec right);
+
 static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
                                       const struct bx_tar_options* options,
                                       const struct bx_tar_select_plan* select_plan) {
     memset(state, 0, sizeof(*state));
     state->options = options;
     state->select_plan = select_plan;
+    state->starting_file_reached = options->starting_file == NULL;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
     state->name_policy = (struct bx_tar_name_policy){
         .absolute_names = options->absolute_names,
@@ -600,13 +699,55 @@ static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
 }
 
 static void bx_tar_list_state_init(struct bx_tar_list_state* state,
+                                   const struct bx_tar_options* options,
                                    const struct bx_tar_select_plan* select_plan) {
+    state->options = options;
+    state->starting_file_reached = options->starting_file == NULL;
     state->select_plan = select_plan;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
 }
 
 static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
     free(state->matched_members);
+}
+
+static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
+                                      const struct bx_tar_options* options,
+                                      const struct bx_tar_select_plan* select_plan) {
+    memset(state, 0, sizeof(*state));
+    state->options = options;
+    state->select_plan = select_plan;
+    state->matched_members = bx_tar_alloc_matched_members(select_plan);
+    state->current_fd = -1;
+    state->name_policy = (struct bx_tar_name_policy){
+        .absolute_names = options->absolute_names,
+        .strip_components = options->strip_components,
+        .one_top_level = options->one_top_level,
+        .transform = options->name_transform.active ? &options->name_transform : NULL,
+    };
+}
+
+static void bx_tar_compare_state_cleanup(struct bx_tar_compare_state* state) {
+    if (state->current_fd >= 0) {
+        close(state->current_fd);
+        state->current_fd = -1;
+    }
+    free(state->current_fs_path);
+    state->current_fs_path = NULL;
+    free(state->matched_members);
+}
+
+static bool bx_tar_starting_file_gate_reached(bool* reached_io,
+                                              const char* starting_file,
+                                              const struct bx_tar_entry* entry) {
+    if (*reached_io) {
+        return true;
+    }
+    if (starting_file != NULL && strcmp(entry->name, starting_file) == 0) {
+        *reached_io = true;
+        return true;
+    }
+    return false;
 }
 
 static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* state) {
@@ -618,12 +759,194 @@ static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* sta
     state->current_mode_bits = 0u;
     state->current_mtime.tv_sec = 0;
     state->current_mtime.tv_nsec = 0;
+    state->current_owner = 0;
+    state->current_group = 0;
+    state->current_owner_mapped = false;
+    state->current_group_mapped = false;
     state->current_sparse = false;
     state->current_sparse_extent_index = 0u;
     state->current_sparse_extent_offset = 0u;
     state->current_sparse_logical_offset = 0u;
     free(state->current_dest_path);
     state->current_dest_path = NULL;
+}
+
+static bool bx_tar_extract_map_entry_ids(const struct bx_tar_extract_state* state,
+                                         const struct bx_tar_entry* entry,
+                                         uid_t* owner_out,
+                                         gid_t* group_out,
+                                         bool* owner_mapped_out,
+                                         bool* group_mapped_out) {
+    *owner_out = entry->uid;
+    *group_out = entry->gid;
+    *owner_mapped_out = false;
+    *group_mapped_out = false;
+
+    if (state->options->owner_map.len > 0u
+        && bx_tar_id_map_apply_owner(&state->options->owner_map,
+                                     entry->uid,
+                                     entry->uname,
+                                     owner_out,
+                                     NULL)) {
+        *owner_mapped_out = true;
+    }
+    if (state->options->group_map.len > 0u
+        && bx_tar_id_map_apply_group(&state->options->group_map,
+                                     entry->gid,
+                                     entry->gname,
+                                     group_out,
+                                     NULL)) {
+        *group_mapped_out = true;
+    }
+
+    return true;
+}
+
+static bool bx_tar_extract_apply_path_ownership(const char* path,
+                                                bool nofollow,
+                                                uid_t owner,
+                                                gid_t group,
+                                                bool owner_mapped,
+                                                bool group_mapped,
+                                                struct bx_diag_ctx* diag) {
+    int rc;
+
+    if (!owner_mapped && !group_mapped) {
+        return true;
+    }
+
+    rc = nofollow
+        ? lchown(path, owner_mapped ? owner : (uid_t)-1, group_mapped ? group : (gid_t)-1)
+        : chown(path, owner_mapped ? owner : (uid_t)-1, group_mapped ? group : (gid_t)-1);
+    if (rc != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static void bx_tar_compare_clear_current_stream(struct bx_tar_compare_state* state) {
+    if (state->current_fd >= 0) {
+        close(state->current_fd);
+        state->current_fd = -1;
+    }
+    free(state->current_fs_path);
+    state->current_fs_path = NULL;
+    state->current_skip = false;
+    state->current_compare_contents = false;
+    state->current_sparse = false;
+    state->current_reported_content_diff = false;
+    state->current_sparse_extent_index = 0u;
+    state->current_sparse_extent_offset = 0u;
+    state->current_sparse_logical_offset = 0u;
+}
+
+static bool bx_tar_compare_report_stdout(struct bx_tar_compare_state* state,
+                                         struct bx_diag_ctx* diag,
+                                         const char* format,
+                                         const char* name,
+                                         const char* extra) {
+    int rc;
+
+    state->status = state->status < 1 ? 1 : state->status;
+    rc = extra == NULL ? printf(format, name) : printf(format, name, extra);
+    if (rc < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        state->status = 2;
+        return false;
+    }
+    return true;
+}
+
+static void bx_tar_compare_report_stderr(struct bx_tar_compare_state* state,
+                                         struct bx_diag_ctx* diag,
+                                         const char* format,
+                                         const char* name,
+                                         const char* reason) {
+    fprintf(stderr, "%s: ", diag->progname);
+    fprintf(stderr, format, name, reason);
+    state->status = state->status < 1 ? 1 : state->status;
+}
+
+static void bx_tar_compare_report_error(struct bx_tar_compare_state* state,
+                                        struct bx_diag_ctx* diag,
+                                        const char* format,
+                                        const char* name,
+                                        const char* reason) {
+    fprintf(stderr, "%s: ", diag->progname);
+    fprintf(stderr, format, name, reason);
+    state->status = 2;
+}
+
+static enum bx_tar_kind bx_tar_kind_from_stat_mode(mode_t mode) {
+    if (S_ISREG(mode)) {
+        return BX_TAR_KIND_REG;
+    }
+    if (S_ISDIR(mode)) {
+        return BX_TAR_KIND_DIR;
+    }
+    if (S_ISLNK(mode)) {
+        return BX_TAR_KIND_SYMLINK;
+    }
+    if (S_ISFIFO(mode)) {
+        return BX_TAR_KIND_FIFO;
+    }
+    return BX_TAR_KIND_REG;
+}
+
+static bool bx_tar_compare_kind_matches(enum bx_tar_kind archive_kind, mode_t fs_mode) {
+    if (archive_kind == BX_TAR_KIND_HARDLINK) {
+        return S_ISREG(fs_mode);
+    }
+    return bx_tar_kind_from_stat_mode(fs_mode) == archive_kind;
+}
+
+static bool bx_tar_compare_verify_zero_range(int fd,
+                                             size_t start_offset,
+                                             size_t len,
+                                             struct bx_tar_compare_state* state,
+                                             const struct bx_tar_entry* entry,
+                                             struct bx_diag_ctx* diag) {
+    unsigned char buffer[8192];
+
+    if (len == 0u) {
+        return true;
+    }
+    if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
+        bx_tar_compare_report_error(state, diag, "%s: Cannot open: %s\n", entry->name, strerror(errno));
+        return false;
+    }
+
+    while (len > 0u) {
+        size_t chunk = len > sizeof(buffer) ? sizeof(buffer) : len;
+        ssize_t nread = read(fd, buffer, chunk);
+
+        if (nread < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            bx_tar_compare_report_error(state, diag, "%s: Cannot open: %s\n", entry->name, strerror(errno));
+            return false;
+        }
+        if ((size_t)nread != chunk) {
+            if (!state->current_reported_content_diff) {
+                state->current_reported_content_diff = true;
+                return bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL);
+            }
+            return false;
+        }
+        for (size_t i = 0u; i < chunk; i++) {
+            if (buffer[i] != 0u) {
+                if (!state->current_reported_content_diff) {
+                    state->current_reported_content_diff = true;
+                    return bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL);
+                }
+                return false;
+            }
+        }
+        len -= chunk;
+    }
+    return true;
 }
 
 static bool bx_tar_extract_write_zero_bytes(size_t zero_len,
@@ -640,6 +963,322 @@ static bool bx_tar_extract_write_zero_bytes(size_t zero_len,
         zero_len -= chunk;
     }
     return true;
+}
+
+static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
+                                     const struct bx_tar_entry* entry,
+                                     struct bx_diag_ctx* diag) {
+    struct stat st;
+    char* clean_name;
+    bool stripped_absolute;
+    bool stripped_dotdot;
+
+    bx_tar_compare_clear_current_stream(state);
+    if (!bx_tar_select_plan_match(state->select_plan,
+                                  entry->name,
+                                  state->select_plan->len == 0u,
+                                  state->matched_members,
+                                  NULL)) {
+        state->current_skip = true;
+        return true;
+    }
+
+    clean_name = bx_tar_map_member_name(entry->name,
+                                        &state->name_policy,
+                                        &stripped_absolute,
+                                        &stripped_dotdot);
+    if (stripped_absolute && !state->warned_absolute) {
+        fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
+        state->warned_absolute = true;
+    }
+    if (stripped_dotdot && !state->warned_dotdot) {
+        fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
+        state->warned_dotdot = true;
+    }
+    if (clean_name[0] == '\0') {
+        free(clean_name);
+        state->current_skip = true;
+        return true;
+    }
+    state->current_fs_path = clean_name;
+
+    if (lstat(state->current_fs_path, &st) != 0) {
+        if (errno == ENOENT) {
+            bx_tar_compare_report_stderr(state,
+                                         diag,
+                                         "%s: Warning: Cannot stat: %s\n",
+                                         entry->name,
+                                         strerror(errno));
+        }
+        else {
+            bx_tar_compare_report_error(state,
+                                        diag,
+                                        "%s: Cannot stat: %s\n",
+                                        entry->name,
+                                        strerror(errno));
+        }
+        state->current_skip = true;
+        return true;
+    }
+
+    if (!bx_tar_compare_kind_matches(entry->kind, st.st_mode)) {
+        if (!bx_tar_compare_report_stdout(state, diag, "%s: File type differs\n", entry->name, NULL)) {
+            return false;
+        }
+    }
+    if ((st.st_mode & 07777u) != (entry->mode & 07777u)) {
+        if (!bx_tar_compare_report_stdout(state, diag, "%s: Mode differs\n", entry->name, NULL)) {
+            return false;
+        }
+    }
+    if (st.st_mtim.tv_sec != entry->mtime.tv_sec) {
+        if (!bx_tar_compare_report_stdout(state, diag, "%s: Mod time differs\n", entry->name, NULL)) {
+            return false;
+        }
+    }
+
+    if (entry->kind == BX_TAR_KIND_SYMLINK) {
+        char* target = bx_path_readlink_dup(state->current_fs_path);
+
+        if (target == NULL) {
+            bx_tar_compare_report_error(state,
+                                        diag,
+                                        "%s: Cannot readlink: %s\n",
+                                        entry->name,
+                                        strerror(errno));
+            return true;
+        }
+        if (strcmp(target, entry->linkname) != 0
+            && !bx_tar_compare_report_stdout(state, diag, "%s: Symlink differs\n", entry->name, NULL)) {
+            free(target);
+            return false;
+        }
+        free(target);
+        state->current_skip = true;
+        return true;
+    }
+    if (entry->kind == BX_TAR_KIND_HARDLINK) {
+        bool link_abs = false;
+        bool link_dotdot = false;
+        char* mapped_target = bx_tar_map_member_name(entry->linkname, &state->name_policy, &link_abs, &link_dotdot);
+        struct stat target_st;
+        bool linked = false;
+
+        (void)link_abs;
+        (void)link_dotdot;
+        if (lstat(mapped_target, &target_st) == 0) {
+            linked = target_st.st_dev == st.st_dev && target_st.st_ino == st.st_ino;
+        }
+        if (!linked
+            && !bx_tar_compare_report_stdout(state, diag, "%s: Not linked to %s\n", entry->name, entry->linkname)) {
+            free(mapped_target);
+            return false;
+        }
+        free(mapped_target);
+        state->current_skip = true;
+        return true;
+    }
+    if (entry->kind != BX_TAR_KIND_REG) {
+        state->current_skip = true;
+        return true;
+    }
+
+    if ((size_t)st.st_size != entry->size) {
+        if (!bx_tar_compare_report_stdout(state, diag, "%s: Size differs\n", entry->name, NULL)) {
+            return false;
+        }
+        state->current_skip = true;
+        return true;
+    }
+
+    state->current_fd = open(state->current_fs_path, O_RDONLY);
+    if (state->current_fd < 0) {
+        bx_tar_compare_report_error(state,
+                                    diag,
+                                    "%s: Cannot open: %s\n",
+                                    entry->name,
+                                    strerror(errno));
+        state->current_skip = true;
+        return true;
+    }
+    state->current_compare_contents = true;
+    state->current_sparse = entry->sparse;
+    return true;
+}
+
+static bool bx_tar_compare_entry_payload(struct bx_tar_compare_state* state,
+                                         const struct bx_tar_entry* entry,
+                                         const unsigned char* data,
+                                         size_t len,
+                                         struct bx_diag_ctx* diag) {
+    unsigned char buffer[8192];
+
+    if (state->current_skip || !state->current_compare_contents || len == 0u) {
+        return true;
+    }
+
+    if (!state->current_sparse) {
+        size_t offset = 0u;
+
+        while (offset < len) {
+            size_t chunk = len - offset;
+            ssize_t nread;
+
+            if (chunk > sizeof(buffer)) {
+                chunk = sizeof(buffer);
+            }
+            nread = read(state->current_fd, buffer, chunk);
+            if (nread < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                bx_tar_compare_report_error(state,
+                                            diag,
+                                            "%s: Cannot open: %s\n",
+                                            entry->name,
+                                            strerror(errno));
+                state->current_compare_contents = false;
+                return true;
+            }
+            if ((size_t)nread != chunk || memcmp(buffer, data + offset, chunk) != 0) {
+                if (!state->current_reported_content_diff) {
+                    state->current_reported_content_diff = true;
+                    if (!bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL)) {
+                        return false;
+                    }
+                }
+                state->current_compare_contents = false;
+                return true;
+            }
+            offset += chunk;
+        }
+        return true;
+    }
+
+    while (len > 0u) {
+        const struct bx_tar_sparse_extent* extent;
+        size_t chunk;
+        ssize_t nread;
+
+        while (state->current_sparse_extent_index < entry->extent_count
+               && state->current_sparse_extent_offset
+                   == entry->extents[state->current_sparse_extent_index].size) {
+            state->current_sparse_extent_index++;
+            state->current_sparse_extent_offset = 0u;
+        }
+        if (state->current_sparse_extent_index >= entry->extent_count) {
+            state->current_compare_contents = false;
+            return true;
+        }
+
+        extent = &entry->extents[state->current_sparse_extent_index];
+        if (state->current_sparse_extent_offset == 0u) {
+            if (!bx_tar_compare_verify_zero_range(state->current_fd,
+                                                  state->current_sparse_logical_offset,
+                                                  extent->offset - state->current_sparse_logical_offset,
+                                                  state,
+                                                  entry,
+                                                  diag)) {
+                state->current_compare_contents = false;
+                return state->status < 2;
+            }
+            if (lseek(state->current_fd, (off_t)extent->offset, SEEK_SET) < 0) {
+                bx_tar_compare_report_error(state,
+                                            diag,
+                                            "%s: Cannot open: %s\n",
+                                            entry->name,
+                                            strerror(errno));
+                state->current_compare_contents = false;
+                return true;
+            }
+            state->current_sparse_logical_offset = extent->offset;
+        }
+
+        chunk = extent->size - state->current_sparse_extent_offset;
+        if (chunk > len) {
+            chunk = len;
+        }
+        {
+            size_t compared = 0u;
+
+            while (compared < chunk) {
+                size_t read_chunk = chunk - compared;
+
+                if (read_chunk > sizeof(buffer)) {
+                    read_chunk = sizeof(buffer);
+                }
+                while (true) {
+                    nread = read(state->current_fd, buffer, read_chunk);
+                    if (nread < 0 && errno == EINTR) {
+                        continue;
+                    }
+                    break;
+                }
+                if (nread < 0) {
+                    bx_tar_compare_report_error(state,
+                                                diag,
+                                                "%s: Cannot open: %s\n",
+                                                entry->name,
+                                                strerror(errno));
+                    state->current_compare_contents = false;
+                    return true;
+                }
+                if ((size_t)nread != read_chunk || memcmp(buffer, data + compared, read_chunk) != 0) {
+                    if (!state->current_reported_content_diff) {
+                        state->current_reported_content_diff = true;
+                        if (!bx_tar_compare_report_stdout(state, diag, "%s: Contents differ\n", entry->name, NULL)) {
+                            return false;
+                        }
+                    }
+                    state->current_compare_contents = false;
+                    return true;
+                }
+                compared += read_chunk;
+            }
+        }
+
+        data += chunk;
+        len -= chunk;
+        state->current_sparse_extent_offset += chunk;
+        state->current_sparse_logical_offset += chunk;
+    }
+    return true;
+}
+
+static bool bx_tar_compare_end_entry(struct bx_tar_compare_state* state,
+                                     const struct bx_tar_entry* entry,
+                                     struct bx_diag_ctx* diag) {
+    if (state->current_compare_contents && state->current_sparse) {
+        while (state->current_sparse_extent_index < entry->extent_count
+               && state->current_sparse_extent_offset
+                   == entry->extents[state->current_sparse_extent_index].size) {
+            state->current_sparse_extent_index++;
+            state->current_sparse_extent_offset = 0u;
+        }
+        if (state->current_sparse_extent_index == entry->extent_count
+            && !bx_tar_compare_verify_zero_range(state->current_fd,
+                                                 state->current_sparse_logical_offset,
+                                                 entry->size - state->current_sparse_logical_offset,
+                                                 state,
+                                                 entry,
+                                                 diag)) {
+            bx_tar_compare_clear_current_stream(state);
+            return state->status < 2;
+        }
+    }
+    bx_tar_compare_clear_current_stream(state);
+    return true;
+}
+
+static int bx_tar_compare_finish(struct bx_tar_compare_state* state,
+                                 struct bx_diag_ctx* diag) {
+    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
+        state->status = 2;
+    }
+    if (state->status == 2) {
+        bx_tar_report_previous_errors(diag);
+    }
+    return state->status;
 }
 
 static bool bx_tar_extract_sparse_payload_complete(const struct bx_tar_extract_state* state,
@@ -726,6 +1365,17 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     const char* extract_dir = NULL;
     bool stripped_absolute;
     bool stripped_dotdot;
+    uid_t mapped_owner = 0;
+    gid_t mapped_group = 0;
+    bool owner_mapped = false;
+    bool group_mapped = false;
+
+    if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
+                                           state->options->starting_file,
+                                           entry)) {
+        bx_tar_extract_clear_current_stream(state);
+        return true;
+    }
 
     if (!bx_tar_select_plan_match(state->select_plan,
                                   entry->name,
@@ -765,6 +1415,13 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         return ok;
     }
 
+    bx_tar_extract_map_entry_ids(state,
+                                 entry,
+                                 &mapped_owner,
+                                 &mapped_group,
+                                 &owner_mapped,
+                                 &group_mapped);
+
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name) : xstrdup(clean_name);
     free(clean_name);
 
@@ -789,6 +1446,16 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                                        entry->mode,
                                        !state->options->touch_mtime,
                                        entry->mtime);
+        if (!bx_tar_extract_apply_path_ownership(dest_path,
+                                                 false,
+                                                 mapped_owner,
+                                                 mapped_group,
+                                                 owner_mapped,
+                                                 group_mapped,
+                                                 diag)) {
+            free(dest_path);
+            return false;
+        }
         free(dest_path);
         bx_tar_extract_clear_current_stream(state);
         return true;
@@ -811,6 +1478,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         state->current_dest_path = dest_path;
         state->current_mode_bits = entry->mode;
         state->current_mtime = entry->mtime;
+        state->current_owner = mapped_owner;
+        state->current_group = mapped_group;
+        state->current_owner_mapped = owner_mapped;
+        state->current_group_mapped = group_mapped;
         state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
         state->current_sparse = entry->sparse;
         return true;
@@ -824,6 +1495,16 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
         if (!state->options->touch_mtime
             && !bx_archive_set_path_mtime(dest_path, entry->mtime, true, diag)) {
+            free(dest_path);
+            return false;
+        }
+        if (!bx_tar_extract_apply_path_ownership(dest_path,
+                                                 true,
+                                                 mapped_owner,
+                                                 mapped_group,
+                                                 owner_mapped,
+                                                 group_mapped,
+                                                 diag)) {
             free(dest_path);
             return false;
         }
@@ -852,6 +1533,16 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
             return false;
         }
         free(target);
+        if (!bx_tar_extract_apply_path_ownership(dest_path,
+                                                 false,
+                                                 mapped_owner,
+                                                 mapped_group,
+                                                 owner_mapped,
+                                                 group_mapped,
+                                                 diag)) {
+            free(dest_path);
+            return false;
+        }
     }
     else if (entry->kind == BX_TAR_KIND_FIFO) {
         unlink(dest_path);
@@ -862,6 +1553,16 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
         if (!state->options->touch_mtime
             && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
+            free(dest_path);
+            return false;
+        }
+        if (!bx_tar_extract_apply_path_ownership(dest_path,
+                                                 false,
+                                                 mapped_owner,
+                                                 mapped_group,
+                                                 owner_mapped,
+                                                 group_mapped,
+                                                 diag)) {
             free(dest_path);
             return false;
         }
@@ -934,6 +1635,15 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return false;
         }
     }
+    if (state->current_owner_mapped || state->current_group_mapped) {
+        if (fchown(fd,
+                   state->current_owner_mapped ? state->current_owner : (uid_t)-1,
+                   state->current_group_mapped ? state->current_group : (gid_t)-1) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            bx_tar_extract_clear_current_stream(state);
+            return false;
+        }
+    }
 
     state->current_fd = -1;
     state->current_dest_path = NULL;
@@ -982,6 +1692,11 @@ static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
 static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                   const struct bx_tar_entry* entry,
                                   struct bx_diag_ctx* diag) {
+    if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
+                                           state->options->starting_file,
+                                           entry)) {
+        return true;
+    }
     if (!bx_tar_select_plan_match(state->select_plan,
                                   entry->name,
                                   state->select_plan->len == 0u,
@@ -1037,6 +1752,26 @@ static bool bx_tar_list_stream_visit(void* user,
     return bx_tar_list_one_entry(user, entry, diag);
 }
 
+static bool bx_tar_compare_stream_visit(void* user,
+                                        const struct bx_tar_entry* entry,
+                                        struct bx_diag_ctx* diag) {
+    return bx_tar_compare_one_entry(user, entry, diag);
+}
+
+static bool bx_tar_compare_stream_payload_visit(void* user,
+                                                const struct bx_tar_entry* entry,
+                                                const unsigned char* data,
+                                                size_t len,
+                                                struct bx_diag_ctx* diag) {
+    return bx_tar_compare_entry_payload(user, entry, data, len, diag);
+}
+
+static bool bx_tar_compare_stream_end_visit(void* user,
+                                            const struct bx_tar_entry* entry,
+                                            struct bx_diag_ctx* diag) {
+    return bx_tar_compare_end_entry(user, entry, diag);
+}
+
 static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
                                          const struct bx_tar_select_plan* select_plan,
                                          struct bx_diag_ctx* diag) {
@@ -1057,13 +1792,33 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         };
         int rc;
 
-        bx_tar_list_state_init(&state, select_plan);
+        bx_tar_list_state_init(&state, options, select_plan);
         if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
             bx_tar_list_state_cleanup(&state);
             return 2;
         }
         rc = bx_tar_list_finish(&state, diag);
         bx_tar_list_state_cleanup(&state);
+        return rc;
+    }
+    else if (options->mode == BX_TAR_MODE_COMPARE) {
+        struct bx_tar_compare_state state;
+        struct bx_tar_stream_visitor_ops visitor_ops = {
+            .user = &state,
+            .begin_entry = bx_tar_compare_stream_visit,
+            .visit_payload = bx_tar_compare_stream_payload_visit,
+            .end_entry = bx_tar_compare_stream_end_visit,
+            .stream_sparse_payload = true,
+        };
+        int rc;
+
+        bx_tar_compare_state_init(&state, options, select_plan);
+        if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
+            bx_tar_compare_state_cleanup(&state);
+            return 2;
+        }
+        rc = bx_tar_compare_finish(&state, diag);
+        bx_tar_compare_state_cleanup(&state);
         return rc;
     }
     else {
@@ -1136,6 +1891,8 @@ static bool bx_tar_write_parsed_entry_sink(const struct bx_tar_stream_sink* sink
     return bx_tar_stream_write_raw_entry(&counting_sink,
                                          entry->name,
                                          entry->linkname,
+                                         entry->uname,
+                                         entry->gname,
                                          bx_tar_stream_kind_from_entry_kind(entry->kind),
                                          entry->mode,
                                          entry->uid,
@@ -1219,6 +1976,8 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                              &state->counting_sink,
                                              entry->name,
                                              entry->linkname,
+                                             entry->uname,
+                                             entry->gname,
                                              bx_tar_stream_kind_from_entry_kind(entry->kind),
                                              entry->mode,
                                              entry->uid,
@@ -1232,6 +1991,8 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
         return bx_tar_stream_start_sparse_v1_entry(&state->current_live_entry,
                                                    &state->counting_sink,
                                                    entry->name,
+                                                   entry->uname,
+                                                   entry->gname,
                                                    entry->mode,
                                                    entry->uid,
                                                    entry->gid,
@@ -1356,6 +2117,37 @@ static int bx_tar_timespec_compare(struct timespec left, struct timespec right) 
         return 1;
     }
     return 0;
+}
+
+static struct timespec bx_tar_entry_stat_time(const struct bx_archive_fs_entry* entry,
+                                              bool use_ctime) {
+    return use_ctime ? entry->st.st_ctim : entry->st.st_mtim;
+}
+
+static void bx_tar_filter_newer_entries(struct bx_archive_fs_list* list,
+                                        struct timespec cutoff,
+                                        bool use_ctime) {
+    size_t read_index;
+    size_t write_index = 0u;
+
+    for (read_index = 0u; read_index < list->len; read_index++) {
+        bool keep = bx_tar_timespec_compare(
+            bx_tar_entry_stat_time(&list->entries[read_index], use_ctime),
+            cutoff
+        ) > 0;
+
+        if (!keep) {
+            free(list->entries[read_index].source_path);
+            free(list->entries[read_index].archive_path);
+            free(list->entries[read_index].link_target);
+            continue;
+        }
+        if (write_index != read_index) {
+            list->entries[write_index] = list->entries[read_index];
+        }
+        write_index++;
+    }
+    list->len = write_index;
 }
 
 static void bx_tar_update_record_list_free(struct bx_tar_update_record_list* list) {
@@ -1811,6 +2603,9 @@ static int bx_tar_update_archive(const struct bx_tar_options* options,
                                           diag)) {
         goto out;
     }
+    if (options->newer_active) {
+        bx_tar_filter_newer_entries(&appended_files, options->newer_time, options->newer_use_ctime);
+    }
     bx_tar_filter_update_entries(&appended_files, &archived_mtimes);
 
     if (had_update_errors && bx_tar_append_target_is_existing_regular_file(options->archive_path)) {
@@ -1880,6 +2675,70 @@ out:
     return rc;
 }
 
+static bool bx_tar_parse_touch_like_time_arg(const char* text, struct timespec* out) {
+    size_t len;
+    const char* seconds_text;
+    size_t digits_len;
+    int year;
+    int month;
+    int day;
+    int hour;
+    int minute;
+    int second = 0;
+
+    if (text == NULL || *text == '\0') {
+        return false;
+    }
+
+    seconds_text = strchr(text, '.');
+    len = strlen(text);
+    digits_len = seconds_text == NULL ? len : (size_t)(seconds_text - text);
+    if (seconds_text != NULL) {
+        if (strlen(seconds_text) != 3u) {
+            return false;
+        }
+        if (!bx_time_parse_fixed_width_int(seconds_text, 1u, 2u, &second)) {
+            return false;
+        }
+    }
+
+    if (digits_len == 8u) {
+        if (!bx_time_current_local_year(&year)
+            || !bx_time_parse_fixed_width_int(text, 0u, 2u, &month)
+            || !bx_time_parse_fixed_width_int(text, 2u, 2u, &day)
+            || !bx_time_parse_fixed_width_int(text, 4u, 2u, &hour)
+            || !bx_time_parse_fixed_width_int(text, 6u, 2u, &minute)) {
+            return false;
+        }
+    }
+    else if (digits_len == 10u) {
+        int short_year;
+
+        if (!bx_time_parse_fixed_width_int(text, 0u, 2u, &short_year)
+            || !bx_time_parse_fixed_width_int(text, 2u, 2u, &month)
+            || !bx_time_parse_fixed_width_int(text, 4u, 2u, &day)
+            || !bx_time_parse_fixed_width_int(text, 6u, 2u, &hour)
+            || !bx_time_parse_fixed_width_int(text, 8u, 2u, &minute)) {
+            return false;
+        }
+        year = short_year >= 69 ? 1900 + short_year : 2000 + short_year;
+    }
+    else if (digits_len == 12u) {
+        if (!bx_time_parse_fixed_width_int(text, 0u, 4u, &year)
+            || !bx_time_parse_fixed_width_int(text, 4u, 2u, &month)
+            || !bx_time_parse_fixed_width_int(text, 6u, 2u, &day)
+            || !bx_time_parse_fixed_width_int(text, 8u, 2u, &hour)
+            || !bx_time_parse_fixed_width_int(text, 10u, 2u, &minute)) {
+            return false;
+        }
+    }
+    else {
+        return false;
+    }
+
+    return bx_time_build_local_timestamp(year, month, day, hour, minute, second, 0, out);
+}
+
 static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
                                   struct bx_diag_ctx* diag) {
     struct bx_archive_fs_list appended_files = {0};
@@ -1922,6 +2781,9 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
                                               &had_append_errors,
                                               diag)) {
             goto out;
+        }
+        if (options->newer_active) {
+            bx_tar_filter_newer_entries(&appended_files, options->newer_time, options->newer_use_ctime);
         }
         if (had_append_errors && bx_tar_append_target_is_existing_regular_file(options->archive_path)) {
             bx_tar_report_previous_errors(diag);
@@ -1990,12 +2852,15 @@ out:
 }
 
 static bool bx_tar_parse_time_arg(const char* text, struct timespec* out) {
-    if (text[0] != '@') {
-        return false;
+    struct bx_time_epoch_parse_options epoch_options = {
+        .allow_trailing_space = false,
+        .normalize_negative_fraction = true,
+    };
+
+    if (bx_time_parse_epoch_literal(text, &epoch_options, out)) {
+        return true;
     }
-    out->tv_sec = (time_t)strtoll(text + 1, NULL, 10);
-    out->tv_nsec = 0;
-    return true;
+    return bx_tar_parse_touch_like_time_arg(text, out);
 }
 
 static bool bx_tar_warning_keyword_supported(const char* text) {
@@ -2078,6 +2943,8 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CATENATE, NULL, diag);
         case BX_TAR_OPT_MODE_CREATE:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
+        case BX_TAR_OPT_MODE_COMPARE:
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_COMPARE, NULL, diag);
         case BX_TAR_OPT_MODE_LIST:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag);
         case BX_TAR_OPT_MODE_EXTRACT:
@@ -2125,6 +2992,42 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_create_options_set_recurse(&options->create_options, false);
         case BX_TAR_OPT_RECURSION:
             return bx_tar_create_options_set_recurse(&options->create_options, true);
+        case BX_TAR_OPT_ANCHORED_ON:
+            return bx_tar_create_options_set_anchored(&options->create_options, true);
+        case BX_TAR_OPT_ANCHORED_OFF:
+            return bx_tar_create_options_set_anchored(&options->create_options, false);
+        case BX_TAR_OPT_IGNORE_CASE_ON:
+            return bx_tar_create_options_set_ignore_case(&options->create_options, true);
+        case BX_TAR_OPT_IGNORE_CASE_OFF:
+            return bx_tar_create_options_set_ignore_case(&options->create_options, false);
+        case BX_TAR_OPT_WILDCARDS_ON:
+            return bx_tar_create_options_set_wildcards(&options->create_options, true);
+        case BX_TAR_OPT_WILDCARDS_OFF:
+            return bx_tar_create_options_set_wildcards(&options->create_options, false);
+        case BX_TAR_OPT_WILDCARDS_MATCH_SLASH_ON:
+            return bx_tar_create_options_set_wildcards_match_slash(&options->create_options, true);
+        case BX_TAR_OPT_WILDCARDS_MATCH_SLASH_OFF:
+            return bx_tar_create_options_set_wildcards_match_slash(&options->create_options, false);
+        case BX_TAR_OPT_EXCLUDE_CACHES:
+            return bx_tar_create_options_set_exclude_caches(&options->create_options);
+        case BX_TAR_OPT_EXCLUDE_CACHES_ALL:
+            return bx_tar_create_options_set_exclude_caches_all(&options->create_options);
+        case BX_TAR_OPT_EXCLUDE_CACHES_UNDER:
+            return bx_tar_create_options_set_exclude_caches_under(&options->create_options);
+        case BX_TAR_OPT_EXCLUDE_IGNORE:
+            return bx_tar_create_options_add_exclude_ignore(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_IGNORE_RECURSIVE:
+            return bx_tar_create_options_add_exclude_ignore_recursive(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_TAG:
+            return bx_tar_create_options_add_exclude_tag(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_TAG_ALL:
+            return bx_tar_create_options_add_exclude_tag_all(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_TAG_UNDER:
+            return bx_tar_create_options_add_exclude_tag_under(&options->create_options, value);
+        case BX_TAR_OPT_EXCLUDE_VCS:
+            return bx_tar_create_options_set_exclude_vcs(&options->create_options);
+        case BX_TAR_OPT_EXCLUDE_VCS_IGNORES:
+            return bx_tar_create_options_set_exclude_vcs_ignores(&options->create_options);
         case BX_TAR_OPT_REMOVE_FILES:
             options->create_options.remove_files = true;
             return true;
@@ -2158,6 +3061,25 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_TOUCH_MTIME_ON:
             options->touch_mtime = true;
+            return true;
+        case BX_TAR_OPT_STARTING_FILE:
+            options->starting_file = value;
+            return true;
+        case BX_TAR_OPT_NEWER:
+            if (!bx_tar_parse_time_arg(value, &options->newer_time)) {
+                bx_diag(diag, "unsupported time '%s'", value);
+                return false;
+            }
+            options->newer_active = true;
+            options->newer_use_ctime = true;
+            return true;
+        case BX_TAR_OPT_NEWER_MTIME:
+            if (!bx_tar_parse_time_arg(value, &options->newer_time)) {
+                bx_diag(diag, "unsupported time '%s'", value);
+                return false;
+            }
+            options->newer_active = true;
+            options->newer_use_ctime = false;
             return true;
         case BX_TAR_OPT_STRIP_COMPONENTS: {
             char* end = NULL;
@@ -2195,6 +3117,13 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             }
             options->fixed_mtime = true;
             return true;
+        case BX_TAR_OPT_MODE:
+            if (!bx_tar_validate_mode_arg(value, diag)) {
+                return false;
+            }
+            free(options->mode_text);
+            options->mode_text = xstrdup(value);
+            return true;
         case BX_TAR_OPT_OWNER:
             options->owner = (uid_t)strtoul(value, NULL, 10);
             options->owner_set = true;
@@ -2203,6 +3132,10 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->group = (gid_t)strtoul(value, NULL, 10);
             options->group_set = true;
             return true;
+        case BX_TAR_OPT_GROUP_MAP:
+            return bx_tar_id_map_load_group(&options->group_map, value, diag);
+        case BX_TAR_OPT_OWNER_MAP:
+            return bx_tar_id_map_load_owner(&options->owner_map, value, diag);
         case BX_TAR_OPT_XATTRS_ON:
             options->xattrs = true;
             return true;
@@ -2230,6 +3163,10 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_tar_transform_rule_cleanup(&options->name_transform);
     bx_tar_create_options_cleanup(&options->create_options);
     bx_archive_name_list_free(&options->source_archives);
+    bx_tar_id_map_cleanup(&options->owner_map);
+    bx_tar_id_map_cleanup(&options->group_map);
+    free(options->mode_text);
+    options->mode_text = NULL;
 }
 
 static bool bx_tar_add_operand(struct bx_tar_options* options, const char* operand) {
@@ -2395,6 +3332,9 @@ int bx_tar_run(int argc, char** argv) {
                                               &diag)) {
             bx_tar_options_cleanup(&options);
             return 2;
+        }
+        if (options.newer_active) {
+            bx_tar_filter_newer_entries(&files, options.newer_time, options.newer_use_ctime);
         }
         if (gzip_output && compress_threads > 1u) {
             rc = bx_tar_write_create_archive_gzip_mt_direct(&files, &options, compress_threads, &diag) ? 0 : 2;
