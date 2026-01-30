@@ -1,9 +1,11 @@
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -42,6 +44,7 @@ enum bx_tar_mode {
     BX_TAR_MODE_CATENATE,
     BX_TAR_MODE_CREATE,
     BX_TAR_MODE_COMPARE,
+    BX_TAR_MODE_TEST_LABEL,
     BX_TAR_MODE_LIST,
     BX_TAR_MODE_EXTRACT,
     BX_TAR_MODE_APPEND,
@@ -56,6 +59,11 @@ struct bx_tar_options {
     const char* archive_path;
     bool to_stdout;
     bool keep_old_files;
+    bool overwrite;
+    bool unlink_first;
+    bool recursive_unlink;
+    bool verbose_reports;
+    char* index_file_path;
     bool gzip;
     bool auto_compress;
     bool absolute_names;
@@ -98,6 +106,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_MODE_CATENATE,
     BX_TAR_OPT_MODE_CREATE,
     BX_TAR_OPT_MODE_COMPARE,
+    BX_TAR_OPT_MODE_TEST_LABEL,
     BX_TAR_OPT_MODE_LIST,
     BX_TAR_OPT_MODE_EXTRACT,
     BX_TAR_OPT_MODE_APPEND,
@@ -108,6 +117,11 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_DIRECTORY,
     BX_TAR_OPT_TO_STDOUT,
     BX_TAR_OPT_KEEP_OLD_FILES,
+    BX_TAR_OPT_OVERWRITE,
+    BX_TAR_OPT_UNLINK_FIRST,
+    BX_TAR_OPT_RECURSIVE_UNLINK,
+    BX_TAR_OPT_INDEX_FILE,
+    BX_TAR_OPT_VERBOSE,
     BX_TAR_OPT_EXCLUDE,
     BX_TAR_OPT_EXCLUDE_FROM,
     BX_TAR_OPT_ADD_FILE,
@@ -190,7 +204,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--diff", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--compare", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_COMPARE},
     {"--append", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_APPEND},
-    {"--test-label", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UNSUPPORTED},
+    {"--test-label", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_TEST_LABEL},
     {"--list", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {"--update", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
@@ -244,16 +258,16 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--keep-newer-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--one-top-level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ONE_TOP_LEVEL},
-    {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OVERWRITE},
     {"--overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--recursive-unlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_RECURSIVE_UNLINK},
     {"--remove-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REMOVE_FILES},
     {"--threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_THREADS},
     {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
     {"--mt-chunk-size", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MT_CHUNK_SIZE},
     {"--no-mt", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_MT},
     {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNLINK_FIRST},
     {"--verify", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--ignore-command-error", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-ignore-command-error", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -338,7 +352,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--checkpoint", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--checkpoint-action", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--full-time", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--index-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--index-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_INDEX_FILE},
     {"--check-links", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-quote-chars", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--quote-chars", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
@@ -351,7 +365,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--show-stored-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--totals", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--utc", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--verbose", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--verbose", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
     {"--warning", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_WARNING},
     {"--interactive", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--confirmation", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -401,7 +415,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'P', "-P", BX_TAR_OPTARG_NONE, BX_TAR_OPT_ABSOLUTE_NAMES_ON},
     {'s', "-s", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'R', "-R", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'v', "-v", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'v', "-v", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
     {'w', "-w", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'o', "-o", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'f', "-f", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
@@ -415,6 +429,66 @@ static const char* bx_tar_progname(char** argv, int argc) {
 
 static void bx_tar_report_previous_errors(const struct bx_diag_ctx* diag) {
     fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
+}
+
+static bool bx_tar_report_output_init(struct bx_tar_report_output* output,
+                                      const struct bx_tar_options* options,
+                                      bool default_stdout,
+                                      bool forbid_stdout,
+                                      struct bx_diag_ctx* diag) {
+    memset(output, 0, sizeof(*output));
+    if (options->index_file_path != NULL) {
+        if (strcmp(options->index_file_path, "-") == 0) {
+            if (forbid_stdout) {
+                bx_diag(diag, "cannot use --index-file=- when archive data is written to standard output");
+                return false;
+            }
+            output->stream = stdout;
+            return true;
+        }
+        output->stream = fopen(options->index_file_path, "wb");
+        if (output->stream == NULL) {
+            bx_diag(diag, "%s: %s", options->index_file_path, strerror(errno));
+            return false;
+        }
+        output->close_stream = true;
+        return true;
+    }
+
+    output->stream = default_stdout ? stdout : stderr;
+    return true;
+}
+
+static void bx_tar_report_output_cleanup(struct bx_tar_report_output* output) {
+    if (output->close_stream && output->stream != NULL) {
+        fclose(output->stream);
+    }
+    output->stream = NULL;
+    output->close_stream = false;
+}
+
+static bool bx_tar_report_printf(FILE* stream,
+                                 struct bx_diag_ctx* diag,
+                                 const char* fmt,
+                                 ...) {
+    va_list ap;
+    int rc;
+
+    va_start(ap, fmt);
+    rc = vfprintf(stream, fmt, ap);
+    va_end(ap);
+    if (rc < 0) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_tar_report_member_line(FILE* stream,
+                                      const char* name,
+                                      bool is_directory,
+                                      struct bx_diag_ctx* diag) {
+    return bx_tar_report_printf(stream, diag, is_directory ? "%s/\n" : "%s\n", name);
 }
 
 static struct bx_tar_stream_options
@@ -604,6 +678,7 @@ static bool bx_tar_write_create_archive_gzip_mt_direct(const struct bx_archive_f
 
 struct bx_tar_extract_state {
     const struct bx_tar_options* options;
+    FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
     struct bx_archive_pending_dirs dirs;
     struct bx_tar_name_policy name_policy;
@@ -633,6 +708,7 @@ struct bx_tar_extract_state {
 
 struct bx_tar_list_state {
     const struct bx_tar_options* options;
+    FILE* report_stream;
     bool starting_file_reached;
     const struct bx_tar_select_plan* select_plan;
     bool* matched_members;
@@ -640,6 +716,7 @@ struct bx_tar_list_state {
 
 struct bx_tar_compare_state {
     const struct bx_tar_options* options;
+    FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
     struct bx_tar_name_policy name_policy;
     bool warned_absolute;
@@ -657,6 +734,11 @@ struct bx_tar_compare_state {
     size_t current_sparse_logical_offset;
 };
 
+struct bx_tar_report_output {
+    FILE* stream;
+    bool close_stream;
+};
+
 static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* select_plan) {
     bool* matched_members;
 
@@ -672,9 +754,11 @@ static int bx_tar_timespec_compare(struct timespec left, struct timespec right);
 
 static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
                                       const struct bx_tar_options* options,
-                                      const struct bx_tar_select_plan* select_plan) {
+                                      const struct bx_tar_select_plan* select_plan,
+                                      FILE* report_stream) {
     memset(state, 0, sizeof(*state));
     state->options = options;
+    state->report_stream = report_stream;
     state->select_plan = select_plan;
     state->starting_file_reached = options->starting_file == NULL;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
@@ -700,8 +784,10 @@ static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
 
 static void bx_tar_list_state_init(struct bx_tar_list_state* state,
                                    const struct bx_tar_options* options,
-                                   const struct bx_tar_select_plan* select_plan) {
+                                   const struct bx_tar_select_plan* select_plan,
+                                   FILE* report_stream) {
     state->options = options;
+    state->report_stream = report_stream;
     state->starting_file_reached = options->starting_file == NULL;
     state->select_plan = select_plan;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
@@ -713,9 +799,11 @@ static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
 
 static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
                                       const struct bx_tar_options* options,
-                                      const struct bx_tar_select_plan* select_plan) {
+                                      const struct bx_tar_select_plan* select_plan,
+                                      FILE* report_stream) {
     memset(state, 0, sizeof(*state));
     state->options = options;
+    state->report_stream = report_stream;
     state->select_plan = select_plan;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
     state->current_fd = -1;
@@ -825,6 +913,208 @@ static bool bx_tar_extract_apply_path_ownership(const char* path,
     return true;
 }
 
+static bool bx_tar_extract_remove_path_tree(const char* path, struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+        if (unlink(path) != 0) {
+            bx_diag(diag, "%s: %s", path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    {
+        DIR* dir = opendir(path);
+        struct dirent* ent;
+
+        if (dir == NULL) {
+            bx_diag(diag, "%s: %s", path, strerror(errno));
+            return false;
+        }
+        while ((ent = readdir(dir)) != NULL) {
+            char* child_path;
+            bool ok;
+
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            child_path = bx_path_join(path, ent->d_name);
+            ok = bx_tar_extract_remove_path_tree(child_path, diag);
+            free(child_path);
+            if (!ok) {
+                closedir(dir);
+                return false;
+            }
+        }
+        closedir(dir);
+    }
+
+    if (rmdir(path) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_tar_extract_prepare_parent_dirs_safe(const char* dest_path,
+                                                    struct bx_diag_ctx* diag) {
+    struct bx_path_components components = {0};
+    bool absolute = dest_path[0] == '/';
+    char* current = absolute ? xstrdup("/") : xstrdup("");
+    bool ok = true;
+    size_t i;
+
+    bx_path_components_append_raw(&components, dest_path);
+    if (components.count == 0u) {
+        free(current);
+        return true;
+    }
+
+    for (i = 0u; i + 1u < components.count; i++) {
+        const char* part = components.parts[i];
+        char* next;
+        struct stat st;
+
+        if (part[0] == '\0') {
+            continue;
+        }
+        if (current[0] == '\0' || strcmp(current, "/") == 0) {
+            next = (strcmp(current, "/") == 0) ? bx_path_join("/", part) : xstrdup(part);
+        }
+        else {
+            next = bx_path_join(current, part);
+        }
+
+        if (lstat(next, &st) != 0) {
+            if (errno != ENOENT) {
+                bx_diag(diag, "%s: %s", next, strerror(errno));
+                free(next);
+                ok = false;
+                break;
+            }
+            if (mkdir(next, 0777u) != 0) {
+                bx_diag(diag, "%s: %s", next, strerror(errno));
+                free(next);
+                ok = false;
+                break;
+            }
+        }
+        else if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+            if (!bx_tar_extract_remove_path_tree(next, diag) || mkdir(next, 0777u) != 0) {
+                if (errno != 0 && !S_ISDIR(st.st_mode)) {
+                    bx_diag(diag, "%s: %s", next, strerror(errno));
+                }
+                free(next);
+                ok = false;
+                break;
+            }
+        }
+
+        free(current);
+        current = next;
+    }
+
+    free(current);
+    bx_path_components_free(&components);
+    return ok;
+}
+
+static bool bx_tar_extract_remove_empty_dir_default(const char* path,
+                                                    struct bx_diag_ctx* diag) {
+    if (rmdir(path) == 0) {
+        return true;
+    }
+    if (errno == ENOTEMPTY || errno == EEXIST) {
+        bx_diag(diag, "%s: %s", path, strerror(EEXIST));
+        return false;
+    }
+    bx_diag(diag, "%s: %s", path, strerror(errno));
+    return false;
+}
+
+static bool bx_tar_extract_prepare_final_non_dir_target(const struct bx_tar_extract_state* state,
+                                                        const struct bx_tar_entry* entry,
+                                                        const char* dest_path,
+                                                        struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    if (lstat(dest_path, &st) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+        if (unlink(dest_path) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    if (state->options->recursive_unlink) {
+        return bx_tar_extract_remove_path_tree(dest_path, diag);
+    }
+    if (state->options->overwrite) {
+        bx_diag(diag, "%s: %s", dest_path, strerror(EISDIR));
+        return false;
+    }
+    if (state->options->unlink_first) {
+        if (rmdir(dest_path) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    (void)entry;
+    return bx_tar_extract_remove_empty_dir_default(dest_path, diag);
+}
+
+static bool bx_tar_extract_prepare_final_dir_target(const struct bx_tar_extract_state* state,
+                                                    const char* dest_path,
+                                                    bool* mkdir_needed_out,
+                                                    struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    *mkdir_needed_out = false;
+    if (lstat(dest_path, &st) != 0) {
+        if (errno == ENOENT) {
+            *mkdir_needed_out = true;
+            return true;
+        }
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+        if (!bx_tar_extract_remove_path_tree(dest_path, diag)) {
+            return false;
+        }
+        *mkdir_needed_out = true;
+        return true;
+    }
+
+    if (state->options->recursive_unlink) {
+        if (!bx_tar_extract_remove_path_tree(dest_path, diag)) {
+            return false;
+        }
+        *mkdir_needed_out = true;
+    }
+    return true;
+}
+
 static void bx_tar_compare_clear_current_stream(struct bx_tar_compare_state* state) {
     if (state->current_fd >= 0) {
         close(state->current_fd);
@@ -846,12 +1136,12 @@ static bool bx_tar_compare_report_stdout(struct bx_tar_compare_state* state,
                                          const char* format,
                                          const char* name,
                                          const char* extra) {
-    int rc;
-
     state->status = state->status < 1 ? 1 : state->status;
-    rc = extra == NULL ? printf(format, name) : printf(format, name, extra);
-    if (rc < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
+    if (!bx_tar_report_printf(state->report_stream,
+                              diag,
+                              format,
+                              name,
+                              extra)) {
         state->status = 2;
         return false;
     }
@@ -1407,6 +1697,14 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     if (state->options->to_stdout) {
         bool ok = true;
         bx_tar_extract_clear_current_stream(state);
+        if (state->options->verbose_reports
+            && !bx_tar_report_member_line(state->report_stream,
+                                          entry->name,
+                                          entry->kind == BX_TAR_KIND_DIR,
+                                          diag)) {
+            free(clean_name);
+            return false;
+        }
         if (entry->kind == BX_TAR_KIND_REG) {
             state->current_stream_mode = BX_TAR_EXTRACT_STREAM_STDOUT;
             state->current_sparse = entry->sparse;
@@ -1434,9 +1732,28 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
+    if (state->options->verbose_reports
+        && !bx_tar_report_member_line(state->report_stream,
+                                      dest_path,
+                                      entry->kind == BX_TAR_KIND_DIR,
+                                      diag)) {
+        free(dest_path);
+        return false;
+    }
+
+    if (!bx_tar_extract_prepare_parent_dirs_safe(dest_path, diag)) {
+        free(dest_path);
+        return false;
+    }
 
     if (entry->kind == BX_TAR_KIND_DIR) {
-        if (mkdir(dest_path, 0777u) != 0 && errno != EEXIST) {
+        bool mkdir_needed = false;
+
+        if (!bx_tar_extract_prepare_final_dir_target(state, dest_path, &mkdir_needed, diag)) {
+            free(dest_path);
+            return false;
+        }
+        if (mkdir_needed && mkdir(dest_path, 0777u) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
             return false;
@@ -1461,13 +1778,16 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         return true;
     }
 
-    if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
-        free(dest_path);
-        return false;
-    }
-
     if (entry->kind == BX_TAR_KIND_REG) {
-        int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
+        int fd;
+
+        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
+            free(dest_path);
+            state->status = 2;
+            bx_tar_extract_clear_current_stream(state);
+            return true;
+        }
+        fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
         if (fd < 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
@@ -1487,7 +1807,11 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         return true;
     }
     else if (entry->kind == BX_TAR_KIND_SYMLINK) {
-        unlink(dest_path);
+        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
+            free(dest_path);
+            state->status = 2;
+            return true;
+        }
         if (symlink(entry->linkname, dest_path) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
@@ -1520,12 +1844,12 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         (void)target_stripped_absolute;
         (void)target_stripped_dotdot;
         free(mapped_target);
-        if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
+        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
             free(dest_path);
             free(target);
-            return false;
+            state->status = 2;
+            return true;
         }
-        unlink(dest_path);
         if (link(target, dest_path) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
@@ -1545,7 +1869,11 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
     }
     else if (entry->kind == BX_TAR_KIND_FIFO) {
-        unlink(dest_path);
+        if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
+            free(dest_path);
+            state->status = 2;
+            return true;
+        }
         if (mkfifo(dest_path, entry->mode & 07777u) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
@@ -1704,14 +2032,10 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                   NULL)) {
         return true;
     }
-    if (entry->kind == BX_TAR_KIND_DIR) {
-        if (printf("%s/\n", entry->name) < 0) {
-            bx_diag(diag, "write error: %s", strerror(errno));
-            return false;
-        }
-    }
-    else if (printf("%s\n", entry->name) < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
+    if (!bx_tar_report_member_line(state->report_stream,
+                                   entry->name,
+                                   entry->kind == BX_TAR_KIND_DIR,
+                                   diag)) {
         return false;
     }
     return true;
@@ -1782,6 +2106,22 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
                 && options->archive_path != NULL
                 && bx_archive_path_has_gzip_suffix(options->archive_path)),
     };
+    struct bx_tar_report_output report_output = {0};
+    bool need_report_output = options->mode == BX_TAR_MODE_LIST
+        || options->mode == BX_TAR_MODE_COMPARE
+        || options->verbose_reports;
+    bool report_default_stdout = options->mode == BX_TAR_MODE_LIST
+        || options->mode == BX_TAR_MODE_COMPARE;
+    bool report_forbid_stdout = options->mode == BX_TAR_MODE_EXTRACT && options->to_stdout;
+
+    if (need_report_output
+        && !bx_tar_report_output_init(&report_output,
+                                      options,
+                                      report_default_stdout,
+                                      report_forbid_stdout,
+                                      diag)) {
+        return 2;
+    }
 
     if (options->mode == BX_TAR_MODE_LIST) {
         struct bx_tar_list_state state;
@@ -1792,13 +2132,15 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         };
         int rc;
 
-        bx_tar_list_state_init(&state, options, select_plan);
+        bx_tar_list_state_init(&state, options, select_plan, report_output.stream);
         if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
             bx_tar_list_state_cleanup(&state);
+            bx_tar_report_output_cleanup(&report_output);
             return 2;
         }
         rc = bx_tar_list_finish(&state, diag);
         bx_tar_list_state_cleanup(&state);
+        bx_tar_report_output_cleanup(&report_output);
         return rc;
     }
     else if (options->mode == BX_TAR_MODE_COMPARE) {
@@ -1812,13 +2154,15 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         };
         int rc;
 
-        bx_tar_compare_state_init(&state, options, select_plan);
+        bx_tar_compare_state_init(&state, options, select_plan, report_output.stream);
         if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
             bx_tar_compare_state_cleanup(&state);
+            bx_tar_report_output_cleanup(&report_output);
             return 2;
         }
         rc = bx_tar_compare_finish(&state, diag);
         bx_tar_compare_state_cleanup(&state);
+        bx_tar_report_output_cleanup(&report_output);
         return rc;
     }
     else {
@@ -1832,13 +2176,15 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         };
         int rc;
 
-        bx_tar_extract_state_init(&state, options, select_plan);
+        bx_tar_extract_state_init(&state, options, select_plan, report_output.stream);
         if (!bx_tar_visit_archive_stream(&reader_options, &visitor_ops, diag)) {
             bx_tar_extract_state_cleanup(&state);
+            bx_tar_report_output_cleanup(&report_output);
             return 2;
         }
         rc = bx_tar_extract_finish(&state, diag);
         bx_tar_extract_state_cleanup(&state);
+        bx_tar_report_output_cleanup(&report_output);
         return rc;
     }
 }
@@ -2945,6 +3291,8 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_set_mode_option(options, BX_TAR_MODE_CREATE, NULL, diag);
         case BX_TAR_OPT_MODE_COMPARE:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_COMPARE, NULL, diag);
+        case BX_TAR_OPT_MODE_TEST_LABEL:
+            return bx_tar_set_mode_option(options, BX_TAR_MODE_TEST_LABEL, NULL, diag);
         case BX_TAR_OPT_MODE_LIST:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag);
         case BX_TAR_OPT_MODE_EXTRACT:
@@ -2967,6 +3315,22 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_KEEP_OLD_FILES:
             options->keep_old_files = true;
+            return true;
+        case BX_TAR_OPT_OVERWRITE:
+            options->overwrite = true;
+            return true;
+        case BX_TAR_OPT_UNLINK_FIRST:
+            options->unlink_first = true;
+            return true;
+        case BX_TAR_OPT_RECURSIVE_UNLINK:
+            options->recursive_unlink = true;
+            return true;
+        case BX_TAR_OPT_INDEX_FILE:
+            free(options->index_file_path);
+            options->index_file_path = xstrdup(value);
+            return true;
+        case BX_TAR_OPT_VERBOSE:
+            options->verbose_reports = true;
             return true;
         case BX_TAR_OPT_EXCLUDE:
             return bx_tar_create_options_add_exclude_pattern(&options->create_options, value);
@@ -3165,15 +3529,77 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_archive_name_list_free(&options->source_archives);
     bx_tar_id_map_cleanup(&options->owner_map);
     bx_tar_id_map_cleanup(&options->group_map);
+    free(options->index_file_path);
+    options->index_file_path = NULL;
     free(options->mode_text);
     options->mode_text = NULL;
 }
 
 static bool bx_tar_add_operand(struct bx_tar_options* options, const char* operand) {
-    if (options->mode == BX_TAR_MODE_CATENATE) {
+    if (options->mode == BX_TAR_MODE_CATENATE || options->mode == BX_TAR_MODE_TEST_LABEL) {
         return bx_archive_name_list_append(&options->source_archives, operand);
     }
     return bx_tar_create_options_add_add_file(&options->create_options, operand);
+}
+
+static int bx_tar_test_label_archive(const struct bx_tar_options* options,
+                                     struct bx_diag_ctx* diag) {
+    struct bx_tar_reader_stream_options reader_options = {
+        .archive_path = options->archive_path,
+        .require_gzip = false,
+    };
+    struct bx_tar_report_output report_output = {0};
+    char* label = NULL;
+    int rc = 0;
+    size_t i;
+
+    if (!bx_tar_read_volume_label_stream(&reader_options, &label, diag)) {
+        free(label);
+        return 2;
+    }
+    if (!bx_tar_report_output_init(&report_output, options, true, false, diag)) {
+        free(label);
+        return 2;
+    }
+    if (options->source_archives.len == 0u) {
+        if (label != NULL) {
+            if (!bx_tar_report_printf(report_output.stream, diag, "%s\n", label)) {
+                bx_tar_report_output_cleanup(&report_output);
+                free(label);
+                return 2;
+            }
+        }
+        bx_tar_report_output_cleanup(&report_output);
+        free(label);
+        return 0;
+    }
+
+    rc = 1;
+    for (i = 0u; i < options->source_archives.len; i++) {
+        if (label != NULL && strcmp(label, options->source_archives.items[i]) == 0) {
+            rc = 0;
+            break;
+        }
+    }
+    bx_tar_report_output_cleanup(&report_output);
+    free(label);
+    return rc;
+}
+
+static bool bx_tar_report_fs_entries(FILE* stream,
+                                     const struct bx_archive_fs_list* files,
+                                     struct bx_diag_ctx* diag) {
+    size_t i;
+
+    for (i = 0u; i < files->len; i++) {
+        if (!bx_tar_report_member_line(stream,
+                                       files->entries[i].archive_path,
+                                       S_ISDIR(files->entries[i].st.st_mode),
+                                       diag)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool bx_tar_parse_options(struct bx_tar_options* options,
@@ -3320,6 +3746,7 @@ int bx_tar_run(int argc, char** argv) {
 
     if (options.mode == BX_TAR_MODE_CREATE) {
         struct bx_archive_fs_list files = {0};
+        struct bx_tar_report_output report_output = {0};
         bool had_create_errors = false;
         bool had_postwrite_errors = false;
         bool gzip_output = bx_tar_output_uses_gzip(&options);
@@ -3335,6 +3762,22 @@ int bx_tar_run(int argc, char** argv) {
         }
         if (options.newer_active) {
             bx_tar_filter_newer_entries(&files, options.newer_time, options.newer_use_ctime);
+        }
+        if (options.verbose_reports
+            && !bx_tar_report_output_init(&report_output,
+                                          &options,
+                                          false,
+                                          strcmp(options.archive_path, "-") == 0,
+                                          &diag)) {
+            bx_archive_fs_list_free(&files);
+            bx_tar_options_cleanup(&options);
+            return 2;
+        }
+        if (options.verbose_reports && !bx_tar_report_fs_entries(report_output.stream, &files, &diag)) {
+            bx_tar_report_output_cleanup(&report_output);
+            bx_archive_fs_list_free(&files);
+            bx_tar_options_cleanup(&options);
+            return 2;
         }
         if (gzip_output && compress_threads > 1u) {
             rc = bx_tar_write_create_archive_gzip_mt_direct(&files, &options, compress_threads, &diag) ? 0 : 2;
@@ -3357,12 +3800,18 @@ int bx_tar_run(int argc, char** argv) {
             bx_tar_report_previous_errors(&diag);
             rc = 2;
         }
+        bx_tar_report_output_cleanup(&report_output);
         bx_archive_fs_list_free(&files);
         bx_tar_options_cleanup(&options);
         return rc;
     }
     if (options.mode == BX_TAR_MODE_CATENATE) {
         rc = bx_tar_catenate_archive(&options, &diag);
+        bx_tar_options_cleanup(&options);
+        return rc;
+    }
+    if (options.mode == BX_TAR_MODE_TEST_LABEL) {
+        rc = bx_tar_test_label_archive(&options, &diag);
         bx_tar_options_cleanup(&options);
         return rc;
     }

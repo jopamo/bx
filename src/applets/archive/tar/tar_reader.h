@@ -81,4 +81,8 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
                                  const struct bx_tar_stream_visitor_ops* visitor_ops,
                                  struct bx_diag_ctx* diag);
 
+bool bx_tar_read_volume_label_stream(const struct bx_tar_reader_stream_options* options,
+                                     char** label_out,
+                                     struct bx_diag_ctx* diag);
+
 #endif

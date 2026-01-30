@@ -38,6 +38,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -r                    append files to an existing archive\n");
     fprintf(stream, "  -u                    append files only when newer than the archived copy\n");
     fprintf(stream, "      --delete          remove named members from an archive\n");
+    fprintf(stream, "      --test-label      print or match the archive volume label\n");
     fprintf(stream, "  -N DATE               include only files newer than DATE during filesystem input collection\n");
     fprintf(stream, "      --newer=DATE      compare by status change or modification time\n");
     fprintf(stream, "      --newer-mtime=DATE\n");
