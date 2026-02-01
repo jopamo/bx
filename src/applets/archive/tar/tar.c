@@ -39,6 +39,12 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -u                    append files only when newer than the archived copy\n");
     fprintf(stream, "      --delete          remove named members from an archive\n");
     fprintf(stream, "      --test-label      print or match the archive volume label\n");
+    fprintf(stream, "  -v                    report processed member names\n");
+    fprintf(stream, "      --index-file=FILE write listing or verbose output to FILE\n");
+    fprintf(stream, "      --show-transformed-names\n");
+    fprintf(stream, "                        report rewritten member names when listing or extracting\n");
+    fprintf(stream, "      --show-stored-names\n");
+    fprintf(stream, "                        GNU-compatible alias for transformed report names\n");
     fprintf(stream, "  -N DATE               include only files newer than DATE during filesystem input collection\n");
     fprintf(stream, "      --newer=DATE      compare by status change or modification time\n");
     fprintf(stream, "      --newer-mtime=DATE\n");

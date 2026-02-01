@@ -12,6 +12,7 @@
 
 struct bx_tar_stream_options {
     bool format_ustar;
+    bool numeric_owner;
     bool owner_set;
     bool group_set;
     bool fixed_mtime;

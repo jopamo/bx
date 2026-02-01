@@ -592,11 +592,13 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
             gname = bx_tar_stream_effective_group_name(gid, mapped_gname, group_name_buf);
         }
     }
-    if (uname == NULL) {
-        uname = bx_id_user_name(uid, owner_name_buf);
-    }
-    if (gname == NULL) {
-        gname = bx_id_group_name(gid, group_name_buf);
+    if (!options->numeric_owner) {
+        if (uname == NULL) {
+            uname = bx_id_user_name(uid, owner_name_buf);
+        }
+        if (gname == NULL) {
+            gname = bx_id_group_name(gid, group_name_buf);
+        }
     }
     if (options->mode_text != NULL
         && !bx_tar_stream_apply_mode_text(mode,

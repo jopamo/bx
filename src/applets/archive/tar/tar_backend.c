@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -18,6 +17,7 @@
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_id_map.h"
 #include "applets/archive/tar/tar_names.h"
+#include "applets/archive/tar/tar_report.h"
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_select.h"
 #include "applets/archive/tar/tar_stream.h"
@@ -63,6 +63,7 @@ struct bx_tar_options {
     bool unlink_first;
     bool recursive_unlink;
     bool verbose_reports;
+    bool report_mapped_names;
     char* index_file_path;
     bool gzip;
     bool auto_compress;
@@ -71,6 +72,7 @@ struct bx_tar_options {
     bool sort_name;
     const char* starting_file;
     bool format_ustar;
+    bool numeric_owner;
     bool owner_set;
     bool group_set;
     uid_t owner;
@@ -122,6 +124,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_RECURSIVE_UNLINK,
     BX_TAR_OPT_INDEX_FILE,
     BX_TAR_OPT_VERBOSE,
+    BX_TAR_OPT_REPORT_MAPPED_NAMES,
     BX_TAR_OPT_EXCLUDE,
     BX_TAR_OPT_EXCLUDE_FROM,
     BX_TAR_OPT_ADD_FILE,
@@ -162,6 +165,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
     BX_TAR_OPT_ABSOLUTE_NAMES_ON,
     BX_TAR_OPT_TOUCH_MTIME_ON,
+    BX_TAR_OPT_NUMERIC_OWNER,
     BX_TAR_OPT_NEWER,
     BX_TAR_OPT_NEWER_MTIME,
     BX_TAR_OPT_STARTING_FILE,
@@ -278,7 +282,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--delay-directory-restore", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-delay-directory-restore", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--group", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP},
-    {"--numeric-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--numeric-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NUMERIC_OWNER},
     {"--owner", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER},
     {"--group-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_GROUP_MAP},
     {"--owner-map", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_OWNER_MAP},
@@ -361,8 +365,8 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--show-defaults", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--show-omitted-dirs", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--show-snapshot-field-ranges", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--show-transformed-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--show-stored-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--show-transformed-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REPORT_MAPPED_NAMES},
+    {"--show-stored-names", BX_TAR_OPTARG_NONE, BX_TAR_OPT_REPORT_MAPPED_NAMES},
     {"--totals", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--utc", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--verbose", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
@@ -431,70 +435,11 @@ static void bx_tar_report_previous_errors(const struct bx_diag_ctx* diag) {
     fprintf(stderr, "%s: Exiting with failure status due to previous errors\n", diag->progname);
 }
 
-static bool bx_tar_report_output_init(struct bx_tar_report_output* output,
-                                      const struct bx_tar_options* options,
-                                      bool default_stdout,
-                                      bool forbid_stdout,
-                                      struct bx_diag_ctx* diag) {
-    memset(output, 0, sizeof(*output));
-    if (options->index_file_path != NULL) {
-        if (strcmp(options->index_file_path, "-") == 0) {
-            if (forbid_stdout) {
-                bx_diag(diag, "cannot use --index-file=- when archive data is written to standard output");
-                return false;
-            }
-            output->stream = stdout;
-            return true;
-        }
-        output->stream = fopen(options->index_file_path, "wb");
-        if (output->stream == NULL) {
-            bx_diag(diag, "%s: %s", options->index_file_path, strerror(errno));
-            return false;
-        }
-        output->close_stream = true;
-        return true;
-    }
-
-    output->stream = default_stdout ? stdout : stderr;
-    return true;
-}
-
-static void bx_tar_report_output_cleanup(struct bx_tar_report_output* output) {
-    if (output->close_stream && output->stream != NULL) {
-        fclose(output->stream);
-    }
-    output->stream = NULL;
-    output->close_stream = false;
-}
-
-static bool bx_tar_report_printf(FILE* stream,
-                                 struct bx_diag_ctx* diag,
-                                 const char* fmt,
-                                 ...) {
-    va_list ap;
-    int rc;
-
-    va_start(ap, fmt);
-    rc = vfprintf(stream, fmt, ap);
-    va_end(ap);
-    if (rc < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    return true;
-}
-
-static bool bx_tar_report_member_line(FILE* stream,
-                                      const char* name,
-                                      bool is_directory,
-                                      struct bx_diag_ctx* diag) {
-    return bx_tar_report_printf(stream, diag, is_directory ? "%s/\n" : "%s\n", name);
-}
-
 static struct bx_tar_stream_options
 bx_tar_make_stream_options(const struct bx_tar_options* options) {
     return (struct bx_tar_stream_options){
         .format_ustar = options->format_ustar,
+        .numeric_owner = options->numeric_owner,
         .owner_set = options->owner_set,
         .group_set = options->group_set,
         .fixed_mtime = options->fixed_mtime,
@@ -711,6 +656,9 @@ struct bx_tar_list_state {
     FILE* report_stream;
     bool starting_file_reached;
     const struct bx_tar_select_plan* select_plan;
+    struct bx_tar_name_policy name_policy;
+    bool warned_absolute;
+    bool warned_dotdot;
     bool* matched_members;
 };
 
@@ -732,11 +680,6 @@ struct bx_tar_compare_state {
     size_t current_sparse_extent_index;
     size_t current_sparse_extent_offset;
     size_t current_sparse_logical_offset;
-};
-
-struct bx_tar_report_output {
-    FILE* stream;
-    bool close_stream;
 };
 
 static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* select_plan) {
@@ -786,10 +729,17 @@ static void bx_tar_list_state_init(struct bx_tar_list_state* state,
                                    const struct bx_tar_options* options,
                                    const struct bx_tar_select_plan* select_plan,
                                    FILE* report_stream) {
+    memset(state, 0, sizeof(*state));
     state->options = options;
     state->report_stream = report_stream;
     state->starting_file_reached = options->starting_file == NULL;
     state->select_plan = select_plan;
+    state->name_policy = (struct bx_tar_name_policy){
+        .absolute_names = options->absolute_names,
+        .strip_components = options->strip_components,
+        .one_top_level = options->one_top_level,
+        .transform = options->name_transform.active ? &options->name_transform : NULL,
+    };
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
 }
 
@@ -836,6 +786,26 @@ static bool bx_tar_starting_file_gate_reached(bool* reached_io,
         return true;
     }
     return false;
+}
+
+static void bx_tar_warn_name_adjustments(const struct bx_diag_ctx* diag,
+                                         bool stripped_absolute,
+                                         bool* warned_absolute,
+                                         bool stripped_dotdot,
+                                         bool* warned_dotdot) {
+    if (stripped_absolute && !*warned_absolute) {
+        fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
+        *warned_absolute = true;
+    }
+    if (stripped_dotdot && !*warned_dotdot) {
+        fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
+        *warned_dotdot = true;
+    }
+}
+
+static void bx_tar_report_empty_name(const struct bx_tar_entry* entry,
+                                     const struct bx_diag_ctx* diag) {
+    fprintf(stderr, "%s: %s: transforms to empty name\n", diag->progname, entry->name);
 }
 
 static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* state) {
@@ -1277,15 +1247,13 @@ static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
                                         &state->name_policy,
                                         &stripped_absolute,
                                         &stripped_dotdot);
-    if (stripped_absolute && !state->warned_absolute) {
-        fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
-        state->warned_absolute = true;
-    }
-    if (stripped_dotdot && !state->warned_dotdot) {
-        fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
-        state->warned_dotdot = true;
-    }
+    bx_tar_warn_name_adjustments(diag,
+                                 stripped_absolute,
+                                 &state->warned_absolute,
+                                 stripped_dotdot,
+                                 &state->warned_dotdot);
     if (clean_name[0] == '\0') {
+        bx_tar_report_empty_name(entry, diag);
         free(clean_name);
         state->current_skip = true;
         return true;
@@ -1653,6 +1621,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     char* clean_name;
     char* dest_path = NULL;
     const char* extract_dir = NULL;
+    const char* report_name;
     bool stripped_absolute;
     bool stripped_dotdot;
     uid_t mapped_owner = 0;
@@ -1680,26 +1649,25 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                                         &state->name_policy,
                                         &stripped_absolute,
                                         &stripped_dotdot);
-    if (stripped_absolute && !state->warned_absolute) {
-        fprintf(stderr, "%s: Removing leading '/' from member names\n", diag->progname);
-        state->warned_absolute = true;
-    }
-    if (stripped_dotdot && !state->warned_dotdot) {
-        fprintf(stderr, "%s: Removing leading '../' from member names\n", diag->progname);
-        state->warned_dotdot = true;
-    }
+    bx_tar_warn_name_adjustments(diag,
+                                 stripped_absolute,
+                                 &state->warned_absolute,
+                                 stripped_dotdot,
+                                 &state->warned_dotdot);
     if (clean_name[0] == '\0') {
+        bx_tar_report_empty_name(entry, diag);
         free(clean_name);
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
+    report_name = state->options->report_mapped_names ? clean_name : entry->name;
 
     if (state->options->to_stdout) {
         bool ok = true;
         bx_tar_extract_clear_current_stream(state);
         if (state->options->verbose_reports
             && !bx_tar_report_member_line(state->report_stream,
-                                          entry->name,
+                                          report_name,
                                           entry->kind == BX_TAR_KIND_DIR,
                                           diag)) {
             free(clean_name);
@@ -1721,25 +1689,27 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                                  &group_mapped);
 
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name) : xstrdup(clean_name);
-    free(clean_name);
 
     if (state->options->keep_old_files
         && access(dest_path, F_OK) == 0
         && entry->kind != BX_TAR_KIND_DIR) {
         fprintf(stderr, "%s: %s: Cannot open: File exists\n", diag->progname, entry->name);
         state->status = 2;
+        free(clean_name);
         free(dest_path);
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
     if (state->options->verbose_reports
         && !bx_tar_report_member_line(state->report_stream,
-                                      dest_path,
+                                      report_name,
                                       entry->kind == BX_TAR_KIND_DIR,
                                       diag)) {
+        free(clean_name);
         free(dest_path);
         return false;
     }
+    free(clean_name);
 
     if (!bx_tar_extract_prepare_parent_dirs_safe(dest_path, diag)) {
         free(dest_path);
@@ -2020,6 +1990,11 @@ static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
 static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                   const struct bx_tar_entry* entry,
                                   struct bx_diag_ctx* diag) {
+    char* clean_name;
+    const char* report_name;
+    bool stripped_absolute;
+    bool stripped_dotdot;
+
     if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
                                            state->options->starting_file,
                                            entry)) {
@@ -2032,12 +2007,29 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                   NULL)) {
         return true;
     }
+    clean_name = bx_tar_map_member_name(entry->name,
+                                        &state->name_policy,
+                                        &stripped_absolute,
+                                        &stripped_dotdot);
+    bx_tar_warn_name_adjustments(diag,
+                                 stripped_absolute,
+                                 &state->warned_absolute,
+                                 stripped_dotdot,
+                                 &state->warned_dotdot);
+    if (clean_name[0] == '\0') {
+        bx_tar_report_empty_name(entry, diag);
+        free(clean_name);
+        return true;
+    }
+    report_name = state->options->report_mapped_names ? clean_name : entry->name;
     if (!bx_tar_report_member_line(state->report_stream,
-                                   entry->name,
+                                   report_name,
                                    entry->kind == BX_TAR_KIND_DIR,
                                    diag)) {
+        free(clean_name);
         return false;
     }
+    free(clean_name);
     return true;
 }
 
@@ -2110,15 +2102,15 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
     bool need_report_output = options->mode == BX_TAR_MODE_LIST
         || options->mode == BX_TAR_MODE_COMPARE
         || options->verbose_reports;
-    bool report_default_stdout = options->mode == BX_TAR_MODE_LIST
-        || options->mode == BX_TAR_MODE_COMPARE;
-    bool report_forbid_stdout = options->mode == BX_TAR_MODE_EXTRACT && options->to_stdout;
+    FILE* report_default_stream = (options->mode == BX_TAR_MODE_LIST
+                                   || options->mode == BX_TAR_MODE_COMPARE)
+        ? stdout
+        : stderr;
 
     if (need_report_output
         && !bx_tar_report_output_init(&report_output,
-                                      options,
-                                      report_default_stdout,
-                                      report_forbid_stdout,
+                                      options->index_file_path,
+                                      report_default_stream,
                                       diag)) {
         return 2;
     }
@@ -2140,7 +2132,9 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         }
         rc = bx_tar_list_finish(&state, diag);
         bx_tar_list_state_cleanup(&state);
-        bx_tar_report_output_cleanup(&report_output);
+        if (!bx_tar_report_output_finish(&report_output, diag)) {
+            return 2;
+        }
         return rc;
     }
     else if (options->mode == BX_TAR_MODE_COMPARE) {
@@ -2162,7 +2156,9 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         }
         rc = bx_tar_compare_finish(&state, diag);
         bx_tar_compare_state_cleanup(&state);
-        bx_tar_report_output_cleanup(&report_output);
+        if (!bx_tar_report_output_finish(&report_output, diag)) {
+            return 2;
+        }
         return rc;
     }
     else {
@@ -2184,7 +2180,9 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
         }
         rc = bx_tar_extract_finish(&state, diag);
         bx_tar_extract_state_cleanup(&state);
-        bx_tar_report_output_cleanup(&report_output);
+        if (!bx_tar_report_output_finish(&report_output, diag)) {
+            return 2;
+        }
         return rc;
     }
 }
@@ -3332,6 +3330,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_VERBOSE:
             options->verbose_reports = true;
             return true;
+        case BX_TAR_OPT_REPORT_MAPPED_NAMES:
+            options->report_mapped_names = true;
+            return true;
         case BX_TAR_OPT_EXCLUDE:
             return bx_tar_create_options_add_exclude_pattern(&options->create_options, value);
         case BX_TAR_OPT_EXCLUDE_FROM:
@@ -3425,6 +3426,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_TOUCH_MTIME_ON:
             options->touch_mtime = true;
+            return true;
+        case BX_TAR_OPT_NUMERIC_OWNER:
+            options->numeric_owner = true;
             return true;
         case BX_TAR_OPT_STARTING_FILE:
             options->starting_file = value;
@@ -3557,7 +3561,7 @@ static int bx_tar_test_label_archive(const struct bx_tar_options* options,
         free(label);
         return 2;
     }
-    if (!bx_tar_report_output_init(&report_output, options, true, false, diag)) {
+    if (!bx_tar_report_output_init(&report_output, options->index_file_path, stdout, diag)) {
         free(label);
         return 2;
     }
@@ -3569,7 +3573,10 @@ static int bx_tar_test_label_archive(const struct bx_tar_options* options,
                 return 2;
             }
         }
-        bx_tar_report_output_cleanup(&report_output);
+        if (!bx_tar_report_output_finish(&report_output, diag)) {
+            free(label);
+            return 2;
+        }
         free(label);
         return 0;
     }
@@ -3581,7 +3588,10 @@ static int bx_tar_test_label_archive(const struct bx_tar_options* options,
             break;
         }
     }
-    bx_tar_report_output_cleanup(&report_output);
+    if (!bx_tar_report_output_finish(&report_output, diag)) {
+        free(label);
+        return 2;
+    }
     free(label);
     return rc;
 }
@@ -3765,9 +3775,8 @@ int bx_tar_run(int argc, char** argv) {
         }
         if (options.verbose_reports
             && !bx_tar_report_output_init(&report_output,
-                                          &options,
-                                          false,
-                                          strcmp(options.archive_path, "-") == 0,
+                                          options.index_file_path,
+                                          stderr,
                                           &diag)) {
             bx_archive_fs_list_free(&files);
             bx_tar_options_cleanup(&options);
@@ -3800,7 +3809,9 @@ int bx_tar_run(int argc, char** argv) {
             bx_tar_report_previous_errors(&diag);
             rc = 2;
         }
-        bx_tar_report_output_cleanup(&report_output);
+        if (!bx_tar_report_output_finish(&report_output, &diag)) {
+            rc = 2;
+        }
         bx_archive_fs_list_free(&files);
         bx_tar_options_cleanup(&options);
         return rc;
