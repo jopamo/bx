@@ -2,6 +2,7 @@
 #define BX_APPLETS_ARCHIVE_TAR_REPORT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "bx/diag.h"
@@ -26,6 +27,15 @@ bool bx_tar_report_printf(FILE* stream,
 bool bx_tar_report_member_line(FILE* stream,
                                const char* name,
                                bool is_directory,
+                               struct bx_diag_ctx* diag);
+bool bx_tar_report_member_line_with_block(FILE* stream,
+                                          uint64_t block_index,
+                                          const char* name,
+                                          bool is_directory,
+                                          struct bx_diag_ctx* diag);
+bool bx_tar_report_archive_end(FILE* stream,
+                               uint64_t block_index,
+                               bool zero_block_terminated,
                                struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_TAR_REPORT_H */

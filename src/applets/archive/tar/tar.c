@@ -41,6 +41,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --test-label      print or match the archive volume label\n");
     fprintf(stream, "  -v                    report processed member names\n");
     fprintf(stream, "      --index-file=FILE write listing or verbose output to FILE\n");
+    fprintf(stream, "      --block-number    prefix archive-read reports with parser block numbers\n");
+    fprintf(stream, "      --totals          write final byte totals to standard error\n");
     fprintf(stream, "      --show-transformed-names\n");
     fprintf(stream, "                        report rewritten member names when listing or extracting\n");
     fprintf(stream, "      --show-stored-names\n");
@@ -51,6 +53,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        compare by modification time only\n");
     fprintf(stream, "  -K FILE               start list or extract at member FILE\n");
     fprintf(stream, "  -z                    filter the archive through gzip\n");
+    fprintf(stream, "  -J                    filter the archive through xz\n");
+    fprintf(stream, "      --zstd           filter the archive through zstd\n");
     fprintf(stream, "  -a                    choose compression from the archive suffix\n");
     fprintf(stream, "      --threads=N       use N gzip compression workers (0 uses online CPUs)\n");
     fprintf(stream, "      --compress-threads=N\n");

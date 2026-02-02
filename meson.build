@@ -148,7 +148,33 @@ if not zlib_dep.found()
   zlib_dep = cc.find_library('z', required : true)
 endif
 
+liblzma_dep = dependency('liblzma', required : false, static: use_static_binary)
+if not liblzma_dep.found()
+  liblzma_dep = cc.find_library('lzma', required : false)
+endif
+if liblzma_dep.found()
+  add_project_arguments('-DBX_HAVE_LIBLZMA=1', language : 'c')
+else
+  add_project_arguments('-DBX_HAVE_LIBLZMA=0', language : 'c')
+endif
+
+libzstd_dep = dependency('libzstd', required : false, static: use_static_binary)
+if not libzstd_dep.found()
+  libzstd_dep = cc.find_library('zstd', required : false)
+endif
+if libzstd_dep.found()
+  add_project_arguments('-DBX_HAVE_LIBZSTD=1', language : 'c')
+else
+  add_project_arguments('-DBX_HAVE_LIBZSTD=0', language : 'c')
+endif
+
 bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep]
+if liblzma_dep.found()
+  bx_deps += [liblzma_dep]
+endif
+if libzstd_dep.found()
+  bx_deps += [libzstd_dep]
+endif
 if mira_embed_enabled
   bx_deps += [mira_embed_dep]
 endif
@@ -205,8 +231,11 @@ bx_crypto_sources = [
 ]
 
 bx_archive_applet_sources = [
+  'src/applets/archive/archive_codec.c',
   'src/applets/archive/archive_common.c',
   'src/applets/archive/archive_gzip.c',
+  'src/applets/archive/archive_xz.c',
+  'src/applets/archive/archive_zstd.c',
   'src/applets/archive/archive_ordered.c',
   'src/applets/archive/archive_temp.c',
   'src/applets/archive/archive_fs.c',
@@ -922,6 +951,31 @@ if get_option('tests')
     dependencies : [threads_dep],
   )
   test('archive ordered', test_archive_ordered)
+
+  test_archive_codec_deps = [threads_dep, zlib_dep]
+  if liblzma_dep.found()
+    test_archive_codec_deps += [liblzma_dep]
+  endif
+  if libzstd_dep.found()
+    test_archive_codec_deps += [libzstd_dep]
+  endif
+
+  test_archive_codec = executable(
+    'test-archive-codec',
+    [
+      'tests/src/archive/test_archive_codec.c',
+      'src/applets/archive/archive_codec.c',
+      'src/applets/archive/archive_gzip.c',
+      'src/applets/archive/archive_xz.c',
+      'src/applets/archive/archive_zstd.c',
+      'src/applets/archive/archive_ordered.c',
+      'src/lib/cancel_state.c',
+      'src/lib/work_pool.c',
+    ],
+    include_directories : include_directories('src', 'src/dispatch'),
+    dependencies : test_archive_codec_deps,
+  )
+  test('archive codec', test_archive_codec)
 
   test_archive_gzip_mt = executable(
     'test-archive-gzip-mt',

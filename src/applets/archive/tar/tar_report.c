@@ -1,3 +1,4 @@
+#include <inttypes.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <string.h>
@@ -78,4 +79,31 @@ bool bx_tar_report_member_line(FILE* stream,
                                bool is_directory,
                                struct bx_diag_ctx* diag) {
     return bx_tar_report_printf(stream, diag, is_directory ? "%s/\n" : "%s\n", name);
+}
+
+bool bx_tar_report_member_line_with_block(FILE* stream,
+                                          uint64_t block_index,
+                                          const char* name,
+                                          bool is_directory,
+                                          struct bx_diag_ctx* diag) {
+    return bx_tar_report_printf(stream,
+                                diag,
+                                is_directory
+                                    ? "block %" PRIu64 ": %s/\n"
+                                    : "block %" PRIu64 ": %s\n",
+                                block_index,
+                                name);
+}
+
+bool bx_tar_report_archive_end(FILE* stream,
+                               uint64_t block_index,
+                               bool zero_block_terminated,
+                               struct bx_diag_ctx* diag) {
+    return bx_tar_report_printf(stream,
+                                diag,
+                                "block %" PRIu64 ": %s\n",
+                                block_index,
+                                zero_block_terminated
+                                    ? "** Block of NULs **"
+                                    : "** End of File **");
 }

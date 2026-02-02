@@ -3,10 +3,12 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 
+#include "applets/archive/archive_codec.h"
 #include "applets/archive/archive_common.h"
 
 #define BX_TAR_BLOCK_SIZE 512u
@@ -40,6 +42,12 @@ struct bx_tar_entry {
     bool sparse;
     struct bx_tar_sparse_extent* extents;
     size_t extent_count;
+    uint64_t header_block_index;
+};
+
+enum bx_tar_stream_end_kind {
+    BX_TAR_STREAM_END_EOF = 0,
+    BX_TAR_STREAM_END_ZERO_BLOCKS,
 };
 
 struct bx_tar_entry_list {
@@ -50,7 +58,7 @@ struct bx_tar_entry_list {
 
 struct bx_tar_reader_stream_options {
     const char* archive_path;
-    bool require_gzip;
+    const struct bx_archive_codec* required_codec;
 };
 
 struct bx_tar_stream_visitor_ops {
@@ -61,7 +69,12 @@ struct bx_tar_stream_visitor_ops {
                           const unsigned char* data,
                           size_t len,
                           struct bx_diag_ctx* diag);
-    bool (*end_entry)(void* user, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag);
+bool (*end_entry)(void* user, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag);
+    bool (*finish_archive)(void* user,
+                           uint64_t block_index,
+                           enum bx_tar_stream_end_kind end_kind,
+                           uint64_t total_bytes_read,
+                           struct bx_diag_ctx* diag);
     bool stream_sparse_payload;
 };
 
