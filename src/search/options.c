@@ -1034,6 +1034,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     opts->encoding_mode = BX_RG_ENCODING_AUTO;
     opts->path_separator = '/';
     opts->unicode = true;
+    opts->color_mode = BX_COLOR_AUTO;
+    bx_color_set_mode(opts->color_mode);
     bx_rg_color_settings_init_defaults(&opts->rg_colors);
     bx_rg_parse_hyperlink_format(progname, "none", &opts->hyperlink_format);
     if (personality == BX_SEARCH_RG) {

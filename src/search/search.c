@@ -130,6 +130,17 @@ static bool bx_search_should_skip_special_input_mode(mode_t mode,
         && bx_search_mode_is_special_input(mode);
 }
 
+static bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
+                                                      const struct search_opts *opts) {
+    if (!entry || !opts || opts->device_mode != BX_GREP_DEVICE_SKIP)
+        return false;
+
+    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+        return false;
+
+    return bx_search_mode_is_special_input(entry->mode);
+}
+
 static char *display_path_for_output(const char *path, bool strip_dot_prefix,
                                      const struct search_opts *opts) {
     return bx_rg_display_path_dup(path, strip_dot_prefix,
@@ -437,6 +448,14 @@ static bool match_has_word_boundaries(const unsigned char *buf, size_t len,
 static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
                                   size_t start, struct search_opts *opts, struct bx_match *out) {
     bx_search_dev_counters_note_matcher_invocation();
+    if (opts->line_regexp && m->kind == MATCHER_LITERAL) {
+        if (start != 0u)
+            return -1;
+        if (!bx_literal_verify_at(m->literal, buf, len, 0u, out))
+            return -1;
+        return out->start == 0u && out->end == len ? 0 : -1;
+    }
+
     size_t pos = start;
     while (pos <= len) {
         if (matcher_find(m, buf, len, pos, out) != 0)
@@ -454,9 +473,17 @@ static bool matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
                                                        size_t candidate_start,
                                                        struct search_opts *opts,
                                                        struct bx_match *out) {
-    if (!m || m->kind != MATCHER_LITERAL || !opts || opts->line_regexp)
+    if (!m || m->kind != MATCHER_LITERAL || !opts)
         return false;
     bx_search_dev_counters_note_matcher_invocation();
+    if (opts->line_regexp) {
+        if (candidate_start != 0u)
+            return false;
+        if (!bx_literal_verify_at(m->literal, buf, len, 0u, out))
+            return false;
+        return out->start == 0u && out->end == len;
+    }
+
     if (!bx_literal_verify_at(m->literal, buf, len, candidate_start, out))
         return false;
     if (opts->word_regexp && !match_has_word_boundaries(buf, len, out, opts))
@@ -484,7 +511,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     int flags = 0;
     bool use_posix = matcher_uses_posix(pattern, personality, opts);
 
-    if (opts->line_regexp) {
+    if (opts->line_regexp && !opts->fixed_strings) {
         size_t plen = strlen(base_pattern);
         size_t extra = 1;
         if (opts->line_regexp) extra += 2;
@@ -2648,7 +2675,7 @@ static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user)
         return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, gs ? gs->opts : NULL))
         return BX_WALK_CONTINUE;
-    if (bx_search_should_skip_special_input_mode(entry->mode, gs ? gs->opts : NULL))
+    if (bx_search_entry_should_skip_special_input(entry, gs ? gs->opts : NULL))
         return BX_WALK_CONTINUE;
 
     char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix, gs->opts);
