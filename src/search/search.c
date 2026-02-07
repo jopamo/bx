@@ -348,6 +348,66 @@ static bool matcher_uses_posix(const char *pattern,
     }
 }
 
+static int matcher_find_posix_portable(regex_t *regex,
+                                       const unsigned char *buf,
+                                       size_t len,
+                                       size_t start,
+                                       struct bx_match *out) {
+    if (!regex || !buf || !out || start > len)
+        return -1;
+
+#ifdef REG_STARTEND
+    regmatch_t match = {
+        .rm_so = (regoff_t)start,
+        .rm_eo = (regoff_t)len,
+    };
+    int rc = regexec(regex, (const char *)buf, 1, &match, REG_STARTEND);
+    if (rc != 0)
+        return -1;
+    if (match.rm_so < 0 || match.rm_eo < 0)
+        return -1;
+    out->start = (size_t)match.rm_so;
+    out->end = (size_t)match.rm_eo;
+    return 0;
+#else
+    size_t chunk_start = start;
+
+    while (chunk_start <= len) {
+        const unsigned char *chunk_end = memchr(buf + chunk_start, '\0', len - chunk_start);
+        size_t chunk_len = chunk_end ? (size_t)(chunk_end - (buf + chunk_start))
+                                     : (len - chunk_start);
+        char *chunk = malloc(chunk_len + 1u);
+        if (!chunk)
+            return -1;
+        memcpy(chunk, buf + chunk_start, chunk_len);
+        chunk[chunk_len] = '\0';
+
+        regmatch_t match = {0};
+        int eflags = 0;
+        if (chunk_start > 0u)
+            eflags |= REG_NOTBOL;
+        if (chunk_end)
+            eflags |= REG_NOTEOL;
+
+        int rc = regexec(regex, chunk, 1, &match, eflags);
+        free(chunk);
+        if (rc == 0) {
+            if (match.rm_so < 0 || match.rm_eo < 0)
+                return -1;
+            out->start = chunk_start + (size_t)match.rm_so;
+            out->end = chunk_start + (size_t)match.rm_eo;
+            return 0;
+        }
+
+        if (!chunk_end)
+            break;
+        chunk_start += chunk_len + 1u;
+    }
+
+    return -1;
+#endif
+}
+
 static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t len,
                         size_t start, struct bx_match *out) {
     if (m->kind == MATCHER_LITERAL)
@@ -360,21 +420,8 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
          * Search only the logical record slice [start, len). Grep trims the
          * record delimiter before matching, so POSIX regexec must not see the
          * trailing newline or any carried-over bytes from a reused buffer.
-         * Using REG_STARTEND also preserves absolute offsets for subsequent
-         * searches and works for embedded NUL bytes.
          */
-        regmatch_t match = {
-            .rm_so = (regoff_t)start,
-            .rm_eo = (regoff_t)len,
-        };
-        int rc = regexec(&m->posix, (const char *)buf, 1, &match, REG_STARTEND);
-        if (rc != 0)
-            return -1;
-        if (match.rm_so < 0 || match.rm_eo < 0)
-            return -1;
-        out->start = (size_t)match.rm_so;
-        out->end = (size_t)match.rm_eo;
-        return 0;
+        return matcher_find_posix_portable(&m->posix, buf, len, start, out);
     }
 
     return bx_regex_find(m->regex, buf, len, start, out);
