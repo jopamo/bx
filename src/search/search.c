@@ -1417,12 +1417,13 @@ static int search_file_buffered_opened(FILE *f,
         for (int j = start; j < end; j++) lines[j].print = true;
     }
 
+    bool want_group_separator = needs_line_buffering(opts);
     bool in_group = false;
     int last_printed = -1;
     for (int i = 0; i < nlines; i++) {
         if (!lines[i].print) { in_group = false; continue; }
         if (!in_group && last_printed >= 0 && i > last_printed + 1) {
-            if (!opts->suppress_group_separator) {
+            if (want_group_separator && !opts->suppress_group_separator) {
                 bx_search_printf_out("%s\n", opts->group_separator ? opts->group_separator : "--");
                 bx_search_dev_counters_note_output_line_emitted();
             }
