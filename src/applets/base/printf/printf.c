@@ -111,6 +111,10 @@ static void bx_printf_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "for details about the options it supports.\n");
 }
 
+static bool bx_printf_is_lone_meta_option(int argc, char** argv, const char* option) {
+    return argc == 2 && strcmp(argv[1], option) == 0;
+}
+
 static bool bx_printf_parse_options(int argc, char** argv, struct bx_printf_options* options, struct bx_diag_ctx* diag) {
     memset(options, 0, sizeof(*options));
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "printf");
@@ -122,12 +126,16 @@ static bool bx_printf_parse_options(int argc, char** argv, struct bx_printf_opti
         return false;
     }
 
-    if (argc == 2 && strcmp(argv[1], "--help") == 0) {
+    /*
+     * FORMAT is allowed to begin with '-'. Only the lone metadata switches
+     * are treated as options; other leading-dash operands stay literal.
+     */
+    if (bx_printf_is_lone_meta_option(argc, argv, "--help")) {
         options->show_help = true;
         return true;
     }
 
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+    if (bx_printf_is_lone_meta_option(argc, argv, "--version")) {
         options->show_version = true;
         return true;
     }
