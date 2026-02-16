@@ -61,38 +61,32 @@ mira_embed_opt = get_option('mira_embed')
 mira_embed_dep = declare_dependency()
 mira_embed_enabled = false
 if mira_embed_opt != 'disabled'
-  if use_static_binary
-    pkgconf = find_program('pkg-config', required : true)
-    mira_embed_exists = run_command(pkgconf, '--exists', 'mira-embed', check : false).returncode() == 0
-    if mira_embed_exists
-      mira_embed_cflags_str = run_command(pkgconf, '--cflags', 'mira-embed', check : true).stdout().strip()
-      mira_embed_libs_str = run_command(pkgconf, '--libs', '--static', 'mira-embed', check : true).stdout().strip()
+  # mira-embed ships as a static library, so consumers always need the
+  # full transitive link set from pkg-config --static, even when bx itself is
+  # built as a dynamically linked executable.
+  pkgconf = find_program('pkg-config', required : true)
+  mira_embed_exists = run_command(pkgconf, '--exists', 'mira-embed', check : false).returncode() == 0
+  if mira_embed_exists
+    mira_embed_cflags_str = run_command(pkgconf, '--cflags', 'mira-embed', check : true).stdout().strip()
+    mira_embed_libs_str = run_command(pkgconf, '--libs', '--static', 'mira-embed', check : true).stdout().strip()
 
-      mira_embed_cflags = []
-      if mira_embed_cflags_str != ''
-        mira_embed_cflags = mira_embed_cflags_str.split()
-      endif
-
-      mira_embed_libs = []
-      if mira_embed_libs_str != ''
-        mira_embed_libs = mira_embed_libs_str.split()
-      endif
-
-      mira_embed_dep = declare_dependency(
-        compile_args : mira_embed_cflags,
-        link_args : mira_embed_libs,
-      )
-      mira_embed_enabled = true
-    elif mira_embed_opt == 'enabled'
-      error('mira-embed was not found via pkg-config')
+    mira_embed_cflags = []
+    if mira_embed_cflags_str != ''
+      mira_embed_cflags = mira_embed_cflags_str.split()
     endif
-  else
-    mira_embed_dep = dependency(
-      'mira-embed',
-      required : mira_embed_opt == 'enabled',
-      method : 'pkg-config',
+
+    mira_embed_libs = []
+    if mira_embed_libs_str != ''
+      mira_embed_libs = mira_embed_libs_str.split()
+    endif
+
+    mira_embed_dep = declare_dependency(
+      compile_args : mira_embed_cflags,
+      link_args : mira_embed_libs,
     )
-    mira_embed_enabled = mira_embed_dep.found()
+    mira_embed_enabled = true
+  elif mira_embed_opt == 'enabled'
+    error('mira-embed was not found via pkg-config')
   endif
 endif
 
@@ -127,9 +121,9 @@ if mira_embed_enabled and use_static_binary
   )
   if not mira_embed_static_link_ok
     if mira_embed_opt == 'enabled'
-      error('mira-embed found but is not fully static-linkable with this toolchain/dependency set')
+      error('mira-embed found but is not fully static-linkable with this toolchain/dependency set; provide static libcurl transitive dependencies or reconfigure with -Dstatic_binary=disabled')
     endif
-    warning('mira-embed found but is not fully static-linkable; disabling wget mira-embed backend')
+    warning('mira-embed found but is not fully static-linkable with the current libcurl dependency set; disabling wget mira-embed backend (reconfigure with -Dstatic_binary=disabled or provide static libcurl transitive dependencies)')
     mira_embed_enabled = false
     mira_embed_dep = declare_dependency()
   endif
