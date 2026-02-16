@@ -2259,7 +2259,7 @@ bc_program_asciify(BcProgram* p)
 	size_t idx;
 #if BC_ENABLED
 	// This is in the outer scope because it has to be freed after a jump.
-	char* temp_str;
+	char* temp_str = NULL;
 #endif // BC_ENABLED
 
 	// Check the stack.
@@ -2277,49 +2277,54 @@ bc_program_asciify(BcProgram* p)
 	// Handle arrays in bc specially.
 	if (r->t == BC_RESULT_ARRAY)
 	{
-		// Yes, this is one place where we need to cast the number from
-		// bc_program_num() to a vector.
-		BcVec* v = (BcVec*) n;
-		size_t i;
-
 		// XXX: If this is changed, you should also change the similar code in
 		// bc_program_builtin().
 
-		// Dereference the array, if necessary.
-		if (v->size == sizeof(uchar))
-		{
-			v = bc_program_dereference(p, v);
-		}
-
-		assert(v->size == sizeof(BcNum));
-
-		// Allocate the string and set the jump for it.
 		BC_SIG_LOCK;
-		temp_str = bc_vm_malloc(v->len + 1);
 		BC_SETJMP_LOCKED(vm, exit);
 		BC_SIG_UNLOCK;
 
-		// Convert the array.
-		for (i = 0; i < v->len; ++i)
 		{
-			BcNum* num = (BcNum*) bc_vec_item(v, i);
+			// Yes, this is one place where we need to cast the number from
+			// bc_program_num() to a vector.
+			BcVec* v = (BcVec*) n;
+			size_t i;
 
-			if (BC_PROG_STR(num))
+			// Dereference the array, if necessary.
+			if (v->size == sizeof(uchar))
 			{
-				temp_str[i] = (bc_program_string(p, num))[0];
+				v = bc_program_dereference(p, v);
 			}
-			else
+
+			assert(v->size == sizeof(BcNum));
+
+			BC_SIG_LOCK;
+			temp_str = bc_vm_malloc(v->len + 1);
+			BC_SIG_UNLOCK;
+
+			// Convert the array.
+			for (i = 0; i < v->len; ++i)
 			{
-				temp_str[i] = (char) bc_program_asciifyNum(p, num);
+				BcNum* num = (BcNum*) bc_vec_item(v, i);
+
+				if (BC_PROG_STR(num))
+				{
+					temp_str[i] = (bc_program_string(p, num))[0];
+				}
+				else
+				{
+					temp_str[i] = (char) bc_program_asciifyNum(p, num);
+				}
 			}
+
+			temp_str[v->len] = '\0';
 		}
-
-		temp_str[v->len] = '\0';
 
 		// Store the string in the slab and map, and free the temp string.
 		BC_SIG_LOCK;
 		idx = bc_program_addString(p, temp_str);
 		free(temp_str);
+		temp_str = NULL;
 		BC_UNSETJMP(vm);
 		BC_SIG_UNLOCK;
 	}
@@ -2687,6 +2692,26 @@ bc_program_printStack(BcProgram* p)
 	}
 }
 #endif // DC_ENABLED
+
+static void
+bc_program_jump(BcFunc* func, BcInstPtr* ip, char* code, bool jump)
+{
+	size_t idx;
+
+	idx = bc_program_index(code, &ip->idx);
+
+	// If a jump is required...
+	if (jump)
+	{
+		size_t* addr = bc_vec_item(&func->labels, idx);
+
+		// If this fails, then the parser failed to set up the labels correctly.
+		assert(*addr != SIZE_MAX);
+
+		// Set the new address.
+		ip->idx = *addr;
+	}
+}
 
 /**
  * Pushes the value of a global onto the results stack.
@@ -3059,13 +3084,11 @@ bc_program_reset(BcProgram* p)
 void
 bc_program_exec(BcProgram* p)
 {
-	size_t idx;
 	BcResult r;
 	BcResult* ptr;
 	BcInstPtr* ip;
 	BcFunc* func;
 	char* code;
-	bool cond = false;
 	uchar inst;
 #if BC_ENABLED
 	BcNum* num;
@@ -3155,42 +3178,26 @@ bc_program_exec(BcProgram* p)
 #endif // !BC_HAS_COMPUTED_GOTO
 		{
 #if BC_ENABLED
-			// This just sets up the condition for the unconditional jump below,
-			// which checks the condition, if necessary.
 			// clang-format off
 			BC_PROG_LBL(BC_INST_JUMP_ZERO):
 			// clang-format on
 			{
+				bool jump;
+
 				bc_program_prep(p, &ptr, &num, 0);
 
-				cond = !bc_num_cmpZero(num);
+				jump = !bc_num_cmpZero(num);
 				bc_vec_pop(&p->results);
 
-				BC_PROG_DIRECT_JUMP(BC_INST_JUMP)
+				bc_program_jump(func, ip, code, jump);
+				BC_PROG_JUMP(inst, code, ip);
 			}
-			// Fallthrough.
-			BC_PROG_FALLTHROUGH
 
 			// clang-format off
 			BC_PROG_LBL(BC_INST_JUMP):
 			// clang-format on
 			{
-				idx = bc_program_index(code, &ip->idx);
-
-				// If a jump is required...
-				if (inst == BC_INST_JUMP || cond)
-				{
-					// Get the address to jump to.
-					size_t* addr = bc_vec_item(&func->labels, idx);
-
-					// If this fails, then the parser failed to set up the
-					// labels correctly.
-					assert(*addr != SIZE_MAX);
-
-					// Set the new address.
-					ip->idx = *addr;
-				}
-
+				bc_program_jump(func, ip, code, true);
 				BC_PROG_JUMP(inst, code, ip);
 			}
 
@@ -3615,9 +3622,8 @@ bc_program_exec(BcProgram* p)
 			BC_PROG_LBL(BC_INST_EXEC_COND):
 			// clang-format on
 			{
-				cond = (inst == BC_INST_EXEC_COND);
-
-				bc_program_execStr(p, code, &ip->idx, cond, func->code.len);
+				bc_program_execStr(p, code, &ip->idx,
+				                   inst == BC_INST_EXEC_COND, func->code.len);
 
 				// Because we changed the execution stack and where we are
 				// executing, we have to update all of this.
@@ -3702,6 +3708,8 @@ bc_program_exec(BcProgram* p)
 			BC_PROG_LBL(BC_INST_PUSH_TO_VAR):
 			// clang-format on
 			{
+				size_t idx;
+
 				idx = bc_program_index(code, &ip->idx);
 				bc_program_copyToVar(p, idx, BC_TYPE_VAR);
 				BC_PROG_JUMP(inst, code, ip);

@@ -2284,8 +2284,6 @@ static void
 bc_num_binary(BcNum* a, BcNum* b, BcNum* c, size_t scale, BcNumBinOp op,
               size_t req)
 {
-	BcNum* ptr_a;
-	BcNum* ptr_b;
 	BcNum num2;
 #if BC_ENABLE_LIBRARY
 	BcVm* vm = NULL;
@@ -2297,9 +2295,6 @@ bc_num_binary(BcNum* a, BcNum* b, BcNum* c, size_t scale, BcNumBinOp op,
 	assert(BC_NUM_RDX_VALID(b));
 
 	BC_SIG_LOCK;
-
-	ptr_a = c == a ? &num2 : a;
-	ptr_b = c == b ? &num2 : b;
 
 	// Actually reallocate. If we don't reallocate, we want to expand at the
 	// very least.
@@ -2318,19 +2313,22 @@ bc_num_binary(BcNum* a, BcNum* b, BcNum* c, size_t scale, BcNumBinOp op,
 		// set stay set since a longjmp() is not guaranteed to preserve locals.
 		BC_SETJMP_LOCKED(vm, err);
 		BC_SIG_UNLOCK;
+
+		// It is okay for a and b to be the same. If a binary operator function
+		// does need them to be different, the binary operator function is
+		// responsible for that.
+		op(c == a ? &num2 : a, c == b ? &num2 : b, c, scale);
 	}
 	else
 	{
 		BC_SIG_UNLOCK;
 		bc_num_expand(c, req);
+
+		// It is okay for a and b to be the same. If a binary operator function
+		// does need them to be different, the binary operator function is
+		// responsible for that.
+		op(a, b, c, scale);
 	}
-
-	// It is okay for a and b to be the same. If a binary operator function does
-	// need them to be different, the binary operator function is responsible
-	// for that.
-
-	// Call the actual binary operator function.
-	op(ptr_a, ptr_b, c, scale);
 
 	assert(!BC_NUM_NEG(c) || BC_NUM_NONZERO(c));
 	assert(BC_NUM_RDX_VAL(c) <= c->len || !c->len);
@@ -3415,8 +3413,6 @@ bc_num_setup(BcNum* restrict n, BcDig* restrict num, size_t cap)
 void
 bc_num_init(BcNum* restrict n, size_t req)
 {
-	BcDig* num;
-
 	BC_SIG_ASSERT_LOCKED;
 
 	assert(n != NULL);
@@ -3426,14 +3422,17 @@ bc_num_init(BcNum* restrict n, size_t req)
 	req = req >= BC_NUM_DEF_SIZE ? req : BC_NUM_DEF_SIZE;
 
 	// If we can't use a temp, allocate.
-	if (req != BC_NUM_DEF_SIZE) num = bc_vm_malloc(BC_NUM_SIZE(req));
-	else
+	if (req != BC_NUM_DEF_SIZE)
 	{
-		num = bc_vm_getTemp() == NULL ? bc_vm_malloc(BC_NUM_SIZE(req)) :
-		                                bc_vm_takeTemp();
+		bc_num_setup(n, bc_vm_malloc(BC_NUM_SIZE(req)), req);
+		return;
 	}
 
-	bc_num_setup(n, num, req);
+	if (bc_vm_getTemp() == NULL)
+	{
+		bc_num_setup(n, bc_vm_malloc(BC_NUM_SIZE(req)), req);
+	}
+	else bc_num_setup(n, bc_vm_takeTemp(), req);
 }
 
 void
@@ -4280,7 +4279,7 @@ void
 bc_num_divmod(BcNum* a, BcNum* b, BcNum* c, BcNum* d, size_t scale)
 {
 	size_t ts, len;
-	BcNum *ptr_a, num2;
+	BcNum num2;
 	// This is volatile to quiet a warning on GCC about clobbering with
 	// longjmp().
 	volatile bool init = false;
@@ -4303,7 +4302,6 @@ bc_num_divmod(BcNum* a, BcNum* b, BcNum* c, BcNum* d, size_t scale)
 	{
 		// NOLINTNEXTLINE
 		memcpy(&num2, c, sizeof(BcNum));
-		ptr_a = &num2;
 
 		BC_SIG_LOCK;
 
@@ -4317,7 +4315,6 @@ bc_num_divmod(BcNum* a, BcNum* b, BcNum* c, BcNum* d, size_t scale)
 	}
 	else
 	{
-		ptr_a = a;
 		bc_num_expand(c, len);
 	}
 
@@ -4327,7 +4324,7 @@ bc_num_divmod(BcNum* a, BcNum* b, BcNum* c, BcNum* d, size_t scale)
 	{
 		BcBigDig rem;
 
-		bc_num_divArray(ptr_a, (BcBigDig) b->num[0], c, &rem);
+		bc_num_divArray(c == a ? &num2 : a, (BcBigDig) b->num[0], c, &rem);
 
 		assert(rem < BC_BASE_POW);
 
@@ -4335,7 +4332,7 @@ bc_num_divmod(BcNum* a, BcNum* b, BcNum* c, BcNum* d, size_t scale)
 		d->len = (rem != 0);
 	}
 	// Do the slow method.
-	else bc_num_r(ptr_a, b, c, d, scale, ts);
+	else bc_num_r(c == a ? &num2 : a, b, c, d, scale, ts);
 
 	assert(!BC_NUM_NEG(c) || BC_NUM_NONZERO(c));
 	assert(BC_NUM_RDX_VALID(c));

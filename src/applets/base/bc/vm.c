@@ -1156,42 +1156,13 @@ bc_vm_readLine(bool clear)
 	return good;
 }
 
-/**
- * Processes text from stdin.
- */
 static void
-bc_vm_stdin(void)
+bc_vm_stdinLoop(void)
 {
-	bool clear;
-
+	bool clear = true;
 #if BC_ENABLE_LIBRARY
 	BcVm* vm = bcl_getspecific();
 #endif // BC_ENABLE_LIBRARY
-
-	clear = true;
-	vm->mode = BC_MODE_STDIN;
-
-	// Set up the lexer.
-	bc_lex_file(&vm->prs.l, bc_program_stdin_name);
-
-	// These are global so that the lexers can access them, but they are
-	// allocated and freed in this function because they should only be used for
-	// stdin and expressions (they are used in bc_vm_exprs() as well). So they
-	// are tied to this function, really. Well, this and bc_vm_readLine(). These
-	// are the reasons that we have vm->is_stdin to tell the lexers if we are
-	// reading from stdin. Well, both lexers care. And the reason they care is
-	// so that if a comment or a string goes across multiple lines, the lexer
-	// can request more data from stdin until the comment or string is ended.
-	BC_SIG_LOCK;
-	bc_vec_init(&vm->buffer, sizeof(uchar), BC_DTOR_NONE);
-	bc_vec_init(&vm->line_buf, sizeof(uchar), BC_DTOR_NONE);
-	BC_SETJMP_LOCKED(vm, err);
-	BC_SIG_UNLOCK;
-
-// This label exists because errors can cause jumps to end up at the err label
-// below. If that happens, and the error should be cleared and execution
-// continue, then we need to jump back.
-restart:
 
 	// While we still read data from stdin.
 	while (bc_vm_readLine(clear))
@@ -1220,6 +1191,42 @@ restart:
 	// End the if statements.
 	if (BC_IS_BC) bc_vm_endif();
 #endif // BC_ENABLED
+}
+
+/**
+ * Processes text from stdin.
+ */
+static void
+bc_vm_stdin(void)
+{
+#if BC_ENABLE_LIBRARY
+	BcVm* vm = bcl_getspecific();
+#endif // BC_ENABLE_LIBRARY
+
+	vm->mode = BC_MODE_STDIN;
+
+	// Set up the lexer.
+	bc_lex_file(&vm->prs.l, bc_program_stdin_name);
+
+	// These are global so that the lexers can access them, but they are
+	// allocated and freed in this function because they should only be used for
+	// stdin and expressions (they are used in bc_vm_exprs() as well). So they
+	// are tied to this function, really. Well, this and bc_vm_readLine(). These
+	// are the reasons that we have vm->is_stdin to tell the lexers if we are
+	// reading from stdin. Well, both lexers care. And the reason they care is
+	// so that if a comment or a string goes across multiple lines, the lexer
+	// can request more data from stdin until the comment or string is ended.
+	BC_SIG_LOCK;
+	bc_vec_init(&vm->buffer, sizeof(uchar), BC_DTOR_NONE);
+	bc_vec_init(&vm->line_buf, sizeof(uchar), BC_DTOR_NONE);
+	BC_SETJMP_LOCKED(vm, err);
+	BC_SIG_UNLOCK;
+
+// This label exists because errors can cause jumps to end up at the err label
+// below. If that happens, and the error should be cleared and execution
+// continue, then we need to jump back.
+restart:
+	bc_vm_stdinLoop();
 
 err:
 
@@ -1283,28 +1290,12 @@ bc_vm_readBuf(bool clear)
 }
 
 static void
-bc_vm_exprs(void)
+bc_vm_exprsLoop(void)
 {
-	bool clear;
-
+	bool clear = true;
 #if BC_ENABLE_LIBRARY
 	BcVm* vm = bcl_getspecific();
 #endif // BC_ENABLE_LIBRARY
-
-	clear = true;
-	vm->mode = BC_MODE_EXPRS;
-
-	// Prepare the lexer.
-	bc_lex_file(&vm->prs.l, bc_program_exprs_name);
-
-	// We initialize this so that the lexer can access it in the case that it
-	// needs more data for expressions, such as for a multiline string or
-	// comment. See the comment on the allocation of vm->buffer above in
-	// bc_vm_stdin() for more information.
-	BC_SIG_LOCK;
-	bc_vec_init(&vm->buffer, sizeof(uchar), BC_DTOR_NONE);
-	BC_SETJMP_LOCKED(vm, err);
-	BC_SIG_UNLOCK;
 
 	while (bc_vm_readBuf(clear))
 	{
@@ -1323,6 +1314,30 @@ bc_vm_exprs(void)
 	// If we were not supposed to clear, then we should process everything. This
 	// makes sure that errors get reported.
 	if (!clear) bc_vm_process(vm->buffer.v, BC_MODE_EXPRS);
+}
+
+static void
+bc_vm_exprs(void)
+{
+#if BC_ENABLE_LIBRARY
+	BcVm* vm = bcl_getspecific();
+#endif // BC_ENABLE_LIBRARY
+
+	vm->mode = BC_MODE_EXPRS;
+
+	// Prepare the lexer.
+	bc_lex_file(&vm->prs.l, bc_program_exprs_name);
+
+	// We initialize this so that the lexer can access it in the case that it
+	// needs more data for expressions, such as for a multiline string or
+	// comment. See the comment on the allocation of vm->buffer above in
+	// bc_vm_stdin() for more information.
+	BC_SIG_LOCK;
+	bc_vec_init(&vm->buffer, sizeof(uchar), BC_DTOR_NONE);
+	BC_SETJMP_LOCKED(vm, err);
+	BC_SIG_UNLOCK;
+
+	bc_vm_exprsLoop();
 
 err:
 
