@@ -21,14 +21,19 @@ struct bx_tar_name_policy {
     const struct bx_tar_transform_rule* transform;
 };
 
+struct bx_tar_mapped_name {
+    const char* text;
+    char* owned;
+};
+
 bool bx_tar_transform_rule_init(struct bx_tar_transform_rule* rule,
                                 const char* spec,
                                 struct bx_diag_ctx* diag);
 void bx_tar_transform_rule_cleanup(struct bx_tar_transform_rule* rule);
 
-char* bx_tar_map_member_name(const char* stored_name,
-                             const struct bx_tar_name_policy* policy,
-                             bool* stripped_absolute,
-                             bool* stripped_dotdot);
+struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
+                                                 const struct bx_tar_name_policy* policy,
+                                                 bool* stripped_absolute,
+                                                 bool* stripped_dotdot);
 
 #endif /* BX_APPLETS_ARCHIVE_TAR_NAMES_H */

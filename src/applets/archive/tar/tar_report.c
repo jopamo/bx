@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "applets/archive/tar/tar_report.h"
@@ -74,11 +75,28 @@ bool bx_tar_report_printf(FILE* stream,
     return true;
 }
 
+static bool bx_tar_report_write(FILE* stream,
+                                const void* data,
+                                size_t len,
+                                struct bx_diag_ctx* diag) {
+    if (len == 0u) {
+        return true;
+    }
+    if (fwrite(data, 1u, len, stream) == len) {
+        return true;
+    }
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
 bool bx_tar_report_member_line(FILE* stream,
                                const char* name,
                                bool is_directory,
                                struct bx_diag_ctx* diag) {
-    return bx_tar_report_printf(stream, diag, is_directory ? "%s/\n" : "%s\n", name);
+    size_t name_len = strlen(name);
+
+    return bx_tar_report_write(stream, name, name_len, diag)
+        && bx_tar_report_write(stream, is_directory ? "/\n" : "\n", is_directory ? 2u : 1u, diag);
 }
 
 bool bx_tar_report_member_line_with_block(FILE* stream,
@@ -86,13 +104,20 @@ bool bx_tar_report_member_line_with_block(FILE* stream,
                                           const char* name,
                                           bool is_directory,
                                           struct bx_diag_ctx* diag) {
-    return bx_tar_report_printf(stream,
-                                diag,
-                                is_directory
-                                    ? "block %" PRIu64 ": %s/\n"
-                                    : "block %" PRIu64 ": %s\n",
-                                block_index,
-                                name);
+    char prefix[64];
+    int prefix_len = snprintf(prefix, sizeof(prefix), "block %" PRIu64 ": ", block_index);
+
+    if (prefix_len < 0 || (size_t)prefix_len >= sizeof(prefix)) {
+        return bx_tar_report_printf(stream,
+                                    diag,
+                                    is_directory
+                                        ? "block %" PRIu64 ": %s/\n"
+                                        : "block %" PRIu64 ": %s\n",
+                                    block_index,
+                                    name);
+    }
+    return bx_tar_report_write(stream, prefix, (size_t)prefix_len, diag)
+        && bx_tar_report_member_line(stream, name, is_directory, diag);
 }
 
 bool bx_tar_report_archive_end(FILE* stream,

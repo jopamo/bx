@@ -13,8 +13,10 @@
 #include "applets/archive/tar/tar_reader.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
+#include "lib/xreadwrite.h"
 
 #ifdef S_ISVTX
 #define BX_TAR_STICKY_BIT S_ISVTX
@@ -27,7 +29,7 @@
 #define BX_TAR_STREAM_BLOCK_SIZE 512u
 #define BX_TAR_STREAM_RECORD_BLOCKS 20u
 #define BX_TAR_STREAM_FILE_BUFFER_SIZE (1024u * 1024u)
-#define BX_TAR_STREAM_FILE_CHUNK_SIZE (256u * 1024u)
+#define BX_TAR_STREAM_ID_NAME_CACHE_SIZE 16u
 
 struct bx_tar_hardlink_seen {
     dev_t dev;
@@ -44,6 +46,31 @@ struct bx_tar_hardlink_seen_list {
 struct bx_tar_stream_counting_sink {
     const struct bx_tar_stream_sink* inner;
     size_t* bytes_written;
+};
+
+struct bx_tar_stream_id_name_cache_entry {
+    uintmax_t id;
+    char* name;
+    bool valid;
+};
+
+struct bx_tar_stream_id_name_cache {
+    struct bx_tar_stream_id_name_cache_entry entries[BX_TAR_STREAM_ID_NAME_CACHE_SIZE];
+    size_t next_slot;
+};
+
+struct bx_tar_stream_name_caches {
+    struct bx_tar_stream_id_name_cache users;
+    struct bx_tar_stream_id_name_cache groups;
+};
+
+struct bx_tar_stream_fs_write_state {
+    const struct bx_tar_stream_sink* sink;
+    const struct bx_tar_stream_options* options;
+    struct bx_tar_hardlink_seen_list seen;
+    struct bx_tar_stream_name_caches name_caches;
+    unsigned char* file_buffer;
+    size_t file_buffer_size;
 };
 
 bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
@@ -83,6 +110,53 @@ static bool bx_tar_stream_counting_sink_write(void* user, const void* data, size
     }
     *sink->bytes_written += len;
     return true;
+}
+
+static void bx_tar_stream_id_name_cache_cleanup(struct bx_tar_stream_id_name_cache* cache) {
+    size_t i;
+
+    for (i = 0u; i < BX_TAR_STREAM_ID_NAME_CACHE_SIZE; i++) {
+        free(cache->entries[i].name);
+        cache->entries[i].name = NULL;
+        cache->entries[i].valid = false;
+    }
+    cache->next_slot = 0u;
+}
+
+static const char* bx_tar_stream_id_name_cache_remember(struct bx_tar_stream_id_name_cache* cache,
+                                                        uintmax_t id,
+                                                        const char* name) {
+    struct bx_tar_stream_id_name_cache_entry* entry;
+
+    for (size_t i = 0u; i < BX_TAR_STREAM_ID_NAME_CACHE_SIZE; i++) {
+        if (cache->entries[i].valid && cache->entries[i].id == id) {
+            return cache->entries[i].name;
+        }
+    }
+
+    entry = &cache->entries[cache->next_slot];
+    cache->next_slot = (cache->next_slot + 1u) % BX_TAR_STREAM_ID_NAME_CACHE_SIZE;
+    free(entry->name);
+    entry->name = xstrdup(name);
+    entry->id = id;
+    entry->valid = true;
+    return entry->name;
+}
+
+static const char* bx_tar_stream_user_name(struct bx_tar_stream_name_caches* caches, uid_t uid) {
+    char numeric_buffer[32];
+
+    return bx_tar_stream_id_name_cache_remember(&caches->users,
+                                                (uintmax_t)uid,
+                                                bx_id_user_name(uid, numeric_buffer));
+}
+
+static const char* bx_tar_stream_group_name(struct bx_tar_stream_name_caches* caches, gid_t gid) {
+    char numeric_buffer[32];
+
+    return bx_tar_stream_id_name_cache_remember(&caches->groups,
+                                                (uintmax_t)gid,
+                                                bx_id_group_name(gid, numeric_buffer));
 }
 
 static void bx_tar_stream_format_octal_field(unsigned char* field, size_t len, size_t value) {
@@ -429,44 +503,46 @@ static bool bx_tar_stream_write_sparse_number_line(struct bx_tar_stream_live_ent
 static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
                                           const char* path,
                                           size_t expected_size,
+                                          unsigned char* buffer,
+                                          size_t buffer_size,
                                           struct bx_diag_ctx* diag) {
-    unsigned char buffer[BX_TAR_STREAM_FILE_CHUNK_SIZE];
-    FILE* stream = fopen(path, "rb");
+    int fd = bx_fd_open_read(path, diag);
     size_t total = 0u;
 
-    if (stream == NULL) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
+    if (fd < 0) {
         return false;
     }
-    setvbuf(stream, NULL, _IOFBF, BX_TAR_STREAM_FILE_BUFFER_SIZE);
 
     while (total < expected_size) {
         size_t chunk = expected_size - total;
-        size_t nread;
+        size_t filled = 0u;
 
-        if (chunk > sizeof(buffer)) {
-            chunk = sizeof(buffer);
+        if (chunk > buffer_size) {
+            chunk = buffer_size;
         }
-        nread = fread(buffer, 1u, chunk, stream);
-        if (nread != chunk) {
-            if (ferror(stream)) {
+        while (filled < chunk) {
+            ssize_t nread = bx_xread(fd, buffer + filled, chunk - filled);
+
+            if (nread < 0) {
                 bx_diag(diag, "%s: %s", path, strerror(errno));
+                bx_fd_close(&fd, path, NULL);
+                return false;
             }
-            else {
+            if (nread == 0) {
                 bx_diag(diag, "%s: file shrank while reading", path);
+                bx_fd_close(&fd, path, NULL);
+                return false;
             }
-            fclose(stream);
+            filled += (size_t)nread;
+        }
+        if (!bx_tar_stream_sink_write(sink, buffer, chunk, diag)) {
+            bx_fd_close(&fd, path, NULL);
             return false;
         }
-        if (!bx_tar_stream_sink_write(sink, buffer, nread, diag)) {
-            fclose(stream);
-            return false;
-        }
-        total += nread;
+        total += chunk;
     }
 
-    if (fclose(stream) != 0) {
-        bx_diag(diag, "%s: %s", path, strerror(errno));
+    if (!bx_fd_close(&fd, path, diag)) {
         return false;
     }
     return true;
@@ -512,22 +588,22 @@ static void bx_tar_stream_seen_list_free(struct bx_tar_hardlink_seen_list* seen)
     seen->cap = 0u;
 }
 
-static const char* bx_tar_stream_effective_owner_name(uid_t uid,
-                                                      const char* mapped_name,
-                                                      char numeric_buffer[32]) {
+static const char* bx_tar_stream_effective_owner_name(struct bx_tar_stream_name_caches* caches,
+                                                      uid_t uid,
+                                                      const char* mapped_name) {
     if (mapped_name != NULL) {
         return mapped_name;
     }
-    return bx_id_user_name(uid, numeric_buffer);
+    return bx_tar_stream_user_name(caches, uid);
 }
 
-static const char* bx_tar_stream_effective_group_name(gid_t gid,
-                                                      const char* mapped_name,
-                                                      char numeric_buffer[32]) {
+static const char* bx_tar_stream_effective_group_name(struct bx_tar_stream_name_caches* caches,
+                                                      gid_t gid,
+                                                      const char* mapped_name) {
     if (mapped_name != NULL) {
         return mapped_name;
     }
-    return bx_id_group_name(gid, numeric_buffer);
+    return bx_tar_stream_group_name(caches, gid);
 }
 
 static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
@@ -551,65 +627,63 @@ static bool bx_tar_stream_apply_mode_text(mode_t initial_mode,
     return bx_mode_parse(mode_text, &params, mode_out);
 }
 
-static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
-                                         const struct bx_archive_fs_entry* fs_entry,
-                                         const struct bx_tar_stream_options* options,
-                                         struct bx_tar_hardlink_seen_list* seen,
+static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* state,
+                                         const struct bx_archive_fs_visit_entry* fs_entry,
                                          struct bx_diag_ctx* diag) {
-    mode_t mode = fs_entry->st.st_mode & 07777u;
-    uid_t uid = options->owner_set ? options->owner : fs_entry->st.st_uid;
-    gid_t gid = options->group_set ? options->group : fs_entry->st.st_gid;
+    const struct bx_tar_stream_sink* sink = state->sink;
+    const struct bx_tar_stream_options* options = state->options;
+    mode_t mode = fs_entry->st->st_mode & 07777u;
+    uid_t uid = options->owner_set ? options->owner : fs_entry->st->st_uid;
+    gid_t gid = options->group_set ? options->group : fs_entry->st->st_gid;
     const char* mapped_uname = NULL;
     const char* mapped_gname = NULL;
-    char owner_name_buf[32];
-    char group_name_buf[32];
     const char* uname = NULL;
     const char* gname = NULL;
-    struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st.st_mtim;
+    struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st->st_mtim;
     unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
-    size_t file_size = (size_t)fs_entry->st.st_size;
+    size_t file_size = (size_t)fs_entry->st->st_size;
     size_t padded_size = bx_tar_stream_round_up(file_size, BX_TAR_STREAM_BLOCK_SIZE);
 
     if (!options->owner_set && options->owner_map != NULL) {
-        const char* source_name = bx_id_user_name(fs_entry->st.st_uid, owner_name_buf);
+        const char* source_name = bx_tar_stream_user_name(&state->name_caches, fs_entry->st->st_uid);
 
         if (bx_tar_id_map_apply_owner(options->owner_map,
-                                      fs_entry->st.st_uid,
+                                      fs_entry->st->st_uid,
                                       source_name,
                                       &uid,
                                       &mapped_uname)) {
-            uname = bx_tar_stream_effective_owner_name(uid, mapped_uname, owner_name_buf);
+            uname = bx_tar_stream_effective_owner_name(&state->name_caches, uid, mapped_uname);
         }
     }
     if (!options->group_set && options->group_map != NULL) {
-        const char* source_name = bx_id_group_name(fs_entry->st.st_gid, group_name_buf);
+        const char* source_name = bx_tar_stream_group_name(&state->name_caches, fs_entry->st->st_gid);
 
         if (bx_tar_id_map_apply_group(options->group_map,
-                                      fs_entry->st.st_gid,
+                                      fs_entry->st->st_gid,
                                       source_name,
                                       &gid,
                                       &mapped_gname)) {
-            gname = bx_tar_stream_effective_group_name(gid, mapped_gname, group_name_buf);
+            gname = bx_tar_stream_effective_group_name(&state->name_caches, gid, mapped_gname);
         }
     }
     if (!options->numeric_owner) {
         if (uname == NULL) {
-            uname = bx_id_user_name(uid, owner_name_buf);
+            uname = bx_tar_stream_user_name(&state->name_caches, uid);
         }
         if (gname == NULL) {
-            gname = bx_id_group_name(gid, group_name_buf);
+            gname = bx_tar_stream_group_name(&state->name_caches, gid);
         }
     }
     if (options->mode_text != NULL
         && !bx_tar_stream_apply_mode_text(mode,
-                                          S_ISDIR(fs_entry->st.st_mode),
+                                          S_ISDIR(fs_entry->st->st_mode),
                                           options->mode_text,
                                           &mode)) {
         bx_diag(diag, "invalid mode '%s'", options->mode_text);
         return false;
     }
 
-    if (S_ISDIR(fs_entry->st.st_mode)) {
+    if (S_ISDIR(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              NULL,
@@ -625,7 +699,7 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                              !options->format_ustar,
                                              diag);
     }
-    if (S_ISLNK(fs_entry->st.st_mode)) {
+    if (S_ISLNK(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              fs_entry->link_target,
@@ -641,7 +715,7 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                              !options->format_ustar,
                                              diag);
     }
-    if (S_ISFIFO(fs_entry->st.st_mode)) {
+    if (S_ISFIFO(fs_entry->st->st_mode)) {
         return bx_tar_stream_write_raw_entry(sink,
                                              fs_entry->archive_path,
                                              NULL,
@@ -657,17 +731,17 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                              !options->format_ustar,
                                              diag);
     }
-    if (!S_ISREG(fs_entry->st.st_mode)) {
+    if (!S_ISREG(fs_entry->st->st_mode)) {
         bx_diag(diag, "%s: unsupported file type", fs_entry->source_path);
         return false;
     }
 
-    if (fs_entry->st.st_nlink > 1) {
-        ssize_t index = bx_tar_stream_find_seen_hardlink(seen, fs_entry->st.st_dev, fs_entry->st.st_ino);
+    if (fs_entry->st->st_nlink > 1) {
+        ssize_t index = bx_tar_stream_find_seen_hardlink(&state->seen, fs_entry->st->st_dev, fs_entry->st->st_ino);
         if (index >= 0) {
             return bx_tar_stream_write_raw_entry(sink,
                                                  fs_entry->archive_path,
-                                                 seen->items[index].first_name,
+                                                 state->seen.items[index].first_name,
                                                  uname,
                                                  gname,
                                                  BX_TAR_STREAM_KIND_HARDLINK,
@@ -680,9 +754,9 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                                  !options->format_ustar,
                                                  diag);
         }
-        bx_tar_stream_record_seen_hardlink(seen,
-                                           fs_entry->st.st_dev,
-                                           fs_entry->st.st_ino,
+        bx_tar_stream_record_seen_hardlink(&state->seen,
+                                           fs_entry->st->st_dev,
+                                           fs_entry->st->st_ino,
                                            fs_entry->archive_path);
     }
 
@@ -698,11 +772,16 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
                                        NULL,
                                        file_size,
                                        mtime,
-                                        !options->format_ustar,
+                                       !options->format_ustar,
                                        diag)) {
         return false;
     }
-    if (!bx_tar_stream_write_file_data(sink, fs_entry->source_path, file_size, diag)) {
+    if (!bx_tar_stream_write_file_data(sink,
+                                       fs_entry->source_path,
+                                       file_size,
+                                       state->file_buffer,
+                                       state->file_buffer_size,
+                                       diag)) {
         return false;
     }
     if (padded_size > file_size
@@ -710,6 +789,14 @@ static bool bx_tar_stream_write_fs_entry(const struct bx_tar_stream_sink* sink,
         return false;
     }
     return true;
+}
+
+static bool bx_tar_stream_visit_fs_entry(const struct bx_archive_fs_visit_entry* fs_entry,
+                                         void* user,
+                                         struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_fs_write_state* state = user;
+
+    return bx_tar_stream_write_fs_entry(state, fs_entry, diag);
 }
 
 static bool bx_tar_stream_finish_archive(const struct bx_tar_stream_sink* sink,
@@ -1057,7 +1144,6 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
                                       const struct bx_tar_stream_sink* sink,
                                       size_t* bytes_written_io,
                                       struct bx_diag_ctx* diag) {
-    struct bx_tar_hardlink_seen_list seen = {0};
     struct bx_tar_stream_counting_sink counting_user = {
         .inner = sink,
         .bytes_written = NULL,
@@ -1065,6 +1151,12 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
     struct bx_tar_stream_sink counting_sink = {
         .user = &counting_user,
         .write = bx_tar_stream_counting_sink_write,
+    };
+    struct bx_tar_stream_fs_write_state state = {
+        .sink = &counting_sink,
+        .options = options,
+        .file_buffer = xmalloc(BX_TAR_STREAM_FILE_BUFFER_SIZE),
+        .file_buffer_size = BX_TAR_STREAM_FILE_BUFFER_SIZE,
     };
     size_t i;
 
@@ -1075,13 +1167,72 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
     counting_user.bytes_written = bytes_written_io;
 
     for (i = 0u; i < files->len; i++) {
-        if (!bx_tar_stream_write_fs_entry(&counting_sink, &files->entries[i], options, &seen, diag)) {
-            bx_tar_stream_seen_list_free(&seen);
+        struct bx_archive_fs_visit_entry entry = {
+            .source_path = files->entries[i].source_path,
+            .archive_path = files->entries[i].archive_path,
+            .st = &files->entries[i].st,
+            .link_target = files->entries[i].link_target,
+        };
+
+        if (!bx_tar_stream_write_fs_entry(&state, &entry, diag)) {
+            free(state.file_buffer);
+            bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
+            bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
+            bx_tar_stream_seen_list_free(&state.seen);
             return false;
         }
     }
 
-    bx_tar_stream_seen_list_free(&seen);
+    free(state.file_buffer);
+    bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
+    bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
+    bx_tar_stream_seen_list_free(&state.seen);
+    return true;
+}
+
+bool bx_tar_stream_write_fs_entries_body(bx_tar_stream_fs_entry_producer_fn producer,
+                                         void* producer_user,
+                                         const struct bx_tar_stream_options* options,
+                                         const struct bx_tar_stream_sink* sink,
+                                         size_t* bytes_written_io,
+                                         struct bx_diag_ctx* diag) {
+    struct bx_tar_stream_counting_sink counting_user = {
+        .inner = sink,
+        .bytes_written = NULL,
+    };
+    struct bx_tar_stream_sink counting_sink = {
+        .user = &counting_user,
+        .write = bx_tar_stream_counting_sink_write,
+    };
+    struct bx_tar_stream_fs_write_state state = {
+        .sink = &counting_sink,
+        .options = options,
+        .file_buffer = xmalloc(BX_TAR_STREAM_FILE_BUFFER_SIZE),
+        .file_buffer_size = BX_TAR_STREAM_FILE_BUFFER_SIZE,
+    };
+
+    if (producer == NULL) {
+        bx_diag(diag, "invalid tar stream fs entry producer");
+        return false;
+    }
+    if (bytes_written_io == NULL) {
+        bx_diag(diag, "invalid tar stream byte counter");
+        return false;
+    }
+
+    counting_user.bytes_written = bytes_written_io;
+    if (!producer(producer_user, bx_tar_stream_visit_fs_entry, &state, diag)) {
+        free(state.file_buffer);
+        bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
+        bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
+        bx_tar_stream_seen_list_free(&state.seen);
+        return false;
+    }
+
+    free(state.file_buffer);
+    bx_tar_stream_id_name_cache_cleanup(&state.name_caches.groups);
+    bx_tar_stream_id_name_cache_cleanup(&state.name_caches.users);
+    bx_tar_stream_seen_list_free(&state.seen);
     return true;
 }
 

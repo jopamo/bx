@@ -107,6 +107,12 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
                                       bool sort_children,
                                       bool* had_create_errors,
                                       struct bx_diag_ctx* diag);
+bool bx_tar_create_visit_fs_entries(const struct bx_tar_create_options* create_options,
+                                    bool sort_children,
+                                    bx_archive_fs_visit_fn visit_fn,
+                                    void* visit_user_data,
+                                    bool* had_create_errors,
+                                    struct bx_diag_ctx* diag);
 
 bool bx_tar_create_remove_archived_sources(const struct bx_archive_fs_list* list,
                                            const struct bx_diag_ctx* diag);

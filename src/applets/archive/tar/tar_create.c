@@ -64,7 +64,8 @@ struct bx_tar_create_filter_state {
 };
 
 struct bx_tar_create_collect_ctx {
-    struct bx_archive_fs_list* list;
+    bx_archive_fs_visit_fn visit_fn;
+    void* visit_user_data;
     bool sort_children;
     bool had_create_errors;
     struct bx_diag_ctx* diag;
@@ -778,6 +779,26 @@ bx_tar_create_handle_fs_error(const char* source_path,
     return BX_ARCHIVE_FS_ERROR_SKIP;
 }
 
+static bool bx_tar_create_collect_entry(const struct bx_archive_fs_visit_entry* entry,
+                                        void* user_data,
+                                        struct bx_diag_ctx* diag) {
+    struct bx_archive_fs_list* list = user_data;
+    (void)diag;
+
+    if (list->len == list->cap) {
+        size_t next_cap = list->cap ? list->cap * 2u : 32u;
+        list->entries = xrealloc(list->entries, next_cap * sizeof(*list->entries));
+        list->cap = next_cap;
+    }
+
+    list->entries[list->len].source_path = xstrdup(entry->source_path);
+    list->entries[list->len].archive_path = xstrdup(entry->archive_path);
+    list->entries[list->len].st = *entry->st;
+    list->entries[list->len].link_target = entry->link_target ? xstrdup(entry->link_target) : NULL;
+    list->len++;
+    return true;
+}
+
 static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
                                    const struct bx_tar_files_from_state* state,
                                    const char* name) {
@@ -798,16 +819,17 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
         .had_create_errors = &ctx->had_create_errors,
     };
     char* source_path = bx_tar_create_resolve_input_path(state->cwd, name);
-    bool ok = bx_archive_fs_add_path_filtered(ctx->list,
-                                              source_path,
-                                              name,
-                                              state->recurse,
-                                              ctx->sort_children,
-                                              bx_tar_create_include_path,
-                                              &filter_state,
-                                              bx_tar_create_handle_fs_error,
-                                              &filter_state,
-                                              ctx->diag);
+    bool ok = bx_archive_fs_visit_path_filtered(source_path,
+                                                name,
+                                                state->recurse,
+                                                ctx->sort_children,
+                                                bx_tar_create_include_path,
+                                                &filter_state,
+                                                bx_tar_create_handle_fs_error,
+                                                &filter_state,
+                                                ctx->visit_fn,
+                                                ctx->visit_user_data,
+                                                ctx->diag);
 
     bx_tar_create_filter_state_cleanup(&filter_state);
     free(source_path);
@@ -1416,11 +1438,12 @@ static bool bx_tar_create_apply_directive(struct bx_tar_create_collect_ctx* ctx,
     return true;
 }
 
-bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
-                                      const struct bx_tar_create_options* create_options,
-                                      bool sort_children,
-                                      bool* had_create_errors,
-                                      struct bx_diag_ctx* diag) {
+bool bx_tar_create_visit_fs_entries(const struct bx_tar_create_options* create_options,
+                                    bool sort_children,
+                                    bx_archive_fs_visit_fn visit_fn,
+                                    void* visit_user_data,
+                                    bool* had_create_errors,
+                                    struct bx_diag_ctx* diag) {
     struct bx_tar_files_from_state state = {
         .cwd = NULL,
         .separator = '\n',
@@ -1435,7 +1458,8 @@ bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
         .exclude_tag_under_files = {0},
     };
     struct bx_tar_create_collect_ctx ctx = {
-        .list = list,
+        .visit_fn = visit_fn,
+        .visit_user_data = visit_user_data,
         .sort_children = sort_children,
         .had_create_errors = false,
         .diag = diag,
@@ -1464,6 +1488,19 @@ out:
     bx_archive_name_list_free(&state.exclude_tag_under_files);
     free(state.cwd);
     return ok;
+}
+
+bool bx_tar_create_collect_fs_entries(struct bx_archive_fs_list* list,
+                                      const struct bx_tar_create_options* create_options,
+                                      bool sort_children,
+                                      bool* had_create_errors,
+                                      struct bx_diag_ctx* diag) {
+    return bx_tar_create_visit_fs_entries(create_options,
+                                          sort_children,
+                                          bx_tar_create_collect_entry,
+                                          list,
+                                          had_create_errors,
+                                          diag);
 }
 
 static bool bx_tar_create_path_seen(const struct bx_archive_name_list* seen_paths, const char* path) {

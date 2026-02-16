@@ -53,6 +53,19 @@ static bool bx_archive_fs_list_push(struct bx_archive_fs_list* list,
     return true;
 }
 
+static bool bx_archive_fs_collect_entry(const struct bx_archive_fs_visit_entry* entry,
+                                        void* user_data,
+                                        struct bx_diag_ctx* diag) {
+    struct bx_archive_fs_list* list = user_data;
+    (void)diag;
+
+    return bx_archive_fs_list_push(list,
+                                   entry->source_path,
+                                   entry->archive_path,
+                                   entry->st,
+                                   entry->link_target);
+}
+
 static int bx_archive_name_compare(const void* left, const void* right) {
     const char* const* a = left;
     const char* const* b = right;
@@ -140,16 +153,17 @@ static bool bx_archive_read_children(const char* dir_path,
     return true;
 }
 
-bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
-                                     const char* source_path,
-                                     const char* archive_path,
-                                     bool recurse,
-                                     bool sort_children,
-                                     bx_archive_fs_include_fn include_fn,
-                                     void* include_user_data,
-                                     bx_archive_fs_error_fn error_fn,
-                                     void* error_user_data,
-                                     struct bx_diag_ctx* diag) {
+bool bx_archive_fs_visit_path_filtered(const char* source_path,
+                                       const char* archive_path,
+                                       bool recurse,
+                                       bool sort_children,
+                                       bx_archive_fs_include_fn include_fn,
+                                       void* include_user_data,
+                                       bx_archive_fs_error_fn error_fn,
+                                       void* error_user_data,
+                                       bx_archive_fs_visit_fn visit_fn,
+                                       void* visit_user_data,
+                                       struct bx_diag_ctx* diag) {
     struct stat st;
     char* link_target = NULL;
 
@@ -179,7 +193,17 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
         }
     }
 
-    bx_archive_fs_list_push(list, source_path, archive_path, &st, link_target);
+    if (!visit_fn(&(struct bx_archive_fs_visit_entry){
+                      .source_path = source_path,
+                      .archive_path = archive_path,
+                      .st = &st,
+                      .link_target = link_target,
+                  },
+                  visit_user_data,
+                  diag)) {
+        free(link_target);
+        return false;
+    }
     free(link_target);
 
     if (recurse && S_ISDIR(st.st_mode)) {
@@ -200,16 +224,17 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
         for (i = 0u; i < child_count; i++) {
             char* child_source = bx_path_join(source_path, children[i]);
             char* child_archive = bx_path_join(archive_path, children[i]);
-            bool ok = bx_archive_fs_add_path_filtered(list,
-                                                      child_source,
-                                                      child_archive,
-                                                      true,
-                                                      sort_children,
-                                                      include_fn,
-                                                      include_user_data,
-                                                      error_fn,
-                                                      error_user_data,
-                                                      diag);
+            bool ok = bx_archive_fs_visit_path_filtered(child_source,
+                                                        child_archive,
+                                                        true,
+                                                        sort_children,
+                                                        include_fn,
+                                                        include_user_data,
+                                                        error_fn,
+                                                        error_user_data,
+                                                        visit_fn,
+                                                        visit_user_data,
+                                                        diag);
             free(child_source);
             free(child_archive);
             free(children[i]);
@@ -225,6 +250,29 @@ bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
     }
 
     return true;
+}
+
+bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
+                                     const char* source_path,
+                                     const char* archive_path,
+                                     bool recurse,
+                                     bool sort_children,
+                                     bx_archive_fs_include_fn include_fn,
+                                     void* include_user_data,
+                                     bx_archive_fs_error_fn error_fn,
+                                     void* error_user_data,
+                                     struct bx_diag_ctx* diag) {
+    return bx_archive_fs_visit_path_filtered(source_path,
+                                             archive_path,
+                                             recurse,
+                                             sort_children,
+                                             include_fn,
+                                             include_user_data,
+                                             error_fn,
+                                             error_user_data,
+                                             bx_archive_fs_collect_entry,
+                                             list,
+                                             diag);
 }
 
 bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
@@ -245,7 +293,39 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                                            diag);
 }
 
-bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
+void bx_archive_parent_dir_cache_cleanup(struct bx_archive_parent_dir_cache* cache) {
+    if (cache == NULL) {
+        return;
+    }
+    free(cache->last_parent);
+    cache->last_parent = NULL;
+}
+
+void bx_archive_parent_dir_cache_invalidate(struct bx_archive_parent_dir_cache* cache) {
+    bx_archive_parent_dir_cache_cleanup(cache);
+}
+
+bool bx_archive_parent_dir_cache_matches_parent(const struct bx_archive_parent_dir_cache* cache,
+                                                const char* parent) {
+    return cache != NULL
+        && cache->last_parent != NULL
+        && parent != NULL
+        && strcmp(cache->last_parent, parent) == 0;
+}
+
+void bx_archive_parent_dir_cache_remember_parent(struct bx_archive_parent_dir_cache* cache,
+                                                 const char* parent) {
+    if (cache == NULL) {
+        return;
+    }
+
+    free(cache->last_parent);
+    cache->last_parent = xstrdup(parent);
+}
+
+bool bx_archive_ensure_parent_dirs_cached(const char* path,
+                                          struct bx_archive_parent_dir_cache* cache,
+                                          struct bx_diag_ctx* diag) {
     char* parent = bx_path_parent_dir_dup(path);
     char* cursor;
     size_t i;
@@ -258,9 +338,12 @@ bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
         free(parent);
         return true;
     }
+    if (bx_archive_parent_dir_cache_matches_parent(cache, parent)) {
+        free(parent);
+        return true;
+    }
 
     cursor = xstrdup(parent);
-    free(parent);
 
     if (cursor[0] == '/') {
         i = 1u;
@@ -276,6 +359,7 @@ bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
         cursor[i] = '\0';
         if (cursor[0] != '\0' && mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
             bx_diag(diag, "%s: %s", cursor, strerror(errno));
+            free(parent);
             free(cursor);
             return false;
         }
@@ -284,12 +368,19 @@ bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
 
     if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
         bx_diag(diag, "%s: %s", cursor, strerror(errno));
+        free(parent);
         free(cursor);
         return false;
     }
 
+    bx_archive_parent_dir_cache_remember_parent(cache, parent);
+    free(parent);
     free(cursor);
     return true;
+}
+
+bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
+    return bx_archive_ensure_parent_dirs_cached(path, NULL, diag);
 }
 
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {

@@ -47,6 +47,11 @@ struct bx_tar_stream_live_entry {
     bool active;
 };
 
+typedef bool (*bx_tar_stream_fs_entry_producer_fn)(void* user,
+                                                   bx_archive_fs_visit_fn visit_fn,
+                                                   void* visit_user_data,
+                                                   struct bx_diag_ctx* diag);
+
 bool bx_tar_stream_write_raw_entry(const struct bx_tar_stream_sink* sink,
                                    const char* path,
                                    const char* linkname,
@@ -109,6 +114,13 @@ bool bx_tar_stream_write_fs_list_body(const struct bx_archive_fs_list* files,
                                       const struct bx_tar_stream_sink* sink,
                                       size_t* bytes_written_io,
                                       struct bx_diag_ctx* diag);
+
+bool bx_tar_stream_write_fs_entries_body(bx_tar_stream_fs_entry_producer_fn producer,
+                                         void* producer_user,
+                                         const struct bx_tar_stream_options* options,
+                                         const struct bx_tar_stream_sink* sink,
+                                         size_t* bytes_written_io,
+                                         struct bx_diag_ctx* diag);
 
 bool bx_tar_stream_encode_fs_list(const struct bx_archive_fs_list* files,
                                   const struct bx_tar_stream_options* options,

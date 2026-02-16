@@ -163,20 +163,64 @@ static char* bx_tar_transform_apply(const struct bx_tar_transform_rule* rule,
     }
 }
 
-char* bx_tar_map_member_name(const char* stored_name,
-                             const struct bx_tar_name_policy* policy,
-                             bool* stripped_absolute,
-                             bool* stripped_dotdot) {
+static bool bx_tar_map_member_name_can_borrow(const char* stored_name,
+                                              const struct bx_tar_name_policy* policy) {
+    const char* part = stored_name;
+    const char* cursor = stored_name;
+
+    if (stored_name[0] == '\0') {
+        return true;
+    }
+    if (policy != NULL) {
+        if (policy->strip_components != 0u || policy->one_top_level != NULL) {
+            return false;
+        }
+        if (policy->transform != NULL && policy->transform->active) {
+            return false;
+        }
+    }
+
+    while (true) {
+        if (*cursor == '/' || *cursor == '\0') {
+            size_t len = (size_t)(cursor - part);
+
+            if (len == 0u) {
+                return false;
+            }
+            if ((len == 1u && part[0] == '.')
+                || (len == 2u && part[0] == '.' && part[1] == '.')) {
+                return false;
+            }
+            if (*cursor == '\0') {
+                break;
+            }
+            part = cursor + 1;
+        }
+        cursor++;
+    }
+
+    return true;
+}
+
+struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
+                                                 const struct bx_tar_name_policy* policy,
+                                                 bool* stripped_absolute,
+                                                 bool* stripped_dotdot) {
     struct bx_path_components components = {0};
     struct bx_archive_buffer output;
     char* transformed = NULL;
-    char* result = NULL;
     const char* name;
     bool leading_slash = false;
     size_t start_index = 0u;
+    struct bx_tar_mapped_name result = {0};
 
     *stripped_absolute = false;
     *stripped_dotdot = false;
+
+    if (bx_tar_map_member_name_can_borrow(stored_name, policy)) {
+        result.text = stored_name;
+        return result;
+    }
 
     transformed = bx_tar_transform_apply(policy ? policy->transform : NULL, stored_name);
     name = transformed;
@@ -234,7 +278,8 @@ char* bx_tar_map_member_name(const char* stored_name,
     }
 
     bx_archive_buffer_append_byte(&output, '\0');
-    result = xstrdup((const char*)output.data);
+    result.owned = xstrdup((const char*)output.data);
+    result.text = result.owned;
 
     bx_archive_buffer_free(&output);
     bx_path_components_free(&components);

@@ -21,6 +21,13 @@ struct bx_archive_fs_list {
     size_t cap;
 };
 
+struct bx_archive_fs_visit_entry {
+    const char* source_path;
+    const char* archive_path;
+    const struct stat* st;
+    const char* link_target;
+};
+
 enum bx_archive_fs_error_op {
     BX_ARCHIVE_FS_ERROR_LSTAT = 0,
     BX_ARCHIVE_FS_ERROR_READLINK,
@@ -41,6 +48,9 @@ typedef enum bx_archive_fs_error_action (*bx_archive_fs_error_fn)(const char* so
                                                                   enum bx_archive_fs_error_op op,
                                                                   int errnum,
                                                                   void* user_data);
+typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* entry,
+                                       void* user_data,
+                                       struct bx_diag_ctx* diag);
 
 struct bx_archive_pending_dir {
     char* path;
@@ -55,7 +65,22 @@ struct bx_archive_pending_dirs {
     size_t cap;
 };
 
+struct bx_archive_parent_dir_cache {
+    char* last_parent;
+};
+
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
+bool bx_archive_fs_visit_path_filtered(const char* source_path,
+                                       const char* archive_path,
+                                       bool recurse,
+                                       bool sort_children,
+                                       bx_archive_fs_include_fn include_fn,
+                                       void* include_user_data,
+                                       bx_archive_fs_error_fn error_fn,
+                                       void* error_user_data,
+                                       bx_archive_fs_visit_fn visit_fn,
+                                       void* visit_user_data,
+                                       struct bx_diag_ctx* diag);
 bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,
                                      const char* source_path,
                                      const char* archive_path,
@@ -73,7 +98,17 @@ bool bx_archive_fs_add_path(struct bx_archive_fs_list* list,
                             bool sort_children,
                             struct bx_diag_ctx* diag);
 
+void bx_archive_parent_dir_cache_cleanup(struct bx_archive_parent_dir_cache* cache);
+void bx_archive_parent_dir_cache_invalidate(struct bx_archive_parent_dir_cache* cache);
+bool bx_archive_parent_dir_cache_matches_parent(const struct bx_archive_parent_dir_cache* cache,
+                                                const char* parent);
+void bx_archive_parent_dir_cache_remember_parent(struct bx_archive_parent_dir_cache* cache,
+                                                 const char* parent);
+
 bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag);
+bool bx_archive_ensure_parent_dirs_cached(const char* path,
+                                          struct bx_archive_parent_dir_cache* cache,
+                                          struct bx_diag_ctx* diag);
 
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs);
 bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
