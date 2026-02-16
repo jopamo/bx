@@ -12,6 +12,12 @@
 #include "bx/libbx.h"
 #include "lib/path_ops.h"
 
+struct bx_archive_fs_path_buf {
+    char* data;
+    size_t len;
+    size_t cap;
+};
+
 static void bx_archive_fs_entry_free(struct bx_archive_fs_entry* entry) {
     free(entry->source_path);
     free(entry->archive_path);
@@ -70,6 +76,53 @@ static int bx_archive_name_compare(const void* left, const void* right) {
     const char* const* a = left;
     const char* const* b = right;
     return strcmp(*a, *b);
+}
+
+static void bx_archive_fs_path_buf_cleanup(struct bx_archive_fs_path_buf* buf) {
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0u;
+    buf->cap = 0u;
+}
+
+static void bx_archive_fs_path_buf_init(struct bx_archive_fs_path_buf* buf, const char* path) {
+    buf->len = strlen(path);
+    buf->cap = buf->len + 1u;
+    buf->data = xmalloc(buf->cap);
+    memcpy(buf->data, path, buf->cap);
+}
+
+static void bx_archive_fs_path_buf_reserve(struct bx_archive_fs_path_buf* buf, size_t need_len) {
+    size_t need_cap = need_len + 1u;
+
+    if (need_cap <= buf->cap) {
+        return;
+    }
+    while (buf->cap < need_cap) {
+        buf->cap *= 2u;
+    }
+    buf->data = xrealloc(buf->data, buf->cap);
+}
+
+static size_t bx_archive_fs_path_buf_push_child(struct bx_archive_fs_path_buf* buf, const char* name) {
+    size_t restore_len = buf->len;
+    size_t name_len = strlen(name);
+    bool need_slash = buf->len > 0u && buf->data[buf->len - 1u] != '/';
+    size_t new_len = buf->len + (need_slash ? 1u : 0u) + name_len;
+
+    bx_archive_fs_path_buf_reserve(buf, new_len);
+    if (need_slash) {
+        buf->data[buf->len++] = '/';
+    }
+    memcpy(buf->data + buf->len, name, name_len);
+    buf->len = new_len;
+    buf->data[buf->len] = '\0';
+    return restore_len;
+}
+
+static void bx_archive_fs_path_buf_restore(struct bx_archive_fs_path_buf* buf, size_t restore_len) {
+    buf->len = restore_len;
+    buf->data[buf->len] = '\0';
 }
 
 static enum bx_archive_fs_error_action
@@ -153,6 +206,217 @@ static bool bx_archive_read_children(const char* dir_path,
     return true;
 }
 
+static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_buf* source_path,
+                                                    struct bx_archive_fs_path_buf* archive_path,
+                                                    bool recurse,
+                                                    bool sort_children,
+                                                    bx_archive_fs_include_fn include_fn,
+                                                    void* include_user_data,
+                                                    bx_archive_fs_error_fn error_fn,
+                                                    void* error_user_data,
+                                                    bx_archive_fs_visit_fn visit_fn,
+                                                    void* visit_user_data,
+                                                    struct bx_diag_ctx* diag);
+
+static bool bx_archive_fs_visit_sorted_children(struct bx_archive_fs_path_buf* source_path,
+                                                struct bx_archive_fs_path_buf* archive_path,
+                                                bool sort_children,
+                                                bx_archive_fs_include_fn include_fn,
+                                                void* include_user_data,
+                                                bx_archive_fs_error_fn error_fn,
+                                                void* error_user_data,
+                                                bx_archive_fs_visit_fn visit_fn,
+                                                void* visit_user_data,
+                                                struct bx_diag_ctx* diag) {
+    char** children = NULL;
+    size_t child_count = 0u;
+    size_t i;
+
+    if (!bx_archive_read_children(source_path->data,
+                                  sort_children,
+                                  &children,
+                                  &child_count,
+                                  error_fn,
+                                  error_user_data,
+                                  diag)) {
+        return false;
+    }
+
+    for (i = 0u; i < child_count; i++) {
+        size_t source_restore_len = bx_archive_fs_path_buf_push_child(source_path, children[i]);
+        size_t archive_restore_len = bx_archive_fs_path_buf_push_child(archive_path, children[i]);
+        bool ok = bx_archive_fs_visit_path_filtered_inner(source_path,
+                                                          archive_path,
+                                                          true,
+                                                          sort_children,
+                                                          include_fn,
+                                                          include_user_data,
+                                                          error_fn,
+                                                          error_user_data,
+                                                          visit_fn,
+                                                          visit_user_data,
+                                                          diag);
+
+        bx_archive_fs_path_buf_restore(archive_path, archive_restore_len);
+        bx_archive_fs_path_buf_restore(source_path, source_restore_len);
+        free(children[i]);
+        if (!ok) {
+            while (++i < child_count) {
+                free(children[i]);
+            }
+            free(children);
+            return false;
+        }
+    }
+
+    free(children);
+    return true;
+}
+
+static bool bx_archive_fs_visit_unsorted_children(struct bx_archive_fs_path_buf* source_path,
+                                                  struct bx_archive_fs_path_buf* archive_path,
+                                                  bool sort_children,
+                                                  bx_archive_fs_include_fn include_fn,
+                                                  void* include_user_data,
+                                                  bx_archive_fs_error_fn error_fn,
+                                                  void* error_user_data,
+                                                  bx_archive_fs_visit_fn visit_fn,
+                                                  void* visit_user_data,
+                                                  struct bx_diag_ctx* diag) {
+    DIR* dir = opendir(source_path->data);
+    struct dirent* ent;
+
+    if (dir == NULL) {
+        return bx_archive_fs_handle_error(source_path->data,
+                                          BX_ARCHIVE_FS_ERROR_OPENDIR,
+                                          errno,
+                                          error_fn,
+                                          error_user_data,
+                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    }
+
+    while ((ent = readdir(dir)) != NULL) {
+        size_t source_restore_len;
+        size_t archive_restore_len;
+        bool ok;
+
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+
+        source_restore_len = bx_archive_fs_path_buf_push_child(source_path, ent->d_name);
+        archive_restore_len = bx_archive_fs_path_buf_push_child(archive_path, ent->d_name);
+        ok = bx_archive_fs_visit_path_filtered_inner(source_path,
+                                                     archive_path,
+                                                     true,
+                                                     sort_children,
+                                                     include_fn,
+                                                     include_user_data,
+                                                     error_fn,
+                                                     error_user_data,
+                                                     visit_fn,
+                                                     visit_user_data,
+                                                     diag);
+        bx_archive_fs_path_buf_restore(archive_path, archive_restore_len);
+        bx_archive_fs_path_buf_restore(source_path, source_restore_len);
+        if (!ok) {
+            closedir(dir);
+            return false;
+        }
+    }
+
+    if (closedir(dir) != 0) {
+        return bx_archive_fs_handle_error(source_path->data,
+                                          BX_ARCHIVE_FS_ERROR_CLOSEDIR,
+                                          errno,
+                                          error_fn,
+                                          error_user_data,
+                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    }
+
+    return true;
+}
+
+static bool bx_archive_fs_visit_path_filtered_inner(struct bx_archive_fs_path_buf* source_path,
+                                                    struct bx_archive_fs_path_buf* archive_path,
+                                                    bool recurse,
+                                                    bool sort_children,
+                                                    bx_archive_fs_include_fn include_fn,
+                                                    void* include_user_data,
+                                                    bx_archive_fs_error_fn error_fn,
+                                                    void* error_user_data,
+                                                    bx_archive_fs_visit_fn visit_fn,
+                                                    void* visit_user_data,
+                                                    struct bx_diag_ctx* diag) {
+    struct stat st;
+    char* link_target = NULL;
+
+    if (lstat(source_path->data, &st) != 0) {
+        return bx_archive_fs_handle_error(source_path->data,
+                                          BX_ARCHIVE_FS_ERROR_LSTAT,
+                                          errno,
+                                          error_fn,
+                                          error_user_data,
+                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+    }
+
+    if (include_fn != NULL
+        && !include_fn(source_path->data, archive_path->data, &st, include_user_data)) {
+        return true;
+    }
+
+    if (S_ISLNK(st.st_mode)) {
+        link_target = bx_path_readlink_dup(source_path->data);
+        if (link_target == NULL) {
+            return bx_archive_fs_handle_error(source_path->data,
+                                              BX_ARCHIVE_FS_ERROR_READLINK,
+                                              errno,
+                                              error_fn,
+                                              error_user_data,
+                                              diag) == BX_ARCHIVE_FS_ERROR_SKIP;
+        }
+    }
+
+    if (!visit_fn(&(struct bx_archive_fs_visit_entry){
+                      .source_path = source_path->data,
+                      .archive_path = archive_path->data,
+                      .st = &st,
+                      .link_target = link_target,
+                  },
+                  visit_user_data,
+                  diag)) {
+        free(link_target);
+        return false;
+    }
+    free(link_target);
+
+    if (!recurse || !S_ISDIR(st.st_mode)) {
+        return true;
+    }
+    if (sort_children) {
+        return bx_archive_fs_visit_sorted_children(source_path,
+                                                   archive_path,
+                                                   sort_children,
+                                                   include_fn,
+                                                   include_user_data,
+                                                   error_fn,
+                                                   error_user_data,
+                                                   visit_fn,
+                                                   visit_user_data,
+                                                   diag);
+    }
+    return bx_archive_fs_visit_unsorted_children(source_path,
+                                                 archive_path,
+                                                 sort_children,
+                                                 include_fn,
+                                                 include_user_data,
+                                                 error_fn,
+                                                 error_user_data,
+                                                 visit_fn,
+                                                 visit_user_data,
+                                                 diag);
+}
+
 bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                        const char* archive_path,
                                        bool recurse,
@@ -164,92 +428,26 @@ bool bx_archive_fs_visit_path_filtered(const char* source_path,
                                        bx_archive_fs_visit_fn visit_fn,
                                        void* visit_user_data,
                                        struct bx_diag_ctx* diag) {
-    struct stat st;
-    char* link_target = NULL;
+    struct bx_archive_fs_path_buf source_buf = {0};
+    struct bx_archive_fs_path_buf archive_buf = {0};
+    bool ok;
 
-    if (lstat(source_path, &st) != 0) {
-        return bx_archive_fs_handle_error(source_path,
-                                          BX_ARCHIVE_FS_ERROR_LSTAT,
-                                          errno,
-                                          error_fn,
-                                          error_user_data,
-                                          diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-    }
-
-    if (include_fn != NULL
-        && !include_fn(source_path, archive_path, &st, include_user_data)) {
-        return true;
-    }
-
-    if (S_ISLNK(st.st_mode)) {
-        link_target = bx_path_readlink_dup(source_path);
-        if (link_target == NULL) {
-            return bx_archive_fs_handle_error(source_path,
-                                              BX_ARCHIVE_FS_ERROR_READLINK,
-                                              errno,
-                                              error_fn,
-                                              error_user_data,
-                                              diag) == BX_ARCHIVE_FS_ERROR_SKIP;
-        }
-    }
-
-    if (!visit_fn(&(struct bx_archive_fs_visit_entry){
-                      .source_path = source_path,
-                      .archive_path = archive_path,
-                      .st = &st,
-                      .link_target = link_target,
-                  },
-                  visit_user_data,
-                  diag)) {
-        free(link_target);
-        return false;
-    }
-    free(link_target);
-
-    if (recurse && S_ISDIR(st.st_mode)) {
-        char** children = NULL;
-        size_t child_count = 0u;
-        size_t i;
-
-        if (!bx_archive_read_children(source_path,
-                                      sort_children,
-                                      &children,
-                                      &child_count,
-                                      error_fn,
-                                      error_user_data,
-                                      diag)) {
-            return false;
-        }
-
-        for (i = 0u; i < child_count; i++) {
-            char* child_source = bx_path_join(source_path, children[i]);
-            char* child_archive = bx_path_join(archive_path, children[i]);
-            bool ok = bx_archive_fs_visit_path_filtered(child_source,
-                                                        child_archive,
-                                                        true,
-                                                        sort_children,
-                                                        include_fn,
-                                                        include_user_data,
-                                                        error_fn,
-                                                        error_user_data,
-                                                        visit_fn,
-                                                        visit_user_data,
-                                                        diag);
-            free(child_source);
-            free(child_archive);
-            free(children[i]);
-            if (!ok) {
-                while (++i < child_count) {
-                    free(children[i]);
-                }
-                free(children);
-                return false;
-            }
-        }
-        free(children);
-    }
-
-    return true;
+    bx_archive_fs_path_buf_init(&source_buf, source_path);
+    bx_archive_fs_path_buf_init(&archive_buf, archive_path);
+    ok = bx_archive_fs_visit_path_filtered_inner(&source_buf,
+                                                 &archive_buf,
+                                                 recurse,
+                                                 sort_children,
+                                                 include_fn,
+                                                 include_user_data,
+                                                 error_fn,
+                                                 error_user_data,
+                                                 visit_fn,
+                                                 visit_user_data,
+                                                 diag);
+    bx_archive_fs_path_buf_cleanup(&archive_buf);
+    bx_archive_fs_path_buf_cleanup(&source_buf);
+    return ok;
 }
 
 bool bx_archive_fs_add_path_filtered(struct bx_archive_fs_list* list,

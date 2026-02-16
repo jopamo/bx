@@ -237,10 +237,18 @@ bool bx_archive_write_regular_payload(int fd,
     off_t logical_end = 0;
     bool used_sparse = false;
 
+    if (!sparse) {
+        if (!bx_xwrite_all(fd, data, len)) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
     while (offset < len) {
         size_t span = 0u;
 
-        if (sparse && data[offset] == 0u) {
+        if (data[offset] == 0u) {
             while (offset + span < len && data[offset + span] == 0u) {
                 span++;
             }
@@ -254,7 +262,7 @@ bool bx_archive_write_regular_payload(int fd,
             continue;
         }
 
-        while (offset + span < len && (!sparse || data[offset + span] != 0u)) {
+        while (offset + span < len && data[offset + span] != 0u) {
             span++;
         }
         if (!bx_xwrite_all(fd, data + offset, span)) {

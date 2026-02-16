@@ -15,6 +15,10 @@ struct bx_tar_match_policy {
 
 struct bx_tar_match_pattern {
     char* text;
+    char* folded_text;
+    size_t trimmed_len;
+    bool wildcard_magic;
+    bool has_slash;
     struct bx_tar_match_policy policy;
 };
 

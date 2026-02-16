@@ -31,6 +31,10 @@
 #define BX_TAR_STREAM_FILE_BUFFER_SIZE (1024u * 1024u)
 #define BX_TAR_STREAM_ID_NAME_CACHE_SIZE 16u
 
+static const unsigned char bx_tar_stream_zero_block[BX_TAR_STREAM_BLOCK_SIZE];
+static const unsigned char
+    bx_tar_stream_zero_record[BX_TAR_STREAM_BLOCK_SIZE * BX_TAR_STREAM_RECORD_BLOCKS];
+
 struct bx_tar_hardlink_seen {
     dev_t dev;
     ino_t ino;
@@ -57,11 +61,20 @@ struct bx_tar_stream_id_name_cache_entry {
 struct bx_tar_stream_id_name_cache {
     struct bx_tar_stream_id_name_cache_entry entries[BX_TAR_STREAM_ID_NAME_CACHE_SIZE];
     size_t next_slot;
+    size_t last_slot;
+    bool last_valid;
 };
 
 struct bx_tar_stream_name_caches {
     struct bx_tar_stream_id_name_cache users;
     struct bx_tar_stream_id_name_cache groups;
+};
+
+struct bx_tar_stream_ustar_name {
+    unsigned char name[100u];
+    unsigned char prefix[155u];
+    size_t name_len;
+    size_t prefix_len;
 };
 
 struct bx_tar_stream_fs_write_state {
@@ -121,6 +134,26 @@ static void bx_tar_stream_id_name_cache_cleanup(struct bx_tar_stream_id_name_cac
         cache->entries[i].valid = false;
     }
     cache->next_slot = 0u;
+    cache->last_slot = 0u;
+    cache->last_valid = false;
+}
+
+static const char* bx_tar_stream_id_name_cache_lookup(struct bx_tar_stream_id_name_cache* cache,
+                                                      uintmax_t id) {
+    if (cache->last_valid
+        && cache->entries[cache->last_slot].valid
+        && cache->entries[cache->last_slot].id == id) {
+        return cache->entries[cache->last_slot].name;
+    }
+    for (size_t i = 0u; i < BX_TAR_STREAM_ID_NAME_CACHE_SIZE; i++) {
+        if (cache->entries[i].valid && cache->entries[i].id == id) {
+            cache->last_slot = i;
+            cache->last_valid = true;
+            return cache->entries[i].name;
+        }
+    }
+
+    return NULL;
 }
 
 static const char* bx_tar_stream_id_name_cache_remember(struct bx_tar_stream_id_name_cache* cache,
@@ -128,13 +161,9 @@ static const char* bx_tar_stream_id_name_cache_remember(struct bx_tar_stream_id_
                                                         const char* name) {
     struct bx_tar_stream_id_name_cache_entry* entry;
 
-    for (size_t i = 0u; i < BX_TAR_STREAM_ID_NAME_CACHE_SIZE; i++) {
-        if (cache->entries[i].valid && cache->entries[i].id == id) {
-            return cache->entries[i].name;
-        }
-    }
-
     entry = &cache->entries[cache->next_slot];
+    cache->last_slot = cache->next_slot;
+    cache->last_valid = true;
     cache->next_slot = (cache->next_slot + 1u) % BX_TAR_STREAM_ID_NAME_CACHE_SIZE;
     free(entry->name);
     entry->name = xstrdup(name);
@@ -144,110 +173,133 @@ static const char* bx_tar_stream_id_name_cache_remember(struct bx_tar_stream_id_
 }
 
 static const char* bx_tar_stream_user_name(struct bx_tar_stream_name_caches* caches, uid_t uid) {
+    const char* cached = bx_tar_stream_id_name_cache_lookup(&caches->users, (uintmax_t)uid);
     char numeric_buffer[32];
 
+    if (cached != NULL) {
+        return cached;
+    }
     return bx_tar_stream_id_name_cache_remember(&caches->users,
                                                 (uintmax_t)uid,
                                                 bx_id_user_name(uid, numeric_buffer));
 }
 
 static const char* bx_tar_stream_group_name(struct bx_tar_stream_name_caches* caches, gid_t gid) {
+    const char* cached = bx_tar_stream_id_name_cache_lookup(&caches->groups, (uintmax_t)gid);
     char numeric_buffer[32];
 
+    if (cached != NULL) {
+        return cached;
+    }
     return bx_tar_stream_id_name_cache_remember(&caches->groups,
                                                 (uintmax_t)gid,
                                                 bx_id_group_name(gid, numeric_buffer));
 }
 
-static void bx_tar_stream_format_octal_field(unsigned char* field, size_t len, size_t value) {
-    char text[32];
-    size_t text_len;
-    memset(field, 0, len);
-    snprintf(text, sizeof(text), "%0*lo", (int)(len - 1u), (unsigned long)value);
-    text_len = strlen(text);
-    if (text_len >= len) {
-        memcpy(field, text + (text_len - (len - 1u)), len - 1u);
-    }
-    else {
-        memcpy(field + (len - 1u - text_len), text, text_len);
-    }
-}
-
-static void bx_tar_stream_write_checksum(unsigned char* header) {
+static unsigned int bx_tar_stream_format_octal_field(unsigned char* field, size_t len, size_t value) {
     unsigned int sum = 0u;
     size_t i;
-    memset(header + 148, ' ', 8u);
-    for (i = 0u; i < BX_TAR_STREAM_BLOCK_SIZE; i++) {
-        sum += header[i];
+
+    memset(field, '0', len - 1u);
+    field[len - 1u] = '\0';
+    sum = (unsigned int)((len - 1u) * (unsigned int)'0');
+
+    i = len - 1u;
+    while (i > 0u && value > 0u) {
+        unsigned char digit = (unsigned char)('0' + (value & 7u));
+
+        field[--i] = digit;
+        sum += (unsigned int)(digit - (unsigned char)'0');
+        value >>= 3u;
     }
-    snprintf((char*)header + 148, 8u, "%06o", sum);
-    header[154] = '\0';
-    header[155] = ' ';
+    return sum;
+}
+
+static unsigned int bx_tar_stream_copy_bytes(unsigned char* dest, const unsigned char* src, size_t len) {
+    unsigned int sum = 0u;
+    size_t i;
+
+    memcpy(dest, src, len);
+    for (i = 0u; i < len; i++) {
+        sum += src[i];
+    }
+    return sum;
+}
+
+static unsigned int bx_tar_stream_copy_text(unsigned char* dest,
+                                            size_t field_len,
+                                            const char* text,
+                                            size_t text_len) {
+    if (text_len > field_len) {
+        text_len = field_len;
+    }
+    return bx_tar_stream_copy_bytes(dest, (const unsigned char*)text, text_len);
+}
+
+static void bx_tar_stream_write_checksum_field(unsigned char* field, unsigned int sum) {
+    bx_tar_stream_format_octal_field(field, 7u, sum);
+    field[6] = '\0';
+    field[7] = ' ';
 }
 
 static bool bx_tar_stream_split_ustar_name(const char* path,
                                            bool directory,
-                                           unsigned char* name_out,
-                                           unsigned char* prefix_out) {
-    char* stored = NULL;
-    const char* slash;
-    size_t len;
-    bool ok = false;
+                                           struct bx_tar_stream_ustar_name* split) {
+    size_t path_len;
+    size_t total_len;
+    size_t search_limit;
 
-    memset(name_out, 0, 100u);
-    memset(prefix_out, 0, 155u);
+    memset(split, 0, sizeof(*split));
 
-    if (directory) {
-        size_t path_len = strlen(path);
-        stored = xmalloc(path_len + 2u);
-        memcpy(stored, path, path_len);
-        stored[path_len] = '/';
-        stored[path_len + 1u] = '\0';
-    }
-    else {
-        stored = xstrdup(path);
-    }
-
-    len = strlen(stored);
-    if (len <= 100u) {
-        memcpy(name_out, stored, len);
-        ok = true;
-        goto out;
-    }
-
-    slash = strrchr(stored, '/');
-    while (slash != NULL) {
-        size_t prefix_len = (size_t)(slash - stored);
-        size_t name_len = len - prefix_len - 1u;
-        if (prefix_len <= 155u && name_len <= 100u) {
-            memcpy(prefix_out, stored, prefix_len);
-            memcpy(name_out, slash + 1, name_len);
-            ok = true;
-            goto out;
+    path_len = strlen(path);
+    total_len = path_len + (directory ? 1u : 0u);
+    if (total_len <= sizeof(split->name)) {
+        memcpy(split->name, path, path_len);
+        if (directory) {
+            split->name[path_len] = '/';
         }
-        if (slash == stored) {
-            break;
+        split->name_len = total_len;
+        return true;
+    }
+
+    search_limit = total_len;
+    while (search_limit > 0u) {
+        size_t slash_index = search_limit - 1u;
+        size_t prefix_len;
+        size_t name_len;
+        size_t name_offset;
+        size_t copied = 0u;
+
+        if ((!directory || slash_index != path_len) && path[slash_index] != '/') {
+            search_limit = slash_index;
+            continue;
         }
-        {
-            char* tmp = xmalloc(prefix_len + 1u);
-            memcpy(tmp, stored, prefix_len);
-            tmp[prefix_len] = '\0';
-            slash = strrchr(tmp, '/');
-            if (slash != NULL) {
-                size_t next_offset = (size_t)(slash - tmp);
-                free(tmp);
-                slash = stored + next_offset;
+
+        prefix_len = slash_index;
+        name_len = total_len - prefix_len - 1u;
+        if (prefix_len <= sizeof(split->prefix) && name_len <= sizeof(split->name)) {
+            memcpy(split->prefix, path, prefix_len);
+            split->prefix_len = prefix_len;
+
+            name_offset = prefix_len + 1u;
+            if (name_offset < path_len) {
+                copied = path_len - name_offset;
+                if (copied > name_len) {
+                    copied = name_len;
+                }
+                memcpy(split->name, path + name_offset, copied);
             }
-            else {
-                free(tmp);
-                slash = NULL;
+            if (directory && copied < name_len) {
+                split->name[copied] = '/';
             }
+            split->name_len = name_len;
+            return true;
         }
+
+        search_limit = slash_index;
     }
 
-out:
-    free(stored);
-    return ok;
+    return false;
 }
 
 static size_t bx_tar_stream_decimal_digits(size_t value) {
@@ -292,6 +344,50 @@ static bool bx_tar_stream_pax_append_size_record(struct bx_archive_buffer* buffe
     return bx_tar_stream_pax_append_record(buffer, key, text);
 }
 
+static bool bx_tar_stream_append_prepared_raw_header(const struct bx_tar_stream_sink* sink,
+                                                     const struct bx_tar_stream_ustar_name* path_name,
+                                                     const char* linkname,
+                                                     const char* uname,
+                                                     const char* gname,
+                                                     char typeflag,
+                                                     mode_t mode,
+                                                     uid_t uid,
+                                                     gid_t gid,
+                                                     size_t size,
+                                                     struct timespec mtime,
+                                                     struct bx_diag_ctx* diag) {
+    unsigned char header[BX_TAR_STREAM_BLOCK_SIZE];
+    unsigned int checksum = 8u * (unsigned int)' ';
+
+    memset(header, 0, sizeof(header));
+    checksum += bx_tar_stream_copy_bytes(header, path_name->name, path_name->name_len);
+    checksum += bx_tar_stream_format_octal_field(header + 100, 8u, mode & 07777u);
+    checksum += bx_tar_stream_format_octal_field(header + 108, 8u, uid);
+    checksum += bx_tar_stream_format_octal_field(header + 116, 8u, gid);
+    checksum += bx_tar_stream_format_octal_field(header + 124, 12u, size);
+    checksum += bx_tar_stream_format_octal_field(header + 136, 12u, (size_t)mtime.tv_sec);
+    header[156] = (unsigned char)typeflag;
+    checksum += (unsigned char)typeflag;
+    if (linkname != NULL) {
+        size_t link_len = strlen(linkname);
+        checksum += bx_tar_stream_copy_text(header + 157, 100u, linkname, link_len);
+    }
+    checksum += bx_tar_stream_copy_text(header + 257, 5u, "ustar", 5u);
+    checksum += bx_tar_stream_copy_text(header + 263, 2u, "00", 2u);
+    if (uname != NULL) {
+        size_t owner_len = strlen(uname);
+        checksum += bx_tar_stream_copy_text(header + 265, 32u, uname, owner_len);
+    }
+    if (gname != NULL) {
+        size_t group_len = strlen(gname);
+        checksum += bx_tar_stream_copy_text(header + 297, 32u, gname, group_len);
+    }
+    checksum += bx_tar_stream_copy_bytes(header + 345, path_name->prefix, path_name->prefix_len);
+    memset(header + 148, ' ', 8u);
+    bx_tar_stream_write_checksum_field(header + 148, checksum);
+    return bx_tar_stream_sink_write(sink, header, sizeof(header), diag);
+}
+
 static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sink,
                                             const char* path,
                                             const char* linkname,
@@ -305,49 +401,25 @@ static bool bx_tar_stream_append_raw_header(const struct bx_tar_stream_sink* sin
                                             struct timespec mtime,
                                             bool directory,
                                             struct bx_diag_ctx* diag) {
-    unsigned char header[BX_TAR_STREAM_BLOCK_SIZE];
-    unsigned char name[100u];
-    unsigned char prefix[155u];
+    struct bx_tar_stream_ustar_name path_name;
 
-    if (!bx_tar_stream_split_ustar_name(path, directory, name, prefix)) {
+    if (!bx_tar_stream_split_ustar_name(path, directory, &path_name)) {
         bx_diag(diag, "%s: file name too long", path);
         return false;
     }
 
-    memset(header, 0, sizeof(header));
-    memcpy(header, name, sizeof(name));
-    bx_tar_stream_format_octal_field(header + 100, 8u, mode & 07777u);
-    bx_tar_stream_format_octal_field(header + 108, 8u, uid);
-    bx_tar_stream_format_octal_field(header + 116, 8u, gid);
-    bx_tar_stream_format_octal_field(header + 124, 12u, size);
-    bx_tar_stream_format_octal_field(header + 136, 12u, (size_t)mtime.tv_sec);
-    header[156] = (unsigned char)typeflag;
-    if (linkname != NULL) {
-        size_t link_len = strlen(linkname);
-        if (link_len > 100u) {
-            link_len = 100u;
-        }
-        memcpy(header + 157, linkname, link_len);
-    }
-    memcpy(header + 257, "ustar", 5u);
-    memcpy(header + 263, "00", 2u);
-    if (uname != NULL) {
-        size_t owner_len = strlen(uname);
-        if (owner_len > 32u) {
-            owner_len = 32u;
-        }
-        memcpy(header + 265, uname, owner_len);
-    }
-    if (gname != NULL) {
-        size_t group_len = strlen(gname);
-        if (group_len > 32u) {
-            group_len = 32u;
-        }
-        memcpy(header + 297, gname, group_len);
-    }
-    memcpy(header + 345, prefix, sizeof(prefix));
-    bx_tar_stream_write_checksum(header);
-    return bx_tar_stream_sink_write(sink, header, sizeof(header), diag);
+    return bx_tar_stream_append_prepared_raw_header(sink,
+                                                    &path_name,
+                                                    linkname,
+                                                    uname,
+                                                    gname,
+                                                    typeflag,
+                                                    mode,
+                                                    uid,
+                                                    gid,
+                                                    size,
+                                                    mtime,
+                                                    diag);
 }
 
 static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
@@ -368,11 +440,9 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
     bool need_link_pax = false;
     const char* stored_link = linkname;
     const char* actual_header_path = path;
+    struct bx_tar_stream_ustar_name split_path;
 
-    need_path_pax = !bx_tar_stream_split_ustar_name(path,
-                                                    is_dir,
-                                                    (unsigned char[100]){0},
-                                                    (unsigned char[155]){0});
+    need_path_pax = !bx_tar_stream_split_ustar_name(path, is_dir, &split_path);
     if (linkname != NULL && strlen(linkname) > 100u) {
         need_link_pax = true;
     }
@@ -416,8 +486,10 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         }
         pax_size = bx_tar_stream_round_up(pax_data.len, BX_TAR_STREAM_BLOCK_SIZE);
         if (pax_size > pax_data.len) {
-            unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
-            if (!bx_tar_stream_sink_write(sink, zeros, pax_size - pax_data.len, diag)) {
+            if (!bx_tar_stream_sink_write(sink,
+                                          bx_tar_stream_zero_block,
+                                          pax_size - pax_data.len,
+                                          diag)) {
                 bx_archive_buffer_free(&pax_data);
                 return false;
             }
@@ -428,6 +500,21 @@ static bool bx_tar_stream_write_header(const struct bx_tar_stream_sink* sink,
         if (need_link_pax) {
             stored_link = "";
         }
+    }
+
+    if (!need_path_pax) {
+        return bx_tar_stream_append_prepared_raw_header(sink,
+                                                        &split_path,
+                                                        stored_link,
+                                                        uname,
+                                                        gname,
+                                                        typeflag,
+                                                        mode,
+                                                        uid,
+                                                        gid,
+                                                        typeflag == '0' ? size : 0u,
+                                                        mtime,
+                                                        diag);
     }
 
     return bx_tar_stream_append_raw_header(sink,
@@ -450,13 +537,12 @@ static bool bx_tar_stream_write_entry_data(const struct bx_tar_stream_sink* sink
                                            size_t len,
                                            struct bx_diag_ctx* diag) {
     size_t padded = bx_tar_stream_round_up(len, BX_TAR_STREAM_BLOCK_SIZE);
-    unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
 
     if (!bx_tar_stream_sink_write(sink, data, len, diag)) {
         return false;
     }
     if (padded > len) {
-        return bx_tar_stream_sink_write(sink, zeros, padded - len, diag);
+        return bx_tar_stream_sink_write(sink, bx_tar_stream_zero_block, padded - len, diag);
     }
     return true;
 }
@@ -507,7 +593,9 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
                                           size_t buffer_size,
                                           struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_read(path, diag);
+    size_t padding = bx_tar_stream_round_up(expected_size, BX_TAR_STREAM_BLOCK_SIZE) - expected_size;
     size_t total = 0u;
+    bool padding_written = padding == 0u;
 
     if (fd < 0) {
         return false;
@@ -516,10 +604,13 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
     while (total < expected_size) {
         size_t chunk = expected_size - total;
         size_t filled = 0u;
+        bool final_chunk;
+        size_t write_len;
 
         if (chunk > buffer_size) {
             chunk = buffer_size;
         }
+        final_chunk = total + chunk == expected_size;
         while (filled < chunk) {
             ssize_t nread = bx_xread(fd, buffer + filled, chunk - filled);
 
@@ -535,13 +626,24 @@ static bool bx_tar_stream_write_file_data(const struct bx_tar_stream_sink* sink,
             }
             filled += (size_t)nread;
         }
-        if (!bx_tar_stream_sink_write(sink, buffer, chunk, diag)) {
+        write_len = chunk;
+        if (final_chunk && padding > 0u && buffer_size - chunk >= padding) {
+            memset(buffer + chunk, 0, padding);
+            write_len += padding;
+            padding_written = true;
+        }
+        if (!bx_tar_stream_sink_write(sink, buffer, write_len, diag)) {
             bx_fd_close(&fd, path, NULL);
             return false;
         }
         total += chunk;
     }
 
+    if (!padding_written
+        && !bx_tar_stream_sink_write(sink, bx_tar_stream_zero_block, padding, diag)) {
+        bx_fd_close(&fd, path, NULL);
+        return false;
+    }
     if (!bx_fd_close(&fd, path, diag)) {
         return false;
     }
@@ -640,9 +742,7 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
     const char* uname = NULL;
     const char* gname = NULL;
     struct timespec mtime = options->fixed_mtime ? options->mtime : fs_entry->st->st_mtim;
-    unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
     size_t file_size = (size_t)fs_entry->st->st_size;
-    size_t padded_size = bx_tar_stream_round_up(file_size, BX_TAR_STREAM_BLOCK_SIZE);
 
     if (!options->owner_set && options->owner_map != NULL) {
         const char* source_name = bx_tar_stream_user_name(&state->name_caches, fs_entry->st->st_uid);
@@ -784,10 +884,6 @@ static bool bx_tar_stream_write_fs_entry(struct bx_tar_stream_fs_write_state* st
                                        diag)) {
         return false;
     }
-    if (padded_size > file_size
-        && !bx_tar_stream_sink_write(sink, zeros, padded_size - file_size, diag)) {
-        return false;
-    }
     return true;
 }
 
@@ -806,12 +902,13 @@ static bool bx_tar_stream_finish_archive(const struct bx_tar_stream_sink* sink,
     size_t padded = bx_tar_stream_round_up(with_trailer,
                                            BX_TAR_STREAM_BLOCK_SIZE * BX_TAR_STREAM_RECORD_BLOCKS);
     size_t zeros_needed = padded - bytes_written;
-    unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE * BX_TAR_STREAM_RECORD_BLOCKS] = {0};
 
     while (zeros_needed > 0u) {
-        size_t chunk = zeros_needed > sizeof(zeros) ? sizeof(zeros) : zeros_needed;
+        size_t chunk = zeros_needed > sizeof(bx_tar_stream_zero_record)
+            ? sizeof(bx_tar_stream_zero_record)
+            : zeros_needed;
 
-        if (!bx_tar_stream_sink_write(sink, zeros, chunk, diag)) {
+        if (!bx_tar_stream_sink_write(sink, bx_tar_stream_zero_record, chunk, diag)) {
             return false;
         }
         zeros_needed -= chunk;
@@ -1024,8 +1121,10 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
         size_t pax_size = bx_tar_stream_round_up(pax_data.len, BX_TAR_STREAM_BLOCK_SIZE);
 
         if (pax_size > pax_data.len) {
-            unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
-            if (!bx_tar_stream_sink_write(sink, zeros, pax_size - pax_data.len, diag)) {
+            if (!bx_tar_stream_sink_write(sink,
+                                          bx_tar_stream_zero_block,
+                                          pax_size - pax_data.len,
+                                          diag)) {
                 bx_archive_buffer_free(&pax_data);
                 return false;
             }
@@ -1071,13 +1170,17 @@ bool bx_tar_stream_start_sparse_v1_entry(struct bx_tar_stream_live_entry* entry,
         }
     }
     if (padded_map_size > map_size) {
-        unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
         size_t remaining = padded_map_size - map_size;
 
         while (remaining > 0u) {
-            size_t chunk = remaining > sizeof(zeros) ? sizeof(zeros) : remaining;
+            size_t chunk = remaining > sizeof(bx_tar_stream_zero_block)
+                ? sizeof(bx_tar_stream_zero_block)
+                : remaining;
 
-            if (!bx_tar_stream_write_raw_entry_chunk(entry, zeros, chunk, diag)) {
+            if (!bx_tar_stream_write_raw_entry_chunk(entry,
+                                                     bx_tar_stream_zero_block,
+                                                     chunk,
+                                                     diag)) {
                 return false;
             }
             remaining -= chunk;
@@ -1107,8 +1210,6 @@ bool bx_tar_stream_write_raw_entry_chunk(struct bx_tar_stream_live_entry* entry,
 
 bool bx_tar_stream_finish_raw_entry(struct bx_tar_stream_live_entry* entry,
                                     struct bx_diag_ctx* diag) {
-    unsigned char zeros[BX_TAR_STREAM_BLOCK_SIZE] = {0};
-
     if (entry == NULL || !entry->active) {
         bx_diag(diag, "invalid tar stream live entry state");
         return false;
@@ -1119,11 +1220,11 @@ bool bx_tar_stream_finish_raw_entry(struct bx_tar_stream_live_entry* entry,
     }
 
     while (entry->padding_remaining > 0u) {
-        size_t chunk = entry->padding_remaining > sizeof(zeros)
-            ? sizeof(zeros)
+        size_t chunk = entry->padding_remaining > sizeof(bx_tar_stream_zero_block)
+            ? sizeof(bx_tar_stream_zero_block)
             : entry->padding_remaining;
 
-        if (!bx_tar_stream_sink_write(entry->sink, zeros, chunk, diag)) {
+        if (!bx_tar_stream_sink_write(entry->sink, bx_tar_stream_zero_block, chunk, diag)) {
             return false;
         }
         entry->padding_remaining -= chunk;
