@@ -202,6 +202,58 @@ static bool bx_tar_map_member_name_can_borrow(const char* stored_name,
     return true;
 }
 
+static const char* bx_tar_map_member_name_borrow_ptr(const char* stored_name,
+                                                     const struct bx_tar_name_policy* policy) {
+    const char* name = stored_name;
+    const char* part;
+    const char* cursor;
+
+    if (stored_name[0] == '\0') {
+        return stored_name;
+    }
+    if (policy != NULL) {
+        if (policy->strip_components != 0u || policy->one_top_level != NULL) {
+            return NULL;
+        }
+        if (policy->transform != NULL && policy->transform->active) {
+            return NULL;
+        }
+    }
+
+    while (name[0] == '.' && name[1] == '/') {
+        name += 2;
+    }
+    if (name == stored_name) {
+        return bx_tar_map_member_name_can_borrow(stored_name, policy) ? stored_name : NULL;
+    }
+    if (name[0] == '\0' || name[0] == '/') {
+        return NULL;
+    }
+
+    part = name;
+    cursor = name;
+    while (true) {
+        if (*cursor == '/' || *cursor == '\0') {
+            size_t len = (size_t)(cursor - part);
+
+            if (len == 0u) {
+                return NULL;
+            }
+            if ((len == 1u && part[0] == '.')
+                || (len == 2u && part[0] == '.' && part[1] == '.')) {
+                return NULL;
+            }
+            if (*cursor == '\0') {
+                break;
+            }
+            part = cursor + 1;
+        }
+        cursor++;
+    }
+
+    return name;
+}
+
 struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
                                                  const struct bx_tar_name_policy* policy,
                                                  bool* stripped_absolute,
@@ -216,6 +268,15 @@ struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
 
     *stripped_absolute = false;
     *stripped_dotdot = false;
+
+    {
+        const char* borrowed = bx_tar_map_member_name_borrow_ptr(stored_name, policy);
+
+        if (borrowed != NULL) {
+            result.text = borrowed;
+            return result;
+        }
+    }
 
     if (bx_tar_map_member_name_can_borrow(stored_name, policy)) {
         result.text = stored_name;

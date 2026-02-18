@@ -1327,17 +1327,98 @@ bc_num_shiftAddSub(BcNum* restrict n, const BcNum* restrict a, size_t shift,
 	op(n->num + shift, a->num, a->len);
 }
 
+typedef struct BcNumKTemps
+{
+	BcNum l1, h1, l2, h2, m2, m1, z0, z1, z2, temp;
+	BcDig* digs;
+} BcNumKTemps;
+
+static void
+bc_num_kMul(const BcNum* a, const BcNum* b, BcNum* restrict c,
+            BcNumKTemps* restrict t)
+{
+	size_t max = t->temp.cap;
+	size_t max2 = (t->l1.cap + 1) / 2;
+	BcNumShiftAddOp op;
+
+	// First, set up c.
+	bc_num_expand(c, max);
+	c->len = max;
+	// NOLINTNEXTLINE
+	memset(c->num, 0, BC_NUM_SIZE(c->len));
+
+	// Split the parameters.
+	bc_num_split(a, max2, &t->l1, &t->h1);
+	bc_num_split(b, max2, &t->l2, &t->h2);
+
+	// Do the subtraction.
+	bc_num_sub(&t->h1, &t->l1, &t->m1, 0);
+	bc_num_sub(&t->l2, &t->h2, &t->m2, 0);
+
+	// The if statements below are there for efficiency reasons. The best way to
+	// understand them is to understand the Karatsuba algorithm because now that
+	// the ollocations and splits are done, the algorithm is pretty
+	// straightforward.
+
+	if (BC_NUM_NONZERO(&t->h1) && BC_NUM_NONZERO(&t->h2))
+	{
+		assert(BC_NUM_RDX_VALID(&t->h1));
+		assert(BC_NUM_RDX_VALID(&t->h2));
+
+		bc_num_m(&t->h1, &t->h2, &t->z2, 0);
+		bc_num_clean(&t->z2);
+
+		bc_num_shiftAddSub(c, &t->z2, max2 * 2, bc_num_addArrays);
+		bc_num_shiftAddSub(c, &t->z2, max2, bc_num_addArrays);
+	}
+
+	if (BC_NUM_NONZERO(&t->l1) && BC_NUM_NONZERO(&t->l2))
+	{
+		assert(BC_NUM_RDX_VALID(&t->l1));
+		assert(BC_NUM_RDX_VALID(&t->l2));
+
+		bc_num_m(&t->l1, &t->l2, &t->z0, 0);
+		bc_num_clean(&t->z0);
+
+		bc_num_shiftAddSub(c, &t->z0, max2, bc_num_addArrays);
+		bc_num_shiftAddSub(c, &t->z0, 0, bc_num_addArrays);
+	}
+
+	if (BC_NUM_NONZERO(&t->m1) && BC_NUM_NONZERO(&t->m2))
+	{
+		assert(BC_NUM_RDX_VALID(&t->m1));
+		assert(BC_NUM_RDX_VALID(&t->m2));
+
+		bc_num_m(&t->m1, &t->m2, &t->z1, 0);
+		bc_num_clean(&t->z1);
+
+		op = (BC_NUM_NEG(&t->m1) != BC_NUM_NEG(&t->m2)) ?
+		         bc_num_subArrays :
+		         bc_num_addArrays;
+		bc_num_shiftAddSub(c, &t->z1, max2, op);
+	}
+}
+
+static void
+bc_num_kFree(BcNumKTemps* restrict t)
+{
+	free(t->digs);
+	bc_num_free(&t->temp);
+	bc_num_free(&t->z2);
+	bc_num_free(&t->z1);
+	bc_num_free(&t->z0);
+	free(t);
+}
+
 /**
  * Implements the Karatsuba algorithm.
  */
 static void
 bc_num_k(const BcNum* a, const BcNum* b, BcNum* restrict c)
 {
-	size_t max, max2, total;
-	BcNum l1, h1, l2, h2, m2, m1, z0, z1, z2, temp;
-	BcDig* digs;
+	size_t max, total;
+	BcNumKTemps* t;
 	BcDig* dig_ptr;
-	BcNumShiftAddOp op;
 	bool aone = BC_NUM_ONE(a);
 #if BC_ENABLE_LIBRARY
 	BcVm* vm = bcl_getspecific();
@@ -1365,7 +1446,6 @@ bc_num_k(const BcNum* a, const BcNum* b, BcNum* restrict c)
 	// operations.
 	max = BC_MAX(a->len, b->len);
 	max = BC_MAX(max, BC_NUM_DEF_SIZE);
-	max2 = (max + 1) / 2;
 
 	// Calculate the space needed for all of the temporary allocations. We do
 	// this to just allocate once.
@@ -1373,99 +1453,42 @@ bc_num_k(const BcNum* a, const BcNum* b, BcNum* restrict c)
 
 	BC_SIG_LOCK;
 
+	t = bc_vm_malloc(sizeof(BcNumKTemps));
+
 	// Allocate space for all of the temporaries.
-	digs = dig_ptr = bc_vm_malloc(BC_NUM_SIZE(total));
+	t->digs = dig_ptr = bc_vm_malloc(BC_NUM_SIZE(total));
 
 	// Set up the temporaries.
-	bc_num_setup(&l1, dig_ptr, max);
+	bc_num_setup(&t->l1, dig_ptr, max);
 	dig_ptr += max;
-	bc_num_setup(&h1, dig_ptr, max);
+	bc_num_setup(&t->h1, dig_ptr, max);
 	dig_ptr += max;
-	bc_num_setup(&l2, dig_ptr, max);
+	bc_num_setup(&t->l2, dig_ptr, max);
 	dig_ptr += max;
-	bc_num_setup(&h2, dig_ptr, max);
+	bc_num_setup(&t->h2, dig_ptr, max);
 	dig_ptr += max;
-	bc_num_setup(&m1, dig_ptr, max);
+	bc_num_setup(&t->m1, dig_ptr, max);
 	dig_ptr += max;
-	bc_num_setup(&m2, dig_ptr, max);
+	bc_num_setup(&t->m2, dig_ptr, max);
 
 	// Some temporaries need the ability to grow, so we allocate them
 	// separately.
 	max = bc_vm_growSize(max, 1);
-	bc_num_init(&z0, max);
-	bc_num_init(&z1, max);
-	bc_num_init(&z2, max);
+	bc_num_init(&t->z0, max);
+	bc_num_init(&t->z1, max);
+	bc_num_init(&t->z2, max);
 	max = bc_vm_growSize(max, max) + 1;
-	bc_num_init(&temp, max);
+	bc_num_init(&t->temp, max);
 
 	BC_SETJMP_LOCKED(vm, err);
 
 	BC_SIG_UNLOCK;
 
-	// First, set up c.
-	bc_num_expand(c, max);
-	c->len = max;
-	// NOLINTNEXTLINE
-	memset(c->num, 0, BC_NUM_SIZE(c->len));
-
-	// Split the parameters.
-	bc_num_split(a, max2, &l1, &h1);
-	bc_num_split(b, max2, &l2, &h2);
-
-	// Do the subtraction.
-	bc_num_sub(&h1, &l1, &m1, 0);
-	bc_num_sub(&l2, &h2, &m2, 0);
-
-	// The if statements below are there for efficiency reasons. The best way to
-	// understand them is to understand the Karatsuba algorithm because now that
-	// the ollocations and splits are done, the algorithm is pretty
-	// straightforward.
-
-	if (BC_NUM_NONZERO(&h1) && BC_NUM_NONZERO(&h2))
-	{
-		assert(BC_NUM_RDX_VALID_NP(h1));
-		assert(BC_NUM_RDX_VALID_NP(h2));
-
-		bc_num_m(&h1, &h2, &z2, 0);
-		bc_num_clean(&z2);
-
-		bc_num_shiftAddSub(c, &z2, max2 * 2, bc_num_addArrays);
-		bc_num_shiftAddSub(c, &z2, max2, bc_num_addArrays);
-	}
-
-	if (BC_NUM_NONZERO(&l1) && BC_NUM_NONZERO(&l2))
-	{
-		assert(BC_NUM_RDX_VALID_NP(l1));
-		assert(BC_NUM_RDX_VALID_NP(l2));
-
-		bc_num_m(&l1, &l2, &z0, 0);
-		bc_num_clean(&z0);
-
-		bc_num_shiftAddSub(c, &z0, max2, bc_num_addArrays);
-		bc_num_shiftAddSub(c, &z0, 0, bc_num_addArrays);
-	}
-
-	if (BC_NUM_NONZERO(&m1) && BC_NUM_NONZERO(&m2))
-	{
-		assert(BC_NUM_RDX_VALID_NP(m1));
-		assert(BC_NUM_RDX_VALID_NP(m1));
-
-		bc_num_m(&m1, &m2, &z1, 0);
-		bc_num_clean(&z1);
-
-		op = (BC_NUM_NEG_NP(m1) != BC_NUM_NEG_NP(m2)) ?
-		         bc_num_subArrays :
-		         bc_num_addArrays;
-		bc_num_shiftAddSub(c, &z1, max2, op);
-	}
+	bc_num_kMul(a, b, c, t);
 
 err:
 	BC_SIG_MAYLOCK;
-	free(digs);
-	bc_num_free(&temp);
-	bc_num_free(&z2);
-	bc_num_free(&z1);
-	bc_num_free(&z0);
+	bc_num_kFree(t);
 	BC_LONGJMP_CONT(vm);
 }
 
