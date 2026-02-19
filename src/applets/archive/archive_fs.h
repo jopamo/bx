@@ -67,6 +67,7 @@ struct bx_archive_pending_dirs {
 
 struct bx_archive_parent_dir_cache {
     char* last_parent;
+    size_t last_parent_len;
 };
 
 void bx_archive_fs_list_free(struct bx_archive_fs_list* list);
@@ -109,6 +110,11 @@ bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag);
 bool bx_archive_ensure_parent_dirs_cached(const char* path,
                                           struct bx_archive_parent_dir_cache* cache,
                                           struct bx_diag_ctx* diag);
+bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* diag);
+bool bx_archive_ensure_parent_dirs_safe_cached(const char* path,
+                                               struct bx_archive_parent_dir_cache* cache,
+                                               struct bx_diag_ctx* diag);
+bool bx_archive_remove_path_tree(const char* path, struct bx_diag_ctx* diag);
 
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs);
 bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
@@ -123,5 +129,9 @@ bool bx_archive_set_path_mtime(const char* path,
                                struct timespec mtime,
                                bool nofollow,
                                struct bx_diag_ctx* diag);
+bool bx_archive_set_fd_mtime(int fd,
+                             const char* path,
+                             struct timespec mtime,
+                             struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_ARCHIVE_FS_H */

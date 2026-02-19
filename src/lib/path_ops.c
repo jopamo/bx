@@ -16,9 +16,35 @@ static char* bx_path_dup_range(const char* start, size_t len) {
     return res;
 }
 
+static void bx_path_components_reserve(struct bx_path_components* components, size_t need_count) {
+    size_t next_cap;
+
+    if (need_count <= components->cap) {
+        return;
+    }
+
+    next_cap = components->cap ? components->cap : 8u;
+    while (next_cap < need_count) {
+        next_cap *= 2u;
+    }
+
+    components->parts = xrealloc(components->parts, sizeof(*components->parts) * next_cap);
+    components->cap = next_cap;
+}
+
+static void bx_path_components_push_owned(struct bx_path_components* components, char* part) {
+    bx_path_components_reserve(components, components->count + 1u);
+    components->parts[components->count++] = part;
+}
+
+static void bx_path_components_push_range_dup(struct bx_path_components* components,
+                                              const char* start,
+                                              size_t len) {
+    bx_path_components_push_owned(components, bx_path_dup_range(start, len));
+}
+
 void bx_path_components_push_dup(struct bx_path_components* components, const char* part) {
-    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + 1u));
-    components->parts[components->count++] = xstrdup(part);
+    bx_path_components_push_owned(components, xstrdup(part));
 }
 
 void bx_path_components_pop(struct bx_path_components* components) {
@@ -38,6 +64,7 @@ void bx_path_components_free(struct bx_path_components* components) {
     free(components->parts);
     components->parts = NULL;
     components->count = 0u;
+    components->cap = 0u;
 }
 
 bool bx_path_components_shift(struct bx_path_components* components, char** part_out) {
@@ -55,14 +82,26 @@ bool bx_path_components_shift(struct bx_path_components* components, char** part
 }
 
 void bx_path_components_append_raw(struct bx_path_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
+    const char* cursor = path;
 
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        bx_path_components_push_dup(components, token);
+    while (*cursor != '\0') {
+        const char* part;
+        const char* end;
+
+        while (*cursor == '/') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        part = cursor;
+        while (*cursor != '\0' && *cursor != '/') {
+            cursor++;
+        }
+        end = cursor;
+        bx_path_components_push_range_dup(components, part, (size_t)(end - part));
     }
-
-    free(copy);
 }
 
 void bx_path_components_insert_raw_path(struct bx_path_components* components, size_t index, const char* path) {
@@ -73,11 +112,14 @@ void bx_path_components_insert_raw_path(struct bx_path_components* components, s
         return;
     }
 
-    components->parts = xrealloc(components->parts, sizeof(*components->parts) * (components->count + inserted.count));
+    bx_path_components_reserve(components, components->count + inserted.count);
     memmove(&components->parts[index + inserted.count], &components->parts[index], sizeof(*components->parts) * (components->count - index));
     memcpy(&components->parts[index], inserted.parts, sizeof(*components->parts) * inserted.count);
     components->count += inserted.count;
     free(inserted.parts);
+    inserted.parts = NULL;
+    inserted.count = 0u;
+    inserted.cap = 0u;
 }
 
 void bx_path_components_append_normalized_part(struct bx_path_components* components, const char* part) {
@@ -93,14 +135,35 @@ void bx_path_components_append_normalized_part(struct bx_path_components* compon
 }
 
 void bx_path_components_append_normalized(struct bx_path_components* components, const char* path) {
-    char* copy = xstrdup(path);
-    char* saveptr = NULL;
+    const char* cursor = path;
 
-    for (char* token = strtok_r(copy, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        bx_path_components_append_normalized_part(components, token);
+    while (*cursor != '\0') {
+        const char* part;
+        const char* end;
+        size_t len;
+
+        while (*cursor == '/') {
+            cursor++;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+
+        part = cursor;
+        while (*cursor != '\0' && *cursor != '/') {
+            cursor++;
+        }
+        end = cursor;
+        len = (size_t)(end - part);
+        if (len == 1u && part[0] == '.') {
+            continue;
+        }
+        if (len == 2u && part[0] == '.' && part[1] == '.') {
+            bx_path_components_pop(components);
+            continue;
+        }
+        bx_path_components_push_range_dup(components, part, len);
     }
-
-    free(copy);
 }
 
 void bx_path_components_prepend_raw_path(struct bx_path_components* components, const char* path) {
@@ -112,16 +175,15 @@ void bx_path_components_prepend_raw_path(struct bx_path_components* components, 
         return;
     }
 
-    char** merged = xmalloc((head.count + components->count) * sizeof(*merged));
-    memcpy(merged, head.parts, head.count * sizeof(*merged));
-    if (components->count > 0u) {
-        memcpy(merged + head.count, components->parts, components->count * sizeof(*merged));
-    }
+    bx_path_components_reserve(components, head.count + components->count);
+    memmove(components->parts + head.count, components->parts, components->count * sizeof(*components->parts));
+    memcpy(components->parts, head.parts, head.count * sizeof(*components->parts));
 
     free(head.parts);
-    free(components->parts);
-    components->parts = merged;
     components->count += head.count;
+    head.parts = NULL;
+    head.count = 0u;
+    head.cap = 0u;
 }
 
 char* bx_path_components_to_absolute_path(const struct bx_path_components* components, size_t count) {

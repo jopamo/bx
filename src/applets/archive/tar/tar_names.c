@@ -163,50 +163,10 @@ static char* bx_tar_transform_apply(const struct bx_tar_transform_rule* rule,
     }
 }
 
-static bool bx_tar_map_member_name_can_borrow(const char* stored_name,
-                                              const struct bx_tar_name_policy* policy) {
-    const char* part = stored_name;
-    const char* cursor = stored_name;
-
-    if (stored_name[0] == '\0') {
-        return true;
-    }
-    if (policy != NULL) {
-        if (policy->strip_components != 0u || policy->one_top_level != NULL) {
-            return false;
-        }
-        if (policy->transform != NULL && policy->transform->active) {
-            return false;
-        }
-    }
-
-    while (true) {
-        if (*cursor == '/' || *cursor == '\0') {
-            size_t len = (size_t)(cursor - part);
-
-            if (len == 0u) {
-                return false;
-            }
-            if ((len == 1u && part[0] == '.')
-                || (len == 2u && part[0] == '.' && part[1] == '.')) {
-                return false;
-            }
-            if (*cursor == '\0') {
-                break;
-            }
-            part = cursor + 1;
-        }
-        cursor++;
-    }
-
-    return true;
-}
-
 static const char* bx_tar_map_member_name_borrow_ptr(const char* stored_name,
                                                      const struct bx_tar_name_policy* policy) {
     const char* name = stored_name;
-    const char* part;
-    const char* cursor;
+    const char* normalized_name;
 
     if (stored_name[0] == '\0') {
         return stored_name;
@@ -223,35 +183,29 @@ static const char* bx_tar_map_member_name_borrow_ptr(const char* stored_name,
     while (name[0] == '.' && name[1] == '/') {
         name += 2;
     }
-    if (name == stored_name) {
-        return bx_tar_map_member_name_can_borrow(stored_name, policy) ? stored_name : NULL;
-    }
     if (name[0] == '\0' || name[0] == '/') {
         return NULL;
     }
+    normalized_name = name;
 
-    part = name;
-    cursor = name;
-    while (true) {
-        if (*cursor == '/' || *cursor == '\0') {
-            size_t len = (size_t)(cursor - part);
+    for (;;) {
+        const char* slash = strchr(name, '/');
+        size_t part_len = slash != NULL ? (size_t)(slash - name) : strlen(name);
 
-            if (len == 0u) {
-                return NULL;
-            }
-            if ((len == 1u && part[0] == '.')
-                || (len == 2u && part[0] == '.' && part[1] == '.')) {
-                return NULL;
-            }
-            if (*cursor == '\0') {
-                break;
-            }
-            part = cursor + 1;
+        if (part_len == 0u) {
+            return NULL;
         }
-        cursor++;
+        if (part_len == 1u && name[0] == '.') {
+            return NULL;
+        }
+        if (part_len == 2u && name[0] == '.' && name[1] == '.') {
+            return NULL;
+        }
+        if (slash == NULL) {
+            return normalized_name;
+        }
+        name = slash + 1;
     }
-
-    return name;
 }
 
 struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
@@ -276,11 +230,6 @@ struct bx_tar_mapped_name bx_tar_map_member_name(const char* stored_name,
             result.text = borrowed;
             return result;
         }
-    }
-
-    if (bx_tar_map_member_name_can_borrow(stored_name, policy)) {
-        result.text = stored_name;
-        return result;
     }
 
     transformed = bx_tar_transform_apply(policy ? policy->transform : NULL, stored_name);

@@ -7,6 +7,7 @@
 struct bx_path_components {
     char** parts;
     size_t count;
+    size_t cap;
 };
 
 void bx_path_components_push_dup(struct bx_path_components* components, const char* part);

@@ -497,6 +497,7 @@ void bx_archive_parent_dir_cache_cleanup(struct bx_archive_parent_dir_cache* cac
     }
     free(cache->last_parent);
     cache->last_parent = NULL;
+    cache->last_parent_len = 0u;
 }
 
 void bx_archive_parent_dir_cache_invalidate(struct bx_archive_parent_dir_cache* cache) {
@@ -508,6 +509,7 @@ bool bx_archive_parent_dir_cache_matches_parent(const struct bx_archive_parent_d
     return cache != NULL
         && cache->last_parent != NULL
         && parent != NULL
+        && cache->last_parent_len == strlen(parent)
         && strcmp(cache->last_parent, parent) == 0;
 }
 
@@ -519,24 +521,100 @@ void bx_archive_parent_dir_cache_remember_parent(struct bx_archive_parent_dir_ca
 
     free(cache->last_parent);
     cache->last_parent = xstrdup(parent);
+    cache->last_parent_len = strlen(parent);
 }
 
-bool bx_archive_ensure_parent_dirs_cached(const char* path,
-                                          struct bx_archive_parent_dir_cache* cache,
-                                          struct bx_diag_ctx* diag) {
-    char* parent = bx_path_parent_dir_dup(path);
+static bool
+bx_archive_parent_dir_cache_matches_path_parent(const struct bx_archive_parent_dir_cache* cache,
+                                                const char* path) {
+    const char* slash;
+
+    if (cache == NULL || cache->last_parent == NULL || path == NULL) {
+        return false;
+    }
+
+    slash = strrchr(path, '/');
+    if (slash == NULL) {
+        return cache->last_parent_len == 1u && cache->last_parent[0] == '.';
+    }
+    if (slash == path) {
+        return cache->last_parent_len == 1u && cache->last_parent[0] == '/';
+    }
+
+    return cache->last_parent_len == (size_t)(slash - path)
+        && memcmp(cache->last_parent, path, cache->last_parent_len) == 0;
+}
+
+bool bx_archive_remove_path_tree(const char* path, struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    if (lstat(path, &st) != 0) {
+        if (errno == ENOENT) {
+            return true;
+        }
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+        if (unlink(path) != 0) {
+            bx_diag(diag, "%s: %s", path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    {
+        DIR* dir = opendir(path);
+        struct dirent* ent;
+
+        if (dir == NULL) {
+            bx_diag(diag, "%s: %s", path, strerror(errno));
+            return false;
+        }
+        while ((ent = readdir(dir)) != NULL) {
+            char* child_path;
+            bool ok;
+
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+                continue;
+            }
+            child_path = bx_path_join(path, ent->d_name);
+            ok = bx_archive_remove_path_tree(child_path, diag);
+            free(child_path);
+            if (!ok) {
+                closedir(dir);
+                return false;
+            }
+        }
+        closedir(dir);
+    }
+
+    if (rmdir(path) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool bx_archive_ensure_parent_dirs_impl(const char* path,
+                                               struct bx_archive_parent_dir_cache* cache,
+                                               bool safe_existing,
+                                               struct bx_diag_ctx* diag) {
+    char* parent;
     char* cursor;
     size_t i;
 
+    if (bx_archive_parent_dir_cache_matches_path_parent(cache, path)) {
+        return true;
+    }
+
+    parent = bx_path_parent_dir_dup(path);
     if (parent == NULL) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }
     if (strcmp(parent, ".") == 0 || strcmp(parent, "/") == 0) {
-        free(parent);
-        return true;
-    }
-    if (bx_archive_parent_dir_cache_matches_parent(cache, parent)) {
         free(parent);
         return true;
     }
@@ -551,20 +629,84 @@ bool bx_archive_ensure_parent_dirs_cached(const char* path,
     }
 
     for (; cursor[i] != '\0'; i++) {
+        struct stat st;
+
         if (cursor[i] != '/') {
             continue;
         }
         cursor[i] = '\0';
-        if (cursor[0] != '\0' && mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
-            bx_diag(diag, "%s: %s", cursor, strerror(errno));
-            free(parent);
-            free(cursor);
-            return false;
+        if (cursor[0] == '\0') {
+            cursor[i] = '/';
+            continue;
+        }
+        if (!safe_existing) {
+            if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
+                bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                free(parent);
+                free(cursor);
+                return false;
+            }
+            cursor[i] = '/';
+            continue;
+        }
+        if (lstat(cursor, &st) != 0) {
+            if (errno != ENOENT) {
+                bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                free(parent);
+                free(cursor);
+                return false;
+            }
+            if (mkdir(cursor, 0777u) != 0) {
+                bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                free(parent);
+                free(cursor);
+                return false;
+            }
+        }
+        else if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+            bx_archive_parent_dir_cache_invalidate(cache);
+            if (!bx_archive_remove_path_tree(cursor, diag) || mkdir(cursor, 0777u) != 0) {
+                if (errno != 0 && !S_ISDIR(st.st_mode)) {
+                    bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                }
+                free(parent);
+                free(cursor);
+                return false;
+            }
         }
         cursor[i] = '/';
     }
 
-    if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
+    if (safe_existing) {
+        struct stat st;
+
+        if (lstat(cursor, &st) != 0) {
+            if (errno != ENOENT) {
+                bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                free(parent);
+                free(cursor);
+                return false;
+            }
+            if (mkdir(cursor, 0777u) != 0) {
+                bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                free(parent);
+                free(cursor);
+                return false;
+            }
+        }
+        else if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) {
+            bx_archive_parent_dir_cache_invalidate(cache);
+            if (!bx_archive_remove_path_tree(cursor, diag) || mkdir(cursor, 0777u) != 0) {
+                if (errno != 0 && !S_ISDIR(st.st_mode)) {
+                    bx_diag(diag, "%s: %s", cursor, strerror(errno));
+                }
+                free(parent);
+                free(cursor);
+                return false;
+            }
+        }
+    }
+    else if (mkdir(cursor, 0777u) != 0 && errno != EEXIST) {
         bx_diag(diag, "%s: %s", cursor, strerror(errno));
         free(parent);
         free(cursor);
@@ -577,8 +719,24 @@ bool bx_archive_ensure_parent_dirs_cached(const char* path,
     return true;
 }
 
+bool bx_archive_ensure_parent_dirs_cached(const char* path,
+                                          struct bx_archive_parent_dir_cache* cache,
+                                          struct bx_diag_ctx* diag) {
+    return bx_archive_ensure_parent_dirs_impl(path, cache, false, diag);
+}
+
 bool bx_archive_ensure_parent_dirs(const char* path, struct bx_diag_ctx* diag) {
     return bx_archive_ensure_parent_dirs_cached(path, NULL, diag);
+}
+
+bool bx_archive_ensure_parent_dirs_safe_cached(const char* path,
+                                               struct bx_archive_parent_dir_cache* cache,
+                                               struct bx_diag_ctx* diag) {
+    return bx_archive_ensure_parent_dirs_impl(path, cache, true, diag);
+}
+
+bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* diag) {
+    return bx_archive_ensure_parent_dirs_safe_cached(path, NULL, diag);
 }
 
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
@@ -621,6 +779,21 @@ bool bx_archive_set_path_mtime(const char* path,
     times[0] = mtime;
     times[1] = mtime;
     if (utimensat(AT_FDCWD, path, times, flags) != 0) {
+        bx_diag(diag, "%s: %s", path, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool bx_archive_set_fd_mtime(int fd,
+                             const char* path,
+                             struct timespec mtime,
+                             struct bx_diag_ctx* diag) {
+    struct timespec times[2];
+
+    times[0] = mtime;
+    times[1] = mtime;
+    if (futimens(fd, times) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
     }

@@ -59,6 +59,8 @@ struct bx_tar_entry_list {
 struct bx_tar_reader_stream_options {
     const char* archive_path;
     const struct bx_archive_codec* required_codec;
+    bool skip_owner_group_names;
+    bool skip_owner_group_ids;
 };
 
 struct bx_tar_stream_visitor_ops {
