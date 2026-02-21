@@ -25,6 +25,7 @@ struct bx_tar_pax_info {
     int sparse_minor;
     size_t sparse_realsize;
     bool sparse_enabled;
+    bool active;
 };
 
 struct bx_tar_stream_input {
@@ -32,12 +33,24 @@ struct bx_tar_stream_input {
 };
 
 void bx_tar_entry_free(struct bx_tar_entry* entry) {
-    free(entry->name);
-    free(entry->linkname);
-    free(entry->uname);
-    free(entry->gname);
-    free(entry->data);
-    free(entry->extents);
+    if (entry->name != NULL) {
+        free(entry->name);
+    }
+    if (entry->linkname != NULL) {
+        free(entry->linkname);
+    }
+    if (entry->uname != NULL) {
+        free(entry->uname);
+    }
+    if (entry->gname != NULL) {
+        free(entry->gname);
+    }
+    if (entry->data != NULL) {
+        free(entry->data);
+    }
+    if (entry->extents != NULL) {
+        free(entry->extents);
+    }
     entry->name = NULL;
     entry->linkname = NULL;
     entry->uname = NULL;
@@ -73,10 +86,21 @@ bool bx_tar_entry_list_push(struct bx_tar_entry_list* list, const struct bx_tar_
 }
 
 static void bx_tar_pax_info_clear(struct bx_tar_pax_info* pax) {
-    free(pax->path);
-    free(pax->linkpath);
-    free(pax->uname);
-    free(pax->gname);
+    if (!pax->active) {
+        return;
+    }
+    if (pax->path != NULL) {
+        free(pax->path);
+    }
+    if (pax->linkpath != NULL) {
+        free(pax->linkpath);
+    }
+    if (pax->uname != NULL) {
+        free(pax->uname);
+    }
+    if (pax->gname != NULL) {
+        free(pax->gname);
+    }
     memset(pax, 0, sizeof(*pax));
 }
 
@@ -119,13 +143,20 @@ static uint64_t bx_tar_stream_input_total_bytes_read(const struct bx_tar_stream_
     return bx_archive_codec_input_total_bytes_read(input->codec_input);
 }
 
-static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
+static bool bx_tar_parse_octal_field_slow(const unsigned char* field, size_t len, size_t* value_out) {
     const unsigned char* cursor = field;
     const unsigned char* end = field + len;
     size_t value = 0u;
 
     while (cursor < end && (*cursor == ' ' || *cursor == '\0')) {
         cursor++;
+    }
+    while (cursor < end && *cursor == '0') {
+        cursor++;
+    }
+    if (cursor == end || *cursor == '\0' || *cursor == ' ') {
+        *value_out = 0u;
+        return true;
     }
     while (cursor < end) {
         unsigned char ch = *cursor++;
@@ -140,6 +171,34 @@ static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, siz
     }
     *value_out = value;
     return true;
+}
+
+static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, size_t* value_out) {
+    if (len > 0u && (field[len - 1u] == '\0' || field[len - 1u] == ' ')) {
+        size_t value = 0u;
+        size_t i = 0u;
+        size_t digit_end = len - 1u;
+
+        while (i < digit_end && field[i] == '0') {
+            i++;
+        }
+        if (i == digit_end) {
+            *value_out = 0u;
+            return true;
+        }
+        while (i < digit_end) {
+            unsigned char ch = field[i++];
+
+            if ((unsigned)(ch - '0') > 7u) {
+                return bx_tar_parse_octal_field_slow(field, len, value_out);
+            }
+            value = (value << 3) + (size_t)(ch - '0');
+        }
+        *value_out = value;
+        return true;
+    }
+
+    return bx_tar_parse_octal_field_slow(field, len, value_out);
 }
 
 static bool bx_tar_parse_sparse_map(const unsigned char* payload,
@@ -226,35 +285,43 @@ static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
     if (strcmp(key, "path") == 0) {
         free(pax->path);
         pax->path = xstrdup(value);
+        pax->active = true;
     }
     else if (strcmp(key, "linkpath") == 0) {
         free(pax->linkpath);
         pax->linkpath = xstrdup(value);
+        pax->active = true;
     }
     else if (!skip_owner_group_names && strcmp(key, "uname") == 0) {
         free(pax->uname);
         pax->uname = xstrdup(value);
+        pax->active = true;
     }
     else if (!skip_owner_group_names && strcmp(key, "gname") == 0) {
         free(pax->gname);
         pax->gname = xstrdup(value);
+        pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.name") == 0) {
         free(pax->path);
         pax->path = xstrdup(value);
         pax->sparse_enabled = true;
+        pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.major") == 0) {
         pax->sparse_major = atoi(value);
         pax->sparse_enabled = true;
+        pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.minor") == 0) {
         pax->sparse_minor = atoi(value);
         pax->sparse_enabled = true;
+        pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.realsize") == 0) {
         pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
         pax->sparse_enabled = true;
+        pax->active = true;
     }
     return true;
 }
@@ -264,8 +331,7 @@ static size_t bx_tar_header_text_len(const unsigned char* field, size_t width) {
     return end != NULL ? (size_t)(end - field) : width;
 }
 
-static char* bx_tar_header_text_dup(const unsigned char* field, size_t width) {
-    size_t len = bx_tar_header_text_len(field, width);
+static char* bx_tar_header_text_dup_len(const unsigned char* field, size_t len) {
     char* text = xmalloc(len + 1u);
 
     memcpy(text, field, len);
@@ -273,16 +339,22 @@ static char* bx_tar_header_text_dup(const unsigned char* field, size_t width) {
     return text;
 }
 
+static char* bx_tar_header_text_dup(const unsigned char* field, size_t width) {
+    size_t len = bx_tar_header_text_len(field, width);
+    return bx_tar_header_text_dup_len(field, len);
+}
+
 static char* bx_tar_header_name_join_dup(const unsigned char* name_field,
                                          size_t name_width,
                                          const unsigned char* prefix_field,
                                          size_t prefix_width) {
     size_t name_len = bx_tar_header_text_len(name_field, name_width);
-    size_t prefix_len = bx_tar_header_text_len(prefix_field, prefix_width);
+    size_t prefix_len;
 
-    if (prefix_len == 0u) {
-        return bx_tar_header_text_dup(name_field, name_width);
+    if (prefix_field[0] == '\0') {
+        return bx_tar_header_text_dup_len(name_field, name_len);
     }
+    prefix_len = bx_tar_header_text_len(prefix_field, prefix_width);
 
     {
         char* text = xmalloc(prefix_len + 1u + name_len + 1u);
