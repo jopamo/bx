@@ -1219,6 +1219,9 @@ if get_option('tests')
   test_ls_smoke_differential = find_program('tests/applets/base/ls/test_ls_smoke_differential.sh')
   test('ls smoke differential', test_ls_smoke_differential, args : [bx_exe], suite : fast_track_p0_suite)
 
+  test_ls_option_matrix = find_program('tests/applets/base/ls/test_ls_option_matrix.py')
+  test('ls option matrix', test_ls_option_matrix, args : [bx_exe], suite : fast_track_p1_suite)
+
   test_tree_basic = find_program('tests/applets/base/tree/test_tree_basic.sh')
   test('tree basic', test_tree_basic, args : [bx_exe], suite : fast_track_p1_suite)
 
@@ -1513,6 +1516,9 @@ if get_option('tests')
   test('tar option matrix coverage audit', python3, args : [test_tar_option_matrix_coverage_audit], suite : fast_track_p1_suite)
   test_tar_option_surface_parity = find_program('tests/applets/archive/tar/test_tar_option_surface_parity.py')
   test('tar option surface parity', test_tar_option_surface_parity, args : [bx_exe], suite : ['archive-gap', 'parity-gap'])
+
+  test_ls_option_matrix_coverage_audit = files('tests/test_ls_option_matrix_coverage_audit.py')
+  test('ls option matrix coverage audit', python3, args : [test_ls_option_matrix_coverage_audit], suite : fast_track_p0_suite)
 
   test_cpio_basic = find_program('tests/applets/archive/cpio/test_cpio_basic.sh')
   test('cpio basic', test_cpio_basic, args : [bx_exe], suite : fast_track_p1_suite)

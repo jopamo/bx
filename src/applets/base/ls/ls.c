@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fnmatch.h>
 #include <getopt.h>
 #include <grp.h>
 #include <inttypes.h>
@@ -31,12 +32,41 @@ enum bx_ls_format {
     BX_LS_FORMAT_SINGLE,
     BX_LS_FORMAT_COLUMNS,
     BX_LS_FORMAT_LONG,
+    BX_LS_FORMAT_COMMAS,
+};
+
+enum bx_ls_columns_layout {
+    BX_LS_COLUMNS_VERTICAL = 0,
+    BX_LS_COLUMNS_HORIZONTAL,
 };
 
 enum bx_ls_sort_mode {
     BX_LS_SORT_NAME = 0,
     BX_LS_SORT_TIME,
     BX_LS_SORT_SIZE,
+};
+
+enum bx_ls_indicator_style {
+    BX_LS_INDICATOR_NONE = 0,
+    BX_LS_INDICATOR_SLASH,
+    BX_LS_INDICATOR_FILE_TYPE,
+    BX_LS_INDICATOR_CLASSIFY,
+};
+
+enum bx_ls_time_kind {
+    BX_LS_TIME_MTIME = 0,
+    BX_LS_TIME_CTIME,
+    BX_LS_TIME_ATIME,
+    BX_LS_TIME_BIRTH,
+};
+
+enum bx_ls_time_style {
+    BX_LS_TIME_STYLE_DEFAULT = 0,
+    BX_LS_TIME_STYLE_FULL_ISO,
+    BX_LS_TIME_STYLE_LONG_ISO,
+    BX_LS_TIME_STYLE_ISO,
+    BX_LS_TIME_STYLE_LOCALE,
+    BX_LS_TIME_STYLE_CUSTOM,
 };
 
 enum bx_ls_option_code {
@@ -59,6 +89,7 @@ enum bx_ls_option_code {
     BX_LS_OPT_TIME = 17,
     BX_LS_OPT_TIME_STYLE = 18,
     BX_LS_OPT_ZERO = 19,
+    BX_LS_OPT_FILE_TYPE = 20,
 };
 
 enum bx_ls_color_when {
@@ -67,16 +98,25 @@ enum bx_ls_color_when {
     BX_LS_COLOR_AUTO,
 };
 
+struct bx_ls_pattern_list {
+    char** items;
+    size_t len;
+    size_t cap;
+};
+
 struct bx_ls_options {
     const char* progname;
     enum bx_ls_variant variant;
     enum bx_ls_format format;
+    enum bx_ls_columns_layout columns_layout;
     bool show_all;
     bool almost_all;
+    bool ignore_backups;
     bool directory_mode;
     bool recursive;
-    bool classify;
-    bool slash_directories;
+    bool show_owner;
+    bool show_group;
+    bool show_author;
     bool show_inode;
     bool numeric_ids;
     bool human_readable;
@@ -88,6 +128,12 @@ struct bx_ls_options {
     bool show_help;
     bool show_version;
     enum bx_ls_color_when color_when;
+    enum bx_ls_indicator_style indicator_style;
+    enum bx_ls_time_kind time_kind;
+    enum bx_ls_time_style time_style;
+    char* custom_time_style;
+    struct bx_ls_pattern_list ignore_patterns;
+    struct bx_ls_pattern_list hide_patterns;
 };
 
 struct bx_ls_entry {
@@ -114,8 +160,14 @@ struct bx_ls_long_widths {
     size_t nlink;
     size_t user;
     size_t group;
+    size_t author;
     size_t size;
 };
+
+static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, char* pattern);
+static void bx_ls_pattern_list_free(struct bx_ls_pattern_list* list);
+static time_t bx_ls_selected_time_sec(const struct stat* st, enum bx_ls_time_kind kind);
+static long bx_ls_selected_time_nsec(const struct stat* st, enum bx_ls_time_kind kind);
 
 static const char* bx_ls_variant_name(enum bx_ls_variant variant) {
     switch (variant) {
@@ -320,10 +372,24 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->progname = bx_cli_progname(argv0, bx_ls_variant_name(variant));
     options->variant = variant;
     options->format = bx_ls_default_format(variant);
+    options->columns_layout = BX_LS_COLUMNS_VERTICAL;
+    options->show_owner = true;
+    options->show_group = true;
+    options->show_author = false;
     options->sort_entries = true;
     options->sort_mode = BX_LS_SORT_NAME;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
     options->color_when = BX_LS_COLOR_NEVER;
+    options->indicator_style = BX_LS_INDICATOR_NONE;
+    options->time_kind = BX_LS_TIME_MTIME;
+    options->time_style = BX_LS_TIME_STYLE_DEFAULT;
+}
+
+static void bx_ls_options_free(struct bx_ls_options* options) {
+    free(options->custom_time_style);
+    options->custom_time_style = NULL;
+    bx_ls_pattern_list_free(&options->ignore_patterns);
+    bx_ls_pattern_list_free(&options->hide_patterns);
 }
 
 static bool bx_ls_parse_format_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
@@ -343,12 +409,19 @@ static bool bx_ls_parse_format_option(const char* text, struct bx_ls_options* op
     }
 
     if (strcmp(text, "commas") == 0) {
-        options->format = BX_LS_FORMAT_SINGLE;
+        options->format = BX_LS_FORMAT_COMMAS;
         return true;
     }
 
-    if (strcmp(text, "across") == 0 || strcmp(text, "horizontal") == 0 || strcmp(text, "vertical") == 0) {
+    if (strcmp(text, "across") == 0 || strcmp(text, "horizontal") == 0) {
         options->format = BX_LS_FORMAT_COLUMNS;
+        options->columns_layout = BX_LS_COLUMNS_HORIZONTAL;
+        return true;
+    }
+
+    if (strcmp(text, "vertical") == 0) {
+        options->format = BX_LS_FORMAT_COLUMNS;
+        options->columns_layout = BX_LS_COLUMNS_VERTICAL;
         return true;
     }
 
@@ -418,6 +491,126 @@ static bool bx_ls_parse_sort_option(const char* text, struct bx_ls_options* opti
     return false;
 }
 
+static void bx_ls_set_format(struct bx_ls_options* options, enum bx_ls_format format) {
+    options->format = format;
+}
+
+static bool bx_ls_parse_indicator_style_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--indicator-style' requires an argument");
+        return false;
+    }
+
+    if (strcmp(text, "none") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_NONE;
+        return true;
+    }
+    if (strcmp(text, "slash") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_SLASH;
+        return true;
+    }
+    if (strcmp(text, "file-type") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_FILE_TYPE;
+        return true;
+    }
+    if (strcmp(text, "classify") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_CLASSIFY;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--indicator-style'", text);
+    return false;
+}
+
+static bool bx_ls_parse_classify_when(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    const char* when = (text == NULL) ? "always" : text;
+
+    if (strcmp(when, "always") == 0 || strcmp(when, "auto") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_CLASSIFY;
+        return true;
+    }
+    if (strcmp(when, "never") == 0) {
+        options->indicator_style = BX_LS_INDICATOR_NONE;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--classify'", when);
+    return false;
+}
+
+static bool bx_ls_parse_time_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--time' requires an argument");
+        return false;
+    }
+
+    if (strcmp(text, "atime") == 0 || strcmp(text, "access") == 0 || strcmp(text, "use") == 0) {
+        options->time_kind = BX_LS_TIME_ATIME;
+        return true;
+    }
+    if (strcmp(text, "ctime") == 0 || strcmp(text, "status") == 0) {
+        options->time_kind = BX_LS_TIME_CTIME;
+        return true;
+    }
+    if (strcmp(text, "mtime") == 0 || strcmp(text, "modification") == 0) {
+        options->time_kind = BX_LS_TIME_MTIME;
+        return true;
+    }
+    if (strcmp(text, "birth") == 0 || strcmp(text, "creation") == 0) {
+        options->time_kind = BX_LS_TIME_BIRTH;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--time'", text);
+    return false;
+}
+
+static bool bx_ls_parse_time_style_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--time-style' requires an argument");
+        return false;
+    }
+
+    const char* style = text;
+    if (strncmp(style, "posix-", 6u) == 0) {
+        style += 6u;
+    }
+
+    if (strcmp(style, "full-iso") == 0) {
+        options->time_style = BX_LS_TIME_STYLE_FULL_ISO;
+        free(options->custom_time_style);
+        options->custom_time_style = NULL;
+        return true;
+    }
+    if (strcmp(style, "long-iso") == 0) {
+        options->time_style = BX_LS_TIME_STYLE_LONG_ISO;
+        free(options->custom_time_style);
+        options->custom_time_style = NULL;
+        return true;
+    }
+    if (strcmp(style, "iso") == 0) {
+        options->time_style = BX_LS_TIME_STYLE_ISO;
+        free(options->custom_time_style);
+        options->custom_time_style = NULL;
+        return true;
+    }
+    if (strcmp(style, "locale") == 0) {
+        options->time_style = BX_LS_TIME_STYLE_LOCALE;
+        free(options->custom_time_style);
+        options->custom_time_style = NULL;
+        return true;
+    }
+    if (style[0] == '+') {
+        options->time_style = BX_LS_TIME_STYLE_CUSTOM;
+        free(options->custom_time_style);
+        options->custom_time_style = xstrdup(style + 1u);
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--time-style'", text);
+    return false;
+}
+
 static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant variant, struct bx_ls_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"all", no_argument, NULL, 'a'},
@@ -429,7 +622,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
         {"directory", no_argument, NULL, 'd'},
         {"dired", no_argument, NULL, 'D'},
         {"classify", optional_argument, NULL, 'F'},
-        {"file-type", no_argument, NULL, 'p'},
+        {"file-type", no_argument, NULL, BX_LS_OPT_FILE_TYPE},
         {"full-time", no_argument, NULL, BX_LS_OPT_FULL_TIME},
         {"group-directories-first", no_argument, NULL, BX_LS_OPT_GROUP_DIRECTORIES_FIRST},
         {"no-group", no_argument, NULL, 'G'},
@@ -472,6 +665,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
 
     opterr = 0;
     optind = 1;
+    unsigned long option_order = 0u;
+    unsigned long explicit_sort_order = 0u;
+    unsigned long short_time_sort_order = 0u;
 
     while (true) {
         int option_index = 0;
@@ -482,24 +678,28 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
 
         switch (c) {
             case '1':
-                options->format = BX_LS_FORMAT_SINGLE;
+                bx_ls_set_format(options, BX_LS_FORMAT_SINGLE);
                 break;
             case 'A':
                 options->almost_all = true;
                 options->show_all = false;
                 break;
             case 'B':
+                options->ignore_backups = true;
                 break;
             case 'C':
-                options->format = BX_LS_FORMAT_COLUMNS;
+                bx_ls_set_format(options, BX_LS_FORMAT_COLUMNS);
+                options->columns_layout = BX_LS_COLUMNS_VERTICAL;
                 break;
             case 'D':
                 break;
             case 'G':
+                options->show_group = false;
                 break;
             case 'H':
                 break;
             case 'I':
+                bx_ls_pattern_list_append(&options->ignore_patterns, optarg);
                 break;
             case 'L':
                 break;
@@ -510,15 +710,20 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 'S':
                 options->sort_entries = true;
                 options->sort_mode = BX_LS_SORT_SIZE;
+                explicit_sort_order = ++option_order;
                 break;
             case 'T':
                 break;
             case 'X':
+                options->sort_entries = true;
+                options->sort_mode = BX_LS_SORT_NAME;
+                explicit_sort_order = ++option_order;
                 break;
             case 'Z':
                 break;
             case 'U':
                 options->sort_entries = false;
+                explicit_sort_order = ++option_order;
                 break;
             case 'a':
                 options->show_all = true;
@@ -528,20 +733,26 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->escape_names = true;
                 break;
             case 'c':
+                options->time_kind = BX_LS_TIME_CTIME;
+                short_time_sort_order = ++option_order;
                 break;
             case 'd':
                 options->directory_mode = true;
                 break;
             case 'F':
-                options->classify = true;
+                if (!bx_ls_parse_classify_when(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case 'f':
                 options->sort_entries = false;
                 options->show_all = true;
                 options->almost_all = false;
+                explicit_sort_order = ++option_order;
                 break;
             case 'g':
-                options->format = BX_LS_FORMAT_LONG;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
+                options->show_owner = false;
                 break;
             case 'i':
                 options->show_inode = true;
@@ -549,22 +760,24 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 'k':
                 break;
             case 'l':
-                options->format = BX_LS_FORMAT_LONG;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
                 break;
             case 'm':
+                bx_ls_set_format(options, BX_LS_FORMAT_COMMAS);
                 break;
             case 'n':
-                options->format = BX_LS_FORMAT_LONG;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
                 options->numeric_ids = true;
                 break;
             case 'o':
-                options->format = BX_LS_FORMAT_LONG;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
+                options->show_group = false;
                 break;
             case 'h':
                 options->human_readable = true;
                 break;
             case 'p':
-                options->slash_directories = true;
+                options->indicator_style = BX_LS_INDICATOR_SLASH;
                 break;
             case 'q':
                 break;
@@ -579,15 +792,22 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
             case 't':
                 options->sort_entries = true;
                 options->sort_mode = BX_LS_SORT_TIME;
+                explicit_sort_order = ++option_order;
                 break;
             case 'u':
+                options->time_kind = BX_LS_TIME_ATIME;
+                short_time_sort_order = ++option_order;
                 break;
             case 'v':
+                options->sort_entries = true;
+                options->sort_mode = BX_LS_SORT_NAME;
+                explicit_sort_order = ++option_order;
                 break;
             case 'w':
                 break;
             case 'x':
-                options->format = BX_LS_FORMAT_COLUMNS;
+                bx_ls_set_format(options, BX_LS_FORMAT_COLUMNS);
+                options->columns_layout = BX_LS_COLUMNS_HORIZONTAL;
                 break;
             case BX_LS_OPT_HELP:
                 options->show_help = true;
@@ -610,21 +830,30 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->si_units = true;
                 break;
             case BX_LS_OPT_AUTHOR:
+                options->show_author = true;
                 break;
             case BX_LS_OPT_BLOCK_SIZE:
                 break;
             case BX_LS_OPT_FULL_TIME:
-                options->format = BX_LS_FORMAT_LONG;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
+                options->time_style = BX_LS_TIME_STYLE_FULL_ISO;
                 break;
             case BX_LS_OPT_GROUP_DIRECTORIES_FIRST:
                 break;
             case BX_LS_OPT_DEREFERENCE_CMDLINE_SYMLINK_TO_DIR:
                 break;
             case BX_LS_OPT_HIDE:
+                bx_ls_pattern_list_append(&options->hide_patterns, optarg);
                 break;
             case BX_LS_OPT_HYPERLINK:
                 break;
             case BX_LS_OPT_INDICATOR_STYLE:
+                if (!bx_ls_parse_indicator_style_option(optarg, options, diag)) {
+                    return false;
+                }
+                break;
+            case BX_LS_OPT_FILE_TYPE:
+                options->indicator_style = BX_LS_INDICATOR_FILE_TYPE;
                 break;
             case BX_LS_OPT_SHOW_CONTROL_CHARS:
                 break;
@@ -634,10 +863,17 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 if (!bx_ls_parse_sort_option(optarg, options, diag)) {
                     return false;
                 }
+                explicit_sort_order = ++option_order;
                 break;
             case BX_LS_OPT_TIME:
+                if (!bx_ls_parse_time_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_TIME_STYLE:
+                if (!bx_ls_parse_time_style_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_ZERO:
                 break;
@@ -657,8 +893,30 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
         }
     }
 
+    if (short_time_sort_order > explicit_sort_order && options->format != BX_LS_FORMAT_LONG) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_TIME;
+    }
+
     *first_operand = optind;
     return true;
+}
+
+static void bx_ls_pattern_list_append(struct bx_ls_pattern_list* list, char* pattern) {
+    if (list->len == list->cap) {
+        size_t new_cap = (list->cap == 0) ? 4u : list->cap * 2u;
+        list->items = xrealloc(list->items, new_cap * sizeof(*list->items));
+        list->cap = new_cap;
+    }
+
+    list->items[list->len++] = pattern;
+}
+
+static void bx_ls_pattern_list_free(struct bx_ls_pattern_list* list) {
+    free(list->items);
+    list->items = NULL;
+    list->len = 0;
+    list->cap = 0;
 }
 
 static void bx_ls_entry_list_append(struct bx_ls_entry_list* list, struct bx_ls_entry* entry) {
@@ -730,21 +988,26 @@ static int bx_ls_entry_compare(const void* lhs, const void* rhs) {
     const struct bx_ls_entry* b = (const struct bx_ls_entry*)rhs;
 
     enum bx_ls_sort_mode sort_mode = BX_LS_SORT_NAME;
+    enum bx_ls_time_kind time_kind = BX_LS_TIME_MTIME;
     bool reverse = false;
     if (bx_ls_sort_options != NULL) {
         sort_mode = bx_ls_sort_options->sort_mode;
+        time_kind = bx_ls_sort_options->time_kind;
         reverse = bx_ls_sort_options->reverse_sort;
     }
 
     int cmp = 0;
     if (sort_mode == BX_LS_SORT_TIME) {
         if (a->has_stat && b->has_stat) {
-            cmp = bx_ls_compare_intmax((intmax_t)b->st.st_mtime, (intmax_t)a->st.st_mtime);
-#if defined(__linux__)
+            time_t a_sec = bx_ls_selected_time_sec(&a->st, time_kind);
+            time_t b_sec = bx_ls_selected_time_sec(&b->st, time_kind);
+            long a_nsec = bx_ls_selected_time_nsec(&a->st, time_kind);
+            long b_nsec = bx_ls_selected_time_nsec(&b->st, time_kind);
+
+            cmp = bx_ls_compare_intmax((intmax_t)b_sec, (intmax_t)a_sec);
             if (cmp == 0) {
-                cmp = bx_ls_compare_intmax((intmax_t)b->st.st_mtim.tv_nsec, (intmax_t)a->st.st_mtim.tv_nsec);
+                cmp = bx_ls_compare_intmax((intmax_t)b_nsec, (intmax_t)a_nsec);
             }
-#endif
         }
         else if (a->has_stat != b->has_stat) {
             cmp = a->has_stat ? -1 : 1;
@@ -777,7 +1040,42 @@ static int bx_ls_path_compare(const void* lhs, const void* rhs) {
     return cmp;
 }
 
+static bool bx_ls_name_ends_with_backup_suffix(const char* name) {
+    size_t len = strlen(name);
+    return len > 0u && name[len - 1u] == '~';
+}
+
+static bool bx_ls_name_matches_pattern_list(const char* name, const struct bx_ls_pattern_list* patterns) {
+    for (size_t i = 0; i < patterns->len; i++) {
+        if (fnmatch(patterns->items[i], name, FNM_PERIOD) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool bx_ls_name_is_ignored(const char* name, const struct bx_ls_options* options) {
+    if (options->ignore_backups && bx_ls_name_ends_with_backup_suffix(name)) {
+        return true;
+    }
+
+    return bx_ls_name_matches_pattern_list(name, &options->ignore_patterns);
+}
+
+static bool bx_ls_name_is_hidden_by_pattern(const char* name, const struct bx_ls_options* options) {
+    if (options->show_all || options->almost_all) {
+        return false;
+    }
+
+    return bx_ls_name_matches_pattern_list(name, &options->hide_patterns);
+}
+
 static bool bx_ls_should_include_name(const char* name, const struct bx_ls_options* options) {
+    if (bx_ls_name_is_ignored(name, options) || bx_ls_name_is_hidden_by_pattern(name, options)) {
+        return false;
+    }
+
     if (options->show_all) {
         return true;
     }
@@ -961,16 +1259,44 @@ static const char* bx_ls_group_name(gid_t gid, bool numeric_ids, char numeric_bu
     return numeric_buffer;
 }
 
-static void bx_ls_format_timestamp(time_t timestamp, char buffer[32]) {
+static time_t bx_ls_selected_time_sec(const struct stat* st, enum bx_ls_time_kind kind) {
+    switch (kind) {
+        case BX_LS_TIME_CTIME:
+            return st->st_ctime;
+        case BX_LS_TIME_ATIME:
+            return st->st_atime;
+        case BX_LS_TIME_BIRTH:
+            return st->st_mtime;
+        case BX_LS_TIME_MTIME:
+        default:
+            return st->st_mtime;
+    }
+}
+
+static long bx_ls_selected_time_nsec(const struct stat* st, enum bx_ls_time_kind kind) {
+#if defined(__linux__)
+    switch (kind) {
+        case BX_LS_TIME_CTIME:
+            return st->st_ctim.tv_nsec;
+        case BX_LS_TIME_ATIME:
+            return st->st_atim.tv_nsec;
+        case BX_LS_TIME_BIRTH:
+            return st->st_mtim.tv_nsec;
+        case BX_LS_TIME_MTIME:
+        default:
+            return st->st_mtim.tv_nsec;
+    }
+#else
+    (void)st;
+    (void)kind;
+    return 0;
+#endif
+}
+
+static bool bx_ls_time_is_recent(time_t timestamp) {
     time_t now = time(NULL);
     if (now == (time_t)-1) {
-        now = timestamp;
-    }
-
-    struct tm tm_value;
-    if (localtime_r(&timestamp, &tm_value) == NULL) {
-        (void)snprintf(buffer, 32u, "??? ?? ??:??");
-        return;
+        return true;
     }
 
     double delta = difftime(now, timestamp);
@@ -978,9 +1304,102 @@ static void bx_ls_format_timestamp(time_t timestamp, char buffer[32]) {
         delta = -delta;
     }
 
-    const char* fmt = (delta > (365.0 / 2.0) * 24.0 * 60.0 * 60.0 || timestamp > now + 3600) ? "%b %e  %Y" : "%b %e %H:%M";
-    if (strftime(buffer, 32u, fmt, &tm_value) == 0u) {
-        (void)snprintf(buffer, 32u, "??? ?? ??:??");
+    return !(delta > (365.0 / 2.0) * 24.0 * 60.0 * 60.0 || timestamp > now + 3600);
+}
+
+static bool bx_ls_format_with_strftime(const char* fmt, const struct tm* tm_value, char* buffer, size_t buffer_size) {
+    return strftime(buffer, buffer_size, fmt, tm_value) != 0u;
+}
+
+static void bx_ls_format_custom_timestamp(
+    const struct bx_ls_options* options,
+    const struct tm* tm_value,
+    bool is_recent,
+    char* buffer,
+    size_t buffer_size) {
+    const char* fmt = options->custom_time_style;
+    if (fmt == NULL || fmt[0] == '\0') {
+        (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+        return;
+    }
+
+    const char* newline = strchr(fmt, '\n');
+    if (newline != NULL) {
+        if (is_recent) {
+            fmt = newline + 1;
+        }
+        else {
+            size_t first_len = (size_t)(newline - fmt);
+            char* first = xmalloc(first_len + 1u);
+            memcpy(first, fmt, first_len);
+            first[first_len] = '\0';
+            if (!bx_ls_format_with_strftime(first, tm_value, buffer, buffer_size)) {
+                (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+            }
+            free(first);
+            return;
+        }
+    }
+
+    if (!bx_ls_format_with_strftime(fmt, tm_value, buffer, buffer_size)) {
+        (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+    }
+}
+
+static void bx_ls_format_timestamp(
+    const struct bx_ls_options* options,
+    time_t timestamp,
+    long nsec,
+    char* buffer,
+    size_t buffer_size) {
+    if (buffer_size == 0u) {
+        return;
+    }
+
+    struct tm tm_value;
+    if (localtime_r(&timestamp, &tm_value) == NULL) {
+        (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+        return;
+    }
+
+    bool is_recent = bx_ls_time_is_recent(timestamp);
+
+    switch (options->time_style) {
+        case BX_LS_TIME_STYLE_FULL_ISO: {
+            char datetime[32];
+            char zone[16];
+            if (!bx_ls_format_with_strftime("%Y-%m-%d %H:%M:%S", &tm_value, datetime, sizeof(datetime))
+                || !bx_ls_format_with_strftime("%z", &tm_value, zone, sizeof(zone))) {
+                (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+                return;
+            }
+            (void)snprintf(buffer, buffer_size, "%s.%09ld %s", datetime, nsec, zone);
+            return;
+        }
+        case BX_LS_TIME_STYLE_LONG_ISO:
+            if (!bx_ls_format_with_strftime("%Y-%m-%d %H:%M", &tm_value, buffer, buffer_size)) {
+                (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+            }
+            return;
+        case BX_LS_TIME_STYLE_ISO:
+            if (!bx_ls_format_with_strftime(is_recent ? "%m-%d %H:%M" : "%Y-%m-%d ", &tm_value, buffer, buffer_size)) {
+                (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+            }
+            return;
+        case BX_LS_TIME_STYLE_CUSTOM:
+            bx_ls_format_custom_timestamp(options, &tm_value, is_recent, buffer, buffer_size);
+            return;
+        case BX_LS_TIME_STYLE_LOCALE:
+        case BX_LS_TIME_STYLE_DEFAULT:
+        default:
+            if (!bx_ls_format_with_strftime(
+                    is_recent ? "%b %e %H:%M" : "%b %e  %Y",
+                    &tm_value,
+                    buffer,
+                    buffer_size)) {
+                (void)snprintf(buffer, buffer_size, "??? ?? ??:??");
+            }
+            return;
     }
 }
 
@@ -1052,31 +1471,35 @@ static char* bx_ls_escape_name(const char* name, bool escape_names) {
 }
 
 static char bx_ls_indicator_char(mode_t mode, const struct bx_ls_options* options) {
-    if (options->classify) {
-        if (S_ISDIR(mode)) {
-            return '/';
-        }
-        if (S_ISLNK(mode)) {
-            return '@';
-        }
-        if (S_ISFIFO(mode)) {
-            return '|';
-        }
+    switch (options->indicator_style) {
+        case BX_LS_INDICATOR_SLASH:
+            return S_ISDIR(mode) ? '/' : '\0';
+        case BX_LS_INDICATOR_FILE_TYPE:
+        case BX_LS_INDICATOR_CLASSIFY:
+            if (S_ISDIR(mode)) {
+                return '/';
+            }
+            if (S_ISLNK(mode)) {
+                return '@';
+            }
+            if (S_ISFIFO(mode)) {
+                return '|';
+            }
 #ifdef S_ISSOCK
-        if (S_ISSOCK(mode)) {
-            return '=';
-        }
+            if (S_ISSOCK(mode)) {
+                return '=';
+            }
 #endif
-        if (S_ISREG(mode) && (mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0) {
-            return '*';
-        }
+            if (options->indicator_style == BX_LS_INDICATOR_CLASSIFY
+                && S_ISREG(mode)
+                && (mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0) {
+                return '*';
+            }
+            return '\0';
+        case BX_LS_INDICATOR_NONE:
+        default:
+            return '\0';
     }
-
-    if (options->slash_directories && S_ISDIR(mode)) {
-        return '/';
-    }
-
-    return '\0';
 }
 
 static bool bx_ls_color_enabled(const struct bx_ls_options* options) {
@@ -1421,8 +1844,9 @@ static size_t bx_ls_uintmax_width(uintmax_t value) {
 static void bx_ls_long_widths_init(struct bx_ls_long_widths* widths, const struct bx_ls_options* options) {
     widths->inode = options->show_inode ? 1u : 0u;
     widths->nlink = 1u;
-    widths->user = 1u;
-    widths->group = 1u;
+    widths->user = options->show_owner ? 1u : 0u;
+    widths->group = options->show_group ? 1u : 0u;
+    widths->author = options->show_author ? 1u : 0u;
     widths->size = 1u;
 }
 
@@ -1452,18 +1876,25 @@ static void bx_ls_compute_long_widths(
             widths->nlink = nlink_width;
         }
 
-        char user_numeric[32];
-        const char* user_name = bx_ls_user_name(st.st_uid, options->numeric_ids, user_numeric);
-        size_t user_width = strlen(user_name);
-        if (user_width > widths->user) {
-            widths->user = user_width;
+        if (options->show_owner || options->show_author) {
+            char user_numeric[32];
+            const char* user_name = bx_ls_user_name(st.st_uid, options->numeric_ids, user_numeric);
+            size_t user_width = strlen(user_name);
+            if (options->show_owner && user_width > widths->user) {
+                widths->user = user_width;
+            }
+            if (options->show_author && user_width > widths->author) {
+                widths->author = user_width;
+            }
         }
 
-        char group_numeric[32];
-        const char* group_name = bx_ls_group_name(st.st_gid, options->numeric_ids, group_numeric);
-        size_t group_width = strlen(group_name);
-        if (group_width > widths->group) {
-            widths->group = group_width;
+        if (options->show_group) {
+            char group_numeric[32];
+            const char* group_name = bx_ls_group_name(st.st_gid, options->numeric_ids, group_numeric);
+            size_t group_width = strlen(group_name);
+            if (group_width > widths->group) {
+                widths->group = group_width;
+            }
         }
 
         char size_text[32];
@@ -1556,6 +1987,49 @@ static size_t bx_ls_display_width(const char* text) {
     return width;
 }
 
+static size_t bx_ls_columns_index(
+    const struct bx_ls_options* options,
+    size_t row,
+    size_t col,
+    size_t row_count,
+    size_t column_count) {
+    if (options->columns_layout == BX_LS_COLUMNS_HORIZONTAL) {
+        return row * column_count + col;
+    }
+
+    return col * row_count + row;
+}
+
+static size_t bx_ls_column_width_for(
+    const char* const* cells,
+    size_t cell_count,
+    const struct bx_ls_options* options,
+    size_t row_count,
+    size_t column_count,
+    size_t col,
+    bool* has_values) {
+    size_t width = 0u;
+    bool any = false;
+
+    for (size_t row = 0; row < row_count; row++) {
+        size_t idx = bx_ls_columns_index(options, row, col, row_count, column_count);
+        if (idx >= cell_count) {
+            continue;
+        }
+
+        any = true;
+        size_t used = bx_ls_display_width(cells[idx]);
+        if (used > width) {
+            width = used;
+        }
+    }
+
+    if (has_values != NULL) {
+        *has_values = any;
+    }
+    return width;
+}
+
 static void bx_ls_print_entries_single(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     for (size_t i = 0; i < entries->len; i++) {
         char* cell = NULL;
@@ -1569,6 +2043,26 @@ static void bx_ls_print_entries_single(const struct bx_ls_entry_list* entries, c
     }
 }
 
+static void bx_ls_print_entries_commas(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    bool first = true;
+
+    for (size_t i = 0; i < entries->len; i++) {
+        char* cell = NULL;
+        if (!bx_ls_build_short_cell(&entries->items[i], options, diag, &cell)) {
+            continue;
+        }
+
+        if (!first) {
+            (void)fputs(", ", stdout);
+        }
+        (void)fputs(cell, stdout);
+        first = false;
+        free(cell);
+    }
+
+    (void)fputc('\n', stdout);
+}
+
 static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     if (entries->len == 0) {
         return;
@@ -1576,7 +2070,6 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
 
     char** cells = xmalloc(entries->len * sizeof(*cells));
     size_t cell_count = 0;
-    size_t max_width = 0;
 
     for (size_t i = 0; i < entries->len; i++) {
         char* cell = NULL;
@@ -1585,10 +2078,6 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
         }
 
         cells[cell_count++] = cell;
-        size_t cell_width = bx_ls_display_width(cell);
-        if (cell_width > max_width) {
-            max_width = cell_width;
-        }
     }
 
     if (cell_count == 0) {
@@ -1597,33 +2086,55 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
     }
 
     size_t term_width = bx_ls_output_width();
-    size_t column_width = max_width + 2u;
-    size_t column_count = (column_width == 0u) ? 1u : (term_width / column_width);
-    if (column_count == 0u) {
-        column_count = 1u;
+    size_t column_count = 1u;
+
+    for (size_t candidate = 1u; candidate <= cell_count; candidate++) {
+        size_t candidate_row_count = (cell_count + candidate - 1u) / candidate;
+        size_t total_width = 0u;
+        size_t used_columns = 0u;
+
+        for (size_t col = 0; col < candidate; col++) {
+            bool has_values = false;
+            size_t width = bx_ls_column_width_for(
+                (const char* const*)cells,
+                cell_count,
+                options,
+                candidate_row_count,
+                candidate,
+                col,
+                &has_values);
+            if (!has_values) {
+                continue;
+            }
+
+            if (used_columns > 0u) {
+                total_width += 2u;
+            }
+            total_width += width;
+            used_columns++;
+        }
+
+        if (total_width <= term_width) {
+            column_count = candidate;
+        }
     }
-    if (column_count > cell_count) {
-        column_count = cell_count;
-    }
+
     size_t row_count = (cell_count + column_count - 1u) / column_count;
     size_t* column_widths = xmalloc(column_count * sizeof(*column_widths));
     for (size_t col = 0; col < column_count; col++) {
-        column_widths[col] = 0u;
-        for (size_t row = 0; row < row_count; row++) {
-            size_t idx = col * row_count + row;
-            if (idx >= cell_count) {
-                continue;
-            }
-            size_t used = bx_ls_display_width(cells[idx]);
-            if (used > column_widths[col]) {
-                column_widths[col] = used;
-            }
-        }
+        column_widths[col] = bx_ls_column_width_for(
+            (const char* const*)cells,
+            cell_count,
+            options,
+            row_count,
+            column_count,
+            col,
+            NULL);
     }
 
     for (size_t row = 0; row < row_count; row++) {
         for (size_t col = 0; col < column_count; col++) {
-            size_t idx = col * row_count + row;
+            size_t idx = bx_ls_columns_index(options, row, col, row_count, column_count);
             if (idx >= cell_count) {
                 continue;
             }
@@ -1632,7 +2143,7 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
 
             size_t next_col = col + 1u;
             while (next_col < column_count) {
-                size_t next_idx = next_col * row_count + row;
+                size_t next_idx = bx_ls_columns_index(options, row, next_col, row_count, column_count);
                 if (next_idx < cell_count) {
                     break;
                 }
@@ -1675,9 +2186,15 @@ static void bx_ls_print_long_entry(
     char group_numeric[32];
     const char* user_name = bx_ls_user_name(st.st_uid, options->numeric_ids, user_numeric);
     const char* group_name = bx_ls_group_name(st.st_gid, options->numeric_ids, group_numeric);
+    const char* author_name = user_name;
 
-    char timestamp[32];
-    bx_ls_format_timestamp(st.st_mtime, timestamp);
+    char timestamp[64];
+    bx_ls_format_timestamp(
+        options,
+        bx_ls_selected_time_sec(&st, options->time_kind),
+        bx_ls_selected_time_nsec(&st, options->time_kind),
+        timestamp,
+        sizeof(timestamp));
     char size[32];
     bx_ls_format_size((intmax_t)st.st_size, options, size);
 
@@ -1703,19 +2220,19 @@ static void bx_ls_print_long_entry(
         printf("%*" PRIuMAX " ", (int)widths->inode, (uintmax_t)st.st_ino);
     }
 
-    printf(
-        "%s %*" PRIuMAX " %-*s %-*s %*s %s %s",
-        mode,
-        (int)widths->nlink,
-        (uintmax_t)st.st_nlink,
-        (int)widths->user,
-        user_name,
-        (int)widths->group,
-        group_name,
-        (int)widths->size,
-        size,
-        timestamp,
-        display_name);
+    printf("%s %*" PRIuMAX, mode, (int)widths->nlink, (uintmax_t)st.st_nlink);
+
+    if (options->show_owner) {
+        printf(" %-*s", (int)widths->user, user_name);
+    }
+    if (options->show_group) {
+        printf(" %-*s", (int)widths->group, group_name);
+    }
+    if (options->show_author) {
+        printf(" %-*s", (int)widths->author, author_name);
+    }
+
+    printf(" %*s %s %s", (int)widths->size, size, timestamp, display_name);
 
     if (symlink_display != NULL) {
         printf(" -> %s", symlink_display);
@@ -1760,6 +2277,9 @@ static void bx_ls_print_entries(const struct bx_ls_entry_list* entries, const st
     switch (options->format) {
         case BX_LS_FORMAT_LONG:
             bx_ls_print_entries_long(entries, options, diag, print_total);
+            break;
+        case BX_LS_FORMAT_COMMAS:
+            bx_ls_print_entries_commas(entries, options, diag);
             break;
         case BX_LS_FORMAT_COLUMNS:
             bx_ls_print_entries_columns(entries, options, diag);
@@ -1881,16 +2401,20 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
     int first_operand = 0;
 
     if (!bx_ls_parse_options(argc, argv, variant, &options, &first_operand, &diag)) {
-        return diag.exit_status != 0 ? diag.exit_status : 1;
+        int status = diag.exit_status != 0 ? diag.exit_status : 1;
+        bx_ls_options_free(&options);
+        return status;
     }
 
     if (options.show_help) {
         bx_ls_print_help(stdout, &options);
+        bx_ls_options_free(&options);
         return 0;
     }
 
     if (options.show_version) {
         bx_cli_print_version(options.progname);
+        bx_ls_options_free(&options);
         return 0;
     }
 
@@ -1900,7 +2424,9 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 
-    return diag.exit_status;
+    int status = diag.exit_status;
+    bx_ls_options_free(&options);
+    return status;
 }
 
 int bx_ls_main(int argc, char** argv) {
