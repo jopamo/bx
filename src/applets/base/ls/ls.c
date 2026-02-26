@@ -44,6 +44,9 @@ enum bx_ls_sort_mode {
     BX_LS_SORT_NAME = 0,
     BX_LS_SORT_TIME,
     BX_LS_SORT_SIZE,
+    BX_LS_SORT_EXTENSION,
+    BX_LS_SORT_VERSION,
+    BX_LS_SORT_WIDTH,
 };
 
 enum bx_ls_indicator_style {
@@ -67,6 +70,18 @@ enum bx_ls_time_style {
     BX_LS_TIME_STYLE_ISO,
     BX_LS_TIME_STYLE_LOCALE,
     BX_LS_TIME_STYLE_CUSTOM,
+};
+
+enum bx_ls_quoting_style {
+    BX_LS_QUOTING_DEFAULT = 0,
+    BX_LS_QUOTING_LITERAL,
+    BX_LS_QUOTING_LOCALE,
+    BX_LS_QUOTING_SHELL,
+    BX_LS_QUOTING_SHELL_ALWAYS,
+    BX_LS_QUOTING_SHELL_ESCAPE,
+    BX_LS_QUOTING_SHELL_ESCAPE_ALWAYS,
+    BX_LS_QUOTING_C,
+    BX_LS_QUOTING_ESCAPE,
 };
 
 enum bx_ls_option_code {
@@ -98,6 +113,12 @@ enum bx_ls_color_when {
     BX_LS_COLOR_AUTO,
 };
 
+enum bx_ls_hyperlink_when {
+    BX_LS_HYPERLINK_NEVER = 0,
+    BX_LS_HYPERLINK_ALWAYS,
+    BX_LS_HYPERLINK_AUTO,
+};
+
 struct bx_ls_pattern_list {
     char** items;
     size_t len;
@@ -117,14 +138,18 @@ struct bx_ls_options {
     bool dereference_all;
     bool dereference_command_line;
     bool dereference_command_line_symlink_to_dir;
+    bool dired;
     bool show_owner;
     bool show_group;
     bool show_author;
     bool show_inode;
+    bool show_size_blocks;
+    bool show_context;
     bool numeric_ids;
     bool human_readable;
     bool si_units;
     bool escape_names;
+    bool hide_control_chars;
     bool sort_entries;
     bool reverse_sort;
     enum bx_ls_sort_mode sort_mode;
@@ -134,10 +159,15 @@ struct bx_ls_options {
     bool width_set;
     size_t output_width;
     size_t tabsize;
+    bool block_size_set;
+    uintmax_t block_size_divisor;
+    char block_size_suffix[8];
     enum bx_ls_color_when color_when;
+    enum bx_ls_hyperlink_when hyperlink_when;
     enum bx_ls_indicator_style indicator_style;
     enum bx_ls_time_kind time_kind;
     enum bx_ls_time_style time_style;
+    enum bx_ls_quoting_style quoting_style;
     char* custom_time_style;
     struct bx_ls_pattern_list ignore_patterns;
     struct bx_ls_pattern_list hide_patterns;
@@ -165,10 +195,12 @@ struct bx_ls_path_list {
 
 struct bx_ls_long_widths {
     size_t inode;
+    size_t blocks;
     size_t nlink;
     size_t user;
     size_t group;
     size_t author;
+    size_t context;
     size_t size;
 };
 
@@ -387,14 +419,20 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->sort_entries = true;
     options->sort_mode = BX_LS_SORT_NAME;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
+    options->hide_control_chars = false;
     options->color_when = BX_LS_COLOR_NEVER;
     options->indicator_style = BX_LS_INDICATOR_NONE;
     options->time_kind = BX_LS_TIME_MTIME;
     options->time_style = BX_LS_TIME_STYLE_DEFAULT;
+    options->quoting_style = BX_LS_QUOTING_DEFAULT;
     options->zero_terminated = false;
     options->width_set = false;
     options->output_width = 0u;
     options->tabsize = 8u;
+    options->block_size_set = false;
+    options->block_size_divisor = 1u;
+    options->block_size_suffix[0] = '\0';
+    options->hyperlink_when = BX_LS_HYPERLINK_NEVER;
 }
 
 static void bx_ls_options_free(struct bx_ls_options* options) {
@@ -493,7 +531,25 @@ static bool bx_ls_parse_sort_option(const char* text, struct bx_ls_options* opti
         return true;
     }
 
-    if (strcmp(text, "version") == 0 || strcmp(text, "extension") == 0 || strcmp(text, "width") == 0) {
+    if (strcmp(text, "version") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_VERSION;
+        return true;
+    }
+
+    if (strcmp(text, "extension") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_EXTENSION;
+        return true;
+    }
+
+    if (strcmp(text, "width") == 0) {
+        options->sort_entries = true;
+        options->sort_mode = BX_LS_SORT_WIDTH;
+        return true;
+    }
+
+    if (strcmp(text, "name") == 0) {
         options->sort_entries = true;
         options->sort_mode = BX_LS_SORT_NAME;
         return true;
@@ -519,6 +575,79 @@ static bool bx_ls_parse_width_option(const char* text, struct bx_ls_options* opt
 
     options->width_set = true;
     options->output_width = (size_t)parsed;
+    return true;
+}
+
+static bool bx_ls_parse_hyperlink_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    const char* when = (text == NULL) ? "always" : text;
+
+    if (strcmp(when, "always") == 0) {
+        options->hyperlink_when = BX_LS_HYPERLINK_ALWAYS;
+        return true;
+    }
+    if (strcmp(when, "auto") == 0) {
+        options->hyperlink_when = BX_LS_HYPERLINK_AUTO;
+        return true;
+    }
+    if (strcmp(when, "never") == 0) {
+        options->hyperlink_when = BX_LS_HYPERLINK_NEVER;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--hyperlink'", when);
+    return false;
+}
+
+static bool bx_ls_parse_block_size_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--block-size' requires an argument");
+        return false;
+    }
+
+    char* end = NULL;
+    errno = 0;
+    unsigned long numeric = strtoul(text, &end, 10);
+    if (errno != 0 || end == text) {
+        bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
+        return false;
+    }
+
+    uintmax_t multiplier = 1u;
+    const char* suffix = "";
+    if (*end != '\0') {
+        char unit = end[0];
+        bool decimal = false;
+        if (end[1] == 'B' && end[2] == '\0') {
+            decimal = true;
+        }
+        else if (!(end[1] == '\0')) {
+            bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
+            return false;
+        }
+
+        const char* units = "KMGTPEZYRQ";
+        const char* pos = strchr(units, unit);
+        if (pos == NULL) {
+            bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
+            return false;
+        }
+
+        unsigned index = (unsigned)(pos - units) + 1u;
+        multiplier = 1u;
+        for (unsigned i = 0; i < index; i++) {
+            multiplier *= decimal ? 1000u : 1024u;
+        }
+        suffix = decimal ? end : end;
+    }
+
+    if (numeric == 0ul) {
+        bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
+        return false;
+    }
+
+    options->block_size_set = true;
+    options->block_size_divisor = (uintmax_t)numeric * multiplier;
+    (void)snprintf(options->block_size_suffix, sizeof(options->block_size_suffix), "%s", suffix);
     return true;
 }
 
@@ -660,6 +789,49 @@ static bool bx_ls_parse_time_style_option(const char* text, struct bx_ls_options
     return false;
 }
 
+static bool bx_ls_parse_quoting_style_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+    if (text == NULL) {
+        bx_diag(diag, "option '--quoting-style' requires an argument");
+        return false;
+    }
+
+    if (strcmp(text, "literal") == 0) {
+        options->quoting_style = BX_LS_QUOTING_LITERAL;
+        return true;
+    }
+    if (strcmp(text, "locale") == 0) {
+        options->quoting_style = BX_LS_QUOTING_LOCALE;
+        return true;
+    }
+    if (strcmp(text, "shell") == 0) {
+        options->quoting_style = BX_LS_QUOTING_SHELL;
+        return true;
+    }
+    if (strcmp(text, "shell-always") == 0) {
+        options->quoting_style = BX_LS_QUOTING_SHELL_ALWAYS;
+        return true;
+    }
+    if (strcmp(text, "shell-escape") == 0) {
+        options->quoting_style = BX_LS_QUOTING_SHELL_ESCAPE;
+        return true;
+    }
+    if (strcmp(text, "shell-escape-always") == 0) {
+        options->quoting_style = BX_LS_QUOTING_SHELL_ESCAPE_ALWAYS;
+        return true;
+    }
+    if (strcmp(text, "c") == 0) {
+        options->quoting_style = BX_LS_QUOTING_C;
+        return true;
+    }
+    if (strcmp(text, "escape") == 0) {
+        options->quoting_style = BX_LS_QUOTING_ESCAPE;
+        return true;
+    }
+
+    bx_diag(diag, "invalid argument '%s' for '--quoting-style'", text);
+    return false;
+}
+
 static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant variant, struct bx_ls_options* options, int* first_operand, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"all", no_argument, NULL, 'a'},
@@ -741,6 +913,8 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->columns_layout = BX_LS_COLUMNS_VERTICAL;
                 break;
             case 'D':
+                options->dired = true;
+                bx_ls_set_format(options, BX_LS_FORMAT_LONG);
                 break;
             case 'G':
                 options->show_group = false;
@@ -756,8 +930,10 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->dereference_command_line = true;
                 break;
             case 'N':
+                options->quoting_style = BX_LS_QUOTING_LITERAL;
                 break;
             case 'Q':
+                options->quoting_style = BX_LS_QUOTING_C;
                 break;
             case 'S':
                 options->sort_entries = true;
@@ -771,10 +947,11 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 break;
             case 'X':
                 options->sort_entries = true;
-                options->sort_mode = BX_LS_SORT_NAME;
+                options->sort_mode = BX_LS_SORT_EXTENSION;
                 explicit_sort_order = ++option_order;
                 break;
             case 'Z':
+                options->show_context = true;
                 break;
             case 'U':
                 options->sort_entries = false;
@@ -785,7 +962,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->almost_all = false;
                 break;
             case 'b':
-                options->escape_names = true;
+                options->quoting_style = BX_LS_QUOTING_ESCAPE;
                 break;
             case 'c':
                 options->time_kind = BX_LS_TIME_CTIME;
@@ -835,6 +1012,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->indicator_style = BX_LS_INDICATOR_SLASH;
                 break;
             case 'q':
+                options->hide_control_chars = true;
                 break;
             case 'r':
                 options->reverse_sort = true;
@@ -843,6 +1021,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->recursive = true;
                 break;
             case 's':
+                options->show_size_blocks = true;
                 break;
             case 't':
                 options->sort_entries = true;
@@ -855,7 +1034,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 break;
             case 'v':
                 options->sort_entries = true;
-                options->sort_mode = BX_LS_SORT_NAME;
+                options->sort_mode = BX_LS_SORT_VERSION;
                 explicit_sort_order = ++option_order;
                 break;
             case 'w':
@@ -891,6 +1070,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->show_author = true;
                 break;
             case BX_LS_OPT_BLOCK_SIZE:
+                if (!bx_ls_parse_block_size_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_FULL_TIME:
                 bx_ls_set_format(options, BX_LS_FORMAT_LONG);
@@ -905,6 +1087,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 bx_ls_pattern_list_append(&options->hide_patterns, optarg);
                 break;
             case BX_LS_OPT_HYPERLINK:
+                if (!bx_ls_parse_hyperlink_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_INDICATOR_STYLE:
                 if (!bx_ls_parse_indicator_style_option(optarg, options, diag)) {
@@ -915,8 +1100,12 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->indicator_style = BX_LS_INDICATOR_FILE_TYPE;
                 break;
             case BX_LS_OPT_SHOW_CONTROL_CHARS:
+                options->hide_control_chars = false;
                 break;
             case BX_LS_OPT_QUOTING_STYLE:
+                if (!bx_ls_parse_quoting_style_option(optarg, options, diag)) {
+                    return false;
+                }
                 break;
             case BX_LS_OPT_SORT:
                 if (!bx_ls_parse_sort_option(optarg, options, diag)) {
@@ -1043,6 +1232,48 @@ static int bx_ls_compare_intmax(intmax_t lhs, intmax_t rhs) {
     return 0;
 }
 
+static const char* bx_ls_name_extension(const char* name, bool* has_extension) {
+    const char* last_dot = strrchr(name, '.');
+    if (last_dot == NULL || last_dot == name) {
+        *has_extension = false;
+        return "";
+    }
+
+    *has_extension = true;
+    return last_dot + 1u;
+}
+
+static int bx_ls_compare_names_by_extension(const char* lhs, const char* rhs) {
+    bool lhs_has_extension = false;
+    bool rhs_has_extension = false;
+    const char* lhs_ext = bx_ls_name_extension(lhs, &lhs_has_extension);
+    const char* rhs_ext = bx_ls_name_extension(rhs, &rhs_has_extension);
+
+    if (lhs_has_extension != rhs_has_extension) {
+        return lhs_has_extension ? 1 : -1;
+    }
+
+    if (lhs_has_extension && rhs_has_extension) {
+        int cmp = strcmp(lhs_ext, rhs_ext);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+
+    return strcmp(lhs, rhs);
+}
+
+static int bx_ls_compare_names_by_width(const char* lhs, const char* rhs) {
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    int cmp = bx_ls_compare_intmax((intmax_t)lhs_len, (intmax_t)rhs_len);
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    return strcmp(lhs, rhs);
+}
+
 static int bx_ls_entry_compare(const void* lhs, const void* rhs) {
     const struct bx_ls_entry* a = (const struct bx_ls_entry*)lhs;
     const struct bx_ls_entry* b = (const struct bx_ls_entry*)rhs;
@@ -1081,6 +1312,15 @@ static int bx_ls_entry_compare(const void* lhs, const void* rhs) {
             cmp = a->has_stat ? -1 : 1;
         }
     }
+    else if (sort_mode == BX_LS_SORT_EXTENSION) {
+        cmp = bx_ls_compare_names_by_extension(a->name, b->name);
+    }
+    else if (sort_mode == BX_LS_SORT_VERSION) {
+        cmp = strverscmp(a->name, b->name);
+    }
+    else if (sort_mode == BX_LS_SORT_WIDTH) {
+        cmp = bx_ls_compare_names_by_width(a->name, b->name);
+    }
 
     if (cmp == 0) {
         cmp = strcmp(a->name, b->name);
@@ -1093,7 +1333,24 @@ static int bx_ls_path_compare(const void* lhs, const void* rhs) {
     const char* const* a = (const char* const*)lhs;
     const char* const* b = (const char* const*)rhs;
 
-    int cmp = strcmp(*a, *b);
+    enum bx_ls_sort_mode sort_mode = BX_LS_SORT_NAME;
+    if (bx_ls_sort_options != NULL) {
+        sort_mode = bx_ls_sort_options->sort_mode;
+    }
+
+    int cmp = 0;
+    if (sort_mode == BX_LS_SORT_EXTENSION) {
+        cmp = bx_ls_compare_names_by_extension(*a, *b);
+    }
+    else if (sort_mode == BX_LS_SORT_VERSION) {
+        cmp = strverscmp(*a, *b);
+    }
+    else if (sort_mode == BX_LS_SORT_WIDTH) {
+        cmp = bx_ls_compare_names_by_width(*a, *b);
+    }
+    else {
+        cmp = strcmp(*a, *b);
+    }
     if (bx_ls_sort_options != NULL && bx_ls_sort_options->reverse_sort) {
         cmp = -cmp;
     }
@@ -1472,63 +1729,286 @@ static size_t bx_ls_escape_append_octal(char* out, size_t out_pos, unsigned char
     return out_pos;
 }
 
-static char* bx_ls_escape_name(const char* name, bool escape_names) {
-    if (!escape_names) {
-        return xstrdup(name);
+static bool bx_ls_is_nongraphic(unsigned char ch) {
+    return isprint(ch) == 0;
+}
+
+static enum bx_ls_quoting_style bx_ls_effective_quoting_style(const struct bx_ls_options* options) {
+    if (options->quoting_style != BX_LS_QUOTING_DEFAULT) {
+        return options->quoting_style;
     }
 
+    return options->escape_names ? BX_LS_QUOTING_ESCAPE : BX_LS_QUOTING_LITERAL;
+}
+
+static size_t bx_ls_append_escape_char(
+    char* out,
+    size_t out_pos,
+    unsigned char ch,
+    bool escape_space,
+    bool escape_double_quote,
+    bool escape_single_quote) {
+    switch (ch) {
+        case ' ':
+            if (escape_space) {
+                out[out_pos++] = '\\';
+            }
+            out[out_pos++] = ' ';
+            break;
+        case '\\':
+            out[out_pos++] = '\\';
+            out[out_pos++] = '\\';
+            break;
+        case '"':
+            if (escape_double_quote) {
+                out[out_pos++] = '\\';
+            }
+            out[out_pos++] = '"';
+            break;
+        case '\'':
+            if (escape_single_quote) {
+                out[out_pos++] = '\\';
+            }
+            out[out_pos++] = '\'';
+            break;
+        case '\a':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'a';
+            break;
+        case '\b':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'b';
+            break;
+        case '\f':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'f';
+            break;
+        case '\n':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'n';
+            break;
+        case '\r':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'r';
+            break;
+        case '\t':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 't';
+            break;
+        case '\v':
+            out[out_pos++] = '\\';
+            out[out_pos++] = 'v';
+            break;
+        default:
+            if (!bx_ls_is_nongraphic(ch)) {
+                out[out_pos++] = (char)ch;
+            }
+            else {
+                out_pos = bx_ls_escape_append_octal(out, out_pos, ch);
+            }
+            break;
+    }
+
+    return out_pos;
+}
+
+static char* bx_ls_render_literal_name(const char* name, bool hide_control_chars) {
     size_t len = strlen(name);
-    char* out = xmalloc((len * 4u) + 1u);
+    char* out = xmalloc(len + 1u);
     size_t out_pos = 0;
 
     for (size_t i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)name[i];
-        switch (ch) {
-            case '\\':
-                out[out_pos++] = '\\';
-                out[out_pos++] = '\\';
-                break;
-            case '\a':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'a';
-                break;
-            case '\b':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'b';
-                break;
-            case '\f':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'f';
-                break;
-            case '\n':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'n';
-                break;
-            case '\r':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'r';
-                break;
-            case '\t':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 't';
-                break;
-            case '\v':
-                out[out_pos++] = '\\';
-                out[out_pos++] = 'v';
-                break;
-            default:
-                if (isprint(ch)) {
-                    out[out_pos++] = (char)ch;
-                }
-                else {
-                    out_pos = bx_ls_escape_append_octal(out, out_pos, ch);
-                }
-                break;
+        if (hide_control_chars && bx_ls_is_nongraphic(ch)) {
+            out[out_pos++] = '?';
+        }
+        else {
+            out[out_pos++] = (char)ch;
         }
     }
 
     out[out_pos] = '\0';
     return out;
+}
+
+static char* bx_ls_render_escape_style_name(const char* name) {
+    size_t len = strlen(name);
+    char* out = xmalloc((len * 4u) + 1u);
+    size_t out_pos = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], true, false, false);
+    }
+
+    out[out_pos] = '\0';
+    return out;
+}
+
+static char* bx_ls_render_c_style_name(const char* name) {
+    size_t len = strlen(name);
+    char* out = xmalloc((len * 4u) + 3u);
+    size_t out_pos = 0;
+    out[out_pos++] = '"';
+
+    for (size_t i = 0; i < len; i++) {
+        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], false, true, false);
+    }
+
+    out[out_pos++] = '"';
+    out[out_pos] = '\0';
+    return out;
+}
+
+static char* bx_ls_render_locale_name(const char* name) {
+    size_t len = strlen(name);
+    char* out = xmalloc((len * 4u) + 3u);
+    size_t out_pos = 0;
+    out[out_pos++] = '\'';
+
+    for (size_t i = 0; i < len; i++) {
+        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], false, false, true);
+    }
+
+    out[out_pos++] = '\'';
+    out[out_pos] = '\0';
+    return out;
+}
+
+static bool bx_ls_shell_char_is_safe(unsigned char ch) {
+    return isalnum(ch) != 0
+        || ch == '-'
+        || ch == '_'
+        || ch == '.'
+        || ch == '/'
+        || ch == '~';
+}
+
+static bool bx_ls_name_has_nongraphic(const char* name) {
+    for (size_t i = 0; name[i] != '\0'; i++) {
+        if (bx_ls_is_nongraphic((unsigned char)name[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static size_t bx_ls_append_shell_double_quoted_segment(char* out, size_t out_pos, const char* text, size_t len) {
+    out[out_pos++] = '"';
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)text[i];
+        if (ch == '"' || ch == '\\' || ch == '$' || ch == '`') {
+            out[out_pos++] = '\\';
+        }
+        out[out_pos++] = (char)ch;
+    }
+    out[out_pos++] = '"';
+    return out_pos;
+}
+
+static size_t bx_ls_append_shell_single_quoted_segment(char* out, size_t out_pos, const char* text, size_t len) {
+    out[out_pos++] = '\'';
+    memcpy(out + out_pos, text, len);
+    out_pos += len;
+    out[out_pos++] = '\'';
+    return out_pos;
+}
+
+static size_t bx_ls_append_shell_quoted_segment(char* out, size_t out_pos, const char* text, size_t len, bool always_quote) {
+    bool needs_quotes = always_quote;
+    if (!needs_quotes) {
+        for (size_t i = 0; i < len; i++) {
+            if (!bx_ls_shell_char_is_safe((unsigned char)text[i])) {
+                needs_quotes = true;
+                break;
+            }
+        }
+    }
+
+    if (!needs_quotes) {
+        memcpy(out + out_pos, text, len);
+        out_pos += len;
+        return out_pos;
+    }
+
+    if (memchr(text, '\'', len) == NULL) {
+        return bx_ls_append_shell_single_quoted_segment(out, out_pos, text, len);
+    }
+
+    return bx_ls_append_shell_double_quoted_segment(out, out_pos, text, len);
+}
+
+static char* bx_ls_render_shell_style_name(const char* name, bool always_quote) {
+    size_t len = strlen(name);
+    char* out = xmalloc((len * 4u) + 3u);
+    size_t out_pos = 0;
+
+    out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name, len, always_quote);
+    out[out_pos] = '\0';
+    return out;
+}
+
+static size_t bx_ls_append_shell_escape_fragment(char* out, size_t out_pos, unsigned char ch) {
+    memcpy(out + out_pos, "$'", 2u);
+    out_pos += 2u;
+    out_pos = bx_ls_append_escape_char(out, out_pos, ch, false, false, false);
+    out[out_pos++] = '\'';
+    return out_pos;
+}
+
+static char* bx_ls_render_shell_escape_style_name(const char* name, bool always_quote) {
+    if (!bx_ls_name_has_nongraphic(name)) {
+        return bx_ls_render_shell_style_name(name, always_quote);
+    }
+
+    size_t len = strlen(name);
+    char* out = xmalloc((len * 8u) + 8u);
+    size_t out_pos = 0;
+    size_t segment_start = 0u;
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)name[i];
+        if (!bx_ls_is_nongraphic(ch)) {
+            continue;
+        }
+
+        if (i > segment_start) {
+            out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name + segment_start, i - segment_start, true);
+        }
+        out_pos = bx_ls_append_shell_escape_fragment(out, out_pos, ch);
+        segment_start = i + 1u;
+    }
+
+    if (segment_start < len) {
+        out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name + segment_start, len - segment_start, true);
+    }
+
+    out[out_pos] = '\0';
+    return out;
+}
+
+static char* bx_ls_render_name(const char* name, const struct bx_ls_options* options) {
+    switch (bx_ls_effective_quoting_style(options)) {
+        case BX_LS_QUOTING_LITERAL:
+            return bx_ls_render_literal_name(name, options->hide_control_chars);
+        case BX_LS_QUOTING_LOCALE:
+            return bx_ls_render_locale_name(name);
+        case BX_LS_QUOTING_SHELL:
+            return bx_ls_render_shell_style_name(name, false);
+        case BX_LS_QUOTING_SHELL_ALWAYS:
+            return bx_ls_render_shell_style_name(name, true);
+        case BX_LS_QUOTING_SHELL_ESCAPE:
+            return bx_ls_render_shell_escape_style_name(name, false);
+        case BX_LS_QUOTING_SHELL_ESCAPE_ALWAYS:
+            return bx_ls_render_shell_escape_style_name(name, true);
+        case BX_LS_QUOTING_C:
+            return bx_ls_render_c_style_name(name);
+        case BX_LS_QUOTING_ESCAPE:
+            return bx_ls_render_escape_style_name(name);
+        case BX_LS_QUOTING_DEFAULT:
+        default:
+            return bx_ls_render_literal_name(name, options->hide_control_chars);
+    }
 }
 
 static char bx_ls_indicator_char(mode_t mode, const struct bx_ls_options* options) {
@@ -1823,25 +2303,37 @@ static char* bx_ls_colorize_name(const char* text, const struct bx_ls_entry* ent
     return output;
 }
 
-static void bx_ls_format_size(intmax_t size, const struct bx_ls_options* options, char buffer[32]) {
-    if (!options->human_readable) {
-        (void)snprintf(buffer, 32u, "%" PRIdMAX, size);
+static uintmax_t bx_ls_ceil_div_uintmax(uintmax_t value, uintmax_t divisor) {
+    if (divisor == 0u) {
+        return value;
+    }
+    return (value + divisor - 1u) / divisor;
+}
+
+static uintmax_t bx_ls_allocated_bytes(const struct stat* st) {
+    if (st->st_blocks <= 0) {
+        return 0u;
+    }
+    return (uintmax_t)st->st_blocks * 512u;
+}
+
+static void bx_ls_format_human_bytes(uintmax_t size, bool si_units, char buffer[32]) {
+    if (!si_units && size < 1024u) {
+        (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
+        return;
+    }
+    if (si_units && size < 1000u) {
+        (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
         return;
     }
 
     static const char* units_1024[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
     static const char* units_1000[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
-    const char* const* units = options->si_units ? units_1000 : units_1024;
-    const double base = options->si_units ? 1000.0 : 1024.0;
+    const char* const* units = si_units ? units_1000 : units_1024;
+    const double base = si_units ? 1000.0 : 1024.0;
     const size_t max_unit = (sizeof(units_1024) / sizeof(units_1024[0])) - 1u;
 
-    bool negative = size < 0;
-    uintmax_t magnitude = (uintmax_t)size;
-    if (negative) {
-        magnitude = (uintmax_t)(-(size + 1)) + 1u;
-    }
-
-    double value = (double)magnitude;
+    double value = (double)size;
     size_t unit = 0;
 
     while (value >= base && unit < max_unit) {
@@ -1849,18 +2341,45 @@ static void bx_ls_format_size(intmax_t size, const struct bx_ls_options* options
         unit++;
     }
 
-    if (unit == 0u) {
-        (void)snprintf(buffer, 32u, "%" PRIdMAX, size);
+    if (value < 10.0) {
+        (void)snprintf(buffer, 32u, "%.1f%s", value, units[unit]);
+    }
+    else {
+        (void)snprintf(buffer, 32u, "%.0f%s", value, units[unit]);
+    }
+}
+
+static void bx_ls_format_scaled_exact_or_human(uintmax_t size, const struct bx_ls_options* options, char buffer[32]) {
+    if (options->block_size_set) {
+        uintmax_t scaled = bx_ls_ceil_div_uintmax(size, options->block_size_divisor);
+        (void)snprintf(buffer, 32u, "%" PRIuMAX "%s", scaled, options->block_size_suffix);
         return;
     }
 
-    const char* sign = negative ? "-" : "";
-    if (value < 10.0) {
-        (void)snprintf(buffer, 32u, "%s%.1f%s", sign, value, units[unit]);
+    if (options->human_readable) {
+        bx_ls_format_human_bytes(size, options->si_units, buffer);
+        return;
     }
-    else {
-        (void)snprintf(buffer, 32u, "%s%.0f%s", sign, value, units[unit]);
+
+    (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
+}
+
+static void bx_ls_format_file_size(uintmax_t size, const struct bx_ls_options* options, char buffer[32]) {
+    if (!options->block_size_set && !options->human_readable) {
+        (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
+        return;
     }
+
+    bx_ls_format_scaled_exact_or_human(size, options, buffer);
+}
+
+static void bx_ls_format_block_count(uintmax_t allocated_bytes, const struct bx_ls_options* options, char buffer[32]) {
+    if (options->block_size_set || options->human_readable) {
+        bx_ls_format_scaled_exact_or_human(allocated_bytes, options, buffer);
+        return;
+    }
+
+    (void)snprintf(buffer, 32u, "%" PRIuMAX, bx_ls_ceil_div_uintmax(allocated_bytes, 1024u));
 }
 
 static char* bx_ls_append_indicator(char* name, char indicator) {
@@ -1989,7 +2508,7 @@ static bool bx_ls_build_short_cell(const struct bx_ls_entry* entry, const struct
     struct stat st;
     bool have_stat = bx_ls_entry_stat(entry, &st, diag, options->show_inode);
 
-    char* name = bx_ls_escape_name(entry->name, options->escape_names);
+    char* name = bx_ls_render_name(entry->name, options);
     if (have_stat) {
         name = bx_ls_append_indicator(name, bx_ls_indicator_char(st.st_mode, options));
         char* colored_name = bx_ls_colorize_name(name, entry, &st, options);
@@ -2352,7 +2871,7 @@ static void bx_ls_print_long_entry(
     char size[32];
     bx_ls_format_size((intmax_t)st.st_size, options, size);
 
-    char* display_name = bx_ls_escape_name(entry->name, options->escape_names);
+    char* display_name = bx_ls_render_name(entry->name, options);
     display_name = bx_ls_append_indicator(display_name, bx_ls_indicator_char(st.st_mode, options));
     char* colored_name = bx_ls_colorize_name(display_name, entry, &st, options);
     free(display_name);
@@ -2365,7 +2884,7 @@ static void bx_ls_print_long_entry(
             bx_ls_perror_path(diag, entry->full_path, 1);
         }
         else {
-            symlink_display = bx_ls_escape_name(symlink_target, options->escape_names);
+            symlink_display = bx_ls_render_name(symlink_target, options);
             free(symlink_target);
         }
     }
