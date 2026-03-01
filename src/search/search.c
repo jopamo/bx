@@ -21,6 +21,8 @@
 #include "lib/work_pool.h"
 #include "search.h"
 #include "options.h"
+#include "rg_parallel.h"
+#include "search_internal.h"
 #include "fswalk/walk.h"
 #include "filter.h"
 #include "ignore.h"
@@ -42,10 +44,14 @@ static bool progname_uses_os_error_style(const char *progname) {
     return strcmp(progname, "rg") == 0;
 }
 
+bool bx_search_progname_uses_os_error_style(const char *progname) {
+    return progname_uses_os_error_style(progname);
+}
+
 static FILE *bx_search_output_stream(void);
 static FILE *bx_search_error_stream(void);
 
-static bool bx_search_path_exceeds_max_filesize(const char *path,
+bool bx_search_path_exceeds_max_filesize(const char *path,
                                                 const struct search_opts *opts) {
     if (!path || !opts || !opts->max_filesize_set)
         return false;
@@ -56,7 +62,7 @@ static bool bx_search_path_exceeds_max_filesize(const char *path,
     return S_ISREG(st.st_mode) && st.st_size > (off_t)opts->max_filesize;
 }
 
-static bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
+bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
                                                  const struct search_opts *opts) {
     if (!entry || !opts || !opts->max_filesize_set || entry->is_dir)
         return false;
@@ -124,13 +130,13 @@ static bool bx_search_mode_is_special_input(mode_t mode) {
     return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode);
 }
 
-static bool bx_search_should_skip_special_input_mode(mode_t mode,
+bool bx_search_should_skip_special_input_mode(mode_t mode,
                                                      const struct search_opts *opts) {
     return opts && opts->device_mode == BX_GREP_DEVICE_SKIP
         && bx_search_mode_is_special_input(mode);
 }
 
-static bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
+bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
                                                       const struct search_opts *opts) {
     if (!entry || !opts || opts->device_mode != BX_GREP_DEVICE_SKIP)
         return false;
@@ -147,6 +153,12 @@ static char *display_path_for_output(const char *path, bool strip_dot_prefix,
                                   opts ? opts->path_separator : '/');
 }
 
+char *bx_search_display_path_for_output(const char *path,
+                                        bool strip_dot_prefix,
+                                        const struct search_opts *opts) {
+    return display_path_for_output(path, strip_dot_prefix, opts);
+}
+
 static const char *display_name_for_stream(const char *filename, const char *display_name_override,
                                            struct search_opts *opts) {
     if (display_name_override)
@@ -158,33 +170,15 @@ static const char *display_name_for_stream(const char *filename, const char *dis
 
 struct bx_matcher;
 
-struct bx_search_stats {
-    int matches;
-    int matched_lines;
-    int files_with_matches;
-    int files_searched;
-    size_t bytes_printed;
-    size_t bytes_searched;
-};
-
-struct bx_search_output_ctx {
-    FILE *out;
-    FILE *err;
-    struct bx_search_stats *stats;
-    bool heading_output_started;
-    bool used_heading;
-    bool emitted_stdout;
-};
-
 static _Thread_local struct bx_search_output_ctx *current_output_ctx = NULL;
 
-static struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx) {
+struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx) {
     struct bx_search_output_ctx *previous = current_output_ctx;
     current_output_ctx = ctx;
     return previous;
 }
 
-static void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
+void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
     current_output_ctx = previous;
 }
 
@@ -252,6 +246,14 @@ static int search_file_streaming_opened(FILE *f,
                                         int *match_count,
                                         struct bx_record_stream *record_stream,
                                         struct bx_search_stats *stats);
+static int search_transformed_buffer(unsigned char *buf, size_t len,
+                                     const char *display_name,
+                                     const char *progname,
+                                     struct bx_matcher *m,
+                                     struct search_opts *opts,
+                                     int *match_count,
+                                     struct bx_record_stream *record_stream,
+                                     struct bx_search_stats *stats);
 static ssize_t read_record(FILE *f, struct bx_record_stream *stream, struct search_opts *opts);
 static char record_delimiter(const struct search_opts *opts);
 static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts);
@@ -502,6 +504,10 @@ static void matcher_free(struct bx_matcher *m) {
     free(m);
 }
 
+void bx_search_matcher_free(struct bx_matcher *m) {
+    matcher_free(m);
+}
+
 static struct bx_matcher *compile_matcher(const char *pattern,
                                           enum bx_search_personality personality,
                                           struct search_opts *opts,
@@ -594,6 +600,13 @@ static struct bx_matcher *compile_matcher(const char *pattern,
 
     free(wrapped);
     return m;
+}
+
+struct bx_matcher *bx_search_compile_matcher(const char *pattern,
+                                             enum bx_search_personality personality,
+                                             struct search_opts *opts,
+                                             char **errmsg) {
+    return compile_matcher(pattern, personality, opts, errmsg);
 }
 
 static char *build_search_pattern(const char *pattern,
@@ -1210,7 +1223,8 @@ static bool search_default_heading(enum bx_search_personality personality,
     return opts->show_filename;
 }
 
-#define BX_SEARCH_SCANNER_MIN_FILE_SIZE 65536u
+#define BX_SEARCH_SCANNER_MIN_FILE_SIZE 1u
+#define BX_SEARCH_SCANNER_RAW_CHUNK_CAP 65536u
 
 static bool search_file_scanner_stream_is_eligible(FILE *f) {
     if (!f)
@@ -1254,6 +1268,177 @@ static bool search_file_scanner_can_shortcut_file_presence(const struct search_o
     if (opts->count_only)
         return false;
     return (opts->files_with_matches || opts->files_without_match) && !opts->stats;
+}
+
+static bool search_file_scanner_can_raw_shortcut_file_presence(const struct bx_matcher *m,
+                                                               const struct search_opts *opts) {
+    if (!search_file_scanner_can_shortcut_file_presence(opts))
+        return false;
+    if (!m || m->kind != MATCHER_LITERAL)
+        return false;
+    return !opts->line_regexp && !opts->word_regexp;
+}
+
+static bool search_file_needs_early_transform_load(const char *filename,
+                                                   bool use_stdin,
+                                                   const struct search_opts *opts) {
+    if (!opts)
+        return false;
+    if (use_stdin)
+        return bx_rg_transform_maybe_needed(opts, filename, true, fileno(stdin));
+    return bx_rg_transform_needs_file_preload(opts, filename);
+}
+
+static bool search_file_opened_needs_auto_transform(FILE *f,
+                                                    const struct search_opts *opts) {
+    if (!f || !opts)
+        return false;
+    return bx_rg_transform_auto_encoding_needs_fd(opts, fileno(f));
+}
+
+static bool bx_search_scanner_reserve_raw_buffer(struct bx_search_scanner *scanner,
+                                                 size_t needed) {
+    if (!scanner)
+        return false;
+    if (scanner->cap >= needed)
+        return true;
+
+    size_t new_cap = scanner->cap == 0u ? BX_SEARCH_SCANNER_RAW_CHUNK_CAP : scanner->cap;
+    while (new_cap < needed) {
+        if (new_cap > (SIZE_MAX / 2u))
+            return false;
+        new_cap *= 2u;
+    }
+
+    unsigned char *tmp = realloc(scanner->buf, new_cap);
+    if (!tmp)
+        return false;
+    scanner->buf = tmp;
+    scanner->cap = new_cap;
+    return true;
+}
+
+static int search_file_raw_presence_opened(FILE *f,
+                                           bool use_stdin,
+                                           const char *filename,
+                                           const char *display_name,
+                                           const char *progname,
+                                           struct bx_matcher *m,
+                                           struct search_opts *opts,
+                                           int *match_count,
+                                           struct bx_search_scanner *scanner,
+                                           struct bx_record_stream *record_stream,
+                                           struct bx_search_stats *stats) {
+    int status = 1;
+    int file_matches = 0;
+    size_t plen;
+    size_t overlap;
+    size_t carry = 0u;
+    bool counted_file = false;
+    bool first_chunk = true;
+
+    if (!f || !m || !opts || !scanner)
+        return 2;
+
+    plen = bx_literal_len(m->literal);
+    overlap = plen > 0u ? plen - 1u : 0u;
+    scanner->len = 0u;
+    if (!bx_search_scanner_reserve_raw_buffer(scanner,
+                                              BX_SEARCH_SCANNER_RAW_CHUNK_CAP + overlap)) {
+        if (!use_stdin)
+            fclose(f);
+        return 2;
+    }
+
+    for (;;) {
+        if (carry > 0u)
+            memmove(scanner->buf, scanner->buf + scanner->len - carry, carry);
+        scanner->len = carry;
+
+        size_t nread = fread(scanner->buf + carry, 1u, scanner->cap - carry, f);
+        scanner->len += nread;
+        bx_search_dev_counters_note_bytes_read(nread);
+
+        if (first_chunk) {
+            first_chunk = false;
+            if (filename &&
+                bx_rg_transform_auto_encoding_needs_prefix(opts, scanner->buf, scanner->len)) {
+                unsigned char *transformed = NULL;
+                size_t transformed_len = 0u;
+                enum bx_rg_transform_result transform_rc;
+
+                if (!use_stdin)
+                    fclose(f);
+                transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
+                                                            bx_search_error_stream(),
+                                                            &transformed, &transformed_len);
+                if (transform_rc == BX_RG_TRANSFORM_NO_MATCH)
+                    return 1;
+                if (transform_rc == BX_RG_TRANSFORM_ERROR)
+                    return 2;
+                return search_transformed_buffer(transformed, transformed_len, display_name,
+                                                 progname, m, opts, match_count,
+                                                 record_stream, stats);
+            }
+        }
+
+        if (!counted_file) {
+            counted_file = true;
+            if (stats)
+                stats->files_searched++;
+        }
+        if (stats)
+            stats->bytes_searched += nread;
+
+        if (scanner->len > 0u) {
+            struct bx_match bm;
+            if (bx_literal_find(m->literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
+                bx_search_dev_counters_note_candidate_hit();
+                bx_search_dev_counters_note_matcher_invocation();
+                file_matches = 1;
+                if (stats) {
+                    stats->matches++;
+                    stats->matched_lines++;
+                    stats->files_with_matches++;
+                }
+                status = 0;
+                break;
+            }
+        }
+
+        if (nread == 0u) {
+            if (ferror(f)) {
+                report_path_error(progname, display_name, errno ? errno : EIO, opts);
+                status = 2;
+            }
+            break;
+        }
+
+        carry = overlap < scanner->len ? overlap : scanner->len;
+    }
+
+    if (status != 2) {
+        if (opts->files_with_matches && file_matches > 0 && display_name) {
+            if (opts->null_output)
+                bx_search_printf_out("%s%c", display_name, '\0');
+            else
+                bx_search_printf_out("%s\n", display_name);
+            bx_search_dev_counters_note_output_line_emitted();
+        }
+        if (opts->files_without_match && file_matches == 0 && display_name) {
+            if (opts->null_output)
+                bx_search_printf_out("%s%c", display_name, '\0');
+            else
+                bx_search_printf_out("%s\n", display_name);
+            bx_search_dev_counters_note_output_line_emitted();
+        }
+        if (match_count)
+            *match_count += file_matches;
+    }
+
+    if (!use_stdin)
+        fclose(f);
+    return status;
 }
 
 static int search_file_buffered_opened(FILE *f,
@@ -1512,6 +1697,10 @@ static int search_file_scanner_opened(FILE *f,
     int status = 1;
     bool heading_printed_for_file = false;
     bool stop = false;
+
+    if (search_file_scanner_can_raw_shortcut_file_presence(m, opts))
+        return search_file_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
+                                               m, opts, match_count, scanner, NULL, stats);
 
     if (stats)
         stats->files_searched++;
@@ -1988,7 +2177,7 @@ static int search_file(const char *filename, const char *display_name_override, 
         if (owned_display_name)
             display_name = owned_display_name;
     }
-    if (!use_stdin && filename && strcmp(filename, "-") != 0)
+    if (!opts->recursive && !use_stdin && filename && strcmp(filename, "-") != 0)
         operand_st_loaded = stat(filename, &operand_st) == 0;
 
     bx_rg_tracef(opts, "search: %s", display_name ? display_name : "(stdin)");
@@ -2010,8 +2199,7 @@ static int search_file(const char *filename, const char *display_name_override, 
         goto out;
     }
 
-    if (bx_rg_transform_maybe_needed(opts, filename, use_stdin,
-                                     use_stdin ? fileno(stdin) : -1)) {
+    if (search_file_needs_early_transform_load(filename, use_stdin, opts)) {
         unsigned char *transformed = NULL;
         size_t transformed_len = 0u;
         enum bx_rg_transform_result transform_rc =
@@ -2060,6 +2248,36 @@ static int search_file(const char *filename, const char *display_name_override, 
         FILE *f = open_search_input_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
+
+        if (search_file_scanner_can_raw_shortcut_file_presence(m, opts)) {
+            result = search_file_raw_presence_opened(f, false, filename, display_name, progname,
+                                                     m, opts, match_count, scanner,
+                                                     record_stream, stats);
+            goto out;
+        }
+
+        if (search_file_opened_needs_auto_transform(f, opts)) {
+            unsigned char *transformed = NULL;
+            size_t transformed_len = 0u;
+            enum bx_rg_transform_result transform_rc;
+
+            fclose(f);
+            transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
+                                                        bx_search_error_stream(),
+                                                        &transformed, &transformed_len);
+            if (transform_rc == BX_RG_TRANSFORM_NO_MATCH) {
+                result = 1;
+                goto out;
+            }
+            if (transform_rc == BX_RG_TRANSFORM_ERROR) {
+                result = 2;
+                goto out;
+            }
+            result = search_transformed_buffer(transformed, transformed_len, display_name,
+                                               progname, m, opts, match_count,
+                                               record_stream, stats);
+            goto out;
+        }
 
         bool is_binary_file = false;
         if (bx_record_stream_probe_binary_prefix(f, &is_binary_file)) {
@@ -2168,6 +2386,19 @@ out:
     return result;
 }
 
+int bx_search_search_file(const char *filename,
+                          const char *display_name_override,
+                          const char *progname,
+                          struct bx_matcher *m,
+                          struct search_opts *opts,
+                          int *match_count,
+                          struct bx_search_scanner *scanner,
+                          struct bx_record_stream *record_stream,
+                          struct bx_search_stats *stats) {
+    return search_file(filename, display_name_override, progname, m, opts,
+                       match_count, scanner, record_stream, stats);
+}
+
 /* --- binary detection --- */
 
 static bool is_binary(const char *path) {
@@ -2212,480 +2443,6 @@ static bool rg_should_search_stdin(void) {
 
 /* --- recursive search using shared walker --- */
 
-struct grep_walk_state;
-struct bx_search_operand_ref;
-
-static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
-                                                    enum bx_search_personality personality,
-                                                    const struct search_opts *opts,
-                                                    bool *stop);
-static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts);
-static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
-                                                             const struct search_opts *opts);
-static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
-                                         const char *path);
-
-/*
- * Recursive rg parallel search keeps output ordered by path discovery order.
- * Batch multiple files into one worker record so tiny-file trees do not pay
- * one pool job plus one ordered-output record per file.
- */
-#define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES 64u
-#define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES 16384u
-
-struct bx_search_parallel_job_item {
-    char *path;
-    char *display_name;
-};
-
-struct bx_search_parallel_job {
-    uint64_t seq;
-    size_t count;
-    size_t path_bytes;
-    struct bx_search_parallel_job_item items[BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES];
-};
-
-struct bx_search_parallel_record {
-    uint64_t seq;
-    char *stdout_buf;
-    size_t stdout_len;
-    char *stderr_buf;
-    size_t stderr_len;
-    struct bx_search_stats stats;
-    int status;
-    bool match_seen;
-    bool error_seen;
-    bool used_heading;
-};
-
-struct bx_search_parallel_worker {
-    struct bx_matcher *matcher;
-    struct bx_search_scanner scanner;
-    struct bx_record_stream record_stream;
-};
-
-struct bx_search_parallel_state {
-    const char *progname;
-    const char *pattern;
-    enum bx_search_personality personality;
-    struct search_opts *opts;
-    struct bx_cancel_state cancel;
-    struct bx_work_pool *pool;
-    struct bx_output_sink *sink;
-    pthread_mutex_t lock;
-    uint64_t next_seq;
-    int exit_status;
-    bool match_seen;
-    bool error_seen;
-    bool heading_output_started;
-    bool fatal_error;
-    struct bx_search_stats stats;
-    char *fatal_message;
-    struct bx_search_parallel_job *pending_job;
-};
-
-struct bx_search_parallel_walk_state {
-    struct bx_search_parallel_state *parallel;
-    bool strip_dot_prefix;
-};
-
-static void bx_search_parallel_set_fatal(struct bx_search_parallel_state *state,
-                                         const char *message) {
-    if (!state)
-        return;
-
-    pthread_mutex_lock(&state->lock);
-    state->fatal_error = true;
-    if (!state->fatal_message && message)
-        state->fatal_message = strdup(message);
-    pthread_mutex_unlock(&state->lock);
-
-    bx_cancel_state_request(&state->cancel);
-    if (state->pool)
-        bx_work_pool_wake(state->pool);
-    if (state->sink)
-        bx_output_sink_wake(state->sink);
-}
-
-static void bx_search_parallel_free_job(void *user, void *job_ptr) {
-    (void)user;
-    struct bx_search_parallel_job *job = job_ptr;
-
-    if (!job)
-        return;
-    for (size_t i = 0; i < job->count; i++) {
-        free(job->items[i].path);
-        free(job->items[i].display_name);
-    }
-    free(job);
-}
-
-static void bx_search_parallel_dispose_record(void *user, void *record_ptr) {
-    (void)user;
-    struct bx_search_parallel_record *record = record_ptr;
-
-    if (!record)
-        return;
-    free(record->stdout_buf);
-    free(record->stderr_buf);
-    free(record);
-}
-
-static uint64_t bx_search_parallel_record_seq(const void *record_ptr, void *user) {
-    (void)user;
-    return ((const struct bx_search_parallel_record *)record_ptr)->seq;
-}
-
-static void bx_search_parallel_emit_record(void *user, void *record_ptr) {
-    struct bx_search_parallel_state *state = user;
-    struct bx_search_parallel_record *record = record_ptr;
-
-    if (!state || !record)
-        return;
-
-    if (record->used_heading && record->stdout_len > 0u && state->heading_output_started)
-        fputc('\n', stdout);
-    if (record->stdout_len > 0u && record->stdout_buf)
-        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
-    if (record->stderr_len > 0u && record->stderr_buf)
-        fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
-    if (record->used_heading && record->stdout_len > 0u)
-        state->heading_output_started = true;
-
-    state->stats.matches += record->stats.matches;
-    state->stats.matched_lines += record->stats.matched_lines;
-    state->stats.files_with_matches += record->stats.files_with_matches;
-    state->stats.files_searched += record->stats.files_searched;
-    state->stats.bytes_printed += record->stats.bytes_printed;
-    state->stats.bytes_searched += record->stats.bytes_searched;
-
-    if (record->match_seen) {
-        state->match_seen = true;
-        if (state->exit_status != 2)
-            state->exit_status = 0;
-    }
-    if (record->error_seen) {
-        state->error_seen = true;
-        state->exit_status = 2;
-    }
-}
-
-static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *state,
-                                             struct bx_search_parallel_record *record) {
-    if (!state || !record)
-        return false;
-    if (bx_output_sink_submit(state->sink, record))
-        return true;
-
-    bx_search_parallel_set_fatal(state, "rg: failed to submit ordered output record\n");
-    bx_search_parallel_dispose_record(NULL, record);
-    return false;
-}
-
-static void bx_search_parallel_drop_empty_pending_job(struct bx_search_parallel_state *state) {
-    if (!state || !state->pending_job || state->pending_job->count != 0u)
-        return;
-
-    free(state->pending_job);
-    state->pending_job = NULL;
-}
-
-static size_t bx_search_parallel_job_item_cost(const char *path,
-                                               const char *display_name) {
-    size_t total = strlen(path) + 1u;
-    if (display_name)
-        total += strlen(display_name) + 1u;
-    return total;
-}
-
-static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state *state) {
-    struct bx_search_parallel_job *job;
-
-    if (!state || !state->pending_job)
-        return true;
-
-    job = state->pending_job;
-    state->pending_job = NULL;
-    job->seq = state->next_seq++;
-    if (bx_work_pool_submit(state->pool, job))
-        return true;
-
-    bx_search_parallel_free_job(NULL, job);
-    return false;
-}
-
-static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state *state,
-                                                 const char *path,
-                                                 int errnum) {
-    struct bx_search_parallel_record *record = calloc(1u, sizeof(*record));
-    FILE *err_stream = NULL;
-
-    if (!record)
-        return false;
-    if (!bx_search_parallel_flush_pending_job(state)) {
-        bx_search_parallel_dispose_record(NULL, record);
-        return false;
-    }
-    record->seq = state->next_seq;
-    record->status = 2;
-    record->error_seen = true;
-
-    if (state->opts && state->opts->suppress_errors) {
-        if (!bx_search_parallel_submit_record(state, record))
-            return false;
-        state->next_seq++;
-        return true;
-    }
-
-    err_stream = open_memstream(&record->stderr_buf, &record->stderr_len);
-    if (!err_stream) {
-        bx_search_parallel_dispose_record(NULL, record);
-        return false;
-    }
-
-    if (progname_uses_os_error_style(state->progname))
-        fprintf(err_stream, "%s: %s: %s (os error %d)\n",
-                state->progname, path, strerror(errnum), errnum);
-    else
-        fprintf(err_stream, "%s: %s: %s\n",
-                state->progname, path, strerror(errnum));
-    fclose(err_stream);
-
-    if (!bx_search_parallel_submit_record(state, record))
-        return false;
-    state->next_seq++;
-    return true;
-}
-
-static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state,
-                                          const char *path,
-                                          const char *display_name) {
-    struct bx_search_parallel_job *job;
-    struct bx_search_parallel_job_item *item;
-    char *path_copy = NULL;
-    char *display_copy = NULL;
-    size_t item_cost;
-
-    if (!state || !path)
-        return false;
-    if (bx_cancel_state_requested(&state->cancel))
-        return false;
-
-    item_cost = bx_search_parallel_job_item_cost(path, display_name);
-    job = state->pending_job;
-    if (job &&
-        (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
-         (job->count > 0u &&
-          job->path_bytes + item_cost > BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES))) {
-        if (!bx_search_parallel_flush_pending_job(state))
-            return false;
-        job = NULL;
-    }
-
-    if (!job) {
-        job = calloc(1u, sizeof(*job));
-        if (!job)
-            return false;
-        state->pending_job = job;
-    }
-
-    path_copy = strdup(path);
-    if (!path_copy) {
-        bx_search_parallel_drop_empty_pending_job(state);
-        return false;
-    }
-
-    if (display_name) {
-        display_copy = strdup(display_name);
-        if (!display_copy) {
-            free(path_copy);
-            bx_search_parallel_drop_empty_pending_job(state);
-            return false;
-        }
-    }
-
-    item = &job->items[job->count++];
-    item->path = path_copy;
-    item->display_name = display_copy;
-    job->path_bytes += item_cost;
-
-    if (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
-        job->path_bytes >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES)
-        return bx_search_parallel_flush_pending_job(state);
-    return true;
-}
-
-static void *bx_search_parallel_worker_init(void *user, size_t worker_index) {
-    struct bx_search_parallel_state *state = user;
-    struct bx_search_parallel_worker *worker;
-    char *errmsg = NULL;
-
-    (void)worker_index;
-    worker = calloc(1u, sizeof(*worker));
-    if (!worker)
-        return NULL;
-
-    worker->matcher = compile_matcher(state->pattern, state->personality, state->opts, &errmsg);
-    if (!worker->matcher) {
-        if (errmsg) {
-            bx_search_parallel_set_fatal(state, errmsg);
-            free(errmsg);
-        }
-        free(worker);
-        return NULL;
-    }
-
-    return worker;
-}
-
-static void bx_search_parallel_worker_fini(void *user, void *worker_local, size_t worker_index) {
-    (void)user;
-    (void)worker_index;
-    struct bx_search_parallel_worker *worker = worker_local;
-
-    if (!worker)
-        return;
-    matcher_free(worker->matcher);
-    bx_search_scanner_dispose(&worker->scanner);
-    bx_record_stream_dispose(&worker->record_stream);
-    free(worker);
-}
-
-static void bx_search_parallel_process_job(void *user,
-                                           void *worker_local,
-                                           void *job_ptr,
-                                           size_t worker_index) {
-    struct bx_search_parallel_state *state = user;
-    struct bx_search_parallel_worker *worker = worker_local;
-    struct bx_search_parallel_job *job = job_ptr;
-    struct bx_search_parallel_record *record = NULL;
-    struct bx_search_output_ctx output_ctx = {0};
-    struct bx_search_output_ctx *previous_ctx = NULL;
-    FILE *out_stream = NULL;
-    FILE *err_stream = NULL;
-    int match_count = 0;
-
-    (void)worker_index;
-    if (!state || !worker || !job)
-        return;
-
-    record = calloc(1u, sizeof(*record));
-    if (!record) {
-        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output record\n");
-        bx_search_parallel_free_job(NULL, job);
-        return;
-    }
-    record->seq = job->seq;
-
-    if (bx_cancel_state_requested(&state->cancel) && state->opts->quiet) {
-        record->status = 1;
-        bx_search_parallel_submit_record(state, record);
-        bx_search_parallel_free_job(NULL, job);
-        return;
-    }
-
-    out_stream = open_memstream(&record->stdout_buf, &record->stdout_len);
-    err_stream = open_memstream(&record->stderr_buf, &record->stderr_len);
-    if (!out_stream || !err_stream) {
-        if (out_stream)
-            fclose(out_stream);
-        if (err_stream)
-            fclose(err_stream);
-        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
-        bx_search_parallel_dispose_record(NULL, record);
-        bx_search_parallel_free_job(NULL, job);
-        return;
-    }
-
-    output_ctx.out = out_stream;
-    output_ctx.err = err_stream;
-    output_ctx.stats = state->opts->stats ? &record->stats : NULL;
-    previous_ctx = bx_search_output_ctx_push(&output_ctx);
-    record->status = 1;
-    for (size_t i = 0; i < job->count; i++) {
-        int status;
-
-        if (state->opts->quiet && bx_cancel_state_requested(&state->cancel))
-            break;
-
-        status = search_file(job->items[i].path,
-                             job->items[i].display_name,
-                             state->progname,
-                             worker->matcher,
-                             state->opts,
-                             &match_count,
-                             &worker->scanner,
-                             &worker->record_stream,
-                             &record->stats);
-        if (status == 2) {
-            record->error_seen = true;
-            record->status = 2;
-            continue;
-        }
-        if (status == 0) {
-            record->match_seen = true;
-            if (record->status != 2)
-                record->status = 0;
-            if (state->opts->quiet && bx_cancel_state_request(&state->cancel)) {
-                bx_work_pool_wake(state->pool);
-                break;
-            }
-        }
-    }
-    bx_search_output_ctx_pop(previous_ctx);
-
-    record->used_heading = output_ctx.used_heading;
-
-    fclose(out_stream);
-    fclose(err_stream);
-
-    if (!bx_search_parallel_submit_record(state, record))
-        bx_search_parallel_set_fatal(state, "rg: failed to queue worker output\n");
-    bx_search_parallel_free_job(NULL, job);
-}
-
-static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entry, void *user) {
-    struct bx_search_parallel_walk_state *state = user;
-    char *display_name;
-
-    if (!state || !state->parallel)
-        return BX_WALK_ERROR;
-    if (bx_cancel_state_requested(&state->parallel->cancel))
-        return BX_WALK_STOP;
-    if (entry->is_dir)
-        return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
-        return BX_WALK_CONTINUE;
-    if (bx_search_should_skip_special_input_mode(entry->mode, state->parallel->opts))
-        return BX_WALK_CONTINUE;
-
-    display_name = display_path_for_output(entry->path, state->strip_dot_prefix,
-                                           state->parallel->opts);
-    if (!bx_search_parallel_queue_path(state->parallel, entry->path,
-                                       display_name ? display_name : entry->path)) {
-        free(display_name);
-        return bx_cancel_state_requested(&state->parallel->cancel)
-            ? BX_WALK_STOP
-            : BX_WALK_ERROR;
-    }
-    free(display_name);
-    return BX_WALK_CONTINUE;
-}
-
-static enum bx_walk_action bx_search_parallel_walk_error_cb(const char *path,
-                                                            int errnum,
-                                                            void *user) {
-    struct bx_search_parallel_walk_state *state = user;
-
-    if (!state || !state->parallel)
-        return BX_WALK_ERROR;
-    if (!bx_search_parallel_submit_path_error(state->parallel, path, errnum))
-        return BX_WALK_ERROR;
-    return bx_cancel_state_requested(&state->parallel->cancel)
-        ? BX_WALK_STOP
-        : BX_WALK_CONTINUE;
-}
-
 struct grep_walk_state {
     struct bx_matcher *m;
     struct search_opts *opts;
@@ -2714,7 +2471,7 @@ static const char *const rg_ignore_filenames[] = {
     ".rgignore",
 };
 
-static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
+struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
                                                     enum bx_search_personality personality,
                                                     const struct search_opts *opts,
                                                     bool *stop) {
@@ -2737,7 +2494,7 @@ static struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
     };
 }
 
-static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts) {
+struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts) {
     return (struct bx_walk_filter_opts){
         .hidden = opts->hidden,
         .glob_case_insensitive = opts->glob_case_insensitive,
@@ -2751,7 +2508,7 @@ static struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search
     };
 }
 
-static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
+struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
                                                              const struct search_opts *opts) {
     return (struct bx_walk_ignore_opts){
         .no_ignore = opts->no_ignore,
@@ -2774,11 +2531,6 @@ static struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *prognam
         .num_ignore_filenames = 3,
     };
 }
-
-struct bx_search_operand_ref {
-    const char *path;
-    int index;
-};
 
 static int bx_search_operand_ref_compare(const void *left, const void *right) {
     const struct bx_search_operand_ref *a = left;
@@ -2841,17 +2593,17 @@ static enum bx_walk_action files_walk_error_cb(const char *path, int errnum, voi
     return BX_WALK_CONTINUE;
 }
 
-static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
-                                         const char *path) {
+bool bx_search_explicit_entry_selected(const struct search_opts *opts,
+                                       const char *path) {
     const char *name = bx_path_basename_ptr(path);
 
-    if (gs->opts->num_include > 0) {
+    if (opts->num_include > 0) {
         struct bx_walk_filter_opts filter_opts = {
-            .hidden = gs->opts->hidden,
-            .glob_case_insensitive = gs->opts->glob_case_insensitive,
-            .include_patterns = gs->opts->include_patterns,
-            .include_pattern_casefold = gs->opts->include_pattern_casefold,
-            .num_include_patterns = gs->opts->num_include,
+            .hidden = opts->hidden,
+            .glob_case_insensitive = opts->glob_case_insensitive,
+            .include_patterns = opts->include_patterns,
+            .include_pattern_casefold = opts->include_pattern_casefold,
+            .num_include_patterns = opts->num_include,
         };
         struct bx_walk_filter_state filter_state;
         bx_walk_filter_init(&filter_state, &filter_opts, path);
@@ -2859,9 +2611,9 @@ static bool grep_explicit_entry_selected(const struct grep_walk_state *gs,
             return false;
     }
 
-    for (int i = 0; i < gs->opts->num_exclude; i++) {
-        int flags = gs->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
-        if (fnmatch(gs->opts->exclude_patterns[i], name, flags) == 0)
+    for (int i = 0; i < opts->num_exclude; i++) {
+        int flags = opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
+        if (fnmatch(opts->exclude_patterns[i], name, flags) == 0)
             return false;
     }
 
@@ -2896,238 +2648,6 @@ static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user)
             return BX_WALK_STOP;
     }
     return BX_WALK_CONTINUE;
-}
-
-static bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
-                                            const struct search_opts *opts,
-                                            int num_files,
-                                            bool rg_searches_stdin) {
-    if (!opts || personality != BX_SEARCH_RG)
-        return false;
-    if (opts->files_only || opts->trace || opts->quiet || rg_searches_stdin)
-        return false;
-    if (bx_thread_count_resolve(opts->threads) <= 1u)
-        return false;
-    if (num_files == 0)
-        return true;
-    return opts->recursive || num_files > 1;
-}
-
-static int bx_search_run_parallel_rg(int argc,
-                                     char **argv,
-                                     int first_file,
-                                     struct bx_search_operand_ref *sorted_operands,
-                                     int sorted_operand_count,
-                                     const char *progname,
-                                     const char *pattern,
-                                     enum bx_search_personality personality,
-                                     struct search_opts *opts,
-                                     struct bx_search_stats *stats_out,
-                                     bool *match_seen_out,
-                                     bool *error_seen_out) {
-    struct bx_search_parallel_state state = {
-        .progname = progname,
-        .pattern = pattern,
-        .personality = personality,
-        .opts = opts,
-        .exit_status = 1,
-    };
-    struct bx_work_pool pool = {0};
-    struct bx_output_sink sink = {0};
-    size_t thread_count = bx_thread_count_resolve(opts->threads);
-    size_t queue_capacity = thread_count > (SIZE_MAX / 64u) ? thread_count : thread_count * 64u;
-    int num_files = argc - first_file;
-    bool pool_ready = false;
-    bool sink_ready = false;
-    bool walk_error_seen = false;
-
-    if (queue_capacity < thread_count)
-        queue_capacity = thread_count;
-
-    bx_cancel_state_init(&state.cancel);
-    if (pthread_mutex_init(&state.lock, NULL) != 0)
-        return 2;
-
-    struct bx_output_sink_opts sink_opts = {
-        .max_pending = queue_capacity,
-        .first_seq = 0u,
-        .ordered = true,
-        .user = &state,
-        .record_seq = bx_search_parallel_record_seq,
-        .emit_record = bx_search_parallel_emit_record,
-        .dispose_record = bx_search_parallel_dispose_record,
-    };
-    if (!bx_output_sink_init(&sink, &sink_opts)) {
-        pthread_mutex_destroy(&state.lock);
-        return 2;
-    }
-    sink_ready = true;
-    state.sink = &sink;
-
-    struct bx_work_pool_opts pool_opts = {
-        .thread_count = thread_count,
-        .queue_capacity = queue_capacity,
-        .user = &state,
-        .cancel = &state.cancel,
-        .worker_init = bx_search_parallel_worker_init,
-        .worker_fini = bx_search_parallel_worker_fini,
-        .process_job = bx_search_parallel_process_job,
-        .dispose_job = bx_search_parallel_free_job,
-    };
-    if (!bx_work_pool_init(&pool, &pool_opts)) {
-        bx_search_parallel_set_fatal(&state, "rg: failed to initialize worker pool\n");
-        goto done;
-    }
-    pool_ready = true;
-    state.pool = &pool;
-
-    if (num_files == 0) {
-        struct bx_search_parallel_walk_state walk_state = {
-            .parallel = &state,
-            .strip_dot_prefix = true,
-        };
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
-        struct bx_search_walk_config walk_config = {
-            .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
-            .visit = bx_search_parallel_walk_cb,
-            .error = bx_search_parallel_walk_error_cb,
-        };
-
-        if (bx_search_walk(".", &walk_config, &walk_state) != 0)
-            walk_error_seen = true;
-    } else if (opts->recursive) {
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
-        struct bx_search_walk_config walk_config = {
-            .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
-            .visit = bx_search_parallel_walk_cb,
-            .error = bx_search_parallel_walk_error_cb,
-        };
-        struct bx_search_parallel_walk_state walk_state = {
-            .parallel = &state,
-            .strip_dot_prefix = false,
-        };
-
-        for (int operand_i = 0; operand_i < num_files; operand_i++) {
-            int j;
-            struct stat st;
-
-            if (bx_cancel_state_requested(&state.cancel))
-                break;
-            j = sorted_operands
-                    ? sorted_operands[opts->sort_paths_reverse
-                                          ? (sorted_operand_count - 1 - operand_i)
-                                          : operand_i]
-                          .index
-                    : (first_file + operand_i);
-            if (stat(argv[j], &st) != 0) {
-                if (!bx_search_parallel_submit_path_error(&state, argv[j], errno)) {
-                    bx_search_parallel_set_fatal(&state, "rg: failed to queue traversal error\n");
-                    break;
-                }
-                continue;
-            }
-            if (S_ISDIR(st.st_mode)) {
-                if (bx_search_walk(argv[j], &walk_config, &walk_state) != 0)
-                    walk_error_seen = true;
-                continue;
-            }
-            if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
-                continue;
-            if (!grep_explicit_entry_selected(&(struct grep_walk_state){ .opts = opts }, argv[j]))
-                continue;
-            if (bx_search_path_exceeds_max_filesize(argv[j], opts))
-                continue;
-
-            char *display_name = display_path_for_output(argv[j], false, opts);
-            if (!bx_search_parallel_queue_path(&state, argv[j],
-                                               display_name ? display_name : argv[j])) {
-                free(display_name);
-                if (!bx_cancel_state_requested(&state.cancel))
-                    bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
-                break;
-            }
-            free(display_name);
-        }
-    } else {
-        for (int operand_i = 0; operand_i < num_files; operand_i++) {
-            int j = sorted_operands
-                        ? sorted_operands[opts->sort_paths_reverse
-                                              ? (sorted_operand_count - 1 - operand_i)
-                                              : operand_i]
-                              .index
-                        : (first_file + operand_i);
-            if (argv[j] && strcmp(argv[j], "-") != 0) {
-                struct stat st;
-                if (lstat(argv[j], &st) == 0) {
-                    if (S_ISDIR(st.st_mode)) {
-                        if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR))
-                            bx_search_parallel_set_fatal(&state, "rg: failed to queue directory error\n");
-                        continue;
-                    }
-                    if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
-                        continue;
-                }
-                if (bx_search_path_exceeds_max_filesize(argv[j], opts))
-                    continue;
-            }
-            if (!bx_search_parallel_queue_path(&state, argv[j], NULL)) {
-                if (!bx_cancel_state_requested(&state.cancel))
-                    bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
-                break;
-            }
-        }
-    }
-
-done:
-    if (!state.fatal_error && !bx_search_parallel_flush_pending_job(&state))
-        bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
-    if (pool_ready) {
-        bx_work_pool_close(&pool);
-        if (!bx_work_pool_join(&pool) && !state.fatal_error)
-            bx_search_parallel_set_fatal(&state, "rg: worker pool failed\n");
-    }
-    if (sink_ready) {
-        bx_output_sink_close(&sink);
-        bx_output_sink_join(&sink);
-    }
-    if (state.fatal_error) {
-        state.error_seen = true;
-        state.exit_status = 2;
-        if (state.fatal_message && *state.fatal_message) {
-            fputs(state.fatal_message, stderr);
-            if (state.fatal_message[strlen(state.fatal_message) - 1] != '\n')
-                fputc('\n', stderr);
-        }
-    }
-    if (walk_error_seen) {
-        state.error_seen = true;
-        state.exit_status = 2;
-    }
-
-    if (stats_out)
-        *stats_out = state.stats;
-    if (match_seen_out)
-        *match_seen_out = state.match_seen;
-    if (error_seen_out)
-        *error_seen_out = state.error_seen;
-
-    if (pool_ready)
-        bx_work_pool_dispose(&pool);
-    if (sink_ready)
-        bx_output_sink_dispose(&sink);
-    if (state.pending_job)
-        bx_search_parallel_free_job(NULL, state.pending_job);
-    pthread_mutex_destroy(&state.lock);
-    free(state.fatal_message);
-    return state.exit_status;
 }
 
 /* --- main entry point --- */
@@ -3379,7 +2899,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
             } else {
                 if (bx_search_should_skip_special_input_mode(st.st_mode, &opts))
                     continue;
-                if (grep_explicit_entry_selected(&gs, argv[j])) {
+                if (bx_search_explicit_entry_selected(gs.opts, argv[j])) {
                     struct bx_walk_entry entry = {.path = argv[j], .is_dir = false, .mode = st.st_mode};
                     enum bx_walk_action action = grep_walk_cb(&entry, &gs);
                     if (action == BX_WALK_STOP)

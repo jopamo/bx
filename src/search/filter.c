@@ -17,7 +17,7 @@ static const char *bx_walk_filter_relative_path(const struct bx_walk_filter_stat
     if (!state || !state->root_path || !path)
         return path;
 
-    size_t root_len = strlen(state->root_path);
+    size_t root_len = state->root_path_len;
     if (strncmp(path, state->root_path, root_len) != 0)
         return path;
     if (path[root_len] == '/')
@@ -100,6 +100,7 @@ void bx_walk_filter_init(struct bx_walk_filter_state *state,
         return;
     state->opts = opts;
     state->root_path = root_path;
+    state->root_path_len = root_path ? strlen(root_path) : 0u;
 }
 
 bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,

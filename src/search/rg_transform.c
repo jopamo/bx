@@ -111,6 +111,54 @@ static const char *bx_rg_search_zip_program(const char *filename, const char *co
     return NULL;
 }
 
+static bool bx_rg_transform_prefix_needs_decode(const unsigned char *prefix,
+                                                size_t nread) {
+    if (!prefix || nread < 2u)
+        return false;
+    return (nread >= 3u &&
+            prefix[0] == 0xEFu && prefix[1] == 0xBBu && prefix[2] == 0xBFu) ||
+           (prefix[0] == 0xFFu && prefix[1] == 0xFEu) ||
+           (prefix[0] == 0xFEu && prefix[1] == 0xFFu);
+}
+
+bool bx_rg_transform_needs_file_preload(const struct search_opts *opts,
+                                        const char *filename) {
+    if (!opts)
+        return false;
+    if (filename && opts->pre_command && *opts->pre_command &&
+        bx_rg_pre_glob_matches(opts, filename)) {
+        return true;
+    }
+    if (filename && opts->search_zip) {
+        const char *const *argv = NULL;
+        if (bx_rg_search_zip_program(filename, &argv) != NULL)
+            return true;
+    }
+    return opts->encoding_mode == BX_RG_ENCODING_EXPLICIT;
+}
+
+bool bx_rg_transform_auto_encoding_needs_prefix(const struct search_opts *opts,
+                                                const unsigned char *prefix,
+                                                size_t nread) {
+    if (!opts || opts->encoding_mode != BX_RG_ENCODING_AUTO)
+        return false;
+    return bx_rg_transform_prefix_needs_decode(prefix, nread);
+}
+
+bool bx_rg_transform_auto_encoding_needs_fd(const struct search_opts *opts,
+                                            int fd_hint) {
+    unsigned char prefix[3] = {0};
+    ssize_t nread;
+
+    if (!opts || fd_hint < 0)
+        return false;
+
+    nread = pread(fd_hint, prefix, sizeof(prefix), 0);
+    if (nread < 0)
+        return false;
+    return bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)nread);
+}
+
 static bool bx_rg_slurp_stream(FILE *f, unsigned char **output, size_t *output_len) {
     size_t cap = 0u;
     size_t len = 0u;
@@ -368,39 +416,24 @@ bool bx_rg_transform_maybe_needed(const struct search_opts *opts,
 
     if (!opts)
         return false;
-    if (!use_stdin && filename && opts->pre_command && *opts->pre_command &&
-        bx_rg_pre_glob_matches(opts, filename)) {
-        return true;
-    }
-    if (!use_stdin && filename && opts->search_zip) {
-        const char *const *argv = NULL;
-        if (bx_rg_search_zip_program(filename, &argv) != NULL)
+    if (use_stdin) {
+        if (opts->encoding_mode == BX_RG_ENCODING_EXPLICIT)
             return true;
+        return bx_rg_transform_auto_encoding_needs_fd(opts, fd_hint);
     }
-    if (opts->encoding_mode == BX_RG_ENCODING_EXPLICIT)
+    if (bx_rg_transform_needs_file_preload(opts, filename))
         return true;
     if (opts->encoding_mode == BX_RG_ENCODING_NONE)
         return false;
     if (opts->encoding_mode != BX_RG_ENCODING_AUTO)
         return false;
 
-    if (use_stdin) {
-        if (fd_hint < 0)
-            return false;
-        if (pread(fd_hint, prefix, sizeof(prefix), 0) < 2)
-            return false;
-    } else {
-        f = fopen(filename, "r");
-        if (!f)
-            return false;
-        nread = fread(prefix, 1u, sizeof(prefix), f);
-        fclose(f);
-        if (nread < 2u)
-            return false;
-    }
-    return (prefix[0] == 0xEFu && prefix[1] == 0xBBu && prefix[2] == 0xBFu) ||
-           (prefix[0] == 0xFFu && prefix[1] == 0xFEu) ||
-           (prefix[0] == 0xFEu && prefix[1] == 0xFFu);
+    f = fopen(filename, "r");
+    if (!f)
+        return false;
+    nread = fread(prefix, 1u, sizeof(prefix), f);
+    fclose(f);
+    return bx_rg_transform_prefix_needs_decode(prefix, nread);
 }
 
 static void bx_rg_report_pre_exec_error(FILE *err_stream,

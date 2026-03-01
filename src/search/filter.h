@@ -9,6 +9,7 @@ struct bx_ignore_state;
 struct bx_walk_filter_state {
     const struct bx_walk_filter_opts *opts;
     const char *root_path;
+    size_t root_path_len;
 };
 
 void bx_walk_filter_init(struct bx_walk_filter_state *state,

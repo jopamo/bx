@@ -23,6 +23,9 @@ struct bx_output_sink {
     pthread_cond_t can_emit;
     pthread_t thread;
     struct bx_output_sink_node *head;
+    uint64_t *skipped_seqs;
+    size_t skipped_len;
+    size_t skipped_cap;
     size_t pending;
     uint64_t next_seq;
     bool closed;
@@ -32,6 +35,7 @@ struct bx_output_sink {
 
 bool bx_output_sink_init(struct bx_output_sink *sink, const struct bx_output_sink_opts *opts);
 bool bx_output_sink_submit(struct bx_output_sink *sink, void *record);
+bool bx_output_sink_skip_seq(struct bx_output_sink *sink, uint64_t seq);
 void bx_output_sink_close(struct bx_output_sink *sink);
 void bx_output_sink_wake(struct bx_output_sink *sink);
 bool bx_output_sink_join(struct bx_output_sink *sink);

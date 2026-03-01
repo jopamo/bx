@@ -42,29 +42,12 @@ int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, boo
         for (size_t i = 0; i < plen; i++)
             m->pattern_lower[i] = (char)tolower((unsigned char)pattern[i]);
         m->pattern_lower[plen] = '\0';
-    } else if (plen >= 3u) {
-        unsigned int counts[UCHAR_MAX + 1u] = {0};
-        unsigned int best_count = UINT_MAX;
-        size_t best_index = 0u;
-
-        for (size_t i = 0; i < plen; ++i)
-            counts[(unsigned char)pattern[i]]++;
-
-        for (size_t i = 0; i < plen; ++i) {
-            unsigned char byte = (unsigned char)pattern[i];
-            unsigned int count = counts[byte];
-            if (count < best_count) {
-                best_count = count;
-                best_index = i;
-                m->anchor_byte = byte;
-            }
-        }
-
-        if (best_count == 1u) {
-            m->anchor_index = best_index;
-            m->has_anchor = true;
-        }
     }
+
+    /*
+     * Keep case-sensitive literals on libc memmem. The older anchor-byte
+     * candidate path lost to libc on current rg tiny-file workloads.
+     */
 
     *out = m;
     return 0;

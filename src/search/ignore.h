@@ -2,6 +2,7 @@
 #define BX_SEARCH_IGNORE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "fswalk/walk.h"
 
@@ -9,8 +10,10 @@ struct bx_ignore_state {
     struct bx_ignore_state *parent;
     const char *dirpath;
     char *owned_dirpath;
+    size_t dirpath_len;
     const char *root_prefix;
     char *owned_root_prefix;
+    size_t root_prefix_len;
     char **patterns;
     int pattern_count;
     bool casefold;

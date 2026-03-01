@@ -24,6 +24,17 @@ static void bx_output_sink_insert_node(struct bx_output_sink *sink,
     it->next = node;
 }
 
+static void bx_output_sink_consume_skipped_locked(struct bx_output_sink *sink) {
+    while (sink->skipped_len > 0u && sink->skipped_seqs[0] == sink->next_seq) {
+        sink->next_seq++;
+        sink->skipped_len--;
+        if (sink->skipped_len > 0u) {
+            memmove(sink->skipped_seqs, sink->skipped_seqs + 1u,
+                    sink->skipped_len * sizeof(*sink->skipped_seqs));
+        }
+    }
+}
+
 static struct bx_output_sink_node *bx_output_sink_take_ready_node(struct bx_output_sink *sink) {
     struct bx_output_sink_node *node = sink->head;
 
@@ -37,8 +48,10 @@ static struct bx_output_sink_node *bx_output_sink_take_ready_node(struct bx_outp
     sink->head = node->next;
     node->next = NULL;
     sink->pending--;
-    if (sink->opts.ordered && node->seq == sink->next_seq)
+    if (sink->opts.ordered && node->seq == sink->next_seq) {
         sink->next_seq++;
+        bx_output_sink_consume_skipped_locked(sink);
+    }
     pthread_cond_signal(&sink->can_submit);
     return node;
 }
@@ -126,6 +139,52 @@ bool bx_output_sink_submit(struct bx_output_sink *sink, void *record) {
     return true;
 }
 
+bool bx_output_sink_skip_seq(struct bx_output_sink *sink, uint64_t seq) {
+    size_t pos;
+    uint64_t *tmp;
+    size_t new_cap;
+
+    if (!sink)
+        return false;
+    if (!sink->opts.ordered)
+        return true;
+
+    pthread_mutex_lock(&sink->lock);
+    if (seq < sink->next_seq) {
+        pthread_mutex_unlock(&sink->lock);
+        return true;
+    }
+
+    for (pos = 0u; pos < sink->skipped_len && sink->skipped_seqs[pos] < seq; pos++)
+        ;
+    if (pos < sink->skipped_len && sink->skipped_seqs[pos] == seq) {
+        pthread_mutex_unlock(&sink->lock);
+        return true;
+    }
+
+    if (sink->skipped_len == sink->skipped_cap) {
+        new_cap = sink->skipped_cap == 0u ? 32u : sink->skipped_cap * 2u;
+        tmp = realloc(sink->skipped_seqs, new_cap * sizeof(*sink->skipped_seqs));
+        if (!tmp) {
+            pthread_mutex_unlock(&sink->lock);
+            return false;
+        }
+        sink->skipped_seqs = tmp;
+        sink->skipped_cap = new_cap;
+    }
+
+    if (pos < sink->skipped_len) {
+        memmove(sink->skipped_seqs + pos + 1u, sink->skipped_seqs + pos,
+                (sink->skipped_len - pos) * sizeof(*sink->skipped_seqs));
+    }
+    sink->skipped_seqs[pos] = seq;
+    sink->skipped_len++;
+    bx_output_sink_consume_skipped_locked(sink);
+    pthread_cond_signal(&sink->can_emit);
+    pthread_mutex_unlock(&sink->lock);
+    return true;
+}
+
 void bx_output_sink_close(struct bx_output_sink *sink) {
     if (!sink)
         return;
@@ -167,6 +226,7 @@ void bx_output_sink_dispose(struct bx_output_sink *sink) {
         free(node);
         node = next;
     }
+    free(sink->skipped_seqs);
 
     pthread_cond_destroy(&sink->can_emit);
     pthread_cond_destroy(&sink->can_submit);

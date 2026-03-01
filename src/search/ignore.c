@@ -11,6 +11,8 @@
 #include "ignore.h"
 #include "lib/path_ops.h"
 
+#define BX_IGNORE_STACK_PATH_BUFSIZE 512u
+
 enum bx_ignore_match_result {
     BX_IGNORE_NO_MATCH = 0,
     BX_IGNORE_INCLUDE,
@@ -57,7 +59,7 @@ static const char *bx_ignore_state_relative_path(const struct bx_ignore_state *s
     if (!state || !state->dirpath || !path)
         goto parent_prefix;
 
-    size_t dir_len = strlen(state->dirpath);
+    size_t dir_len = state->dirpath_len;
     if (strncmp(path, state->dirpath, dir_len) != 0)
         goto parent_prefix;
     if (path[dir_len] == '/')
@@ -123,8 +125,10 @@ void bx_ignore_state_init(struct bx_ignore_state *state,
     state->parent = parent;
     state->dirpath = dirpath;
     state->owned_dirpath = NULL;
+    state->dirpath_len = dirpath ? strlen(dirpath) : 0u;
     state->root_prefix = NULL;
     state->owned_root_prefix = NULL;
+    state->root_prefix_len = 0u;
     state->patterns = patterns;
     state->pattern_count = pattern_count;
     state->casefold = false;
@@ -139,8 +143,10 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state) {
     free(state->owned_root_prefix);
     state->dirpath = NULL;
     state->owned_dirpath = NULL;
+    state->dirpath_len = 0u;
     state->root_prefix = NULL;
     state->owned_root_prefix = NULL;
+    state->root_prefix_len = 0u;
     state->patterns = NULL;
     state->pattern_count = 0;
     state->casefold = false;
@@ -232,6 +238,7 @@ static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *ch
             return NULL;
         }
         state->dirpath = state->owned_dirpath;
+        state->dirpath_len = strlen(state->owned_dirpath);
     }
     if (root_prefix) {
         state->owned_root_prefix = strdup(root_prefix);
@@ -241,6 +248,7 @@ static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *ch
             return NULL;
         }
         state->root_prefix = state->owned_root_prefix;
+        state->root_prefix_len = strlen(state->owned_root_prefix);
     }
     state->casefold = casefold;
     return state;
@@ -258,6 +266,7 @@ bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_op
 
     for (int file_i = 0; file_i < opts->num_ignore_filenames; file_i++) {
         const char *filename = opts->ignore_filenames[file_i];
+        struct stat st;
         if (!filename || filename[0] == '\0')
             continue;
         if (opts->no_ignore_vcs && strcmp(filename, ".gitignore") == 0)
@@ -274,6 +283,10 @@ bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_op
             continue;
 
         snprintf(ignore_path, plen, "%s/%s", dirpath, filename);
+        if (stat(ignore_path, &st) != 0 || !S_ISREG(st.st_mode)) {
+            free(ignore_path);
+            continue;
+        }
         loaded_any |= bx_ignore_load_patterns_from_path(ignore_path, opts, patterns, n, false);
         free(ignore_path);
     }
@@ -554,12 +567,15 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
                                   const char *root_relative_path) {
     for (const struct bx_ignore_state *it = state; it; it = it->parent) {
         const char *relative_path = bx_ignore_state_relative_path(it, path, root_relative_path);
-        char *prefixed_path = NULL;
-        if (it->root_prefix && it->root_prefix[0] != '\0') {
-            size_t prefix_len = strlen(it->root_prefix);
+        char stack_path[BX_IGNORE_STACK_PATH_BUFSIZE];
+        char *heap_path = NULL;
+        if (it->root_prefix && it->root_prefix_len > 0u) {
+            size_t prefix_len = it->root_prefix_len;
             size_t rel_len = relative_path ? strlen(relative_path) : 0;
             size_t total = prefix_len + (rel_len > 0 ? 1 + rel_len : 0) + 1;
-            prefixed_path = malloc(total);
+            char *prefixed_path = total <= sizeof(stack_path)
+                ? stack_path
+                : malloc(total);
             if (!prefixed_path)
                 return false;
             memcpy(prefixed_path, it->root_prefix, prefix_len);
@@ -570,12 +586,14 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
             } else {
                 prefixed_path[prefix_len] = '\0';
             }
+            if (prefixed_path != stack_path)
+                heap_path = prefixed_path;
             relative_path = prefixed_path;
         }
         enum bx_ignore_match_result result =
             bx_ignore_match_patterns(name, relative_path, it->patterns, it->pattern_count,
                                      it->casefold);
-        free(prefixed_path);
+        free(heap_path);
         if (result == BX_IGNORE_EXCLUDE)
             return true;
         if (result == BX_IGNORE_INCLUDE)

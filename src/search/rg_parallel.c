@@ -1,0 +1,829 @@
+#define _GNU_SOURCE
+#include <errno.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+
+#include <pthread.h>
+
+#include "lib/cancel_state.h"
+#include "lib/output_sink.h"
+#include "lib/thread_count.h"
+#include "lib/work_pool.h"
+#include "dev_counters.h"
+#include "record_stream.h"
+#include "rg_parallel.h"
+#include "scanner.h"
+#include "search_internal.h"
+#include "traverse.h"
+
+/*
+ * Recursive rg parallel search keeps output ordered by path discovery order.
+ * Batch multiple files into one worker record so tiny-file trees do not pay
+ * one pool job plus one ordered-output record per file.
+ */
+#define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES 64u
+#define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES 16384u
+
+struct bx_search_parallel_job_item {
+    char *path;
+    char *display_name;
+    bool display_name_is_path;
+};
+
+struct bx_search_parallel_job {
+    uint64_t seq;
+    size_t count;
+    size_t path_bytes;
+    size_t storage_len;
+    size_t storage_cap;
+    char *storage;
+    struct bx_search_parallel_job_item items[BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES];
+};
+
+struct bx_search_parallel_record {
+    uint64_t seq;
+    char *stdout_buf;
+    size_t stdout_len;
+    char *stderr_buf;
+    size_t stderr_len;
+    struct bx_search_stats stats;
+    int status;
+    bool match_seen;
+    bool error_seen;
+    bool used_heading;
+};
+
+struct bx_search_parallel_worker {
+    struct bx_matcher *matcher;
+    struct bx_search_scanner scanner;
+    struct bx_record_stream record_stream;
+};
+
+struct bx_search_parallel_state {
+    const char *progname;
+    const char *pattern;
+    enum bx_search_personality personality;
+    struct search_opts *opts;
+    struct bx_cancel_state cancel;
+    struct bx_work_pool *pool;
+    struct bx_output_sink *sink;
+    pthread_mutex_t lock;
+    uint64_t next_seq;
+    int exit_status;
+    bool match_seen;
+    bool error_seen;
+    bool heading_output_started;
+    bool fatal_error;
+    struct bx_search_stats stats;
+    char *fatal_message;
+    struct bx_search_parallel_job *pending_job;
+};
+
+struct bx_search_parallel_walk_state {
+    struct bx_search_parallel_state *parallel;
+    bool strip_dot_prefix;
+};
+
+static void bx_search_parallel_set_fatal(struct bx_search_parallel_state *state,
+                                         const char *message) {
+    if (!state)
+        return;
+
+    pthread_mutex_lock(&state->lock);
+    state->fatal_error = true;
+    if (!state->fatal_message && message)
+        state->fatal_message = strdup(message);
+    pthread_mutex_unlock(&state->lock);
+
+    bx_cancel_state_request(&state->cancel);
+    if (state->pool) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
+        bx_work_pool_wake(state->pool);
+    }
+    if (state->sink)
+        bx_output_sink_wake(state->sink);
+}
+
+static void bx_search_parallel_free_job(void *user, void *job_ptr) {
+    (void)user;
+    struct bx_search_parallel_job *job = job_ptr;
+
+    if (!job)
+        return;
+    free(job->storage);
+    free(job);
+}
+
+static void bx_search_parallel_dispose_record(void *user, void *record_ptr) {
+    (void)user;
+    struct bx_search_parallel_record *record = record_ptr;
+
+    if (!record)
+        return;
+    free(record->stdout_buf);
+    free(record->stderr_buf);
+    free(record);
+}
+
+static uint64_t bx_search_parallel_record_seq(const void *record_ptr, void *user) {
+    (void)user;
+    return ((const struct bx_search_parallel_record *)record_ptr)->seq;
+}
+
+static void bx_search_parallel_emit_record(void *user, void *record_ptr) {
+    struct bx_search_parallel_state *state = user;
+    struct bx_search_parallel_record *record = record_ptr;
+
+    if (!state || !record)
+        return;
+
+    if (record->used_heading && record->stdout_len > 0u && state->heading_output_started)
+        fputc('\n', stdout);
+    if (record->stdout_len > 0u && record->stdout_buf)
+        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
+    if (record->stderr_len > 0u && record->stderr_buf)
+        fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
+    if (record->used_heading && record->stdout_len > 0u)
+        state->heading_output_started = true;
+
+    state->stats.matches += record->stats.matches;
+    state->stats.matched_lines += record->stats.matched_lines;
+    state->stats.files_with_matches += record->stats.files_with_matches;
+    state->stats.files_searched += record->stats.files_searched;
+    state->stats.bytes_printed += record->stats.bytes_printed;
+    state->stats.bytes_searched += record->stats.bytes_searched;
+
+    if (record->match_seen) {
+        state->match_seen = true;
+        if (state->exit_status != 2)
+            state->exit_status = 0;
+    }
+    if (record->error_seen) {
+        state->error_seen = true;
+        state->exit_status = 2;
+    }
+}
+
+static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *state,
+                                             struct bx_search_parallel_record *record) {
+    if (!state || !record)
+        return false;
+    if (bx_output_sink_submit(state->sink, record)) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED, 1u);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_ORDERED_OUTPUT_RECORDS, 1u);
+        return true;
+    }
+
+    bx_search_parallel_set_fatal(state, "rg: failed to submit ordered output record\n");
+    bx_search_parallel_dispose_record(NULL, record);
+    return false;
+}
+
+static void bx_search_parallel_drop_empty_pending_job(struct bx_search_parallel_state *state) {
+    if (!state || !state->pending_job || state->pending_job->count != 0u)
+        return;
+
+    free(state->pending_job);
+    state->pending_job = NULL;
+}
+
+static size_t bx_search_parallel_job_item_cost(const char *path,
+                                               const char *display_name,
+                                               bool display_name_is_path) {
+    size_t total = strlen(path) + 1u;
+    if (display_name && !display_name_is_path)
+        total += strlen(display_name) + 1u;
+    return total;
+}
+
+static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job *job,
+                                                   size_t needed) {
+    char *tmp;
+    size_t new_cap;
+
+    if (!job)
+        return false;
+    if (job->storage_cap >= needed)
+        return true;
+
+    new_cap = job->storage_cap == 0u ? BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES
+                                     : job->storage_cap;
+    while (new_cap < needed) {
+        if (new_cap > (SIZE_MAX / 2u))
+            return false;
+        new_cap *= 2u;
+    }
+
+    tmp = realloc(job->storage, new_cap);
+    if (!tmp)
+        return false;
+    job->storage = tmp;
+    job->storage_cap = new_cap;
+    return true;
+}
+
+static char *bx_search_parallel_job_store_string(struct bx_search_parallel_job *job,
+                                                 const char *text) {
+    size_t len;
+    char *dest;
+
+    if (!job || !text)
+        return NULL;
+
+    len = strlen(text) + 1u;
+    if (!bx_search_parallel_job_reserve_storage(job, job->storage_len + len))
+        return NULL;
+
+    dest = job->storage + job->storage_len;
+    memcpy(dest, text, len);
+    job->storage_len += len;
+    return dest;
+}
+
+static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state *state) {
+    struct bx_search_parallel_job *job;
+
+    if (!state || !state->pending_job)
+        return true;
+
+    job = state->pending_job;
+    state->pending_job = NULL;
+    job->seq = state->next_seq++;
+    if (bx_work_pool_submit(state->pool, job)) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_BUILT, 1u);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_POOL_SUBMITS, 1u);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
+        return true;
+    }
+
+    bx_search_parallel_free_job(NULL, job);
+    return false;
+}
+
+static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state *state,
+                                                 const char *path,
+                                                 int errnum) {
+    struct bx_search_parallel_record *record = calloc(1u, sizeof(*record));
+    FILE *err_stream = NULL;
+
+    if (!record)
+        return false;
+    if (!bx_search_parallel_flush_pending_job(state)) {
+        bx_search_parallel_dispose_record(NULL, record);
+        return false;
+    }
+    record->seq = state->next_seq;
+    record->status = 2;
+    record->error_seen = true;
+
+    if (state->opts && state->opts->suppress_errors) {
+        if (!bx_search_parallel_submit_record(state, record))
+            return false;
+        state->next_seq++;
+        return true;
+    }
+
+    err_stream = open_memstream(&record->stderr_buf, &record->stderr_len);
+    if (!err_stream) {
+        bx_search_parallel_dispose_record(NULL, record);
+        return false;
+    }
+
+    if (bx_search_progname_uses_os_error_style(state->progname))
+        fprintf(err_stream, "%s: %s: %s (os error %d)\n",
+                state->progname, path, strerror(errnum), errnum);
+    else
+        fprintf(err_stream, "%s: %s: %s\n",
+                state->progname, path, strerror(errnum));
+    fclose(err_stream);
+
+    if (!bx_search_parallel_submit_record(state, record))
+        return false;
+    state->next_seq++;
+    return true;
+}
+
+static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state,
+                                          const char *path,
+                                          const char *display_name,
+                                          bool display_name_is_path) {
+    struct bx_search_parallel_job *job;
+    struct bx_search_parallel_job_item *item;
+    size_t item_cost;
+
+    if (!state || !path)
+        return false;
+    if (bx_cancel_state_requested(&state->cancel))
+        return false;
+
+    item_cost = bx_search_parallel_job_item_cost(path, display_name, display_name_is_path);
+    job = state->pending_job;
+    if (job &&
+        (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
+         (job->count > 0u &&
+          job->path_bytes + item_cost > BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES))) {
+        if (!bx_search_parallel_flush_pending_job(state))
+            return false;
+        job = NULL;
+    }
+
+    if (!job) {
+        job = calloc(1u, sizeof(*job));
+        if (!job)
+            return false;
+        state->pending_job = job;
+    }
+
+    item = &job->items[job->count];
+    item->path = bx_search_parallel_job_store_string(job, path);
+    if (!item->path) {
+        bx_search_parallel_drop_empty_pending_job(state);
+        return false;
+    }
+
+    if (display_name && !display_name_is_path) {
+        item->display_name = bx_search_parallel_job_store_string(job, display_name);
+        if (!item->display_name) {
+            bx_search_parallel_drop_empty_pending_job(state);
+            return false;
+        }
+    } else {
+        item->display_name = NULL;
+    }
+
+    job->count++;
+    item->display_name_is_path = display_name_is_path;
+    job->path_bytes += item_cost;
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,
+                                         (uint64_t)item_cost);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_COPIES_BEFORE_MATCH, 1u);
+
+    if (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
+        job->path_bytes >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES)
+        return bx_search_parallel_flush_pending_job(state);
+    return true;
+}
+
+static void *bx_search_parallel_worker_init(void *user, size_t worker_index) {
+    struct bx_search_parallel_state *state = user;
+    struct bx_search_parallel_worker *worker;
+    char *errmsg = NULL;
+
+    (void)worker_index;
+    worker = calloc(1u, sizeof(*worker));
+    if (!worker)
+        return NULL;
+
+    worker->matcher = bx_search_compile_matcher(state->pattern, state->personality,
+                                                state->opts, &errmsg);
+    if (!worker->matcher) {
+        if (errmsg) {
+            bx_search_parallel_set_fatal(state, errmsg);
+            free(errmsg);
+        }
+        free(worker);
+        return NULL;
+    }
+
+    return worker;
+}
+
+static void bx_search_parallel_worker_fini(void *user, void *worker_local, size_t worker_index) {
+    (void)user;
+    (void)worker_index;
+    struct bx_search_parallel_worker *worker = worker_local;
+
+    if (!worker)
+        return;
+    bx_search_matcher_free(worker->matcher);
+    bx_search_scanner_dispose(&worker->scanner);
+    bx_record_stream_dispose(&worker->record_stream);
+    free(worker);
+}
+
+static void bx_search_parallel_process_job(void *user,
+                                           void *worker_local,
+                                           void *job_ptr,
+                                           size_t worker_index) {
+    struct bx_search_parallel_state *state = user;
+    struct bx_search_parallel_worker *worker = worker_local;
+    struct bx_search_parallel_job *job = job_ptr;
+    struct bx_search_parallel_record *record = NULL;
+    struct bx_search_output_ctx output_ctx = {0};
+    struct bx_search_output_ctx *previous_ctx = NULL;
+    FILE *out_stream = NULL;
+    FILE *err_stream = NULL;
+    int match_count = 0;
+
+    (void)worker_index;
+    if (!state || !worker || !job)
+        return;
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_POOL_POPS, 1u);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_SEARCHED, 1u);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_STOLEN_FILES_SEARCHED,
+                                         (uint64_t)job->count);
+
+    record = calloc(1u, sizeof(*record));
+    if (!record) {
+        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output record\n");
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
+    record->seq = job->seq;
+
+    if (bx_cancel_state_requested(&state->cancel) && state->opts->quiet) {
+        record->status = 1;
+        bx_search_parallel_submit_record(state, record);
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
+
+    out_stream = open_memstream(&record->stdout_buf, &record->stdout_len);
+    if (out_stream)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
+    err_stream = open_memstream(&record->stderr_buf, &record->stderr_len);
+    if (err_stream)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
+    if (!out_stream || !err_stream) {
+        if (out_stream)
+            fclose(out_stream);
+        if (err_stream)
+            fclose(err_stream);
+        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
+        bx_search_parallel_dispose_record(NULL, record);
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
+
+    output_ctx.out = out_stream;
+    output_ctx.err = err_stream;
+    output_ctx.stats = state->opts->stats ? &record->stats : NULL;
+    previous_ctx = bx_search_output_ctx_push(&output_ctx);
+    record->status = 1;
+    for (size_t i = 0; i < job->count; i++) {
+        int status;
+        const char *display_name = job->items[i].display_name_is_path
+            ? job->items[i].path
+            : job->items[i].display_name;
+
+        if (state->opts->quiet && bx_cancel_state_requested(&state->cancel))
+            break;
+
+        status = bx_search_search_file(job->items[i].path,
+                                       display_name,
+                                       state->progname,
+                                       worker->matcher,
+                                       state->opts,
+                                       &match_count,
+                                       &worker->scanner,
+                                       &worker->record_stream,
+                                       &record->stats);
+        if (status == 2) {
+            record->error_seen = true;
+            record->status = 2;
+            continue;
+        }
+        if (status == 0) {
+            record->match_seen = true;
+            if (record->status != 2)
+                record->status = 0;
+            if (state->opts->quiet && bx_cancel_state_request(&state->cancel)) {
+                bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
+                bx_work_pool_wake(state->pool);
+                break;
+            }
+        }
+    }
+    bx_search_output_ctx_pop(previous_ctx);
+
+    record->used_heading = output_ctx.used_heading;
+
+    fclose(out_stream);
+    fclose(err_stream);
+
+    if (!state->opts->stats &&
+        !record->match_seen &&
+        !record->error_seen &&
+        record->stdout_len == 0u &&
+        record->stderr_len == 0u) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
+        if (!bx_output_sink_skip_seq(state->sink, record->seq))
+            bx_search_parallel_set_fatal(state, "rg: failed to advance empty output sequence\n");
+        else
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SKIPPED_OUTPUT_SEQS, 1u);
+        bx_search_parallel_dispose_record(NULL, record);
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
+
+    if (!bx_search_parallel_submit_record(state, record))
+        bx_search_parallel_set_fatal(state, "rg: failed to queue worker output\n");
+    bx_search_parallel_free_job(NULL, job);
+}
+
+static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entry, void *user) {
+    struct bx_search_parallel_walk_state *state = user;
+    char *display_name;
+    const char *queued_display_name;
+    bool display_name_is_path;
+
+    if (!state || !state->parallel)
+        return BX_WALK_ERROR;
+    if (bx_cancel_state_requested(&state->parallel->cancel))
+        return BX_WALK_STOP;
+    if (entry->is_dir) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_DIRS_SEEN, 1u);
+        return BX_WALK_CONTINUE;
+    }
+    if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_should_skip_special_input(entry, state->parallel->opts))
+        return BX_WALK_CONTINUE;
+
+    display_name = NULL;
+    display_name_is_path = !state->strip_dot_prefix &&
+        state->parallel->opts && state->parallel->opts->path_separator == '/';
+    queued_display_name = entry->path;
+    if (!display_name_is_path) {
+        display_name = bx_search_display_path_for_output(entry->path,
+                                                         state->strip_dot_prefix,
+                                                         state->parallel->opts);
+        queued_display_name = display_name ? display_name : entry->path;
+    }
+    if (!bx_search_parallel_queue_path(state->parallel, entry->path,
+                                       queued_display_name,
+                                       display_name_is_path)) {
+        free(display_name);
+        return bx_cancel_state_requested(&state->parallel->cancel)
+            ? BX_WALK_STOP
+            : BX_WALK_ERROR;
+    }
+    free(display_name);
+    return BX_WALK_CONTINUE;
+}
+
+static enum bx_walk_action bx_search_parallel_walk_error_cb(const char *path,
+                                                            int errnum,
+                                                            void *user) {
+    struct bx_search_parallel_walk_state *state = user;
+
+    if (!state || !state->parallel)
+        return BX_WALK_ERROR;
+    if (!bx_search_parallel_submit_path_error(state->parallel, path, errnum))
+        return BX_WALK_ERROR;
+    return bx_cancel_state_requested(&state->parallel->cancel)
+        ? BX_WALK_STOP
+        : BX_WALK_CONTINUE;
+}
+
+static size_t bx_search_rg_auto_thread_count(const struct search_opts *opts) {
+    size_t thread_count = bx_thread_count_resolve(opts ? opts->threads : 0);
+
+    if (!opts || opts->threads > 0 || thread_count <= 4u)
+        return thread_count;
+    return 4u;
+}
+
+bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
+                                     const struct search_opts *opts,
+                                     int num_files,
+                                     bool rg_searches_stdin) {
+    if (!opts || personality != BX_SEARCH_RG)
+        return false;
+    if (opts->files_only || opts->trace || opts->quiet || rg_searches_stdin)
+        return false;
+    if (bx_search_rg_auto_thread_count(opts) <= 1u)
+        return false;
+    if (num_files == 0)
+        return true;
+    return opts->recursive || num_files > 1;
+}
+
+int bx_search_run_parallel_rg(int argc,
+                              char **argv,
+                              int first_file,
+                              struct bx_search_operand_ref *sorted_operands,
+                              int sorted_operand_count,
+                              const char *progname,
+                              const char *pattern,
+                              enum bx_search_personality personality,
+                              struct search_opts *opts,
+                              struct bx_search_stats *stats_out,
+                              bool *match_seen_out,
+                              bool *error_seen_out) {
+    struct bx_search_parallel_state state = {
+        .progname = progname,
+        .pattern = pattern,
+        .personality = personality,
+        .opts = opts,
+        .exit_status = 1,
+    };
+    struct bx_work_pool pool = {0};
+    struct bx_output_sink sink = {0};
+    size_t thread_count = bx_search_rg_auto_thread_count(opts);
+    size_t queue_capacity = thread_count > (SIZE_MAX / 64u) ? thread_count : thread_count * 64u;
+    int num_files = argc - first_file;
+    bool pool_ready = false;
+    bool sink_ready = false;
+    bool walk_error_seen = false;
+
+    if (queue_capacity < thread_count)
+        queue_capacity = thread_count;
+
+    bx_cancel_state_init(&state.cancel);
+    if (pthread_mutex_init(&state.lock, NULL) != 0)
+        return 2;
+
+    struct bx_output_sink_opts sink_opts = {
+        .max_pending = queue_capacity,
+        .first_seq = 0u,
+        .ordered = true,
+        .user = &state,
+        .record_seq = bx_search_parallel_record_seq,
+        .emit_record = bx_search_parallel_emit_record,
+        .dispose_record = bx_search_parallel_dispose_record,
+    };
+    if (!bx_output_sink_init(&sink, &sink_opts)) {
+        pthread_mutex_destroy(&state.lock);
+        return 2;
+    }
+    sink_ready = true;
+    state.sink = &sink;
+
+    struct bx_work_pool_opts pool_opts = {
+        .thread_count = thread_count,
+        .queue_capacity = queue_capacity,
+        .user = &state,
+        .cancel = &state.cancel,
+        .worker_init = bx_search_parallel_worker_init,
+        .worker_fini = bx_search_parallel_worker_fini,
+        .process_job = bx_search_parallel_process_job,
+        .dispose_job = bx_search_parallel_free_job,
+    };
+    if (!bx_work_pool_init(&pool, &pool_opts)) {
+        bx_search_parallel_set_fatal(&state, "rg: failed to initialize worker pool\n");
+        goto done;
+    }
+    pool_ready = true;
+    state.pool = &pool;
+
+    if (num_files == 0) {
+        struct bx_search_parallel_walk_state walk_state = {
+            .parallel = &state,
+            .strip_dot_prefix = true,
+        };
+        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
+        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
+        struct bx_search_walk_config walk_config = {
+            .walk_opts = &walk_opts,
+            .filter_opts = &filter_opts,
+            .ignore_opts = &ignore_opts,
+            .visit = bx_search_parallel_walk_cb,
+            .error = bx_search_parallel_walk_error_cb,
+        };
+
+        if (bx_search_walk(".", &walk_config, &walk_state) != 0)
+            walk_error_seen = true;
+    } else if (opts->recursive) {
+        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
+        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
+        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
+        struct bx_search_walk_config walk_config = {
+            .walk_opts = &walk_opts,
+            .filter_opts = &filter_opts,
+            .ignore_opts = &ignore_opts,
+            .visit = bx_search_parallel_walk_cb,
+            .error = bx_search_parallel_walk_error_cb,
+        };
+        struct bx_search_parallel_walk_state walk_state = {
+            .parallel = &state,
+            .strip_dot_prefix = false,
+        };
+
+        for (int operand_i = 0; operand_i < num_files; operand_i++) {
+            int j;
+            struct stat st;
+
+            if (bx_cancel_state_requested(&state.cancel))
+                break;
+            j = sorted_operands
+                    ? sorted_operands[opts->sort_paths_reverse
+                                          ? (sorted_operand_count - 1 - operand_i)
+                                          : operand_i]
+                          .index
+                    : (first_file + operand_i);
+            if (stat(argv[j], &st) != 0) {
+                if (!bx_search_parallel_submit_path_error(&state, argv[j], errno)) {
+                    bx_search_parallel_set_fatal(&state, "rg: failed to queue traversal error\n");
+                    break;
+                }
+                continue;
+            }
+            if (S_ISDIR(st.st_mode)) {
+                if (bx_search_walk(argv[j], &walk_config, &walk_state) != 0)
+                    walk_error_seen = true;
+                continue;
+            }
+            if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
+                continue;
+            if (!bx_search_explicit_entry_selected(opts, argv[j]))
+                continue;
+            if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+                continue;
+
+            bool display_name_is_path = opts && opts->path_separator == '/';
+            char *display_name = NULL;
+            const char *queued_display_name = argv[j];
+            if (!display_name_is_path) {
+                display_name = bx_search_display_path_for_output(argv[j], false, opts);
+                queued_display_name = display_name ? display_name : argv[j];
+            }
+            if (!bx_search_parallel_queue_path(&state, argv[j],
+                                               queued_display_name,
+                                               display_name_is_path)) {
+                free(display_name);
+                if (!bx_cancel_state_requested(&state.cancel))
+                    bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
+                break;
+            }
+            free(display_name);
+        }
+    } else {
+        for (int operand_i = 0; operand_i < num_files; operand_i++) {
+            int j = sorted_operands
+                        ? sorted_operands[opts->sort_paths_reverse
+                                              ? (sorted_operand_count - 1 - operand_i)
+                                              : operand_i]
+                              .index
+                        : (first_file + operand_i);
+            if (argv[j] && strcmp(argv[j], "-") != 0) {
+                struct stat st;
+                if (lstat(argv[j], &st) == 0) {
+                    if (S_ISDIR(st.st_mode)) {
+                        if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR))
+                            bx_search_parallel_set_fatal(&state, "rg: failed to queue directory error\n");
+                        continue;
+                    }
+                    if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
+                        continue;
+                }
+                if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+                    continue;
+            }
+            if (!bx_search_parallel_queue_path(&state, argv[j], NULL, false)) {
+                if (!bx_cancel_state_requested(&state.cancel))
+                    bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
+                break;
+            }
+        }
+    }
+
+done:
+    if (!state.fatal_error && !bx_search_parallel_flush_pending_job(&state))
+        bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
+    if (pool_ready) {
+        bx_work_pool_close(&pool);
+        if (!bx_work_pool_join(&pool) && !state.fatal_error)
+            bx_search_parallel_set_fatal(&state, "rg: worker pool failed\n");
+    }
+    if (sink_ready) {
+        bx_output_sink_close(&sink);
+        bx_output_sink_join(&sink);
+    }
+    if (state.fatal_error) {
+        state.error_seen = true;
+        state.exit_status = 2;
+        if (state.fatal_message && *state.fatal_message) {
+            fputs(state.fatal_message, stderr);
+            if (state.fatal_message[strlen(state.fatal_message) - 1] != '\n')
+                fputc('\n', stderr);
+        }
+    }
+    if (walk_error_seen) {
+        state.error_seen = true;
+        state.exit_status = 2;
+    }
+
+    if (stats_out)
+        *stats_out = state.stats;
+    if (match_seen_out)
+        *match_seen_out = state.match_seen;
+    if (error_seen_out)
+        *error_seen_out = state.error_seen;
+
+    if (pool_ready)
+        bx_work_pool_dispose(&pool);
+    if (sink_ready)
+        bx_output_sink_dispose(&sink);
+    if (state.pending_job)
+        bx_search_parallel_free_job(NULL, state.pending_job);
+    pthread_mutex_destroy(&state.lock);
+    free(state.fatal_message);
+    return state.exit_status;
+}
