@@ -161,6 +161,149 @@ void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
     }
 }
 
+static char **bx_ignore_clone_patterns(char **patterns, int pattern_count) {
+    if (!patterns || pattern_count <= 0)
+        return NULL;
+
+    char **copy = calloc((size_t)pattern_count, sizeof(*copy));
+    if (!copy)
+        return NULL;
+
+    for (int i = 0; i < pattern_count; ++i) {
+        copy[i] = patterns[i] ? strdup(patterns[i]) : NULL;
+        if (patterns[i] && !copy[i]) {
+            bx_ignore_free_patterns(copy, i);
+            return NULL;
+        }
+    }
+    return copy;
+}
+
+struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state *state) {
+    if (!state)
+        return NULL;
+
+    struct bx_ignore_state *parent = bx_ignore_state_clone_chain(state->parent);
+    char **patterns = bx_ignore_clone_patterns(state->patterns, state->pattern_count);
+    struct bx_ignore_state *copy = calloc(1u, sizeof(*copy));
+    if (!copy) {
+        bx_ignore_free_patterns(patterns, state->pattern_count);
+        bx_ignore_state_dispose_chain(parent);
+        return NULL;
+    }
+
+    bx_ignore_state_init(copy, parent, state->dirpath, patterns, state->pattern_count);
+    if (state->dirpath) {
+        copy->owned_dirpath = strdup(state->dirpath);
+        if (!copy->owned_dirpath) {
+            bx_ignore_state_dispose(copy);
+            free(copy);
+            bx_ignore_state_dispose_chain(parent);
+            return NULL;
+        }
+        copy->dirpath = copy->owned_dirpath;
+        copy->dirpath_len = strlen(copy->owned_dirpath);
+    }
+    if (state->root_prefix) {
+        copy->owned_root_prefix = strdup(state->root_prefix);
+        if (!copy->owned_root_prefix) {
+            bx_ignore_state_dispose(copy);
+            free(copy);
+            bx_ignore_state_dispose_chain(parent);
+            return NULL;
+        }
+        copy->root_prefix = copy->owned_root_prefix;
+        copy->root_prefix_len = strlen(copy->owned_root_prefix);
+    }
+    copy->casefold = state->casefold;
+    return copy;
+}
+
+static bool bx_ignore_state_rewrite_root_prefixes(struct bx_ignore_state *state,
+                                                  const char *current_root,
+                                                  const char *subtree_root) {
+    if (!state)
+        return true;
+    if (!bx_ignore_state_rewrite_root_prefixes(state->parent, current_root, subtree_root))
+        return false;
+
+    char *old_root_prefix = state->root_prefix ? strdup(state->root_prefix) : NULL;
+    if (state->root_prefix && !old_root_prefix)
+        return false;
+
+    free(state->owned_root_prefix);
+    state->owned_root_prefix = NULL;
+    state->root_prefix = NULL;
+    state->root_prefix_len = 0u;
+
+    const char *relative_root = NULL;
+    if (subtree_root && state->dirpath) {
+        size_t dir_len = state->dirpath_len;
+        if (strncmp(subtree_root, state->dirpath, dir_len) == 0) {
+            if (subtree_root[dir_len] == '/')
+                relative_root = subtree_root + dir_len + 1;
+            else if (subtree_root[dir_len] == '\0')
+                relative_root = "";
+        }
+    }
+    if (!relative_root && current_root && subtree_root &&
+        strncmp(subtree_root, current_root, strlen(current_root)) == 0) {
+        const char *suffix = subtree_root + strlen(current_root);
+        if (*suffix == '/')
+            suffix++;
+        else if (*suffix != '\0')
+            suffix = NULL;
+        if (suffix) {
+            const char *base = old_root_prefix ? old_root_prefix : "";
+            size_t base_len = strlen(base);
+            size_t suffix_len = strlen(suffix);
+            size_t total = base_len + (base_len > 0u && suffix_len > 0u ? 1u : 0u) + suffix_len + 1u;
+            state->owned_root_prefix = malloc(total);
+            if (!state->owned_root_prefix) {
+                free(old_root_prefix);
+                return false;
+            }
+            if (base_len > 0u)
+                memcpy(state->owned_root_prefix, base, base_len);
+            if (base_len > 0u && suffix_len > 0u)
+                state->owned_root_prefix[base_len++] = '/';
+            if (suffix_len > 0u)
+                memcpy(state->owned_root_prefix + base_len, suffix, suffix_len);
+            state->owned_root_prefix[base_len + suffix_len] = '\0';
+            state->root_prefix = state->owned_root_prefix;
+            state->root_prefix_len = base_len + suffix_len;
+            free(old_root_prefix);
+            return true;
+        }
+    }
+    if (!relative_root) {
+        free(old_root_prefix);
+        return true;
+    }
+
+    state->owned_root_prefix = strdup(relative_root);
+    if (!state->owned_root_prefix) {
+        free(old_root_prefix);
+        return false;
+    }
+    state->root_prefix = state->owned_root_prefix;
+    state->root_prefix_len = strlen(state->owned_root_prefix);
+    free(old_root_prefix);
+    return true;
+}
+
+struct bx_ignore_state *bx_ignore_state_clone_chain_for_subtree(const struct bx_ignore_state *state,
+                                                                const char *current_root,
+                                                                const char *subtree_root) {
+    struct bx_ignore_state *copy = bx_ignore_state_clone_chain(state);
+    if (!copy)
+        return NULL;
+    if (bx_ignore_state_rewrite_root_prefixes(copy, current_root, subtree_root))
+        return copy;
+    bx_ignore_state_dispose_chain(copy);
+    return NULL;
+}
+
 static void bx_ignore_report_error(const struct bx_walk_ignore_opts *opts,
                                    const char *path,
                                    int errnum) {

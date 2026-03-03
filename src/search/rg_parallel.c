@@ -10,12 +10,13 @@
 #include <pthread.h>
 
 #include "lib/cancel_state.h"
-#include "lib/output_sink.h"
 #include "lib/thread_count.h"
 #include "lib/work_pool.h"
 #include "dev_counters.h"
 #include "record_stream.h"
 #include "rg_parallel.h"
+#include "rg_publish.h"
+#include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
 #include "traverse.h"
@@ -44,19 +45,6 @@ struct bx_search_parallel_job {
     struct bx_search_parallel_job_item items[BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES];
 };
 
-struct bx_search_parallel_record {
-    uint64_t seq;
-    char *stdout_buf;
-    size_t stdout_len;
-    char *stderr_buf;
-    size_t stderr_len;
-    struct bx_search_stats stats;
-    int status;
-    bool match_seen;
-    bool error_seen;
-    bool used_heading;
-};
-
 struct bx_search_parallel_worker {
     struct bx_matcher *matcher;
     struct bx_search_scanner scanner;
@@ -70,7 +58,7 @@ struct bx_search_parallel_state {
     struct search_opts *opts;
     struct bx_cancel_state cancel;
     struct bx_work_pool *pool;
-    struct bx_output_sink *sink;
+    struct bx_rg_publish_state *publish;
     pthread_mutex_t lock;
     uint64_t next_seq;
     int exit_status;
@@ -79,6 +67,7 @@ struct bx_search_parallel_state {
     bool heading_output_started;
     bool fatal_error;
     struct bx_search_stats stats;
+    struct bx_rg_publish_aggregate aggregate;
     char *fatal_message;
     struct bx_search_parallel_job *pending_job;
 };
@@ -104,8 +93,8 @@ static void bx_search_parallel_set_fatal(struct bx_search_parallel_state *state,
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
         bx_work_pool_wake(state->pool);
     }
-    if (state->sink)
-        bx_output_sink_wake(state->sink);
+    if (state->publish)
+        bx_rg_publish_wake(state->publish);
 }
 
 static void bx_search_parallel_free_job(void *user, void *job_ptr) {
@@ -118,65 +107,33 @@ static void bx_search_parallel_free_job(void *user, void *job_ptr) {
     free(job);
 }
 
-static void bx_search_parallel_dispose_record(void *user, void *record_ptr) {
+static void bx_search_parallel_dispose_record(void *user,
+                                              struct bx_rg_publish_record *record) {
     (void)user;
-    struct bx_search_parallel_record *record = record_ptr;
-
-    if (!record)
-        return;
-    free(record->stdout_buf);
-    free(record->stderr_buf);
-    free(record);
+    bx_rg_publish_dispose_record(record);
 }
 
-static uint64_t bx_search_parallel_record_seq(const void *record_ptr, void *user) {
+static uint64_t bx_search_parallel_record_seq(const struct bx_rg_publish_record *record,
+                                              void *user) {
     (void)user;
-    return ((const struct bx_search_parallel_record *)record_ptr)->seq;
+    return record->seq;
 }
 
-static void bx_search_parallel_emit_record(void *user, void *record_ptr) {
+static void bx_search_parallel_emit_record(void *user,
+                                           struct bx_rg_publish_record *record) {
     struct bx_search_parallel_state *state = user;
-    struct bx_search_parallel_record *record = record_ptr;
 
-    if (!state || !record)
+    if (!state)
         return;
-
-    if (record->used_heading && record->stdout_len > 0u && state->heading_output_started)
-        fputc('\n', stdout);
-    if (record->stdout_len > 0u && record->stdout_buf)
-        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
-    if (record->stderr_len > 0u && record->stderr_buf)
-        fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
-    if (record->used_heading && record->stdout_len > 0u)
-        state->heading_output_started = true;
-
-    state->stats.matches += record->stats.matches;
-    state->stats.matched_lines += record->stats.matched_lines;
-    state->stats.files_with_matches += record->stats.files_with_matches;
-    state->stats.files_searched += record->stats.files_searched;
-    state->stats.bytes_printed += record->stats.bytes_printed;
-    state->stats.bytes_searched += record->stats.bytes_searched;
-
-    if (record->match_seen) {
-        state->match_seen = true;
-        if (state->exit_status != 2)
-            state->exit_status = 0;
-    }
-    if (record->error_seen) {
-        state->error_seen = true;
-        state->exit_status = 2;
-    }
+    bx_rg_publish_emit_record_default(&state->aggregate, record);
 }
 
 static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *state,
-                                             struct bx_search_parallel_record *record) {
+                                             struct bx_rg_publish_record *record) {
     if (!state || !record)
         return false;
-    if (bx_output_sink_submit(state->sink, record)) {
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED, 1u);
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_ORDERED_OUTPUT_RECORDS, 1u);
+    if (bx_rg_publish_submit(state->publish, record))
         return true;
-    }
 
     bx_search_parallel_set_fatal(state, "rg: failed to submit ordered output record\n");
     bx_search_parallel_dispose_record(NULL, record);
@@ -218,9 +175,19 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
         new_cap *= 2u;
     }
 
+    uintptr_t old_storage_addr = (uintptr_t)job->storage;
     tmp = realloc(job->storage, new_cap);
     if (!tmp)
         return false;
+    if (old_storage_addr != 0u && (uintptr_t)tmp != old_storage_addr) {
+        ptrdiff_t delta = (ptrdiff_t)((uintptr_t)tmp - old_storage_addr);
+        for (size_t i = 0; i < job->count; ++i) {
+            if (job->items[i].path)
+                job->items[i].path += delta;
+            if (job->items[i].display_name)
+                job->items[i].display_name += delta;
+        }
+    }
     job->storage = tmp;
     job->storage_cap = new_cap;
     return true;
@@ -267,7 +234,7 @@ static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state
 static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state *state,
                                                  const char *path,
                                                  int errnum) {
-    struct bx_search_parallel_record *record = calloc(1u, sizeof(*record));
+    struct bx_rg_publish_record *record = calloc(1u, sizeof(*record));
     FILE *err_stream = NULL;
 
     if (!record)
@@ -413,11 +380,9 @@ static void bx_search_parallel_process_job(void *user,
     struct bx_search_parallel_state *state = user;
     struct bx_search_parallel_worker *worker = worker_local;
     struct bx_search_parallel_job *job = job_ptr;
-    struct bx_search_parallel_record *record = NULL;
+    struct bx_rg_publish_record *record = NULL;
     struct bx_search_output_ctx output_ctx = {0};
     struct bx_search_output_ctx *previous_ctx = NULL;
-    FILE *out_stream = NULL;
-    FILE *err_stream = NULL;
     int match_count = 0;
 
     (void)worker_index;
@@ -442,26 +407,10 @@ static void bx_search_parallel_process_job(void *user,
         bx_search_parallel_free_job(NULL, job);
         return;
     }
-
-    out_stream = open_memstream(&record->stdout_buf, &record->stdout_len);
-    if (out_stream)
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
-    err_stream = open_memstream(&record->stderr_buf, &record->stderr_len);
-    if (err_stream)
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
-    if (!out_stream || !err_stream) {
-        if (out_stream)
-            fclose(out_stream);
-        if (err_stream)
-            fclose(err_stream);
-        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
-        bx_search_parallel_dispose_record(NULL, record);
-        bx_search_parallel_free_job(NULL, job);
-        return;
-    }
-
-    output_ctx.out = out_stream;
-    output_ctx.err = err_stream;
+    output_ctx.capture_out_buf = &record->stdout_buf;
+    output_ctx.capture_out_len = &record->stdout_len;
+    output_ctx.capture_err_buf = &record->stderr_buf;
+    output_ctx.capture_err_len = &record->stderr_len;
     output_ctx.stats = state->opts->stats ? &record->stats : NULL;
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
     record->status = 1;
@@ -502,9 +451,16 @@ static void bx_search_parallel_process_job(void *user,
     bx_search_output_ctx_pop(previous_ctx);
 
     record->used_heading = output_ctx.used_heading;
-
-    fclose(out_stream);
-    fclose(err_stream);
+    if (output_ctx.out)
+        fclose(output_ctx.out);
+    if (output_ctx.err)
+        fclose(output_ctx.err);
+    if (output_ctx.capture_failed) {
+        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
+        bx_search_parallel_dispose_record(NULL, record);
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
 
     if (!state->opts->stats &&
         !record->match_seen &&
@@ -512,10 +468,8 @@ static void bx_search_parallel_process_job(void *user,
         record->stdout_len == 0u &&
         record->stderr_len == 0u) {
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
-        if (!bx_output_sink_skip_seq(state->sink, record->seq))
+        if (!bx_rg_publish_skip_seq(state->publish, record->seq))
             bx_search_parallel_set_fatal(state, "rg: failed to advance empty output sequence\n");
-        else
-            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SKIPPED_OUTPUT_SEQS, 1u);
         bx_search_parallel_dispose_record(NULL, record);
         bx_search_parallel_free_job(NULL, job);
         return;
@@ -624,36 +578,50 @@ int bx_search_run_parallel_rg(int argc,
         .exit_status = 1,
     };
     struct bx_work_pool pool = {0};
-    struct bx_output_sink sink = {0};
+    struct bx_rg_publish_state publish = {0};
     size_t thread_count = bx_search_rg_auto_thread_count(opts);
     size_t queue_capacity = thread_count > (SIZE_MAX / 64u) ? thread_count : thread_count * 64u;
     int num_files = argc - first_file;
     bool pool_ready = false;
-    bool sink_ready = false;
+    bool publish_ready = false;
     bool walk_error_seen = false;
 
     if (queue_capacity < thread_count)
         queue_capacity = thread_count;
 
+    if (bx_rg_sched_supported(personality, opts, num_files, false)) {
+        return bx_rg_sched_run(argc, argv, first_file, sorted_operands,
+                               sorted_operand_count, progname, pattern,
+                               personality, opts, thread_count,
+                               stats_out, match_seen_out, error_seen_out);
+    }
+
     bx_cancel_state_init(&state.cancel);
     if (pthread_mutex_init(&state.lock, NULL) != 0)
         return 2;
+    state.aggregate = (struct bx_rg_publish_aggregate){
+        .stats = &state.stats,
+        .exit_status = &state.exit_status,
+        .match_seen = &state.match_seen,
+        .error_seen = &state.error_seen,
+        .heading_output_started = &state.heading_output_started,
+    };
 
-    struct bx_output_sink_opts sink_opts = {
+    struct bx_rg_publish_opts publish_opts = {
+        .mode = BX_RG_PUBLISH_ORDERED,
         .max_pending = queue_capacity,
         .first_seq = 0u,
-        .ordered = true,
         .user = &state,
         .record_seq = bx_search_parallel_record_seq,
         .emit_record = bx_search_parallel_emit_record,
         .dispose_record = bx_search_parallel_dispose_record,
     };
-    if (!bx_output_sink_init(&sink, &sink_opts)) {
+    if (!bx_rg_publish_init(&publish, &publish_opts)) {
         pthread_mutex_destroy(&state.lock);
         return 2;
     }
-    sink_ready = true;
-    state.sink = &sink;
+    publish_ready = true;
+    state.publish = &publish;
 
     struct bx_work_pool_opts pool_opts = {
         .thread_count = thread_count,
@@ -792,9 +760,9 @@ done:
         if (!bx_work_pool_join(&pool) && !state.fatal_error)
             bx_search_parallel_set_fatal(&state, "rg: worker pool failed\n");
     }
-    if (sink_ready) {
-        bx_output_sink_close(&sink);
-        bx_output_sink_join(&sink);
+    if (publish_ready) {
+        bx_rg_publish_close(&publish);
+        bx_rg_publish_join(&publish);
     }
     if (state.fatal_error) {
         state.error_seen = true;
@@ -819,8 +787,8 @@ done:
 
     if (pool_ready)
         bx_work_pool_dispose(&pool);
-    if (sink_ready)
-        bx_output_sink_dispose(&sink);
+    if (publish_ready)
+        bx_rg_publish_dispose(&publish);
     if (state.pending_job)
         bx_search_parallel_free_job(NULL, state.pending_job);
     pthread_mutex_destroy(&state.lock);

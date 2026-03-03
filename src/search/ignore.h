@@ -31,6 +31,10 @@ void bx_ignore_state_init(struct bx_ignore_state *state,
 void bx_ignore_state_dispose(struct bx_ignore_state *state);
 
 void bx_ignore_state_dispose_chain(struct bx_ignore_state *state);
+struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state *state);
+struct bx_ignore_state *bx_ignore_state_clone_chain_for_subtree(const struct bx_ignore_state *state,
+                                                                const char *current_root,
+                                                                const char *subtree_root);
 
 bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
                              char ***patterns, int *n);

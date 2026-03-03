@@ -127,7 +127,15 @@ static enum bx_walk_action bx_search_walk_visit(struct bx_walk_entry *entry, voi
         return BX_WALK_CONTINUE;
     }
 
-    enum bx_walk_action action = state->config->visit(entry, state->user);
+    enum bx_walk_action action;
+    if (state->config->visit_with_ignore) {
+        action = state->config->visit_with_ignore(entry,
+                                                  ignore_state,
+                                                  state->have_ignore_opts ? &state->ignore_opts : NULL,
+                                                  state->user);
+    } else {
+        action = state->config->visit(entry, state->user);
+    }
     if (action == BX_WALK_CONTINUE && entry->prune)
         action = BX_WALK_PRUNE;
 
@@ -148,7 +156,8 @@ static enum bx_walk_action bx_search_walk_error(const char *path, int errnum, vo
 int bx_search_walk(const char *root,
                    const struct bx_search_walk_config *config,
                    void *user) {
-    if (!root || !config || !config->walk_opts || !config->visit) {
+    if (!root || !config || !config->walk_opts ||
+        (!config->visit && !config->visit_with_ignore)) {
         errno = EINVAL;
         return -1;
     }
@@ -161,17 +170,32 @@ int bx_search_walk(const char *root,
 
     if (config->ignore_opts) {
         state.ignore_opts = *config->ignore_opts;
-        state.ignore_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root, &state.ignore_opts);
-        state.git_root_owned = bx_ignore_find_git_root(root, &state.ignore_opts);
-        state.ignore_opts.git_root = state.git_root_owned;
         state.have_ignore_opts = true;
-        bool ok = false;
-        state.parent_ignore_state = bx_ignore_load_parent_state(root, &state.ignore_opts, &ok);
-        if (!ok) {
-            bx_ignore_state_dispose_chain(state.parent_ignore_state);
-            free(state.git_root_owned);
-            free(state.stack);
-            return -1;
+        if (state.ignore_opts.git_root) {
+            state.git_root_owned = strdup(state.ignore_opts.git_root);
+            if (!state.git_root_owned) {
+                free(state.stack);
+                return -1;
+            }
+            state.ignore_opts.git_root = state.git_root_owned;
+        } else {
+            state.ignore_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root,
+                                                                                      &state.ignore_opts);
+            state.git_root_owned = bx_ignore_find_git_root(root, &state.ignore_opts);
+            state.ignore_opts.git_root = state.git_root_owned;
+        }
+
+        if (config->inherited_parent_ignore_state) {
+            state.parent_ignore_state = config->inherited_parent_ignore_state;
+        } else {
+            bool ok = false;
+            state.parent_ignore_state = bx_ignore_load_parent_state(root, &state.ignore_opts, &ok);
+            if (!ok) {
+                bx_ignore_state_dispose_chain(state.parent_ignore_state);
+                free(state.git_root_owned);
+                free(state.stack);
+                return -1;
+            }
         }
     }
 

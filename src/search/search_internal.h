@@ -24,10 +24,15 @@ struct bx_search_stats {
 struct bx_search_output_ctx {
     FILE *out;
     FILE *err;
+    char **capture_out_buf;
+    size_t *capture_out_len;
+    char **capture_err_buf;
+    size_t *capture_err_len;
     struct bx_search_stats *stats;
     bool heading_output_started;
     bool used_heading;
     bool emitted_stdout;
+    bool capture_failed;
 };
 
 bool bx_search_progname_uses_os_error_style(const char *progname);

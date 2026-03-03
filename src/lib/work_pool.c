@@ -37,9 +37,11 @@ static void *bx_work_pool_worker_main(void *arg) {
 
         job = pool->items[pool->head];
         pool->items[pool->head] = NULL;
+        bool was_full = pool->count == pool->queue_capacity;
         pool->head = (pool->head + 1u) % pool->queue_capacity;
         pool->count--;
-        pthread_cond_signal(&pool->can_push);
+        if (was_full)
+            pthread_cond_signal(&pool->can_push);
         pthread_mutex_unlock(&pool->lock);
 
         pool->opts.process_job(pool->opts.user, worker_local, job, worker_index);
@@ -117,7 +119,8 @@ bool bx_work_pool_submit(struct bx_work_pool *pool, void *job) {
     pool->items[pool->tail] = job;
     pool->tail = (pool->tail + 1u) % pool->queue_capacity;
     pool->count++;
-    pthread_cond_signal(&pool->can_pop);
+    if (pool->count <= pool->thread_count)
+        pthread_cond_signal(&pool->can_pop);
     pthread_mutex_unlock(&pool->lock);
     return true;
 }

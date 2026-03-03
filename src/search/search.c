@@ -50,6 +50,15 @@ bool bx_search_progname_uses_os_error_style(const char *progname) {
 
 static FILE *bx_search_output_stream(void);
 static FILE *bx_search_error_stream(void);
+static FILE *bx_search_null_stream(void);
+
+static FILE *bx_search_null_stream(void) {
+    static FILE *stream = NULL;
+
+    if (!stream)
+        stream = fopen("/dev/null", "wb");
+    return stream ? stream : stderr;
+}
 
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                                 const struct search_opts *opts) {
@@ -183,10 +192,32 @@ void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
 }
 
 static FILE *bx_search_output_stream(void) {
+    if (current_output_ctx && !current_output_ctx->out &&
+        current_output_ctx->capture_out_buf && current_output_ctx->capture_out_len) {
+        current_output_ctx->out = open_memstream(current_output_ctx->capture_out_buf,
+                                                 current_output_ctx->capture_out_len);
+        if (current_output_ctx->out)
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
+        else
+            current_output_ctx->capture_failed = true;
+    }
+    if (current_output_ctx && current_output_ctx->capture_failed)
+        return bx_search_null_stream();
     return current_output_ctx && current_output_ctx->out ? current_output_ctx->out : stdout;
 }
 
 static FILE *bx_search_error_stream(void) {
+    if (current_output_ctx && !current_output_ctx->err &&
+        current_output_ctx->capture_err_buf && current_output_ctx->capture_err_len) {
+        current_output_ctx->err = open_memstream(current_output_ctx->capture_err_buf,
+                                                 current_output_ctx->capture_err_len);
+        if (current_output_ctx->err)
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED, 1u);
+        else
+            current_output_ctx->capture_failed = true;
+    }
+    if (current_output_ctx && current_output_ctx->capture_failed)
+        return bx_search_null_stream();
     return current_output_ctx && current_output_ctx->err ? current_output_ctx->err : stderr;
 }
 
