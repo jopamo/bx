@@ -33,40 +33,55 @@ static bool bx_search_scanner_reserve(struct bx_search_scanner *scanner, size_t 
 }
 
 static size_t bx_search_scanner_find_last_delimiter(const struct bx_search_scanner *scanner) {
-    for (size_t i = scanner->len; i > 0u; --i) {
-        if (scanner->buf[i - 1u] == (unsigned char)scanner->delimiter)
-            return i;
-    }
-    return 0u;
+    const unsigned char *hit;
+
+    if (!scanner || scanner->len == 0u)
+        return 0u;
+    hit = memrchr(scanner->buf, (unsigned char)scanner->delimiter, scanner->len);
+    if (!hit)
+        return 0u;
+    return (size_t)(hit - scanner->buf) + 1u;
 }
 
 static size_t bx_search_scanner_count_delimiters(const unsigned char *buf,
                                                  size_t len,
                                                  unsigned char delimiter) {
     size_t count = 0u;
-    for (size_t i = 0; i < len; ++i) {
-        if (buf[i] == delimiter)
-            count++;
+    const unsigned char *cursor = buf;
+    const unsigned char *end = buf + len;
+
+    while (cursor < end) {
+        const unsigned char *hit = memchr(cursor, delimiter, (size_t)(end - cursor));
+        if (!hit)
+            break;
+        count++;
+        cursor = hit + 1u;
     }
     return count;
 }
 
 static size_t bx_search_scanner_record_start(const struct bx_search_scanner *scanner, size_t chunk_off) {
-    while (chunk_off > 0u) {
-        if (scanner->buf[chunk_off - 1u] == (unsigned char)scanner->delimiter)
-            break;
-        --chunk_off;
-    }
-    return chunk_off;
+    const unsigned char *hit;
+
+    if (!scanner || chunk_off == 0u)
+        return 0u;
+    hit = memrchr(scanner->buf, (unsigned char)scanner->delimiter, chunk_off);
+    if (!hit)
+        return 0u;
+    return (size_t)(hit - scanner->buf) + 1u;
 }
 
 static size_t bx_search_scanner_record_end(const struct bx_search_scanner *scanner, size_t chunk_off) {
-    while (chunk_off < scanner->scan_len) {
-        if (scanner->buf[chunk_off] == (unsigned char)scanner->delimiter)
-            return chunk_off + 1u;
-        ++chunk_off;
-    }
-    return scanner->scan_len;
+    const unsigned char *hit;
+
+    if (!scanner || chunk_off >= scanner->scan_len)
+        return scanner ? scanner->scan_len : 0u;
+    hit = memchr(scanner->buf + chunk_off,
+                 (unsigned char)scanner->delimiter,
+                 scanner->scan_len - chunk_off);
+    if (!hit)
+        return scanner->scan_len;
+    return (size_t)(hit - scanner->buf) + 1u;
 }
 
 void bx_search_scanner_dispose(struct bx_search_scanner *scanner) {
@@ -81,10 +96,13 @@ void bx_search_scanner_dispose(struct bx_search_scanner *scanner) {
     scanner->file_off = 0;
     scanner->records_before_buf = 0u;
     scanner->delimiter = '\n';
+    scanner->track_record_numbers = false;
     scanner->eof = false;
 }
 
-void bx_search_scanner_begin_file(struct bx_search_scanner *scanner, char delimiter) {
+void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
+                                  char delimiter,
+                                  bool track_record_numbers) {
     if (!scanner)
         return;
 
@@ -93,6 +111,7 @@ void bx_search_scanner_begin_file(struct bx_search_scanner *scanner, char delimi
     scanner->file_off = 0;
     scanner->records_before_buf = 0u;
     scanner->delimiter = delimiter;
+    scanner->track_record_numbers = track_record_numbers;
     scanner->eof = false;
 }
 
@@ -102,15 +121,19 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
 
     if (scanner->scan_len > 0u) {
         size_t consumed = scanner->scan_len;
-        size_t consumed_records = bx_search_scanner_count_delimiters(
-            scanner->buf, consumed, (unsigned char)scanner->delimiter
-        );
+        size_t consumed_records = 0u;
         size_t carry_len = scanner->len - consumed;
+        if (scanner->track_record_numbers) {
+            consumed_records = bx_search_scanner_count_delimiters(
+                scanner->buf, consumed, (unsigned char)scanner->delimiter
+            );
+        }
         if (carry_len > 0u)
             memmove(scanner->buf, scanner->buf + consumed, carry_len);
         scanner->len = carry_len;
         scanner->file_off += (off_t)consumed;
-        scanner->records_before_buf += consumed_records;
+        if (scanner->track_record_numbers)
+            scanner->records_before_buf += consumed_records;
         scanner->scan_len = 0u;
     }
 
@@ -190,13 +213,21 @@ bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
     return true;
 }
 
+size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,
+                                                size_t start_off,
+                                                size_t end_off) {
+    if (!scanner || start_off > end_off || end_off > scanner->scan_len)
+        return 0u;
+    return bx_search_scanner_count_delimiters(scanner->buf + start_off,
+                                              end_off - start_off,
+                                              (unsigned char)scanner->delimiter);
+}
+
 size_t bx_search_scanner_record_number(const struct bx_search_scanner *scanner,
                                        const struct bx_search_record_slice *record) {
     if (!scanner || !record)
         return 1u;
 
-    size_t prior = bx_search_scanner_count_delimiters(scanner->buf,
-                                                      record->chunk_off,
-                                                      (unsigned char)scanner->delimiter);
+    size_t prior = bx_search_scanner_count_delimiters_range(scanner, 0u, record->chunk_off);
     return scanner->records_before_buf + prior + 1u;
 }

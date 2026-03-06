@@ -587,7 +587,7 @@ static void bx_rg_append_number(char **buf, size_t *len, size_t *cap, size_t val
 char *bx_rg_hyperlink_open_dup(const char *format, const char *hostname_bin,
                                const char *path, size_t line, size_t column,
                                bool have_line, bool have_column) {
-    const char *wsl = getenv("WSL_DISTRO_NAME");
+    const char *wsl = NULL;
     char *encoded_path = NULL;
     char *hostname = NULL;
     char *buf = NULL;
@@ -597,6 +597,7 @@ char *bx_rg_hyperlink_open_dup(const char *format, const char *hostname_bin,
     if (!format || format[0] == '\0' || !path || !bx_color_enabled())
         return NULL;
 
+    wsl = getenv("WSL_DISTRO_NAME");
     encoded_path = bx_rg_percent_encode_path(path);
     hostname = bx_rg_resolve_hostname_dup(hostname_bin);
     if (!encoded_path || !hostname) {

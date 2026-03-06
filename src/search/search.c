@@ -237,8 +237,30 @@ static size_t bx_search_fwrite_out(const void *buf, size_t len) {
     return written;
 }
 
+static size_t bx_search_fwrite_stream(FILE *stream, const void *buf, size_t len) {
+    size_t written;
+
+    if (!stream || len == 0u)
+        return 0u;
+    written = fwrite(buf, 1u, len, stream);
+    if (written > 0u)
+        bx_search_note_stdout_output();
+    return written;
+}
+
 static int bx_search_fputs_out(const char *text) {
     int rc = fputs(text, bx_search_output_stream());
+    if (rc >= 0 && text && *text)
+        bx_search_note_stdout_output();
+    return rc;
+}
+
+static int bx_search_fputs_stream(FILE *stream, const char *text) {
+    int rc;
+
+    if (!stream)
+        return EOF;
+    rc = fputs(text, stream);
     if (rc >= 0 && text && *text)
         bx_search_note_stdout_output();
     return rc;
@@ -251,12 +273,37 @@ static int bx_search_putc_out(int ch) {
     return rc;
 }
 
+static int bx_search_putc_stream(FILE *stream, int ch) {
+    int rc;
+
+    if (!stream)
+        return EOF;
+    rc = fputc(ch, stream);
+    if (rc != EOF)
+        bx_search_note_stdout_output();
+    return rc;
+}
+
 static int bx_search_printf_out(const char *fmt, ...) {
     va_list ap;
     int rc;
 
     va_start(ap, fmt);
     rc = vfprintf(bx_search_output_stream(), fmt, ap);
+    va_end(ap);
+    if (rc > 0)
+        bx_search_note_stdout_output();
+    return rc;
+}
+
+static int bx_search_printf_stream(FILE *stream, const char *fmt, ...) {
+    va_list ap;
+    int rc;
+
+    if (!stream)
+        return -1;
+    va_start(ap, fmt);
+    rc = vfprintf(stream, fmt, ap);
     va_end(ap);
     if (rc > 0)
         bx_search_note_stdout_output();
@@ -700,34 +747,56 @@ static size_t printable_trim_prefix(const unsigned char *line, size_t len,
 
 static void print_plain_record_contents(const unsigned char *line, size_t len,
                                         struct search_opts *opts) {
+    FILE *out = current_output_ctx ? bx_search_output_stream() : stdout;
     size_t trim_prefix = printable_trim_prefix(line, len, opts);
-    bx_search_fwrite_out(line + trim_prefix, len - trim_prefix);
+    bx_search_fwrite_stream(out, line + trim_prefix, len - trim_prefix);
     stats_count_bytes(len - trim_prefix);
 }
 
-static void print_match_colored(const unsigned char *line, size_t len,
-                                 size_t match_start, size_t match_end,
-                                 struct search_opts *opts) {
-    size_t trim_prefix = printable_trim_prefix(line, len, opts);
+static void print_match_colored_cached(const unsigned char *line, size_t len,
+                                       size_t match_start, size_t match_end,
+                                       bool has_delim,
+                                       struct search_opts *opts,
+                                       FILE *out,
+                                       bool color,
+                                       unsigned char delimiter) {
+    size_t trim_prefix = 0u;
+
+    if (opts->trim)
+        trim_prefix = printable_trim_prefix(line, len, opts);
     if (trim_prefix > match_start)
         trim_prefix = match_start;
     if (!opts->only_matching) {
-        bx_search_fwrite_out(line + trim_prefix, match_start - trim_prefix);
+        bx_search_fwrite_stream(out, line + trim_prefix, match_start - trim_prefix);
         stats_count_bytes(match_start - trim_prefix);
-        bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.match);
-        bx_search_fwrite_out(line + match_start, match_end - match_start);
+        if (color)
+            bx_rg_emit_color_style_start_file(out, &opts->rg_colors.match);
+        bx_search_fwrite_stream(out, line + match_start, match_end - match_start);
         stats_count_bytes(match_end - match_start);
-        bx_rg_emit_color_reset_file(bx_search_output_stream());
-        bx_search_fwrite_out(line + match_end, len - match_end);
+        if (color)
+            bx_rg_emit_color_reset_file(out);
+        bx_search_fwrite_stream(out, line + match_end, len - match_end);
         stats_count_bytes(len - match_end);
-        if (len == 0 || line[len - 1] != record_delimiter(opts))
-            write_record_terminator(opts);
+        if (!has_delim)
+            bx_search_putc_stream(out, delimiter);
     } else {
-        bx_search_fwrite_out(line + match_start, match_end - match_start);
+        bx_search_fwrite_stream(out, line + match_start, match_end - match_start);
         stats_count_bytes(match_end - match_start);
-        write_record_terminator(opts);
+        bx_search_putc_stream(out, delimiter);
     }
     bx_search_dev_counters_note_output_line_emitted();
+}
+
+static void print_match_colored(const unsigned char *line, size_t len,
+                                size_t match_start, size_t match_end,
+                                struct search_opts *opts) {
+    FILE *out = current_output_ctx ? bx_search_output_stream() : stdout;
+    bool color = bx_color_enabled();
+    unsigned char delimiter = (unsigned char)record_delimiter(opts);
+    bool has_delim = len > 0u && line[len - 1u] == delimiter;
+
+    print_match_colored_cached(line, len, match_start, match_end, has_delim,
+                               opts, out, color, delimiter);
 }
 
 static void print_replacement_piece(const char *replace, const unsigned char *match, size_t match_len) {
@@ -778,9 +847,11 @@ static bool should_omit_long_match_line(const struct search_opts *opts, size_t r
 }
 
 static void print_omitted_long_line(struct search_opts *opts) {
-    bx_search_fputs_out("[Omitted long matching line]");
+    FILE *out = current_output_ctx ? bx_search_output_stream() : stdout;
+
+    bx_search_fputs_stream(out, "[Omitted long matching line]");
     stats_count_bytes(strlen("[Omitted long matching line]"));
-    write_record_terminator(opts);
+    bx_search_putc_stream(out, (unsigned char)record_delimiter(opts));
     bx_search_dev_counters_note_output_line_emitted();
 }
 
@@ -792,63 +863,109 @@ static const char *context_field_separator(struct search_opts *opts) {
     return opts->field_context_separator ? opts->field_context_separator : "-";
 }
 
-static bool print_result_prefix(const char *display_name, struct search_opts *opts,
-                                int line_num, size_t column, bool has_column,
-                                size_t byte_offset, const char *sep) {
+static bool print_result_prefix_cached(const char *display_name,
+                                       size_t display_name_len,
+                                       struct search_opts *opts,
+                                       int line_num,
+                                       size_t column,
+                                       bool has_column,
+                                       size_t byte_offset,
+                                       const char *sep,
+                                       size_t sep_len,
+                                       FILE *out,
+                                       bool color) {
     bool printed = false;
+
     if (opts->show_filename && display_name) {
-        char *hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
-                                                   opts->hostname_bin,
-                                                   display_name,
-                                                   (size_t)line_num,
-                                                   column,
-                                                   opts->show_line_number,
-                                                   has_column && opts->show_column);
+        bool hyperlink_enabled = color
+            && opts->hyperlink_format
+            && opts->hyperlink_format[0] != '\0';
+        char *hyperlink = NULL;
+
+        if (!color && !opts->show_line_number && !opts->show_column
+            && !opts->show_byte_offset && !opts->null_filename) {
+            bx_search_fwrite_stream(out, display_name, display_name_len);
+            stats_count_bytes(display_name_len);
+            bx_search_fwrite_stream(out, sep, sep_len);
+            stats_count_bytes(sep_len);
+            return true;
+        }
+
+        if (hyperlink_enabled) {
+            hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
+                                                 opts->hostname_bin,
+                                                 display_name,
+                                                 (size_t)line_num,
+                                                 column,
+                                                 opts->show_line_number,
+                                                 has_column && opts->show_column);
+        }
         if (hyperlink)
-            bx_search_fputs_out(hyperlink);
-        bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.path);
-        bx_search_fputs_out(display_name);
-        stats_count_bytes(strlen(display_name));
-        bx_rg_emit_color_reset_file(bx_search_output_stream());
+            bx_search_fputs_stream(out, hyperlink);
+        if (color)
+            bx_rg_emit_color_style_start_file(out, &opts->rg_colors.path);
+        bx_search_fwrite_stream(out, display_name, display_name_len);
+        stats_count_bytes(display_name_len);
+        if (color)
+            bx_rg_emit_color_reset_file(out);
         if (hyperlink) {
-            bx_search_fputs_out(bx_rg_hyperlink_close());
+            bx_search_fputs_stream(out, bx_rg_hyperlink_close());
             free(hyperlink);
         }
         if (opts->null_filename)
-            bx_search_putc_out('\0');
+            bx_search_putc_stream(out, '\0');
         else
-            bx_search_fputs_out(sep);
-        stats_count_bytes(opts->null_filename ? 1 : strlen(sep));
+            bx_search_fwrite_stream(out, sep, sep_len);
+        stats_count_bytes(sep_len);
         printed = true;
     }
     if (opts->show_line_number) {
-        bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.line);
-        int n = bx_search_printf_out(opts->initial_tab ? "%2d" : "%d", line_num);
+        if (color)
+            bx_rg_emit_color_style_start_file(out, &opts->rg_colors.line);
+        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2d" : "%d", line_num);
         if (n > 0) stats_count_bytes((size_t)n);
-        bx_rg_emit_color_reset_file(bx_search_output_stream());
-        bx_search_fputs_out(sep);
-        stats_count_bytes(strlen(sep));
+        if (color)
+            bx_rg_emit_color_reset_file(out);
+        bx_search_fwrite_stream(out, sep, sep_len);
+        stats_count_bytes(sep_len);
         printed = true;
     }
     if (opts->show_column && has_column) {
-        bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.column);
-        int n = bx_search_printf_out(opts->initial_tab ? "%2zu" : "%zu", column);
+        if (color)
+            bx_rg_emit_color_style_start_file(out, &opts->rg_colors.column);
+        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2zu" : "%zu", column);
         if (n > 0) stats_count_bytes((size_t)n);
-        bx_rg_emit_color_reset_file(bx_search_output_stream());
-        bx_search_fputs_out(sep);
-        stats_count_bytes(strlen(sep));
+        if (color)
+            bx_rg_emit_color_reset_file(out);
+        bx_search_fwrite_stream(out, sep, sep_len);
+        stats_count_bytes(sep_len);
         printed = true;
     }
     if (opts->show_byte_offset) {
-        bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.line);
-        int n = bx_search_printf_out(opts->initial_tab ? "%2zu" : "%zu", byte_offset);
+        if (color)
+            bx_rg_emit_color_style_start_file(out, &opts->rg_colors.line);
+        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2zu" : "%zu", byte_offset);
         if (n > 0) stats_count_bytes((size_t)n);
-        bx_rg_emit_color_reset_file(bx_search_output_stream());
-        bx_search_fputs_out(sep);
-        stats_count_bytes(strlen(sep));
+        if (color)
+            bx_rg_emit_color_reset_file(out);
+        bx_search_fwrite_stream(out, sep, sep_len);
+        stats_count_bytes(sep_len);
         printed = true;
     }
     return printed;
+}
+
+static bool print_result_prefix(const char *display_name, struct search_opts *opts,
+                                int line_num, size_t column, bool has_column,
+                                size_t byte_offset, const char *sep) {
+    FILE *out = current_output_ctx ? bx_search_output_stream() : stdout;
+    bool color = bx_color_enabled();
+    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    size_t sep_len = (opts && opts->null_filename) ? 1u : strlen(sep);
+
+    return print_result_prefix_cached(display_name, display_name_len,
+                                      opts, line_num, column, has_column,
+                                      byte_offset, sep, sep_len, out, color);
 }
 
 static void maybe_emit_initial_tab(const struct search_opts *opts, bool prefix_printed) {
@@ -1728,6 +1845,27 @@ static int search_file_scanner_opened(FILE *f,
     int status = 1;
     bool heading_printed_for_file = false;
     bool stop = false;
+    bool shortcut_file_presence = search_file_scanner_can_shortcut_file_presence(opts);
+    bool need_line_numbers = opts->show_line_number;
+    bool exact_literal_candidates = !opts->word_regexp
+        && !opts->line_regexp
+        && bx_literal_candidates_are_exact(m->literal);
+    bool heading_enabled = use_heading_output(display_name, opts);
+    bool need_initial_tab = opts->initial_tab;
+    bool can_omit_long_line = opts->max_columns > 0 && !opts->only_matching;
+    bool fast_plain_line_output = !color
+        && !opts->trim
+        && !opts->only_matching
+        && !need_line_numbers
+        && !opts->show_column
+        && !opts->show_byte_offset
+        && !need_initial_tab;
+    const char *match_sep = match_field_separator(opts);
+    size_t match_sep_len = opts->null_filename ? 1u : strlen(match_sep);
+    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    bool color = bx_color_enabled();
+    unsigned char delimiter = (unsigned char)record_delimiter(opts);
+    FILE *out = NULL;
 
     if (search_file_scanner_can_raw_shortcut_file_presence(m, opts))
         return search_file_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
@@ -1736,8 +1874,11 @@ static int search_file_scanner_opened(FILE *f,
     if (stats)
         stats->files_searched++;
 
-    bx_search_scanner_begin_file(scanner, record_delimiter(opts));
+    bx_search_scanner_begin_file(scanner, (char)delimiter, need_line_numbers);
     while (!stop && bx_search_scanner_read_chunk(scanner, f)) {
+        size_t next_line_num = scanner->records_before_buf + 1u;
+        size_t numbered_until = 0u;
+
         if (stats)
             stats->bytes_searched += scanner->scan_len;
 
@@ -1748,7 +1889,7 @@ static int search_file_scanner_opened(FILE *f,
                 break;
 
             struct bx_match bm;
-            if (search_file_scanner_can_shortcut_file_presence(opts)) {
+            if (shortcut_file_presence) {
                 if (!matcher_verify_literal_candidate_with_opts(m, scanner->buf, scanner->scan_len,
                                                                 candidate.chunk_off, opts, &bm)) {
                     continue;
@@ -1768,19 +1909,38 @@ static int search_file_scanner_opened(FILE *f,
             if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
                 continue;
 
-            size_t match_len = record_match_len(record.data, record.len, opts);
             size_t candidate_record_off = candidate.chunk_off - record.chunk_off;
-            if (!matcher_verify_literal_candidate_with_opts(m, record.data, match_len,
-                                                            candidate_record_off, opts, &bm)) {
-                if (matcher_find_with_opts(m, record.data, match_len, 0, opts, &bm) != 0)
-                    continue;
+            size_t match_len = 0u;
+            if (exact_literal_candidates) {
+                bm.start = candidate_record_off;
+                bm.end = candidate_record_off + candidate.anchor_len;
+            } else {
+                match_len = record_match_len(record.data, record.len, opts);
+                if (!matcher_verify_literal_candidate_with_opts(m, record.data, match_len,
+                                                                candidate_record_off, opts, &bm)) {
+                    if (matcher_find_with_opts(m, record.data, match_len, 0, opts, &bm) != 0)
+                        continue;
+                }
             }
 
             cursor = record.chunk_off + record.len;
-            size_t line_num = bx_search_scanner_record_number(scanner, &record);
-            int record_match_count = opts->count_matches
-                                         ? count_record_matches(m, record.data, match_len, opts)
-                                         : 1;
+            size_t line_num = 0u;
+            if (need_line_numbers) {
+                if (record.chunk_off > numbered_until) {
+                    next_line_num += bx_search_scanner_count_delimiters_range(scanner,
+                                                                              numbered_until,
+                                                                              record.chunk_off);
+                }
+                line_num = next_line_num;
+                numbered_until = record.chunk_off + record.len;
+                next_line_num++;
+            }
+            int record_match_count = 1;
+            if (opts->count_matches) {
+                if (match_len == 0u)
+                    match_len = record_match_len(record.data, record.len, opts);
+                record_match_count = count_record_matches(m, record.data, match_len, opts);
+            }
             file_matches += record_match_count;
             if (stats) {
                 stats->matches += record_match_count;
@@ -1807,17 +1967,52 @@ static int search_file_scanner_opened(FILE *f,
                 continue;
             }
 
-            maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            bool prefix_printed = print_result_prefix(
-                heading_printed_for_file ? NULL : display_name,
-                opts, (int)line_num, bm.start + 1u, true,
-                (size_t)record.file_off,
-                match_field_separator(opts));
-            maybe_emit_initial_tab(opts, prefix_printed);
-            if (should_omit_long_match_line(opts, record.len))
+            if (heading_enabled)
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
+            if (!out)
+                out = current_output_ctx ? bx_search_output_stream() : stdout;
+            if (can_omit_long_line && (int)record.len > opts->max_columns)
                 print_omitted_long_line(opts);
-            else
-                print_match_colored(record.data, record.len, bm.start, bm.end, opts);
+            else if (fast_plain_line_output) {
+                const char *prefix_name = heading_printed_for_file ? NULL : display_name;
+                size_t prefix_name_len = heading_printed_for_file ? 0u : display_name_len;
+                size_t printed_bytes = 0u;
+
+                flockfile(out);
+                if (opts->show_filename && prefix_name) {
+                    if (prefix_name_len > 0u) {
+                        printed_bytes += fwrite_unlocked(prefix_name, 1u, prefix_name_len, out);
+                    }
+                    if (opts->null_filename) {
+                        if (putc_unlocked('\0', out) != EOF)
+                            printed_bytes++;
+                    } else if (match_sep_len > 0u) {
+                        printed_bytes += fwrite_unlocked(match_sep, 1u, match_sep_len, out);
+                    }
+                }
+                if (record.len > 0u)
+                    printed_bytes += fwrite_unlocked(record.data, 1u, record.len, out);
+                if (!record.has_delim && putc_unlocked((int)delimiter, out) != EOF)
+                    printed_bytes++;
+                funlockfile(out);
+                if (printed_bytes > 0u)
+                    bx_search_note_stdout_output();
+                stats_count_bytes(printed_bytes);
+                bx_search_dev_counters_note_output_line_emitted();
+            } else {
+                bool prefix_printed = print_result_prefix_cached(
+                    heading_printed_for_file ? NULL : display_name,
+                    heading_printed_for_file ? 0u : display_name_len,
+                    opts, (int)line_num, bm.start + 1u, true,
+                    (size_t)record.file_off,
+                    match_sep, match_sep_len, out, color);
+                if (need_initial_tab && prefix_printed) {
+                    bx_search_putc_stream(out, '\t');
+                    stats_count_bytes(1u);
+                }
+                print_match_colored_cached(record.data, record.len, bm.start, bm.end,
+                                           record.has_delim, opts, out, color, delimiter);
+            }
 
             if (opts->max_count > 0 && file_matches >= opts->max_count)
                 stop = true;

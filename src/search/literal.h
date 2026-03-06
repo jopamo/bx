@@ -21,6 +21,7 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
 size_t bx_literal_len(const struct bx_literal_matcher *m);
 int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size_t len,
                     size_t start, struct bx_match *out);
+bool bx_literal_candidates_are_exact(const struct bx_literal_matcher *m);
 bool bx_literal_contains_byte(const struct bx_literal_matcher *m, unsigned char byte);
 void bx_literal_free(struct bx_literal_matcher *m);
 

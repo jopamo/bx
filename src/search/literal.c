@@ -173,6 +173,10 @@ int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size
     return -1;
 }
 
+bool bx_literal_candidates_are_exact(const struct bx_literal_matcher *m) {
+    return m && !m->has_anchor;
+}
+
 bool bx_literal_contains_byte(const struct bx_literal_matcher *m, unsigned char byte) {
     if (!m || !m->pattern_raw)
         return false;

@@ -7,6 +7,8 @@
 static enum bx_color_mode color_mode = BX_COLOR_AUTO;
 static bool tty_checked = false;
 static bool is_tty = false;
+static bool auto_checked = false;
+static bool auto_enabled = false;
 
 static bool check_tty(void) {
     if (!tty_checked) {
@@ -26,16 +28,27 @@ enum bx_color_mode bx_color_parse(const char *s) {
 
 void bx_color_set_mode(enum bx_color_mode mode) {
     color_mode = mode;
+    auto_checked = false;
 }
 
 bool bx_color_enabled(void) {
-    if (color_mode == BX_COLOR_ALWAYS) return true;
-    if (color_mode == BX_COLOR_NEVER) return false;
+    if (color_mode == BX_COLOR_ALWAYS)
+        return true;
+    if (color_mode == BX_COLOR_NEVER)
+        return false;
+    if (auto_checked)
+        return auto_enabled;
+
+    auto_checked = true;
+    auto_enabled = false;
     if (!check_tty())
         return false;
+
     const char *term = getenv("TERM");
     if (term && strcmp(term, "dumb") == 0)
         return false;
+
+    auto_enabled = true;
     return true;
 }
 

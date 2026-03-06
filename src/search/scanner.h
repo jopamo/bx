@@ -30,11 +30,14 @@ struct bx_search_scanner {
     off_t file_off;
     size_t records_before_buf;
     char delimiter;
+    bool track_record_numbers;
     bool eof;
 };
 
 void bx_search_scanner_dispose(struct bx_search_scanner *scanner);
-void bx_search_scanner_begin_file(struct bx_search_scanner *scanner, char delimiter);
+void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
+                                  char delimiter,
+                                  bool track_record_numbers);
 bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *stream);
 bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *scanner,
                                               struct bx_literal_matcher *literal,
@@ -43,6 +46,9 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
 bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
                                      const struct bx_search_candidate *candidate,
                                      struct bx_search_record_slice *record);
+size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,
+                                                size_t start_off,
+                                                size_t end_off);
 size_t bx_search_scanner_record_number(const struct bx_search_scanner *scanner,
                                        const struct bx_search_record_slice *record);
 
