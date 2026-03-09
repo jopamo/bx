@@ -1853,6 +1853,7 @@ static int search_file_scanner_opened(FILE *f,
     bool heading_enabled = use_heading_output(display_name, opts);
     bool need_initial_tab = opts->initial_tab;
     bool can_omit_long_line = opts->max_columns > 0 && !opts->only_matching;
+    bool color = bx_color_enabled();
     bool fast_plain_line_output = !color
         && !opts->trim
         && !opts->only_matching
@@ -1863,7 +1864,6 @@ static int search_file_scanner_opened(FILE *f,
     const char *match_sep = match_field_separator(opts);
     size_t match_sep_len = opts->null_filename ? 1u : strlen(match_sep);
     size_t display_name_len = display_name ? strlen(display_name) : 0u;
-    bool color = bx_color_enabled();
     unsigned char delimiter = (unsigned char)record_delimiter(opts);
     FILE *out = NULL;
 
