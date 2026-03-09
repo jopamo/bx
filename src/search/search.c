@@ -1977,8 +1977,12 @@ static int search_file_scanner_opened(FILE *f,
                 const char *prefix_name = heading_printed_for_file ? NULL : display_name;
                 size_t prefix_name_len = heading_printed_for_file ? 0u : display_name_len;
                 size_t printed_bytes = 0u;
+                bool output_is_captured = current_output_ctx
+                    && current_output_ctx->capture_out_buf
+                    && current_output_ctx->capture_out_len;
 
-                flockfile(out);
+                if (!output_is_captured)
+                    flockfile(out);
                 if (opts->show_filename && prefix_name) {
                     if (prefix_name_len > 0u) {
                         printed_bytes += fwrite_unlocked(prefix_name, 1u, prefix_name_len, out);
@@ -1994,7 +1998,8 @@ static int search_file_scanner_opened(FILE *f,
                     printed_bytes += fwrite_unlocked(record.data, 1u, record.len, out);
                 if (!record.has_delim && putc_unlocked((int)delimiter, out) != EOF)
                     printed_bytes++;
-                funlockfile(out);
+                if (!output_is_captured)
+                    funlockfile(out);
                 if (printed_bytes > 0u)
                     bx_search_note_stdout_output();
                 stats_count_bytes(printed_bytes);
