@@ -1866,6 +1866,11 @@ static int search_file_scanner_opened(FILE *f,
     size_t display_name_len = display_name ? strlen(display_name) : 0u;
     unsigned char delimiter = (unsigned char)record_delimiter(opts);
     FILE *out = NULL;
+    bool output_is_captured = current_output_ctx
+        && current_output_ctx->capture_out_buf
+        && current_output_ctx->capture_out_len;
+    char *fast_plain_prefix = NULL;
+    size_t fast_plain_prefix_len = 0u;
 
     if (search_file_scanner_can_raw_shortcut_file_presence(m, opts))
         return search_file_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
@@ -1873,6 +1878,23 @@ static int search_file_scanner_opened(FILE *f,
 
     if (stats)
         stats->files_searched++;
+
+    if (fast_plain_line_output && !heading_enabled && opts->show_filename && display_name) {
+        fast_plain_prefix_len = display_name_len + (opts->null_filename ? 1u : match_sep_len);
+        if (fast_plain_prefix_len > 0u) {
+            fast_plain_prefix = malloc(fast_plain_prefix_len);
+            if (fast_plain_prefix) {
+                if (display_name_len > 0u)
+                    memcpy(fast_plain_prefix, display_name, display_name_len);
+                if (opts->null_filename)
+                    fast_plain_prefix[display_name_len] = '\0';
+                else if (match_sep_len > 0u)
+                    memcpy(fast_plain_prefix + display_name_len, match_sep, match_sep_len);
+            } else {
+                fast_plain_prefix_len = 0u;
+            }
+        }
+    }
 
     bx_search_scanner_begin_file(scanner, (char)delimiter, need_line_numbers);
     while (!stop && bx_search_scanner_read_chunk(scanner, f)) {
@@ -1977,13 +1999,13 @@ static int search_file_scanner_opened(FILE *f,
                 const char *prefix_name = heading_printed_for_file ? NULL : display_name;
                 size_t prefix_name_len = heading_printed_for_file ? 0u : display_name_len;
                 size_t printed_bytes = 0u;
-                bool output_is_captured = current_output_ctx
-                    && current_output_ctx->capture_out_buf
-                    && current_output_ctx->capture_out_len;
 
                 if (!output_is_captured)
                     flockfile(out);
-                if (opts->show_filename && prefix_name) {
+                if (fast_plain_prefix && !heading_printed_for_file) {
+                    printed_bytes += fwrite_unlocked(fast_plain_prefix, 1u,
+                                                     fast_plain_prefix_len, out);
+                } else if (opts->show_filename && prefix_name) {
                     if (prefix_name_len > 0u) {
                         printed_bytes += fwrite_unlocked(prefix_name, 1u, prefix_name_len, out);
                     }
@@ -2025,6 +2047,7 @@ static int search_file_scanner_opened(FILE *f,
     }
 
     if (ferror(f)) {
+        free(fast_plain_prefix);
         report_path_error(progname, display_name, errno ? errno : EIO, opts);
         if (!use_stdin)
             fclose(f);
@@ -2053,6 +2076,7 @@ static int search_file_scanner_opened(FILE *f,
         stats->files_with_matches++;
     if (match_count)
         *match_count += file_matches;
+    free(fast_plain_prefix);
     if (!use_stdin)
         fclose(f);
     return status;

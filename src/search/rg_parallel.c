@@ -608,7 +608,7 @@ int bx_search_run_parallel_rg(int argc,
     };
 
     struct bx_rg_publish_opts publish_opts = {
-        .mode = BX_RG_PUBLISH_ORDERED,
+        .mode = BX_RG_PUBLISH_UNORDERED,
         .max_pending = queue_capacity,
         .first_seq = 0u,
         .user = &state,

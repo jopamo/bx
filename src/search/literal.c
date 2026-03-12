@@ -1,9 +1,13 @@
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <stdint.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #include "literal.h"
 
 struct bx_literal_matcher {
@@ -79,6 +83,50 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
         }
         return -1;
     }
+
+#if defined(__SSE2__)
+    if (m->plen >= 2u && m->plen <= 16u) {
+        const unsigned char first = (unsigned char)m->pattern_raw[0];
+        const unsigned char last = (unsigned char)m->pattern_raw[m->plen - 1u];
+        size_t i = start;
+        size_t limit = len - m->plen;
+        __m128i firstv = _mm_set1_epi8((char)first);
+        __m128i lastv = _mm_set1_epi8((char)last);
+
+        while (i + 16u <= limit + 1u) {
+            __m128i block_first = _mm_loadu_si128((const __m128i *)(buf + i));
+            __m128i block_last = _mm_loadu_si128((const __m128i *)(buf + i + m->plen - 1u));
+            unsigned mask1 = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(block_first, firstv));
+            unsigned mask2 = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(block_last, lastv));
+            unsigned mask = mask1 & mask2;
+
+            while (mask != 0u) {
+                unsigned bit = (unsigned)__builtin_ctz(mask);
+                size_t pos = i + (size_t)bit;
+                if (m->plen == 2u ||
+                    memcmp(buf + pos + 1u, m->pattern_raw + 1u, m->plen - 2u) == 0) {
+                    out->start = pos;
+                    out->end = pos + m->plen;
+                    return 0;
+                }
+                mask &= mask - 1u;
+            }
+            i += 16u;
+        }
+
+        for (; i <= limit; ++i) {
+            if (buf[i] == first &&
+                buf[i + m->plen - 1u] == last &&
+                (m->plen == 2u ||
+                 memcmp(buf + i + 1u, m->pattern_raw + 1u, m->plen - 2u) == 0)) {
+                out->start = i;
+                out->end = i + m->plen;
+                return 0;
+            }
+        }
+        return -1;
+    }
+#endif
 
     void *found = memmem(buf + start, len - start, m->pattern_raw, m->plen);
     if (!found)
