@@ -32,6 +32,7 @@ struct bx_archive_codec_input_options {
 
 const struct bx_archive_codec* bx_archive_codec_none(void);
 const struct bx_archive_codec* bx_archive_codec_gzip(void);
+const struct bx_archive_codec* bx_archive_codec_bzip2(void);
 const struct bx_archive_codec* bx_archive_codec_xz(void);
 const struct bx_archive_codec* bx_archive_codec_zstd(void);
 

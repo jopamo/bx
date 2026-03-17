@@ -168,6 +168,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_COMPRESS_THREADS,
     BX_TAR_OPT_MT_CHUNK_SIZE,
     BX_TAR_OPT_NO_MT,
+    BX_TAR_OPT_BZIP2_ON,
     BX_TAR_OPT_GZIP_ON,
     BX_TAR_OPT_XZ_ON,
     BX_TAR_OPT_ZSTD_ON,
@@ -339,7 +340,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--label", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--auto-compress", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
     {"--use-compress-program", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
-    {"--bzip2", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--bzip2", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {"--xz", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
     {"--lzip", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--lzma", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -419,7 +420,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'V', "-V", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {'a', "-a", BX_TAR_OPTARG_NONE, BX_TAR_OPT_AUTO_COMPRESS_ON},
     {'I', "-I", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM},
-    {'j', "-j", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'j', "-j", BX_TAR_OPTARG_NONE, BX_TAR_OPT_BZIP2_ON},
     {'J', "-J", BX_TAR_OPTARG_NONE, BX_TAR_OPT_XZ_ON},
     {'Z', "-Z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'z', "-z", BX_TAR_OPTARG_NONE, BX_TAR_OPT_GZIP_ON},
@@ -644,6 +645,9 @@ static bool bx_tar_apply_external_compress_program(struct bx_tar_options* option
 static const struct bx_archive_codec* bx_tar_codec_from_suffix(const char* path) {
     if (bx_archive_codec_matches_path_suffix(bx_archive_codec_gzip(), path)) {
         return bx_archive_codec_gzip();
+    }
+    if (bx_archive_codec_matches_path_suffix(bx_archive_codec_bzip2(), path)) {
+        return bx_archive_codec_bzip2();
     }
     if (bx_archive_codec_matches_path_suffix(bx_archive_codec_xz(), path)) {
         return bx_archive_codec_xz();
@@ -2822,7 +2826,6 @@ static bool bx_tar_rewrite_stream_visit_reader(const struct bx_tar_rewrite_strea
 
 static bool bx_tar_source_archive_is_unsupported_compressed(const char* path,
                                                             struct bx_diag_ctx* diag) {
-    static const unsigned char bzip2_magic[] = {'B', 'Z', 'h'};
     static const unsigned char lzip_magic[] = {'L', 'Z', 'I', 'P'};
     static const unsigned char compress_magic[] = {0x1f, 0x9d};
     unsigned char header[6];
@@ -2845,10 +2848,6 @@ static bool bx_tar_source_archive_is_unsupported_compressed(const char* path,
         return true;
     }
 
-    if ((size_t)nread >= sizeof(bzip2_magic) && memcmp(header, bzip2_magic, sizeof(bzip2_magic)) == 0) {
-        bx_diag(diag, "%s: unsupported compressed archive format", path);
-        return true;
-    }
     if ((size_t)nread >= sizeof(lzip_magic) && memcmp(header, lzip_magic, sizeof(lzip_magic)) == 0) {
         bx_diag(diag, "%s: unsupported compressed archive format", path);
         return true;
@@ -3864,6 +3863,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         }
         case BX_TAR_OPT_NO_MT:
             options->no_mt = true;
+            return true;
+        case BX_TAR_OPT_BZIP2_ON:
+            bx_tar_set_codec_option(options, bx_archive_codec_bzip2());
             return true;
         case BX_TAR_OPT_GZIP_ON:
             bx_tar_set_codec_option(options, bx_archive_codec_gzip());

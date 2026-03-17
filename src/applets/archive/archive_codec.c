@@ -15,6 +15,7 @@
 #endif
 #include <zlib.h>
 
+#include "applets/archive/archive_bzip2.h"
 #include "applets/archive/archive_codec.h"
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_gzip.h"
@@ -34,6 +35,7 @@ struct bx_archive_codec_input {
     enum {
         BX_ARCHIVE_CODEC_INPUT_PLAIN = 0,
         BX_ARCHIVE_CODEC_INPUT_GZIP,
+        BX_ARCHIVE_CODEC_INPUT_BZIP2,
         BX_ARCHIVE_CODEC_INPUT_XZ,
         BX_ARCHIVE_CODEC_INPUT_ZSTD,
     } kind;
@@ -68,6 +70,24 @@ static const struct bx_archive_codec bx_archive_codec_gzip_value = {
     .name = "gzip",
     .supports_mt_encode = true,
     .matches_path_suffix = bx_archive_path_has_gzip_suffix,
+};
+
+static bool bx_archive_codec_bzip2_matches_path_suffix(const char* path) {
+    size_t len;
+
+    if (path == NULL) {
+        return false;
+    }
+    len = strlen(path);
+    return (len >= 4u && strcmp(path + len - 4u, ".bz2") == 0)
+        || (len >= 4u && strcmp(path + len - 4u, ".tbz") == 0)
+        || (len >= 5u && strcmp(path + len - 5u, ".tbz2") == 0);
+}
+
+static const struct bx_archive_codec bx_archive_codec_bzip2_value = {
+    .name = "bzip2",
+    .supports_mt_encode = false,
+    .matches_path_suffix = bx_archive_codec_bzip2_matches_path_suffix,
 };
 
 static bool bx_archive_codec_xz_matches_path_suffix(const char* path) {
@@ -111,6 +131,10 @@ const struct bx_archive_codec* bx_archive_codec_none(void) {
 
 const struct bx_archive_codec* bx_archive_codec_gzip(void) {
     return &bx_archive_codec_gzip_value;
+}
+
+const struct bx_archive_codec* bx_archive_codec_bzip2(void) {
+    return &bx_archive_codec_bzip2_value;
 }
 
 const struct bx_archive_codec* bx_archive_codec_xz(void) {
@@ -170,6 +194,18 @@ static bool bx_archive_codec_xz_producer_bridge(void* user,
     return adapter->producer(adapter->producer_user, &codec_sink, diag);
 }
 
+static bool bx_archive_codec_bzip2_producer_bridge(void* user,
+                                                   const struct bx_archive_bzip2_stream_sink* sink,
+                                                   struct bx_diag_ctx* diag) {
+    struct bx_archive_codec_producer_adapter* adapter = user;
+    struct bx_archive_codec_stream_sink codec_sink = {
+        .user = sink->user,
+        .write = sink->write,
+    };
+
+    return adapter->producer(adapter->producer_user, &codec_sink, diag);
+}
+
 static bool bx_archive_codec_zstd_producer_bridge(void* user,
                                                   const struct bx_archive_zstd_stream_sink* sink,
                                                   struct bx_diag_ctx* diag) {
@@ -192,6 +228,9 @@ bool bx_archive_codec_encode_buffer(const struct bx_archive_codec* codec,
     if (codec == bx_archive_codec_gzip()) {
         return bx_archive_run_gzip_filter(input, output, false, diag);
     }
+    if (codec == bx_archive_codec_bzip2()) {
+        return bx_archive_run_bzip2_filter(input, output, false, diag);
+    }
     if (codec == bx_archive_codec_xz()) {
         return bx_archive_run_xz_filter(input, output, false, diag);
     }
@@ -211,6 +250,9 @@ bool bx_archive_codec_decode_buffer(const struct bx_archive_codec* codec,
     }
     if (codec == bx_archive_codec_gzip()) {
         return bx_archive_run_gzip_filter(input, output, true, diag);
+    }
+    if (codec == bx_archive_codec_bzip2()) {
+        return bx_archive_run_bzip2_filter(input, output, true, diag);
     }
     if (codec == bx_archive_codec_xz()) {
         return bx_archive_run_xz_filter(input, output, true, diag);
@@ -248,6 +290,21 @@ bool bx_archive_codec_run_encode_stream(const struct bx_archive_codec* codec,
                                                  &producer_adapter,
                                                  &gzip_sink,
                                                  diag);
+    }
+    if (codec == bx_archive_codec_bzip2()) {
+        struct bx_archive_codec_producer_adapter producer_adapter = {
+            .producer = producer,
+            .producer_user = producer_user,
+        };
+        struct bx_archive_bzip2_stream_sink bzip2_sink = {
+            .user = output_sink->user,
+            .write = output_sink->write,
+        };
+
+        return bx_archive_run_bzip2_filter_stream(bx_archive_codec_bzip2_producer_bridge,
+                                                  &producer_adapter,
+                                                  &bzip2_sink,
+                                                  diag);
     }
     if (codec == bx_archive_codec_xz()) {
         struct bx_archive_codec_producer_adapter producer_adapter = {
@@ -324,6 +381,10 @@ static bool bx_archive_codec_input_requires_gzip(const struct bx_archive_codec_i
     return input->required_codec == bx_archive_codec_gzip();
 }
 
+static bool bx_archive_codec_input_requires_bzip2(const struct bx_archive_codec_input* input) {
+    return input->required_codec == bx_archive_codec_bzip2();
+}
+
 static bool bx_archive_codec_input_requires_xz(const struct bx_archive_codec_input* input) {
     return input->required_codec == bx_archive_codec_xz();
 }
@@ -357,10 +418,50 @@ static bool bx_archive_codec_input_check_mode(struct bx_archive_codec_input* inp
     return true;
 }
 
+static bool bx_archive_codec_bytes_have_magic(const unsigned char* data,
+                                              size_t data_len,
+                                              const unsigned char* magic,
+                                              size_t magic_len) {
+    return data_len >= magic_len && memcmp(data, magic, magic_len) == 0;
+}
+
+static const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsigned char* data,
+                                                                    size_t data_len) {
+    static const unsigned char gzip_magic[] = {0x1f, 0x8b};
+    static const unsigned char bzip2_magic[] = {'B', 'Z', 'h'};
+    static const unsigned char xz_magic[] = {0xfd, '7', 'z', 'X', 'Z', 0x00};
+    static const unsigned char zstd_magic[] = {0x28, 0xb5, 0x2f, 0xfd};
+
+    if (bx_archive_codec_bytes_have_magic(data, data_len, gzip_magic, sizeof(gzip_magic))) {
+        return bx_archive_codec_gzip();
+    }
+    if (bx_archive_codec_bytes_have_magic(data, data_len, bzip2_magic, sizeof(bzip2_magic))) {
+        return bx_archive_codec_bzip2();
+    }
+    if (bx_archive_codec_bytes_have_magic(data, data_len, xz_magic, sizeof(xz_magic))) {
+        return bx_archive_codec_xz();
+    }
+    if (bx_archive_codec_bytes_have_magic(data, data_len, zstd_magic, sizeof(zstd_magic))) {
+        return bx_archive_codec_zstd();
+    }
+    return NULL;
+}
+
+static const struct bx_archive_codec* bx_archive_codec_detect_seekable_fd(int fd) {
+    unsigned char magic[6];
+    ssize_t nread = pread(fd, magic, sizeof(magic), 0);
+
+    if (nread <= 0) {
+        return NULL;
+    }
+    return bx_archive_codec_detect_magic(magic, (size_t)nread);
+}
+
 bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
                                  const struct bx_archive_codec_input_options* options,
                                  struct bx_diag_ctx* diag) {
     struct bx_archive_codec_input* input;
+    const struct bx_archive_codec* required_codec;
     int fd;
     bool use_gzip_stream = false;
     bool tune_gzip_buffer = false;
@@ -373,7 +474,6 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     *input_out = NULL;
     input = xmalloc(sizeof(*input));
     memset(input, 0, sizeof(*input));
-    input->required_codec = options->required_codec;
     input->fd = -1;
 
     if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
@@ -403,6 +503,24 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
             input->plain_size = (uint64_t)st.st_size;
         }
     }
+    required_codec = options->required_codec;
+    if (required_codec == NULL && input->plain_seekable) {
+        required_codec = bx_archive_codec_detect_seekable_fd(fd);
+    }
+    input->required_codec = required_codec;
+
+    if (bx_archive_codec_input_requires_bzip2(input)) {
+        input->kind = BX_ARCHIVE_CODEC_INPUT_BZIP2;
+        input->plain_seekable = false;
+        input->plain_size = 0u;
+        if (!bx_archive_bzip2_reader_open((struct bx_archive_bzip2_reader**)&input->codec_reader, fd, diag)) {
+            close(fd);
+            free(input);
+            return false;
+        }
+        *input_out = input;
+        return true;
+    }
     if (bx_archive_codec_input_requires_xz(input)) {
         input->kind = BX_ARCHIVE_CODEC_INPUT_XZ;
         input->plain_seekable = false;
@@ -431,15 +549,6 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     if (bx_archive_codec_input_requires_gzip(input)) {
         use_gzip_stream = true;
         tune_gzip_buffer = true;
-    }
-    else if (input->plain_seekable) {
-        unsigned char magic[2];
-        ssize_t nread = pread(fd, magic, sizeof(magic), 0);
-
-        if (nread == (ssize_t)sizeof(magic) && magic[0] == 0x1fu && magic[1] == 0x8bu) {
-            use_gzip_stream = true;
-            tune_gzip_buffer = true;
-        }
     }
     else {
         use_gzip_stream = true;
@@ -494,6 +603,17 @@ bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,
                                             len,
                                             nread_out,
                                             diag)) {
+            return false;
+        }
+        input->logical_offset += (uint64_t)*nread_out;
+        return true;
+    }
+    if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2) {
+        if (!bx_archive_bzip2_reader_read_some((struct bx_archive_bzip2_reader*)input->codec_reader,
+                                               buffer,
+                                               len,
+                                               nread_out,
+                                               diag)) {
             return false;
         }
         input->logical_offset += (uint64_t)*nread_out;
@@ -590,17 +710,20 @@ bool bx_archive_codec_input_skip(struct bx_archive_codec_input* input,
     }
 
     while (len > 0u) {
-        size_t chunk = len > sizeof(buffer) ? sizeof(buffer) : len;
         size_t nread = 0u;
 
-        if (!bx_archive_codec_input_read_some(input, buffer, chunk, &nread, diag)) {
+        if (!bx_archive_codec_input_read_some(input,
+                                             buffer,
+                                             len > sizeof(buffer) ? sizeof(buffer) : len,
+                                             &nread,
+                                             diag)) {
             return false;
         }
-        if (nread != chunk) {
+        if (nread == 0u) {
             bx_diag(diag, "truncated archive");
             return false;
         }
-        len -= chunk;
+        len -= nread;
     }
 
     return true;
@@ -654,6 +777,9 @@ void bx_archive_codec_input_close(struct bx_archive_codec_input* input) {
     }
     else if (input->kind == BX_ARCHIVE_CODEC_INPUT_XZ) {
         bx_archive_xz_reader_close((struct bx_archive_xz_reader*)input->codec_reader);
+    }
+    else if (input->kind == BX_ARCHIVE_CODEC_INPUT_BZIP2) {
+        bx_archive_bzip2_reader_close((struct bx_archive_bzip2_reader*)input->codec_reader);
     }
     else if (input->kind == BX_ARCHIVE_CODEC_INPUT_ZSTD) {
         bx_archive_zstd_reader_close((struct bx_archive_zstd_reader*)input->codec_reader);

@@ -52,6 +52,7 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --newer-mtime=DATE\n");
     fprintf(stream, "                        compare by modification time only\n");
     fprintf(stream, "  -K FILE               start list or extract at member FILE\n");
+    fprintf(stream, "  -j                    filter the archive through bzip2\n");
     fprintf(stream, "  -z                    filter the archive through gzip\n");
     fprintf(stream, "  -J                    filter the archive through xz\n");
     fprintf(stream, "      --zstd           filter the archive through zstd\n");

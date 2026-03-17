@@ -142,6 +142,19 @@ if not zlib_dep.found()
   zlib_dep = cc.find_library('z', required : true)
 endif
 
+libbz2_dep = cc.find_library('bz2', required : false, static: use_static_binary)
+if not libbz2_dep.found() and not use_static_binary
+  libbz2_dep = dependency('bzip2', required : false, static: false)
+endif
+if not libbz2_dep.found() and not use_static_binary
+  libbz2_dep = cc.find_library('bz2', required : false)
+endif
+if libbz2_dep.found()
+  add_project_arguments('-DBX_HAVE_LIBBZ2=1', language : 'c')
+else
+  add_project_arguments('-DBX_HAVE_LIBBZ2=0', language : 'c')
+endif
+
 liblzma_dep = dependency('liblzma', required : false, static: use_static_binary)
 if not liblzma_dep.found()
   liblzma_dep = cc.find_library('lzma', required : false)
@@ -163,6 +176,9 @@ else
 endif
 
 bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep]
+if libbz2_dep.found()
+  bx_deps += [libbz2_dep]
+endif
 if liblzma_dep.found()
   bx_deps += [liblzma_dep]
 endif
@@ -225,6 +241,7 @@ bx_crypto_sources = [
 ]
 
 bx_archive_applet_sources = [
+  'src/applets/archive/archive_bzip2.c',
   'src/applets/archive/archive_codec.c',
   'src/applets/archive/archive_common.c',
   'src/applets/archive/archive_gzip.c',
@@ -957,6 +974,9 @@ if get_option('tests')
   test('archive ordered', test_archive_ordered)
 
   test_archive_codec_deps = [threads_dep, zlib_dep]
+  if libbz2_dep.found()
+    test_archive_codec_deps += [libbz2_dep]
+  endif
   if liblzma_dep.found()
     test_archive_codec_deps += [liblzma_dep]
   endif
@@ -968,6 +988,7 @@ if get_option('tests')
     'test-archive-codec',
     [
       'tests/src/archive/test_archive_codec.c',
+      'src/applets/archive/archive_bzip2.c',
       'src/applets/archive/archive_codec.c',
       'src/applets/archive/archive_gzip.c',
       'src/applets/archive/archive_xz.c',
