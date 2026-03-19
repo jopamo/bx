@@ -13,6 +13,9 @@ add_project_arguments('-DBX_LSCOLORS_FILE="' + lscolors_install_path + '"', lang
 screen_utf8_install_subdir = join_paths(get_option('datadir'), 'bx', 'screen', 'utf8encodings')
 screen_utf8_install_path = join_paths(get_option('prefix'), screen_utf8_install_subdir)
 screen_system_rc_path = join_paths(get_option('prefix'), get_option('sysconfdir'), 'bx', 'screenrc')
+edit_vim_runtime_install_subdir = join_paths(get_option('datadir'), 'bx', 'vim')
+edit_vim_runtime_install_path = join_paths(get_option('prefix'), edit_vim_runtime_install_subdir)
+edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'edit', 'runtime')
 
 cc = meson.get_compiler('c')
 warn_flags = [
@@ -703,6 +706,182 @@ screen_lib = static_library('bx_screen',
   c_args : screen_c_args,
 )
 
+edit_wrapper_sources = files(
+  'src/applets/text/edit/edit_main.c',
+  'src/applets/text/edit/bx_vim_runtime.c',
+  'src/applets/text/edit/bx_vim_startup.c',
+)
+
+edit_wrapper_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-pedantic',
+])
+edit_wrapper_c_args += [
+  '-DBX_EDIT_VIM_RUNTIME_INSTALL_DIR="' + edit_vim_runtime_install_path + '"',
+  '-DBX_EDIT_VIM_RUNTIME_SOURCE_DIR="' + edit_vim_runtime_source_path + '"',
+]
+
+edit_wrapper_lib = static_library('bx_edit_wrapper',
+  edit_wrapper_sources,
+  include_directories : include_directories('src', 'src/dispatch'),
+  c_args : edit_wrapper_c_args,
+)
+
+edit_vim_sources = files(
+  'src/applets/text/edit/vim/src/alloc.c',
+  'src/applets/text/edit/vim/src/arabic.c',
+  'src/applets/text/edit/vim/src/arglist.c',
+  'src/applets/text/edit/vim/src/autocmd.c',
+  'src/applets/text/edit/vim/src/beval.c',
+  'src/applets/text/edit/vim/src/blob.c',
+  'src/applets/text/edit/vim/src/blowfish.c',
+  'src/applets/text/edit/vim/src/buffer.c',
+  'src/applets/text/edit/vim/src/bufwrite.c',
+  'src/applets/text/edit/vim/src/change.c',
+  'src/applets/text/edit/vim/src/charset.c',
+  'src/applets/text/edit/vim/src/cindent.c',
+  'src/applets/text/edit/vim/src/clientserver.c',
+  'src/applets/text/edit/vim/src/clipboard.c',
+  'src/applets/text/edit/vim/src/cmdexpand.c',
+  'src/applets/text/edit/vim/src/cmdhist.c',
+  'src/applets/text/edit/vim/src/crypt.c',
+  'src/applets/text/edit/vim/src/crypt_zip.c',
+  'src/applets/text/edit/vim/src/debugger.c',
+  'src/applets/text/edit/vim/src/dict.c',
+  'src/applets/text/edit/vim/src/diff.c',
+  'src/applets/text/edit/vim/src/digraph.c',
+  'src/applets/text/edit/vim/src/drawline.c',
+  'src/applets/text/edit/vim/src/drawscreen.c',
+  'src/applets/text/edit/vim/src/edit.c',
+  'src/applets/text/edit/vim/src/eval.c',
+  'src/applets/text/edit/vim/src/evalbuffer.c',
+  'src/applets/text/edit/vim/src/evalfunc.c',
+  'src/applets/text/edit/vim/src/evalvars.c',
+  'src/applets/text/edit/vim/src/evalwindow.c',
+  'src/applets/text/edit/vim/src/ex_cmds.c',
+  'src/applets/text/edit/vim/src/ex_cmds2.c',
+  'src/applets/text/edit/vim/src/ex_docmd.c',
+  'src/applets/text/edit/vim/src/ex_eval.c',
+  'src/applets/text/edit/vim/src/ex_getln.c',
+  'src/applets/text/edit/vim/src/fileio.c',
+  'src/applets/text/edit/vim/src/filepath.c',
+  'src/applets/text/edit/vim/src/findfile.c',
+  'src/applets/text/edit/vim/src/float.c',
+  'src/applets/text/edit/vim/src/fold.c',
+  'src/applets/text/edit/vim/src/fuzzy.c',
+  'src/applets/text/edit/vim/src/gc.c',
+  'src/applets/text/edit/vim/src/getchar.c',
+  'src/applets/text/edit/vim/src/gui_xim.c',
+  'src/applets/text/edit/vim/src/hardcopy.c',
+  'src/applets/text/edit/vim/src/hashtab.c',
+  'src/applets/text/edit/vim/src/help.c',
+  'src/applets/text/edit/vim/src/highlight.c',
+  'src/applets/text/edit/vim/src/if_cscope.c',
+  'src/applets/text/edit/vim/src/if_xcmdsrv.c',
+  'src/applets/text/edit/vim/src/indent.c',
+  'src/applets/text/edit/vim/src/insexpand.c',
+  'src/applets/text/edit/vim/src/json.c',
+  'src/applets/text/edit/vim/src/linematch.c',
+  'src/applets/text/edit/vim/src/list.c',
+  'src/applets/text/edit/vim/src/locale.c',
+  'src/applets/text/edit/vim/src/logfile.c',
+  'src/applets/text/edit/vim/src/main.c',
+  'src/applets/text/edit/vim/src/map.c',
+  'src/applets/text/edit/vim/src/mark.c',
+  'src/applets/text/edit/vim/src/match.c',
+  'src/applets/text/edit/vim/src/mbyte.c',
+  'src/applets/text/edit/vim/src/memfile.c',
+  'src/applets/text/edit/vim/src/memline.c',
+  'src/applets/text/edit/vim/src/menu.c',
+  'src/applets/text/edit/vim/src/message.c',
+  'src/applets/text/edit/vim/src/misc1.c',
+  'src/applets/text/edit/vim/src/misc2.c',
+  'src/applets/text/edit/vim/src/mouse.c',
+  'src/applets/text/edit/vim/src/move.c',
+  'src/applets/text/edit/vim/src/normal.c',
+  'src/applets/text/edit/vim/src/ops.c',
+  'src/applets/text/edit/vim/src/option.c',
+  'src/applets/text/edit/vim/src/optionstr.c',
+  'src/applets/text/edit/vim/src/os_unix.c',
+  'src/applets/text/edit/vim/src/auto/pathdef.c',
+  'src/applets/text/edit/vim/src/popupmenu.c',
+  'src/applets/text/edit/vim/src/popupwin.c',
+  'src/applets/text/edit/vim/src/profiler.c',
+  'src/applets/text/edit/vim/src/pty.c',
+  'src/applets/text/edit/vim/src/quickfix.c',
+  'src/applets/text/edit/vim/src/regexp.c',
+  'src/applets/text/edit/vim/src/register.c',
+  'src/applets/text/edit/vim/src/screen.c',
+  'src/applets/text/edit/vim/src/scriptfile.c',
+  'src/applets/text/edit/vim/src/search.c',
+  'src/applets/text/edit/vim/src/session.c',
+  'src/applets/text/edit/vim/src/sha256.c',
+  'src/applets/text/edit/vim/src/sign.c',
+  'src/applets/text/edit/vim/src/sound.c',
+  'src/applets/text/edit/vim/src/spell.c',
+  'src/applets/text/edit/vim/src/spellfile.c',
+  'src/applets/text/edit/vim/src/spellsuggest.c',
+  'src/applets/text/edit/vim/src/strings.c',
+  'src/applets/text/edit/vim/src/syntax.c',
+  'src/applets/text/edit/vim/src/tabpanel.c',
+  'src/applets/text/edit/vim/src/tag.c',
+  'src/applets/text/edit/vim/src/term.c',
+  'src/applets/text/edit/vim/src/terminal.c',
+  'src/applets/text/edit/vim/src/testing.c',
+  'src/applets/text/edit/vim/src/textformat.c',
+  'src/applets/text/edit/vim/src/textobject.c',
+  'src/applets/text/edit/vim/src/textprop.c',
+  'src/applets/text/edit/vim/src/time.c',
+  'src/applets/text/edit/vim/src/tuple.c',
+  'src/applets/text/edit/vim/src/typval.c',
+  'src/applets/text/edit/vim/src/ui.c',
+  'src/applets/text/edit/vim/src/undo.c',
+  'src/applets/text/edit/vim/src/usercmd.c',
+  'src/applets/text/edit/vim/src/userfunc.c',
+  'src/applets/text/edit/vim/src/version.c',
+  'src/applets/text/edit/vim/src/vim9class.c',
+  'src/applets/text/edit/vim/src/vim9cmds.c',
+  'src/applets/text/edit/vim/src/vim9compile.c',
+  'src/applets/text/edit/vim/src/vim9execute.c',
+  'src/applets/text/edit/vim/src/vim9expr.c',
+  'src/applets/text/edit/vim/src/vim9generics.c',
+  'src/applets/text/edit/vim/src/vim9instr.c',
+  'src/applets/text/edit/vim/src/vim9script.c',
+  'src/applets/text/edit/vim/src/vim9type.c',
+  'src/applets/text/edit/vim/src/viminfo.c',
+  'src/applets/text/edit/vim/src/window.c',
+  'src/applets/text/edit/vim/src/xdiff/xdiffi.c',
+  'src/applets/text/edit/vim/src/xdiff/xemit.c',
+  'src/applets/text/edit/vim/src/xdiff/xhistogram.c',
+  'src/applets/text/edit/vim/src/xdiff/xpatience.c',
+  'src/applets/text/edit/vim/src/xdiff/xprepare.c',
+  'src/applets/text/edit/vim/src/xdiff/xutils.c',
+)
+
+edit_vim_deps = [screen_termcap_dep]
+edit_vim_dl_dep = cc.find_library('dl', required : false)
+if edit_vim_dl_dep.found()
+  edit_vim_deps += [edit_vim_dl_dep]
+endif
+
+edit_vim_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-pedantic',
+  '-Wno-cast-function-type',
+  '-Wno-declaration-after-statement',
+  '-Wno-sign-compare',
+  '-Wno-unused-parameter',
+  '-Wno-unused-function',
+])
+edit_vim_c_args += ['-DHAVE_CONFIG_H']
+
+edit_vim_lib = static_library('bx_edit_vim',
+  edit_vim_sources,
+  include_directories : include_directories('src', 'src/applets/text/edit/vim/src', 'src/applets/text/edit/vim/src/proto'),
+  dependencies : edit_vim_deps,
+  c_args : edit_vim_c_args,
+)
+
 bc_host_c_args = cc.get_supported_arguments([
   '-Wno-error',
 ])
@@ -737,7 +916,7 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'vim', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -763,7 +942,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib],
+  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
@@ -771,6 +950,11 @@ bx_exe = executable('bx',
 
 install_subdir('src/applets/system/screen/utf8encodings',
   install_dir : join_paths(get_option('datadir'), 'bx', 'screen')
+)
+
+install_subdir('src/applets/text/edit/runtime',
+  install_dir : edit_vim_runtime_install_subdir,
+  strip_directory : true
 )
 
 if multicall_install_mode == 'symlink'
@@ -1079,6 +1263,9 @@ if get_option('tests')
 
   test_ed_basic = find_program('tests/applets/text/ed/test_ed_basic.sh')
   test('ed basic', test_ed_basic, args : [bx_exe], suite : fast_track_p2_suite)
+
+  test_edit_basic = find_program('tests/applets/text/edit/test_edit_basic.sh')
+  test('vim basic', test_edit_basic, args : [bx_exe], suite : fast_track_p2_suite)
 
   test_expand_basic = find_program('tests/applets/base/expand/test_expand_basic.sh')
   test('expand basic', test_expand_basic, args : [bx_exe], suite : fast_track_p2_suite)

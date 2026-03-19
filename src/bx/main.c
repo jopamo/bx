@@ -56,6 +56,7 @@ static const struct applet applets[] = {
     {"dd", bx_dd_main},
     {"printf", bx_printf_main},
     {"ed", bx_ed_main},
+    {"vim", bx_vim_main},
     {"env", bx_env_main},
     {"printenv", bx_printenv_main},
     {"pwd", bx_pwd_main},
