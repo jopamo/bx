@@ -7357,7 +7357,7 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"packages",
-#ifdef FEAT_EVAL
+#if defined(FEAT_EVAL) && !defined(BX_VIM_NO_PACKAGES)
 		1
 #else
 		0

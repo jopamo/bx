@@ -428,7 +428,7 @@ static char *(features[]) =
 	"-ole",
 # endif
 #endif
-#ifdef FEAT_EVAL
+#if defined(FEAT_EVAL) && !defined(BX_VIM_NO_PACKAGES)
 	"+packages",
 #else
 	"-packages",

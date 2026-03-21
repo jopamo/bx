@@ -313,6 +313,12 @@ static void	ex_tag_cmd(exarg_T *eap, char_u *name);
 # define ex_import		ex_ni
 # define ex_export		ex_ni
 #endif
+#ifdef BX_VIM_NO_PACKAGES
+# undef ex_packadd
+# undef ex_packloadall
+# define ex_packadd		ex_ni
+# define ex_packloadall		ex_ni
+#endif
 #ifndef FEAT_SESSION
 # define ex_loadview		ex_ni
 #endif

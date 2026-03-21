@@ -615,7 +615,9 @@ init_highlight(
 #endif
 }
 
-#if defined(FEAT_EVAL) && (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS))
+#if defined(FEAT_EVAL) \
+	&& (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)) \
+	&& !defined(BX_VIM_NO_COLOR_LISTS)
 /*
  * Load a default color list. Intended to support legacy color names but allows
  * the user to override the color values. Only loaded once.
@@ -651,7 +653,9 @@ load_colors(char_u *name)
     buf = alloc(STRLEN(name) + 12);
     if (buf != NULL)
     {
-#if defined(FEAT_EVAL) && (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS))
+#if defined(FEAT_EVAL) \
+	&& (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)) \
+	&& !defined(BX_VIM_NO_COLOR_LISTS)
 	load_default_colors_lists();
 #endif
 	apply_autocmds(EVENT_COLORSCHEMEPRE, name,
@@ -2700,7 +2704,9 @@ gui_get_color_cmn(char_u *name)
     color = colorname2rgb(name);
     if (color == INVALCOLOR)
     {
+# if !defined(BX_VIM_NO_COLOR_LISTS)
 	load_default_colors_lists();
+# endif
 	color = colorname2rgb(name);
     }
 
