@@ -1,4 +1,7 @@
+scriptencoding utf-8
+
 set nocompatible
+set encoding=utf-8
 
 runtime filetype.vim
 runtime ftplugin.vim
@@ -28,8 +31,6 @@ set mouse=
 set t_Co=256
 set background=dark
 runtime syntax/syntax.vim
-
-set encoding=utf-8
 
 set textwidth=0
 set formatoptions=crq
