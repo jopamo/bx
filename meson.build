@@ -874,15 +874,6 @@ edit_vim_c_args = cc.get_supported_arguments([
   '-Wno-unused-function',
 ])
 edit_vim_c_args += ['-DHAVE_CONFIG_H']
-#
-# The embedded Vim source is not safe under higher glibc fortify levels.
-# Upstream Vim's configure forcibly rewrites FORTIFY to 1
-# (-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1). Keep that policy local to the
-# imported Vim core so distro-wide hardening flags do not trip known aborts.
-edit_vim_c_args += [
-  '-U_FORTIFY_SOURCE',
-  '-D_FORTIFY_SOURCE=1',
-]
 
 edit_vim_lib = static_library('bx_edit_vim',
   edit_vim_sources,
