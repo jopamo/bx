@@ -1880,8 +1880,8 @@ struct dictitem_S
 typedef struct dictitem_S dictitem_T;
 
 /*
- * A dictitem with a 16 character key (plus NUL).  This is an efficient way to
- * have a fixed-size dictitem.
+ * A dictitem with a fixed-size key buffer (plus NUL).  This avoids extra
+ * allocations for hot-path users that know their maximum key length up front.
  */
 #define DICTITEM16_KEY_LEN 16
 struct dictitem16_S
@@ -1891,6 +1891,15 @@ struct dictitem16_S
     char_u	di_key[DICTITEM16_KEY_LEN + 1];	// key
 };
 typedef struct dictitem16_S dictitem16_T;
+
+#define DICTITEM_VAR_SHORT_LEN 20
+struct dictitemvar_S
+{
+    typval_T	di_tv;		// type and value of the variable
+    char_u	di_flags;	// DI_FLAGS_ flags (only used for variable)
+    char_u	di_key[DICTITEM_VAR_SHORT_LEN + 1];	// key
+};
+typedef struct dictitemvar_S dictitemvar_T;
 
 // Flags for "di_flags"
 #define DI_FLAGS_RO	   0x01	    // read-only variable
@@ -2125,7 +2134,7 @@ struct ufunc_S
 # define IS_GENERIC_FUNC(ufunc) (((ufunc)->uf_flags & FC_GENERIC) == FC_GENERIC)
 
 # define MAX_FUNC_ARGS	20	// maximum number of function arguments
-# define VAR_SHORT_LEN	20	// short variable name length
+# define VAR_SHORT_LEN	DICTITEM_VAR_SHORT_LEN	// short variable name length
 # define FIXVAR_CNT	12	// number of fixed variables
 
 /*
@@ -2136,11 +2145,7 @@ struct funccall_S
     ufunc_T	*fc_func;	// function being called
     int		fc_linenr;	// next line to be executed
     int		fc_returned;	// ":return" used
-    struct			// fixed variables for arguments
-    {
-	dictitem_T	var;		// variable (without room for name)
-	char_u	room[VAR_SHORT_LEN];	// room for the name
-    } fc_fixvar[FIXVAR_CNT];
+    dictitemvar_T	fc_fixvar[FIXVAR_CNT];	// fixed variables for arguments
     dict_T	fc_l_vars;	// l: local function variables
     dictitem_T	fc_l_vars_var;	// variable for l: scope
     dict_T	fc_l_avars;	// a: argument variables
