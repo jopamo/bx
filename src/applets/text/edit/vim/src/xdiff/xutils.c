@@ -41,12 +41,12 @@ int xdl_emit_diffrec(char const *rec, long size, char const *pre, long psize,
 	int i = 2;
 	mmbuffer_t mb[3];
 
-	mb[0].ptr = (char *) pre;
+	mb[0].ptr = pre;
 	mb[0].size = psize;
-	mb[1].ptr = (char *) rec;
+	mb[1].ptr = rec;
 	mb[1].size = size;
 	if (size > 0 && rec[size - 1] != '\n') {
-		mb[2].ptr = (char *) "\n\\ No newline at end of file\n";
+		mb[2].ptr = "\n\\ No newline at end of file\n";
 		mb[2].size = (long)strlen(mb[2].ptr);
 		i++;
 	}
@@ -58,14 +58,14 @@ int xdl_emit_diffrec(char const *rec, long size, char const *pre, long psize,
 	return 0;
 }
 
-void *xdl_mmfile_first(mmfile_t *mmf, long *size)
+const char *xdl_mmfile_first(const mmfile_t *mmf, long *size)
 {
 	*size = mmf->size;
 	return mmf->ptr;
 }
 
 
-long xdl_mmfile_size(mmfile_t *mmf)
+long xdl_mmfile_size(const mmfile_t *mmf)
 {
 	return mmf->size;
 }
@@ -118,7 +118,7 @@ void *xdl_cha_alloc(chastore_t *cha) {
 	return data;
 }
 
-long xdl_guess_lines(mmfile_t *mf, long sample) {
+long xdl_guess_lines(const mmfile_t *mf, long sample) {
 	long nl = 0, size, tsize = 0;
 	char const *data, *cur, *top;
 
@@ -464,10 +464,10 @@ int xdl_fall_back_diff(xdfenv_t *diff_env, xpparam_t const *xpp,
 	mmfile_t subfile1, subfile2;
 	xdfenv_t env;
 
-	subfile1.ptr = (char *)diff_env->xdf1.recs[line1 - 1].ptr;
+	subfile1.ptr = diff_env->xdf1.recs[line1 - 1].ptr;
 	subfile1.size = diff_env->xdf1.recs[line1 + count1 - 2].ptr +
 		diff_env->xdf1.recs[line1 + count1 - 2].size - subfile1.ptr;
-	subfile2.ptr = (char *)diff_env->xdf2.recs[line2 - 1].ptr;
+	subfile2.ptr = diff_env->xdf2.recs[line2 - 1].ptr;
 	subfile2.size = diff_env->xdf2.recs[line2 + count2 - 2].ptr +
 		diff_env->xdf2.recs[line2 + count2 - 2].size - subfile2.ptr;
 	if (xdl_do_diff(&subfile1, &subfile2, xpp, &env) < 0)

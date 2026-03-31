@@ -69,12 +69,12 @@ extern "C" {
 #define XDL_MERGE_ZEALOUS_DIFF3 2
 
 typedef struct s_mmfile {
-	char *ptr;
+	const char *ptr;
 	long size;
 } mmfile_t;
 
 typedef struct s_mmbuffer {
-	char *ptr;
+	const char *ptr;
 	long size;
 } mmbuffer_t;
 
@@ -131,8 +131,8 @@ typedef struct s_bdiffparam {
 #define xdl_free(ptr) vim_free(ptr)
 #define xdl_realloc(ptr,x) vim_realloc((ptr),(x))
 
-void *xdl_mmfile_first(mmfile_t *mmf, long *size);
-long xdl_mmfile_size(mmfile_t *mmf);
+const char *xdl_mmfile_first(const mmfile_t *mmf, long *size);
+long xdl_mmfile_size(const mmfile_t *mmf);
 
 int xdl_diff(mmfile_t *mf1, mmfile_t *mf2, xpparam_t const *xpp,
 	     xdemitconf_t const *xecfg, xdemitcb_t *ecb);

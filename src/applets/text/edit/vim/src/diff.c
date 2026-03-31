@@ -71,6 +71,7 @@ static int diff_bin_works = MAYBE; // TRUE when "diff --binary" works, FALSE
 typedef struct {
     char_u	*din_fname;  // used for external diff
     mmfile_t	din_mmfile;  // used for internal diff
+    char_u	*din_mmalloc;  // owned storage for internal diff input
 } diffin_T;
 
 // used for diff result
@@ -775,7 +776,11 @@ diff_redraw(
 clear_diffin(diffin_T *din)
 {
     if (din->din_fname == NULL)
-	VIM_CLEAR(din->din_mmfile.ptr);
+    {
+	VIM_CLEAR(din->din_mmalloc);
+	din->din_mmfile.ptr = NULL;
+	din->din_mmfile.size = 0;
+    }
     else
 	mch_remove(din->din_fname);
 }
@@ -808,6 +813,7 @@ diff_write_buffer(buf_T *buf, diffin_T *din, linenr_T start, linenr_T end)
     {
 	din->din_mmfile.ptr = NULL;
 	din->din_mmfile.size = 0;
+	din->din_mmalloc = NULL;
 	return OK;
     }
 
@@ -832,6 +838,7 @@ diff_write_buffer(buf_T *buf, diffin_T *din, linenr_T start, linenr_T end)
     }
     din->din_mmfile.ptr = (char *)ptr;
     din->din_mmfile.size = len;
+    din->din_mmalloc = ptr;
 
     len = 0;
     for (lnum = start; lnum <= end; ++lnum)
@@ -937,8 +944,10 @@ diff_write(buf_T *buf, diffin_T *din, linenr_T start, linenr_T end)
     static int
 lnum_compare(const void *s1, const void *s2)
 {
-    linenr_T	lnum1 = *(linenr_T*)s1;
-    linenr_T	lnum2 = *(linenr_T*)s2;
+    const linenr_T	*lnum1p = s1;
+    const linenr_T	*lnum2p = s2;
+    linenr_T		lnum1 = *lnum1p;
+    linenr_T		lnum2 = *lnum2p;
     if (lnum1 < lnum2)
 	return -1;
     if (lnum1 > lnum2)
@@ -2394,6 +2403,7 @@ run_linematch_algorithm(diff_T *dp)
 	    {
 		diffbufs_mm[ndiffs].din_mmfile.size = 0;
 		diffbufs_mm[ndiffs].din_mmfile.ptr = NULL;
+		diffbufs_mm[ndiffs].din_mmalloc = NULL;
 	    }
 
 	    diffbufs[ndiffs] = &diffbufs_mm[ndiffs].din_mmfile;
@@ -2417,7 +2427,11 @@ run_linematch_algorithm(diff_T *dp)
 	linematch_nbuffers(diffbufs, diff_length, ndiffs, &decisions, iwhite);
 
     for (size_t i = 0; i < ndiffs; i++)
-	free(diffbufs_mm[i].din_mmfile.ptr); // TODO should this be vim_free ?
+    {
+	VIM_CLEAR(diffbufs_mm[i].din_mmalloc);
+	diffbufs_mm[i].din_mmfile.ptr = NULL;
+	diffbufs_mm[i].din_mmfile.size = 0;
+    }
 
     apply_linematch_results(dp, decisions_length, decisions);
 
@@ -3766,11 +3780,13 @@ diff_find_change_inline_diff(
 	{
 	    dio.dio_new.din_mmfile.ptr = (char *)curstr->ga_data;
 	    dio.dio_new.din_mmfile.size = curstr->ga_len;
+	    dio.dio_new.din_mmalloc = NULL;
 	}
 	else
 	{
 	    dio.dio_orig.din_mmfile.ptr = (char *)curstr->ga_data;
 	    dio.dio_orig.din_mmfile.size = curstr->ga_len;
+	    dio.dio_orig.din_mmalloc = NULL;
 	}
 	if (file1_idx != i)
 	{
@@ -4815,7 +4831,16 @@ xdiff_out_unified(
     int		i;
 
     for (i = 0; i < nbuf; i++)
-	ga_concat_len(&dout->dout_ga, (char_u *)mb[i].ptr, mb[i].size);
+    {
+	if (mb[i].ptr == NULL || mb[i].size == 0 || *mb[i].ptr == NUL)
+	    continue;
+	if (ga_grow(&dout->dout_ga, (int)mb[i].size) == OK)
+	{
+	    memmove((char *)dout->dout_ga.ga_data + dout->dout_ga.ga_len,
+		    mb[i].ptr, (size_t)mb[i].size);
+	    dout->dout_ga.ga_len += (int)mb[i].size;
+	}
+    }
 
     return 0;
 }
@@ -5041,6 +5066,7 @@ list_to_diffin(list_T *l, diffin_T *din, int icase)
 
     din->din_mmfile.ptr = (char *)ga.ga_data;
     din->din_mmfile.size = ga.ga_len;
+    din->din_mmalloc = ga.ga_data;
 }
 
 /*

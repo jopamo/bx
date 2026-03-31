@@ -33,8 +33,8 @@ static size_t test_charmatch_paths(diffcmppath_T *node, int lastdecision);
     static size_t
 line_len(const mmfile_t *m)
 {
-    char	*s = m->ptr;
-    char	*end;
+    const char	*s = m->ptr;
+    const char	*end;
 
     end = memchr(s, '\n', (size_t)m->size);
     return end ? (size_t)(end - s) : (size_t)m->size;
@@ -97,8 +97,8 @@ matching_chars(const mmfile_t *m1, const mmfile_t *m2)
 {
     size_t	s1len = MIN(MATCH_CHAR_MAX_LEN - 1, line_len(m1));
     size_t	s2len = MIN(MATCH_CHAR_MAX_LEN - 1, line_len(m2));
-    char	*s1 = m1->ptr;
-    char	*s2 = m2->ptr;
+    const char	*s1 = m1->ptr;
+    const char	*s2 = m2->ptr;
     int		matrix[2][MATCH_CHAR_MAX_LEN] = { 0 };
     int		icur = 1;  // save space by storing only two rows for i axis
 
@@ -167,7 +167,7 @@ fastforward_buf_to_lnum(mmfile_t s, linenr_T lnum)
 {
     for (int i = 0; i < lnum - 1; i++)
     {
-	char *line_end;
+	const char *line_end;
 
 	line_end = memchr(s.ptr, '\n', (size_t)s.size);
 	s.size = line_end ? (int)(s.size - (line_end - s.ptr)) : 0;
