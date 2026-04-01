@@ -164,25 +164,27 @@ fuzzy_match(
     static int
 fuzzy_match_item_compare(const void *s1, const void *s2)
 {
-    int		v1 = ((fuzzyItem_T *)s1)->score;
-    int		v2 = ((fuzzyItem_T *)s2)->score;
+    const fuzzyItem_T *item1 = s1;
+    const fuzzyItem_T *item2 = s2;
+    int		v1 = item1->score;
+    int		v2 = item2->score;
 
     if (v1 == v2)
     {
 	int exact_match1 = FALSE, exact_match2 = FALSE;
-	char_u *pat = ((fuzzyItem_T *)s1)->pat;
+	char_u *pat = item1->pat;
 	int patlen = (int)STRLEN(pat);
-	int startpos = ((fuzzyItem_T *)s1)->startpos;
+	int startpos = item1->startpos;
 	exact_match1 = (startpos >= 0) && STRNCMP(pat,
-		((fuzzyItem_T *)s1)->itemstr + startpos, patlen) == 0;
-	startpos = ((fuzzyItem_T *)s2)->startpos;
+		item1->itemstr + startpos, patlen) == 0;
+	startpos = item2->startpos;
 	exact_match2 = (startpos >= 0) && STRNCMP(pat,
-		((fuzzyItem_T *)s2)->itemstr + startpos, patlen) == 0;
+		item2->itemstr + startpos, patlen) == 0;
 
 	if (exact_match1 == exact_match2)
 	{
-	    int idx1 = ((fuzzyItem_T *)s1)->idx;
-	    int idx2 = ((fuzzyItem_T *)s2)->idx;
+	    int idx1 = item1->idx;
+	    int idx2 = item2->idx;
 	    return idx1 == idx2 ? 0 : idx1 > idx2 ? 1 : -1;
 	}
 	else if (exact_match2)
@@ -579,10 +581,12 @@ f_matchfuzzypos(typval_T *argvars, typval_T *rettv)
     static int
 fuzzy_match_str_compare(const void *s1, const void *s2)
 {
-    int		v1 = ((fuzmatch_str_T *)s1)->score;
-    int		v2 = ((fuzmatch_str_T *)s2)->score;
-    int		idx1 = ((fuzmatch_str_T *)s1)->idx;
-    int		idx2 = ((fuzmatch_str_T *)s2)->idx;
+    const fuzmatch_str_T *match1 = s1;
+    const fuzmatch_str_T *match2 = s2;
+    int		v1 = match1->score;
+    int		v2 = match2->score;
+    int		idx1 = match1->idx;
+    int		idx2 = match2->idx;
 
     if (v1 == v2)
 	return idx1 == idx2 ? 0 : idx1 > idx2 ? 1 : -1;
@@ -608,12 +612,14 @@ fuzzy_match_str_sort(fuzmatch_str_T *fm, int sz)
     static int
 fuzzy_match_func_compare(const void *s1, const void *s2)
 {
-    int		v1 = ((fuzmatch_str_T *)s1)->score;
-    int		v2 = ((fuzmatch_str_T *)s2)->score;
-    int		idx1 = ((fuzmatch_str_T *)s1)->idx;
-    int		idx2 = ((fuzmatch_str_T *)s2)->idx;
-    char_u	*str1 = ((fuzmatch_str_T *)s1)->str;
-    char_u	*str2 = ((fuzmatch_str_T *)s2)->str;
+    const fuzmatch_str_T *match1 = s1;
+    const fuzmatch_str_T *match2 = s2;
+    int		v1 = match1->score;
+    int		v2 = match2->score;
+    int		idx1 = match1->idx;
+    int		idx2 = match2->idx;
+    char_u	*str1 = match1->str;
+    char_u	*str2 = match2->str;
 
     if (*str1 != '<' && *str2 == '<')
 	return -1;

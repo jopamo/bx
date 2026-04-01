@@ -1706,8 +1706,10 @@ find_special_key_in_table(int c)
     static int
 cmp_key_name_entry(const void *a, const void *b)
 {
-    char_u  *p1 = ((struct key_name_entry *)a)->name.string;
-    char_u  *p2 = ((struct key_name_entry *)b)->name.string;
+    const struct key_name_entry *e1 = a;
+    const struct key_name_entry *e2 = b;
+    char_u  *p1 = e1->name.string;
+    char_u  *p2 = e2->name.string;
     int	    result = 0;
 
     if (p1 == p2)
@@ -2015,7 +2017,7 @@ get_real_state(void)
  * "b" must point to the start of the file name
  */
     int
-after_pathsep(char_u *b, char_u *p)
+after_pathsep(const char_u *b, const char_u *p)
 {
     return p > b && vim_ispathsep(p[-1])
 			     && (!has_mbyte || (*mb_head_off)(b, p - 1) == 0);
@@ -3151,8 +3153,8 @@ get_special_pty_type(void)
     int
 cmp_keyvalue_value(const void *a, const void *b)
 {
-    keyvalue_T *kv1 = (keyvalue_T *)a;
-    keyvalue_T *kv2 = (keyvalue_T *)b;
+    const keyvalue_T *kv1 = a;
+    const keyvalue_T *kv2 = b;
 
     return STRCMP(kv1->value.string, kv2->value.string);
 }
@@ -3161,8 +3163,8 @@ cmp_keyvalue_value(const void *a, const void *b)
     int
 cmp_keyvalue_value_n(const void *a, const void *b)
 {
-    keyvalue_T *kv1 = (keyvalue_T *)a;
-    keyvalue_T *kv2 = (keyvalue_T *)b;
+    const keyvalue_T *kv1 = a;
+    const keyvalue_T *kv2 = b;
 
     return STRNCMP(kv1->value.string, kv2->value.string, MAX(kv1->value.length,
 		kv2->value.length));
@@ -3172,8 +3174,8 @@ cmp_keyvalue_value_n(const void *a, const void *b)
     int
 cmp_keyvalue_value_i(const void *a, const void *b)
 {
-    keyvalue_T *kv1 = (keyvalue_T *)a;
-    keyvalue_T *kv2 = (keyvalue_T *)b;
+    const keyvalue_T *kv1 = a;
+    const keyvalue_T *kv2 = b;
 
     return STRICMP(kv1->value.string, kv2->value.string);
 }
@@ -3183,11 +3185,11 @@ cmp_keyvalue_value_i(const void *a, const void *b)
     int
 cmp_keyvalue_value_ni(const void *a, const void *b)
 {
-    keyvalue_T *kv1 = (keyvalue_T *)a;
-    keyvalue_T *kv2 = (keyvalue_T *)b;
+    const keyvalue_T *kv1 = a;
+    const keyvalue_T *kv2 = b;
 
-    return vim_strnicmp_asc((char *)kv1->value.string,
-	    (char *)kv2->value.string, MAX(kv1->value.length,
+    return vim_strnicmp_asc((const char *)kv1->value.string,
+	    (const char *)kv2->value.string, MAX(kv1->value.length,
 		    kv2->value.length));
 }
 

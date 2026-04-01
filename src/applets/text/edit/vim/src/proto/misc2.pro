@@ -40,7 +40,7 @@ void set_fileformat(int t, int opt_flags);
 int default_fileformat(void);
 int call_shell(char_u *cmd, int opt);
 int get_real_state(void);
-int after_pathsep(char_u *b, char_u *p);
+int after_pathsep(const char_u *b, const char_u *p);
 int same_directory(char_u *f1, char_u *f2);
 int vim_chdirfile(char_u *fname, char *trigger_autocmd);
 int vim_stat(const char *name, stat_T *stp);

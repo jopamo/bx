@@ -595,7 +595,7 @@ vim_strnicmp(char *s1, char *s2, size_t len)
  * return 0 for match, < 0 for smaller, > 0 for bigger
  */
     int
-vim_strnicmp_asc(char *s1, char *s2, size_t len)
+vim_strnicmp_asc(const char *s1, const char *s2, size_t len)
 {
     int                i = 0;
 
@@ -746,7 +746,10 @@ static int sort_compare(const void *s1, const void *s2);
     static int
 sort_compare(const void *s1, const void *s2)
 {
-    return STRCMP(*(char **)s1, *(char **)s2);
+    const char_u *const *str1 = s1;
+    const char_u *const *str2 = s2;
+
+    return strcmp((const char *)*str1, (const char *)*str2);
 }
 
     void
@@ -1092,7 +1095,7 @@ byteidx_common(typval_T *argvars, typval_T *rettv, int comp)
 	}
     }
 
-    int (*ptr2len)(char_u *);
+    int (*ptr2len)(const char_u *);
     if (enc_utf8 && comp)
 	ptr2len = utf_ptr2len;
     else
@@ -1165,7 +1168,7 @@ f_charidx(typval_T *argvars, typval_T *rettv)
 	    utf16idx = tv_get_bool(&argvars[3]);
     }
 
-    int (*ptr2len)(char_u *);
+    int (*ptr2len)(const char_u *);
     if (enc_utf8 && countcc)
 	ptr2len = utf_ptr2len;
     else
@@ -1661,8 +1664,8 @@ f_str2list(typval_T *argvars, typval_T *rettv)
 
     if (has_mbyte || utf8)
     {
-	int (*ptr2len)(char_u *);
-	int (*ptr2char)(char_u *);
+	int (*ptr2len)(const char_u *);
+	int (*ptr2char)(const char_u *);
 
 	if (utf8 || enc_utf8)
 	{
@@ -2230,7 +2233,7 @@ f_utf16idx(typval_T *argvars, typval_T *rettv)
 	    charidx = tv_get_bool(&argvars[3]);
     }
 
-    int (*ptr2len)(char_u *);
+    int (*ptr2len)(const char_u *);
     if (enc_utf8 && countcc)
 	ptr2len = utf_ptr2len;
     else
@@ -3070,8 +3073,7 @@ adjust_types(
 	if (*ap_types == NULL)
 	    new_types = ALLOC_CLEAR_MULT(const char *, arg);
 	else
-	    new_types = vim_realloc((char **)*ap_types,
-						arg * sizeof(const char *));
+	    new_types = vim_realloc(*ap_types, arg * sizeof(*new_types));
 
 	if (new_types == NULL)
 	    return FAIL;
@@ -3204,7 +3206,7 @@ parse_fmt_types(
 	if (*p != '%')
 	{
 	    const char    *q = strchr(p + 1, '%');
-	    size_t  n = (q == NULL) ? STRLEN(p) : (size_t)(q - p);
+	    size_t  n = (q == NULL) ? strlen(p) : (size_t)(q - p);
 
 	    p += n;
 	}
@@ -3469,7 +3471,7 @@ parse_fmt_types(
     return OK;
 
 error:
-    vim_free((char**)*ap_types);
+    vim_free(*ap_types);
     *ap_types = NULL;
     *num_posarg = 0;
     return FAIL;
@@ -3605,14 +3607,14 @@ vim_vsnprintf_typval(
 	if (*p != '%')
 	{
 	    const char    *q = strchr(p + 1, '%');
-	    size_t  n = (q == NULL) ? STRLEN(p) : (size_t)(q - p);
+	    size_t  n = (q == NULL) ? strlen(p) : (size_t)(q - p);
 
 	    // Copy up to the next '%' or NUL without any changes.
 	    if (str_l < str_m)
 	    {
 		size_t avail = str_m - str_l;
 
-		mch_memmove(str + str_l, p, n > avail ? avail : n);
+		memmove(str + str_l, p, n > avail ? avail : n);
 	    }
 	    p += n;
 	    str_l += n;
@@ -3941,11 +3943,11 @@ vim_vsnprintf_typval(
 		    }
 		    if (fmt_spec == 'S')
 		    {
-			char_u	*p1;
+			const char_u *p1;
 			size_t	i;
 			int	cell;
 
-			for (i = 0, p1 = (char_u *)str_arg; *p1;
+			for (i = 0, p1 = (const char_u *)str_arg; *p1;
 							  p1 += mb_ptr2len(p1))
 			{
 			    cell = mb_ptr2cells(p1);
@@ -3954,7 +3956,7 @@ vim_vsnprintf_typval(
 			    i += cell;
 			}
 
-			str_arg_l = p1 - (char_u *)str_arg;
+			str_arg_l = (size_t)(p1 - (const char_u *)str_arg);
 			if (min_field_width != 0)
 			    min_field_width += str_arg_l - i;
 		    }
@@ -4349,7 +4351,7 @@ vim_vsnprintf_typval(
 			    )
 		    {
 			// Avoid a buffer overflow
-			STRCPY(tmp, infinity_str(f > 0.0, fmt_spec,
+			strcpy((char *)tmp, infinity_str(f > 0.0, fmt_spec,
 					      force_sign, space_for_positive));
 			str_arg_l = STRLEN(tmp);
 			zero_padding = 0;
@@ -4366,7 +4368,7 @@ vim_vsnprintf_typval(
 			}
 			else if (isinf(f))
 			{
-			    STRCPY(tmp, infinity_str(f > 0.0, fmt_spec,
+			    strcpy((char *)tmp, infinity_str(f > 0.0, fmt_spec,
 					      force_sign, space_for_positive));
 			    str_arg_l = STRLEN(tmp);
 			    zero_padding = 0;
@@ -4534,9 +4536,8 @@ vim_vsnprintf_typval(
 		    {
 			size_t avail = str_m - str_l;
 
-			mch_memmove(str + str_l, str_arg,
-					     (size_t)zn > avail ? avail
-								: (size_t)zn);
+			memmove(str + str_l, str_arg,
+				 (size_t)zn > avail ? avail : (size_t)zn);
 		    }
 		    str_l += zn;
 		}
@@ -4569,7 +4570,7 @@ vim_vsnprintf_typval(
 		    {
 			size_t avail = str_m - str_l;
 
-			mch_memmove(str + str_l,
+			memmove(str + str_l,
 				str_arg + zero_padding_insertion_ind,
 				(size_t)sn > avail ? avail : (size_t)sn);
 		    }
@@ -4613,7 +4614,7 @@ vim_vsnprintf_typval(
 	emsg(_(e_too_many_arguments_to_printf));
 
 error:
-    vim_free((char*)ap_types);
+    vim_free(ap_types);
     va_end(ap);
 
     // Return the number of characters formatted (excluding trailing nul

@@ -89,11 +89,27 @@ static enum bx_dircolors_shell_mode bx_dircolors_default_shell_mode(void) {
     return BX_DIRCOLORS_SHELL_BOURNE;
 }
 
+static const char* bx_dircolors_extra_input_path(void) {
+    if (BX_LSCOLORS_FILE[0] == '\0') {
+        return NULL;
+    }
+    if (strcmp(BX_LSCOLORS_FILE, "/etc/LS_COLORS") == 0 ||
+        strcmp(BX_LSCOLORS_FILE, "/etc/DIR_COLORS") == 0) {
+        return NULL;
+    }
+    return BX_LSCOLORS_FILE;
+}
+
 static void bx_dircolors_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]\n", progname);
     fprintf(stream, "Output shell commands to set LS_COLORS.\n");
     fprintf(stream, "FILE defaults to the first readable path among:\n");
-    fprintf(stream, "  /etc/LS_COLORS, /etc/DIR_COLORS, %s\n", BX_LSCOLORS_FILE);
+    fprintf(stream, "  /etc/LS_COLORS, /etc/DIR_COLORS");
+    const char* extra_input_path = bx_dircolors_extra_input_path();
+    if (extra_input_path != NULL) {
+        fprintf(stream, ", %s", extra_input_path);
+    }
+    fputc('\n', stream);
     fprintf(stream, "\n");
     fprintf(stream, "  -b, --bourne-shell   output Bourne shell commands\n");
     fprintf(stream, "  -c, --c-shell        output C shell commands\n");
@@ -407,13 +423,17 @@ static const char* bx_dircolors_default_input_path(void) {
     static const char* candidates[] = {
         "/etc/LS_COLORS",
         "/etc/DIR_COLORS",
-        BX_LSCOLORS_FILE,
     };
 
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
         if (access(candidates[i], R_OK) == 0) {
             return candidates[i];
         }
+    }
+
+    const char* extra_input_path = bx_dircolors_extra_input_path();
+    if (extra_input_path != NULL && access(extra_input_path, R_OK) == 0) {
+        return extra_input_path;
     }
 
     return NULL;

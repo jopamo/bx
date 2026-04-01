@@ -58,6 +58,8 @@ int bx_vim_prepare_invocation(struct bx_vim_invocation* invocation, int argc, ch
 
     invocation->runtime_dir = bx_vim_runtime_resolve_dir();
     invocation->runtime_cmd = bx_vim_runtime_make_runtime_cmd(invocation->runtime_dir);
+    invocation->policy_cmd = xstrdup(bx_vim_runtime_policy_cmd());
+    invocation->defaults_cmd = xstrdup(bx_vim_runtime_defaults_cmd());
 
     const int prefix_argc = 16;
     invocation->argc = prefix_argc + argc - 1;
@@ -77,9 +79,9 @@ int bx_vim_prepare_invocation(struct bx_vim_invocation* invocation, int argc, ch
     invocation->argv[out++] = "--cmd";
     invocation->argv[out++] = invocation->runtime_cmd;
     invocation->argv[out++] = "--cmd";
-    invocation->argv[out++] = (char*)bx_vim_runtime_policy_cmd();
+    invocation->argv[out++] = invocation->policy_cmd;
     invocation->argv[out++] = "--cmd";
-    invocation->argv[out++] = (char*)bx_vim_runtime_defaults_cmd();
+    invocation->argv[out++] = invocation->defaults_cmd;
 
     for (int i = 1; i < argc; ++i) {
         invocation->argv[out++] = argv[i];
@@ -90,9 +92,13 @@ int bx_vim_prepare_invocation(struct bx_vim_invocation* invocation, int argc, ch
 
 void bx_vim_free_invocation(struct bx_vim_invocation* invocation) {
     free(invocation->argv);
+    free(invocation->defaults_cmd);
+    free(invocation->policy_cmd);
     free(invocation->runtime_cmd);
     free(invocation->runtime_dir);
     invocation->argv = NULL;
+    invocation->defaults_cmd = NULL;
+    invocation->policy_cmd = NULL;
     invocation->runtime_cmd = NULL;
     invocation->runtime_dir = NULL;
     invocation->argc = 0;

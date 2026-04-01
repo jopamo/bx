@@ -9216,7 +9216,7 @@ mch_create_anon_file(void)
 {
     int fd = -1;
 #ifdef HAVE_SHM_OPEN
-    const char template[] = "/vimXXXXXX";
+    char template[] = "/vimXXXXXX";
 
     for (int i = 0; i < 100; i++)
     {

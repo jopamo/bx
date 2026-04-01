@@ -89,6 +89,8 @@ static int has_dash_c_arg = FALSE;
 #  ifdef VIMDLL
 __declspec(dllexport)
 #  endif
+int bx_vim_main_impl(int argc, char **argv);
+
     int
 #  ifdef MSWIN
 VimMain

@@ -6,6 +6,8 @@ struct bx_vim_invocation {
     char** argv;
     char* runtime_dir;
     char* runtime_cmd;
+    char* policy_cmd;
+    char* defaults_cmd;
 };
 
 void bx_vim_print_help(const char* progname);

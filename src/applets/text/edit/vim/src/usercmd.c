@@ -808,8 +808,8 @@ parse_addr_type_arg(
     static int
 cmp_addr_type(const void *a, const void *b)
 {
-    addrtype_T *at1 = (addrtype_T *)a;
-    addrtype_T *at2 = (addrtype_T *)b;
+    const addrtype_T *at1 = a;
+    const addrtype_T *at2 = b;
 
     return STRNCMP(at1->fullname, at2->fullname, MAX(at1->fullnamelen, at2->fullnamelen));
 }

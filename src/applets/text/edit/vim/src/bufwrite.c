@@ -482,7 +482,7 @@ buf_write_bytes(struct bw_info *ip)
 
 	    // copy remainder to ip->bw_rest[] to be used for the next call.
 	    if (fromlen > 0)
-		mch_memmove(ip->bw_rest, (void *)from, fromlen);
+		memmove(ip->bw_rest, from, fromlen);
 	    ip->bw_restlen = (int)fromlen;
 
 	    buf = ip->bw_conv_buf;

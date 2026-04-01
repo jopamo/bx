@@ -1648,7 +1648,7 @@ retry:
 		{
 		    // Some remaining characters, keep them for the next
 		    // round.
-		    mch_memmove(conv_rest, (char_u *)fromp, from_size);
+		    memmove(conv_rest, fromp, from_size);
 		    conv_restlen = (int)from_size;
 		}
 
@@ -5039,10 +5039,12 @@ theend:
     static int
 compare_readdirex_item(const void *p1, const void *p2)
 {
+    dict_T *const *item1 = p1;
+    dict_T *const *item2 = p2;
     char_u  *name1, *name2;
 
-    name1 = dict_get_string(*(dict_T**)p1, "name", FALSE);
-    name2 = dict_get_string(*(dict_T**)p2, "name", FALSE);
+    name1 = dict_get_string(*item1, "name", FALSE);
+    name2 = dict_get_string(*item2, "name", FALSE);
     if (readdirex_sort == READDIR_SORT_BYTE)
 	return STRCMP(name1, name2);
     if (readdirex_sort == READDIR_SORT_IC)
@@ -5054,12 +5056,15 @@ compare_readdirex_item(const void *p1, const void *p2)
     static int
 compare_readdir_item(const void *s1, const void *s2)
 {
-    if (readdirex_sort == READDIR_SORT_BYTE)
-	return STRCMP(*(char **)s1, *(char **)s2);
-    if (readdirex_sort == READDIR_SORT_IC)
-	return STRICMP(*(char **)s1, *(char **)s2);
+    const char_u *const *name1 = s1;
+    const char_u *const *name2 = s2;
 
-    return STRCOLL(*(char **)s1, *(char **)s2);
+    if (readdirex_sort == READDIR_SORT_BYTE)
+	return strcmp((const char *)*name1, (const char *)*name2);
+    if (readdirex_sort == READDIR_SORT_IC)
+	return strcasecmp((const char *)*name1, (const char *)*name2);
+
+    return strcoll((const char *)*name1, (const char *)*name2);
 }
 #endif
 

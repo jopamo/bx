@@ -1458,16 +1458,20 @@ cp_set_prev(void* node, void* prev)
     static int
 cp_compare_fuzzy(const void* a, const void* b)
 {
-    int score_a = ((compl_T*)a)->cp_score;
-    int score_b = ((compl_T*)b)->cp_score;
+    const compl_T *left = a;
+    const compl_T *right = b;
+    int score_a = left->cp_score;
+    int score_b = right->cp_score;
     return (score_b > score_a) ? 1 : (score_b < score_a) ? -1 : 0;
 }
 
     static int
 cp_compare_nearest(const void* a, const void* b)
 {
-    int score_a = ((compl_T*)a)->cp_score;
-    int score_b = ((compl_T*)b)->cp_score;
+    const compl_T *left = a;
+    const compl_T *right = b;
+    int score_a = left->cp_score;
+    int score_b = right->cp_score;
     if (score_a == FUZZY_SCORE_NONE || score_b == FUZZY_SCORE_NONE)
 	return 0;
     return (score_a > score_b) ? 1 : (score_a < score_b) ? -1 : 0;

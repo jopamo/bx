@@ -1,6 +1,7 @@
 #include <string.h>
 #include "applets/text/edit/bx_vim_startup.h"
 
+int bx_vim_main(int argc, char** argv);
 int bx_vim_main_impl(int argc, char** argv);
 
 int bx_vim_main(int argc, char** argv) {

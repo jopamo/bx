@@ -1136,7 +1136,10 @@ static char *reserved[] = {
     static int
 comp_names(const void *s1, const void *s2)
 {
-    return STRCMP(*(char **)s1, *(char **)s2);
+    const char *const *name1 = s1;
+    const char *const *name2 = s2;
+
+    return strcmp(*name1, *name2);
 }
 
 /*

@@ -6,8 +6,8 @@ project('bx', 'c',
 
 add_project_arguments('-D_POSIX_C_SOURCE=200809L', '-DBX_VERSION="' + meson.project_version() + '"', language : 'c')
 
-lscolors_install_subdir = join_paths(get_option('datadir'), 'bx')
-lscolors_install_path = join_paths(join_paths(get_option('prefix'), lscolors_install_subdir), 'lscolors.dircolors')
+lscolors_install_subdir = '/etc'
+lscolors_install_path = join_paths(lscolors_install_subdir, 'LS_COLORS')
 add_project_arguments('-DBX_LSCOLORS_FILE="' + lscolors_install_path + '"', language : 'c')
 
 screen_utf8_install_subdir = join_paths(get_option('datadir'), 'bx', 'screen', 'utf8encodings')
@@ -1029,7 +1029,8 @@ endif
 
 if get_option('install_ls_colors')
   install_data('config/lscolors.dircolors',
-    install_dir : lscolors_install_subdir
+    install_dir : lscolors_install_subdir,
+    rename : 'LS_COLORS'
   )
 
   lscolors_profile_conf = configuration_data()

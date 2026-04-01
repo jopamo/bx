@@ -122,15 +122,15 @@
 
 static int dbcs_char2len(int c);
 static int dbcs_char2bytes(int c, char_u *buf);
-static int dbcs_ptr2len(char_u *p);
-static int dbcs_ptr2len_len(char_u *p, int size);
-static int utf_ptr2cells_len(char_u *p, int size);
+static int dbcs_ptr2len(const char_u *p);
+static int dbcs_ptr2len_len(const char_u *p, int size);
+static int utf_ptr2cells_len(const char_u *p, int size);
 static int dbcs_char2cells(int c);
-static int dbcs_ptr2cells_len(char_u *p, int size);
-static int dbcs_ptr2char(char_u *p);
-static int dbcs_head_off(char_u *base, char_u *p);
-static inline int utf_ptr2char_and_len(char_u *p, int *lenp);
-static inline int utf_ptr2char_and_len_len(char_u *p, int size, int *lenp);
+static int dbcs_ptr2cells_len(const char_u *p, int size);
+static int dbcs_ptr2char(const char_u *p);
+static int dbcs_head_off(const char_u *base, const char_u *p);
+static inline int utf_ptr2char_and_len(const char_u *p, int *lenp);
+static inline int utf_ptr2char_and_len_len(const char_u *p, int size, int *lenp);
 static inline int utf_iscomposinglike_char(int c1, int c2);
 #ifdef FEAT_EVAL
 static int cw_value(int c);
@@ -1076,7 +1076,7 @@ dbcs_char2bytes(int c, char_u *buf)
  * Used for mb_ptr2len() when 'encoding' latin.
  */
     int
-latin_ptr2len(char_u *p)
+latin_ptr2len(const char_u *p)
 {
     return *p == NUL ? 0 : 1;
 }
@@ -1086,7 +1086,7 @@ latin_ptr2len(char_u *p)
  * Used for mb_ptr2len() when 'encoding' DBCS.
  */
     static int
-dbcs_ptr2len(char_u *p)
+dbcs_ptr2len(const char_u *p)
 {
     int		len;
 
@@ -1107,7 +1107,7 @@ dbcs_ptr2len(char_u *p)
  * Returns 1 for an illegal char or an incomplete byte sequence.
  */
     int
-latin_ptr2len_len(char_u *p, int size)
+latin_ptr2len_len(const char_u *p, int size)
 {
     if (size < 1 || *p == NUL)
 	return 0;
@@ -1115,7 +1115,7 @@ latin_ptr2len_len(char_u *p, int size)
 }
 
     static int
-dbcs_ptr2len_len(char_u *p, int size)
+dbcs_ptr2len_len(const char_u *p, int size)
 {
     int		len;
 
@@ -1622,14 +1622,14 @@ utf_char2cells(int c)
  * This doesn't take care of unprintable characters, use ptr2cells() for that.
  */
     int
-latin_ptr2cells(char_u *p UNUSED)
+latin_ptr2cells(const char_u *p UNUSED)
 {
     return 1;
 }
 
     int
 utf_ptr2cells(
-    char_u	*p)
+    const char_u	*p)
 {
     int		c;
     int		len;
@@ -1650,7 +1650,7 @@ utf_ptr2cells(
 }
 
     int
-dbcs_ptr2cells(char_u *p)
+dbcs_ptr2cells(const char_u *p)
 {
     // Number of cells is equal to number of bytes, except for euc-jp when
     // the first byte is 0x8e.
@@ -1665,13 +1665,13 @@ dbcs_ptr2cells(char_u *p)
  * For an empty string or truncated character returns 1.
  */
     int
-latin_ptr2cells_len(char_u *p UNUSED, int size UNUSED)
+latin_ptr2cells_len(const char_u *p UNUSED, int size UNUSED)
 {
     return 1;
 }
 
     static int
-utf_ptr2cells_len(char_u *p, int size)
+utf_ptr2cells_len(const char_u *p, int size)
 {
     int		c;
     int		len;
@@ -1694,7 +1694,7 @@ utf_ptr2cells_len(char_u *p, int size)
 }
 
     static int
-dbcs_ptr2cells_len(char_u *p, int size)
+dbcs_ptr2cells_len(const char_u *p, int size)
 {
     // Number of cells is equal to number of bytes, except for euc-jp when
     // the first byte is 0x8e.
@@ -1776,13 +1776,13 @@ utf_off2cells(unsigned off, unsigned max_off)
  * Convert a byte sequence into a character.
  */
     int
-latin_ptr2char(char_u *p)
+latin_ptr2char(const char_u *p)
 {
     return *p;
 }
 
     static int
-dbcs_ptr2char(char_u *p)
+dbcs_ptr2char(const char_u *p)
 {
     if (MB_BYTE2LEN(*p) > 1 && p[1] != NUL)
 	return (p[0] << 8) + p[1];
@@ -1795,7 +1795,7 @@ dbcs_ptr2char(char_u *p)
  * Illegal bytes are returned as-is with a length of one.
  */
     static inline int
-utf_ptr2char_and_len(char_u *p, int *lenp)
+utf_ptr2char_and_len(const char_u *p, int *lenp)
 {
     int		len;
     int		c;
@@ -1876,7 +1876,7 @@ utf_ptr2char_and_len(char_u *p, int *lenp)
  * For an incomplete sequence "*lenp" is set to the expected length.
  */
     static inline int
-utf_ptr2char_and_len_len(char_u *p, int size, int *lenp)
+utf_ptr2char_and_len_len(const char_u *p, int size, int *lenp)
 {
     int		len;
     int		c;
@@ -1999,7 +1999,7 @@ utf_iscomposinglike_char(int c1, int c2)
  * Does not include composing characters, of course.
  */
     int
-utf_ptr2char(char_u *p)
+utf_ptr2char(const char_u *p)
 {
     int		len;
 
@@ -2233,7 +2233,7 @@ utfc_char2bytes(int off, char_u *buf)
  * Returns 1 for an illegal byte sequence.
  */
     int
-utf_ptr2len(char_u *p)
+utf_ptr2len(const char_u *p)
 {
     int		len;
 
@@ -2272,7 +2272,7 @@ utf_byte2len_zero(int b)
  * Never returns zero.
  */
     int
-utf_ptr2len_len(char_u *p, int size)
+utf_ptr2len_len(const char_u *p, int size)
 {
     int		len;
 
@@ -2286,7 +2286,7 @@ utf_ptr2len_len(char_u *p, int size)
  * Returns zero for NUL.
  */
     int
-utfc_ptr2len(char_u *p)
+utfc_ptr2len(const char_u *p)
 {
     int		len;
     int		c;
@@ -2336,7 +2336,7 @@ utfc_ptr2len(char_u *p)
  * Returns 1 for an illegal char or an incomplete byte sequence.
  */
     int
-utfc_ptr2len_len(char_u *p, int size)
+utfc_ptr2len_len(const char_u *p, int size)
 {
     int		len;
     int		c;
@@ -4068,15 +4068,15 @@ show_utf8(void)
  * Returns 0 when already at the first byte of a character.
  */
     int
-latin_head_off(char_u *base UNUSED, char_u *p UNUSED)
+latin_head_off(const char_u *base UNUSED, const char_u *p UNUSED)
 {
     return 0;
 }
 
     static int
-dbcs_head_off(char_u *base, char_u *p)
+dbcs_head_off(const char_u *base, const char_u *p)
 {
-    char_u	*q;
+    const char_u	*q;
 
     // It can't be a trailing byte when not using DBCS, at the start of the
     // string or the previous byte can't start a double-byte.
@@ -4131,14 +4131,14 @@ dbcs_screen_head_off(char_u *base, char_u *p)
  * terminated.
  */
     int
-utf_head_off(char_u *base, char_u *p)
+utf_head_off(const char_u *base, const char_u *p)
 {
-    char_u	*q;
-    char_u	*s;
+    const char_u	*q;
+    const char_u	*s;
     int		c;
     int		len;
 #ifdef FEAT_ARABIC
-    char_u	*j;
+    const char_u	*j;
 #endif
 
     if (*p < 0x80)		// be quick for ASCII
@@ -5080,13 +5080,13 @@ iconv_string(
 	    // conversion from 'encoding' to something else.  In other
 	    // situations we don't know what to skip anyway.
 	    *to++ = '?';
-	    if ((*mb_ptr2cells)((char_u *)from) > 1)
+	    if ((*mb_ptr2cells)((const char_u *)from) > 1)
 		*to++ = '?';
 	    if (enc_utf8)
-		l = utfc_ptr2len_len((char_u *)from, (int)fromlen);
+		l = utfc_ptr2len_len((const char_u *)from, (int)fromlen);
 	    else
 	    {
-		l = (*mb_ptr2len)((char_u *)from);
+		l = (*mb_ptr2len)((const char_u *)from);
 		if (l > (int)fromlen)
 		    l = (int)fromlen;
 	    }
@@ -5776,8 +5776,10 @@ cw_value(int c)
     static int
 tv_nr_compare(const void *a1, const void *a2)
 {
-    listitem_T *li1 = *(listitem_T **)a1;
-    listitem_T *li2 = *(listitem_T **)a2;
+    listitem_T *const *li1p = a1;
+    listitem_T *const *li2p = a2;
+    listitem_T *li1 = *li1p;
+    listitem_T *li2 = *li2p;
 
     return li1->li_tv.vval.v_number == li2->li_tv.vval.v_number ? 0 :
 	li1->li_tv.vval.v_number > li2->li_tv.vval.v_number ? 1 : -1;

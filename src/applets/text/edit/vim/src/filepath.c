@@ -3533,7 +3533,10 @@ expand_backtick(
     static int
 pstrcmp(const void *a, const void *b)
 {
-    return (pathcmp(*(char **)a, *(char **)b, -1));
+    const char *const *path1 = a;
+    const char *const *path2 = b;
+
+    return pathcmp(*path1, *path2, -1);
 }
 
 /*
@@ -3783,7 +3786,10 @@ dos_expandpath(
     static int
 pstrcmp(const void *a, const void *b)
 {
-    return (pathcmp(*(char **)a, *(char **)b, -1));
+    const char *const *path1 = a;
+    const char *const *path2 = b;
+
+    return pathcmp(*path1, *path2, -1);
 }
 
 /*
@@ -4329,8 +4335,8 @@ pathcmp(const char *p, const char *q, int maxlen)
 
     for (i = 0, j = 0; maxlen < 0 || (i < maxlen && j < maxlen);)
     {
-	c1 = PTR2CHAR((char_u *)p + i);
-	c2 = PTR2CHAR((char_u *)q + j);
+	c1 = PTR2CHAR((const char_u *)p + i);
+	c2 = PTR2CHAR((const char_u *)q + j);
 
 	// End of "p": check if "q" also ends or just has a slash.
 	if (c1 == NUL)
@@ -4365,18 +4371,18 @@ pathcmp(const char *p, const char *q, int maxlen)
 		    : c1 - c2;  // no match
 	}
 
-	i += mb_ptr2len((char_u *)p + i);
-	j += mb_ptr2len((char_u *)q + j);
+	i += mb_ptr2len((const char_u *)p + i);
+	j += mb_ptr2len((const char_u *)q + j);
     }
     if (s == NULL)	// "i" or "j" ran into "maxlen"
 	return 0;
 
-    c1 = PTR2CHAR((char_u *)s + i);
-    c2 = PTR2CHAR((char_u *)s + i + mb_ptr2len((char_u *)s + i));
+    c1 = PTR2CHAR((const char_u *)s + i);
+    c2 = PTR2CHAR((const char_u *)s + i + mb_ptr2len((const char_u *)s + i));
     // ignore a trailing slash, but not "//" or ":/"
     if (c2 == NUL
 	    && i > 0
-	    && !after_pathsep((char_u *)s, (char_u *)s + i)
+	    && !after_pathsep((const char_u *)s, (const char_u *)s + i)
 #ifdef BACKSLASH_IN_FILENAME
 	    && (c1 == '/' || c1 == '\\')
 #else

@@ -299,16 +299,21 @@ typedef struct
     static int
 string_compare(const void *s1, const void *s2)
 {
+    const char *left = s1;
+    const char *right = s2;
+
     if (sort_lc)
-	return strcoll((char *)s1, (char *)s2);
-    return sort_ic ? STRICMP(s1, s2) : STRCMP(s1, s2);
+	return strcoll(left, right);
+    return sort_ic ? strcasecmp(left, right) : strcmp(left, right);
 }
 
     static int
 sort_compare(const void *s1, const void *s2)
 {
-    sorti_T	l1 = *(sorti_T *)s1;
-    sorti_T	l2 = *(sorti_T *)s2;
+    const sorti_T *left = s1;
+    const sorti_T *right = s2;
+    sorti_T	l1 = *left;
+    sorti_T	l2 = *right;
     int		result = 0;
 
     // If the user interrupts, there's no way to stop qsort() immediately, but

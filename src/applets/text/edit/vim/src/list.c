@@ -2091,7 +2091,7 @@ static sortinfo_T	*sortinfo = NULL;
     static int
 item_compare(const void *s1, const void *s2)
 {
-    sortItem_T  *si1, *si2;
+    const sortItem_T  *si1, *si2;
     typval_T	*tv1, *tv2;
     char_u	*p1, *p2;
     char_u	*tofree1 = NULL, *tofree2 = NULL;
@@ -2099,8 +2099,8 @@ item_compare(const void *s1, const void *s2)
     char_u	numbuf1[NUMBUFLEN];
     char_u	numbuf2[NUMBUFLEN];
 
-    si1 = (sortItem_T *)s1;
-    si2 = (sortItem_T *)s2;
+    si1 = s1;
+    si2 = s2;
     tv1 = &si1->item->li_tv;
     tv2 = &si2->item->li_tv;
 
@@ -2173,7 +2173,7 @@ item_compare(const void *s1, const void *s2)
     static int
 item_compare2(const void *s1, const void *s2)
 {
-    sortItem_T  *si1, *si2;
+    const sortItem_T  *si1, *si2;
     int		res;
     typval_T	rettv;
     typval_T	argv[3];
@@ -2186,8 +2186,8 @@ item_compare2(const void *s1, const void *s2)
     if (sortinfo->item_compare_func_err)
 	return 0;
 
-    si1 = (sortItem_T *)s1;
-    si2 = (sortItem_T *)s2;
+    si1 = s1;
+    si2 = s2;
 
     if (partial == NULL)
 	func_name = sortinfo->item_compare_func;

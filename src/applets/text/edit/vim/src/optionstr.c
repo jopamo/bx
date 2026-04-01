@@ -4472,7 +4472,7 @@ update_stlo_maxheight(char_u **varp, int actual_stlh)
     p = src;
     while (*p != NUL)
     {
-	if (STRNCMP(p, "maxheight:", 10) == 0)
+	if (strncmp((const char *)p, "maxheight:", 10) == 0)
 	    last_mh = p;
 	while (*p != ',' && *p != NUL)
 	    ++p;
@@ -4483,7 +4483,7 @@ update_stlo_maxheight(char_u **varp, int actual_stlh)
     if (last_mh == NULL)
 	return;
 
-    size_t	bufsize = STRLEN(src) + NUMBUFLEN + 1;
+    size_t	bufsize = strlen((const char *)src) + NUMBUFLEN + 1;
     char_u	*buf = alloc(bufsize);
     if (buf == NULL)
 	return;
@@ -4503,7 +4503,7 @@ update_stlo_maxheight(char_u **varp, int actual_stlh)
 	if (*p == ',')
 	    ++p;
 
-	if (STRNCMP(tok, "maxheight:", 10) == 0)
+	if (strncmp((const char *)tok, "maxheight:", 10) == 0)
 	{
 	    if (tok == last_mh)
 	    {
@@ -4519,7 +4519,7 @@ update_stlo_maxheight(char_u **varp, int actual_stlh)
 	{
 	    if (need_comma)
 		buf[len++] = ',';
-	    mch_memmove(buf + len, tok, tok_len);
+	    memmove(buf + len, tok, (size_t)tok_len);
 	    len += tok_len;
 	    need_comma = true;
 	}
