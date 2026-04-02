@@ -382,6 +382,50 @@ trunc_string(
 
 int vim_snprintf(char *str, size_t str_m, const char *fmt, ...);
 
+    static char_u *
+copy_const_string(const char *s)
+{
+    size_t	len = strlen(s) + 1;
+    char_u	*copy = alloc(len);
+
+    if (copy != NULL)
+	memmove(copy, s, len);
+    return copy;
+}
+
+    static int
+msg_attr_keep_const(const char *s, int attr, int keep)
+{
+    char_u	*copy = copy_const_string(s);
+    int		r = FALSE;
+
+    if (copy != NULL)
+    {
+	r = msg_attr_keep((char *)copy, attr, keep);
+	vim_free(copy);
+    }
+    return r;
+}
+
+#ifdef FEAT_EVAL
+    static int
+cause_errthrow_const(const char *s, int severe, int *ignore)
+{
+    if (s == _(e_interrupted))
+	return cause_errthrow((char_u *)_(e_interrupted), severe, ignore);
+
+    char_u *copy = copy_const_string(s);
+    int	    r = FALSE;
+
+    if (copy != NULL)
+    {
+	r = cause_errthrow(copy, severe, ignore);
+	vim_free(copy);
+    }
+    return r;
+}
+#endif
+
     int
 smsg(const char *s, ...)
 {
@@ -389,7 +433,7 @@ smsg(const char *s, ...)
     {
 	// Very early in initialisation and already something wrong, just
 	// give the raw message so the user at least gets a hint.
-	return msg((char *)s);
+	return msg_attr_keep_const(s, 0, FALSE);
     }
 
     va_list arglist;
@@ -407,7 +451,7 @@ smsg_attr(int attr, const char *s, ...)
     {
 	// Very early in initialisation and already something wrong, just
 	// give the raw message so the user at least gets a hint.
-	return msg_attr((char *)s, attr);
+	return msg_attr_keep_const(s, attr, FALSE);
     }
 
     va_list arglist;
@@ -425,7 +469,7 @@ smsg_attr_keep(int attr, const char *s, ...)
     {
 	// Very early in initialisation and already something wrong, just
 	// give the raw message so the user at least gets a hint.
-	return msg_attr_keep((char *)s, attr, TRUE);
+	return msg_attr_keep_const(s, attr, TRUE);
     }
 
     va_list arglist;
@@ -659,7 +703,7 @@ emsg_core(const char *s)
     // When testing some errors are turned into a normal message.
     if (ignore_error(s))
 	// don't call msg() if it results in a dialog
-	return msg_use_printf() ? FALSE : msg((char *)s);
+	return msg_use_printf() ? FALSE : msg_attr_keep_const(s, 0, FALSE);
 #endif
 
     ++called_emsg;
@@ -681,7 +725,7 @@ emsg_core(const char *s)
 	 * when the message should be ignored completely (used for the
 	 * interrupt message).
 	 */
-	if (cause_errthrow((char_u *)s, severe, &ignore) == TRUE)
+	if (cause_errthrow_const(s, severe, &ignore) == TRUE)
 	{
 	    if (!ignore)
 		++did_emsg;
@@ -690,7 +734,7 @@ emsg_core(const char *s)
 
 	if (in_assert_fails && emsg_assert_fails_msg == NULL)
 	{
-	    emsg_assert_fails_msg = vim_strsave((char_u *)s);
+	    emsg_assert_fails_msg = copy_const_string(s);
 	    emsg_assert_fails_lnum = SOURCING_LNUM;
 	    vim_free(emsg_assert_fails_context);
 	    emsg_assert_fails_context = vim_strsave(
@@ -698,7 +742,12 @@ emsg_core(const char *s)
 	}
 
 	// set "v:errmsg", also when using ":silent! cmd"
-	set_vim_var_string(VV_ERRMSG, (char_u *)s, -1);
+	{
+	    char_u *copy = copy_const_string(s);
+
+	    set_vim_var_string(VV_ERRMSG, copy, -1);
+	    vim_free(copy);
+	}
 #endif
 
 	/*
@@ -727,7 +776,15 @@ emsg_core(const char *s)
 		    redir_write(p, -1);
 		    vim_free(p);
 		}
-		redir_write((char_u *)s, -1);
+		{
+		    char_u *copy = copy_const_string(s);
+
+		    if (copy != NULL)
+		    {
+			redir_write(copy, -1);
+			vim_free(copy);
+		    }
+		}
 	    }
 #ifdef FEAT_EVAL
 	    // Only increment did_emsg_def when :silent! wasn't used inside the
@@ -785,7 +842,7 @@ emsg_core(const char *s)
      * Display the error message itself.
      */
     msg_nowait = FALSE;			// wait for this msg
-    r = msg_attr((char *)s, attr);
+    r = msg_attr_keep_const(s, attr, FALSE);
 
 #ifdef FEAT_JOB_CHANNEL
     emsg_to_channel_log = FALSE;
