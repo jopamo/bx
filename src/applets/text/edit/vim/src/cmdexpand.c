@@ -97,12 +97,12 @@ cmdline_fuzzy_complete(char_u *fuzzystr)
     static int
 sort_func_compare(const void *s1, const void *s2)
 {
-    char_u *p1 = *(char_u **)s1;
-    char_u *p2 = *(char_u **)s2;
+    const char_u *p1 = *(const char_u *const *)s1;
+    const char_u *p2 = *(const char_u *const *)s2;
 
     if (*p1 != '<' && *p2 == '<') return -1;
     if (*p1 == '<' && *p2 != '<') return 1;
-    return STRCMP(p1, p2);
+    return strcmp((const char *)p1, (const char *)p2);
 }
 
 /*

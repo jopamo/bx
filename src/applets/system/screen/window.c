@@ -772,11 +772,15 @@ void CloseDevice(Window *window)
 	}
 	switch (window->w_type) {
 	case W_TYPE_PTY:
+	{
+		int unused_result = chmod(window->w_tty, 0666);
+		(void)unused_result; /* unused */
+		unused_result = chown(window->w_tty, 0, 0);
+		(void)unused_result; /* unused */
 		/* pty 4 SALE */
-		(void)chmod(window->w_tty, 0666);
-		(void)chown(window->w_tty, 0, 0);
 		ClosePTY(window->w_ptyfd);
 		break;
+	}
 	case W_TYPE_PLAIN:
 		CloseTTY(window->w_ptyfd);
 		break;
@@ -1323,8 +1327,12 @@ void FreePseudowin(Window *w)
 	}
 #endif
 	/* should be able to use CloseDevice() here */
-	(void)chmod(pwin->p_tty, 0666);
-	(void)chown(pwin->p_tty, 0, 0);
+	{
+		int unused_result = chmod(pwin->p_tty, 0666);
+		(void)unused_result; /* unused */
+		unused_result = chown(pwin->p_tty, 0, 0);
+		(void)unused_result; /* unused */
+	}
 	if (pwin->p_ptyfd >= 0) {
 		if (w->w_type == W_TYPE_PTY)
 			ClosePTY(pwin->p_ptyfd);
@@ -1525,8 +1533,10 @@ static void win_writeev_fn(Event *event, void *data)
 
 		if (p->w_miflag) { /* don't loop if not needed */
 			for (Window *win = mru_window; win; win = win->w_prev_mru) {
-				if (win != p && win->w_miflag)
-					write(win->w_ptyfd, p->w_inbuf, p->w_inlen);
+				if (win != p && win->w_miflag) {
+					ssize_t unused_result = write(win->w_ptyfd, p->w_inbuf, p->w_inlen);
+					(void)unused_result; /* unused */
+				}
 			}
 		}
 

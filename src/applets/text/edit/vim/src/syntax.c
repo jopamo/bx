@@ -854,10 +854,10 @@ syn_sync(
     static void
 save_chartab(char_u *chartab)
 {
+    mch_memmove(chartab, syn_buf->b_chartab, (size_t)32);
     if (syn_block->b_syn_isk == empty_option)
 	return;
 
-    mch_memmove(chartab, syn_buf->b_chartab, (size_t)32);
     mch_memmove(syn_buf->b_chartab, syn_win->w_s->b_syn_chartab, (size_t)32);
 }
 

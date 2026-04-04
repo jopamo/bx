@@ -306,7 +306,7 @@ populate_tensor(
     if (ch_dim == ndiffs)
     {
 	int npaths = 0;
-	size_t paths[LN_MAX_BUFS];
+	size_t paths[LN_MAX_BUFS] = { 0 };
 
 	for (size_t j = 0; j < ndiffs; j++)
 	{
@@ -424,7 +424,7 @@ linematch_nbuffers(
     }
 
     // memory for avoiding repetitive calculations of score
-    int df_iters[LN_MAX_BUFS];
+    int df_iters[LN_MAX_BUFS] = { 0 };
     populate_tensor(df_iters, 0, diffcmppath, diff_len, ndiffs, diff_blk,
 		    iwhite);
 

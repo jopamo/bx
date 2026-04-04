@@ -205,7 +205,12 @@ const char *wmbc_strncpy(WinMsgBufContext *wmbc, const char *s, size_t n)
 	}
 
 	char *p = wmbc->p;
-	strncpy(wmbc->p, s, n);
+	size_t copy = strlen(s);
+	if (copy > n)
+		copy = n;
+	memcpy(wmbc->p, s, copy);
+	if (copy < n)
+		memset(wmbc->p + copy, 0, n - copy);
 	wmbc->p += n;
 	return p;
 }

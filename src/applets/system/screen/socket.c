@@ -890,9 +890,11 @@ void ReceiveMsg(void)
 	case MSG_QUERY:
 		{
 			char *oldSocketPath = SaveStr(SocketPath);
-			strncpy(SocketPath, m.m.command.writeback, ARRAY_SIZE(SocketPath));
+			strncpy(SocketPath, m.m.command.writeback, ARRAY_SIZE(SocketPath) - 1);
+			SocketPath[ARRAY_SIZE(SocketPath) - 1] = '\0';
 			int s = MakeClientSocket(0);
-			strncpy(SocketPath, oldSocketPath, ARRAY_SIZE(SocketPath));
+			strncpy(SocketPath, oldSocketPath, ARRAY_SIZE(SocketPath) - 1);
+			SocketPath[ARRAY_SIZE(SocketPath) - 1] = '\0';
 			Free(oldSocketPath);
 			if (s >= 0) {
 				queryflag = s;

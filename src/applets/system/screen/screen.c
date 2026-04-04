@@ -853,7 +853,10 @@ int main(int argc, char **argv)
 			if (access(SocketPath, F_OK)) {
 				if (mkdir(SocketPath, 0700) == -1 && errno != EEXIST)
 					Panic(errno, "Cannot make directory '%s'", SocketPath);
-				(void)chown(SocketPath, real_uid, real_gid);
+				{
+					int unused_result = chown(SocketPath, real_uid, real_gid);
+					(void)unused_result; /* unused */
+				}
 			}
 		}
 #endif
@@ -1214,7 +1217,10 @@ static void CoreDump(int sigsig)
 			continue;
 		fcntl(disp->d_userfd, F_SETFL, 0);
 		SetTTY(disp->d_userfd, &D_OldMode);
-		write(disp->d_userfd, buf, strlen(buf));
+		{
+			ssize_t unused_result = write(disp->d_userfd, buf, strlen(buf));
+			(void)unused_result; /* unused */
+		}
 		Kill(disp->d_userpid, SIG_BYE);
 	}
 
@@ -1528,8 +1534,10 @@ void Msg(int err, const char *fmt, ...)
 	} else
 		printf("%s\r\n", buf);
 
-	if (queryflag >= 0)
-		write(queryflag, buf, strlen(buf));
+	if (queryflag >= 0) {
+		ssize_t unused_result = write(queryflag, buf, strlen(buf));
+		(void)unused_result; /* unused */
+	}
 }
 
 /*
@@ -1561,8 +1569,12 @@ void Panic(int err, const char *fmt, ...)
 			Flush(3);
 			SetTTY(D_userfd, &D_OldMode);
 			fcntl(D_userfd, F_SETFL, 0);
-			write(D_userfd, buf, strlen(buf));
-			write(D_userfd, "\n", 1);
+			{
+				ssize_t unused_result = write(D_userfd, buf, strlen(buf));
+				(void)unused_result; /* unused */
+				unused_result = write(D_userfd, "\n", 1);
+				(void)unused_result; /* unused */
+			}
 			freetty();
 			if (D_userpid)
 				Kill(D_userpid, SIG_BYE);
@@ -1578,7 +1590,10 @@ void QueryMsg(int err, const char *fmt, ...)
 		return;
 
 	PROCESS_MESSAGE(buf);
-	write(queryflag, buf, strlen(buf));
+	{
+		ssize_t unused_result = write(queryflag, buf, strlen(buf));
+		(void)unused_result; /* unused */
+	}
 }
 
 void Dummy(int err, const char *fmt, ...)
@@ -1682,7 +1697,10 @@ static void serv_select_fn(Event *event, void *data)
 		 * environment */
 		if (fore && displays) {
 			char ibuf = displays->d_OldMode.tio.c_cc[VINTR];
-			write(W_UWP(fore) ? fore->w_pwin->p_ptyfd : fore->w_ptyfd, &ibuf, 1);
+			ssize_t unused_result = write(
+				W_UWP(fore) ? fore->w_pwin->p_ptyfd : fore->w_ptyfd,
+				&ibuf, 1);
+			(void)unused_result; /* unused */
 		}
 		InterruptPlease = 0;
 	}

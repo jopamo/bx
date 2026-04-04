@@ -3784,7 +3784,7 @@ base64_encode(blob_T *blob)
     static void
 base64_decode(const char_u *data, blob_T *blob)
 {
-    size_t input_len = STRLEN(data);
+    size_t input_len = strlen((const char *)data);
 
     if (input_len == 0)
 	return;
@@ -9856,8 +9856,11 @@ f_ngettext(typval_T *argvars, typval_T *rettv)
 #if defined(HAVE_DNGETTEXT)
 	rettv->vval.v_string = vim_strsave((char_u *)dngettext((const char *)argvars[3].vval.v_string, (const char *)argvars[0].vval.v_string, (const char *)argvars[1].vval.v_string, (int)argvars[2].vval.v_number));
 #else
+	char_u *translated = argvars[2].vval.v_number == 1
+		? argvars[0].vval.v_string
+		: argvars[1].vval.v_string;
 	textdomain((const char *)argvars[3].vval.v_string);
-	rettv->vval.v_string = vim_strsave((char_u *)NGETTEXT((const char *)argvars[0].vval.v_string, (const char *)argvars[1].vval.v_string, argvars[2].vval.v_number));
+	rettv->vval.v_string = vim_strsave(translated);
 	textdomain(VIMPACKAGE);
 #endif
 
@@ -9867,7 +9870,12 @@ f_ngettext(typval_T *argvars, typval_T *rettv)
 #endif
     }
     else
-	rettv->vval.v_string = vim_strsave((char_u *)NGETTEXT((const char *)argvars[0].vval.v_string, (const char *)argvars[1].vval.v_string, argvars[2].vval.v_number));
+    {
+	char_u *translated = argvars[2].vval.v_number == 1
+		? argvars[0].vval.v_string
+		: argvars[1].vval.v_string;
+	rettv->vval.v_string = vim_strsave(translated);
+    }
 }
 
 

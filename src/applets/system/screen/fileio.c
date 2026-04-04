@@ -432,8 +432,8 @@ void WriteFile(struct acluser *user, char *fn, int dump)
 			i = SocketName - SocketPath;
 			if (i > (int)ARRAY_SIZE(fnbuf) - 9)
 				i = 0;
-			strncpy(fnbuf, SocketPath, i);
-			strncpy(fnbuf + i, ".termcap", 9);
+			memcpy(fnbuf, SocketPath, (size_t)i);
+			memcpy(fnbuf + i, ".termcap", sizeof(".termcap"));
 			fn = fnbuf;
 		}
 		break;

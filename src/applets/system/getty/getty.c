@@ -18,6 +18,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/xreadwrite.h"
 
 enum bx_getty_clocal_mode {
     BX_GETTY_CLOCAL_AUTO = 0,
@@ -518,7 +519,7 @@ static bool bx_getty_copy_file_to_stdout(const char* path, struct bx_diag_ctx* d
 
     char buf[4096];
     while (true) {
-        ssize_t n = read(fd, buf, sizeof(buf));
+        ssize_t n = bx_xread(fd, buf, sizeof(buf));
         if (n == 0) {
             close(fd);
             return true;
@@ -528,7 +529,7 @@ static bool bx_getty_copy_file_to_stdout(const char* path, struct bx_diag_ctx* d
             close(fd);
             return false;
         }
-        if (write(STDOUT_FILENO, buf, (size_t)n) != n) {
+        if (!bx_xwrite_all(STDOUT_FILENO, buf, (size_t)n)) {
             bx_diag(diag, "cannot write issue text: %s", strerror(errno));
             close(fd);
             return false;
@@ -696,8 +697,11 @@ static int bx_getty_exec_login(const struct bx_getty_options* options, struct bx
         return 1;
     }
 
-    if (bx_getty_should_clear(tty_path, options)) {
-        write(STDOUT_FILENO, "\033[H\033[J", 6);
+    if (bx_getty_should_clear(tty_path, options)
+        && !bx_xwrite_all(STDOUT_FILENO, "\033[H\033[J", sizeof("\033[H\033[J") - 1)) {
+        bx_diag(diag, "cannot clear screen: %s", strerror(errno));
+        free(tty_path);
+        return 1;
     }
 
     if (!options->noissue && !bx_getty_copy_file_to_stdout("/etc/issue", diag)) {
