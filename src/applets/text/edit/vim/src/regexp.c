@@ -82,7 +82,7 @@ disable_regexp_timeout(void)
 
 #if defined(FEAT_EVAL)
 # ifdef FEAT_RELTIME
-static sig_atomic_t *saved_timeout_flag;
+static volatile sig_atomic_t *saved_timeout_flag;
 # endif
 
 /*
@@ -94,7 +94,7 @@ static sig_atomic_t *saved_timeout_flag;
 save_timeout_for_debugging(void)
 {
 # ifdef FEAT_RELTIME
-    saved_timeout_flag = (sig_atomic_t *)timeout_flag;
+    saved_timeout_flag = timeout_flag;
     timeout_flag = &dummy_timeout_flag;
 # endif
 }

@@ -2335,8 +2335,10 @@ void DisplaySleep1000(int n, int eat)
 	pfd[0].events = POLLIN;
 
 	if (poll(pfd, ARRAY_SIZE(pfd), n) > 0) {
-		if (eat)
-			read(D_userfd, &buf, 1);
+		if (eat) {
+			ssize_t unused_result = read(D_userfd, &buf, 1);
+			(void)unused_result; /* unused */
+		}
 	}
 }
 
@@ -3030,7 +3032,8 @@ void RunBlanker(char **cmdv)
 		freetty();
 		if (slave != -1) {
 			close(0);
-			dup(slave);
+			if (dup(slave) < 0)
+				Panic(errno, "Cannot dup() blanker slave");
 			close(slave);
 			closeallfiles(D_blankerev.fd);
 			slave = dup(0);
