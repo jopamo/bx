@@ -155,11 +155,11 @@ extern void perror __P((char *));
 # endif
 #endif
 
-char version[] = "xxd 2026-04-26 by Juergen Weigert et al.";
+static char version[] = "xxd 2026-04-26 by Juergen Weigert et al.";
 #ifdef WIN32
-char osver[] = " (Win32)";
+static char osver[] = " (Win32)";
 #else
-char osver[] = "";
+static char osver[] = "";
 #endif
 
 #if defined(WIN32)
@@ -240,7 +240,8 @@ char osver[] = "";
     + COLS         /* ASCII dump */ \
     + 2)           /* "\n\0" */
 
-char hexxa[] = "0123456789abcdef0123456789ABCDEF", *hexx = hexxa;
+static char hexxa[] = "0123456789abcdef0123456789ABCDEF";
+static char *hexx = hexxa;
 
 /* the different hextypes known by this program: */
 #define HEX_NORMAL         0x00 /* no flags set */
@@ -274,7 +275,7 @@ l_colored[c++] = 'm';
 static char *pname;
 
   static void
-exit_with_usage(void)
+exit_with_usage(int status)
 {
   fprintf(stderr, "Usage:\n       %s [options] [infile [outfile]]\n", pname);
   fprintf(stderr, "    or\n       %s -r [-s [-]offset] [-c cols] [-ps] [infile [outfile]]\n", pname);
@@ -305,7 +306,7 @@ exit_with_usage(void)
   fprintf(stderr, "    -u          use upper case hex letters.\n"
 		  "    -R when     colorize the output; <when> can be 'always', 'auto' or 'never'. Default: 'auto'.\n"
 		  "    -v          show version: \"%s%s\".\n", version, osver);
-  exit(1);
+  exit(status);
 }
 
   static void
@@ -740,6 +741,8 @@ enable_color(void)
 #endif
 }
 
+int main(int argc, char *argv[]);
+
   int
 main(int argc, char *argv[])
 {
@@ -805,6 +808,8 @@ main(int argc, char *argv[])
 	  fprintf(stderr, "%s%s\n", version, osver);
 	  exit(0);
 	}
+      else if (!STRNCMP(pp, "-h", 2))
+	exit_with_usage(0);
       else if (!STRNCMP(pp, "-c", 2))
 	{
 	  if (pp[2] && !STRNCMP("apitalize", pp + 2, 9))
@@ -817,7 +822,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 	      colsgiven = 1;
 	      cols = (int)strtol(argv[2], NULL, 0);
 	      argv++;
@@ -831,7 +836,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 	      octspergrp = (int)strtol(argv[2], NULL, 0);
 	      argv++;
 	      argc--;
@@ -846,7 +851,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 
 	      if (argv[2][0] == '+')
 	       reloffset++;
@@ -879,7 +884,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 #ifdef TRY_SEEK
 	      if (argv[2][0] == '+')
 		relseek++;
@@ -898,7 +903,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 	      length = strtol(argv[2], (char **)NULL, 0);
 	      argv++;
 	      argc--;
@@ -911,7 +916,7 @@ main(int argc, char *argv[])
 	  else
 	    {
 	      if (!argv[2])
-		exit_with_usage();
+		exit_with_usage(1);
 	      varname = argv[2];
 	      argv++;
 	      argc--;
@@ -927,7 +932,7 @@ main(int argc, char *argv[])
 	      argc--;
 	    }
 	  if (!pw)
-	    exit_with_usage();
+	    exit_with_usage(1);
 	  if (!STRNCMP(pw, "always", 6))
 	    {
 	      (void)enable_color();
@@ -939,7 +944,7 @@ main(int argc, char *argv[])
 	  else if (!STRNCMP(pw, "auto", 4))
 	    color = enable_color();
 	  else
-	    exit_with_usage();
+	    exit_with_usage(1);
 	}
       else if (!strcmp(argv[1], "--"))	/* end of options */
 	{
@@ -948,7 +953,7 @@ main(int argc, char *argv[])
 	  break;
 	}
       else if (pp[0] == '-' && pp[1])	/* unknown option */
-	exit_with_usage();
+	exit_with_usage(1);
       else
 	break;				/* not an option */
 
@@ -1002,7 +1007,7 @@ main(int argc, char *argv[])
     error_exit(1, "number of octets per group must be a power of 2 with -e.");
 
   if (argc > 3)
-    exit_with_usage();
+    exit_with_usage(1);
 
   if (argc == 1 || (argv[1][0] == '-' && !argv[1][1]))
     BIN_ASSIGN(fp = stdin, !revert);
