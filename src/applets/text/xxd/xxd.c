@@ -741,10 +741,10 @@ enable_color(void)
 #endif
 }
 
-int main(int argc, char *argv[]);
+int bx_xxd_main(int argc, char *argv[]);
 
   int
-main(int argc, char *argv[])
+bx_xxd_main(int argc, char *argv[])
 {
   FILE *fp, *fpo;
   int c, e, p = 0, relseek = 1, negseek = 0, revert = 0, i, x;

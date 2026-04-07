@@ -887,11 +887,10 @@ xxd_c_args = cc.get_supported_arguments([
 ])
 xxd_c_args += [
   '-DUNIX',
-  '-Dmain=bx_xxd_main',
 ]
 
 xxd_lib = static_library('bx_xxd',
-  'src/applets/text/edit/vim/src/xxd/xxd.c',
+  'src/applets/text/xxd/xxd.c',
   c_args : xxd_c_args,
 )
 
