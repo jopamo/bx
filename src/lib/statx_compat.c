@@ -98,3 +98,30 @@ int bx_statx_lstat(const char* pathname, unsigned int mask, struct stat* st) {
 #endif
     return lstat(pathname, st);
 }
+
+int bx_statx_get_btime(const char* pathname, struct timespec* btime, bool* available) {
+    if (!pathname || !btime || !available) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *available = false;
+
+#ifdef SYS_statx
+    struct statx stx;
+    int dirfd = pathname[0] == '/' ? 0 : AT_FDCWD;
+    if (syscall(SYS_statx, dirfd, pathname, bx_statx_flags, STATX_BTIME, &stx) == 0) {
+        if ((stx.stx_mask & STATX_BTIME) != 0) {
+            btime->tv_sec = (time_t)stx.stx_btime.tv_sec;
+            btime->tv_nsec = stx.stx_btime.tv_nsec;
+            *available = true;
+        }
+        return 0;
+    }
+    if (errno != ENOSYS && errno != EINVAL) {
+        return -1;
+    }
+#endif
+
+    return 0;
+}

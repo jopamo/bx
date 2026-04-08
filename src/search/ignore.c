@@ -236,16 +236,12 @@ static bool bx_ignore_state_rewrite_root_prefixes(struct bx_ignore_state *state,
     state->root_prefix = NULL;
     state->root_prefix_len = 0u;
 
-    const char *relative_root = NULL;
-    if (subtree_root && state->dirpath) {
-        size_t dir_len = state->dirpath_len;
-        if (strncmp(subtree_root, state->dirpath, dir_len) == 0) {
-            if (subtree_root[dir_len] == '/')
-                relative_root = subtree_root + dir_len + 1;
-            else if (subtree_root[dir_len] == '\0')
-                relative_root = "";
-        }
+    if (state->dirpath) {
+        free(old_root_prefix);
+        return true;
     }
+
+    const char *relative_root = NULL;
     if (!relative_root && current_root && subtree_root &&
         strncmp(subtree_root, current_root, strlen(current_root)) == 0) {
         const char *suffix = subtree_root + strlen(current_root);

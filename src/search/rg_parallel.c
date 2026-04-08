@@ -19,6 +19,7 @@
 #include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
+#include "sort.h"
 #include "traverse.h"
 
 /*
@@ -551,6 +552,8 @@ bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
         return false;
     if (opts->files_only || opts->trace || opts->quiet || rg_searches_stdin)
         return false;
+    if (bx_search_sort_requested(opts))
+        return false;
     if (bx_search_rg_auto_thread_count(opts) <= 1u)
         return false;
     if (num_files == 0)
@@ -681,7 +684,7 @@ int bx_search_run_parallel_rg(int argc,
             if (bx_cancel_state_requested(&state.cancel))
                 break;
             j = sorted_operands
-                    ? sorted_operands[opts->sort_paths_reverse
+                    ? sorted_operands[bx_search_sort_is_descending(opts)
                                           ? (sorted_operand_count - 1 - operand_i)
                                           : operand_i]
                           .index
@@ -725,7 +728,7 @@ int bx_search_run_parallel_rg(int argc,
     } else {
         for (int operand_i = 0; operand_i < num_files; operand_i++) {
             int j = sorted_operands
-                        ? sorted_operands[opts->sort_paths_reverse
+                        ? sorted_operands[bx_search_sort_is_descending(opts)
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index

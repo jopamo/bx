@@ -463,6 +463,7 @@ bx_search_sources = [
   'src/search/rg_text.c',
   'src/search/rg_transform.c',
   'src/search/scanner.c',
+  'src/search/sort.c',
   'src/search/search.c',
   'src/search/traverse.c',
 ]
@@ -1842,6 +1843,8 @@ if get_option('tests')
   test('rg upstream option case coverage audit', python3, args : [test_rg_upstream_option_case_coverage_audit], suite : fast_track_p2_suite)
   test_rg_upstream_option_gap_audit = files('tests/test_rg_upstream_option_gap_audit.py')
   test('rg upstream option gap audit', python3, args : [test_rg_upstream_option_gap_audit], suite : fast_track_p2_suite)
+  test_rg_sort_matrix = files('tests/applets/text/rg/test_rg_sort_matrix.py')
+  test('rg sort matrix', python3, args : [test_rg_sort_matrix, bx_exe], suite : fast_track_p2_suite)
   test_rg_hotpath_harness = files('tests/applets/text/rg/test_rg_hotpath_harness.py')
   test('rg hotpath harness', python3, args : [test_rg_hotpath_harness, bx_exe], suite : fast_track_p2_suite)
   test_rg_threads = files('tests/applets/text/rg/test_rg_threads.py')

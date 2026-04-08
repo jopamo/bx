@@ -19,6 +19,7 @@
 #include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
+#include "sort.h"
 #include "traverse.h"
 
 #define BX_RG_SCHED_BATCH_MAX_FILES 64u
@@ -1110,7 +1111,7 @@ bool bx_rg_sched_supported(enum bx_search_personality personality,
         return false;
     if (!(opts->files_with_matches || opts->files_without_match))
         return false;
-    if (opts->sort_paths || opts->sort_paths_reverse)
+    if (bx_search_sort_requested(opts))
         return false;
     if (bx_thread_count_resolve(opts->threads) <= 1u)
         return false;
@@ -1175,7 +1176,7 @@ int bx_rg_sched_run(int argc,
     } else {
         for (int operand_i = 0; operand_i < num_files; ++operand_i) {
             int j = sorted_operands
-                        ? sorted_operands[opts->sort_paths_reverse
+                        ? sorted_operands[bx_search_sort_is_descending(opts)
                                               ? (sorted_operand_count - 1 - operand_i)
                                               : operand_i]
                               .index

@@ -16,6 +16,19 @@
 #define MAX_RG_IGNORE_FILES 32
 #define MAX_PRE_GLOBS 16
 
+enum bx_search_sort_key {
+    BX_SEARCH_SORT_NONE = 0,
+    BX_SEARCH_SORT_PATH,
+    BX_SEARCH_SORT_MODIFIED,
+    BX_SEARCH_SORT_ACCESSED,
+    BX_SEARCH_SORT_CREATED,
+};
+
+enum bx_search_sort_dir {
+    BX_SEARCH_SORT_ASCENDING = 0,
+    BX_SEARCH_SORT_DESCENDING,
+};
+
 struct search_opts {
     bool show_line_number;
     bool show_column;
@@ -82,8 +95,8 @@ struct search_opts {
     int   num_ignore_files;
     bool null_output;
     bool null_filename;
-    bool sort_paths;
-    bool sort_paths_reverse;
+    enum bx_search_sort_key sort_key;
+    enum bx_search_sort_dir sort_dir;
     bool stay_on_filesystem;
     bool null_data;
     bool multiline;

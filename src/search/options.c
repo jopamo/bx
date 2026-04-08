@@ -247,6 +247,32 @@ static bool bx_search_personality_is_grep_family(enum bx_search_personality pers
         || personality == BX_SEARCH_FGREP;
 }
 
+static bool bx_search_parse_sort_key(const char *text, enum bx_search_sort_key *out) {
+    if (!text || !out)
+        return false;
+    if (strcmp(text, "none") == 0) {
+        *out = BX_SEARCH_SORT_NONE;
+        return true;
+    }
+    if (strcmp(text, "path") == 0) {
+        *out = BX_SEARCH_SORT_PATH;
+        return true;
+    }
+    if (strcmp(text, "modified") == 0) {
+        *out = BX_SEARCH_SORT_MODIFIED;
+        return true;
+    }
+    if (strcmp(text, "accessed") == 0) {
+        *out = BX_SEARCH_SORT_ACCESSED;
+        return true;
+    }
+    if (strcmp(text, "created") == 0) {
+        *out = BX_SEARCH_SORT_CREATED;
+        return true;
+    }
+    return false;
+}
+
 static int bx_search_require_rg_option(const char *progname,
                                        enum bx_search_personality personality,
                                        int option_index, int argc, char **argv,
@@ -504,8 +530,8 @@ void bx_search_print_help(const char *progname) {
     puts("      --dfa-size-limit=NUM[KMG]  accept ripgrep's DFA size limit flag");
     puts("      --pcre2-version  print PCRE2 version information and exit");
     puts("      --stop-on-nonmatch  stop reading a file after a non-matching record follows a match");
-    puts("      --sort=TYPE  sort results ascending by TYPE; path is supported");
-    puts("      --sortr=TYPE  sort results descending by TYPE; path is supported");
+    puts("      --sort=TYPE  sort results ascending by TYPE; supported: none, path, modified, accessed, created");
+    puts("      --sortr=TYPE  sort results descending by TYPE; supported: none, path, modified, accessed, created");
     puts("  -V            output version information and exit");
     puts("      --help    display this help and exit");
     puts("      --version output version information and exit");
@@ -1960,7 +1986,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, c == OPT_SORT ? "--sort" : "--sortr") != 0)
                 return -1;
-            if (strcmp(optarg, "path") != 0) {
+            if (!bx_search_parse_sort_key(optarg, &opts->sort_key)) {
                 fprintf(stderr,
                         "%s: unsupported argument for %s: %s\n",
                         progname,
@@ -1968,8 +1994,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                         optarg);
                 return -1;
             }
-            opts->sort_paths = true;
-            opts->sort_paths_reverse = (c == OPT_SORTR);
+            opts->sort_dir = c == OPT_SORTR
+                                 ? BX_SEARCH_SORT_DESCENDING
+                                 : BX_SEARCH_SORT_ASCENDING;
             break;
         case OPT_SORT_FILES:
             if (bx_search_require_rg_option(progname, personality, optind, argc,

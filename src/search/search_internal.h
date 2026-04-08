@@ -36,6 +36,10 @@ struct bx_search_output_ctx {
 };
 
 bool bx_search_progname_uses_os_error_style(const char *progname);
+void bx_search_report_path_error(const char *progname,
+                                 const char *path,
+                                 int errnum,
+                                 const struct search_opts *opts);
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts);
 bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
