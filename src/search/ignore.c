@@ -525,7 +525,7 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                                               &loaded, &loaded_n, false);
             if (loaded_n > 0) {
                 chain = bx_ignore_append_state(chain, loaded, loaded_n, NULL, NULL,
-                                               false);
+                                               opts->ignore_file_case_insensitive);
                 if (!chain)
                     goto fail;
             } else {
