@@ -115,6 +115,7 @@ struct search_opts {
     bool pcre2_version;
     bool heading;
     bool heading_set;
+    bool vimgrep;
     enum bx_rg_encoding_mode encoding_mode;
     char *encoding_name;
     char *hostname_bin;

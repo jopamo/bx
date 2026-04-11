@@ -1454,6 +1454,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'z':
             if (bx_search_personality_is_rg(personality)) {
+                free(opts->pre_command);
+                opts->pre_command = NULL;
                 opts->search_zip = true;
                 break;
             }
@@ -1991,8 +1993,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             fprintf(stderr, "%s: unsupported option '--debug'\n", progname);
             return -1;
         case OPT_TRACE:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--trace");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--trace") != 0)
+                return -1;
+            opts->trace = true;
+            break;
         case OPT_SORT:
         case OPT_SORTR:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
@@ -2118,8 +2123,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->crlf = false;
             break;
         case OPT_HOSTNAME_BIN:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--hostname-bin");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--hostname-bin") != 0)
+                return -1;
+            free(opts->hostname_bin);
+            opts->hostname_bin = NULL;
+            if (optarg[0] != '\0') {
+                opts->hostname_bin = strdup(optarg);
+                if (!opts->hostname_bin)
+                    return -1;
+            }
+            break;
         case OPT_HYPERLINK_FORMAT:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, "--hyperlink-format") != 0)
@@ -2152,18 +2166,42 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case OPT_PRE:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--pre");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--pre") != 0)
+                return -1;
+            free(opts->pre_command);
+            opts->pre_command = NULL;
+            if (optarg[0] != '\0') {
+                opts->pre_command = strdup(optarg);
+                if (!opts->pre_command)
+                    return -1;
+                opts->search_zip = false;
+            }
+            break;
         case OPT_NO_PRE:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--no-pre");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--no-pre") != 0)
+                return -1;
+            free(opts->pre_command);
+            opts->pre_command = NULL;
+            break;
         case OPT_PRE_GLOB:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--pre-glob");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--pre-glob") != 0)
+                return -1;
+            if (opts->num_pre_globs < MAX_PRE_GLOBS) {
+                opts->pre_globs[opts->num_pre_globs] = strdup(optarg);
+                if (!opts->pre_globs[opts->num_pre_globs])
+                    return -1;
+                opts->num_pre_globs++;
+            }
+            break;
         case OPT_SEARCH_ZIP:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, "--search-zip") != 0)
                 return -1;
+            free(opts->pre_command);
+            opts->pre_command = NULL;
             opts->search_zip = true;
             break;
         case OPT_NO_SEARCH_ZIP:
@@ -2263,8 +2301,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             opts->max_filesize_set = true;
             break;
         case OPT_VIMGREP:
-            return bx_search_unsupported_rg_option(
-                progname, personality, optind, argc, argv, "--vimgrep");
+            if (bx_search_require_rg_option(progname, personality, optind, argc,
+                                            argv, "--vimgrep") != 0)
+                return -1;
+            opts->vimgrep = true;
+            break;
         case OPT_GENERATE:
             return bx_search_unsupported_rg_option(
                 progname, personality, optind, argc, argv, "--generate");

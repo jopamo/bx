@@ -1034,6 +1034,40 @@ static void print_only_matches(const unsigned char *line, size_t len,
     }
 }
 
+static void print_vimgrep_matches(const unsigned char *line, size_t len,
+                                  const char *display_name, int line_num,
+                                  size_t byte_offset,
+                                  struct bx_matcher *m, struct search_opts *opts) {
+    size_t match_len = record_match_len(line, len, opts);
+    size_t start = 0u;
+    FILE *out = current_output_ctx ? bx_search_output_stream() : stdout;
+    bool color = bx_color_enabled();
+    unsigned char delimiter = (unsigned char)record_delimiter(opts);
+    bool has_delim = len > 0u && line[len - 1u] == delimiter;
+
+    while (start <= match_len) {
+        struct bx_match bm;
+        if (matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
+            break;
+        bool prefix_printed = print_result_prefix(display_name, opts, line_num,
+                                                  bm.start + 1u, true,
+                                                  byte_offset + bm.start,
+                                                  match_field_separator(opts));
+        maybe_emit_initial_tab(opts, prefix_printed);
+        if (should_omit_long_match_line(opts, len))
+            print_omitted_long_line(opts);
+        else if (opts->replace)
+            print_replaced_record(line, len, m, opts);
+        else
+            print_match_colored_cached(line, len, bm.start, bm.end, has_delim,
+                                       opts, out, color, delimiter);
+        if (bm.end > bm.start)
+            start = bm.end;
+        else
+            start = bm.start + 1u;
+    }
+}
+
 /* --- line buffering for context --- */
 
 struct line_buf {
@@ -1399,7 +1433,8 @@ static bool search_file_can_use_scanner(const struct bx_matcher *m,
         return false;
     if (!opts->recursive || opts->multiline || opts->invert_match)
         return false;
-    if (needs_line_buffering(opts) || opts->replace || opts->only_matching || opts->passthru)
+    if (needs_line_buffering(opts) || opts->replace || opts->only_matching
+        || opts->passthru || opts->vimgrep)
         return false;
     if (opts->stop_on_nonmatch)
         return false;
@@ -1763,7 +1798,12 @@ static int search_file_buffered_opened(FILE *f,
             }
         }
         if (lines[i].match) {
-            if (opts->only_matching && !opts->invert_match) {
+            if (opts->vimgrep && !opts->invert_match) {
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
+                print_vimgrep_matches((unsigned char *)lines[i].text, lines[i].len,
+                                      heading_printed_for_file ? NULL : display_name,
+                                      i + 1, lines[i].byte_offset, m, opts);
+            } else if (opts->only_matching && !opts->invert_match) {
                 maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 print_only_matches((unsigned char *)lines[i].text, lines[i].len,
                                    heading_printed_for_file ? NULL : display_name,
@@ -2168,7 +2208,13 @@ static int search_file_streaming_opened(FILE *f,
                 report_binary_match(progname, display_name);
                 break;
             }
-            if (opts->only_matching && !opts->invert_match) {
+            if (opts->vimgrep && !opts->invert_match) {
+                maybe_print_heading(display_name, opts, &heading_printed_for_file);
+                print_vimgrep_matches((unsigned char *)line, (size_t)len,
+                                      heading_printed_for_file ? NULL : display_name,
+                                      line_num, line_offset, m, opts);
+                stdout_emitted = true;
+            } else if (opts->only_matching && !opts->invert_match) {
                 maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 print_only_matches((unsigned char *)line, (size_t)len,
                                    heading_printed_for_file ? NULL : display_name, line_num,
@@ -3033,6 +3079,15 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     if (bx_search_personality_is_rg(personality)
         && !opts.show_line_number && isatty(STDOUT_FILENO))
         opts.show_line_number = true;
+    if (bx_search_personality_is_rg(personality) && opts.vimgrep) {
+        opts.show_filename = true;
+        opts.hide_filename = false;
+        opts.show_line_number = true;
+        opts.show_column = true;
+        opts.only_matching = false;
+        opts.heading = false;
+        opts.heading_set = true;
+    }
     if (!opts.heading_set)
         opts.heading = search_default_heading(personality, &opts);
 
