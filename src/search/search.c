@@ -8,8 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <poll.h>
-#include <pthread.h>
 #include <regex.h>
 #include <unistd.h>
 
@@ -24,6 +22,7 @@
 #include "rg_parallel.h"
 #include "search_internal.h"
 #include "search_plan.h"
+#include "search_run.h"
 #include "fswalk/walk.h"
 #include "filter.h"
 #include "ignore.h"
@@ -574,6 +573,8 @@ static bool matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
 }
 
 static void matcher_free(struct bx_matcher *m) {
+    if (!m)
+        return;
     if (m->kind == MATCHER_LITERAL)
         bx_literal_free(m->literal);
     else if (m->kind == MATCHER_POSIX)
@@ -686,47 +687,6 @@ struct bx_matcher *bx_search_compile_matcher(const char *pattern,
                                              struct search_opts *opts,
                                              char **errmsg) {
     return compile_matcher(pattern, personality, opts, errmsg);
-}
-
-static char *build_search_pattern(const char *pattern,
-                                  enum bx_search_personality personality,
-                                  const struct search_opts *opts) {
-    if (!pattern || !opts || opts->num_extra_patterns == 0)
-        return pattern ? strdup(pattern) : NULL;
-
-    bool use_basic_grouping = !bx_search_personality_is_rg(personality) &&
-                              !opts->perl_regexp &&
-                              !opts->extended_regex &&
-                              !opts->fixed_strings;
-    const char *group_open = use_basic_grouping ? "\\(" : "(";
-    const char *group_close = use_basic_grouping ? "\\)" : ")";
-    const char *group_sep = use_basic_grouping ? "\\|" : "|";
-    size_t total = strlen(pattern) + strlen(group_open) + strlen(group_close) + 1u;
-
-    for (int k = 0; k < opts->num_extra_patterns; k++)
-        total += strlen(opts->extra_patterns[k]) + strlen(group_sep);
-
-    char *combined = malloc(total);
-    if (!combined)
-        return NULL;
-
-    char *p = combined;
-    memcpy(p, group_open, strlen(group_open));
-    p += strlen(group_open);
-    memcpy(p, pattern, strlen(pattern));
-    p += strlen(pattern);
-    for (int k = 0; k < opts->num_extra_patterns; k++) {
-        memcpy(p, group_sep, strlen(group_sep));
-        p += strlen(group_sep);
-        const char *extra_pattern = opts->extra_patterns[k];
-        size_t extra_len = strlen(extra_pattern);
-        memcpy(p, extra_pattern, extra_len);
-        p += extra_len;
-    }
-    memcpy(p, group_close, strlen(group_close));
-    p += strlen(group_close);
-    *p = '\0';
-    return combined;
 }
 
 static bool matcher_is_scanner_literal_eligible(const struct bx_matcher *m,
@@ -1372,34 +1332,6 @@ static int search_file_multiline(const char *filename, const char *display_name,
     if (stats)
         stats->files_searched++;
     return search_buffer_multiline(buf, len, display_name, m, opts, match_count, stats);
-}
-
-static bool search_default_show_filename(int argc, char **argv, int first_file,
-                                         enum bx_search_personality personality,
-                                         struct search_opts *opts,
-                                         bool rg_searches_stdin) {
-    int num_files = argc - first_file;
-    if (num_files == 0) {
-        if (bx_search_personality_is_rg(personality))
-            return !rg_searches_stdin;
-        return opts->recursive;
-    }
-    if (num_files > 1)
-        return true;
-    if (!argv[first_file] || strcmp(argv[first_file], "-") == 0)
-        return false;
-
-    struct stat st;
-    if (stat(argv[first_file], &st) == 0)
-        return S_ISDIR(st.st_mode);
-    return false;
-}
-
-static bool search_default_heading(enum bx_search_personality personality,
-                                   const struct search_opts *opts) {
-    if (!bx_search_personality_is_rg(personality) || !isatty(STDOUT_FILENO))
-        return false;
-    return opts->show_filename;
 }
 
 #define BX_SEARCH_SCANNER_MIN_FILE_SIZE 1u
@@ -2701,55 +2633,7 @@ static bool is_binary(const char *path) {
     return false;
 }
 
-static bool rg_should_search_stdin(void) {
-    if (isatty(STDIN_FILENO))
-        return false;
-
-    struct stat st;
-    if (fstat(STDIN_FILENO, &st) != 0)
-        return false;
-
-    if (S_ISCHR(st.st_mode))
-        return false;
-
-    if (S_ISREG(st.st_mode) || S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode))
-        return true;
-
-    struct pollfd pfd = {
-        .fd = STDIN_FILENO,
-        .events = POLLIN,
-    };
-
-    int rc = poll(&pfd, 1, 0);
-    if (rc <= 0)
-        return false;
-
-    return (pfd.revents & POLLIN) != 0;
-}
-
 /* --- recursive search using shared walker --- */
-
-struct grep_walk_state {
-    struct bx_matcher *m;
-    struct search_opts *opts;
-    const char *progname;
-    int *match_count;
-    struct bx_search_scanner *scanner;
-    struct bx_record_stream *record_stream;
-    struct bx_search_stats *stats;
-    int *exit_status;
-    bool *match_seen;
-    bool *error_seen;
-    bool *stop;
-    bool strip_dot_prefix;
-};
-
-struct files_walk_state {
-    struct search_opts *opts;
-    const char *progname;
-    bool *error_seen;
-    bool strip_dot_prefix;
-};
 
 static const char *const rg_ignore_filenames[] = {
     ".gitignore",
@@ -2818,67 +2702,6 @@ struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
     };
 }
 
-static int bx_search_operand_ref_compare(const void *left, const void *right) {
-    const struct bx_search_operand_ref *a = left;
-    const struct bx_search_operand_ref *b = right;
-    int cmp = strcmp(a->path, b->path);
-    if (cmp != 0)
-        return cmp;
-    return (a->index > b->index) - (a->index < b->index);
-}
-
-static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
-    int argc, char **argv, int first_file, int *out_count
-) {
-    int count = argc - first_file;
-    if (out_count)
-        *out_count = count;
-    if (count <= 0)
-        return NULL;
-
-    struct bx_search_operand_ref *refs = calloc((size_t)count, sizeof(*refs));
-    if (!refs)
-        return NULL;
-
-    for (int i = 0; i < count; i++) {
-        refs[i].path = argv[first_file + i];
-        refs[i].index = first_file + i;
-    }
-    qsort(refs, (size_t)count, sizeof(*refs), bx_search_operand_ref_compare);
-    return refs;
-}
-
-static enum bx_walk_action fs_cb(struct bx_walk_entry *entry, void *user) {
-    struct files_walk_state *st = user;
-    if (bx_search_entry_exceeds_max_filesize(entry, st ? st->opts : NULL))
-        return BX_WALK_CONTINUE;
-    if (!entry->is_dir) {
-        char *display = display_path_for_output(entry->path, st && st->strip_dot_prefix,
-                                                st ? st->opts : NULL);
-        printf("%s%c", display ? display : entry->path,
-               (st && st->opts && st->opts->null_output) ? '\0' : '\n');
-        free(display);
-    }
-    return BX_WALK_CONTINUE;
-}
-
-static enum bx_walk_action grep_walk_error_cb(const char *path, int errnum, void *user) {
-    struct grep_walk_state *gs = user;
-    bx_search_report_path_error(gs->progname, path, errnum, gs->opts);
-    *gs->exit_status = 2;
-    if (gs->error_seen)
-        *gs->error_seen = true;
-    return BX_WALK_CONTINUE;
-}
-
-static enum bx_walk_action files_walk_error_cb(const char *path, int errnum, void *user) {
-    struct files_walk_state *st = user;
-    bx_search_report_path_error(st->progname, path, errnum, st->opts);
-    if (st->error_seen)
-        *st->error_seen = true;
-    return BX_WALK_CONTINUE;
-}
-
 bool bx_search_explicit_entry_selected(const struct search_opts *opts,
                                        const char *path) {
     const char *name = bx_path_basename_ptr(path);
@@ -2904,36 +2727,6 @@ bool bx_search_explicit_entry_selected(const struct search_opts *opts,
     }
 
     return true;
-}
-
-static enum bx_walk_action grep_walk_cb(struct bx_walk_entry *entry, void *user) {
-    struct grep_walk_state *gs = user;
-    if (gs->stop && *gs->stop)
-        return BX_WALK_STOP;
-    if (entry->is_dir)
-        return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, gs ? gs->opts : NULL))
-        return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, gs ? gs->opts : NULL))
-        return BX_WALK_CONTINUE;
-
-    char *display_name = display_path_for_output(entry->path, gs->strip_dot_prefix, gs->opts);
-
-    int r = search_file(entry->path, display_name, gs->progname, gs->m, gs->opts,
-                        gs->match_count, gs->scanner, gs->record_stream, gs->stats);
-    free(display_name);
-    if (r == 2) {
-        *gs->exit_status = 2;
-        if (gs->error_seen) *gs->error_seen = true;
-        return BX_WALK_CONTINUE;
-    }
-    if (r == 0) {
-        *gs->exit_status = 0;
-        if (gs->match_seen) *gs->match_seen = true;
-        if (gs->opts->quiet && gs->stop)
-            return BX_WALK_STOP;
-    }
-    return BX_WALK_CONTINUE;
 }
 
 /* --- main entry point --- */
@@ -2972,127 +2765,10 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     bool rg_searches_stdin = (bx_search_personality_is_rg(personality)
                               && !opts.files_only
                               && num_files == 0
-                              && rg_should_search_stdin());
+                              && bx_search_run_should_search_stdin());
     bx_search_plan_build(&plan, personality, &opts, num_files, rg_searches_stdin);
     if (bx_search_personality_is_rg(personality) && bx_search_plan_debug_enabled())
         bx_search_plan_debug_dump(stderr, &plan);
-
-    if (opts.files_only) {
-        bool error_seen = false;
-        if (bx_search_sort_is_metadata(&opts)) {
-            struct bx_search_sorted_paths sorted_paths = {0};
-            if (bx_search_collect_metadata_sorted_paths(argc, argv, first_file, progname,
-                                                        personality, &opts, &sorted_paths,
-                                                        &error_seen) != 0) {
-                bx_search_sorted_paths_dispose(&sorted_paths);
-                bx_search_free_options(&opts);
-                return finish_search_main(2);
-            }
-            for (size_t i = 0; i < sorted_paths.len; ++i) {
-                char *display = display_path_for_output(sorted_paths.items[i].path,
-                                                        sorted_paths.items[i].strip_dot_prefix,
-                                                        &opts);
-                printf("%s%c",
-                       display ? display : sorted_paths.items[i].path,
-                       opts.null_output ? '\0' : '\n');
-                free(display);
-            }
-            bx_search_sorted_paths_dispose(&sorted_paths);
-            bx_search_free_options(&opts);
-            return finish_search_main(error_seen ? 2 : 0);
-        }
-
-        struct files_walk_state fstate = {
-            .opts = &opts,
-            .progname = progname,
-            .error_seen = &error_seen,
-        };
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, NULL);
-        walk_opts.cycle_mode = opts.follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
-                                                    : BX_WALK_CYCLE_NONE;
-        walk_opts.cycle_report = BX_WALK_CYCLE_ERROR;
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
-        struct bx_search_walk_config walk_config = {
-            .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
-            .visit = fs_cb,
-            .error = files_walk_error_cb,
-        };
-        int sorted_operand_count = 0;
-        struct bx_search_operand_ref *sorted_operands =
-            bx_search_sort_is_path(&opts)
-                ? bx_search_collect_sorted_operands(argc, argv, first_file, &sorted_operand_count)
-                : NULL;
-        if (num_files == 0) {
-            fstate.strip_dot_prefix = true;
-            if (bx_search_walk(".", &walk_config, &fstate) != 0)
-                error_seen = true;
-        } else {
-            for (int operand_i = 0; operand_i < num_files; operand_i++) {
-                int j = sorted_operands
-                            ? sorted_operands[bx_search_sort_is_descending(&opts)
-                                                  ? (sorted_operand_count - 1 - operand_i)
-                                                  : operand_i]
-                                  .index
-                            : (first_file + operand_i);
-                struct stat st;
-                if (stat(argv[j], &st) != 0) {
-                    bx_search_report_path_error(progname, argv[j], errno, &opts);
-                    error_seen = true;
-                    continue;
-                }
-                if (bx_search_path_exceeds_max_filesize(argv[j], &opts))
-                    continue;
-                if (S_ISDIR(st.st_mode))
-                    error_seen |= bx_search_walk(argv[j], &walk_config, &fstate) != 0;
-                else
-                    printf("%s%c", argv[j], opts.null_output ? '\0' : '\n');
-            }
-        }
-        free(sorted_operands);
-        bx_search_free_options(&opts);
-        return finish_search_main(error_seen ? 2 : 0);
-    }
-
-    int sorted_operand_count = 0;
-    struct bx_search_operand_ref *sorted_operands =
-        bx_search_sort_is_path(&opts)
-            ? bx_search_collect_sorted_operands(argc, argv, first_file, &sorted_operand_count)
-            : NULL;
-    if (!opts.show_filename && !opts.hide_filename)
-        opts.show_filename = search_default_show_filename(argc, argv, first_file, personality,
-                                                          &opts, rg_searches_stdin);
-    if (opts.hide_filename)
-        opts.show_filename = false;
-    if (bx_search_personality_is_rg(personality)
-        && !opts.show_line_number && isatty(STDOUT_FILENO))
-        opts.show_line_number = true;
-    if (bx_search_personality_is_rg(personality) && opts.vimgrep) {
-        opts.show_filename = true;
-        opts.hide_filename = false;
-        opts.show_line_number = true;
-        opts.show_column = true;
-        opts.only_matching = false;
-        opts.heading = false;
-        opts.heading_set = true;
-    }
-    if (!opts.heading_set)
-        opts.heading = search_default_heading(personality, &opts);
-
-    char *search_pattern = build_search_pattern(pattern, personality, &opts);
-    if (!search_pattern) {
-        free(sorted_operands);
-        bx_search_free_options(&opts);
-        return finish_search_main(2);
-    }
-
-    int global_matches = 0;
-    int exit_status = 1;
-    bool match_seen = false;
-    bool error_seen = false;
-    bool ran_search = false;
     struct bx_search_stats stats = {0};
     struct bx_search_output_ctx main_output_ctx = {
         .out = stdout,
@@ -3101,223 +2777,23 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     };
     struct bx_search_output_ctx *previous_output_ctx = bx_search_output_ctx_push(&main_output_ctx);
 
-    struct bx_matcher *m;
-    char *compile_error = NULL;
-    struct bx_search_scanner scanner = {0};
-    struct bx_record_stream record_stream = {0};
+    struct bx_search_run_args run_args = {
+        .argc = argc,
+        .argv = argv,
+        .first_file = first_file,
+        .pattern = pattern,
+        .progname = progname,
+        .personality = personality,
+        .plan = &plan,
+        .opts = &opts,
+        .stats = &stats,
+    };
+    struct bx_search_run_result run_result = {0};
 
-    m = compile_matcher(search_pattern, personality, &opts, &compile_error);
-
-    if (!m) {
-        if (compile_error) {
-            if (!bx_search_personality_is_rg(personality)) {
-                fprintf(stderr, "%s: Invalid regular expression\n",
-                        argv[0] ? argv[0] : "grep");
-            } else {
-                fprintf(stderr, "%s: invalid pattern '%s': %s\n",
-                        argv[0] ? argv[0] : "grep", pattern, compile_error);
-            }
-            free(compile_error);
-        } else {
-            fprintf(stderr, "%s: invalid pattern: %s\n",
-                    argv[0] ? argv[0] : "grep", pattern);
-        }
-        bx_search_scanner_dispose(&scanner);
-        bx_record_stream_dispose(&record_stream);
-        exit_status = 2;
-        error_seen = true;
-        goto done;
-    }
-
-    if (bx_search_sort_is_metadata(&opts) && !(num_files == 0 && rg_searches_stdin)) {
-        struct bx_search_sorted_paths sorted_paths = {0};
-
-        if (bx_search_collect_metadata_sorted_paths(argc, argv, first_file, progname,
-                                                    personality, &opts, &sorted_paths,
-                                                    &error_seen) != 0) {
-            error_seen = true;
-            bx_search_sorted_paths_dispose(&sorted_paths);
-            matcher_free(m);
-            bx_search_scanner_dispose(&scanner);
-            bx_record_stream_dispose(&record_stream);
-            goto done;
-        }
-
-        ran_search = true;
-        for (size_t i = 0; i < sorted_paths.len; ++i) {
-            char *display_name = display_path_for_output(sorted_paths.items[i].path,
-                                                         sorted_paths.items[i].strip_dot_prefix,
-                                                         &opts);
-            int r = search_file(sorted_paths.items[i].path, display_name, progname, m, &opts,
-                                &global_matches, &scanner, &record_stream, &stats);
-            free(display_name);
-            if (r == 2) {
-                error_seen = true;
-            } else if (r == 0) {
-                match_seen = true;
-                if (opts.quiet)
-                    break;
-            }
-        }
-        bx_search_sorted_paths_dispose(&sorted_paths);
-        matcher_free(m);
-        bx_search_scanner_dispose(&scanner);
-        bx_record_stream_dispose(&record_stream);
-        goto done;
-    }
-
-    if (bx_search_parallel_rg_supported(personality, &opts, num_files, rg_searches_stdin)) {
-        matcher_free(m);
-        ran_search = true;
-        exit_status = bx_search_run_parallel_rg(argc, argv, first_file,
-                                                sorted_operands, sorted_operand_count,
-                                                progname, search_pattern, personality,
-                                                &opts, &stats, &match_seen, &error_seen);
-        goto done;
-    }
-    ran_search = true;
-
-    if (num_files == 0) {
-        if ((bx_search_personality_is_rg(personality) && !rg_searches_stdin) ||
-            (!bx_search_personality_is_rg(personality) && opts.recursive)) {
-            bool stop = false;
-            struct grep_walk_state gs = {.m = m, .opts = &opts,
-                                         .progname = progname,
-                                         .match_count = &global_matches,
-                                         .scanner = &scanner,
-                                         .record_stream = &record_stream,
-                                         .stats = &stats,
-                                         .exit_status = &exit_status,
-                                         .match_seen = &match_seen,
-                                         .error_seen = &error_seen,
-                                         .stop = &stop,
-                                         .strip_dot_prefix = true};
-            struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
-            struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-            struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
-            struct bx_search_walk_config walk_config = {
-                .walk_opts = &walk_opts,
-                .filter_opts = &filter_opts,
-                .ignore_opts = &ignore_opts,
-                .visit = grep_walk_cb,
-                .error = grep_walk_error_cb,
-            };
-
-            if (bx_search_walk(".", &walk_config, &gs) != 0) {
-                exit_status = 2;
-                error_seen = true;
-            }
-        } else {
-            exit_status = search_file(NULL, NULL, progname, m, &opts, &global_matches,
-                                      &scanner, &record_stream, &stats);
-            if (exit_status == 0) match_seen = true;
-            else if (exit_status == 2) error_seen = true;
-        }
-    } else if (opts.recursive) {
-        bool stop = false;
-        struct grep_walk_state gs = {.m = m, .opts = &opts,
-                                     .progname = progname,
-                                     .match_count = &global_matches,
-                                     .scanner = &scanner,
-                                     .record_stream = &record_stream,
-                                     .stats = &stats,
-                                     .exit_status = &exit_status,
-                                     .match_seen = &match_seen,
-                                     .error_seen = &error_seen,
-                                     .stop = &stop,
-                                     .strip_dot_prefix = false};
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, &opts, &stop);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(&opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
-        struct bx_search_walk_config walk_config = {
-            .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
-            .visit = grep_walk_cb,
-            .error = grep_walk_error_cb,
-        };
-
-        for (int operand_i = 0; operand_i < num_files && !stop; operand_i++) {
-            int j = sorted_operands
-                        ? sorted_operands[bx_search_sort_is_descending(&opts)
-                                              ? (sorted_operand_count - 1 - operand_i)
-                                              : operand_i]
-                              .index
-                        : (first_file + operand_i);
-            struct stat st;
-            if (stat(argv[j], &st) != 0) {
-                bx_search_report_path_error(progname, argv[j], errno, &opts);
-                exit_status = 2;
-                error_seen = true;
-                continue;
-            }
-            if (S_ISDIR(st.st_mode)) {
-                if (bx_search_walk(argv[j], &walk_config, &gs) != 0) {
-                    exit_status = 2;
-                    error_seen = true;
-                }
-            } else {
-                if (bx_search_should_skip_special_input_mode(st.st_mode, &opts))
-                    continue;
-                if (bx_search_explicit_entry_selected(gs.opts, argv[j])) {
-                    struct bx_walk_entry entry = {.path = argv[j], .is_dir = false, .mode = st.st_mode};
-                    enum bx_walk_action action = grep_walk_cb(&entry, &gs);
-                    if (action == BX_WALK_STOP)
-                        stop = true;
-                }
-            }
-        }
-    } else {
-        for (int operand_i = 0; operand_i < num_files; operand_i++) {
-            int j = sorted_operands
-                        ? sorted_operands[bx_search_sort_is_descending(&opts)
-                                              ? (sorted_operand_count - 1 - operand_i)
-                                              : operand_i]
-                              .index
-                        : (first_file + operand_i);
-            if (argv[j] && strcmp(argv[j], "-") != 0) {
-                struct stat st;
-                if (lstat(argv[j], &st) == 0) {
-                    if (S_ISDIR(st.st_mode)) {
-                        if (opts.directory_mode == BX_GREP_DIR_SKIP)
-                            continue;
-                        bx_search_report_path_error(progname, argv[j], EISDIR, &opts);
-                        exit_status = 2;
-                        error_seen = true;
-                        continue;
-                    }
-                    if (bx_search_should_skip_special_input_mode(st.st_mode, &opts))
-                        continue;
-                }
-                if (bx_search_path_exceeds_max_filesize(argv[j], &opts))
-                    continue;
-            }
-            int r = search_file(argv[j], NULL, progname, m, &opts, &global_matches,
-                                &scanner, &record_stream, &stats);
-            if (r == 2) {
-                exit_status = 2;
-                error_seen = true;
-            } else if (r == 0) {
-                exit_status = 0;
-                match_seen = true;
-                if (opts.quiet)
-                    break;
-            }
-        }
-    }
-    matcher_free(m);
-    bx_search_scanner_dispose(&scanner);
-    bx_record_stream_dispose(&record_stream);
-done:
-    if (opts.stats && ran_search)
+    bx_search_run(&run_args, &run_result);
+    if (opts.stats && run_result.ran_search)
         print_stats_summary(&stats);
     bx_search_output_ctx_pop(previous_output_ctx);
-    free(search_pattern);
-    free(sorted_operands);
     bx_search_free_options(&opts);
-    if (opts.quiet && match_seen)
-        return finish_search_main(0);
-    if (error_seen)
-        return finish_search_main(2);
-    return finish_search_main(match_seen ? 0 : 1);
+    return finish_search_main(run_result.status);
 }
