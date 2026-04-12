@@ -463,6 +463,7 @@ bx_search_sources = [
   'src/search/rg_text.c',
   'src/search/rg_transform.c',
   'src/search/scanner.c',
+  'src/search/search_plan.c',
   'src/search/sort.c',
   'src/search/search.c',
   'src/search/traverse.c',
@@ -1851,6 +1852,8 @@ if get_option('tests')
   test('rg easy option matrix', python3, args : [test_rg_easy_option_matrix, bx_exe], suite : fast_track_p2_suite)
   test_rg_next_tier_matrix = files('tests/applets/text/rg/test_rg_next_tier_matrix.py')
   test('rg next tier matrix', python3, args : [test_rg_next_tier_matrix, bx_exe], suite : fast_track_p2_suite)
+  test_rg_plan_shape = files('tests/applets/text/rg/test_rg_plan_shape.py')
+  test('rg plan shape', python3, args : [test_rg_plan_shape, bx_exe], suite : fast_track_p2_suite)
   test_rg_hotpath_harness = files('tests/applets/text/rg/test_rg_hotpath_harness.py')
   test('rg hotpath harness', python3, args : [test_rg_hotpath_harness, bx_exe], suite : fast_track_p2_suite)
   test_rg_threads = files('tests/applets/text/rg/test_rg_threads.py')
