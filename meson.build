@@ -463,6 +463,7 @@ bx_search_sources = [
   'src/search/rg_text.c',
   'src/search/rg_transform.c',
   'src/search/scanner.c',
+  'src/search/search_input.c',
   'src/search/search_plan.c',
   'src/search/search_run.c',
   'src/search/sort.c',
