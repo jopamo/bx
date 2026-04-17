@@ -1259,7 +1259,7 @@ static int search_file_multiline(const char *filename, const char *display_name,
     FILE *f = stdin;
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     if (!use_stdin) {
-        f = fopen(filename, "r");
+        f = bx_search_input_fopen(filename, opts);
         if (!f) {
             bx_search_report_path_error(progname, filename, errno, opts);
             return 2;
@@ -2259,7 +2259,7 @@ static bool binary_file_matches(const char *filename,
                                 struct bx_matcher *m,
                                 struct search_opts *opts,
                                 struct bx_record_stream *record_stream) {
-    FILE *f = fopen(filename, "r");
+    FILE *f = bx_search_input_fopen(filename, opts);
     if (!f)
         return false;
     bx_search_dev_counters_note_file_opened();
@@ -2470,7 +2470,8 @@ static int search_file(const char *filename, const char *display_name_override, 
         fclose(f);
     }
 
-    if (!use_stdin && !opts->null_data && !opts->binary_as_text && bx_search_input_is_binary_path(filename)) {
+    if (!use_stdin && !opts->null_data && !opts->binary_as_text &&
+        bx_search_input_is_binary_path(filename, opts)) {
         if (opts->binary_without_match)
             result = search_binary_without_match(display_name, opts, match_count, stats);
 

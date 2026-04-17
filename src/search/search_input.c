@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -13,6 +15,57 @@
 #include "search_input.h"
 #include "search_internal.h"
 
+static int bx_search_input_open_readonly(const char *filename,
+                                         const struct search_opts *opts) {
+    int flags = O_RDONLY;
+
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOATIME
+    /*
+     * Metadata-sorted accessed-time searches must not perturb atime while
+     * reading candidate files, or a second pass can collapse to path-order
+     * ties after the first pass dirties every file to "now".
+     */
+    if (opts && opts->sort_key == BX_SEARCH_SORT_ACCESSED)
+        flags |= O_NOATIME;
+#endif
+
+    int fd = open(filename, flags);
+
+#ifdef O_NOATIME
+    if (fd < 0 && (flags & O_NOATIME) != 0 &&
+        (errno == EPERM || errno == EINVAL || errno == EOPNOTSUPP || errno == ENOTSUP)) {
+        flags &= ~O_NOATIME;
+        fd = open(filename, flags);
+    }
+#endif
+
+    return fd;
+}
+
+FILE *bx_search_input_fopen(const char *filename,
+                            const struct search_opts *opts) {
+    if (!filename) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int fd = bx_search_input_open_readonly(filename, opts);
+    if (fd < 0)
+        return NULL;
+
+    FILE *f = fdopen(fd, "r");
+    if (f)
+        return f;
+
+    int saved_errno = errno;
+    close(fd);
+    errno = saved_errno;
+    return NULL;
+}
+
 FILE *bx_search_input_open_stream(const char *filename,
                                   const char *progname,
                                   struct search_opts *opts,
@@ -26,7 +79,7 @@ FILE *bx_search_input_open_stream(const char *filename,
         return stdin;
     }
 
-    FILE *f = fopen(filename, "r");
+    FILE *f = bx_search_input_fopen(filename, opts);
 
     if (!f) {
         bx_search_report_path_error(progname, filename, errno, opts);
@@ -102,8 +155,9 @@ bool bx_search_input_opened_needs_auto_transform(FILE *f,
     return bx_rg_transform_auto_encoding_needs_fd(opts, fileno(f));
 }
 
-bool bx_search_input_is_binary_path(const char *path) {
-    FILE *f = fopen(path, "r");
+bool bx_search_input_is_binary_path(const char *path,
+                                    const struct search_opts *opts) {
+    FILE *f = bx_search_input_fopen(path, opts);
 
     if (!f)
         return false;

@@ -426,29 +426,91 @@ void bx_search_print_help(const char *progname) {
     const char *base = bx_cli_progname(progname, "grep");
     bool is_rg = strcmp(base, "rg") == 0;
 
+    if (!is_rg) {
+        printf("Usage: %s [OPTION]... PATTERNS [FILE]...\n", progname);
+        puts("Search for PATTERNS in each FILE.");
+        puts("Example: grep -i 'hello world' menu.h main.c");
+        puts("PATTERNS can contain multiple patterns separated by newlines.");
+        puts("");
+        puts("Pattern selection and interpretation:");
+        puts("  -E, --extended-regexp     PATTERNS are extended regular expressions");
+        puts("  -F, --fixed-strings       PATTERNS are strings");
+        puts("  -G, --basic-regexp        PATTERNS are basic regular expressions");
+        puts("  -P, --perl-regexp         PATTERNS are Perl regular expressions");
+        puts("  -e, --regexp=PATTERNS     use PATTERNS for matching");
+        puts("  -f, --file=FILE           take PATTERNS from FILE");
+        puts("  -i, --ignore-case         ignore case distinctions in patterns and data");
+        puts("      --no-ignore-case      do not ignore case distinctions (default)");
+        puts("  -w, --word-regexp         match only whole words");
+        puts("  -x, --line-regexp         match only whole lines");
+        puts("  -z, --null-data           a data line ends in 0 byte, not newline");
+        puts("");
+        puts("Miscellaneous:");
+        puts("  -s, --no-messages         suppress error messages");
+        puts("  -v, --invert-match        select non-matching lines");
+        puts("  -V, --version             display version information and exit");
+        puts("      --help                display this help text and exit");
+        puts("");
+        puts("Output control:");
+        puts("  -m, --max-count=NUM       stop after NUM selected lines");
+        puts("  -b, --byte-offset         print the byte offset with output lines");
+        puts("  -n, --line-number         print line number with output lines");
+        puts("      --line-buffered       flush output on every line");
+        puts("  -H, --with-filename       print file name with output lines");
+        puts("  -h, --no-filename         suppress the file name prefix on output");
+        puts("      --label=LABEL         use LABEL as the standard input file name prefix");
+        puts("  -o, --only-matching       show only nonempty parts of lines that match");
+        puts("  -q, --quiet, --silent     suppress all normal output");
+        puts("      --binary-files=TYPE   assume that binary files are TYPE;");
+        puts("                            TYPE is 'binary', 'text', or 'without-match'");
+        puts("  -a, --text                equivalent to --binary-files=text");
+        puts("  -I                        equivalent to --binary-files=without-match");
+        puts("  -d, --directories=ACTION  how to handle directories;");
+        puts("                            ACTION is 'read', 'recurse', or 'skip'");
+        puts("  -D, --devices=ACTION      how to handle devices, FIFOs and sockets;");
+        puts("                            ACTION is 'read' or 'skip'");
+        puts("  -r, --recursive           like --directories=recurse");
+        puts("  -R, --dereference-recursive  likewise, but follow all symlinks");
+        puts("      --include=GLOB        search only files that match GLOB (a file pattern)");
+        puts("      --exclude=GLOB        skip files that match GLOB");
+        puts("      --exclude-from=FILE   skip files that match any file pattern from FILE");
+        puts("      --exclude-dir=GLOB    skip directories that match GLOB");
+        puts("  -L, --files-without-match  print only names of FILEs with no selected lines");
+        puts("  -l, --files-with-matches  print only names of FILEs with selected lines");
+        puts("  -c, --count               print only a count of selected lines per FILE");
+        puts("  -T, --initial-tab         make tabs line up (if needed)");
+        puts("  -Z, --null                print 0 byte after FILE name");
+        puts("");
+        puts("Context control:");
+        puts("  -B, --before-context=NUM  print NUM lines of leading context");
+        puts("  -A, --after-context=NUM   print NUM lines of trailing context");
+        puts("  -C, --context=NUM         print NUM lines of output context");
+        puts("  -NUM                      same as --context=NUM");
+        puts("      --group-separator=SEP  print SEP on line between matches with context");
+        puts("      --no-group-separator  do not print separator for matches with context");
+        puts("      --color[=WHEN],");
+        puts("      --colour[=WHEN]       use markers to highlight the matching strings;");
+        puts("                            WHEN is 'always', 'never', or 'auto'");
+        puts("  -U, --binary              do not strip CR characters at EOL (MSDOS/Windows)");
+        puts("");
+        puts("When FILE is '-', read standard input.  If no FILE is given, read standard");
+        puts("input, but with -r, recursively search the working directory instead.  With");
+        puts("fewer than two FILEs, assume -h.  Exit status is 0 if any line is selected,");
+        puts("1 otherwise; if any error occurs and -q is not given, the exit status is 2.");
+        return;
+    }
+
     printf("Usage: %s [OPTION]... PATTERN [FILE]...\n", progname);
     puts("Search for PATTERN in each FILE.");
     puts("");
-    if (!is_rg)
-        puts("  -G, --basic-regexp  PATTERN is a basic regular expression");
     puts("  -E, --extended-regexp  PATTERN is an extended regular expression");
     puts("  -F, --fixed-strings  PATTERN is a set of fixed strings");
-    if (!is_rg) {
-        puts("  -P, --perl-regexp  PATTERN is a Perl regular expression");
-        puts("  -e, --regexp=PATTERN  use PATTERN for matching");
-        puts("  -f, --file=FILE  read PATTERNs from FILE");
-    }
     puts("  -b, --byte-offset  print the byte offset with output lines");
     puts("      --column  print the column number with output lines");
     puts("  -H, --with-filename  print the file name for each match");
     puts("      --no-filename  suppress file name prefixes");
-    if (is_rg)
-        puts("  -h            display help and exit");
-    else
-        puts("  -h            suppress the file name prefix on output");
+    puts("  -h            display help and exit");
     puts("  -i, --ignore-case  ignore case distinctions");
-    if (!is_rg)
-        puts("      --no-ignore-case  restore case-sensitive matching");
     puts("  -n, --line-number  print line number with output lines");
     puts("      --no-line-number  suppress line numbers");
     puts("  -o, --only-matching  show only the part of a line matching PATTERN");
@@ -462,29 +524,12 @@ void bx_search_print_help(const char *progname) {
     puts("  -l, --files-with-matches  print only names of FILEs with selected lines");
     puts("  -L            print only names of FILEs with no selected lines");
     puts("  -q, --quiet   suppress all normal output");
-    if (is_rg) {
-        puts("  -s, --case-sensitive  search case-sensitively");
-        puts("  -S, --smart-case  search case-insensitively when the pattern is lowercase");
-    }
-    else
-        puts("  -s, --no-messages  suppress error messages");
-    if (!is_rg)
-        puts("      --silent  suppress all normal output and diagnostics");
-    if (is_rg) {
-        puts("  -r            recursive, do not follow symlinks");
-        puts("  -R            recursive, follow symlinks");
-    } else {
-        puts("  -r, --recursive  recursive, do not follow symlinks");
-        puts("  -R, --dereference-recursive  recursive, follow symlinks");
-    }
+    puts("  -s, --case-sensitive  search case-sensitively");
+    puts("  -S, --smart-case  search case-insensitively when the pattern is lowercase");
+    puts("  -r            recursive, do not follow symlinks");
+    puts("  -R            recursive, follow symlinks");
     puts("  -a, --text    process binary files as text");
-    if (!is_rg)
-        puts("  -U, --binary  do not strip CR characters at EOL");
     puts("  -I            skip binary files");
-    if (!is_rg) {
-        puts("      --binary-files=TYPE  set binary file handling mode");
-        puts("  -D ACTION, --devices=ACTION  set device, FIFO, and socket handling");
-    }
     puts("  -A NUM, --after-context=NUM  print NUM lines of trailing context");
     puts("  -B NUM, --before-context=NUM  print NUM lines of leading context");
     puts("  -C NUM, --context=NUM  print NUM lines of output context");
@@ -493,10 +538,6 @@ void bx_search_print_help(const char *progname) {
     puts("      --label=LABEL  use LABEL as the standard input file name");
     puts("      --group-separator=SEP  use SEP between context groups");
     puts("      --no-group-separator   suppress context group separators");
-    if (!is_rg)
-        puts("  -T, --initial-tab  align output prefixes on tab stops");
-    if (!is_rg)
-        puts("      --line-buffered  flush output on every line");
     puts("      --context-separator=SEP  use SEP between ripgrep context groups");
     puts("      --no-context-separator  suppress ripgrep context group separators");
     puts("      --field-context-separator=SEP  use SEP between fields on context lines");

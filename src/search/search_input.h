@@ -9,6 +9,8 @@
 struct bx_record_stream;
 struct search_opts;
 
+FILE *bx_search_input_fopen(const char *filename,
+                            const struct search_opts *opts);
 FILE *bx_search_input_open_stream(const char *filename,
                                   const char *progname,
                                   struct search_opts *opts,
@@ -23,6 +25,7 @@ bool bx_search_input_needs_early_transform_load(const char *filename,
                                                 const struct search_opts *opts);
 bool bx_search_input_opened_needs_auto_transform(FILE *f,
                                                  const struct search_opts *opts);
-bool bx_search_input_is_binary_path(const char *path);
+bool bx_search_input_is_binary_path(const char *path,
+                                    const struct search_opts *opts);
 
 #endif
