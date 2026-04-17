@@ -11,6 +11,7 @@
 #include "scanner.h"
 
 struct bx_matcher;
+struct bx_literal_matcher;
 
 struct bx_search_stats {
     int matches;
@@ -53,11 +54,23 @@ char *bx_search_display_path_for_output(const char *path,
                                         const struct search_opts *opts);
 struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx);
 void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous);
+FILE *bx_search_error_output_stream(void);
+int bx_search_printf_out(const char *fmt, ...);
 struct bx_matcher *bx_search_compile_matcher(const char *pattern,
                                              enum bx_search_personality personality,
                                              struct search_opts *opts,
                                              char **errmsg);
 void bx_search_matcher_free(struct bx_matcher *m);
+struct bx_literal_matcher *bx_search_matcher_literal(struct bx_matcher *m);
+int bx_search_search_transformed_buffer(unsigned char *buf,
+                                        size_t len,
+                                        const char *display_name,
+                                        const char *progname,
+                                        struct bx_matcher *m,
+                                        struct search_opts *opts,
+                                        int *match_count,
+                                        struct bx_record_stream *record_stream,
+                                        struct bx_search_stats *stats);
 int bx_search_search_file(const char *filename,
                           const char *display_name_override,
                           const char *progname,

@@ -21,6 +21,7 @@
 #include "search_input.h"
 #include "options.h"
 #include "rg_parallel.h"
+#include "search_raw_presence.h"
 #include "search_internal.h"
 #include "search_plan.h"
 #include "search_run.h"
@@ -126,14 +127,14 @@ void bx_search_report_path_error(const char *progname, const char *path, int err
         return;
 
     if (progname_uses_os_error_style(progname))
-        fprintf(bx_search_error_stream(), "%s: %s: %s (os error %d)\n",
+        fprintf(bx_search_error_output_stream(), "%s: %s: %s (os error %d)\n",
                 progname, path, strerror(errnum), errnum);
     else
-        fprintf(bx_search_error_stream(), "%s: %s: %s\n", progname, path, strerror(errnum));
+        fprintf(bx_search_error_output_stream(), "%s: %s: %s\n", progname, path, strerror(errnum));
 }
 
 static void report_binary_match(const char *progname, const char *path) {
-    fprintf(bx_search_error_stream(), "%s: %s: binary file matches\n", progname, path);
+    fprintf(bx_search_error_output_stream(), "%s: %s: binary file matches\n", progname, path);
 }
 
 static bool bx_search_mode_is_special_input(mode_t mode) {
@@ -222,6 +223,10 @@ static FILE *bx_search_error_stream(void) {
     return current_output_ctx && current_output_ctx->err ? current_output_ctx->err : stderr;
 }
 
+FILE *bx_search_error_output_stream(void) {
+    return bx_search_error_stream();
+}
+
 static void bx_search_note_stdout_output(void) {
     if (current_output_ctx)
         current_output_ctx->emitted_stdout = true;
@@ -285,7 +290,7 @@ static int bx_search_putc_stream(FILE *stream, int ch) {
     return rc;
 }
 
-static int bx_search_printf_out(const char *fmt, ...) {
+int bx_search_printf_out(const char *fmt, ...) {
     va_list ap;
     int rc;
 
@@ -324,14 +329,14 @@ static int search_file_streaming_opened(FILE *f,
                                         int *match_count,
                                         struct bx_record_stream *record_stream,
                                         struct bx_search_stats *stats);
-static int search_transformed_buffer(unsigned char *buf, size_t len,
-                                     const char *display_name,
-                                     const char *progname,
-                                     struct bx_matcher *m,
-                                     struct search_opts *opts,
-                                     int *match_count,
-                                     struct bx_record_stream *record_stream,
-                                     struct bx_search_stats *stats);
+int bx_search_search_transformed_buffer(unsigned char *buf, size_t len,
+                                        const char *display_name,
+                                        const char *progname,
+                                        struct bx_matcher *m,
+                                        struct search_opts *opts,
+                                        int *match_count,
+                                        struct bx_record_stream *record_stream,
+                                        struct bx_search_stats *stats);
 static char record_delimiter(const struct search_opts *opts);
 static size_t record_match_len(const unsigned char *buf, size_t len, const struct search_opts *opts);
 static void write_record_terminator(const struct search_opts *opts);
@@ -585,6 +590,12 @@ static void matcher_free(struct bx_matcher *m) {
 
 void bx_search_matcher_free(struct bx_matcher *m) {
     matcher_free(m);
+}
+
+struct bx_literal_matcher *bx_search_matcher_literal(struct bx_matcher *m) {
+    if (!m || m->kind != MATCHER_LITERAL)
+        return NULL;
+    return m->literal;
 }
 
 static struct bx_matcher *compile_matcher(const char *pattern,
@@ -1268,7 +1279,6 @@ static int search_file_multiline(const char *filename, const char *display_name,
 }
 
 #define BX_SEARCH_SCANNER_MIN_FILE_SIZE 1u
-#define BX_SEARCH_SCANNER_RAW_CHUNK_CAP 65536u
 
 static bool search_file_scanner_stream_is_eligible(FILE *f) {
     if (!f)
@@ -1322,151 +1332,6 @@ static bool search_file_scanner_can_raw_shortcut_file_presence(const struct bx_m
     if (!m || m->kind != MATCHER_LITERAL)
         return false;
     return !opts->line_regexp && !opts->word_regexp;
-}
-
-static bool bx_search_scanner_reserve_raw_buffer(struct bx_search_scanner *scanner,
-                                                 size_t needed) {
-    if (!scanner)
-        return false;
-    if (scanner->cap >= needed)
-        return true;
-
-    size_t new_cap = scanner->cap == 0u ? BX_SEARCH_SCANNER_RAW_CHUNK_CAP : scanner->cap;
-    while (new_cap < needed) {
-        if (new_cap > (SIZE_MAX / 2u))
-            return false;
-        new_cap *= 2u;
-    }
-
-    unsigned char *tmp = realloc(scanner->buf, new_cap);
-    if (!tmp)
-        return false;
-    scanner->buf = tmp;
-    scanner->cap = new_cap;
-    return true;
-}
-
-static int search_file_raw_presence_opened(FILE *f,
-                                           bool use_stdin,
-                                           const char *filename,
-                                           const char *display_name,
-                                           const char *progname,
-                                           struct bx_matcher *m,
-                                           struct search_opts *opts,
-                                           int *match_count,
-                                           struct bx_search_scanner *scanner,
-                                           struct bx_record_stream *record_stream,
-                                           struct bx_search_stats *stats) {
-    int status = 1;
-    int file_matches = 0;
-    size_t plen;
-    size_t overlap;
-    size_t carry = 0u;
-    bool counted_file = false;
-    bool first_chunk = true;
-
-    if (!f || !m || !opts || !scanner)
-        return 2;
-
-    plen = bx_literal_len(m->literal);
-    overlap = plen > 0u ? plen - 1u : 0u;
-    scanner->len = 0u;
-    if (!bx_search_scanner_reserve_raw_buffer(scanner,
-                                              BX_SEARCH_SCANNER_RAW_CHUNK_CAP + overlap)) {
-        if (!use_stdin)
-            fclose(f);
-        return 2;
-    }
-
-    for (;;) {
-        if (carry > 0u)
-            memmove(scanner->buf, scanner->buf + scanner->len - carry, carry);
-        scanner->len = carry;
-
-        size_t nread = fread(scanner->buf + carry, 1u, scanner->cap - carry, f);
-        scanner->len += nread;
-        bx_search_dev_counters_note_bytes_read(nread);
-
-        if (first_chunk) {
-            first_chunk = false;
-            if (filename &&
-                bx_rg_transform_auto_encoding_needs_prefix(opts, scanner->buf, scanner->len)) {
-                unsigned char *transformed = NULL;
-                size_t transformed_len = 0u;
-                enum bx_rg_transform_result transform_rc;
-
-                if (!use_stdin)
-                    fclose(f);
-                transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
-                                                            bx_search_error_stream(),
-                                                            &transformed, &transformed_len);
-                if (transform_rc == BX_RG_TRANSFORM_NO_MATCH)
-                    return 1;
-                if (transform_rc == BX_RG_TRANSFORM_ERROR)
-                    return 2;
-                return search_transformed_buffer(transformed, transformed_len, display_name,
-                                                 progname, m, opts, match_count,
-                                                 record_stream, stats);
-            }
-        }
-
-        if (!counted_file) {
-            counted_file = true;
-            if (stats)
-                stats->files_searched++;
-        }
-        if (stats)
-            stats->bytes_searched += nread;
-
-        if (scanner->len > 0u) {
-            struct bx_match bm;
-            if (bx_literal_find(m->literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
-                bx_search_dev_counters_note_candidate_hit();
-                bx_search_dev_counters_note_matcher_invocation();
-                file_matches = 1;
-                if (stats) {
-                    stats->matches++;
-                    stats->matched_lines++;
-                    stats->files_with_matches++;
-                }
-                status = 0;
-                break;
-            }
-        }
-
-        if (nread == 0u) {
-            if (ferror(f)) {
-                bx_search_report_path_error(progname, display_name, errno ? errno : EIO, opts);
-                status = 2;
-            }
-            break;
-        }
-
-        carry = overlap < scanner->len ? overlap : scanner->len;
-    }
-
-    if (status != 2) {
-        if (opts->files_with_matches && file_matches > 0 && display_name) {
-            if (opts->null_output)
-                bx_search_printf_out("%s%c", display_name, '\0');
-            else
-                bx_search_printf_out("%s\n", display_name);
-            bx_search_dev_counters_note_output_line_emitted();
-        }
-        if (opts->files_without_match && file_matches == 0 && display_name) {
-            if (opts->null_output)
-                bx_search_printf_out("%s%c", display_name, '\0');
-            else
-                bx_search_printf_out("%s\n", display_name);
-            bx_search_dev_counters_note_output_line_emitted();
-        }
-        if (match_count)
-            *match_count += file_matches;
-    }
-
-    if (!use_stdin)
-        fclose(f);
-    return status;
 }
 
 static int search_file_buffered_opened(FILE *f,
@@ -1758,7 +1623,7 @@ static int search_file_scanner_opened(FILE *f,
     size_t fast_plain_prefix_len = 0u;
 
     if (search_file_scanner_can_raw_shortcut_file_presence(m, opts))
-        return search_file_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
+        return bx_search_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
                                                m, opts, match_count, scanner, NULL, stats);
 
     if (stats)
@@ -2262,7 +2127,7 @@ static int search_file_run_opened_kernel(enum bx_search_file_kernel_kind kernel,
         return search_file_multiline_opened(f, use_stdin, display_name, m, opts,
                                             match_count, stats);
     case BX_SEARCH_FILE_KERNEL_RAW_PRESENCE:
-        return search_file_raw_presence_opened(f, use_stdin, filename, display_name, progname,
+        return bx_search_raw_presence_opened(f, use_stdin, filename, display_name, progname,
                                                m, opts, match_count, scanner,
                                                record_stream, stats);
     case BX_SEARCH_FILE_KERNEL_SCANNER:
@@ -2405,14 +2270,14 @@ static bool binary_file_matches(const char *filename,
     return matched;
 }
 
-static int search_transformed_buffer(unsigned char *buf, size_t len,
-                                     const char *display_name,
-                                     const char *progname,
-                                     struct bx_matcher *m,
-                                     struct search_opts *opts,
-                                     int *match_count,
-                                     struct bx_record_stream *record_stream,
-                                     struct bx_search_stats *stats) {
+int bx_search_search_transformed_buffer(unsigned char *buf, size_t len,
+                                        const char *display_name,
+                                        const char *progname,
+                                        struct bx_matcher *m,
+                                        struct search_opts *opts,
+                                        int *match_count,
+                                        struct bx_record_stream *record_stream,
+                                        struct bx_search_stats *stats) {
     enum bx_search_file_kernel_kind kernel =
         search_file_select_buffered_memory_kernel(opts);
     FILE *mem;
@@ -2481,7 +2346,7 @@ static int search_file(const char *filename, const char *display_name_override, 
         size_t transformed_len = 0u;
         enum bx_rg_transform_result transform_rc =
             bx_rg_load_transformed_input(filename, progname, opts,
-                                         bx_search_error_stream(),
+                                         bx_search_error_output_stream(),
                                          &transformed, &transformed_len);
         if (transform_rc == BX_RG_TRANSFORM_NO_MATCH) {
             result = 1;
@@ -2491,7 +2356,7 @@ static int search_file(const char *filename, const char *display_name_override, 
             result = 2;
             goto out;
         }
-        result = search_transformed_buffer(transformed, transformed_len, display_name, progname,
+        result = bx_search_search_transformed_buffer(transformed, transformed_len, display_name, progname,
                                            m, opts, match_count, record_stream, stats);
         goto out;
     }
@@ -2539,7 +2404,7 @@ static int search_file(const char *filename, const char *display_name_override, 
 
             fclose(f);
             transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
-                                                        bx_search_error_stream(),
+                                                        bx_search_error_output_stream(),
                                                         &transformed, &transformed_len);
             if (transform_rc == BX_RG_TRANSFORM_NO_MATCH) {
                 result = 1;
@@ -2549,7 +2414,7 @@ static int search_file(const char *filename, const char *display_name_override, 
                 result = 2;
                 goto out;
             }
-            result = search_transformed_buffer(transformed, transformed_len, display_name,
+            result = bx_search_search_transformed_buffer(transformed, transformed_len, display_name,
                                                progname, m, opts, match_count,
                                                record_stream, stats);
             goto out;
