@@ -1329,6 +1329,8 @@ static bool search_file_scanner_can_raw_shortcut_file_presence(const struct bx_m
                                                                const struct search_opts *opts) {
     if (!search_file_scanner_can_shortcut_file_presence(opts))
         return false;
+    if (opts->binary_without_match)
+        return false;
     if (!m || m->kind != MATCHER_LITERAL)
         return false;
     return !opts->line_regexp && !opts->word_regexp;
@@ -2472,11 +2474,10 @@ static int search_file(const char *filename, const char *display_name_override, 
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text &&
         bx_search_input_is_binary_path(filename, opts)) {
-        if (opts->binary_without_match)
+        if (opts->binary_without_match) {
             result = search_binary_without_match(display_name, opts, match_count, stats);
-
-        if (result != 1)
             goto out;
+        }
 
         if (opts->quiet || opts->files_with_matches || opts->files_without_match || opts->count_only) {
             result = search_file_run_path_kernel(search_file_select_binary_search_kernel(opts),
