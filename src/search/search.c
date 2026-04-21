@@ -182,6 +182,7 @@ static const char *display_name_for_stream(const char *filename, const char *dis
 struct bx_matcher;
 
 static _Thread_local struct bx_search_output_ctx *current_output_ctx = NULL;
+static _Thread_local int current_offset_width = 0;
 
 struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx) {
     struct bx_search_output_ctx *previous = current_output_ctx;
@@ -191,6 +192,23 @@ struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_c
 
 void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
     current_output_ctx = previous;
+}
+
+static int bx_search_compute_offset_width_from_stat(const struct stat *st,
+                                                    const struct search_opts *opts) {
+    if (!opts || !opts->initial_tab || !st || st->st_size < 0)
+        return 0;
+
+    uintmax_t num = (uintmax_t)st->st_size;
+    if (opts->show_line_number && num < UINTMAX_MAX)
+        num++;
+
+    int width = 1;
+    while (num >= 10u) {
+        width++;
+        num /= 10u;
+    }
+    return width;
 }
 
 static FILE *bx_search_output_stream(void) {
@@ -350,6 +368,12 @@ enum matcher_kind {
     MATCHER_REGEX,
     MATCHER_POSIX,
     MATCHER_LITERAL,
+    MATCHER_LITERAL_SET,
+};
+
+struct bx_literal_set {
+    struct bx_literal_matcher **items;
+    size_t count;
 };
 
 struct bx_matcher {
@@ -357,6 +381,7 @@ struct bx_matcher {
     union {
         struct bx_regex *regex;
         struct bx_literal_matcher *literal;
+        struct bx_literal_set literal_set;
         regex_t posix;
     };
 };
@@ -508,6 +533,27 @@ static int matcher_find(struct bx_matcher *m, const unsigned char *buf, size_t l
                         size_t start, struct bx_match *out) {
     if (m->kind == MATCHER_LITERAL)
         return bx_literal_find(m->literal, buf, len, start, out);
+    if (m->kind == MATCHER_LITERAL_SET) {
+        struct bx_match best = {0};
+        bool found = false;
+
+        for (size_t i = 0; i < m->literal_set.count; ++i) {
+            struct bx_match candidate = {0};
+
+            if (bx_literal_find(m->literal_set.items[i], buf, len, start, &candidate) != 0)
+                continue;
+            if (!found || candidate.start < best.start ||
+                (candidate.start == best.start && candidate.end < best.end)) {
+                best = candidate;
+                found = true;
+            }
+        }
+
+        if (!found)
+            return -1;
+        *out = best;
+        return 0;
+    }
     if (m->kind == MATCHER_POSIX) {
         if (start > len)
             return -1;
@@ -533,12 +579,23 @@ static bool match_has_word_boundaries(const unsigned char *buf, size_t len,
 static int matcher_find_with_opts(struct bx_matcher *m, const unsigned char *buf, size_t len,
                                   size_t start, struct search_opts *opts, struct bx_match *out) {
     bx_search_dev_counters_note_matcher_invocation();
-    if (opts->line_regexp && m->kind == MATCHER_LITERAL) {
+    if (opts->line_regexp &&
+        (m->kind == MATCHER_LITERAL || m->kind == MATCHER_LITERAL_SET)) {
         if (start != 0u)
             return -1;
-        if (!bx_literal_verify_at(m->literal, buf, len, 0u, out))
-            return -1;
-        return out->start == 0u && out->end == len ? 0 : -1;
+        if (m->kind == MATCHER_LITERAL) {
+            if (!bx_literal_verify_at(m->literal, buf, len, 0u, out))
+                return -1;
+            return out->start == 0u && out->end == len ? 0 : -1;
+        }
+
+        for (size_t i = 0; i < m->literal_set.count; ++i) {
+            if (!bx_literal_verify_at(m->literal_set.items[i], buf, len, 0u, out))
+                continue;
+            if (out->start == 0u && out->end == len)
+                return 0;
+        }
+        return -1;
     }
 
     size_t pos = start;
@@ -581,6 +638,11 @@ static void matcher_free(struct bx_matcher *m) {
         return;
     if (m->kind == MATCHER_LITERAL)
         bx_literal_free(m->literal);
+    else if (m->kind == MATCHER_LITERAL_SET) {
+        for (size_t i = 0; i < m->literal_set.count; ++i)
+            bx_literal_free(m->literal_set.items[i]);
+        free(m->literal_set.items);
+    }
     else if (m->kind == MATCHER_POSIX)
         regfree(&m->posix);
     else
@@ -607,6 +669,14 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     const char *final_pattern = pattern;
     int flags = 0;
     bool use_posix = matcher_uses_posix(pattern, personality, opts);
+    size_t literal_pattern_count = 1u;
+
+    if (opts->num_extra_patterns > 0 && !bx_search_personality_is_rg(personality) &&
+        opts->perl_regexp) {
+        if (errmsg && !*errmsg)
+            *errmsg = strdup("the -P option only supports a single pattern");
+        return NULL;
+    }
 
     if (opts->line_regexp && !opts->fixed_strings) {
         size_t plen = strlen(base_pattern);
@@ -649,6 +719,46 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     if (!m) {
         free(wrapped);
         return NULL;
+    }
+
+    if (opts->fixed_strings) {
+        literal_pattern_count = 1u + (size_t)opts->num_extra_patterns;
+        if (literal_pattern_count > 1u) {
+            m->literal_set.items = calloc(literal_pattern_count,
+                                          sizeof(*m->literal_set.items));
+            if (!m->literal_set.items) {
+                free(wrapped);
+                free(m);
+                return NULL;
+            }
+
+            if (bx_literal_compile(&m->literal_set.items[0], final_pattern,
+                                   (flags & BX_REGEX_ICASE) != 0) != 0) {
+                if (errmsg && !*errmsg)
+                    *errmsg = strdup("empty fixed-string pattern is not supported");
+                matcher_free(m);
+                free(wrapped);
+                return NULL;
+            }
+            m->literal_set.count = 1u;
+
+            for (int k = 0; k < opts->num_extra_patterns; ++k) {
+                if (bx_literal_compile(&m->literal_set.items[m->literal_set.count],
+                                       opts->extra_patterns[k],
+                                       (flags & BX_REGEX_ICASE) != 0) != 0) {
+                    if (errmsg && !*errmsg)
+                        *errmsg = strdup("empty fixed-string pattern is not supported");
+                    matcher_free(m);
+                    free(wrapped);
+                    return NULL;
+                }
+                m->literal_set.count++;
+            }
+
+            m->kind = MATCHER_LITERAL_SET;
+            free(wrapped);
+            return m;
+        }
     }
 
     if (opts->fixed_strings ||
@@ -893,7 +1003,9 @@ static bool print_result_prefix_cached(const char *display_name,
     if (opts->show_line_number) {
         if (color)
             bx_rg_emit_color_style_start_file(out, &opts->rg_colors.line);
-        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2d" : "%d", line_num);
+        int n = current_offset_width > 0
+            ? bx_search_printf_stream(out, "%*d", current_offset_width, line_num)
+            : bx_search_printf_stream(out, "%d", line_num);
         if (n > 0) stats_count_bytes((size_t)n);
         if (color)
             bx_rg_emit_color_reset_file(out);
@@ -904,7 +1016,9 @@ static bool print_result_prefix_cached(const char *display_name,
     if (opts->show_column && has_column) {
         if (color)
             bx_rg_emit_color_style_start_file(out, &opts->rg_colors.column);
-        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2zu" : "%zu", column);
+        int n = current_offset_width > 0
+            ? bx_search_printf_stream(out, "%*zu", current_offset_width, column)
+            : bx_search_printf_stream(out, "%zu", column);
         if (n > 0) stats_count_bytes((size_t)n);
         if (color)
             bx_rg_emit_color_reset_file(out);
@@ -915,7 +1029,9 @@ static bool print_result_prefix_cached(const char *display_name,
     if (opts->show_byte_offset) {
         if (color)
             bx_rg_emit_color_style_start_file(out, &opts->rg_colors.line);
-        int n = bx_search_printf_stream(out, opts->initial_tab ? "%2zu" : "%zu", byte_offset);
+        int n = current_offset_width > 0
+            ? bx_search_printf_stream(out, "%*zu", current_offset_width, byte_offset)
+            : bx_search_printf_stream(out, "%zu", byte_offset);
         if (n > 0) stats_count_bytes((size_t)n);
         if (color)
             bx_rg_emit_color_reset_file(out);
@@ -2315,6 +2431,7 @@ static int search_file(const char *filename, const char *display_name_override, 
     char *owned_display_name = NULL;
     const char *display_name = display_name_for_stream(filename, display_name_override, opts);
     int result = 1;
+    int previous_offset_width = current_offset_width;
 
     if (!display_name_override && filename && strcmp(filename, "-") != 0) {
         owned_display_name = bx_rg_display_path_dup(filename, false, opts->path_separator);
@@ -2323,6 +2440,25 @@ static int search_file(const char *filename, const char *display_name_override, 
     }
     if (!opts->recursive && !use_stdin && filename && strcmp(filename, "-") != 0)
         operand_st_loaded = stat(filename, &operand_st) == 0;
+
+    current_offset_width = 0;
+    if (opts->initial_tab) {
+        struct stat offset_width_st;
+
+        if (use_stdin) {
+            if (fstat(STDIN_FILENO, &offset_width_st) == 0) {
+                current_offset_width =
+                    bx_search_compute_offset_width_from_stat(&offset_width_st, opts);
+            }
+        } else if (operand_st_loaded) {
+            current_offset_width =
+                bx_search_compute_offset_width_from_stat(&operand_st, opts);
+        } else if (filename && strcmp(filename, "-") != 0 &&
+                   stat(filename, &offset_width_st) == 0) {
+            current_offset_width =
+                bx_search_compute_offset_width_from_stat(&offset_width_st, opts);
+        }
+    }
 
     bx_rg_tracef(opts, "search: %s", display_name ? display_name : "(stdin)");
 
@@ -2505,6 +2641,7 @@ static int search_file(const char *filename, const char *display_name_override, 
 out_error:
     result = 2;
 out:
+    current_offset_width = previous_offset_width;
     free(owned_display_name);
     return result;
 }

@@ -147,6 +147,8 @@ static char *bx_search_run_build_search_pattern(const char *pattern,
                                                 const struct search_opts *opts) {
     if (!pattern || !opts || opts->num_extra_patterns == 0)
         return pattern ? strdup(pattern) : NULL;
+    if (opts->fixed_strings)
+        return strdup(pattern);
 
     bool use_basic_grouping = !bx_search_run_personality_is_rg(personality) &&
                               !opts->perl_regexp &&
@@ -377,7 +379,11 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
 
     if (compile_error) {
         if (!bx_search_run_personality_is_rg(args->personality)) {
-            fprintf(stderr, "%s: Invalid regular expression\n", args->progname);
+            if (strcmp(compile_error, "the -P option only supports a single pattern") == 0) {
+                fprintf(stderr, "%s: %s\n", args->progname, compile_error);
+            } else {
+                fprintf(stderr, "%s: Invalid regular expression\n", args->progname);
+            }
         } else {
             fprintf(stderr, "%s: invalid pattern '%s': %s\n",
                     args->progname, args->pattern, compile_error);
