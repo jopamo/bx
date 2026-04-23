@@ -7,6 +7,7 @@
 #include "literal.h"
 #include "pcre2_matcher.h"
 #include "rg_text.h"
+#include "search.h"
 #include "search_internal.h"
 
 enum matcher_kind {
@@ -328,10 +329,6 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     bool use_posix = matcher_uses_posix(pattern, personality, opts);
     size_t literal_pattern_count = 1u;
 
-    if (opts->num_extra_patterns > 0 && !bx_search_progname_uses_os_error_style(NULL) &&
-        false) {
-        /* unreachable placeholder */
-    }
     if (opts->num_extra_patterns > 0 && personality != BX_SEARCH_RG &&
         opts->perl_regexp) {
         if (errmsg && !*errmsg)

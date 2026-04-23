@@ -467,6 +467,7 @@ bx_search_sources = [
   'src/search/search_plan.c',
   'src/search/search_raw_presence.c',
   'src/search/search_buffered.c',
+  'src/search/search_matcher.c',
   'src/search/search_multiline.c',
   'src/search/search_output.c',
   'src/search/search_scanner.c',
