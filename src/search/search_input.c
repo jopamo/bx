@@ -99,6 +99,16 @@ ssize_t bx_search_input_read_record(FILE *f,
     return bx_record_stream_read(f, stream, opts->null_data ? '\0' : '\n');
 }
 
+char bx_search_record_delimiter(const struct search_opts *opts) {
+    return opts->null_data ? '\0' : '\n';
+}
+
+size_t bx_search_record_match_len(const unsigned char *buf,
+                                  size_t len,
+                                  const struct search_opts *opts) {
+    return bx_rg_record_match_len(buf, len, bx_search_record_delimiter(opts), opts->crlf);
+}
+
 unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
     size_t cap = 4096u;
     size_t len = 0u;

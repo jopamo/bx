@@ -17,8 +17,11 @@ static bool bx_search_plan_has_explicit_transform(const struct search_opts *opts
         || opts->encoding_mode == BX_RG_ENCODING_EXPLICIT;
 }
 
-static bool bx_search_plan_fastpath_is_deferred_candidate(enum bx_search_personality personality,
-                                                          const struct search_opts *opts);
+static bool bx_search_plan_fastpath_is_deferred_candidate(
+    enum bx_search_personality personality,
+    const struct search_opts *opts,
+    bool has_metadata_sort
+);
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts) {
     return opts && (opts->after_context > 0 || opts->before_context > 0);
@@ -48,14 +51,15 @@ bx_search_plan_select_output_kind(const struct search_opts *opts) {
 
 static enum bx_search_plan_input_kind
 bx_search_plan_select_input_kind(enum bx_search_personality personality,
-                                 const struct search_opts *opts) {
+                                 const struct search_opts *opts,
+                                 bool has_metadata_sort) {
     if (!opts || opts->files_only)
         return BX_SEARCH_PLAN_INPUT_NONE;
     if (bx_search_plan_has_explicit_transform(opts))
         return BX_SEARCH_PLAN_INPUT_TRANSFORMED_BUFFER;
     if (opts->multiline)
         return BX_SEARCH_PLAN_INPUT_MULTILINE_BUFFER;
-    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts))
+    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort))
         return BX_SEARCH_PLAN_INPUT_RAW_STREAM;
     if (bx_search_plan_needs_line_buffering(opts)
         || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
@@ -64,9 +68,25 @@ bx_search_plan_select_input_kind(enum bx_search_personality personality,
     return BX_SEARCH_PLAN_INPUT_RAW_STREAM;
 }
 
-static bool bx_search_plan_fastpath_is_deferred_candidate(enum bx_search_personality personality,
-                                                          const struct search_opts *opts) {
+static bool bx_search_plan_deferred_fastpath_requested(const struct search_opts *opts) {
+    if (!opts)
+        return false;
+    return opts->quiet
+        || opts->files_with_matches
+        || opts->files_without_match
+        || opts->recursive;
+}
+
+static bool bx_search_plan_fastpath_is_deferred_candidate(
+    enum bx_search_personality personality,
+    const struct search_opts *opts,
+    bool has_metadata_sort
+) {
     if (!opts || personality != BX_SEARCH_RG)
+        return false;
+    if (!bx_search_plan_deferred_fastpath_requested(opts))
+        return false;
+    if (has_metadata_sort)
         return false;
     if (opts->multiline || opts->invert_match)
         return false;
@@ -76,21 +96,24 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(enum bx_search_persona
         return false;
     if (opts->replace || opts->only_matching || opts->passthru || opts->vimgrep)
         return false;
+    /*
+     * --json is rejected during option parsing before a search plan is built,
+     * so no JSON output invocation can reach the deferred fast path.
+     */
     if (opts->stop_on_nonmatch)
         return false;
-    return opts->quiet
-        || (opts->files_with_matches || opts->files_without_match)
-        || opts->recursive;
+    return true;
 }
 
 static enum bx_search_plan_kernel_kind
 bx_search_plan_select_kernel_kind(enum bx_search_personality personality,
-                                  const struct search_opts *opts) {
+                                  const struct search_opts *opts,
+                                  bool has_metadata_sort) {
     if (!opts || opts->files_only)
         return BX_SEARCH_PLAN_KERNEL_NONE;
     if (opts->multiline)
         return BX_SEARCH_PLAN_KERNEL_MULTILINE;
-    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts))
+    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort))
         return BX_SEARCH_PLAN_KERNEL_DEFERRED_FASTPATH;
     if (bx_search_plan_needs_line_buffering(opts)
         || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
@@ -134,8 +157,8 @@ void bx_search_plan_build(struct bx_search_plan *plan,
     plan->has_multiline = opts->multiline;
     plan->parallel_supported = parallel_supported;
     plan->subtree_parallel_supported = subtree_parallel_supported;
-    plan->input_kind = bx_search_plan_select_input_kind(personality, opts);
-    plan->kernel_kind = bx_search_plan_select_kernel_kind(personality, opts);
+    plan->input_kind = bx_search_plan_select_input_kind(personality, opts, metadata_sort);
+    plan->kernel_kind = bx_search_plan_select_kernel_kind(personality, opts, metadata_sort);
     plan->output_kind = bx_search_plan_select_output_kind(opts);
 
     if (metadata_sort) {
