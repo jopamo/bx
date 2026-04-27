@@ -30,102 +30,13 @@ static const char *display_name_for_stream(const char *filename,
     return filename;
 }
 
-static int search_file_scanner(const char *filename,
-                               const char *display_name,
-                               const char *progname,
-                               struct bx_matcher *m,
-                               struct search_opts *opts,
-                               int *match_count,
-                               struct bx_search_scanner *scanner,
-                               struct bx_record_stream *record_stream,
-                               struct bx_search_stats *stats) {
-    bool use_stdin = false;
-    FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, &use_stdin);
-
-    if (!f)
-        return 2;
-    if (!bx_search_scanner_stream_is_eligible(f))
-        return bx_search_streaming_opened(f, use_stdin, display_name, progname, m, opts,
-                                          match_count, record_stream, stats);
-
-    return bx_search_scanner_opened(f, use_stdin, display_name, progname, m, opts,
-                                    match_count, scanner, stats);
-}
-
-enum bx_search_file_kernel_kind {
-    BX_SEARCH_FILE_KERNEL_MULTILINE = 0,
-    BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
-    BX_SEARCH_FILE_KERNEL_SCANNER,
-    BX_SEARCH_FILE_KERNEL_BUFFERED,
-    BX_SEARCH_FILE_KERNEL_STREAMING,
-};
-
 static enum bx_search_file_kernel_kind
-search_file_select_buffered_memory_kernel(const struct search_opts *opts) {
-    if (opts->multiline)
-        return BX_SEARCH_FILE_KERNEL_MULTILINE;
-    if (bx_search_plan_needs_line_buffering(opts)
-        || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
-        return BX_SEARCH_FILE_KERNEL_BUFFERED;
-    }
-    return BX_SEARCH_FILE_KERNEL_STREAMING;
-}
-
-static enum bx_search_file_kernel_kind
-search_file_select_opened_kernel(FILE *f,
-                                 struct bx_matcher *m,
-                                 struct search_opts *opts,
-                                 bool use_stdin) {
-    if (opts->multiline)
-        return BX_SEARCH_FILE_KERNEL_MULTILINE;
-    if (bx_search_plan_needs_line_buffering(opts)
-        || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
-        return BX_SEARCH_FILE_KERNEL_BUFFERED;
-    }
-    if (bx_search_scanner_can_use(m, opts, use_stdin)
-        && bx_search_scanner_stream_is_eligible(f)) {
-        return BX_SEARCH_FILE_KERNEL_SCANNER;
-    }
-    return BX_SEARCH_FILE_KERNEL_STREAMING;
-}
-
-static enum bx_search_file_kernel_kind
-search_file_select_opened_nonbinary_kernel(FILE *f,
-                                           struct bx_matcher *m,
-                                           struct search_opts *opts,
-                                           bool use_stdin) {
-    if (opts->multiline)
-        return BX_SEARCH_FILE_KERNEL_MULTILINE;
-    if (bx_search_plan_needs_line_buffering(opts))
-        return BX_SEARCH_FILE_KERNEL_BUFFERED;
-    if (bx_search_scanner_can_use(m, opts, use_stdin)
-        && bx_search_scanner_stream_is_eligible(f)) {
-        return BX_SEARCH_FILE_KERNEL_SCANNER;
-    }
-    return BX_SEARCH_FILE_KERNEL_STREAMING;
-}
-
-static enum bx_search_file_kernel_kind
-search_file_select_path_kernel(struct bx_matcher *m,
-                               struct search_opts *opts,
-                               bool use_stdin) {
-    if (opts->multiline)
-        return BX_SEARCH_FILE_KERNEL_MULTILINE;
-    if ((use_stdin
-         && !bx_search_streaming_uses_line_buffered_stdin(opts, use_stdin)
-         && bx_search_plan_plain_output_needs_binary_sensitive_path(opts))
-        || bx_search_plan_needs_line_buffering(opts)) {
-        return BX_SEARCH_FILE_KERNEL_BUFFERED;
-    }
-    if (bx_search_scanner_can_use(m, opts, use_stdin))
-        return BX_SEARCH_FILE_KERNEL_SCANNER;
-    return BX_SEARCH_FILE_KERNEL_STREAMING;
-}
-
-static enum bx_search_file_kernel_kind
-search_file_select_binary_search_kernel(const struct search_opts *opts) {
-    return bx_search_plan_needs_line_buffering(opts)
-        ? BX_SEARCH_FILE_KERNEL_BUFFERED
+search_file_resolve_opened_kernel(FILE *f,
+                                  enum bx_search_file_kernel_kind desired_kernel) {
+    if (desired_kernel != BX_SEARCH_FILE_KERNEL_SCANNER)
+        return desired_kernel;
+    return bx_search_scanner_stream_is_eligible(f)
+        ? BX_SEARCH_FILE_KERNEL_SCANNER
         : BX_SEARCH_FILE_KERNEL_STREAMING;
 }
 
@@ -178,9 +89,17 @@ static int search_file_run_path_kernel(enum bx_search_file_kernel_kind kernel,
     case BX_SEARCH_FILE_KERNEL_MULTILINE:
         return bx_search_multiline_path(filename, display_name, progname, m, opts,
                                         match_count, stats);
-    case BX_SEARCH_FILE_KERNEL_SCANNER:
-        return search_file_scanner(filename, display_name, progname, m, opts,
-                                   match_count, scanner, record_stream, stats);
+    case BX_SEARCH_FILE_KERNEL_SCANNER: {
+        bool use_stdin = false;
+        FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, &use_stdin);
+
+        if (!f)
+            return 2;
+        return search_file_run_opened_kernel(search_file_resolve_opened_kernel(f, kernel),
+                                             f, use_stdin, filename, display_name, progname,
+                                             m, opts, match_count, scanner,
+                                             record_stream, stats);
+    }
     case BX_SEARCH_FILE_KERNEL_BUFFERED:
         return bx_search_buffered_path(filename, display_name, progname, m, opts,
                                        match_count, record_stream, stats);
@@ -198,16 +117,18 @@ static int search_file_opened_without_reopen(FILE *f,
                                              const char *display_name,
                                              const char *progname,
                                              struct bx_matcher *m,
+                                             const struct bx_search_exec_plan *exec_plan,
                                              struct search_opts *opts,
                                              int *match_count,
                                              struct bx_search_scanner *scanner,
                                              struct bx_record_stream *record_stream,
                                              struct bx_search_stats *stats) {
     enum bx_search_file_kernel_kind kernel =
-        search_file_select_opened_kernel(f, m, opts, use_stdin);
+        exec_plan ? exec_plan->opened_special_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
 
     return search_file_run_opened_kernel(kernel, f, use_stdin, NULL, display_name, progname,
-                                         m, opts, match_count, scanner, record_stream, stats);
+                                         m, opts, match_count, scanner,
+                                         record_stream, stats);
 }
 
 int bx_search_binary_without_match(const char *display_name,
@@ -296,12 +217,13 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
                                         const char *display_name,
                                         const char *progname,
                                         struct bx_matcher *m,
+                                        const struct bx_search_exec_plan *exec_plan,
                                         struct search_opts *opts,
                                         int *match_count,
                                         struct bx_record_stream *record_stream,
                                         struct bx_search_stats *stats) {
     enum bx_search_file_kernel_kind kernel =
-        search_file_select_buffered_memory_kernel(opts);
+        exec_plan ? exec_plan->transformed_buffer_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
 
     if (kernel == BX_SEARCH_FILE_KERNEL_MULTILINE) {
         if (stats)
@@ -318,7 +240,8 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
     }
 
     int rc = search_file_run_opened_kernel(kernel, mem, false, NULL, display_name, progname,
-                                           m, opts, match_count, NULL, record_stream, stats);
+                                           m, opts, match_count, NULL,
+                                           record_stream, stats);
     free(buf);
     return rc;
 }
@@ -327,6 +250,7 @@ static int search_file(const char *filename,
                        const char *display_name_override,
                        const char *progname,
                        struct bx_matcher *m,
+                       const struct bx_search_exec_plan *exec_plan,
                        struct search_opts *opts,
                        int *match_count,
                        struct bx_search_scanner *scanner,
@@ -382,8 +306,9 @@ static int search_file(const char *filename,
         if (!f)
             goto out_error;
 
-        result = search_file_opened_without_reopen(f, false, display_name, progname, m, opts,
-                                                   match_count, scanner, record_stream, stats);
+        result = search_file_opened_without_reopen(f, false, display_name, progname, m,
+                                                   exec_plan, opts, match_count, scanner,
+                                                   record_stream, stats);
         goto out;
     }
 
@@ -403,7 +328,7 @@ static int search_file(const char *filename,
             goto out;
         }
         result = bx_search_search_transformed_buffer(transformed, transformed_len, display_name,
-                                                     progname, m, opts, match_count,
+                                                     progname, m, exec_plan, opts, match_count,
                                                      record_stream, stats);
         goto out;
     }
@@ -424,9 +349,11 @@ static int search_file(const char *filename,
         }
     }
 
-    if (use_stdin && !bx_search_streaming_uses_line_buffered_stdin(opts, use_stdin) &&
-        bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
-        result = search_file_run_path_kernel(BX_SEARCH_FILE_KERNEL_BUFFERED,
+    if (use_stdin) {
+        enum bx_search_file_kernel_kind stdin_kernel =
+            exec_plan ? exec_plan->stdin_path_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
+
+        result = search_file_run_path_kernel(stdin_kernel,
                                              filename, display_name, progname, m, opts,
                                              match_count, scanner, record_stream, stats);
         goto out;
@@ -436,14 +363,6 @@ static int search_file(const char *filename,
         FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
-
-        if (bx_search_scanner_can_raw_shortcut_file_presence(m, opts)) {
-            result = search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
-                                                   f, false, filename, display_name, progname,
-                                                   m, opts, match_count, scanner,
-                                                   record_stream, stats);
-            goto out;
-        }
 
         if (bx_search_input_opened_needs_auto_transform(f, opts)) {
             unsigned char *transformed = NULL;
@@ -463,8 +382,16 @@ static int search_file(const char *filename,
                 goto out;
             }
             result = bx_search_search_transformed_buffer(transformed, transformed_len,
-                                                         display_name, progname, m, opts,
+                                                         display_name, progname, m, exec_plan, opts,
                                                          match_count, record_stream, stats);
+            goto out;
+        }
+
+        if (exec_plan && exec_plan->raw_presence_supported) {
+            result = search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
+                                                   f, false, filename, display_name, progname,
+                                                   m, opts, match_count, scanner,
+                                                   record_stream, stats);
             goto out;
         }
 
@@ -480,7 +407,8 @@ static int search_file(const char *filename,
                 if (opts->quiet || opts->files_with_matches ||
                     opts->files_without_match || opts->count_only) {
                     result = search_file_run_opened_kernel(
-                        search_file_select_binary_search_kernel(opts),
+                        exec_plan ? exec_plan->binary_search_kernel
+                                  : BX_SEARCH_FILE_KERNEL_STREAMING,
                         f, false, filename, display_name, progname, m, opts,
                         match_count, scanner, record_stream, stats);
                     goto out;
@@ -499,8 +427,12 @@ static int search_file(const char *filename,
                 goto out;
             }
 
+            enum bx_search_file_kernel_kind nonbinary_kernel =
+                exec_plan ? exec_plan->opened_nonbinary_kernel
+                          : BX_SEARCH_FILE_KERNEL_STREAMING;
+
             result = search_file_run_opened_kernel(
-                search_file_select_opened_nonbinary_kernel(f, m, opts, false),
+                search_file_resolve_opened_kernel(f, nonbinary_kernel),
                 f, false, filename, display_name, progname, m, opts,
                 match_count, scanner, record_stream, stats);
             goto out;
@@ -510,8 +442,8 @@ static int search_file(const char *filename,
             struct stat opened_st;
             if (fstat(fileno(f), &opened_st) == 0 && !S_ISREG(opened_st.st_mode)) {
                 result = search_file_opened_without_reopen(f, false, display_name, progname,
-                                                           m, opts, match_count, scanner,
-                                                           record_stream, stats);
+                                                           m, exec_plan, opts, match_count,
+                                                           scanner, record_stream, stats);
                 goto out;
             }
         }
@@ -528,7 +460,9 @@ static int search_file(const char *filename,
 
         if (opts->quiet || opts->files_with_matches ||
             opts->files_without_match || opts->count_only) {
-            result = search_file_run_path_kernel(search_file_select_binary_search_kernel(opts),
+            result = search_file_run_path_kernel(exec_plan
+                                                     ? exec_plan->binary_search_kernel
+                                                     : BX_SEARCH_FILE_KERNEL_STREAMING,
                                                  filename, display_name, progname, m, opts,
                                                  match_count, scanner, record_stream, stats);
             goto out;
@@ -545,7 +479,9 @@ static int search_file(const char *filename,
         goto out;
     }
 
-    result = search_file_run_path_kernel(search_file_select_path_kernel(m, opts, use_stdin),
+    result = search_file_run_path_kernel(exec_plan
+                                             ? exec_plan->regular_path_kernel
+                                             : BX_SEARCH_FILE_KERNEL_STREAMING,
                                          filename, display_name, progname, m, opts,
                                          match_count, scanner, record_stream, stats);
     goto out;
@@ -562,11 +498,12 @@ int bx_search_search_file(const char *filename,
                           const char *display_name_override,
                           const char *progname,
                           struct bx_matcher *m,
+                          const struct bx_search_exec_plan *exec_plan,
                           struct search_opts *opts,
                           int *match_count,
                           struct bx_search_scanner *scanner,
                           struct bx_record_stream *record_stream,
                           struct bx_search_stats *stats) {
-    return search_file(filename, display_name_override, progname, m, opts,
+    return search_file(filename, display_name_override, progname, m, exec_plan, opts,
                        match_count, scanner, record_stream, stats);
 }

@@ -6,7 +6,6 @@
 
 #include "dev_counters.h"
 #include "literal.h"
-#include "rg_transform.h"
 #include "search_internal.h"
 #include "search_raw_presence.h"
 
@@ -49,11 +48,12 @@ int bx_search_raw_presence_opened(FILE *f,
     int file_matches = 0;
     size_t carry = 0u;
     bool counted_file = false;
-    bool first_chunk = true;
     struct bx_literal_matcher *literal = bx_search_matcher_literal(m);
 
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
+    (void)filename;
+    (void)record_stream;
 
     size_t plen = bx_literal_len(literal);
     size_t overlap = plen > 0u ? plen - 1u : 0u;
@@ -73,29 +73,6 @@ int bx_search_raw_presence_opened(FILE *f,
         size_t nread = fread(scanner->buf + carry, 1u, scanner->cap - carry, f);
         scanner->len += nread;
         bx_search_dev_counters_note_bytes_read(nread);
-
-        if (first_chunk) {
-            first_chunk = false;
-            if (filename &&
-                bx_rg_transform_auto_encoding_needs_prefix(opts, scanner->buf, scanner->len)) {
-                unsigned char *transformed = NULL;
-                size_t transformed_len = 0u;
-                enum bx_rg_transform_result transform_rc;
-
-                if (!use_stdin)
-                    fclose(f);
-                transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
-                                                            bx_search_error_output_stream(),
-                                                            &transformed, &transformed_len);
-                if (transform_rc == BX_RG_TRANSFORM_NO_MATCH)
-                    return 1;
-                if (transform_rc == BX_RG_TRANSFORM_ERROR)
-                    return 2;
-                return bx_search_search_transformed_buffer(transformed, transformed_len,
-                                                           display_name, progname, m, opts,
-                                                           match_count, record_stream, stats);
-            }
-        }
 
         if (!counted_file) {
             counted_file = true;

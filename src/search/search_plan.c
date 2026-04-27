@@ -7,6 +7,8 @@
 #include "rg_parallel.h"
 #include "rg_sched.h"
 #include "search_plan.h"
+#include "search_scanner.h"
+#include "search_streaming.h"
 #include "sort.h"
 
 static bool bx_search_plan_has_explicit_transform(const struct search_opts *opts) {
@@ -179,6 +181,73 @@ void bx_search_plan_build(struct bx_search_plan *plan,
 
     plan->orchestrator = BX_SEARCH_PLAN_ORCHESTRATOR_SINGLE;
     plan->publication_kind = BX_SEARCH_PLAN_PUBLICATION_DIRECT;
+}
+
+static enum bx_search_file_kernel_kind
+bx_search_exec_plan_transformed_kernel(const struct bx_search_plan *plan) {
+    if (!plan)
+        return BX_SEARCH_FILE_KERNEL_STREAMING;
+    if (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
+        return BX_SEARCH_FILE_KERNEL_MULTILINE;
+    if (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_BUFFERED)
+        return BX_SEARCH_FILE_KERNEL_BUFFERED;
+    return BX_SEARCH_FILE_KERNEL_STREAMING;
+}
+
+void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
+                               const struct bx_search_plan *plan,
+                               const struct bx_matcher *matcher,
+                               const struct search_opts *opts) {
+    bool plain_binary_sensitive_path;
+    bool line_buffered_stdin;
+    bool scanner_regular_supported;
+    bool needs_line_buffering;
+
+    if (!exec_plan)
+        return;
+
+    memset(exec_plan, 0, sizeof(*exec_plan));
+    exec_plan->transformed_buffer_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->opened_special_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->opened_nonbinary_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->regular_path_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->stdin_path_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->binary_search_kernel = BX_SEARCH_FILE_KERNEL_STREAMING;
+    if (!plan || !opts)
+        return;
+
+    plain_binary_sensitive_path = bx_search_plan_plain_output_needs_binary_sensitive_path(opts);
+    line_buffered_stdin = bx_search_streaming_uses_line_buffered_stdin(opts, true);
+    scanner_regular_supported = bx_search_scanner_can_use(matcher, opts, false);
+    needs_line_buffering = plan->has_context;
+
+    exec_plan->transformed_buffer_kernel = bx_search_exec_plan_transformed_kernel(plan);
+    exec_plan->opened_special_kernel =
+        (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
+            ? BX_SEARCH_FILE_KERNEL_MULTILINE
+            : ((needs_line_buffering || plain_binary_sensitive_path)
+                   ? BX_SEARCH_FILE_KERNEL_BUFFERED
+                   : BX_SEARCH_FILE_KERNEL_STREAMING);
+    exec_plan->opened_nonbinary_kernel =
+        (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
+            ? BX_SEARCH_FILE_KERNEL_MULTILINE
+            : (needs_line_buffering
+                   ? BX_SEARCH_FILE_KERNEL_BUFFERED
+                   : (scanner_regular_supported
+                          ? BX_SEARCH_FILE_KERNEL_SCANNER
+                          : BX_SEARCH_FILE_KERNEL_STREAMING));
+    exec_plan->regular_path_kernel = exec_plan->opened_nonbinary_kernel;
+    exec_plan->stdin_path_kernel =
+        (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
+            ? BX_SEARCH_FILE_KERNEL_MULTILINE
+            : ((needs_line_buffering || (plain_binary_sensitive_path && !line_buffered_stdin))
+                   ? BX_SEARCH_FILE_KERNEL_BUFFERED
+                   : BX_SEARCH_FILE_KERNEL_STREAMING);
+    exec_plan->binary_search_kernel =
+        needs_line_buffering ? BX_SEARCH_FILE_KERNEL_BUFFERED
+                             : BX_SEARCH_FILE_KERNEL_STREAMING;
+    exec_plan->raw_presence_supported =
+        bx_search_scanner_can_raw_shortcut_file_presence(matcher, opts);
 }
 
 bool bx_search_plan_debug_enabled(void) {

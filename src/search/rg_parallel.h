@@ -10,6 +10,8 @@ struct bx_search_operand_ref {
     int index;
 };
 
+struct bx_search_exec_plan;
+struct bx_search_plan;
 struct bx_search_stats;
 struct search_opts;
 
@@ -25,6 +27,8 @@ int bx_search_run_parallel_rg(int argc,
                               const char *progname,
                               const char *pattern,
                               enum bx_search_personality personality,
+                              const struct bx_search_plan *plan,
+                              const struct bx_search_exec_plan *exec_plan,
                               struct search_opts *opts,
                               struct bx_search_stats *stats_out,
                               bool *match_seen_out,

@@ -6,6 +6,7 @@
 #include "search.h"
 
 struct bx_search_operand_ref;
+struct bx_search_exec_plan;
 struct bx_search_stats;
 struct search_opts;
 
@@ -21,6 +22,7 @@ int bx_rg_sched_run(int argc,
                     const char *progname,
                     const char *pattern,
                     enum bx_search_personality personality,
+                    const struct bx_search_exec_plan *exec_plan,
                     struct search_opts *opts,
                     size_t thread_count,
                     struct bx_search_stats *stats_out,

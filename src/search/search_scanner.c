@@ -11,7 +11,6 @@
 #include "literal.h"
 #include "search_internal.h"
 #include "search_plan.h"
-#include "search_raw_presence.h"
 #include "search_scanner.h"
 
 #define BX_SEARCH_SCANNER_MIN_FILE_SIZE 1u
@@ -129,11 +128,6 @@ int bx_search_scanner_opened(FILE *f,
 
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
-
-    if (bx_search_scanner_can_raw_shortcut_file_presence(m, opts)) {
-        return bx_search_raw_presence_opened(f, use_stdin, NULL, display_name, progname,
-                                             m, opts, match_count, scanner, NULL, stats);
-    }
 
     if (stats)
         stats->files_searched++;

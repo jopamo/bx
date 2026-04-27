@@ -13,6 +13,7 @@
 struct bx_matcher;
 struct bx_match;
 struct bx_literal_matcher;
+struct bx_search_exec_plan;
 
 struct bx_search_stats {
     int matches;
@@ -169,6 +170,7 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
                                         const char *display_name,
                                         const char *progname,
                                         struct bx_matcher *m,
+                                        const struct bx_search_exec_plan *exec_plan,
                                         struct search_opts *opts,
                                         int *match_count,
                                         struct bx_record_stream *record_stream,
@@ -177,6 +179,7 @@ int bx_search_search_file(const char *filename,
                           const char *display_name_override,
                           const char *progname,
                           struct bx_matcher *m,
+                          const struct bx_search_exec_plan *exec_plan,
                           struct search_opts *opts,
                           int *match_count,
                           struct bx_search_scanner *scanner,

@@ -73,6 +73,7 @@ struct bx_rg_sched_state {
     const char *progname;
     const char *pattern;
     enum bx_search_personality personality;
+    const struct bx_search_exec_plan *exec_plan;
     struct search_opts *opts;
     struct search_opts quiet_opts;
     struct bx_cancel_state cancel;
@@ -687,6 +688,7 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                        display_name,
                                        sched->progname,
                                        worker->matcher,
+                                       sched->exec_plan,
                                        &sched->quiet_opts,
                                        &dummy_matches,
                                        &worker->scanner,
@@ -1128,6 +1130,7 @@ int bx_rg_sched_run(int argc,
                     const char *progname,
                     const char *pattern,
                     enum bx_search_personality personality,
+                    const struct bx_search_exec_plan *exec_plan,
                     struct search_opts *opts,
                     size_t thread_count,
                     struct bx_search_stats *stats_out,
@@ -1137,6 +1140,7 @@ int bx_rg_sched_run(int argc,
         .progname = progname,
         .pattern = pattern,
         .personality = personality,
+        .exec_plan = exec_plan,
         .opts = opts,
         .exit_status = 1,
         .thread_count = thread_count,

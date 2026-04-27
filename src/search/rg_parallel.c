@@ -19,6 +19,7 @@
 #include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
+#include "search_plan.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -56,6 +57,8 @@ struct bx_search_parallel_state {
     const char *progname;
     const char *pattern;
     enum bx_search_personality personality;
+    const struct bx_search_plan *plan;
+    const struct bx_search_exec_plan *exec_plan;
     struct search_opts *opts;
     struct bx_cancel_state cancel;
     struct bx_work_pool *pool;
@@ -428,6 +431,7 @@ static void bx_search_parallel_process_job(void *user,
                                        display_name,
                                        state->progname,
                                        worker->matcher,
+                                       state->exec_plan,
                                        state->opts,
                                        &match_count,
                                        &worker->scanner,
@@ -569,6 +573,8 @@ int bx_search_run_parallel_rg(int argc,
                               const char *progname,
                               const char *pattern,
                               enum bx_search_personality personality,
+                              const struct bx_search_plan *plan,
+                              const struct bx_search_exec_plan *exec_plan,
                               struct search_opts *opts,
                               struct bx_search_stats *stats_out,
                               bool *match_seen_out,
@@ -577,6 +583,8 @@ int bx_search_run_parallel_rg(int argc,
         .progname = progname,
         .pattern = pattern,
         .personality = personality,
+        .plan = plan,
+        .exec_plan = exec_plan,
         .opts = opts,
         .exit_status = 1,
     };
@@ -592,10 +600,10 @@ int bx_search_run_parallel_rg(int argc,
     if (queue_capacity < thread_count)
         queue_capacity = thread_count;
 
-    if (bx_rg_sched_supported(personality, opts, num_files, false)) {
+    if (plan && plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE) {
         return bx_rg_sched_run(argc, argv, first_file, sorted_operands,
                                sorted_operand_count, progname, pattern,
-                               personality, opts, thread_count,
+                               personality, exec_plan, opts, thread_count,
                                stats_out, match_seen_out, error_seen_out);
     }
 

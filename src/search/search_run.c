@@ -18,6 +18,7 @@
 
 struct grep_walk_state {
     struct bx_matcher *matcher;
+    const struct bx_search_exec_plan *exec_plan;
     struct search_opts *opts;
     const char *progname;
     int *match_count;
@@ -123,7 +124,8 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
                                                            state->strip_dot_prefix,
                                                            state->opts);
     int rc = bx_search_search_file(entry->path, display_name, state->progname,
-                                   state->matcher, state->opts, state->match_count,
+                                   state->matcher, state->exec_plan,
+                                   state->opts, state->match_count,
                                    state->scanner, state->record_stream, state->stats);
     free(display_name);
     if (rc == 2) {
@@ -397,6 +399,7 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
 
 static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
                                           struct bx_matcher *matcher,
+                                          const struct bx_search_exec_plan *exec_plan,
                                           struct bx_search_scanner *scanner,
                                           struct bx_record_stream *record_stream,
                                           bool *match_seen,
@@ -418,7 +421,7 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
                                                                sorted_paths.items[i].strip_dot_prefix,
                                                                args->opts);
         int rc = bx_search_search_file(sorted_paths.items[i].path, display_name,
-                                       args->progname, matcher, args->opts,
+                                       args->progname, matcher, exec_plan, args->opts,
                                        &global_matches, scanner, record_stream,
                                        args->stats);
         free(display_name);
@@ -436,6 +439,7 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
 
 static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                           struct bx_matcher *matcher,
+                                          const struct bx_search_exec_plan *exec_plan,
                                           struct bx_search_scanner *scanner,
                                           struct bx_record_stream *record_stream,
                                           struct bx_search_operand_ref *sorted_operands,
@@ -452,6 +456,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
             bool stop = false;
             struct grep_walk_state state = {
                 .matcher = matcher,
+                .exec_plan = exec_plan,
                 .opts = args->opts,
                 .progname = args->progname,
                 .match_count = &global_matches,
@@ -483,7 +488,8 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                 *error_seen = true;
             }
         } else {
-            int rc = bx_search_search_file(NULL, NULL, args->progname, matcher, args->opts,
+            int rc = bx_search_search_file(NULL, NULL, args->progname, matcher, exec_plan,
+                                           args->opts,
                                            &global_matches, scanner, record_stream,
                                            args->stats);
             if (rc == 0)
@@ -498,6 +504,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
         bool stop = false;
         struct grep_walk_state state = {
             .matcher = matcher,
+            .exec_plan = exec_plan,
             .opts = args->opts,
             .progname = args->progname,
             .match_count = &global_matches,
@@ -590,6 +597,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
         }
 
         int rc = bx_search_search_file(args->argv[j], NULL, args->progname, matcher,
+                                       exec_plan,
                                        args->opts, &global_matches, scanner,
                                        record_stream, args->stats);
         if (rc == 2) {
@@ -613,6 +621,7 @@ void bx_search_run(const struct bx_search_run_args *args,
     struct bx_record_stream record_stream = {0};
     struct bx_search_operand_ref *sorted_operands = NULL;
     char *search_pattern = NULL;
+    struct bx_search_exec_plan exec_plan = {0};
     int sorted_operand_count = 0;
     bool match_seen = false;
     bool error_seen = false;
@@ -644,6 +653,7 @@ void bx_search_run(const struct bx_search_run_args *args,
         local_result.status = 2;
         goto done;
     }
+    bx_search_exec_plan_build(&exec_plan, args->plan, matcher, args->opts);
 
     sorted_operands = bx_search_sort_is_path(args->opts)
         ? bx_search_collect_sorted_operands(args->argc, args->argv, args->first_file,
@@ -651,7 +661,7 @@ void bx_search_run(const struct bx_search_run_args *args,
         : NULL;
 
     if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_METADATA_SORTED) {
-        bx_search_run_metadata_sorted(args, matcher, &scanner, &record_stream,
+        bx_search_run_metadata_sorted(args, matcher, &exec_plan, &scanner, &record_stream,
                                       &match_seen, &error_seen);
         local_result.ran_search = true;
         local_result.status = bx_search_run_status_from_flags(args->opts,
@@ -665,7 +675,8 @@ void bx_search_run(const struct bx_search_run_args *args,
                                                         args->first_file, sorted_operands,
                                                         sorted_operand_count, args->progname,
                                                         search_pattern, args->personality,
-                                                        args->opts, args->stats,
+                                                        args->plan, &exec_plan, args->opts,
+                                                        args->stats,
                                                         &match_seen, &error_seen);
         local_result.ran_search = true;
         local_result.status = parallel_status;
@@ -675,7 +686,7 @@ void bx_search_run(const struct bx_search_run_args *args,
         goto done;
     }
 
-    bx_search_run_single_threaded(args, matcher, &scanner, &record_stream,
+    bx_search_run_single_threaded(args, matcher, &exec_plan, &scanner, &record_stream,
                                   sorted_operands, sorted_operand_count,
                                   &match_seen, &error_seen);
     local_result.ran_search = true;
