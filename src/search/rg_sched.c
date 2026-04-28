@@ -795,7 +795,8 @@ static struct bx_rg_sched_worker *bx_rg_sched_worker_init(struct bx_rg_sched_sta
     worker->matcher = bx_search_compile_matcher(sched->pattern,
                                                 sched->personality,
                                                 sched->opts,
-                                                &errmsg);
+                                                &errmsg,
+                                                NULL);
     if (!worker->matcher) {
         bx_rg_sched_set_fatal(sched, errmsg ? errmsg : "rg: failed to compile matcher\n");
         free(errmsg);

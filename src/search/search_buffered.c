@@ -6,6 +6,7 @@
 #include "dev_counters.h"
 #include "lib/color.h"
 #include "pcre2_matcher.h"
+#include "record_stream.h"
 #include "search_buffered.h"
 #include "search_input.h"
 #include "search_internal.h"
@@ -74,6 +75,9 @@ int bx_search_buffered_opened(FILE *f,
     bool saw_binary = false;
     bool saw_match_record = false;
     bool heading_printed_for_file = false;
+
+    if (!use_stdin)
+        bx_record_stream_prepare_file(f, record_stream);
 
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *raw = record_stream->record;

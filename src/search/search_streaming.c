@@ -5,6 +5,7 @@
 #include "dev_counters.h"
 #include "lib/color.h"
 #include "pcre2_matcher.h"
+#include "record_stream.h"
 #include "search_input.h"
 #include "search_internal.h"
 #include "search_streaming.h"
@@ -36,6 +37,9 @@ int bx_search_streaming_opened(FILE *f,
     bool binary_seen_before_output = false;
     const bool line_buffered_stdin_binary_watch =
         bx_search_streaming_uses_line_buffered_stdin(opts, use_stdin);
+
+    if (!use_stdin)
+        bx_record_stream_prepare_file(f, record_stream);
 
     if (stats)
         stats->files_searched++;

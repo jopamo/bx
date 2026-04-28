@@ -2,6 +2,7 @@
 #define BX_SEARCH_RG_PARALLEL_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "search.h"
 
@@ -11,10 +12,10 @@ struct bx_search_operand_ref {
 };
 
 struct bx_search_exec_plan;
-struct bx_search_plan;
 struct bx_search_stats;
 struct search_opts;
 
+size_t bx_search_rg_thread_count(const struct search_opts *opts);
 bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
                                      const struct search_opts *opts,
                                      int num_files,
@@ -27,7 +28,6 @@ int bx_search_run_parallel_rg(int argc,
                               const char *progname,
                               const char *pattern,
                               enum bx_search_personality personality,
-                              const struct bx_search_plan *plan,
                               const struct bx_search_exec_plan *exec_plan,
                               struct search_opts *opts,
                               struct bx_search_stats *stats_out,

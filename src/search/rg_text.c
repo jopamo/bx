@@ -2,12 +2,15 @@
 #include <ctype.h>
 #include <errno.h>
 #include <iconv.h>
+#include <langinfo.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <wctype.h>
 #include "rg_text.h"
 
 static bool bx_rg_encoding_is_alias(const char *name, const char *alias) {
@@ -37,6 +40,19 @@ static bool bx_rg_encoding_is_alias(const char *name, const char *alias) {
 static bool bx_rg_encoding_is_utf8(const char *name) {
     return bx_rg_encoding_is_alias(name, "utf8") ||
            bx_rg_encoding_is_alias(name, "utf-8");
+}
+
+bool bx_rg_locale_is_utf8(void) {
+    return bx_rg_encoding_is_utf8(nl_langinfo(CODESET));
+}
+
+uint32_t bx_rg_locale_uppercase_codepoint(uint32_t cp) {
+    if (cp > (uint32_t)WINT_MAX)
+        return cp;
+    wint_t upper = towupper((wint_t)cp);
+    if (upper == WEOF)
+        return cp;
+    return (uint32_t)upper;
 }
 
 bool bx_rg_parse_encoding_name(const char *progname, const char *name,
@@ -265,8 +281,16 @@ static bool bx_rg_is_word_char_unicode(uint32_t cp) {
     return true;
 }
 
-static bool bx_rg_decode_utf8_codepoint(const unsigned char *buf, size_t len,
-                                        size_t *consumed_out, uint32_t *cp_out) {
+static bool bx_rg_is_word_char_locale(uint32_t cp) {
+    if (cp == (uint32_t)'_')
+        return true;
+    if (cp > (uint32_t)WINT_MAX)
+        return false;
+    return iswalnum((wint_t)cp) != 0;
+}
+
+bool bx_rg_decode_utf8_codepoint(const unsigned char *buf, size_t len,
+                                 size_t *consumed_out, uint32_t *cp_out) {
     uint32_t cp;
     size_t consumed;
 
@@ -308,7 +332,7 @@ static bool bx_rg_decode_utf8_codepoint(const unsigned char *buf, size_t len,
     return true;
 }
 
-static bool bx_rg_decode_prev_utf8(const unsigned char *buf, size_t end, uint32_t *cp_out) {
+bool bx_rg_decode_prev_utf8(const unsigned char *buf, size_t end, uint32_t *cp_out) {
     size_t start;
     size_t consumed = 0u;
 
@@ -322,8 +346,8 @@ static bool bx_rg_decode_prev_utf8(const unsigned char *buf, size_t end, uint32_
     return start + consumed == end;
 }
 
-static bool bx_rg_decode_next_utf8(const unsigned char *buf, size_t len, size_t start,
-                                   uint32_t *cp_out) {
+bool bx_rg_decode_next_utf8(const unsigned char *buf, size_t len, size_t start,
+                            uint32_t *cp_out) {
     size_t consumed = 0u;
 
     if (start >= len || !cp_out)
@@ -363,6 +387,24 @@ bool bx_rg_match_has_word_boundaries(const unsigned char *buf, size_t len,
     if (end < len) {
         uint32_t cp;
         if (bx_rg_decode_next_utf8(buf, len, end, &cp) && bx_rg_is_word_char_unicode(cp))
+            return false;
+    }
+    return true;
+}
+
+bool bx_rg_match_has_locale_word_boundaries_utf8(const unsigned char *buf, size_t len,
+                                                 size_t start, size_t end) {
+    if (!buf)
+        return false;
+
+    if (start > 0u) {
+        uint32_t cp;
+        if (bx_rg_decode_prev_utf8(buf, start, &cp) && bx_rg_is_word_char_locale(cp))
+            return false;
+    }
+    if (end < len) {
+        uint32_t cp;
+        if (bx_rg_decode_next_utf8(buf, len, end, &cp) && bx_rg_is_word_char_locale(cp))
             return false;
     }
     return true;

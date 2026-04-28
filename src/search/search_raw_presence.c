@@ -42,7 +42,6 @@ int bx_search_raw_presence_opened(FILE *f,
                                   struct search_opts *opts,
                                   int *match_count,
                                   struct bx_search_scanner *scanner,
-                                  struct bx_record_stream *record_stream,
                                   struct bx_search_stats *stats) {
     int status = 1;
     int file_matches = 0;
@@ -53,7 +52,6 @@ int bx_search_raw_presence_opened(FILE *f,
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
     (void)filename;
-    (void)record_stream;
 
     size_t plen = bx_literal_len(literal);
     size_t overlap = plen > 0u ? plen - 1u : 0u;

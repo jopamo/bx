@@ -15,6 +15,7 @@ struct bx_search_dev_counters {
     atomic_size_t candidate_hits;
     atomic_size_t matcher_invocations;
     atomic_size_t records_materialized;
+    atomic_size_t scanner_plain_prefix_allocs;
     atomic_size_t output_lines_emitted;
     atomic_uint_fast64_t files_seen;
     atomic_uint_fast64_t dirs_seen;
@@ -56,6 +57,8 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.candidate_hits, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.matcher_invocations, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.records_materialized, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.scanner_plain_prefix_allocs, 0u,
+                          memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.output_lines_emitted, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.files_seen, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.dirs_seen, 0u, memory_order_relaxed);
@@ -111,6 +114,14 @@ void bx_search_dev_counters_note_record_materialized(void) {
         return;
 
     atomic_fetch_add_explicit(&current_dev_counters.records_materialized, 1u, memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.scanner_plain_prefix_allocs, 1u,
+                              memory_order_relaxed);
 }
 
 void bx_search_dev_counters_note_output_line_emitted(void) {
@@ -191,7 +202,7 @@ void bx_search_dev_counters_report(FILE *stream) {
         return;
 
     fprintf(stream,
-            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu matcher_invocations=%zu records_materialized=%zu output_lines_emitted=%zu "
+            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu matcher_invocations=%zu records_materialized=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
             "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
@@ -201,6 +212,8 @@ void bx_search_dev_counters_report(FILE *stream) {
             atomic_load_explicit(&current_dev_counters.candidate_hits, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.matcher_invocations, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.records_materialized, memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.scanner_plain_prefix_allocs,
+                                 memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.output_lines_emitted, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.files_seen, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.dirs_seen, memory_order_relaxed),

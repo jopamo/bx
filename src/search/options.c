@@ -1116,6 +1116,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->hidden = true;
         opts->no_ignore = true;
         opts->unicode = false;
+        opts->locale_word_regexp = true;
     }
 
     const struct option *selected_long_opts =

@@ -104,6 +104,436 @@ static bool pattern_is_plain_literal(const char *pattern) {
     return true;
 }
 
+static bool search_pattern_ere_backrefs(const char *pattern,
+                                        bool *has_backrefs_out,
+                                        bool *invalid_backref_out) {
+    bool in_class = false;
+    bool has_backrefs = false;
+    bool invalid_backref = false;
+    size_t group_count = 0u;
+
+    if (!pattern) {
+        if (has_backrefs_out)
+            *has_backrefs_out = false;
+        if (invalid_backref_out)
+            *invalid_backref_out = false;
+        return false;
+    }
+
+    for (size_t i = 0u; pattern[i] != '\0'; ++i) {
+        if (pattern[i] == '\\') {
+            char next = pattern[i + 1u];
+
+            if (next == '\0')
+                break;
+            if (in_class) {
+                i++;
+                continue;
+            }
+            if (next >= '1' && next <= '9') {
+                has_backrefs = true;
+                if ((size_t)(next - '0') > group_count)
+                    invalid_backref = true;
+            }
+            i++;
+            continue;
+        }
+
+        if (in_class) {
+            if (pattern[i] == ']')
+                in_class = false;
+            continue;
+        }
+
+        if (pattern[i] == '[') {
+            in_class = true;
+            continue;
+        }
+        if (pattern[i] == '(') {
+            group_count++;
+            continue;
+        }
+    }
+
+    if (has_backrefs_out)
+        *has_backrefs_out = has_backrefs;
+    if (invalid_backref_out)
+        *invalid_backref_out = invalid_backref;
+    return has_backrefs;
+}
+
+static size_t search_collation_token_end(const char *pattern,
+                                         size_t start,
+                                         char marker) {
+    size_t cursor = start;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == marker &&
+            pattern[cursor + 1u] == ']' &&
+            pattern[cursor + 2u] == ']') {
+            return cursor;
+        }
+        cursor++;
+    }
+    return SIZE_MAX;
+}
+
+static bool search_append_pattern_bytes(char **buf,
+                                        size_t *len,
+                                        size_t *cap,
+                                        const char *data,
+                                        size_t data_len) {
+    if (!buf || !len || !cap || (!data && data_len != 0u))
+        return false;
+
+    if (*len + data_len + 1u > *cap) {
+        size_t next_cap = *cap ? *cap : 32u;
+
+        while (*len + data_len + 1u > next_cap)
+            next_cap *= 2u;
+        char *grown = realloc(*buf, next_cap);
+        if (!grown)
+            return false;
+        *buf = grown;
+        *cap = next_cap;
+    }
+
+    if (data_len > 0u)
+        memcpy(*buf + *len, data, data_len);
+    *len += data_len;
+    (*buf)[*len] = '\0';
+    return true;
+}
+
+static bool search_append_singleton_bracket(char **buf,
+                                            size_t *len,
+                                            size_t *cap,
+                                            char ch) {
+    if (ch == ']')
+        return search_append_pattern_bytes(buf, len, cap, "[]]", 3u);
+    return search_append_pattern_bytes(buf, len, cap, "[", 1u) &&
+           search_append_pattern_bytes(buf, len, cap, &ch, 1u) &&
+           search_append_pattern_bytes(buf, len, cap, "]", 1u);
+}
+
+static char *search_rewrite_simple_collation_tokens(const char *pattern, char **errmsg) {
+    char *rewritten = NULL;
+    size_t len = 0u;
+    size_t cap = 0u;
+    size_t cursor = 0u;
+
+    if (!pattern)
+        return NULL;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor, 2u)) {
+                free(rewritten);
+                return NULL;
+            }
+            cursor += 2u;
+            continue;
+        }
+
+        if (pattern[cursor] == '[' &&
+            pattern[cursor + 1u] == '[' &&
+            (pattern[cursor + 2u] == '=' || pattern[cursor + 2u] == '.')) {
+            char marker = pattern[cursor + 2u];
+            size_t token_end = search_collation_token_end(pattern, cursor + 3u, marker);
+
+            if (token_end == SIZE_MAX)
+                break;
+            if (token_end != cursor + 4u) {
+                if (errmsg && !*errmsg)
+                    *errmsg = strdup("Invalid collation character");
+                free(rewritten);
+                return NULL;
+            }
+            if (!search_append_singleton_bracket(&rewritten, &len, &cap,
+                                                 pattern[cursor + 3u])) {
+                free(rewritten);
+                return NULL;
+            }
+            cursor = token_end + 3u;
+            continue;
+        }
+
+        if (!search_append_pattern_bytes(&rewritten, &len, &cap, pattern + cursor, 1u)) {
+            free(rewritten);
+            return NULL;
+        }
+        cursor++;
+    }
+
+    if (pattern[cursor] != '\0') {
+        if (!search_append_pattern_bytes(&rewritten, &len, &cap, pattern + cursor,
+                                         strlen(pattern + cursor))) {
+            free(rewritten);
+            return NULL;
+        }
+    }
+
+    return rewritten;
+}
+
+static bool search_append_warning_line(char **warnings,
+                                       size_t *len,
+                                       size_t *cap,
+                                       const char *message) {
+    return search_append_pattern_bytes(warnings, len, cap, message, strlen(message)) &&
+           search_append_pattern_bytes(warnings, len, cap, "\n", 1u);
+}
+
+static bool search_is_gnu_bre_mode(enum bx_search_personality personality,
+                                   const struct search_opts *opts) {
+    return opts != NULL
+        && personality != BX_SEARCH_RG
+        && !opts->extended_regex
+        && !opts->perl_regexp
+        && !opts->fixed_strings;
+}
+
+static size_t search_bre_interval_close(const char *pattern, size_t start) {
+    size_t cursor = start;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == '\\' && pattern[cursor + 1u] == '}')
+            return cursor;
+        cursor++;
+    }
+    return SIZE_MAX;
+}
+
+static size_t search_bre_bracket_close(const char *pattern, size_t start) {
+    size_t cursor = start;
+    bool first = true;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+            cursor += 2u;
+            first = false;
+            continue;
+        }
+        if (pattern[cursor] == ']' && !first)
+            return cursor;
+        if (pattern[cursor] != '^' || !first)
+            first = false;
+        cursor++;
+    }
+    return SIZE_MAX;
+}
+
+static char *search_rewrite_gnu_bre_escapes(const char *pattern,
+                                            char **warningmsg,
+                                            char **errmsg) {
+    char *rewritten = NULL;
+    char *warnings = NULL;
+    size_t len = 0u;
+    size_t cap = 0u;
+    size_t warn_len = 0u;
+    size_t warn_cap = 0u;
+    size_t cursor = 0u;
+    bool prev_is_atom = false;
+    size_t group_depth = 0u;
+
+    if (!pattern)
+        return NULL;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == '[') {
+            size_t bracket_end = search_bre_bracket_close(pattern, cursor + 1u);
+
+            if (bracket_end == SIZE_MAX)
+                break;
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor,
+                                             bracket_end + 1u - cursor)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            prev_is_atom = true;
+            cursor = bracket_end + 1u;
+            continue;
+        }
+
+        if (pattern[cursor] == '\\') {
+            char next = pattern[cursor + 1u];
+
+            if (next == '\0') {
+                if (errmsg && !*errmsg)
+                    *errmsg = strdup("Trailing backslash");
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+
+            if (next == '+' || next == '?') {
+                if (prev_is_atom) {
+                    if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                     pattern + cursor, 2u)) {
+                        free(warnings);
+                        free(rewritten);
+                        return NULL;
+                    }
+                } else {
+                    const char *warning = (next == '+')
+                                              ? "warning: stray \\ before +"
+                                              : "warning: stray \\ before ?";
+                    if (!search_append_warning_line(&warnings, &warn_len, &warn_cap, warning) ||
+                        !search_append_pattern_bytes(&rewritten, &len, &cap, &next, 1u)) {
+                        free(warnings);
+                        free(rewritten);
+                        return NULL;
+                    }
+                }
+                prev_is_atom = true;
+                cursor += 2u;
+                continue;
+            }
+
+            if (next == '{') {
+                if (!prev_is_atom) {
+                    if (!search_append_warning_line(&warnings, &warn_len, &warn_cap,
+                                                    "warning: stray \\ before {") ||
+                        !search_append_pattern_bytes(&rewritten, &len, &cap, "{", 1u)) {
+                        free(warnings);
+                        free(rewritten);
+                        return NULL;
+                    }
+                    prev_is_atom = true;
+                    cursor += 2u;
+                    continue;
+                }
+
+                size_t close = search_bre_interval_close(pattern, cursor + 2u);
+                if (close == SIZE_MAX) {
+                    if (errmsg && !*errmsg)
+                        *errmsg = strdup("Unmatched \\{");
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap, "\\{", 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                if (pattern[cursor + 2u] == ',') {
+                    if (!search_append_pattern_bytes(&rewritten, &len, &cap, "0", 1u)) {
+                        free(warnings);
+                        free(rewritten);
+                        return NULL;
+                    }
+                }
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                 pattern + cursor + 2u,
+                                                 close - (cursor + 2u)) ||
+                    !search_append_pattern_bytes(&rewritten, &len, &cap, "\\}", 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                prev_is_atom = true;
+                cursor = close + 2u;
+                continue;
+            }
+
+            if (next == '|' ) {
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                 pattern + cursor, 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                prev_is_atom = false;
+                cursor += 2u;
+                continue;
+            }
+
+            if (next == '(') {
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                 pattern + cursor, 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                group_depth++;
+                prev_is_atom = false;
+                cursor += 2u;
+                continue;
+            }
+
+            if (next == ')') {
+                if (group_depth == 0u) {
+                    if (errmsg && !*errmsg)
+                        *errmsg = strdup("Unmatched ) or \\)");
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                 pattern + cursor, 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                group_depth--;
+                prev_is_atom = true;
+                cursor += 2u;
+                continue;
+            }
+
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor, 2u)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            prev_is_atom = (next != '|'
+                            && next != '<'
+                            && next != '>'
+                            && next != '`'
+                            && next != '\'');
+            cursor += 2u;
+            continue;
+        }
+
+        if (!search_append_pattern_bytes(&rewritten, &len, &cap, pattern + cursor, 1u)) {
+            free(warnings);
+            free(rewritten);
+            return NULL;
+        }
+        prev_is_atom = pattern[cursor] != '^' && pattern[cursor] != '$';
+        cursor++;
+    }
+
+    if (pattern[cursor] != '\0') {
+        if (!search_append_pattern_bytes(&rewritten, &len, &cap, pattern + cursor,
+                                         strlen(pattern + cursor))) {
+            free(warnings);
+            free(rewritten);
+            return NULL;
+        }
+    }
+
+    if (group_depth != 0u) {
+        if (errmsg && !*errmsg)
+            *errmsg = strdup("Unmatched ( or \\(");
+        free(warnings);
+        free(rewritten);
+        return NULL;
+    }
+
+    if (warningmsg)
+        *warningmsg = warnings;
+    else
+        free(warnings);
+    return rewritten;
+}
+
 static bool matcher_uses_posix(const char *pattern,
                                enum bx_search_personality personality,
                                const struct search_opts *opts) {
@@ -226,6 +656,11 @@ static bool match_has_word_boundaries(const unsigned char *buf,
                                       size_t len,
                                       const struct bx_match *match,
                                       const struct search_opts *opts) {
+    if (opts && opts->locale_word_regexp && bx_rg_locale_is_utf8()) {
+        return bx_rg_match_has_locale_word_boundaries_utf8(buf, len,
+                                                           match->start,
+                                                           match->end);
+    }
     return bx_rg_match_has_word_boundaries(buf, len, match->start, match->end,
                                            opts && opts->unicode);
 }
@@ -321,14 +756,23 @@ struct bx_literal_matcher *bx_search_matcher_literal(const struct bx_matcher *m)
 static struct bx_matcher *compile_matcher(const char *pattern,
                                           enum bx_search_personality personality,
                                           struct search_opts *opts,
-                                          char **errmsg) {
+                                          char **errmsg,
+                                          char **warningmsg) {
+    char *bre_rewritten = NULL;
     char *wrapped = NULL;
+    char *collation_rewritten = NULL;
     const char *base_pattern = pattern;
     const char *final_pattern = pattern;
     int flags = 0;
     bool use_posix = matcher_uses_posix(pattern, personality, opts);
+    bool locale_utf8_icase = false;
+    bool use_literal = false;
+    bool ere_has_backrefs = false;
+    bool ere_invalid_backref = false;
     size_t literal_pattern_count = 1u;
 
+    if (warningmsg)
+        *warningmsg = NULL;
     if (opts->num_extra_patterns > 0 && personality != BX_SEARCH_RG &&
         opts->perl_regexp) {
         if (errmsg && !*errmsg)
@@ -336,28 +780,69 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         return NULL;
     }
 
-    if (opts->line_regexp && !opts->fixed_strings) {
-        size_t plen = strlen(base_pattern);
-        size_t extra = 1u;
-        if (opts->line_regexp)
-            extra += 2u;
-        wrapped = malloc(plen + extra);
+    if (opts->ignore_case)
+        flags |= BX_REGEX_ICASE;
+
+    if (opts->multiline)
+        flags |= BX_REGEX_MULTILINE;
+    if (opts->multiline_dotall)
+        flags |= BX_REGEX_DOTALL;
+    locale_utf8_icase = (flags & BX_REGEX_ICASE) != 0 &&
+                        personality != BX_SEARCH_RG &&
+                        bx_rg_locale_is_utf8();
+    use_literal = opts->fixed_strings || pattern_is_plain_literal(base_pattern);
+    if (search_is_gnu_bre_mode(personality, opts) == false &&
+        opts != NULL &&
+        personality != BX_SEARCH_RG &&
+        opts->extended_regex) {
+        search_pattern_ere_backrefs(base_pattern, &ere_has_backrefs, &ere_invalid_backref);
+        if (ere_invalid_backref) {
+            if (errmsg && !*errmsg)
+                *errmsg = strdup("Invalid back reference");
+            return NULL;
+        }
+        if (ere_has_backrefs)
+            use_posix = false;
+    }
+
+    if (opts->line_regexp && !use_literal) {
+        size_t plen = strlen(final_pattern);
+        wrapped = malloc(plen + 3u);
         if (!wrapped)
             return NULL;
 
         char *p = wrapped;
-        if (opts->line_regexp)
-            *p++ = '^';
-        memcpy(p, base_pattern, plen);
+        *p++ = '^';
+        memcpy(p, final_pattern, plen);
         p += plen;
-        if (opts->line_regexp)
-            *p++ = '$';
+        *p++ = '$';
         *p = '\0';
         final_pattern = wrapped;
     }
 
-    if (opts->ignore_case)
-        flags |= BX_REGEX_ICASE;
+    if (search_is_gnu_bre_mode(personality, opts)) {
+        bre_rewritten = search_rewrite_gnu_bre_escapes(final_pattern, warningmsg, errmsg);
+        if (!bre_rewritten) {
+            free(wrapped);
+            return NULL;
+        }
+        final_pattern = bre_rewritten;
+    }
+
+    if (personality != BX_SEARCH_RG && !opts->fixed_strings) {
+        collation_rewritten = search_rewrite_simple_collation_tokens(final_pattern, errmsg);
+        if (!collation_rewritten) {
+            if (errmsg && *errmsg) {
+                free(bre_rewritten);
+                free(wrapped);
+                return NULL;
+            }
+            free(bre_rewritten);
+            free(wrapped);
+            return NULL;
+        }
+        final_pattern = collation_rewritten;
+    }
 
     if (opts->smart_case && !opts->ignore_case) {
         bool has_upper = false;
@@ -371,13 +856,10 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             flags |= BX_REGEX_ICASE;
     }
 
-    if (opts->multiline)
-        flags |= BX_REGEX_MULTILINE;
-    if (opts->multiline_dotall)
-        flags |= BX_REGEX_DOTALL;
-
     struct bx_matcher *m = calloc(1u, sizeof(*m));
     if (!m) {
+        free(collation_rewritten);
+        free(bre_rewritten);
         free(wrapped);
         return NULL;
     }
@@ -388,16 +870,21 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             m->literal_set.items = calloc(literal_pattern_count,
                                           sizeof(*m->literal_set.items));
             if (!m->literal_set.items) {
+                free(collation_rewritten);
+                free(bre_rewritten);
                 free(wrapped);
                 free(m);
                 return NULL;
             }
 
             if (bx_literal_compile(&m->literal_set.items[0], final_pattern,
-                                   (flags & BX_REGEX_ICASE) != 0) != 0) {
+                                   (flags & BX_REGEX_ICASE) != 0,
+                                   locale_utf8_icase) != 0) {
                 if (errmsg && !*errmsg)
                     *errmsg = strdup("empty fixed-string pattern is not supported");
                 matcher_free(m);
+                free(collation_rewritten);
+                free(bre_rewritten);
                 free(wrapped);
                 return NULL;
             }
@@ -406,10 +893,13 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             for (int k = 0; k < opts->num_extra_patterns; ++k) {
                 if (bx_literal_compile(&m->literal_set.items[m->literal_set.count],
                                        opts->extra_patterns[k],
-                                       (flags & BX_REGEX_ICASE) != 0) != 0) {
+                                       (flags & BX_REGEX_ICASE) != 0,
+                                       locale_utf8_icase) != 0) {
                     if (errmsg && !*errmsg)
                         *errmsg = strdup("empty fixed-string pattern is not supported");
                     matcher_free(m);
+                    free(collation_rewritten);
+                    free(bre_rewritten);
                     free(wrapped);
                     return NULL;
                 }
@@ -417,16 +907,20 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             }
 
             m->kind = MATCHER_LITERAL_SET;
+            free(collation_rewritten);
+            free(bre_rewritten);
             free(wrapped);
             return m;
         }
     }
 
-    if (opts->fixed_strings ||
-        (!opts->line_regexp && pattern_is_plain_literal(final_pattern))) {
-        if (bx_literal_compile(&m->literal, final_pattern, (flags & BX_REGEX_ICASE) != 0) != 0) {
+    if (use_literal) {
+        if (bx_literal_compile(&m->literal, base_pattern, (flags & BX_REGEX_ICASE) != 0,
+                               locale_utf8_icase) != 0) {
             if (errmsg && !*errmsg)
                 *errmsg = strdup("empty fixed-string pattern is not supported");
+            free(collation_rewritten);
+            free(bre_rewritten);
             free(wrapped);
             free(m);
             return NULL;
@@ -445,6 +939,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         if (rc != 0) {
             if (errmsg && !*errmsg)
                 *errmsg = bx_regex_strerror_dup(rc, &m->posix);
+            free(collation_rewritten);
+            free(bre_rewritten);
             free(wrapped);
             free(m);
             return NULL;
@@ -452,6 +948,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         m->kind = MATCHER_POSIX;
     } else {
         if (bx_regex_compile(&m->regex, final_pattern, flags, errmsg) != 0) {
+            free(collation_rewritten);
+            free(bre_rewritten);
             free(wrapped);
             free(m);
             return NULL;
@@ -459,6 +957,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         m->kind = MATCHER_REGEX;
     }
 
+    free(collation_rewritten);
+    free(bre_rewritten);
     free(wrapped);
     return m;
 }
@@ -466,8 +966,9 @@ static struct bx_matcher *compile_matcher(const char *pattern,
 struct bx_matcher *bx_search_compile_matcher(const char *pattern,
                                              enum bx_search_personality personality,
                                              struct search_opts *opts,
-                                             char **errmsg) {
-    return compile_matcher(pattern, personality, opts, errmsg);
+                                             char **errmsg,
+                                             char **warningmsg) {
+    return compile_matcher(pattern, personality, opts, errmsg, warningmsg);
 }
 
 bool bx_search_matcher_is_scanner_literal_eligible(const struct bx_matcher *m,

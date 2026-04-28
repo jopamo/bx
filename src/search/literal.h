@@ -7,7 +7,8 @@
 
 struct bx_literal_matcher;
 
-int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, bool ignore_case);
+int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, bool ignore_case,
+                       bool locale_utf8_upper);
 bool bx_literal_next_candidate(const struct bx_literal_matcher *m,
                                const unsigned char *buf,
                                size_t len,

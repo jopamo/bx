@@ -79,13 +79,51 @@ bool bx_search_scanner_can_use(const struct bx_matcher *m,
 
 bool bx_search_scanner_can_raw_shortcut_file_presence(const struct bx_matcher *m,
                                                       const struct search_opts *opts) {
+    struct bx_literal_matcher *literal;
+
     if (!bx_search_scanner_can_shortcut_file_presence(opts))
         return false;
     if (opts->binary_without_match && !opts->quiet)
         return false;
-    return bx_search_matcher_literal(m) != NULL
+    literal = bx_search_matcher_literal(m);
+    return literal != NULL
         && !opts->line_regexp
-        && !opts->word_regexp;
+        && !opts->word_regexp
+        && bx_literal_candidates_are_exact(literal);
+}
+
+static char *bx_search_scanner_prepare_fast_plain_prefix(const char *display_name,
+                                                         size_t display_name_len,
+                                                         const char *match_sep,
+                                                         size_t match_sep_len,
+                                                         const struct search_opts *opts,
+                                                         size_t *prefix_len_out) {
+    size_t prefix_len = 0u;
+    char *prefix;
+
+    if (!display_name || !opts || !prefix_len_out)
+        return NULL;
+
+    prefix_len = display_name_len + (opts->null_filename ? 1u : match_sep_len);
+    *prefix_len_out = prefix_len;
+    if (prefix_len == 0u)
+        return NULL;
+
+    prefix = malloc(prefix_len);
+    if (!prefix) {
+        *prefix_len_out = 0u;
+        return NULL;
+    }
+
+    if (display_name_len > 0u)
+        memcpy(prefix, display_name, display_name_len);
+    if (opts->null_filename) {
+        prefix[display_name_len] = '\0';
+    } else if (match_sep_len > 0u) {
+        memcpy(prefix + display_name_len, match_sep, match_sep_len);
+    }
+    bx_search_dev_counters_note_scanner_plain_prefix_alloc();
+    return prefix;
 }
 
 int bx_search_scanner_opened(FILE *f,
@@ -132,21 +170,14 @@ int bx_search_scanner_opened(FILE *f,
     if (stats)
         stats->files_searched++;
 
-    if (fast_plain_line_output && !heading_enabled && opts->show_filename && display_name) {
-        fast_plain_prefix_len = display_name_len + (opts->null_filename ? 1u : match_sep_len);
-        if (fast_plain_prefix_len > 0u) {
-            fast_plain_prefix = malloc(fast_plain_prefix_len);
-            if (fast_plain_prefix) {
-                if (display_name_len > 0u)
-                    memcpy(fast_plain_prefix, display_name, display_name_len);
-                if (opts->null_filename)
-                    fast_plain_prefix[display_name_len] = '\0';
-                else if (match_sep_len > 0u)
-                    memcpy(fast_plain_prefix + display_name_len, match_sep, match_sep_len);
-            } else {
-                fast_plain_prefix_len = 0u;
-            }
-        }
+    if (!shortcut_file_presence
+        && fast_plain_line_output
+        && !heading_enabled
+        && opts->show_filename
+        && display_name) {
+        fast_plain_prefix = bx_search_scanner_prepare_fast_plain_prefix(
+            display_name, display_name_len, match_sep, match_sep_len, opts, &fast_plain_prefix_len
+        );
     }
 
     bx_search_scanner_begin_file(scanner, (char)delimiter, need_line_numbers);

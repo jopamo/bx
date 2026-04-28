@@ -10,6 +10,7 @@
 
 #include "fswalk/walk.h"
 #include "rg_parallel.h"
+#include "rg_sched.h"
 #include "search_internal.h"
 #include "search_plan.h"
 #include "search_run.h"
@@ -371,8 +372,26 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
                                           const char *search_pattern,
                                           struct bx_matcher **matcher_out) {
     char *compile_error = NULL;
+    char *compile_warning = NULL;
     struct bx_matcher *matcher = bx_search_compile_matcher(search_pattern, args->personality,
-                                                           args->opts, &compile_error);
+                                                           args->opts, &compile_error,
+                                                           &compile_warning);
+
+    if (compile_warning) {
+        const char *cursor = compile_warning;
+
+        while (*cursor != '\0') {
+            const char *line_end = strchr(cursor, '\n');
+            size_t line_len = line_end ? (size_t)(line_end - cursor) : strlen(cursor);
+
+            if (line_len > 0u)
+                fprintf(stderr, "%s: %.*s\n", args->progname, (int)line_len, cursor);
+            if (!line_end)
+                break;
+            cursor = line_end + 1;
+        }
+        free(compile_warning);
+    }
 
     if (matcher) {
         *matcher_out = matcher;
@@ -382,6 +401,13 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
     if (compile_error) {
         if (!bx_search_run_personality_is_rg(args->personality)) {
             if (strcmp(compile_error, "the -P option only supports a single pattern") == 0) {
+                fprintf(stderr, "%s: %s\n", args->progname, compile_error);
+            } else if (strcmp(compile_error, "Invalid collation character") == 0 ||
+                       strcmp(compile_error, "Trailing backslash") == 0 ||
+                       strcmp(compile_error, "Unmatched \\{") == 0 ||
+                       strcmp(compile_error, "Unmatched ( or \\(") == 0 ||
+                       strcmp(compile_error, "Unmatched ) or \\)") == 0 ||
+                       strcmp(compile_error, "Invalid back reference") == 0) {
                 fprintf(stderr, "%s: %s\n", args->progname, compile_error);
             } else {
                 fprintf(stderr, "%s: Invalid regular expression\n", args->progname);
@@ -669,13 +695,29 @@ void bx_search_run(const struct bx_search_run_args *args,
         goto done;
     }
 
-    if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_GENERIC
-        || args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE) {
+    if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE) {
+        int parallel_status = bx_rg_sched_run(args->argc, args->argv,
+                                              args->first_file, sorted_operands,
+                                              sorted_operand_count, args->progname,
+                                              search_pattern, args->personality,
+                                              &exec_plan, args->opts,
+                                              bx_search_rg_thread_count(args->opts),
+                                              args->stats,
+                                              &match_seen, &error_seen);
+        local_result.ran_search = true;
+        local_result.status = parallel_status;
+        if (!error_seen && !match_seen)
+            local_result.status = bx_search_run_status_from_flags(args->opts,
+                                                                  match_seen, error_seen);
+        goto done;
+    }
+
+    if (args->plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_GENERIC) {
         int parallel_status = bx_search_run_parallel_rg(args->argc, args->argv,
                                                         args->first_file, sorted_operands,
                                                         sorted_operand_count, args->progname,
                                                         search_pattern, args->personality,
-                                                        args->plan, &exec_plan, args->opts,
+                                                        &exec_plan, args->opts,
                                                         args->stats,
                                                         &match_seen, &error_seen);
         local_result.ran_search = true;

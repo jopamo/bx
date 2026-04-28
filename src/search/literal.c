@@ -9,6 +9,7 @@
 #include <emmintrin.h>
 #endif
 #include "literal.h"
+#include "rg_text.h"
 
 struct bx_literal_matcher {
     char  *pattern_lower;
@@ -18,9 +19,11 @@ struct bx_literal_matcher {
     unsigned char anchor_byte;
     bool   ignore_case;
     bool   has_anchor;
+    bool   locale_utf8_upper;
 };
 
-int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, bool ignore_case) {
+int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, bool ignore_case,
+                       bool locale_utf8_upper) {
     size_t plen = strlen(pattern);
     if (plen == 0)
         return -1;
@@ -30,13 +33,14 @@ int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, boo
 
     m->plen = plen;
     m->ignore_case = ignore_case;
+    m->locale_utf8_upper = ignore_case && locale_utf8_upper;
     m->pattern_raw = strdup(pattern);
     if (!m->pattern_raw) {
         free(m);
         return -1;
     }
 
-    if (ignore_case) {
+    if (ignore_case && !m->locale_utf8_upper) {
         m->pattern_lower = malloc(plen + 1);
         if (!m->pattern_lower) {
             free(m->pattern_raw);
@@ -57,15 +61,68 @@ int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, boo
     return 0;
 }
 
+static bool bx_literal_verify_at_locale_utf8(const struct bx_literal_matcher *m,
+                                             const unsigned char *buf,
+                                             size_t len,
+                                             size_t start,
+                                             struct bx_match *out) {
+    size_t pattern_off = 0u;
+    size_t input_off = start;
+
+    if (!m || !buf || start > len || m->plen == 0u)
+        return false;
+
+    while (pattern_off < m->plen) {
+        size_t pattern_consume = 0u;
+        size_t input_consume = 0u;
+        uint32_t pattern_cp = 0u;
+        uint32_t input_cp = 0u;
+
+        if (input_off >= len)
+            return false;
+        if (!bx_rg_decode_utf8_codepoint((const unsigned char *)m->pattern_raw + pattern_off,
+                                         m->plen - pattern_off,
+                                         &pattern_consume,
+                                         &pattern_cp)) {
+            return false;
+        }
+        if (!bx_rg_decode_utf8_codepoint(buf + input_off, len - input_off,
+                                         &input_consume, &input_cp)) {
+            return false;
+        }
+        if (bx_rg_locale_uppercase_codepoint(pattern_cp) !=
+            bx_rg_locale_uppercase_codepoint(input_cp)) {
+            return false;
+        }
+        pattern_off += pattern_consume;
+        input_off += input_consume;
+    }
+
+    if (out) {
+        out->start = start;
+        out->end = input_off;
+    }
+    return true;
+}
+
 static int bx_literal_find_direct(const struct bx_literal_matcher *m,
                                   const unsigned char *buf,
                                   size_t len,
                                   size_t start,
                                   struct bx_match *out) {
-    if (start >= len || m->plen == 0 || len - start < m->plen)
+    if (start >= len || m->plen == 0)
         return -1;
 
     if (m->ignore_case) {
+        if (m->locale_utf8_upper) {
+            for (size_t i = start; i < len; i++) {
+                if (bx_literal_verify_at_locale_utf8(m, buf, len, i, out))
+                    return 0;
+            }
+            return -1;
+        }
+        if (len - start < m->plen)
+            return -1;
         for (size_t i = start; i <= len - m->plen; i++) {
             bool match = true;
             for (size_t j = 0; j < m->plen; j++) {
@@ -83,6 +140,9 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
         }
         return -1;
     }
+
+    if (len - start < m->plen)
+        return -1;
 
 #if defined(__SSE2__)
     if (m->plen >= 2u && m->plen <= 16u) {
@@ -180,17 +240,21 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
                           size_t len,
                           size_t start,
                           struct bx_match *out) {
-    if (!m || !buf || start > len || m->plen == 0u || len - start < m->plen)
+    if (!m || !buf || start > len || m->plen == 0u)
         return false;
 
     if (m->ignore_case) {
+        if (m->locale_utf8_upper)
+            return bx_literal_verify_at_locale_utf8(m, buf, len, start, out);
+        if (len - start < m->plen)
+            return false;
         for (size_t i = 0; i < m->plen; ++i) {
             if ((unsigned char)tolower((unsigned char)buf[start + i])
                 != (unsigned char)m->pattern_lower[i]) {
                 return false;
             }
         }
-    } else if (memcmp(buf + start, m->pattern_raw, m->plen) != 0) {
+    } else if (len - start < m->plen || memcmp(buf + start, m->pattern_raw, m->plen) != 0) {
         return false;
     }
 
@@ -222,7 +286,7 @@ int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size
 }
 
 bool bx_literal_candidates_are_exact(const struct bx_literal_matcher *m) {
-    return m && !m->has_anchor;
+    return m && !m->has_anchor && !m->locale_utf8_upper;
 }
 
 bool bx_literal_contains_byte(const struct bx_literal_matcher *m, unsigned char byte) {

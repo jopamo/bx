@@ -16,10 +16,8 @@
 #include "record_stream.h"
 #include "rg_parallel.h"
 #include "rg_publish.h"
-#include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
-#include "search_plan.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -57,7 +55,6 @@ struct bx_search_parallel_state {
     const char *progname;
     const char *pattern;
     enum bx_search_personality personality;
-    const struct bx_search_plan *plan;
     const struct bx_search_exec_plan *exec_plan;
     struct search_opts *opts;
     struct bx_cancel_state cancel;
@@ -351,7 +348,7 @@ static void *bx_search_parallel_worker_init(void *user, size_t worker_index) {
         return NULL;
 
     worker->matcher = bx_search_compile_matcher(state->pattern, state->personality,
-                                                state->opts, &errmsg);
+                                                state->opts, &errmsg, NULL);
     if (!worker->matcher) {
         if (errmsg) {
             bx_search_parallel_set_fatal(state, errmsg);
@@ -548,6 +545,10 @@ static size_t bx_search_rg_auto_thread_count(const struct search_opts *opts) {
     return 4u;
 }
 
+size_t bx_search_rg_thread_count(const struct search_opts *opts) {
+    return bx_search_rg_auto_thread_count(opts);
+}
+
 bool bx_search_parallel_rg_supported(enum bx_search_personality personality,
                                      const struct search_opts *opts,
                                      int num_files,
@@ -573,7 +574,6 @@ int bx_search_run_parallel_rg(int argc,
                               const char *progname,
                               const char *pattern,
                               enum bx_search_personality personality,
-                              const struct bx_search_plan *plan,
                               const struct bx_search_exec_plan *exec_plan,
                               struct search_opts *opts,
                               struct bx_search_stats *stats_out,
@@ -583,7 +583,6 @@ int bx_search_run_parallel_rg(int argc,
         .progname = progname,
         .pattern = pattern,
         .personality = personality,
-        .plan = plan,
         .exec_plan = exec_plan,
         .opts = opts,
         .exit_status = 1,
@@ -599,13 +598,6 @@ int bx_search_run_parallel_rg(int argc,
 
     if (queue_capacity < thread_count)
         queue_capacity = thread_count;
-
-    if (plan && plan->orchestrator == BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE) {
-        return bx_rg_sched_run(argc, argv, first_file, sorted_operands,
-                               sorted_operand_count, progname, pattern,
-                               personality, exec_plan, opts, thread_count,
-                               stats_out, match_seen_out, error_seen_out);
-    }
 
     bx_cancel_state_init(&state.cancel);
     if (pthread_mutex_init(&state.lock, NULL) != 0)

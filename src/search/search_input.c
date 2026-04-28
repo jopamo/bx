@@ -18,29 +18,13 @@
 static int bx_search_input_open_readonly(const char *filename,
                                          const struct search_opts *opts) {
     int flags = O_RDONLY;
+    (void)opts;
 
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
 #endif
-#ifdef O_NOATIME
-    /*
-     * Metadata-sorted accessed-time searches must not perturb atime while
-     * reading candidate files, or a second pass can collapse to path-order
-     * ties after the first pass dirties every file to "now".
-     */
-    if (opts && opts->sort_key == BX_SEARCH_SORT_ACCESSED)
-        flags |= O_NOATIME;
-#endif
 
     int fd = open(filename, flags);
-
-#ifdef O_NOATIME
-    if (fd < 0 && (flags & O_NOATIME) != 0 &&
-        (errno == EPERM || errno == EINVAL || errno == EOPNOTSUPP || errno == ENOTSUP)) {
-        flags &= ~O_NOATIME;
-        fd = open(filename, flags);
-    }
-#endif
 
     return fd;
 }
@@ -86,8 +70,7 @@ FILE *bx_search_input_open_stream(const char *filename,
         return NULL;
     }
     bx_search_dev_counters_note_file_opened();
-
-    bx_record_stream_prepare_file(f, stream);
+    (void)stream;
     if (use_stdin_out)
         *use_stdin_out = false;
     return f;

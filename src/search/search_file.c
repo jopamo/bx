@@ -58,8 +58,7 @@ static int search_file_run_opened_kernel(enum bx_search_file_kernel_kind kernel,
                                           match_count, stats);
     case BX_SEARCH_FILE_KERNEL_RAW_PRESENCE:
         return bx_search_raw_presence_opened(f, use_stdin, filename, display_name, progname,
-                                             m, opts, match_count, scanner,
-                                             record_stream, stats);
+                                             m, opts, match_count, scanner, stats);
     case BX_SEARCH_FILE_KERNEL_SCANNER:
         return bx_search_scanner_opened(f, use_stdin, display_name, progname, m, opts,
                                         match_count, scanner, stats);
@@ -360,7 +359,7 @@ static int search_file(const char *filename,
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
-        FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
+        FILE *f = bx_search_input_open_stream(filename, progname, opts, NULL, NULL);
         if (!f)
             goto out_error;
 
@@ -390,8 +389,8 @@ static int search_file(const char *filename,
         if (exec_plan && exec_plan->raw_presence_supported) {
             result = search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
                                                    f, false, filename, display_name, progname,
-                                                   m, opts, match_count, scanner,
-                                                   record_stream, stats);
+                                                   m, opts, match_count, scanner, record_stream,
+                                                   stats);
             goto out;
         }
 

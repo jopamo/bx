@@ -80,7 +80,8 @@ bool bx_search_matcher_is_scanner_literal_eligible(const struct bx_matcher *m,
 struct bx_matcher *bx_search_compile_matcher(const char *pattern,
                                              enum bx_search_personality personality,
                                              struct search_opts *opts,
-                                             char **errmsg);
+                                             char **errmsg,
+                                             char **warningmsg);
 void bx_search_matcher_free(struct bx_matcher *m);
 struct bx_literal_matcher *bx_search_matcher_literal(const struct bx_matcher *m);
 int bx_search_matcher_find_with_opts(struct bx_matcher *m,

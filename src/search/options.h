@@ -110,6 +110,7 @@ struct search_opts {
     bool crlf;
     bool trim;
     bool unicode;
+    bool locale_word_regexp;
     bool trace;
     bool search_zip;
     bool pcre2_version;

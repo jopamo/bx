@@ -1,3 +1,4 @@
+#include <locale.h>
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -22,6 +23,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int first_file;
     const char *progname = argv[0] ? argv[0] : "grep";
 
+    (void)setlocale(LC_ALL, "");
     bx_search_dev_counters_begin_from_env();
 
     int rc = bx_search_parse_options(argc, argv, &opts, personality, &pattern, &first_file);

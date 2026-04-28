@@ -34,6 +34,7 @@ void bx_search_dev_counters_note_file_opened(void);
 void bx_search_dev_counters_note_candidate_hit(void);
 void bx_search_dev_counters_note_matcher_invocation(void);
 void bx_search_dev_counters_note_record_materialized(void);
+void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void);
 void bx_search_dev_counters_note_output_line_emitted(void);
 void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counter,
                                           uint64_t count);
