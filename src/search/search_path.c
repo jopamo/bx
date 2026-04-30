@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <fnmatch.h>
 #include <stdbool.h>
 #include <stdio.h>

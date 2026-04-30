@@ -216,11 +216,17 @@ int bx_search_buffered_opened(FILE *f,
 
     bool want_group_separator = bx_search_plan_needs_line_buffering(opts);
     bool in_group = false;
+    bool emitted_file_separator = false;
+    bool printed_any_line = false;
     int last_printed = -1;
     for (int i = 0; i < nlines; i++) {
         if (!lines[i].print) {
             in_group = false;
             continue;
+        }
+        if (want_group_separator && !emitted_file_separator) {
+            (void)bx_search_maybe_emit_context_file_separator(opts);
+            emitted_file_separator = true;
         }
         if (!in_group && last_printed >= 0 && i > last_printed + 1) {
             if (want_group_separator && !opts->suppress_group_separator) {
@@ -308,7 +314,10 @@ int bx_search_buffered_opened(FILE *f,
         }
         in_group = true;
         last_printed = i;
+        printed_any_line = true;
     }
+    if (want_group_separator && printed_any_line)
+        bx_search_note_context_output_started();
     if (stats && file_matches > 0)
         stats->files_with_matches++;
     if (match_count)

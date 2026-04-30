@@ -440,6 +440,21 @@ void bx_search_maybe_emit_initial_tab(const struct search_opts *opts,
     bx_search_stats_count_bytes(1u);
 }
 
+bool bx_search_maybe_emit_context_file_separator(const struct search_opts *opts) {
+    if (!current_output_ctx || !current_output_ctx->context_output_started || !opts)
+        return false;
+    if (opts->suppress_group_separator)
+        return false;
+    bx_search_printf_out("%s\n", opts->group_separator ? opts->group_separator : "--");
+    bx_search_dev_counters_note_output_line_emitted();
+    return true;
+}
+
+void bx_search_note_context_output_started(void) {
+    if (current_output_ctx)
+        current_output_ctx->context_output_started = true;
+}
+
 bool bx_search_use_heading_output(const char *display_name,
                                   const struct search_opts *opts) {
     return opts->heading && opts->show_filename && display_name && display_name[0] != '\0';

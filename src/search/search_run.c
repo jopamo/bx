@@ -400,17 +400,17 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
 
     if (compile_error) {
         if (!bx_search_run_personality_is_rg(args->personality)) {
+            const char *message = compile_error;
+
+            if (strncmp(compile_error, "regex parse error at offset ", 28) == 0) {
+                const char *detail = strstr(compile_error, ": ");
+                if (detail && detail[2] != '\0')
+                    message = detail + 2;
+            }
             if (strcmp(compile_error, "the -P option only supports a single pattern") == 0) {
-                fprintf(stderr, "%s: %s\n", args->progname, compile_error);
-            } else if (strcmp(compile_error, "Invalid collation character") == 0 ||
-                       strcmp(compile_error, "Trailing backslash") == 0 ||
-                       strcmp(compile_error, "Unmatched \\{") == 0 ||
-                       strcmp(compile_error, "Unmatched ( or \\(") == 0 ||
-                       strcmp(compile_error, "Unmatched ) or \\)") == 0 ||
-                       strcmp(compile_error, "Invalid back reference") == 0) {
-                fprintf(stderr, "%s: %s\n", args->progname, compile_error);
+                fprintf(stderr, "%s: %s\n", args->progname, message);
             } else {
-                fprintf(stderr, "%s: Invalid regular expression\n", args->progname);
+                fprintf(stderr, "%s: %s\n", args->progname, message);
             }
         } else {
             fprintf(stderr, "%s: invalid pattern '%s': %s\n",

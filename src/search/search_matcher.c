@@ -216,6 +216,117 @@ static bool search_append_singleton_bracket(char **buf,
            search_append_pattern_bytes(buf, len, cap, "]", 1u);
 }
 
+static char *search_wrap_line_regexp_pattern(const char *pattern,
+                                             bool bre_syntax) {
+    char *wrapped = NULL;
+    size_t len = 0u;
+    size_t cap = 0u;
+    size_t cursor = 0u;
+    size_t group_depth = 0u;
+    bool in_class = false;
+    bool first_in_class = false;
+
+    if (!pattern)
+        return NULL;
+    if (!search_append_pattern_bytes(&wrapped, &len, &cap, "^", 1u))
+        return NULL;
+
+    while (pattern[cursor] != '\0') {
+        if (in_class) {
+            if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+                if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                                 pattern + cursor, 2u)) {
+                    free(wrapped);
+                    return NULL;
+                }
+                cursor += 2u;
+                first_in_class = false;
+                continue;
+            }
+            if (pattern[cursor] == ']' && !first_in_class)
+                in_class = false;
+            if (pattern[cursor] != '^' || !first_in_class)
+                first_in_class = false;
+            if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                             pattern + cursor, 1u)) {
+                free(wrapped);
+                return NULL;
+            }
+            cursor++;
+            continue;
+        }
+
+        if (pattern[cursor] == '[') {
+            in_class = true;
+            first_in_class = true;
+            if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                             pattern + cursor, 1u)) {
+                free(wrapped);
+                return NULL;
+            }
+            cursor++;
+            continue;
+        }
+
+        if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+            char next = pattern[cursor + 1u];
+
+            if (bre_syntax) {
+                if (next == '(') {
+                    group_depth++;
+                } else if (next == ')' && group_depth > 0u) {
+                    group_depth--;
+                } else if (next == '|' && group_depth == 0u) {
+                    if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                                     "$\\|^", 4u)) {
+                        free(wrapped);
+                        return NULL;
+                    }
+                    cursor += 2u;
+                    continue;
+                }
+            }
+            if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                             pattern + cursor, 2u)) {
+                free(wrapped);
+                return NULL;
+            }
+            cursor += 2u;
+            continue;
+        }
+
+        if (!bre_syntax) {
+            if (pattern[cursor] == '(') {
+                group_depth++;
+            } else if (pattern[cursor] == ')' && group_depth > 0u) {
+                group_depth--;
+            } else if (pattern[cursor] == '|' && group_depth == 0u) {
+                if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                                 "$|^", 3u)) {
+                    free(wrapped);
+                    return NULL;
+                }
+                cursor++;
+                continue;
+            }
+        }
+
+        if (!search_append_pattern_bytes(&wrapped, &len, &cap,
+                                         pattern + cursor, 1u)) {
+            free(wrapped);
+            return NULL;
+        }
+        cursor++;
+    }
+
+    if (!search_append_pattern_bytes(&wrapped, &len, &cap, "$", 1u)) {
+        free(wrapped);
+        return NULL;
+    }
+
+    return wrapped;
+}
+
 static char *search_rewrite_simple_collation_tokens(const char *pattern, char **errmsg) {
     char *rewritten = NULL;
     size_t len = 0u;
@@ -534,6 +645,160 @@ static char *search_rewrite_gnu_bre_escapes(const char *pattern,
     return rewritten;
 }
 
+static bool search_is_gnu_ere_mode(enum bx_search_personality personality,
+                                   const struct search_opts *opts) {
+    return opts != NULL
+        && personality != BX_SEARCH_RG
+        && opts->extended_regex
+        && !opts->perl_regexp
+        && !opts->fixed_strings;
+}
+
+static size_t search_ere_interval_token_end(const char *pattern, size_t start) {
+    size_t cursor = start;
+    bool saw_body = false;
+
+    while (pattern[cursor] != '\0') {
+        if (pattern[cursor] == '}')
+            return saw_body ? cursor : SIZE_MAX;
+        if ((pattern[cursor] >= '0' && pattern[cursor] <= '9') || pattern[cursor] == ',') {
+            saw_body = true;
+            cursor++;
+            continue;
+        }
+        return SIZE_MAX;
+    }
+    return SIZE_MAX;
+}
+
+static char *search_rewrite_gnu_ere_warnings(const char *pattern,
+                                             char **warningmsg) {
+    char *rewritten = NULL;
+    char *warnings = NULL;
+    size_t len = 0u;
+    size_t cap = 0u;
+    size_t warn_len = 0u;
+    size_t warn_cap = 0u;
+    size_t cursor = 0u;
+    bool in_class = false;
+    bool first_in_class = false;
+    bool at_expr_start = true;
+
+    if (!pattern)
+        return NULL;
+
+    while (pattern[cursor] != '\0') {
+        bool was_at_expr_start = at_expr_start;
+
+        if (in_class) {
+            if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+                if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                                 pattern + cursor, 2u)) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                cursor += 2u;
+                first_in_class = false;
+                continue;
+            }
+            if (pattern[cursor] == ']' && !first_in_class) {
+                in_class = false;
+                at_expr_start = false;
+            }
+            if (pattern[cursor] != '^' || !first_in_class)
+                first_in_class = false;
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor, 1u)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            cursor++;
+            continue;
+        }
+
+        if (was_at_expr_start && (pattern[cursor] == '*' ||
+                                  pattern[cursor] == '+' ||
+                                  pattern[cursor] == '?')) {
+            char warning[64];
+
+            snprintf(warning, sizeof(warning),
+                     "warning: %c at start of expression",
+                     pattern[cursor]);
+            if (!search_append_warning_line(&warnings, &warn_len, &warn_cap, warning)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            cursor++;
+            continue;
+        }
+
+        if (was_at_expr_start && pattern[cursor] == '{') {
+            size_t interval_end = search_ere_interval_token_end(pattern, cursor + 1u);
+
+            if (interval_end != SIZE_MAX) {
+                if (!search_append_warning_line(&warnings, &warn_len, &warn_cap,
+                                                "warning: {...} at start of expression")) {
+                    free(warnings);
+                    free(rewritten);
+                    return NULL;
+                }
+                cursor = interval_end + 1u;
+                continue;
+            }
+        }
+
+        if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor, 2u)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            at_expr_start = false;
+            cursor += 2u;
+            continue;
+        }
+
+        if (pattern[cursor] == '[') {
+            in_class = true;
+            first_in_class = true;
+            if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                             pattern + cursor, 1u)) {
+                free(warnings);
+                free(rewritten);
+                return NULL;
+            }
+            cursor++;
+            continue;
+        }
+
+        if (!search_append_pattern_bytes(&rewritten, &len, &cap,
+                                         pattern + cursor, 1u)) {
+            free(warnings);
+            free(rewritten);
+            return NULL;
+        }
+
+        if (pattern[cursor] == '(' || pattern[cursor] == '|') {
+            at_expr_start = true;
+        } else if (pattern[cursor] == '^' && was_at_expr_start) {
+            at_expr_start = true;
+        } else {
+            at_expr_start = false;
+        }
+        cursor++;
+    }
+
+    if (warningmsg)
+        *warningmsg = warnings;
+    else
+        free(warnings);
+    return rewritten;
+}
+
 static bool matcher_uses_posix(const char *pattern,
                                enum bx_search_personality personality,
                                const struct search_opts *opts) {
@@ -759,6 +1024,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
                                           char **errmsg,
                                           char **warningmsg) {
     char *bre_rewritten = NULL;
+    char *ere_warning_rewritten = NULL;
     char *wrapped = NULL;
     char *collation_rewritten = NULL;
     const char *base_pattern = pattern;
@@ -805,41 +1071,33 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             use_posix = false;
     }
 
-    if (opts->line_regexp && !use_literal) {
-        size_t plen = strlen(final_pattern);
-        wrapped = malloc(plen + 3u);
-        if (!wrapped)
+    if (search_is_gnu_ere_mode(personality, opts)) {
+        ere_warning_rewritten = search_rewrite_gnu_ere_warnings(final_pattern, warningmsg);
+        if (!ere_warning_rewritten)
             return NULL;
+        final_pattern = ere_warning_rewritten;
+    }
 
-        char *p = wrapped;
-        *p++ = '^';
-        memcpy(p, final_pattern, plen);
-        p += plen;
-        *p++ = '$';
-        *p = '\0';
+    if (opts->line_regexp && !use_literal) {
+        wrapped = search_wrap_line_regexp_pattern(
+            final_pattern,
+            search_is_gnu_bre_mode(personality, opts));
+        if (!wrapped)
+            goto fail;
         final_pattern = wrapped;
     }
 
     if (search_is_gnu_bre_mode(personality, opts)) {
         bre_rewritten = search_rewrite_gnu_bre_escapes(final_pattern, warningmsg, errmsg);
-        if (!bre_rewritten) {
-            free(wrapped);
-            return NULL;
-        }
+        if (!bre_rewritten)
+            goto fail;
         final_pattern = bre_rewritten;
     }
 
     if (personality != BX_SEARCH_RG && !opts->fixed_strings) {
         collation_rewritten = search_rewrite_simple_collation_tokens(final_pattern, errmsg);
         if (!collation_rewritten) {
-            if (errmsg && *errmsg) {
-                free(bre_rewritten);
-                free(wrapped);
-                return NULL;
-            }
-            free(bre_rewritten);
-            free(wrapped);
-            return NULL;
+            goto fail;
         }
         final_pattern = collation_rewritten;
     }
@@ -858,10 +1116,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
 
     struct bx_matcher *m = calloc(1u, sizeof(*m));
     if (!m) {
-        free(collation_rewritten);
-        free(bre_rewritten);
-        free(wrapped);
-        return NULL;
+        goto fail;
     }
 
     if (opts->fixed_strings) {
@@ -870,11 +1125,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             m->literal_set.items = calloc(literal_pattern_count,
                                           sizeof(*m->literal_set.items));
             if (!m->literal_set.items) {
-                free(collation_rewritten);
-                free(bre_rewritten);
-                free(wrapped);
                 free(m);
-                return NULL;
+                goto fail;
             }
 
             if (bx_literal_compile(&m->literal_set.items[0], final_pattern,
@@ -883,10 +1135,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
                 if (errmsg && !*errmsg)
                     *errmsg = strdup("empty fixed-string pattern is not supported");
                 matcher_free(m);
-                free(collation_rewritten);
-                free(bre_rewritten);
-                free(wrapped);
-                return NULL;
+                goto fail;
             }
             m->literal_set.count = 1u;
 
@@ -898,10 +1147,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
                     if (errmsg && !*errmsg)
                         *errmsg = strdup("empty fixed-string pattern is not supported");
                     matcher_free(m);
-                    free(collation_rewritten);
-                    free(bre_rewritten);
-                    free(wrapped);
-                    return NULL;
+                    goto fail;
                 }
                 m->literal_set.count++;
             }
@@ -909,6 +1155,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             m->kind = MATCHER_LITERAL_SET;
             free(collation_rewritten);
             free(bre_rewritten);
+            free(ere_warning_rewritten);
             free(wrapped);
             return m;
         }
@@ -919,11 +1166,8 @@ static struct bx_matcher *compile_matcher(const char *pattern,
                                locale_utf8_icase) != 0) {
             if (errmsg && !*errmsg)
                 *errmsg = strdup("empty fixed-string pattern is not supported");
-            free(collation_rewritten);
-            free(bre_rewritten);
-            free(wrapped);
             free(m);
-            return NULL;
+            goto fail;
         }
         m->kind = MATCHER_LITERAL;
     } else if (use_posix) {
@@ -939,28 +1183,30 @@ static struct bx_matcher *compile_matcher(const char *pattern,
         if (rc != 0) {
             if (errmsg && !*errmsg)
                 *errmsg = bx_regex_strerror_dup(rc, &m->posix);
-            free(collation_rewritten);
-            free(bre_rewritten);
-            free(wrapped);
             free(m);
-            return NULL;
+            goto fail;
         }
         m->kind = MATCHER_POSIX;
     } else {
         if (bx_regex_compile(&m->regex, final_pattern, flags, errmsg) != 0) {
-            free(collation_rewritten);
-            free(bre_rewritten);
-            free(wrapped);
             free(m);
-            return NULL;
+            goto fail;
         }
         m->kind = MATCHER_REGEX;
     }
 
     free(collation_rewritten);
     free(bre_rewritten);
+    free(ere_warning_rewritten);
     free(wrapped);
     return m;
+
+fail:
+    free(collation_rewritten);
+    free(bre_rewritten);
+    free(ere_warning_rewritten);
+    free(wrapped);
+    return NULL;
 }
 
 struct bx_matcher *bx_search_compile_matcher(const char *pattern,

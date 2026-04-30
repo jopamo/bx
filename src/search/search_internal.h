@@ -33,6 +33,7 @@ struct bx_search_output_ctx {
     size_t *capture_err_len;
     struct bx_search_stats *stats;
     bool heading_output_started;
+    bool context_output_started;
     bool used_heading;
     bool emitted_stdout;
     bool capture_failed;
@@ -123,6 +124,8 @@ bool bx_search_print_result_prefix_cached(const char *display_name,
                                           bool color);
 void bx_search_maybe_emit_initial_tab(const struct search_opts *opts,
                                       bool prefix_printed);
+bool bx_search_maybe_emit_context_file_separator(const struct search_opts *opts);
+void bx_search_note_context_output_started(void);
 void bx_search_print_match_colored_cached(const unsigned char *line,
                                           size_t len,
                                           size_t match_start,
