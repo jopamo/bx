@@ -155,6 +155,7 @@ struct search_opts {
         BX_GREP_DEVICE_READ = 0,
         BX_GREP_DEVICE_SKIP,
     } device_mode;
+    bool device_mode_explicit;
 };
 
 int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,

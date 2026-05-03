@@ -44,6 +44,7 @@ void bx_search_report_path_error(const char *progname,
                                  const char *path,
                                  int errnum,
                                  const struct search_opts *opts);
+void bx_search_report_write_error(const char *progname, int errnum);
 void bx_search_report_binary_match(const char *progname, const char *path);
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts);
@@ -53,6 +54,8 @@ bool bx_search_should_skip_special_input_mode(mode_t mode,
                                               const struct search_opts *opts);
 bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
                                                const struct search_opts *opts);
+bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *entry,
+                                                         const struct search_opts *opts);
 char *bx_search_display_path_for_output(const char *path,
                                         bool strip_dot_prefix,
                                         const struct search_opts *opts);
@@ -66,6 +69,7 @@ FILE *bx_search_output_stream(void);
 FILE *bx_search_error_output_stream(void);
 bool bx_search_stdout_is_captured(void);
 void bx_search_note_stdout_output(void);
+int bx_search_check_output_error(void);
 int bx_search_printf_out(const char *fmt, ...);
 void bx_search_stats_count_bytes(size_t count);
 char bx_search_record_delimiter(const struct search_opts *opts);

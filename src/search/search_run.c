@@ -118,7 +118,7 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
         return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, state ? state->opts : NULL))
+    if (bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
 
     char *display_name = bx_search_display_path_for_output(entry->path,
@@ -662,9 +662,8 @@ void bx_search_run(const struct bx_search_run_args *args,
 
     if (args->plan->output_kind == BX_SEARCH_PLAN_OUTPUT_FILES_ONLY) {
         local_result.status = bx_search_run_files_only(args);
-        if (result)
-            *result = local_result;
-        return;
+        local_result.ran_search = true;
+        goto done;
     }
 
     search_pattern = bx_search_run_build_search_pattern(args->pattern, args->personality,
@@ -736,6 +735,13 @@ void bx_search_run(const struct bx_search_run_args *args,
                                                           match_seen, error_seen);
 
 done:
+    if (local_result.ran_search) {
+        int output_err = bx_search_check_output_error();
+        if (output_err != 0) {
+            bx_search_report_write_error(args->progname, output_err);
+            local_result.status = 2;
+        }
+    }
     bx_search_matcher_free(matcher);
     bx_search_scanner_dispose(&scanner);
     bx_record_stream_dispose(&record_stream);

@@ -91,6 +91,15 @@ void bx_search_report_path_error(const char *progname,
                 progname, path, strerror(errnum));
 }
 
+void bx_search_report_write_error(const char *progname, int errnum) {
+    if (progname_uses_os_error_style(progname))
+        fprintf(bx_search_error_output_stream(), "%s: write error: %s (os error %d)\n",
+                progname, strerror(errnum), errnum);
+    else
+        fprintf(bx_search_error_output_stream(), "%s: write error: %s\n",
+                progname, strerror(errnum));
+}
+
 static void report_binary_match(const char *progname, const char *path) {
     fprintf(bx_search_error_output_stream(), "%s: %s: binary file matches\n",
             progname, path);
@@ -104,10 +113,14 @@ static bool bx_search_mode_is_special_input(mode_t mode) {
     return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode);
 }
 
+static bool bx_search_mode_is_explicit_skip_special_input(mode_t mode) {
+    return S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode);
+}
+
 bool bx_search_should_skip_special_input_mode(mode_t mode,
                                               const struct search_opts *opts) {
     return opts && opts->device_mode == BX_GREP_DEVICE_SKIP
-        && bx_search_mode_is_special_input(mode);
+        && bx_search_mode_is_explicit_skip_special_input(mode);
 }
 
 bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
@@ -119,6 +132,20 @@ bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
         return false;
 
     return bx_search_mode_is_special_input(entry->mode);
+}
+
+bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *entry,
+                                                         const struct search_opts *opts) {
+    if (!entry || !opts)
+        return false;
+
+    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+        return false;
+
+    if (!bx_search_mode_is_special_input(entry->mode))
+        return false;
+
+    return opts->device_mode == BX_GREP_DEVICE_SKIP || !opts->device_mode_explicit;
 }
 
 static char *display_path_for_output(const char *path,

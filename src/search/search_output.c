@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -102,6 +103,19 @@ bool bx_search_stdout_is_captured(void) {
 void bx_search_note_stdout_output(void) {
     if (current_output_ctx)
         current_output_ctx->emitted_stdout = true;
+}
+
+int bx_search_check_output_error(void) {
+    FILE *out = bx_search_output_stream();
+    int saved_errno = 0;
+
+    if (!out)
+        return 0;
+    if (fflush(out) == EOF)
+        saved_errno = errno;
+    if (!ferror(out))
+        return 0;
+    return saved_errno != 0 ? saved_errno : (errno != 0 ? errno : EIO);
 }
 
 static size_t bx_search_fwrite_out(const void *buf, size_t len) {

@@ -1383,6 +1383,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 bx_grep_print_usage_try_help(progname);
                 return 3;
             }
+            opts->device_mode_explicit = true;
             break;
         case OPT_MAX_COLUMNS:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
