@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <stdint.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -233,6 +232,32 @@ bool bx_literal_next_candidate(const struct bx_literal_matcher *m,
     *candidate_start = (size_t)(found - buf) - m->anchor_index;
     *cursor = *candidate_start + 1u;
     return true;
+}
+
+bool bx_literal_next_scanner_candidate(const struct bx_literal_matcher *m,
+                                       const unsigned char *buf,
+                                       size_t len,
+                                       size_t *cursor,
+                                       size_t *candidate_start) {
+    if (!m || !buf || !cursor || !candidate_start)
+        return false;
+    if (*cursor > len)
+        return false;
+
+    if (!m->has_anchor && !m->ignore_case) {
+        if (len - *cursor < m->plen)
+            return false;
+
+        void *found = memmem(buf + *cursor, len - *cursor, m->pattern_raw, m->plen);
+        if (!found)
+            return false;
+
+        *candidate_start = (size_t)((const unsigned char *)found - buf);
+        *cursor = *candidate_start + 1u;
+        return true;
+    }
+
+    return bx_literal_next_candidate(m, buf, len, cursor, candidate_start);
 }
 
 bool bx_literal_verify_at(const struct bx_literal_matcher *m,

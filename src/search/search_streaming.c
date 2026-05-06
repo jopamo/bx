@@ -106,9 +106,11 @@ int bx_search_streaming_opened(FILE *f,
                 stdout_emitted = true;
             } else if (opts->only_matching && !opts->invert_match) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                bx_search_print_only_matches((unsigned char *)line, record_len,
-                                             heading_printed_for_file ? NULL : display_name,
-                                             line_num, line_offset, m, opts);
+                bx_search_print_only_matches_from_first(
+                    (unsigned char *)line, record_len,
+                    heading_printed_for_file ? NULL : display_name,
+                    line_num, line_offset, m, &bm, opts
+                );
                 stdout_emitted = true;
             } else if (!(opts->only_matching && opts->invert_match)) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);

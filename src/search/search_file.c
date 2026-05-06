@@ -263,7 +263,8 @@ static int search_file(const char *filename,
     int result = 1;
     int previous_offset_width = bx_search_output_get_offset_width();
 
-    if (!display_name_override && filename && strcmp(filename, "-") != 0) {
+    if (!display_name_override && filename && strcmp(filename, "-") != 0 &&
+        opts->path_separator != '\0' && opts->path_separator != '/') {
         owned_display_name = bx_rg_display_path_dup(filename, false, opts->path_separator);
         if (owned_display_name)
             display_name = owned_display_name;

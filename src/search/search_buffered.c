@@ -236,6 +236,13 @@ int bx_search_buffered_opened(FILE *f,
             }
         }
         if (lines[i].match) {
+            struct bx_match bm;
+            size_t match_len = bx_search_record_match_len((unsigned char *)lines[i].text,
+                                                          lines[i].len, opts);
+
+            bx_search_matcher_find_with_opts(
+                m, (unsigned char *)lines[i].text, match_len, 0, opts, &bm
+            );
             if (opts->vimgrep && !opts->invert_match) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 bx_search_print_vimgrep_matches(
@@ -244,16 +251,11 @@ int bx_search_buffered_opened(FILE *f,
                     i + 1, lines[i].byte_offset, m, opts);
             } else if (opts->only_matching && !opts->invert_match) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                bx_search_print_only_matches(
+                bx_search_print_only_matches_from_first(
                     (unsigned char *)lines[i].text, lines[i].len,
                     heading_printed_for_file ? NULL : display_name,
-                    i + 1, lines[i].byte_offset, m, opts);
+                    i + 1, lines[i].byte_offset, m, &bm, opts);
             } else {
-                struct bx_match bm;
-                bx_search_matcher_find_with_opts(
-                    m, (unsigned char *)lines[i].text,
-                    bx_search_record_match_len((unsigned char *)lines[i].text, lines[i].len, opts),
-                    0, opts, &bm);
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 bool prefix_printed = bx_search_print_result_prefix(
                     heading_printed_for_file ? NULL : display_name,

@@ -64,9 +64,9 @@ bool bx_search_scanner_can_use(const struct bx_matcher *m,
                                bool use_stdin) {
     if (!m || !opts || use_stdin)
         return false;
-    if (!opts->recursive || opts->multiline || opts->invert_match)
+    if (opts->multiline || opts->invert_match)
         return false;
-    if (bx_search_plan_needs_line_buffering(opts) || opts->replace || opts->only_matching
+    if (bx_search_plan_needs_line_buffering(opts) || opts->replace
         || opts->passthru || opts->vimgrep) {
         return false;
     }
@@ -161,6 +161,11 @@ int bx_search_scanner_opened(FILE *f,
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     FILE *out = NULL;
     bool output_is_captured = bx_search_stdout_is_captured();
+    bool prefer_memmem_candidates = opts->quiet ||
+        (!heading_enabled &&
+         !opts->show_filename &&
+         !opts->files_with_matches &&
+         !opts->files_without_match);
     char *fast_plain_prefix = NULL;
     size_t fast_plain_prefix_len = 0u;
 
@@ -193,7 +198,9 @@ int bx_search_scanner_opened(FILE *f,
             struct bx_search_candidate candidate;
             struct bx_match bm;
 
-            if (!bx_search_scanner_next_literal_candidate(scanner, literal, &cursor, &candidate))
+            if (!bx_search_scanner_next_literal_candidate(scanner, literal,
+                                                          prefer_memmem_candidates,
+                                                          &cursor, &candidate))
                 break;
 
             if (shortcut_file_presence) {
@@ -282,7 +289,13 @@ int bx_search_scanner_opened(FILE *f,
             if (!out)
                 out = bx_search_output_stream();
 
-            if (can_omit_long_line && (int)record.len > opts->max_columns) {
+            if (opts->only_matching) {
+                bx_search_print_only_matches_from_first(
+                    record.data, record.len,
+                    heading_printed_for_file ? NULL : display_name,
+                    (int)line_num, (size_t)record.file_off, m, &bm, opts
+                );
+            } else if (can_omit_long_line && (int)record.len > opts->max_columns) {
                 bx_search_print_omitted_long_line(opts);
             } else if (fast_plain_line_output) {
                 const char *prefix_name = heading_printed_for_file ? NULL : display_name;

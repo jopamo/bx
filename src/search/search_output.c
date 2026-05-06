@@ -512,27 +512,56 @@ void bx_search_print_only_matches(const unsigned char *line,
                                   size_t byte_offset,
                                   struct bx_matcher *m,
                                   struct search_opts *opts) {
+    bx_search_print_only_matches_from_first(line, len, display_name, line_num,
+                                            byte_offset, m, NULL, opts);
+}
+
+void bx_search_print_only_matches_from_first(const unsigned char *line,
+                                             size_t len,
+                                             const char *display_name,
+                                             int line_num,
+                                             size_t byte_offset,
+                                             struct bx_matcher *m,
+                                             const struct bx_match *first_match,
+                                             struct search_opts *opts) {
     size_t match_len = bx_search_record_match_len(line, len, opts);
     size_t start = 0u;
+    FILE *out = bx_search_output_stream();
+    bool color = bx_color_enabled();
+    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    const char *sep = bx_search_match_field_separator(opts);
+    size_t sep_len = (opts && opts->null_filename) ? 1u : strlen(sep);
+    unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
+    struct bx_match bm = {0};
+    bool have_match = false;
 
-    while (start <= match_len) {
-        struct bx_match bm;
+    if (first_match && first_match->start <= first_match->end &&
+        first_match->end <= match_len) {
+        bm = *first_match;
+        have_match = true;
+    }
 
-        if (bx_search_matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0)
+    while (have_match || start <= match_len) {
+        if (!have_match &&
+            bx_search_matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0) {
             break;
-        bool prefix_printed = bx_search_print_result_prefix(display_name, opts, line_num,
-                                                            bm.start + 1u, true,
-                                                            byte_offset + bm.start,
-                                                            bx_search_match_field_separator(opts));
+        }
+        bool prefix_printed = bx_search_print_result_prefix_cached(display_name, display_name_len,
+                                                                   opts, line_num,
+                                                                   bm.start + 1u, true,
+                                                                   byte_offset + bm.start,
+                                                                   sep, sep_len, out, color);
         bx_search_maybe_emit_initial_tab(opts, prefix_printed);
-        bx_search_fwrite_out(line + bm.start, bm.end - bm.start);
+        bx_search_fwrite_stream(out, line + bm.start, bm.end - bm.start);
         bx_search_stats_count_bytes(bm.end - bm.start);
-        bx_search_write_record_terminator(opts);
+        bx_search_putc_stream(out, delimiter);
+        bx_search_stats_count_bytes(1u);
         bx_search_dev_counters_note_output_line_emitted();
         if (bm.end > bm.start)
             start = bm.end;
         else
             start = bm.start + 1u;
+        have_match = false;
     }
 }
 

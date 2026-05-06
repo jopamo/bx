@@ -173,6 +173,7 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
 
 bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *scanner,
                                               struct bx_literal_matcher *literal,
+                                              bool prefer_memmem_candidates,
                                               size_t *cursor,
                                               struct bx_search_candidate *candidate) {
     if (!scanner || !literal || !cursor || !candidate)
@@ -181,8 +182,13 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
         return false;
 
     size_t candidate_start = 0u;
-    if (!bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len, cursor, &candidate_start))
+    if (!(prefer_memmem_candidates
+              ? bx_literal_next_scanner_candidate(literal, scanner->buf, scanner->scan_len,
+                                                  cursor, &candidate_start)
+              : bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len,
+                                          cursor, &candidate_start))) {
         return false;
+    }
 
     bx_search_dev_counters_note_candidate_hit();
     candidate->chunk_off = candidate_start;
