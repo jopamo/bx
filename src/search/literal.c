@@ -290,6 +290,10 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
     return true;
 }
 
+const char *bx_literal_bytes(const struct bx_literal_matcher *m) {
+    return m ? m->pattern_raw : NULL;
+}
+
 size_t bx_literal_len(const struct bx_literal_matcher *m) {
     return m ? m->plen : 0u;
 }

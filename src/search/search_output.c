@@ -8,6 +8,7 @@
 
 #include "dev_counters.h"
 #include "lib/color.h"
+#include "literal.h"
 #include "pcre2_matcher.h"
 #include "rg_output.h"
 #include "rg_text.h"
@@ -94,6 +95,20 @@ FILE *bx_search_error_output_stream(void) {
     return bx_search_error_stream();
 }
 
+static bool bx_search_stream_is_private(FILE *stream) {
+    if (!current_output_ctx || !stream)
+        return false;
+    if (current_output_ctx->capture_out_buf && current_output_ctx->capture_out_len &&
+        current_output_ctx->out == stream) {
+        return true;
+    }
+    if (current_output_ctx->capture_err_buf && current_output_ctx->capture_err_len &&
+        current_output_ctx->err == stream) {
+        return true;
+    }
+    return false;
+}
+
 bool bx_search_stdout_is_captured(void) {
     return current_output_ctx
         && current_output_ctx->capture_out_buf
@@ -134,7 +149,10 @@ static size_t bx_search_fwrite_stream(FILE *stream, const void *buf, size_t len)
 
     if (!stream || len == 0u)
         return 0u;
-    written = fwrite(buf, 1u, len, stream);
+    if (bx_search_stream_is_private(stream))
+        written = fwrite_unlocked(buf, 1u, len, stream);
+    else
+        written = fwrite(buf, 1u, len, stream);
     if (written > 0u)
         bx_search_note_stdout_output();
     return written;
@@ -172,10 +190,86 @@ static int bx_search_putc_stream(FILE *stream, int ch) {
 
     if (!stream)
         return EOF;
-    rc = fputc(ch, stream);
+    rc = bx_search_stream_is_private(stream) ? putc_unlocked(ch, stream) : fputc(ch, stream);
     if (rc != EOF)
         bx_search_note_stdout_output();
     return rc;
+}
+
+static bool bx_search_only_matching_can_use_exact_literal_fast(
+    const struct bx_literal_matcher *literal,
+    const struct search_opts *opts,
+    bool color
+) {
+    if (!literal || !opts || color)
+        return false;
+    if (opts->word_regexp || opts->line_regexp || opts->trim || opts->initial_tab)
+        return false;
+    if (opts->show_line_number || opts->show_column || opts->show_byte_offset)
+        return false;
+    return bx_literal_candidates_are_exact(literal);
+}
+
+static void bx_search_print_only_matches_exact_literal_fast(
+    const unsigned char *line,
+    size_t len,
+    const char *display_name,
+    struct bx_literal_matcher *literal,
+    const struct bx_match *first_match,
+    struct search_opts *opts,
+    FILE *out
+) {
+    enum { BX_SEARCH_ONLY_MATCHING_STACK_BUF = 512 };
+    const char *literal_bytes = bx_literal_bytes(literal);
+    size_t literal_len = bx_literal_len(literal);
+    size_t match_len = bx_search_record_match_len(line, len, opts);
+    const char *sep = bx_search_match_field_separator(opts);
+    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    size_t sep_len = opts->null_filename ? 1u : strlen(sep);
+    size_t prefix_len = (opts->show_filename && display_name) ? display_name_len + sep_len : 0u;
+    size_t output_len = prefix_len + literal_len + 1u;
+    unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
+    unsigned char stack_buf[BX_SEARCH_ONLY_MATCHING_STACK_BUF];
+    unsigned char *output_buf = stack_buf;
+    struct bx_match bm = {0};
+    size_t start = 0u;
+    bool have_match = false;
+
+    if (!literal_bytes || literal_len == 0u || output_len == 0u)
+        return;
+    if (output_len > sizeof(stack_buf)) {
+        output_buf = malloc(output_len);
+        if (!output_buf)
+            return;
+    }
+
+    if (prefix_len > 0u) {
+        memcpy(output_buf, display_name, display_name_len);
+        if (opts->null_filename)
+            output_buf[display_name_len] = '\0';
+        else
+            memcpy(output_buf + display_name_len, sep, sep_len);
+    }
+    memcpy(output_buf + prefix_len, literal_bytes, literal_len);
+    output_buf[prefix_len + literal_len] = delimiter;
+
+    if (first_match && first_match->start <= first_match->end && first_match->end <= match_len) {
+        bm = *first_match;
+        have_match = true;
+    }
+
+    while (have_match || start <= match_len) {
+        if (!have_match && bx_literal_find(literal, line, match_len, start, &bm) != 0)
+            break;
+        bx_search_fwrite_stream(out, output_buf, output_len);
+        bx_search_stats_count_bytes(output_len);
+        bx_search_dev_counters_note_output_line_emitted();
+        start = bm.end > bm.start ? bm.end : bm.start + 1u;
+        have_match = false;
+    }
+
+    if (output_buf != stack_buf)
+        free(output_buf);
 }
 
 int bx_search_printf_out(const char *fmt, ...) {
@@ -534,11 +628,19 @@ void bx_search_print_only_matches_from_first(const unsigned char *line,
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     struct bx_match bm = {0};
     bool have_match = false;
+    struct bx_literal_matcher *literal = bx_search_matcher_literal(m);
 
     if (first_match && first_match->start <= first_match->end &&
         first_match->end <= match_len) {
         bm = *first_match;
         have_match = true;
+    }
+
+    if (bx_search_only_matching_can_use_exact_literal_fast(literal, opts, color)) {
+        bx_search_print_only_matches_exact_literal_fast(line, len, display_name,
+                                                        literal, have_match ? &bm : NULL,
+                                                        opts, out);
+        return;
     }
 
     while (have_match || start <= match_len) {

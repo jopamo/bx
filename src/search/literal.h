@@ -24,6 +24,7 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
                           size_t len,
                           size_t start,
                           struct bx_match *out);
+const char *bx_literal_bytes(const struct bx_literal_matcher *m);
 size_t bx_literal_len(const struct bx_literal_matcher *m);
 int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size_t len,
                     size_t start, struct bx_match *out);
