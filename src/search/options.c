@@ -1663,7 +1663,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             char *line = NULL; size_t cap = 0;
             while (getline(&line, &cap, pf) != -1) {
                 size_t llen = strlen(line);
-                while (llen > 0 && (line[llen-1] == '\n' || line[llen-1] == '\r'))
+                while (llen > 0 && line[llen-1] == '\n')
                     line[--llen] = '\0';
                 if (opts->num_extra_patterns < 16)
                     opts->extra_patterns[opts->num_extra_patterns++] = strdup(line);

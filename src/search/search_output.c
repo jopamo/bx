@@ -220,38 +220,33 @@ static void bx_search_print_only_matches_exact_literal_fast(
     FILE *out
 ) {
     enum { BX_SEARCH_ONLY_MATCHING_STACK_BUF = 512 };
-    const char *literal_bytes = bx_literal_bytes(literal);
-    size_t literal_len = bx_literal_len(literal);
     size_t match_len = bx_search_record_match_len(line, len, opts);
     const char *sep = bx_search_match_field_separator(opts);
     size_t display_name_len = display_name ? strlen(display_name) : 0u;
     size_t sep_len = opts->null_filename ? 1u : strlen(sep);
     size_t prefix_len = (opts->show_filename && display_name) ? display_name_len + sep_len : 0u;
-    size_t output_len = prefix_len + literal_len + 1u;
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     unsigned char stack_buf[BX_SEARCH_ONLY_MATCHING_STACK_BUF];
-    unsigned char *output_buf = stack_buf;
+    unsigned char *prefix_buf = stack_buf;
     struct bx_match bm = {0};
     size_t start = 0u;
     bool have_match = false;
 
-    if (!literal_bytes || literal_len == 0u || output_len == 0u)
+    if (bx_literal_len(literal) == 0u)
         return;
-    if (output_len > sizeof(stack_buf)) {
-        output_buf = malloc(output_len);
-        if (!output_buf)
+    if (prefix_len > sizeof(stack_buf)) {
+        prefix_buf = malloc(prefix_len);
+        if (!prefix_buf)
             return;
     }
 
     if (prefix_len > 0u) {
-        memcpy(output_buf, display_name, display_name_len);
+        memcpy(prefix_buf, display_name, display_name_len);
         if (opts->null_filename)
-            output_buf[display_name_len] = '\0';
+            prefix_buf[display_name_len] = '\0';
         else
-            memcpy(output_buf + display_name_len, sep, sep_len);
+            memcpy(prefix_buf + display_name_len, sep, sep_len);
     }
-    memcpy(output_buf + prefix_len, literal_bytes, literal_len);
-    output_buf[prefix_len + literal_len] = delimiter;
 
     if (first_match && first_match->start <= first_match->end && first_match->end <= match_len) {
         bm = *first_match;
@@ -259,17 +254,22 @@ static void bx_search_print_only_matches_exact_literal_fast(
     }
 
     while (have_match || start <= match_len) {
+        size_t matched_len;
+
         if (!have_match && bx_literal_find(literal, line, match_len, start, &bm) != 0)
             break;
-        bx_search_fwrite_stream(out, output_buf, output_len);
-        bx_search_stats_count_bytes(output_len);
+        matched_len = bm.end - bm.start;
+        bx_search_fwrite_stream(out, prefix_buf, prefix_len);
+        bx_search_fwrite_stream(out, line + bm.start, matched_len);
+        bx_search_putc_stream(out, delimiter);
+        bx_search_stats_count_bytes(prefix_len + matched_len + 1u);
         bx_search_dev_counters_note_output_line_emitted();
         start = bm.end > bm.start ? bm.end : bm.start + 1u;
         have_match = false;
     }
 
-    if (output_buf != stack_buf)
-        free(output_buf);
+    if (prefix_buf != stack_buf)
+        free(prefix_buf);
 }
 
 int bx_search_printf_out(const char *fmt, ...) {
