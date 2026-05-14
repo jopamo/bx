@@ -1,4 +1,4 @@
-option('tests', type : 'boolean', value : true, description : 'Build and run tests')
+option('tests', type : 'boolean', value : false, description : 'Deprecated: tests moved to the sibling bx-tests Meson project')
 option(
   'static_binary',
   type : 'combo',
