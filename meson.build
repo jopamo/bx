@@ -42,7 +42,7 @@ if static_binary_opt == 'enabled'
 elif static_binary_opt == 'auto'
   if compiler_targets_glibc
     if musl_gcc.found()
-      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup via scripts/dev/meson-setup.sh or CC=musl-gcc.')
+      warning('static_binary=auto: musl-gcc is available but this configure did not select it; using shared linkage. Re-run setup with CC=musl-gcc if you want musl static linkage.')
     endif
   elif static_link_supported
     use_static_binary = true
@@ -1025,7 +1025,7 @@ else
     wrapper_conf.set('BX_PATH', install_bx_path)
     wrapper_conf.set('APPLET', applet)
     wrapper = configure_file(
-      input : 'scripts/dev/applet-shebang.in',
+      input : 'assets/install/applet-shebang.in',
       output : applet,
       configuration : wrapper_conf,
     )
@@ -1064,7 +1064,7 @@ if get_option('install_ls_colors')
     lscolors_install_path
   )
   lscolors_profile = configure_file(
-    input : 'scripts/dev/bx-lscolors-profile.sh.in',
+    input : 'assets/install/bx-lscolors-profile.sh.in',
     output : 'bx-lscolors.sh',
     configuration : lscolors_profile_conf,
   )

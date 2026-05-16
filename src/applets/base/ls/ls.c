@@ -21,6 +21,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -643,54 +644,34 @@ static bool bx_ls_parse_block_size_option(const char* text, struct bx_ls_options
         return false;
     }
 
-    char* end = NULL;
-    errno = 0;
-    unsigned long numeric = strtoul(text, &end, 10);
-    const char* unit_text = end;
-    if (errno != 0) {
-        bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
-        return false;
-    }
-    if (end == text) {
-        numeric = 1ul;
-        unit_text = text;
-    }
-
-    uintmax_t multiplier = 1u;
+    uintmax_t value = 0u;
     const char* suffix = "";
-    if (*unit_text != '\0') {
-        char unit = unit_text[0];
-        bool decimal = false;
-        if (unit_text[1] == 'B' && unit_text[2] == '\0') {
-            decimal = true;
-        }
-        else if (!(unit_text[1] == '\0')) {
+    size_t digits = 0u;
+    char with_default_one[32];
+    const char* parse_text = text;
+
+    while (text[digits] >= '0' && text[digits] <= '9') {
+        digits++;
+    }
+    if (digits == 0u) {
+        if (snprintf(with_default_one, sizeof(with_default_one), "1%s", text) >= (int)sizeof(with_default_one)) {
             bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
             return false;
         }
-
-        const char* units = "KMGTPEZYRQ";
-        const char* pos = strchr(units, unit);
-        if (pos == NULL) {
-            bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
-            return false;
-        }
-
-        unsigned index = (unsigned)(pos - units) + 1u;
-        multiplier = 1u;
-        for (unsigned i = 0; i < index; i++) {
-            multiplier *= decimal ? 1000u : 1024u;
-        }
-        suffix = unit_text;
+        parse_text = with_default_one;
+        suffix = text;
+    }
+    else if (text[digits] != '\0') {
+        suffix = text + digits;
     }
 
-    if (numeric == 0ul) {
+    if (!bx_size_parse_block_size(parse_text, &value)) {
         bx_diag(diag, "invalid argument '%s' for '--block-size'", text);
         return false;
     }
 
     options->block_size_set = true;
-    options->block_size_divisor = (uintmax_t)numeric * multiplier;
+    options->block_size_divisor = value;
     (void)snprintf(options->block_size_suffix, sizeof(options->block_size_suffix), "%s", suffix);
     return true;
 }

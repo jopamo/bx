@@ -335,6 +335,8 @@ static char *search_rewrite_simple_collation_tokens(const char *pattern, char **
 
     if (!pattern)
         return NULL;
+    if (!search_append_pattern_bytes(&rewritten, &len, &cap, NULL, 0u))
+        return NULL;
 
     while (pattern[cursor] != '\0') {
         if (pattern[cursor] == '\\' && pattern[cursor + 1u] != '\0') {
@@ -449,6 +451,8 @@ static char *search_rewrite_gnu_bre_escapes(const char *pattern,
     size_t group_depth = 0u;
 
     if (!pattern)
+        return NULL;
+    if (!search_append_pattern_bytes(&rewritten, &len, &cap, NULL, 0u))
         return NULL;
 
     while (pattern[cursor] != '\0') {
@@ -685,6 +689,8 @@ static char *search_rewrite_gnu_ere_warnings(const char *pattern,
     bool at_expr_start = true;
 
     if (!pattern)
+        return NULL;
+    if (!search_append_pattern_bytes(&rewritten, &len, &cap, NULL, 0u))
         return NULL;
 
     while (pattern[cursor] != '\0') {

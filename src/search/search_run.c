@@ -407,6 +407,15 @@ static bool bx_search_run_compile_matcher(const struct bx_search_run_args *args,
                 if (detail && detail[2] != '\0')
                     message = detail + 2;
             }
+            if (strcmp(message, "Missing ']'") == 0) {
+                message = "Invalid regular expression";
+            }
+            else if (strcmp(message, "Invalid character range") == 0) {
+                message = "Invalid range end";
+            }
+            else if (strcmp(message, "Invalid contents of {}") == 0) {
+                message = "Invalid content of \\{\\}";
+            }
             if (strcmp(compile_error, "the -P option only supports a single pattern") == 0) {
                 fprintf(stderr, "%s: %s\n", args->progname, message);
             } else {
