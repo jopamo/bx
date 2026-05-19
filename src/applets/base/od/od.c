@@ -56,8 +56,7 @@ struct bx_od_format {
     size_t unit_size;
     bool char_suffix;
     size_t intrinsic_width;
-    size_t cell_width;
-    int slot_width;
+    size_t pad_width;
 };
 
 struct bx_od_options {
@@ -80,8 +79,9 @@ struct bx_od_options {
     struct bx_od_format* formats;
     size_t format_count;
     size_t format_capacity;
-    size_t min_unit;
-    int base_slot_width;
+    size_t width_per_block;
+    bool width_warning_pending;
+    uintmax_t width_warning_original;
 };
 
 struct bx_od_operands {
@@ -100,6 +100,7 @@ struct bx_od_input {
     const char* current_name;
     bool current_is_stdin;
     bool retried_current_stdin_error;
+    bool opened_any;
     bool had_error;
     struct bx_diag_ctx* diag;
 };
@@ -136,6 +137,24 @@ static void bx_od_warn(const char* progname, const char* fmt, ...) {
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+}
+
+static void bx_od_maybe_warn_width_adjustment(const struct bx_od_options* options,
+                                              const struct bx_od_input* input,
+                                              bool* warned) {
+    if (options == NULL || input == NULL || warned == NULL) {
+        return;
+    }
+
+    if (*warned || !options->width_warning_pending || !input->opened_any) {
+        return;
+    }
+
+    bx_od_warn(options->progname,
+               "invalid width %ju; using %ju instead",
+               options->width_warning_original,
+               options->width);
+    *warned = true;
 }
 
 static void bx_od_try_help(const struct bx_diag_ctx* diag) {
@@ -221,6 +240,26 @@ static bool bx_od_lcm(uintmax_t a, uintmax_t b, uintmax_t* out) {
     g = bx_od_gcd(a, b);
     reduced = a / g;
     return bx_od_safe_mul(reduced, b, out);
+}
+
+static size_t bx_od_pad_at(size_t fields, size_t i, size_t pad) {
+    size_t whole;
+    size_t rem;
+
+    if (fields == 0u) {
+        return 0u;
+    }
+
+    whole = pad / fields;
+    rem = pad % fields;
+    return whole * i + (rem * i) / fields;
+}
+
+static void bx_od_print_spaces(size_t count) {
+    while (count > 0u) {
+        fputc(' ', stdout);
+        count--;
+    }
 }
 
 static enum bx_od_parse_result bx_od_parse_prefixed_uint(const char* text,
@@ -919,89 +958,80 @@ static bool bx_od_finalize_formats(struct bx_od_options* options, struct bx_diag
 
     for (size_t i = 0u; i < options->format_count; i++) {
         options->formats[i].intrinsic_width = bx_od_intrinsic_width(&options->formats[i]);
-        options->formats[i].cell_width = options->formats[i].intrinsic_width;
-        options->formats[i].slot_width = 0;
+        options->formats[i].pad_width = 0u;
     }
 
-    for (size_t i = 0u; i < options->format_count; i++) {
-        size_t max_width = options->formats[i].intrinsic_width;
-
-        for (size_t j = 0u; j < options->format_count; j++) {
-            if (options->formats[j].unit_size == options->formats[i].unit_size &&
-                options->formats[j].intrinsic_width > max_width) {
-                max_width = options->formats[j].intrinsic_width;
-            }
-        }
-
-        options->formats[i].cell_width = max_width;
-    }
-
-    options->min_unit = 0u;
-    options->base_slot_width = 0;
+    options->width_per_block = 0u;
 
     for (size_t i = 0u; i < options->format_count; i++) {
-        if (options->min_unit == 0u || options->formats[i].unit_size < options->min_unit) {
-            options->min_unit = options->formats[i].unit_size;
-        }
-
         if (!bx_od_lcm(width_multiple, (uintmax_t)options->formats[i].unit_size, &width_multiple)) {
             bx_diag(diag, "invalid line width");
             return false;
         }
     }
 
-    for (size_t i = 0u; i < options->format_count; i++) {
-        size_t ratio = options->formats[i].unit_size / options->min_unit;
-        size_t needed = options->formats[i].cell_width + 1u;
-        size_t base_needed = (needed + ratio - 1u) / ratio;
-
-        if (base_needed > (size_t)INT_MAX) {
-            bx_diag(diag, "invalid line width");
-            return false;
-        }
-
-        if ((int)base_needed > options->base_slot_width) {
-            options->base_slot_width = (int)base_needed;
-        }
-    }
-
-    for (size_t i = 0u; i < options->format_count; i++) {
-        size_t ratio = options->formats[i].unit_size / options->min_unit;
-        size_t slot_width = (size_t)options->base_slot_width * ratio;
-
-        if (slot_width > (size_t)INT_MAX) {
-            bx_diag(diag, "invalid line width");
-            return false;
-        }
-
-        options->formats[i].slot_width = (int)slot_width;
-    }
-
     if (!options->width_specified) {
         if (options->width < width_multiple) {
             options->width = width_multiple;
         }
-        return true;
+        else if (width_multiple > 0u) {
+            options->width -= options->width % width_multiple;
+        }
     }
-
-    if (options->width == 0u) {
+    else if (options->width == 0u) {
         bx_diag(diag, "invalid %s argument '%ju'", options->width_option_name, options->width);
         return false;
     }
-
-    adjusted_width = options->width;
-    if (adjusted_width < width_multiple) {
-        adjusted_width = width_multiple;
-    }
-    else if (adjusted_width % width_multiple != 0u) {
-        adjusted_width -= adjusted_width % width_multiple;
-    }
-
-    if (adjusted_width != options->width) {
-        if (!(options->read_bytes_set && options->read_bytes == 0u)) {
-            bx_od_warn(options->progname, "invalid width %ju; using %ju instead", options->width, adjusted_width);
+    else {
+        adjusted_width = options->width;
+        if (adjusted_width < width_multiple || adjusted_width % width_multiple != 0u) {
+            adjusted_width = width_multiple;
         }
-        options->width = adjusted_width;
+
+        if (adjusted_width != options->width) {
+            options->width_warning_pending = true;
+            options->width_warning_original = options->width;
+            options->width = adjusted_width;
+        }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        size_t fields_per_block = (size_t)(options->width / options->formats[i].unit_size);
+        size_t block_width;
+
+        if (fields_per_block == 0u) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        if (fields_per_block > 1u && fields_per_block - 1u > SIZE_MAX / (fields_per_block - 1u)) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        if (options->formats[i].intrinsic_width > SIZE_MAX - 1u ||
+            fields_per_block > SIZE_MAX / (options->formats[i].intrinsic_width + 1u)) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        block_width = (options->formats[i].intrinsic_width + 1u) * fields_per_block;
+        if (block_width > options->width_per_block) {
+            options->width_per_block = block_width;
+        }
+    }
+
+    for (size_t i = 0u; i < options->format_count; i++) {
+        size_t fields_per_block = (size_t)(options->width / options->formats[i].unit_size);
+        size_t block_width;
+
+        if (fields_per_block > 0u && options->formats[i].intrinsic_width > SIZE_MAX / fields_per_block) {
+            bx_diag(diag, "invalid line width");
+            return false;
+        }
+
+        block_width = options->formats[i].intrinsic_width * fields_per_block;
+        options->formats[i].pad_width = options->width_per_block - block_width;
     }
 
     return true;
@@ -1431,6 +1461,10 @@ static void bx_od_input_init(struct bx_od_input* input,
     input->diag = diag;
 }
 
+static bool bx_od_input_opened_any(const struct bx_od_input* input) {
+    return input != NULL && input->opened_any;
+}
+
 static bool bx_od_operands_are_stdin_only(const struct bx_od_operands* operands) {
     if (operands->file_count == 0u) {
         return true;
@@ -1452,6 +1486,7 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
             input->current_name = "-";
             input->current_is_stdin = true;
             input->retried_current_stdin_error = false;
+            input->opened_any = true;
             input->next_index = 1u;
             return true;
         }
@@ -1465,6 +1500,7 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
             input->current_fd = STDIN_FILENO;
             input->current_is_stdin = true;
             input->retried_current_stdin_error = false;
+            input->opened_any = true;
             return true;
         }
 
@@ -1472,6 +1508,7 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
         if (input->current_fd >= 0) {
             input->current_is_stdin = false;
             input->retried_current_stdin_error = false;
+            input->opened_any = true;
             return true;
         }
 
@@ -1524,6 +1561,22 @@ static size_t bx_od_input_read(struct bx_od_input* input, unsigned char* buffer,
 
 static bool bx_od_input_had_error(const struct bx_od_input* input) {
     return input != NULL && input->had_error;
+}
+
+static void bx_od_input_prime_zero_read(struct bx_od_input* input, const struct bx_od_options* options) {
+    if (input == NULL || options == NULL) {
+        return;
+    }
+
+    if (!(options->read_bytes_set && options->read_bytes == 0u)) {
+        return;
+    }
+
+    if (input->current_fd >= 0) {
+        return;
+    }
+
+    (void)bx_od_input_open_next(input);
 }
 
 static bool bx_od_input_skip(struct bx_od_input* input, uintmax_t count, bool try_seek_stdin) {
@@ -1780,7 +1833,15 @@ static bool bx_od_double_bits_equal(double a, double b) {
 }
 
 static bool bx_od_long_double_bits_equal(long double a, long double b) {
-    return memcmp(&a, &b, sizeof(a)) == 0;
+    if (isnan(a) || isnan(b)) {
+        return false;
+    }
+
+    if (a == b) {
+        return a != 0.0L || signbit(a) == signbit(b);
+    }
+
+    return false;
 }
 
 static void bx_od_format_shortest_float(float value, char* out, size_t out_size) {
@@ -2060,19 +2121,23 @@ static bool bx_od_print_block(const struct bx_od_options* options,
 
     for (size_t i = 0u; i < options->format_count; i++) {
         const struct bx_od_format* format = &options->formats[i];
-        size_t printed_units = 0u;
+        size_t fields = (size_t)(options->width / format->unit_size);
+        size_t blank_fields = ((size_t)options->width - size) / format->unit_size;
+        size_t field_index = 0u;
+        size_t pad_remaining = format->pad_width;
 
         if (i == 0u) {
             fputs(prefix, stdout);
         }
         else {
-            for (size_t j = 0u; j < prefix_len; j++) {
-                fputc(' ', stdout);
-            }
+            bx_od_print_spaces(prefix_len);
         }
 
-        for (size_t pos = 0u; pos < size; pos += format->unit_size) {
+        for (size_t field = fields; field > blank_fields; field--) {
+            size_t pos = field_index * format->unit_size;
             size_t bytes_available = format->unit_size;
+            size_t next_pad;
+            size_t adjusted_width;
 
             if (bytes_available > size - pos) {
                 bytes_available = size - pos;
@@ -2082,17 +2147,25 @@ static bool bx_od_print_block(const struct bx_od_options* options,
                 return false;
             }
 
-            printf("%*s", format->slot_width, token);
-            printed_units++;
+            next_pad = bx_od_pad_at(fields, field - 1u, format->pad_width);
+            adjusted_width = (pad_remaining - next_pad) + format->intrinsic_width;
+            if (adjusted_width > (size_t)INT_MAX) {
+                return false;
+            }
+
+            printf("%*s", (int)adjusted_width, token);
+            pad_remaining = next_pad;
+            field_index++;
         }
 
         if (format->char_suffix) {
-            size_t full_units = (size_t)(options->width / format->unit_size);
-
-            while (printed_units < full_units) {
-                printf("%*s", format->slot_width, "");
-                printed_units++;
+            if (blank_fields > 0u) {
+                if (format->intrinsic_width > 0u && blank_fields > SIZE_MAX / format->intrinsic_width) {
+                    return false;
+                }
+                bx_od_print_spaces(blank_fields * format->intrinsic_width);
             }
+            bx_od_print_spaces(pad_remaining);
             bx_od_print_ascii_trailer(buffer, size);
         }
 
@@ -2123,6 +2196,7 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
     size_t previous_size = 0u;
     bool previous_valid = false;
     bool suppressed = false;
+    bool width_warning_emitted = false;
     uintmax_t dumped = 0u;
     uintmax_t address = operands->offset;
     uintmax_t label = operands->label;
@@ -2139,6 +2213,9 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
         return false;
     }
 
+    bx_od_input_prime_zero_read(&input, options);
+    bx_od_maybe_warn_width_adjustment(options, &input, &width_warning_emitted);
+
     while (true) {
         size_t to_read = (size_t)options->width;
         size_t nread;
@@ -2154,6 +2231,7 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
         }
 
         nread = bx_od_input_read(&input, buffer, to_read);
+        bx_od_maybe_warn_width_adjustment(options, &input, &width_warning_emitted);
         if (nread == 0u) {
             break;
         }
@@ -2192,7 +2270,9 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
     }
 
     bx_od_input_close_current(&input);
-    bx_od_print_final_line(options, address, operands->have_label, label);
+    if (dumped > 0u || bx_od_input_opened_any(&input)) {
+        bx_od_print_final_line(options, address, operands->have_label, label);
+    }
     free(buffer);
     free(previous);
     return true;
@@ -2221,6 +2301,7 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
     size_t string_cap = 0u;
     size_t string_len = 0u;
     bool in_string = false;
+    bool width_warning_emitted = false;
     uintmax_t string_start = operands->offset;
     uintmax_t position = operands->offset;
     uintmax_t remaining = options->read_bytes_set ? options->read_bytes : UINTMAX_MAX;
@@ -2236,6 +2317,9 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
         return false;
     }
 
+    bx_od_input_prime_zero_read(&input, options);
+    bx_od_maybe_warn_width_adjustment(options, &input, &width_warning_emitted);
+
     while (remaining > 0u) {
         size_t to_read = sizeof(chunk);
         size_t nread;
@@ -2245,6 +2329,7 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
         }
 
         nread = bx_od_input_read(&input, chunk, to_read);
+        bx_od_maybe_warn_width_adjustment(options, &input, &width_warning_emitted);
         if (nread == 0u) {
             break;
         }
