@@ -903,7 +903,7 @@ static int matcher_find(struct bx_matcher *m,
             if (bx_literal_find(m->literal_set.items[i], buf, len, start, &candidate) != 0)
                 continue;
             if (!found || candidate.start < best.start ||
-                (candidate.start == best.start && candidate.end < best.end)) {
+                (candidate.start == best.start && candidate.end > best.end)) {
                 best = candidate;
                 found = true;
             }
@@ -1134,6 +1134,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
                 free(m);
                 goto fail;
             }
+            m->kind = MATCHER_LITERAL_SET;
 
             if (bx_literal_compile(&m->literal_set.items[0], final_pattern,
                                    (flags & BX_REGEX_ICASE) != 0,
@@ -1226,6 +1227,8 @@ struct bx_matcher *bx_search_compile_matcher(const char *pattern,
 bool bx_search_matcher_is_scanner_literal_eligible(const struct bx_matcher *m,
                                                    const struct search_opts *opts) {
     if (!m || !opts || m->kind != MATCHER_LITERAL)
+        return false;
+    if (bx_literal_len(m->literal) == 0u)
         return false;
     return !bx_literal_contains_byte(m->literal,
                                      (unsigned char)bx_search_record_delimiter(opts));

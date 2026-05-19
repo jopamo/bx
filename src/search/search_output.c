@@ -648,6 +648,11 @@ void bx_search_print_only_matches_from_first(const unsigned char *line,
             bx_search_matcher_find_with_opts(m, line, match_len, start, opts, &bm) != 0) {
             break;
         }
+        if (bm.end == bm.start) {
+            start = bm.start + 1u;
+            have_match = false;
+            continue;
+        }
         bool prefix_printed = bx_search_print_result_prefix_cached(display_name, display_name_len,
                                                                    opts, line_num,
                                                                    bm.start + 1u, true,

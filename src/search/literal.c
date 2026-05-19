@@ -24,8 +24,6 @@ struct bx_literal_matcher {
 int bx_literal_compile(struct bx_literal_matcher **out, const char *pattern, bool ignore_case,
                        bool locale_utf8_upper) {
     size_t plen = strlen(pattern);
-    if (plen == 0)
-        return -1;
 
     struct bx_literal_matcher *m = calloc(1, sizeof(*m));
     if (!m) return -1;
@@ -109,7 +107,15 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
                                   size_t len,
                                   size_t start,
                                   struct bx_match *out) {
-    if (start >= len || m->plen == 0)
+    if (m->plen == 0u) {
+        if (start > len)
+            return -1;
+        out->start = start;
+        out->end = start;
+        return 0;
+    }
+
+    if (start >= len)
         return -1;
 
     if (m->ignore_case) {
@@ -265,8 +271,16 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
                           size_t len,
                           size_t start,
                           struct bx_match *out) {
-    if (!m || !buf || start > len || m->plen == 0u)
+    if (!m || !buf || start > len)
         return false;
+
+    if (m->plen == 0u) {
+        if (out) {
+            out->start = start;
+            out->end = start;
+        }
+        return true;
+    }
 
     if (m->ignore_case) {
         if (m->locale_utf8_upper)
@@ -315,7 +329,7 @@ int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size
 }
 
 bool bx_literal_candidates_are_exact(const struct bx_literal_matcher *m) {
-    return m && !m->has_anchor && !m->locale_utf8_upper;
+    return m && m->plen > 0u && !m->has_anchor && !m->locale_utf8_upper;
 }
 
 bool bx_literal_contains_byte(const struct bx_literal_matcher *m, unsigned char byte) {

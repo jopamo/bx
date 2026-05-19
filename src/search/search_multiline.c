@@ -131,6 +131,12 @@ int bx_search_multiline_buffer(unsigned char *buf,
 
         size_t line_num = bx_search_multiline_line_number_for_offset(buf, bm.start);
         if (opts->only_matching && !opts->invert_match) {
+            if (bm.end == bm.start) {
+                if (opts->max_count > 0 && file_matches >= opts->max_count)
+                    break;
+                start = bm.start + 1u;
+                continue;
+            }
             bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
             bool prefix_printed = bx_search_print_result_prefix(
                 heading_printed_for_file ? NULL : display_name,
