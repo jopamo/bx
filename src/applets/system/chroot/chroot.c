@@ -608,6 +608,7 @@ int bx_chroot_main(int argc, char** argv) {
 
     if (options.skip_chdir && !bx_chroot_newroot_is_old_root(options.newroot)) {
         bx_diag(&diag, "option --skip-chdir only permitted if NEWROOT is old '/'");
+        bx_cli_print_try_help(options.progname);
         goto out;
     }
 
