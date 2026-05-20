@@ -184,7 +184,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+i:t:r:hV", long_options, NULL);
+        int c = getopt_long(argc, argv, "+:i:t:r:hV", long_options, NULL);
         if (c == -1) {
             break;
         }
