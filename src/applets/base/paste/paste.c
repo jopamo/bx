@@ -212,11 +212,22 @@ static void paste_serial(int num_files, char** filenames, struct bx_paste_option
 static void paste_parallel(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
     FILE** files = xmalloc(num_files * sizeof(FILE*));
     bool* is_stdio = xmalloc(num_files * sizeof(bool));
+    bool open_failed = false;
     for (int i = 0; i < num_files; i++) {
         files[i] = bx_fopen_dash(filenames[i], "r", &is_stdio[i]);
         if (!files[i]) {
             bx_diag(diag, "%s: %s", filenames[i], strerror(errno));
+            open_failed = true;
         }
+    }
+
+    if (open_failed) {
+        for (int i = 0; i < num_files; i++) {
+            bx_fclose_nonstdio(files[i], is_stdio[i]);
+        }
+        free(files);
+        free(is_stdio);
+        return;
     }
 
     int delimiter = options->zero_terminated ? '\0' : '\n';
