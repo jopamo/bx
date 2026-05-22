@@ -261,6 +261,7 @@ int bx_pathchk_main(int argc, char** argv) {
     int first_operand = 0;
 
     if (!bx_pathchk_parse_options(argc, argv, &options, &first_operand, &diag)) {
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
@@ -277,6 +278,7 @@ int bx_pathchk_main(int argc, char** argv) {
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
         bx_diag(&diag, "missing operand");
+        bx_cli_print_try_help(options.progname);
         return diag.exit_status;
     }
 
