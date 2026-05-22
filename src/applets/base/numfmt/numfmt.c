@@ -1,20 +1,28 @@
+#include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <math.h>
-#include <limits.h>
-#include <locale.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 enum unit_type { UNIT_NONE, UNIT_SI, UNIT_IEC, UNIT_IEC_I, UNIT_AUTO };
+
+enum bx_numfmt_parse_status {
+    BX_NUMFMT_PARSE_OK = 0,
+    BX_NUMFMT_PARSE_ERROR = 1,
+    BX_NUMFMT_PARSE_ERROR_TRY_HELP = 2,
+};
 
 struct bx_numfmt_options {
     const char* progname;
@@ -63,30 +71,130 @@ static void bx_numfmt_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "               1Ki = 1024, 1Mi = 1048576, ...\n");
 }
 
-static enum unit_type parse_unit(const char* str, struct bx_diag_ctx* diag) {
-    if (strcmp(str, "none") == 0)
-        return UNIT_NONE;
-    if (strcmp(str, "si") == 0)
-        return UNIT_SI;
-    if (strcmp(str, "iec") == 0)
-        return UNIT_IEC;
-    if (strcmp(str, "iec-i") == 0)
-        return UNIT_IEC_I;
-    if (strcmp(str, "auto") == 0)
-        return UNIT_AUTO;
+static bool bx_numfmt_parse_unit(const char* str, enum unit_type* unit_out, struct bx_diag_ctx* diag) {
+    if (strcmp(str, "none") == 0) {
+        *unit_out = UNIT_NONE;
+        return true;
+    }
+    if (strcmp(str, "si") == 0) {
+        *unit_out = UNIT_SI;
+        return true;
+    }
+    if (strcmp(str, "iec") == 0) {
+        *unit_out = UNIT_IEC;
+        return true;
+    }
+    if (strcmp(str, "iec-i") == 0) {
+        *unit_out = UNIT_IEC_I;
+        return true;
+    }
+    if (strcmp(str, "auto") == 0) {
+        *unit_out = UNIT_AUTO;
+        return true;
+    }
+
     bx_diag(diag, "invalid unit: '%s'", str);
-    return UNIT_NONE;
+    return false;
 }
 
-static bool bx_numfmt_parse_options(int argc, char** argv, struct bx_numfmt_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+static bool bx_numfmt_parse_padding(const char* text, int* value_out, struct bx_diag_ctx* diag) {
+    intmax_t parsed = 0;
+    if (!bx_size_parse_signed_count(text, &parsed) || parsed < INT_MIN || parsed > INT_MAX) {
+        bx_diag(diag, "invalid padding value '%s'", text);
+        return false;
+    }
+
+    *value_out = (int)parsed;
+    return true;
+}
+
+static bool bx_numfmt_parse_header_count(const char* text, int* value_out, struct bx_diag_ctx* diag) {
+    uintmax_t parsed = 0;
+    if (!bx_size_parse_uint(text, &parsed) || parsed > INT_MAX) {
+        bx_diag(diag, "invalid header value '%s'", text);
+        return false;
+    }
+
+    *value_out = (int)parsed;
+    return true;
+}
+
+static bool bx_numfmt_parse_field_index(const char* text, int* value_out, struct bx_diag_ctx* diag) {
+    uintmax_t parsed = 0;
+    if (!bx_size_parse_uint(text, &parsed) || parsed == 0 || parsed > INT_MAX) {
+        bx_diag(diag, "field value must be a positive integer: '%s'", text);
+        return false;
+    }
+
+    *value_out = (int)parsed;
+    return true;
+}
+
+static bool bx_numfmt_long_option_requires_arg(const char* arg) {
+    static const char* required[] = {
+        "--from",
+        "--to",
+        "--padding",
+        "--field",
+        "--delimiter",
+        "--suffix",
+        "--format",
+    };
+
+    for (size_t i = 0; i < (sizeof(required) / sizeof(required[0])); i++) {
+        if (strcmp(arg, required[i]) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static const char* bx_numfmt_missing_arg_name(int opt_value) {
+    switch (opt_value) {
+        case 1:
+            return "--from";
+        case 2:
+            return "--to";
+        case 3:
+            return "--padding";
+        case 5:
+            return "--field";
+        case 6:
+            return "--delimiter";
+        case 7:
+            return "--suffix";
+        case 8:
+            return "--format";
+        default:
+            return NULL;
+    }
+}
+
+static enum bx_numfmt_parse_status bx_numfmt_parse_options(
+    int argc,
+    char** argv,
+    struct bx_numfmt_options* options,
+    int* first_operand,
+    struct bx_diag_ctx* diag
+) {
     static const struct option long_options[] = {
-        {"from", required_argument, NULL, 1},  {"to", required_argument, NULL, 2},        {"padding", required_argument, NULL, 3}, {"header", optional_argument, NULL, 4},
-        {"field", required_argument, NULL, 5}, {"delimiter", required_argument, NULL, 6}, {"suffix", required_argument, NULL, 7},  {"format", required_argument, NULL, 8},
-        {"grouping", no_argument, NULL, 9},    {"help", no_argument, NULL, 10},           {"version", no_argument, NULL, 11},      {NULL, 0, NULL, 0},
+        {"from", required_argument, NULL, 1},
+        {"to", required_argument, NULL, 2},
+        {"padding", required_argument, NULL, 3},
+        {"header", optional_argument, NULL, 4},
+        {"field", required_argument, NULL, 5},
+        {"delimiter", required_argument, NULL, 6},
+        {"suffix", required_argument, NULL, 7},
+        {"format", required_argument, NULL, 8},
+        {"grouping", no_argument, NULL, 9},
+        {"help", no_argument, NULL, 10},
+        {"version", no_argument, NULL, 11},
+        {NULL, 0, NULL, 0},
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = "numfmt";
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "numfmt");
     options->field = 1;
     diag->progname = options->progname;
 
@@ -96,26 +204,45 @@ static bool bx_numfmt_parse_options(int argc, char** argv, struct bx_numfmt_opti
     while (true) {
         int option_index = 0;
         int c = getopt_long(argc, argv, "", long_options, &option_index);
-        if (c == -1)
+        if (c == -1) {
             break;
+        }
 
         switch (c) {
             case 1:
-                options->from_unit = parse_unit(optarg, diag);
+                if (!bx_numfmt_parse_unit(optarg, &options->from_unit, diag)) {
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 break;
             case 2:
-                options->to_unit = parse_unit(optarg, diag);
+                if (!bx_numfmt_parse_unit(optarg, &options->to_unit, diag)) {
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 break;
             case 3:
-                options->padding = atoi(optarg);
+                if (!bx_numfmt_parse_padding(optarg, &options->padding, diag)) {
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 break;
             case 4:
-                options->header = optarg ? atoi(optarg) : 1;
+                if (optarg == NULL) {
+                    options->header = 1;
+                    break;
+                }
+                if (!bx_numfmt_parse_header_count(optarg, &options->header, diag)) {
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 break;
             case 5:
-                options->field = atoi(optarg);
+                if (!bx_numfmt_parse_field_index(optarg, &options->field, diag)) {
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 break;
             case 6:
+                if (optarg[0] == '\0' || optarg[1] != '\0') {
+                    bx_diag(diag, "delimiter must be a single character: '%s'", optarg);
+                    return BX_NUMFMT_PARSE_ERROR;
+                }
                 options->delimiter = optarg[0];
                 break;
             case 7:
@@ -129,114 +256,325 @@ static bool bx_numfmt_parse_options(int argc, char** argv, struct bx_numfmt_opti
                 break;
             case 10:
                 options->show_help = true;
-                return true;
+                return BX_NUMFMT_PARSE_OK;
             case 11:
                 options->show_version = true;
-                return true;
-            case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
+                return BX_NUMFMT_PARSE_OK;
+            case '?': {
+                const char* missing_name = bx_numfmt_missing_arg_name(optopt);
+                if (missing_name != NULL) {
+                    bx_diag(diag, "option requires an argument -- '%s'", missing_name);
+                    return BX_NUMFMT_PARSE_ERROR_TRY_HELP;
+                }
+                if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
+                    const char* current = argv[optind - 1];
+                    if (strncmp(current, "--", 2) == 0 && bx_numfmt_long_option_requires_arg(current)) {
+                        bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
+                    }
+                    else {
+                        bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
+                    }
+                }
+                else {
+                    bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
+                }
+                return BX_NUMFMT_PARSE_ERROR_TRY_HELP;
+            }
             default:
-                return false;
+                return BX_NUMFMT_PARSE_ERROR;
         }
     }
 
     *first_operand = optind;
+    return BX_NUMFMT_PARSE_OK;
+}
+
+static bool bx_numfmt_is_field_space(unsigned char ch) {
+    return ch != '\n' && isspace(ch);
+}
+
+static bool bx_numfmt_parse_suffix(const char* suffix, enum unit_type from, double* value_out) {
+    if (suffix == NULL || suffix[0] == '\0') {
+        return true;
+    }
+
+    if (from == UNIT_NONE) {
+        return false;
+    }
+
+    char unit_char = (char)toupper((unsigned char)suffix[0]);
+    const char* units = "KMGTPEZY";
+    const char* pos = strchr(units, unit_char);
+    if (pos == NULL) {
+        return false;
+    }
+
+    bool has_i = false;
+    const char* rest = suffix + 1;
+    if (*rest == 'i' || *rest == 'I') {
+        has_i = true;
+        rest++;
+    }
+
+    if (*rest != '\0') {
+        return false;
+    }
+
+    if (from == UNIT_SI && has_i) {
+        return false;
+    }
+    if (from == UNIT_IEC_I && !has_i) {
+        return false;
+    }
+
+    int exponent = (int)(pos - units) + 1;
+    double base;
+    if (from == UNIT_AUTO) {
+        base = has_i ? 1024.0 : 1000.0;
+    }
+    else if (from == UNIT_SI) {
+        base = 1000.0;
+    }
+    else {
+        base = 1024.0;
+    }
+
+    *value_out *= pow(base, exponent);
     return true;
 }
 
-static double parse_number(const char* str, enum unit_type from, struct bx_diag_ctx* diag) {
-    char* endptr;
-    double val = strtod(str, &endptr);
-    if (endptr == str) {
-        bx_diag(diag, "invalid number: '%s'", str);
+static double bx_numfmt_parse_number_text(
+    const char* text,
+    size_t len,
+    const struct bx_numfmt_options* options,
+    struct bx_diag_ctx* diag,
+    bool* ok_out
+) {
+    *ok_out = false;
+
+    char* scratch = xmalloc(len + 1);
+    memcpy(scratch, text, len);
+    scratch[len] = '\0';
+
+    if (options->suffix != NULL) {
+        size_t suffix_len = strlen(options->suffix);
+        if (len >= suffix_len && memcmp(scratch + len - suffix_len, options->suffix, suffix_len) == 0) {
+            scratch[len - suffix_len] = '\0';
+        }
+    }
+
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(scratch, &end);
+    if (end == scratch) {
+        bx_diag(diag, "invalid number: '%s'", scratch);
+        free(scratch);
         return NAN;
     }
 
-    if (*endptr != '\0') {
-        const char* s = endptr;
-        double factor = 1.0;
-        double base = (from == UNIT_SI) ? 1000.0 : 1024.0;
-
-        const char* units = "KMGTP EZY";
-        const char* p = strchr(units, toupper((unsigned char)*s));
-        if (p) {
-            int exp = (int)(p - units) + 1;
-            factor = pow(base, exp);
-            s++;
-            if (from == UNIT_IEC_I || from == UNIT_AUTO) {
-                if (*s == 'i')
-                    s++;
-            }
-        }
-        val *= factor;
+    if (*end != '\0' && !bx_numfmt_parse_suffix(end, options->from_unit, &value)) {
+        bx_diag(diag, "invalid number: '%s'", scratch);
+        free(scratch);
+        return NAN;
     }
-    return val;
+
+    free(scratch);
+    *ok_out = true;
+    return value;
 }
 
-static void print_with_padding(const char* str, int padding) {
-    if (padding > 0)
-        printf("%*s", padding, str);
-    else if (padding < 0)
-        printf("%-*s", -padding, str);
-    else
-        printf("%s", str);
-}
+static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, int exponent) {
+    static const char* si_units[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y"};
+    static const char* iec_units[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y"};
+    static const char* iec_i_units[] = {"", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi"};
 
-static void format_number(double val, struct bx_numfmt_options* options) {
-    char buf[128];
-    if (options->to_unit == UNIT_NONE) {
-        if (options->format)
-            sprintf(buf, options->format, val);
-        else
-            sprintf(buf, "%.0f", val);
-        print_with_padding(buf, options->padding);
+    if (exponent < 0) {
+        exponent = 0;
     }
-    else {
-        double base = (options->to_unit == UNIT_SI) ? 1000.0 : 1024.0;
-        const char* units = " KMGTP EZY";
-        int exp = 0;
-        if (val >= base || val <= -base) {
-            exp = (int)(log(fabs(val)) / log(base));
-            if (exp > 8)
-                exp = 8;
-            val /= pow(base, exp);
-        }
+    if (exponent > 8) {
+        exponent = 8;
+    }
 
-        if (options->format)
-            sprintf(buf, options->format, val);
-        else
-            sprintf(buf, "%.1f", val);
-
-        if (units[exp] != ' ') {
-            size_t len = strlen(buf);
-            buf[len] = units[exp];
-            if (options->to_unit == UNIT_IEC_I) {
-                buf[len + 1] = 'i';
-                buf[len + 2] = '\0';
-            }
-            else {
-                buf[len + 1] = '\0';
-            }
-        }
-        print_with_padding(buf, options->padding);
+    switch (to_unit) {
+        case UNIT_SI:
+            return si_units[exponent];
+        case UNIT_IEC:
+            return iec_units[exponent];
+        case UNIT_IEC_I:
+            return iec_i_units[exponent];
+        case UNIT_AUTO:
+            return si_units[exponent];
+        case UNIT_NONE:
+        default:
+            return "";
     }
 }
 
-static void process_line(char* line, struct bx_numfmt_options* options, struct bx_diag_ctx* diag) {
-    if (options->field == 1 && options->delimiter == 0) {
-        double val = parse_number(line, options->from_unit, diag);
-        if (!isnan(val)) {
-            format_number(val, options);
-            printf("\n");
+static char* bx_numfmt_format_number(double value, const struct bx_numfmt_options* options) {
+    char number_buf[256];
+    double scaled = value;
+    int exponent = 0;
+
+    if (options->to_unit != UNIT_NONE) {
+        double base = (options->to_unit == UNIT_IEC || options->to_unit == UNIT_IEC_I) ? 1024.0 : 1000.0;
+        while (fabs(scaled) >= base && exponent < 8) {
+            scaled /= base;
+            exponent++;
+        }
+    }
+
+    const char* format = options->format;
+    if (format == NULL) {
+        if (options->to_unit == UNIT_NONE) {
+            format = options->grouping ? "%'.0f" : "%.0f";
         }
         else {
-            printf("%s", line);
+            format = options->grouping ? "%'.1f" : "%.1f";
+        }
+    }
+
+    snprintf(number_buf, sizeof(number_buf), format, scaled);
+
+    const char* unit = bx_numfmt_output_unit_label(options->to_unit, exponent);
+    size_t suffix_len = (options->suffix != NULL) ? strlen(options->suffix) : 0;
+    size_t total_len = strlen(number_buf) + strlen(unit) + suffix_len;
+
+    char* unpadded = xmalloc(total_len + 1);
+    strcpy(unpadded, number_buf);
+    strcat(unpadded, unit);
+    if (options->suffix != NULL) {
+        strcat(unpadded, options->suffix);
+    }
+
+    size_t width = strlen(unpadded);
+    size_t target_width = width;
+    int abs_padding = (options->padding < 0) ? -options->padding : options->padding;
+    if (abs_padding > 0 && (size_t)abs_padding > target_width) {
+        target_width = (size_t)abs_padding;
+    }
+
+    char* padded = xmalloc(target_width + 1);
+    if ((size_t)abs_padding <= width || options->padding == 0) {
+        memcpy(padded, unpadded, width + 1);
+    }
+    else if (options->padding > 0) {
+        size_t pad = target_width - width;
+        memset(padded, ' ', pad);
+        memcpy(padded + pad, unpadded, width + 1);
+    }
+    else {
+        memcpy(padded, unpadded, width);
+        memset(padded + width, ' ', target_width - width);
+        padded[target_width] = '\0';
+    }
+
+    free(unpadded);
+    return padded;
+}
+
+static void bx_numfmt_process_direct_number(
+    const char* text,
+    size_t len,
+    const struct bx_numfmt_options* options,
+    struct bx_diag_ctx* diag
+) {
+    bool ok = false;
+    double value = bx_numfmt_parse_number_text(text, len, options, diag, &ok);
+    if (!ok) {
+        return;
+    }
+
+    char* formatted = bx_numfmt_format_number(value, options);
+    puts(formatted);
+    free(formatted);
+}
+
+static void bx_numfmt_process_line(char* line, const struct bx_numfmt_options* options, struct bx_diag_ctx* diag) {
+    size_t len = strlen(line);
+    bool has_newline = (len > 0 && line[len - 1] == '\n');
+    size_t content_len = has_newline ? (len - 1) : len;
+
+    if (options->field == 1 && options->delimiter == '\0') {
+        bool ok = false;
+        double value = bx_numfmt_parse_number_text(line, content_len, options, diag, &ok);
+        if (!ok) {
+            fputs(line, stdout);
+            return;
+        }
+
+        char* formatted = bx_numfmt_format_number(value, options);
+        fputs(formatted, stdout);
+        if (has_newline) {
+            fputc('\n', stdout);
+        }
+        free(formatted);
+        return;
+    }
+
+    const char* field_start = NULL;
+    const char* field_end = NULL;
+
+    if (options->delimiter != '\0') {
+        const char* p = line;
+        int current_field = 1;
+        field_start = p;
+        while (current_field < options->field) {
+            const char* delim = strchr(field_start, options->delimiter);
+            if (delim == NULL || (has_newline && delim >= line + content_len)) {
+                fputs(line, stdout);
+                return;
+            }
+            field_start = delim + 1;
+            current_field++;
+        }
+
+        field_end = field_start;
+        while (*field_end != '\0' && *field_end != '\n' && *field_end != options->delimiter) {
+            field_end++;
         }
     }
     else {
-        printf("%s", line);
+        const char* p = line;
+        int current_field = 0;
+        while (*p != '\0' && *p != '\n') {
+            while (bx_numfmt_is_field_space((unsigned char)*p)) {
+                p++;
+            }
+            if (*p == '\0' || *p == '\n') {
+                break;
+            }
+
+            current_field++;
+            const char* token_start = p;
+            while (*p != '\0' && *p != '\n' && !bx_numfmt_is_field_space((unsigned char)*p)) {
+                p++;
+            }
+
+            if (current_field == options->field) {
+                field_start = token_start;
+                field_end = p;
+                break;
+            }
+        }
     }
+
+    if (field_start == NULL || field_end == NULL) {
+        fputs(line, stdout);
+        return;
+    }
+
+    bool ok = false;
+    double value = bx_numfmt_parse_number_text(field_start, (size_t)(field_end - field_start), options, diag, &ok);
+    if (!ok) {
+        fputs(line, stdout);
+        return;
+    }
+
+    char* formatted = bx_numfmt_format_number(value, options);
+    fwrite(line, 1, (size_t)(field_start - line), stdout);
+    fputs(formatted, stdout);
+    fputs(field_end, stdout);
+    free(formatted);
 }
 
 int bx_numfmt_main(int argc, char** argv) {
@@ -246,8 +584,15 @@ int bx_numfmt_main(int argc, char** argv) {
 
     setlocale(LC_ALL, "");
 
-    if (!bx_numfmt_parse_options(argc, argv, &options, &first_operand, &diag))
-        return 1;
+    enum bx_numfmt_parse_status parse_status =
+        bx_numfmt_parse_options(argc, argv, &options, &first_operand, &diag);
+    if (parse_status != BX_NUMFMT_PARSE_OK) {
+        if (parse_status == BX_NUMFMT_PARSE_ERROR_TRY_HELP) {
+            bx_cli_print_try_help(options.progname);
+        }
+        return diag.exit_status;
+    }
+
     if (options.show_help) {
         bx_numfmt_print_help(stdout, options.progname);
         return 0;
@@ -260,26 +605,23 @@ int bx_numfmt_main(int argc, char** argv) {
     int num_args = argc - first_operand;
     if (num_args > 0) {
         for (int i = 0; i < num_args; i++) {
-            double val = parse_number(argv[first_operand + i], options.from_unit, &diag);
-            if (!isnan(val))
-                format_number(val, &options);
-            printf("\n");
+            bx_numfmt_process_direct_number(argv[first_operand + i], strlen(argv[first_operand + i]), &options, &diag);
         }
+        return diag.exit_status;
     }
-    else {
-        char* line = NULL;
-        size_t len = 0;
-        int header_count = 0;
-        while (getline(&line, &len, stdin) != -1) {
-            if (header_count < options.header) {
-                printf("%s", line);
-                header_count++;
-                continue;
-            }
-            process_line(line, &options, &diag);
+
+    char* line = NULL;
+    size_t cap = 0;
+    int header_count = 0;
+    while (getline(&line, &cap, stdin) != -1) {
+        if (header_count < options.header) {
+            fputs(line, stdout);
+            header_count++;
+            continue;
         }
-        free(line);
+        bx_numfmt_process_line(line, &options, &diag);
     }
+    free(line);
 
     return diag.exit_status;
 }
