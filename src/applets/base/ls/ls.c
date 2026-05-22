@@ -3826,6 +3826,9 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
 
     if (!bx_ls_parse_options(argc, argv, variant, &options, &first_operand, &diag)) {
         int status = diag.exit_status != 0 ? diag.exit_status : 1;
+        if (status != 0) {
+            bx_cli_print_try_help(diag.progname);
+        }
         bx_ls_options_free(&options);
         return status;
     }
