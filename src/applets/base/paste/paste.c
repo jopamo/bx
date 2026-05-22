@@ -23,6 +23,12 @@ struct bx_paste_options {
     bool show_version;
 };
 
+enum bx_paste_parse_status {
+    BX_PASTE_PARSE_OK = 0,
+    BX_PASTE_PARSE_ERROR = 1,
+    BX_PASTE_PARSE_ERROR_TRY_HELP = 2,
+};
+
 static void bx_paste_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [FILE]...\n", progname);
     fprintf(stream, "Write lines consisting of the sequentially corresponding lines from\n");
@@ -98,7 +104,13 @@ static bool bx_paste_parse_delimiters(const char* spec, struct bx_paste_options*
     return true;
 }
 
-static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_options* options, int* first_operand, struct bx_diag_ctx* diag) {
+static enum bx_paste_parse_status bx_paste_parse_options(
+    int argc,
+    char** argv,
+    struct bx_paste_options* options,
+    int* first_operand,
+    struct bx_diag_ctx* diag
+) {
     static const struct option long_options[] = {
         {"delimiters", required_argument, NULL, 'd'},
         {"serial", no_argument, NULL, 's'},
@@ -109,7 +121,7 @@ static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_option
     };
 
     memset(options, 0, sizeof(*options));
-    options->progname = "paste";
+    options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "paste");
     options->delimiter_spec = "\t";
     diag->progname = options->progname;
 
@@ -134,20 +146,28 @@ static bool bx_paste_parse_options(int argc, char** argv, struct bx_paste_option
                 break;
             case 1:
                 options->show_help = true;
-                return true;
+                return BX_PASTE_PARSE_OK;
             case 2:
                 options->show_version = true;
-                return true;
+                return BX_PASTE_PARSE_OK;
             case '?':
-                bx_diag(diag, "invalid option -- '%c'", optopt);
-                return false;
+                if (optopt == 'd') {
+                    bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
+                }
+                else {
+                    bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
+                }
+                return BX_PASTE_PARSE_ERROR_TRY_HELP;
             default:
-                return false;
+                return BX_PASTE_PARSE_ERROR;
         }
     }
 
     *first_operand = optind;
-    return bx_paste_parse_delimiters(options->delimiter_spec, options, diag);
+    if (!bx_paste_parse_delimiters(options->delimiter_spec, options, diag)) {
+        return BX_PASTE_PARSE_ERROR;
+    }
+    return BX_PASTE_PARSE_OK;
 }
 
 static void bx_paste_emit_delimiter(const struct bx_paste_options* options, size_t index) {
@@ -251,8 +271,14 @@ int bx_paste_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {.progname = "paste", .exit_status = 0};
     int first_operand = 0;
 
-    if (!bx_paste_parse_options(argc, argv, &options, &first_operand, &diag))
+    enum bx_paste_parse_status parse_status =
+        bx_paste_parse_options(argc, argv, &options, &first_operand, &diag);
+    if (parse_status != BX_PASTE_PARSE_OK) {
+        if (parse_status == BX_PASTE_PARSE_ERROR_TRY_HELP) {
+            bx_cli_print_try_help(options.progname);
+        }
         return 1;
+    }
     if (options.show_help) {
         bx_paste_print_help(stdout, options.progname);
         return 0;
