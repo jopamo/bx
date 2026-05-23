@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 typedef struct {
     unsigned long long lines;
@@ -117,8 +118,11 @@ int bx_wc_main(int argc, char** argv) {
     static const struct option long_options[] = {{"bytes", no_argument, NULL, 'c'},           {"chars", no_argument, NULL, 'm'}, {"lines", no_argument, NULL, 'l'},   {"words", no_argument, NULL, 'w'},
                                                   {"max-line-length", no_argument, NULL, 'L'}, {"help", no_argument, NULL, 'h'},  {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
 
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "wc");
+    struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     bool opt_c = false, opt_m = false, opt_l = false, opt_w = false, opt_L = false;
     int c;
+    opterr = 0;
     while ((c = getopt_long(argc, argv, "cmwlL", long_options, NULL)) != -1) {
         switch (c) {
             case 'c':
@@ -137,7 +141,7 @@ int bx_wc_main(int argc, char** argv) {
                 opt_L = true;
                 break;
             case 'h':
-                printf("Usage: %s [OPTION]... [FILE]...\n", argv[0]);
+                printf("Usage: %s [OPTION]... [FILE]...\n", progname);
                 printf("Print newline, word, and byte counts for each FILE, and a total line if\n");
                 printf("more than one FILE is specified.  A word is a non-zero-length sequence of\n");
                 printf("characters delimited by white space.\n");
@@ -151,9 +155,10 @@ int bx_wc_main(int argc, char** argv) {
                 printf("      --version       output version information and exit\n");
                 return 0;
             case 'v':
-                printf("wc (bx) %s\n", BX_VERSION);
+                bx_cli_print_version(progname);
                 return 0;
             default:
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 return 1;
         }
     }
@@ -191,8 +196,6 @@ int bx_wc_main(int argc, char** argv) {
     wc_counts_t* counts = malloc((size_t)num_files * sizeof(wc_counts_t));
     bool* file_ok = malloc((size_t)num_files * sizeof(bool));
     int ncounts = 0;
-    bool had_error = false;
-
     for (int i = 0; i < num_files; i++) {
         const char* name = argv[optind + i];
         FILE* f;
@@ -202,8 +205,7 @@ int bx_wc_main(int argc, char** argv) {
         else {
             f = fopen(name, "r");
             if (!f) {
-                fprintf(stderr, "%s: %s: %s\n", argv[0], name, strerror(errno));
-                had_error = true;
+                bx_perror_path(&diag, name);
                 file_ok[i] = false;
                 continue;
             }
@@ -256,5 +258,5 @@ int bx_wc_main(int argc, char** argv) {
 
     free(counts);
     free(file_ok);
-    return had_error ? 1 : 0;
+    return diag.exit_status;
 }
