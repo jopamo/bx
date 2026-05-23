@@ -194,7 +194,7 @@ static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_op
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+s:k:v", long_options, NULL);
+        int c = getopt_long(argc, argv, "+:s:k:v", long_options, NULL);
         if (c == -1) {
             break;
         }
