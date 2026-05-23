@@ -64,13 +64,13 @@ static bool bx_unexpand_parse_tab_size(const char* text, struct bx_unexpand_opti
     return true;
 }
 
-static void bx_unexpand_diag_option_requires_arg(struct bx_diag_ctx* diag, int optopt, int optind, int argc, char* const argv[]) {
-    if (optind > 0 && optind <= argc && argv[optind - 1] != NULL && strncmp(argv[optind - 1], "--", 2) == 0) {
-        bx_diag(diag, "option '%s' requires an argument", argv[optind - 1]);
+static void bx_unexpand_diag_option_requires_arg(struct bx_diag_ctx* diag, int missing_optopt, int missing_optind, int argc, char* const argv[]) {
+    if (missing_optind > 0 && missing_optind <= argc && argv[missing_optind - 1] != NULL && strncmp(argv[missing_optind - 1], "--", 2) == 0) {
+        bx_diag(diag, "option '%s' requires an argument", argv[missing_optind - 1]);
         return;
     }
 
-    bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
+    bx_cli_diag_option_requires_arg(diag, missing_optopt, missing_optind, argc, argv);
 }
 
 static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_options* options, int* first_operand, struct bx_diag_ctx* diag) {

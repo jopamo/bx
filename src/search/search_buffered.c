@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -144,10 +145,18 @@ int bx_search_buffered_opened(FILE *f,
     if (!use_stdin)
         fclose(f);
     if (bx_record_stream_had_error(record_stream)) {
+        int errnum = bx_record_stream_error(record_stream);
         bx_search_buffered_free_lines(lines, nlines);
-        bx_search_report_record_too_large(progname,
-                                          display_name ? display_name : "(standard input)",
-                                          opts);
+        if (errnum == EOVERFLOW) {
+            bx_search_report_record_too_large(progname,
+                                              display_name ? display_name : "(standard input)",
+                                              opts);
+        } else {
+            bx_search_report_path_error(progname,
+                                        display_name ? display_name : "(standard input)",
+                                        errnum != 0 ? errnum : EIO,
+                                        opts);
+        }
         return 2;
     }
     if (stats)

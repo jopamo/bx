@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -234,12 +235,29 @@ void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream) {
 bool bx_record_stream_probe_binary_prefix(FILE *f,
                                           struct bx_record_stream *stream,
                                           bool *is_binary_out) {
+    int fd;
+    struct stat st;
     size_t available;
 
     if (!f || !stream)
         return false;
 
     stream->errnum = 0;
+    fd = fileno(f);
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        unsigned char buf[BX_RECORD_STREAM_BINARY_PROBE_CAP];
+        ssize_t nread = pread(fd, buf, sizeof(buf), 0);
+
+        if (nread < 0) {
+            stream->errnum = errno ? errno : EIO;
+            return false;
+        }
+        bx_search_dev_counters_note_bytes_read((size_t)nread);
+        if (is_binary_out)
+            *is_binary_out = memchr(buf, '\0', (size_t)nread) != NULL;
+        return true;
+    }
+
     available = bx_record_stream_fill_pending(f, stream, BX_RECORD_STREAM_BINARY_PROBE_CAP);
     if (stream->errnum != 0)
         return false;
@@ -293,6 +311,10 @@ int bx_record_stream_error(const struct bx_record_stream *stream) {
 
 size_t bx_record_stream_record_limit(const struct bx_record_stream *stream) {
     return stream ? stream->record_limit : 0u;
+}
+
+size_t bx_record_stream_default_record_limit(void) {
+    return BX_RECORD_STREAM_SPECIAL_RECORD_LIMIT;
 }
 
 ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char delimiter) {

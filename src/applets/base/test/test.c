@@ -12,6 +12,10 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 
+#ifndef S_ISVTX
+#define S_ISVTX 01000
+#endif
+
 static int pos;
 static int argc_val;
 static char** argv_val;

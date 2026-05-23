@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,20 @@
 #include "search_raw_presence.h"
 #include "search_scanner.h"
 #include "search_streaming.h"
+
+static void search_file_report_record_stream_error(const char *progname,
+                                                   const char *path,
+                                                   struct bx_record_stream *record_stream,
+                                                   const struct search_opts *opts);
+static int binary_presence_opened(FILE *f,
+                                  bool use_stdin,
+                                  const char *display_name,
+                                  const char *progname,
+                                  struct bx_matcher *m,
+                                  struct search_opts *opts,
+                                  int *match_count,
+                                  struct bx_record_stream *record_stream,
+                                  struct bx_search_stats *stats);
 
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
@@ -130,6 +145,49 @@ static int search_file_opened_without_reopen(FILE *f,
                                          record_stream, stats);
 }
 
+static int search_file_handle_binary_prefix(FILE *f,
+                                            bool use_stdin,
+                                            const char *display_name,
+                                            const char *progname,
+                                            struct bx_matcher *m,
+                                            struct search_opts *opts,
+                                            int *match_count,
+                                            struct bx_record_stream *record_stream,
+                                            struct bx_search_stats *stats) {
+    bool is_binary_file = false;
+
+    if (!f || !opts || opts->null_data || opts->binary_as_text || !record_stream)
+        return -1;
+
+    if (!bx_record_stream_probe_binary_prefix(f, record_stream, &is_binary_file)) {
+        if (bx_record_stream_had_error(record_stream)) {
+            search_file_report_record_stream_error(progname,
+                                                   display_name ? display_name
+                                                                : "(standard input)",
+                                                   record_stream,
+                                                   opts);
+            if (!use_stdin)
+                fclose(f);
+            return 2;
+        }
+        return -1;
+    }
+    if (!is_binary_file)
+        return -1;
+
+    if (opts->binary_without_match) {
+        if (!use_stdin)
+            fclose(f);
+        return bx_search_binary_without_match(display_name, opts, match_count, stats);
+    }
+
+    if (opts->count_only)
+        return -2;
+
+    return binary_presence_opened(f, use_stdin, display_name, progname, m, opts,
+                                  match_count, record_stream, stats);
+}
+
 int bx_search_binary_without_match(const char *display_name,
                                    struct search_opts *opts,
                                    int *match_count,
@@ -150,12 +208,183 @@ int bx_search_binary_without_match(const char *display_name,
     return 1;
 }
 
-static bool binary_file_matches_opened(FILE *f,
-                                       struct bx_matcher *m,
-                                       struct search_opts *opts,
-                                       struct bx_record_stream *record_stream) {
+static void search_file_report_record_stream_error(const char *progname,
+                                                   const char *path,
+                                                   struct bx_record_stream *record_stream,
+                                                   const struct search_opts *opts) {
+    int errnum;
+
+    if (!record_stream)
+        return;
+
+    errnum = bx_record_stream_error(record_stream);
+    if (errnum == EOVERFLOW) {
+        bx_search_report_record_too_large(progname, path, opts);
+        return;
+    }
+
+    bx_search_report_path_error(progname, path, errnum != 0 ? errnum : EIO, opts);
+}
+
+static bool binary_segment_matches(const unsigned char *buf,
+                                   size_t len,
+                                   struct bx_matcher *m,
+                                   struct search_opts *opts) {
+    struct bx_match bm;
+    bool matched =
+        bx_search_matcher_find_with_opts(m, buf, len, 0, opts, &bm) == 0;
+
+    if (opts->invert_match)
+        matched = !matched;
+    return matched;
+}
+
+static int binary_presence_opened(FILE *f,
+                                  bool use_stdin,
+                                  const char *display_name,
+                                  const char *progname,
+                                  struct bx_matcher *m,
+                                  struct search_opts *opts,
+                                  int *match_count,
+                                  struct bx_record_stream *record_stream,
+                                  struct bx_search_stats *stats) {
+    unsigned char chunk[8192];
+    unsigned char *segment = NULL;
+    size_t segment_len = 0u;
+    size_t segment_cap = 0u;
+    size_t segment_limit = bx_record_stream_record_limit(record_stream);
+    bool matched = false;
+
+    if (segment_limit == 0u)
+        segment_limit = bx_record_stream_default_record_limit();
+
+    if (stats)
+        stats->files_searched++;
+
+    for (;;) {
+        size_t nread = bx_record_stream_read_chunk(f, record_stream, chunk, sizeof(chunk));
+        size_t start = 0u;
+
+        if (stats)
+            stats->bytes_searched += nread;
+        if (nread == 0u)
+            break;
+
+        while (start < nread) {
+            size_t span = start;
+
+            while (span < nread && chunk[span] != '\n' && chunk[span] != '\0')
+                span++;
+
+            if (span > start) {
+                size_t piece = span - start;
+                size_t needed = segment_len + piece;
+                if (needed > segment_limit) {
+                    if (record_stream)
+                        record_stream->errnum = EOVERFLOW;
+                    goto out_error;
+                }
+                if (needed > segment_cap) {
+                    size_t new_cap = segment_cap == 0u ? 256u : segment_cap;
+                    while (new_cap < needed) {
+                        if (new_cap > (SIZE_MAX / 2u)) {
+                            if (record_stream)
+                                record_stream->errnum = ENOMEM;
+                            goto out_error;
+                        }
+                        new_cap *= 2u;
+                    }
+                    unsigned char *tmp = realloc(segment, new_cap);
+                    if (!tmp) {
+                        if (record_stream)
+                            record_stream->errnum = ENOMEM;
+                        goto out_error;
+                    }
+                    segment = tmp;
+                    segment_cap = new_cap;
+                }
+                memcpy(segment + segment_len, chunk + start, piece);
+                segment_len += piece;
+            }
+
+            if (span < nread) {
+                if (binary_segment_matches(segment, segment_len, m, opts)) {
+                    matched = true;
+                    goto out_done;
+                }
+                segment_len = 0u;
+            }
+
+            start = span + 1u;
+        }
+    }
+
+    if (bx_record_stream_had_error(record_stream))
+        goto out_error;
+
+    if (segment_len > 0u && binary_segment_matches(segment, segment_len, m, opts))
+        matched = true;
+
+out_done:
+    free(segment);
+    if (!use_stdin)
+        fclose(f);
+
+    if (matched) {
+        if (stats) {
+            stats->matches++;
+            stats->matched_lines++;
+            stats->files_with_matches++;
+        }
+        if (match_count)
+            (*match_count)++;
+        if (opts->quiet)
+            return 0;
+        if (opts->files_with_matches && display_name) {
+            if (opts->null_output)
+                bx_search_printf_out("%s%c", display_name, '\0');
+            else
+                bx_search_printf_out("%s\n", display_name);
+            bx_search_dev_counters_note_output_line_emitted();
+            return 0;
+        }
+        if (!(opts->files_without_match || opts->count_only))
+            bx_search_report_binary_match(progname, display_name);
+        return 0;
+    }
+
+    if (opts->files_without_match && display_name) {
+        if (opts->null_output)
+            bx_search_printf_out("%s%c", display_name, '\0');
+        else
+            bx_search_printf_out("%s\n", display_name);
+        bx_search_dev_counters_note_output_line_emitted();
+    }
+    return 1;
+
+out_error:
+    free(segment);
+    search_file_report_record_stream_error(progname,
+                                           display_name ? display_name : "(standard input)",
+                                           record_stream,
+                                           opts);
+    if (!use_stdin)
+        fclose(f);
+    return 2;
+}
+
+static int binary_file_matches_opened(FILE *f,
+                                      const char *display_name,
+                                      const char *progname,
+                                      struct bx_matcher *m,
+                                      struct search_opts *opts,
+                                      struct bx_record_stream *record_stream,
+                                      bool *matched_out) {
     ssize_t len;
     bool matched = false;
+
+    if (matched_out)
+        *matched_out = false;
 
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *line = record_stream->record;
@@ -192,23 +421,34 @@ static bool binary_file_matches_opened(FILE *f,
             break;
     }
 
-    return matched;
+    if (bx_record_stream_had_error(record_stream)) {
+        search_file_report_record_stream_error(progname, display_name, record_stream, opts);
+        return 2;
+    }
+
+    if (matched_out)
+        *matched_out = matched;
+    return 0;
 }
 
-static bool binary_file_matches(const char *filename,
-                                struct bx_matcher *m,
-                                struct search_opts *opts,
-                                struct bx_record_stream *record_stream) {
+static int binary_file_matches(const char *filename,
+                               const char *display_name,
+                               const char *progname,
+                               struct bx_matcher *m,
+                               struct search_opts *opts,
+                               struct bx_record_stream *record_stream,
+                               bool *matched_out) {
     FILE *f = bx_search_input_fopen(filename, opts);
 
     if (!f)
-        return false;
+        return 1;
     bx_search_dev_counters_note_file_opened();
 
     bx_record_stream_prepare_file(f, record_stream);
-    bool matched = binary_file_matches_opened(f, m, opts, record_stream);
+    int rc = binary_file_matches_opened(f, display_name, progname, m, opts, record_stream,
+                                        matched_out);
     fclose(f);
-    return matched;
+    return rc;
 }
 
 int bx_search_search_transformed_buffer(unsigned char *buf,
@@ -237,6 +477,8 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
                                     errno, opts);
         return 2;
     }
+    if (record_stream)
+        bx_record_stream_prepare_file(mem, record_stream);
 
     int rc = search_file_run_opened_kernel(kernel, mem, false, NULL, display_name, progname,
                                            m, opts, match_count, NULL,
@@ -296,6 +538,7 @@ static int search_file(const char *filename,
     if (operand_st_loaded && (S_ISCHR(operand_st.st_mode) || S_ISBLK(operand_st.st_mode)
                               || S_ISFIFO(operand_st.st_mode) || S_ISSOCK(operand_st.st_mode))) {
         FILE *f;
+        int binary_result;
 
         if (bx_search_should_skip_special_input_mode(operand_st.st_mode, opts)) {
             result = 1;
@@ -305,6 +548,20 @@ static int search_file(const char *filename,
         f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
+
+        binary_result = search_file_handle_binary_prefix(f, false, display_name, progname, m,
+                                                         opts, match_count, record_stream, stats);
+        if (binary_result >= 0) {
+            result = binary_result;
+            goto out;
+        }
+        if (binary_result == -2) {
+            result = search_file_run_opened_kernel(
+                exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
+                f, false, filename, display_name, progname, m, opts,
+                match_count, scanner, record_stream, stats);
+            goto out;
+        }
 
         result = search_file_opened_without_reopen(f, false, display_name, progname, m,
                                                    exec_plan, opts, match_count, scanner,
@@ -352,15 +609,35 @@ static int search_file(const char *filename,
     if (use_stdin) {
         enum bx_search_file_kernel_kind stdin_kernel =
             exec_plan ? exec_plan->stdin_path_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
+        FILE *f;
+        int binary_result;
 
-        result = search_file_run_path_kernel(stdin_kernel,
-                                             filename, display_name, progname, m, opts,
-                                             match_count, scanner, record_stream, stats);
+        f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
+        if (!f)
+            goto out_error;
+
+        binary_result = search_file_handle_binary_prefix(f, true, display_name, progname, m,
+                                                         opts, match_count, record_stream, stats);
+        if (binary_result >= 0) {
+            result = binary_result;
+            goto out;
+        }
+        if (binary_result == -2) {
+            result = search_file_run_opened_kernel(
+                exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
+                f, true, filename, display_name, progname, m, opts,
+                match_count, scanner, record_stream, stats);
+            goto out;
+        }
+
+        result = search_file_run_opened_kernel(stdin_kernel,
+                                               f, true, filename, display_name, progname, m, opts,
+                                               match_count, scanner, record_stream, stats);
         goto out;
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
-        FILE *f = bx_search_input_open_stream(filename, progname, opts, NULL, NULL);
+        FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
 
@@ -395,35 +672,19 @@ static int search_file(const char *filename,
             goto out;
         }
 
-        bool is_binary_file = false;
-        if (bx_record_stream_probe_binary_prefix(f, &is_binary_file)) {
-            if (is_binary_file) {
-                if (opts->binary_without_match) {
-                    fclose(f);
-                    result = bx_search_binary_without_match(display_name, opts, match_count, stats);
-                    goto out;
-                }
-
-                if (opts->quiet || opts->files_with_matches ||
-                    opts->files_without_match || opts->count_only) {
-                    result = search_file_run_opened_kernel(
-                        exec_plan ? exec_plan->binary_search_kernel
-                                  : BX_SEARCH_FILE_KERNEL_STREAMING,
-                        f, false, filename, display_name, progname, m, opts,
-                        match_count, scanner, record_stream, stats);
-                    goto out;
-                }
-
-                bool matched = binary_file_matches_opened(f, m, opts, record_stream);
-                fclose(f);
-                if (matched) {
-                    bx_search_report_binary_match(progname, display_name);
-                    if (match_count)
-                        (*match_count)++;
-                    result = 0;
-                    goto out;
-                }
-                result = 1;
+        {
+            int binary_result = search_file_handle_binary_prefix(
+                f, false, display_name, progname, m, opts, match_count, record_stream, stats
+            );
+            if (binary_result >= 0) {
+                result = binary_result;
+                goto out;
+            }
+            if (binary_result == -2) {
+                result = search_file_run_opened_kernel(
+                    exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
+                    f, false, filename, display_name, progname, m, opts,
+                    match_count, scanner, record_stream, stats);
                 goto out;
             }
 
@@ -437,18 +698,6 @@ static int search_file(const char *filename,
                 match_count, scanner, record_stream, stats);
             goto out;
         }
-
-        {
-            struct stat opened_st;
-            if (fstat(fileno(f), &opened_st) == 0 && !S_ISREG(opened_st.st_mode)) {
-                result = search_file_opened_without_reopen(f, false, display_name, progname,
-                                                           m, exec_plan, opts, match_count,
-                                                           scanner, record_stream, stats);
-                goto out;
-            }
-        }
-
-        fclose(f);
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text &&
@@ -468,7 +717,14 @@ static int search_file(const char *filename,
             goto out;
         }
 
-        if (binary_file_matches(filename, m, opts, record_stream)) {
+        bool matched = false;
+        int binary_rc = binary_file_matches(filename, display_name, progname, m, opts,
+                                            record_stream, &matched);
+        if (binary_rc == 2) {
+            result = 2;
+            goto out;
+        }
+        if (matched) {
             bx_search_report_binary_match(progname, display_name);
             if (match_count)
                 (*match_count)++;
