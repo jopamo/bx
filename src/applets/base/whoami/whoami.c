@@ -1,11 +1,20 @@
+#include <getopt.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <pwd.h>
 #include <sys/types.h>
-#include <string.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+
+static void bx_whoami_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [OPTION]...\n", progname);
+    fprintf(stream, "Print the user name associated with the current effective user ID.\n");
+    fprintf(stream, "Same as id -un.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "      --help          display this help and exit\n");
+    fprintf(stream, "      --version       output version information and exit\n");
+}
 
 int bx_whoami_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {
@@ -14,24 +23,42 @@ int bx_whoami_main(int argc, char** argv) {
         .verbose = false,
         .debug = false,
     };
+    static const struct option long_options[] = {
+        {"help", no_argument, NULL, 1},
+        {"version", no_argument, NULL, 2},
+        {NULL, 0, NULL, 0},
+    };
+    int c;
 
-    if (argc > 1) {
-        if (strcmp(argv[1], "--help") == 0) {
-            printf("Usage: %s [OPTION]...\n", diag.progname);
-            printf("Print the user name associated with the current effective user ID.\n");
-            printf("Same as id -un.\n");
-            printf("\n");
-            printf("      --help          display this help and exit\n");
-            printf("      --version       output version information and exit\n");
-            return 0;
+    c = bx_cli_maybe_handle_help_or_version(
+        argc,
+        argv,
+        "whoami",
+        NULL,
+        NULL,
+        bx_whoami_print_help
+    );
+    if (c >= 0) {
+        return c;
+    }
+
+    opterr = 0;
+    optind = 1;
+    while ((c = getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
+        switch (c) {
+            case '?':
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
+                bx_cli_print_try_help(diag.progname);
+                return diag.exit_status;
+            default:
+                break;
         }
-        if (strcmp(argv[1], "--version") == 0) {
-            bx_cli_print_version(diag.progname);
-            return 0;
-        }
-        bx_diag(&diag, "extra operand '%s'", argv[1]);
+    }
+
+    if (optind < argc) {
+        bx_cli_diag_extra_operand(&diag, argv[optind]);
         bx_cli_print_try_help(diag.progname);
-        return 1;
+        return diag.exit_status;
     }
 
     uid_t euid = geteuid();

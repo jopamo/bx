@@ -11,6 +11,7 @@
 #include "which.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
 
 struct which_opts {
     bool all;
@@ -38,7 +39,7 @@ struct function {
 };
 
 static const char* which_progname(const char* argv0) {
-    return (argv0 && argv0[0] != '\0') ? argv0 : "which";
+    return bx_cli_progname(argv0, "which");
 }
 
 static void print_help(FILE* stream, const char* progname) {
@@ -59,8 +60,8 @@ static void print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  --help                print this help text\n");
 }
 
-static void print_version(void) {
-    printf("bx which version %s\n", BX_VERSION);
+static void print_version(const char* progname) {
+    bx_cli_print_version(progname);
 }
 
 static void print_missing_search_space(FILE* stream, const char* cmd) {
@@ -675,7 +676,7 @@ int bx_which_main(int argc, char** argv) {
                 break;
             case 'v':
             case 'V':
-                print_version();
+                print_version(diag.progname);
                 return 0;
             case 1001:
                 opts.skip_dot = true;
