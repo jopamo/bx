@@ -27,10 +27,10 @@ enum bx_tree_option_code {
 };
 
 static void bx_tree_print_help(FILE *stream, const char *progname) {
-    fprintf(stream, "Usage: %s [-adfghilnopqrstuvxACDFNS] [-L level [-R]] [-H baseHREF]\\n", progname);
-    fprintf(stream, "       %*s[-T title] [-o filename] [--nolinks] [-P pattern] [-I pattern]\\n", (int)strlen(progname) + 8, "");
-    fprintf(stream, "       %*s[--inodes] [--device] [--noreport] [--dirsfirst] [--version]\\n", (int)strlen(progname) + 8, "");
-    fprintf(stream, "       %*s[--help] [--filelimit #] [directory ...]\\n", (int)strlen(progname) + 8, "");
+    fprintf(stream, "Usage: %s [-adfghilnopqrstuvxACDFNS] [-L level [-R]] [-H baseHREF]\n", progname);
+    fprintf(stream, "       %*s[-T title] [-o filename] [--nolinks] [-P pattern] [-I pattern]\n", (int)strlen(progname) + 8, "");
+    fprintf(stream, "       %*s[--inodes] [--device] [--noreport] [--dirsfirst] [--version]\n", (int)strlen(progname) + 8, "");
+    fprintf(stream, "       %*s[--help] [--filelimit #] [directory ...]\n", (int)strlen(progname) + 8, "");
     fprintf(stream, "List contents of directories in a tree-like format.\n\n");
     fprintf(stream, "  -a             include hidden files\n");
     fprintf(stream, "  -d             list directories only\n");
@@ -159,7 +159,7 @@ static bool bx_tree_parse_options(int argc,
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+adfghilnpqrstuvxACDFNSL:RH:T:o:P:I:",
+        int c = getopt_long(argc, argv, "+:adfghilnpqrstuvxACDFNSL:RH:T:o:P:I:",
                             long_options, &option_index);
         if (c == -1)
             break;
@@ -297,8 +297,14 @@ static bool bx_tree_parse_options(int argc,
                 return false;
             break;
         case ':':
-            fprintf(stderr, "%s: option requires an argument -- '%s'\n",
-                    opts->progname, argv[optind - 1]);
+            if (optind > 0 && optind <= argc && strncmp(argv[optind - 1], "--", 2) == 0)
+                fprintf(stderr, "%s: option requires an argument -- '%s'\n",
+                        opts->progname, argv[optind - 1]);
+            else if (optopt != 0)
+                fprintf(stderr, "%s: option requires an argument -- '%c'\n",
+                        opts->progname, optopt);
+            else
+                fprintf(stderr, "%s: option requires an argument\n", opts->progname);
             return false;
         case '?':
         default:

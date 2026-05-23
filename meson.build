@@ -196,7 +196,6 @@ endif
 bx_core_sources = [
   'src/bx/main.c',
   'src/bx/libbx.c',
-  'src/dispatch/applets.c',
 ]
 
 bx_lib_sources = [
@@ -364,6 +363,7 @@ bx_base_applet_sources = [
   'src/applets/base/tree/tree_render.c',
   'src/applets/base/tr/tr.c',
   'src/applets/base/truncate/truncate.c',
+  'src/applets/base/truefalse/truefalse.c',
   'src/applets/base/tty/tty.c',
   'src/applets/base/uname/uname.c',
   'src/applets/base/unexpand/unexpand.c',
