@@ -5,8 +5,12 @@
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
+
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 static void next_suffix(char* suffix, int length, bool numeric, bool hex) {
     for (int i = length - 1; i >= 0; i--) {
@@ -42,6 +46,21 @@ static void next_suffix(char* suffix, int length, bool numeric, bool hex) {
     }
 }
 
+static void bx_split_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [OPTION]... [FILE [PREFIX]]\n", progname);
+    fprintf(stream, "Output pieces of FILE to PREFIXaa, PREFIXab, ...; default size is 1000 lines.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "With no FILE, or when FILE is -, read standard input.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  -a, --suffix-length=N      generate suffixes of length N (default 2)\n");
+    fprintf(stream, "  -b, --bytes=SIZE           put SIZE bytes per output file\n");
+    fprintf(stream, "  -d, --numeric-suffixes[=FROM]  use numeric suffixes instead of alphabetic\n");
+    fprintf(stream, "  -l, --lines=NUMBER         put NUMBER lines per output file\n");
+    fprintf(stream, "  -x, --hex-suffixes[=FROM]  use hexadecimal suffixes instead of alphabetic\n");
+    fprintf(stream, "      --help                 display this help and exit\n");
+    fprintf(stream, "      --version              output version information and exit\n");
+}
+
 int bx_split_main(int argc, char** argv) {
     static const struct option long_options[] = {{"bytes", required_argument, NULL, 'b'},
                                                  {"lines", required_argument, NULL, 'l'},
@@ -52,6 +71,8 @@ int bx_split_main(int argc, char** argv) {
                                                  {"version", no_argument, NULL, 'v'},
                                                  {NULL, 0, NULL, 0}};
 
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "split");
+    struct bx_diag_ctx diag = {.progname = progname};
     long long split_size = 0;
     bool split_by_lines = true;
     long long lines_per_file = 1000;
@@ -59,33 +80,63 @@ int bx_split_main(int argc, char** argv) {
     bool numeric = false;
     bool hex = false;
 
+    opterr = 0;
+    optind = 1;
+
     int c;
     while ((c = getopt_long(argc, argv, "b:l:a:dx", long_options, NULL)) != -1) {
         switch (c) {
-            case 'b':
-                split_size = atoll(optarg);  // Should handle suffixes like K, M
+            case 'b': {
+                uintmax_t parsed = 0;
+                if (!bx_size_parse_block_size(optarg, &parsed)
+                    || parsed > (uintmax_t)LLONG_MAX) {
+                    bx_diag(&diag, "invalid number of bytes: '%s'", optarg);
+                    return 1;
+                }
+                split_size = (long long)parsed;
                 split_by_lines = false;
                 break;
-            case 'l':
-                lines_per_file = atoll(optarg);
+            }
+            case 'l': {
+                uintmax_t parsed = 0;
+                if (!bx_size_parse_uint(optarg, &parsed)
+                    || parsed == 0u
+                    || parsed > (uintmax_t)LLONG_MAX) {
+                    bx_diag(&diag, "invalid number of lines: '%s'", optarg);
+                    return 1;
+                }
+                lines_per_file = (long long)parsed;
                 split_by_lines = true;
                 break;
-            case 'a':
-                suffix_length = atoi(optarg);
+            }
+            case 'a': {
+                uintmax_t parsed = 0;
+                if (!bx_size_parse_uint(optarg, &parsed)
+                    || parsed == 0u
+                    || parsed > (uintmax_t)INT32_MAX) {
+                    bx_diag(&diag, "invalid suffix length: '%s'", optarg);
+                    return 1;
+                }
+                suffix_length = (int)parsed;
                 break;
+            }
             case 'd':
                 numeric = true;
+                hex = false;
                 break;
             case 'x':
                 hex = true;
+                numeric = false;
                 break;
             case 'h':
-                printf("Usage: %s [OPTION]... [FILE [PREFIX]]\n", argv[0]);
-                // ...
+                bx_split_print_help(stdout, progname);
                 return 0;
             case 'v':
-                printf("split (bx) %s\n", BX_VERSION);
+                bx_cli_print_version(progname);
                 return 0;
+            case '?':
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
+                return 1;
             default:
                 return 1;
         }
@@ -105,6 +156,14 @@ int bx_split_main(int argc, char** argv) {
     }
     if (optind < argc) {
         prefix = argv[optind];
+        optind++;
+    }
+    if (optind < argc) {
+        bx_cli_diag_extra_operand(&diag, argv[optind]);
+        if (in != stdin) {
+            fclose(in);
+        }
+        return 1;
     }
 
     char* suffix = malloc((size_t)suffix_length + 1);
