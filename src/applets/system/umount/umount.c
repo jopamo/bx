@@ -256,7 +256,7 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
     optind = 1;
 
     while (true) {
-        int c = getopt_long(argc, argv, "+aflnt:qgRrv", long_options, NULL);
+        int c = getopt_long(argc, argv, "+:aflnt:qgRrvhV", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -292,12 +292,17 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
                 options->verbose = true;
                 diag->verbose = true;
                 break;
+            case 'h':
             case 1:
                 options->show_help = true;
                 return true;
+            case 'V':
             case 2:
                 options->show_version = true;
                 return true;
+            case ':':
+                bx_cli_diag_option_requires_arg(diag, optopt, optind, argc, argv);
+                return false;
             case '?':
                 bx_cli_diag_unrecognized_option(diag, optopt, optind, argc, argv);
                 return false;

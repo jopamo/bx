@@ -6,6 +6,25 @@
 #include <getopt.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
+
+static void bx_uname_print_help(FILE* stream, const char* progname) {
+    fprintf(stream, "Usage: %s [OPTION]...\n", progname);
+    fprintf(stream, "Print certain system information.  With no OPTION, same as -s.\n");
+    fprintf(stream, "\n");
+    fprintf(stream, "  -a, --all                print all information, in the following order,\n");
+    fprintf(stream, "                             except omit -p and -i if unknown:\n");
+    fprintf(stream, "  -s, --kernel-name        print the kernel name\n");
+    fprintf(stream, "  -n, --nodename           print the network node hostname\n");
+    fprintf(stream, "  -r, --kernel-release     print the kernel release\n");
+    fprintf(stream, "  -v, --kernel-version     print the kernel version\n");
+    fprintf(stream, "  -m, --machine            print the machine hardware name\n");
+    fprintf(stream, "  -p, --processor          print the processor type (non-portable)\n");
+    fprintf(stream, "  -i, --hardware-platform  print the hardware platform (non-portable)\n");
+    fprintf(stream, "  -o, --operating-system   print the operating system\n");
+    fprintf(stream, "      --help          display this help and exit\n");
+    fprintf(stream, "      --version       output version information and exit\n");
+}
 
 int bx_uname_main(int argc, char** argv) {
     static const struct option long_options[] = {{"all", no_argument, NULL, 'a'},
@@ -21,10 +40,18 @@ int bx_uname_main(int argc, char** argv) {
                                                  {"version", no_argument, NULL, 'V'},
                                                  {NULL, 0, NULL, 0}};
 
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "uname");
+    struct bx_diag_ctx diag = {
+        .progname = progname,
+        .exit_status = 0,
+        .verbose = false,
+        .debug = false,
+    };
     int opt_a = 0, opt_s = 0, opt_n = 0, opt_r = 0, opt_v = 0, opt_m = 0, opt_p = 0, opt_i = 0, opt_o = 0;
     int c;
 
     opterr = 0;
+    optind = 1;
     while ((c = getopt_long(argc, argv, "asnrvmpio", long_options, NULL)) != -1) {
         switch (c) {
             case 'a':
@@ -55,32 +82,24 @@ int bx_uname_main(int argc, char** argv) {
                 opt_o = 1;
                 break;
             case 'h':
-                printf("Usage: %s [OPTION]...\n", argv[0]);
-                printf("Print certain system information.  With no OPTION, same as -s.\n");
-                printf("\n");
-                printf("  -a, --all                print all information, in the following order,\n");
-                printf("                             except omit -p and -i if unknown:\n");
-                printf("  -s, --kernel-name        print the kernel name\n");
-                printf("  -n, --nodename           print the network node hostname\n");
-                printf("  -r, --kernel-release     print the kernel release\n");
-                printf("  -v, --kernel-version     print the kernel version\n");
-                printf("  -m, --machine            print the machine hardware name\n");
-                printf("  -p, --processor          print the processor type (non-portable)\n");
-                printf("  -i, --hardware-platform  print the hardware platform (non-portable)\n");
-                printf("  -o, --operating-system   print the operating system\n");
-                printf("      --help          display this help and exit\n");
-                printf("      --version       output version information and exit\n");
+                bx_uname_print_help(stdout, progname);
                 return 0;
             case 'V':
-                printf("uname (bx) %s\n", BX_VERSION);
+                bx_cli_print_version(progname);
                 return 0;
             case '?':
-                bx_err("invalid option -- '%c'", optopt);
-                printf("Try '%s --help' for more information.\n", argv[0]);
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
+                bx_cli_print_try_help(progname);
                 return 1;
             default:
                 return 1;
         }
+    }
+
+    if (optind < argc) {
+        bx_cli_diag_extra_operand(&diag, argv[optind]);
+        bx_cli_print_try_help(progname);
+        return 1;
     }
 
     if (opt_a) {
@@ -93,7 +112,7 @@ int bx_uname_main(int argc, char** argv) {
 
     struct utsname u;
     if (uname(&u) == -1) {
-        bx_perror("uname");
+        perror(progname);
         return 1;
     }
 
