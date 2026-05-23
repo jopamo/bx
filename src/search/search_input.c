@@ -58,6 +58,8 @@ FILE *bx_search_input_open_stream(const char *filename,
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
 
     if (use_stdin) {
+        if (stream)
+            bx_record_stream_prepare_file(stdin, stream);
         if (use_stdin_out)
             *use_stdin_out = true;
         return stdin;
@@ -70,7 +72,8 @@ FILE *bx_search_input_open_stream(const char *filename,
         return NULL;
     }
     bx_search_dev_counters_note_file_opened();
-    (void)stream;
+    if (stream)
+        bx_record_stream_prepare_file(f, stream);
     if (use_stdin_out)
         *use_stdin_out = false;
     return f;

@@ -100,6 +100,16 @@ void bx_search_report_write_error(const char *progname, int errnum) {
                 progname, strerror(errnum));
 }
 
+void bx_search_report_record_too_large(const char *progname,
+                                       const char *path,
+                                       const struct search_opts *opts) {
+    if (opts && opts->suppress_errors)
+        return;
+
+    fprintf(bx_search_error_output_stream(), "%s: %s: input record too large\n",
+            progname, path);
+}
+
 static void report_binary_match(const char *progname, const char *path) {
     fprintf(bx_search_error_output_stream(), "%s: %s: binary file matches\n",
             progname, path);

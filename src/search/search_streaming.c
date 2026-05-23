@@ -38,9 +38,6 @@ int bx_search_streaming_opened(FILE *f,
     const bool line_buffered_stdin_binary_watch =
         bx_search_streaming_uses_line_buffered_stdin(opts, use_stdin);
 
-    if (!use_stdin)
-        bx_record_stream_prepare_file(f, record_stream);
-
     if (stats)
         stats->files_searched++;
 
@@ -178,6 +175,15 @@ int bx_search_streaming_opened(FILE *f,
         } else if (opts->stop_on_nonmatch && saw_match_record) {
             break;
         }
+    }
+
+    if (bx_record_stream_had_error(record_stream)) {
+        bx_search_report_record_too_large(progname,
+                                          display_name ? display_name : "(standard input)",
+                                          opts);
+        if (!use_stdin)
+            fclose(f);
+        return 2;
     }
 
     if (opts->quiet && file_matches > 0)

@@ -76,9 +76,6 @@ int bx_search_buffered_opened(FILE *f,
     bool saw_match_record = false;
     bool heading_printed_for_file = false;
 
-    if (!use_stdin)
-        bx_record_stream_prepare_file(f, record_stream);
-
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *raw = record_stream->record;
 
@@ -146,6 +143,13 @@ int bx_search_buffered_opened(FILE *f,
     }
     if (!use_stdin)
         fclose(f);
+    if (bx_record_stream_had_error(record_stream)) {
+        bx_search_buffered_free_lines(lines, nlines);
+        bx_search_report_record_too_large(progname,
+                                          display_name ? display_name : "(standard input)",
+                                          opts);
+        return 2;
+    }
     if (stats)
         stats->files_searched++;
 

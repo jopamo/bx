@@ -46,6 +46,9 @@ void bx_search_report_path_error(const char *progname,
                                  const struct search_opts *opts);
 void bx_search_report_write_error(const char *progname, int errnum);
 void bx_search_report_binary_match(const char *progname, const char *path);
+void bx_search_report_record_too_large(const char *progname,
+                                       const char *path,
+                                       const struct search_opts *opts);
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts);
 bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,

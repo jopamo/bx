@@ -31,5 +31,6 @@ size_t bx_record_stream_read_chunk(FILE *f,
 bool bx_record_stream_had_error(const struct bx_record_stream *stream);
 int bx_record_stream_error(const struct bx_record_stream *stream);
 size_t bx_record_stream_record_limit(const struct bx_record_stream *stream);
+size_t bx_record_stream_default_record_limit(void);
 
 #endif
