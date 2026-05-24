@@ -907,6 +907,64 @@ xxd_lib = static_library('bx_xxd',
   c_args : xxd_c_args,
 )
 
+jq_sources = files(
+  'src/applets/text/jq/jq_applet.c',
+  'src/applets/text/jq/bx_jq_pcre2.c',
+  'src/applets/text/jq/upstream/src/builtin.c',
+  'src/applets/text/jq/upstream/src/bytecode.c',
+  'src/applets/text/jq/upstream/src/compile.c',
+  'src/applets/text/jq/upstream/src/execute.c',
+  'src/applets/text/jq/upstream/src/jq_test.c',
+  'src/applets/text/jq/upstream/src/jv.c',
+  'src/applets/text/jq/upstream/src/jv_alloc.c',
+  'src/applets/text/jq/upstream/src/jv_aux.c',
+  'src/applets/text/jq/upstream/src/jv_dtoa.c',
+  'src/applets/text/jq/upstream/src/jv_dtoa_tsd.c',
+  'src/applets/text/jq/upstream/src/jv_file.c',
+  'src/applets/text/jq/upstream/src/jv_parse.c',
+  'src/applets/text/jq/upstream/src/jv_print.c',
+  'src/applets/text/jq/upstream/src/jv_unicode.c',
+  'src/applets/text/jq/upstream/src/linker.c',
+  'src/applets/text/jq/upstream/src/locfile.c',
+  'src/applets/text/jq/upstream/src/main.c',
+  'src/applets/text/jq/upstream/src/parser.c',
+  'src/applets/text/jq/upstream/src/lexer.c',
+  'src/applets/text/jq/upstream/src/util.c',
+  'src/applets/text/jq/upstream/vendor/decNumber/decContext.c',
+  'src/applets/text/jq/upstream/vendor/decNumber/decNumber.c',
+)
+
+jq_include_dirs = include_directories(
+  'src',
+  'src/dispatch',
+  'src/applets/text/jq',
+  'src/applets/text/jq/upstream',
+  'src/applets/text/jq/upstream/src',
+  'src/applets/text/jq/upstream/vendor',
+)
+
+jq_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-pedantic',
+  '-Wno-cast-qual',
+  '-Wno-declaration-after-statement',
+  '-Wno-sign-compare',
+  '-Wno-unused-function',
+  '-Wno-unused-parameter',
+])
+jq_c_args += [
+  '-Dmain=bx_jq_main_impl',
+  '-include',
+  join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'jq', 'bx_jq_config.h'),
+]
+
+jq_lib = static_library('bx_jq',
+  jq_sources,
+  include_directories : jq_include_dirs,
+  dependencies : [threads_dep, pcre2_dep],
+  c_args : jq_c_args,
+)
+
 bc_host_c_args = cc.get_supported_arguments([
   '-Wno-error',
 ])
@@ -941,7 +999,7 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'vim', 'xxd', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'vim', 'jq', 'xxd', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -967,7 +1025,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib],
+  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

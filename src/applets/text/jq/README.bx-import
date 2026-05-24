@@ -1,0 +1,10 @@
+This applet embeds a fenced jq-derived JSON query runtime inside bx.
+
+Import layout:
+- upstream/src/: copied jq source snapshot plus checked-in generated lexer/parser
+- upstream/vendor/decNumber/: jq's imported decimal arithmetic subset
+
+Local policy:
+- bx exposes only the `jq` multicall applet entrypoint
+- regex builtins are wired to libpcre2 instead of Oniguruma
+- bx owns the import config/build seam, version/build metadata, and dispatch wrapper
