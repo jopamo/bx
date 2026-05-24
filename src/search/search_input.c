@@ -15,8 +15,8 @@
 #include "search_input.h"
 #include "search_internal.h"
 
-static int bx_search_input_open_readonly(const char *filename,
-                                         const struct search_opts *opts) {
+int bx_search_input_open_fd(const char *filename,
+                            const struct search_opts *opts) {
     int flags = O_RDONLY;
     (void)opts;
 
@@ -24,9 +24,7 @@ static int bx_search_input_open_readonly(const char *filename,
     flags |= O_CLOEXEC;
 #endif
 
-    int fd = open(filename, flags);
-
-    return fd;
+    return open(filename, flags);
 }
 
 FILE *bx_search_input_fopen(const char *filename,
@@ -36,7 +34,7 @@ FILE *bx_search_input_fopen(const char *filename,
         return NULL;
     }
 
-    int fd = bx_search_input_open_readonly(filename, opts);
+    int fd = bx_search_input_open_fd(filename, opts);
     if (fd < 0)
         return NULL;
 

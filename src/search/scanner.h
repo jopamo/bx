@@ -35,6 +35,7 @@ struct bx_search_scanner {
 };
 
 void bx_search_scanner_dispose(struct bx_search_scanner *scanner);
+bool bx_search_scanner_reserve(struct bx_search_scanner *scanner, size_t needed);
 void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
                                   char delimiter,
                                   bool track_record_numbers);

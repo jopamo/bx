@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <fnmatch.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -138,16 +139,43 @@ bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
     if (!entry || !opts || opts->device_mode != BX_GREP_DEVICE_SKIP)
         return false;
 
+    if (entry->d_type_known) {
+        return entry->d_type == DT_CHR || entry->d_type == DT_BLK ||
+               entry->d_type == DT_FIFO || entry->d_type == DT_SOCK;
+    }
+
     if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
         return false;
 
     return bx_search_mode_is_special_input(entry->mode);
 }
 
+static bool bx_search_entry_is_unfollowed_symlink(struct bx_walk_entry *entry,
+                                                  const struct search_opts *opts) {
+    if (!entry || !opts || opts->follow_symlinks)
+        return false;
+    if (entry->is_symlink)
+        return true;
+    if (entry->metadata_tried || entry->metadata_loaded)
+        return entry->metadata_loaded && S_ISLNK(entry->mode);
+    return false;
+}
+
 bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *entry,
                                                          const struct search_opts *opts) {
     if (!entry || !opts)
         return false;
+
+    if (bx_search_entry_is_unfollowed_symlink(entry, opts))
+        return true;
+
+    if (entry->d_type_known) {
+        bool is_special = entry->d_type == DT_CHR || entry->d_type == DT_BLK ||
+                          entry->d_type == DT_FIFO || entry->d_type == DT_SOCK;
+        if (!is_special)
+            return false;
+        return opts->device_mode == BX_GREP_DEVICE_SKIP || !opts->device_mode_explicit;
+    }
 
     if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
         return false;

@@ -248,6 +248,11 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
                              : BX_SEARCH_FILE_KERNEL_STREAMING;
     exec_plan->raw_presence_supported =
         bx_search_scanner_can_raw_shortcut_file_presence(matcher, opts);
+    exec_plan->deferred_literal_precheck =
+        plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_DEFERRED_FASTPATH
+        && plan->output_kind == BX_SEARCH_PLAN_OUTPUT_MATCH_LINES
+        && scanner_regular_supported
+        && !opts->stats;
 }
 
 bool bx_search_plan_debug_enabled(void) {

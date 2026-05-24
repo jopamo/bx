@@ -79,6 +79,9 @@ static enum bx_walk_action bx_search_files_walk_cb(struct bx_walk_entry *entry, 
 
     if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
+    if (!entry->is_dir &&
+        bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
+        return BX_WALK_CONTINUE;
     if (!entry->is_dir) {
         char *display = bx_search_display_path_for_output(entry->path,
                                                           state && state->strip_dot_prefix,

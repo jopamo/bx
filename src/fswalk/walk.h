@@ -72,7 +72,10 @@ struct bx_walk_ignore_opts {
 
 struct bx_walk_entry {
     char *path;
+    unsigned char d_type;
+    bool d_type_known;
     bool is_dir;
+    bool is_symlink;
     bool prune;
     bool metadata_loaded;
     bool metadata_tried;

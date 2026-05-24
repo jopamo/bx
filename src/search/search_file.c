@@ -9,9 +9,11 @@
 #include <unistd.h>
 
 #include "dev_counters.h"
+#include "literal.h"
 #include "pcre2_matcher.h"
 #include "rg_output.h"
 #include "rg_transform.h"
+#include "scanner.h"
 #include "search_buffered.h"
 #include "search_input.h"
 #include "search_internal.h"
@@ -34,6 +36,15 @@ static int binary_presence_opened(FILE *f,
                                   int *match_count,
                                   struct bx_record_stream *record_stream,
                                   struct bx_search_stats *stats);
+
+#define BX_SEARCH_DEFERRED_CHUNK_CAP (256u * 1024u)
+
+enum bx_search_deferred_precheck_result {
+    BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED = -1,
+    BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH = 0,
+    BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH = 1,
+    BX_SEARCH_DEFERRED_PRECHECK_ERROR = 2,
+};
 
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
@@ -124,6 +135,122 @@ static int search_file_run_path_kernel(enum bx_search_file_kernel_kind kernel,
         break;
     }
     return 2;
+}
+
+static int search_file_deferred_literal_precheck_path(const char *filename,
+                                                      const char *display_name,
+                                                      const char *progname,
+                                                      struct bx_matcher *m,
+                                                      const struct bx_search_exec_plan *exec_plan,
+                                                      struct search_opts *opts,
+                                                      struct bx_search_scanner *scanner,
+                                                      struct bx_search_stats *stats) {
+    struct bx_literal_matcher *literal;
+    struct stat st;
+    int fd;
+    int result = BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
+    size_t searched_len = 0u;
+    unsigned char prefix[1024];
+    ssize_t prefix_len = 0;
+
+    if (!filename || !m || !exec_plan || !exec_plan->deferred_literal_precheck ||
+        !opts || !scanner) {
+        return BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
+    }
+    literal = bx_search_matcher_literal(m);
+    if (!literal)
+        return BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
+
+    fd = bx_search_input_open_fd(filename, opts);
+    if (fd < 0) {
+        bx_search_report_path_error(progname, filename, errno, opts);
+        return BX_SEARCH_DEFERRED_PRECHECK_ERROR;
+    }
+    bx_search_dev_counters_note_file_opened();
+
+    if (fstat(fd, &st) != 0)
+        goto out_error;
+    if (!S_ISREG(st.st_mode) || st.st_size < 0)
+        goto out;
+
+    do {
+        prefix_len = pread(fd, prefix, sizeof(prefix), 0);
+    } while (prefix_len < 0 && errno == EINTR);
+    if (prefix_len < 0)
+        goto out_error;
+    bx_search_dev_counters_note_bytes_read((size_t)prefix_len);
+    if (bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)prefix_len))
+        goto out;
+
+    if (!opts->null_data && !opts->binary_as_text) {
+        unsigned char *nul = memchr(prefix, '\0', (size_t)prefix_len);
+        if (nul) {
+            struct bx_match bm;
+            searched_len = (size_t)prefix_len;
+            result = bx_literal_find(literal, prefix, (size_t)(nul - prefix), 0u, &bm) == 0
+                ? BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH
+                : BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
+            goto out;
+        }
+    }
+
+    if (st.st_size == 0) {
+        result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
+        goto out;
+    }
+
+    {
+        size_t plen = bx_literal_len(literal);
+        size_t overlap = plen > 0u ? plen - 1u : 0u;
+        size_t carry = 0u;
+
+        if (!bx_search_scanner_reserve(scanner, BX_SEARCH_DEFERRED_CHUNK_CAP + overlap))
+            goto out;
+        for (;;) {
+            if (carry > 0u)
+                memmove(scanner->buf, scanner->buf + scanner->len - carry, carry);
+            scanner->len = carry;
+
+            ssize_t nread;
+            do {
+                nread = read(fd, scanner->buf + carry, scanner->cap - carry);
+            } while (nread < 0 && errno == EINTR);
+            if (nread < 0)
+                goto out_error;
+            scanner->len += (size_t)nread;
+            searched_len += (size_t)nread;
+            bx_search_dev_counters_note_bytes_read((size_t)nread);
+
+            if (scanner->len > 0u) {
+                struct bx_match bm;
+                if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
+                    result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
+                    goto out;
+                }
+            }
+
+            if (nread == 0) {
+                result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
+                goto out;
+            }
+            carry = overlap < scanner->len ? overlap : scanner->len;
+        }
+    }
+
+out_error:
+    bx_search_report_path_error(progname,
+                                display_name ? display_name : filename,
+                                errno ? errno : EIO,
+                                opts);
+    result = BX_SEARCH_DEFERRED_PRECHECK_ERROR;
+
+out:
+    close(fd);
+    if (result == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH && stats) {
+        stats->files_searched++;
+        stats->bytes_searched += searched_len;
+    }
+    return result;
 }
 
 static int search_file_opened_without_reopen(FILE *f,
@@ -634,6 +761,17 @@ static int search_file(const char *filename,
                                                f, true, filename, display_name, progname, m, opts,
                                                match_count, scanner, record_stream, stats);
         goto out;
+    }
+
+    if (!use_stdin) {
+        int precheck = search_file_deferred_literal_precheck_path(filename, display_name,
+                                                                  progname, m, exec_plan, opts,
+                                                                  scanner, stats);
+        if (precheck == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
+            precheck == BX_SEARCH_DEFERRED_PRECHECK_ERROR) {
+            result = precheck;
+            goto out;
+        }
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {

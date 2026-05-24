@@ -546,7 +546,7 @@ static enum bx_walk_action bx_rg_sched_frontier_visit(struct bx_walk_entry *entr
 
     if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, state->sched->opts))
+    if (bx_search_entry_should_skip_recursive_special_input(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
 
     if (state->pending_batch && state->pending_batch->u.batch.count >= BX_RG_SCHED_BATCH_MAX_FILES) {
@@ -751,7 +751,7 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
     }
     if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, state->sched->opts))
+    if (bx_search_entry_should_skip_recursive_special_input(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
 
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);

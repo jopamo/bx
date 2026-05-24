@@ -149,15 +149,6 @@ static void bx_search_parallel_drop_empty_pending_job(struct bx_search_parallel_
     state->pending_job = NULL;
 }
 
-static size_t bx_search_parallel_job_item_cost(const char *path,
-                                               const char *display_name,
-                                               bool display_name_is_path) {
-    size_t total = strlen(path) + 1u;
-    if (display_name && !display_name_is_path)
-        total += strlen(display_name) + 1u;
-    return total;
-}
-
 static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job *job,
                                                    size_t needed) {
     char *tmp;
@@ -194,21 +185,19 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
     return true;
 }
 
-static char *bx_search_parallel_job_store_string(struct bx_search_parallel_job *job,
-                                                 const char *text) {
-    size_t len;
+static char *bx_search_parallel_job_store_string_len(struct bx_search_parallel_job *job,
+                                                     const char *text,
+                                                     size_t len_with_nul) {
     char *dest;
 
-    if (!job || !text)
+    if (!job || !text || len_with_nul == 0u)
         return NULL;
-
-    len = strlen(text) + 1u;
-    if (!bx_search_parallel_job_reserve_storage(job, job->storage_len + len))
+    if (!bx_search_parallel_job_reserve_storage(job, job->storage_len + len_with_nul))
         return NULL;
 
     dest = job->storage + job->storage_len;
-    memcpy(dest, text, len);
-    job->storage_len += len;
+    memcpy(dest, text, len_with_nul);
+    job->storage_len += len_with_nul;
     return dest;
 }
 
@@ -282,13 +271,20 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
     struct bx_search_parallel_job *job;
     struct bx_search_parallel_job_item *item;
     size_t item_cost;
+    size_t path_len;
+    size_t display_len = 0u;
 
     if (!state || !path)
         return false;
     if (bx_cancel_state_requested(&state->cancel))
         return false;
 
-    item_cost = bx_search_parallel_job_item_cost(path, display_name, display_name_is_path);
+    path_len = strlen(path) + 1u;
+    item_cost = path_len;
+    if (display_name && !display_name_is_path) {
+        display_len = strlen(display_name) + 1u;
+        item_cost += display_len;
+    }
     job = state->pending_job;
     if (job &&
         (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
@@ -307,14 +303,15 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
     }
 
     item = &job->items[job->count];
-    item->path = bx_search_parallel_job_store_string(job, path);
+    item->path = bx_search_parallel_job_store_string_len(job, path, path_len);
     if (!item->path) {
         bx_search_parallel_drop_empty_pending_job(state);
         return false;
     }
 
     if (display_name && !display_name_is_path) {
-        item->display_name = bx_search_parallel_job_store_string(job, display_name);
+        item->display_name = bx_search_parallel_job_store_string_len(job, display_name,
+                                                                     display_len);
         if (!item->display_name) {
             bx_search_parallel_drop_empty_pending_job(state);
             return false;
@@ -498,7 +495,7 @@ static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entr
     }
     if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, state->parallel->opts))
+    if (bx_search_entry_should_skip_recursive_special_input(entry, state->parallel->opts))
         return BX_WALK_CONTINUE;
 
     display_name = NULL;

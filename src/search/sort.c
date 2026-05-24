@@ -200,7 +200,7 @@ static enum bx_walk_action bx_search_sort_walk_cb(struct bx_walk_entry *entry, v
         return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, state->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_special_input(entry, state->opts))
+    if (bx_search_entry_should_skip_recursive_special_input(entry, state->opts))
         return BX_WALK_CONTINUE;
 
     switch (bx_search_sorted_paths_add(state, entry->path, state->strip_dot_prefix)) {

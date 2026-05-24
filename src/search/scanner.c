@@ -12,7 +12,7 @@
 
 #define BX_SEARCH_SCANNER_CHUNK_CAP 65536u
 
-static bool bx_search_scanner_reserve(struct bx_search_scanner *scanner, size_t needed) {
+bool bx_search_scanner_reserve(struct bx_search_scanner *scanner, size_t needed) {
     if (scanner->cap >= needed)
         return true;
 

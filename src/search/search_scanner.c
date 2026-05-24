@@ -157,7 +157,8 @@ int bx_search_scanner_opened(FILE *f,
         && !need_initial_tab;
     const char *match_sep = bx_search_match_field_separator(opts);
     size_t match_sep_len = opts->null_filename ? 1u : strlen(match_sep);
-    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    size_t display_name_len = 0u;
+    bool display_name_len_ready = false;
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     FILE *out = NULL;
     bool output_is_captured = bx_search_stdout_is_captured();
@@ -174,16 +175,6 @@ int bx_search_scanner_opened(FILE *f,
 
     if (stats)
         stats->files_searched++;
-
-    if (!shortcut_file_presence
-        && fast_plain_line_output
-        && !heading_enabled
-        && opts->show_filename
-        && display_name) {
-        fast_plain_prefix = bx_search_scanner_prepare_fast_plain_prefix(
-            display_name, display_name_len, match_sep, match_sep_len, opts, &fast_plain_prefix_len
-        );
-    }
 
     bx_search_scanner_begin_file(scanner, (char)delimiter, need_line_numbers);
     while (!stop && bx_search_scanner_read_chunk(scanner, f)) {
@@ -299,8 +290,23 @@ int bx_search_scanner_opened(FILE *f,
                 bx_search_print_omitted_long_line(opts);
             } else if (fast_plain_line_output) {
                 const char *prefix_name = heading_printed_for_file ? NULL : display_name;
-                size_t prefix_name_len = heading_printed_for_file ? 0u : display_name_len;
+                size_t prefix_name_len = 0u;
                 size_t printed_bytes = 0u;
+
+                if (!heading_printed_for_file && display_name && !display_name_len_ready) {
+                    display_name_len = strlen(display_name);
+                    display_name_len_ready = true;
+                }
+                prefix_name_len = heading_printed_for_file ? 0u : display_name_len;
+                if (!fast_plain_prefix
+                    && !heading_printed_for_file
+                    && opts->show_filename
+                    && display_name) {
+                    fast_plain_prefix = bx_search_scanner_prepare_fast_plain_prefix(
+                        display_name, display_name_len, match_sep, match_sep_len,
+                        opts, &fast_plain_prefix_len
+                    );
+                }
 
                 if (!output_is_captured)
                     flockfile(out);

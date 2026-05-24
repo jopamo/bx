@@ -76,6 +76,7 @@ struct bx_search_exec_plan {
     enum bx_search_file_kernel_kind stdin_path_kernel;
     enum bx_search_file_kernel_kind binary_search_kernel;
     bool raw_presence_supported;
+    bool deferred_literal_precheck;
 };
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts);
