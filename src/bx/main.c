@@ -123,6 +123,8 @@ static const struct applet applets[] = {
     {"expand", bx_expand_main},
     {"id", bx_id_main},
     {"logname", bx_logname_main},
+    {"man", bx_man_main},
+    {"mandoc", bx_mandoc_main},
     {"join", bx_join_main},
     {"comm", bx_comm_main},
     {"cksum", bx_cksum_main},

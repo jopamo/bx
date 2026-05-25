@@ -18,6 +18,7 @@ edit_vim_runtime_install_path = join_paths(get_option('prefix'), edit_vim_runtim
 edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'edit', 'runtime')
 
 cc = meson.get_compiler('c')
+can_run = meson.can_run_host_binaries()
 warn_flags = [
   '-Wshadow',
   '-Wstrict-prototypes',
@@ -215,6 +216,7 @@ bx_lib_sources = [
   'src/lib/id_parse.c',
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
+  'src/lib/manual_runtime.c',
   'src/lib/output_sink.c',
   'src/lib/output.c',
   'src/lib/overwrite_ops.c',
@@ -393,6 +395,8 @@ bx_text_applet_sources = [
   'src/applets/text/ed/main_loop.c',
   'src/applets/text/ed/regex.c',
   'src/applets/text/ed/signal.c',
+  'src/applets/text/man/man.c',
+  'src/applets/text/mandoc/mandoc.c',
   'src/applets/text/fd/fd.c',
   'src/applets/text/fd/fd_exec.c',
   'src/applets/text/fd/fd_match.c',
@@ -965,6 +969,179 @@ jq_lib = static_library('bx_jq',
   c_args : jq_c_args,
 )
 
+manual_utf8_locale = ''
+manual_utf8_locale_candidates = [
+  'C.UTF-8',
+  'C.utf8',
+  'en_US.UTF-8',
+  'en_US.utf8',
+]
+
+locale_prog = find_program('locale', required : false)
+if locale_prog.found()
+  locale_list = run_command(locale_prog, '-a', check : false)
+  if locale_list.returncode() == 0
+    foreach loc : locale_list.stdout().strip().split('\n')
+      low = loc.to_lower()
+      if low.contains('.utf') and low.contains('8')
+        if not manual_utf8_locale_candidates.contains(loc)
+          manual_utf8_locale_candidates += [loc]
+        endif
+      endif
+    endforeach
+  endif
+endif
+
+manual_utf8_locale_check = '''
+  #include <locale.h>
+  int main(void) {
+    return setlocale(LC_CTYPE, TEST_LOCALE) == NULL;
+  }
+'''
+
+if can_run
+  foreach loc : manual_utf8_locale_candidates
+    locale_check = cc.run(
+      manual_utf8_locale_check,
+      args : ['-DTEST_LOCALE="@0@"'.format(loc)],
+      name : 'manual utf8 locale ' + loc,
+    )
+    if locale_check.compiled() and locale_check.returncode() == 0
+      manual_utf8_locale = loc
+      break
+    endif
+  endforeach
+endif
+
+manual_have_wchar = false
+if manual_utf8_locale != ''
+  manual_wchar_check = '''
+    #define _DEFAULT_SOURCE
+    #define _GNU_SOURCE
+    #define _XOPEN_SOURCE 700
+    #include <locale.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <wchar.h>
+    int main(void) {
+      char buf[MB_CUR_MAX];
+      mbstate_t ps;
+      if (setlocale(LC_CTYPE, TEST_LOCALE) == NULL)
+        return 1;
+      if (sizeof(wchar_t) < 4)
+        return 1;
+      if (wcwidth(L' ') != 1 || wcwidth(0x2013) != 1)
+        return 1;
+      memset(&ps, 0, sizeof(ps));
+      return wcrtomb(buf, 0x2013, &ps) == (size_t)-1;
+    }
+  '''
+  if can_run
+    wchar_check = cc.run(
+      manual_wchar_check,
+      args : ['-DTEST_LOCALE="@0@"'.format(manual_utf8_locale)],
+      name : 'manual utf8 byte output',
+    )
+    manual_have_wchar = wchar_check.compiled() and wchar_check.returncode() == 0
+  else
+    manual_have_wchar = cc.links(
+      manual_wchar_check,
+      args : ['-DTEST_LOCALE="@0@"'.format(manual_utf8_locale)],
+      name : 'manual utf8 byte output',
+    )
+  endif
+endif
+
+manual_sources = files(
+  'src/lib/manual/apps/main.c',
+  'src/lib/manual/core/manpath.c',
+  'src/lib/manual/core/man_markdown.c',
+  'src/lib/manual/core/markdown_man.c',
+  'src/lib/manual/core/mdoc_man.c',
+  'src/lib/manual/core/mdoc_markdown.c',
+  'src/lib/manual/core/out.c',
+  'src/lib/manual/core/eqn_term.c',
+  'src/lib/manual/core/man_term.c',
+  'src/lib/manual/core/mdoc_term.c',
+  'src/lib/manual/core/roff_term.c',
+  'src/lib/manual/core/term.c',
+  'src/lib/manual/core/term_ascii.c',
+  'src/lib/manual/core/term_tab.c',
+  'src/lib/manual/core/term_tag.c',
+  'src/lib/manual/core/tbl_term.c',
+  'src/lib/manual/core/man.c',
+  'src/lib/manual/core/man_macro.c',
+  'src/lib/manual/core/man_validate.c',
+  'src/lib/manual/core/att.c',
+  'src/lib/manual/core/lib.c',
+  'src/lib/manual/core/mdoc.c',
+  'src/lib/manual/core/mdoc_argv.c',
+  'src/lib/manual/core/mdoc_macro.c',
+  'src/lib/manual/core/mdoc_state.c',
+  'src/lib/manual/core/mdoc_validate.c',
+  'src/lib/manual/core/st.c',
+  'src/lib/manual/core/eqn.c',
+  'src/lib/manual/core/roff.c',
+  'src/lib/manual/core/roff_escape.c',
+  'src/lib/manual/core/roff_validate.c',
+  'src/lib/manual/core/tbl.c',
+  'src/lib/manual/core/tbl_data.c',
+  'src/lib/manual/core/tbl_layout.c',
+  'src/lib/manual/core/tbl_opts.c',
+  'src/lib/manual/core/arch.c',
+  'src/lib/manual/core/chars.c',
+  'src/lib/manual/core/mandoc.c',
+  'src/lib/manual/core/mandoc_aux.c',
+  'src/lib/manual/core/mandoc_msg.c',
+  'src/lib/manual/core/mandoc_ohash.c',
+  'src/lib/manual/core/mandoc_xr.c',
+  'src/lib/manual/core/msec.c',
+  'src/lib/manual/core/preconv.c',
+  'src/lib/manual/core/read.c',
+  'src/lib/manual/core/tag.c',
+  'src/lib/manual/compat/compat_progname.c',
+  'src/lib/manual/compat/compat_reallocarray.c',
+  'src/lib/manual/compat/compat_recallocarray.c',
+  'src/lib/manual/compat/compat_strlcat.c',
+  'src/lib/manual/compat/compat_strlcpy.c',
+  'src/lib/manual/compat/compat_strtonum.c',
+  'src/lib/manual/compat/compat_ohash.c',
+)
+
+manual_include_dirs = include_directories(
+  'src/lib/manual',
+  'src/lib/manual/include',
+  'src/lib/manual/data',
+)
+
+manual_deps = [zlib_dep]
+if libbz2_dep.found()
+  manual_deps += [libbz2_dep]
+endif
+
+manual_c_args = cc.get_supported_arguments([
+  '-Wno-error',
+  '-Wno-cast-qual',
+  '-Wno-declaration-after-statement',
+  '-Wno-missing-prototypes',
+  '-Wno-sign-compare',
+  '-Wno-unused-parameter',
+  '-Wno-unused-variable',
+])
+manual_c_args += [
+  '-D_GNU_SOURCE',
+  '-DBX_MANUAL_HAVE_WCHAR=' + (manual_have_wchar ? '1' : '0'),
+  '-DBX_MANUAL_UTF8_LOCALE="' + manual_utf8_locale + '"',
+  '-Dmain=bx_mandoc_main_impl',
+]
+
+manual_lib = static_library('bx_manual',
+  manual_sources,
+  include_directories : manual_include_dirs,
+  dependencies : manual_deps,
+  c_args : manual_c_args,
+)
+
 bc_host_c_args = cc.get_supported_arguments([
   '-Wno-error',
 ])
@@ -999,7 +1176,7 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'vim', 'jq', 'xxd', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
+applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'man', 'mandoc', 'vim', 'jq', 'xxd', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
@@ -1025,7 +1202,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib],
+  link_whole : [nc_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

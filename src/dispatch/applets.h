@@ -83,6 +83,8 @@ int bx_hostid_main(int argc, char** argv);
 int bx_hostname_main(int argc, char** argv);
 int bx_echo_main(int argc, char** argv);
 int bx_ed_main(int argc, char** argv);
+int bx_man_main(int argc, char** argv);
+int bx_mandoc_main(int argc, char** argv);
 int bx_vim_main(int argc, char** argv);
 int bx_jq_main(int argc, char** argv);
 int bx_xxd_main(int argc, char** argv);
