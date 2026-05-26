@@ -39,6 +39,8 @@ const struct bx_archive_codec* bx_archive_codec_zstd(void);
 const char* bx_archive_codec_name(const struct bx_archive_codec* codec);
 bool bx_archive_codec_supports_mt_encode(const struct bx_archive_codec* codec);
 bool bx_archive_codec_matches_path_suffix(const struct bx_archive_codec* codec, const char* path);
+const struct bx_archive_codec* bx_archive_codec_detect_path_suffix(const char* path);
+const struct bx_archive_codec* bx_archive_codec_detect_fd(int fd);
 
 bool bx_archive_codec_encode_buffer(const struct bx_archive_codec* codec,
                                     const struct bx_archive_buffer* input,
@@ -64,6 +66,10 @@ bool bx_archive_codec_run_encode_mt_stream(const struct bx_archive_codec* codec,
 bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
                                  const struct bx_archive_codec_input_options* options,
                                  struct bx_diag_ctx* diag);
+bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
+                                    int fd,
+                                    const struct bx_archive_codec* required_codec,
+                                    struct bx_diag_ctx* diag);
 bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,
                                       unsigned char* buffer,
                                       size_t len,

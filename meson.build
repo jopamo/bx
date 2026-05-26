@@ -153,31 +153,37 @@ endif
 if not libbz2_dep.found() and not use_static_binary
   libbz2_dep = cc.find_library('bz2', required : false)
 endif
-if libbz2_dep.found()
-  add_project_arguments('-DBX_HAVE_LIBBZ2=1', language : 'c')
-else
-  add_project_arguments('-DBX_HAVE_LIBBZ2=0', language : 'c')
+if not libbz2_dep.found()
+  if use_static_binary
+    error('libbz2 is required; bx man/mandoc must not silently build without bzip2-compressed manual page support. Provide a static libbz2 or reconfigure with -Dstatic_binary=disabled.')
+  endif
+  error('libbz2 is required; bx man/mandoc must not silently build without bzip2-compressed manual page support.')
 endif
+add_project_arguments('-DBX_HAVE_LIBBZ2=1', language : 'c')
 
 liblzma_dep = dependency('liblzma', required : false, static: use_static_binary)
 if not liblzma_dep.found()
   liblzma_dep = cc.find_library('lzma', required : false)
 endif
-if liblzma_dep.found()
-  add_project_arguments('-DBX_HAVE_LIBLZMA=1', language : 'c')
-else
-  add_project_arguments('-DBX_HAVE_LIBLZMA=0', language : 'c')
+if not liblzma_dep.found()
+  if use_static_binary
+    error('liblzma is required; bx man/mandoc must not silently build without xz-compressed manual page support. Provide a static liblzma or reconfigure with -Dstatic_binary=disabled.')
+  endif
+  error('liblzma is required; bx man/mandoc must not silently build without xz-compressed manual page support.')
 endif
+add_project_arguments('-DBX_HAVE_LIBLZMA=1', language : 'c')
 
 libzstd_dep = dependency('libzstd', required : false, static: use_static_binary)
 if not libzstd_dep.found()
   libzstd_dep = cc.find_library('zstd', required : false)
 endif
-if libzstd_dep.found()
-  add_project_arguments('-DBX_HAVE_LIBZSTD=1', language : 'c')
-else
-  add_project_arguments('-DBX_HAVE_LIBZSTD=0', language : 'c')
+if not libzstd_dep.found()
+  if use_static_binary
+    error('libzstd is required; bx man/mandoc must not silently build without zstd-compressed manual page support. Provide a static libzstd or reconfigure with -Dstatic_binary=disabled.')
+  endif
+  error('libzstd is required; bx man/mandoc must not silently build without zstd-compressed manual page support.')
 endif
+add_project_arguments('-DBX_HAVE_LIBZSTD=1', language : 'c')
 
 bx_deps = [cc.find_library('m', required : false), threads_dep, pcre2_dep, zlib_dep]
 if libbz2_dep.found()
@@ -1127,15 +1133,13 @@ if not manual_have_strlcpy
 endif
 
 manual_include_dirs = include_directories(
+  'src',
   'src/lib/manual',
   'src/lib/manual/include',
   'src/lib/manual/data',
 )
 
-manual_deps = [zlib_dep]
-if libbz2_dep.found()
-  manual_deps += [libbz2_dep]
-endif
+manual_deps = [zlib_dep, libbz2_dep, liblzma_dep, libzstd_dep]
 
 manual_c_args = cc.get_supported_arguments([
   '-Wno-error',

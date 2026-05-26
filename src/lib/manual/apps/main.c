@@ -47,6 +47,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "applets/archive/archive_codec.h"
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "mandoc_xr.h"
@@ -480,12 +481,12 @@ main(int argc, char *argv[])
 					prio += 10; /* Wrong dir name. */
 				if (search.sec != NULL) {
 					ep = strchr(sec, '\0');
-					if (ep - sec > 3 &&
-					    strncmp(ep - 3, ".gz", 3) == 0)
-						ep -= 3;
-					else if (ep - sec > 4 &&
-					    strncmp(ep - 4, ".bz2", 4) == 0)
-						ep -= 4;
+					if (bx_archive_codec_detect_path_suffix(sec) != NULL) {
+						const char *suffix = strrchr(sec, '.');
+
+						if (suffix != NULL)
+							ep = suffix;
+					}
 					if ((size_t)(ep - sec) < ssz + 3 ||
 					    strncmp(ep - ssz, search.sec,
 					     ssz) != 0)      /* Wrong file */

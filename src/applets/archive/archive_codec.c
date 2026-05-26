@@ -160,6 +160,22 @@ bool bx_archive_codec_matches_path_suffix(const struct bx_archive_codec* codec, 
         && codec->matches_path_suffix(path);
 }
 
+const struct bx_archive_codec* bx_archive_codec_detect_path_suffix(const char* path) {
+    if (bx_archive_codec_matches_path_suffix(bx_archive_codec_gzip(), path)) {
+        return bx_archive_codec_gzip();
+    }
+    if (bx_archive_codec_matches_path_suffix(bx_archive_codec_bzip2(), path)) {
+        return bx_archive_codec_bzip2();
+    }
+    if (bx_archive_codec_matches_path_suffix(bx_archive_codec_xz(), path)) {
+        return bx_archive_codec_xz();
+    }
+    if (bx_archive_codec_matches_path_suffix(bx_archive_codec_zstd(), path)) {
+        return bx_archive_codec_zstd();
+    }
+    return NULL;
+}
+
 static bool bx_archive_codec_copy_buffer(const struct bx_archive_buffer* input,
                                          struct bx_archive_buffer* output,
                                          struct bx_diag_ctx* diag) {
@@ -447,7 +463,7 @@ static const struct bx_archive_codec* bx_archive_codec_detect_magic(const unsign
     return NULL;
 }
 
-static const struct bx_archive_codec* bx_archive_codec_detect_seekable_fd(int fd) {
+const struct bx_archive_codec* bx_archive_codec_detect_fd(int fd) {
     unsigned char magic[6];
     ssize_t nread = pread(fd, magic, sizeof(magic), 0);
 
@@ -457,16 +473,15 @@ static const struct bx_archive_codec* bx_archive_codec_detect_seekable_fd(int fd
     return bx_archive_codec_detect_magic(magic, (size_t)nread);
 }
 
-bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
-                                 const struct bx_archive_codec_input_options* options,
-                                 struct bx_diag_ctx* diag) {
+static bool bx_archive_codec_input_open_owned_fd(struct bx_archive_codec_input** input_out,
+                                                 int fd,
+                                                 const struct bx_archive_codec* required_codec,
+                                                 struct bx_diag_ctx* diag) {
     struct bx_archive_codec_input* input;
-    const struct bx_archive_codec* required_codec;
-    int fd;
     bool use_gzip_stream = false;
     bool tune_gzip_buffer = false;
 
-    if (input_out == NULL || options == NULL) {
+    if (input_out == NULL) {
         bx_diag(diag, "invalid archive codec reader configuration");
         return false;
     }
@@ -475,23 +490,6 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     input = xmalloc(sizeof(*input));
     memset(input, 0, sizeof(*input));
     input->fd = -1;
-
-    if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        fd = dup(STDIN_FILENO);
-        if (fd < 0) {
-            free(input);
-            bx_diag(diag, "read error: %s", strerror(errno));
-            return false;
-        }
-    }
-    else {
-        fd = open(options->archive_path, O_RDONLY);
-        if (fd < 0) {
-            free(input);
-            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
-            return false;
-        }
-    }
 
     {
         struct stat st;
@@ -503,9 +501,8 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
             input->plain_size = (uint64_t)st.st_size;
         }
     }
-    required_codec = options->required_codec;
     if (required_codec == NULL && input->plain_seekable) {
-        required_codec = bx_archive_codec_detect_seekable_fd(fd);
+        required_codec = bx_archive_codec_detect_fd(fd);
     }
     input->required_codec = required_codec;
 
@@ -578,6 +575,52 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
 
     *input_out = input;
     return true;
+}
+
+bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
+                                    int fd,
+                                    const struct bx_archive_codec* required_codec,
+                                    struct bx_diag_ctx* diag) {
+    int owned_fd;
+
+    if (input_out == NULL || fd < 0) {
+        bx_diag(diag, "invalid archive codec reader configuration");
+        return false;
+    }
+    owned_fd = dup(fd);
+    if (owned_fd < 0) {
+        bx_diag(diag, "read error: %s", strerror(errno));
+        return false;
+    }
+    return bx_archive_codec_input_open_owned_fd(input_out, owned_fd, required_codec, diag);
+}
+
+bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
+                                 const struct bx_archive_codec_input_options* options,
+                                 struct bx_diag_ctx* diag) {
+    int fd;
+
+    if (input_out == NULL || options == NULL) {
+        bx_diag(diag, "invalid archive codec reader configuration");
+        return false;
+    }
+
+    if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
+        fd = dup(STDIN_FILENO);
+        if (fd < 0) {
+            bx_diag(diag, "read error: %s", strerror(errno));
+            return false;
+        }
+    }
+    else {
+        fd = open(options->archive_path, O_RDONLY);
+        if (fd < 0) {
+            bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
+            return false;
+        }
+    }
+
+    return bx_archive_codec_input_open_owned_fd(input_out, fd, options->required_codec, diag);
 }
 
 bool bx_archive_codec_input_read_some(struct bx_archive_codec_input* input,

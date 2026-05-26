@@ -37,10 +37,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <zlib.h>
-#if HAVE_BZLIB
-#include <bzlib.h>
-#endif
+
+#include "applets/archive/archive_codec.h"
+#include "bx/diag.h"
 
 #include "mandoc_aux.h"
 #include "mandoc.h"
@@ -54,12 +53,6 @@
 
 #define	REPARSE_LIMIT	1000
 
-enum	input_type {
-	INPUT_FILE = 0,
-	INPUT_GZ,
-	INPUT_BZ2
-};
-
 struct	mparse {
 	struct roff	 *roff; /* roff parser (!NULL) */
 	struct roff_man	 *man; /* man parser */
@@ -68,20 +61,21 @@ struct	mparse {
 	struct buf	 *loop; /* open .while request line */
 	const char	 *os_s; /* default operating system */
 	int		  options; /* parser options */
-	enum input_type	  filetype; /* compression state of current input */
 	int		  filenc; /* encoding of the current file */
 	int		  reparse_count; /* finite interp. stack */
 	int		  line; /* line number in the file */
 };
 
 static	void	  choose_parser(struct mparse *);
-static	enum input_type filename_type(const char *);
 static	void	  free_buf_list(struct buf *);
 static	const char *filename_sec(const char *);
 static	void	  resize_buf(struct buf *, size_t);
 static	int	  mparse_buf_r(struct mparse *, struct buf, size_t, int);
-static	int	  read_whole_file(struct mparse *, int, struct buf *, int *);
+static	int	  read_whole_file(struct mparse *, int, const char *,
+			struct buf *, int *);
 static	void	  mparse_end(struct mparse *);
+static	int	  read_compressed_file(int, const struct bx_archive_codec *,
+			struct buf *);
 
 
 static void
@@ -151,21 +145,30 @@ choose_parser(struct mparse *curp)
 	curp->man->meta.first->tok = TOKEN_NONE;
 }
 
-static enum input_type
-filename_type(const char *file)
-{
-	const char	*cp;
+struct diag_capture {
+	char	*message;
+};
 
-	cp = strrchr(file, '.');
-	if (cp == NULL)
-		return INPUT_FILE;
-	if (strcmp(cp + 1, "gz") == 0)
-		return INPUT_GZ;
-#if HAVE_BZLIB
-	if (strcmp(cp + 1, "bz2") == 0)
-		return INPUT_BZ2;
-#endif
-	return INPUT_FILE;
+static const struct bx_archive_codec *
+filename_compression_codec(const char *file)
+{
+
+	return file == NULL ? NULL : bx_archive_codec_detect_path_suffix(file);
+}
+
+static void
+capture_diag_message(void *user, const char *progname, const char *message)
+{
+	struct diag_capture	*capture;
+	size_t			 needed;
+
+	(void)progname;
+	capture = user;
+	if (capture == NULL || capture->message != NULL || message == NULL)
+		return;
+	needed = strlen(message) + 1;
+	capture->message = mandoc_malloc(needed);
+	memcpy(capture->message, message, needed);
 }
 
 static const char *
@@ -177,7 +180,7 @@ filename_sec(const char *file)
 	cp = strrchr(file, '.');
 	if (cp == NULL)
 		return NULL;
-	if (filename_type(file) != INPUT_FILE) {
+	if (filename_compression_codec(file) != NULL) {
 		len = (size_t)(cp - file);
 		while (len > 0 && file[len - 1] != '.')
 			len--;
@@ -485,21 +488,95 @@ out:
 }
 
 static int
-read_whole_file(struct mparse *curp, int fd, struct buf *fb, int *with_mmap)
+read_compressed_file(int fd, const struct bx_archive_codec *codec, struct buf *fb)
+{
+	struct bx_archive_codec_input	*input;
+	struct bx_diag_ctx		 diag;
+	struct diag_capture		 capture;
+	size_t				 off, nread;
+	int				 retval;
+
+	memset(&capture, 0, sizeof(capture));
+	memset(&diag, 0, sizeof(diag));
+	diag.progname = getprogname();
+	diag.emit = capture_diag_message;
+	diag.emit_user = &capture;
+
+	fb->sz = 0;
+	fb->buf = NULL;
+	retval = -1;
+
+	if ( ! bx_archive_codec_input_open_fd(&input, fd, codec, &diag)) {
+		mandoc_msg(MANDOCERR_OPEN, 0, 0, "%s",
+		    capture.message != NULL ? capture.message :
+		    "failed to initialize compressed manual page reader");
+		goto out;
+	}
+
+	off = 0;
+	for (;;) {
+		if (off == fb->sz) {
+			if (fb->sz == (1U << 31)) {
+				mandoc_msg(MANDOCERR_TOOLARGE, 0, 0, NULL);
+				goto close_input;
+			}
+			resize_buf(fb, 65536);
+		}
+		if ( ! bx_archive_codec_input_read_some(input,
+		    (unsigned char *)fb->buf + off, fb->sz - off, &nread,
+		    &diag)) {
+			mandoc_msg(MANDOCERR_READ, 0, 0, "%s",
+			    capture.message != NULL ? capture.message :
+			    "failed to read compressed manual page");
+			goto close_input;
+		}
+		if (nread == 0)
+			break;
+		off += nread;
+	}
+	if ( ! bx_archive_codec_input_finish_success(input, &diag)) {
+		mandoc_msg(MANDOCERR_READ, 0, 0, "%s",
+		    capture.message != NULL ? capture.message :
+		    "failed to finish compressed manual page read");
+		goto close_input;
+	}
+	fb->sz = off;
+	retval = 0;
+
+close_input:
+	bx_archive_codec_input_close(input);
+out:
+	if (retval == -1) {
+		free(fb->buf);
+		fb->buf = NULL;
+	}
+	free(capture.message);
+	return retval;
+}
+
+static int
+read_whole_file(struct mparse *curp, int fd, const char *filename,
+    struct buf *fb, int *with_mmap)
 {
 	struct stat	 st;
-	gzFile		 gz;
-#if HAVE_BZLIB
-	BZFILE		*bz;
-	int		 bzerrnum;
-#endif
+	const struct bx_archive_codec *codec;
 	size_t		 off;
 	ssize_t		 ssz;
-	int		 gzerrnum, retval;
+	int		 retval;
+
+	(void)curp;
 
 	if (fstat(fd, &st) == -1) {
 		mandoc_msg(MANDOCERR_FSTAT, 0, 0, "%s", strerror(errno));
 		return -1;
+	}
+
+	codec = filename_compression_codec(filename);
+	if (codec == NULL && S_ISREG(st.st_mode))
+		codec = bx_archive_codec_detect_fd(fd);
+	if (codec != NULL) {
+		*with_mmap = 0;
+		return read_compressed_file(fd, codec, fb);
 	}
 
 	/*
@@ -509,7 +586,7 @@ read_whole_file(struct mparse *curp, int fd, struct buf *fb, int *with_mmap)
 	 * concerned that this is going to tank any machines.
 	 */
 
-	if (curp->filetype == INPUT_FILE && S_ISREG(st.st_mode)) {
+	if (S_ISREG(st.st_mode)) {
 		if (st.st_size > 0x7fffffff) {
 			mandoc_msg(MANDOCERR_TOOLARGE, 0, 0, NULL);
 			return -1;
@@ -520,41 +597,6 @@ read_whole_file(struct mparse *curp, int fd, struct buf *fb, int *with_mmap)
 		if (fb->buf != MAP_FAILED)
 			return 0;
 	}
-
-	gz = NULL;
-#if HAVE_BZLIB
-	bz = NULL;
-	bzerrnum = BZ_OK;
-#endif
-	if (curp->filetype != INPUT_FILE) {
-		/*
-		 * Duplicating the file descriptor is required because
-		 * compressed stream close functions also close the file
-		 * descriptor, which this function must not do.
-		 */
-		if ((fd = dup(fd)) == -1) {
-			mandoc_msg(MANDOCERR_DUP, 0, 0,
-			    "%s", strerror(errno));
-			return -1;
-		}
-		if (curp->filetype == INPUT_GZ) {
-			if ((gz = gzdopen(fd, "rb")) != NULL)
-				goto ready;
-			mandoc_msg(MANDOCERR_GZDOPEN, 0, 0,
-			    "%s", strerror(errno));
-			close(fd);
-			return -1;
-		}
-#if HAVE_BZLIB
-		if ((bz = BZ2_bzdopen(fd, "rb")) != NULL)
-			goto ready;
-		mandoc_msg(MANDOCERR_OPEN, 0, 0,
-		    "%s", strerror(errno));
-		close(fd);
-		return -1;
-#endif
-	}
-ready:
 
 	/*
 	 * If this isn't a regular file (like, say, stdin), then we must
@@ -574,45 +616,18 @@ ready:
 			}
 			resize_buf(fb, 65536);
 		}
-		if (curp->filetype == INPUT_GZ)
-			ssz = gzread(gz, fb->buf + (int)off, fb->sz - off);
-#if HAVE_BZLIB
-		else if (curp->filetype == INPUT_BZ2)
-			ssz = BZ2_bzread(bz, fb->buf + (int)off,
-			    (int)(fb->sz - off));
-#endif
-		else
-			ssz = read(fd, fb->buf + (int)off, fb->sz - off);
+		ssz = read(fd, fb->buf + (int)off, fb->sz - off);
 		if (ssz == 0) {
 			fb->sz = off;
 			retval = 0;
 			break;
 		}
 		if (ssz == -1) {
-			if (curp->filetype == INPUT_GZ)
-				(void)gzerror(gz, &gzerrnum);
-			mandoc_msg(MANDOCERR_READ, 0, 0, "%s",
-			    curp->filetype == INPUT_GZ &&
-			    gzerrnum != Z_ERRNO ? zError(gzerrnum) :
-#if HAVE_BZLIB
-			    curp->filetype == INPUT_BZ2 ?
-			    BZ2_bzerror(bz, &bzerrnum) :
-#endif
-			    strerror(errno));
+			mandoc_msg(MANDOCERR_READ, 0, 0, "%s", strerror(errno));
 			break;
 		}
 		off += (size_t)ssz;
 	}
-
-	if (curp->filetype == INPUT_GZ &&
-	    (gzerrnum = gzclose(gz)) != Z_OK)
-		mandoc_msg(MANDOCERR_GZCLOSE, 0, 0, "%s",
-		    gzerrnum == Z_ERRNO ? strerror(errno) :
-		    zError(gzerrnum));
-#if HAVE_BZLIB
-	else if (curp->filetype == INPUT_BZ2)
-		BZ2_bzclose(bz);
-#endif
 	if (retval == -1) {
 		free(fb->buf);
 		fb->buf = NULL;
@@ -658,7 +673,7 @@ mparse_readfd(struct mparse *curp, int fd, const char *filename)
         else
                 curp->man->filesec = '\0';
 
-	if (read_whole_file(curp, fd, &blk, &with_mmap) == -1)
+	if (read_whole_file(curp, fd, filename, &blk, &with_mmap) == -1)
 		return;
 
 	/*
@@ -765,10 +780,18 @@ mparse_readmem(struct mparse *curp, const char *buf, size_t sz,
 int
 mparse_open(struct mparse *curp, const char *file)
 {
+	static const char *const suffixes[] = {
+		".gz",
+		".bz2",
+		".xz",
+		".zst",
+		".zstd",
+	};
 	char		 *cp;
 	int		  fd, save_errno;
+	size_t		  i;
 
-	curp->filetype = filename_type(file);
+	(void)curp;
 
 	/* First try to use the filename as it is. */
 
@@ -781,24 +804,15 @@ mparse_open(struct mparse *curp, const char *file)
 	 * try appending known compressed suffixes.
 	 */
 
-	if (curp->filetype == INPUT_FILE) {
+	if (filename_compression_codec(file) == NULL) {
 		save_errno = errno;
-		mandoc_asprintf(&cp, "%s.gz", file);
-		fd = open(cp, O_RDONLY);
-		free(cp);
-		if (fd != -1) {
-			curp->filetype = INPUT_GZ;
-			return fd;
+		for (i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+			mandoc_asprintf(&cp, "%s%s", file, suffixes[i]);
+			fd = open(cp, O_RDONLY);
+			free(cp);
+			if (fd != -1)
+				return fd;
 		}
-#if HAVE_BZLIB
-		mandoc_asprintf(&cp, "%s.bz2", file);
-		fd = open(cp, O_RDONLY);
-		free(cp);
-		if (fd != -1) {
-			curp->filetype = INPUT_BZ2;
-			return fd;
-		}
-#endif
 		errno = save_errno;
 	}
 
@@ -843,7 +857,6 @@ mparse_reset(struct mparse *curp)
 	roff_man_reset(curp->man);
 	free_buf_list(curp->secondary);
 	curp->secondary = NULL;
-	curp->filetype = INPUT_FILE;
 	tag_alloc();
 }
 

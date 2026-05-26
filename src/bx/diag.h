@@ -8,14 +8,38 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
+typedef void (*bx_diag_emit_fn)(void* user, const char* progname, const char* message);
+
 struct bx_diag_ctx {
     const char* progname;
     int exit_status;
     bool verbose;
     bool debug;
+    bx_diag_emit_fn emit;
+    void* emit_user;
 };
 
 static inline void bx_vdiag(const struct bx_diag_ctx* ctx, const char* fmt, va_list ap) {
+    if (ctx->emit != NULL) {
+        va_list ap_copy;
+        int needed;
+        char* message;
+
+        va_copy(ap_copy, ap);
+        needed = vsnprintf(NULL, 0, fmt, ap_copy);
+        va_end(ap_copy);
+        if (needed >= 0) {
+            message = malloc((size_t)needed + 1u);
+            if (message != NULL) {
+                va_copy(ap_copy, ap);
+                (void)vsnprintf(message, (size_t)needed + 1u, fmt, ap_copy);
+                va_end(ap_copy);
+                ctx->emit(ctx->emit_user, ctx->progname, message);
+                free(message);
+                return;
+            }
+        }
+    }
     fprintf(stderr, "%s: ", ctx->progname);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
@@ -30,6 +54,18 @@ static inline void bx_diag(struct bx_diag_ctx* ctx, const char* fmt, ...) {
 }
 
 static inline void bx_perror_path(struct bx_diag_ctx* ctx, const char* path) {
+    if (ctx->emit != NULL) {
+        size_t needed = strlen(path) + 2u + strlen(strerror(errno)) + 1u;
+        char* message = malloc(needed);
+
+        if (message != NULL) {
+            (void)snprintf(message, needed, "%s: %s", path, strerror(errno));
+            ctx->emit(ctx->emit_user, ctx->progname, message);
+            free(message);
+            ctx->exit_status = 1;
+            return;
+        }
+    }
     fprintf(stderr, "%s: %s: %s\n", ctx->progname, path, strerror(errno));
     ctx->exit_status = 1;
 }
