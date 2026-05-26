@@ -1014,6 +1014,19 @@ if can_run
 endif
 
 manual_have_wchar = false
+manual_strl_prefix = '''
+  #define _DEFAULT_SOURCE
+  #define _GNU_SOURCE
+  #include <string.h>
+'''
+manual_have_strlcat = cc.has_function(
+  'strlcat',
+  prefix : manual_strl_prefix,
+)
+manual_have_strlcpy = cc.has_function(
+  'strlcpy',
+  prefix : manual_strl_prefix,
+)
 if manual_utf8_locale != ''
   manual_wchar_check = '''
     #define _DEFAULT_SOURCE
@@ -1102,11 +1115,16 @@ manual_sources = files(
   'src/lib/manual/compat/compat_progname.c',
   'src/lib/manual/compat/compat_reallocarray.c',
   'src/lib/manual/compat/compat_recallocarray.c',
-  'src/lib/manual/compat/compat_strlcat.c',
-  'src/lib/manual/compat/compat_strlcpy.c',
   'src/lib/manual/compat/compat_strtonum.c',
   'src/lib/manual/compat/compat_ohash.c',
 )
+
+if not manual_have_strlcat
+  manual_sources += files('src/lib/manual/compat/compat_strlcat.c')
+endif
+if not manual_have_strlcpy
+  manual_sources += files('src/lib/manual/compat/compat_strlcpy.c')
+endif
 
 manual_include_dirs = include_directories(
   'src/lib/manual',

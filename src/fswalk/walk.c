@@ -53,15 +53,6 @@ static int bx_walk_fill_entry(char *path,
     struct stat lst;
 
     if (!ctx->opts->follow_symlinks) {
-        if (d_type == DT_DIR) {
-            entry->is_dir = true;
-            return 0;
-        }
-        if (d_type != DT_UNKNOWN) {
-            entry->is_dir = false;
-            entry->is_symlink = d_type == DT_LNK;
-            return 0;
-        }
         if (lstat(path, &st) != 0)
             return errno;
         bx_walk_entry_fill_from_stat(entry, &st);
