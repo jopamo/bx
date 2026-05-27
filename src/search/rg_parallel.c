@@ -30,8 +30,8 @@
 #define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES 16384u
 
 struct bx_search_parallel_job_item {
-    char *path;
-    char *display_name;
+    const char *path;
+    const char *display_name;
     bool path_in_storage;
     bool display_name_in_storage;
     bool display_name_is_path;
@@ -343,7 +343,7 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
         }
         item->path_in_storage = true;
     } else {
-        item->path = (char *)path;
+        item->path = path;
         item->path_in_storage = false;
     }
 
@@ -357,7 +357,7 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
             }
             item->display_name_in_storage = true;
         } else {
-            item->display_name = (char *)display_name;
+            item->display_name = display_name;
             item->display_name_in_storage = false;
         }
     } else {
@@ -576,8 +576,9 @@ static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entr
                                                          state->parallel->opts);
         queued_display_name = display_name ? display_name : entry->path;
     }
-    if (!bx_search_parallel_queue_path(state->parallel, entry->path,
+    if (!bx_search_parallel_queue_path(state->parallel, entry->path, true,
                                        queued_display_name,
+                                       !display_name_is_path,
                                        display_name_is_path)) {
         free(display_name);
         return bx_cancel_state_requested(&state->parallel->cancel)
@@ -780,8 +781,9 @@ int bx_search_run_parallel_rg(int argc,
                 display_name = bx_search_display_path_for_output(argv[j], false, opts);
                 queued_display_name = display_name ? display_name : argv[j];
             }
-            if (!bx_search_parallel_queue_path(&state, argv[j],
+            if (!bx_search_parallel_queue_path(&state, argv[j], false,
                                                queued_display_name,
+                                               display_name != NULL,
                                                display_name_is_path)) {
                 free(display_name);
                 if (!bx_cancel_state_requested(&state.cancel))
@@ -812,7 +814,8 @@ int bx_search_run_parallel_rg(int argc,
                 if (bx_search_path_exceeds_max_filesize(argv[j], opts))
                     continue;
             }
-            if (!bx_search_parallel_queue_path(&state, argv[j], NULL, false)) {
+            if (!bx_search_parallel_queue_path(&state, argv[j], false,
+                                               NULL, false, false)) {
                 if (!bx_cancel_state_requested(&state.cancel))
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
                 break;
