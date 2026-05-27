@@ -195,9 +195,11 @@ int bx_search_scanner_opened(FILE *f,
                 break;
 
             if (shortcut_file_presence) {
-                if (!bx_search_matcher_verify_literal_candidate_with_opts(
-                        m, scanner->buf, scanner->scan_len, candidate.chunk_off, opts, &bm)) {
-                    continue;
+                if (!exact_literal_candidates) {
+                    if (!bx_search_matcher_verify_literal_candidate_with_opts(
+                            m, scanner->buf, scanner->scan_len, candidate.chunk_off, opts, &bm)) {
+                        continue;
+                    }
                 }
 
                 file_matches++;
