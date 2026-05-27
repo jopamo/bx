@@ -186,11 +186,23 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
         unsigned char *nul = memchr(prefix, '\0', (size_t)prefix_len);
         if (nul) {
             struct bx_match bm;
-            searched_len = (size_t)prefix_len;
-            result = bx_literal_find(literal, prefix, (size_t)(nul - prefix), 0u, &bm) == 0
-                ? BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH
-                : BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
-            goto out;
+            /*
+             * Default plain-output rg currently treats the first NUL as a
+             * definitive binary cut-off, but quiet mode may still consult the
+             * later binary presence path. Keep the cheap early-positive here,
+             * and only let quiet searches fall through to a full-file
+             * conservative precheck before rejecting the file.
+             */
+            if (bx_literal_find(literal, prefix, (size_t)(nul - prefix), 0u, &bm) == 0) {
+                searched_len = (size_t)prefix_len;
+                result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
+                goto out;
+            }
+            if (!opts->quiet) {
+                searched_len = (size_t)prefix_len;
+                result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
+                goto out;
+            }
         }
     }
 
