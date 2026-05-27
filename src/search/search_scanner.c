@@ -213,6 +213,11 @@ int bx_search_scanner_opened(FILE *f,
             }
 
             struct bx_search_record_slice record;
+            /*
+             * Candidate detection owns the no-match fast path. Only recover a
+             * record after a literal candidate survived the presence-only
+             * shortcut and may need line-oriented verification or output.
+             */
             if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
                 continue;
 
@@ -234,6 +239,10 @@ int bx_search_scanner_opened(FILE *f,
 
             cursor = record.chunk_off + record.len;
             size_t line_num = 0u;
+            /*
+             * Keep delimiter counting cold until a literal candidate already
+             * forced record recovery for a potential match.
+             */
             if (need_line_numbers) {
                 if (record.chunk_off > numbered_until) {
                     next_line_num += bx_search_scanner_count_delimiters_range(

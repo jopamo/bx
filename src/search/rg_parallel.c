@@ -32,6 +32,8 @@
 struct bx_search_parallel_job_item {
     char *path;
     char *display_name;
+    bool path_in_storage;
+    bool display_name_in_storage;
     bool display_name_is_path;
 };
 
@@ -129,6 +131,34 @@ static void bx_search_parallel_emit_record(void *user,
     bx_rg_publish_emit_record_default(&state->aggregate, record);
 }
 
+static void bx_search_parallel_merge_direct_result(struct bx_search_parallel_state *state,
+                                                   const struct bx_search_stats *stats,
+                                                   bool match_seen,
+                                                   bool error_seen) {
+    if (!state || !state->publish)
+        return;
+
+    pthread_mutex_lock(&state->publish->unordered_lock);
+    if (stats) {
+        state->stats.matches += stats->matches;
+        state->stats.matched_lines += stats->matched_lines;
+        state->stats.files_with_matches += stats->files_with_matches;
+        state->stats.files_searched += stats->files_searched;
+        state->stats.bytes_printed += stats->bytes_printed;
+        state->stats.bytes_searched += stats->bytes_searched;
+    }
+    if (match_seen) {
+        state->match_seen = true;
+        if (state->exit_status != 2)
+            state->exit_status = 0;
+    }
+    if (error_seen) {
+        state->error_seen = true;
+        state->exit_status = 2;
+    }
+    pthread_mutex_unlock(&state->publish->unordered_lock);
+}
+
 static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *state,
                                              struct bx_rg_publish_record *record) {
     if (!state || !record)
@@ -174,9 +204,9 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
     if (old_storage_addr != 0u && (uintptr_t)tmp != old_storage_addr) {
         ptrdiff_t delta = (ptrdiff_t)((uintptr_t)tmp - old_storage_addr);
         for (size_t i = 0; i < job->count; ++i) {
-            if (job->items[i].path)
+            if (job->items[i].path_in_storage && job->items[i].path)
                 job->items[i].path += delta;
-            if (job->items[i].display_name)
+            if (job->items[i].display_name_in_storage && job->items[i].display_name)
                 job->items[i].display_name += delta;
         }
     }
@@ -266,7 +296,9 @@ static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state
 
 static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state,
                                           const char *path,
+                                          bool path_copy_required,
                                           const char *display_name,
+                                          bool display_name_copy_required,
                                           bool display_name_is_path) {
     struct bx_search_parallel_job *job;
     struct bx_search_parallel_job_item *item;
@@ -280,8 +312,8 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
         return false;
 
     path_len = strlen(path) + 1u;
-    item_cost = path_len;
-    if (display_name && !display_name_is_path) {
+    item_cost = path_copy_required ? path_len : 0u;
+    if (display_name && !display_name_is_path && display_name_copy_required) {
         display_len = strlen(display_name) + 1u;
         item_cost += display_len;
     }
@@ -303,30 +335,45 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
     }
 
     item = &job->items[job->count];
-    item->path = bx_search_parallel_job_store_string_len(job, path, path_len);
-    if (!item->path) {
-        bx_search_parallel_drop_empty_pending_job(state);
-        return false;
-    }
-
-    if (display_name && !display_name_is_path) {
-        item->display_name = bx_search_parallel_job_store_string_len(job, display_name,
-                                                                     display_len);
-        if (!item->display_name) {
+    if (path_copy_required) {
+        item->path = bx_search_parallel_job_store_string_len(job, path, path_len);
+        if (!item->path) {
             bx_search_parallel_drop_empty_pending_job(state);
             return false;
         }
+        item->path_in_storage = true;
+    } else {
+        item->path = (char *)path;
+        item->path_in_storage = false;
+    }
+
+    if (display_name && !display_name_is_path) {
+        if (display_name_copy_required) {
+            item->display_name = bx_search_parallel_job_store_string_len(job, display_name,
+                                                                         display_len);
+            if (!item->display_name) {
+                bx_search_parallel_drop_empty_pending_job(state);
+                return false;
+            }
+            item->display_name_in_storage = true;
+        } else {
+            item->display_name = (char *)display_name;
+            item->display_name_in_storage = false;
+        }
     } else {
         item->display_name = NULL;
+        item->display_name_in_storage = false;
     }
 
     job->count++;
     item->display_name_is_path = display_name_is_path;
     job->path_bytes += item_cost;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,
-                                         (uint64_t)item_cost);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_COPIES_BEFORE_MATCH, 1u);
+    if (item_cost > 0u) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,
+                                             (uint64_t)item_cost);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_COPIES_BEFORE_MATCH, 1u);
+    }
 
     if (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
         job->path_bytes >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES)
@@ -379,9 +426,17 @@ static void bx_search_parallel_process_job(void *user,
     struct bx_search_parallel_worker *worker = worker_local;
     struct bx_search_parallel_job *job = job_ptr;
     struct bx_rg_publish_record *record = NULL;
+    char *stdout_buf = NULL;
+    size_t stdout_len = 0u;
+    char *stderr_buf = NULL;
+    size_t stderr_len = 0u;
+    struct bx_search_stats job_stats = {0};
     struct bx_search_output_ctx output_ctx = {0};
     struct bx_search_output_ctx *previous_ctx = NULL;
     int match_count = 0;
+    int job_status = 1;
+    bool job_match_seen = false;
+    bool job_error_seen = false;
 
     (void)worker_index;
     if (!state || !worker || !job)
@@ -391,27 +446,16 @@ static void bx_search_parallel_process_job(void *user,
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_STOLEN_FILES_SEARCHED,
                                          (uint64_t)job->count);
 
-    record = calloc(1u, sizeof(*record));
-    if (!record) {
-        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output record\n");
-        bx_search_parallel_free_job(NULL, job);
-        return;
-    }
-    record->seq = job->seq;
-
     if (bx_cancel_state_requested(&state->cancel) && state->opts->quiet) {
-        record->status = 1;
-        bx_search_parallel_submit_record(state, record);
         bx_search_parallel_free_job(NULL, job);
         return;
     }
-    output_ctx.capture_out_buf = &record->stdout_buf;
-    output_ctx.capture_out_len = &record->stdout_len;
-    output_ctx.capture_err_buf = &record->stderr_buf;
-    output_ctx.capture_err_len = &record->stderr_len;
-    output_ctx.stats = state->opts->stats ? &record->stats : NULL;
+    output_ctx.capture_out_buf = &stdout_buf;
+    output_ctx.capture_out_len = &stdout_len;
+    output_ctx.capture_err_buf = &stderr_buf;
+    output_ctx.capture_err_len = &stderr_len;
+    output_ctx.stats = state->opts->stats ? &job_stats : NULL;
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
-    record->status = 1;
     for (size_t i = 0; i < job->count; i++) {
         int status;
         const char *display_name = job->items[i].display_name_is_path
@@ -430,16 +474,16 @@ static void bx_search_parallel_process_job(void *user,
                                        &match_count,
                                        &worker->scanner,
                                        &worker->record_stream,
-                                       &record->stats);
+                                       &job_stats);
         if (status == 2) {
-            record->error_seen = true;
-            record->status = 2;
+            job_error_seen = true;
+            job_status = 2;
             continue;
         }
         if (status == 0) {
-            record->match_seen = true;
-            if (record->status != 2)
-                record->status = 0;
+            job_match_seen = true;
+            if (job_status != 2)
+                job_status = 0;
             if (state->opts->quiet && bx_cancel_state_request(&state->cancel)) {
                 bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
                 bx_work_pool_wake(state->pool);
@@ -449,31 +493,55 @@ static void bx_search_parallel_process_job(void *user,
     }
     bx_search_output_ctx_pop(previous_ctx);
 
-    record->used_heading = output_ctx.used_heading;
     if (output_ctx.out)
         fclose(output_ctx.out);
     if (output_ctx.err)
         fclose(output_ctx.err);
     if (output_ctx.capture_failed) {
         bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
-        bx_search_parallel_dispose_record(NULL, record);
+        free(stdout_buf);
+        free(stderr_buf);
         bx_search_parallel_free_job(NULL, job);
         return;
     }
 
-    if (!state->opts->stats &&
-        !record->match_seen &&
-        !record->error_seen &&
-        record->stdout_len == 0u &&
-        record->stderr_len == 0u) {
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
-        if (!bx_rg_publish_skip_seq(state->publish, record->seq))
-            bx_search_parallel_set_fatal(state, "rg: failed to advance empty output sequence\n");
-        bx_search_parallel_dispose_record(NULL, record);
+    /*
+     * Keep the worker output record cold until the search actually produced
+     * captured output. Stats-only and no-output outcomes merge directly.
+     */
+    if (stdout_len == 0u && stderr_len == 0u) {
+        if (!state->opts->stats && !job_match_seen && !job_error_seen)
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
+        if (state->opts->stats || job_match_seen || job_error_seen) {
+            bx_search_parallel_merge_direct_result(state,
+                                                  state->opts->stats ? &job_stats : NULL,
+                                                  job_match_seen,
+                                                  job_error_seen);
+        }
+        free(stdout_buf);
+        free(stderr_buf);
         bx_search_parallel_free_job(NULL, job);
         return;
     }
 
+    record = calloc(1u, sizeof(*record));
+    if (!record) {
+        free(stdout_buf);
+        free(stderr_buf);
+        bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output record\n");
+        bx_search_parallel_free_job(NULL, job);
+        return;
+    }
+    record->seq = job->seq;
+    record->stdout_buf = stdout_buf;
+    record->stdout_len = stdout_len;
+    record->stderr_buf = stderr_buf;
+    record->stderr_len = stderr_len;
+    record->stats = job_stats;
+    record->status = job_status;
+    record->match_seen = job_match_seen;
+    record->error_seen = job_error_seen;
+    record->used_heading = output_ctx.used_heading;
     if (!bx_search_parallel_submit_record(state, record))
         bx_search_parallel_set_fatal(state, "rg: failed to queue worker output\n");
     bx_search_parallel_free_job(NULL, job);
