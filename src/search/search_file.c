@@ -248,7 +248,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                 goto out_error;
             scanner->len += (size_t)nread;
             searched_len += (size_t)nread;
-            bx_search_dev_counters_note_bytes_read((size_t)nread);
+            bx_search_dev_counters_note_content_read((size_t)nread);
 
             if (!prefix_policy_checked && nread > 0) {
                 prefix_policy_checked = true;
@@ -319,6 +319,7 @@ out_error:
     result = BX_SEARCH_DEFERRED_PRECHECK_ERROR;
 
 out:
+    bx_search_dev_counters_note_content_close_call();
     close(fd);
     if (stats && (result == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
                   (result == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH &&
@@ -844,6 +845,7 @@ static int search_file(const char *filename,
         struct stat offset_width_st;
 
         if (use_stdin) {
+            bx_search_dev_counters_note_content_fstat_call();
             if (fstat(STDIN_FILENO, &offset_width_st) == 0) {
                 bx_search_output_set_offset_width(
                     bx_search_compute_offset_width_from_stat(&offset_width_st, opts));

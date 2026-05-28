@@ -151,7 +151,7 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
 
             size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, stream);
             scanner->len += nread;
-            bx_search_dev_counters_note_bytes_read(nread);
+            bx_search_dev_counters_note_content_read(nread);
             if (nread == 0u) {
                 if (ferror(stream))
                     return false;

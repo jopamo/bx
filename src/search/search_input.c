@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "dev_counters.h"
@@ -20,11 +21,28 @@ int bx_search_input_open_fd(const char *filename,
     int flags = O_RDONLY;
     (void)opts;
 
+#ifdef O_LARGEFILE
+    flags |= O_LARGEFILE;
+#endif
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
 #endif
 
-    return open(filename, flags);
+#ifdef SYS_openat
+    int fd;
+    bx_search_dev_counters_note_content_open_call();
+    do {
+        fd = (int)syscall(SYS_openat, AT_FDCWD, filename, flags, 0);
+    } while (fd < 0 && errno == EINTR);
+    return fd;
+#else
+    int fd;
+    bx_search_dev_counters_note_content_open_call();
+    do {
+        fd = open(filename, flags);
+    } while (fd < 0 && errno == EINTR);
+    return fd;
+#endif
 }
 
 FILE *bx_search_input_fopen(const char *filename,
@@ -43,6 +61,7 @@ FILE *bx_search_input_fopen(const char *filename,
         return f;
 
     int saved_errno = errno;
+    bx_search_dev_counters_note_content_close_call();
     close(fd);
     errno = saved_errno;
     return NULL;
@@ -116,7 +135,7 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
 
         size_t nread = fread(buf + len, 1u, cap - len, f);
         len += nread;
-        bx_search_dev_counters_note_bytes_read(nread);
+        bx_search_dev_counters_note_content_read(nread);
         if (nread == 0u)
             break;
     }
@@ -159,7 +178,7 @@ bool bx_search_input_is_binary_path(const char *path,
 
     unsigned char buf[1024];
     size_t n = fread(buf, 1u, sizeof(buf), f);
-    bx_search_dev_counters_note_bytes_read(n);
+    bx_search_dev_counters_note_content_read(n);
     fclose(f);
     if (n == 0u)
         return false;

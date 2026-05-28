@@ -153,6 +153,7 @@ static size_t bx_record_stream_configure_limit(FILE *f) {
     fd = fileno(f);
     if (fd < 0)
         return 0u;
+    bx_search_dev_counters_note_content_fstat_call();
     if (fstat(fd, &st) != 0)
         return 0u;
     if (S_ISREG(st.st_mode))
@@ -181,7 +182,7 @@ static size_t bx_record_stream_fill_pending(FILE *f,
 
         nread = fread(stream->pending + stream->pending_len, 1u, target - available, f);
         stream->pending_len += nread;
-        bx_search_dev_counters_note_bytes_read(nread);
+        bx_search_dev_counters_note_content_read(nread);
         available += nread;
         if (nread == 0u) {
             if (ferror(f))
@@ -244,6 +245,9 @@ bool bx_record_stream_probe_binary_prefix(FILE *f,
 
     stream->errnum = 0;
     fd = fileno(f);
+    if (fd >= 0) {
+        bx_search_dev_counters_note_content_fstat_call();
+    }
     if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
         unsigned char buf[BX_RECORD_STREAM_BINARY_PROBE_CAP];
         ssize_t nread = pread(fd, buf, sizeof(buf), 0);
@@ -253,6 +257,9 @@ bool bx_record_stream_probe_binary_prefix(FILE *f,
             return false;
         }
         bx_search_dev_counters_note_bytes_read((size_t)nread);
+        bx_search_dev_counters_note_content_pread((size_t)nread);
+        bx_search_dev_counters_note_prefix_pread((size_t)nread);
+        bx_search_dev_counters_note_prefix_bytes_rescanned((size_t)nread);
         if (is_binary_out)
             *is_binary_out = memchr(buf, '\0', (size_t)nread) != NULL;
         return true;
@@ -294,7 +301,7 @@ size_t bx_record_stream_read_chunk(FILE *f,
         size_t nread = fread(buf + copied, 1u, cap - copied, f);
 
         copied += nread;
-        bx_search_dev_counters_note_bytes_read(nread);
+        bx_search_dev_counters_note_content_read(nread);
         if (nread == 0u && ferror(f))
             stream->errnum = errno ? errno : EIO;
     }
@@ -350,7 +357,7 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
             unsigned char chunk[BX_RECORD_STREAM_READ_CHUNK_CAP];
             size_t nread = fread(chunk, 1u, sizeof(chunk), f);
 
-            bx_search_dev_counters_note_bytes_read(nread);
+            bx_search_dev_counters_note_content_read(nread);
             if (nread == 0u) {
                 if (ferror(f)) {
                     stream->errnum = errno ? errno : EIO;

@@ -50,6 +50,7 @@ bool bx_search_scanner_stream_is_eligible(FILE *f) {
         return false;
 
     struct stat st;
+    bx_search_dev_counters_note_content_fstat_call();
     if (fstat(fd, &st) != 0)
         return false;
     if (!S_ISREG(st.st_mode))

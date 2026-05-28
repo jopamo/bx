@@ -67,7 +67,7 @@ int bx_search_raw_presence_opened(FILE *f,
 
         size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, f);
         scanner->len += nread;
-        bx_search_dev_counters_note_bytes_read(nread);
+        bx_search_dev_counters_note_content_read(nread);
 
         if (!counted_file) {
             counted_file = true;

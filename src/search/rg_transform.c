@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "dev_counters.h"
 #include "lib/path_ops.h"
 #include "options.h"
 #include "rg_text.h"
@@ -156,6 +157,9 @@ bool bx_rg_transform_auto_encoding_needs_fd(const struct search_opts *opts,
     nread = pread(fd_hint, prefix, sizeof(prefix), 0);
     if (nread < 0)
         return false;
+    bx_search_dev_counters_note_content_pread((size_t)nread);
+    bx_search_dev_counters_note_prefix_pread((size_t)nread);
+    bx_search_dev_counters_note_prefix_bytes_rescanned((size_t)nread);
     return bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)nread);
 }
 

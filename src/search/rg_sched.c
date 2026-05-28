@@ -122,6 +122,8 @@ struct bx_rg_sched_walk_state {
     char **stderr_buf;
     size_t *stderr_len;
     size_t *stderr_cap;
+    bool *match_seen;
+    bool *error_seen;
     size_t worker_index;
     int base_depth;
     const char *work_root_path;
@@ -165,6 +167,10 @@ static void bx_rg_sched_note_file_search(bool stolen) {
                                              ? BX_SEARCH_RG_SCHED_STOLEN_FILES_SEARCHED
                                              : BX_SEARCH_RG_SCHED_LOCAL_FILES_SEARCHED,
                                          1u);
+}
+
+static bool bx_rg_sched_uses_path_only_output(const struct search_opts *opts) {
+    return opts && (opts->files_with_matches || opts->files_without_match);
 }
 
 static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
@@ -539,58 +545,19 @@ static bool bx_rg_sched_flush_pending_batch(struct bx_rg_sched_frontier_state *s
     return true;
 }
 
-static enum bx_walk_action bx_rg_sched_frontier_visit(struct bx_walk_entry *entry,
-                                                      const struct bx_ignore_state *ignore_state,
-                                                      const struct bx_walk_ignore_opts *ignore_opts,
-                                                      void *user) {
-    struct bx_rg_sched_frontier_state *state = user;
-
-    if (!state || !state->sched)
-        return BX_WALK_ERROR;
-    if (entry->is_dir) {
-        if (entry->depth == 0)
-            return BX_WALK_CONTINUE;
-        if (!bx_rg_sched_flush_pending_batch(state))
-            return BX_WALK_ERROR;
-        struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(entry->path,
-                                                                 state->root_path,
-                                                                 entry->depth,
-                                                                 state->strip_dot_prefix,
-                                                                 ignore_opts ? ignore_opts->git_root : NULL,
-                                                                 ignore_state);
-        if (!work)
-            return BX_WALK_ERROR;
-        if (!bx_rg_sched_work_vec_push(state->vec, work)) {
-            bx_rg_sched_free_work(work);
-            return BX_WALK_ERROR;
-        }
-        return BX_WALK_PRUNE;
+static bool bx_rg_sched_add_root_dir_work(struct bx_rg_sched_work_vec *vec,
+                                          const char *path,
+                                          bool strip_dot_prefix) {
+    struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(path, path, 0,
+                                                             strip_dot_prefix,
+                                                             NULL, NULL);
+    if (!work)
+        return false;
+    if (!bx_rg_sched_work_vec_push(vec, work)) {
+        bx_rg_sched_free_work(work);
+        return false;
     }
-
-    if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
-        return BX_WALK_CONTINUE;
-    if (bx_search_entry_should_skip_recursive_special_input(entry, state->sched->opts))
-        return BX_WALK_CONTINUE;
-
-    if (state->pending_batch && state->pending_batch->u.batch.count >= BX_RG_SCHED_BATCH_MAX_FILES) {
-        if (!bx_rg_sched_flush_pending_batch(state))
-            return BX_WALK_ERROR;
-    }
-    if (!bx_rg_sched_batch_add(state, entry->path, entry->depth))
-        return BX_WALK_ERROR;
-    return BX_WALK_CONTINUE;
-}
-
-static enum bx_walk_action bx_rg_sched_frontier_error(const char *path,
-                                                      int errnum,
-                                                      void *user) {
-    struct bx_rg_sched_frontier_state *state = user;
-    if (!state || !state->sched)
-        return BX_WALK_ERROR;
-    bx_rg_sched_report_path_error(state->sched, path, errnum);
-    state->sched->error_seen = true;
-    state->sched->exit_status = 2;
-    return BX_WALK_CONTINUE;
+    return true;
 }
 
 static bool bx_rg_sched_worker_display_reserve(struct bx_rg_sched_worker *worker,
@@ -704,24 +671,32 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                   struct bx_rg_sched_worker *worker,
                                   const char *path,
                                   bool strip_dot_prefix,
-                                  bool stolen) {
-    const struct bx_search_exec_plan *exec_plan =
-        (sched->opts->files_with_matches || sched->opts->files_without_match)
-            ? &worker->quiet_exec_plan
-            : sched->exec_plan;
+                                  bool stolen,
+                                  bool *match_seen_out) {
     int dummy_matches = 0;
-    int status = bx_search_search_file(path,
-                                       NULL,
-                                       strip_dot_prefix,
-                                       sched->progname,
-                                       worker->matcher,
-                                       exec_plan,
-                                       &sched->quiet_opts,
-                                       &dummy_matches,
-                                       &worker->scanner,
-                                       &worker->record_stream,
-                                       NULL);
+
+    if (match_seen_out)
+        *match_seen_out = false;
+
+    if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
+        int status = bx_search_search_file(path, NULL, strip_dot_prefix,
+                                           sched->progname, worker->matcher,
+                                           sched->exec_plan, sched->opts,
+                                           &dummy_matches, &worker->scanner,
+                                           &worker->record_stream, NULL);
+        bx_rg_sched_note_file_search(stolen);
+        if (status == 0 && match_seen_out)
+            *match_seen_out = true;
+        return status;
+    }
+
+    int status = bx_search_search_file(path, NULL, strip_dot_prefix,
+                                       sched->progname, worker->matcher,
+                                       &worker->quiet_exec_plan, &sched->quiet_opts,
+                                       &dummy_matches, &worker->scanner,
+                                       &worker->record_stream, NULL);
     bx_rg_sched_note_file_search(stolen);
+
     if (status == 0 && sched->opts->files_with_matches) {
         const char *display_name = bx_rg_sched_display_path(worker, path, strip_dot_prefix,
                                                             sched->opts);
@@ -729,6 +704,8 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
             bx_rg_sched_set_fatal(sched, "rg: failed to append worker output\n");
             return 2;
         }
+        if (match_seen_out)
+            *match_seen_out = true;
         return 0;
     }
     if (status == 1 && sched->opts->files_without_match) {
@@ -738,6 +715,8 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
             bx_rg_sched_set_fatal(sched, "rg: failed to append worker output\n");
             return 2;
         }
+        if (match_seen_out)
+            *match_seen_out = true;
         return 0;
     }
     return status;
@@ -786,8 +765,14 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
         return BX_WALK_CONTINUE;
 
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
-    (void)bx_rg_sched_search_one(state->sched, state->worker, entry->path,
-                                 state->strip_dot_prefix, state->stolen);
+    bool matched = false;
+    int status = bx_rg_sched_search_one(state->sched, state->worker, entry->path,
+                                        state->strip_dot_prefix, state->stolen,
+                                        &matched);
+    if (matched && state->match_seen)
+        *state->match_seen = true;
+    if (status == 2 && state->error_seen)
+        *state->error_seen = true;
     return BX_WALK_CONTINUE;
 }
 
@@ -867,6 +852,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     size_t walk_stderr_len = 0u;
     size_t walk_stderr_cap = 0u;
     size_t stderr_cap = 0u;
+    size_t stdout_before = worker ? worker->stdout_len : 0u;
     bool job_match_seen = false;
     bool job_error_seen = false;
 
@@ -875,6 +861,10 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
 
     char *stderr_buf = NULL;
     size_t stderr_len = 0u;
+    if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
+        output_ctx.capture_out_buf = &worker->stdout_buf;
+        output_ctx.capture_out_len = &worker->stdout_len;
+    }
     output_ctx.capture_err_buf = &stderr_buf;
     output_ctx.capture_err_len = &stderr_len;
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
@@ -912,6 +902,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .stderr_buf = &walk_stderr_buf,
             .stderr_len = &walk_stderr_len,
             .stderr_cap = &walk_stderr_cap,
+            .match_seen = &job_match_seen,
+            .error_seen = &job_error_seen,
             .worker_index = worker_index,
             .base_depth = work->base_depth,
             .work_root_path = work_root_path,
@@ -946,14 +938,11 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .error = bx_rg_sched_walk_error,
             .inherited_parent_ignore_state = inherited_ignore,
         };
-        size_t before = worker->stdout_len;
         int rc = bx_search_walk(work_root_path, &walk_config, &walk_state);
         if (rc != 0)
             job_error_seen = true;
-        job_match_seen = worker->stdout_len > before;
     } else {
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_SEARCHED, 1u);
-        size_t before = worker->stdout_len;
         for (size_t i = 0; i < work->u.batch.count; ++i) {
             const char *path =
                 bx_rg_sched_work_storage_string(work, work->u.batch.items[i].path_offset);
@@ -962,22 +951,25 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
                 job_error_seen = true;
                 break;
             }
+            bool matched = false;
             int status = bx_rg_sched_search_one(sched,
                                                 worker,
                                                 path,
                                                 work->u.batch.items[i].strip_dot_prefix,
-                                                stolen);
+                                                stolen,
+                                                &matched);
             if (status == 2)
                 job_error_seen = true;
-            if (worker->stdout_len > before)
+            if (matched)
                 job_match_seen = true;
-            before = worker->stdout_len;
             if (bx_cancel_state_requested(&sched->cancel))
                 break;
         }
     }
 
     bx_search_output_ctx_pop(previous_ctx);
+    if (output_ctx.out)
+        fclose(output_ctx.out);
     if (output_ctx.err)
         fclose(output_ctx.err);
     stderr_cap = stderr_len > 0u ? stderr_len + 1u : 0u;
@@ -1004,6 +996,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     free(walk_stderr_buf);
     if (stderr_len > 0u)
         job_error_seen = true;
+    if (worker->stdout_len > stdout_before)
+        job_match_seen = true;
 
     if (worker->stdout_len == 0u && stderr_len == 0u && work->kind == BX_RG_SCHED_WORK_FILE_BATCH)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
@@ -1034,6 +1028,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     record->stderr_len = stderr_len;
     record->match_seen = job_match_seen;
     record->error_seen = job_error_seen;
+    record->used_heading = output_ctx.used_heading;
     worker->stdout_buf = NULL;
     worker->stdout_len = 0u;
     worker->stdout_cap = 0u;
@@ -1115,36 +1110,6 @@ static void *bx_rg_sched_worker_main(void *arg) {
     return NULL;
 }
 
-static bool bx_rg_sched_build_frontier_for_root(struct bx_rg_sched_state *sched,
-                                                struct bx_rg_sched_work_vec *vec,
-                                                const char *root,
-                                                bool strip_dot_prefix) {
-    struct bx_walk_opts walk_opts = bx_search_make_walk_opts(sched->progname,
-                                                             sched->personality,
-                                                             sched->opts,
-                                                             NULL);
-    if (walk_opts.max_depth < 0 || walk_opts.max_depth > 1)
-        walk_opts.max_depth = 1;
-    struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(sched->opts);
-    struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(sched->progname,
-                                                                        sched->opts);
-    struct bx_rg_sched_frontier_state frontier = {
-        .sched = sched,
-        .vec = vec,
-        .root_path = root,
-        .strip_dot_prefix = strip_dot_prefix,
-    };
-    struct bx_search_walk_config walk_config = {
-        .walk_opts = &walk_opts,
-        .filter_opts = &filter_opts,
-        .ignore_opts = &ignore_opts,
-        .visit_with_ignore = bx_rg_sched_frontier_visit,
-        .error = bx_rg_sched_frontier_error,
-    };
-    int rc = bx_search_walk(root, &walk_config, &frontier);
-    return rc == 0 && bx_rg_sched_flush_pending_batch(&frontier);
-}
-
 static bool bx_rg_sched_seed_frontier(struct bx_rg_sched_state *sched,
                                       struct bx_rg_sched_work_vec *frontier) {
     if (!sched || !frontier)
@@ -1181,10 +1146,26 @@ bool bx_rg_sched_supported(enum bx_search_personality personality,
         return false;
     if (opts->files_only || opts->trace || opts->quiet || opts->stats || rg_searches_stdin)
         return false;
-    if (!(opts->files_with_matches || opts->files_without_match))
-        return false;
     if (bx_search_sort_requested(opts))
         return false;
+    if (!bx_rg_sched_uses_path_only_output(opts)) {
+        if (opts->count_only || opts->count_matches)
+            return false;
+        if (opts->multiline || opts->invert_match)
+            return false;
+        if (opts->pre_command || opts->search_zip ||
+            opts->encoding_mode == BX_RG_ENCODING_EXPLICIT) {
+            return false;
+        }
+        if (bx_search_plan_needs_line_buffering(opts))
+            return false;
+        if (opts->heading)
+            return false;
+        if (opts->replace || opts->only_matching || opts->passthru || opts->vimgrep)
+            return false;
+        if (opts->stop_on_nonmatch)
+            return false;
+    }
     if (bx_thread_count_resolve(opts->threads) <= 1u)
         return false;
     if (num_files == 0)
@@ -1244,10 +1225,8 @@ int bx_rg_sched_run(int argc,
 
     int num_files = argc - first_file;
     if (num_files == 0) {
-        if (!bx_rg_sched_build_frontier_for_root(&sched, &frontier, ".", true)) {
-            if (!sched.error_seen)
-                bx_rg_sched_set_fatal(&sched, "rg: failed to build recursive frontier\n");
-        }
+        if (!bx_rg_sched_add_root_dir_work(&frontier, ".", true))
+            bx_rg_sched_set_fatal(&sched, "rg: failed to queue recursive root\n");
     } else {
         for (int operand_i = 0; operand_i < num_files; ++operand_i) {
             int j = sorted_operands
@@ -1264,10 +1243,8 @@ int bx_rg_sched_run(int argc,
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
-                if (!bx_rg_sched_build_frontier_for_root(&sched, &frontier, argv[j], false)) {
-                    if (!sched.error_seen)
-                        bx_rg_sched_set_fatal(&sched, "rg: failed to build recursive frontier\n");
-                }
+                if (!bx_rg_sched_add_root_dir_work(&frontier, argv[j], false))
+                    bx_rg_sched_set_fatal(&sched, "rg: failed to queue recursive root\n");
                 continue;
             }
             if (bx_search_should_skip_special_input_mode(st.st_mode, opts))

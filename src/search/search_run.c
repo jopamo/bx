@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "dev_counters.h"
 #include "fswalk/walk.h"
 #include "rg_parallel.h"
 #include "rg_sched.h"
@@ -223,6 +224,7 @@ bool bx_search_run_should_search_stdin(void) {
         return false;
 
     struct stat st;
+    bx_search_dev_counters_note_content_fstat_call();
     if (fstat(STDIN_FILENO, &st) != 0)
         return false;
 
