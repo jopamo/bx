@@ -264,6 +264,8 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
 
             if (scanner->len > 0u) {
                 struct bx_match bm;
+
+                bx_search_dev_counters_note_literal_overlap_bytes_scanned(carry);
                 if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
                     result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                     goto out;

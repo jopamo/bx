@@ -31,6 +31,7 @@ static int bx_literal_find_anchored_exact(const struct bx_literal_matcher *m,
                                           size_t len,
                                           size_t start,
                                           struct bx_match *out);
+static int bx_literal_return_result(int result);
 
 struct bx_literal_matcher {
     char  *pattern_lower;
@@ -503,22 +504,22 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
                                   size_t start,
                                   struct bx_match *out) {
     if (m->plen == 0u)
-        return bx_literal_find_empty(buf, len, start, out);
+        return bx_literal_return_result(bx_literal_find_empty(buf, len, start, out));
 
     if (start >= len)
-        return -1;
+        return bx_literal_return_result(-1);
 
     if (m->ignore_case) {
         if (m->locale_utf8_upper) {
             bx_search_dev_counters_note_literal_bytes_scanned(len - start);
             for (size_t i = start; i < len; i++) {
                 if (bx_literal_verify_at_locale_utf8(m, buf, len, i, out))
-                    return 0;
+                    return bx_literal_return_result(0);
             }
-            return -1;
+            return bx_literal_return_result(-1);
         }
         if (len - start < m->plen)
-            return -1;
+            return bx_literal_return_result(-1);
         bx_search_dev_counters_note_literal_bytes_scanned(len - start);
         for (size_t i = start; i <= len - m->plen; i++) {
             bool match = true;
@@ -532,19 +533,28 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
             if (match) {
                 out->start = i;
                 out->end = i + m->plen;
-                return 0;
+                return bx_literal_return_result(0);
             }
         }
-        return -1;
+        return bx_literal_return_result(-1);
     }
 
     if (len - start < m->plen)
-        return -1;
+        return bx_literal_return_result(-1);
 
     bx_search_dev_counters_note_literal_bytes_scanned(len - start);
-    return m->case_sensitive_find
-        ? m->case_sensitive_find(m, buf, len, start, out)
-        : bx_literal_find_case_sensitive_scalar(m, buf, len, start, out);
+    return bx_literal_return_result(
+        m->case_sensitive_find
+            ? m->case_sensitive_find(m, buf, len, start, out)
+            : bx_literal_find_case_sensitive_scalar(m, buf, len, start, out));
+}
+
+static int bx_literal_return_result(int result) {
+    if (result == 0)
+        bx_search_dev_counters_note_literal_match();
+    else
+        bx_search_dev_counters_note_literal_not_found();
+    return result;
 }
 
 bool bx_literal_next_candidate(const struct bx_literal_matcher *m,

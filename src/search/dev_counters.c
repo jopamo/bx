@@ -15,6 +15,9 @@ struct bx_search_dev_counters {
     atomic_size_t candidate_hits;
     atomic_size_t literal_candidate_hits;
     atomic_size_t literal_confirm_calls;
+    atomic_size_t literal_matches;
+    atomic_size_t literal_not_found;
+    atomic_size_t literal_overlap_bytes_scanned;
     atomic_size_t literal_plan_compiles;
     atomic_size_t literal_algo_empty_calls;
     atomic_size_t literal_algo_byte_calls;
@@ -74,6 +77,10 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.candidate_hits, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_candidate_hits, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_confirm_calls, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_matches, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_not_found, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_overlap_bytes_scanned, 0u,
+                          memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_plan_compiles, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_algo_empty_calls, 0u,
                           memory_order_relaxed);
@@ -161,6 +168,30 @@ void bx_search_dev_counters_note_literal_confirm_call(void) {
         return;
 
     atomic_fetch_add_explicit(&current_dev_counters.literal_confirm_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_match(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_matches, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_not_found(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_not_found, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_overlap_bytes_scanned(size_t count) {
+    if (!current_dev_counters.enabled || count == 0u)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_overlap_bytes_scanned, count,
                               memory_order_relaxed);
 }
 
@@ -383,7 +414,7 @@ void bx_search_dev_counters_report(FILE *stream) {
         return;
 
     fprintf(stream,
-            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu literal_candidate_hits=%zu literal_confirm_calls=%zu literal_plan_compiles=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_long_calls=%zu literal_algo_scalar_calls=%zu literal_algo_x86_avx2_calls=%zu literal_algo_arm64_neon_calls=%zu literal_algo_arm64_sve_calls=%zu literal_algo_memmem_calls=%zu literal_bytes_scanned=%zu literal_algo_sse2_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
+            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu literal_candidate_hits=%zu literal_confirm_calls=%zu literal_matches=%zu literal_not_found=%zu literal_overlap_bytes_scanned=%zu literal_plan_compiles=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_long_calls=%zu literal_algo_scalar_calls=%zu literal_algo_x86_avx2_calls=%zu literal_algo_arm64_neon_calls=%zu literal_algo_arm64_sve_calls=%zu literal_algo_memmem_calls=%zu literal_bytes_scanned=%zu literal_algo_sse2_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
             "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
@@ -394,6 +425,12 @@ void bx_search_dev_counters_report(FILE *stream) {
             atomic_load_explicit(&current_dev_counters.literal_candidate_hits,
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.literal_confirm_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_matches,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_not_found,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_overlap_bytes_scanned,
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.literal_plan_compiles,
                                  memory_order_relaxed),
