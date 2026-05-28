@@ -260,8 +260,10 @@ bool bx_record_stream_probe_binary_prefix(FILE *f,
         bx_search_dev_counters_note_content_pread((size_t)nread);
         bx_search_dev_counters_note_prefix_pread((size_t)nread);
         bx_search_dev_counters_note_prefix_bytes_rescanned((size_t)nread);
-        if (is_binary_out)
+        if (is_binary_out) {
+            bx_search_dev_counters_note_binary_prefix_check();
             *is_binary_out = memchr(buf, '\0', (size_t)nread) != NULL;
+        }
         return true;
     }
 
@@ -270,6 +272,7 @@ bool bx_record_stream_probe_binary_prefix(FILE *f,
         return false;
 
     if (is_binary_out) {
+        bx_search_dev_counters_note_binary_prefix_check();
         *is_binary_out =
             memchr(stream->pending + stream->pending_off, '\0', available) != NULL;
     }

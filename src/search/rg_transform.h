@@ -19,6 +19,9 @@ void bx_rg_tracef(const struct search_opts *opts, const char *fmt, ...);
 bool bx_rg_transform_needs_file_preload(const struct search_opts *opts,
                                         const char *filename);
 
+bool bx_rg_transform_prefix_needs_decode(const unsigned char *prefix,
+                                         size_t nread);
+
 bool bx_rg_transform_auto_encoding_needs_prefix(const struct search_opts *opts,
                                                 const unsigned char *prefix,
                                                 size_t nread);

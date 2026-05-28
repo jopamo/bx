@@ -55,12 +55,61 @@ enum bx_search_deferred_precheck_result {
     BX_SEARCH_DEFERRED_PRECHECK_TRANSFORM_NEEDED = 3,
 };
 
+struct bx_search_deferred_prefix_policy {
+    bool transform_needed;
+    bool binary_nul_found;
+    size_t binary_nul_offset;
+};
+
 struct bx_search_display_name_state {
     const char *filename;
     const char *display_name_override;
     bool strip_dot_prefix;
     char *owned_display_name;
 };
+
+static bool search_file_stat_from_walk_entry(const struct bx_walk_entry *entry,
+                                             const char *filename,
+                                             struct stat *st) {
+    if (!entry || !filename || !st || !entry->metadata_loaded)
+        return false;
+    /*
+     * Walker metadata is valid only for the live entry that owns the path
+     * buffer. Do not reuse metadata through an equal-by-text path copy.
+     */
+    if (entry->path != filename)
+        return false;
+
+    memset(st, 0, sizeof(*st));
+    st->st_dev = entry->dev;
+    st->st_ino = entry->inode;
+    st->st_mode = entry->mode;
+    st->st_nlink = entry->nlink;
+    st->st_uid = entry->uid;
+    st->st_gid = entry->gid;
+    st->st_size = entry->size;
+    st->st_blksize = entry->block_size;
+    st->st_atim = entry->atime;
+    st->st_mtim = entry->mtime;
+    st->st_ctim = entry->ctime;
+    return true;
+}
+
+static bool search_file_should_stat_path_for_slow_policy(const char *filename,
+                                                         bool use_stdin,
+                                                         const struct search_opts *opts) {
+    if (!filename || use_stdin || strcmp(filename, "-") == 0)
+        return false;
+    if (!opts)
+        return false;
+    /*
+     * Path stat fallback is cold policy work. Keep it out of the recursive
+     * default literal path unless an explicit output option needs exact size,
+     * or a non-recursive explicit operand needs exact type for directory and
+     * special-file policy.
+     */
+    return opts->initial_tab || !opts->recursive;
+}
 
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
@@ -195,6 +244,32 @@ static bool search_file_find_literal_precheck_match(const struct bx_lit_plan *ab
     return true;
 }
 
+static struct bx_search_deferred_prefix_policy
+search_file_check_deferred_prefix_policy(struct search_opts *opts,
+                                         const unsigned char *buf,
+                                         size_t len) {
+    struct bx_search_deferred_prefix_policy policy = {0};
+
+    if (!opts || !buf || len == 0u)
+        return policy;
+
+    if (opts->encoding_mode == BX_RG_ENCODING_AUTO) {
+        policy.transform_needed = bx_rg_transform_prefix_needs_decode(buf, len);
+        if (policy.transform_needed)
+            return policy;
+    }
+
+    if (!opts->null_data && !opts->binary_as_text) {
+        bx_search_dev_counters_note_binary_prefix_check();
+        const unsigned char *nul = memchr(buf, '\0', len);
+        if (nul) {
+            policy.binary_nul_found = true;
+            policy.binary_nul_offset = (size_t)(nul - buf);
+        }
+    }
+    return policy;
+}
+
 static int search_file_deferred_literal_precheck_path(const char *filename,
                                                       struct bx_search_display_name_state *display_name_state,
                                                       const char *progname,
@@ -251,36 +326,37 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
             bx_search_dev_counters_note_content_read((size_t)nread);
 
             if (!prefix_policy_checked && nread > 0) {
+                struct bx_search_deferred_prefix_policy prefix_policy;
                 prefix_policy_checked = true;
-                if (bx_rg_transform_auto_encoding_needs_prefix(opts,
-                                                               scanner->buf,
-                                                               scanner->len)) {
+                prefix_policy = search_file_check_deferred_prefix_policy(opts,
+                                                                         scanner->buf,
+                                                                         scanner->len);
+                if (prefix_policy.transform_needed) {
                     result = BX_SEARCH_DEFERRED_PRECHECK_TRANSFORM_NEEDED;
                     goto out;
                 }
 
-                if (!opts->null_data && !opts->binary_as_text) {
-                    unsigned char *nul = memchr(scanner->buf, '\0', scanner->len);
-                    if (nul) {
-                        struct bx_match bm;
-                        bx_search_dev_counters_note_binary_policy_check();
-                        /*
-                         * Default plain-output rg treats the first NUL as a
-                         * binary cut-off. Consult only bytes already read by
-                         * the main scan; do not issue a separate prefix pread.
-                         */
-                        if (search_file_find_literal_precheck_match(absence_plan,
-                                                                    scanner->buf,
-                                                                    (size_t)(nul - scanner->buf),
-                                                                    0u,
-                                                                    &bm)) {
-                            result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
-                            goto out;
-                        }
-                        if (!opts->quiet) {
-                            result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
-                            goto out;
-                        }
+                if (prefix_policy.binary_nul_found) {
+                    struct bx_match bm;
+                    bx_search_dev_counters_note_binary_policy_check();
+                    /*
+                     * Default plain-output rg treats the first NUL as a
+                     * binary cut-off. Consult only bytes already read by the
+                     * main scan; do not issue a separate prefix pread or a
+                     * second policy scan over the same prefix bytes.
+                     */
+                    if (search_file_find_literal_precheck_match(absence_plan,
+                                                                scanner->buf,
+                                                                prefix_policy.binary_nul_offset,
+                                                                0u,
+                                                                &bm)) {
+                        result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
+                        goto out;
+                    }
+                    if (!opts->quiet) {
+                        bx_search_dev_counters_note_file_cut_off_by_binary_prefix();
+                        result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
+                        goto out;
                     }
                 }
             }
@@ -386,6 +462,7 @@ static int search_file_handle_binary_prefix(FILE *f,
 
     bx_search_dev_counters_note_binary_policy_check();
     if (opts->binary_without_match) {
+        bx_search_dev_counters_note_file_cut_off_by_binary_prefix();
         if (!use_stdin)
             fclose(f);
         return bx_search_binary_without_match(display_name, opts, match_count, stats);
@@ -734,7 +811,8 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
                                                  int *match_count,
                                                  struct bx_search_scanner *scanner,
                                                  struct bx_record_stream *record_stream,
-                                                 struct bx_search_stats *stats) {
+                                                 struct bx_search_stats *stats,
+                                                 bool candidate_triggered) {
     FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
     const char *display_name;
 
@@ -772,10 +850,13 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
         enum bx_search_file_kernel_kind nonbinary_kernel =
             exec_plan ? exec_plan->opened_nonbinary_kernel
                       : BX_SEARCH_FILE_KERNEL_STREAMING;
+        enum bx_search_file_kernel_kind resolved_kernel =
+            search_file_resolve_opened_kernel(f, nonbinary_kernel);
 
+        if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER)
+            bx_search_dev_counters_note_candidate_triggered_scanner_entry();
         return search_file_run_opened_kernel(
-            search_file_resolve_opened_kernel(f, nonbinary_kernel),
-            f, false, filename, display_name, progname, m, opts,
+            resolved_kernel, f, false, filename, display_name, progname, m, opts,
             match_count, scanner, record_stream, stats);
     }
 }
@@ -810,15 +891,21 @@ static int search_file_default_literal_raw_path(const char *filename,
             (*match_count)++;
         return 0;
     }
+    if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH) {
+        bx_search_dev_counters_note_literal_candidate_hit();
+        bx_search_dev_counters_note_candidate_triggered_reopen_call();
+    }
 
     return search_file_run_nonstdin_regular_path(filename, display_name_state, progname, m,
                                                  exec_plan, opts, match_count, scanner,
-                                                 record_stream, stats);
+                                                 record_stream, stats,
+                                                 precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH);
 }
 
 static int search_file(const char *filename,
                        const char *display_name_override,
                        bool strip_dot_prefix,
+                       const struct bx_walk_entry *walk_entry,
                        const char *progname,
                        struct bx_matcher *m,
                        const struct bx_search_exec_plan *exec_plan,
@@ -837,8 +924,11 @@ static int search_file(const char *filename,
     };
     int result = 1;
     int previous_offset_width = bx_search_output_get_offset_width();
-    if (!opts->recursive && !use_stdin && filename && strcmp(filename, "-") != 0)
+    if (search_file_stat_from_walk_entry(walk_entry, filename, &operand_st)) {
+        operand_st_loaded = true;
+    } else if (search_file_should_stat_path_for_slow_policy(filename, use_stdin, opts)) {
         operand_st_loaded = stat(filename, &operand_st) == 0;
+    }
 
     bx_search_output_set_offset_width(0);
     if (opts->initial_tab) {
@@ -967,7 +1057,8 @@ static int search_file(const char *filename,
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
         result = search_file_run_nonstdin_regular_path(filename, &display_name_state,
                                                        progname, m, exec_plan, opts,
-                                                       match_count, scanner, record_stream, stats);
+                                                       match_count, scanner, record_stream,
+                                                       stats, false);
         goto out;
     }
 
@@ -976,6 +1067,7 @@ static int search_file(const char *filename,
         const char *display_name = search_file_resolve_display_name(&display_name_state, opts);
         bx_search_dev_counters_note_binary_policy_check();
         if (opts->binary_without_match) {
+            bx_search_dev_counters_note_file_cut_off_by_binary_prefix();
             result = bx_search_binary_without_match(display_name, opts, match_count, stats);
             goto out;
         }
@@ -1037,7 +1129,27 @@ int bx_search_search_file(const char *filename,
                           struct bx_search_scanner *scanner,
                           struct bx_record_stream *record_stream,
                           struct bx_search_stats *stats) {
-    return search_file(filename, display_name_override, strip_dot_prefix, progname, m,
+    return search_file(filename, display_name_override, strip_dot_prefix, NULL, progname, m,
                        exec_plan, opts,
                        match_count, scanner, record_stream, stats);
+}
+
+int bx_search_search_walk_entry(const struct bx_walk_entry *entry,
+                                const char *display_name_override,
+                                bool strip_dot_prefix,
+                                const char *progname,
+                                struct bx_matcher *m,
+                                const struct bx_search_exec_plan *exec_plan,
+                                struct search_opts *opts,
+                                int *match_count,
+                                struct bx_search_scanner *scanner,
+                                struct bx_record_stream *record_stream,
+                                struct bx_search_stats *stats) {
+    if (!entry || !entry->path)
+        return bx_search_search_file(NULL, display_name_override, strip_dot_prefix,
+                                     progname, m, exec_plan, opts, match_count,
+                                     scanner, record_stream, stats);
+    return search_file(entry->path, display_name_override, strip_dot_prefix, entry,
+                       progname, m, exec_plan, opts, match_count, scanner,
+                       record_stream, stats);
 }

@@ -112,8 +112,9 @@ static const char *bx_rg_search_zip_program(const char *filename, const char *co
     return NULL;
 }
 
-static bool bx_rg_transform_prefix_needs_decode(const unsigned char *prefix,
-                                                size_t nread) {
+bool bx_rg_transform_prefix_needs_decode(const unsigned char *prefix,
+                                         size_t nread) {
+    bx_search_dev_counters_note_transform_prefix_check();
     if (!prefix || nread < 2u)
         return false;
     return (nread >= 3u &&

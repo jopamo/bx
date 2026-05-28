@@ -144,6 +144,7 @@ enum bx_walk_metadata_reason {
     BX_WALK_METADATA_REASON_OUTPUT,
 };
 
+void bx_walk_entry_fill_from_stat(struct bx_walk_entry *entry, const struct stat *st);
 bool bx_walk_entry_load_metadata_for(struct bx_walk_entry *entry,
                                      enum bx_walk_metadata_reason reason);
 int bx_walk(const char *root,

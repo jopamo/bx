@@ -143,6 +143,18 @@ struct bx_rg_sched_frontier_state {
 static void bx_rg_sched_work_vec_dispose(struct bx_rg_sched_work_vec *vec);
 static void bx_rg_sched_free_work(struct bx_rg_sched_work *work);
 
+static void bx_rg_sched_lock_global(struct bx_rg_sched_state *sched) {
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_QUEUE_LOCK_ACQUIRES,
+                                         1u);
+    pthread_mutex_lock(&sched->lock);
+}
+
+static void bx_rg_sched_lock_worker_slot(struct bx_rg_sched_worker_slot *slot) {
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_SLOT_LOCK_ACQUIRES,
+                                         1u);
+    pthread_mutex_lock(&slot->lock);
+}
+
 static void bx_rg_sched_publish_dispose_record(void *user,
                                                struct bx_rg_publish_record *record) {
     (void)user;
@@ -152,6 +164,8 @@ static void bx_rg_sched_publish_dispose_record(void *user,
 static void bx_rg_sched_signal_workers_locked(struct bx_rg_sched_state *sched) {
     if (!sched)
         return;
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_QUEUE_COND_WAKEUPS,
+                                         1u);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
     pthread_cond_broadcast(&sched->work_ready);
 }
@@ -200,7 +214,7 @@ static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
     if (!state)
         return;
 
-    pthread_mutex_lock(&state->lock);
+    bx_rg_sched_lock_global(state);
     state->fatal_error = true;
     state->shutdown = true;
     if (!state->fatal_message && message)
@@ -230,6 +244,9 @@ static void bx_rg_sched_report_path_error(const struct bx_rg_sched_state *state,
 static void bx_rg_sched_free_work(struct bx_rg_sched_work *work) {
     if (!work)
         return;
+    if (work->kind == BX_RG_SCHED_WORK_FILE_BATCH && work->u.batch.count == 0u)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
+                                             1u);
     if (work->kind == BX_RG_SCHED_WORK_DIR)
         bx_ignore_state_dispose_chain(work->u.dir.parent_ignore_state);
     free(work->storage);
@@ -254,6 +271,9 @@ static bool bx_rg_sched_work_reserve_storage(struct bx_rg_sched_work *work, size
         return false;
     work->storage = tmp;
     work->storage_cap = new_cap;
+    if (work->kind == BX_RG_SCHED_WORK_FILE_BATCH)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_STORAGE_REALLOCS,
+                                             1u);
     return true;
 }
 
@@ -363,7 +383,7 @@ static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
         return false;
 
     struct bx_rg_sched_worker_slot *slot = &sched->worker_slots[worker_index];
-    pthread_mutex_lock(&slot->lock);
+    bx_rg_sched_lock_worker_slot(slot);
     bool ok = bx_rg_sched_worker_slot_reserve(slot, slot->len + 1u);
     if (ok)
         slot->items[slot->len++] = work;
@@ -371,7 +391,7 @@ static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
     if (!ok)
         return false;
 
-    pthread_mutex_lock(&sched->lock);
+    bx_rg_sched_lock_global(sched);
     sched->pending_work++;
     if (sched->idle_workers > 0u && !sched->shutdown)
         bx_rg_sched_signal_workers_locked(sched);
@@ -382,7 +402,7 @@ static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
 }
 
 static void bx_rg_sched_note_work_claimed(struct bx_rg_sched_state *sched) {
-    pthread_mutex_lock(&sched->lock);
+    bx_rg_sched_lock_global(sched);
     if (sched->pending_work > 0u)
         sched->pending_work--;
     sched->active_workers++;
@@ -396,7 +416,7 @@ static struct bx_rg_sched_work *bx_rg_sched_try_pop_local_work(struct bx_rg_sche
         return NULL;
 
     struct bx_rg_sched_worker_slot *slot = &sched->worker_slots[worker_index];
-    pthread_mutex_lock(&slot->lock);
+    bx_rg_sched_lock_worker_slot(slot);
     if (slot->len == 0u) {
         pthread_mutex_unlock(&slot->lock);
         return NULL;
@@ -423,7 +443,7 @@ static struct bx_rg_sched_work *bx_rg_sched_try_steal_work(struct bx_rg_sched_st
         size_t victim_index = (worker_index + offset) % sched->thread_count;
         struct bx_rg_sched_worker_slot *slot = &sched->worker_slots[victim_index];
 
-        pthread_mutex_lock(&slot->lock);
+        bx_rg_sched_lock_worker_slot(slot);
         if (slot->len == 0u) {
             pthread_mutex_unlock(&slot->lock);
             continue;
@@ -439,6 +459,9 @@ static struct bx_rg_sched_work *bx_rg_sched_try_steal_work(struct bx_rg_sched_st
         slot->items[slot->len] = NULL;
         pthread_mutex_unlock(&slot->lock);
 
+        if (work->kind == BX_RG_SCHED_WORK_DIR)
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_SUBTREES_STOLEN,
+                                                 1u);
         bx_rg_sched_note_work_claimed(sched);
         if (stolen_out)
             *stolen_out = true;
@@ -452,7 +475,7 @@ static void bx_rg_sched_finish_work(struct bx_rg_sched_state *sched) {
     if (!sched)
         return;
 
-    pthread_mutex_lock(&sched->lock);
+    bx_rg_sched_lock_global(sched);
     if (sched->active_workers > 0u)
         sched->active_workers--;
     if (sched->fatal_error ||
@@ -504,6 +527,7 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_batch(void) {
     struct bx_rg_sched_work *work = calloc(1u, sizeof(*work));
     if (!work)
         return NULL;
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS, 1u);
     work->kind = BX_RG_SCHED_WORK_FILE_BATCH;
     return work;
 }
@@ -524,8 +548,13 @@ static bool bx_rg_sched_batch_add(struct bx_rg_sched_frontier_state *state,
         return false;
 
     struct bx_rg_sched_file_item *item = &work->u.batch.items[work->u.batch.count];
-    if (!bx_rg_sched_work_store_string(work, path, &item->path_offset))
+    if (!bx_rg_sched_work_store_string(work, path, &item->path_offset)) {
+        if (work->u.batch.count == 0u) {
+            state->pending_batch = NULL;
+            bx_rg_sched_free_work(work);
+        }
         return false;
+    }
     item->base_depth = base_depth;
     item->strip_dot_prefix = state->strip_dot_prefix;
     work->u.batch.count++;
@@ -542,10 +571,18 @@ static bool bx_rg_sched_flush_pending_batch(struct bx_rg_sched_frontier_state *s
         return true;
     struct bx_rg_sched_work *work = state->pending_batch;
     state->pending_batch = NULL;
+    if (work->u.batch.count == 0u) {
+        bx_rg_sched_free_work(work);
+        return true;
+    }
     if (!bx_rg_sched_work_vec_push(state->vec, work)) {
         bx_rg_sched_free_work(work);
         return false;
     }
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_FILES,
+                                         (uint64_t)work->u.batch.count);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_PATH_BYTES,
+                                         (uint64_t)work->storage_len);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_BUILT, 1u);
     return true;
 }
@@ -675,6 +712,7 @@ static bool bx_rg_sched_worker_append_output(struct bx_rg_sched_state *sched,
 
 static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                   struct bx_rg_sched_worker *worker,
+                                  const struct bx_walk_entry *entry,
                                   const char *path,
                                   bool strip_dot_prefix,
                                   bool stolen,
@@ -685,22 +723,34 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
         *match_seen_out = false;
 
     if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
-        int status = bx_search_search_file(path, NULL, strip_dot_prefix,
-                                           sched->progname, worker->matcher,
-                                           sched->exec_plan, sched->opts,
-                                           &dummy_matches, &worker->scanner,
-                                           &worker->record_stream, NULL);
+        int status = entry
+            ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
+                                          sched->progname, worker->matcher,
+                                          sched->exec_plan, sched->opts,
+                                          &dummy_matches, &worker->scanner,
+                                          &worker->record_stream, NULL)
+            : bx_search_search_file(path, NULL, strip_dot_prefix,
+                                    sched->progname, worker->matcher,
+                                    sched->exec_plan, sched->opts,
+                                    &dummy_matches, &worker->scanner,
+                                    &worker->record_stream, NULL);
         bx_rg_sched_note_file_search(stolen);
         if (status == 0 && match_seen_out)
             *match_seen_out = true;
         return status;
     }
 
-    int status = bx_search_search_file(path, NULL, strip_dot_prefix,
-                                       sched->progname, worker->matcher,
-                                       &worker->quiet_exec_plan, &sched->quiet_opts,
-                                       &dummy_matches, &worker->scanner,
-                                       &worker->record_stream, NULL);
+    int status = entry
+        ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
+                                      sched->progname, worker->matcher,
+                                      &worker->quiet_exec_plan, &sched->quiet_opts,
+                                      &dummy_matches, &worker->scanner,
+                                      &worker->record_stream, NULL)
+        : bx_search_search_file(path, NULL, strip_dot_prefix,
+                                sched->progname, worker->matcher,
+                                &worker->quiet_exec_plan, &sched->quiet_opts,
+                                &dummy_matches, &worker->scanner,
+                                &worker->record_stream, NULL);
     bx_rg_sched_note_file_search(stolen);
 
     if (status == 0 && sched->opts->files_with_matches) {
@@ -775,7 +825,7 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
 
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
     bool matched = false;
-    int status = bx_rg_sched_search_one(state->sched, state->worker, entry->path,
+    int status = bx_rg_sched_search_one(state->sched, state->worker, entry, entry->path,
                                         state->strip_dot_prefix, state->stolen,
                                         &matched);
     if (matched && state->match_seen)
@@ -962,6 +1012,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             bool matched = false;
             int status = bx_rg_sched_search_one(sched,
                                                 worker,
+                                                NULL,
                                                 path,
                                                 work->u.batch.items[i].strip_dot_prefix,
                                                 stolen,
@@ -1075,7 +1126,7 @@ static void *bx_rg_sched_worker_main(void *arg) {
             continue;
         }
 
-        pthread_mutex_lock(&sched->lock);
+        bx_rg_sched_lock_global(sched);
         if (sched->fatal_error || sched->shutdown || bx_cancel_state_requested(&sched->cancel)) {
             pthread_mutex_unlock(&sched->lock);
             break;

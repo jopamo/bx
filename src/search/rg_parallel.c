@@ -40,6 +40,7 @@ struct bx_search_parallel_job {
     uint64_t seq;
     size_t count;
     size_t path_bytes;
+    size_t search_path_bytes;
     size_t storage_len;
     size_t storage_cap;
     char *storage;
@@ -105,6 +106,9 @@ static void bx_search_parallel_free_job(void *user, void *job_ptr) {
 
     if (!job)
         return;
+    if (job->count == 0u)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
+                                             1u);
     free(job->storage);
     free(job);
 }
@@ -174,7 +178,7 @@ static void bx_search_parallel_drop_empty_pending_job(struct bx_search_parallel_
     if (!state || !state->pending_job || state->pending_job->count != 0u)
         return;
 
-    free(state->pending_job);
+    bx_search_parallel_free_job(NULL, state->pending_job);
     state->pending_job = NULL;
 }
 
@@ -201,6 +205,7 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
         return false;
     job->storage = tmp;
     job->storage_cap = new_cap;
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_STORAGE_REALLOCS, 1u);
     return true;
 }
 
@@ -241,8 +246,16 @@ static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state
 
     job = state->pending_job;
     state->pending_job = NULL;
+    if (job->count == 0u) {
+        bx_search_parallel_free_job(NULL, job);
+        return true;
+    }
     job->seq = state->next_seq++;
     if (bx_work_pool_submit(state->pool, job)) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_FILES,
+                                             (uint64_t)job->count);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_PATH_BYTES,
+                                             (uint64_t)job->search_path_bytes);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_BUILT, 1u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_POOL_SUBMITS, 1u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
@@ -326,6 +339,7 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
         job = calloc(1u, sizeof(*job));
         if (!job)
             return false;
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS, 1u);
         state->pending_job = job;
     }
 
@@ -346,6 +360,7 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
     job->count++;
     item->strip_dot_prefix = strip_dot_prefix;
     job->path_bytes += item_cost;
+    job->search_path_bytes += path_len;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
     if (item_cost > 0u) {
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,

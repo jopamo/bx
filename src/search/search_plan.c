@@ -23,7 +23,8 @@ static bool bx_search_plan_has_explicit_transform(const struct search_opts *opts
 static bool bx_search_plan_fastpath_is_deferred_candidate(
     enum bx_search_personality personality,
     const struct search_opts *opts,
-    bool has_metadata_sort
+    bool has_metadata_sort,
+    bool rg_searches_stdin
 );
 
 static bool bx_search_plan_deferred_fastpath_has_absence_plan(
@@ -59,14 +60,16 @@ bx_search_plan_select_output_kind(const struct search_opts *opts) {
 static enum bx_search_plan_input_kind
 bx_search_plan_select_input_kind(enum bx_search_personality personality,
                                  const struct search_opts *opts,
-                                 bool has_metadata_sort) {
+                                 bool has_metadata_sort,
+                                 bool rg_searches_stdin) {
     if (!opts || opts->files_only)
         return BX_SEARCH_PLAN_INPUT_NONE;
     if (bx_search_plan_has_explicit_transform(opts))
         return BX_SEARCH_PLAN_INPUT_TRANSFORMED_BUFFER;
     if (opts->multiline)
         return BX_SEARCH_PLAN_INPUT_MULTILINE_BUFFER;
-    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort))
+    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort,
+                                                      rg_searches_stdin))
         return BX_SEARCH_PLAN_INPUT_RAW_STREAM;
     if (bx_search_plan_needs_line_buffering(opts)
         || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
@@ -87,13 +90,26 @@ static bool bx_search_plan_deferred_fastpath_requested(const struct search_opts 
 static bool bx_search_plan_fastpath_is_deferred_candidate(
     enum bx_search_personality personality,
     const struct search_opts *opts,
-    bool has_metadata_sort
+    bool has_metadata_sort,
+    bool rg_searches_stdin
 ) {
     if (!opts || personality != BX_SEARCH_RG)
+        return false;
+    if (rg_searches_stdin)
         return false;
     if (!bx_search_plan_deferred_fastpath_requested(opts))
         return false;
     if (has_metadata_sort)
+        return false;
+    /*
+     * The deferred default-literal path owns only rg's default file-input
+     * binary cutoff policy. Explicit text/binary, hidden-filename, and stdin
+     * modes stay on the existing opened/scanner/buffered paths that own their
+     * output framing and binary diagnostics.
+     */
+    if (opts->binary_as_text || !opts->binary_without_match)
+        return false;
+    if (opts->hide_filename)
         return false;
     if (opts->multiline || opts->invert_match)
         return false;
@@ -121,12 +137,14 @@ static bool bx_search_plan_deferred_fastpath_has_absence_plan(
 static enum bx_search_plan_kernel_kind
 bx_search_plan_select_kernel_kind(enum bx_search_personality personality,
                                   const struct search_opts *opts,
-                                  bool has_metadata_sort) {
+                                  bool has_metadata_sort,
+                                  bool rg_searches_stdin) {
     if (!opts || opts->files_only)
         return BX_SEARCH_PLAN_KERNEL_NONE;
     if (opts->multiline)
         return BX_SEARCH_PLAN_KERNEL_MULTILINE;
-    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort))
+    if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort,
+                                                      rg_searches_stdin))
         return BX_SEARCH_PLAN_KERNEL_DEFERRED_FASTPATH;
     if (bx_search_plan_needs_line_buffering(opts)
         || bx_search_plan_plain_output_needs_binary_sensitive_path(opts)) {
@@ -170,8 +188,10 @@ void bx_search_plan_build(struct bx_search_plan *plan,
     plan->has_multiline = opts->multiline;
     plan->parallel_supported = parallel_supported;
     plan->subtree_parallel_supported = subtree_parallel_supported;
-    plan->input_kind = bx_search_plan_select_input_kind(personality, opts, metadata_sort);
-    plan->kernel_kind = bx_search_plan_select_kernel_kind(personality, opts, metadata_sort);
+    plan->input_kind = bx_search_plan_select_input_kind(personality, opts, metadata_sort,
+                                                        rg_searches_stdin);
+    plan->kernel_kind = bx_search_plan_select_kernel_kind(personality, opts, metadata_sort,
+                                                          rg_searches_stdin);
     plan->output_kind = bx_search_plan_select_output_kind(opts);
 
     if (metadata_sort) {

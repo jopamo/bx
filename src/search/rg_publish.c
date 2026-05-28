@@ -114,6 +114,8 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
     if (!state || !record)
         return false;
 
+    bool has_diagnostic = record->stderr_len > 0u;
+    bool has_match_output = record->stdout_len > 0u;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_QUEUED_OUTPUT_BATCHES, 1u);
     if (record->stdout_len == 0u && record->stderr_len == 0u)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_OUTPUT_BATCHES, 1u);
@@ -122,6 +124,12 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
         if (!bx_output_sink_submit(&state->ordered_sink, record))
             return false;
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED, 1u);
+        if (has_diagnostic)
+            bx_search_dev_counters_note_rg_sched(
+                BX_SEARCH_RG_SCHED_DIAGNOSTIC_RECORDS_SUBMITTED, 1u);
+        if (has_match_output)
+            bx_search_dev_counters_note_rg_sched(
+                BX_SEARCH_RG_SCHED_MATCH_RECORDS_SUBMITTED, 1u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_ORDERED_OUTPUT_RECORDS, 1u);
         return true;
     }
@@ -129,6 +137,12 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
     pthread_mutex_lock(&state->unordered_lock);
     state->opts.emit_record(state->opts.user, record);
     pthread_mutex_unlock(&state->unordered_lock);
+    if (has_diagnostic)
+        bx_search_dev_counters_note_rg_sched(
+            BX_SEARCH_RG_SCHED_DIAGNOSTIC_RECORDS_SUBMITTED, 1u);
+    if (has_match_output)
+        bx_search_dev_counters_note_rg_sched(
+            BX_SEARCH_RG_SCHED_MATCH_RECORDS_SUBMITTED, 1u);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_UNORDERED_OUTPUT_FLUSHES, 1u);
     if (state->opts.dispose_record)
         state->opts.dispose_record(state->opts.user, record);

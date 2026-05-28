@@ -125,10 +125,11 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
     if (bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
 
-    int rc = bx_search_search_file(entry->path, NULL, state->strip_dot_prefix, state->progname,
-                                   state->matcher, state->exec_plan,
-                                   state->opts, state->match_count,
-                                   state->scanner, state->record_stream, state->stats);
+    int rc = bx_search_search_walk_entry(entry, NULL, state->strip_dot_prefix,
+                                         state->progname, state->matcher,
+                                         state->exec_plan, state->opts,
+                                         state->match_count, state->scanner,
+                                         state->record_stream, state->stats);
     if (rc == 2) {
         *state->exit_status = 2;
         if (state->error_seen)
@@ -590,9 +591,9 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                 if (bx_search_explicit_entry_selected(args->opts, args->argv[j])) {
                     struct bx_walk_entry entry = {
                         .path = args->argv[j],
-                        .is_dir = false,
-                        .mode = st.st_mode,
+                        .follow_metadata = true,
                     };
+                    bx_walk_entry_fill_from_stat(&entry, &st);
                     enum bx_walk_action action = bx_search_grep_walk_cb(&entry, &state);
                     if (action == BX_WALK_STOP)
                         stop = true;

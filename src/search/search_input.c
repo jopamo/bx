@@ -182,9 +182,6 @@ bool bx_search_input_is_binary_path(const char *path,
     fclose(f);
     if (n == 0u)
         return false;
-    for (size_t i = 0; i < n; i++) {
-        if (buf[i] == 0u)
-            return true;
-    }
-    return false;
+    bx_search_dev_counters_note_binary_prefix_check();
+    return memchr(buf, '\0', n) != NULL;
 }

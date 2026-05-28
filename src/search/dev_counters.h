@@ -11,14 +11,24 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_DIRS_SEEN,
     BX_SEARCH_RG_SCHED_GLOBAL_POOL_SUBMITS,
     BX_SEARCH_RG_SCHED_GLOBAL_POOL_POPS,
+    BX_SEARCH_RG_SCHED_GLOBAL_QUEUE_LOCK_ACQUIRES,
+    BX_SEARCH_RG_SCHED_GLOBAL_QUEUE_COND_WAKEUPS,
+    BX_SEARCH_RG_SCHED_WORKER_SLOT_LOCK_ACQUIRES,
     BX_SEARCH_RG_SCHED_WORKER_WAKEUPS,
     BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,
     BX_SEARCH_RG_SCHED_PATH_COPIES_BEFORE_MATCH,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCH_FILES,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCH_PATH_BYTES,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCH_STORAGE_REALLOCS,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
     BX_SEARCH_RG_SCHED_BATCHES_BUILT,
     BX_SEARCH_RG_SCHED_BATCHES_SEARCHED,
     BX_SEARCH_RG_SCHED_EMPTY_BATCHES,
     BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED,
     BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED,
+    BX_SEARCH_RG_SCHED_DIAGNOSTIC_RECORDS_SUBMITTED,
+    BX_SEARCH_RG_SCHED_MATCH_RECORDS_SUBMITTED,
     BX_SEARCH_RG_SCHED_ORDERED_OUTPUT_RECORDS,
     BX_SEARCH_RG_SCHED_UNORDERED_OUTPUT_FLUSHES,
     BX_SEARCH_RG_SCHED_SKIPPED_OUTPUT_SEQS,
@@ -29,6 +39,7 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_QUEUED_OUTPUT_BATCHES,
     BX_SEARCH_RG_SCHED_EMPTY_OUTPUT_BATCHES,
     BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED,
+    BX_SEARCH_RG_SCHED_WORKER_SUBTREES_STOLEN,
 };
 
 enum bx_search_walk_counter {
@@ -67,6 +78,11 @@ void bx_search_dev_counters_note_content_read(size_t count);
 void bx_search_dev_counters_note_content_pread(size_t count);
 void bx_search_dev_counters_note_prefix_pread(size_t count);
 void bx_search_dev_counters_note_prefix_bytes_rescanned(size_t count);
+void bx_search_dev_counters_note_transform_prefix_check(void);
+void bx_search_dev_counters_note_binary_prefix_check(void);
+void bx_search_dev_counters_note_file_cut_off_by_binary_prefix(void);
+void bx_search_dev_counters_note_candidate_triggered_reopen_call(void);
+void bx_search_dev_counters_note_candidate_triggered_scanner_entry(void);
 void bx_search_dev_counters_note_candidate_hit(void);
 void bx_search_dev_counters_note_literal_candidate_hit(void);
 void bx_search_dev_counters_note_literal_confirm_call(void);
