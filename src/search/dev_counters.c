@@ -46,6 +46,11 @@ struct bx_search_dev_counters {
     atomic_size_t literal_algo_arm64_sve_calls;
     atomic_size_t literal_algo_memmem_calls;
     atomic_size_t literal_bytes_scanned;
+    atomic_uint_fast64_t literal_backend_requested;
+    atomic_uint_fast64_t literal_backend_resolved;
+    atomic_uint_fast64_t literal_avx2_runtime_available;
+    atomic_uint_fast64_t literal_avx2_target_available;
+    atomic_uint_fast64_t literal_avx2_eligible_but_not_selected;
     atomic_size_t literal_algo_sse2_calls;
     atomic_size_t matcher_invocations;
     atomic_size_t records_materialized;
@@ -174,6 +179,16 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.literal_algo_memmem_calls, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_bytes_scanned, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_backend_requested, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_backend_resolved, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_avx2_runtime_available, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_avx2_target_available, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_avx2_eligible_but_not_selected, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.literal_algo_sse2_calls, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.matcher_invocations, 0u, memory_order_relaxed);
@@ -520,6 +535,33 @@ void bx_search_dev_counters_note_literal_bytes_scanned(size_t count) {
                               memory_order_relaxed);
 }
 
+void bx_search_dev_counters_note_literal_backend_selection(
+    uint64_t requested,
+    uint64_t resolved,
+    bool avx2_runtime_available,
+    bool avx2_target_available,
+    bool avx2_eligible_but_not_selected) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_store_explicit(&current_dev_counters.literal_backend_requested, requested,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_backend_resolved, resolved,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_avx2_runtime_available,
+                          avx2_runtime_available ? 1u : 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_avx2_target_available,
+                          avx2_target_available ? 1u : 0u,
+                          memory_order_relaxed);
+    if (avx2_eligible_but_not_selected) {
+        atomic_fetch_add_explicit(
+            &current_dev_counters.literal_avx2_eligible_but_not_selected,
+            1u,
+            memory_order_relaxed);
+    }
+}
+
 void bx_search_dev_counters_note_literal_algo_sse2_call(void) {
     if (!current_dev_counters.enabled)
         return;
@@ -804,7 +846,9 @@ void bx_search_dev_counters_report(FILE *stream) {
             "content_open_calls=%" PRIuMAX " content_close_calls=%" PRIuMAX " content_fstat_calls=%" PRIuMAX " content_fcntl_calls=%" PRIuMAX " "
             "content_read_calls=%" PRIuMAX " content_read_bytes=%" PRIuMAX " content_pread_calls=%" PRIuMAX " content_pread_bytes=%" PRIuMAX " "
             "prefix_pread_calls=%" PRIuMAX " prefix_pread_bytes=%" PRIuMAX " prefix_bytes_rescanned=%" PRIuMAX " "
-            "candidate_hits=%zu literal_candidate_hits=%zu literal_confirm_calls=%zu literal_matches=%zu literal_not_found=%zu literal_overlap_bytes_scanned=%zu literal_cross_chunk_matches=%zu literal_plan_compiles=%zu literal_selected_pair_start=%zu literal_selected_pair_interior=%zu literal_selected_pair_end=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_long_calls=%zu literal_algo_scalar_calls=%zu literal_algo_x86_avx2_calls=%zu literal_algo_arm64_neon_calls=%zu literal_algo_arm64_sve_calls=%zu literal_algo_memmem_calls=%zu literal_bytes_scanned=%zu literal_algo_sse2_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_entries_from_literal_candidate=%zu scanner_entries_without_candidate=%zu lines_counted=%zu line_boundaries_recovered=%zu records_expanded=%zu plain_line_outputs=%zu context_buffer_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
+            "candidate_hits=%zu literal_candidate_hits=%zu literal_confirm_calls=%zu literal_matches=%zu literal_not_found=%zu literal_overlap_bytes_scanned=%zu literal_cross_chunk_matches=%zu literal_plan_compiles=%zu literal_selected_pair_start=%zu literal_selected_pair_interior=%zu literal_selected_pair_end=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_long_calls=%zu literal_algo_scalar_calls=%zu literal_algo_x86_avx2_calls=%zu literal_algo_arm64_neon_calls=%zu literal_algo_arm64_sve_calls=%zu literal_algo_memmem_calls=%zu literal_bytes_scanned=%zu "
+            "literal_backend_requested=%" PRIuMAX " literal_backend_resolved=%" PRIuMAX " literal_avx2_runtime_available=%" PRIuMAX " literal_avx2_target_available=%" PRIuMAX " literal_avx2_eligible_but_not_selected=%" PRIuMAX " "
+            "literal_algo_sse2_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_entries_from_literal_candidate=%zu scanner_entries_without_candidate=%zu lines_counted=%zu line_boundaries_recovered=%zu records_expanded=%zu plain_line_outputs=%zu context_buffer_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
             "binary_policy_checks=%" PRIuMAX " "
             "walk_dirents_seen=%" PRIuMAX " walk_dirs_seen=%" PRIuMAX " walk_files_seen=%" PRIuMAX " walk_symlinks_seen=%" PRIuMAX " walk_unknown_dtype_seen=%" PRIuMAX " "
             "walk_lstat_calls=%" PRIuMAX " walk_fstatat_calls=%" PRIuMAX " walk_stat_reason_unknown_dtype=%" PRIuMAX " walk_stat_reason_symlink_policy=%" PRIuMAX " walk_stat_reason_traversal_policy=%" PRIuMAX " "
@@ -887,6 +931,19 @@ void bx_search_dev_counters_report(FILE *stream) {
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.literal_bytes_scanned,
                                  memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.literal_backend_requested,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.literal_backend_resolved,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.literal_avx2_runtime_available,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.literal_avx2_target_available,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.literal_avx2_eligible_but_not_selected,
+                memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.literal_algo_sse2_calls,
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.matcher_invocations, memory_order_relaxed),

@@ -86,6 +86,7 @@ struct bx_walk_ignore_opts {
     bool no_ignore_global;
     bool no_require_git;
     bool gitignore_enabled;
+    bool git_root_resolved;
     bool ignore_file_case_insensitive;
     bool suppress_ignore_messages;
     bool os_error_style;

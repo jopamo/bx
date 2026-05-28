@@ -151,6 +151,8 @@ static int bx_literal_find_case_sensitive_compiled(const struct bx_literal_match
                                                    struct bx_match *out);
 static bool bx_literal_can_use_sse2(const struct bx_literal_matcher *m);
 static bool bx_literal_can_use_avx2(const struct bx_literal_matcher *m);
+static bool bx_literal_avx2_target_available(void);
+static bool bx_literal_avx2_eligible_without_runtime(const struct bx_literal_matcher *m);
 #if defined(__aarch64__)
 static bool bx_literal_can_use_arm64_neon(const struct bx_literal_matcher *m);
 static bool bx_literal_can_use_arm64_sve(const struct bx_literal_matcher *m);
@@ -278,7 +280,7 @@ static void bx_literal_backend_auto_init(void) {
 
     if (bx_literal_x86_probe_has_avx2(probe)) {
         bx_literal_runtime_has_avx2_state = true;
-#if defined(__AVX2__)
+#if BX_LITERAL_HAVE_AVX2_TARGET || defined(__AVX2__)
         bx_literal_backend_auto_state = BX_LITERAL_BACKEND_AVX2;
 #else
         bx_literal_backend_auto_state = BX_LITERAL_BACKEND_SSE2;
@@ -437,6 +439,25 @@ static bool bx_literal_can_use_avx2(const struct bx_literal_matcher *m) {
         && (m->plan.algo == BX_LIT_SHORT_RARE_PAIR || m->plan.algo == BX_LIT_MEDIUM_RARE_PAIR)
         && m->plan.needle_len >= 4u && m->plan.needle_len <= 256u
         && bx_literal_runtime_has_avx2();
+#else
+    (void)m;
+    return false;
+#endif
+}
+
+static bool bx_literal_avx2_target_available(void) {
+#if BX_LITERAL_HAVE_AVX2_TARGET
+    return true;
+#else
+    return false;
+#endif
+}
+
+static bool bx_literal_avx2_eligible_without_runtime(const struct bx_literal_matcher *m) {
+#if BX_LITERAL_HAVE_AVX2_TARGET
+    return m && !m->ignore_case
+        && (m->plan.algo == BX_LIT_SHORT_RARE_PAIR || m->plan.algo == BX_LIT_MEDIUM_RARE_PAIR)
+        && m->plan.needle_len >= 4u && m->plan.needle_len <= 256u;
 #else
     (void)m;
     return false;
@@ -1808,6 +1829,20 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
         m->case_sensitive_find = bx_literal_find_case_sensitive_rare_pair_scalar;
         m->plan.backend = bx_literal_resolve_backend(m, requested);
         bx_lit_plan_select_ops(&m->plan);
+        bool avx2_runtime_available = bx_literal_runtime_has_avx2();
+        bool avx2_target_available = bx_literal_avx2_target_available();
+        bool avx2_eligible_but_not_selected =
+            requested == BX_LITERAL_BACKEND_AVX2 &&
+            avx2_runtime_available &&
+            avx2_target_available &&
+            bx_literal_avx2_eligible_without_runtime(m) &&
+            m->plan.backend != BX_LITERAL_BACKEND_AVX2;
+        bx_search_dev_counters_note_literal_backend_selection(
+            (uint64_t)requested,
+            (uint64_t)m->plan.backend,
+            avx2_runtime_available,
+            avx2_target_available,
+            avx2_eligible_but_not_selected);
 #if defined(__aarch64__)
         if (m->plan.backend == BX_LITERAL_BACKEND_ARM64_SVE) {
 #if BX_LITERAL_HAVE_ARM64_SVE_INTRINSICS

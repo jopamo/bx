@@ -330,6 +330,7 @@ struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
         .extra_ignore_files = opts->ignore_files,
         .num_extra_ignore_files = opts->num_ignore_files,
         .gitignore_enabled = false,
+        .git_root_resolved = false,
         .ignore_filenames = rg_ignore_filenames,
         .num_ignore_filenames = 3,
     };

@@ -48,6 +48,7 @@ struct bx_rg_sched_work {
             size_t path_offset;
             size_t git_root_offset;
             struct bx_ignore_state *parent_ignore_state;
+            bool git_root_resolved;
             bool gitignore_enabled;
         } dir;
         struct {
@@ -467,8 +468,11 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
                                                          const char *current_root,
                                                          int base_depth,
                                                          bool strip_dot_prefix,
+                                                         bool git_root_resolved,
+                                                         bool gitignore_enabled,
                                                          const char *git_root,
-                                                         const struct bx_ignore_state *parent_ignore_state) {
+                                                         const struct bx_ignore_state
+                                                             *parent_ignore_state) {
     struct bx_rg_sched_work *work = calloc(1u, sizeof(*work));
     if (!work)
         return NULL;
@@ -483,7 +487,8 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
         bx_rg_sched_free_work(work);
         return NULL;
     }
-    work->u.dir.gitignore_enabled = git_root != NULL;
+    work->u.dir.git_root_resolved = git_root_resolved;
+    work->u.dir.gitignore_enabled = gitignore_enabled;
     if (parent_ignore_state) {
         work->u.dir.parent_ignore_state =
             bx_ignore_state_clone_chain_for_subtree(parent_ignore_state, current_root, path);
@@ -550,6 +555,7 @@ static bool bx_rg_sched_add_root_dir_work(struct bx_rg_sched_work_vec *vec,
                                           bool strip_dot_prefix) {
     struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(path, path, 0,
                                                              strip_dot_prefix,
+                                                             false, false,
                                                              NULL, NULL);
     if (!work)
         return false;
@@ -739,12 +745,15 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
             bx_rg_sched_note_dir_walk(state->stolen);
             if (entry->depth == 1 &&
                 (state->sched->opts->max_depth < 0 || global_depth < state->sched->opts->max_depth)) {
-                struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(entry->path,
-                                                                         state->work_root_path,
-                                                                         global_depth,
-                                                                         state->strip_dot_prefix,
-                                                                         ignore_opts ? ignore_opts->git_root : NULL,
-                                                                         ignore_state);
+                struct bx_rg_sched_work *work =
+                    bx_rg_sched_work_new_dir(entry->path,
+                                             state->work_root_path,
+                                             global_depth,
+                                             state->strip_dot_prefix,
+                                             ignore_opts ? ignore_opts->git_root_resolved : false,
+                                             ignore_opts ? ignore_opts->gitignore_enabled : false,
+                                             ignore_opts ? ignore_opts->git_root : NULL,
+                                             ignore_state);
                 if (!work) {
                     bx_rg_sched_set_fatal(state->sched, "rg: failed to queue local subtree work\n");
                     return BX_WALK_ERROR;
@@ -924,10 +933,9 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(sched->opts);
         struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(sched->progname,
                                                                             sched->opts);
-        if (git_root) {
-            ignore_opts.git_root = git_root;
-            ignore_opts.gitignore_enabled = work->u.dir.gitignore_enabled;
-        }
+        ignore_opts.git_root = git_root;
+        ignore_opts.git_root_resolved = work->u.dir.git_root_resolved;
+        ignore_opts.gitignore_enabled = work->u.dir.gitignore_enabled;
         struct bx_ignore_state *inherited_ignore = work->u.dir.parent_ignore_state;
         work->u.dir.parent_ignore_state = NULL;
         struct bx_search_walk_config walk_config = {

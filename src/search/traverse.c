@@ -201,11 +201,16 @@ int bx_search_walk(const char *root,
                 return -1;
             }
             state.ignore_opts.git_root = state.git_root_owned;
-        } else {
-            state.ignore_opts.gitignore_enabled = bx_ignore_enable_gitignore_for_root(root,
-                                                                                      &state.ignore_opts);
+            state.ignore_opts.git_root_resolved = true;
+        } else if (!state.ignore_opts.git_root_resolved) {
             state.git_root_owned = bx_ignore_find_git_root(root, &state.ignore_opts);
             state.ignore_opts.git_root = state.git_root_owned;
+            state.ignore_opts.gitignore_enabled =
+                state.git_root_owned != NULL ||
+                (!state.ignore_opts.no_ignore &&
+                 !state.ignore_opts.no_ignore_vcs &&
+                 state.ignore_opts.no_require_git);
+            state.ignore_opts.git_root_resolved = true;
         }
 
         if (config->inherited_parent_ignore_state) {
