@@ -314,7 +314,6 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
                                                            size_t len,
                                                            size_t start,
                                                            struct bx_match *out) {
-    const unsigned char *needle;
     size_t needle_len;
     size_t pair_index;
     size_t search_off;
@@ -326,14 +325,13 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
         m->plan.needle_len > 16u || len - start < m->plan.needle_len) {
         return -1;
     }
-    needle = m->plan.needle;
     needle_len = m->plan.needle_len;
 
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_scalar_call();
     pair_index = bx_literal_rare_pair_index(m);
-    pair_first = needle[pair_index];
-    pair_second = needle[pair_index + 1u];
+    pair_first = m->plan.rare_pair_first;
+    pair_second = m->plan.rare_pair_second;
     search_off = start + pair_index;
     search_limit = len - (needle_len - pair_index);
     while (search_off <= search_limit) {

@@ -20,10 +20,10 @@ enum bx_lit_algo {
 };
 
 /*
- * Shared literal plan state.
+ * Shared compile-once literal plan state.
  *
- * This starts with only the algorithm classification so the storage lives in a
- * shared home before later items add precomputed needle metadata.
+ * Keep hot-path metadata here so literal.c runtime paths can consume selected
+ * bytes and algorithm choices without re-deriving them per matcher/search.
  */
 struct bx_lit_plan {
     const unsigned char *needle;
@@ -31,6 +31,8 @@ struct bx_lit_plan {
     unsigned char first_byte;
     unsigned char last_byte;
     unsigned char rare_byte;
+    unsigned char rare_pair_first;
+    unsigned char rare_pair_second;
     enum bx_lit_algo algo;
 };
 

@@ -44,18 +44,29 @@ static size_t bx_lit_plan_select_rare_byte_index(const unsigned char *needle,
     return best_index;
 }
 
+static size_t bx_lit_plan_select_rare_pair_index(size_t rare_index, size_t needle_len) {
+    if (needle_len < 2u)
+        return 0u;
+    return (rare_index + 1u < needle_len) ? rare_index : (rare_index - 1u);
+}
+
 void bx_lit_plan_compile(struct bx_lit_plan *plan,
                          const unsigned char *needle,
                          size_t needle_len) {
-    size_t rare_index = bx_lit_plan_select_rare_byte_index(needle, needle_len);
+    size_t rare_index;
+    size_t rare_pair_index;
 
     if (!plan)
         return;
 
+    rare_index = bx_lit_plan_select_rare_byte_index(needle, needle_len);
+    rare_pair_index = bx_lit_plan_select_rare_pair_index(rare_index, needle_len);
     plan->needle = needle;
     plan->needle_len = needle_len;
     plan->first_byte = (needle && needle_len > 0u) ? needle[0] : 0u;
     plan->last_byte = (needle && needle_len > 0u) ? needle[needle_len - 1u] : 0u;
     plan->rare_byte = (needle && needle_len > 0u) ? needle[rare_index] : 0u;
+    plan->rare_pair_first = (needle && needle_len > 1u) ? needle[rare_pair_index] : 0u;
+    plan->rare_pair_second = (needle && needle_len > 1u) ? needle[rare_pair_index + 1u] : 0u;
     plan->algo = bx_lit_plan_select_algo(needle_len);
 }
