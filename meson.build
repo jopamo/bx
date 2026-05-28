@@ -461,6 +461,7 @@ bx_search_sources = [
   'src/search/metadata.c',
   'src/search/dev_counters.c',
   'src/search/literal.c',
+  'src/search/literal_plan.c',
   'src/search/ignore.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
