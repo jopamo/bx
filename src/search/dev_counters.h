@@ -90,6 +90,7 @@ void bx_search_dev_counters_note_literal_algo_arm64_sve_call(void);
 void bx_search_dev_counters_note_literal_algo_memmem_call(void);
 void bx_search_dev_counters_note_literal_bytes_scanned(size_t count);
 void bx_search_dev_counters_note_literal_rare_pair_probe_call(void);
+void bx_search_dev_counters_note_literal_pair_mask_nonzero(void);
 void bx_search_dev_counters_note_literal_backend_selection(uint64_t requested,
                                                            uint64_t resolved,
                                                            bool avx2_runtime_available,

@@ -1458,6 +1458,7 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_sve_core(const struct bx_
     svuint8_t secondv;
     svuint8_t ones;
     svuint8_t zeros;
+    bool count_masks;
 
     if (!plan || !buf || !plan->needle || plan->needle_len < 4u || plan->needle_len > 256u ||
         len < plan->needle_len) {
@@ -1476,6 +1477,7 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_sve_core(const struct bx_
     secondv = svdup_n_u8(pair_second);
     ones = svdup_n_u8(0xffu);
     zeros = svdup_n_u8(0u);
+    count_masks = bx_search_dev_counters_enabled();
 
     while (search_off <= search_limit) {
         size_t active_lanes = search_limit - search_off + 1u;
@@ -1499,6 +1501,8 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_sve_core(const struct bx_
             search_off += active_lanes;
             continue;
         }
+        if (count_masks)
+            bx_search_dev_counters_note_literal_pair_mask_nonzero();
         candidate_bytes = svsel_u8(pair_pg, ones, zeros);
         svst1_u8(pg, candidate_lanes, candidate_bytes);
         if (bx_literal_arm64_sve_confirm_candidate_lanes_scalar(
@@ -1574,6 +1578,8 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_neon_core(const struct bx
             search_off += 16u;
             continue;
         }
+        if (count_probes)
+            bx_search_dev_counters_note_literal_pair_mask_nonzero();
         {
             uint16_t lane_mask = bx_literal_arm64_neon_pair_mask_to_bits(pair_mask);
 
@@ -1668,6 +1674,8 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
             search_off += 32u;
             continue;
         }
+        if (count_probes)
+            bx_search_dev_counters_note_literal_pair_mask_nonzero();
         while (mask != 0u) {
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = search_off + (size_t)bit - pair_offset;
@@ -1754,6 +1762,8 @@ static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_p
         unsigned mask2 = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(block_last, lastv));
         unsigned mask = mask1 & mask2;
 
+        if (mask != 0u && count_probes)
+            bx_search_dev_counters_note_literal_pair_mask_nonzero();
         while (mask != 0u) {
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = i + (size_t)bit;
@@ -1811,6 +1821,8 @@ static int bx_literal_find_case_sensitive_sse2(const struct bx_literal_matcher *
         unsigned mask2 = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(block_last, lastv));
         unsigned mask = mask1 & mask2;
 
+        if (mask != 0u && count_probes)
+            bx_search_dev_counters_note_literal_pair_mask_nonzero();
         while (mask != 0u) {
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = i + (size_t)bit;
