@@ -83,7 +83,7 @@ int bx_search_raw_presence_opened(FILE *f,
         if (scanner->len > 0u) {
             struct bx_match literal_match;
             if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &literal_match) == 0) {
-                bx_search_dev_counters_note_candidate_hit();
+                bx_search_dev_counters_note_literal_candidate_hit();
                 file_matches = 1;
                 if (stats) {
                     stats->matches++;

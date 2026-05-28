@@ -26,6 +26,11 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
 static bool bx_literal_match_at_anchor(const struct bx_literal_matcher *m,
                                        const unsigned char *buf,
                                        size_t pos);
+static int bx_literal_find_anchored_exact(const struct bx_literal_matcher *m,
+                                          const unsigned char *buf,
+                                          size_t len,
+                                          size_t start,
+                                          struct bx_match *out);
 
 struct bx_literal_matcher {
     char  *pattern_lower;
@@ -336,6 +341,16 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
     return -1;
 }
 
+static int bx_literal_find_case_sensitive_long_scalar(const struct bx_literal_matcher *m,
+                                                      const unsigned char *buf,
+                                                      size_t len,
+                                                      size_t start,
+                                                      struct bx_match *out) {
+    bx_search_dev_counters_note_literal_algo_long_call();
+    bx_search_dev_counters_note_literal_algo_scalar_call();
+    return bx_literal_find_anchored_exact(m, buf, len, start, out);
+}
+
 static bool bx_literal_match_at_anchor(const struct bx_literal_matcher *m,
                                        const unsigned char *buf,
                                        size_t pos) {
@@ -479,10 +494,7 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
 #endif
         return;
     }
-    if (requested == BX_LITERAL_BACKEND_SCALAR)
-        return;
-    if (!bx_literal_can_use_sse2(m))
-        return;
+    m->case_sensitive_find = bx_literal_find_case_sensitive_long_scalar;
 }
 
 static int bx_literal_find_direct(const struct bx_literal_matcher *m,
@@ -498,6 +510,7 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
 
     if (m->ignore_case) {
         if (m->locale_utf8_upper) {
+            bx_search_dev_counters_note_literal_bytes_scanned(len - start);
             for (size_t i = start; i < len; i++) {
                 if (bx_literal_verify_at_locale_utf8(m, buf, len, i, out))
                     return 0;
@@ -506,6 +519,7 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
         }
         if (len - start < m->plen)
             return -1;
+        bx_search_dev_counters_note_literal_bytes_scanned(len - start);
         for (size_t i = start; i <= len - m->plen; i++) {
             bool match = true;
             for (size_t j = 0; j < m->plen; j++) {
@@ -527,6 +541,7 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
     if (len - start < m->plen)
         return -1;
 
+    bx_search_dev_counters_note_literal_bytes_scanned(len - start);
     return m->case_sensitive_find
         ? m->case_sensitive_find(m, buf, len, start, out)
         : bx_literal_find_case_sensitive_scalar(m, buf, len, start, out);
@@ -558,6 +573,7 @@ bool bx_literal_verify_at(const struct bx_literal_matcher *m,
     if (!m || !buf || start > len)
         return false;
 
+    bx_search_dev_counters_note_literal_confirm_call();
     if (m->plen == 0u) {
         if (out) {
             out->start = start;

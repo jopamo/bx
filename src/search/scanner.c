@@ -192,7 +192,7 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
         return false;
     }
 
-    bx_search_dev_counters_note_candidate_hit();
+    bx_search_dev_counters_note_literal_candidate_hit();
     candidate->chunk_off = candidate_start;
     candidate->file_off = scanner->file_off + (off_t)candidate_start;
     candidate->anchor_len = bx_literal_len(literal);
