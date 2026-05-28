@@ -164,6 +164,7 @@ int bx_search_scanner_opened(FILE *f,
     bool output_is_captured = bx_search_stdout_is_captured();
     char *fast_plain_prefix = NULL;
     size_t fast_plain_prefix_len = 0u;
+    bool saw_literal_candidate = false;
 
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
@@ -188,6 +189,10 @@ int bx_search_scanner_opened(FILE *f,
             if (!bx_search_scanner_next_literal_candidate(scanner, literal,
                                                           &cursor, &candidate))
                 break;
+            if (!saw_literal_candidate) {
+                saw_literal_candidate = true;
+                bx_search_dev_counters_note_scanner_entry_from_literal_candidate();
+            }
 
             if (shortcut_file_presence) {
                 if (!exact_literal_candidates) {
@@ -363,6 +368,8 @@ int bx_search_scanner_opened(FILE *f,
     }
 
     if (ferror(f)) {
+        if (!saw_literal_candidate)
+            bx_search_dev_counters_note_scanner_entry_without_candidate();
         free(fast_plain_prefix);
         bx_search_report_path_error(progname, display_name, errno ? errno : EIO, opts);
         if (!use_stdin)
@@ -392,6 +399,8 @@ int bx_search_scanner_opened(FILE *f,
         stats->files_with_matches++;
     if (match_count)
         *match_count += file_matches;
+    if (!saw_literal_candidate)
+        bx_search_dev_counters_note_scanner_entry_without_candidate();
     free(fast_plain_prefix);
     if (!use_stdin)
         fclose(f);

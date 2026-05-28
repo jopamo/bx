@@ -267,6 +267,9 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
 
                 bx_search_dev_counters_note_literal_overlap_bytes_scanned(carry);
                 if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
+                    if (bx_literal_match_crosses_chunk_boundary(&bm, carry)) {
+                        bx_search_dev_counters_note_literal_cross_chunk_match();
+                    }
                     result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                     goto out;
                 }

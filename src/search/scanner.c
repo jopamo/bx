@@ -57,6 +57,7 @@ static size_t bx_search_scanner_count_delimiters(const unsigned char *buf,
         count++;
         cursor = hit + 1u;
     }
+    bx_search_dev_counters_note_lines_counted(count);
     return count;
 }
 

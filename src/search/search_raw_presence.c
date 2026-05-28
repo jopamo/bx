@@ -85,6 +85,9 @@ int bx_search_raw_presence_opened(FILE *f,
 
             bx_search_dev_counters_note_literal_overlap_bytes_scanned(carry);
             if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &literal_match) == 0) {
+                if (bx_literal_match_crosses_chunk_boundary(&literal_match, carry)) {
+                    bx_search_dev_counters_note_literal_cross_chunk_match();
+                }
                 bx_search_dev_counters_note_literal_candidate_hit();
                 file_matches = 1;
                 if (stats) {
