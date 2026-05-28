@@ -89,12 +89,14 @@ void bx_search_dev_counters_note_literal_algo_arm64_neon_call(void);
 void bx_search_dev_counters_note_literal_algo_arm64_sve_call(void);
 void bx_search_dev_counters_note_literal_algo_memmem_call(void);
 void bx_search_dev_counters_note_literal_bytes_scanned(size_t count);
+void bx_search_dev_counters_note_literal_rare_pair_probe_call(void);
 void bx_search_dev_counters_note_literal_backend_selection(uint64_t requested,
                                                            uint64_t resolved,
                                                            bool avx2_runtime_available,
                                                            bool avx2_target_available,
                                                            bool avx2_eligible_but_not_selected);
 void bx_search_dev_counters_note_literal_algo_sse2_call(void);
+void bx_search_dev_counters_note_literal_sse2_first_last_call(void);
 void bx_search_dev_counters_note_matcher_invocation(void);
 void bx_search_dev_counters_note_record_materialized(void);
 void bx_search_dev_counters_note_scanner_entry(void);

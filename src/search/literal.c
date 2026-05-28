@@ -523,6 +523,7 @@ static enum bx_lit_result bx_literal_arm64_neon_confirm_candidate_lanes_scalar(
     size_t needle_len,
     size_t *match_off) {
     size_t valid_lanes = search_limit - search_off + 1u;
+    bool count_probes = bx_search_dev_counters_enabled();
 
     for (size_t lane = 0u; lane < valid_lanes; ++lane) {
         size_t pos;
@@ -530,6 +531,8 @@ static enum bx_lit_result bx_literal_arm64_neon_confirm_candidate_lanes_scalar(
         if ((lane_mask & ((uint16_t)1u << lane)) == 0u)
             continue;
         pos = search_off + lane - pair_offset;
+        if (count_probes)
+            bx_search_dev_counters_note_literal_rare_pair_probe_call();
         if (memcmp(buf + pos, needle, needle_len) == 0) {
             if (match_off)
                 *match_off = pos;
@@ -549,6 +552,7 @@ static enum bx_lit_result bx_literal_arm64_neon_confirm_candidate_lanes_bitmask(
     size_t needle_len,
     size_t *match_off) {
     size_t valid_lanes = search_limit - search_off + 1u;
+    bool count_probes = bx_search_dev_counters_enabled();
 
     if (valid_lanes < 16u)
         lane_mask &= (uint16_t)(((uint32_t)1u << valid_lanes) - 1u);
@@ -556,6 +560,8 @@ static enum bx_lit_result bx_literal_arm64_neon_confirm_candidate_lanes_bitmask(
         unsigned lane = (unsigned)__builtin_ctz((unsigned)lane_mask);
         size_t pos = search_off + lane - pair_offset;
 
+        if (count_probes)
+            bx_search_dev_counters_note_literal_rare_pair_probe_call();
         if (memcmp(buf + pos, needle, needle_len) == 0) {
             if (match_off)
                 *match_off = pos;
@@ -578,6 +584,7 @@ static enum bx_lit_result bx_literal_arm64_sve_confirm_candidate_lanes_scalar(
     size_t *match_off) {
     const unsigned char *cursor = candidate_lanes;
     size_t remaining_lanes = active_lanes;
+    bool count_probes = bx_search_dev_counters_enabled();
 
     while (remaining_lanes != 0u) {
         const unsigned char *candidate = memchr(cursor, 0xff, remaining_lanes);
@@ -588,6 +595,8 @@ static enum bx_lit_result bx_literal_arm64_sve_confirm_candidate_lanes_scalar(
             return BX_LIT_NOT_FOUND;
         lane = (size_t)(candidate - candidate_lanes);
         pos = search_off + lane - pair_offset;
+        if (count_probes)
+            bx_search_dev_counters_note_literal_rare_pair_probe_call();
         if (memcmp(buf + pos, needle, needle_len) == 0) {
             if (match_off)
                 *match_off = pos;
@@ -865,6 +874,7 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
     size_t search_limit;
     unsigned char pair_first;
     unsigned char pair_second;
+    bool count_probes;
 
     if (!m || !buf || start >= len || m->plan.needle_len < 4u ||
         m->plan.needle_len > 256u || len - start < m->plan.needle_len) {
@@ -879,6 +889,7 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
     pair_second = m->plan.rare_pair_second;
     search_off = start + pair_offset;
     search_limit = len - (needle_len - pair_offset);
+    count_probes = bx_search_dev_counters_enabled();
     while (search_off <= search_limit) {
         const unsigned char *found = memchr(buf + search_off,
                                             pair_first,
@@ -888,7 +899,13 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
         if (!found)
             return -1;
         pos = (size_t)(found - buf) - pair_offset;
-        if (found[1] == pair_second && bx_literal_match_at_anchor(m, buf, pos)) {
+        if (found[1] == pair_second) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (!bx_literal_match_at_anchor(m, buf, pos)) {
+                search_off = (size_t)(found - buf) + 1u;
+                continue;
+            }
             if (out) {
                 out->start = pos;
                 out->end = pos + needle_len;
@@ -1356,6 +1373,7 @@ static enum bx_lit_result bx_literal_scan_absent_pair_probe_core(const struct bx
     size_t search_limit;
     unsigned char pair_first;
     unsigned char pair_second;
+    bool count_probes;
 
     if (!plan || !buf || !plan->needle || plan->needle_len < 4u || len < plan->needle_len)
         return BX_LIT_NOT_FOUND;
@@ -1366,6 +1384,7 @@ static enum bx_lit_result bx_literal_scan_absent_pair_probe_core(const struct bx
 
     search_off = pair_offset;
     search_limit = len - (needle_len - pair_offset);
+    count_probes = bx_search_dev_counters_enabled();
     while (search_off <= search_limit) {
         const unsigned char *found = memchr(buf + search_off,
                                             pair_first,
@@ -1375,8 +1394,13 @@ static enum bx_lit_result bx_literal_scan_absent_pair_probe_core(const struct bx
         if (!found)
             return BX_LIT_NOT_FOUND;
         pos = (size_t)(found - buf) - pair_offset;
-        if (found[1] == pair_second &&
-            memcmp(buf + pos, plan->needle, needle_len) == 0) {
+        if (found[1] == pair_second) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (memcmp(buf + pos, plan->needle, needle_len) != 0) {
+                search_off = (size_t)(found - buf) + 1u;
+                continue;
+            }
             if (match_off)
                 *match_off = pos;
             return BX_LIT_FOUND;
@@ -1521,6 +1545,7 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_neon_core(const struct bx
     unsigned char pair_second;
     uint8x16_t firstv;
     uint8x16_t secondv;
+    bool count_probes;
 
     if (!plan || !buf || !plan->needle || plan->needle_len < 4u || plan->needle_len > 256u ||
         len < plan->needle_len) {
@@ -1536,6 +1561,7 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_neon_core(const struct bx
     search_limit = len - (needle_len - pair_offset);
     firstv = vdupq_n_u8(pair_first);
     secondv = vdupq_n_u8(pair_second);
+    count_probes = bx_search_dev_counters_enabled();
 
     while (search_off + 15u <= search_limit && search_off + 16u < len) {
         uint8x16_t v0 = vld1q_u8(buf + search_off);
@@ -1570,11 +1596,14 @@ static enum bx_lit_result bx_literal_scan_absent_arm64_neon_core(const struct bx
         size_t pos = search_off - pair_offset;
 
         if (buf[search_off] == pair_first &&
-            buf[search_off + 1u] == pair_second &&
-            memcmp(buf + pos, needle, needle_len) == 0) {
-            if (match_off)
-                *match_off = pos;
-            return BX_LIT_FOUND;
+            buf[search_off + 1u] == pair_second) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (memcmp(buf + pos, needle, needle_len) == 0) {
+                if (match_off)
+                    *match_off = pos;
+                return BX_LIT_FOUND;
+            }
         }
     }
 
@@ -1610,6 +1639,7 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
     unsigned char pair_second;
     __m256i firstv;
     __m256i secondv;
+    bool count_probes;
 
     if (!plan || !buf || !plan->needle || plan->needle_len < 4u || plan->needle_len > 256u ||
         len < plan->needle_len) {
@@ -1625,6 +1655,7 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
     search_limit = len - (needle_len - pair_offset);
     firstv = _mm256_set1_epi8((char)pair_first);
     secondv = _mm256_set1_epi8((char)pair_second);
+    count_probes = bx_search_dev_counters_enabled();
 
     while (search_off + 31u <= search_limit && search_off + 32u < len) {
         __m256i block_first = _mm256_loadu_si256((const __m256i *)(const void *)(buf + search_off));
@@ -1641,6 +1672,8 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = search_off + (size_t)bit - pair_offset;
 
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
             if (memcmp(buf + pos, needle, needle_len) == 0) {
                 if (match_off)
                     *match_off = pos;
@@ -1655,11 +1688,14 @@ static enum bx_lit_result BX_LITERAL_AVX2_TARGET bx_literal_scan_absent_avx2_cor
         size_t pos = search_off - pair_offset;
 
         if (buf[search_off] == pair_first &&
-            buf[search_off + 1u] == pair_second &&
-            memcmp(buf + pos, needle, needle_len) == 0) {
-            if (match_off)
-                *match_off = pos;
-            return BX_LIT_FOUND;
+            buf[search_off + 1u] == pair_second) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (memcmp(buf + pos, needle, needle_len) == 0) {
+                if (match_off)
+                    *match_off = pos;
+                return BX_LIT_FOUND;
+            }
         }
     }
 
@@ -1697,6 +1733,7 @@ static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_p
     size_t limit;
     __m128i firstv;
     __m128i lastv;
+    bool count_probes;
 
     if (!plan || !buf || !needle || needle_len < 4u || needle_len > 256u || len < needle_len)
         return BX_LIT_NOT_FOUND;
@@ -1704,9 +1741,11 @@ static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_p
     bx_search_dev_counters_note_literal_bytes_scanned(len);
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_sse2_call();
+    bx_search_dev_counters_note_literal_sse2_first_last_call();
     limit = len - needle_len;
     firstv = _mm_set1_epi8((char)first);
     lastv = _mm_set1_epi8((char)last);
+    count_probes = bx_search_dev_counters_enabled();
 
     while (i + 16u <= limit + 1u) {
         __m128i block_first = _mm_loadu_si128((const __m128i *)(buf + i));
@@ -1718,6 +1757,8 @@ static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_p
         while (mask != 0u) {
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = i + (size_t)bit;
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
             if (needle_len == 2u ||
                 memcmp(buf + pos + 1u, needle + 1u, needle_len - 2u) == 0) {
                 if (match_off)
@@ -1731,12 +1772,15 @@ static enum bx_lit_result bx_literal_scan_absent_sse2_plan(const struct bx_lit_p
 
     for (; i <= limit; ++i) {
         if (buf[i] == first &&
-            buf[i + needle_len - 1u] == last &&
-            (needle_len == 2u ||
-             memcmp(buf + i + 1u, needle + 1u, needle_len - 2u) == 0)) {
-            if (match_off)
-                *match_off = i;
-            return BX_LIT_FOUND;
+            buf[i + needle_len - 1u] == last) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (needle_len == 2u ||
+                memcmp(buf + i + 1u, needle + 1u, needle_len - 2u) == 0) {
+                if (match_off)
+                    *match_off = i;
+                return BX_LIT_FOUND;
+            }
         }
     }
     return BX_LIT_NOT_FOUND;
@@ -1751,12 +1795,14 @@ static int bx_literal_find_case_sensitive_sse2(const struct bx_literal_matcher *
     size_t needle_len = m ? m->plan.needle_len : 0u;
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_sse2_call();
+    bx_search_dev_counters_note_literal_sse2_first_last_call();
     const unsigned char first = m->plan.first_byte;
     const unsigned char last = m->plan.last_byte;
     size_t i = start;
     size_t limit = len - needle_len;
     __m128i firstv = _mm_set1_epi8((char)first);
     __m128i lastv = _mm_set1_epi8((char)last);
+    bool count_probes = bx_search_dev_counters_enabled();
 
     while (i + 16u <= limit + 1u) {
         __m128i block_first = _mm_loadu_si128((const __m128i *)(buf + i));
@@ -1768,6 +1814,8 @@ static int bx_literal_find_case_sensitive_sse2(const struct bx_literal_matcher *
         while (mask != 0u) {
             unsigned bit = (unsigned)__builtin_ctz(mask);
             size_t pos = i + (size_t)bit;
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
             if (needle_len == 2u ||
                 memcmp(buf + pos + 1u, needle + 1u, needle_len - 2u) == 0) {
                 out->start = pos;
@@ -1781,12 +1829,15 @@ static int bx_literal_find_case_sensitive_sse2(const struct bx_literal_matcher *
 
     for (; i <= limit; ++i) {
         if (buf[i] == first &&
-            buf[i + needle_len - 1u] == last &&
-            (needle_len == 2u ||
-             memcmp(buf + i + 1u, needle + 1u, needle_len - 2u) == 0)) {
-            out->start = i;
-            out->end = i + needle_len;
-            return 0;
+            buf[i + needle_len - 1u] == last) {
+            if (count_probes)
+                bx_search_dev_counters_note_literal_rare_pair_probe_call();
+            if (needle_len == 2u ||
+                memcmp(buf + i + 1u, needle + 1u, needle_len - 2u) == 0) {
+                out->start = i;
+                out->end = i + needle_len;
+                return 0;
+            }
         }
     }
     return -1;
