@@ -11,6 +11,8 @@ static enum bx_lit_algo bx_lit_plan_select_algo(size_t needle_len) {
         return BX_LIT_PAIR;
     if (needle_len <= 16u)
         return BX_LIT_SHORT_RARE_PAIR;
+    if (needle_len <= 256u)
+        return BX_LIT_MEDIUM_RARE_PAIR;
     return BX_LIT_LONG_TWO_WAY;
 }
 
