@@ -78,6 +78,8 @@ struct bx_search_dev_counters {
     atomic_uint_fast64_t walk_path_copies_before_match;
     atomic_uint_fast64_t walk_ignore_checks;
     atomic_uint_fast64_t walk_ignore_glob_fallbacks;
+    atomic_uint_fast64_t walk_ignore_git_root_lstat_calls;
+    atomic_uint_fast64_t walk_ignore_git_root_lstat_misses;
     atomic_uint_fast64_t files_seen;
     atomic_uint_fast64_t dirs_seen;
     atomic_uint_fast64_t global_pool_submits;
@@ -217,6 +219,10 @@ void bx_search_dev_counters_reset(void) {
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_checks, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_glob_fallbacks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_git_root_lstat_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_git_root_lstat_misses, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.files_seen, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.dirs_seen, 0u, memory_order_relaxed);
@@ -700,6 +706,14 @@ void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter,
         atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_glob_fallbacks, count,
                                   memory_order_relaxed);
         return;
+    case BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_CALLS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_git_root_lstat_calls, count,
+                                  memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_MISSES:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_git_root_lstat_misses, count,
+                                  memory_order_relaxed);
+        return;
     }
 }
 
@@ -796,6 +810,7 @@ void bx_search_dev_counters_report(FILE *stream) {
             "walk_lstat_calls=%" PRIuMAX " walk_fstatat_calls=%" PRIuMAX " walk_stat_reason_unknown_dtype=%" PRIuMAX " walk_stat_reason_symlink_policy=%" PRIuMAX " walk_stat_reason_traversal_policy=%" PRIuMAX " "
             "walk_stat_reason_metadata_filter=%" PRIuMAX " walk_stat_reason_metadata_output=%" PRIuMAX " walk_openat_calls=%" PRIuMAX " walk_path_join_calls=%" PRIuMAX " walk_path_allocs=%" PRIuMAX " "
             "walk_path_copies_before_match=%" PRIuMAX " walk_ignore_checks=%" PRIuMAX " walk_ignore_glob_fallbacks=%" PRIuMAX " "
+            "walk_ignore_git_root_lstat_calls=%" PRIuMAX " walk_ignore_git_root_lstat_misses=%" PRIuMAX " "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
             "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
@@ -931,6 +946,12 @@ void bx_search_dev_counters_report(FILE *stream) {
                                             memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_glob_fallbacks,
                                             memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_ignore_git_root_lstat_calls,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_ignore_git_root_lstat_misses,
+                memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.files_seen, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.dirs_seen, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.global_pool_submits, memory_order_relaxed),

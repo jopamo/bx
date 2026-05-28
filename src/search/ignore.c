@@ -594,7 +594,10 @@ static bool path_has_git_dir(const char *dirpath) {
     if (!git_path)
         return false;
     struct stat st;
+    bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_CALLS, 1u);
     bool found = lstat(git_path, &st) == 0;
+    if (!found)
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_MISSES, 1u);
     free(git_path);
     return found;
 }
