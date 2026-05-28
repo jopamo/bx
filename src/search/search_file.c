@@ -46,6 +46,13 @@ enum bx_search_deferred_precheck_result {
     BX_SEARCH_DEFERRED_PRECHECK_ERROR = 2,
 };
 
+struct bx_search_display_name_state {
+    const char *filename;
+    const char *display_name_override;
+    bool strip_dot_prefix;
+    char *owned_display_name;
+};
+
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
                                            struct search_opts *opts) {
@@ -54,6 +61,28 @@ static const char *display_name_for_stream(const char *filename,
     if (!filename || strcmp(filename, "-") == 0)
         return opts->label ? opts->label : "(standard input)";
     return filename;
+}
+
+static const char *search_file_resolve_display_name(
+    struct bx_search_display_name_state *state,
+    struct search_opts *opts) {
+    const char *fallback;
+
+    if (!state)
+        return NULL;
+    fallback = display_name_for_stream(state->filename, state->display_name_override, opts);
+    if (state->display_name_override || !state->filename || strcmp(state->filename, "-") == 0)
+        return fallback;
+    if (!state->strip_dot_prefix &&
+        (!opts || opts->path_separator == '\0' || opts->path_separator == '/')) {
+        return fallback;
+    }
+    if (!state->owned_display_name) {
+        state->owned_display_name = bx_search_display_path_for_output(state->filename,
+                                                                      state->strip_dot_prefix,
+                                                                      opts);
+    }
+    return state->owned_display_name ? state->owned_display_name : fallback;
 }
 
 static enum bx_search_file_kernel_kind
@@ -138,7 +167,7 @@ static int search_file_run_path_kernel(enum bx_search_file_kernel_kind kernel,
 }
 
 static int search_file_deferred_literal_precheck_path(const char *filename,
-                                                      const char *display_name,
+                                                      struct bx_search_display_name_state *display_name_state,
                                                       const char *progname,
                                                       struct bx_matcher *m,
                                                       const struct bx_search_exec_plan *exec_plan,
@@ -251,7 +280,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
 
 out_error:
     bx_search_report_path_error(progname,
-                                display_name ? display_name : filename,
+                                search_file_resolve_display_name(display_name_state, opts),
                                 errno ? errno : EIO,
                                 opts);
     result = BX_SEARCH_DEFERRED_PRECHECK_ERROR;
@@ -628,6 +657,7 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
 
 static int search_file(const char *filename,
                        const char *display_name_override,
+                       bool strip_dot_prefix,
                        const char *progname,
                        struct bx_matcher *m,
                        const struct bx_search_exec_plan *exec_plan,
@@ -639,17 +669,13 @@ static int search_file(const char *filename,
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     struct stat operand_st;
     bool operand_st_loaded = false;
-    char *owned_display_name = NULL;
-    const char *display_name = display_name_for_stream(filename, display_name_override, opts);
+    struct bx_search_display_name_state display_name_state = {
+        .filename = filename,
+        .display_name_override = display_name_override,
+        .strip_dot_prefix = strip_dot_prefix,
+    };
     int result = 1;
     int previous_offset_width = bx_search_output_get_offset_width();
-
-    if (!display_name_override && filename && strcmp(filename, "-") != 0 &&
-        opts->path_separator != '\0' && opts->path_separator != '/') {
-        owned_display_name = bx_rg_display_path_dup(filename, false, opts->path_separator);
-        if (owned_display_name)
-            display_name = owned_display_name;
-    }
     if (!opts->recursive && !use_stdin && filename && strcmp(filename, "-") != 0)
         operand_st_loaded = stat(filename, &operand_st) == 0;
 
@@ -672,12 +698,16 @@ static int search_file(const char *filename,
         }
     }
 
-    bx_rg_tracef(opts, "search: %s", display_name ? display_name : "(stdin)");
+    if (bx_rg_trace_enabled(opts)) {
+        bx_rg_tracef(opts, "search: %s",
+                     search_file_resolve_display_name(&display_name_state, opts));
+    }
 
     if (operand_st_loaded && (S_ISCHR(operand_st.st_mode) || S_ISBLK(operand_st.st_mode)
                               || S_ISFIFO(operand_st.st_mode) || S_ISSOCK(operand_st.st_mode))) {
         FILE *f;
         int binary_result;
+        const char *display_name;
 
         if (bx_search_should_skip_special_input_mode(operand_st.st_mode, opts)) {
             result = 1;
@@ -688,6 +718,7 @@ static int search_file(const char *filename,
         if (!f)
             goto out_error;
 
+        display_name = search_file_resolve_display_name(&display_name_state, opts);
         binary_result = search_file_handle_binary_prefix(f, false, display_name, progname, m,
                                                          opts, match_count, record_stream, stats);
         if (binary_result >= 0) {
@@ -711,6 +742,7 @@ static int search_file(const char *filename,
     if (bx_search_input_needs_early_transform_load(filename, use_stdin, opts)) {
         unsigned char *transformed = NULL;
         size_t transformed_len = 0u;
+        const char *display_name;
         enum bx_rg_transform_result transform_rc =
             bx_rg_load_transformed_input(filename, progname, opts,
                                          bx_search_error_output_stream(),
@@ -723,6 +755,7 @@ static int search_file(const char *filename,
             result = 2;
             goto out;
         }
+        display_name = search_file_resolve_display_name(&display_name_state, opts);
         result = bx_search_search_transformed_buffer(transformed, transformed_len, display_name,
                                                      progname, m, exec_plan, opts, match_count,
                                                      record_stream, stats);
@@ -730,12 +763,13 @@ static int search_file(const char *filename,
     }
 
     if (opts->multiline) {
+        const char *display_name = search_file_resolve_display_name(&display_name_state, opts);
         result = search_file_run_path_kernel(BX_SEARCH_FILE_KERNEL_MULTILINE,
                                              filename, display_name, progname, m, opts,
                                              match_count, scanner, record_stream, stats);
         goto out;
     }
-    if (display_name && !opts->recursive) {
+    if (!use_stdin && !opts->recursive) {
         struct stat st;
         if (filename && strcmp(filename, "-") != 0 &&
             lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -750,11 +784,13 @@ static int search_file(const char *filename,
             exec_plan ? exec_plan->stdin_path_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
         FILE *f;
         int binary_result;
+        const char *display_name;
 
         f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
 
+        display_name = search_file_resolve_display_name(&display_name_state, opts);
         binary_result = search_file_handle_binary_prefix(f, true, display_name, progname, m,
                                                          opts, match_count, record_stream, stats);
         if (binary_result >= 0) {
@@ -776,7 +812,7 @@ static int search_file(const char *filename,
     }
 
     if (!use_stdin) {
-        int precheck = search_file_deferred_literal_precheck_path(filename, display_name,
+        int precheck = search_file_deferred_literal_precheck_path(filename, &display_name_state,
                                                                   progname, m, exec_plan, opts,
                                                                   scanner, stats);
         if (precheck == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
@@ -788,6 +824,7 @@ static int search_file(const char *filename,
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
         FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
+        const char *display_name;
         if (!f)
             goto out_error;
 
@@ -808,12 +845,14 @@ static int search_file(const char *filename,
                 result = 2;
                 goto out;
             }
+            display_name = search_file_resolve_display_name(&display_name_state, opts);
             result = bx_search_search_transformed_buffer(transformed, transformed_len,
                                                          display_name, progname, m, exec_plan, opts,
                                                          match_count, record_stream, stats);
             goto out;
         }
 
+        display_name = search_file_resolve_display_name(&display_name_state, opts);
         if (exec_plan && exec_plan->raw_presence_supported) {
             result = search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
                                                    f, false, filename, display_name, progname,
@@ -852,6 +891,7 @@ static int search_file(const char *filename,
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text &&
         bx_search_input_is_binary_path(filename, opts)) {
+        const char *display_name = search_file_resolve_display_name(&display_name_state, opts);
         if (opts->binary_without_match) {
             result = bx_search_binary_without_match(display_name, opts, match_count, stats);
             goto out;
@@ -885,23 +925,27 @@ static int search_file(const char *filename,
         goto out;
     }
 
-    result = search_file_run_path_kernel(exec_plan
-                                             ? exec_plan->regular_path_kernel
-                                             : BX_SEARCH_FILE_KERNEL_STREAMING,
-                                         filename, display_name, progname, m, opts,
-                                         match_count, scanner, record_stream, stats);
+    {
+        const char *display_name = search_file_resolve_display_name(&display_name_state, opts);
+        result = search_file_run_path_kernel(exec_plan
+                                                 ? exec_plan->regular_path_kernel
+                                                 : BX_SEARCH_FILE_KERNEL_STREAMING,
+                                             filename, display_name, progname, m, opts,
+                                             match_count, scanner, record_stream, stats);
+    }
     goto out;
 
 out_error:
     result = 2;
 out:
     bx_search_output_set_offset_width(previous_offset_width);
-    free(owned_display_name);
+    free(display_name_state.owned_display_name);
     return result;
 }
 
 int bx_search_search_file(const char *filename,
                           const char *display_name_override,
+                          bool strip_dot_prefix,
                           const char *progname,
                           struct bx_matcher *m,
                           const struct bx_search_exec_plan *exec_plan,
@@ -910,6 +954,7 @@ int bx_search_search_file(const char *filename,
                           struct bx_search_scanner *scanner,
                           struct bx_record_stream *record_stream,
                           struct bx_search_stats *stats) {
-    return search_file(filename, display_name_override, progname, m, exec_plan, opts,
+    return search_file(filename, display_name_override, strip_dot_prefix, progname, m,
+                       exec_plan, opts,
                        match_count, scanner, record_stream, stats);
 }

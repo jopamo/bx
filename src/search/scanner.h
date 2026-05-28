@@ -42,7 +42,6 @@ void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
 bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *stream);
 bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *scanner,
                                               struct bx_literal_matcher *literal,
-                                              bool prefer_memmem_candidates,
                                               size_t *cursor,
                                               struct bx_search_candidate *candidate);
 bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,

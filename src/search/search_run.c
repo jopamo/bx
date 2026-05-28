@@ -124,14 +124,10 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
     if (bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
 
-    char *display_name = bx_search_display_path_for_output(entry->path,
-                                                           state->strip_dot_prefix,
-                                                           state->opts);
-    int rc = bx_search_search_file(entry->path, display_name, state->progname,
+    int rc = bx_search_search_file(entry->path, NULL, state->strip_dot_prefix, state->progname,
                                    state->matcher, state->exec_plan,
                                    state->opts, state->match_count,
                                    state->scanner, state->record_stream, state->stats);
-    free(display_name);
     if (rc == 2) {
         *state->exit_status = 2;
         if (state->error_seen)
@@ -455,14 +451,11 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
     }
 
     for (size_t i = 0; i < sorted_paths.len; ++i) {
-        char *display_name = bx_search_display_path_for_output(sorted_paths.items[i].path,
-                                                               sorted_paths.items[i].strip_dot_prefix,
-                                                               args->opts);
-        int rc = bx_search_search_file(sorted_paths.items[i].path, display_name,
+        int rc = bx_search_search_file(sorted_paths.items[i].path, NULL,
+                                       sorted_paths.items[i].strip_dot_prefix,
                                        args->progname, matcher, exec_plan, args->opts,
                                        &global_matches, scanner, record_stream,
                                        args->stats);
-        free(display_name);
         if (rc == 2) {
             *error_seen = true;
         } else if (rc == 0) {
@@ -526,7 +519,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                 *error_seen = true;
             }
         } else {
-            int rc = bx_search_search_file(NULL, NULL, args->progname, matcher, exec_plan,
+            int rc = bx_search_search_file(NULL, NULL, false, args->progname, matcher, exec_plan,
                                            args->opts,
                                            &global_matches, scanner, record_stream,
                                            args->stats);
@@ -634,7 +627,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                 continue;
         }
 
-        int rc = bx_search_search_file(args->argv[j], NULL, args->progname, matcher,
+        int rc = bx_search_search_file(args->argv[j], NULL, false, args->progname, matcher,
                                        exec_plan,
                                        args->opts, &global_matches, scanner,
                                        record_stream, args->stats);

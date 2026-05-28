@@ -32,8 +32,17 @@ void bx_search_dev_counters_reset(void);
 void bx_search_dev_counters_note_bytes_read(size_t count);
 void bx_search_dev_counters_note_file_opened(void);
 void bx_search_dev_counters_note_candidate_hit(void);
+void bx_search_dev_counters_note_literal_plan_compile(void);
+void bx_search_dev_counters_note_literal_algo_empty_call(void);
+void bx_search_dev_counters_note_literal_algo_byte_call(void);
+void bx_search_dev_counters_note_literal_algo_pair_call(void);
+void bx_search_dev_counters_note_literal_algo_short_call(void);
+void bx_search_dev_counters_note_literal_algo_rare_pair_call(void);
+void bx_search_dev_counters_note_literal_algo_scalar_call(void);
+void bx_search_dev_counters_note_literal_algo_sse2_call(void);
 void bx_search_dev_counters_note_matcher_invocation(void);
 void bx_search_dev_counters_note_record_materialized(void);
+void bx_search_dev_counters_note_scanner_entry(void);
 void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void);
 void bx_search_dev_counters_note_output_line_emitted(void);
 void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counter,

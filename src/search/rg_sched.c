@@ -164,6 +164,27 @@ static void bx_rg_sched_note_file_search(bool stolen) {
                                          1u);
 }
 
+static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
+                                            bool match_seen,
+                                            bool error_seen) {
+    if (!sched)
+        return;
+
+    if (sched->publish_ready)
+        pthread_mutex_lock(&sched->publish.unordered_lock);
+    if (match_seen) {
+        sched->match_seen = true;
+        if (sched->exit_status != 2)
+            sched->exit_status = 0;
+    }
+    if (error_seen) {
+        sched->error_seen = true;
+        sched->exit_status = 2;
+    }
+    if (sched->publish_ready)
+        pthread_mutex_unlock(&sched->publish.unordered_lock);
+}
+
 static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
                                   const char *message) {
     if (!state)
@@ -682,10 +703,10 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                   const char *path,
                                   bool strip_dot_prefix,
                                   bool stolen) {
-    const char *display_name = bx_rg_sched_display_path(worker, path, strip_dot_prefix, sched->opts);
     int dummy_matches = 0;
     int status = bx_search_search_file(path,
-                                       display_name,
+                                       NULL,
+                                       strip_dot_prefix,
                                        sched->progname,
                                        worker->matcher,
                                        sched->exec_plan,
@@ -696,6 +717,8 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                        NULL);
     bx_rg_sched_note_file_search(stolen);
     if (status == 0 && sched->opts->files_with_matches) {
+        const char *display_name = bx_rg_sched_display_path(worker, path, strip_dot_prefix,
+                                                            sched->opts);
         if (!bx_rg_sched_worker_append_output(sched, worker, display_name)) {
             bx_rg_sched_set_fatal(sched, "rg: failed to append worker output\n");
             return 2;
@@ -703,6 +726,8 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
         return 0;
     }
     if (status == 1 && sched->opts->files_without_match) {
+        const char *display_name = bx_rg_sched_display_path(worker, path, strip_dot_prefix,
+                                                            sched->opts);
         if (!bx_rg_sched_worker_append_output(sched, worker, display_name)) {
             bx_rg_sched_set_fatal(sched, "rg: failed to append worker output\n");
             return 2;
@@ -938,39 +963,38 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     if (worker->stdout_len == 0u && stderr_len == 0u && work->kind == BX_RG_SCHED_WORK_FILE_BATCH)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
 
-    if (worker->stdout_len > 0u || stderr_len > 0u) {
-        struct bx_rg_publish_record *record = calloc(1u, sizeof(*record));
-        if (!record) {
-            free(stderr_buf);
-            bx_rg_sched_set_fatal(sched, "rg: failed to allocate worker output record\n");
-            bx_rg_sched_free_work(work);
-            bx_rg_sched_finish_work(sched);
-            return;
-        }
-        record->stdout_buf = worker->stdout_buf;
-        record->stdout_len = worker->stdout_len;
-        record->stderr_buf = stderr_buf;
-        record->stderr_len = stderr_len;
-        record->match_seen = job_match_seen;
-        record->error_seen = job_error_seen;
-        worker->stdout_buf = NULL;
-        worker->stdout_len = 0u;
-        worker->stdout_cap = 0u;
-        if (!bx_rg_publish_submit(&sched->publish, record)) {
-            bx_rg_publish_dispose_record(record);
-            bx_rg_sched_set_fatal(sched, "rg: failed to publish worker output\n");
-        }
-    } else {
+    if (worker->stdout_len == 0u && stderr_len == 0u) {
         free(stderr_buf);
-        if (job_match_seen) {
-            sched->match_seen = true;
-            if (sched->exit_status != 2)
-                sched->exit_status = 0;
-        }
-        if (job_error_seen) {
-            sched->error_seen = true;
-            sched->exit_status = 2;
-        }
+        /*
+         * Keep no-output work off the unordered publication path entirely.
+         * Search results that emitted nothing merge directly.
+         */
+        bx_rg_sched_merge_direct_result(sched, job_match_seen, job_error_seen);
+        bx_rg_sched_free_work(work);
+        bx_rg_sched_finish_work(sched);
+        return;
+    }
+
+    struct bx_rg_publish_record *record = calloc(1u, sizeof(*record));
+    if (!record) {
+        free(stderr_buf);
+        bx_rg_sched_set_fatal(sched, "rg: failed to allocate worker output record\n");
+        bx_rg_sched_free_work(work);
+        bx_rg_sched_finish_work(sched);
+        return;
+    }
+    record->stdout_buf = worker->stdout_buf;
+    record->stdout_len = worker->stdout_len;
+    record->stderr_buf = stderr_buf;
+    record->stderr_len = stderr_len;
+    record->match_seen = job_match_seen;
+    record->error_seen = job_error_seen;
+    worker->stdout_buf = NULL;
+    worker->stdout_len = 0u;
+    worker->stdout_cap = 0u;
+    if (!bx_rg_publish_submit(&sched->publish, record)) {
+        bx_rg_publish_dispose_record(record);
+        bx_rg_sched_set_fatal(sched, "rg: failed to publish worker output\n");
     }
 
     bx_rg_sched_free_work(work);

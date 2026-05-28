@@ -13,8 +13,17 @@ struct bx_search_dev_counters {
     atomic_size_t bytes_read;
     atomic_size_t files_opened;
     atomic_size_t candidate_hits;
+    atomic_size_t literal_plan_compiles;
+    atomic_size_t literal_algo_empty_calls;
+    atomic_size_t literal_algo_byte_calls;
+    atomic_size_t literal_algo_pair_calls;
+    atomic_size_t literal_algo_short_calls;
+    atomic_size_t literal_algo_rare_pair_calls;
+    atomic_size_t literal_algo_scalar_calls;
+    atomic_size_t literal_algo_sse2_calls;
     atomic_size_t matcher_invocations;
     atomic_size_t records_materialized;
+    atomic_size_t scanner_entries;
     atomic_size_t scanner_plain_prefix_allocs;
     atomic_size_t output_lines_emitted;
     atomic_uint_fast64_t files_seen;
@@ -55,8 +64,22 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.bytes_read, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.files_opened, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.candidate_hits, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_plan_compiles, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_empty_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_byte_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_pair_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_short_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_rare_pair_calls, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_scalar_calls, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.literal_algo_sse2_calls, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.matcher_invocations, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.records_materialized, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.scanner_entries, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.scanner_plain_prefix_allocs, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.output_lines_emitted, 0u, memory_order_relaxed);
@@ -102,6 +125,70 @@ void bx_search_dev_counters_note_candidate_hit(void) {
     atomic_fetch_add_explicit(&current_dev_counters.candidate_hits, 1u, memory_order_relaxed);
 }
 
+void bx_search_dev_counters_note_literal_plan_compile(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_plan_compiles, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_empty_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_empty_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_byte_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_byte_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_pair_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_pair_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_short_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_short_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_rare_pair_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_rare_pair_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_scalar_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_scalar_calls, 1u,
+                              memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_literal_algo_sse2_call(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.literal_algo_sse2_calls, 1u,
+                              memory_order_relaxed);
+}
+
 void bx_search_dev_counters_note_matcher_invocation(void) {
     if (!current_dev_counters.enabled)
         return;
@@ -114,6 +201,13 @@ void bx_search_dev_counters_note_record_materialized(void) {
         return;
 
     atomic_fetch_add_explicit(&current_dev_counters.records_materialized, 1u, memory_order_relaxed);
+}
+
+void bx_search_dev_counters_note_scanner_entry(void) {
+    if (!current_dev_counters.enabled)
+        return;
+
+    atomic_fetch_add_explicit(&current_dev_counters.scanner_entries, 1u, memory_order_relaxed);
 }
 
 void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void) {
@@ -202,7 +296,7 @@ void bx_search_dev_counters_report(FILE *stream) {
         return;
 
     fprintf(stream,
-            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu matcher_invocations=%zu records_materialized=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
+            "bx-search-dev-counters: bytes_read=%zu files_opened=%zu candidate_hits=%zu literal_plan_compiles=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_scalar_calls=%zu literal_algo_sse2_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
             "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
@@ -210,8 +304,25 @@ void bx_search_dev_counters_report(FILE *stream) {
             atomic_load_explicit(&current_dev_counters.bytes_read, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.files_opened, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.candidate_hits, memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_plan_compiles,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_empty_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_byte_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_pair_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_short_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_rare_pair_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_scalar_calls,
+                                 memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.literal_algo_sse2_calls,
+                                 memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.matcher_invocations, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.records_materialized, memory_order_relaxed),
+            atomic_load_explicit(&current_dev_counters.scanner_entries, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.scanner_plain_prefix_allocs,
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.output_lines_emitted, memory_order_relaxed),

@@ -124,6 +124,12 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
         size_t consumed_records = 0u;
         size_t carry_len = scanner->len - consumed;
         if (scanner->track_record_numbers) {
+            /*
+             * When -n is active we must keep a running count for discarded
+             * chunks, even if the first later literal candidate has not been
+             * seen yet. This is the eager cross-chunk line-number work that
+             * the hot-path audits intentionally pin.
+             */
             consumed_records = bx_search_scanner_count_delimiters(
                 scanner->buf, consumed, (unsigned char)scanner->delimiter
             );
@@ -173,7 +179,6 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
 
 bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *scanner,
                                               struct bx_literal_matcher *literal,
-                                              bool prefer_memmem_candidates,
                                               size_t *cursor,
                                               struct bx_search_candidate *candidate) {
     if (!scanner || !literal || !cursor || !candidate)
@@ -182,11 +187,8 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
         return false;
 
     size_t candidate_start = 0u;
-    if (!(prefer_memmem_candidates
-              ? bx_literal_next_scanner_candidate(literal, scanner->buf, scanner->scan_len,
-                                                  cursor, &candidate_start)
-              : bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len,
-                                          cursor, &candidate_start))) {
+    if (!bx_literal_next_candidate(literal, scanner->buf, scanner->scan_len,
+                                   cursor, &candidate_start)) {
         return false;
     }
 

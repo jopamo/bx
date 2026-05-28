@@ -31,10 +31,8 @@
 
 struct bx_search_parallel_job_item {
     const char *path;
-    const char *display_name;
     bool path_in_storage;
-    bool display_name_in_storage;
-    bool display_name_is_path;
+    bool strip_dot_prefix;
 };
 
 struct bx_search_parallel_job {
@@ -206,8 +204,6 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
         for (size_t i = 0; i < job->count; ++i) {
             if (job->items[i].path_in_storage && job->items[i].path)
                 job->items[i].path += delta;
-            if (job->items[i].display_name_in_storage && job->items[i].display_name)
-                job->items[i].display_name += delta;
         }
     }
     job->storage = tmp;
@@ -297,14 +293,11 @@ static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state
 static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state,
                                           const char *path,
                                           bool path_copy_required,
-                                          const char *display_name,
-                                          bool display_name_copy_required,
-                                          bool display_name_is_path) {
+                                          bool strip_dot_prefix) {
     struct bx_search_parallel_job *job;
     struct bx_search_parallel_job_item *item;
     size_t item_cost;
     size_t path_len;
-    size_t display_len = 0u;
 
     if (!state || !path)
         return false;
@@ -313,10 +306,6 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
 
     path_len = strlen(path) + 1u;
     item_cost = path_copy_required ? path_len : 0u;
-    if (display_name && !display_name_is_path && display_name_copy_required) {
-        display_len = strlen(display_name) + 1u;
-        item_cost += display_len;
-    }
     job = state->pending_job;
     if (job &&
         (job->count >= BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES ||
@@ -347,26 +336,8 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
         item->path_in_storage = false;
     }
 
-    if (display_name && !display_name_is_path) {
-        if (display_name_copy_required) {
-            item->display_name = bx_search_parallel_job_store_string_len(job, display_name,
-                                                                         display_len);
-            if (!item->display_name) {
-                bx_search_parallel_drop_empty_pending_job(state);
-                return false;
-            }
-            item->display_name_in_storage = true;
-        } else {
-            item->display_name = display_name;
-            item->display_name_in_storage = false;
-        }
-    } else {
-        item->display_name = NULL;
-        item->display_name_in_storage = false;
-    }
-
     job->count++;
-    item->display_name_is_path = display_name_is_path;
+    item->strip_dot_prefix = strip_dot_prefix;
     job->path_bytes += item_cost;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
     if (item_cost > 0u) {
@@ -458,15 +429,13 @@ static void bx_search_parallel_process_job(void *user,
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
     for (size_t i = 0; i < job->count; i++) {
         int status;
-        const char *display_name = job->items[i].display_name_is_path
-            ? job->items[i].path
-            : job->items[i].display_name;
 
         if (state->opts->quiet && bx_cancel_state_requested(&state->cancel))
             break;
 
         status = bx_search_search_file(job->items[i].path,
-                                       display_name,
+                                       NULL,
+                                       job->items[i].strip_dot_prefix,
                                        state->progname,
                                        worker->matcher,
                                        state->exec_plan,
@@ -549,9 +518,6 @@ static void bx_search_parallel_process_job(void *user,
 
 static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entry, void *user) {
     struct bx_search_parallel_walk_state *state = user;
-    char *display_name;
-    const char *queued_display_name;
-    bool display_name_is_path;
 
     if (!state || !state->parallel)
         return BX_WALK_ERROR;
@@ -566,26 +532,12 @@ static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entr
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->parallel->opts))
         return BX_WALK_CONTINUE;
 
-    display_name = NULL;
-    display_name_is_path = !state->strip_dot_prefix &&
-        state->parallel->opts && state->parallel->opts->path_separator == '/';
-    queued_display_name = entry->path;
-    if (!display_name_is_path) {
-        display_name = bx_search_display_path_for_output(entry->path,
-                                                         state->strip_dot_prefix,
-                                                         state->parallel->opts);
-        queued_display_name = display_name ? display_name : entry->path;
-    }
     if (!bx_search_parallel_queue_path(state->parallel, entry->path, true,
-                                       queued_display_name,
-                                       !display_name_is_path,
-                                       display_name_is_path)) {
-        free(display_name);
+                                       state->strip_dot_prefix)) {
         return bx_cancel_state_requested(&state->parallel->cancel)
             ? BX_WALK_STOP
             : BX_WALK_ERROR;
     }
-    free(display_name);
     return BX_WALK_CONTINUE;
 }
 
@@ -774,23 +726,11 @@ int bx_search_run_parallel_rg(int argc,
             if (bx_search_path_exceeds_max_filesize(argv[j], opts))
                 continue;
 
-            bool display_name_is_path = opts && opts->path_separator == '/';
-            char *display_name = NULL;
-            const char *queued_display_name = argv[j];
-            if (!display_name_is_path) {
-                display_name = bx_search_display_path_for_output(argv[j], false, opts);
-                queued_display_name = display_name ? display_name : argv[j];
-            }
-            if (!bx_search_parallel_queue_path(&state, argv[j], false,
-                                               queued_display_name,
-                                               display_name != NULL,
-                                               display_name_is_path)) {
-                free(display_name);
+            if (!bx_search_parallel_queue_path(&state, argv[j], false, false)) {
                 if (!bx_cancel_state_requested(&state.cancel))
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
                 break;
             }
-            free(display_name);
         }
     } else {
         for (int operand_i = 0; operand_i < num_files; operand_i++) {
@@ -814,8 +754,7 @@ int bx_search_run_parallel_rg(int argc,
                 if (bx_search_path_exceeds_max_filesize(argv[j], opts))
                     continue;
             }
-            if (!bx_search_parallel_queue_path(&state, argv[j], false,
-                                               NULL, false, false)) {
+            if (!bx_search_parallel_queue_path(&state, argv[j], false, false)) {
                 if (!bx_cancel_state_requested(&state.cancel))
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue file job\n");
                 break;

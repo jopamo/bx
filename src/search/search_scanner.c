@@ -162,17 +162,13 @@ int bx_search_scanner_opened(FILE *f,
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     FILE *out = NULL;
     bool output_is_captured = bx_search_stdout_is_captured();
-    bool prefer_memmem_candidates = opts->quiet ||
-        (!heading_enabled &&
-         !opts->show_filename &&
-         !opts->files_with_matches &&
-         !opts->files_without_match);
     char *fast_plain_prefix = NULL;
     size_t fast_plain_prefix_len = 0u;
 
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
 
+    bx_search_dev_counters_note_scanner_entry();
     if (stats)
         stats->files_searched++;
 
@@ -190,7 +186,6 @@ int bx_search_scanner_opened(FILE *f,
             struct bx_match bm;
 
             if (!bx_search_scanner_next_literal_candidate(scanner, literal,
-                                                          prefer_memmem_candidates,
                                                           &cursor, &candidate))
                 break;
 
@@ -240,8 +235,10 @@ int bx_search_scanner_opened(FILE *f,
             cursor = record.chunk_off + record.len;
             size_t line_num = 0u;
             /*
-             * Keep delimiter counting cold until a literal candidate already
-             * forced record recovery for a potential match.
+             * Within the current chunk, keep delimiter counting cold until a
+             * literal candidate already forced record recovery for a potential
+             * match. Cross-chunk running totals for -n are maintained earlier
+             * in scanner.c when consumed chunks are discarded.
              */
             if (need_line_numbers) {
                 if (record.chunk_off > numbered_until) {

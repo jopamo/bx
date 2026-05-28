@@ -14,11 +14,6 @@ bool bx_literal_next_candidate(const struct bx_literal_matcher *m,
                                size_t len,
                                size_t *cursor,
                                size_t *candidate_start);
-bool bx_literal_next_scanner_candidate(const struct bx_literal_matcher *m,
-                                       const unsigned char *buf,
-                                       size_t len,
-                                       size_t *cursor,
-                                       size_t *candidate_start);
 bool bx_literal_verify_at(const struct bx_literal_matcher *m,
                           const unsigned char *buf,
                           size_t len,

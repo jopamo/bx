@@ -196,6 +196,7 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
                                         struct bx_search_stats *stats);
 int bx_search_search_file(const char *filename,
                           const char *display_name_override,
+                          bool strip_dot_prefix,
                           const char *progname,
                           struct bx_matcher *m,
                           const struct bx_search_exec_plan *exec_plan,
