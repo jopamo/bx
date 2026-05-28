@@ -72,6 +72,13 @@ bx_ignore_program_match_after_anchored_prefix(const struct bx_ignore_program *pr
                                               const char *name,
                                               const char *relative_path,
                                               bool is_dir);
+static enum bx_ignore_match_result
+bx_ignore_program_match_generic_rules_from(const struct bx_ignore_program *program,
+                                           const char *name,
+                                           const char *relative_path,
+                                           bool is_dir,
+                                           int start_index,
+                                           int stop_exclusive);
 
 static void bx_ignore_rule_dispose(struct bx_ignore_rule *rule) {
     if (!rule)
@@ -423,6 +430,30 @@ static enum bx_ignore_match_result bx_ignore_program_match_rules_from(const stru
     for (int i = start_index; i >= 0 && i >= stop_exclusive; --i) {
         enum bx_ignore_match_result result =
             bx_ignore_program_match_rule(program, &program->rules[i], name, relative_path, is_dir);
+        if (result != BX_IGNORE_NO_MATCH)
+            return result;
+    }
+    return BX_IGNORE_NO_MATCH;
+}
+
+static enum bx_ignore_match_result
+bx_ignore_program_match_generic_rules_from(const struct bx_ignore_program *program,
+                                           const char *name,
+                                           const char *relative_path,
+                                           bool is_dir,
+                                           int start_index,
+                                           int stop_exclusive) {
+    if (!program || !program->rules || program->rule_count <= 0)
+        return BX_IGNORE_NO_MATCH;
+
+    if (start_index >= program->rule_count)
+        start_index = program->rule_count - 1;
+    for (int i = start_index; i >= 0 && i >= stop_exclusive; --i) {
+        const struct bx_ignore_rule *rule = &program->rules[i];
+        if (!bx_ignore_rule_uses_generic_glob_fallback(rule))
+            continue;
+        enum bx_ignore_match_result result =
+            bx_ignore_program_match_rule(program, rule, name, relative_path, is_dir);
         if (result != BX_IGNORE_NO_MATCH)
             return result;
     }
@@ -862,16 +893,24 @@ bx_ignore_program_match_after_anchored_prefix(const struct bx_ignore_program *pr
                                               const char *name,
                                               const char *relative_path,
                                               bool is_dir) {
+    return bx_ignore_program_match_generic_glob_fallback(program, name, relative_path, is_dir);
+}
+
+enum bx_ignore_match_result
+bx_ignore_program_match_generic_glob_fallback(const struct bx_ignore_program *program,
+                                              const char *name,
+                                              const char *relative_path,
+                                              bool is_dir) {
     if (!program || !program->rules || program->rule_count <= 0)
         return BX_IGNORE_NO_MATCH;
 
-    /* No literal fast path matched; keep generic glob semantics via the full rule scan. */
-    return bx_ignore_program_match_rules_from(program,
-                                              name,
-                                              relative_path,
-                                              is_dir,
-                                              program->rule_count - 1,
-                                              0);
+    /* All literal and anchored-prefix rules were already staged earlier; only generic glob rules remain here. */
+    return bx_ignore_program_match_generic_rules_from(program,
+                                                      name,
+                                                      relative_path,
+                                                      is_dir,
+                                                      program->rule_count - 1,
+                                                      0);
 }
 
 enum bx_ignore_match_result bx_ignore_program_match(const struct bx_ignore_program *program,

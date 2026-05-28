@@ -67,6 +67,13 @@ bx_ignore_state_match_anchored_prefix(const struct bx_ignore_state *state,
                                       const char *root_relative_path,
                                       bool is_dir);
 
+enum bx_ignore_match_result
+bx_ignore_state_match_generic_glob_fallback(const struct bx_ignore_state *state,
+                                            const char *name,
+                                            const char *path,
+                                            const char *root_relative_path,
+                                            bool is_dir);
+
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
                                   const char *name,
                                   const char *path,

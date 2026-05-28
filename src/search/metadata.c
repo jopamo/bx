@@ -65,6 +65,56 @@ static bool bx_walk_entry_matches_directory_type(struct bx_walk_entry *entry) {
     return entry->is_dir;
 }
 
+enum bx_walk_type_match_state
+bx_walk_entry_matches_type_without_metadata(struct bx_walk_entry *entry, char type_filter) {
+    if (!entry)
+        return BX_WALK_TYPE_MATCH_NO;
+
+    switch (type_filter) {
+    case 'f':
+        if (entry->d_type_known)
+            return entry->d_type == DT_REG ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'd':
+        return entry->is_dir ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+    case 'l':
+        if (entry->d_type_known)
+            return entry->d_type == DT_LNK ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'x':
+        if (entry->d_type_known && entry->d_type != DT_REG)
+            return BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'e':
+        if (entry->is_dir)
+            return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+        if (entry->d_type_known) {
+            if (entry->d_type == DT_REG)
+                return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+            return BX_WALK_TYPE_MATCH_NO;
+        }
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'p':
+        if (entry->d_type_known)
+            return entry->d_type == DT_FIFO ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 's':
+        if (entry->d_type_known)
+            return entry->d_type == DT_SOCK ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'b':
+        if (entry->d_type_known)
+            return entry->d_type == DT_BLK ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    case 'c':
+        if (entry->d_type_known)
+            return entry->d_type == DT_CHR ? BX_WALK_TYPE_MATCH_YES : BX_WALK_TYPE_MATCH_NO;
+        return BX_WALK_TYPE_MATCH_DEFER_METADATA;
+    default:
+        return BX_WALK_TYPE_MATCH_NO;
+    }
+}
+
 bool bx_walk_numeric_match(unsigned long long actual, long long expected, int cmp) {
     unsigned long long want = (unsigned long long)expected;
     if (cmp > 0)

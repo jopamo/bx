@@ -128,6 +128,14 @@ static bool bx_walk_filter_entry_matches_type(const struct bx_walk_filter_state 
     return bx_walk_entry_matches_type(entry, state->opts->type_filter);
 }
 
+static enum bx_walk_type_match_state
+bx_walk_filter_entry_matches_type_without_metadata(const struct bx_walk_filter_state *state,
+                                                   struct bx_walk_entry *entry) {
+    if (!state || !state->opts || state->opts->type_filter == '\0')
+        return BX_WALK_TYPE_MATCH_YES;
+    return bx_walk_entry_matches_type_without_metadata(entry, state->opts->type_filter);
+}
+
 void bx_walk_filter_init(struct bx_walk_filter_state *state,
                          const struct bx_walk_filter_opts *opts,
                          const char *root_path) {
@@ -146,6 +154,7 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     const char *name;
     const char *path;
     bool entry_selected = true;
+    bool metadata_type_pending = false;
 
     if (entry_selected_out)
         *entry_selected_out = true;
@@ -160,11 +169,17 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     if (bx_walk_filter_hidden_policy_should_skip(state, name, path, &relative_path))
         return true;
 
-    entry_selected = bx_walk_filter_entry_matches_type(state, entry);
-    if (!entry_selected && !entry->is_dir) {
-        if (entry_selected_out)
-            *entry_selected_out = false;
-        return false;
+    enum bx_walk_type_match_state type_match =
+        bx_walk_filter_entry_matches_type_without_metadata(state, entry);
+    if (type_match == BX_WALK_TYPE_MATCH_NO) {
+        entry_selected = false;
+        if (!entry->is_dir) {
+            if (entry_selected_out)
+                *entry_selected_out = false;
+            return false;
+        }
+    } else if (type_match == BX_WALK_TYPE_MATCH_DEFER_METADATA) {
+        metadata_type_pending = true;
     }
 
     if (!relative_path)
@@ -209,11 +224,25 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
             : BX_IGNORE_NO_MATCH;
     if (anchored_prefix_ignore == BX_IGNORE_EXCLUDE)
         return true;
+
+    if (metadata_type_pending) {
+        entry_selected = bx_walk_filter_entry_matches_type(state, entry);
+        if (!entry_selected && !entry->is_dir) {
+            if (entry_selected_out)
+                *entry_selected_out = false;
+            return false;
+        }
+    }
+
     if (basename_ignore == BX_IGNORE_NO_MATCH &&
         extension_ignore == BX_IGNORE_NO_MATCH &&
         directory_ignore == BX_IGNORE_NO_MATCH &&
         anchored_prefix_ignore == BX_IGNORE_NO_MATCH &&
-        bx_ignore_state_matches_path(ignore_state, name, path, relative_path, entry->is_dir))
+        bx_ignore_state_match_generic_glob_fallback(ignore_state,
+                                                    name,
+                                                    path,
+                                                    relative_path,
+                                                    entry->is_dir) == BX_IGNORE_EXCLUDE)
         return true;
 
     if (bx_walk_filter_matches_exclude_dir(state, name))

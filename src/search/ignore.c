@@ -186,6 +186,7 @@ enum bx_ignore_state_match_mode {
     BX_IGNORE_STATE_MATCH_LITERAL_EXTENSION,
     BX_IGNORE_STATE_MATCH_LITERAL_DIRECTORY,
     BX_IGNORE_STATE_MATCH_ANCHORED_PREFIX,
+    BX_IGNORE_STATE_MATCH_GENERIC_GLOB_FALLBACK,
     BX_IGNORE_STATE_MATCH_FULL,
 };
 
@@ -870,6 +871,11 @@ bx_ignore_state_match_with_mode(const struct bx_ignore_state *state,
                                                           name,
                                                           relative_path,
                                                           is_dir)
+            : mode == BX_IGNORE_STATE_MATCH_GENERIC_GLOB_FALLBACK
+                ? bx_ignore_program_match_generic_glob_fallback(it->program,
+                                                                name,
+                                                                relative_path,
+                                                                is_dir)
                 : bx_ignore_program_match(it->program, name, relative_path, is_dir);
         free(heap_path);
         if (result == BX_IGNORE_EXCLUDE || result == BX_IGNORE_INCLUDE)
@@ -932,6 +938,20 @@ bx_ignore_state_match_anchored_prefix(const struct bx_ignore_state *state,
                                            root_relative_path,
                                            is_dir,
                                            BX_IGNORE_STATE_MATCH_ANCHORED_PREFIX);
+}
+
+enum bx_ignore_match_result
+bx_ignore_state_match_generic_glob_fallback(const struct bx_ignore_state *state,
+                                            const char *name,
+                                            const char *path,
+                                            const char *root_relative_path,
+                                            bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_GENERIC_GLOB_FALLBACK);
 }
 
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
