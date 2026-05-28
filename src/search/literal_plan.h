@@ -22,6 +22,23 @@ enum bx_lit_algo {
 enum bx_literal_backend {
     BX_LITERAL_BACKEND_SCALAR = 0,
     BX_LITERAL_BACKEND_SSE2,
+    BX_LITERAL_BACKEND_AVX2,
+    BX_LITERAL_BACKEND_ARM64_NEON,
+    BX_LITERAL_BACKEND_ARM64_SVE,
+};
+
+enum bx_lit_result {
+    BX_LIT_NOT_FOUND = 0,
+    BX_LIT_FOUND,
+};
+
+struct bx_lit_plan;
+
+struct bx_lit_ops {
+    enum bx_lit_result (*scan_absent)(const struct bx_lit_plan *,
+                                      const unsigned char *,
+                                      size_t,
+                                      size_t *);
 };
 
 /*
@@ -40,6 +57,7 @@ struct bx_lit_plan {
     unsigned char rare_byte;
     unsigned char rare_pair_first;
     unsigned char rare_pair_second;
+    const struct bx_lit_ops *ops;
     enum bx_literal_backend backend;
     enum bx_lit_algo algo;
 };

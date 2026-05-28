@@ -1,8 +1,9 @@
 #define _GNU_SOURCE
 #include <errno.h>
-#include <fnmatch.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -14,45 +15,150 @@
 
 #define BX_IGNORE_STACK_PATH_BUFSIZE 512u
 
-enum bx_ignore_match_result {
-    BX_IGNORE_NO_MATCH = 0,
-    BX_IGNORE_INCLUDE,
-    BX_IGNORE_EXCLUDE,
+struct bx_ignore_program_cache_key {
+    uint64_t content_hash;
+    bool casefold;
+    char *content;
+    size_t content_len;
 };
 
-static enum bx_ignore_match_result match_ignore_line(const char *line,
-                                                     const char *name,
-                                                     const char *relative_path,
-                                                     bool casefold) {
-    const char *p = line;
-    while (*p == ' ')
-        p++;
-    if (*p == '#' || *p == '\0')
-        return BX_IGNORE_NO_MATCH;
+struct bx_ignore_program_cache_entry {
+    struct bx_ignore_program_cache_entry *next;
+    uint64_t content_hash;
+    bool casefold;
+    char *content;
+    size_t content_len;
+    struct bx_ignore_program *program;
+};
 
-    bool negate = false;
-    if (*p == '!') {
-        negate = true;
-        p++;
+static pthread_mutex_t bx_ignore_program_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t bx_ignore_program_cache_once = PTHREAD_ONCE_INIT;
+static struct bx_ignore_program_cache_entry *bx_ignore_program_cache = NULL;
+
+static uint64_t bx_ignore_program_hash_bytes(uint64_t hash, const void *data, size_t len) {
+    const unsigned char *bytes = data;
+
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= (uint64_t)bytes[i];
+        hash *= UINT64_C(1099511628211);
     }
-    if (*p == '/')
-        p++;
-    if (*p == '\0')
-        return BX_IGNORE_NO_MATCH;
+    return hash;
+}
 
-    bool match = false;
-    int flags = FNM_PATHNAME | (casefold ? FNM_CASEFOLD : 0);
-    if (strchr(p, '/')) {
-        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
-        match = relative_path && relative_path[0] != '\0' &&
-                fnmatch(p, relative_path, flags) == 0;
-    } else {
-        match = fnmatch(p, name, flags) == 0;
+static void bx_ignore_program_cache_key_dispose(struct bx_ignore_program_cache_key *key) {
+    if (!key)
+        return;
+    free(key->content);
+    key->content = NULL;
+    key->content_len = 0u;
+    key->content_hash = 0u;
+    key->casefold = false;
+}
+
+static bool bx_ignore_program_cache_build_key(struct bx_ignore_program_cache_key *key,
+                                              char *const *patterns,
+                                              int pattern_count,
+                                              bool casefold) {
+    size_t total_len = 0u;
+    uint64_t hash = UINT64_C(14695981039346656037);
+
+    if (!key)
+        return false;
+    memset(key, 0, sizeof(*key));
+    if (!patterns || pattern_count <= 0)
+        return false;
+
+    for (int i = 0; i < pattern_count; ++i) {
+        if (!patterns[i])
+            continue;
+        total_len += strlen(patterns[i]) + 1u;
+    }
+    if (total_len == 0u)
+        return false;
+
+    key->content = malloc(total_len);
+    if (!key->content)
+        return false;
+
+    char *out = key->content;
+    for (int i = 0; i < pattern_count; ++i) {
+        size_t pattern_len;
+
+        if (!patterns[i])
+            continue;
+        pattern_len = strlen(patterns[i]);
+        memcpy(out, patterns[i], pattern_len);
+        out += pattern_len;
+        *out++ = '\n';
+        hash = bx_ignore_program_hash_bytes(hash, patterns[i], pattern_len);
+        hash = bx_ignore_program_hash_bytes(hash, "\n", 1u);
     }
 
-    if (!match)
-        return BX_IGNORE_NO_MATCH;
-    return negate ? BX_IGNORE_INCLUDE : BX_IGNORE_EXCLUDE;
+    key->content_hash = bx_ignore_program_hash_bytes(hash, &casefold, sizeof(casefold));
+    key->casefold = casefold;
+    key->content_len = total_len;
+    return true;
+}
+
+static struct bx_ignore_program *
+bx_ignore_program_cache_lookup_locked(const struct bx_ignore_program_cache_key *key) {
+    if (!key || !key->content || key->content_len == 0u)
+        return NULL;
+
+    for (struct bx_ignore_program_cache_entry *it = bx_ignore_program_cache; it; it = it->next) {
+        if (it->content_hash != key->content_hash || it->casefold != key->casefold ||
+            it->content_len != key->content_len) {
+            continue;
+        }
+        if (memcmp(it->content, key->content, key->content_len) == 0)
+            return it->program;
+    }
+    return NULL;
+}
+
+static void bx_ignore_program_cache_dispose(void) {
+    struct bx_ignore_program_cache_entry *entries;
+
+    pthread_mutex_lock(&bx_ignore_program_cache_lock);
+    entries = bx_ignore_program_cache;
+    bx_ignore_program_cache = NULL;
+    pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+
+    while (entries) {
+        struct bx_ignore_program_cache_entry *next = entries->next;
+        bx_ignore_program_release(entries->program);
+        free(entries->content);
+        free(entries);
+        entries = next;
+    }
+}
+
+static void bx_ignore_program_cache_init(void) {
+    (void)atexit(bx_ignore_program_cache_dispose);
+}
+
+static bool bx_ignore_program_cache_insert_locked(struct bx_ignore_program_cache_key *key,
+                                                  struct bx_ignore_program *program) {
+    struct bx_ignore_program_cache_entry *entry;
+
+    if (!key || !key->content || key->content_len == 0u || !program)
+        return false;
+
+    entry = calloc(1u, sizeof(*entry));
+    if (!entry)
+        return false;
+
+    entry->content_hash = key->content_hash;
+    entry->casefold = key->casefold;
+    entry->content = key->content;
+    entry->content_len = key->content_len;
+    entry->program = program;
+    entry->next = bx_ignore_program_cache;
+    bx_ignore_program_cache = entry;
+
+    key->content = NULL;
+    key->content_len = 0u;
+    return true;
 }
 
 static const char *bx_ignore_state_relative_path(const struct bx_ignore_state *state,
@@ -75,25 +181,15 @@ parent_prefix:
     return root_relative_path;
 }
 
-static enum bx_ignore_match_result bx_ignore_match_patterns(const char *name,
-                                                            const char *relative_path,
-                                                            char **patterns,
-                                                            int n,
-                                                            bool casefold) {
-    if (!patterns || n <= 0)
-        return BX_IGNORE_NO_MATCH;
+enum bx_ignore_state_match_mode {
+    BX_IGNORE_STATE_MATCH_LITERAL_BASENAME = 0,
+    BX_IGNORE_STATE_MATCH_LITERAL_EXTENSION,
+    BX_IGNORE_STATE_MATCH_LITERAL_DIRECTORY,
+    BX_IGNORE_STATE_MATCH_ANCHORED_PREFIX,
+    BX_IGNORE_STATE_MATCH_FULL,
+};
 
-    for (int i = n - 1; i >= 0; i--) {
-        enum bx_ignore_match_result result =
-            match_ignore_line(patterns[i], name, relative_path, casefold);
-        if (result != BX_IGNORE_NO_MATCH)
-            return result;
-    }
-
-    return BX_IGNORE_NO_MATCH;
-}
-
-bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern) {
+static bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern) {
     if (*n >= *cap) {
         int new_cap = *cap == 0 ? 16 : *cap * 2;
         char **tmp = realloc(*patterns, (size_t)new_cap * sizeof(**patterns));
@@ -110,7 +206,7 @@ bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pa
     return true;
 }
 
-void bx_ignore_free_patterns(char **patterns, int n) {
+static void bx_ignore_free_patterns(char **patterns, int n) {
     if (!patterns)
         return;
     for (int i = 0; i < n; i++)
@@ -121,7 +217,7 @@ void bx_ignore_free_patterns(char **patterns, int n) {
 void bx_ignore_state_init(struct bx_ignore_state *state,
                           struct bx_ignore_state *parent,
                           const char *dirpath,
-                          char **patterns, int pattern_count) {
+                          struct bx_ignore_program *program) {
     if (!state)
         return;
     state->parent = parent;
@@ -131,15 +227,13 @@ void bx_ignore_state_init(struct bx_ignore_state *state,
     state->root_prefix = NULL;
     state->owned_root_prefix = NULL;
     state->root_prefix_len = 0u;
-    state->patterns = patterns;
-    state->pattern_count = pattern_count;
-    state->casefold = false;
+    state->program = program;
 }
 
 void bx_ignore_state_dispose(struct bx_ignore_state *state) {
     if (!state)
         return;
-    bx_ignore_free_patterns(state->patterns, state->pattern_count);
+    bx_ignore_program_release(state->program);
     state->parent = NULL;
     free(state->owned_dirpath);
     free(state->owned_root_prefix);
@@ -149,9 +243,7 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state) {
     state->root_prefix = NULL;
     state->owned_root_prefix = NULL;
     state->root_prefix_len = 0u;
-    state->patterns = NULL;
-    state->pattern_count = 0;
-    state->casefold = false;
+    state->program = NULL;
 }
 
 void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
@@ -163,38 +255,19 @@ void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
     }
 }
 
-static char **bx_ignore_clone_patterns(char **patterns, int pattern_count) {
-    if (!patterns || pattern_count <= 0)
-        return NULL;
-
-    char **copy = calloc((size_t)pattern_count, sizeof(*copy));
-    if (!copy)
-        return NULL;
-
-    for (int i = 0; i < pattern_count; ++i) {
-        copy[i] = patterns[i] ? strdup(patterns[i]) : NULL;
-        if (patterns[i] && !copy[i]) {
-            bx_ignore_free_patterns(copy, i);
-            return NULL;
-        }
-    }
-    return copy;
-}
-
 struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state *state) {
     if (!state)
         return NULL;
 
     struct bx_ignore_state *parent = bx_ignore_state_clone_chain(state->parent);
-    char **patterns = bx_ignore_clone_patterns(state->patterns, state->pattern_count);
     struct bx_ignore_state *copy = calloc(1u, sizeof(*copy));
     if (!copy) {
-        bx_ignore_free_patterns(patterns, state->pattern_count);
         bx_ignore_state_dispose_chain(parent);
         return NULL;
     }
 
-    bx_ignore_state_init(copy, parent, state->dirpath, patterns, state->pattern_count);
+    bx_ignore_state_init(copy, parent, state->dirpath,
+                         bx_ignore_program_retain(state->program));
     if (state->dirpath) {
         copy->owned_dirpath = strdup(state->dirpath);
         if (!copy->owned_dirpath) {
@@ -217,7 +290,6 @@ struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state
         copy->root_prefix = copy->owned_root_prefix;
         copy->root_prefix_len = strlen(copy->owned_root_prefix);
     }
-    copy->casefold = state->casefold;
     return copy;
 }
 
@@ -353,24 +425,88 @@ static bool bx_ignore_load_patterns_from_path(const char *path,
     return loaded_any && *n > 0;
 }
 
+static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns,
+                                                                 int pattern_count,
+                                                                 bool casefold) {
+    struct bx_ignore_program_cache_key cache_key;
+    struct bx_ignore_program *program = NULL;
+    bool have_cache_key;
+
+    have_cache_key = bx_ignore_program_cache_build_key(&cache_key,
+                                                       patterns,
+                                                       pattern_count,
+                                                       casefold);
+    if (have_cache_key) {
+        pthread_once(&bx_ignore_program_cache_once, bx_ignore_program_cache_init);
+        pthread_mutex_lock(&bx_ignore_program_cache_lock);
+        program = bx_ignore_program_cache_lookup_locked(&cache_key);
+        if (program) {
+            program = bx_ignore_program_retain(program);
+            pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+            bx_ignore_free_patterns(patterns, pattern_count);
+            bx_ignore_program_cache_key_dispose(&cache_key);
+            return program;
+        }
+        pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+    }
+
+    program = bx_ignore_program_compile(patterns, pattern_count, casefold);
+    bx_ignore_free_patterns(patterns, pattern_count);
+    if (!program) {
+        if (have_cache_key)
+            bx_ignore_program_cache_key_dispose(&cache_key);
+        return NULL;
+    }
+
+    if (have_cache_key) {
+        pthread_mutex_lock(&bx_ignore_program_cache_lock);
+        struct bx_ignore_program *cached = bx_ignore_program_cache_lookup_locked(&cache_key);
+        if (cached) {
+            struct bx_ignore_program *retained = bx_ignore_program_retain(cached);
+            pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+            bx_ignore_program_release(program);
+            bx_ignore_program_cache_key_dispose(&cache_key);
+            return retained;
+        }
+        if (bx_ignore_program_cache_insert_locked(&cache_key, program)) {
+            struct bx_ignore_program *retained = bx_ignore_program_retain(program);
+            pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+            bx_ignore_program_cache_key_dispose(&cache_key);
+            return retained;
+        }
+        pthread_mutex_unlock(&bx_ignore_program_cache_lock);
+        bx_ignore_program_cache_key_dispose(&cache_key);
+    }
+    return program;
+}
+
+static struct bx_ignore_program *bx_ignore_load_program_from_path(const char *path,
+                                                                  const struct bx_walk_ignore_opts *opts,
+                                                                  bool explicit_file,
+                                                                  bool casefold) {
+    char **patterns = NULL;
+    int pattern_count = 0;
+
+    bx_ignore_load_patterns_from_path(path, opts, &patterns, &pattern_count, explicit_file);
+    return bx_ignore_program_from_patterns(patterns, pattern_count, casefold);
+}
+
 static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *chain,
-                                                      char **patterns, int pattern_count,
+                                                      struct bx_ignore_program *program,
                                                       const char *dirpath,
-                                                      const char *root_prefix,
-                                                      bool casefold) {
+                                                      const char *root_prefix) {
     struct bx_ignore_state *state;
 
-    if (pattern_count <= 0) {
-        bx_ignore_free_patterns(patterns, pattern_count);
+    if (!program) {
         return chain;
     }
 
     state = calloc(1, sizeof(*state));
     if (!state) {
-        bx_ignore_free_patterns(patterns, pattern_count);
+        bx_ignore_program_release(program);
         return NULL;
     }
-    bx_ignore_state_init(state, chain, dirpath, patterns, pattern_count);
+    bx_ignore_state_init(state, chain, dirpath, program);
     if (dirpath) {
         state->owned_dirpath = strdup(dirpath);
         if (!state->owned_dirpath) {
@@ -391,19 +527,16 @@ static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *ch
         state->root_prefix = state->owned_root_prefix;
         state->root_prefix_len = strlen(state->owned_root_prefix);
     }
-    state->casefold = casefold;
     return state;
 }
 
-bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
-                             char ***patterns, int *n) {
-    *patterns = NULL;
-    *n = 0;
+struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
+                                                 const struct bx_walk_ignore_opts *opts) {
+    char **patterns = NULL;
+    int pattern_count = 0;
 
     if (!opts || !opts->ignore_filenames || opts->num_ignore_filenames <= 0)
-        return false;
-
-    bool loaded_any = false;
+        return NULL;
 
     for (int file_i = 0; file_i < opts->num_ignore_filenames; file_i++) {
         const char *filename = opts->ignore_filenames[file_i];
@@ -428,11 +561,12 @@ bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_op
             free(ignore_path);
             continue;
         }
-        loaded_any |= bx_ignore_load_patterns_from_path(ignore_path, opts, patterns, n, false);
+        (void)bx_ignore_load_patterns_from_path(ignore_path, opts, &patterns, &pattern_count, false);
         free(ignore_path);
     }
 
-    return loaded_any && *n > 0;
+    return bx_ignore_program_from_patterns(patterns, pattern_count,
+                                           opts->ignore_file_case_insensitive);
 }
 
 void bx_ignore_validate_explicit_ignore_files(const struct bx_walk_ignore_opts *opts) {
@@ -521,17 +655,13 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
 
     if (!opts->no_ignore_files && opts->extra_ignore_files && opts->num_extra_ignore_files > 0) {
         for (int i = 0; i < opts->num_extra_ignore_files; i++) {
-            char **loaded = NULL;
-            int loaded_n = 0;
-            bx_ignore_load_patterns_from_path(opts->extra_ignore_files[i], opts,
-                                              &loaded, &loaded_n, false);
-            if (loaded_n > 0) {
-                chain = bx_ignore_append_state(chain, loaded, loaded_n, NULL, NULL,
-                                               opts->ignore_file_case_insensitive);
+            struct bx_ignore_program *program =
+                bx_ignore_load_program_from_path(opts->extra_ignore_files[i], opts, false,
+                                                 opts->ignore_file_case_insensitive);
+            if (program) {
+                chain = bx_ignore_append_state(chain, program, NULL, NULL);
                 if (!chain)
                     goto fail;
-            } else {
-                bx_ignore_free_patterns(loaded, loaded_n);
             }
         }
     }
@@ -542,8 +672,6 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         char *base = NULL;
         char *git_dir = NULL;
         char *global_path = NULL;
-        char **loaded = NULL;
-        int loaded_n = 0;
 
         if (xdg && *xdg) {
             base = strdup(xdg);
@@ -556,18 +684,17 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                 global_path = bx_path_join(git_dir, "ignore");
         }
         if (global_path) {
-            bx_ignore_load_patterns_from_path(global_path, opts, &loaded, &loaded_n, false);
-            if (loaded_n > 0) {
-                chain = bx_ignore_append_state(chain, loaded, loaded_n, NULL, NULL,
-                                               opts->ignore_file_case_insensitive);
+            struct bx_ignore_program *program =
+                bx_ignore_load_program_from_path(global_path, opts, false,
+                                                 opts->ignore_file_case_insensitive);
+            if (program) {
+                chain = bx_ignore_append_state(chain, program, NULL, NULL);
                 if (!chain) {
                     free(base);
                     free(git_dir);
                     free(global_path);
                     goto fail;
                 }
-            } else {
-                bx_ignore_free_patterns(loaded, loaded_n);
             }
         }
         free(base);
@@ -579,22 +706,19 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         char *git_dir = bx_path_join(opts->git_root, ".git");
         char *info_dir = git_dir ? bx_path_join(git_dir, "info") : NULL;
         char *exclude_path = info_dir ? bx_path_join(info_dir, "exclude") : NULL;
-        char **loaded = NULL;
-        int loaded_n = 0;
 
         if (exclude_path) {
-            bx_ignore_load_patterns_from_path(exclude_path, opts, &loaded, &loaded_n, false);
-            if (loaded_n > 0) {
-                chain = bx_ignore_append_state(chain, loaded, loaded_n, NULL, NULL,
-                                               opts->ignore_file_case_insensitive);
+            struct bx_ignore_program *program =
+                bx_ignore_load_program_from_path(exclude_path, opts, false,
+                                                 opts->ignore_file_case_insensitive);
+            if (program) {
+                chain = bx_ignore_append_state(chain, program, NULL, NULL);
                 if (!chain) {
                     free(git_dir);
                     free(info_dir);
                     free(exclude_path);
                     goto fail;
                 }
-            } else {
-                bx_ignore_free_patterns(loaded, loaded_n);
             }
         }
         free(git_dir);
@@ -650,10 +774,8 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
     free(cursor);
 
     for (int i = dir_count - 1; i >= 0; i--) {
-        char **loaded = NULL;
-        int loaded_n = 0;
-        bx_ignore_load_patterns(dirs[i], opts, &loaded, &loaded_n);
-        if (loaded_n > 0) {
+        struct bx_ignore_program *program = bx_ignore_load_program(dirs[i], opts);
+        if (program) {
             size_t dir_len = strlen(dirs[i]);
             const char *relative_root = resolved_root;
             if (strncmp(resolved_root, dirs[i], dir_len) == 0) {
@@ -662,8 +784,7 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                 else if (resolved_root[dir_len] == '\0')
                     relative_root = "";
             }
-            chain = bx_ignore_append_state(chain, loaded, loaded_n, NULL, relative_root,
-                                           opts->ignore_file_case_insensitive);
+            chain = bx_ignore_append_state(chain, program, NULL, relative_root);
             if (!chain) {
                 for (int k = 0; k < dir_count; k++)
                     free(dirs[k]);
@@ -672,8 +793,6 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                 resolved_root = NULL;
                 goto fail;
             }
-        } else {
-            bx_ignore_free_patterns(loaded, loaded_n);
         }
     }
 
@@ -698,14 +817,13 @@ success:
     return chain;
 }
 
-bool bx_ignore_path_ignored(const char *name, char **patterns, int n) {
-    return bx_ignore_match_patterns(name, NULL, patterns, n, false) == BX_IGNORE_EXCLUDE;
-}
-
-bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
-                                  const char *name,
-                                  const char *path,
-                                  const char *root_relative_path) {
+static enum bx_ignore_match_result
+bx_ignore_state_match_with_mode(const struct bx_ignore_state *state,
+                                const char *name,
+                                const char *path,
+                                const char *root_relative_path,
+                                bool is_dir,
+                                enum bx_ignore_state_match_mode mode) {
     for (const struct bx_ignore_state *it = state; it; it = it->parent) {
         const char *relative_path = bx_ignore_state_relative_path(it, path, root_relative_path);
         char stack_path[BX_IGNORE_STACK_PATH_BUFSIZE];
@@ -732,13 +850,99 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
             relative_path = prefixed_path;
         }
         enum bx_ignore_match_result result =
-            bx_ignore_match_patterns(name, relative_path, it->patterns, it->pattern_count,
-                                     it->casefold);
+            mode == BX_IGNORE_STATE_MATCH_LITERAL_BASENAME
+                ? bx_ignore_program_match_literal_basename(it->program,
+                                                           name,
+                                                           relative_path,
+                                                           is_dir)
+            : mode == BX_IGNORE_STATE_MATCH_LITERAL_EXTENSION
+                ? bx_ignore_program_match_literal_extension(it->program,
+                                                            name,
+                                                            relative_path,
+                                                            is_dir)
+            : mode == BX_IGNORE_STATE_MATCH_LITERAL_DIRECTORY
+                ? bx_ignore_program_match_literal_directory(it->program,
+                                                            name,
+                                                            relative_path,
+                                                            is_dir)
+            : mode == BX_IGNORE_STATE_MATCH_ANCHORED_PREFIX
+                ? bx_ignore_program_match_anchored_prefix(it->program,
+                                                          name,
+                                                          relative_path,
+                                                          is_dir)
+                : bx_ignore_program_match(it->program, name, relative_path, is_dir);
         free(heap_path);
-        if (result == BX_IGNORE_EXCLUDE)
-            return true;
-        if (result == BX_IGNORE_INCLUDE)
-            return false;
+        if (result == BX_IGNORE_EXCLUDE || result == BX_IGNORE_INCLUDE)
+            return result;
     }
-    return false;
+    return BX_IGNORE_NO_MATCH;
+}
+
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_basename(const struct bx_ignore_state *state,
+                                       const char *name,
+                                       const char *path,
+                                       const char *root_relative_path,
+                                       bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_LITERAL_BASENAME);
+}
+
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_extension(const struct bx_ignore_state *state,
+                                        const char *name,
+                                        const char *path,
+                                        const char *root_relative_path,
+                                        bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_LITERAL_EXTENSION);
+}
+
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_directory(const struct bx_ignore_state *state,
+                                        const char *name,
+                                        const char *path,
+                                        const char *root_relative_path,
+                                        bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_LITERAL_DIRECTORY);
+}
+
+enum bx_ignore_match_result
+bx_ignore_state_match_anchored_prefix(const struct bx_ignore_state *state,
+                                      const char *name,
+                                      const char *path,
+                                      const char *root_relative_path,
+                                      bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_ANCHORED_PREFIX);
+}
+
+bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
+                                  const char *name,
+                                  const char *path,
+                                  const char *root_relative_path,
+                                  bool is_dir) {
+    return bx_ignore_state_match_with_mode(state,
+                                           name,
+                                           path,
+                                           root_relative_path,
+                                           is_dir,
+                                           BX_IGNORE_STATE_MATCH_FULL) == BX_IGNORE_EXCLUDE;
 }

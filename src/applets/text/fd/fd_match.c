@@ -8,7 +8,6 @@
 
 #include "fd_match.h"
 #include "lib/path_ops.h"
-#include "search/metadata.h"
 
 static uint32_t fd_compile_flags(const struct fd_opts *opts,
                                  const char *pattern) {
@@ -24,13 +23,6 @@ static uint32_t fd_compile_flags(const struct fd_opts *opts,
         return PCRE2_CASELESS;
     }
     return 0;
-}
-
-static bool fd_matches_type(struct bx_walk_entry *entry,
-                            const struct fd_opts *opts) {
-    if (!opts->type_filter)
-        return true;
-    return bx_walk_entry_matches_type(entry, opts->type_filter[0]);
 }
 
 static pcre2_code *fd_compile_regex(const char *progname, const char *pattern,
@@ -253,9 +245,6 @@ enum bx_walk_action fd_walk_callback(struct bx_walk_entry *entry, void *user) {
     } else if (entry->depth < opts->min_depth) {
         return BX_WALK_CONTINUE;
     }
-
-    if (!fd_matches_type(entry, opts))
-        return BX_WALK_CONTINUE;
 
     const char *name = opts->full_path ? entry->path : fd_basename(entry->path);
 

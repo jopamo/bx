@@ -31,6 +31,7 @@
 
 struct bx_search_parallel_job_item {
     const char *path;
+    size_t path_offset;
     bool path_in_storage;
     bool strip_dot_prefix;
 };
@@ -195,36 +196,41 @@ static bool bx_search_parallel_job_reserve_storage(struct bx_search_parallel_job
         new_cap *= 2u;
     }
 
-    uintptr_t old_storage_addr = (uintptr_t)job->storage;
     tmp = realloc(job->storage, new_cap);
     if (!tmp)
         return false;
-    if (old_storage_addr != 0u && (uintptr_t)tmp != old_storage_addr) {
-        ptrdiff_t delta = (ptrdiff_t)((uintptr_t)tmp - old_storage_addr);
-        for (size_t i = 0; i < job->count; ++i) {
-            if (job->items[i].path_in_storage && job->items[i].path)
-                job->items[i].path += delta;
-        }
-    }
     job->storage = tmp;
     job->storage_cap = new_cap;
     return true;
 }
 
-static char *bx_search_parallel_job_store_string_len(struct bx_search_parallel_job *job,
-                                                     const char *text,
-                                                     size_t len_with_nul) {
-    char *dest;
+static bool bx_search_parallel_job_store_string_len(struct bx_search_parallel_job *job,
+                                                    const char *text,
+                                                    size_t len_with_nul,
+                                                    size_t *offset_out) {
+    size_t offset;
 
-    if (!job || !text || len_with_nul == 0u)
-        return NULL;
+    if (!job || !text || len_with_nul == 0u || !offset_out)
+        return false;
     if (!bx_search_parallel_job_reserve_storage(job, job->storage_len + len_with_nul))
-        return NULL;
+        return false;
 
-    dest = job->storage + job->storage_len;
-    memcpy(dest, text, len_with_nul);
+    offset = job->storage_len;
+    memcpy(job->storage + offset, text, len_with_nul);
     job->storage_len += len_with_nul;
-    return dest;
+    *offset_out = offset;
+    return true;
+}
+
+static const char *bx_search_parallel_job_item_path(const struct bx_search_parallel_job *job,
+                                                    const struct bx_search_parallel_job_item *item) {
+    if (!job || !item)
+        return NULL;
+    if (!item->path_in_storage)
+        return item->path;
+    if (!job->storage || item->path_offset >= job->storage_len)
+        return NULL;
+    return job->storage + item->path_offset;
 }
 
 static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state *state) {
@@ -325,14 +331,15 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
 
     item = &job->items[job->count];
     if (path_copy_required) {
-        item->path = bx_search_parallel_job_store_string_len(job, path, path_len);
-        if (!item->path) {
+        if (!bx_search_parallel_job_store_string_len(job, path, path_len, &item->path_offset)) {
             bx_search_parallel_drop_empty_pending_job(state);
             return false;
         }
+        item->path = NULL;
         item->path_in_storage = true;
     } else {
         item->path = path;
+        item->path_offset = 0u;
         item->path_in_storage = false;
     }
 
@@ -429,11 +436,20 @@ static void bx_search_parallel_process_job(void *user,
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
     for (size_t i = 0; i < job->count; i++) {
         int status;
+        const char *path;
 
         if (state->opts->quiet && bx_cancel_state_requested(&state->cancel))
             break;
 
-        status = bx_search_search_file(job->items[i].path,
+        path = bx_search_parallel_job_item_path(job, &job->items[i]);
+        if (!path) {
+            bx_search_parallel_set_fatal(state, "rg: failed to resolve queued worker path\n");
+            job_error_seen = true;
+            job_status = 2;
+            break;
+        }
+
+        status = bx_search_search_file(path,
                                        NULL,
                                        job->items[i].strip_dot_prefix,
                                        state->progname,
@@ -475,8 +491,8 @@ static void bx_search_parallel_process_job(void *user,
     }
 
     /*
-     * Keep the worker output record cold until the search actually produced
-     * captured output. Stats-only and no-output outcomes merge directly.
+     * Avoid queuing an output batch unless the job actually produced captured
+     * output. Stats-only and no-output outcomes merge directly.
      */
     if (stdout_len == 0u && stderr_len == 0u) {
         if (!state->opts->stats && !job_match_seen && !job_error_seen)

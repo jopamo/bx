@@ -5,11 +5,11 @@
 #include <string.h>
 
 #include "dev_counters.h"
-#include "literal.h"
+#include "literal_scan.h"
+#include "pcre2_matcher.h"
+#include "search_chunk_overlap.h"
 #include "search_internal.h"
 #include "search_raw_presence.h"
-
-#define BX_SEARCH_RAW_PRESENCE_CHUNK_CAP 65536u
 
 static bool bx_search_raw_presence_reserve_buffer(struct bx_search_scanner *scanner,
                                                   size_t needed) {
@@ -38,7 +38,7 @@ int bx_search_raw_presence_opened(FILE *f,
                                   const char *filename,
                                   const char *display_name,
                                   const char *progname,
-                                  struct bx_matcher *m,
+                                  const struct bx_lit_plan *absence_plan,
                                   struct search_opts *opts,
                                   int *match_count,
                                   struct bx_search_scanner *scanner,
@@ -47,13 +47,11 @@ int bx_search_raw_presence_opened(FILE *f,
     int file_matches = 0;
     size_t carry = 0u;
     bool counted_file = false;
-    struct bx_literal_matcher *literal = bx_search_matcher_literal(m);
 
-    if (!f || !m || !opts || !scanner || !literal)
+    if (!f || !absence_plan || !opts || !scanner)
         return 2;
     (void)filename;
-
-    size_t overlap = bx_literal_overlap_len(literal);
+    size_t overlap = absence_plan->min_overlap_len;
     scanner->len = 0u;
     if (!bx_search_raw_presence_reserve_buffer(scanner,
                                                BX_SEARCH_RAW_PRESENCE_CHUNK_CAP + overlap)) {
@@ -63,11 +61,11 @@ int bx_search_raw_presence_opened(FILE *f,
     }
 
     for (;;) {
-        if (carry > 0u)
-            memmove(scanner->buf, scanner->buf + scanner->len - carry, carry);
-        scanner->len = carry;
+        scanner->len = bx_search_chunk_overlap_prepend_carry(scanner->buf,
+                                                             scanner->len,
+                                                             carry);
 
-        size_t nread = fread(scanner->buf + carry, 1u, scanner->cap - carry, f);
+        size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, f);
         scanner->len += nread;
         bx_search_dev_counters_note_bytes_read(nread);
 
@@ -79,14 +77,28 @@ int bx_search_raw_presence_opened(FILE *f,
         if (stats)
             stats->bytes_searched += nread;
 
-        if (scanner->len > 0u) {
+        if (bx_search_chunk_overlap_has_fresh_bytes(scanner->len, carry)) {
             struct bx_match literal_match;
+            bool found = false;
+            size_t scan_start = bx_search_chunk_overlap_scan_start(carry, overlap);
+            size_t overlap_bytes_scanned =
+                bx_search_chunk_overlap_rescanned_bytes(carry, overlap);
 
-            bx_search_dev_counters_note_literal_overlap_bytes_scanned(carry);
-            if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &literal_match) == 0) {
-                if (bx_literal_match_crosses_chunk_boundary(&literal_match, carry)) {
-                    bx_search_dev_counters_note_literal_cross_chunk_match();
-                }
+            bx_search_dev_counters_note_literal_overlap_bytes_scanned(overlap_bytes_scanned);
+            size_t literal_match_off = SIZE_MAX;
+
+            if (bx_literal_scan_absent(absence_plan,
+                                       scanner->buf + scan_start,
+                                       scanner->len - scan_start,
+                                       &literal_match_off) == BX_LIT_FOUND) {
+                literal_match.start = scan_start + literal_match_off;
+                literal_match.end = literal_match.start + absence_plan->needle_len;
+                found = true;
+            }
+            if (found) {
+                bx_search_chunk_overlap_note_cross_chunk_match(literal_match.start,
+                                                               literal_match.end,
+                                                               carry);
                 bx_search_dev_counters_note_literal_candidate_hit();
                 file_matches = 1;
                 if (stats) {
@@ -107,7 +119,7 @@ int bx_search_raw_presence_opened(FILE *f,
             break;
         }
 
-        carry = overlap < scanner->len ? overlap : scanner->len;
+        carry = bx_search_chunk_overlap_carry_len(scanner->len, overlap);
     }
 
     if (status != 2) {

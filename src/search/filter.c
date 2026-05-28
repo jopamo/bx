@@ -8,9 +8,34 @@
 #include "fswalk/walk.h"
 #include "filter.h"
 #include "ignore.h"
+#include "lib/path_ops.h"
+#include "metadata.h"
+
+static const char *bx_walk_filter_relative_path(const struct bx_walk_filter_state *state,
+                                                const char *path);
+static bool bx_walk_filter_matches_include_relative(const struct bx_walk_filter_state *state,
+                                                    const char *name,
+                                                    const char *relative_path);
 
 static bool bx_walk_filter_is_hidden(const char *name) {
     return name[0] == '.';
+}
+
+static bool bx_walk_filter_hidden_policy_should_skip(const struct bx_walk_filter_state *state,
+                                                     const char *name,
+                                                     const char *path,
+                                                     const char **relative_path_out) {
+    const char *relative_path;
+
+    if (relative_path_out)
+        *relative_path_out = NULL;
+    if (!state || !state->opts || state->opts->hidden || !bx_walk_filter_is_hidden(name))
+        return false;
+
+    relative_path = bx_walk_filter_relative_path(state, path);
+    if (relative_path_out)
+        *relative_path_out = relative_path;
+    return !bx_walk_filter_matches_include_relative(state, name, relative_path);
 }
 
 static const char *bx_walk_filter_relative_path(const struct bx_walk_filter_state *state,
@@ -96,6 +121,13 @@ static bool bx_walk_filter_matches_exclude_dir(const struct bx_walk_filter_state
     return false;
 }
 
+static bool bx_walk_filter_entry_matches_type(const struct bx_walk_filter_state *state,
+                                              struct bx_walk_entry *entry) {
+    if (!state || !state->opts || state->opts->type_filter == '\0')
+        return true;
+    return bx_walk_entry_matches_type(entry, state->opts->type_filter);
+}
+
 void bx_walk_filter_init(struct bx_walk_filter_state *state,
                          const struct bx_walk_filter_opts *opts,
                          const char *root_path) {
@@ -107,19 +139,81 @@ void bx_walk_filter_init(struct bx_walk_filter_state *state,
 }
 
 bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
-                                const char *name,
-                                const char *path,
-                                const struct bx_ignore_state *ignore_state) {
-    const char *relative_path = bx_walk_filter_relative_path(state, path);
+                                struct bx_walk_entry *entry,
+                                const struct bx_ignore_state *ignore_state,
+                                bool *entry_selected_out) {
+    const char *relative_path = NULL;
+    const char *name;
+    const char *path;
+    bool entry_selected = true;
+
+    if (entry_selected_out)
+        *entry_selected_out = true;
+    if (!entry || !entry->path)
+        return false;
+
+    name = bx_path_basename_ptr(entry->path);
+    path = entry->path;
 
     bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_CHECKS, 1u);
 
-    if (state && state->opts && !state->opts->hidden && bx_walk_filter_is_hidden(name) &&
-        !bx_walk_filter_matches_include_relative(state, name, relative_path)) {
+    if (bx_walk_filter_hidden_policy_should_skip(state, name, path, &relative_path))
         return true;
+
+    entry_selected = bx_walk_filter_entry_matches_type(state, entry);
+    if (!entry_selected && !entry->is_dir) {
+        if (entry_selected_out)
+            *entry_selected_out = false;
+        return false;
     }
 
-    if (bx_ignore_state_matches_path(ignore_state, name, path, relative_path))
+    if (!relative_path)
+        relative_path = bx_walk_filter_relative_path(state, path);
+
+    enum bx_ignore_match_result basename_ignore =
+        bx_ignore_state_match_literal_basename(ignore_state,
+                                               name,
+                                               path,
+                                               relative_path,
+                                               entry->is_dir);
+    if (basename_ignore == BX_IGNORE_EXCLUDE)
+        return true;
+    enum bx_ignore_match_result extension_ignore = basename_ignore == BX_IGNORE_NO_MATCH
+        ? bx_ignore_state_match_literal_extension(ignore_state,
+                                                  name,
+                                                  path,
+                                                  relative_path,
+                                                  entry->is_dir)
+        : BX_IGNORE_NO_MATCH;
+    if (extension_ignore == BX_IGNORE_EXCLUDE)
+        return true;
+    enum bx_ignore_match_result directory_ignore =
+        basename_ignore == BX_IGNORE_NO_MATCH && extension_ignore == BX_IGNORE_NO_MATCH
+            ? bx_ignore_state_match_literal_directory(ignore_state,
+                                                      name,
+                                                      path,
+                                                      relative_path,
+                                                      entry->is_dir)
+            : BX_IGNORE_NO_MATCH;
+    if (directory_ignore == BX_IGNORE_EXCLUDE)
+        return true;
+    enum bx_ignore_match_result anchored_prefix_ignore =
+        basename_ignore == BX_IGNORE_NO_MATCH &&
+        extension_ignore == BX_IGNORE_NO_MATCH &&
+        directory_ignore == BX_IGNORE_NO_MATCH
+            ? bx_ignore_state_match_anchored_prefix(ignore_state,
+                                                    name,
+                                                    path,
+                                                    relative_path,
+                                                    entry->is_dir)
+            : BX_IGNORE_NO_MATCH;
+    if (anchored_prefix_ignore == BX_IGNORE_EXCLUDE)
+        return true;
+    if (basename_ignore == BX_IGNORE_NO_MATCH &&
+        extension_ignore == BX_IGNORE_NO_MATCH &&
+        directory_ignore == BX_IGNORE_NO_MATCH &&
+        anchored_prefix_ignore == BX_IGNORE_NO_MATCH &&
+        bx_ignore_state_matches_path(ignore_state, name, path, relative_path, entry->is_dir))
         return true;
 
     if (bx_walk_filter_matches_exclude_dir(state, name))
@@ -128,6 +222,8 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     if (bx_walk_filter_matches_exclude(state, name, relative_path))
         return true;
 
+    if (entry_selected_out)
+        *entry_selected_out = entry_selected;
     return false;
 }
 

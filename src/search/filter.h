@@ -21,8 +21,8 @@ bool bx_walk_filter_matches_include(const struct bx_walk_filter_state *state,
                                     const char *path);
 
 bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
-                                const char *name,
-                                const char *path,
-                                const struct bx_ignore_state *ignore_state);
+                                struct bx_walk_entry *entry,
+                                const struct bx_ignore_state *ignore_state,
+                                bool *entry_selected_out);
 
 #endif

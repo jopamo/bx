@@ -44,7 +44,8 @@ bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
                                           const struct search_opts *opts) {
     if (!entry || !opts || !opts->max_filesize_set || entry->is_dir)
         return false;
-    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+    if (!entry->metadata_loaded &&
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
         return false;
     return entry->metadata_loaded && S_ISREG(entry->mode)
         && entry->size > (off_t)opts->max_filesize;
@@ -80,6 +81,21 @@ static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
         return;
     case BX_WALK_COUNTER_FSTATAT_CALLS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FSTATAT_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_UNKNOWN_DTYPE, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_SYMLINK_POLICY, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_TRAVERSAL_POLICY:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_TRAVERSAL_POLICY, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_METADATA_FILTER:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_METADATA_FILTER, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_METADATA_OUTPUT:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT, count);
         return;
     case BX_WALK_COUNTER_OPENAT_CALLS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, count);
@@ -192,7 +208,8 @@ bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
                entry->d_type == DT_FIFO || entry->d_type == DT_SOCK;
     }
 
-    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+    if (!entry->metadata_loaded &&
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
         return false;
 
     return bx_search_mode_is_special_input(entry->mode);
@@ -225,7 +242,8 @@ bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *e
         return opts->device_mode == BX_GREP_DEVICE_SKIP || !opts->device_mode_explicit;
     }
 
-    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+    if (!entry->metadata_loaded &&
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
         return false;
 
     if (!bx_search_mode_is_special_input(entry->mode))
@@ -281,6 +299,7 @@ struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
 struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *opts) {
     return (struct bx_walk_filter_opts){
         .hidden = opts->hidden,
+        .type_filter = '\0',
         .glob_case_insensitive = opts->glob_case_insensitive,
         .include_patterns = opts->include_patterns,
         .include_pattern_casefold = opts->include_pattern_casefold,

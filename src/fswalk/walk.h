@@ -28,6 +28,11 @@ enum bx_walk_counter {
     BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN,
     BX_WALK_COUNTER_LSTAT_CALLS,
     BX_WALK_COUNTER_FSTATAT_CALLS,
+    BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE,
+    BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY,
+    BX_WALK_COUNTER_STAT_REASON_TRAVERSAL_POLICY,
+    BX_WALK_COUNTER_STAT_REASON_METADATA_FILTER,
+    BX_WALK_COUNTER_STAT_REASON_METADATA_OUTPUT,
     BX_WALK_COUNTER_OPENAT_CALLS,
     BX_WALK_COUNTER_PATH_JOIN_CALLS,
     BX_WALK_COUNTER_PATH_ALLOCS,
@@ -60,6 +65,7 @@ struct bx_walk_opts {
 
 struct bx_walk_filter_opts {
     bool hidden;
+    char type_filter;
     bool glob_case_insensitive;
     char *const *include_patterns;
     const bool *include_pattern_casefold;
@@ -101,6 +107,9 @@ struct bx_walk_entry {
     bool metadata_loaded;
     bool metadata_tried;
     bool follow_metadata;
+    const char *metadata_name;
+    int metadata_dirfd;
+    bool metadata_dirfd_valid;
     dev_t dev;
     mode_t mode;
     ino_t inode;
@@ -128,7 +137,14 @@ struct bx_walk_ops {
     enum bx_walk_action (*error)(const char *path, int errnum, void *user);
 };
 
-bool bx_walk_entry_load_metadata(struct bx_walk_entry *entry);
+enum bx_walk_metadata_reason {
+    BX_WALK_METADATA_REASON_TRAVERSAL_POLICY = 0,
+    BX_WALK_METADATA_REASON_FILTER,
+    BX_WALK_METADATA_REASON_OUTPUT,
+};
+
+bool bx_walk_entry_load_metadata_for(struct bx_walk_entry *entry,
+                                     enum bx_walk_metadata_reason reason);
 int bx_walk(const char *root,
             const struct bx_walk_opts *opts,
             const struct bx_walk_ops *ops,

@@ -11,7 +11,7 @@ static bool bx_walk_entry_mode_matches(struct bx_walk_entry *entry, bool (*predi
     if (!entry || !predicate)
         return false;
 
-    if (!bx_walk_entry_load_metadata(entry))
+    if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
         return false;
 
     return predicate(entry->mode);
@@ -39,6 +39,30 @@ static bool bx_walk_mode_is_block(mode_t mode) {
 
 static bool bx_walk_mode_is_char(mode_t mode) {
     return S_ISCHR(mode);
+}
+
+static bool bx_walk_entry_matches_regular_type(struct bx_walk_entry *entry) {
+    if (!entry)
+        return false;
+    if (entry->d_type_known)
+        return entry->d_type == DT_REG;
+    return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular);
+}
+
+static bool bx_walk_entry_matches_known_dtype(struct bx_walk_entry *entry,
+                                              unsigned char d_type,
+                                              bool (*predicate)(mode_t)) {
+    if (!entry)
+        return false;
+    if (entry->d_type_known)
+        return entry->d_type == d_type;
+    return bx_walk_entry_mode_matches(entry, predicate);
+}
+
+static bool bx_walk_entry_matches_directory_type(struct bx_walk_entry *entry) {
+    if (!entry)
+        return false;
+    return entry->is_dir;
 }
 
 bool bx_walk_numeric_match(unsigned long long actual, long long expected, int cmp) {
@@ -177,25 +201,25 @@ bool bx_walk_entry_matches_type(struct bx_walk_entry *entry, char type_filter) {
 
     switch (type_filter) {
     case 'f':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular);
+        return bx_walk_entry_matches_regular_type(entry);
     case 'd':
-        return entry->is_dir;
+        return bx_walk_entry_matches_directory_type(entry);
     case 'l':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_symlink);
+        return bx_walk_entry_matches_known_dtype(entry, DT_LNK, bx_walk_mode_is_symlink);
     case 'x':
-        if (!bx_walk_entry_load_metadata(entry))
+        if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
             return false;
         return S_ISREG(entry->mode) && access(entry->path, X_OK) == 0;
     case 'e':
         return bx_walk_entry_is_empty(entry);
     case 'p':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_fifo);
+        return bx_walk_entry_matches_known_dtype(entry, DT_FIFO, bx_walk_mode_is_fifo);
     case 's':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_socket);
+        return bx_walk_entry_matches_known_dtype(entry, DT_SOCK, bx_walk_mode_is_socket);
     case 'b':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_block);
+        return bx_walk_entry_matches_known_dtype(entry, DT_BLK, bx_walk_mode_is_block);
     case 'c':
-        return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_char);
+        return bx_walk_entry_matches_known_dtype(entry, DT_CHR, bx_walk_mode_is_char);
     default:
         return false;
     }

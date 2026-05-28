@@ -114,7 +114,7 @@ bool find_write_printf_format(FILE *fp, const char *format,
                     return false;
                 break;
             case 'l': {
-                if (!bx_walk_entry_load_metadata(entry))
+                if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_OUTPUT))
                     return false;
                 if (!S_ISLNK(entry->mode))
                     break;
@@ -128,7 +128,7 @@ bool find_write_printf_format(FILE *fp, const char *format,
                 break;
             }
             case 'm': {
-                if (!bx_walk_entry_load_metadata(entry))
+                if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_OUTPUT))
                     return false;
                 if (fprintf(fp, "%o", entry->mode & 07777u) < 0)
                     return false;

@@ -10,11 +10,13 @@
 
 #include "dev_counters.h"
 #include "literal.h"
+#include "literal_scan.h"
 #include "pcre2_matcher.h"
 #include "rg_output.h"
 #include "rg_transform.h"
 #include "scanner.h"
 #include "search_buffered.h"
+#include "search_chunk_overlap.h"
 #include "search_input.h"
 #include "search_internal.h"
 #include "search_multiline.h"
@@ -36,6 +38,11 @@ static int binary_presence_opened(FILE *f,
                                   int *match_count,
                                   struct bx_record_stream *record_stream,
                                   struct bx_search_stats *stats);
+static bool search_file_find_literal_precheck_match(const struct bx_lit_plan *absence_plan,
+                                                    const unsigned char *buf,
+                                                    size_t len,
+                                                    size_t start,
+                                                    struct bx_match *out);
 
 #define BX_SEARCH_DEFERRED_CHUNK_CAP (256u * 1024u)
 
@@ -113,7 +120,8 @@ static int search_file_run_opened_kernel(enum bx_search_file_kernel_kind kernel,
                                           match_count, stats);
     case BX_SEARCH_FILE_KERNEL_RAW_PRESENCE:
         return bx_search_raw_presence_opened(f, use_stdin, filename, display_name, progname,
-                                             m, opts, match_count, scanner, stats);
+                                             bx_search_matcher_absence_plan(m), opts,
+                                             match_count, scanner, stats);
     case BX_SEARCH_FILE_KERNEL_SCANNER:
         return bx_search_scanner_opened(f, use_stdin, display_name, progname, m, opts,
                                         match_count, scanner, stats);
@@ -166,6 +174,25 @@ static int search_file_run_path_kernel(enum bx_search_file_kernel_kind kernel,
     return 2;
 }
 
+static bool search_file_find_literal_precheck_match(const struct bx_lit_plan *absence_plan,
+                                                    const unsigned char *buf,
+                                                    size_t len,
+                                                    size_t start,
+                                                    struct bx_match *out) {
+    if (!absence_plan || !buf || !out || start > len)
+        return false;
+
+    size_t literal_match_off = SIZE_MAX;
+    if (bx_literal_scan_absent(absence_plan, buf + start, len - start, &literal_match_off)
+        != BX_LIT_FOUND) {
+        return false;
+    }
+
+    out->start = start + literal_match_off;
+    out->end = out->start + absence_plan->needle_len;
+    return true;
+}
+
 static int search_file_deferred_literal_precheck_path(const char *filename,
                                                       struct bx_search_display_name_state *display_name_state,
                                                       const char *progname,
@@ -174,7 +201,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                                                       struct search_opts *opts,
                                                       struct bx_search_scanner *scanner,
                                                       struct bx_search_stats *stats) {
-    struct bx_literal_matcher *literal;
+    const struct bx_lit_plan *absence_plan;
     struct stat st;
     int fd;
     int result = BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
@@ -186,8 +213,8 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
         !opts || !scanner) {
         return BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
     }
-    literal = bx_search_matcher_literal(m);
-    if (!literal)
+    absence_plan = bx_search_matcher_absence_plan(m);
+    if (!absence_plan)
         return BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
 
     fd = bx_search_input_open_fd(filename, opts);
@@ -223,7 +250,11 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
              * and only let quiet searches fall through to a full-file
              * conservative precheck before rejecting the file.
              */
-            if (bx_literal_find(literal, prefix, (size_t)(nul - prefix), 0u, &bm) == 0) {
+            if (search_file_find_literal_precheck_match(absence_plan,
+                                                        prefix,
+                                                        (size_t)(nul - prefix),
+                                                        0u,
+                                                        &bm)) {
                 searched_len = (size_t)prefix_len;
                 result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                 goto out;
@@ -242,19 +273,22 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
     }
 
     {
-        size_t overlap = bx_literal_overlap_len(literal);
+        size_t chunk_cap = opts->quiet ? BX_SEARCH_RAW_PRESENCE_CHUNK_CAP
+                                       : BX_SEARCH_DEFERRED_CHUNK_CAP;
+        size_t overlap = absence_plan->min_overlap_len;
         size_t carry = 0u;
 
-        if (!bx_search_scanner_reserve(scanner, BX_SEARCH_DEFERRED_CHUNK_CAP + overlap))
+        if (!bx_search_scanner_reserve(scanner, chunk_cap + overlap))
             goto out;
         for (;;) {
-            if (carry > 0u)
-                memmove(scanner->buf, scanner->buf + scanner->len - carry, carry);
-            scanner->len = carry;
+            scanner->len = bx_search_chunk_overlap_prepend_carry(scanner->buf,
+                                                                 scanner->len,
+                                                                 carry);
 
+            size_t read_cap = (chunk_cap + overlap) - scanner->len;
             ssize_t nread;
             do {
-                nread = read(fd, scanner->buf + carry, scanner->cap - carry);
+                nread = read(fd, scanner->buf + scanner->len, read_cap);
             } while (nread < 0 && errno == EINTR);
             if (nread < 0)
                 goto out_error;
@@ -262,14 +296,19 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
             searched_len += (size_t)nread;
             bx_search_dev_counters_note_bytes_read((size_t)nread);
 
-            if (scanner->len > 0u) {
+            if (bx_search_chunk_overlap_has_fresh_bytes(scanner->len, carry)) {
                 struct bx_match bm;
+                size_t scan_start = bx_search_chunk_overlap_scan_start(carry, overlap);
+                size_t overlap_bytes_scanned =
+                    bx_search_chunk_overlap_rescanned_bytes(carry, overlap);
 
-                bx_search_dev_counters_note_literal_overlap_bytes_scanned(carry);
-                if (bx_literal_find(literal, scanner->buf, scanner->len, 0u, &bm) == 0) {
-                    if (bx_literal_match_crosses_chunk_boundary(&bm, carry)) {
-                        bx_search_dev_counters_note_literal_cross_chunk_match();
-                    }
+                bx_search_dev_counters_note_literal_overlap_bytes_scanned(overlap_bytes_scanned);
+                if (search_file_find_literal_precheck_match(absence_plan,
+                                                            scanner->buf,
+                                                            scanner->len,
+                                                            scan_start,
+                                                            &bm)) {
+                    bx_search_chunk_overlap_note_cross_chunk_match(bm.start, bm.end, carry);
                     result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                     goto out;
                 }
@@ -279,7 +318,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                 result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
                 goto out;
             }
-            carry = overlap < scanner->len ? overlap : scanner->len;
+            carry = bx_search_chunk_overlap_carry_len(scanner->len, overlap);
         }
     }
 
@@ -292,9 +331,16 @@ out_error:
 
 out:
     close(fd);
-    if (result == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH && stats) {
+    if (stats && (result == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
+                  (result == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH &&
+                   opts->quiet && exec_plan && exec_plan->raw_presence_supported))) {
         stats->files_searched++;
         stats->bytes_searched += searched_len;
+        if (result == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH) {
+            stats->matches++;
+            stats->matched_lines++;
+            stats->files_with_matches++;
+        }
     }
     return result;
 }
@@ -661,6 +707,105 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
     return rc;
 }
 
+static int search_file_run_nonstdin_regular_path(const char *filename,
+                                                 struct bx_search_display_name_state *display_name_state,
+                                                 const char *progname,
+                                                 struct bx_matcher *m,
+                                                 const struct bx_search_exec_plan *exec_plan,
+                                                 struct search_opts *opts,
+                                                 int *match_count,
+                                                 struct bx_search_scanner *scanner,
+                                                 struct bx_record_stream *record_stream,
+                                                 struct bx_search_stats *stats) {
+    FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
+    const char *display_name;
+
+    if (!f)
+        return 2;
+
+    if (bx_search_input_opened_needs_auto_transform(f, opts)) {
+        unsigned char *transformed = NULL;
+        size_t transformed_len = 0u;
+        enum bx_rg_transform_result transform_rc;
+
+        fclose(f);
+        transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
+                                                    bx_search_error_output_stream(),
+                                                    &transformed, &transformed_len);
+        if (transform_rc == BX_RG_TRANSFORM_NO_MATCH)
+            return 1;
+        if (transform_rc == BX_RG_TRANSFORM_ERROR)
+            return 2;
+
+        display_name = search_file_resolve_display_name(display_name_state, opts);
+        return bx_search_search_transformed_buffer(transformed, transformed_len,
+                                                   display_name, progname, m, exec_plan, opts,
+                                                   match_count, record_stream, stats);
+    }
+
+    display_name = search_file_resolve_display_name(display_name_state, opts);
+    if (exec_plan && exec_plan->raw_presence_supported) {
+        return search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
+                                             f, false, filename, display_name, progname,
+                                             m, opts, match_count, scanner, record_stream,
+                                             stats);
+    }
+
+    {
+        int binary_result = search_file_handle_binary_prefix(
+            f, false, display_name, progname, m, opts, match_count, record_stream, stats
+        );
+        if (binary_result >= 0)
+            return binary_result;
+        if (binary_result == -2) {
+            return search_file_run_opened_kernel(
+                exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
+                f, false, filename, display_name, progname, m, opts,
+                match_count, scanner, record_stream, stats);
+        }
+
+        enum bx_search_file_kernel_kind nonbinary_kernel =
+            exec_plan ? exec_plan->opened_nonbinary_kernel
+                      : BX_SEARCH_FILE_KERNEL_STREAMING;
+
+        return search_file_run_opened_kernel(
+            search_file_resolve_opened_kernel(f, nonbinary_kernel),
+            f, false, filename, display_name, progname, m, opts,
+            match_count, scanner, record_stream, stats);
+    }
+}
+
+static int search_file_default_literal_raw_path(const char *filename,
+                                                struct bx_search_display_name_state *display_name_state,
+                                                const char *progname,
+                                                struct bx_matcher *m,
+                                                const struct bx_search_exec_plan *exec_plan,
+                                                struct search_opts *opts,
+                                                int *match_count,
+                                                struct bx_search_scanner *scanner,
+                                                struct bx_record_stream *record_stream,
+                                                struct bx_search_stats *stats) {
+    int precheck = search_file_deferred_literal_precheck_path(filename, display_name_state,
+                                                              progname, m, exec_plan, opts,
+                                                              scanner, stats);
+
+    if (precheck == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
+        precheck == BX_SEARCH_DEFERRED_PRECHECK_ERROR) {
+        return precheck;
+    }
+    if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH &&
+        opts->quiet && exec_plan && exec_plan->raw_presence_supported) {
+        bx_search_dev_counters_note_literal_candidate_hit();
+        if (match_count)
+            (*match_count)++;
+        return 0;
+    }
+
+    return search_file_run_nonstdin_regular_path(filename, display_name_state, progname, m,
+                                                 exec_plan, opts, match_count, scanner,
+                                                 record_stream, stats);
+}
+
 static int search_file(const char *filename,
                        const char *display_name_override,
                        bool strip_dot_prefix,
@@ -817,82 +962,18 @@ static int search_file(const char *filename,
         goto out;
     }
 
-    if (!use_stdin) {
-        int precheck = search_file_deferred_literal_precheck_path(filename, &display_name_state,
-                                                                  progname, m, exec_plan, opts,
-                                                                  scanner, stats);
-        if (precheck == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
-            precheck == BX_SEARCH_DEFERRED_PRECHECK_ERROR) {
-            result = precheck;
-            goto out;
-        }
+    if (!use_stdin && exec_plan && exec_plan->deferred_literal_precheck) {
+        result = search_file_default_literal_raw_path(filename, &display_name_state,
+                                                      progname, m, exec_plan, opts,
+                                                      match_count, scanner, record_stream, stats);
+        goto out;
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text) {
-        FILE *f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
-        const char *display_name;
-        if (!f)
-            goto out_error;
-
-        if (bx_search_input_opened_needs_auto_transform(f, opts)) {
-            unsigned char *transformed = NULL;
-            size_t transformed_len = 0u;
-            enum bx_rg_transform_result transform_rc;
-
-            fclose(f);
-            transform_rc = bx_rg_load_transformed_input(filename, progname, opts,
-                                                        bx_search_error_output_stream(),
-                                                        &transformed, &transformed_len);
-            if (transform_rc == BX_RG_TRANSFORM_NO_MATCH) {
-                result = 1;
-                goto out;
-            }
-            if (transform_rc == BX_RG_TRANSFORM_ERROR) {
-                result = 2;
-                goto out;
-            }
-            display_name = search_file_resolve_display_name(&display_name_state, opts);
-            result = bx_search_search_transformed_buffer(transformed, transformed_len,
-                                                         display_name, progname, m, exec_plan, opts,
-                                                         match_count, record_stream, stats);
-            goto out;
-        }
-
-        display_name = search_file_resolve_display_name(&display_name_state, opts);
-        if (exec_plan && exec_plan->raw_presence_supported) {
-            result = search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
-                                                   f, false, filename, display_name, progname,
-                                                   m, opts, match_count, scanner, record_stream,
-                                                   stats);
-            goto out;
-        }
-
-        {
-            int binary_result = search_file_handle_binary_prefix(
-                f, false, display_name, progname, m, opts, match_count, record_stream, stats
-            );
-            if (binary_result >= 0) {
-                result = binary_result;
-                goto out;
-            }
-            if (binary_result == -2) {
-                result = search_file_run_opened_kernel(
-                    exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
-                    f, false, filename, display_name, progname, m, opts,
-                    match_count, scanner, record_stream, stats);
-                goto out;
-            }
-
-            enum bx_search_file_kernel_kind nonbinary_kernel =
-                exec_plan ? exec_plan->opened_nonbinary_kernel
-                          : BX_SEARCH_FILE_KERNEL_STREAMING;
-
-            result = search_file_run_opened_kernel(
-                search_file_resolve_opened_kernel(f, nonbinary_kernel),
-                f, false, filename, display_name, progname, m, opts,
-                match_count, scanner, record_stream, stats);
-            goto out;
-        }
+        result = search_file_run_nonstdin_regular_path(filename, &display_name_state,
+                                                       progname, m, exec_plan, opts,
+                                                       match_count, scanner, record_stream, stats);
+        goto out;
     }
 
     if (!use_stdin && !opts->null_data && !opts->binary_as_text &&

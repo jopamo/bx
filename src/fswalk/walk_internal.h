@@ -25,11 +25,16 @@ struct bx_walk_dirent_list {
     size_t cap;
 };
 
+typedef int (*bx_walk_dirent_visit_fn)(const char *name, unsigned char d_type, void *user);
+
+struct bx_walk_path_buf;
+
 struct bx_walk_ctx {
     const struct bx_walk_opts *opts;
     const struct bx_walk_ops *ops;
     void *user;
     dev_t root_device;
+    struct bx_walk_path_buf *path_buf;
 };
 
 static inline void bx_walk_note_counter(const struct bx_walk_counter_ops *ops,
@@ -49,7 +54,20 @@ static inline void bx_walk_ctx_note_counter(const struct bx_walk_ctx *ctx,
 }
 
 void bx_walk_entry_fill_from_stat(struct bx_walk_entry *entry, const struct stat *st);
+int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
+                                   char *path,
+                                   const char *name,
+                                   unsigned char d_type,
+                                   int parent_dirfd,
+                                   bool follow_symlinks,
+                                   int depth,
+                                   const struct bx_walk_counter_ops *counter_ops,
+                                   bool *entry_was_symlink);
 
+int bx_walk_dirent_iterate(DIR *dir,
+                           bx_walk_dirent_visit_fn visit,
+                           void *user,
+                           int *err_out);
 void bx_walk_dirent_list_free(struct bx_walk_dirent_list *list);
 int bx_walk_dirent_list_read_sorted(DIR *dir, struct bx_walk_dirent_list *list, int *err_out);
 

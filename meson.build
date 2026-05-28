@@ -19,6 +19,24 @@ edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'a
 
 cc = meson.get_compiler('c')
 can_run = meson.can_run_host_binaries()
+arm64_sve_intrinsics = cc.compiles(
+  '''
+  #if !defined(__aarch64__) || !defined(__ARM_FEATURE_SVE)
+  #error "SVE intrinsics not enabled for this target"
+  #endif
+  #include <arm_sve.h>
+  int main(void) {
+    svbool_t pg = svptrue_b8();
+    return svptest_any(pg, pg) ? 0 : 0;
+  }
+  ''',
+  name : 'arm64 sve intrinsics',
+)
+if arm64_sve_intrinsics
+  add_project_arguments('-DBX_LITERAL_HAVE_ARM64_SVE_INTRINSICS=1', language : 'c')
+else
+  add_project_arguments('-DBX_LITERAL_HAVE_ARM64_SVE_INTRINSICS=0', language : 'c')
+endif
 warn_flags = [
   '-Wshadow',
   '-Wstrict-prototypes',
@@ -462,7 +480,10 @@ bx_search_sources = [
   'src/search/dev_counters.c',
   'src/search/literal.c',
   'src/search/literal_plan.c',
+  'src/search/literal_arm64_probe.c',
+  'src/search/literal_x86_probe.c',
   'src/search/ignore.c',
+  'src/search/ignore_program.c',
   'src/search/options.c',
   'src/search/pcre2_matcher.c',
   'src/search/record_stream.c',

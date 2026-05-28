@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "fswalk/walk.h"
+#include "ignore_program.h"
 
 struct bx_ignore_state {
     struct bx_ignore_state *parent;
@@ -14,19 +15,13 @@ struct bx_ignore_state {
     const char *root_prefix;
     char *owned_root_prefix;
     size_t root_prefix_len;
-    char **patterns;
-    int pattern_count;
-    bool casefold;
+    struct bx_ignore_program *program;
 };
-
-bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern);
-
-void bx_ignore_free_patterns(char **patterns, int n);
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
                           struct bx_ignore_state *parent,
                           const char *dirpath,
-                          char **patterns, int pattern_count);
+                          struct bx_ignore_program *program);
 
 void bx_ignore_state_dispose(struct bx_ignore_state *state);
 
@@ -36,20 +31,47 @@ struct bx_ignore_state *bx_ignore_state_clone_chain_for_subtree(const struct bx_
                                                                 const char *current_root,
                                                                 const char *subtree_root);
 
-bool bx_ignore_load_patterns(const char *dirpath, const struct bx_walk_ignore_opts *opts,
-                             char ***patterns, int *n);
+struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
+                                                 const struct bx_walk_ignore_opts *opts);
 void bx_ignore_validate_explicit_ignore_files(const struct bx_walk_ignore_opts *opts);
 
 struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
                                                     const struct bx_walk_ignore_opts *opts,
                                                     bool *ok);
 
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_basename(const struct bx_ignore_state *state,
+                                       const char *name,
+                                       const char *path,
+                                       const char *root_relative_path,
+                                       bool is_dir);
+
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_extension(const struct bx_ignore_state *state,
+                                        const char *name,
+                                        const char *path,
+                                        const char *root_relative_path,
+                                        bool is_dir);
+
+enum bx_ignore_match_result
+bx_ignore_state_match_literal_directory(const struct bx_ignore_state *state,
+                                        const char *name,
+                                        const char *path,
+                                        const char *root_relative_path,
+                                        bool is_dir);
+
+enum bx_ignore_match_result
+bx_ignore_state_match_anchored_prefix(const struct bx_ignore_state *state,
+                                      const char *name,
+                                      const char *path,
+                                      const char *root_relative_path,
+                                      bool is_dir);
+
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
                                   const char *name,
                                   const char *path,
-                                  const char *root_relative_path);
-
-bool bx_ignore_path_ignored(const char *name, char **patterns, int n);
+                                  const char *root_relative_path,
+                                  bool is_dir);
 
 bool bx_ignore_enable_gitignore_for_root(const char *root, const struct bx_walk_ignore_opts *opts);
 char *bx_ignore_find_git_root(const char *root, const struct bx_walk_ignore_opts *opts);

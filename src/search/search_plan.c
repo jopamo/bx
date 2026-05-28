@@ -6,6 +6,7 @@
 #include "options.h"
 #include "rg_parallel.h"
 #include "rg_sched.h"
+#include "search_internal.h"
 #include "search_plan.h"
 #include "search_scanner.h"
 #include "search_streaming.h"
@@ -23,6 +24,10 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(
     enum bx_search_personality personality,
     const struct search_opts *opts,
     bool has_metadata_sort
+);
+
+static bool bx_search_plan_deferred_fastpath_has_absence_plan(
+    const struct bx_matcher *matcher
 );
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts) {
@@ -105,6 +110,12 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(
     if (opts->stop_on_nonmatch)
         return false;
     return true;
+}
+
+static bool bx_search_plan_deferred_fastpath_has_absence_plan(
+    const struct bx_matcher *matcher
+) {
+    return bx_search_matcher_absence_plan(matcher) != NULL;
 }
 
 static enum bx_search_plan_kernel_kind
@@ -247,11 +258,13 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
         needs_line_buffering ? BX_SEARCH_FILE_KERNEL_BUFFERED
                              : BX_SEARCH_FILE_KERNEL_STREAMING;
     exec_plan->raw_presence_supported =
-        bx_search_scanner_can_raw_shortcut_file_presence(matcher, opts);
+        bx_search_scanner_can_raw_shortcut_file_presence(matcher, opts)
+        && bx_search_matcher_absence_plan(matcher) != NULL;
     exec_plan->deferred_literal_precheck =
         plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_DEFERRED_FASTPATH
         && plan->output_kind == BX_SEARCH_PLAN_OUTPUT_MATCH_LINES
         && scanner_regular_supported
+        && bx_search_plan_deferred_fastpath_has_absence_plan(matcher)
         && !opts->stats;
 }
 

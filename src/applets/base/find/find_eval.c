@@ -90,7 +90,7 @@ static bool find_match_pattern(const char *pattern, const char *text,
 
 static bool find_match_link_target(struct bx_walk_entry *entry, const char *pattern,
                                    bool ignore_case) {
-    if (!bx_walk_entry_load_metadata(entry))
+    if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
         return false;
     if (!S_ISLNK(entry->mode))
         return false;
@@ -141,7 +141,7 @@ static bool find_match_xtype(struct bx_walk_entry *entry, char type_filter) {
 }
 
 static bool find_eval_require_metadata(struct bx_walk_entry *entry) {
-    return bx_walk_entry_load_metadata(entry);
+    return bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER);
 }
 
 static bool find_eval_fail(struct find_state *st) {

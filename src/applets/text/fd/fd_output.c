@@ -68,7 +68,7 @@ static off_t fd_detail_display_size(const struct bx_walk_entry *entry) {
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
                             struct bx_walk_entry *entry) {
-    if (!bx_walk_entry_load_metadata(entry))
+    if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_OUTPUT))
         return false;
     if (!fd_detail_items_reserve(items, items->count + 1))
         return false;

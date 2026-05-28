@@ -49,6 +49,7 @@ int bx_fd_main(int argc, char **argv) {
     };
     struct bx_walk_filter_opts filter_opts = {
         .hidden = opts->hidden,
+        .type_filter = opts->type_filter ? opts->type_filter[0] : '\0',
         .exclude_patterns = opts->exclude_patterns,
         .num_exclude_patterns = opts->num_exclude_patterns,
     };

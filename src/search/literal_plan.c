@@ -130,6 +130,7 @@ void bx_lit_plan_compile(struct bx_lit_plan *plan,
     plan->rare_byte = (needle && needle_len > 0u) ? needle[rare_index] : 0u;
     plan->rare_pair_first = (needle && needle_len > 1u) ? needle[rare_pair_offset] : 0u;
     plan->rare_pair_second = (needle && needle_len > 1u) ? needle[rare_pair_offset + 1u] : 0u;
+    plan->ops = NULL;
     plan->backend = BX_LITERAL_BACKEND_SCALAR;
     plan->algo = bx_lit_plan_select_algo(needle_len);
 }

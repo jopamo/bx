@@ -12,6 +12,7 @@
 
 struct bx_matcher;
 struct bx_match;
+struct bx_lit_plan;
 struct bx_literal_matcher;
 struct bx_search_exec_plan;
 
@@ -92,6 +93,7 @@ struct bx_matcher *bx_search_compile_matcher(const char *pattern,
                                              char **warningmsg);
 void bx_search_matcher_free(struct bx_matcher *m);
 struct bx_literal_matcher *bx_search_matcher_literal(const struct bx_matcher *m);
+const struct bx_lit_plan *bx_search_matcher_absence_plan(const struct bx_matcher *m);
 int bx_search_matcher_find_with_opts(struct bx_matcher *m,
                                      const unsigned char *buf,
                                      size_t len,

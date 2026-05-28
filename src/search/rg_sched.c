@@ -19,6 +19,7 @@
 #include "rg_sched.h"
 #include "scanner.h"
 #include "search_internal.h"
+#include "search_plan.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -30,7 +31,7 @@ enum bx_rg_sched_work_kind {
 };
 
 struct bx_rg_sched_file_item {
-    char *path;
+    size_t path_offset;
     int base_depth;
     bool strip_dot_prefix;
 };
@@ -44,8 +45,8 @@ struct bx_rg_sched_work {
     char *storage;
     union {
         struct {
-            char *path;
-            char *git_root;
+            size_t path_offset;
+            size_t git_root_offset;
             struct bx_ignore_state *parent_ignore_state;
             bool gitignore_enabled;
         } dir;
@@ -74,6 +75,7 @@ struct bx_rg_sched_state {
     const char *pattern;
     enum bx_search_personality personality;
     const struct bx_search_exec_plan *exec_plan;
+    struct bx_search_plan quiet_plan;
     struct search_opts *opts;
     struct search_opts quiet_opts;
     struct bx_cancel_state cancel;
@@ -99,6 +101,7 @@ struct bx_rg_sched_state {
 
 struct bx_rg_sched_worker {
     struct bx_matcher *matcher;
+    struct bx_search_exec_plan quiet_exec_plan;
     struct bx_search_scanner scanner;
     struct bx_record_stream record_stream;
     char *display_scratch;
@@ -239,42 +242,38 @@ static bool bx_rg_sched_work_reserve_storage(struct bx_rg_sched_work *work, size
         new_cap *= 2u;
     }
 
-    uintptr_t old_storage_addr = (uintptr_t)work->storage;
     char *tmp = realloc(work->storage, new_cap);
     if (!tmp)
         return false;
-    if (old_storage_addr != 0u && (uintptr_t)tmp != old_storage_addr) {
-        ptrdiff_t delta = (ptrdiff_t)((uintptr_t)tmp - old_storage_addr);
-        if (work->kind == BX_RG_SCHED_WORK_DIR) {
-            if (work->u.dir.path)
-                work->u.dir.path += delta;
-            if (work->u.dir.git_root)
-                work->u.dir.git_root += delta;
-        } else {
-            for (size_t i = 0; i < work->u.batch.count; ++i) {
-                if (work->u.batch.items[i].path)
-                    work->u.batch.items[i].path += delta;
-            }
-        }
-    }
     work->storage = tmp;
     work->storage_cap = new_cap;
     return true;
 }
 
-static char *bx_rg_sched_work_store_string(struct bx_rg_sched_work *work,
-                                           const char *text) {
-    if (!work || !text)
-        return NULL;
+static bool bx_rg_sched_work_store_string(struct bx_rg_sched_work *work,
+                                          const char *text,
+                                          size_t *offset_out) {
+    size_t offset;
+
+    if (!work || !text || !offset_out)
+        return false;
 
     size_t len = strlen(text) + 1u;
     if (!bx_rg_sched_work_reserve_storage(work, work->storage_len + len))
-        return NULL;
+        return false;
 
-    char *dest = work->storage + work->storage_len;
-    memcpy(dest, text, len);
+    offset = work->storage_len;
+    memcpy(work->storage + offset, text, len);
     work->storage_len += len;
-    return dest;
+    *offset_out = offset;
+    return true;
+}
+
+static const char *bx_rg_sched_work_storage_string(const struct bx_rg_sched_work *work,
+                                                   size_t offset) {
+    if (!work || !work->storage || offset == SIZE_MAX || offset >= work->storage_len)
+        return NULL;
+    return work->storage + offset;
 }
 
 static bool bx_rg_sched_work_vec_push(struct bx_rg_sched_work_vec *vec,
@@ -470,9 +469,11 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
     work->kind = BX_RG_SCHED_WORK_DIR;
     work->base_depth = base_depth;
     work->strip_dot_prefix = strip_dot_prefix;
-    work->u.dir.path = bx_rg_sched_work_store_string(work, path);
-    if (!work->u.dir.path ||
-        (git_root && !(work->u.dir.git_root = bx_rg_sched_work_store_string(work, git_root)))) {
+    work->u.dir.path_offset = SIZE_MAX;
+    work->u.dir.git_root_offset = SIZE_MAX;
+    if (!bx_rg_sched_work_store_string(work, path, &work->u.dir.path_offset) ||
+        (git_root &&
+         !bx_rg_sched_work_store_string(work, git_root, &work->u.dir.git_root_offset))) {
         bx_rg_sched_free_work(work);
         return NULL;
     }
@@ -512,8 +513,7 @@ static bool bx_rg_sched_batch_add(struct bx_rg_sched_frontier_state *state,
         return false;
 
     struct bx_rg_sched_file_item *item = &work->u.batch.items[work->u.batch.count];
-    item->path = bx_rg_sched_work_store_string(work, path);
-    if (!item->path)
+    if (!bx_rg_sched_work_store_string(work, path, &item->path_offset))
         return false;
     item->base_depth = base_depth;
     item->strip_dot_prefix = state->strip_dot_prefix;
@@ -705,13 +705,17 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                   const char *path,
                                   bool strip_dot_prefix,
                                   bool stolen) {
+    const struct bx_search_exec_plan *exec_plan =
+        (sched->opts->files_with_matches || sched->opts->files_without_match)
+            ? &worker->quiet_exec_plan
+            : sched->exec_plan;
     int dummy_matches = 0;
     int status = bx_search_search_file(path,
                                        NULL,
                                        strip_dot_prefix,
                                        sched->progname,
                                        worker->matcher,
-                                       sched->exec_plan,
+                                       exec_plan,
                                        &sched->quiet_opts,
                                        &dummy_matches,
                                        &worker->scanner,
@@ -830,6 +834,14 @@ static struct bx_rg_sched_worker *bx_rg_sched_worker_init(struct bx_rg_sched_sta
         free(worker);
         return NULL;
     }
+    /*
+     * The subtree scheduler publishes presence-only path names itself. Run
+     * each per-file -l/-L search under a quiet execution plan so exact-literal
+     * presence stays on the absence/raw path instead of entering the
+     * line-oriented scanner just to rediscover whether a file matched.
+     */
+    bx_search_exec_plan_build(&worker->quiet_exec_plan, &sched->quiet_plan,
+                              worker->matcher, &sched->quiet_opts);
     return worker;
 }
 
@@ -868,6 +880,30 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     previous_ctx = bx_search_output_ctx_push(&output_ctx);
 
     if (work->kind == BX_RG_SCHED_WORK_DIR) {
+        const char *work_root_path = bx_rg_sched_work_storage_string(work,
+                                                                     work->u.dir.path_offset);
+        const char *git_root = bx_rg_sched_work_storage_string(work, work->u.dir.git_root_offset);
+
+        if (!work_root_path) {
+            bx_search_output_ctx_pop(previous_ctx);
+            if (output_ctx.err)
+                fclose(output_ctx.err);
+            free(stderr_buf);
+            bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued subtree path\n");
+            bx_rg_sched_free_work(work);
+            bx_rg_sched_finish_work(sched);
+            return;
+        }
+        if (work->u.dir.git_root_offset != SIZE_MAX && !git_root) {
+            bx_search_output_ctx_pop(previous_ctx);
+            if (output_ctx.err)
+                fclose(output_ctx.err);
+            free(stderr_buf);
+            bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued ignore root\n");
+            bx_rg_sched_free_work(work);
+            bx_rg_sched_finish_work(sched);
+            return;
+        }
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_DIRS_SEEN, 1u);
         bx_rg_sched_note_dir_walk(stolen);
         struct bx_rg_sched_walk_state walk_state = {
@@ -878,7 +914,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .stderr_cap = &walk_stderr_cap,
             .worker_index = worker_index,
             .base_depth = work->base_depth,
-            .work_root_path = work->u.dir.path,
+            .work_root_path = work_root_path,
             .strip_dot_prefix = work->strip_dot_prefix,
             .stolen = stolen,
         };
@@ -896,8 +932,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(sched->opts);
         struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(sched->progname,
                                                                             sched->opts);
-        if (work->u.dir.git_root) {
-            ignore_opts.git_root = work->u.dir.git_root;
+        if (git_root) {
+            ignore_opts.git_root = git_root;
             ignore_opts.gitignore_enabled = work->u.dir.gitignore_enabled;
         }
         struct bx_ignore_state *inherited_ignore = work->u.dir.parent_ignore_state;
@@ -911,7 +947,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .inherited_parent_ignore_state = inherited_ignore,
         };
         size_t before = worker->stdout_len;
-        int rc = bx_search_walk(work->u.dir.path, &walk_config, &walk_state);
+        int rc = bx_search_walk(work_root_path, &walk_config, &walk_state);
         if (rc != 0)
             job_error_seen = true;
         job_match_seen = worker->stdout_len > before;
@@ -919,9 +955,16 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_SEARCHED, 1u);
         size_t before = worker->stdout_len;
         for (size_t i = 0; i < work->u.batch.count; ++i) {
+            const char *path =
+                bx_rg_sched_work_storage_string(work, work->u.batch.items[i].path_offset);
+            if (!path) {
+                bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued batch path\n");
+                job_error_seen = true;
+                break;
+            }
             int status = bx_rg_sched_search_one(sched,
                                                 worker,
-                                                work->u.batch.items[i].path,
+                                                path,
                                                 work->u.batch.items[i].strip_dot_prefix,
                                                 stolen);
             if (status == 2)
@@ -968,8 +1011,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     if (worker->stdout_len == 0u && stderr_len == 0u) {
         free(stderr_buf);
         /*
-         * Keep no-output work off the unordered publication path entirely.
-         * Search results that emitted nothing merge directly.
+         * Avoid queuing an output batch unless this work actually emitted at
+         * least one path or diagnostic. No-output results merge directly.
          */
         bx_rg_sched_merge_direct_result(sched, job_match_seen, job_error_seen);
         bx_rg_sched_free_work(work);
@@ -1182,6 +1225,7 @@ int bx_rg_sched_run(int argc,
     sched.quiet_opts.files_with_matches = false;
     sched.quiet_opts.files_without_match = false;
     sched.quiet_opts.stats = false;
+    bx_search_plan_build(&sched.quiet_plan, personality, &sched.quiet_opts, 1, false);
     sched.aggregate = (struct bx_rg_publish_aggregate){
         .stats = &sched.stats,
         .exit_status = &sched.exit_status,

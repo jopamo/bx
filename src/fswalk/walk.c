@@ -1,20 +1,289 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "walk_internal.h"
 
-#define BX_WALK_STACK_PATH_CAP 1024u
-
-static int bx_walk_recursive(const char *dirpath,
+static int bx_walk_recursive(DIR *dir,
                              const struct bx_walk_ctx *ctx,
                              int depth,
                              const struct bx_walk_ancestor *ancestors);
+static int bx_walk_status_from_action(const struct bx_walk_ctx *ctx,
+                                      enum bx_walk_action action,
+                                      int *status_out);
+static int bx_walk_recursive_visit_entry(const char *name,
+                                         unsigned char d_type,
+                                         int parent_dirfd,
+                                         const struct bx_walk_ctx *ctx,
+                                         int depth,
+                                         const struct bx_walk_ancestor *ancestors);
+
+struct bx_walk_recursive_dirent_iter {
+    int dirfd;
+    const struct bx_walk_ctx *ctx;
+    int depth;
+    const struct bx_walk_ancestor *ancestors;
+    int status;
+};
+
+struct bx_walk_path_buf {
+    char *data;
+    size_t len;
+    size_t cap;
+};
+
+struct bx_walk_entry_path_state {
+    struct bx_walk_path_buf *path_buf;
+    const char *name;
+    size_t prev_len;
+    bool appended;
+};
+
+static bool bx_walk_path_buf_reserve(struct bx_walk_path_buf *buf,
+                                     size_t needed,
+                                     const struct bx_walk_counter_ops *counter_ops,
+                                     int *err_out) {
+    char *old_data;
+
+    if (err_out)
+        *err_out = 0;
+    if (!buf) {
+        if (err_out)
+            *err_out = EINVAL;
+        return false;
+    }
+    if (buf->cap >= needed)
+        return true;
+
+    size_t new_cap = buf->cap == 0u ? 64u : buf->cap;
+    while (new_cap < needed) {
+        if (new_cap > SIZE_MAX / 2u) {
+            if (err_out)
+                *err_out = ENAMETOOLONG;
+            return false;
+        }
+        new_cap *= 2u;
+    }
+
+    old_data = buf->data;
+    char *tmp = realloc(buf->data, new_cap);
+    if (!tmp) {
+        if (err_out)
+            *err_out = ENOMEM;
+        return false;
+    }
+    bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_ALLOCS, 1u);
+    if (old_data && buf->len > 0u && tmp != old_data)
+        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH, 1u);
+    buf->data = tmp;
+    buf->cap = new_cap;
+    return true;
+}
+
+static bool bx_walk_path_buf_init(struct bx_walk_path_buf *buf,
+                                  const char *root,
+                                  const struct bx_walk_counter_ops *counter_ops,
+                                  int *err_out) {
+    if (err_out)
+        *err_out = 0;
+    if (!buf || !root) {
+        if (err_out)
+            *err_out = EINVAL;
+        return false;
+    }
+
+    memset(buf, 0, sizeof(*buf));
+    size_t root_len = strlen(root);
+    size_t initial_needed = root_len + 1u;
+    if (root_len <= SIZE_MAX - 257u)
+        initial_needed = root_len + 257u;
+    if (!bx_walk_path_buf_reserve(buf, initial_needed, counter_ops, err_out))
+        return false;
+    memcpy(buf->data, root, root_len + 1u);
+    buf->len = root_len;
+    return true;
+}
+
+static void bx_walk_path_buf_free(struct bx_walk_path_buf *buf) {
+    if (!buf)
+        return;
+    free(buf->data);
+    memset(buf, 0, sizeof(*buf));
+}
+
+static char *bx_walk_path_buf_push_name(struct bx_walk_path_buf *buf,
+                                        const char *name,
+                                        const struct bx_walk_counter_ops *counter_ops,
+                                        int *err_out) {
+    if (err_out)
+        *err_out = 0;
+    if (!buf || !buf->data || !name) {
+        if (err_out)
+            *err_out = EINVAL;
+        return NULL;
+    }
+
+    size_t name_len = strlen(name);
+    bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_JOIN_CALLS, 1u);
+    if (buf->len > SIZE_MAX - name_len - 2u) {
+        if (err_out)
+            *err_out = ENAMETOOLONG;
+        return NULL;
+    }
+
+    size_t needed = buf->len + 1u + name_len + 1u;
+    if (!bx_walk_path_buf_reserve(buf, needed, counter_ops, err_out))
+        return NULL;
+
+    buf->data[buf->len] = '/';
+    memcpy(buf->data + buf->len + 1u, name, name_len);
+    buf->len += 1u + name_len;
+    buf->data[buf->len] = '\0';
+    return buf->data;
+}
+
+static void bx_walk_path_buf_pop_to_len(struct bx_walk_path_buf *buf, size_t len) {
+    if (!buf || !buf->data || len > buf->len)
+        return;
+    buf->len = len;
+    buf->data[len] = '\0';
+}
+
+static char *bx_walk_entry_path_ensure(struct bx_walk_entry_path_state *state,
+                                       const struct bx_walk_ctx *ctx,
+                                       int *join_err) {
+    if (join_err)
+        *join_err = 0;
+    if (!state || !ctx)
+        return NULL;
+    if (state->appended)
+        return state->path_buf ? state->path_buf->data : NULL;
+
+    char *full = bx_walk_path_buf_push_name(state->path_buf, state->name,
+                                            ctx->opts->counter_ops, join_err);
+    if (full)
+        state->appended = true;
+    return full;
+}
+
+static void bx_walk_entry_path_release(struct bx_walk_entry_path_state *state) {
+    if (!state || !state->appended)
+        return;
+    bx_walk_path_buf_pop_to_len(state->path_buf, state->prev_len);
+    state->appended = false;
+}
+
+static int bx_walk_open_directory_path(const char *dirpath,
+                                       const struct bx_walk_ctx *ctx,
+                                       DIR **dir_out,
+                                       int *status_out) {
+    DIR *dir = opendir(dirpath);
+    if (dir) {
+        *dir_out = dir;
+        return 1;
+    }
+
+    if (errno == EACCES && ctx->opts->suppress_eacces) {
+        if (ctx->opts->report_eacces)
+            bx_walk_report_error(ctx->opts, dirpath, errno);
+        *dir_out = NULL;
+        return 0;
+    }
+
+    enum bx_walk_action action = bx_walk_handle_error(ctx, dirpath, errno);
+    bx_walk_status_from_action(ctx, action, status_out);
+    *dir_out = NULL;
+    return status_out && *status_out != 0 ? -1 : 0;
+}
+
+static bool bx_walk_should_descend_child_directory(const struct bx_walk_entry *entry,
+                                                   const struct bx_walk_opts *opts) {
+    if (!entry || !opts || !entry->is_dir || entry->prune)
+        return false;
+    if (entry->is_symlink)
+        return opts->follow_symlinks;
+    return true;
+}
+
+static bool bx_walk_should_descend_root_directory(const struct bx_walk_entry *entry,
+                                                  const struct bx_walk_opts *opts) {
+    if (!entry || !opts || !entry->is_dir || entry->prune)
+        return false;
+    if (entry->is_symlink)
+        return opts->follow_root_symlink;
+    return true;
+}
+
+static int bx_walk_open_directory_child(int parent_dirfd,
+                                        const char *name,
+                                        struct bx_walk_entry_path_state *path_state,
+                                        const struct bx_walk_ctx *ctx,
+                                        DIR **dir_out,
+                                        int *status_out) {
+    const char *path = ctx && ctx->path_buf ? ctx->path_buf->data : NULL;
+    /*
+     * openat()/fdopendir() follow directory symlinks. The caller must decide
+     * whether a symlink-backed directory is descendable before we reach this
+     * open boundary.
+     */
+    if (parent_dirfd < 0 || !name) {
+        int join_err = 0;
+        char *full = bx_walk_entry_path_ensure(path_state, ctx, &join_err);
+        if (full)
+            path = full;
+        return bx_walk_open_directory_path(path, ctx, dir_out, status_out);
+    }
+
+    bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_OPENAT_CALLS, 1u);
+    int fd = openat(parent_dirfd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (fd < 0) {
+        int join_err = 0;
+        char *full = bx_walk_entry_path_ensure(path_state, ctx, &join_err);
+        if (full)
+            path = full;
+        if (errno == EACCES && ctx->opts->suppress_eacces) {
+            if (ctx->opts->report_eacces)
+                bx_walk_report_error(ctx->opts, path, errno);
+            *dir_out = NULL;
+            return 0;
+        }
+        enum bx_walk_action action = bx_walk_handle_error(ctx, path, errno);
+        bx_walk_status_from_action(ctx, action, status_out);
+        *dir_out = NULL;
+        return status_out && *status_out != 0 ? -1 : 0;
+    }
+
+    DIR *dir = fdopendir(fd);
+    if (dir) {
+        *dir_out = dir;
+        return 1;
+    }
+
+    int saved_errno = errno != 0 ? errno : EIO;
+    close(fd);
+    errno = saved_errno;
+    int join_err = 0;
+    char *full = bx_walk_entry_path_ensure(path_state, ctx, &join_err);
+    if (full)
+        path = full;
+    if (saved_errno == EACCES && ctx->opts->suppress_eacces) {
+        if (ctx->opts->report_eacces)
+            bx_walk_report_error(ctx->opts, path, saved_errno);
+        *dir_out = NULL;
+        return 0;
+    }
+    enum bx_walk_action action = bx_walk_handle_error(ctx, path, saved_errno);
+    bx_walk_status_from_action(ctx, action, status_out);
+    *dir_out = NULL;
+    return status_out && *status_out != 0 ? -1 : 0;
+}
 
 static int bx_walk_status_from_action(const struct bx_walk_ctx *ctx,
                                       enum bx_walk_action action,
@@ -35,72 +304,23 @@ static int bx_walk_status_from_action(const struct bx_walk_ctx *ctx,
     return -1;
 }
 
-static int bx_walk_fill_entry(char *path,
-                              unsigned char d_type,
-                              const struct bx_walk_ctx *ctx,
-                              int depth,
-                              struct bx_walk_entry *entry,
-                              bool *entry_was_symlink) {
-    memset(entry, 0, sizeof(*entry));
-    entry->path = path;
-    entry->d_type = d_type;
-    entry->d_type_known = d_type != DT_UNKNOWN;
-    entry->follow_metadata = ctx->opts->follow_symlinks;
-    entry->depth = depth;
-    entry->counter_ops = ctx->opts->counter_ops;
-    *entry_was_symlink = false;
+static int bx_walk_recursive_iterate_dirent(const char *name,
+                                            unsigned char d_type,
+                                            void *user) {
+    struct bx_walk_recursive_dirent_iter *state = user;
+    if (!state)
+        return -1;
 
-    struct stat st;
-    struct stat lst;
-
-    if (!ctx->opts->follow_symlinks) {
-        if (d_type == DT_DIR) {
-            entry->is_dir = true;
-            return 0;
-        }
-        if (d_type == DT_LNK) {
-            entry->is_symlink = true;
-            return 0;
-        }
-        if (d_type != DT_UNKNOWN) {
-            entry->is_dir = false;
-            return 0;
-        }
-        bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
-        if (lstat(path, &st) != 0)
-            return errno;
-        bx_walk_entry_fill_from_stat(entry, &st);
-        entry->is_symlink = S_ISLNK(st.st_mode);
-        return 0;
+    bx_walk_ctx_note_counter(state->ctx, BX_WALK_COUNTER_DIRENTS_SEEN, 1u);
+    if (d_type == DT_UNKNOWN)
+        bx_walk_ctx_note_counter(state->ctx, BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN, 1u);
+    if (bx_walk_recursive_visit_entry(name, d_type,
+                                      state->dirfd,
+                                      state->ctx, state->depth, state->ancestors) != 0) {
+        state->status = -1;
     }
-
-    if (d_type == DT_DIR) {
-        entry->is_dir = true;
-        return 0;
-    }
-    if (d_type != DT_LNK && d_type != DT_UNKNOWN) {
-        entry->is_dir = false;
-        return 0;
-    }
-
-    bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
-    if (lstat(path, &lst) != 0)
-        return errno;
-
-    *entry_was_symlink = S_ISLNK(lst.st_mode);
-    entry->is_symlink = *entry_was_symlink;
-    if (!*entry_was_symlink) {
-        if (stat(path, &st) != 0)
-            return errno;
-        bx_walk_entry_fill_from_stat(entry, &st);
-        return 0;
-    }
-
-    if (stat(path, &st) == 0) {
-        bx_walk_entry_fill_from_stat(entry, &st);
-    } else {
-        bx_walk_entry_fill_from_stat(entry, &lst);
-    }
+    if (bx_walk_should_stop(state->ctx->opts))
+        return 1;
     return 0;
 }
 
@@ -119,7 +339,8 @@ static int bx_walk_prepare_directory(struct bx_walk_entry *entry,
     if (!ctx->opts->stay_on_filesystem && ctx->opts->cycle_mode == BX_WALK_CYCLE_NONE)
         return 0;
 
-    if (!entry->metadata_loaded && !bx_walk_entry_load_metadata(entry))
+    if (!entry->metadata_loaded &&
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_TRAVERSAL_POLICY))
         return errno != 0 ? errno : ENOENT;
 
     *crosses_filesystem = ctx->opts->stay_on_filesystem && entry->dev != ctx->root_device;
@@ -141,9 +362,9 @@ static int bx_walk_prepare_directory(struct bx_walk_entry *entry,
     return 0;
 }
 
-static int bx_walk_recursive_visit_entry(const char *dirpath,
-                                         const char *name,
+static int bx_walk_recursive_visit_entry(const char *name,
                                          unsigned char d_type,
+                                         int parent_dirfd,
                                          const struct bx_walk_ctx *ctx,
                                          int depth,
                                          const struct bx_walk_ancestor *ancestors) {
@@ -153,48 +374,29 @@ static int bx_walk_recursive_visit_entry(const char *dirpath,
     if (ctx->opts->max_depth >= 0 && depth + 1 > ctx->opts->max_depth)
         return 0;
 
-    int join_err = 0;
-    char stack_full[BX_WALK_STACK_PATH_CAP];
-    char *full = NULL;
-    bool full_is_heap = false;
-    size_t dir_len = strlen(dirpath);
-    size_t name_len = strlen(name);
-    bool likely_dir = d_type == DT_DIR;
-
-    bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_PATH_JOIN_CALLS, 1u);
-    if (dir_len > SIZE_MAX - name_len - 2u) {
-        join_err = ENAMETOOLONG;
-    } else {
-        size_t full_len = dir_len + 1u + name_len + 1u;
-
-        if (!likely_dir && full_len <= sizeof(stack_full)) {
-            full = stack_full;
-            memcpy(full, dirpath, dir_len);
-            full[dir_len] = '/';
-            memcpy(full + dir_len + 1u, name, name_len);
-            full[full_len - 1u] = '\0';
-        } else {
-            full = bx_walk_path_join(dirpath, name, &join_err, ctx->opts->counter_ops);
-            full_is_heap = full != NULL;
-        }
-    }
-    if (!full) {
-        enum bx_walk_action action = bx_walk_handle_error(ctx, dirpath,
-                                                          join_err != 0 ? join_err : ENOMEM);
-        int status = 0;
-        bx_walk_status_from_action(ctx, action, &status);
-        return status;
-    }
+    struct bx_walk_entry_path_state path_state = {
+        .path_buf = ctx->path_buf,
+        .name = name,
+        .prev_len = ctx->path_buf ? ctx->path_buf->len : 0u,
+    };
 
     int status = 0;
     bool entry_was_symlink = false;
     struct bx_walk_entry entry;
-    int fill_err = bx_walk_fill_entry(full, d_type, ctx, depth + 1, &entry, &entry_was_symlink);
+    int fill_err = bx_walk_entry_fill_from_dirent(&entry, NULL, name, d_type,
+                                                  parent_dirfd,
+                                                  ctx->opts->follow_symlinks,
+                                                  depth + 1,
+                                                  ctx->opts->counter_ops,
+                                                  &entry_was_symlink);
     if (fill_err != 0) {
-        enum bx_walk_action action = bx_walk_handle_error(ctx, full, fill_err);
+        int join_err = 0;
+        char *full = bx_walk_entry_path_ensure(&path_state, ctx, &join_err);
+        enum bx_walk_action action = bx_walk_handle_error(ctx,
+                                                          full ? full : ctx->path_buf->data,
+                                                          fill_err);
         bx_walk_status_from_action(ctx, action, &status);
-        if (full_is_heap)
-            free(full);
+        bx_walk_entry_path_release(&path_state);
         return status;
     }
     if (entry.is_symlink) {
@@ -210,95 +412,92 @@ static int bx_walk_recursive_visit_entry(const char *dirpath,
     int dir_err = bx_walk_prepare_directory(&entry, ctx, ancestors, entry_was_symlink,
                                             &crosses_filesystem, &repeated_dir);
     if (dir_err != 0) {
-        enum bx_walk_action action = bx_walk_handle_error(ctx, full, dir_err);
+        int join_err = 0;
+        char *full = bx_walk_entry_path_ensure(&path_state, ctx, &join_err);
+        enum bx_walk_action action = bx_walk_handle_error(ctx,
+                                                          full ? full : ctx->path_buf->data,
+                                                          dir_err);
         bx_walk_status_from_action(ctx, action, &status);
-        if (full_is_heap)
-            free(full);
+        bx_walk_entry_path_release(&path_state);
         return status;
     }
 
     if (repeated_dir) {
+        int join_err = 0;
+        char *full = bx_walk_entry_path_ensure(&path_state, ctx, &join_err);
         if (ctx->opts->cycle_report != BX_WALK_CYCLE_IGNORE)
-            bx_walk_report_loop(ctx->opts, full);
+            bx_walk_report_loop(ctx->opts, full ? full : ctx->path_buf->data);
         if (ctx->opts->cycle_report == BX_WALK_CYCLE_ERROR)
             status = -1;
-        if (full_is_heap)
-            free(full);
+        bx_walk_entry_path_release(&path_state);
         return status;
     }
 
     if (crosses_filesystem) {
-        if (full_is_heap)
-            free(full);
+        bx_walk_entry_path_release(&path_state);
         return 0;
     }
+
+    int join_err = 0;
+    char *full = bx_walk_entry_path_ensure(&path_state, ctx, &join_err);
+    if (!full) {
+        enum bx_walk_action action = bx_walk_handle_error(ctx, ctx->path_buf->data,
+                                                          join_err != 0 ? join_err : ENOMEM);
+        bx_walk_status_from_action(ctx, action, &status);
+        bx_walk_entry_path_release(&path_state);
+        return status;
+    }
+    entry.path = full;
 
     if (!ctx->opts->post_order) {
         enum bx_walk_action action = bx_walk_apply_visit_action(ctx, &entry, &status);
         if (action == BX_WALK_STOP || action == BX_WALK_ERROR) {
-            if (full_is_heap)
-                free(full);
+            bx_walk_entry_path_release(&path_state);
             return status;
         }
     }
 
-    if (!bx_walk_should_stop(ctx->opts) && entry.is_dir && !entry.prune) {
-        if (!full_is_heap) {
-            full = strdup(stack_full);
-            if (!full) {
-                enum bx_walk_action action = bx_walk_handle_error(ctx, stack_full, ENOMEM);
-                bx_walk_status_from_action(ctx, action, &status);
-                return status;
-            }
-            bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_PATH_ALLOCS, 1u);
-            bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH, 1u);
-            full_is_heap = true;
-            entry.path = full;
-        }
+    if (!bx_walk_should_stop(ctx->opts) &&
+        bx_walk_should_descend_child_directory(&entry, ctx->opts)) {
         struct bx_walk_ancestor next = {
             .dev = entry.dev,
             .ino = entry.inode,
-            .path = full,
+            .path = NULL,
             .parent = ancestors,
         };
-        if (bx_walk_recursive(full, ctx, depth + 1, &next) != 0)
+        DIR *child_dir = NULL;
+        int open_rc = bx_walk_open_directory_child(parent_dirfd, name, &path_state,
+                                                   ctx, &child_dir, &status);
+        if (open_rc < 0) {
             status = -1;
+        } else if (open_rc > 0 && bx_walk_recursive(child_dir, ctx, depth + 1, &next) != 0) {
+            status = -1;
+        }
     }
 
     if (!bx_walk_should_stop(ctx->opts) && ctx->opts->post_order) {
         enum bx_walk_action action = bx_walk_apply_visit_action(ctx, &entry, &status);
         if (action == BX_WALK_STOP || action == BX_WALK_ERROR) {
-            if (full_is_heap)
-                free(full);
+            bx_walk_entry_path_release(&path_state);
             return status;
         }
     }
 
-    if (full_is_heap)
-        free(full);
+    bx_walk_entry_path_release(&path_state);
     return status;
 }
 
-static int bx_walk_recursive(const char *dirpath,
+static int bx_walk_recursive(DIR *dir,
                              const struct bx_walk_ctx *ctx,
                              int depth,
                              const struct bx_walk_ancestor *ancestors) {
-    if (bx_walk_should_stop(ctx->opts))
+    if (bx_walk_should_stop(ctx->opts)) {
+        closedir(dir);
         return 0;
-    if (ctx->opts->max_depth >= 0 && depth > ctx->opts->max_depth)
+    }
+    if (ctx->opts->max_depth >= 0 && depth > ctx->opts->max_depth) {
+        closedir(dir);
         return 0;
-
-    DIR *dir = opendir(dirpath);
-    if (!dir) {
-        if (errno == EACCES && ctx->opts->suppress_eacces) {
-            if (ctx->opts->report_eacces)
-                bx_walk_report_error(ctx->opts, dirpath, errno);
-            return 0;
-        }
-        enum bx_walk_action action = bx_walk_handle_error(ctx, dirpath, errno);
-        int status = 0;
-        bx_walk_status_from_action(ctx, action, &status);
-        return status;
     }
 
     int status = 0;
@@ -306,12 +505,11 @@ static int bx_walk_recursive(const char *dirpath,
         struct bx_walk_dirent_list dirents = {0};
         int dirent_err = 0;
         if (bx_walk_dirent_list_read_sorted(dir, &dirents, &dirent_err) != 0) {
-            enum bx_walk_action action = bx_walk_handle_error(ctx, dirpath,
+            enum bx_walk_action action = bx_walk_handle_error(ctx, ctx->path_buf->data,
                                                               dirent_err != 0 ? dirent_err : EIO);
             bx_walk_dirent_list_free(&dirents);
-            closedir(dir);
             bx_walk_status_from_action(ctx, action, &status);
-            return status;
+            goto out;
         }
 
         for (size_t iter_index = 0; iter_index < dirents.len; iter_index++) {
@@ -321,7 +519,8 @@ static int bx_walk_recursive(const char *dirpath,
             bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_DIRENTS_SEEN, 1u);
             if (item->d_type == DT_UNKNOWN)
                 bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN, 1u);
-            if (bx_walk_recursive_visit_entry(dirpath, item->name, item->d_type,
+            if (bx_walk_recursive_visit_entry(item->name, item->d_type,
+                                              dirfd(dir),
                                               ctx, depth, ancestors) != 0)
                 status = -1;
             if (bx_walk_should_stop(ctx->opts))
@@ -329,28 +528,24 @@ static int bx_walk_recursive(const char *dirpath,
         }
         bx_walk_dirent_list_free(&dirents);
     } else {
-        errno = 0;
-        struct dirent *ent;
-        while ((ent = readdir(dir)) != NULL) {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-                continue;
-            bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_DIRENTS_SEEN, 1u);
-            if (ent->d_type == DT_UNKNOWN)
-                bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN, 1u);
-            if (bx_walk_recursive_visit_entry(dirpath, ent->d_name, ent->d_type,
-                                              ctx, depth, ancestors) != 0)
-                status = -1;
-            if (bx_walk_should_stop(ctx->opts))
-                break;
-            errno = 0;
-        }
+        struct bx_walk_recursive_dirent_iter iter = {
+            .dirfd = dirfd(dir),
+            .ctx = ctx,
+            .depth = depth,
+            .ancestors = ancestors,
+        };
+        int dirent_err = 0;
+        int dirent_rc = bx_walk_dirent_iterate(dir, bx_walk_recursive_iterate_dirent,
+                                               &iter, &dirent_err);
+        status = iter.status;
 
-        if (!bx_walk_should_stop(ctx->opts) && errno != 0) {
-            enum bx_walk_action action = bx_walk_handle_error(ctx, dirpath, errno);
+        if (!bx_walk_should_stop(ctx->opts) && dirent_rc < 0 && dirent_err != 0) {
+            enum bx_walk_action action = bx_walk_handle_error(ctx, ctx->path_buf->data, dirent_err);
             bx_walk_status_from_action(ctx, action, &status);
         }
     }
 
+out:
     closedir(dir);
     return status;
 }
@@ -382,22 +577,23 @@ int bx_walk(const char *root,
         .user = user,
         .root_device = st.st_dev,
     };
+    struct bx_walk_path_buf path_buf;
+    int path_err = 0;
+    if (!bx_walk_path_buf_init(&path_buf, root, opts->counter_ops, &path_err)) {
+        enum bx_walk_action action = bx_walk_handle_error(&ctx, root, path_err != 0 ? path_err : ENOMEM);
+        int status = 0;
+        bx_walk_status_from_action(&ctx, action, &status);
+        return status;
+    }
+    ctx.path_buf = &path_buf;
 
     if (S_ISDIR(st.st_mode)) {
         struct bx_walk_entry entry = {
-            .path = strdup(root),
+            .path = path_buf.data,
             .follow_metadata = opts->follow_root_symlink,
             .depth = 0,
             .counter_ops = opts->counter_ops,
         };
-        if (!entry.path) {
-            enum bx_walk_action action = bx_walk_handle_error(&ctx, root, ENOMEM);
-            int status = 0;
-            bx_walk_status_from_action(&ctx, action, &status);
-            return status;
-        }
-        bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_PATH_ALLOCS, 1u);
-        bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH, 1u);
         bx_walk_entry_fill_from_stat(&entry, &st);
         bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_DIRS_SEEN, 1u);
 
@@ -405,20 +601,26 @@ int bx_walk(const char *root,
         if (!opts->post_order) {
             enum bx_walk_action action = bx_walk_apply_visit_action(&ctx, &entry, &status);
             if (action == BX_WALK_STOP || action == BX_WALK_ERROR) {
-                free(entry.path);
+                bx_walk_path_buf_free(&path_buf);
                 return status;
             }
         }
 
-        if (!bx_walk_should_stop(opts) && !entry.prune) {
+        if (!bx_walk_should_stop(opts) &&
+            bx_walk_should_descend_root_directory(&entry, opts)) {
+            DIR *root_dir = NULL;
             struct bx_walk_ancestor root_ancestor = {
                 .dev = st.st_dev,
                 .ino = st.st_ino,
-                .path = root,
+                .path = NULL,
                 .parent = NULL,
             };
-            if (bx_walk_recursive(root, &ctx, 0, &root_ancestor) != 0)
+            int open_rc = bx_walk_open_directory_path(path_buf.data, &ctx, &root_dir, &status);
+            if (open_rc < 0) {
                 status = -1;
+            } else if (open_rc > 0 && bx_walk_recursive(root_dir, &ctx, 0, &root_ancestor) != 0) {
+                status = -1;
+            }
         }
 
         if (!bx_walk_should_stop(opts) && opts->post_order) {
@@ -426,24 +628,16 @@ int bx_walk(const char *root,
             (void)action;
         }
 
-        free(entry.path);
+        bx_walk_path_buf_free(&path_buf);
         return status;
     }
 
     struct bx_walk_entry entry = {
-        .path = strdup(root),
+        .path = path_buf.data,
         .follow_metadata = opts->follow_root_symlink,
         .depth = 0,
         .counter_ops = opts->counter_ops,
     };
-    if (!entry.path) {
-        enum bx_walk_action action = bx_walk_handle_error(&ctx, root, ENOMEM);
-        int status = 0;
-        bx_walk_status_from_action(&ctx, action, &status);
-        return status;
-    }
-    bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_PATH_ALLOCS, 1u);
-    bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH, 1u);
     bx_walk_entry_fill_from_stat(&entry, &st);
     if (S_ISLNK(st.st_mode))
         bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_SYMLINKS_SEEN, 1u);
@@ -451,6 +645,6 @@ int bx_walk(const char *root,
         bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_FILES_SEEN, 1u);
     int status = 0;
     (void)bx_walk_apply_visit_action(&ctx, &entry, &status);
-    free(entry.path);
+    bx_walk_path_buf_free(&path_buf);
     return status;
 }

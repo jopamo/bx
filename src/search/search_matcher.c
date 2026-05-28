@@ -5,6 +5,7 @@
 
 #include "dev_counters.h"
 #include "literal.h"
+#include "literal_scan.h"
 #include "pcre2_matcher.h"
 #include "rg_text.h"
 #include "search.h"
@@ -979,6 +980,11 @@ bool bx_search_matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
                                                           size_t candidate_start,
                                                           struct search_opts *opts,
                                                           struct bx_match *out) {
+    /*
+     * This verifier is only for post-candidate confirmation on literal-driven
+     * scanner paths. Regex/non-literal matchers must not enter here without a
+     * preceding literal candidate hit.
+     */
     if (!m || m->kind != MATCHER_LITERAL || !opts)
         return false;
     bx_search_dev_counters_note_matcher_invocation();
@@ -1022,6 +1028,10 @@ struct bx_literal_matcher *bx_search_matcher_literal(const struct bx_matcher *m)
     if (!m || m->kind != MATCHER_LITERAL)
         return NULL;
     return m->literal;
+}
+
+const struct bx_lit_plan *bx_search_matcher_absence_plan(const struct bx_matcher *m) {
+    return bx_literal_absence_plan(bx_search_matcher_literal(m));
 }
 
 static struct bx_matcher *compile_matcher(const char *pattern,
