@@ -345,6 +345,7 @@ int bx_search_scanner_opened(FILE *f,
                 if (printed_bytes > 0u)
                     bx_search_note_stdout_output();
                 bx_search_stats_count_bytes(printed_bytes);
+                bx_search_dev_counters_note_plain_line_output();
                 bx_search_dev_counters_note_output_line_emitted();
             } else {
                 bool prefix_printed = bx_search_print_result_prefix_cached(

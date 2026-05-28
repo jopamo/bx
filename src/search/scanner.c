@@ -213,6 +213,13 @@ bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
     if (end < start || end > scanner->scan_len)
         return false;
 
+    /*
+     * Recovering a line-oriented record around a candidate resolves both the
+     * start and end boundaries. Count that boundary work separately from any
+     * later record/output materialization.
+     */
+    bx_search_dev_counters_note_line_boundaries_recovered(2u);
+    bx_search_dev_counters_note_record_expanded();
     record->data = scanner->buf + start;
     record->len = end - start;
     record->file_off = scanner->file_off + (off_t)start;
