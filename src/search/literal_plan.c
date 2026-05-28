@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include "dev_counters.h"
 #include "literal_plan.h"
 
 /*
@@ -119,6 +120,7 @@ void bx_lit_plan_compile(struct bx_lit_plan *plan,
 
     rare_index = bx_lit_plan_select_rare_byte_index(needle, needle_len);
     rare_pair_offset = bx_lit_plan_select_rare_pair_offset(needle, needle_len);
+    bx_search_dev_counters_note_literal_selected_pair_distribution(rare_pair_offset, needle_len);
     plan->needle = needle;
     plan->needle_len = needle_len;
     plan->min_overlap_len = needle_len > 0u ? needle_len - 1u : 0u;

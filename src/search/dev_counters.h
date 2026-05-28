@@ -60,6 +60,8 @@ void bx_search_dev_counters_note_literal_not_found(void);
 void bx_search_dev_counters_note_literal_overlap_bytes_scanned(size_t count);
 void bx_search_dev_counters_note_literal_cross_chunk_match(void);
 void bx_search_dev_counters_note_literal_plan_compile(void);
+void bx_search_dev_counters_note_literal_selected_pair_distribution(size_t pair_offset,
+                                                                    size_t needle_len);
 void bx_search_dev_counters_note_literal_algo_empty_call(void);
 void bx_search_dev_counters_note_literal_algo_byte_call(void);
 void bx_search_dev_counters_note_literal_algo_pair_call(void);
