@@ -28,6 +28,9 @@ enum bx_lit_algo {
 struct bx_lit_plan {
     const unsigned char *needle;
     size_t needle_len;
+    unsigned char first_byte;
+    unsigned char last_byte;
+    unsigned char rare_byte;
     enum bx_lit_algo algo;
 };
 

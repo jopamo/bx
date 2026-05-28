@@ -43,7 +43,6 @@ struct bx_literal_matcher {
     char  *pattern_lower;
     char  *pattern_raw;
     size_t anchor_index;
-    unsigned char anchor_byte;
     struct bx_lit_plan plan;
     bx_literal_case_sensitive_find_fn case_sensitive_find;
     enum bx_literal_backend backend;
@@ -65,37 +64,28 @@ static enum bx_literal_backend bx_literal_backend_override(void) {
 }
 
 static void bx_literal_choose_anchor(struct bx_literal_matcher *m) {
-    const unsigned char *needle;
     size_t needle_len;
-    size_t byte_counts[256] = {0};
+    unsigned char rare_byte;
     size_t best_index = 0u;
-    size_t best_count = SIZE_MAX;
     size_t best_span = SIZE_MAX;
 
     if (!m || !m->plan.needle || m->plan.needle_len == 0u)
         return;
-    needle = m->plan.needle;
     needle_len = m->plan.needle_len;
+    rare_byte = m->plan.rare_byte;
 
     for (size_t i = 0; i < needle_len; ++i) {
-        byte_counts[needle[i]]++;
-    }
-
-    for (size_t i = 0; i < needle_len; ++i) {
-        size_t count = byte_counts[needle[i]];
         size_t left_span = i;
         size_t right_span = needle_len - i - 1u;
         size_t span = left_span > right_span ? left_span : right_span;
 
-        if (count < best_count || (count == best_count && span < best_span)) {
+        if (m->plan.needle[i] == rare_byte && span < best_span) {
             best_index = i;
-            best_count = count;
             best_span = span;
         }
     }
 
     m->anchor_index = best_index;
-    m->anchor_byte = (unsigned char)m->pattern_raw[best_index];
     m->has_anchor = true;
 }
 
@@ -213,16 +203,14 @@ static int bx_literal_find_case_sensitive_byte(const struct bx_literal_matcher *
                                                size_t len,
                                                size_t start,
                                                struct bx_match *out) {
-    const unsigned char *needle;
     const unsigned char *found;
     size_t pos;
 
     if (!m || !buf || start >= len || m->plan.needle_len != 1u)
         return -1;
-    needle = m->plan.needle;
 
     bx_search_dev_counters_note_literal_algo_byte_call();
-    found = memchr(buf + start, needle[0], len - start);
+    found = memchr(buf + start, m->plan.first_byte, len - start);
     if (!found)
         return -1;
 
@@ -251,7 +239,7 @@ static int bx_literal_find_case_sensitive_pair(const struct bx_literal_matcher *
     needle = m->plan.needle;
 
     bx_search_dev_counters_note_literal_algo_pair_call();
-    first = needle[0];
+    first = m->plan.first_byte;
     second = needle[1];
     cursor = buf + start;
     end = buf + len - 1u;
@@ -291,7 +279,7 @@ static int bx_literal_find_case_sensitive_short(const struct bx_literal_matcher 
     needle = m->plan.needle;
 
     bx_search_dev_counters_note_literal_algo_short_call();
-    first = needle[0];
+    first = m->plan.first_byte;
     second = needle[1];
     third = needle[2];
     cursor = buf + start;
@@ -420,7 +408,7 @@ static int bx_literal_find_anchored_exact(const struct bx_literal_matcher *m,
     search_limit = len - (needle_len - m->anchor_index);
     while (search_off <= search_limit) {
         const unsigned char *found = memchr(buf + search_off,
-                                            m->anchor_byte,
+                                            m->plan.rare_byte,
                                             search_limit - search_off + 1u);
         size_t pos;
 
@@ -466,8 +454,8 @@ static int bx_literal_find_case_sensitive_sse2(const struct bx_literal_matcher *
     size_t needle_len = m ? m->plan.needle_len : 0u;
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_sse2_call();
-    const unsigned char first = needle[0];
-    const unsigned char last = needle[needle_len - 1u];
+    const unsigned char first = m->plan.first_byte;
+    const unsigned char last = m->plan.last_byte;
     size_t i = start;
     size_t limit = len - needle_len;
     __m128i firstv = _mm_set1_epi8((char)first);
