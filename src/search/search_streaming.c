@@ -93,6 +93,7 @@ int bx_search_streaming_opened(FILE *f,
                 continue;
             }
             if (binary_seen_before_output) {
+                bx_search_dev_counters_note_binary_policy_check();
                 bx_search_report_binary_match(progname, display_name);
                 break;
             }

@@ -215,6 +215,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
         unsigned char *nul = memchr(prefix, '\0', (size_t)prefix_len);
         if (nul) {
             struct bx_match bm;
+            bx_search_dev_counters_note_binary_policy_check();
             /*
              * Default plain-output rg currently treats the first NUL as a
              * definitive binary cut-off, but quiet mode may still consult the
@@ -348,6 +349,7 @@ static int search_file_handle_binary_prefix(FILE *f,
     if (!is_binary_file)
         return -1;
 
+    bx_search_dev_counters_note_binary_policy_check();
     if (opts->binary_without_match) {
         if (!use_stdin)
             fclose(f);
@@ -897,6 +899,7 @@ static int search_file(const char *filename,
     if (!use_stdin && !opts->null_data && !opts->binary_as_text &&
         bx_search_input_is_binary_path(filename, opts)) {
         const char *display_name = search_file_resolve_display_name(&display_name_state, opts);
+        bx_search_dev_counters_note_binary_policy_check();
         if (opts->binary_without_match) {
             result = bx_search_binary_without_match(display_name, opts, match_count, stats);
             goto out;

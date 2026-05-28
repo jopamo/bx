@@ -76,6 +76,7 @@ int bx_search_buffered_opened(FILE *f,
     bool saw_binary = false;
     bool saw_match_record = false;
     bool heading_printed_for_file = false;
+    bool count_context_buffer_entries = bx_search_plan_needs_line_buffering(opts);
 
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *raw = record_stream->record;
@@ -124,6 +125,8 @@ int bx_search_buffered_opened(FILE *f,
             saw_match_record = true;
             if (opts->max_count > 0 && file_matches >= opts->max_count) {
                 after_left = opts->after_context;
+                if (count_context_buffer_entries)
+                    bx_search_dev_counters_note_context_buffer_entry();
                 nlines++;
                 if (after_left == 0)
                     break;
@@ -135,11 +138,15 @@ int bx_search_buffered_opened(FILE *f,
             break;
         } else if (after_left > 0) {
             after_left--;
+            if (count_context_buffer_entries)
+                bx_search_dev_counters_note_context_buffer_entry();
             nlines++;
             if (after_left == 0)
                 break;
             continue;
         }
+        if (count_context_buffer_entries)
+            bx_search_dev_counters_note_context_buffer_entry();
         nlines++;
     }
     if (!use_stdin)
@@ -163,6 +170,7 @@ int bx_search_buffered_opened(FILE *f,
         stats->files_searched++;
 
     if (saw_binary && !opts->binary_as_text) {
+        bx_search_dev_counters_note_binary_policy_check();
         if (opts->binary_without_match) {
             bx_search_buffered_free_lines(lines, nlines);
             return bx_search_binary_without_match(display_name, opts, match_count, stats);

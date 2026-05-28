@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -17,6 +18,25 @@ enum bx_walk_cycle_report {
     BX_WALK_CYCLE_IGNORE = 0,
     BX_WALK_CYCLE_WARN,
     BX_WALK_CYCLE_ERROR,
+};
+
+enum bx_walk_counter {
+    BX_WALK_COUNTER_DIRENTS_SEEN = 0,
+    BX_WALK_COUNTER_DIRS_SEEN,
+    BX_WALK_COUNTER_FILES_SEEN,
+    BX_WALK_COUNTER_SYMLINKS_SEEN,
+    BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN,
+    BX_WALK_COUNTER_LSTAT_CALLS,
+    BX_WALK_COUNTER_FSTATAT_CALLS,
+    BX_WALK_COUNTER_OPENAT_CALLS,
+    BX_WALK_COUNTER_PATH_JOIN_CALLS,
+    BX_WALK_COUNTER_PATH_ALLOCS,
+    BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH,
+};
+
+struct bx_walk_counter_ops {
+    void (*note)(enum bx_walk_counter counter, uint64_t count, void *user);
+    void *user;
 };
 
 struct bx_walk_opts {
@@ -35,6 +55,7 @@ struct bx_walk_opts {
     int max_depth;
     enum bx_walk_cycle_mode cycle_mode;
     enum bx_walk_cycle_report cycle_report;
+    const struct bx_walk_counter_ops *counter_ops;
 };
 
 struct bx_walk_filter_opts {
@@ -92,6 +113,7 @@ struct bx_walk_entry {
     struct timespec mtime;
     struct timespec ctime;
     int depth;
+    const struct bx_walk_counter_ops *counter_ops;
 };
 
 enum bx_walk_action {

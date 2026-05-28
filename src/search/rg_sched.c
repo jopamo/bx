@@ -370,6 +370,8 @@ static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
     if (sched->idle_workers > 0u && !sched->shutdown)
         bx_rg_sched_signal_workers_locked(sched);
     pthread_mutex_unlock(&sched->lock);
+    if (work->kind == BX_RG_SCHED_WORK_DIR)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED, 1u);
     return true;
 }
 

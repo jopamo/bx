@@ -5,7 +5,10 @@
 
 #include "walk_internal.h"
 
-char *bx_walk_path_join(const char *dirpath, const char *name, int *err_out) {
+char *bx_walk_path_join(const char *dirpath,
+                        const char *name,
+                        int *err_out,
+                        const struct bx_walk_counter_ops *counter_ops) {
     if (err_out)
         *err_out = 0;
 
@@ -30,6 +33,8 @@ char *bx_walk_path_join(const char *dirpath, const char *name, int *err_out) {
             *err_out = ENOMEM;
         return NULL;
     }
+    bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_ALLOCS, 1u);
+    bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH, 1u);
 
     memcpy(full, dirpath, dir_len);
     full[dir_len] = '/';

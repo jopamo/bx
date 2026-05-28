@@ -1,6 +1,7 @@
 #ifndef BX_SEARCH_DEV_COUNTERS_H
 #define BX_SEARCH_DEV_COUNTERS_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -25,8 +26,28 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_STOLEN_FILES_SEARCHED,
     BX_SEARCH_RG_SCHED_LOCAL_DIRS_WALKED,
     BX_SEARCH_RG_SCHED_STOLEN_DIRS_WALKED,
+    BX_SEARCH_RG_SCHED_QUEUED_OUTPUT_BATCHES,
+    BX_SEARCH_RG_SCHED_EMPTY_OUTPUT_BATCHES,
+    BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED,
 };
 
+enum bx_search_walk_counter {
+    BX_SEARCH_WALK_DIRENTS_SEEN = 0,
+    BX_SEARCH_WALK_DIRS_SEEN,
+    BX_SEARCH_WALK_FILES_SEEN,
+    BX_SEARCH_WALK_SYMLINKS_SEEN,
+    BX_SEARCH_WALK_UNKNOWN_DTYPE_SEEN,
+    BX_SEARCH_WALK_LSTAT_CALLS,
+    BX_SEARCH_WALK_FSTATAT_CALLS,
+    BX_SEARCH_WALK_OPENAT_CALLS,
+    BX_SEARCH_WALK_PATH_JOIN_CALLS,
+    BX_SEARCH_WALK_PATH_ALLOCS,
+    BX_SEARCH_WALK_PATH_COPIES_BEFORE_MATCH,
+    BX_SEARCH_WALK_IGNORE_CHECKS,
+    BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS,
+};
+
+bool bx_search_dev_counters_enabled(void);
 void bx_search_dev_counters_begin_from_env(void);
 void bx_search_dev_counters_reset(void);
 void bx_search_dev_counters_note_bytes_read(size_t count);
@@ -61,8 +82,11 @@ void bx_search_dev_counters_note_lines_counted(size_t count);
 void bx_search_dev_counters_note_line_boundaries_recovered(size_t count);
 void bx_search_dev_counters_note_record_expanded(void);
 void bx_search_dev_counters_note_plain_line_output(void);
+void bx_search_dev_counters_note_context_buffer_entry(void);
 void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void);
 void bx_search_dev_counters_note_output_line_emitted(void);
+void bx_search_dev_counters_note_binary_policy_check(void);
+void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter, uint64_t count);
 void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counter,
                                           uint64_t count);
 void bx_search_dev_counters_report(FILE *stream);

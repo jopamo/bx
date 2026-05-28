@@ -114,6 +114,10 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
     if (!state || !record)
         return false;
 
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_QUEUED_OUTPUT_BATCHES, 1u);
+    if (record->stdout_len == 0u && record->stderr_len == 0u)
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_OUTPUT_BATCHES, 1u);
+
     if (state->opts.mode == BX_RG_PUBLISH_ORDERED) {
         if (!bx_output_sink_submit(&state->ordered_sink, record))
             return false;

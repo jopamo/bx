@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "dev_counters.h"
 #include "fswalk/walk.h"
 #include "ignore.h"
 #include "lib/path_ops.h"
@@ -42,6 +43,7 @@ static enum bx_ignore_match_result match_ignore_line(const char *line,
     bool match = false;
     int flags = FNM_PATHNAME | (casefold ? FNM_CASEFOLD : 0);
     if (strchr(p, '/')) {
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
         match = relative_path && relative_path[0] != '\0' &&
                 fnmatch(p, relative_path, flags) == 0;
     } else {

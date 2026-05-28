@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "dev_counters.h"
 #include "fswalk/walk.h"
 #include "filter.h"
 #include "ignore.h"
@@ -46,9 +47,10 @@ static bool bx_walk_filter_matches_include_relative(const struct bx_walk_filter_
         }
         if (fnmatch(pattern, name, flags) == 0)
             return true;
-        if (relative_path && relative_path[0] != '\0' &&
-            fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0) {
-            return true;
+        if (relative_path && relative_path[0] != '\0') {
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
+            if (fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0)
+                return true;
         }
     }
 
@@ -70,9 +72,10 @@ static bool bx_walk_filter_matches_exclude(const struct bx_walk_filter_state *st
             continue;
         if (fnmatch(pattern, name, flags) == 0)
             return true;
-        if (relative_path && relative_path[0] != '\0' &&
-            fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0) {
-            return true;
+        if (relative_path && relative_path[0] != '\0') {
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
+            if (fnmatch(pattern, relative_path, FNM_PATHNAME | flags) == 0)
+                return true;
         }
     }
 
@@ -108,6 +111,8 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
                                 const char *path,
                                 const struct bx_ignore_state *ignore_state) {
     const char *relative_path = bx_walk_filter_relative_path(state, path);
+
+    bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_CHECKS, 1u);
 
     if (state && state->opts && !state->opts->hidden && bx_walk_filter_is_hidden(name) &&
         !bx_walk_filter_matches_include_relative(state, name, relative_path)) {

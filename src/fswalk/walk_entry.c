@@ -30,7 +30,13 @@ bool bx_walk_entry_load_metadata(struct bx_walk_entry *entry) {
     entry->metadata_tried = true;
 
     struct stat st;
-    int rc = entry->follow_metadata ? stat(entry->path, &st) : lstat(entry->path, &st);
+    int rc;
+    if (entry->follow_metadata) {
+        rc = stat(entry->path, &st);
+    } else {
+        bx_walk_note_counter(entry->counter_ops, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
+        rc = lstat(entry->path, &st);
+    }
     if (rc != 0)
         return false;
 

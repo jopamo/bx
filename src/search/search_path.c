@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 
 #include "filter.h"
+#include "dev_counters.h"
 #include "fswalk/walk.h"
 #include "ignore.h"
 #include "lib/cli_common.h"
@@ -52,6 +53,53 @@ bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
 static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
     return personality == BX_SEARCH_RG;
 }
+
+static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
+                                          uint64_t count,
+                                          void *user) {
+    (void)user;
+
+    switch (counter) {
+    case BX_WALK_COUNTER_DIRENTS_SEEN:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIRENTS_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_DIRS_SEEN:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIRS_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_FILES_SEEN:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FILES_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_SYMLINKS_SEEN:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_SYMLINKS_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_UNKNOWN_DTYPE_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_LSTAT_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_LSTAT_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_FSTATAT_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FSTATAT_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_OPENAT_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_JOIN_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_JOIN_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_ALLOCS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_ALLOCS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_COPIES_BEFORE_MATCH, count);
+        return;
+    }
+}
+
+static const struct bx_walk_counter_ops bx_search_walk_counter_ops = {
+    .note = bx_search_walk_counter_bridge,
+    .user = NULL,
+};
 
 static bool bx_search_use_rg_sort_policy(enum bx_search_personality personality,
                                          const struct search_opts *opts) {
@@ -226,6 +274,7 @@ struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
         .max_depth = opts->max_depth,
         .cycle_mode = bx_search_cycle_mode(personality, opts),
         .cycle_report = bx_search_cycle_report(personality, opts),
+        .counter_ops = bx_search_dev_counters_enabled() ? &bx_search_walk_counter_ops : NULL,
     };
 }
 

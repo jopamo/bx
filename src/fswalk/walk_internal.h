@@ -32,6 +32,22 @@ struct bx_walk_ctx {
     dev_t root_device;
 };
 
+static inline void bx_walk_note_counter(const struct bx_walk_counter_ops *ops,
+                                        enum bx_walk_counter counter,
+                                        uint64_t count) {
+    if (!ops || !ops->note || count == 0u)
+        return;
+    ops->note(counter, count, ops->user);
+}
+
+static inline void bx_walk_ctx_note_counter(const struct bx_walk_ctx *ctx,
+                                            enum bx_walk_counter counter,
+                                            uint64_t count) {
+    if (!ctx || !ctx->opts)
+        return;
+    bx_walk_note_counter(ctx->opts->counter_ops, counter, count);
+}
+
 void bx_walk_entry_fill_from_stat(struct bx_walk_entry *entry, const struct stat *st);
 
 void bx_walk_dirent_list_free(struct bx_walk_dirent_list *list);
@@ -51,6 +67,9 @@ enum bx_walk_action bx_walk_apply_visit_action(const struct bx_walk_ctx *ctx,
 
 bool bx_walk_ancestor_contains(const struct bx_walk_ancestor *anc, dev_t dev, ino_t ino);
 
-char *bx_walk_path_join(const char *dirpath, const char *name, int *err_out);
+char *bx_walk_path_join(const char *dirpath,
+                        const char *name,
+                        int *err_out,
+                        const struct bx_walk_counter_ops *counter_ops);
 
 #endif
