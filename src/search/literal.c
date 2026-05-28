@@ -665,7 +665,11 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
 #endif
         return;
     }
-    m->case_sensitive_find = bx_literal_find_case_sensitive_long_scalar;
+    if (m->plan.algo == BX_LIT_LONG_TWO_WAY
+        || m->plan.algo == BX_LIT_LONG_HORSPOOL) {
+        m->case_sensitive_find = bx_literal_find_case_sensitive_long_scalar;
+        return;
+    }
 }
 
 static int bx_literal_find_direct(const struct bx_literal_matcher *m,
