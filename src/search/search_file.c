@@ -242,8 +242,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
     }
 
     {
-        size_t plen = bx_literal_len(literal);
-        size_t overlap = plen > 0u ? plen - 1u : 0u;
+        size_t overlap = bx_literal_overlap_len(literal);
         size_t carry = 0u;
 
         if (!bx_search_scanner_reserve(scanner, BX_SEARCH_DEFERRED_CHUNK_CAP + overlap))

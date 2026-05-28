@@ -53,8 +53,7 @@ int bx_search_raw_presence_opened(FILE *f,
         return 2;
     (void)filename;
 
-    size_t plen = bx_literal_len(literal);
-    size_t overlap = plen > 0u ? plen - 1u : 0u;
+    size_t overlap = bx_literal_overlap_len(literal);
     scanner->len = 0u;
     if (!bx_search_raw_presence_reserve_buffer(scanner,
                                                BX_SEARCH_RAW_PRESENCE_CHUNK_CAP + overlap)) {

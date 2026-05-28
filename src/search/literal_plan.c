@@ -44,7 +44,7 @@ static size_t bx_lit_plan_select_rare_byte_index(const unsigned char *needle,
     return best_index;
 }
 
-static size_t bx_lit_plan_select_rare_pair_index(size_t rare_index, size_t needle_len) {
+static size_t bx_lit_plan_select_rare_pair_offset(size_t rare_index, size_t needle_len) {
     if (needle_len < 2u)
         return 0u;
     return (rare_index + 1u < needle_len) ? rare_index : (rare_index - 1u);
@@ -54,19 +54,22 @@ void bx_lit_plan_compile(struct bx_lit_plan *plan,
                          const unsigned char *needle,
                          size_t needle_len) {
     size_t rare_index;
-    size_t rare_pair_index;
+    size_t rare_pair_offset;
 
     if (!plan)
         return;
 
     rare_index = bx_lit_plan_select_rare_byte_index(needle, needle_len);
-    rare_pair_index = bx_lit_plan_select_rare_pair_index(rare_index, needle_len);
+    rare_pair_offset = bx_lit_plan_select_rare_pair_offset(rare_index, needle_len);
     plan->needle = needle;
     plan->needle_len = needle_len;
+    plan->min_overlap_len = needle_len > 0u ? needle_len - 1u : 0u;
+    plan->rare_pair_offset = rare_pair_offset;
     plan->first_byte = (needle && needle_len > 0u) ? needle[0] : 0u;
     plan->last_byte = (needle && needle_len > 0u) ? needle[needle_len - 1u] : 0u;
     plan->rare_byte = (needle && needle_len > 0u) ? needle[rare_index] : 0u;
-    plan->rare_pair_first = (needle && needle_len > 1u) ? needle[rare_pair_index] : 0u;
-    plan->rare_pair_second = (needle && needle_len > 1u) ? needle[rare_pair_index + 1u] : 0u;
+    plan->rare_pair_first = (needle && needle_len > 1u) ? needle[rare_pair_offset] : 0u;
+    plan->rare_pair_second = (needle && needle_len > 1u) ? needle[rare_pair_offset + 1u] : 0u;
+    plan->backend = BX_LITERAL_BACKEND_SCALAR;
     plan->algo = bx_lit_plan_select_algo(needle_len);
 }

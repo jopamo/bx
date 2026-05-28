@@ -12,10 +12,11 @@
 #include "literal_plan.h"
 #include "rg_text.h"
 
-enum bx_literal_backend {
-    BX_LITERAL_BACKEND_SCALAR = 0,
-    BX_LITERAL_BACKEND_SSE2,
-};
+typedef int (*bx_literal_find_fn)(const struct bx_literal_matcher *m,
+                                  const unsigned char *buf,
+                                  size_t len,
+                                  size_t start,
+                                  struct bx_match *out);
 
 typedef int (*bx_literal_case_sensitive_find_fn)(const struct bx_literal_matcher *m,
                                                  const unsigned char *buf,
@@ -27,6 +28,16 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
 static bool bx_literal_match_at_anchor(const struct bx_literal_matcher *m,
                                        const unsigned char *buf,
                                        size_t pos);
+static int bx_literal_find_empty_compiled(const struct bx_literal_matcher *m,
+                                          const unsigned char *buf,
+                                          size_t len,
+                                          size_t start,
+                                          struct bx_match *out);
+static int bx_literal_find_non_empty(const struct bx_literal_matcher *m,
+                                     const unsigned char *buf,
+                                     size_t len,
+                                     size_t start,
+                                     struct bx_match *out);
 static int bx_literal_find_case_sensitive_compiled(const struct bx_literal_matcher *m,
                                                    const unsigned char *buf,
                                                    size_t len,
@@ -44,8 +55,8 @@ struct bx_literal_matcher {
     char  *pattern_raw;
     size_t anchor_index;
     struct bx_lit_plan plan;
+    bx_literal_find_fn find;
     bx_literal_case_sensitive_find_fn case_sensitive_find;
-    enum bx_literal_backend backend;
     bool   ignore_case;
     bool   has_anchor;
     bool   locale_utf8_upper;
@@ -198,6 +209,15 @@ static int bx_literal_find_empty(const unsigned char *buf,
     return 0;
 }
 
+static int bx_literal_find_empty_compiled(const struct bx_literal_matcher *m,
+                                          const unsigned char *buf,
+                                          size_t len,
+                                          size_t start,
+                                          struct bx_match *out) {
+    (void)m;
+    return bx_literal_find_empty(buf, len, start, out);
+}
+
 static int bx_literal_find_case_sensitive_byte(const struct bx_literal_matcher *m,
                                                const unsigned char *buf,
                                                size_t len,
@@ -302,20 +322,13 @@ static int bx_literal_find_case_sensitive_short(const struct bx_literal_matcher 
     return -1;
 }
 
-static size_t bx_literal_rare_pair_index(const struct bx_literal_matcher *m) {
-    if (!m || m->plan.needle_len < 4u)
-        return 0u;
-    return (m->anchor_index + 1u < m->plan.needle_len) ? m->anchor_index
-                                                        : (m->anchor_index - 1u);
-}
-
 static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_literal_matcher *m,
                                                            const unsigned char *buf,
                                                            size_t len,
                                                            size_t start,
                                                            struct bx_match *out) {
     size_t needle_len;
-    size_t pair_index;
+    size_t pair_offset;
     size_t search_off;
     size_t search_limit;
     unsigned char pair_first;
@@ -329,11 +342,11 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
 
     bx_search_dev_counters_note_literal_algo_rare_pair_call();
     bx_search_dev_counters_note_literal_algo_scalar_call();
-    pair_index = bx_literal_rare_pair_index(m);
+    pair_offset = m->plan.rare_pair_offset;
     pair_first = m->plan.rare_pair_first;
     pair_second = m->plan.rare_pair_second;
-    search_off = start + pair_index;
-    search_limit = len - (needle_len - pair_index);
+    search_off = start + pair_offset;
+    search_limit = len - (needle_len - pair_offset);
     while (search_off <= search_limit) {
         const unsigned char *found = memchr(buf + search_off,
                                             pair_first,
@@ -342,7 +355,7 @@ static int bx_literal_find_case_sensitive_rare_pair_scalar(const struct bx_liter
 
         if (!found)
             return -1;
-        pos = (size_t)(found - buf) - pair_index;
+        pos = (size_t)(found - buf) - pair_offset;
         if (found[1] == pair_second && bx_literal_match_at_anchor(m, buf, pos)) {
             if (out) {
                 out->start = pos;
@@ -432,6 +445,51 @@ static int bx_literal_find_case_sensitive_scalar(const struct bx_literal_matcher
     return bx_literal_find_anchored_exact(m, buf, len, start, out);
 }
 
+static int bx_literal_find_non_empty(const struct bx_literal_matcher *m,
+                                     const unsigned char *buf,
+                                     size_t len,
+                                     size_t start,
+                                     struct bx_match *out) {
+    if (!m || !buf || start >= len)
+        return -1;
+
+    if (m->ignore_case) {
+        if (m->locale_utf8_upper) {
+            bx_search_dev_counters_note_literal_bytes_scanned(len - start);
+            for (size_t i = start; i < len; i++) {
+                if (bx_literal_verify_at_locale_utf8(m, buf, len, i, out))
+                    return 0;
+            }
+            return -1;
+        }
+        if (len - start < m->plan.needle_len)
+            return -1;
+        bx_search_dev_counters_note_literal_bytes_scanned(len - start);
+        for (size_t i = start; i <= len - m->plan.needle_len; i++) {
+            bool match = true;
+            for (size_t j = 0; j < m->plan.needle_len; j++) {
+                if ((unsigned char)tolower((unsigned char)buf[i + j])
+                    != (unsigned char)m->pattern_lower[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                out->start = i;
+                out->end = i + m->plan.needle_len;
+                return 0;
+            }
+        }
+        return -1;
+    }
+
+    if (len - start < m->plan.needle_len)
+        return -1;
+
+    bx_search_dev_counters_note_literal_bytes_scanned(len - start);
+    return bx_literal_find_case_sensitive_compiled(m, buf, len, start, out);
+}
+
 static int bx_literal_find_case_sensitive_compiled(const struct bx_literal_matcher *m,
                                                    const unsigned char *buf,
                                                    size_t len,
@@ -500,8 +558,13 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
     if (!m)
         return;
 
-    m->backend = BX_LITERAL_BACKEND_SCALAR;
+    m->find = bx_literal_find_non_empty;
+    m->plan.backend = BX_LITERAL_BACKEND_SCALAR;
     m->case_sensitive_find = bx_literal_find_case_sensitive_scalar;
+    if (m->plan.algo == BX_LIT_EMPTY) {
+        m->find = bx_literal_find_empty_compiled;
+        return;
+    }
     if (m->plan.needle_len == 1u) {
         m->case_sensitive_find = bx_literal_find_case_sensitive_byte;
         return;
@@ -521,7 +584,7 @@ static void bx_literal_select_case_sensitive_backend(struct bx_literal_matcher *
         if (!bx_literal_can_use_sse2(m))
             return;
 #if defined(__SSE2__)
-        m->backend = BX_LITERAL_BACKEND_SSE2;
+        m->plan.backend = BX_LITERAL_BACKEND_SSE2;
         m->case_sensitive_find = bx_literal_find_case_sensitive_sse2;
 #endif
         return;
@@ -534,48 +597,9 @@ static int bx_literal_find_direct(const struct bx_literal_matcher *m,
                                   size_t len,
                                   size_t start,
                                   struct bx_match *out) {
-    if (m->plan.algo == BX_LIT_EMPTY)
-        return bx_literal_return_result(bx_literal_find_empty(buf, len, start, out));
-
-    if (start >= len)
+    if (!m || !m->find)
         return bx_literal_return_result(-1);
-
-    if (m->ignore_case) {
-        if (m->locale_utf8_upper) {
-            bx_search_dev_counters_note_literal_bytes_scanned(len - start);
-            for (size_t i = start; i < len; i++) {
-                if (bx_literal_verify_at_locale_utf8(m, buf, len, i, out))
-                    return bx_literal_return_result(0);
-            }
-            return bx_literal_return_result(-1);
-        }
-        if (len - start < m->plan.needle_len)
-            return bx_literal_return_result(-1);
-        bx_search_dev_counters_note_literal_bytes_scanned(len - start);
-        for (size_t i = start; i <= len - m->plan.needle_len; i++) {
-            bool match = true;
-            for (size_t j = 0; j < m->plan.needle_len; j++) {
-                if ((unsigned char)tolower((unsigned char)buf[i + j])
-                    != (unsigned char)m->pattern_lower[j]) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) {
-                out->start = i;
-                out->end = i + m->plan.needle_len;
-                return bx_literal_return_result(0);
-            }
-        }
-        return bx_literal_return_result(-1);
-    }
-
-    if (len - start < m->plan.needle_len)
-        return bx_literal_return_result(-1);
-
-    bx_search_dev_counters_note_literal_bytes_scanned(len - start);
-    return bx_literal_return_result(
-        bx_literal_find_case_sensitive_compiled(m, buf, len, start, out));
+    return bx_literal_return_result(m->find(m, buf, len, start, out));
 }
 
 static int bx_literal_return_result(int result) {
@@ -650,6 +674,10 @@ const char *bx_literal_bytes(const struct bx_literal_matcher *m) {
 
 size_t bx_literal_len(const struct bx_literal_matcher *m) {
     return m ? m->plan.needle_len : 0u;
+}
+
+size_t bx_literal_overlap_len(const struct bx_literal_matcher *m) {
+    return m ? m->plan.min_overlap_len : 0u;
 }
 
 int bx_literal_find(struct bx_literal_matcher *m, const unsigned char *buf, size_t len,

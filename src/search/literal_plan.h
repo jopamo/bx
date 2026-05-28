@@ -19,6 +19,11 @@ enum bx_lit_algo {
     BX_LIT_LONG_HORSPOOL,
 };
 
+enum bx_literal_backend {
+    BX_LITERAL_BACKEND_SCALAR = 0,
+    BX_LITERAL_BACKEND_SSE2,
+};
+
 /*
  * Shared compile-once literal plan state.
  *
@@ -28,11 +33,14 @@ enum bx_lit_algo {
 struct bx_lit_plan {
     const unsigned char *needle;
     size_t needle_len;
+    size_t min_overlap_len;
+    size_t rare_pair_offset;
     unsigned char first_byte;
     unsigned char last_byte;
     unsigned char rare_byte;
     unsigned char rare_pair_first;
     unsigned char rare_pair_second;
+    enum bx_literal_backend backend;
     enum bx_lit_algo algo;
 };
 
