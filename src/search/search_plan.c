@@ -106,12 +106,13 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(
     if (has_metadata_sort)
         return false;
     /*
-     * The deferred default-literal path owns only rg's default file-input
-     * binary cutoff policy. Explicit text/binary, hidden-filename, and stdin
-     * modes stay on the existing opened/scanner/buffered paths that own their
-     * output framing and binary diagnostics.
+     * The deferred literal path can keep both default binary cutoff and
+     * explicit binary diagnostics candidate-triggered: no-match returns from
+     * raw fd evidence, while any candidate falls back through the opened path
+     * before diagnostic publication. Explicit text, hidden-filename, and stdin
+     * modes stay on existing paths that own their transformed/framed input.
      */
-    if (opts->binary_as_text || !opts->binary_without_match)
+    if (opts->binary_as_text)
         return false;
     if (opts->hide_filename)
         return false;

@@ -47,6 +47,7 @@ static bool search_file_find_literal_precheck_match(const struct bx_lit_plan *ab
 
 #define BX_SEARCH_DEFERRED_CHUNK_CAP (256u * 1024u)
 #define BX_SEARCH_DEFERRED_PREFIX_POLICY_CAP 1024u
+#define BX_SEARCH_DEFERRED_DIRECT_BUFFER_CAP (8u * 1024u * 1024u)
 
 enum bx_search_deferred_precheck_result {
     BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED = -1,
@@ -300,10 +301,23 @@ static int search_file_try_buffer_deferred_fd_to_eof(int fd,
     if (fd < 0 || !scanner || !searched_len)
         return -1;
 
-    while (scanner->len < scanner->cap) {
-        size_t read_cap = scanner->cap - scanner->len;
+    for (;;) {
+        size_t read_cap;
         ssize_t nread;
 
+        if (scanner->len == scanner->cap) {
+            size_t new_cap = scanner->cap ? scanner->cap * 2u : BX_SEARCH_DEFERRED_CHUNK_CAP;
+            if (new_cap <= scanner->cap)
+                return 1;
+            if (new_cap > BX_SEARCH_DEFERRED_DIRECT_BUFFER_CAP)
+                new_cap = BX_SEARCH_DEFERRED_DIRECT_BUFFER_CAP;
+            if (new_cap <= scanner->cap)
+                return 1;
+            if (!bx_search_scanner_reserve(scanner, new_cap))
+                return -1;
+        }
+
+        read_cap = scanner->cap - scanner->len;
         do {
             nread = read(fd, scanner->buf + scanner->len, read_cap);
         } while (nread < 0 && errno == EINTR);
@@ -315,7 +329,6 @@ static int search_file_try_buffer_deferred_fd_to_eof(int fd,
         if (nread == 0)
             return 0;
     }
-    return 1;
 }
 
 static void search_file_note_deferred_buffer_candidate(struct bx_search_deferred_precheck_state *state,
@@ -368,7 +381,6 @@ static int search_file_output_deferred_buffered_candidates(
     size_t bytes_searched
 ) {
     struct bx_literal_matcher *literal;
-    size_t cursor = 0u;
     int file_matches = 0;
     bool heading_printed_for_file = false;
     bool heading_enabled;
@@ -418,55 +430,88 @@ static int search_file_output_deferred_buffered_candidates(
         stats->bytes_searched += bytes_searched;
     }
 
-    while (cursor <= scanner->scan_len) {
-        struct bx_search_candidate candidate;
-        struct bx_search_record_slice record;
-        struct bx_match bm;
-        size_t candidate_record_off;
+    for (size_t window_start = 0u; window_start < scanner->scan_len;) {
+        struct bx_search_scanner window = *scanner;
+        size_t remaining = scanner->scan_len - window_start;
+        size_t window_len = remaining < BX_SEARCH_DEFERRED_CHUNK_CAP
+            ? remaining
+            : BX_SEARCH_DEFERRED_CHUNK_CAP;
+        size_t cursor = 0u;
 
-        if (!bx_search_scanner_next_literal_candidate(scanner, literal, &cursor, &candidate))
-            break;
-        if (!bx_search_scanner_candidate_record_is_buffered(scanner, &candidate))
-            return -1;
-        if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
-            continue;
-
-        candidate_record_off = candidate.chunk_off - record.chunk_off;
-        bm.start = candidate_record_off;
-        bm.end = candidate_record_off + candidate.anchor_len;
-        cursor = record.chunk_off + record.len;
-
-        file_matches++;
-        if (stats) {
-            stats->matches++;
-            stats->matched_lines++;
-        }
-
-        if (heading_enabled)
-            bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-
-        if (can_omit_long_line && (int)record.len > opts->max_columns) {
-            bx_search_print_omitted_long_line(opts);
-        } else {
-            bool prefix_printed;
-
-            if (!heading_printed_for_file && display_name && !display_name_len_ready) {
-                display_name_len = strlen(display_name);
-                display_name_len_ready = true;
+        if (window_start + window_len < scanner->scan_len) {
+            const unsigned char *base = scanner->buf + window_start;
+            const unsigned char *delim = memrchr(base, delimiter, window_len);
+            if (delim) {
+                window_len = (size_t)(delim - base) + 1u;
+            } else {
+                const unsigned char *next = memchr(base + window_len,
+                                                   delimiter,
+                                                   remaining - window_len);
+                window_len = next ? (size_t)(next - base) + 1u : remaining;
             }
-            prefix_printed = bx_search_print_result_prefix_cached(
-                heading_printed_for_file ? NULL : display_name,
-                heading_printed_for_file ? 0u : display_name_len,
-                opts, 0, bm.start + 1u, true, (size_t)record.file_off,
-                match_sep, match_sep_len, out, color
-            );
-            bx_search_maybe_emit_initial_tab(opts, prefix_printed);
-            bx_search_print_match_colored_cached(record.data, record.len, bm.start, bm.end,
-                                                 record.has_delim, opts, out, color,
-                                                 delimiter);
-            if (plain_line_output)
-                bx_search_dev_counters_note_plain_line_output();
         }
+        if (window_len == 0u)
+            break;
+
+        window.buf = scanner->buf + window_start;
+        window.len = window_len;
+        window.scan_len = window_len;
+        window.cap = window_len;
+        window.file_off = scanner->file_off + (off_t)window_start;
+        window.eof = window_start + window_len == scanner->scan_len;
+
+        while (cursor <= window.scan_len) {
+            struct bx_search_candidate candidate;
+            struct bx_search_record_slice record;
+            struct bx_match bm;
+            size_t candidate_record_off;
+
+            if (!bx_search_scanner_next_literal_candidate(&window, literal, &cursor, &candidate))
+                break;
+            if (window_start == 0u &&
+                !bx_search_scanner_candidate_record_is_buffered(&window, &candidate))
+                return -1;
+            if (!bx_search_scanner_expand_record(&window, &candidate, &record))
+                continue;
+
+            candidate_record_off = candidate.chunk_off - record.chunk_off;
+            bm.start = candidate_record_off;
+            bm.end = candidate_record_off + candidate.anchor_len;
+            cursor = record.chunk_off + record.len;
+
+            file_matches++;
+            if (stats) {
+                stats->matches++;
+                stats->matched_lines++;
+            }
+
+            if (heading_enabled)
+                bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
+
+            if (can_omit_long_line && (int)record.len > opts->max_columns) {
+                bx_search_print_omitted_long_line(opts);
+            } else {
+                bool prefix_printed;
+
+                if (!heading_printed_for_file && display_name && !display_name_len_ready) {
+                    display_name_len = strlen(display_name);
+                    display_name_len_ready = true;
+                }
+                prefix_printed = bx_search_print_result_prefix_cached(
+                    heading_printed_for_file ? NULL : display_name,
+                    heading_printed_for_file ? 0u : display_name_len,
+                    opts, 0, bm.start + 1u, true, (size_t)record.file_off,
+                    match_sep, match_sep_len, out, color
+                );
+                bx_search_maybe_emit_initial_tab(opts, prefix_printed);
+                bx_search_print_match_colored_cached(record.data, record.len, bm.start, bm.end,
+                                                     record.has_delim, opts, out, color,
+                                                     delimiter);
+                if (plain_line_output)
+                    bx_search_dev_counters_note_plain_line_output();
+            }
+        }
+        window_start += window_len;
     }
 
     if (file_matches == 0)
@@ -567,7 +612,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                         result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                         goto out;
                     }
-                    if (!opts->quiet) {
+                    if (opts->binary_without_match && !opts->quiet) {
                         bx_search_dev_counters_note_file_cut_off_by_binary_prefix();
                         result = BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH;
                         goto out;
@@ -1058,7 +1103,7 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
             f, false, display_name, progname, m, opts, match_count, record_stream, stats
         );
         if (binary_result >= 0) {
-            if (candidate_triggered && opts->binary_without_match)
+            if (candidate_triggered)
                 bx_search_dev_counters_note_literal_candidate_hit();
             return binary_result;
         }
