@@ -10,6 +10,8 @@
 
 struct bx_search_dev_counters {
     bool enabled;
+    bool batch_debug_enabled;
+    atomic_uint_fast64_t batch_debug_next_id;
     atomic_size_t bytes_read;
     atomic_size_t files_opened;
     atomic_uint_fast64_t content_open_calls;
@@ -115,9 +117,9 @@ struct bx_search_dev_counters {
     atomic_uint_fast64_t search_batch_allocs;
     atomic_uint_fast64_t search_batch_storage_reallocs;
     atomic_uint_fast64_t search_batch_lifetime_empty;
-    atomic_uint_fast64_t batches_built;
-    atomic_uint_fast64_t batches_searched;
-    atomic_uint_fast64_t empty_batches;
+    atomic_uint_fast64_t search_batches_queued;
+    atomic_uint_fast64_t search_batches_searched;
+    atomic_uint_fast64_t search_batches_empty;
     atomic_uint_fast64_t memstreams_opened;
     atomic_uint_fast64_t output_records_submitted;
     atomic_uint_fast64_t diagnostic_records_submitted;
@@ -131,6 +133,9 @@ struct bx_search_dev_counters {
     atomic_uint_fast64_t stolen_dirs_walked;
     atomic_uint_fast64_t queued_output_batches;
     atomic_uint_fast64_t empty_output_batches;
+    atomic_uint_fast64_t output_batch_records;
+    atomic_uint_fast64_t output_batch_stdout_bytes;
+    atomic_uint_fast64_t output_batch_stderr_bytes;
     atomic_uint_fast64_t worker_subtrees_donated;
     atomic_uint_fast64_t worker_subtrees_stolen;
 };
@@ -144,6 +149,10 @@ bool bx_search_dev_counters_enabled(void) {
 void bx_search_dev_counters_begin_from_env(void) {
     bx_search_dev_counters_reset();
 
+    const char *batch_debug = getenv("BX_SEARCH_BATCH_DEBUG");
+    if (batch_debug && *batch_debug && strcmp(batch_debug, "0") != 0)
+        current_dev_counters.batch_debug_enabled = true;
+
     const char *value = getenv("BX_SEARCH_DEV_COUNTERS");
     if (!value || !*value || strcmp(value, "0") == 0)
         return;
@@ -153,6 +162,9 @@ void bx_search_dev_counters_begin_from_env(void) {
 
 void bx_search_dev_counters_reset(void) {
     current_dev_counters.enabled = false;
+    current_dev_counters.batch_debug_enabled = false;
+    atomic_store_explicit(&current_dev_counters.batch_debug_next_id, 1u,
+                          memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.bytes_read, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.files_opened, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.content_open_calls, 0u, memory_order_relaxed);
@@ -313,9 +325,9 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.search_batch_allocs, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.search_batch_storage_reallocs, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.search_batch_lifetime_empty, 0u, memory_order_relaxed);
-    atomic_store_explicit(&current_dev_counters.batches_built, 0u, memory_order_relaxed);
-    atomic_store_explicit(&current_dev_counters.batches_searched, 0u, memory_order_relaxed);
-    atomic_store_explicit(&current_dev_counters.empty_batches, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.search_batches_queued, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.search_batches_searched, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.search_batches_empty, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.memstreams_opened, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.output_records_submitted, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.diagnostic_records_submitted, 0u,
@@ -331,6 +343,11 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.stolen_dirs_walked, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.queued_output_batches, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.empty_output_batches, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.output_batch_records, 0u, memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.output_batch_stdout_bytes, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.output_batch_stderr_bytes, 0u,
+                          memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.worker_subtrees_donated, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.worker_subtrees_stolen, 0u,
@@ -990,14 +1007,14 @@ void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counte
     case BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY:
         atomic_fetch_add_explicit(&current_dev_counters.search_batch_lifetime_empty, count, memory_order_relaxed);
         return;
-    case BX_SEARCH_RG_SCHED_BATCHES_BUILT:
-        atomic_fetch_add_explicit(&current_dev_counters.batches_built, count, memory_order_relaxed);
+    case BX_SEARCH_RG_SCHED_SEARCH_BATCHES_QUEUED:
+        atomic_fetch_add_explicit(&current_dev_counters.search_batches_queued, count, memory_order_relaxed);
         return;
-    case BX_SEARCH_RG_SCHED_BATCHES_SEARCHED:
-        atomic_fetch_add_explicit(&current_dev_counters.batches_searched, count, memory_order_relaxed);
+    case BX_SEARCH_RG_SCHED_SEARCH_BATCHES_SEARCHED:
+        atomic_fetch_add_explicit(&current_dev_counters.search_batches_searched, count, memory_order_relaxed);
         return;
-    case BX_SEARCH_RG_SCHED_EMPTY_BATCHES:
-        atomic_fetch_add_explicit(&current_dev_counters.empty_batches, count, memory_order_relaxed);
+    case BX_SEARCH_RG_SCHED_SEARCH_BATCHES_EMPTY:
+        atomic_fetch_add_explicit(&current_dev_counters.search_batches_empty, count, memory_order_relaxed);
         return;
     case BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED:
         atomic_fetch_add_explicit(&current_dev_counters.memstreams_opened, count, memory_order_relaxed);
@@ -1042,6 +1059,18 @@ void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counte
         atomic_fetch_add_explicit(&current_dev_counters.empty_output_batches, count,
                                   memory_order_relaxed);
         return;
+    case BX_SEARCH_RG_SCHED_OUTPUT_BATCH_RECORDS:
+        atomic_fetch_add_explicit(&current_dev_counters.output_batch_records, count,
+                                  memory_order_relaxed);
+        return;
+    case BX_SEARCH_RG_SCHED_OUTPUT_BATCH_STDOUT_BYTES:
+        atomic_fetch_add_explicit(&current_dev_counters.output_batch_stdout_bytes, count,
+                                  memory_order_relaxed);
+        return;
+    case BX_SEARCH_RG_SCHED_OUTPUT_BATCH_STDERR_BYTES:
+        atomic_fetch_add_explicit(&current_dev_counters.output_batch_stderr_bytes, count,
+                                  memory_order_relaxed);
+        return;
     case BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED:
         atomic_fetch_add_explicit(&current_dev_counters.worker_subtrees_donated, count,
                                   memory_order_relaxed);
@@ -1051,6 +1080,57 @@ void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counte
                                   memory_order_relaxed);
         return;
     }
+}
+
+uint64_t bx_search_dev_batch_debug_next_id(void) {
+    if (!current_dev_counters.batch_debug_enabled)
+        return 0u;
+    return (uint64_t)atomic_fetch_add_explicit(&current_dev_counters.batch_debug_next_id,
+                                               1u,
+                                               memory_order_relaxed);
+}
+
+void bx_search_dev_batch_debug_search(const char *source,
+                                      const char *event,
+                                      uint64_t id,
+                                      uint64_t files,
+                                      uint64_t path_bytes) {
+    if (!current_dev_counters.batch_debug_enabled)
+        return;
+
+    fprintf(stderr,
+            "bx-search-batch-lifecycle: kind=search source=%s event=%s id=%" PRIu64
+            " files=%" PRIu64 " path_bytes=%" PRIu64 "\n",
+            source ? source : "?",
+            event ? event : "?",
+            id,
+            files,
+            path_bytes);
+}
+
+void bx_search_dev_batch_debug_output(const char *source,
+                                      const char *event,
+                                      uint64_t id,
+                                      uint64_t stdout_bytes,
+                                      uint64_t stderr_bytes,
+                                      bool match_output,
+                                      bool diagnostic_output,
+                                      bool empty) {
+    if (!current_dev_counters.batch_debug_enabled)
+        return;
+
+    fprintf(stderr,
+            "bx-search-batch-lifecycle: kind=output source=%s event=%s id=%" PRIu64
+            " stdout_bytes=%" PRIu64 " stderr_bytes=%" PRIu64
+            " match=%u diagnostic=%u empty=%u\n",
+            source ? source : "?",
+            event ? event : "?",
+            id,
+            stdout_bytes,
+            stderr_bytes,
+            match_output ? 1u : 0u,
+            diagnostic_output ? 1u : 0u,
+            empty ? 1u : 0u);
 }
 
 void bx_search_dev_counters_report(FILE *stream) {
@@ -1073,10 +1153,10 @@ void bx_search_dev_counters_report(FILE *stream) {
             "walk_path_copies_before_match=%" PRIuMAX " walk_ignore_checks=%" PRIuMAX " walk_ignore_glob_fallbacks=%" PRIuMAX " "
             "walk_ignore_git_root_lstat_calls=%" PRIuMAX " walk_ignore_git_root_lstat_misses=%" PRIuMAX " "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " global_queue_lock_acquires=%" PRIuMAX " global_queue_cond_wakeups=%" PRIuMAX " worker_slot_lock_acquires=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
-            "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " search_batch_files=%" PRIuMAX " search_batch_path_bytes=%" PRIuMAX " search_batch_allocs=%" PRIuMAX " search_batch_storage_reallocs=%" PRIuMAX " search_batch_lifetime_empty=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
+            "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " search_batch_files=%" PRIuMAX " search_batch_path_bytes=%" PRIuMAX " search_batch_allocs=%" PRIuMAX " search_batch_storage_reallocs=%" PRIuMAX " search_batch_lifetime_empty=%" PRIuMAX " queued_search_batches=%" PRIuMAX " searched_search_batches=%" PRIuMAX " empty_search_batches=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " diagnostic_records_submitted=%" PRIuMAX " match_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
             "skipped_output_seqs=%" PRIuMAX " local_files_searched=%" PRIuMAX " stolen_files_searched=%" PRIuMAX " local_dirs_walked=%" PRIuMAX " stolen_dirs_walked=%" PRIuMAX " "
-            "queued_search_batches=%" PRIuMAX " queued_output_batches=%" PRIuMAX " empty_search_batches=%" PRIuMAX " empty_output_batches=%" PRIuMAX " "
+            "queued_output_batches=%" PRIuMAX " empty_output_batches=%" PRIuMAX " output_batch_records=%" PRIuMAX " output_batch_stdout_bytes=%" PRIuMAX " output_batch_stderr_bytes=%" PRIuMAX " "
             "worker_local_files_processed=%" PRIuMAX " worker_local_dirs_walked=%" PRIuMAX " worker_subtrees_donated=%" PRIuMAX " worker_donated_subtrees=%" PRIuMAX " worker_stolen_subtrees=%" PRIuMAX " global_queue_pushes=%" PRIuMAX " global_queue_pops=%" PRIuMAX " "
             "ordered_records_submitted=%" PRIuMAX " unordered_flushes=%" PRIuMAX "\n",
             atomic_load_explicit(&current_dev_counters.bytes_read, memory_order_relaxed),
@@ -1277,9 +1357,12 @@ void bx_search_dev_counters_report(FILE *stream) {
             (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batch_allocs, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batch_storage_reallocs, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batch_lifetime_empty, memory_order_relaxed),
-            (uintmax_t)atomic_load_explicit(&current_dev_counters.batches_built, memory_order_relaxed),
-            (uintmax_t)atomic_load_explicit(&current_dev_counters.batches_searched, memory_order_relaxed),
-            (uintmax_t)atomic_load_explicit(&current_dev_counters.empty_batches, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_queued, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_searched, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_empty, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_queued, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_searched, memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.search_batches_empty, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.memstreams_opened, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.output_records_submitted, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.diagnostic_records_submitted, memory_order_relaxed),
@@ -1291,11 +1374,15 @@ void bx_search_dev_counters_report(FILE *stream) {
             (uintmax_t)atomic_load_explicit(&current_dev_counters.stolen_files_searched, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.local_dirs_walked, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.stolen_dirs_walked, memory_order_relaxed),
-            (uintmax_t)atomic_load_explicit(&current_dev_counters.batches_built, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.queued_output_batches,
                                             memory_order_relaxed),
-            (uintmax_t)atomic_load_explicit(&current_dev_counters.empty_batches, memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.empty_output_batches,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.output_batch_records,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.output_batch_stdout_bytes,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.output_batch_stderr_bytes,
                                             memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.local_files_searched,
                                             memory_order_relaxed),

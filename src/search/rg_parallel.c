@@ -38,6 +38,7 @@ struct bx_search_parallel_job_item {
 
 struct bx_search_parallel_job {
     uint64_t seq;
+    uint64_t debug_id;
     size_t count;
     size_t path_bytes;
     size_t search_path_bytes;
@@ -106,6 +107,11 @@ static void bx_search_parallel_free_job(void *user, void *job_ptr) {
 
     if (!job)
         return;
+    bx_search_dev_batch_debug_search("rg_parallel",
+                                     "free",
+                                     job->debug_id,
+                                     (uint64_t)job->count,
+                                     (uint64_t)job->search_path_bytes);
     if (job->count == 0u)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
                                              1u);
@@ -252,11 +258,16 @@ static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state
     }
     job->seq = state->next_seq++;
     if (bx_work_pool_submit(state->pool, job)) {
+        bx_search_dev_batch_debug_search("rg_parallel",
+                                         "queued",
+                                         job->debug_id,
+                                         (uint64_t)job->count,
+                                         (uint64_t)job->search_path_bytes);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_FILES,
                                              (uint64_t)job->count);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_PATH_BYTES,
                                              (uint64_t)job->search_path_bytes);
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_BUILT, 1u);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_QUEUED, 1u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_POOL_SUBMITS, 1u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_WAKEUPS, 1u);
         return true;
@@ -338,6 +349,8 @@ static bool bx_search_parallel_queue_path(struct bx_search_parallel_state *state
         job = calloc(1u, sizeof(*job));
         if (!job)
             return false;
+        job->debug_id = bx_search_dev_batch_debug_next_id();
+        bx_search_dev_batch_debug_search("rg_parallel", "alloc", job->debug_id, 0u, 0u);
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS, 1u);
         state->pending_job = job;
     }
@@ -434,7 +447,12 @@ static void bx_search_parallel_process_job(void *user,
     if (!state || !worker || !job)
         return;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_GLOBAL_POOL_POPS, 1u);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_SEARCHED, 1u);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_SEARCHED, 1u);
+    bx_search_dev_batch_debug_search("rg_parallel",
+                                     "searched",
+                                     job->debug_id,
+                                     (uint64_t)job->count,
+                                     (uint64_t)job->search_path_bytes);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_STOLEN_FILES_SEARCHED,
                                          (uint64_t)job->count);
 
@@ -509,8 +527,14 @@ static void bx_search_parallel_process_job(void *user,
      * output. Stats-only and no-output outcomes merge directly.
      */
     if (stdout_len == 0u && stderr_len == 0u) {
-        if (!state->opts->stats && !job_match_seen && !job_error_seen)
-            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
+        if (!state->opts->stats && !job_match_seen && !job_error_seen) {
+            bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_EMPTY, 1u);
+            bx_search_dev_batch_debug_search("rg_parallel",
+                                             "empty-result",
+                                             job->debug_id,
+                                             (uint64_t)job->count,
+                                             (uint64_t)job->search_path_bytes);
+        }
         if (state->opts->stats || job_match_seen || job_error_seen) {
             bx_search_parallel_merge_direct_result(state,
                                                   state->opts->stats ? &job_stats : NULL,

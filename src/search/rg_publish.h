@@ -16,6 +16,7 @@ enum bx_rg_publish_mode {
 
 struct bx_rg_publish_record {
     uint64_t seq;
+    uint64_t debug_id;
     char *stdout_buf;
     size_t stdout_len;
     char *stderr_buf;

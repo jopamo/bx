@@ -15,6 +15,10 @@ static int bx_walk_recursive(DIR *dir,
                              const struct bx_walk_ctx *ctx,
                              int depth,
                              const struct bx_walk_ancestor *ancestors);
+static int bx_walk_process_directory_root(DIR *opened_dir,
+                                          const struct stat *st,
+                                          struct bx_walk_ctx *ctx,
+                                          struct bx_walk_path_buf *path_buf);
 static int bx_walk_status_from_action(const struct bx_walk_ctx *ctx,
                                       enum bx_walk_action action,
                                       int *status_out);
@@ -550,6 +554,61 @@ out:
     return status;
 }
 
+static int bx_walk_process_directory_root(DIR *opened_dir,
+                                          const struct stat *st,
+                                          struct bx_walk_ctx *ctx,
+                                          struct bx_walk_path_buf *path_buf) {
+    struct bx_walk_entry entry = {
+        .path = path_buf->data,
+        .follow_metadata = ctx->opts->follow_root_symlink,
+        .depth = 0,
+        .counter_ops = ctx->opts->counter_ops,
+    };
+    bx_walk_entry_fill_from_stat(&entry, st);
+    bx_walk_note_counter(ctx->opts->counter_ops, BX_WALK_COUNTER_DIRS_SEEN, 1u);
+
+    int status = 0;
+    if (!ctx->opts->post_order) {
+        enum bx_walk_action action = bx_walk_apply_visit_action(ctx, &entry, &status);
+        if (action == BX_WALK_STOP || action == BX_WALK_ERROR) {
+            if (opened_dir)
+                closedir(opened_dir);
+            return status;
+        }
+    }
+
+    if (!bx_walk_should_stop(ctx->opts) &&
+        bx_walk_should_descend_root_directory(&entry, ctx->opts)) {
+        DIR *root_dir = opened_dir;
+        struct bx_walk_ancestor root_ancestor = {
+            .dev = st->st_dev,
+            .ino = st->st_ino,
+            .path = NULL,
+            .parent = NULL,
+        };
+        int open_rc = root_dir ? 1 : bx_walk_open_directory_path(path_buf->data,
+                                                                 ctx,
+                                                                 &root_dir,
+                                                                 &status);
+        if (open_rc < 0) {
+            status = -1;
+        } else if (open_rc > 0 && bx_walk_recursive(root_dir, ctx, 0, &root_ancestor) != 0) {
+            status = -1;
+        }
+        opened_dir = NULL;
+    }
+
+    if (opened_dir)
+        closedir(opened_dir);
+
+    if (!bx_walk_should_stop(ctx->opts) && ctx->opts->post_order) {
+        enum bx_walk_action action = bx_walk_apply_visit_action(ctx, &entry, &status);
+        (void)action;
+    }
+
+    return status;
+}
+
 int bx_walk(const char *root,
             const struct bx_walk_opts *opts,
             const struct bx_walk_ops *ops,
@@ -588,46 +647,7 @@ int bx_walk(const char *root,
     ctx.path_buf = &path_buf;
 
     if (S_ISDIR(st.st_mode)) {
-        struct bx_walk_entry entry = {
-            .path = path_buf.data,
-            .follow_metadata = opts->follow_root_symlink,
-            .depth = 0,
-            .counter_ops = opts->counter_ops,
-        };
-        bx_walk_entry_fill_from_stat(&entry, &st);
-        bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_DIRS_SEEN, 1u);
-
-        int status = 0;
-        if (!opts->post_order) {
-            enum bx_walk_action action = bx_walk_apply_visit_action(&ctx, &entry, &status);
-            if (action == BX_WALK_STOP || action == BX_WALK_ERROR) {
-                bx_walk_path_buf_free(&path_buf);
-                return status;
-            }
-        }
-
-        if (!bx_walk_should_stop(opts) &&
-            bx_walk_should_descend_root_directory(&entry, opts)) {
-            DIR *root_dir = NULL;
-            struct bx_walk_ancestor root_ancestor = {
-                .dev = st.st_dev,
-                .ino = st.st_ino,
-                .path = NULL,
-                .parent = NULL,
-            };
-            int open_rc = bx_walk_open_directory_path(path_buf.data, &ctx, &root_dir, &status);
-            if (open_rc < 0) {
-                status = -1;
-            } else if (open_rc > 0 && bx_walk_recursive(root_dir, &ctx, 0, &root_ancestor) != 0) {
-                status = -1;
-            }
-        }
-
-        if (!bx_walk_should_stop(opts) && opts->post_order) {
-            enum bx_walk_action action = bx_walk_apply_visit_action(&ctx, &entry, &status);
-            (void)action;
-        }
-
+        int status = bx_walk_process_directory_root(NULL, &st, &ctx, &path_buf);
         bx_walk_path_buf_free(&path_buf);
         return status;
     }
@@ -645,6 +665,53 @@ int bx_walk(const char *root,
         bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_FILES_SEEN, 1u);
     int status = 0;
     (void)bx_walk_apply_visit_action(&ctx, &entry, &status);
+    bx_walk_path_buf_free(&path_buf);
+    return status;
+}
+
+int bx_walk_opened_dir(const char *root,
+                       DIR *root_dir,
+                       const struct bx_walk_opts *opts,
+                       const struct bx_walk_ops *ops,
+                       void *user) {
+    if (!root || !root_dir || !opts || !ops || !ops->visit) {
+        if (root_dir)
+            closedir(root_dir);
+        errno = EINVAL;
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(dirfd(root_dir), &st) != 0) {
+        int err = errno;
+        struct bx_walk_ctx ctx = {.opts = opts, .ops = ops, .user = user, .root_device = 0};
+        enum bx_walk_action action = bx_walk_handle_error(&ctx, root, err);
+        int status = 0;
+        bx_walk_status_from_action(&ctx, action, &status);
+        closedir(root_dir);
+        errno = err;
+        return status;
+    }
+
+    struct bx_walk_ctx ctx = {
+        .opts = opts,
+        .ops = ops,
+        .user = user,
+        .root_device = st.st_dev,
+    };
+    struct bx_walk_path_buf path_buf;
+    int path_err = 0;
+    if (!bx_walk_path_buf_init(&path_buf, root, opts->counter_ops, &path_err)) {
+        enum bx_walk_action action =
+            bx_walk_handle_error(&ctx, root, path_err != 0 ? path_err : ENOMEM);
+        int status = 0;
+        bx_walk_status_from_action(&ctx, action, &status);
+        closedir(root_dir);
+        return status;
+    }
+    ctx.path_buf = &path_buf;
+
+    int status = bx_walk_process_directory_root(root_dir, &st, &ctx, &path_buf);
     bx_walk_path_buf_free(&path_buf);
     return status;
 }

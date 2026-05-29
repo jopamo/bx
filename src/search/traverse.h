@@ -1,6 +1,8 @@
 #ifndef BX_SEARCH_TRAVERSE_H
 #define BX_SEARCH_TRAVERSE_H
 
+#include <dirent.h>
+
 #include "fswalk/walk.h"
 #include "ignore.h"
 
@@ -20,5 +22,9 @@ struct bx_search_walk_config {
 int bx_search_walk(const char *root,
                    const struct bx_search_walk_config *config,
                    void *user);
+int bx_search_walk_opened_dir(const char *root,
+                              DIR *root_dir,
+                              const struct bx_search_walk_config *config,
+                              void *user);
 
 #endif

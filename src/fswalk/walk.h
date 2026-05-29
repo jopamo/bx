@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -159,5 +160,10 @@ int bx_walk(const char *root,
             const struct bx_walk_opts *opts,
             const struct bx_walk_ops *ops,
             void *user);
+int bx_walk_opened_dir(const char *root,
+                       DIR *root_dir,
+                       const struct bx_walk_opts *opts,
+                       const struct bx_walk_ops *ops,
+                       void *user);
 
 #endif

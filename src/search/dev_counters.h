@@ -22,9 +22,12 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS,
     BX_SEARCH_RG_SCHED_SEARCH_BATCH_STORAGE_REALLOCS,
     BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
-    BX_SEARCH_RG_SCHED_BATCHES_BUILT,
-    BX_SEARCH_RG_SCHED_BATCHES_SEARCHED,
-    BX_SEARCH_RG_SCHED_EMPTY_BATCHES,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCHES_QUEUED,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCHES_SEARCHED,
+    BX_SEARCH_RG_SCHED_SEARCH_BATCHES_EMPTY,
+    BX_SEARCH_RG_SCHED_BATCHES_BUILT = BX_SEARCH_RG_SCHED_SEARCH_BATCHES_QUEUED,
+    BX_SEARCH_RG_SCHED_BATCHES_SEARCHED = BX_SEARCH_RG_SCHED_SEARCH_BATCHES_SEARCHED,
+    BX_SEARCH_RG_SCHED_EMPTY_BATCHES = BX_SEARCH_RG_SCHED_SEARCH_BATCHES_EMPTY,
     BX_SEARCH_RG_SCHED_MEMSTREAMS_OPENED,
     BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED,
     BX_SEARCH_RG_SCHED_DIAGNOSTIC_RECORDS_SUBMITTED,
@@ -38,6 +41,9 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_STOLEN_DIRS_WALKED,
     BX_SEARCH_RG_SCHED_QUEUED_OUTPUT_BATCHES,
     BX_SEARCH_RG_SCHED_EMPTY_OUTPUT_BATCHES,
+    BX_SEARCH_RG_SCHED_OUTPUT_BATCH_RECORDS,
+    BX_SEARCH_RG_SCHED_OUTPUT_BATCH_STDOUT_BYTES,
+    BX_SEARCH_RG_SCHED_OUTPUT_BATCH_STDERR_BYTES,
     BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED,
     BX_SEARCH_RG_SCHED_WORKER_SUBTREES_STOLEN,
 };
@@ -137,6 +143,20 @@ void bx_search_dev_counters_note_binary_policy_check(void);
 void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter, uint64_t count);
 void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counter,
                                           uint64_t count);
+uint64_t bx_search_dev_batch_debug_next_id(void);
+void bx_search_dev_batch_debug_search(const char *source,
+                                      const char *event,
+                                      uint64_t id,
+                                      uint64_t files,
+                                      uint64_t path_bytes);
+void bx_search_dev_batch_debug_output(const char *source,
+                                      const char *event,
+                                      uint64_t id,
+                                      uint64_t stdout_bytes,
+                                      uint64_t stderr_bytes,
+                                      bool match_output,
+                                      bool diagnostic_output,
+                                      bool empty);
 void bx_search_dev_counters_report(FILE *stream);
 
 #endif

@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -176,11 +177,14 @@ static enum bx_walk_action bx_search_walk_error(const char *path, int errnum, vo
     return state->config->error(path, errnum, state->user);
 }
 
-int bx_search_walk(const char *root,
-                   const struct bx_search_walk_config *config,
-                   void *user) {
+static int bx_search_walk_impl(const char *root,
+                               DIR *root_dir,
+                               const struct bx_search_walk_config *config,
+                               void *user) {
     if (!root || !config || !config->walk_opts ||
         (!config->visit && !config->visit_with_ignore)) {
+        if (root_dir)
+            closedir(root_dir);
         errno = EINVAL;
         return -1;
     }
@@ -197,6 +201,8 @@ int bx_search_walk(const char *root,
         if (state.ignore_opts.git_root) {
             state.git_root_owned = strdup(state.ignore_opts.git_root);
             if (!state.git_root_owned) {
+                if (root_dir)
+                    closedir(root_dir);
                 free(state.dir_frames);
                 return -1;
             }
@@ -217,6 +223,8 @@ int bx_search_walk(const char *root,
             if (!bx_search_walk_init_root_dir_frame(&state,
                                                     config->inherited_parent_ignore_state)) {
                 bx_ignore_state_dispose_chain(config->inherited_parent_ignore_state);
+                if (root_dir)
+                    closedir(root_dir);
                 free(state.git_root_owned);
                 free(state.dir_frames);
                 return -1;
@@ -227,12 +235,16 @@ int bx_search_walk(const char *root,
                 bx_ignore_load_parent_state(root, &state.ignore_opts, &ok);
             if (!ok) {
                 bx_ignore_state_dispose_chain(parent_ignore_state);
+                if (root_dir)
+                    closedir(root_dir);
                 free(state.git_root_owned);
                 free(state.dir_frames);
                 return -1;
             }
             if (!bx_search_walk_init_root_dir_frame(&state, parent_ignore_state)) {
                 bx_ignore_state_dispose_chain(parent_ignore_state);
+                if (root_dir)
+                    closedir(root_dir);
                 free(state.git_root_owned);
                 free(state.dir_frames);
                 return -1;
@@ -244,10 +256,25 @@ int bx_search_walk(const char *root,
         .visit = bx_search_walk_visit,
         .error = config->error ? bx_search_walk_error : NULL,
     };
-    int rc = bx_walk(root, config->walk_opts, &ops, &state);
+    int rc = root_dir
+        ? bx_walk_opened_dir(root, root_dir, config->walk_opts, &ops, &state)
+        : bx_walk(root, config->walk_opts, &ops, &state);
 
     bx_search_walk_dir_frames_pop_to_depth(&state, -1);
     free(state.git_root_owned);
     free(state.dir_frames);
     return rc;
+}
+
+int bx_search_walk(const char *root,
+                   const struct bx_search_walk_config *config,
+                   void *user) {
+    return bx_search_walk_impl(root, NULL, config, user);
+}
+
+int bx_search_walk_opened_dir(const char *root,
+                              DIR *root_dir,
+                              const struct bx_search_walk_config *config,
+                              void *user) {
+    return bx_search_walk_impl(root, root_dir, config, user);
 }

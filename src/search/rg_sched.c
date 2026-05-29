@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -7,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <pthread.h>
 
@@ -38,6 +41,7 @@ struct bx_rg_sched_file_item {
 
 struct bx_rg_sched_work {
     enum bx_rg_sched_work_kind kind;
+    uint64_t debug_id;
     int base_depth;
     bool strip_dot_prefix;
     size_t storage_len;
@@ -48,6 +52,7 @@ struct bx_rg_sched_work {
             size_t path_offset;
             size_t git_root_offset;
             struct bx_ignore_state *parent_ignore_state;
+            DIR *owned_dir;
             bool git_root_resolved;
             bool gitignore_enabled;
         } dir;
@@ -243,11 +248,21 @@ static void bx_rg_sched_report_path_error(const struct bx_rg_sched_state *state,
 static void bx_rg_sched_free_work(struct bx_rg_sched_work *work) {
     if (!work)
         return;
+    if (work->kind == BX_RG_SCHED_WORK_FILE_BATCH) {
+        bx_search_dev_batch_debug_search("rg_sched",
+                                         "free",
+                                         work->debug_id,
+                                         (uint64_t)work->u.batch.count,
+                                         (uint64_t)work->storage_len);
+    }
     if (work->kind == BX_RG_SCHED_WORK_FILE_BATCH && work->u.batch.count == 0u)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_LIFETIME_EMPTY,
                                              1u);
-    if (work->kind == BX_RG_SCHED_WORK_DIR)
+    if (work->kind == BX_RG_SCHED_WORK_DIR) {
+        if (work->u.dir.owned_dir)
+            closedir(work->u.dir.owned_dir);
         bx_ignore_state_dispose_chain(work->u.dir.parent_ignore_state);
+    }
     free(work->storage);
     free(work);
 }
@@ -375,29 +390,70 @@ static void bx_rg_sched_worker_slots_dispose(struct bx_rg_sched_state *sched) {
     sched->worker_slots = NULL;
 }
 
-static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
-                                           size_t worker_index,
-                                           struct bx_rg_sched_work *work) {
+static bool bx_rg_sched_enqueue_local_work_with_policy(struct bx_rg_sched_state *sched,
+                                                       size_t worker_index,
+                                                       struct bx_rg_sched_work *work,
+                                                       bool require_idle,
+                                                       bool *queued_out) {
     if (!sched || !sched->worker_slots || worker_index >= sched->thread_count || !work)
         return false;
+    if (queued_out)
+        *queued_out = false;
 
     struct bx_rg_sched_worker_slot *slot = &sched->worker_slots[worker_index];
     bx_rg_sched_lock_worker_slot(slot);
     bool ok = bx_rg_sched_worker_slot_reserve(slot, slot->len + 1u);
-    if (ok)
-        slot->items[slot->len++] = work;
-    pthread_mutex_unlock(&slot->lock);
-    if (!ok)
+    if (!ok) {
+        pthread_mutex_unlock(&slot->lock);
         return false;
+    }
 
     bx_rg_sched_lock_global(sched);
+    if (require_idle && (sched->idle_workers == 0u || sched->shutdown)) {
+        pthread_mutex_unlock(&sched->lock);
+        pthread_mutex_unlock(&slot->lock);
+        return true;
+    }
+    slot->items[slot->len++] = work;
     sched->pending_work++;
     if (sched->idle_workers > 0u && !sched->shutdown)
         bx_rg_sched_signal_workers_locked(sched);
     pthread_mutex_unlock(&sched->lock);
+    pthread_mutex_unlock(&slot->lock);
     if (work->kind == BX_RG_SCHED_WORK_DIR)
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED, 1u);
+    if (queued_out)
+        *queued_out = true;
     return true;
+}
+
+static bool bx_rg_sched_enqueue_local_work(struct bx_rg_sched_state *sched,
+                                           size_t worker_index,
+                                           struct bx_rg_sched_work *work) {
+    return bx_rg_sched_enqueue_local_work_with_policy(sched, worker_index, work, false, NULL);
+}
+
+static bool bx_rg_sched_enqueue_local_work_if_idle(struct bx_rg_sched_state *sched,
+                                                   size_t worker_index,
+                                                   struct bx_rg_sched_work *work,
+                                                   bool *queued_out) {
+    return bx_rg_sched_enqueue_local_work_with_policy(sched,
+                                                      worker_index,
+                                                      work,
+                                                      true,
+                                                      queued_out);
+}
+
+static bool bx_rg_sched_has_idle_worker(struct bx_rg_sched_state *sched) {
+    bool has_idle;
+
+    if (!sched)
+        return false;
+
+    bx_rg_sched_lock_global(sched);
+    has_idle = sched->idle_workers > 0u && !sched->shutdown;
+    pthread_mutex_unlock(&sched->lock);
+    return has_idle;
 }
 
 static void bx_rg_sched_note_work_claimed(struct bx_rg_sched_state *sched) {
@@ -490,17 +546,22 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
                                                          const char *current_root,
                                                          int base_depth,
                                                          bool strip_dot_prefix,
+                                                         DIR *owned_dir,
                                                          bool git_root_resolved,
                                                          bool gitignore_enabled,
                                                          const char *git_root,
                                                          const struct bx_ignore_state
                                                              *parent_ignore_state) {
     struct bx_rg_sched_work *work = calloc(1u, sizeof(*work));
-    if (!work)
+    if (!work) {
+        if (owned_dir)
+            closedir(owned_dir);
         return NULL;
+    }
     work->kind = BX_RG_SCHED_WORK_DIR;
     work->base_depth = base_depth;
     work->strip_dot_prefix = strip_dot_prefix;
+    work->u.dir.owned_dir = owned_dir;
     work->u.dir.path_offset = SIZE_MAX;
     work->u.dir.git_root_offset = SIZE_MAX;
     if (!bx_rg_sched_work_store_string(work, path, &work->u.dir.path_offset) ||
@@ -526,6 +587,8 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_batch(void) {
     struct bx_rg_sched_work *work = calloc(1u, sizeof(*work));
     if (!work)
         return NULL;
+    work->debug_id = bx_search_dev_batch_debug_next_id();
+    bx_search_dev_batch_debug_search("rg_sched", "alloc", work->debug_id, 0u, 0u);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_ALLOCS, 1u);
     work->kind = BX_RG_SCHED_WORK_FILE_BATCH;
     return work;
@@ -582,7 +645,12 @@ static bool bx_rg_sched_flush_pending_batch(struct bx_rg_sched_frontier_state *s
                                          (uint64_t)work->u.batch.count);
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCH_PATH_BYTES,
                                          (uint64_t)work->storage_len);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_BUILT, 1u);
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_QUEUED, 1u);
+    bx_search_dev_batch_debug_search("rg_sched",
+                                     "queued",
+                                     work->debug_id,
+                                     (uint64_t)work->u.batch.count,
+                                     (uint64_t)work->storage_len);
     return true;
 }
 
@@ -591,6 +659,7 @@ static bool bx_rg_sched_add_root_dir_work(struct bx_rg_sched_work_vec *vec,
                                           bool strip_dot_prefix) {
     struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(path, path, 0,
                                                              strip_dot_prefix,
+                                                             NULL,
                                                              false, false,
                                                              NULL, NULL);
     if (!work)
@@ -777,6 +846,34 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
     return status;
 }
 
+static DIR *bx_rg_sched_open_donated_dir(const struct bx_walk_entry *entry) {
+    int parent_fd = AT_FDCWD;
+    const char *name = NULL;
+
+    if (!entry || !entry->is_dir)
+        return NULL;
+    if (entry->metadata_dirfd_valid && entry->metadata_name) {
+        parent_fd = entry->metadata_dirfd;
+        name = entry->metadata_name;
+    } else if (entry->path) {
+        name = entry->path;
+    }
+    if (!name)
+        return NULL;
+
+    bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, 1u);
+    int fd = openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (fd < 0)
+        return NULL;
+
+    DIR *dir = fdopendir(fd);
+    if (!dir) {
+        close(fd);
+        return NULL;
+    }
+    return dir;
+}
+
 static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
                                                   const struct bx_ignore_state *ignore_state,
                                                   const struct bx_walk_ignore_opts *ignore_opts,
@@ -793,12 +890,17 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
             bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_DIRS_SEEN, 1u);
             bx_rg_sched_note_dir_walk(state->stolen);
             if (entry->depth == 1 &&
-                (state->sched->opts->max_depth < 0 || global_depth < state->sched->opts->max_depth)) {
+                (state->sched->opts->max_depth < 0 || global_depth < state->sched->opts->max_depth) &&
+                bx_rg_sched_has_idle_worker(state->sched)) {
+                DIR *donated_dir = bx_rg_sched_open_donated_dir(entry);
+                if (!donated_dir)
+                    return BX_WALK_CONTINUE;
                 struct bx_rg_sched_work *work =
                     bx_rg_sched_work_new_dir(entry->path,
                                              state->work_root_path,
                                              global_depth,
                                              state->strip_dot_prefix,
+                                             donated_dir,
                                              ignore_opts ? ignore_opts->git_root_resolved : false,
                                              ignore_opts ? ignore_opts->gitignore_enabled : false,
                                              ignore_opts ? ignore_opts->git_root : NULL,
@@ -807,10 +909,18 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
                     bx_rg_sched_set_fatal(state->sched, "rg: failed to queue local subtree work\n");
                     return BX_WALK_ERROR;
                 }
-                if (!bx_rg_sched_enqueue_local_work(state->sched, state->worker_index, work)) {
+                bool donated = false;
+                if (!bx_rg_sched_enqueue_local_work_if_idle(state->sched,
+                                                            state->worker_index,
+                                                            work,
+                                                            &donated)) {
                     bx_rg_sched_free_work(work);
                     bx_rg_sched_set_fatal(state->sched, "rg: failed to queue local subtree work\n");
                     return BX_WALK_ERROR;
+                }
+                if (!donated) {
+                    bx_rg_sched_free_work(work);
+                    return BX_WALK_CONTINUE;
                 }
                 return BX_WALK_PRUNE;
             }
@@ -994,11 +1104,20 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .error = bx_rg_sched_walk_error,
             .inherited_parent_ignore_state = inherited_ignore,
         };
-        int rc = bx_search_walk(work_root_path, &walk_config, &walk_state);
+        DIR *owned_dir = work->u.dir.owned_dir;
+        work->u.dir.owned_dir = NULL;
+        int rc = owned_dir
+            ? bx_search_walk_opened_dir(work_root_path, owned_dir, &walk_config, &walk_state)
+            : bx_search_walk(work_root_path, &walk_config, &walk_state);
         if (rc != 0)
             job_error_seen = true;
     } else {
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_BATCHES_SEARCHED, 1u);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_SEARCHED, 1u);
+        bx_search_dev_batch_debug_search("rg_sched",
+                                         "searched",
+                                         work->debug_id,
+                                         (uint64_t)work->u.batch.count,
+                                         (uint64_t)work->storage_len);
         for (size_t i = 0; i < work->u.batch.count; ++i) {
             const char *path =
                 bx_rg_sched_work_storage_string(work, work->u.batch.items[i].path_offset);
@@ -1056,8 +1175,15 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     if (worker->stdout_len > stdout_before)
         job_match_seen = true;
 
-    if (worker->stdout_len == 0u && stderr_len == 0u && work->kind == BX_RG_SCHED_WORK_FILE_BATCH)
-        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_EMPTY_BATCHES, 1u);
+    if (worker->stdout_len == 0u && stderr_len == 0u &&
+        work->kind == BX_RG_SCHED_WORK_FILE_BATCH) {
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SEARCH_BATCHES_EMPTY, 1u);
+        bx_search_dev_batch_debug_search("rg_sched",
+                                         "empty-result",
+                                         work->debug_id,
+                                         (uint64_t)work->u.batch.count,
+                                         (uint64_t)work->storage_len);
+    }
 
     if (worker->stdout_len == 0u && stderr_len == 0u) {
         free(stderr_buf);

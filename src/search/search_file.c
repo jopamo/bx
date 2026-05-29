@@ -111,6 +111,15 @@ static bool search_file_should_stat_path_for_slow_policy(const char *filename,
     return opts->initial_tab || !opts->recursive;
 }
 
+static bool search_file_loaded_metadata_exceeds_max_filesize(
+    const struct stat *st,
+    const struct search_opts *opts
+) {
+    if (!st || !opts || !opts->max_filesize_set)
+        return false;
+    return S_ISREG(st->st_mode) && st->st_size > (off_t)opts->max_filesize;
+}
+
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
                                            struct search_opts *opts) {
@@ -945,6 +954,11 @@ static int search_file(const char *filename,
         operand_st_loaded = true;
     } else if (search_file_should_stat_path_for_slow_policy(filename, use_stdin, opts)) {
         operand_st_loaded = stat(filename, &operand_st) == 0;
+    }
+    if (!use_stdin && operand_st_loaded &&
+        search_file_loaded_metadata_exceeds_max_filesize(&operand_st, opts)) {
+        result = 1;
+        goto out;
     }
 
     bx_search_output_set_offset_width(0);
