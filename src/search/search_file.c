@@ -263,7 +263,16 @@ search_file_check_deferred_prefix_policy(struct search_opts *opts,
         return policy;
 
     if (opts->encoding_mode == BX_RG_ENCODING_AUTO) {
-        policy.transform_needed = bx_rg_transform_prefix_needs_decode(buf, len);
+        bool transform_needed = bx_rg_transform_prefix_needs_decode(buf, len);
+        /*
+         * A UTF-8 BOM only strips bytes from the front of an otherwise
+         * byte-identical stream. Absence of a required literal in the raw
+         * bytes therefore proves absence after the BOM transform too. Keep
+         * scanning for a no-match proof; a candidate still falls back through
+         * the transformed path before publication.
+         */
+        policy.transform_needed = transform_needed &&
+            !bx_rg_transform_prefix_has_utf8_bom(buf, len);
         if (policy.transform_needed)
             return policy;
     }

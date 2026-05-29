@@ -112,15 +112,27 @@ static const char *bx_rg_search_zip_program(const char *filename, const char *co
     return NULL;
 }
 
+bool bx_rg_transform_prefix_has_utf8_bom(const unsigned char *prefix,
+                                         size_t nread) {
+    if (!prefix || nread < 2u)
+        return false;
+    return nread >= 3u &&
+           prefix[0] == 0xEFu && prefix[1] == 0xBBu && prefix[2] == 0xBFu;
+}
+
+static bool bx_rg_transform_prefix_has_utf16_bom(const unsigned char *prefix,
+                                                 size_t nread) {
+    if (!prefix || nread < 2u)
+        return false;
+    return (prefix[0] == 0xFFu && prefix[1] == 0xFEu) ||
+           (prefix[0] == 0xFEu && prefix[1] == 0xFFu);
+}
+
 bool bx_rg_transform_prefix_needs_decode(const unsigned char *prefix,
                                          size_t nread) {
     bx_search_dev_counters_note_transform_prefix_check();
-    if (!prefix || nread < 2u)
-        return false;
-    return (nread >= 3u &&
-            prefix[0] == 0xEFu && prefix[1] == 0xBBu && prefix[2] == 0xBFu) ||
-           (prefix[0] == 0xFFu && prefix[1] == 0xFEu) ||
-           (prefix[0] == 0xFEu && prefix[1] == 0xFFu);
+    return bx_rg_transform_prefix_has_utf8_bom(prefix, nread) ||
+           bx_rg_transform_prefix_has_utf16_bom(prefix, nread);
 }
 
 bool bx_rg_transform_needs_file_preload(const struct search_opts *opts,

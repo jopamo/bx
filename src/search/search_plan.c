@@ -289,7 +289,13 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
     exec_plan->deferred_literal_precheck =
         plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_DEFERRED_FASTPATH
         && plan->output_kind == BX_SEARCH_PLAN_OUTPUT_MATCH_LINES
-        && scanner_regular_supported
+        /*
+         * The absence precheck is an input-side no-match proof. It must stay
+         * available even when the eventual output kernel cannot use the
+         * scanner (for example forced color), because a no-match file has no
+         * output policy to honor and should not materialize records just to
+         * discover absence.
+         */
         && bx_search_plan_deferred_fastpath_has_absence_plan(matcher)
         && !opts->stats;
     exec_plan->max_filesize_zero_literal_skip_regulars =
