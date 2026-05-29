@@ -9,11 +9,22 @@ enum bx_ignore_match_result {
     BX_IGNORE_EXCLUDE,
 };
 
+enum bx_ignore_source_kind {
+    BX_IGNORE_SOURCE_BUILTIN = 0,
+    BX_IGNORE_SOURCE_GITIGNORE,
+    BX_IGNORE_SOURCE_DOTIGNORE,
+};
+
 struct bx_ignore_program;
 
 struct bx_ignore_program *bx_ignore_program_compile(char *const *patterns,
                                                     int pattern_count,
                                                     bool casefold);
+struct bx_ignore_program *
+bx_ignore_program_compile_with_sources(char *const *patterns,
+                                       const enum bx_ignore_source_kind *sources,
+                                       int pattern_count,
+                                       bool casefold);
 struct bx_ignore_program *bx_ignore_program_retain(struct bx_ignore_program *program);
 void bx_ignore_program_release(struct bx_ignore_program *program);
 
