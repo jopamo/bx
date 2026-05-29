@@ -7,6 +7,7 @@
 #include <math.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 static int count_decimal_places(const char* s) {
     const char* dot = strchr(s, '.');
@@ -20,12 +21,17 @@ static int count_decimal_places(const char* s) {
 int bx_seq_main(int argc, char** argv) {
     static const struct option long_options[] = {{"format", required_argument, NULL, 'f'}, {"separator", required_argument, NULL, 's'}, {"equal-width", no_argument, NULL, 'w'},
                                                   {"help", no_argument, NULL, 'h'},         {"version", no_argument, NULL, 'v'},         {NULL, 0, NULL, 0}};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "seq"),
+        .exit_status = 1,
+    };
 
     const char* format = NULL;
     const char* separator = "\n";
     bool equal_width = false;
     int c;
-    while ((c = getopt_long(argc, argv, "+f:s:w", long_options, NULL)) != -1) {
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, ":f:s:whv", long_options, NULL)) != -1) {
         switch (c) {
             case 'f':
                 format = optarg;
@@ -51,7 +57,11 @@ int bx_seq_main(int argc, char** argv) {
             case 'v':
                 printf("seq (bx) %s\n", BX_VERSION);
                 return 0;
+            case ':':
+                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
+                return 1;
             default:
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 return 1;
         }
     }

@@ -2058,7 +2058,9 @@ static void bx_stty_compute_requirements(const struct bx_stty_plan* plan, struct
 }
 
 static int bx_stty_diag_target_errno(struct bx_diag_ctx* diag, const char* target, int errnum) {
-    bx_diag(diag, "%s: %s", target, strerror(errnum));
+    const char* message = errnum == ENOTTY ? "Inappropriate ioctl for device" : strerror(errnum);
+
+    bx_diag(diag, "%s: %s", target, message);
     return diag->exit_status;
 }
 

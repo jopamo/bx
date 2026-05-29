@@ -37,7 +37,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     }
 
     if (opts.line_buffered) {
-        setvbuf(stdout, NULL, _IOLBF, 0);
+        setvbuf(stdout, NULL, _IONBF, 0);
     } else if (opts.block_buffered) {
         setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
     }

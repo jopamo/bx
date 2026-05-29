@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 static void sum_bsd(FILE* f, const char* name, bool print_name) {
     uint16_t checksum = 0;
@@ -35,10 +36,15 @@ static void sum_sysv(FILE* f, const char* name, bool print_name) {
 
 int bx_sum_main(int argc, char** argv) {
     static const struct option long_options[] = {{"sysv", no_argument, NULL, 's'}, {"help", no_argument, NULL, 'h'}, {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sum"),
+        .exit_status = 1,
+    };
 
     bool sysv = false;
     int c;
-    while ((c = getopt_long(argc, argv, "rshv", long_options, NULL)) != -1) {
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, ":rshv", long_options, NULL)) != -1) {
         switch (c) {
             case 'r':
                 sysv = false;
@@ -59,6 +65,7 @@ int bx_sum_main(int argc, char** argv) {
                 printf("sum (bx) %s\n", BX_VERSION);
                 return 0;
             default:
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 return 1;
         }
     }

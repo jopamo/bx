@@ -10,8 +10,10 @@ int bx_wget_main(int argc, char** argv) {
 #if BX_HAVE_MIRA_EMBED
     return mira_embed_run_argv(argc, argv);
 #else
+    (void)argc;
+    (void)argv;
     struct bx_diag_ctx diag = {
-        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "wget"),
+        .progname = "wget",
         .exit_status = 0,
     };
 

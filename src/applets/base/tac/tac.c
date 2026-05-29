@@ -9,6 +9,7 @@
 #include <pcre2.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 static void tac_push_record(char*** records, size_t** record_lens, size_t* count, size_t* cap, const char* data, size_t len) {
     if (*count >= *cap) {
@@ -265,12 +266,17 @@ static void tac_file(FILE* f, const char* separator, bool before) {
 int bx_tac_main(int argc, char** argv) {
     static const struct option long_options[] = {{"before", no_argument, NULL, 'b'}, {"regex", no_argument, NULL, 'r'},   {"separator", required_argument, NULL, 's'},
                                                   {"help", no_argument, NULL, 'h'},   {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
+    struct bx_diag_ctx diag = {
+        .progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "tac"),
+        .exit_status = 1,
+    };
 
     bool before = false;
     bool regex = false;
     const char* separator = "\n";
     int c;
-    while ((c = getopt_long(argc, argv, "brs:", long_options, NULL)) != -1) {
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, ":brs:hv", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 before = true;
@@ -294,7 +300,11 @@ int bx_tac_main(int argc, char** argv) {
             case 'v':
                 printf("tac (bx) %s\n", BX_VERSION);
                 return 0;
+            case ':':
+                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
+                return 1;
             default:
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 return 1;
         }
     }

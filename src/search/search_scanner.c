@@ -84,8 +84,7 @@ bool bx_search_scanner_can_raw_shortcut_file_presence(const struct bx_matcher *m
 
     if (!bx_search_scanner_can_shortcut_file_presence(opts))
         return false;
-    if (opts->binary_without_match && !opts->quiet &&
-        !(opts->files_with_matches || opts->files_without_match))
+    if (opts->binary_without_match && !opts->quiet)
         return false;
     literal = bx_search_matcher_literal(m);
     return literal != NULL
@@ -170,6 +169,10 @@ int bx_search_scanner_opened(FILE *f,
 
     if (!f || !m || !opts || !scanner || !literal)
         return 2;
+    if (display_name && (opts->show_filename || heading_enabled)) {
+        display_name_len = strlen(display_name);
+        display_name_len_ready = true;
+    }
 
     bx_search_dev_counters_note_scanner_entry();
     if (stats)

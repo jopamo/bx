@@ -918,7 +918,6 @@ static int search_file_default_literal_raw_path(const char *filename,
         return 0;
     }
     if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH) {
-        bx_search_dev_counters_note_literal_candidate_hit();
         bx_search_dev_counters_note_candidate_triggered_reopen_call();
     }
 

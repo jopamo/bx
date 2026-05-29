@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include "applets.h"
 #include "bx/diag.h"
+#include "lib/cli_common.h"
 
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,
@@ -1121,7 +1122,11 @@ int bx_sort_main(int argc, char** argv) {
         {NULL, 0, NULL, 0},
     };
 
-    const char* progname = (argv[0] && argv[0][0]) ? argv[0] : "sort";
+    const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sort");
+    struct bx_diag_ctx diag = {
+        .progname = progname,
+        .exit_status = 1,
+    };
     (void)setlocale(LC_ALL, "");
 
     sort_opts_t opts = {
@@ -1142,7 +1147,8 @@ int bx_sort_main(int argc, char** argv) {
     bool has_global_mode = false;
 
     int c;
-    while ((c = getopt_long(argc, argv, "bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
+    opterr = 0;
+    while ((c = getopt_long(argc, argv, ":bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 opts.ignore_leading_blanks = true;
@@ -1230,7 +1236,12 @@ int bx_sort_main(int argc, char** argv) {
                 printf("sort (bx) %s\n", BX_VERSION);
                 sort_key_spec_vec_free(&opts.key_specs);
                 return 0;
+            case ':':
+                bx_cli_diag_option_requires_arg(&diag, optopt, optind, argc, argv);
+                sort_key_spec_vec_free(&opts.key_specs);
+                return 1;
             default:
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 sort_key_spec_vec_free(&opts.key_specs);
                 return 1;
         }
