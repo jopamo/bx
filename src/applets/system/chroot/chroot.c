@@ -17,6 +17,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/id_parse.h"
 
 struct bx_chroot_name_or_id {
     char* raw;
@@ -195,28 +196,9 @@ static bool bx_chroot_parse_groups(const char* text, struct bx_chroot_groups_arg
     return true;
 }
 
-static bool bx_chroot_parse_numeric_id(const char* text, uintmax_t max_value, uintmax_t* value_out) {
-    if (text == NULL || text[0] == '\0' || text[0] == '-') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0') {
-        return false;
-    }
-    if (value > max_value) {
-        return false;
-    }
-
-    *value_out = value;
-    return true;
-}
-
 static bool bx_chroot_parse_uid_numeric(const char* text, uid_t* uid_out) {
     uintmax_t value = 0;
-    if (!bx_chroot_parse_numeric_id(text, (uintmax_t)((uid_t)-1), &value)) {
+    if (!bx_id_parse_numeric(text, (uintmax_t)((uid_t)-1), &value)) {
         return false;
     }
 
@@ -226,7 +208,7 @@ static bool bx_chroot_parse_uid_numeric(const char* text, uid_t* uid_out) {
 
 static bool bx_chroot_parse_gid_numeric(const char* text, gid_t* gid_out) {
     uintmax_t value = 0;
-    if (!bx_chroot_parse_numeric_id(text, (uintmax_t)((gid_t)-1), &value)) {
+    if (!bx_id_parse_numeric(text, (uintmax_t)((gid_t)-1), &value)) {
         return false;
     }
 

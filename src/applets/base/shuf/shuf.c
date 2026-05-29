@@ -14,6 +14,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 #include "lib/args_common.h"
 
 enum {
@@ -73,19 +74,42 @@ static void bx_shuf_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_shuf_parse_uintmax(const char* text, uintmax_t* value_out) {
-    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+    return bx_size_parse_uint(text, value_out);
+}
+
+static bool bx_shuf_decimal_digit(char ch) {
+    return ch >= '0' && ch <= '9';
+}
+
+static const char* bx_shuf_range_separator(const char* text) {
+    const char* p = text;
+    if (p == NULL || p[0] == '\0') {
+        return NULL;
+    }
+
+    if (p[0] == '-' || p[0] == '+') {
+        p++;
+    }
+    if (!bx_shuf_decimal_digit(p[0])) {
+        return NULL;
+    }
+    while (bx_shuf_decimal_digit(p[0])) {
+        p++;
+    }
+    return p[0] == '-' ? p : NULL;
+}
+
+static bool bx_shuf_parse_signed_slice(const char* text, size_t len, intmax_t* value_out) {
+    if (text == NULL || len == 0 || value_out == NULL) {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0') {
-        return false;
-    }
-
-    *value_out = value;
-    return true;
+    char* copy = xmalloc(len + 1u);
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+    bool ok = bx_size_parse_signed_count(copy, value_out);
+    free(copy);
+    return ok;
 }
 
 static bool bx_shuf_parse_input_range(const char* text, intmax_t* lo_out, intmax_t* hi_out) {
@@ -93,22 +117,20 @@ static bool bx_shuf_parse_input_range(const char* text, intmax_t* lo_out, intmax
         return false;
     }
 
-    errno = 0;
-    char* lo_end = NULL;
-    intmax_t lo = strtoimax(text, &lo_end, 10);
-    if (errno == ERANGE || lo_end == text || lo_end == NULL || lo_end[0] != '-') {
+    const char* separator = bx_shuf_range_separator(text);
+    if (separator == NULL) {
         return false;
     }
 
-    const char* hi_text = lo_end + 1;
+    const char* hi_text = separator + 1;
     if (hi_text[0] == '\0') {
         return false;
     }
 
-    errno = 0;
-    char* hi_end = NULL;
-    intmax_t hi = strtoimax(hi_text, &hi_end, 10);
-    if (errno == ERANGE || hi_end == hi_text || hi_end == NULL || hi_end[0] != '\0') {
+    intmax_t lo = 0;
+    intmax_t hi = 0;
+    if (!bx_shuf_parse_signed_slice(text, (size_t)(separator - text), &lo) ||
+        !bx_size_parse_signed_count(hi_text, &hi)) {
         return false;
     }
 

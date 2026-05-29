@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,16 +118,28 @@ static void xargs_print_limits(void) {
 
 static bool xargs_parse_int(const char *progname, const char *optname,
                             const char *text, int *out, bool allow_zero) {
-    char *end = NULL;
-    long v = strtol(text, &end, 10);
-    long min = allow_zero ? 0 : 1;
-    if (!text || *text == '\0' || (end && *end != '\0') || v < min ||
-        v > 100000) {
+    int min = allow_zero ? 0 : 1;
+    if (!bx_args_parse_int_range(text, min, 100000, out)) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n", progname,
                 optname, text ? text : "(null)");
         return false;
     }
-    *out = (int)v;
+    return true;
+}
+
+static bool xargs_parse_delimiter_byte(const char *digits, int base,
+                                       unsigned char *out) {
+    if (!digits || digits[0] == '\0' || digits[0] == '-' || !out)
+        return false;
+
+    errno = 0;
+    char *end = NULL;
+    uintmax_t value = strtoumax(digits, &end, base);
+    if (errno != 0 || end == digits || end == NULL || *end != '\0' ||
+        value > 255)
+        return false;
+
+    *out = (unsigned char)value;
     return true;
 }
 
@@ -153,26 +166,24 @@ static bool xargs_parse_delimiter(const char *progname, const char *text,
     }
 
     if (text[1] == 'x') {
-        char *end = NULL;
-        long v = strtol(text + 2, &end, 16);
-        if (!end || end == text + 2 || *end != '\0' || v < 0 || v > 255) {
+        unsigned char byte = 0;
+        if (!xargs_parse_delimiter_byte(text + 2, 16, &byte)) {
             fprintf(stderr, "%s: invalid delimiter escape: %s\n", progname,
                     text);
             return false;
         }
-        *out = (char)v;
+        *out = (char)byte;
         return true;
     }
 
     if (text[1] >= '0' && text[1] <= '7') {
-        char *end = NULL;
-        long v = strtol(text + 1, &end, 8);
-        if (!end || end == text + 1 || *end != '\0' || v < 0 || v > 255) {
+        unsigned char byte = 0;
+        if (!xargs_parse_delimiter_byte(text + 1, 8, &byte)) {
             fprintf(stderr, "%s: invalid delimiter escape: %s\n", progname,
                     text);
             return false;
         }
-        *out = (char)v;
+        *out = (char)byte;
         return true;
     }
 

@@ -12,6 +12,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/size_parse.h"
 #include "lib/args_common.h"
 
 struct bx_expand_options {
@@ -69,21 +70,28 @@ static bool parse_tabs(const char* list, struct bx_expand_options* options, stru
             s++;
         }
 
-        char* endptr;
-        unsigned long long val = strtoull(s, &endptr, 10);
-        if (*endptr != '\0' || (val == 0 && !repeat)) {
+        uintmax_t parsed = 0;
+        if (!((repeat && s[0] == '\0') || bx_size_parse_uint(s, &parsed)) ||
+            parsed > (uintmax_t)SIZE_MAX || (parsed == 0 && !repeat)) {
             bx_diag(diag, "tab size contains invalid character(s): '%s'", tok_start);
             free(copy);
             return false;
         }
+        size_t val = (size_t)parsed;
 
         if (tok_end == NULL && (relative || repeat)) {
-            options->repeat_size = (size_t)val;
+            options->repeat_size = val;
         }
         else {
-            size_t pos = (size_t)val;
+            size_t pos = val;
             if (relative && options->num_tab_stops > 0) {
-                pos += options->tab_stops[options->num_tab_stops - 1];
+                size_t previous = options->tab_stops[options->num_tab_stops - 1];
+                if (val > (uintmax_t)(SIZE_MAX - previous)) {
+                    bx_diag(diag, "tab offset is not increasing");
+                    free(copy);
+                    return false;
+                }
+                pos = previous + val;
             }
             if (options->num_tab_stops > 0 && pos <= options->tab_stops[options->num_tab_stops - 1]) {
                 bx_diag(diag, "tab offset is not increasing");

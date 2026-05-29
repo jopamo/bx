@@ -18,6 +18,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 #include "lib/args_common.h"
 
 enum bx_dmesg_action {
@@ -116,14 +117,9 @@ static void bx_dmesg_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_dmesg_parse_size(const char* text, size_t* size_out) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    unsigned long long value = strtoull(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value == 0) {
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(text, &value) || value == 0 ||
+        value > (uintmax_t)INT_MAX) {
         return false;
     }
 
@@ -137,10 +133,8 @@ static bool bx_dmesg_parse_console_level(const char* text, int* level_out) {
     }
 
     if (isdigit((unsigned char)text[0])) {
-        errno = 0;
-        char* end = NULL;
-        long value = strtol(text, &end, 10);
-        if (errno != 0 || end == text || *end != '\0' || value < 0 || value > 8) {
+        uintmax_t value = 0;
+        if (!bx_size_parse_uint(text, &value) || value > 8u) {
             return false;
         }
         *level_out = (int)value;

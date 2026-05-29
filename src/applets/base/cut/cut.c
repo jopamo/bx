@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
 
@@ -85,6 +86,23 @@ static void bx_cut_free_ranges(struct bx_cut_options* options) {
     options->num_ranges = 0;
 }
 
+static bool cut_parse_list_number(const char* text, size_t* value_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-' || value_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(text, &end, 10);
+    if (errno != 0 || end == text || end == NULL || *end != '\0' ||
+        value == 0 || value > (uintmax_t)SIZE_MAX) {
+        return false;
+    }
+
+    *value_out = (size_t)value;
+    return true;
+}
+
 static bool parse_list(const char* list, struct bx_cut_options* options, struct bx_diag_ctx* diag) {
     char* copy = xstrdup(list);
     size_t count = 1;
@@ -110,42 +128,39 @@ static bool parse_list(const char* list, struct bx_cut_options* options, struct 
                 char* end_s = dash + 1;
 
                 if (*start_s != '\0') {
-                    char* endptr;
-                    unsigned long long val = strtoull(start_s, &endptr, 10);
-                    if (*endptr != '\0' || val == 0) {
+                    size_t val = 0;
+                    if (!cut_parse_list_number(start_s, &val)) {
                         bx_diag(diag, "invalid byte, character or field list");
                         bx_cut_free_ranges(options);
                         free(copy);
                         return false;
                     }
-                    r.start = (size_t)val;
+                    r.start = val;
                 }
                 else {
                     r.start = 1;
                 }
 
                 if (*end_s != '\0') {
-                    char* endptr;
-                    unsigned long long val = strtoull(end_s, &endptr, 10);
-                    if (*endptr != '\0' || val == 0) {
+                    size_t val = 0;
+                    if (!cut_parse_list_number(end_s, &val)) {
                         bx_diag(diag, "invalid byte, character or field list");
                         bx_cut_free_ranges(options);
                         free(copy);
                         return false;
                     }
-                    r.end = (size_t)val;
+                    r.end = val;
                 }
             }
             else {
-                char* endptr;
-                unsigned long long val = strtoull(tok_start, &endptr, 10);
-                if (*endptr != '\0' || val == 0) {
+                size_t val = 0;
+                if (!cut_parse_list_number(tok_start, &val)) {
                     bx_diag(diag, "invalid byte, character or field list");
                     bx_cut_free_ranges(options);
                     free(copy);
                     return false;
                 }
-                r.start = r.end = (size_t)val;
+                r.start = r.end = val;
             }
 
             if (r.start > r.end && r.end != SIZE_MAX) {

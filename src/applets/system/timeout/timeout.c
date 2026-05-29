@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <math.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -107,7 +108,7 @@ static bool bx_timeout_parse_signal_number(const char* text, int* signal_out) {
 
     errno = 0;
     char* end = NULL;
-    long value = strtol(text, &end, 10);
+    intmax_t value = strtoimax(text, &end, 10);
     if (errno != 0 || end == text || *end != '\0' || value <= 0 || value > 255) {
         return false;
     }
