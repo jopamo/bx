@@ -229,16 +229,15 @@ static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
 
 static void bx_rg_sched_report_path_error(const struct bx_rg_sched_state *state,
                                           const char *path,
-                                          int errnum) {
+                                          int errnum,
+                                          bool io_operation_style) {
     if (!state || (state->opts && state->opts->suppress_errors))
         return;
 
-    if (bx_search_progname_uses_os_error_style(state->progname))
-        fprintf(stderr, "%s: %s: %s (os error %d)\n",
-                state->progname, path, strerror(errnum), errnum);
+    if (io_operation_style)
+        bx_search_fprintf_path_io_error(stderr, state->progname, path, errnum);
     else
-        fprintf(stderr, "%s: %s: %s\n",
-                state->progname, path, strerror(errnum));
+        bx_search_fprintf_path_error(stderr, state->progname, path, errnum);
 }
 
 static void bx_rg_sched_free_work(struct bx_rg_sched_work *work) {
@@ -818,6 +817,9 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
         }
         return BX_WALK_CONTINUE;
     }
+    if (bx_search_entry_can_skip_max_filesize_zero_literal(entry, state->sched->exec_plan,
+                                                           state->sched->opts))
+        return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->sched->opts))
@@ -844,12 +846,8 @@ static enum bx_walk_action bx_rg_sched_walk_error(const char *path,
         return BX_WALK_ERROR;
     char msg[4096];
     int n;
-    if (bx_search_progname_uses_os_error_style(state->sched->progname))
-        n = snprintf(msg, sizeof(msg), "%s: %s: %s (os error %d)\n",
-                     state->sched->progname, path, strerror(errnum), errnum);
-    else
-        n = snprintf(msg, sizeof(msg), "%s: %s: %s\n",
-                     state->sched->progname, path, strerror(errnum));
+    n = bx_search_snprintf_path_error(msg, sizeof(msg),
+                                      state->sched->progname, path, errnum);
     if (n < 0 || (size_t)n >= sizeof(msg) ||
         !bx_rg_sched_append_buf(state->stderr_buf, state->stderr_len, state->stderr_cap,
                                 msg, (size_t)n)) {
@@ -1296,7 +1294,7 @@ int bx_rg_sched_run(int argc,
                         : (first_file + operand_i);
             struct stat st;
             if (stat(argv[j], &st) != 0) {
-                bx_rg_sched_report_path_error(&sched, argv[j], errno);
+                bx_rg_sched_report_path_error(&sched, argv[j], errno, num_files == 1);
                 sched.error_seen = true;
                 sched.exit_status = 2;
                 continue;

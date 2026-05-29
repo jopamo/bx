@@ -16,6 +16,7 @@
 #include "options.h"
 #include "rg_output.h"
 #include "search_internal.h"
+#include "search_plan.h"
 #include "sort.h"
 
 static bool progname_uses_os_error_style(const char *progname) {
@@ -27,6 +28,65 @@ static bool progname_uses_os_error_style(const char *progname) {
 
 bool bx_search_progname_uses_os_error_style(const char *progname) {
     return progname_uses_os_error_style(progname);
+}
+
+int bx_search_fprintf_path_error(FILE *stream,
+                                 const char *progname,
+                                 const char *path,
+                                 int errnum) {
+    const char *display_progname = progname ? progname : "grep";
+    const char *display_path = path ? path : "";
+
+    if (!stream)
+        return -1;
+
+    if (progname_uses_os_error_style(progname))
+        return fprintf(stream, "%s: %s: %s (os error %d)\n",
+                       display_progname, display_path, strerror(errnum), errnum);
+
+    return fprintf(stream, "%s: %s: %s\n",
+                   display_progname, display_path, strerror(errnum));
+}
+
+int bx_search_fprintf_path_io_error(FILE *stream,
+                                    const char *progname,
+                                    const char *path,
+                                    int errnum) {
+    const char *display_progname = progname ? progname : "grep";
+    const char *display_path = path ? path : "";
+
+    if (!stream)
+        return -1;
+
+    if (!progname_uses_os_error_style(progname))
+        return bx_search_fprintf_path_error(stream, progname, path, errnum);
+
+    /*
+     * ripgrep uses this expanded wording for a single searched path operand
+     * that cannot be opened. Keep this byte-exact for the raw default-literal
+     * path, where open failures are reported before scanner/output work is
+     * allowed.
+     */
+    return fprintf(stream,
+                   "%s: %s: IO error for operation on %s: %s (os error %d)\n",
+                   display_progname, display_path, display_path,
+                   strerror(errnum), errnum);
+}
+
+int bx_search_snprintf_path_error(char *buf,
+                                  size_t cap,
+                                  const char *progname,
+                                  const char *path,
+                                  int errnum) {
+    const char *display_progname = progname ? progname : "grep";
+    const char *display_path = path ? path : "";
+
+    if (progname_uses_os_error_style(progname))
+        return snprintf(buf, cap, "%s: %s: %s (os error %d)\n",
+                        display_progname, display_path, strerror(errnum), errnum);
+
+    return snprintf(buf, cap, "%s: %s: %s\n",
+                    display_progname, display_path, strerror(errnum));
 }
 
 bool bx_search_path_exceeds_max_filesize(const char *path,
@@ -45,10 +105,36 @@ bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
     if (!entry || !opts || !opts->max_filesize_set || entry->is_dir)
         return false;
     if (!entry->metadata_loaded &&
-        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_MAX_FILESIZE))
         return false;
     return entry->metadata_loaded && S_ISREG(entry->mode)
         && entry->size > (off_t)opts->max_filesize;
+}
+
+bool bx_search_entry_can_skip_max_filesize_zero_literal(
+    const struct bx_walk_entry *entry,
+    const struct bx_search_exec_plan *exec_plan,
+    const struct search_opts *opts
+) {
+    if (!entry || !exec_plan || !opts)
+        return false;
+    if (!exec_plan->max_filesize_zero_literal_skip_regulars)
+        return false;
+    if (!opts->max_filesize_set || opts->max_filesize != 0u)
+        return false;
+    if (entry->is_dir)
+        return false;
+
+    /*
+     * With --max-filesize 0, the only regular files that pass the size
+     * filter are empty files. The exec-plan flag is set only for non-empty
+     * literal absence plans and output modes where "no match in an empty
+     * regular file" has no observable per-file output. That lets traversal
+     * reject d_type-known regular files without an exact size stat.
+     */
+    if (entry->metadata_loaded)
+        return S_ISREG(entry->mode);
+    return entry->d_type_known && entry->d_type == DT_REG;
 }
 
 static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
@@ -93,6 +179,18 @@ static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
         return;
     case BX_WALK_COUNTER_STAT_REASON_METADATA_FILTER:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_METADATA_FILTER, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_MAX_FILESIZE:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_MAX_FILESIZE, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_MIN_FILESIZE:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_MIN_FILESIZE, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_TYPE:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_TYPE, count);
+        return;
+    case BX_WALK_COUNTER_STAT_REASON_SORT:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_SORT, count);
         return;
     case BX_WALK_COUNTER_STAT_REASON_METADATA_OUTPUT:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT, count);
@@ -148,12 +246,7 @@ void bx_search_report_path_error(const char *progname,
     if (opts && opts->suppress_errors)
         return;
 
-    if (progname_uses_os_error_style(progname))
-        fprintf(bx_search_error_output_stream(), "%s: %s: %s (os error %d)\n",
-                progname, path, strerror(errnum), errnum);
-    else
-        fprintf(bx_search_error_output_stream(), "%s: %s: %s\n",
-                progname, path, strerror(errnum));
+    bx_search_fprintf_path_error(bx_search_error_output_stream(), progname, path, errnum);
 }
 
 void bx_search_report_write_error(const char *progname, int errnum) {

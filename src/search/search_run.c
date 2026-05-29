@@ -120,6 +120,9 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
         return BX_WALK_STOP;
     if (entry->is_dir)
         return BX_WALK_CONTINUE;
+    if (bx_search_entry_can_skip_max_filesize_zero_literal(entry, state->exec_plan,
+                                                           state->opts))
+        return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))

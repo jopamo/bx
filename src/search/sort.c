@@ -139,6 +139,42 @@ static int bx_search_sort_lookup_time(const char *path,
     return -1;
 }
 
+static int bx_search_sort_lookup_walk_entry_time(struct bx_walk_entry *entry,
+                                                 const struct search_opts *opts,
+                                                 struct timespec *out,
+                                                 bool *available,
+                                                 bool *handled) {
+    if (!entry || !opts || !out || !available || !handled) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *handled = true;
+    *available = true;
+    switch (opts->sort_key) {
+    case BX_SEARCH_SORT_MODIFIED:
+    case BX_SEARCH_SORT_ACCESSED:
+        if (!entry->metadata_loaded &&
+            !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_SORT)) {
+            if (errno == 0)
+                errno = ENOENT;
+            return -1;
+        }
+        *out = opts->sort_key == BX_SEARCH_SORT_MODIFIED ? entry->mtime : entry->atime;
+        return 0;
+    case BX_SEARCH_SORT_CREATED:
+        *handled = false;
+        return 0;
+    case BX_SEARCH_SORT_NONE:
+    case BX_SEARCH_SORT_PATH:
+        errno = EINVAL;
+        return -1;
+    }
+
+    errno = EINVAL;
+    return -1;
+}
+
 static void bx_search_report_created_sort_unavailable(const char *progname,
                                                       const char *path,
                                                       const struct search_opts *opts) {
@@ -148,6 +184,13 @@ static void bx_search_report_created_sort_unavailable(const char *progname,
             path,
             bx_search_sort_is_descending(opts) ? "--sortr" : "--sort");
 }
+
+static enum bx_search_sort_add_result bx_search_sorted_paths_add_with_time(
+    struct bx_search_sort_collect_state *state,
+    const char *path,
+    bool strip_dot_prefix,
+    struct timespec sort_time
+);
 
 static enum bx_search_sort_add_result bx_search_sorted_paths_add(
     struct bx_search_sort_collect_state *state,
@@ -175,6 +218,18 @@ static enum bx_search_sort_add_result bx_search_sorted_paths_add(
         return BX_SEARCH_SORT_ADD_STOP;
     }
 
+    return bx_search_sorted_paths_add_with_time(state, path, strip_dot_prefix, sort_time);
+}
+
+static enum bx_search_sort_add_result bx_search_sorted_paths_add_with_time(
+    struct bx_search_sort_collect_state *state,
+    const char *path,
+    bool strip_dot_prefix,
+    struct timespec sort_time
+) {
+    if (!state || !path)
+        return BX_SEARCH_SORT_ADD_ERROR;
+
     if (!bx_search_sorted_paths_reserve(state->out, state->out->len + 1u))
         return BX_SEARCH_SORT_ADD_ERROR;
 
@@ -193,6 +248,9 @@ static enum bx_search_sort_add_result bx_search_sorted_paths_add(
 
 static enum bx_walk_action bx_search_sort_walk_cb(struct bx_walk_entry *entry, void *user) {
     struct bx_search_sort_collect_state *state = user;
+    struct timespec sort_time = {0};
+    bool sort_time_available = false;
+    bool sort_time_from_entry = false;
 
     if (!state || !entry)
         return BX_WALK_ERROR;
@@ -203,7 +261,29 @@ static enum bx_walk_action bx_search_sort_walk_cb(struct bx_walk_entry *entry, v
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->opts))
         return BX_WALK_CONTINUE;
 
-    switch (bx_search_sorted_paths_add(state, entry->path, state->strip_dot_prefix)) {
+    if (bx_search_sort_lookup_walk_entry_time(entry, state->opts, &sort_time,
+                                              &sort_time_available,
+                                              &sort_time_from_entry) != 0) {
+        bx_search_report_path_error(state->progname, entry->path, errno, state->opts);
+        if (state->error_seen)
+            *state->error_seen = true;
+        return BX_WALK_CONTINUE;
+    }
+
+    if (sort_time_from_entry && !sort_time_available) {
+        bx_search_report_created_sort_unavailable(state->progname, entry->path, state->opts);
+        if (state->error_seen)
+            *state->error_seen = true;
+        state->fatal_sort_error = true;
+        return BX_WALK_STOP;
+    }
+
+    enum bx_search_sort_add_result add_result = sort_time_from_entry
+        ? bx_search_sorted_paths_add_with_time(state, entry->path, state->strip_dot_prefix,
+                                               sort_time)
+        : bx_search_sorted_paths_add(state, entry->path, state->strip_dot_prefix);
+
+    switch (add_result) {
     case BX_SEARCH_SORT_ADD_CONTINUE:
         return BX_WALK_CONTINUE;
     case BX_SEARCH_SORT_ADD_STOP:

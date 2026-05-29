@@ -294,6 +294,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
 
     fd = bx_search_input_open_fd(filename, opts);
     if (fd < 0) {
+        bx_search_dev_counters_note_raw_fd_to_diagnostic_entry();
         bx_search_report_path_error(progname, filename, errno, opts);
         return BX_SEARCH_DEFERRED_PRECHECK_ERROR;
     }
@@ -388,6 +389,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
     }
 
 out_error:
+    bx_search_dev_counters_note_raw_fd_to_diagnostic_entry();
     bx_search_report_path_error(progname,
                                 search_file_resolve_display_name(display_name_state, opts),
                                 errno ? errno : EIO,
@@ -853,8 +855,10 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
         enum bx_search_file_kernel_kind resolved_kernel =
             search_file_resolve_opened_kernel(f, nonbinary_kernel);
 
-        if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER)
+        if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER) {
             bx_search_dev_counters_note_candidate_triggered_scanner_entry();
+            bx_search_dev_counters_note_raw_fd_to_scanner_entry();
+        }
         return search_file_run_opened_kernel(
             resolved_kernel, f, false, filename, display_name, progname, m, opts,
             match_count, scanner, record_stream, stats);
@@ -880,9 +884,13 @@ static int search_file_default_literal_raw_path(const char *filename,
         return precheck;
     }
     if (precheck == BX_SEARCH_DEFERRED_PRECHECK_TRANSFORM_NEEDED) {
-        return search_file_run_transformed_input(filename, display_name_state, progname,
-                                                 m, exec_plan, opts, match_count,
-                                                 record_stream, stats);
+        int transformed_result =
+            search_file_run_transformed_input(filename, display_name_state, progname,
+                                              m, exec_plan, opts, match_count,
+                                              record_stream, stats);
+        if (transformed_result == 2)
+            bx_search_dev_counters_note_raw_fd_to_diagnostic_entry();
+        return transformed_result;
     }
     if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH &&
         opts->quiet && exec_plan && exec_plan->raw_presence_supported) {
@@ -896,10 +904,19 @@ static int search_file_default_literal_raw_path(const char *filename,
         bx_search_dev_counters_note_candidate_triggered_reopen_call();
     }
 
-    return search_file_run_nonstdin_regular_path(filename, display_name_state, progname, m,
-                                                 exec_plan, opts, match_count, scanner,
-                                                 record_stream, stats,
-                                                 precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH);
+    {
+        bool candidate_triggered =
+            precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
+        int regular_result = search_file_run_nonstdin_regular_path(
+            filename, display_name_state, progname, m, exec_plan, opts, match_count,
+            scanner, record_stream, stats, candidate_triggered
+        );
+        if (candidate_triggered && regular_result == 0)
+            bx_search_dev_counters_note_raw_fd_to_output_entry();
+        if (candidate_triggered && regular_result == 2)
+            bx_search_dev_counters_note_raw_fd_to_diagnostic_entry();
+        return regular_result;
+    }
 }
 
 static int search_file(const char *filename,

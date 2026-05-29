@@ -54,6 +54,10 @@ enum bx_search_walk_counter {
     BX_SEARCH_WALK_STAT_REASON_SYMLINK_POLICY,
     BX_SEARCH_WALK_STAT_REASON_TRAVERSAL_POLICY,
     BX_SEARCH_WALK_STAT_REASON_METADATA_FILTER,
+    BX_SEARCH_WALK_STAT_REASON_MAX_FILESIZE,
+    BX_SEARCH_WALK_STAT_REASON_MIN_FILESIZE,
+    BX_SEARCH_WALK_STAT_REASON_TYPE,
+    BX_SEARCH_WALK_STAT_REASON_SORT,
     BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT,
     BX_SEARCH_WALK_OPENAT_CALLS,
     BX_SEARCH_WALK_PATH_JOIN_CALLS,
@@ -83,6 +87,9 @@ void bx_search_dev_counters_note_binary_prefix_check(void);
 void bx_search_dev_counters_note_file_cut_off_by_binary_prefix(void);
 void bx_search_dev_counters_note_candidate_triggered_reopen_call(void);
 void bx_search_dev_counters_note_candidate_triggered_scanner_entry(void);
+void bx_search_dev_counters_note_raw_fd_to_scanner_entry(void);
+void bx_search_dev_counters_note_raw_fd_to_output_entry(void);
+void bx_search_dev_counters_note_raw_fd_to_diagnostic_entry(void);
 void bx_search_dev_counters_note_candidate_hit(void);
 void bx_search_dev_counters_note_literal_candidate_hit(void);
 void bx_search_dev_counters_note_literal_confirm_call(void);

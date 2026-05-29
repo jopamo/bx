@@ -7,11 +7,13 @@
 #include "lib/id_parse.h"
 #include "metadata.h"
 
-static bool bx_walk_entry_mode_matches(struct bx_walk_entry *entry, bool (*predicate)(mode_t)) {
+static bool bx_walk_entry_mode_matches_for(struct bx_walk_entry *entry,
+                                           bool (*predicate)(mode_t),
+                                           enum bx_walk_metadata_reason reason) {
     if (!entry || !predicate)
         return false;
 
-    if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
+    if (!bx_walk_entry_load_metadata_for(entry, reason))
         return false;
 
     return predicate(entry->mode);
@@ -46,7 +48,8 @@ static bool bx_walk_entry_matches_regular_type(struct bx_walk_entry *entry) {
         return false;
     if (entry->d_type_known)
         return entry->d_type == DT_REG;
-    return bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular);
+    return bx_walk_entry_mode_matches_for(entry, bx_walk_mode_is_regular,
+                                          BX_WALK_METADATA_REASON_TYPE);
 }
 
 static bool bx_walk_entry_matches_known_dtype(struct bx_walk_entry *entry,
@@ -56,7 +59,8 @@ static bool bx_walk_entry_matches_known_dtype(struct bx_walk_entry *entry,
         return false;
     if (entry->d_type_known)
         return entry->d_type == d_type;
-    return bx_walk_entry_mode_matches(entry, predicate);
+    return bx_walk_entry_mode_matches_for(entry, predicate,
+                                          BX_WALK_METADATA_REASON_TYPE);
 }
 
 static bool bx_walk_entry_matches_directory_type(struct bx_walk_entry *entry) {
@@ -219,7 +223,8 @@ bool bx_walk_gid_has_group(gid_t gid) {
     return bx_id_gid_exists(gid);
 }
 
-bool bx_walk_entry_is_empty(struct bx_walk_entry *entry) {
+static bool bx_walk_entry_is_empty_for(struct bx_walk_entry *entry,
+                                       enum bx_walk_metadata_reason reason) {
     if (!entry)
         return false;
 
@@ -240,9 +245,13 @@ bool bx_walk_entry_is_empty(struct bx_walk_entry *entry) {
         return empty;
     }
 
-    if (!bx_walk_entry_mode_matches(entry, bx_walk_mode_is_regular))
+    if (!bx_walk_entry_mode_matches_for(entry, bx_walk_mode_is_regular, reason))
         return false;
     return entry->size == 0;
+}
+
+bool bx_walk_entry_is_empty(struct bx_walk_entry *entry) {
+    return bx_walk_entry_is_empty_for(entry, BX_WALK_METADATA_REASON_FILTER);
 }
 
 bool bx_walk_entry_matches_type(struct bx_walk_entry *entry, char type_filter) {
@@ -257,11 +266,11 @@ bool bx_walk_entry_matches_type(struct bx_walk_entry *entry, char type_filter) {
     case 'l':
         return bx_walk_entry_matches_known_dtype(entry, DT_LNK, bx_walk_mode_is_symlink);
     case 'x':
-        if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
+        if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_TYPE))
             return false;
         return S_ISREG(entry->mode) && access(entry->path, X_OK) == 0;
     case 'e':
-        return bx_walk_entry_is_empty(entry);
+        return bx_walk_entry_is_empty_for(entry, BX_WALK_METADATA_REASON_TYPE);
     case 'p':
         return bx_walk_entry_matches_known_dtype(entry, DT_FIFO, bx_walk_mode_is_fifo);
     case 's':

@@ -268,7 +268,8 @@ static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state
 
 static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state *state,
                                                  const char *path,
-                                                 int errnum) {
+                                                 int errnum,
+                                                 bool io_operation_style) {
     struct bx_rg_publish_record *record = calloc(1u, sizeof(*record));
     FILE *err_stream = NULL;
 
@@ -295,12 +296,10 @@ static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state
         return false;
     }
 
-    if (bx_search_progname_uses_os_error_style(state->progname))
-        fprintf(err_stream, "%s: %s: %s (os error %d)\n",
-                state->progname, path, strerror(errnum), errnum);
+    if (io_operation_style)
+        bx_search_fprintf_path_io_error(err_stream, state->progname, path, errnum);
     else
-        fprintf(err_stream, "%s: %s: %s\n",
-                state->progname, path, strerror(errnum));
+        bx_search_fprintf_path_error(err_stream, state->progname, path, errnum);
     fclose(err_stream);
 
     if (!bx_search_parallel_submit_record(state, record))
@@ -558,6 +557,10 @@ static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entr
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_DIRS_SEEN, 1u);
         return BX_WALK_CONTINUE;
     }
+    if (bx_search_entry_can_skip_max_filesize_zero_literal(entry,
+                                                           state->parallel->exec_plan,
+                                                           state->parallel->opts))
+        return BX_WALK_CONTINUE;
     if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
         return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->parallel->opts))
@@ -579,7 +582,7 @@ static enum bx_walk_action bx_search_parallel_walk_error_cb(const char *path,
 
     if (!state || !state->parallel)
         return BX_WALK_ERROR;
-    if (!bx_search_parallel_submit_path_error(state->parallel, path, errnum))
+    if (!bx_search_parallel_submit_path_error(state->parallel, path, errnum, false))
         return BX_WALK_ERROR;
     return bx_cancel_state_requested(&state->parallel->cancel)
         ? BX_WALK_STOP
@@ -739,7 +742,8 @@ int bx_search_run_parallel_rg(int argc,
                           .index
                     : (first_file + operand_i);
             if (stat(argv[j], &st) != 0) {
-                if (!bx_search_parallel_submit_path_error(&state, argv[j], errno)) {
+                if (!bx_search_parallel_submit_path_error(&state, argv[j], errno,
+                                                          num_files == 1)) {
                     bx_search_parallel_set_fatal(&state, "rg: failed to queue traversal error\n");
                     break;
                 }
@@ -775,7 +779,8 @@ int bx_search_run_parallel_rg(int argc,
                 struct stat st;
                 if (lstat(argv[j], &st) == 0) {
                     if (S_ISDIR(st.st_mode)) {
-                        if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR))
+                        if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR,
+                                                                  false))
                             bx_search_parallel_set_fatal(&state, "rg: failed to queue directory error\n");
                         continue;
                     }

@@ -286,6 +286,10 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
         && scanner_regular_supported
         && bx_search_plan_deferred_fastpath_has_absence_plan(matcher)
         && !opts->stats;
+    exec_plan->max_filesize_zero_literal_skip_regulars =
+        exec_plan->deferred_literal_precheck
+        && opts->max_filesize_set
+        && opts->max_filesize == 0u;
 }
 
 bool bx_search_plan_debug_enabled(void) {

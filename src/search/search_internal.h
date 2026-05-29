@@ -41,6 +41,19 @@ struct bx_search_output_ctx {
 };
 
 bool bx_search_progname_uses_os_error_style(const char *progname);
+int bx_search_fprintf_path_error(FILE *stream,
+                                 const char *progname,
+                                 const char *path,
+                                 int errnum);
+int bx_search_fprintf_path_io_error(FILE *stream,
+                                    const char *progname,
+                                    const char *path,
+                                    int errnum);
+int bx_search_snprintf_path_error(char *buf,
+                                  size_t cap,
+                                  const char *progname,
+                                  const char *path,
+                                  int errnum);
 void bx_search_report_path_error(const char *progname,
                                  const char *path,
                                  int errnum,
@@ -54,6 +67,10 @@ bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts);
 bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
                                           const struct search_opts *opts);
+bool bx_search_entry_can_skip_max_filesize_zero_literal(
+    const struct bx_walk_entry *entry,
+    const struct bx_search_exec_plan *exec_plan,
+    const struct search_opts *opts);
 bool bx_search_should_skip_special_input_mode(mode_t mode,
                                               const struct search_opts *opts);
 bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
