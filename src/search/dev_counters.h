@@ -188,6 +188,7 @@ void bx_search_dev_counters_note_scanner_entry_from_literal_candidate(void);
 void bx_search_dev_counters_note_scanner_entry_without_candidate(void);
 void bx_search_dev_counters_note_lines_counted(size_t count);
 void bx_search_dev_counters_note_line_boundaries_recovered(size_t count);
+void bx_search_dev_counters_note_candidate_triggered_line_recovery_reread(size_t bytes);
 void bx_search_dev_counters_note_record_expanded(void);
 void bx_search_dev_counters_note_plain_line_output(void);
 void bx_search_dev_counters_note_context_buffer_entry(void);

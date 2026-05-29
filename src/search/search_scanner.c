@@ -136,7 +136,8 @@ int bx_search_scanner_opened(FILE *f,
                              struct search_opts *opts,
                              int *match_count,
                              struct bx_search_scanner *scanner,
-                             struct bx_search_stats *stats) {
+                             struct bx_search_stats *stats,
+                             bool candidate_triggered_scanner_entry) {
     struct bx_literal_matcher *literal = bx_search_matcher_literal(m);
     int file_matches = 0;
     int status = 1;
@@ -176,11 +177,14 @@ int bx_search_scanner_opened(FILE *f,
     }
 
     bx_search_dev_counters_note_scanner_entry();
+    if (candidate_triggered_scanner_entry)
+        bx_search_dev_counters_note_candidate_triggered_scanner_entry();
     if (stats)
         stats->files_searched++;
 
     bx_search_scanner_begin_file(scanner, (char)delimiter, need_line_numbers);
-    while (!stop && bx_search_scanner_read_chunk(scanner, f)) {
+    while (!stop &&
+           bx_search_scanner_read_chunk(scanner, f, candidate_triggered_scanner_entry)) {
         size_t next_line_num = scanner->records_before_buf + 1u;
         size_t numbered_until = 0u;
 

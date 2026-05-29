@@ -25,6 +25,7 @@ int bx_search_scanner_opened(FILE *f,
                              struct search_opts *opts,
                              int *match_count,
                              struct bx_search_scanner *scanner,
-                             struct bx_search_stats *stats);
+                             struct bx_search_stats *stats,
+                             bool candidate_triggered_scanner_entry);
 
 #endif

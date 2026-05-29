@@ -72,6 +72,7 @@ struct bx_search_dev_counters {
     atomic_size_t scanner_entries_without_candidate;
     atomic_size_t lines_counted;
     atomic_size_t line_boundaries_recovered;
+    atomic_size_t candidate_triggered_line_recovery_reread_bytes;
     atomic_size_t records_expanded;
     atomic_size_t plain_line_outputs;
     atomic_size_t context_buffer_entries;
@@ -318,6 +319,8 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.lines_counted, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.line_boundaries_recovered, 0u,
                           memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.candidate_triggered_line_recovery_reread_bytes,
+                          0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.records_expanded, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.plain_line_outputs, 0u, memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.context_buffer_entries, 0u,
@@ -970,6 +973,16 @@ void bx_search_dev_counters_note_line_boundaries_recovered(size_t count) {
                               memory_order_relaxed);
 }
 
+void bx_search_dev_counters_note_candidate_triggered_line_recovery_reread(size_t bytes) {
+    if (!current_dev_counters.enabled || bytes == 0u)
+        return;
+
+    atomic_fetch_add_explicit(
+        &current_dev_counters.candidate_triggered_line_recovery_reread_bytes,
+        bytes,
+        memory_order_relaxed);
+}
+
 void bx_search_dev_counters_note_record_expanded(void) {
     if (!current_dev_counters.enabled)
         return;
@@ -1580,7 +1593,7 @@ void bx_search_dev_counters_report(FILE *stream) {
             "raw_fd_to_scanner_entries=%" PRIuMAX " raw_fd_to_output_entries=%" PRIuMAX " raw_fd_to_diagnostic_entries=%" PRIuMAX " "
             "candidate_hits=%zu literal_candidate_hits=%zu literal_confirm_calls=%zu literal_matches=%zu literal_not_found=%zu literal_overlap_bytes_scanned=%zu literal_cross_chunk_matches=%zu literal_plan_compiles=%zu literal_selected_pair_start=%zu literal_selected_pair_interior=%zu literal_selected_pair_end=%zu literal_algo_empty_calls=%zu literal_algo_byte_calls=%zu literal_algo_pair_calls=%zu literal_algo_short_calls=%zu literal_algo_rare_pair_calls=%zu literal_algo_long_calls=%zu literal_algo_scalar_calls=%zu literal_algo_x86_avx2_calls=%zu literal_algo_arm64_neon_calls=%zu literal_algo_arm64_sve_calls=%zu literal_algo_memmem_calls=%zu literal_bytes_scanned=%zu literal_rare_pair_probe_calls=%zu literal_pair_mask_nonzero=%zu "
             "literal_backend_requested=%" PRIuMAX " literal_backend_resolved=%" PRIuMAX " literal_avx2_runtime_available=%" PRIuMAX " literal_avx2_target_available=%" PRIuMAX " literal_avx2_eligible_but_not_selected=%" PRIuMAX " "
-            "literal_algo_sse2_calls=%zu literal_sse2_first_last_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_entries_from_literal_candidate=%zu scanner_entries_without_candidate=%zu lines_counted=%zu line_boundaries_recovered=%zu records_expanded=%zu plain_line_outputs=%zu context_buffer_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
+            "literal_algo_sse2_calls=%zu literal_sse2_first_last_calls=%zu matcher_invocations=%zu records_materialized=%zu scanner_entries=%zu scanner_entries_from_literal_candidate=%zu scanner_entries_without_candidate=%zu lines_counted=%zu line_boundaries_recovered=%zu candidate_triggered_line_recovery_reread_bytes=%zu records_expanded=%zu plain_line_outputs=%zu context_buffer_entries=%zu scanner_plain_prefix_allocs=%zu output_lines_emitted=%zu "
             "binary_policy_checks=%" PRIuMAX " display_path_borrows=%" PRIuMAX " display_path_copies=%" PRIuMAX " display_path_copy_bytes=%" PRIuMAX " ",
             atomic_load_explicit(&current_dev_counters.bytes_read, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.files_opened, memory_order_relaxed),
@@ -1704,6 +1717,9 @@ void bx_search_dev_counters_report(FILE *stream) {
             atomic_load_explicit(&current_dev_counters.lines_counted, memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.line_boundaries_recovered,
                                  memory_order_relaxed),
+            atomic_load_explicit(
+                &current_dev_counters.candidate_triggered_line_recovery_reread_bytes,
+                memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.records_expanded,
                                  memory_order_relaxed),
             atomic_load_explicit(&current_dev_counters.plain_line_outputs,

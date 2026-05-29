@@ -191,7 +191,7 @@ static int search_file_run_opened_kernel(enum bx_search_file_kernel_kind kernel,
                                              match_count, scanner, stats);
     case BX_SEARCH_FILE_KERNEL_SCANNER:
         return bx_search_scanner_opened(f, use_stdin, display_name, progname, m, opts,
-                                        match_count, scanner, stats);
+                                        match_count, scanner, stats, false);
     case BX_SEARCH_FILE_KERNEL_BUFFERED:
         return bx_search_buffered_opened(f, use_stdin, display_name, progname, m, opts,
                                          match_count, record_stream, stats);
@@ -1127,8 +1127,9 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
             search_file_resolve_opened_kernel(f, nonbinary_kernel);
 
         if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER) {
-            bx_search_dev_counters_note_candidate_triggered_scanner_entry();
             bx_search_dev_counters_note_raw_fd_to_scanner_entry();
+            return bx_search_scanner_opened(f, false, display_name, progname, m, opts,
+                                            match_count, scanner, stats, true);
         }
         return search_file_run_opened_kernel(
             resolved_kernel, f, false, filename, display_name, progname, m, opts,

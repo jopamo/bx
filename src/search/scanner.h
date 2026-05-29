@@ -39,7 +39,9 @@ bool bx_search_scanner_reserve(struct bx_search_scanner *scanner, size_t needed)
 void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
                                   char delimiter,
                                   bool track_record_numbers);
-bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *stream);
+bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
+                                  FILE *stream,
+                                  bool candidate_triggered_scanner_entry);
 bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *scanner,
                                               struct bx_literal_matcher *literal,
                                               size_t *cursor,

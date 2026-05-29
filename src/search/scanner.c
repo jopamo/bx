@@ -116,7 +116,9 @@ void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
     scanner->eof = false;
 }
 
-bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *stream) {
+bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
+                                  FILE *stream,
+                                  bool candidate_triggered_scanner_entry) {
     if (!scanner || !stream)
         return false;
 
@@ -152,6 +154,8 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner, FILE *strea
             size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, stream);
             scanner->len += nread;
             bx_search_dev_counters_note_content_read(nread);
+            if (candidate_triggered_scanner_entry)
+                bx_search_dev_counters_note_candidate_triggered_line_recovery_reread(nread);
             if (nread == 0u) {
                 if (ferror(stream))
                     return false;

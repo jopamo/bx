@@ -1360,8 +1360,6 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         }
     }
     free(walk_stderr_buf);
-    if (stderr_len > 0u)
-        job_error_seen = true;
     if (worker->stdout_len > stdout_before)
         job_match_seen = true;
 
