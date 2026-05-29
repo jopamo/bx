@@ -27,6 +27,8 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
                                        bool casefold);
 struct bx_ignore_program *bx_ignore_program_retain(struct bx_ignore_program *program);
 void bx_ignore_program_release(struct bx_ignore_program *program);
+bool bx_ignore_program_is_basename_only(const struct bx_ignore_program *program);
+bool bx_ignore_program_has_generic_glob_fallback(const struct bx_ignore_program *program);
 
 enum bx_ignore_match_result
 bx_ignore_program_match_literal_basename(const struct bx_ignore_program *program,

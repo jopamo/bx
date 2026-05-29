@@ -1510,12 +1510,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     opts->exclude_patterns[opts->num_exclude] = strdup(optarg + 1);
                     opts->exclude_pattern_casefold[opts->num_exclude] =
                         opts->glob_case_insensitive;
+                    opts->exclude_pattern_is_type[opts->num_exclude] = false;
                     opts->num_exclude++;
                 }
             } else if (opts->num_include < MAX_INCLUDE_PATTERNS) {
                 opts->include_patterns[opts->num_include] = strdup(optarg);
                 opts->include_pattern_casefold[opts->num_include] =
                     opts->glob_case_insensitive;
+                opts->include_pattern_is_type[opts->num_include] = false;
                 opts->num_include++;
             }
             break;
@@ -1527,11 +1529,12 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, optarg);
                 return -1;
             }
-            if (opts->num_include < MAX_INCLUDE_PATTERNS) {
-                opts->include_patterns[opts->num_include] = strdup(optarg);
-                opts->include_pattern_casefold[opts->num_include] = true;
-                opts->num_include++;
-            }
+                if (opts->num_include < MAX_INCLUDE_PATTERNS) {
+                    opts->include_patterns[opts->num_include] = strdup(optarg);
+                    opts->include_pattern_casefold[opts->num_include] = true;
+                    opts->include_pattern_is_type[opts->num_include] = false;
+                    opts->num_include++;
+                }
             break;
         case 'u':
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;
@@ -1613,11 +1616,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     opts->include_patterns[opts->num_include] = strdup(tok);
                     opts->include_pattern_casefold[opts->num_include] =
                         opts->glob_case_insensitive;
+                    opts->include_pattern_is_type[opts->num_include] = true;
                     opts->num_include++;
                 } else if (c == 'T' && opts->num_exclude < MAX_EXCLUDE_PATTERNS) {
                     opts->exclude_patterns[opts->num_exclude] = strdup(tok);
                     opts->exclude_pattern_casefold[opts->num_exclude] =
                         opts->glob_case_insensitive;
+                    opts->exclude_pattern_is_type[opts->num_exclude] = true;
                     opts->num_exclude++;
                 }
                 tok = strtok(NULL, ",");

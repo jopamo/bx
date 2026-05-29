@@ -493,8 +493,10 @@ struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *
         .glob_case_insensitive = opts->glob_case_insensitive,
         .include_patterns = opts->include_patterns,
         .include_pattern_casefold = opts->include_pattern_casefold,
+        .include_pattern_is_type = opts->include_pattern_is_type,
         .num_include_patterns = opts->num_include,
         .exclude_patterns = opts->exclude_patterns,
+        .exclude_pattern_is_type = opts->exclude_pattern_is_type,
         .num_exclude_patterns = opts->num_exclude,
         .exclude_dirs = opts->exclude_dir_patterns,
         .num_exclude_dirs = opts->num_exclude_dir,
@@ -536,6 +538,7 @@ bool bx_search_explicit_entry_selected(const struct search_opts *opts,
             .glob_case_insensitive = opts->glob_case_insensitive,
             .include_patterns = opts->include_patterns,
             .include_pattern_casefold = opts->include_pattern_casefold,
+            .include_pattern_is_type = opts->include_pattern_is_type,
             .num_include_patterns = opts->num_include,
         };
         struct bx_walk_filter_state filter_state;

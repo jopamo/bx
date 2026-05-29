@@ -57,6 +57,7 @@ static void bx_ignore_program_cache_key_dispose(struct bx_ignore_program_cache_k
 
 static bool bx_ignore_program_cache_build_key(struct bx_ignore_program_cache_key *key,
                                               char *const *patterns,
+                                              const enum bx_ignore_source_kind *sources,
                                               int pattern_count,
                                               bool casefold) {
     size_t total_len = 0u;
@@ -71,7 +72,7 @@ static bool bx_ignore_program_cache_build_key(struct bx_ignore_program_cache_key
     for (int i = 0; i < pattern_count; ++i) {
         if (!patterns[i])
             continue;
-        total_len += strlen(patterns[i]) + 1u;
+        total_len += strlen(patterns[i]) + 2u;
     }
     if (total_len == 0u)
         return false;
@@ -86,10 +87,19 @@ static bool bx_ignore_program_cache_build_key(struct bx_ignore_program_cache_key
 
         if (!patterns[i])
             continue;
+        enum bx_ignore_source_kind source = sources
+            ? sources[i]
+            : BX_IGNORE_SOURCE_BUILTIN;
+        unsigned char source_byte =
+            source == BX_IGNORE_SOURCE_GITIGNORE || source == BX_IGNORE_SOURCE_DOTIGNORE
+                ? (unsigned char)source
+                : (unsigned char)BX_IGNORE_SOURCE_BUILTIN;
+        *out++ = (char)source_byte;
         pattern_len = strlen(patterns[i]);
         memcpy(out, patterns[i], pattern_len);
         out += pattern_len;
         *out++ = '\n';
+        hash = bx_ignore_program_hash_bytes(hash, &source_byte, sizeof(source_byte));
         hash = bx_ignore_program_hash_bytes(hash, patterns[i], pattern_len);
         hash = bx_ignore_program_hash_bytes(hash, "\n", 1u);
     }
@@ -190,29 +200,46 @@ enum bx_ignore_state_match_mode {
     BX_IGNORE_STATE_MATCH_FULL,
 };
 
-static bool bx_ignore_append_pattern(char ***patterns, int *n, int *cap, const char *pattern) {
+static bool bx_ignore_append_pattern(char ***patterns,
+                                     enum bx_ignore_source_kind **sources,
+                                     int *n,
+                                     int *cap,
+                                     const char *pattern,
+                                     enum bx_ignore_source_kind source) {
     if (*n >= *cap) {
         int new_cap = *cap == 0 ? 16 : *cap * 2;
         char **tmp = realloc(*patterns, (size_t)new_cap * sizeof(**patterns));
         if (!tmp)
             return false;
+        enum bx_ignore_source_kind *source_tmp =
+            realloc(*sources, (size_t)new_cap * sizeof(**sources));
+        if (!source_tmp) {
+            *patterns = tmp;
+            return false;
+        }
         *patterns = tmp;
+        *sources = source_tmp;
         *cap = new_cap;
     }
 
     (*patterns)[*n] = strdup(pattern);
     if (!(*patterns)[*n])
         return false;
+    (*sources)[*n] = source;
     (*n)++;
     return true;
 }
 
-static void bx_ignore_free_patterns(char **patterns, int n) {
+static void bx_ignore_free_patterns(char **patterns,
+                                    enum bx_ignore_source_kind *sources,
+                                    int n) {
     if (!patterns)
-        return;
+        goto done;
     for (int i = 0; i < n; i++)
         free(patterns[i]);
     free(patterns);
+done:
+    free(sources);
 }
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
@@ -229,6 +256,12 @@ void bx_ignore_state_init(struct bx_ignore_state *state,
     state->owned_root_prefix = NULL;
     state->root_prefix_len = 0u;
     state->program = program;
+    state->basename_only_chain =
+        (!parent || parent->basename_only_chain) &&
+        (!program || bx_ignore_program_is_basename_only(program));
+    state->has_generic_glob_fallback_chain =
+        (parent && parent->has_generic_glob_fallback_chain) ||
+        (program && bx_ignore_program_has_generic_glob_fallback(program));
 }
 
 void bx_ignore_state_dispose(struct bx_ignore_state *state) {
@@ -245,6 +278,8 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state) {
     state->owned_root_prefix = NULL;
     state->root_prefix_len = 0u;
     state->program = NULL;
+    state->basename_only_chain = false;
+    state->has_generic_glob_fallback_chain = false;
 }
 
 void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
@@ -390,13 +425,16 @@ static void bx_ignore_report_error(const struct bx_walk_ignore_opts *opts,
 
 static bool bx_ignore_load_patterns_from_path(const char *path,
                                               const struct bx_walk_ignore_opts *opts,
-                                              char ***patterns, int *n,
-                                              bool explicit_file) {
+                                              char ***patterns,
+                                              enum bx_ignore_source_kind **sources,
+                                              int *n,
+                                              bool explicit_file,
+                                              enum bx_ignore_source_kind source) {
     FILE *f;
     int cap = *n;
     bool loaded_any = false;
 
-    if (!patterns || !n)
+    if (!patterns || !sources || !n)
         return false;
 
     f = fopen(path, "r");
@@ -415,7 +453,7 @@ static bool bx_ignore_load_patterns_from_path(const char *path,
             line[--len] = '\0';
         if (len == 0 || line[0] == '#')
             continue;
-        if (!bx_ignore_append_pattern(patterns, n, &cap, line)) {
+        if (!bx_ignore_append_pattern(patterns, sources, n, &cap, line, source)) {
             free(line);
             fclose(f);
             return loaded_any || *n > 0;
@@ -427,6 +465,7 @@ static bool bx_ignore_load_patterns_from_path(const char *path,
 }
 
 static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns,
+                                                                 enum bx_ignore_source_kind *sources,
                                                                  int pattern_count,
                                                                  bool casefold) {
     struct bx_ignore_program_cache_key cache_key;
@@ -435,6 +474,7 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
 
     have_cache_key = bx_ignore_program_cache_build_key(&cache_key,
                                                        patterns,
+                                                       sources,
                                                        pattern_count,
                                                        casefold);
     if (have_cache_key) {
@@ -444,15 +484,15 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
         if (program) {
             program = bx_ignore_program_retain(program);
             pthread_mutex_unlock(&bx_ignore_program_cache_lock);
-            bx_ignore_free_patterns(patterns, pattern_count);
+            bx_ignore_free_patterns(patterns, sources, pattern_count);
             bx_ignore_program_cache_key_dispose(&cache_key);
             return program;
         }
         pthread_mutex_unlock(&bx_ignore_program_cache_lock);
     }
 
-    program = bx_ignore_program_compile(patterns, pattern_count, casefold);
-    bx_ignore_free_patterns(patterns, pattern_count);
+    program = bx_ignore_program_compile_with_sources(patterns, sources, pattern_count, casefold);
+    bx_ignore_free_patterns(patterns, sources, pattern_count);
     if (!program) {
         if (have_cache_key)
             bx_ignore_program_cache_key_dispose(&cache_key);
@@ -484,12 +524,15 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
 static struct bx_ignore_program *bx_ignore_load_program_from_path(const char *path,
                                                                   const struct bx_walk_ignore_opts *opts,
                                                                   bool explicit_file,
+                                                                  enum bx_ignore_source_kind source,
                                                                   bool casefold) {
     char **patterns = NULL;
+    enum bx_ignore_source_kind *sources = NULL;
     int pattern_count = 0;
 
-    bx_ignore_load_patterns_from_path(path, opts, &patterns, &pattern_count, explicit_file);
-    return bx_ignore_program_from_patterns(patterns, pattern_count, casefold);
+    bx_ignore_load_patterns_from_path(path, opts, &patterns, &sources, &pattern_count,
+                                      explicit_file, source);
+    return bx_ignore_program_from_patterns(patterns, sources, pattern_count, casefold);
 }
 
 static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *chain,
@@ -534,6 +577,7 @@ static struct bx_ignore_state *bx_ignore_append_state(struct bx_ignore_state *ch
 struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
                                                  const struct bx_walk_ignore_opts *opts) {
     char **patterns = NULL;
+    enum bx_ignore_source_kind *sources = NULL;
     int pattern_count = 0;
 
     if (!opts || !opts->ignore_filenames || opts->num_ignore_filenames <= 0)
@@ -562,11 +606,17 @@ struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
             free(ignore_path);
             continue;
         }
-        (void)bx_ignore_load_patterns_from_path(ignore_path, opts, &patterns, &pattern_count, false);
+        enum bx_ignore_source_kind source = strcmp(filename, ".gitignore") == 0
+            ? BX_IGNORE_SOURCE_GITIGNORE
+            : strcmp(filename, ".ignore") == 0
+                ? BX_IGNORE_SOURCE_DOTIGNORE
+                : BX_IGNORE_SOURCE_BUILTIN;
+        (void)bx_ignore_load_patterns_from_path(ignore_path, opts, &patterns, &sources,
+                                                &pattern_count, false, source);
         free(ignore_path);
     }
 
-    return bx_ignore_program_from_patterns(patterns, pattern_count,
+    return bx_ignore_program_from_patterns(patterns, sources, pattern_count,
                                            opts->ignore_file_case_insensitive);
 }
 
@@ -661,6 +711,7 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         for (int i = 0; i < opts->num_extra_ignore_files; i++) {
             struct bx_ignore_program *program =
                 bx_ignore_load_program_from_path(opts->extra_ignore_files[i], opts, false,
+                                                 BX_IGNORE_SOURCE_BUILTIN,
                                                  opts->ignore_file_case_insensitive);
             if (program) {
                 chain = bx_ignore_append_state(chain, program, NULL, NULL);
@@ -690,6 +741,7 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         if (global_path) {
             struct bx_ignore_program *program =
                 bx_ignore_load_program_from_path(global_path, opts, false,
+                                                 BX_IGNORE_SOURCE_GITIGNORE,
                                                  opts->ignore_file_case_insensitive);
             if (program) {
                 chain = bx_ignore_append_state(chain, program, NULL, NULL);
@@ -714,6 +766,7 @@ struct bx_ignore_state *bx_ignore_load_parent_state(const char *root,
         if (exclude_path) {
             struct bx_ignore_program *program =
                 bx_ignore_load_program_from_path(exclude_path, opts, false,
+                                                 BX_IGNORE_SOURCE_GITIGNORE,
                                                  opts->ignore_file_case_insensitive);
             if (program) {
                 chain = bx_ignore_append_state(chain, program, NULL, NULL);
@@ -955,6 +1008,14 @@ bx_ignore_state_match_generic_glob_fallback(const struct bx_ignore_state *state,
                                            root_relative_path,
                                            is_dir,
                                            BX_IGNORE_STATE_MATCH_GENERIC_GLOB_FALLBACK);
+}
+
+bool bx_ignore_state_is_basename_only_chain(const struct bx_ignore_state *state) {
+    return state && state->basename_only_chain;
+}
+
+bool bx_ignore_state_has_generic_glob_fallback_chain(const struct bx_ignore_state *state) {
+    return state && state->has_generic_glob_fallback_chain;
 }
 
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,

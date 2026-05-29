@@ -16,6 +16,8 @@ struct bx_ignore_state {
     char *owned_root_prefix;
     size_t root_prefix_len;
     struct bx_ignore_program *program;
+    bool basename_only_chain;
+    bool has_generic_glob_fallback_chain;
 };
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
@@ -73,6 +75,9 @@ bx_ignore_state_match_generic_glob_fallback(const struct bx_ignore_state *state,
                                             const char *path,
                                             const char *root_relative_path,
                                             bool is_dir);
+
+bool bx_ignore_state_is_basename_only_chain(const struct bx_ignore_state *state);
+bool bx_ignore_state_has_generic_glob_fallback_chain(const struct bx_ignore_state *state);
 
 bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
                                   const char *name,

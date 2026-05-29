@@ -95,8 +95,10 @@ struct bx_walk_filter_opts {
     bool glob_case_insensitive;
     char *const *include_patterns;
     const bool *include_pattern_casefold;
+    const bool *include_pattern_is_type;
     int num_include_patterns;
     char *const *exclude_patterns;
+    const bool *exclude_pattern_is_type;
     int num_exclude_patterns;
     char *const *exclude_dirs;
     int num_exclude_dirs;

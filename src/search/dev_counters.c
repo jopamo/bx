@@ -129,6 +129,14 @@ struct bx_search_dev_counters {
     atomic_uint_fast64_t walk_ignore_literal_extension_rejects;
     atomic_uint_fast64_t walk_ignore_anchored_prefix_checks;
     atomic_uint_fast64_t walk_ignore_anchored_prefix_rejects;
+    atomic_uint_fast64_t walk_ignore_basename_only_fast_paths;
+    atomic_uint_fast64_t walk_ignore_no_generic_glob_fast_paths;
+    atomic_uint_fast64_t walk_ignore_builtin_checks;
+    atomic_uint_fast64_t walk_ignore_builtin_rejects;
+    atomic_uint_fast64_t walk_ignore_gitignore_checks;
+    atomic_uint_fast64_t walk_ignore_gitignore_rejects;
+    atomic_uint_fast64_t walk_ignore_dotignore_checks;
+    atomic_uint_fast64_t walk_ignore_dotignore_rejects;
     atomic_uint_fast64_t walk_ignore_glob_fallbacks;
     atomic_uint_fast64_t walk_ignore_generic_glob_checks;
     atomic_uint_fast64_t walk_ignore_generic_glob_rejects;
@@ -139,6 +147,12 @@ struct bx_search_dev_counters {
     atomic_uint_fast64_t walk_ignore_state_inline_frames;
     atomic_uint_fast64_t walk_ignore_state_fast_paths;
     atomic_uint_fast64_t walk_ignore_state_ns;
+    atomic_uint_fast64_t walk_filter_hidden_policy_checks;
+    atomic_uint_fast64_t walk_filter_hidden_policy_rejects;
+    atomic_uint_fast64_t walk_filter_type_policy_checks;
+    atomic_uint_fast64_t walk_filter_type_policy_rejects;
+    atomic_uint_fast64_t walk_filter_cli_glob_checks;
+    atomic_uint_fast64_t walk_filter_cli_glob_rejects;
     atomic_uint_fast64_t walk_filter_rejected_entries;
     atomic_uint_fast64_t walk_filter_rejected_dirs;
     atomic_uint_fast64_t files_seen;
@@ -402,6 +416,22 @@ void bx_search_dev_counters_reset(void) {
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_anchored_prefix_rejects, 0u,
                           memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_basename_only_fast_paths, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_no_generic_glob_fast_paths, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_builtin_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_builtin_rejects, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_gitignore_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_gitignore_rejects, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_dotignore_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_ignore_dotignore_rejects, 0u,
+                          memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_glob_fallbacks, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_generic_glob_checks, 0u,
@@ -421,6 +451,18 @@ void bx_search_dev_counters_reset(void) {
     atomic_store_explicit(&current_dev_counters.walk_ignore_state_fast_paths, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_ignore_state_ns, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_hidden_policy_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_hidden_policy_rejects, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_type_policy_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_type_policy_rejects, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_cli_glob_checks, 0u,
+                          memory_order_relaxed);
+    atomic_store_explicit(&current_dev_counters.walk_filter_cli_glob_rejects, 0u,
                           memory_order_relaxed);
     atomic_store_explicit(&current_dev_counters.walk_filter_rejected_entries, 0u,
                           memory_order_relaxed);
@@ -1191,6 +1233,38 @@ void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter,
         atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_anchored_prefix_rejects,
                                   count, memory_order_relaxed);
         return;
+    case BX_SEARCH_WALK_IGNORE_BASENAME_ONLY_FAST_PATHS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_basename_only_fast_paths,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_NO_GENERIC_GLOB_FAST_PATHS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_no_generic_glob_fast_paths,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_BUILTIN_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_builtin_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_BUILTIN_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_builtin_rejects,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_GITIGNORE_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_gitignore_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_GITIGNORE_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_gitignore_rejects,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_DOTIGNORE_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_dotignore_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_IGNORE_DOTIGNORE_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_dotignore_rejects,
+                                  count, memory_order_relaxed);
+        return;
     case BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS:
         atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_glob_fallbacks, count,
                                   memory_order_relaxed);
@@ -1230,6 +1304,30 @@ void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter,
     case BX_SEARCH_WALK_IGNORE_STATE_NS:
         atomic_fetch_add_explicit(&current_dev_counters.walk_ignore_state_ns, count,
                                   memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_HIDDEN_POLICY_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_hidden_policy_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_HIDDEN_POLICY_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_hidden_policy_rejects,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_TYPE_POLICY_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_type_policy_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_TYPE_POLICY_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_type_policy_rejects,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_CLI_GLOB_CHECKS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_cli_glob_checks,
+                                  count, memory_order_relaxed);
+        return;
+    case BX_SEARCH_WALK_FILTER_CLI_GLOB_REJECTS:
+        atomic_fetch_add_explicit(&current_dev_counters.walk_filter_cli_glob_rejects,
+                                  count, memory_order_relaxed);
         return;
     case BX_SEARCH_WALK_FILTER_REJECTED_ENTRIES:
         atomic_fetch_add_explicit(&current_dev_counters.walk_filter_rejected_entries, count,
@@ -1628,8 +1726,9 @@ void bx_search_dev_counters_report(FILE *stream) {
             "walk_dirents_seen=%" PRIuMAX " walk_getdents64_calls=%" PRIuMAX " walk_getdents64_bytes=%" PRIuMAX " walk_dirs_seen=%" PRIuMAX " walk_files_seen=%" PRIuMAX " walk_symlinks_seen=%" PRIuMAX " walk_unknown_dtype_seen=%" PRIuMAX " "
             "walk_stat_calls=%" PRIuMAX " walk_fstat_calls=%" PRIuMAX " walk_lstat_calls=%" PRIuMAX " walk_fstatat_calls=%" PRIuMAX " walk_stat_reason_unknown_dtype=%" PRIuMAX " walk_stat_reason_symlink_policy=%" PRIuMAX " walk_stat_reason_traversal_policy=%" PRIuMAX " "
             "walk_stat_reason_metadata_filter=%" PRIuMAX " walk_stat_reason_max_filesize=%" PRIuMAX " walk_stat_reason_min_filesize=%" PRIuMAX " walk_stat_reason_type=%" PRIuMAX " walk_stat_reason_sort=%" PRIuMAX " walk_stat_reason_metadata_output=%" PRIuMAX " walk_stat_reason_explicit_operand=%" PRIuMAX " walk_openat_calls=%" PRIuMAX " walk_path_join_calls=%" PRIuMAX " walk_path_push_calls=%" PRIuMAX " walk_path_push_ns=%" PRIuMAX " walk_path_pop_calls=%" PRIuMAX " walk_path_pop_ns=%" PRIuMAX " walk_path_allocs=%" PRIuMAX " "
-            "walk_path_copies_before_match=%" PRIuMAX " walk_ignore_checks=%" PRIuMAX " walk_ignore_literal_basename_checks=%" PRIuMAX " walk_ignore_literal_basename_rejects=%" PRIuMAX " walk_ignore_literal_extension_checks=%" PRIuMAX " walk_ignore_literal_extension_rejects=%" PRIuMAX " walk_ignore_anchored_prefix_checks=%" PRIuMAX " walk_ignore_anchored_prefix_rejects=%" PRIuMAX " walk_ignore_glob_fallbacks=%" PRIuMAX " walk_ignore_generic_glob_checks=%" PRIuMAX " walk_ignore_generic_glob_rejects=%" PRIuMAX " "
-            "walk_ignore_git_root_lstat_calls=%" PRIuMAX " walk_ignore_git_root_lstat_misses=%" PRIuMAX " walk_filter_ns=%" PRIuMAX " walk_ignore_state_pushes=%" PRIuMAX " walk_ignore_state_inline_frames=%" PRIuMAX " walk_ignore_state_fast_paths=%" PRIuMAX " walk_ignore_state_ns=%" PRIuMAX " walk_filter_rejected_entries=%" PRIuMAX " walk_filter_rejected_dirs=%" PRIuMAX " "
+            "walk_path_copies_before_match=%" PRIuMAX " walk_ignore_checks=%" PRIuMAX " walk_ignore_literal_basename_checks=%" PRIuMAX " walk_ignore_literal_basename_rejects=%" PRIuMAX " walk_ignore_literal_extension_checks=%" PRIuMAX " walk_ignore_literal_extension_rejects=%" PRIuMAX " walk_ignore_anchored_prefix_checks=%" PRIuMAX " walk_ignore_anchored_prefix_rejects=%" PRIuMAX " walk_ignore_basename_only_fast_paths=%" PRIuMAX " walk_ignore_no_generic_glob_fast_paths=%" PRIuMAX " "
+            "walk_ignore_builtin_checks=%" PRIuMAX " walk_ignore_builtin_rejects=%" PRIuMAX " walk_ignore_gitignore_checks=%" PRIuMAX " walk_ignore_gitignore_rejects=%" PRIuMAX " walk_ignore_dotignore_checks=%" PRIuMAX " walk_ignore_dotignore_rejects=%" PRIuMAX " walk_ignore_glob_fallbacks=%" PRIuMAX " walk_ignore_generic_glob_checks=%" PRIuMAX " walk_ignore_generic_glob_rejects=%" PRIuMAX " "
+            "walk_ignore_git_root_lstat_calls=%" PRIuMAX " walk_ignore_git_root_lstat_misses=%" PRIuMAX " walk_filter_ns=%" PRIuMAX " walk_ignore_state_pushes=%" PRIuMAX " walk_ignore_state_inline_frames=%" PRIuMAX " walk_ignore_state_fast_paths=%" PRIuMAX " walk_ignore_state_ns=%" PRIuMAX " walk_filter_hidden_policy_checks=%" PRIuMAX " walk_filter_hidden_policy_rejects=%" PRIuMAX " walk_filter_type_policy_checks=%" PRIuMAX " walk_filter_type_policy_rejects=%" PRIuMAX " walk_filter_cli_glob_checks=%" PRIuMAX " walk_filter_cli_glob_rejects=%" PRIuMAX " walk_filter_rejected_entries=%" PRIuMAX " walk_filter_rejected_dirs=%" PRIuMAX " "
             "files_seen=%" PRIuMAX " dirs_seen=%" PRIuMAX " global_pool_submits=%" PRIuMAX " global_pool_pops=%" PRIuMAX " global_queue_lock_acquires=%" PRIuMAX " global_queue_cond_wakeups=%" PRIuMAX " worker_slot_lock_acquires=%" PRIuMAX " worker_wakeups=%" PRIuMAX " "
             "path_bytes_copied=%" PRIuMAX " path_copies_before_match=%" PRIuMAX " search_batch_files=%" PRIuMAX " search_batch_path_bytes=%" PRIuMAX " search_batch_allocs=%" PRIuMAX " search_batch_storage_reallocs=%" PRIuMAX " search_batch_lifetime_empty=%" PRIuMAX " queued_search_batches=%" PRIuMAX " searched_search_batches=%" PRIuMAX " empty_search_batches=%" PRIuMAX " batches_built=%" PRIuMAX " batches_searched=%" PRIuMAX " empty_batches=%" PRIuMAX " "
             "memstreams_opened=%" PRIuMAX " output_records_submitted=%" PRIuMAX " diagnostic_records_submitted=%" PRIuMAX " match_records_submitted=%" PRIuMAX " ordered_output_records=%" PRIuMAX " unordered_output_flushes=%" PRIuMAX " "
@@ -1717,6 +1816,24 @@ void bx_search_dev_counters_report(FILE *stream) {
             (uintmax_t)atomic_load_explicit(
                 &current_dev_counters.walk_ignore_anchored_prefix_rejects,
                 memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_ignore_basename_only_fast_paths,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_ignore_no_generic_glob_fast_paths,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_builtin_checks,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_builtin_rejects,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_gitignore_checks,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_gitignore_rejects,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_dotignore_checks,
+                                            memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_dotignore_rejects,
+                                            memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_glob_fallbacks,
                                             memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(
@@ -1741,6 +1858,24 @@ void bx_search_dev_counters_report(FILE *stream) {
                                             memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(&current_dev_counters.walk_ignore_state_ns,
                                             memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_hidden_policy_checks,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_hidden_policy_rejects,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_type_policy_checks,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_type_policy_rejects,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_cli_glob_checks,
+                memory_order_relaxed),
+            (uintmax_t)atomic_load_explicit(
+                &current_dev_counters.walk_filter_cli_glob_rejects,
+                memory_order_relaxed),
             (uintmax_t)atomic_load_explicit(
                 &current_dev_counters.walk_filter_rejected_entries,
                 memory_order_relaxed),

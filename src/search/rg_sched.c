@@ -1511,6 +1511,35 @@ static void bx_rg_sched_work_vec_dispose(struct bx_rg_sched_work_vec *vec) {
     vec->cap = 0u;
 }
 
+static bool bx_rg_sched_pattern_is_subtree_filter_exact(const char *pattern) {
+    return !pattern || strchr(pattern, '/') == NULL;
+}
+
+static bool bx_rg_sched_patterns_are_subtree_filter_exact(char *const *patterns,
+                                                          int pattern_count) {
+    for (int i = 0; i < pattern_count; ++i) {
+        if (!bx_rg_sched_pattern_is_subtree_filter_exact(patterns[i]))
+            return false;
+    }
+    return true;
+}
+
+static bool bx_rg_sched_filter_state_exact_for_subtree(const struct search_opts *opts) {
+    if (!opts)
+        return false;
+    /*
+     * CLI include/exclude globs are evaluated relative to the original search
+     * root when they contain a path separator. Subtree workers initialize
+     * filter state from the donated subtree root, so slash-containing patterns
+     * would be rebased incorrectly. Basename-only globs and exclude-dir globs
+     * are name-only checks and remain exact under subtree donation.
+     */
+    return bx_rg_sched_patterns_are_subtree_filter_exact(opts->include_patterns,
+                                                         opts->num_include) &&
+           bx_rg_sched_patterns_are_subtree_filter_exact(opts->exclude_patterns,
+                                                         opts->num_exclude);
+}
+
 bool bx_rg_sched_supported(enum bx_search_personality personality,
                            const struct search_opts *opts,
                            int num_files,
@@ -1521,7 +1550,7 @@ bool bx_rg_sched_supported(enum bx_search_personality personality,
         return false;
     if (bx_search_sort_requested(opts))
         return false;
-    if (opts->num_include > 0 || opts->num_exclude > 0 || opts->num_exclude_dir > 0)
+    if (!bx_rg_sched_filter_state_exact_for_subtree(opts))
         return false;
     if (!bx_rg_sched_uses_path_only_output(opts)) {
         if (opts->count_only || opts->count_matches)
