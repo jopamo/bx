@@ -89,15 +89,33 @@ int bx_search_snprintf_path_error(char *buf,
                     display_progname, display_path, strerror(errnum));
 }
 
+static bool bx_search_loaded_mode_size_exceeds_max_filesize(
+    mode_t mode,
+    off_t size,
+    const struct search_opts *opts
+) {
+    if (!opts || !opts->max_filesize_set)
+        return false;
+    return S_ISREG(mode) && size > (off_t)opts->max_filesize;
+}
+
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts) {
     if (!path || !opts || !opts->max_filesize_set)
         return false;
 
     struct stat st;
+    bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_MAX_FILESIZE);
     if (stat(path, &st) != 0)
         return false;
-    return S_ISREG(st.st_mode) && st.st_size > (off_t)opts->max_filesize;
+    return bx_search_loaded_metadata_exceeds_max_filesize(&st, opts);
+}
+
+bool bx_search_loaded_metadata_exceeds_max_filesize(const struct stat *st,
+                                                    const struct search_opts *opts) {
+    if (!st)
+        return false;
+    return bx_search_loaded_mode_size_exceeds_max_filesize(st->st_mode, st->st_size, opts);
 }
 
 bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
@@ -107,8 +125,8 @@ bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
     if (!entry->metadata_loaded &&
         !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_MAX_FILESIZE))
         return false;
-    return entry->metadata_loaded && S_ISREG(entry->mode)
-        && entry->size > (off_t)opts->max_filesize;
+    return entry->metadata_loaded
+        && bx_search_loaded_mode_size_exceeds_max_filesize(entry->mode, entry->size, opts);
 }
 
 bool bx_search_entry_can_skip_max_filesize_zero_literal(
@@ -118,7 +136,8 @@ bool bx_search_entry_can_skip_max_filesize_zero_literal(
 ) {
     if (!entry || !exec_plan || !opts)
         return false;
-    if (!exec_plan->max_filesize_zero_literal_skip_regulars)
+    if (exec_plan->max_filesize_zero_policy
+        != BX_SEARCH_MAX_FILESIZE_ZERO_SKIP_NON_EMPTY_LITERAL_REGULARS)
         return false;
     if (!opts->max_filesize_set || opts->max_filesize != 0u)
         return false;
@@ -133,8 +152,23 @@ bool bx_search_entry_can_skip_max_filesize_zero_literal(
      * reject d_type-known regular files without an exact size stat.
      */
     if (entry->metadata_loaded)
-        return S_ISREG(entry->mode);
+        return bx_search_mode_can_skip_max_filesize_zero_literal(entry->mode, exec_plan, opts);
     return entry->d_type_known && entry->d_type == DT_REG;
+}
+
+bool bx_search_mode_can_skip_max_filesize_zero_literal(
+    mode_t mode,
+    const struct bx_search_exec_plan *exec_plan,
+    const struct search_opts *opts
+) {
+    if (!exec_plan || !opts)
+        return false;
+    if (exec_plan->max_filesize_zero_policy
+        != BX_SEARCH_MAX_FILESIZE_ZERO_SKIP_NON_EMPTY_LITERAL_REGULARS)
+        return false;
+    if (!opts->max_filesize_set || opts->max_filesize != 0u)
+        return false;
+    return S_ISREG(mode);
 }
 
 static bool bx_search_personality_is_rg(enum bx_search_personality personality) {
@@ -150,6 +184,12 @@ static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
     case BX_WALK_COUNTER_DIRENTS_SEEN:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIRENTS_SEEN, count);
         return;
+    case BX_WALK_COUNTER_GETDENTS64_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_GETDENTS64_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_GETDENTS64_BYTES:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_GETDENTS64_BYTES, count);
+        return;
     case BX_WALK_COUNTER_DIRS_SEEN:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIRS_SEEN, count);
         return;
@@ -161,6 +201,12 @@ static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
         return;
     case BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_UNKNOWN_DTYPE_SEEN, count);
+        return;
+    case BX_WALK_COUNTER_STAT_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_FSTAT_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FSTAT_CALLS, count);
         return;
     case BX_WALK_COUNTER_LSTAT_CALLS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_LSTAT_CALLS, count);
@@ -195,17 +241,68 @@ static void bx_search_walk_counter_bridge(enum bx_walk_counter counter,
     case BX_WALK_COUNTER_STAT_REASON_METADATA_OUTPUT:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT, count);
         return;
+    case BX_WALK_COUNTER_STAT_REASON_EXPLICIT_OPERAND:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND, count);
+        return;
     case BX_WALK_COUNTER_OPENAT_CALLS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, count);
         return;
     case BX_WALK_COUNTER_PATH_JOIN_CALLS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_JOIN_CALLS, count);
         return;
+    case BX_WALK_COUNTER_PATH_PUSH_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_PUSH_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_PUSH_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_PUSH_NS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_POP_CALLS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_POP_CALLS, count);
+        return;
+    case BX_WALK_COUNTER_PATH_POP_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_POP_NS, count);
+        return;
     case BX_WALK_COUNTER_PATH_ALLOCS:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_ALLOCS, count);
         return;
     case BX_WALK_COUNTER_PATH_COPIES_BEFORE_MATCH:
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_PATH_COPIES_BEFORE_MATCH, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_TINY_DIRS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_TINY_DIRS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_TINY_ENTRIES:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_TINY_ENTRIES, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_TINY_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_TINY_NS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_SMALL_DIRS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_SMALL_DIRS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_SMALL_ENTRIES:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_SMALL_ENTRIES, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_SMALL_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_SMALL_NS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_DIRS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_DIRS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_ENTRIES:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_ENTRIES, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_NS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_HUGE_DIRS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_HUGE_DIRS, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_HUGE_ENTRIES:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_HUGE_ENTRIES, count);
+        return;
+    case BX_WALK_COUNTER_DIR_BUCKET_HUGE_NS:
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_DIR_BUCKET_HUGE_NS, count);
         return;
     }
 }
@@ -302,7 +399,7 @@ bool bx_search_entry_should_skip_special_input(struct bx_walk_entry *entry,
     }
 
     if (!entry->metadata_loaded &&
-        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_TYPE))
         return false;
 
     return bx_search_mode_is_special_input(entry->mode);
@@ -336,7 +433,7 @@ bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *e
     }
 
     if (!entry->metadata_loaded &&
-        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_FILTER))
+        !bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_TYPE))
         return false;
 
     if (!bx_search_mode_is_special_input(entry->mode))

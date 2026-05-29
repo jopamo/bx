@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "dev_counters.h"
 #include "lib/statx_compat.h"
 #include "search_internal.h"
 #include "sort.h"
@@ -118,11 +119,13 @@ static int bx_search_sort_lookup_time(const char *path,
     *available = true;
     switch (opts->sort_key) {
     case BX_SEARCH_SORT_MODIFIED:
+        bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_SORT);
         if (stat(path, &st) != 0)
             return -1;
         *out = st.st_mtim;
         return 0;
     case BX_SEARCH_SORT_ACCESSED:
+        bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_SORT);
         if (stat(path, &st) != 0)
             return -1;
         *out = st.st_atim;
@@ -256,9 +259,9 @@ static enum bx_walk_action bx_search_sort_walk_cb(struct bx_walk_entry *entry, v
         return BX_WALK_ERROR;
     if (entry->is_dir)
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, state->opts))
-        return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->opts))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, state->opts))
         return BX_WALK_CONTINUE;
 
     if (bx_search_sort_lookup_walk_entry_time(entry, state->opts, &sort_time,
@@ -368,6 +371,7 @@ int bx_search_collect_metadata_sorted_paths(int argc,
             int j = first_file + operand_i;
             struct stat st;
 
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (stat(argv[j], &st) != 0) {
                 bx_search_report_path_error(progname, argv[j], errno, opts);
                 if (error_seen)
@@ -387,7 +391,7 @@ int bx_search_collect_metadata_sorted_paths(int argc,
                 continue;
             if (!bx_search_explicit_entry_selected(opts, argv[j]))
                 continue;
-            if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+            if (bx_search_loaded_metadata_exceeds_max_filesize(&st, opts))
                 continue;
 
             switch (bx_search_sorted_paths_add(&state, argv[j], false)) {
@@ -407,6 +411,7 @@ int bx_search_collect_metadata_sorted_paths(int argc,
 
             if (argv[j] && strcmp(argv[j], "-") != 0) {
                 struct stat st;
+                bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
                 if (lstat(argv[j], &st) == 0) {
                     if (S_ISDIR(st.st_mode)) {
                         bx_search_report_path_error(progname, argv[j], EISDIR, opts);

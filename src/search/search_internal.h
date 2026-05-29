@@ -14,6 +14,7 @@ struct bx_matcher;
 struct bx_match;
 struct bx_lit_plan;
 struct bx_literal_matcher;
+struct bx_rg_display_path_buf;
 struct bx_search_exec_plan;
 
 struct bx_search_stats {
@@ -65,10 +66,16 @@ void bx_search_report_record_too_large(const char *progname,
                                        const struct search_opts *opts);
 bool bx_search_path_exceeds_max_filesize(const char *path,
                                          const struct search_opts *opts);
+bool bx_search_loaded_metadata_exceeds_max_filesize(const struct stat *st,
+                                                    const struct search_opts *opts);
 bool bx_search_entry_exceeds_max_filesize(struct bx_walk_entry *entry,
                                           const struct search_opts *opts);
 bool bx_search_entry_can_skip_max_filesize_zero_literal(
     const struct bx_walk_entry *entry,
+    const struct bx_search_exec_plan *exec_plan,
+    const struct search_opts *opts);
+bool bx_search_mode_can_skip_max_filesize_zero_literal(
+    mode_t mode,
     const struct bx_search_exec_plan *exec_plan,
     const struct search_opts *opts);
 bool bx_search_should_skip_special_input_mode(mode_t mode,
@@ -224,6 +231,19 @@ int bx_search_search_file(const char *filename,
                           struct bx_search_scanner *scanner,
                           struct bx_record_stream *record_stream,
                           struct bx_search_stats *stats);
+int bx_search_search_file_with_display_buffer(
+    const char *filename,
+    const char *display_name_override,
+    bool strip_dot_prefix,
+    const char *progname,
+    struct bx_matcher *m,
+    const struct bx_search_exec_plan *exec_plan,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_search_scanner *scanner,
+    struct bx_record_stream *record_stream,
+    struct bx_search_stats *stats,
+    struct bx_rg_display_path_buf *display_path_buf);
 int bx_search_search_walk_entry(const struct bx_walk_entry *entry,
                                 const char *display_name_override,
                                 bool strip_dot_prefix,
@@ -235,6 +255,19 @@ int bx_search_search_walk_entry(const struct bx_walk_entry *entry,
                                 struct bx_search_scanner *scanner,
                                 struct bx_record_stream *record_stream,
                                 struct bx_search_stats *stats);
+int bx_search_search_walk_entry_with_display_buffer(
+    const struct bx_walk_entry *entry,
+    const char *display_name_override,
+    bool strip_dot_prefix,
+    const char *progname,
+    struct bx_matcher *m,
+    const struct bx_search_exec_plan *exec_plan,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_search_scanner *scanner,
+    struct bx_record_stream *record_stream,
+    struct bx_search_stats *stats,
+    struct bx_rg_display_path_buf *display_path_buf);
 struct bx_walk_opts bx_search_make_walk_opts(const char *progname,
                                              enum bx_search_personality personality,
                                              const struct search_opts *opts,

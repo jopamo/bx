@@ -53,6 +53,12 @@ enum bx_search_file_kernel_kind {
     BX_SEARCH_FILE_KERNEL_STREAMING,
 };
 
+enum bx_search_max_filesize_zero_policy {
+    BX_SEARCH_MAX_FILESIZE_ZERO_DISABLED = 0,
+    BX_SEARCH_MAX_FILESIZE_ZERO_EXACT_EMPTY_SENSITIVE,
+    BX_SEARCH_MAX_FILESIZE_ZERO_SKIP_NON_EMPTY_LITERAL_REGULARS,
+};
+
 struct bx_search_plan {
     enum bx_search_plan_orchestrator orchestrator;
     enum bx_search_plan_input_kind input_kind;
@@ -77,7 +83,7 @@ struct bx_search_exec_plan {
     enum bx_search_file_kernel_kind binary_search_kernel;
     bool raw_presence_supported;
     bool deferred_literal_precheck;
-    bool max_filesize_zero_literal_skip_regulars;
+    enum bx_search_max_filesize_zero_policy max_filesize_zero_policy;
 };
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts);

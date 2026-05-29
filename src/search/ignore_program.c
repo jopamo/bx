@@ -408,11 +408,20 @@ static enum bx_ignore_match_result bx_ignore_program_match_rule(const struct bx_
     if (rule->directory_only && !is_dir)
         return BX_IGNORE_NO_MATCH;
 
+    bool generic_glob = bx_ignore_rule_uses_generic_glob_fallback(rule);
+    bool count_generic_glob = false;
     /* Literal tables are accelerators only; generic glob rules still fall back to fnmatch(). */
-    if (bx_ignore_rule_uses_generic_glob_fallback(rule))
-        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
+    if (generic_glob) {
+        count_generic_glob = bx_search_dev_counters_enabled();
+        if (count_generic_glob) {
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS, 1u);
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GENERIC_GLOB_CHECKS, 1u);
+        }
+    }
     if (fnmatch(rule->pattern, candidate, flags) != 0)
         return BX_IGNORE_NO_MATCH;
+    if (generic_glob && !rule->negate && count_generic_glob)
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_GENERIC_GLOB_REJECTS, 1u);
     return rule->negate ? BX_IGNORE_INCLUDE : BX_IGNORE_EXCLUDE;
 }
 
@@ -759,6 +768,11 @@ bx_ignore_program_match_literal_basename(const struct bx_ignore_program *program
                                          bool is_dir) {
     if (!program || !program->rules || program->rule_count <= 0)
         return BX_IGNORE_NO_MATCH;
+    bool count_literal_basename = program->literal_basenames
+                                  && program->literal_basename_count > 0
+                                  && bx_search_dev_counters_enabled();
+    if (count_literal_basename)
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_LITERAL_BASENAME_CHECKS, 1u);
 
     const struct bx_ignore_literal_basename *literal_basename =
         bx_ignore_program_find_literal_basename(program, name);
@@ -772,6 +786,8 @@ bx_ignore_program_match_literal_basename(const struct bx_ignore_program *program
                                                literal_basename->rule_index + 1);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
+        if (literal_basename->result == BX_IGNORE_EXCLUDE && count_literal_basename)
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_LITERAL_BASENAME_REJECTS, 1u);
         return literal_basename->result;
     }
     return BX_IGNORE_NO_MATCH;
@@ -796,6 +812,11 @@ bx_ignore_program_match_literal_extension(const struct bx_ignore_program *progra
                                           bool is_dir) {
     if (!program || !program->rules || program->rule_count <= 0)
         return BX_IGNORE_NO_MATCH;
+    bool count_literal_extension = program->literal_extensions
+                                   && program->literal_extension_count > 0
+                                   && bx_search_dev_counters_enabled();
+    if (count_literal_extension)
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_LITERAL_EXTENSION_CHECKS, 1u);
 
     const struct bx_ignore_literal_extension *literal_extension =
         bx_ignore_program_find_literal_extension(program, name);
@@ -809,6 +830,8 @@ bx_ignore_program_match_literal_extension(const struct bx_ignore_program *progra
                                                literal_extension->rule_index + 1);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
+        if (literal_extension->result == BX_IGNORE_EXCLUDE && count_literal_extension)
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_LITERAL_EXTENSION_REJECTS, 1u);
         return literal_extension->result;
     }
     return BX_IGNORE_NO_MATCH;
@@ -870,6 +893,11 @@ bx_ignore_program_match_anchored_prefix(const struct bx_ignore_program *program,
                                         bool is_dir) {
     if (!program || !program->rules || program->rule_count <= 0)
         return BX_IGNORE_NO_MATCH;
+    bool count_anchored_prefix = program->anchored_prefixes
+                                 && program->anchored_prefix_count > 0
+                                 && bx_search_dev_counters_enabled();
+    if (count_anchored_prefix)
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_ANCHORED_PREFIX_CHECKS, 1u);
 
     const struct bx_ignore_anchored_prefix *anchored_prefix =
         bx_ignore_program_find_anchored_prefix(program, relative_path, is_dir);
@@ -883,6 +911,8 @@ bx_ignore_program_match_anchored_prefix(const struct bx_ignore_program *program,
                                                anchored_prefix->rule_index + 1);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
+        if (anchored_prefix->result == BX_IGNORE_EXCLUDE && count_anchored_prefix)
+            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_ANCHORED_PREFIX_REJECTS, 1u);
         return anchored_prefix->result;
     }
     return BX_IGNORE_NO_MATCH;

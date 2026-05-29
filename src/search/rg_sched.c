@@ -17,6 +17,7 @@
 #include "lib/cancel_state.h"
 #include "lib/thread_count.h"
 #include "record_stream.h"
+#include "rg_output.h"
 #include "rg_parallel.h"
 #include "rg_publish.h"
 #include "rg_sched.h"
@@ -39,7 +40,7 @@ enum bx_rg_sched_cancel_reason {
 };
 
 struct bx_rg_sched_file_item {
-    size_t path_offset;
+    const char *path;
     int base_depth;
     bool strip_dot_prefix;
 };
@@ -58,6 +59,7 @@ struct bx_rg_sched_work {
             size_t git_root_offset;
             struct bx_ignore_state *parent_ignore_state;
             DIR *owned_dir;
+            bool donated_dir;
             bool git_root_resolved;
             bool gitignore_enabled;
         } dir;
@@ -115,8 +117,7 @@ struct bx_rg_sched_worker {
     struct bx_search_exec_plan quiet_exec_plan;
     struct bx_search_scanner scanner;
     struct bx_record_stream record_stream;
-    char *display_scratch;
-    size_t display_scratch_cap;
+    struct bx_rg_display_path_buf display_path_buf;
     char *stdout_buf;
     size_t stdout_len;
     size_t stdout_cap;
@@ -587,6 +588,7 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
                                                          int base_depth,
                                                          bool strip_dot_prefix,
                                                          DIR *owned_dir,
+                                                         bool donated_dir,
                                                          bool git_root_resolved,
                                                          bool gitignore_enabled,
                                                          const char *git_root,
@@ -602,6 +604,7 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
     work->base_depth = base_depth;
     work->strip_dot_prefix = strip_dot_prefix;
     work->u.dir.owned_dir = owned_dir;
+    work->u.dir.donated_dir = donated_dir;
     work->u.dir.path_offset = SIZE_MAX;
     work->u.dir.git_root_offset = SIZE_MAX;
     if (!bx_rg_sched_work_store_string(work, path, &work->u.dir.path_offset) ||
@@ -650,21 +653,17 @@ static bool bx_rg_sched_batch_add(struct bx_rg_sched_frontier_state *state,
         return false;
 
     struct bx_rg_sched_file_item *item = &work->u.batch.items[work->u.batch.count];
-    if (!bx_rg_sched_work_store_string(work, path, &item->path_offset)) {
-        if (work->u.batch.count == 0u) {
-            state->pending_batch = NULL;
-            bx_rg_sched_free_work(work);
-        }
-        return false;
-    }
+    /*
+     * File batches are seeded only from explicit argv operands. Borrow those
+     * stable strings instead of copying paths into a global search batch
+     * before any match or diagnostic publication exists.
+     */
+    item->path = path;
     item->base_depth = base_depth;
     item->strip_dot_prefix = state->strip_dot_prefix;
     work->u.batch.count++;
 
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_BYTES_COPIED,
-                                         (uint64_t)(strlen(path) + 1u));
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_PATH_COPIES_BEFORE_MATCH, 1u);
     return true;
 }
 
@@ -700,6 +699,7 @@ static bool bx_rg_sched_add_root_dir_work(struct bx_rg_sched_work_vec *vec,
     struct bx_rg_sched_work *work = bx_rg_sched_work_new_dir(path, path, 0,
                                                              strip_dot_prefix,
                                                              NULL,
+                                                             false,
                                                              false, false,
                                                              NULL, NULL);
     if (!work)
@@ -711,46 +711,17 @@ static bool bx_rg_sched_add_root_dir_work(struct bx_rg_sched_work_vec *vec,
     return true;
 }
 
-static bool bx_rg_sched_worker_display_reserve(struct bx_rg_sched_worker *worker,
-                                               size_t needed) {
-    if (!worker)
-        return false;
-    if (worker->display_scratch_cap >= needed)
-        return true;
-    size_t new_cap = worker->display_scratch_cap == 0u ? 256u : worker->display_scratch_cap;
-    while (new_cap < needed) {
-        if (new_cap > (SIZE_MAX / 2u))
-            return false;
-        new_cap *= 2u;
-    }
-    char *tmp = realloc(worker->display_scratch, new_cap);
-    if (!tmp)
-        return false;
-    worker->display_scratch = tmp;
-    worker->display_scratch_cap = new_cap;
-    return true;
-}
-
 static const char *bx_rg_sched_display_path(struct bx_rg_sched_worker *worker,
                                             const char *path,
                                             bool strip_dot_prefix,
                                             const struct search_opts *opts) {
-    const char *display = path;
-
-    if (strip_dot_prefix && path[0] == '.' && path[1] == '/')
-        display = path + 2u;
-    if (!opts || opts->path_separator == '/')
-        return display;
-
-    size_t len = strlen(display);
-    if (!bx_rg_sched_worker_display_reserve(worker, len + 1u))
-        return display;
-    for (size_t i = 0; i < len; ++i) {
-        char ch = display[i];
-        worker->display_scratch[i] = (ch == '/') ? opts->path_separator : ch;
-    }
-    worker->display_scratch[len] = '\0';
-    return worker->display_scratch;
+    if (!worker || !path)
+        return path;
+    const char *display = bx_rg_display_path_buf_format(&worker->display_path_buf,
+                                                        path,
+                                                        strip_dot_prefix,
+                                                        opts ? opts->path_separator : '/');
+    return display ? display : path;
 }
 
 static bool bx_rg_sched_worker_out_reserve(struct bx_rg_sched_worker *worker,
@@ -868,16 +839,18 @@ static int bx_rg_sched_search_one_captured(struct bx_rg_sched_state *sched,
     };
     struct bx_search_output_ctx *previous_ctx = bx_search_output_ctx_push(&output_ctx);
     int status = entry
-        ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
-                                      sched->progname, worker->matcher,
-                                      sched->exec_plan, sched->opts,
-                                      &dummy_matches, &worker->scanner,
-                                      &worker->record_stream, NULL)
-        : bx_search_search_file(path, NULL, strip_dot_prefix,
-                                sched->progname, worker->matcher,
-                                sched->exec_plan, sched->opts,
-                                &dummy_matches, &worker->scanner,
-                                &worker->record_stream, NULL);
+        ? bx_search_search_walk_entry_with_display_buffer(entry, NULL, strip_dot_prefix,
+                                                          sched->progname, worker->matcher,
+                                                          sched->exec_plan, sched->opts,
+                                                          &dummy_matches, &worker->scanner,
+                                                          &worker->record_stream, NULL,
+                                                          &worker->display_path_buf)
+        : bx_search_search_file_with_display_buffer(path, NULL, strip_dot_prefix,
+                                                    sched->progname, worker->matcher,
+                                                    sched->exec_plan, sched->opts,
+                                                    &dummy_matches, &worker->scanner,
+                                                    &worker->record_stream, NULL,
+                                                    &worker->display_path_buf);
 
     bx_search_output_ctx_pop(previous_ctx);
     if (output_ctx.out)
@@ -934,16 +907,26 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
     if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
         if (defer_output_capture) {
             int probe_status = entry
-                ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
-                                              sched->progname, worker->matcher,
-                                              &worker->quiet_exec_plan, &sched->quiet_opts,
-                                              &dummy_matches, &worker->scanner,
-                                              &worker->record_stream, NULL)
-                : bx_search_search_file(path, NULL, strip_dot_prefix,
-                                        sched->progname, worker->matcher,
-                                        &worker->quiet_exec_plan, &sched->quiet_opts,
-                                        &dummy_matches, &worker->scanner,
-                                        &worker->record_stream, NULL);
+                ? bx_search_search_walk_entry_with_display_buffer(entry, NULL,
+                                                                  strip_dot_prefix,
+                                                                  sched->progname,
+                                                                  worker->matcher,
+                                                                  &worker->quiet_exec_plan,
+                                                                  &sched->quiet_opts,
+                                                                  &dummy_matches,
+                                                                  &worker->scanner,
+                                                                  &worker->record_stream, NULL,
+                                                                  &worker->display_path_buf)
+                : bx_search_search_file_with_display_buffer(path, NULL,
+                                                            strip_dot_prefix,
+                                                            sched->progname,
+                                                            worker->matcher,
+                                                            &worker->quiet_exec_plan,
+                                                            &sched->quiet_opts,
+                                                            &dummy_matches,
+                                                            &worker->scanner,
+                                                            &worker->record_stream, NULL,
+                                                            &worker->display_path_buf);
             bx_rg_sched_note_file_search(stolen);
             if (probe_status != 0)
                 return probe_status;
@@ -954,16 +937,18 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
         }
 
         int status = entry
-            ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
-                                          sched->progname, worker->matcher,
-                                          sched->exec_plan, sched->opts,
-                                          &dummy_matches, &worker->scanner,
-                                          &worker->record_stream, NULL)
-            : bx_search_search_file(path, NULL, strip_dot_prefix,
-                                    sched->progname, worker->matcher,
-                                    sched->exec_plan, sched->opts,
-                                    &dummy_matches, &worker->scanner,
-                                    &worker->record_stream, NULL);
+            ? bx_search_search_walk_entry_with_display_buffer(entry, NULL, strip_dot_prefix,
+                                                              sched->progname, worker->matcher,
+                                                              sched->exec_plan, sched->opts,
+                                                              &dummy_matches, &worker->scanner,
+                                                              &worker->record_stream, NULL,
+                                                              &worker->display_path_buf)
+            : bx_search_search_file_with_display_buffer(path, NULL, strip_dot_prefix,
+                                                        sched->progname, worker->matcher,
+                                                        sched->exec_plan, sched->opts,
+                                                        &dummy_matches, &worker->scanner,
+                                                        &worker->record_stream, NULL,
+                                                        &worker->display_path_buf);
         bx_rg_sched_note_file_search(stolen);
         if (status == 0 && match_seen_out)
             *match_seen_out = true;
@@ -971,16 +956,20 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
     }
 
     int status = entry
-        ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
-                                      sched->progname, worker->matcher,
-                                      &worker->quiet_exec_plan, &sched->quiet_opts,
-                                      &dummy_matches, &worker->scanner,
-                                      &worker->record_stream, NULL)
-        : bx_search_search_file(path, NULL, strip_dot_prefix,
-                                sched->progname, worker->matcher,
-                                &worker->quiet_exec_plan, &sched->quiet_opts,
-                                &dummy_matches, &worker->scanner,
-                                &worker->record_stream, NULL);
+        ? bx_search_search_walk_entry_with_display_buffer(entry, NULL, strip_dot_prefix,
+                                                          sched->progname, worker->matcher,
+                                                          &worker->quiet_exec_plan,
+                                                          &sched->quiet_opts,
+                                                          &dummy_matches, &worker->scanner,
+                                                          &worker->record_stream, NULL,
+                                                          &worker->display_path_buf)
+        : bx_search_search_file_with_display_buffer(path, NULL, strip_dot_prefix,
+                                                    sched->progname, worker->matcher,
+                                                    &worker->quiet_exec_plan,
+                                                    &sched->quiet_opts,
+                                                    &dummy_matches, &worker->scanner,
+                                                    &worker->record_stream, NULL,
+                                                    &worker->display_path_buf);
     bx_rg_sched_note_file_search(stolen);
 
     if (status == 0 && sched->opts->files_with_matches) {
@@ -1025,14 +1014,20 @@ static DIR *bx_rg_sched_open_donated_dir(const struct bx_walk_entry *entry) {
 
     bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, 1u);
     int fd = openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
-    if (fd < 0)
+    if (fd < 0) {
+        bx_search_dev_counters_note_rg_sched(
+            BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPEN_FAILURES, 1u);
         return NULL;
+    }
 
     DIR *dir = fdopendir(fd);
     if (!dir) {
         close(fd);
+        bx_search_dev_counters_note_rg_sched(
+            BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPEN_FAILURES, 1u);
         return NULL;
     }
+    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPENED, 1u);
     return dir;
 }
 
@@ -1063,6 +1058,7 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
                                              global_depth,
                                              state->strip_dot_prefix,
                                              donated_dir,
+                                             true,
                                              ignore_opts ? ignore_opts->git_root_resolved : false,
                                              ignore_opts ? ignore_opts->gitignore_enabled : false,
                                              ignore_opts ? ignore_opts->git_root : NULL,
@@ -1092,9 +1088,9 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
     if (bx_search_entry_can_skip_max_filesize_zero_literal(entry, state->sched->exec_plan,
                                                            state->sched->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
-        return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->sched->opts))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, state->sched->opts))
         return BX_WALK_CONTINUE;
 
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_FILES_SEEN, 1u);
@@ -1173,7 +1169,7 @@ static void bx_rg_sched_worker_fini(struct bx_rg_sched_worker *worker) {
     bx_search_matcher_free(worker->matcher);
     bx_search_scanner_dispose(&worker->scanner);
     bx_record_stream_dispose(&worker->record_stream);
-    free(worker->display_scratch);
+    bx_rg_display_path_buf_dispose(&worker->display_path_buf);
     free(worker->stdout_buf);
     free(worker);
 }
@@ -1289,6 +1285,12 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         };
         DIR *owned_dir = work->u.dir.owned_dir;
         work->u.dir.owned_dir = NULL;
+        if (work->u.dir.donated_dir) {
+            bx_search_dev_counters_note_rg_sched(
+                owned_dir ? BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OWNED_WALKS
+                          : BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_REOPEN_FALLBACKS,
+                1u);
+        }
         int rc = owned_dir
             ? bx_search_walk_opened_dir(work_root_path, owned_dir, &walk_config, &walk_state)
             : bx_search_walk(work_root_path, &walk_config, &walk_state);
@@ -1302,8 +1304,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
                                          (uint64_t)work->u.batch.count,
                                          (uint64_t)work->storage_len);
         for (size_t i = 0; i < work->u.batch.count; ++i) {
-            const char *path =
-                bx_rg_sched_work_storage_string(work, work->u.batch.items[i].path_offset);
+            const char *path = work->u.batch.items[i].path;
             if (!path) {
                 bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued batch path\n");
                 job_error_seen = true;
@@ -1602,6 +1603,7 @@ int bx_rg_sched_run(int argc,
                               .index
                         : (first_file + operand_i);
             struct stat st;
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (stat(argv[j], &st) != 0) {
                 bx_rg_sched_report_path_error(&sched, argv[j], errno, num_files == 1);
                 bx_rg_sched_apply_result_unlocked(&sched, false, true);
@@ -1616,7 +1618,11 @@ int bx_rg_sched_run(int argc,
                 continue;
             if (!bx_search_explicit_entry_selected(opts, argv[j]))
                 continue;
-            if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+            if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
+                                                                  sched.exec_plan,
+                                                                  opts))
+                continue;
+            if (bx_search_loaded_metadata_exceeds_max_filesize(&st, opts))
                 continue;
             struct bx_rg_sched_frontier_state batch_state = {
                 .sched = &sched,

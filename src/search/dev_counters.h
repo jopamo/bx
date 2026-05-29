@@ -46,14 +46,22 @@ enum bx_search_rg_sched_counter {
     BX_SEARCH_RG_SCHED_OUTPUT_BATCH_STDERR_BYTES,
     BX_SEARCH_RG_SCHED_WORKER_SUBTREES_DONATED,
     BX_SEARCH_RG_SCHED_WORKER_SUBTREES_STOLEN,
+    BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPENED,
+    BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPEN_FAILURES,
+    BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OWNED_WALKS,
+    BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_REOPEN_FALLBACKS,
 };
 
 enum bx_search_walk_counter {
     BX_SEARCH_WALK_DIRENTS_SEEN = 0,
+    BX_SEARCH_WALK_GETDENTS64_CALLS,
+    BX_SEARCH_WALK_GETDENTS64_BYTES,
     BX_SEARCH_WALK_DIRS_SEEN,
     BX_SEARCH_WALK_FILES_SEEN,
     BX_SEARCH_WALK_SYMLINKS_SEEN,
     BX_SEARCH_WALK_UNKNOWN_DTYPE_SEEN,
+    BX_SEARCH_WALK_STAT_CALLS,
+    BX_SEARCH_WALK_FSTAT_CALLS,
     BX_SEARCH_WALK_LSTAT_CALLS,
     BX_SEARCH_WALK_FSTATAT_CALLS,
     BX_SEARCH_WALK_STAT_REASON_UNKNOWN_DTYPE,
@@ -65,14 +73,46 @@ enum bx_search_walk_counter {
     BX_SEARCH_WALK_STAT_REASON_TYPE,
     BX_SEARCH_WALK_STAT_REASON_SORT,
     BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT,
+    BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND,
     BX_SEARCH_WALK_OPENAT_CALLS,
     BX_SEARCH_WALK_PATH_JOIN_CALLS,
+    BX_SEARCH_WALK_PATH_PUSH_CALLS,
+    BX_SEARCH_WALK_PATH_PUSH_NS,
+    BX_SEARCH_WALK_PATH_POP_CALLS,
+    BX_SEARCH_WALK_PATH_POP_NS,
     BX_SEARCH_WALK_PATH_ALLOCS,
     BX_SEARCH_WALK_PATH_COPIES_BEFORE_MATCH,
+    BX_SEARCH_WALK_DIR_BUCKET_TINY_DIRS,
+    BX_SEARCH_WALK_DIR_BUCKET_TINY_ENTRIES,
+    BX_SEARCH_WALK_DIR_BUCKET_TINY_NS,
+    BX_SEARCH_WALK_DIR_BUCKET_SMALL_DIRS,
+    BX_SEARCH_WALK_DIR_BUCKET_SMALL_ENTRIES,
+    BX_SEARCH_WALK_DIR_BUCKET_SMALL_NS,
+    BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_DIRS,
+    BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_ENTRIES,
+    BX_SEARCH_WALK_DIR_BUCKET_MEDIUM_NS,
+    BX_SEARCH_WALK_DIR_BUCKET_HUGE_DIRS,
+    BX_SEARCH_WALK_DIR_BUCKET_HUGE_ENTRIES,
+    BX_SEARCH_WALK_DIR_BUCKET_HUGE_NS,
     BX_SEARCH_WALK_IGNORE_CHECKS,
+    BX_SEARCH_WALK_IGNORE_LITERAL_BASENAME_CHECKS,
+    BX_SEARCH_WALK_IGNORE_LITERAL_BASENAME_REJECTS,
+    BX_SEARCH_WALK_IGNORE_LITERAL_EXTENSION_CHECKS,
+    BX_SEARCH_WALK_IGNORE_LITERAL_EXTENSION_REJECTS,
+    BX_SEARCH_WALK_IGNORE_ANCHORED_PREFIX_CHECKS,
+    BX_SEARCH_WALK_IGNORE_ANCHORED_PREFIX_REJECTS,
     BX_SEARCH_WALK_IGNORE_GLOB_FALLBACKS,
+    BX_SEARCH_WALK_IGNORE_GENERIC_GLOB_CHECKS,
+    BX_SEARCH_WALK_IGNORE_GENERIC_GLOB_REJECTS,
     BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_CALLS,
     BX_SEARCH_WALK_IGNORE_GIT_ROOT_LSTAT_MISSES,
+    BX_SEARCH_WALK_FILTER_NS,
+    BX_SEARCH_WALK_IGNORE_STATE_PUSHES,
+    BX_SEARCH_WALK_IGNORE_STATE_INLINE_FRAMES,
+    BX_SEARCH_WALK_IGNORE_STATE_FAST_PATHS,
+    BX_SEARCH_WALK_IGNORE_STATE_NS,
+    BX_SEARCH_WALK_FILTER_REJECTED_ENTRIES,
+    BX_SEARCH_WALK_FILTER_REJECTED_DIRS,
 };
 
 bool bx_search_dev_counters_enabled(void);
@@ -140,7 +180,13 @@ void bx_search_dev_counters_note_context_buffer_entry(void);
 void bx_search_dev_counters_note_scanner_plain_prefix_alloc(void);
 void bx_search_dev_counters_note_output_line_emitted(void);
 void bx_search_dev_counters_note_binary_policy_check(void);
+void bx_search_dev_counters_note_display_path_borrow(void);
+void bx_search_dev_counters_note_display_path_copy(size_t bytes);
 void bx_search_dev_counters_note_walk(enum bx_search_walk_counter counter, uint64_t count);
+void bx_search_dev_counters_note_walk_stat_call(enum bx_search_walk_counter reason);
+void bx_search_dev_counters_note_walk_fstat_call(enum bx_search_walk_counter reason);
+void bx_search_dev_counters_note_walk_lstat_call(enum bx_search_walk_counter reason);
+void bx_search_dev_counters_note_walk_fstatat_call(enum bx_search_walk_counter reason);
 void bx_search_dev_counters_note_rg_sched(enum bx_search_rg_sched_counter counter,
                                           uint64_t count);
 uint64_t bx_search_dev_batch_debug_next_id(void);

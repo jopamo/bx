@@ -14,6 +14,7 @@
 #include "lib/work_pool.h"
 #include "dev_counters.h"
 #include "record_stream.h"
+#include "rg_output.h"
 #include "rg_parallel.h"
 #include "rg_publish.h"
 #include "scanner.h"
@@ -52,6 +53,7 @@ struct bx_search_parallel_worker {
     struct bx_matcher *matcher;
     struct bx_search_scanner scanner;
     struct bx_record_stream record_stream;
+    struct bx_rg_display_path_buf display_path_buf;
 };
 
 struct bx_search_parallel_state {
@@ -420,6 +422,7 @@ static void bx_search_parallel_worker_fini(void *user, void *worker_local, size_
     bx_search_matcher_free(worker->matcher);
     bx_search_scanner_dispose(&worker->scanner);
     bx_record_stream_dispose(&worker->record_stream);
+    bx_rg_display_path_buf_dispose(&worker->display_path_buf);
     free(worker);
 }
 
@@ -481,17 +484,18 @@ static void bx_search_parallel_process_job(void *user,
             break;
         }
 
-        status = bx_search_search_file(path,
-                                       NULL,
-                                       job->items[i].strip_dot_prefix,
-                                       state->progname,
-                                       worker->matcher,
-                                       state->exec_plan,
-                                       state->opts,
-                                       &match_count,
-                                       &worker->scanner,
-                                       &worker->record_stream,
-                                       &job_stats);
+        status = bx_search_search_file_with_display_buffer(path,
+                                                           NULL,
+                                                           job->items[i].strip_dot_prefix,
+                                                           state->progname,
+                                                           worker->matcher,
+                                                           state->exec_plan,
+                                                           state->opts,
+                                                           &match_count,
+                                                           &worker->scanner,
+                                                           &worker->record_stream,
+                                                           &job_stats,
+                                                           &worker->display_path_buf);
         if (status == 2) {
             job_error_seen = true;
             job_status = 2;
@@ -585,9 +589,9 @@ static enum bx_walk_action bx_search_parallel_walk_cb(struct bx_walk_entry *entr
                                                            state->parallel->exec_plan,
                                                            state->parallel->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
-        return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state->parallel->opts))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, state->parallel->opts))
         return BX_WALK_CONTINUE;
 
     if (!bx_search_parallel_queue_path(state->parallel, entry->path, true,
@@ -765,6 +769,7 @@ int bx_search_run_parallel_rg(int argc,
                                           : operand_i]
                           .index
                     : (first_file + operand_i);
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (stat(argv[j], &st) != 0) {
                 if (!bx_search_parallel_submit_path_error(&state, argv[j], errno,
                                                           num_files == 1)) {
@@ -782,7 +787,11 @@ int bx_search_run_parallel_rg(int argc,
                 continue;
             if (!bx_search_explicit_entry_selected(opts, argv[j]))
                 continue;
-            if (bx_search_path_exceeds_max_filesize(argv[j], opts))
+            if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
+                                                                  state.exec_plan,
+                                                                  opts))
+                continue;
+            if (bx_search_loaded_metadata_exceeds_max_filesize(&st, opts))
                 continue;
 
             if (!bx_search_parallel_queue_path(&state, argv[j], false, false)) {
@@ -801,6 +810,7 @@ int bx_search_run_parallel_rg(int argc,
                         : (first_file + operand_i);
             if (argv[j] && strcmp(argv[j], "-") != 0) {
                 struct stat st;
+                bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
                 if (lstat(argv[j], &st) == 0) {
                     if (S_ISDIR(st.st_mode)) {
                         if (!bx_search_parallel_submit_path_error(&state, argv[j], EISDIR,
@@ -809,6 +819,10 @@ int bx_search_run_parallel_rg(int argc,
                         continue;
                     }
                     if (bx_search_should_skip_special_input_mode(st.st_mode, opts))
+                        continue;
+                    if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
+                                                                          state.exec_plan,
+                                                                          opts))
                         continue;
                 }
                 if (bx_search_path_exceeds_max_filesize(argv[j], opts))

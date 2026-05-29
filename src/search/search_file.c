@@ -65,6 +65,7 @@ struct bx_search_display_name_state {
     const char *filename;
     const char *display_name_override;
     bool strip_dot_prefix;
+    struct bx_rg_display_path_buf *display_path_buf;
     char *owned_display_name;
 };
 
@@ -111,15 +112,6 @@ static bool search_file_should_stat_path_for_slow_policy(const char *filename,
     return opts->initial_tab || !opts->recursive;
 }
 
-static bool search_file_loaded_metadata_exceeds_max_filesize(
-    const struct stat *st,
-    const struct search_opts *opts
-) {
-    if (!st || !opts || !opts->max_filesize_set)
-        return false;
-    return S_ISREG(st->st_mode) && st->st_size > (off_t)opts->max_filesize;
-}
-
 static const char *display_name_for_stream(const char *filename,
                                            const char *display_name_override,
                                            struct search_opts *opts) {
@@ -143,6 +135,14 @@ static const char *search_file_resolve_display_name(
     if (!state->strip_dot_prefix &&
         (!opts || opts->path_separator == '\0' || opts->path_separator == '/')) {
         return fallback;
+    }
+    if (state->display_path_buf) {
+        const char *display =
+            bx_rg_display_path_buf_format(state->display_path_buf,
+                                          state->filename,
+                                          state->strip_dot_prefix,
+                                          opts ? opts->path_separator : '/');
+        return display ? display : fallback;
     }
     if (!state->owned_display_name) {
         state->owned_display_name = bx_search_display_path_for_output(state->filename,
@@ -948,7 +948,8 @@ static int search_file(const char *filename,
                        int *match_count,
                        struct bx_search_scanner *scanner,
                        struct bx_record_stream *record_stream,
-                       struct bx_search_stats *stats) {
+                       struct bx_search_stats *stats,
+                       struct bx_rg_display_path_buf *display_path_buf) {
     bool use_stdin = (!filename || strcmp(filename, "-") == 0);
     struct stat operand_st;
     bool operand_st_loaded = false;
@@ -956,16 +957,23 @@ static int search_file(const char *filename,
         .filename = filename,
         .display_name_override = display_name_override,
         .strip_dot_prefix = strip_dot_prefix,
+        .display_path_buf = display_path_buf,
     };
     int result = 1;
     int previous_offset_width = bx_search_output_get_offset_width();
     if (search_file_stat_from_walk_entry(walk_entry, filename, &operand_st)) {
         operand_st_loaded = true;
     } else if (search_file_should_stat_path_for_slow_policy(filename, use_stdin, opts)) {
+        bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
         operand_st_loaded = stat(filename, &operand_st) == 0;
     }
     if (!use_stdin && operand_st_loaded &&
-        search_file_loaded_metadata_exceeds_max_filesize(&operand_st, opts)) {
+        bx_search_mode_can_skip_max_filesize_zero_literal(operand_st.st_mode, exec_plan, opts)) {
+        result = 1;
+        goto out;
+    }
+    if (!use_stdin && operand_st_loaded &&
+        bx_search_loaded_metadata_exceeds_max_filesize(&operand_st, opts)) {
         result = 1;
         goto out;
     }
@@ -983,10 +991,12 @@ static int search_file(const char *filename,
         } else if (operand_st_loaded) {
             bx_search_output_set_offset_width(
                 bx_search_compute_offset_width_from_stat(&operand_st, opts));
-        } else if (filename && strcmp(filename, "-") != 0 &&
-                   stat(filename, &offset_width_st) == 0) {
-            bx_search_output_set_offset_width(
-                bx_search_compute_offset_width_from_stat(&offset_width_st, opts));
+        } else if (filename && strcmp(filename, "-") != 0) {
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_METADATA_OUTPUT);
+            if (stat(filename, &offset_width_st) == 0) {
+                bx_search_output_set_offset_width(
+                    bx_search_compute_offset_width_from_stat(&offset_width_st, opts));
+            }
         }
     }
 
@@ -1047,11 +1057,13 @@ static int search_file(const char *filename,
     }
     if (!use_stdin && !opts->recursive) {
         struct stat st;
-        if (filename && strcmp(filename, "-") != 0 &&
-            lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
-            bx_search_report_path_error(progname, filename, EISDIR, opts);
-            result = 2;
-            goto out;
+        if (filename && strcmp(filename, "-") != 0) {
+            bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
+            if (lstat(filename, &st) == 0 && S_ISDIR(st.st_mode)) {
+                bx_search_report_path_error(progname, filename, EISDIR, opts);
+                result = 2;
+                goto out;
+            }
         }
     }
 
@@ -1171,7 +1183,25 @@ int bx_search_search_file(const char *filename,
                           struct bx_search_stats *stats) {
     return search_file(filename, display_name_override, strip_dot_prefix, NULL, progname, m,
                        exec_plan, opts,
-                       match_count, scanner, record_stream, stats);
+                       match_count, scanner, record_stream, stats, NULL);
+}
+
+int bx_search_search_file_with_display_buffer(
+    const char *filename,
+    const char *display_name_override,
+    bool strip_dot_prefix,
+    const char *progname,
+    struct bx_matcher *m,
+    const struct bx_search_exec_plan *exec_plan,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_search_scanner *scanner,
+    struct bx_record_stream *record_stream,
+    struct bx_search_stats *stats,
+    struct bx_rg_display_path_buf *display_path_buf) {
+    return search_file(filename, display_name_override, strip_dot_prefix, NULL, progname, m,
+                       exec_plan, opts,
+                       match_count, scanner, record_stream, stats, display_path_buf);
 }
 
 int bx_search_search_walk_entry(const struct bx_walk_entry *entry,
@@ -1191,5 +1221,37 @@ int bx_search_search_walk_entry(const struct bx_walk_entry *entry,
                                      scanner, record_stream, stats);
     return search_file(entry->path, display_name_override, strip_dot_prefix, entry,
                        progname, m, exec_plan, opts, match_count, scanner,
-                       record_stream, stats);
+                       record_stream, stats, NULL);
+}
+
+int bx_search_search_walk_entry_with_display_buffer(
+    const struct bx_walk_entry *entry,
+    const char *display_name_override,
+    bool strip_dot_prefix,
+    const char *progname,
+    struct bx_matcher *m,
+    const struct bx_search_exec_plan *exec_plan,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_search_scanner *scanner,
+    struct bx_record_stream *record_stream,
+    struct bx_search_stats *stats,
+    struct bx_rg_display_path_buf *display_path_buf) {
+    if (!entry || !entry->path) {
+        return bx_search_search_file_with_display_buffer(NULL,
+                                                         display_name_override,
+                                                         strip_dot_prefix,
+                                                         progname,
+                                                         m,
+                                                         exec_plan,
+                                                         opts,
+                                                         match_count,
+                                                         scanner,
+                                                         record_stream,
+                                                         stats,
+                                                         display_path_buf);
+    }
+    return search_file(entry->path, display_name_override, strip_dot_prefix, entry,
+                       progname, m, exec_plan, opts, match_count, scanner,
+                       record_stream, stats, display_path_buf);
 }

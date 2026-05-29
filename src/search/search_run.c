@@ -78,10 +78,10 @@ static struct bx_search_operand_ref *bx_search_collect_sorted_operands(
 static enum bx_walk_action bx_search_files_walk_cb(struct bx_walk_entry *entry, void *user) {
     struct files_walk_state *state = user;
 
-    if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
-        return BX_WALK_CONTINUE;
     if (!entry->is_dir &&
         bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
     if (!entry->is_dir) {
         char *display = bx_search_display_path_for_output(entry->path,
@@ -123,9 +123,9 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
     if (bx_search_entry_can_skip_max_filesize_zero_literal(entry, state->exec_plan,
                                                            state->opts))
         return BX_WALK_CONTINUE;
-    if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
-        return BX_WALK_CONTINUE;
     if (bx_search_entry_should_skip_recursive_special_input(entry, state ? state->opts : NULL))
+        return BX_WALK_CONTINUE;
+    if (bx_search_entry_exceeds_max_filesize(entry, state ? state->opts : NULL))
         return BX_WALK_CONTINUE;
 
     int rc = bx_search_search_walk_entry(entry, NULL, state->strip_dot_prefix,
@@ -211,6 +211,7 @@ static bool bx_search_run_default_show_filename(int argc,
         return false;
 
     struct stat st;
+    bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
     if (stat(argv[first_file], &st) == 0)
         return S_ISDIR(st.st_mode);
     return false;
@@ -355,12 +356,13 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
                         : (args->first_file + operand_i);
             struct stat st;
 
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (stat(args->argv[j], &st) != 0) {
                 bx_search_report_path_error(args->progname, args->argv[j], errno, args->opts);
                 error_seen = true;
                 continue;
             }
-            if (bx_search_path_exceeds_max_filesize(args->argv[j], args->opts))
+            if (bx_search_loaded_metadata_exceeds_max_filesize(&st, args->opts))
                 continue;
             if (S_ISDIR(st.st_mode))
                 error_seen |= bx_search_walk(args->argv[j], &walk_config, &state) != 0;
@@ -577,6 +579,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                         : (args->first_file + operand_i);
             struct stat st;
 
+            bx_search_dev_counters_note_walk_stat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (stat(args->argv[j], &st) != 0) {
                 bx_search_report_path_error(args->progname, args->argv[j], errno, args->opts);
                 exit_status = 2;
@@ -617,6 +620,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
         if (args->argv[j] && strcmp(args->argv[j], "-") != 0) {
             struct stat st;
 
+            bx_search_dev_counters_note_walk_lstat_call(BX_SEARCH_WALK_STAT_REASON_EXPLICIT_OPERAND);
             if (lstat(args->argv[j], &st) == 0) {
                 if (S_ISDIR(st.st_mode)) {
                     if (args->opts->directory_mode == BX_GREP_DIR_SKIP)
@@ -627,6 +631,10 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                     continue;
                 }
                 if (bx_search_should_skip_special_input_mode(st.st_mode, args->opts))
+                    continue;
+                if (bx_search_mode_can_skip_max_filesize_zero_literal(st.st_mode,
+                                                                      exec_plan,
+                                                                      args->opts))
                     continue;
             }
             if (bx_search_path_exceeds_max_filesize(args->argv[j], args->opts))

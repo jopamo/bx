@@ -53,6 +53,13 @@ static inline void bx_walk_ctx_note_counter(const struct bx_walk_ctx *ctx,
     bx_walk_note_counter(ctx->opts->counter_ops, counter, count);
 }
 
+static inline void bx_walk_note_stat_call_for_reason(const struct bx_walk_counter_ops *ops,
+                                                     enum bx_walk_counter syscall_counter,
+                                                     enum bx_walk_counter reason_counter) {
+    bx_walk_note_counter(ops, reason_counter, 1u);
+    bx_walk_note_counter(ops, syscall_counter, 1u);
+}
+
 void bx_walk_entry_fill_from_stat(struct bx_walk_entry *entry, const struct stat *st);
 int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
                                    char *path,
@@ -67,9 +74,13 @@ int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
 int bx_walk_dirent_iterate(DIR *dir,
                            bx_walk_dirent_visit_fn visit,
                            void *user,
-                           int *err_out);
+                           int *err_out,
+                           const struct bx_walk_counter_ops *counter_ops);
 void bx_walk_dirent_list_free(struct bx_walk_dirent_list *list);
-int bx_walk_dirent_list_read_sorted(DIR *dir, struct bx_walk_dirent_list *list, int *err_out);
+int bx_walk_dirent_list_read_sorted(DIR *dir,
+                                    struct bx_walk_dirent_list *list,
+                                    int *err_out,
+                                    const struct bx_walk_counter_ops *counter_ops);
 
 bool bx_walk_should_stop(const struct bx_walk_opts *opts);
 const char *bx_walk_error_prefix(const struct bx_walk_opts *opts);

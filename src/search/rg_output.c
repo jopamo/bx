@@ -3,12 +3,14 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "dev_counters.h"
 #include "lib/color.h"
 #include "lib/path_ops.h"
 #include "rg_output.h"
@@ -323,6 +325,63 @@ void bx_rg_emit_color_reset(void) {
     bx_rg_emit_color_reset_file(stdout);
 }
 
+static bool bx_rg_display_path_buf_reserve(struct bx_rg_display_path_buf *buf,
+                                           size_t needed) {
+    if (!buf)
+        return false;
+    if (buf->cap >= needed)
+        return true;
+
+    size_t new_cap = buf->cap == 0u ? 256u : buf->cap;
+    while (new_cap < needed) {
+        if (new_cap > SIZE_MAX / 2u)
+            return false;
+        new_cap *= 2u;
+    }
+    char *tmp = realloc(buf->data, new_cap);
+    if (!tmp)
+        return false;
+    buf->data = tmp;
+    buf->cap = new_cap;
+    return true;
+}
+
+const char *bx_rg_display_path_buf_format(struct bx_rg_display_path_buf *buf,
+                                          const char *path,
+                                          bool strip_dot_prefix,
+                                          char path_separator) {
+    const char *display = path;
+
+    if (!path)
+        return NULL;
+    if (strip_dot_prefix)
+        display = bx_path_strip_dot_slash_prefix_ptr(path);
+    if (!display)
+        display = path;
+    if (path_separator == '\0' || path_separator == '/') {
+        bx_search_dev_counters_note_display_path_borrow();
+        return display;
+    }
+
+    size_t len = strlen(display);
+    if (!bx_rg_display_path_buf_reserve(buf, len + 1u))
+        return NULL;
+    for (size_t i = 0; i < len; ++i) {
+        char ch = display[i];
+        buf->data[i] = ch == '/' ? path_separator : ch;
+    }
+    buf->data[len] = '\0';
+    bx_search_dev_counters_note_display_path_copy(len);
+    return buf->data;
+}
+
+void bx_rg_display_path_buf_dispose(struct bx_rg_display_path_buf *buf) {
+    if (!buf)
+        return;
+    free(buf->data);
+    memset(buf, 0, sizeof(*buf));
+}
+
 char *bx_rg_display_path_dup(const char *path, bool strip_dot_prefix,
                              char path_separator) {
     const char *display = path;
@@ -332,9 +391,11 @@ char *bx_rg_display_path_dup(const char *path, bool strip_dot_prefix,
         return NULL;
     if (strip_dot_prefix)
         display = bx_path_strip_dot_slash_prefix_ptr(path);
+    size_t display_len = strlen(display ? display : path);
     copy = strdup(display ? display : path);
     if (!copy)
         return NULL;
+    bx_search_dev_counters_note_display_path_copy(display_len);
     if (path_separator != '\0' && path_separator != '/') {
         for (char *p = copy; *p; ++p) {
             if (*p == '/')

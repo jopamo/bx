@@ -42,6 +42,11 @@ struct bx_rg_color_settings {
     struct bx_rg_color_style match;
 };
 
+struct bx_rg_display_path_buf {
+    char *data;
+    size_t cap;
+};
+
 void bx_rg_color_settings_init_defaults(struct bx_rg_color_settings *settings);
 bool bx_rg_parse_colors_spec(const char *progname, const char *spec,
                              struct bx_rg_color_settings *settings);
@@ -51,6 +56,11 @@ void bx_rg_emit_color_reset_file(FILE *stream);
 void bx_rg_emit_color_style_start(const struct bx_rg_color_style *style);
 void bx_rg_emit_color_reset(void);
 
+const char *bx_rg_display_path_buf_format(struct bx_rg_display_path_buf *buf,
+                                          const char *path,
+                                          bool strip_dot_prefix,
+                                          char path_separator);
+void bx_rg_display_path_buf_dispose(struct bx_rg_display_path_buf *buf);
 char *bx_rg_display_path_dup(const char *path, bool strip_dot_prefix,
                              char path_separator);
 bool bx_rg_parse_path_separator(const char *progname, const char *arg,

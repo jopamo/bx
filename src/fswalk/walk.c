@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "walk_internal.h"
@@ -27,13 +28,16 @@ static int bx_walk_recursive_visit_entry(const char *name,
                                          int parent_dirfd,
                                          const struct bx_walk_ctx *ctx,
                                          int depth,
-                                         const struct bx_walk_ancestor *ancestors);
+                                         const struct bx_walk_ancestor *ancestors,
+                                         uint64_t *child_recursive_ns);
 
 struct bx_walk_recursive_dirent_iter {
     int dirfd;
     const struct bx_walk_ctx *ctx;
     int depth;
     const struct bx_walk_ancestor *ancestors;
+    uint64_t entries_seen;
+    uint64_t *child_recursive_ns;
     int status;
 };
 
@@ -45,10 +49,78 @@ struct bx_walk_path_buf {
 
 struct bx_walk_entry_path_state {
     struct bx_walk_path_buf *path_buf;
+    const struct bx_walk_counter_ops *counter_ops;
     const char *name;
     size_t prev_len;
     bool appended;
 };
+
+static uint64_t bx_walk_monotonic_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0u;
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
+
+static void bx_walk_note_elapsed_ns(const struct bx_walk_counter_ops *counter_ops,
+                                    enum bx_walk_counter counter,
+                                    uint64_t start_ns) {
+    if (!counter_ops || start_ns == 0u)
+        return;
+    uint64_t end_ns = bx_walk_monotonic_ns();
+    if (end_ns >= start_ns)
+        bx_walk_note_counter(counter_ops, counter, end_ns - start_ns);
+}
+
+static void bx_walk_add_u64_saturated(uint64_t *total, uint64_t value) {
+    if (!total)
+        return;
+    if (UINT64_MAX - *total < value)
+        *total = UINT64_MAX;
+    else
+        *total += value;
+}
+
+static void bx_walk_add_elapsed_ns(uint64_t *total, uint64_t start_ns) {
+    if (!total || start_ns == 0u)
+        return;
+    uint64_t end_ns = bx_walk_monotonic_ns();
+    if (end_ns >= start_ns)
+        bx_walk_add_u64_saturated(total, end_ns - start_ns);
+}
+
+static void bx_walk_note_directory_bucket(const struct bx_walk_ctx *ctx,
+                                          uint64_t entries,
+                                          uint64_t elapsed_ns) {
+    enum bx_walk_counter dirs_counter;
+    enum bx_walk_counter entries_counter;
+    enum bx_walk_counter ns_counter;
+
+    if (!ctx || !ctx->opts || !ctx->opts->counter_ops)
+        return;
+
+    if (entries <= 8u) {
+        dirs_counter = BX_WALK_COUNTER_DIR_BUCKET_TINY_DIRS;
+        entries_counter = BX_WALK_COUNTER_DIR_BUCKET_TINY_ENTRIES;
+        ns_counter = BX_WALK_COUNTER_DIR_BUCKET_TINY_NS;
+    } else if (entries <= 64u) {
+        dirs_counter = BX_WALK_COUNTER_DIR_BUCKET_SMALL_DIRS;
+        entries_counter = BX_WALK_COUNTER_DIR_BUCKET_SMALL_ENTRIES;
+        ns_counter = BX_WALK_COUNTER_DIR_BUCKET_SMALL_NS;
+    } else if (entries <= 512u) {
+        dirs_counter = BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_DIRS;
+        entries_counter = BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_ENTRIES;
+        ns_counter = BX_WALK_COUNTER_DIR_BUCKET_MEDIUM_NS;
+    } else {
+        dirs_counter = BX_WALK_COUNTER_DIR_BUCKET_HUGE_DIRS;
+        entries_counter = BX_WALK_COUNTER_DIR_BUCKET_HUGE_ENTRIES;
+        ns_counter = BX_WALK_COUNTER_DIR_BUCKET_HUGE_NS;
+    }
+
+    bx_walk_ctx_note_counter(ctx, dirs_counter, 1u);
+    bx_walk_ctx_note_counter(ctx, entries_counter, entries);
+    bx_walk_ctx_note_counter(ctx, ns_counter, elapsed_ns);
+}
 
 static bool bx_walk_path_buf_reserve(struct bx_walk_path_buf *buf,
                                      size_t needed,
@@ -136,6 +208,7 @@ static char *bx_walk_path_buf_push_name(struct bx_walk_path_buf *buf,
 
     size_t name_len = strlen(name);
     bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_JOIN_CALLS, 1u);
+    bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_PATH_PUSH_CALLS, 1u);
     if (buf->len > SIZE_MAX - name_len - 2u) {
         if (err_out)
             *err_out = ENAMETOOLONG;
@@ -170,8 +243,10 @@ static char *bx_walk_entry_path_ensure(struct bx_walk_entry_path_state *state,
     if (state->appended)
         return state->path_buf ? state->path_buf->data : NULL;
 
+    uint64_t start_ns = state->counter_ops ? bx_walk_monotonic_ns() : 0u;
     char *full = bx_walk_path_buf_push_name(state->path_buf, state->name,
                                             ctx->opts->counter_ops, join_err);
+    bx_walk_note_elapsed_ns(state->counter_ops, BX_WALK_COUNTER_PATH_PUSH_NS, start_ns);
     if (full)
         state->appended = true;
     return full;
@@ -180,7 +255,10 @@ static char *bx_walk_entry_path_ensure(struct bx_walk_entry_path_state *state,
 static void bx_walk_entry_path_release(struct bx_walk_entry_path_state *state) {
     if (!state || !state->appended)
         return;
+    bx_walk_note_counter(state->counter_ops, BX_WALK_COUNTER_PATH_POP_CALLS, 1u);
+    uint64_t start_ns = state->counter_ops ? bx_walk_monotonic_ns() : 0u;
     bx_walk_path_buf_pop_to_len(state->path_buf, state->prev_len);
+    bx_walk_note_elapsed_ns(state->counter_ops, BX_WALK_COUNTER_PATH_POP_NS, start_ns);
     state->appended = false;
 }
 
@@ -315,12 +393,14 @@ static int bx_walk_recursive_iterate_dirent(const char *name,
     if (!state)
         return -1;
 
+    state->entries_seen++;
     bx_walk_ctx_note_counter(state->ctx, BX_WALK_COUNTER_DIRENTS_SEEN, 1u);
     if (d_type == DT_UNKNOWN)
         bx_walk_ctx_note_counter(state->ctx, BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN, 1u);
     if (bx_walk_recursive_visit_entry(name, d_type,
                                       state->dirfd,
-                                      state->ctx, state->depth, state->ancestors) != 0) {
+                                      state->ctx, state->depth, state->ancestors,
+                                      state->child_recursive_ns) != 0) {
         state->status = -1;
     }
     if (bx_walk_should_stop(state->ctx->opts))
@@ -371,7 +451,8 @@ static int bx_walk_recursive_visit_entry(const char *name,
                                          int parent_dirfd,
                                          const struct bx_walk_ctx *ctx,
                                          int depth,
-                                         const struct bx_walk_ancestor *ancestors) {
+                                         const struct bx_walk_ancestor *ancestors,
+                                         uint64_t *child_recursive_ns) {
     if (bx_walk_should_stop(ctx->opts))
         return 0;
 
@@ -380,6 +461,7 @@ static int bx_walk_recursive_visit_entry(const char *name,
 
     struct bx_walk_entry_path_state path_state = {
         .path_buf = ctx->path_buf,
+        .counter_ops = ctx->opts->counter_ops,
         .name = name,
         .prev_len = ctx->path_buf ? ctx->path_buf->len : 0u,
     };
@@ -474,8 +556,11 @@ static int bx_walk_recursive_visit_entry(const char *name,
                                                    ctx, &child_dir, &status);
         if (open_rc < 0) {
             status = -1;
-        } else if (open_rc > 0 && bx_walk_recursive(child_dir, ctx, depth + 1, &next) != 0) {
-            status = -1;
+        } else if (open_rc > 0) {
+            uint64_t child_start_ns = child_recursive_ns ? bx_walk_monotonic_ns() : 0u;
+            if (bx_walk_recursive(child_dir, ctx, depth + 1, &next) != 0)
+                status = -1;
+            bx_walk_add_elapsed_ns(child_recursive_ns, child_start_ns);
         }
     }
 
@@ -505,10 +590,16 @@ static int bx_walk_recursive(DIR *dir,
     }
 
     int status = 0;
+    uint64_t dir_start_ns = ctx->opts->counter_ops ? bx_walk_monotonic_ns() : 0u;
+    uint64_t child_recursive_ns = 0u;
+    uint64_t *child_recursive_ns_out = dir_start_ns != 0u ? &child_recursive_ns : NULL;
+    uint64_t dir_entries_seen = 0u;
+    uint64_t dir_elapsed_ns = 0u;
     if (ctx->opts->sort_entries || ctx->opts->reverse_sort) {
         struct bx_walk_dirent_list dirents = {0};
         int dirent_err = 0;
-        if (bx_walk_dirent_list_read_sorted(dir, &dirents, &dirent_err) != 0) {
+        if (bx_walk_dirent_list_read_sorted(dir, &dirents, &dirent_err,
+                                            ctx->opts->counter_ops) != 0) {
             enum bx_walk_action action = bx_walk_handle_error(ctx, ctx->path_buf->data,
                                                               dirent_err != 0 ? dirent_err : EIO);
             bx_walk_dirent_list_free(&dirents);
@@ -516,6 +607,7 @@ static int bx_walk_recursive(DIR *dir,
             goto out;
         }
 
+        dir_entries_seen = dirents.len;
         for (size_t iter_index = 0; iter_index < dirents.len; iter_index++) {
             size_t dirent_index = ctx->opts->reverse_sort ? (dirents.len - 1u - iter_index)
                                                           : iter_index;
@@ -525,7 +617,8 @@ static int bx_walk_recursive(DIR *dir,
                 bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_UNKNOWN_DTYPE_SEEN, 1u);
             if (bx_walk_recursive_visit_entry(item->name, item->d_type,
                                               dirfd(dir),
-                                              ctx, depth, ancestors) != 0)
+                                              ctx, depth, ancestors,
+                                              child_recursive_ns_out) != 0)
                 status = -1;
             if (bx_walk_should_stop(ctx->opts))
                 break;
@@ -537,11 +630,14 @@ static int bx_walk_recursive(DIR *dir,
             .ctx = ctx,
             .depth = depth,
             .ancestors = ancestors,
+            .child_recursive_ns = child_recursive_ns_out,
         };
         int dirent_err = 0;
         int dirent_rc = bx_walk_dirent_iterate(dir, bx_walk_recursive_iterate_dirent,
-                                               &iter, &dirent_err);
+                                               &iter, &dirent_err,
+                                               ctx->opts->counter_ops);
         status = iter.status;
+        dir_entries_seen = iter.entries_seen;
 
         if (!bx_walk_should_stop(ctx->opts) && dirent_rc < 0 && dirent_err != 0) {
             enum bx_walk_action action = bx_walk_handle_error(ctx, ctx->path_buf->data, dirent_err);
@@ -550,6 +646,16 @@ static int bx_walk_recursive(DIR *dir,
     }
 
 out:
+    if (dir_start_ns != 0u) {
+        uint64_t dir_end_ns = bx_walk_monotonic_ns();
+        if (dir_end_ns >= dir_start_ns)
+            dir_elapsed_ns = dir_end_ns - dir_start_ns;
+        if (dir_elapsed_ns >= child_recursive_ns)
+            dir_elapsed_ns -= child_recursive_ns;
+        else
+            dir_elapsed_ns = 0u;
+    }
+    bx_walk_note_directory_bucket(ctx, dir_entries_seen, dir_elapsed_ns);
     closedir(dir);
     return status;
 }
@@ -619,8 +725,10 @@ int bx_walk(const char *root,
     }
 
     struct stat st;
-    if (!opts->follow_root_symlink)
-        bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
+    bx_walk_note_stat_call_for_reason(
+        opts->counter_ops,
+        opts->follow_root_symlink ? BX_WALK_COUNTER_STAT_CALLS : BX_WALK_COUNTER_LSTAT_CALLS,
+        BX_WALK_COUNTER_STAT_REASON_EXPLICIT_OPERAND);
     int root_stat_rc = opts->follow_root_symlink ? stat(root, &st) : lstat(root, &st);
     if (root_stat_rc != 0) {
         struct bx_walk_ctx ctx = {.opts = opts, .ops = ops, .user = user, .root_device = 0};
@@ -682,6 +790,9 @@ int bx_walk_opened_dir(const char *root,
     }
 
     struct stat st;
+    bx_walk_note_stat_call_for_reason(opts->counter_ops,
+                                      BX_WALK_COUNTER_FSTAT_CALLS,
+                                      BX_WALK_COUNTER_STAT_REASON_EXPLICIT_OPERAND);
     if (fstat(dirfd(root_dir), &st) != 0) {
         int err = errno;
         struct bx_walk_ctx ctx = {.opts = opts, .ops = ops, .user = user, .root_device = 0};

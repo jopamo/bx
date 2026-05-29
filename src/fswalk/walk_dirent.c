@@ -76,7 +76,8 @@ enum {
 static int bx_walk_dirent_iterate_getdents64(DIR *dir,
                                              bx_walk_dirent_visit_fn visit,
                                              void *user,
-                                             int *err_out) {
+                                             int *err_out,
+                                             const struct bx_walk_counter_ops *counter_ops) {
     int fd = dirfd(dir);
     if (fd < 0) {
         if (err_out)
@@ -84,18 +85,32 @@ static int bx_walk_dirent_iterate_getdents64(DIR *dir,
         return -1;
     }
 
-    unsigned char buf[BX_WALK_GETDENTS64_BUF_SIZE];
+    unsigned char *buf = malloc(BX_WALK_GETDENTS64_BUF_SIZE);
+    if (!buf) {
+        if (err_out)
+            *err_out = ENOMEM;
+        return -1;
+    }
+
     for (;;) {
-        ssize_t nread = syscall(SYS_getdents64, fd, buf, sizeof(buf));
-        if (nread == 0)
+        ssize_t nread = syscall(SYS_getdents64, fd, buf, BX_WALK_GETDENTS64_BUF_SIZE);
+        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_GETDENTS64_CALLS, 1u);
+        if (nread == 0) {
+            free(buf);
             return 0;
+        }
         if (nread < 0) {
-            if (errno == ENOSYS)
+            if (errno == ENOSYS) {
+                free(buf);
                 return BX_WALK_DIRENT_ITERATE_FALLBACK;
+            }
             if (err_out)
                 *err_out = errno;
+            free(buf);
             return -1;
         }
+        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_GETDENTS64_BYTES,
+                             (uint64_t)nread);
 
         size_t pos = 0u;
         while (pos < (size_t)nread) {
@@ -107,13 +122,16 @@ static int bx_walk_dirent_iterate_getdents64(DIR *dir,
                 ent->d_reclen < offsetof(struct bx_walk_linux_dirent64, d_name) + 1u) {
                 if (err_out)
                     *err_out = EIO;
+                free(buf);
                 return -1;
             }
 
             if (strcmp(ent->d_name, ".") != 0 && strcmp(ent->d_name, "..") != 0) {
                 int visit_rc = visit(ent->d_name, ent->d_type, user);
-                if (visit_rc != 0)
+                if (visit_rc != 0) {
+                    free(buf);
                     return visit_rc;
+                }
             }
 
             pos += ent->d_reclen;
@@ -160,7 +178,8 @@ void bx_walk_dirent_list_free(struct bx_walk_dirent_list *list) {
 int bx_walk_dirent_iterate(DIR *dir,
                            bx_walk_dirent_visit_fn visit,
                            void *user,
-                           int *err_out) {
+                           int *err_out,
+                           const struct bx_walk_counter_ops *counter_ops) {
     if (err_out)
         *err_out = 0;
     if (!dir || !visit) {
@@ -170,7 +189,7 @@ int bx_walk_dirent_iterate(DIR *dir,
     }
 
 #if defined(__linux__) && defined(SYS_getdents64)
-    int rc = bx_walk_dirent_iterate_getdents64(dir, visit, user, err_out);
+    int rc = bx_walk_dirent_iterate_getdents64(dir, visit, user, err_out, counter_ops);
     if (rc != BX_WALK_DIRENT_ITERATE_FALLBACK)
         return rc;
     rewinddir(dir);
@@ -179,11 +198,15 @@ int bx_walk_dirent_iterate(DIR *dir,
     return bx_walk_dirent_iterate_readdir(dir, visit, user, err_out);
 }
 
-int bx_walk_dirent_list_read_sorted(DIR *dir, struct bx_walk_dirent_list *list, int *err_out) {
+int bx_walk_dirent_list_read_sorted(DIR *dir,
+                                    struct bx_walk_dirent_list *list,
+                                    int *err_out,
+                                    const struct bx_walk_counter_ops *counter_ops) {
     struct bx_walk_dirent_list_collect_state state = {
         .list = list,
     };
-    int rc = bx_walk_dirent_iterate(dir, bx_walk_dirent_list_collect, &state, err_out);
+    int rc = bx_walk_dirent_iterate(dir, bx_walk_dirent_list_collect, &state,
+                                    err_out, counter_ops);
     if (rc != 0) {
         if (err_out && *err_out == 0)
             *err_out = errno != 0 ? errno : EIO;

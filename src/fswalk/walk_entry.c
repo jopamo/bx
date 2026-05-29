@@ -84,13 +84,16 @@ int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
             return 0;
         }
 
-        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE, 1u);
         if (parent_dirfd >= 0 && name) {
-            bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_FSTATAT_CALLS, 1u);
+            bx_walk_note_stat_call_for_reason(counter_ops,
+                                              BX_WALK_COUNTER_FSTATAT_CALLS,
+                                              BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE);
             if (fstatat(parent_dirfd, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
                 return errno;
         } else {
-            bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
+            bx_walk_note_stat_call_for_reason(counter_ops,
+                                              BX_WALK_COUNTER_LSTAT_CALLS,
+                                              BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE);
             if (lstat(path, &st) != 0)
                 return errno;
         }
@@ -109,17 +112,20 @@ int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
         return 0;
     }
 
-    bx_walk_note_counter(counter_ops,
-                         d_type == DT_UNKNOWN
-                             ? BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE
-                             : BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY,
-                         1u);
+    enum bx_walk_counter reason_counter =
+        d_type == DT_UNKNOWN
+            ? BX_WALK_COUNTER_STAT_REASON_UNKNOWN_DTYPE
+            : BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY;
     if ((d_type == DT_LNK || d_type == DT_UNKNOWN) && parent_dirfd >= 0 && name) {
-        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_FSTATAT_CALLS, 1u);
+        bx_walk_note_stat_call_for_reason(counter_ops,
+                                          BX_WALK_COUNTER_FSTATAT_CALLS,
+                                          reason_counter);
         if (fstatat(parent_dirfd, name, &lst, AT_SYMLINK_NOFOLLOW) != 0)
             return errno;
     } else {
-        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
+        bx_walk_note_stat_call_for_reason(counter_ops,
+                                          BX_WALK_COUNTER_LSTAT_CALLS,
+                                          reason_counter);
         if (lstat(path, &lst) != 0)
             return errno;
     }
@@ -128,26 +134,38 @@ int bx_walk_entry_fill_from_dirent(struct bx_walk_entry *entry,
     entry->is_symlink = *entry_was_symlink;
     if (!*entry_was_symlink) {
         if (parent_dirfd >= 0 && name) {
-            bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_FSTATAT_CALLS, 1u);
+            bx_walk_note_stat_call_for_reason(counter_ops,
+                                              BX_WALK_COUNTER_FSTATAT_CALLS,
+                                              reason_counter);
             if (fstatat(parent_dirfd, name, &st, 0) != 0)
                 return errno;
-        } else if (stat(path, &st) != 0) {
-            return errno;
+        } else {
+            bx_walk_note_stat_call_for_reason(counter_ops,
+                                              BX_WALK_COUNTER_STAT_CALLS,
+                                              reason_counter);
+            if (stat(path, &st) != 0)
+                return errno;
         }
         bx_walk_entry_fill_from_stat(entry, &st);
         return 0;
     }
 
     if (parent_dirfd >= 0 && name) {
-        bx_walk_note_counter(counter_ops, BX_WALK_COUNTER_FSTATAT_CALLS, 1u);
+        bx_walk_note_stat_call_for_reason(counter_ops,
+                                          BX_WALK_COUNTER_FSTATAT_CALLS,
+                                          BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY);
         if (fstatat(parent_dirfd, name, &st, 0) == 0)
             bx_walk_entry_fill_from_stat(entry, &st);
         else
             bx_walk_entry_fill_from_stat(entry, &lst);
-    } else if (stat(path, &st) == 0) {
-        bx_walk_entry_fill_from_stat(entry, &st);
     } else {
-        bx_walk_entry_fill_from_stat(entry, &lst);
+        bx_walk_note_stat_call_for_reason(counter_ops,
+                                          BX_WALK_COUNTER_STAT_CALLS,
+                                          BX_WALK_COUNTER_STAT_REASON_SYMLINK_POLICY);
+        if (stat(path, &st) == 0)
+            bx_walk_entry_fill_from_stat(entry, &st);
+        else
+            bx_walk_entry_fill_from_stat(entry, &lst);
     }
     return 0;
 }
@@ -162,18 +180,25 @@ bool bx_walk_entry_load_metadata_for(struct bx_walk_entry *entry,
         return false;
 
     entry->metadata_tried = true;
-    bx_walk_note_counter(entry->counter_ops, bx_walk_metadata_reason_counter(reason), 1u);
+    enum bx_walk_counter reason_counter = bx_walk_metadata_reason_counter(reason);
 
     struct stat st;
     int rc;
     if (entry->metadata_dirfd_valid) {
         int flags = entry->follow_metadata ? 0 : AT_SYMLINK_NOFOLLOW;
-        bx_walk_note_counter(entry->counter_ops, BX_WALK_COUNTER_FSTATAT_CALLS, 1u);
+        bx_walk_note_stat_call_for_reason(entry->counter_ops,
+                                          BX_WALK_COUNTER_FSTATAT_CALLS,
+                                          reason_counter);
         rc = fstatat(entry->metadata_dirfd, entry->metadata_name, &st, flags);
     } else if (entry->follow_metadata) {
+        bx_walk_note_stat_call_for_reason(entry->counter_ops,
+                                          BX_WALK_COUNTER_STAT_CALLS,
+                                          reason_counter);
         rc = stat(entry->path, &st);
     } else {
-        bx_walk_note_counter(entry->counter_ops, BX_WALK_COUNTER_LSTAT_CALLS, 1u);
+        bx_walk_note_stat_call_for_reason(entry->counter_ops,
+                                          BX_WALK_COUNTER_LSTAT_CALLS,
+                                          reason_counter);
         rc = lstat(entry->path, &st);
     }
     if (rc != 0)

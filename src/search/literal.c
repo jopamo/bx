@@ -2031,10 +2031,6 @@ size_t bx_literal_len(const struct bx_literal_matcher *m) {
     return m ? m->plan.needle_len : 0u;
 }
 
-size_t bx_literal_overlap_len(const struct bx_literal_matcher *m) {
-    return m ? m->plan.min_overlap_len : 0u;
-}
-
 enum bx_lit_result bx_literal_scan_absent(const struct bx_lit_plan *plan,
                                           const unsigned char *buf,
                                           size_t len,

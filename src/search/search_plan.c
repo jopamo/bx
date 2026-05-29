@@ -30,6 +30,10 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(
 static bool bx_search_plan_deferred_fastpath_has_absence_plan(
     const struct bx_matcher *matcher
 );
+static enum bx_search_max_filesize_zero_policy bx_search_select_max_filesize_zero_policy(
+    const struct search_opts *opts,
+    bool deferred_literal_precheck
+);
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts) {
     return opts && (opts->after_context > 0 || opts->before_context > 0);
@@ -132,6 +136,24 @@ static bool bx_search_plan_deferred_fastpath_has_absence_plan(
     const struct bx_matcher *matcher
 ) {
     return bx_search_matcher_absence_plan(matcher) != NULL;
+}
+
+static enum bx_search_max_filesize_zero_policy bx_search_select_max_filesize_zero_policy(
+    const struct search_opts *opts,
+    bool deferred_literal_precheck
+) {
+    if (!opts || !opts->max_filesize_set || opts->max_filesize != 0u)
+        return BX_SEARCH_MAX_FILESIZE_ZERO_DISABLED;
+
+    /*
+     * --max-filesize 0 is only size-insensitive when a non-empty literal
+     * absence plan proves that an empty regular file cannot produce visible
+     * output. Empty literals, empty regexes, and match-empty-capable regexes
+     * must keep exact metadata because empty files remain observable.
+     */
+    return deferred_literal_precheck
+        ? BX_SEARCH_MAX_FILESIZE_ZERO_SKIP_NON_EMPTY_LITERAL_REGULARS
+        : BX_SEARCH_MAX_FILESIZE_ZERO_EXACT_EMPTY_SENSITIVE;
 }
 
 static enum bx_search_plan_kernel_kind
@@ -298,10 +320,8 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
          */
         && bx_search_plan_deferred_fastpath_has_absence_plan(matcher)
         && !opts->stats;
-    exec_plan->max_filesize_zero_literal_skip_regulars =
-        exec_plan->deferred_literal_precheck
-        && opts->max_filesize_set
-        && opts->max_filesize == 0u;
+    exec_plan->max_filesize_zero_policy =
+        bx_search_select_max_filesize_zero_policy(opts, exec_plan->deferred_literal_precheck);
 }
 
 bool bx_search_plan_debug_enabled(void) {
