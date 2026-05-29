@@ -106,19 +106,28 @@ static void bx_du_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_du_parse_max_depth(const char* text, uintmax_t* depth_out, struct bx_diag_ctx* diag) {
-    if (text == NULL || text[0] == '\0' || text[0] == '-') {
+    if (text == NULL || text[0] == '\0') {
         bx_diag(diag, "invalid maximum depth '%s'", text != NULL ? text : "");
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    uintmax_t depth = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || (end != NULL && *end != '\0')) {
+    const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+    if (digits[0] == '+') {
+        digits++;
+    }
+    else if (digits[0] == '-') {
         bx_diag(diag, "invalid maximum depth '%s'", text);
         return false;
     }
 
+    uintmax_t depth = 0;
+    if (!bx_size_parse_uint(digits, &depth)) {
+        bx_diag(diag, "invalid maximum depth '%s'", text);
+        return false;
+    }
     *depth_out = depth;
     return true;
 }

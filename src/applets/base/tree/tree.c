@@ -80,14 +80,11 @@ static bool bx_tree_parse_nonnegative(const char *progname,
                                       const char *optname,
                                       const char *text,
                                       int *out) {
-    char *end = NULL;
-    long value = strtol(text, &end, 10);
-    if (!text || *text == '\0' || (end && *end != '\0') || value < 0 || value > 1L << 20) {
+    if (!bx_args_parse_int_range(text, 0, 1 << 20, out)) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n", progname, optname,
                 text ? text : "(null)");
         return false;
     }
-    *out = (int)value;
     return true;
 }
 

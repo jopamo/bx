@@ -34,19 +34,7 @@ static void bx_nice_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_nice_parse_int(const char* text, int* value_out) {
-    if (text == NULL || text[0] == '\0') {
-        return false;
-    }
-
-    errno = 0;
-    char* end = NULL;
-    long value = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value < INT_MIN || value > INT_MAX) {
-        return false;
-    }
-
-    *value_out = (int)value;
-    return true;
+    return bx_args_parse_int_range(text, INT_MIN, INT_MAX, value_out);
 }
 
 static bool bx_nice_parse_legacy_adjustment(const char* arg, int* adjustment_out) {

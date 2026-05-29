@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <ctype.h>
-#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -59,15 +58,64 @@ static struct bx_rg_color_style *bx_rg_color_target(struct bx_rg_color_settings 
     return NULL;
 }
 
-static bool bx_rg_parse_uint_component(const char *text, unsigned int *out) {
-    char *end = NULL;
-    unsigned long value;
+static bool bx_rg_component_digit(unsigned char ch, unsigned int base,
+                                  unsigned int *digit_out) {
+    unsigned int digit = 0;
 
-    errno = 0;
-    value = strtoul(text, &end, 0);
-    if (errno != 0 || !text || *text == '\0' || !end || *end != '\0' || value > 255ul)
+    if (ch >= '0' && ch <= '9') {
+        digit = (unsigned int)(ch - '0');
+    } else if (ch >= 'a' && ch <= 'f') {
+        digit = 10u + (unsigned int)(ch - 'a');
+    } else if (ch >= 'A' && ch <= 'F') {
+        digit = 10u + (unsigned int)(ch - 'A');
+    } else {
         return false;
-    *out = (unsigned int)value;
+    }
+
+    if (digit >= base)
+        return false;
+
+    *digit_out = digit;
+    return true;
+}
+
+static bool bx_rg_parse_uint_component(const char *text, unsigned int *out) {
+    if (!text || text[0] == '\0' || !out)
+        return false;
+
+    const char *digits = text;
+    while (isspace((unsigned char)*digits))
+        digits++;
+
+    if (digits[0] == '-' || digits[0] == '\0')
+        return false;
+    if (digits[0] == '+')
+        digits++;
+    if (digits[0] == '\0')
+        return false;
+
+    unsigned int base = 10;
+    if (digits[0] == '0') {
+        base = 8;
+        if (digits[1] == 'x' || digits[1] == 'X') {
+            base = 16;
+            digits += 2;
+            if (digits[0] == '\0')
+                return false;
+        }
+    }
+
+    unsigned int value = 0;
+    for (; *digits != '\0'; digits++) {
+        unsigned int digit = 0;
+        if (!bx_rg_component_digit((unsigned char)*digits, base, &digit))
+            return false;
+        if (value > (255u - digit) / base)
+            return false;
+        value = (value * base) + digit;
+    }
+
+    *out = value;
     return true;
 }
 

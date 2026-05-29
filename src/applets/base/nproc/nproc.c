@@ -1,9 +1,8 @@
-#include <errno.h>
+#include <ctype.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -40,12 +39,15 @@ static void bx_nproc_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_nproc_parse_ignore(const char* text, uintmax_t* value_out, struct bx_diag_ctx* diag) {
-    if (text == NULL || text[0] == '\0') {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
         bx_diag(diag, "invalid number: '%s'", text == NULL ? "" : text);
         return false;
     }
 
     const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
     if (digits[0] == '+') {
         digits++;
     }
@@ -59,16 +61,25 @@ static bool bx_nproc_parse_ignore(const char* text, uintmax_t* value_out, struct
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(digits, &end, 10);
-    if (end == digits || *end != '\0') {
-        bx_diag(diag, "invalid number: '%s'", text);
-        return false;
-    }
+    uintmax_t value = 0;
+    bool saturated = false;
+    for (const char* p = digits; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            bx_diag(diag, "invalid number: '%s'", text);
+            return false;
+        }
 
-    if (errno == ERANGE) {
-        value = UINTMAX_MAX;
+        if (saturated) {
+            continue;
+        }
+
+        unsigned int digit = (unsigned int)(*p - '0');
+        if (value > (UINTMAX_MAX - digit) / 10u) {
+            value = UINTMAX_MAX;
+            saturated = true;
+            continue;
+        }
+        value = (value * 10u) + (uintmax_t)digit;
     }
 
     *value_out = value;

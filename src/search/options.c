@@ -150,16 +150,15 @@ enum {
     OPT_GENERATE,
 };
 
+static const int BX_SEARCH_NUMERIC_OPTION_MAX = 1 << 20;
+
 static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
-    char *end = NULL;
-    long v = strtol(text, &end, 10);
-    if (!text || *text == '\0' || (end && *end != '\0') || v < 0 || v > 1<<20) {
+    if (!bx_args_parse_int_range(text, 0, BX_SEARCH_NUMERIC_OPTION_MAX, out)) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n",
                 progname, optname, text ? text : "(null)");
         return false;
     }
-    *out = (int)v;
     return true;
 }
 
@@ -329,13 +328,12 @@ static bool bx_search_parse_nonnegative_int(const char *progname,
                                             const char *text,
                                             int *out) {
     if (personality == BX_SEARCH_GREP && strcmp(optname, "-m") == 0) {
-        char *end = NULL;
-        long v = strtol(text, &end, 10);
-        if (!text || *text == '\0' || (end && *end != '\0') || v < 0 || v > 1<<20) {
+        int parsed = 0;
+        if (!bx_args_parse_int_range(text, 0, BX_SEARCH_NUMERIC_OPTION_MAX, &parsed)) {
             fprintf(stderr, "%s: invalid max count\n", progname);
             return false;
         }
-        *out = (int)v;
+        *out = parsed;
         return true;
     }
 

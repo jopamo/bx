@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <math.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -84,9 +85,13 @@ static bool bx_killall_parse_duration(const char* text, double* seconds_out) {
     double value;
     double factor = 1.0;
 
+    if (text == NULL || text[0] == '\0' || seconds_out == NULL) {
+        return false;
+    }
+
     errno = 0;
     value = strtod(text, &end);
-    if (errno != 0 || end == text || value < 0.0) {
+    if (errno != 0 || end == text || value < 0.0 || !isfinite(value)) {
         return false;
     }
     if (*end == '\0') {
@@ -103,7 +108,11 @@ static bool bx_killall_parse_duration(const char* text, double* seconds_out) {
         case 'd': factor = 86400.0; break;
         default: return false;
     }
-    *seconds_out = value * factor;
+    double seconds = value * factor;
+    if (!isfinite(seconds)) {
+        return false;
+    }
+    *seconds_out = seconds;
     return true;
 }
 

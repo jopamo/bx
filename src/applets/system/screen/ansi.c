@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <sys/ioctl.h>
 #include <string.h>
 
@@ -113,9 +114,11 @@ static void MapCharset(Window *, int);
 static void MapCharsetR(Window *, int);
 static void SaveCursor(Window *, struct cursor *);
 static void attrcolor_skip_spaces(const char **);
+static bool attrcolor_parse_hex_mask_value(const char **, uint32_t *);
 static bool attrcolor_parse_attr_mask(const char **, uint32_t *);
 static int attrcolor_legacy_color(int);
 static bool attrcolor_parse_truecolor(const char **, uint32_t *);
+static bool attrcolor_parse_decimal_channel(const char **, uint32_t *);
 static bool attrcolor_parse_color_channel(const char **, uint32_t, uint32_t *);
 static bool attrcolor_apply_spec(struct mchar *, const char *);
 static bool attrcolor_target_active(const struct mchar *, int);
@@ -200,6 +203,50 @@ static void attrcolor_skip_spaces(const char **pp)
 		(*pp)++;
 }
 
+static bool attrcolor_hex_digit(int c, uint32_t *digit)
+{
+	if (c >= '0' && c <= '9') {
+		*digit = (uint32_t)(c - '0');
+		return true;
+	}
+	if (c >= 'a' && c <= 'f') {
+		*digit = (uint32_t)(c - 'a' + 10);
+		return true;
+	}
+	if (c >= 'A' && c <= 'F') {
+		*digit = (uint32_t)(c - 'A' + 10);
+		return true;
+	}
+	return false;
+}
+
+static bool attrcolor_parse_hex_mask_value(const char **pp, uint32_t *mask)
+{
+	const char *p = *pp;
+	uint32_t value = 0;
+	int digits = 0;
+
+	if (p[0] != '0' || (p[1] != 'x' && p[1] != 'X'))
+		return false;
+	p += 2;
+	while (*p) {
+		uint32_t digit;
+
+		if (!attrcolor_hex_digit((unsigned char)*p, &digit))
+			break;
+		if (value > (UINT32_MAX - digit) / 16u)
+			return false;
+		value = (value * 16u) + digit;
+		digits++;
+		p++;
+	}
+	if (digits == 0)
+		return false;
+	*mask = value;
+	*pp = p;
+	return true;
+}
+
 static bool attrcolor_parse_attr_mask(const char **pp, uint32_t *mask)
 {
 	const char *p = *pp;
@@ -208,13 +255,9 @@ static bool attrcolor_parse_attr_mask(const char **pp, uint32_t *mask)
 	if (*p == '\0' || isspace((unsigned char)*p))
 		return false;
 	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
-		char *end;
-		unsigned long parsed = strtoul(p, &end, 16);
-
-		if (end == p + 2)
+		if (!attrcolor_parse_hex_mask_value(&p, mask))
 			return false;
-		*mask = (uint32_t)parsed;
-		*pp = end;
+		*pp = p;
 		return true;
 	}
 	while (*p && !isspace((unsigned char)*p)) {
@@ -307,6 +350,28 @@ static bool attrcolor_parse_truecolor(const char **pp, uint32_t *color)
 	return true;
 }
 
+static bool attrcolor_parse_decimal_channel(const char **pp, uint32_t *channel)
+{
+	const char *p = *pp;
+	uint32_t value = 0;
+	int digits = 0;
+
+	while (isdigit((unsigned char)*p)) {
+		uint32_t digit = (uint32_t)(*p - '0');
+
+		if (value > (255u - digit) / 10u)
+			return false;
+		value = (value * 10u) + digit;
+		digits++;
+		p++;
+	}
+	if (digits == 0)
+		return false;
+	*channel = value;
+	*pp = p;
+	return true;
+}
+
 static bool attrcolor_parse_color_channel(const char **pp, uint32_t current, uint32_t *color)
 {
 	const char *p = *pp;
@@ -325,13 +390,11 @@ static bool attrcolor_parse_color_channel(const char **pp, uint32_t current, uin
 	if (attrcolor_parse_truecolor(&p, &value)) {
 		/* parsed */
 	} else if (isdigit((unsigned char)*p)) {
-		char *end;
-		unsigned long n = strtoul(p, &end, 10);
+		uint32_t n;
 
-		if (end == p || n > 255)
+		if (!attrcolor_parse_decimal_channel(&p, &n))
 			return false;
 		value = (n <= 15 ? 0x01000000 : 0x02000000) | (uint32_t)n;
-		p = end;
 	} else {
 		int legacy = attrcolor_legacy_color(*p);
 

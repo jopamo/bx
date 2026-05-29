@@ -5,6 +5,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -189,6 +190,29 @@ static bool bx_dmesg_parse_priority_prefix(const char** cursor, int* priority_ou
     return true;
 }
 
+static bool bx_dmesg_parse_timestamp(const char** cursor, double* stamp_out) {
+    if (cursor == NULL || *cursor == NULL || stamp_out == NULL) {
+        return false;
+    }
+
+    const char* p = *cursor;
+    if (p[0] != '[') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    double stamp = strtod(p + 1, &end);
+    if (errno == ERANGE || end == p + 1 || end == NULL || *end != ']' ||
+        !isfinite(stamp) || stamp < 0.0) {
+        return false;
+    }
+
+    *stamp_out = stamp;
+    *cursor = end + 1;
+    return true;
+}
+
 static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"clear", no_argument, NULL, 'C'},
@@ -331,15 +355,10 @@ static void bx_dmesg_print_line(const struct bx_dmesg_options* options, const ch
     const char* message = p;
     double stamp = 0.0;
     bool has_stamp = false;
-    if (*message == '[') {
-        char* end = NULL;
-        stamp = strtod(message + 1, &end);
-        if (end != message + 1 && end != NULL && *end == ']') {
-            has_stamp = true;
-            message = end + 1;
-            if (*message == ' ') {
-                message++;
-            }
+    if (bx_dmesg_parse_timestamp(&message, &stamp)) {
+        has_stamp = true;
+        if (*message == ' ') {
+            message++;
         }
     }
 

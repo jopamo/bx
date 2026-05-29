@@ -600,22 +600,57 @@ static bool bx_ls_parse_sort_option(const char* text, struct bx_ls_options* opti
     return false;
 }
 
+static bool bx_ls_parse_size_compat(const char* text, size_t* value_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+
+    bool negative = false;
+    if (digits[0] == '-') {
+        negative = true;
+        digits++;
+    }
+    else if (digits[0] == '+') {
+        digits++;
+    }
+
+    if (digits[0] == '\0') {
+        return false;
+    }
+
+    uintmax_t parsed = 0u;
+    if (!bx_size_parse_uint(digits, &parsed) || parsed > (uintmax_t)SIZE_MAX) {
+        return false;
+    }
+
+    size_t value = (size_t)parsed;
+    if (negative) {
+        value = (size_t)0 - value;
+    }
+
+    *value_out = value;
+    return true;
+}
+
 static bool bx_ls_parse_width_option(const char* text, struct bx_ls_options* options, struct bx_diag_ctx* diag, const char* option_name) {
     if (text == NULL) {
         bx_diag(diag, "option '%s' requires an argument", option_name);
         return false;
     }
 
-    char* end = NULL;
-    errno = 0;
-    unsigned long parsed = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+    size_t parsed = 0u;
+    if (!bx_ls_parse_size_compat(text, &parsed)) {
         bx_diag(diag, "invalid argument '%s' for '%s'", text, option_name);
         return false;
     }
 
     options->width_set = true;
-    options->output_width = (size_t)parsed;
+    options->output_width = parsed;
     return true;
 }
 
@@ -683,15 +718,13 @@ static bool bx_ls_parse_tabsize_option(const char* text, struct bx_ls_options* o
         return false;
     }
 
-    char* end = NULL;
-    errno = 0;
-    unsigned long parsed = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+    size_t parsed = 0u;
+    if (!bx_ls_parse_size_compat(text, &parsed)) {
         bx_diag(diag, "invalid argument '%s' for '%s'", text, option_name);
         return false;
     }
 
-    options->tabsize = (size_t)parsed;
+    options->tabsize = parsed;
     return true;
 }
 
@@ -2945,11 +2978,9 @@ static size_t bx_ls_output_width(const struct bx_ls_options* options) {
 
     const char* columns_env = getenv("COLUMNS");
     if (columns_env != NULL && columns_env[0] != '\0') {
-        char* end = NULL;
-        errno = 0;
-        unsigned long parsed = strtoul(columns_env, &end, 10);
-        if (errno == 0 && end != columns_env && *end == '\0' && parsed > 0ul) {
-            return (size_t)parsed;
+        size_t parsed = 0u;
+        if (bx_ls_parse_size_compat(columns_env, &parsed) && parsed > 0u) {
+            return parsed;
         }
     }
 

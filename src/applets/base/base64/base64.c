@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 
 #include "applets.h"
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 
 enum {
     BASE64_EXIT_OK = 0,
@@ -93,18 +95,27 @@ static bool base64_write_char(char c, const char* progname) {
 }
 
 static bool base64_parse_wrap_cols(const char* text, size_t* out_cols) {
-    if (text == NULL || text[0] == '\0') {
+    if (text == NULL || text[0] == '\0' || out_cols == NULL) {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    unsigned long long parsed = strtoull(text, &end, 10);
-    if (errno != 0 || end == NULL || end[0] != '\0') {
+    const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+
+    bool negative = false;
+    if (digits[0] == '+' || digits[0] == '-') {
+        negative = digits[0] == '-';
+        digits++;
+    }
+
+    uintmax_t parsed = 0;
+    if (!bx_size_parse_uint(digits, &parsed)) {
         return false;
     }
 
-    if (parsed > (unsigned long long)SIZE_MAX) {
+    if ((negative && parsed != 0) || parsed > (uintmax_t)SIZE_MAX) {
         return false;
     }
 

@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -20,6 +21,7 @@
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 
 enum bx_getty_clocal_mode {
     BX_GETTY_CLOCAL_AUTO = 0,
@@ -181,14 +183,24 @@ static bool bx_getty_parse_baud_list(const char* text, speed_t* speed_out) {
 }
 
 static bool bx_getty_parse_timeout(const char* text, unsigned* timeout_out) {
-    if (text == NULL || text[0] == '\0') {
+    if (text == NULL || text[0] == '\0' || timeout_out == NULL) {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value > UINT_MAX) {
+    const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+
+    if (digits[0] == '-') {
+        return false;
+    }
+    if (digits[0] == '+') {
+        digits++;
+    }
+
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(digits, &value) || value > UINT_MAX) {
         return false;
     }
 

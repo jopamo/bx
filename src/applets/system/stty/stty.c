@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -659,14 +661,79 @@ static bool bx_stty_parse_unsigned(const char* token, unsigned long max_value, u
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    unsigned long value = strtoul(token, &end, 10);
-    if (errno != 0 || end == token || *end != '\0' || value > max_value) {
+    const char* digits = token;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+    if (digits[0] == '-') {
+        return false;
+    }
+    if (digits[0] == '+') {
+        digits++;
+    }
+
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(digits, &value) || value > max_value) {
         return false;
     }
 
     *out = (unsigned)value;
+    return true;
+}
+
+static bool bx_stty_digit_for_base(unsigned char ch, unsigned base, unsigned* digit_out) {
+    unsigned digit = 0;
+
+    if (ch >= '0' && ch <= '9') {
+        digit = (unsigned)(ch - '0');
+    }
+    else if (ch >= 'a' && ch <= 'f') {
+        digit = 10u + (unsigned)(ch - 'a');
+    }
+    else if (ch >= 'A' && ch <= 'F') {
+        digit = 10u + (unsigned)(ch - 'A');
+    }
+    else {
+        return false;
+    }
+
+    if (digit >= base) {
+        return false;
+    }
+
+    *digit_out = digit;
+    return true;
+}
+
+static bool bx_stty_parse_based_uint(const char* token, unsigned base, uintmax_t max_value, uintmax_t* out) {
+    if (token == NULL || token[0] == '\0' || token[0] == '+' || token[0] == '-' || out == NULL) {
+        return false;
+    }
+    if (base < 2u || base > 16u) {
+        return false;
+    }
+
+    const char* digits = token;
+    if (base == 16u && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) {
+        digits += 2;
+        if (digits[0] == '\0') {
+            return false;
+        }
+    }
+
+    uintmax_t value = 0;
+    for (; *digits != '\0'; digits++) {
+        unsigned digit = 0;
+        if (!bx_stty_digit_for_base((unsigned char)*digits, base, &digit)) {
+            return false;
+        }
+        if (value > (max_value - digit) / base) {
+            return false;
+        }
+        value = (value * base) + digit;
+    }
+
+    *out = value;
     return true;
 }
 
@@ -719,10 +786,8 @@ static bool bx_stty_parse_cc_value(const char* s, cc_t* out, bool* disable) {
             base = 8;
         }
 
-        errno = 0;
-        char* end = NULL;
-        unsigned long value = strtoul(s, &end, base);
-        if (errno == 0 && end != s && *end == '\0' && value <= UCHAR_MAX) {
+        uintmax_t value = 0;
+        if (bx_stty_parse_based_uint(s, (unsigned)base, UCHAR_MAX, &value)) {
             *out = (cc_t)value;
             return true;
         }
@@ -796,15 +861,13 @@ static bool bx_stty_parse_save_state(const char* token, struct bx_stty_g_state* 
             return false;
         }
 
-        errno = 0;
-        char* end = NULL;
-        unsigned long value = strtoul(part, &end, 16);
-        if (errno != 0 || end == part || *end != '\0') {
+        uintmax_t value = 0;
+        if (!bx_stty_parse_based_uint(part, 16u, ULONG_MAX, &value)) {
             free(copy);
             return false;
         }
 
-        values[count++] = value;
+        values[count++] = (unsigned long)value;
     }
 
     free(copy);

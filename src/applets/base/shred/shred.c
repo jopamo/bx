@@ -73,10 +73,19 @@ static bool bx_shred_parse_iterations(const char* text, unsigned int* iterations
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0' || value > UINT_MAX) {
+    const char* digits = text;
+    while (isspace((unsigned char)*digits)) {
+        digits++;
+    }
+    if (digits[0] == '+') {
+        digits++;
+    }
+    else if (digits[0] == '-') {
+        return false;
+    }
+
+    uintmax_t value = 0;
+    if (!bx_size_parse_uint(digits, &value) || value > UINT_MAX) {
         return false;
     }
 

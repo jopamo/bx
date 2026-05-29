@@ -343,6 +343,26 @@ static bool bx_numfmt_parse_suffix(const char* suffix, enum unit_type from, doub
     return true;
 }
 
+static bool bx_numfmt_parse_float_value(const char* text, double* value_out, char** end_out) {
+    if (text == NULL || text[0] == '\0' || value_out == NULL || end_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(text, &end);
+    if (end == text) {
+        return false;
+    }
+    if (errno != 0 && errno != ERANGE) {
+        return false;
+    }
+
+    *value_out = value;
+    *end_out = end;
+    return true;
+}
+
 static double bx_numfmt_parse_number_text(
     const char* text,
     size_t len,
@@ -363,10 +383,9 @@ static double bx_numfmt_parse_number_text(
         }
     }
 
-    errno = 0;
     char* end = NULL;
-    double value = strtod(scratch, &end);
-    if (end == scratch) {
+    double value = 0.0;
+    if (!bx_numfmt_parse_float_value(scratch, &value, &end)) {
         bx_diag(diag, "invalid number: '%s'", scratch);
         free(scratch);
         return NAN;

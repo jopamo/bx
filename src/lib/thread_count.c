@@ -1,31 +1,26 @@
 #include <limits.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 
+#include "args_common.h"
 #include "thread_count.h"
 
 bool bx_thread_count_parse(const char *progname,
                            const char *optname,
                            const char *text,
                            int *out) {
-    char *end = NULL;
-    long value;
-
     if (!text || !*text || !out) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n",
                 progname, optname, text ? text : "(null)");
         return false;
     }
 
-    value = strtol(text, &end, 10);
-    if (!end || *end != '\0' || value < 0 || value > INT_MAX) {
+    if (!bx_args_parse_int_range(text, 0, INT_MAX, out)) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n",
                 progname, optname, text);
         return false;
     }
 
-    *out = (int)value;
     return true;
 }
 
