@@ -19,6 +19,7 @@ edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'a
 
 cc = meson.get_compiler('c')
 can_run = meson.can_run_host_binaries()
+python3 = find_program('python3', required : true)
 arm64_sve_intrinsics = cc.compiles(
   '''
   #if !defined(__aarch64__) || !defined(__ARM_FEATURE_SVE)
@@ -1374,6 +1375,8 @@ if get_option('install_ls_colors')
     install_mode : 'rw-r--r--'
   )
 endif
+
+subdir('audit')
 
 if get_option('tests')
   warning('bx tests moved to the sibling bx-tests Meson project; run meson test from ../bx-tests instead')

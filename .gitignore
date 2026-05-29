@@ -8,3 +8,4 @@ ref/
 build*
 .tmp/
 profiling/
+tools/audit/
