@@ -200,6 +200,12 @@ void bx_search_plan_build(struct bx_search_plan *plan,
         return;
     }
     if (subtree_parallel_supported) {
+        /*
+         * Policy decision: recursive subtree scheduling publishes unsorted
+         * --threads >1 results as worker-completion order. Sorted output,
+         * heading output, and other order-sensitive modes stay out of this
+         * scheduler instead of reintroducing per-file ordered batches.
+         */
         plan->orchestrator = BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE;
         plan->publication_kind = BX_SEARCH_PLAN_PUBLICATION_UNORDERED;
         return;

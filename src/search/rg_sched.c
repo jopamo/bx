@@ -33,6 +33,11 @@ enum bx_rg_sched_work_kind {
     BX_RG_SCHED_WORK_FILE_BATCH,
 };
 
+enum bx_rg_sched_cancel_reason {
+    BX_RG_SCHED_CANCEL_NONE = 0,
+    BX_RG_SCHED_CANCEL_FATAL_ERROR,
+};
+
 struct bx_rg_sched_file_item {
     size_t path_offset;
     int base_depth;
@@ -96,8 +101,8 @@ struct bx_rg_sched_state {
     bool heading_output_started;
     bool fatal_error;
     bool shutdown;
+    enum bx_rg_sched_cancel_reason cancel_reason;
     struct bx_search_stats stats;
-    struct bx_rg_publish_aggregate aggregate;
     char *fatal_message;
     size_t thread_count;
     size_t pending_work;
@@ -135,6 +140,7 @@ struct bx_rg_sched_walk_state {
     const char *work_root_path;
     bool strip_dot_prefix;
     bool stolen;
+    bool defer_output_capture;
 };
 
 struct bx_rg_sched_frontier_state {
@@ -193,14 +199,27 @@ static bool bx_rg_sched_uses_path_only_output(const struct search_opts *opts) {
     return opts && (opts->files_with_matches || opts->files_without_match);
 }
 
-static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
-                                            bool match_seen,
-                                            bool error_seen) {
+static bool bx_rg_sched_can_defer_output_capture(const struct bx_rg_sched_state *sched) {
+    /*
+     * In --no-messages deferred-literal match-line mode, the first pass can
+     * run as a quiet truth probe. No output stream is published unless the
+     * probe finds a possible match; diagnostics are suppressed by policy.
+     */
+    return sched && sched->opts && sched->opts->suppress_errors &&
+           !bx_rg_sched_uses_path_only_output(sched->opts) &&
+           sched->exec_plan && sched->exec_plan->deferred_literal_precheck;
+}
+
+static void bx_rg_sched_apply_result_unlocked(struct bx_rg_sched_state *sched,
+                                              bool match_seen,
+                                              bool error_seen) {
     if (!sched)
         return;
 
-    if (sched->publish_ready)
-        pthread_mutex_lock(&sched->publish.unordered_lock);
+    /*
+     * Error status is sticky. Unordered match publication may arrive after an
+     * earlier direct or published error, but it must not demote rc=2 to rc=0.
+     */
     if (match_seen) {
         sched->match_seen = true;
         if (sched->exit_status != 2)
@@ -210,8 +229,30 @@ static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
         sched->error_seen = true;
         sched->exit_status = 2;
     }
+}
+
+static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
+                                            bool match_seen,
+                                            bool error_seen) {
+    if (!sched)
+        return;
+
+    if (sched->publish_ready)
+        pthread_mutex_lock(&sched->publish.unordered_lock);
+    bx_rg_sched_apply_result_unlocked(sched, match_seen, error_seen);
     if (sched->publish_ready)
         pthread_mutex_unlock(&sched->publish.unordered_lock);
+}
+
+static void bx_rg_sched_request_cancel_locked(
+    struct bx_rg_sched_state *state,
+    enum bx_rg_sched_cancel_reason reason) {
+    if (!state || reason == BX_RG_SCHED_CANCEL_NONE)
+        return;
+    if (state->cancel_reason == BX_RG_SCHED_CANCEL_NONE)
+        state->cancel_reason = reason;
+    state->shutdown = true;
+    bx_rg_sched_signal_workers_locked(state);
 }
 
 static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
@@ -221,10 +262,9 @@ static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
 
     bx_rg_sched_lock_global(state);
     state->fatal_error = true;
-    state->shutdown = true;
     if (!state->fatal_message && message)
         state->fatal_message = strdup(message);
-    bx_rg_sched_signal_workers_locked(state);
+    bx_rg_sched_request_cancel_locked(state, BX_RG_SCHED_CANCEL_FATAL_ERROR);
     pthread_mutex_unlock(&state->lock);
 
     bx_cancel_state_request(&state->cancel);
@@ -778,12 +818,113 @@ static bool bx_rg_sched_worker_append_output(struct bx_rg_sched_state *sched,
     return true;
 }
 
+static void bx_rg_sched_publish_emit_record(void *user,
+                                            struct bx_rg_publish_record *record) {
+    struct bx_rg_sched_state *sched = user;
+
+    if (!sched || !record)
+        return;
+
+    if (record->used_heading && record->stdout_len > 0u &&
+        sched->heading_output_started) {
+        fputc('\n', stdout);
+    }
+    if (record->stdout_len > 0u && record->stdout_buf)
+        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
+    if (record->stderr_len > 0u && record->stderr_buf)
+        fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
+    if (record->used_heading && record->stdout_len > 0u)
+        sched->heading_output_started = true;
+
+    sched->stats.matches += record->stats.matches;
+    sched->stats.matched_lines += record->stats.matched_lines;
+    sched->stats.files_with_matches += record->stats.files_with_matches;
+    sched->stats.files_searched += record->stats.files_searched;
+    sched->stats.bytes_printed += record->stats.bytes_printed;
+    sched->stats.bytes_searched += record->stats.bytes_searched;
+
+    bx_rg_sched_apply_result_unlocked(sched, record->match_seen, record->error_seen);
+}
+
+static int bx_rg_sched_search_one_captured(struct bx_rg_sched_state *sched,
+                                           struct bx_rg_sched_worker *worker,
+                                           const struct bx_walk_entry *entry,
+                                           const char *path,
+                                           bool strip_dot_prefix,
+                                           char **stderr_buf,
+                                           size_t *stderr_len,
+                                           size_t *stderr_cap,
+                                           bool *match_seen_out) {
+    int dummy_matches = 0;
+    char *stdout_buf = NULL;
+    size_t stdout_len = 0u;
+    char *local_stderr_buf = NULL;
+    size_t local_stderr_len = 0u;
+    struct bx_search_output_ctx output_ctx = {
+        .capture_out_buf = &stdout_buf,
+        .capture_out_len = &stdout_len,
+        .capture_err_buf = &local_stderr_buf,
+        .capture_err_len = &local_stderr_len,
+    };
+    struct bx_search_output_ctx *previous_ctx = bx_search_output_ctx_push(&output_ctx);
+    int status = entry
+        ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
+                                      sched->progname, worker->matcher,
+                                      sched->exec_plan, sched->opts,
+                                      &dummy_matches, &worker->scanner,
+                                      &worker->record_stream, NULL)
+        : bx_search_search_file(path, NULL, strip_dot_prefix,
+                                sched->progname, worker->matcher,
+                                sched->exec_plan, sched->opts,
+                                &dummy_matches, &worker->scanner,
+                                &worker->record_stream, NULL);
+
+    bx_search_output_ctx_pop(previous_ctx);
+    if (output_ctx.out)
+        fclose(output_ctx.out);
+    if (output_ctx.err)
+        fclose(output_ctx.err);
+
+    if (output_ctx.capture_failed) {
+        free(stdout_buf);
+        free(local_stderr_buf);
+        bx_rg_sched_set_fatal(sched, "rg: failed to allocate worker output streams\n");
+        return 2;
+    }
+    if (stdout_len > 0u &&
+        !bx_rg_sched_append_buf(&worker->stdout_buf, &worker->stdout_len,
+                                &worker->stdout_cap, stdout_buf, stdout_len)) {
+        free(stdout_buf);
+        free(local_stderr_buf);
+        bx_rg_sched_set_fatal(sched, "rg: failed to append worker output\n");
+        return 2;
+    }
+    if (local_stderr_len > 0u &&
+        !bx_rg_sched_append_buf(stderr_buf, stderr_len, stderr_cap,
+                                local_stderr_buf, local_stderr_len)) {
+        free(stdout_buf);
+        free(local_stderr_buf);
+        bx_rg_sched_set_fatal(sched, "rg: failed to append worker diagnostics\n");
+        return 2;
+    }
+    free(stdout_buf);
+    free(local_stderr_buf);
+
+    if (status == 0 && match_seen_out)
+        *match_seen_out = true;
+    return status;
+}
+
 static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
                                   struct bx_rg_sched_worker *worker,
                                   const struct bx_walk_entry *entry,
                                   const char *path,
                                   bool strip_dot_prefix,
                                   bool stolen,
+                                  bool defer_output_capture,
+                                  char **stderr_buf,
+                                  size_t *stderr_len,
+                                  size_t *stderr_cap,
                                   bool *match_seen_out) {
     int dummy_matches = 0;
 
@@ -791,6 +932,27 @@ static int bx_rg_sched_search_one(struct bx_rg_sched_state *sched,
         *match_seen_out = false;
 
     if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
+        if (defer_output_capture) {
+            int probe_status = entry
+                ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
+                                              sched->progname, worker->matcher,
+                                              &worker->quiet_exec_plan, &sched->quiet_opts,
+                                              &dummy_matches, &worker->scanner,
+                                              &worker->record_stream, NULL)
+                : bx_search_search_file(path, NULL, strip_dot_prefix,
+                                        sched->progname, worker->matcher,
+                                        &worker->quiet_exec_plan, &sched->quiet_opts,
+                                        &dummy_matches, &worker->scanner,
+                                        &worker->record_stream, NULL);
+            bx_rg_sched_note_file_search(stolen);
+            if (probe_status != 0)
+                return probe_status;
+            return bx_rg_sched_search_one_captured(sched, worker, entry, path,
+                                                   strip_dot_prefix,
+                                                   stderr_buf, stderr_len,
+                                                   stderr_cap, match_seen_out);
+        }
+
         int status = entry
             ? bx_search_search_walk_entry(entry, NULL, strip_dot_prefix,
                                           sched->progname, worker->matcher,
@@ -939,6 +1101,9 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
     bool matched = false;
     int status = bx_rg_sched_search_one(state->sched, state->worker, entry, entry->path,
                                         state->strip_dot_prefix, state->stolen,
+                                        state->defer_output_capture,
+                                        state->stderr_buf, state->stderr_len,
+                                        state->stderr_cap,
                                         &matched);
     if (matched && state->match_seen)
         *state->match_seen = true;
@@ -954,6 +1119,11 @@ static enum bx_walk_action bx_rg_sched_walk_error(const char *path,
 
     if (!state || !state->sched)
         return BX_WALK_ERROR;
+    if (state->sched->opts && state->sched->opts->suppress_errors) {
+        if (state->error_seen)
+            *state->error_seen = true;
+        return BX_WALK_CONTINUE;
+    }
     char msg[4096];
     int n;
     n = bx_search_snprintf_path_error(msg, sizeof(msg),
@@ -1022,19 +1192,29 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     size_t stdout_before = worker ? worker->stdout_len : 0u;
     bool job_match_seen = false;
     bool job_error_seen = false;
+    bool defer_output_capture = false;
+    bool capture_during_work = false;
+    bool output_ctx_pushed = false;
 
     if (!sched || !worker || !work)
         return;
 
     char *stderr_buf = NULL;
     size_t stderr_len = 0u;
-    if (!bx_rg_sched_uses_path_only_output(sched->opts)) {
+    defer_output_capture = bx_rg_sched_can_defer_output_capture(sched);
+    capture_during_work = !sched->opts->suppress_errors ||
+                          (!bx_rg_sched_uses_path_only_output(sched->opts) &&
+                           !defer_output_capture);
+    if (capture_during_work && !bx_rg_sched_uses_path_only_output(sched->opts)) {
         output_ctx.capture_out_buf = &worker->stdout_buf;
         output_ctx.capture_out_len = &worker->stdout_len;
     }
-    output_ctx.capture_err_buf = &stderr_buf;
-    output_ctx.capture_err_len = &stderr_len;
-    previous_ctx = bx_search_output_ctx_push(&output_ctx);
+    if (capture_during_work) {
+        output_ctx.capture_err_buf = &stderr_buf;
+        output_ctx.capture_err_len = &stderr_len;
+        previous_ctx = bx_search_output_ctx_push(&output_ctx);
+        output_ctx_pushed = true;
+    }
 
     if (work->kind == BX_RG_SCHED_WORK_DIR) {
         const char *work_root_path = bx_rg_sched_work_storage_string(work,
@@ -1042,7 +1222,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         const char *git_root = bx_rg_sched_work_storage_string(work, work->u.dir.git_root_offset);
 
         if (!work_root_path) {
-            bx_search_output_ctx_pop(previous_ctx);
+            if (output_ctx_pushed)
+                bx_search_output_ctx_pop(previous_ctx);
             if (output_ctx.err)
                 fclose(output_ctx.err);
             free(stderr_buf);
@@ -1052,7 +1233,8 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             return;
         }
         if (work->u.dir.git_root_offset != SIZE_MAX && !git_root) {
-            bx_search_output_ctx_pop(previous_ctx);
+            if (output_ctx_pushed)
+                bx_search_output_ctx_pop(previous_ctx);
             if (output_ctx.err)
                 fclose(output_ctx.err);
             free(stderr_buf);
@@ -1076,16 +1258,17 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .work_root_path = work_root_path,
             .strip_dot_prefix = work->strip_dot_prefix,
             .stolen = stolen,
+            .defer_output_capture = defer_output_capture,
         };
         struct bx_walk_opts walk_opts = bx_search_make_walk_opts(sched->progname,
                                                                  sched->personality,
                                                                  sched->opts,
                                                                  NULL);
-        int relative_max_depth = 1;
+        int relative_max_depth = -1;
         if (sched->opts->max_depth >= 0) {
-            relative_max_depth = sched->opts->max_depth - work->base_depth;
-            if (relative_max_depth > 1)
-                relative_max_depth = 1;
+            relative_max_depth = sched->opts->max_depth > work->base_depth
+                ? sched->opts->max_depth - work->base_depth
+                : 0;
         }
         walk_opts.max_depth = relative_max_depth;
         struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(sched->opts);
@@ -1133,6 +1316,10 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
                                                 path,
                                                 work->u.batch.items[i].strip_dot_prefix,
                                                 stolen,
+                                                defer_output_capture,
+                                                &stderr_buf,
+                                                &stderr_len,
+                                                &stderr_cap,
                                                 &matched);
             if (status == 2)
                 job_error_seen = true;
@@ -1143,12 +1330,14 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         }
     }
 
-    bx_search_output_ctx_pop(previous_ctx);
+    if (output_ctx_pushed)
+        bx_search_output_ctx_pop(previous_ctx);
     if (output_ctx.out)
         fclose(output_ctx.out);
     if (output_ctx.err)
         fclose(output_ctx.err);
-    stderr_cap = stderr_len > 0u ? stderr_len + 1u : 0u;
+    if (capture_during_work)
+        stderr_cap = stderr_len > 0u ? stderr_len + 1u : 0u;
 
     if (output_ctx.capture_failed) {
         free(stderr_buf);
@@ -1331,6 +1520,8 @@ bool bx_rg_sched_supported(enum bx_search_personality personality,
         return false;
     if (bx_search_sort_requested(opts))
         return false;
+    if (opts->num_include > 0 || opts->num_exclude > 0 || opts->num_exclude_dir > 0)
+        return false;
     if (!bx_rg_sched_uses_path_only_output(opts)) {
         if (opts->count_only || opts->count_matches)
             return false;
@@ -1390,14 +1581,6 @@ int bx_rg_sched_run(int argc,
     sched.quiet_opts.files_without_match = false;
     sched.quiet_opts.stats = false;
     bx_search_plan_build(&sched.quiet_plan, personality, &sched.quiet_opts, 1, false);
-    sched.aggregate = (struct bx_rg_publish_aggregate){
-        .stats = &sched.stats,
-        .exit_status = &sched.exit_status,
-        .match_seen = &sched.match_seen,
-        .error_seen = &sched.error_seen,
-        .heading_output_started = &sched.heading_output_started,
-    };
-
     bx_cancel_state_init(&sched.cancel);
     if (pthread_mutex_init(&sched.lock, NULL) != 0)
         return 2;
@@ -1421,8 +1604,7 @@ int bx_rg_sched_run(int argc,
             struct stat st;
             if (stat(argv[j], &st) != 0) {
                 bx_rg_sched_report_path_error(&sched, argv[j], errno, num_files == 1);
-                sched.error_seen = true;
-                sched.exit_status = 2;
+                bx_rg_sched_apply_result_unlocked(&sched, false, true);
                 continue;
             }
             if (S_ISDIR(st.st_mode)) {
@@ -1460,9 +1642,9 @@ int bx_rg_sched_run(int argc,
             .mode = BX_RG_PUBLISH_UNORDERED,
             .max_pending = sched.thread_count > 0u ? sched.thread_count : 1u,
             .first_seq = 0u,
-            .user = &sched.aggregate,
+            .user = &sched,
             .record_seq = NULL,
-            .emit_record = bx_rg_publish_emit_record_default,
+            .emit_record = bx_rg_sched_publish_emit_record,
             .dispose_record = bx_rg_sched_publish_dispose_record,
         })) {
         bx_rg_sched_set_fatal(&sched, "rg: failed to initialize unordered publication\n");

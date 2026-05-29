@@ -1252,6 +1252,28 @@ bx_exe = executable('bx',
   install_dir : install_bx_bindir
 )
 
+bx_litbench_exe = executable('bx-litbench',
+  [
+    'tools/bx-litbench.c',
+    'src/fswalk/walk_cycle.c',
+    'src/fswalk/walk_dirent.c',
+    'src/fswalk/walk_entry.c',
+    'src/fswalk/walk_error.c',
+    'src/fswalk/walk_path.c',
+    'src/fswalk/walk.c',
+    'src/lib/size_parse.c',
+    'src/search/dev_counters.c',
+    'src/search/literal.c',
+    'src/search/literal_plan.c',
+    'src/search/literal_arm64_probe.c',
+    'src/search/literal_x86_probe.c',
+    'src/search/rg_text.c',
+  ],
+  include_directories : bx_include_dirs,
+  dependencies : [threads_dep],
+  install : false
+)
+
 install_subdir('src/applets/system/screen/utf8encodings',
   install_dir : join_paths(get_option('datadir'), 'bx', 'screen')
 )
