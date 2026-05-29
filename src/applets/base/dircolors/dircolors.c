@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 #ifndef BX_LSCOLORS_FILE
 #define BX_LSCOLORS_FILE "/usr/share/bx/lscolors.dircolors"
@@ -131,11 +132,10 @@ static bool bx_dircolors_parse_options(int argc, char** argv, struct bx_dircolor
     options->shell_mode = bx_dircolors_default_shell_mode();
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+bc", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+bc", long_options, NULL);
         if (c == -1) {
             break;
         }

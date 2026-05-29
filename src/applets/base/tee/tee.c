@@ -9,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/xreadwrite.h"
+#include "lib/args_common.h"
 
 struct tee_output {
     int fd;
@@ -45,8 +46,8 @@ int bx_tee_main(int argc, char** argv) {
     bool append = false;
     bool ignore_interrupts = false;
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, "ai", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "ai", long_options, NULL)) != -1) {
         switch (c) {
             case 'a':
                 append = true;

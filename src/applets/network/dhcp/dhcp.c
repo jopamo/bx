@@ -21,6 +21,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
 #define BX_DHCP_PACKET_MIN_LEN 240u
@@ -180,11 +181,10 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
     options->server_addr.s_addr = htonl(INADDR_BROADCAST);
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:i:t:r:hV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:i:t:r:hV", long_options, NULL);
         if (c == -1) {
             break;
         }

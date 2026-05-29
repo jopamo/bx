@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -428,6 +429,25 @@ static char *bx_tree_node_href(const struct bx_tree_render_ctx *ctx,
     return href;
 }
 
+static bool bx_tree_parse_ansi_code(const char *token, int *value_out) {
+    char *end = NULL;
+    long value;
+
+    if (token == NULL || token[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    value = strtol(token, &end, 10);
+    if (errno == ERANGE || end == token || end == NULL || *end != '\0'
+        || value < 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *value_out = (int)value;
+    return true;
+}
+
 static char *bx_tree_ansi_code_to_css(const char *code) {
     if (!code || !*code)
         return xstrdup("");
@@ -440,7 +460,10 @@ static char *bx_tree_ansi_code_to_css(const char *code) {
     for (char *token = strtok_r(copy, ";", &saveptr);
          token != NULL;
          token = strtok_r(NULL, ";", &saveptr)) {
-        int value = atoi(token);
+        int value = 0;
+        if (!bx_tree_parse_ansi_code(token, &value)) {
+            continue;
+        }
         switch (value) {
         case 1:
             bold = true;

@@ -12,6 +12,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct which_opts {
     bool all;
@@ -663,8 +664,8 @@ int bx_which_main(int argc, char** argv) {
                                            {"help", no_argument, 0, 1009},
                                            {0, 0, 0, 0}};
 
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, "aivV", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "aivV", long_options, NULL)) != -1) {
         switch (c) {
             case 'a':
                 opts.all = true;

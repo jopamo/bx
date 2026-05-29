@@ -14,6 +14,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/mount_table.h"
+#include "lib/args_common.h"
 
 #ifndef MNT_FORCE
 #define MNT_FORCE 0
@@ -252,11 +253,10 @@ static bool bx_umount_parse_options(int argc, char** argv, struct bx_umount_opti
     diag->progname = options->progname;
     diag->verbose = false;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:aflnt:qgRrvhV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:aflnt:qgRrvhV", long_options, NULL);
         if (c == -1) {
             break;
         }

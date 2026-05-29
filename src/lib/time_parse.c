@@ -1,6 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
-#include <limits.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -68,7 +68,7 @@ bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_pa
 
     errno = 0;
     char* end = NULL;
-    long long seconds_ll = strtoll(text + 1, &end, 10);
+    intmax_t seconds_value = strtoimax(text + 1, &end, 10);
     if (errno != 0 || end == text + 1) {
         return false;
     }
@@ -90,19 +90,19 @@ bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_pa
         return false;
     }
 
-    if (seconds_ll < 0 && nsec != 0) {
+    if (seconds_value < 0 && nsec != 0) {
         if (!options->normalize_negative_fraction) {
             return false;
         }
-        if (seconds_ll == LLONG_MIN) {
+        if (seconds_value == INTMAX_MIN) {
             return false;
         }
-        seconds_ll -= 1;
+        seconds_value -= 1;
         nsec = 1000000000L - nsec;
     }
 
-    time_t seconds = (time_t)seconds_ll;
-    if ((long long)seconds != seconds_ll) {
+    time_t seconds = (time_t)seconds_value;
+    if ((intmax_t)seconds != seconds_value) {
         return false;
     }
 

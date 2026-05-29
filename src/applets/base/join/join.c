@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 struct bx_join_options {
     const char* progname;
@@ -75,12 +77,11 @@ static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options*
     options->separator = 0;  // whitespace
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "a:e:ij:o:t:v:1:2:z", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "a:e:ij:o:t:v:1:2:z", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -103,7 +104,11 @@ static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options*
                 options->ignore_case = true;
                 break;
             case 'j':
-                options->join_field1 = options->join_field2 = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field1)) {
+                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                    return false;
+                }
+                options->join_field2 = options->join_field1;
                 break;
             case 'o':
                 options->format_str = optarg;
@@ -127,10 +132,16 @@ static bool bx_join_parse_options(int argc, char** argv, struct bx_join_options*
                 }
                 break;
             case '1':
-                options->join_field1 = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field1)) {
+                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                    return false;
+                }
                 break;
             case '2':
-                options->join_field2 = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_field2)) {
+                    bx_diag(diag, "invalid field number: '%s'", optarg);
+                    return false;
+                }
                 break;
             case 'z':
                 options->zero_terminated = true;

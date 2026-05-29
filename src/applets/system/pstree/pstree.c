@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 enum bx_pstree_charset {
     BX_PSTREE_CHARSET_ASCII = 0,
@@ -103,10 +104,9 @@ static bool bx_pstree_parse_options(struct bx_pstree_options* options,
 
     memset(options, 0, sizeof(*options));
     options->charset = BX_PSTREE_CHARSET_ASCII;
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
-    while ((c = getopt_long(argc, argv, "+aAcC:gGhH:klnN:pPsStTuUZV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "+aAcC:gGhH:klnN:pPsStTuUZV", long_options, NULL)) != -1) {
         switch (c) {
             case 'a': options->show_args = true; break;
             case 'A':

@@ -18,6 +18,7 @@
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
+#include "lib/args_common.h"
 
 struct bx_fuser_options {
     int signal_number;
@@ -168,9 +169,8 @@ static bool bx_fuser_parse_options(struct bx_fuser_options* options,
         argv[1] = (char*)"--";
     }
 
-    opterr = 0;
-    optind = 1;
-    while ((c = getopt_long(argc, argv, "+acfiIklMn:suvw46hV", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "+acfiIklMn:suvw46hV", long_options, NULL)) != -1) {
         switch (c) {
             case 'a': options->all = true; break;
             case 'c':

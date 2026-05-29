@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void tac_push_record(char*** records, size_t** record_lens, size_t* count, size_t* cap, const char* data, size_t len) {
     if (*count >= *cap) {
@@ -27,14 +28,14 @@ static void tac_push_record(char*** records, size_t** record_lens, size_t* count
     (*count)++;
 }
 
-static void tac_file_regex(FILE* f, const char* pattern, bool before) {
+static void tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_diag_ctx* diag) {
     int errcode;
     PCRE2_SIZE erroffset;
     pcre2_code* re = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
     if (!re) {
         PCRE2_UCHAR errbuf[256];
         pcre2_get_error_message(errcode, errbuf, sizeof(errbuf));
-        bx_err("%s: %s", pattern, (const char*)errbuf);
+        bx_diag(diag, "%s: %s", pattern, (const char*)errbuf);
         return;
     }
 
@@ -275,8 +276,8 @@ int bx_tac_main(int argc, char** argv) {
     bool regex = false;
     const char* separator = "\n";
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, ":brs:hv", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, ":brs:hv", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 before = true;
@@ -311,7 +312,7 @@ int bx_tac_main(int argc, char** argv) {
 
     if (regex) {
         if (optind == argc) {
-            tac_file_regex(stdin, separator, before);
+            tac_file_regex(stdin, separator, before, &diag);
         }
         else {
             bool had_error = false;
@@ -323,12 +324,12 @@ int bx_tac_main(int argc, char** argv) {
                 else {
                     f = fopen(argv[i], "r");
                     if (!f) {
-                        bx_perror(argv[i]);
+                        bx_perror_path(&diag, argv[i]);
                         had_error = true;
                         continue;
                     }
                 }
-                tac_file_regex(f, separator, before);
+                tac_file_regex(f, separator, before, &diag);
                 if (f != stdin)
                     fclose(f);
             }
@@ -350,7 +351,7 @@ int bx_tac_main(int argc, char** argv) {
                 else {
                     f = fopen(argv[i], "r");
                     if (!f) {
-                        bx_perror(argv[i]);
+                        bx_perror_path(&diag, argv[i]);
                         had_error = true;
                         continue;
                     }

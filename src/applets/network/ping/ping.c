@@ -19,6 +19,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
 #define BX_PING_DEFAULT_TIMEOUT_MS 1000u
@@ -96,11 +97,10 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
     options->payload_size = BX_PING_DEFAULT_PAYLOAD_SIZE;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+4c:W:s:hV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+4c:W:s:hV", long_options, NULL);
         if (c == -1) {
             break;
         }

@@ -16,6 +16,7 @@
 #include "lib/path_ops.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/args_common.h"
 
 enum bx_chown_report_mode {
     BX_CHOWN_REPORT_NONE = 0,
@@ -111,12 +112,11 @@ static bool bx_chown_parse_options(int argc, char** argv, struct bx_chown_option
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "chown");
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:RcfhHLPv", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+:RcfhHLPv", long_options, &option_index);
         if (c == -1) {
             break;
         }

@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void bx_hostname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [NAME]\n", progname);
@@ -67,11 +68,10 @@ int bx_hostname_main(int argc, char** argv) {
         .debug = false,
     };
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+", long_options, NULL);
         if (c == -1) {
             break;
         }

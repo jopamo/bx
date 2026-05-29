@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <grp.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <pwd.h>
 #include <stdbool.h>
@@ -16,12 +17,19 @@
 
 static bool find_parse_main_int_arg(const char *progname, const char *optname,
                                     const char *text, int *out) {
-    char *end = NULL;
-    long v = strtol(text, &end, 10);
-    if (!text || *text == '\0' || (end && *end != '\0') || v < 0 ||
-        v > 1 << 20) {
+    if (!text || *text == '\0') {
         fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname,
                 text ? text : "(null)");
+        return false;
+    }
+
+    char *end = NULL;
+    errno = 0;
+    intmax_t v = strtoimax(text, &end, 10);
+    if (end == text || end == NULL || *end != '\0' || errno != 0 || v < 0 ||
+        v > (intmax_t)(1 << 20) || v > INT_MAX) {
+        fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname,
+                text);
         return false;
     }
     *out = (int)v;
@@ -134,8 +142,9 @@ static bool find_parse_size_arg(const char *progname, const char *text,
 
     char *end = NULL;
     errno = 0;
-    long long v = strtoll(text, &end, 10);
-    if (*text == '\0' || !end || errno != 0 || v < 0) {
+    intmax_t v = strtoimax(text, &end, 10);
+    if (*text == '\0' || !end || errno != 0 || v < 0 ||
+        v > (intmax_t)LLONG_MAX) {
         fprintf(stderr, "%s: invalid argument to -size: %s\n", progname,
                 text ? text : "(null)");
         return false;
@@ -174,7 +183,7 @@ static bool find_parse_size_arg(const char *progname, const char *text,
         }
     }
 
-    *value = v;
+    *value = (long long)v;
     *unit = u;
     return true;
 }

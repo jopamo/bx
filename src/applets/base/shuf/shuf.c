@@ -14,6 +14,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 enum {
     BX_SHUF_OPT_HELP = 256,
@@ -139,12 +140,11 @@ static bool bx_shuf_parse_options(int argc, char** argv, struct bx_shuf_options*
     options->random_source_path = "/dev/urandom";
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:ei:n:o:rz", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+:ei:n:o:rz", long_options, &option_index);
         if (c == -1) {
             break;
         }

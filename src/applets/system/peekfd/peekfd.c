@@ -1,5 +1,7 @@
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +12,7 @@
 #include "applets/system/psmisc/psmisc_wrapper.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct bx_peekfd_options {
     bool eight_bit_clean;
@@ -50,10 +53,9 @@ static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
     int c;
 
     memset(options, 0, sizeof(*options));
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
-    while ((c = getopt_long(argc, argv, "+8ncdthV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "+8ncdthV", long_options, NULL)) != -1) {
         switch (c) {
             case '8':
                 options->eight_bit_clean = true;
@@ -97,17 +99,30 @@ static bool bx_peekfd_parse_options(struct bx_peekfd_options* options,
     return true;
 }
 
+static bool bx_peekfd_parse_fd_operand(const char* text, int* fd_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-' || fd_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *fd_out = (int)value;
+    return true;
+}
+
 static bool bx_peekfd_fd_selected(const struct bx_peekfd_options* options, int argc, char** argv, int fd) {
     int i;
     if (options->pid_index + 1 >= argc) {
         return true;
     }
     for (i = options->pid_index + 1; i < argc; i++) {
-        char* end;
-        long value;
-        errno = 0;
-        value = strtol(argv[i], &end, 10);
-        if (errno == 0 && end != argv[i] && *end == '\0' && value == fd) {
+        int value = -1;
+        if (bx_peekfd_parse_fd_operand(argv[i], &value) && value == fd) {
             return true;
         }
     }
@@ -154,10 +169,8 @@ int bx_peekfd_main(int argc, char** argv) {
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
     for (i = options.pid_index + 1u; i < (size_t)argc; i++) {
-        char* end;
-        errno = 0;
-        strtol(argv[i], &end, 10);
-        if (errno != 0 || end == argv[i] || *end != '\0') {
+        int fd = -1;
+        if (!bx_peekfd_parse_fd_operand(argv[i], &fd)) {
             bx_diag(&diag, "invalid file descriptor: %s", argv[i]);
             return diag.exit_status != 0 ? diag.exit_status : 1;
         }

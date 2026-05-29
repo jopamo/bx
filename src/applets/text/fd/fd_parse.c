@@ -9,6 +9,7 @@
 #include "fd_exec.h"
 #include "fd_parse.h"
 #include "search/metadata.h"
+#include "lib/args_common.h"
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
@@ -375,9 +376,8 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
     bool show_help = false;
     int opt;
 
-    optind = 1;
-    opterr = 0;
-    while ((opt = getopt_long(parse_argc, argv,
+    bx_args_getopt_reset();
+    while ((opt = bx_args_getopt_long(parse_argc, argv,
                               "hVHIuaplisFgE:d:t:e:x:X:0qL1", long_opts,
                               NULL)) != -1) {
         switch (opt) {

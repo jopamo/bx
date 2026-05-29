@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 typedef struct {
     long long lines;
@@ -239,11 +240,10 @@ int bx_tail_main(int argc, char** argv) {
         }
     }
 
-    opterr = 0;
-    optind = option_start;
+    bx_args_getopt_reset_at(option_start);
 
     int c;
-    while ((c = getopt_long(argc, argv, "c:n:f::qvs:z", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "c:n:f::qvs:z", long_options, NULL)) != -1) {
         switch (c) {
             case 'c':
                 if (!bx_tail_parse_count_argument(optarg, &opts.bytes)) {

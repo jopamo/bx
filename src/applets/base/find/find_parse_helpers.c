@@ -1,4 +1,6 @@
 #include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,13 +37,14 @@ static bool find_parse_numeric_test(const char *progname, const char *optname,
 
     char *end = NULL;
     errno = 0;
-    long long v = strtoll(text, &end, 10);
-    if (*text == '\0' || !end || *end != '\0' || errno != 0 || v < 0) {
+    intmax_t v = strtoimax(text, &end, 10);
+    if (*text == '\0' || !end || *end != '\0' || errno != 0 || v < 0 ||
+        v > (intmax_t)LLONG_MAX) {
         fprintf(stderr, "%s: invalid argument to %s: %s\n", progname, optname,
                 text ? text : "(null)");
         return false;
     }
-    *value = v;
+    *value = (long long)v;
     return true;
 }
 

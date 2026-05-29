@@ -20,6 +20,7 @@
 #include "lib/cli_common.h"
 #include "lib/id_parse.h"
 #include "lib/prompt_ops.h"
+#include "lib/args_common.h"
 
 struct bx_killall_options {
     int signal_number;
@@ -151,9 +152,8 @@ static bool bx_killall_parse_options(struct bx_killall_options* options,
         argv[1] = (char*)"--";
     }
 
-    opterr = 0;
-    optind = 1;
-    while ((c = getopt_long(argc, argv, "+egiIln:o:qrs:u:vwy:Z:hV", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "+egiIln:o:qrs:u:vwy:Z:hV", long_options, NULL)) != -1) {
         switch (c) {
             case 'e': options->exact = true; break;
             case 'g': options->process_group = true; break;

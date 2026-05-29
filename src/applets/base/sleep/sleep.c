@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void bx_sleep_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s NUMBER[SUFFIX]...\n", progname);
@@ -25,7 +26,7 @@ static void bx_sleep_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_sleep_parse_interval(const char* text, double* seconds_out, bool* infinite_out) {
-    if (text == NULL || text[0] == '\0') {
+    if (text == NULL || text[0] == '\0' || seconds_out == NULL || infinite_out == NULL) {
         return false;
     }
 
@@ -81,7 +82,7 @@ static bool bx_sleep_parse_interval(const char* text, double* seconds_out, bool*
     return true;
 }
 
-static int bx_sleep_for_seconds(double total_seconds) {
+static int bx_sleep_for_seconds(double total_seconds, struct bx_diag_ctx* diag) {
     const double max_chunk_seconds = 1000000000.0;
     const double epsilon = 1e-12;
 
@@ -112,7 +113,7 @@ static int bx_sleep_for_seconds(double total_seconds) {
 
         while (nanosleep(&ts, &ts) == -1) {
             if (errno != EINTR) {
-                bx_perror("nanosleep");
+                bx_perror_path(diag, "nanosleep");
                 return 1;
             }
         }
@@ -123,9 +124,9 @@ static int bx_sleep_for_seconds(double total_seconds) {
     return 0;
 }
 
-static int bx_sleep_forever(void) {
+static int bx_sleep_forever(struct bx_diag_ctx* diag) {
     for (;;) {
-        int rc = bx_sleep_for_seconds(1000000000.0);
+        int rc = bx_sleep_for_seconds(1000000000.0, diag);
         if (rc != 0) {
             return rc;
         }
@@ -140,12 +141,15 @@ int bx_sleep_main(int argc, char** argv) {
     };
 
     const char* progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "sleep");
+    struct bx_diag_ctx diag = {
+        .progname = progname,
+        .exit_status = 1,
+    };
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -158,15 +162,7 @@ int bx_sleep_main(int argc, char** argv) {
                 bx_cli_print_version(progname);
                 return 0;
             case '?':
-                if (optopt != 0) {
-                    bx_err("invalid option -- '%c'", optopt);
-                }
-                else if (optind > 0 && optind <= argc && argv[optind - 1] != NULL) {
-                    bx_err("unrecognized option '%s'", argv[optind - 1]);
-                }
-                else {
-                    bx_err("unrecognized option");
-                }
+                bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);
                 bx_cli_print_try_help(progname);
                 return 1;
             default:
@@ -181,7 +177,7 @@ int bx_sleep_main(int argc, char** argv) {
             return 0;
         }
 
-        bx_err("missing operand");
+        bx_cli_diag_missing_operand(&diag);
         bx_cli_print_try_help(progname);
         return 1;
     }
@@ -192,7 +188,7 @@ int bx_sleep_main(int argc, char** argv) {
         double value_seconds = 0.0;
         bool value_infinite = false;
         if (!bx_sleep_parse_interval(argv[i], &value_seconds, &value_infinite)) {
-            bx_err("invalid time interval '%s'", argv[i]);
+            bx_diag(&diag, "invalid time interval '%s'", argv[i]);
             bx_cli_print_try_help(progname);
             return 1;
         }
@@ -209,8 +205,8 @@ int bx_sleep_main(int argc, char** argv) {
     }
 
     if (sleep_forever) {
-        return bx_sleep_forever();
+        return bx_sleep_forever(&diag);
     }
 
-    return bx_sleep_for_seconds(total_seconds);
+    return bx_sleep_for_seconds(total_seconds, &diag);
 }

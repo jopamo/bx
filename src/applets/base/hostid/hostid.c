@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static bool bx_hostid_try_file(uint32_t* id_out) {
     int fd = open("/etc/hostid", O_RDONLY);
@@ -93,7 +94,7 @@ int bx_hostid_main(int argc, char** argv) {
     };
 
     int c;
-    while ((c = getopt_long(argc, argv, "", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "", long_options, NULL)) != -1) {
         switch (c) {
             case 1:
                 bx_hostid_print_help(stdout, "hostid");

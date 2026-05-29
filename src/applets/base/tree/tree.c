@@ -11,6 +11,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "tree_internal.h"
+#include "lib/args_common.h"
 
 enum bx_tree_option_code {
     BX_TREE_OPT_HELP = 256,
@@ -154,12 +155,11 @@ static bool bx_tree_parse_options(int argc,
         {NULL, 0, NULL, 0},
     };
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:adfghilnpqrstuvxACDFNSL:RH:T:o:P:I:",
+        int c = bx_args_getopt_long(argc, argv, "+:adfghilnpqrstuvxACDFNSL:RH:T:o:P:I:",
                             long_options, &option_index);
         if (c == -1)
             break;

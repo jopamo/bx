@@ -12,6 +12,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 enum cut_mode { CUT_MODE_BYTES, CUT_MODE_CHARS, CUT_MODE_FIELDS, CUT_MODE_NONE };
 
@@ -211,12 +212,11 @@ static bool bx_cut_parse_options(int argc, char** argv, struct bx_cut_options* o
 
     const char* list_str = NULL;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+b:c:d:f:nsz", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+b:c:d:f:nsz", long_options, &option_index);
         if (c == -1) {
             break;
         }

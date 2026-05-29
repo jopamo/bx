@@ -9,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/args_common.h"
 
 enum tr_array_kind {
     TR_ARRAY_STRING1 = 0,
@@ -497,9 +498,9 @@ int bx_tr_main(int argc, char** argv) {
         .progname = tr_progname((argc > 0) ? argv[0] : NULL),
     };
 
-    opterr = 0;
+    bx_args_getopt_reset();
     int opt = 0;
-    while ((opt = getopt_long(argc, argv, "cCdst", long_options, NULL)) != -1) {
+    while ((opt = bx_args_getopt_long(argc, argv, "cCdst", long_options, NULL)) != -1) {
         switch (opt) {
             case 'c':
             case 'C':

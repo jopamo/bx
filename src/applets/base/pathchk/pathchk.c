@@ -11,6 +11,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 #define BX_PATHCHK_POSIX_PATH_MAX 255L
 #define BX_PATHCHK_POSIX_NAME_MAX 14L
@@ -57,12 +58,11 @@ static bool bx_pathchk_parse_options(int argc, char** argv, struct bx_pathchk_op
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "pathchk");
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+pP", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+pP", long_options, &option_index);
         if (c == -1) {
             break;
         }

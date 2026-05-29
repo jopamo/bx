@@ -24,8 +24,10 @@
 #include "applets/archive/tar/tar_select.h"
 #include "applets/archive/tar/tar_stream.h"
 #include "bx/libbx.h"
+#include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/copy_data.h"
+#include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
@@ -3721,6 +3723,32 @@ static bool bx_tar_set_mode_option(struct bx_tar_options* options,
     return true;
 }
 
+static bool bx_tar_parse_owner_option(const char* value,
+                                      uid_t* owner_out,
+                                      struct bx_diag_ctx* diag) {
+    uintmax_t parsed = 0u;
+    if (!bx_id_parse_numeric(value, (uintmax_t)((uid_t)-1), &parsed)) {
+        bx_diag(diag, "invalid owner '%s'", value);
+        return false;
+    }
+
+    *owner_out = (uid_t)parsed;
+    return true;
+}
+
+static bool bx_tar_parse_group_option(const char* value,
+                                      gid_t* group_out,
+                                      struct bx_diag_ctx* diag) {
+    uintmax_t parsed = 0u;
+    if (!bx_id_parse_numeric(value, (uintmax_t)((gid_t)-1), &parsed)) {
+        bx_diag(diag, "invalid group '%s'", value);
+        return false;
+    }
+
+    *group_out = (gid_t)parsed;
+    return true;
+}
+
 static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                                        enum bx_tar_option_effect effect,
                                        const char* display,
@@ -3913,13 +3941,12 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->newer_use_ctime = false;
             return true;
         case BX_TAR_OPT_STRIP_COMPONENTS: {
-            char* end = NULL;
-            unsigned long parsed = strtoul(value, &end, 10);
-            if (value[0] == '\0' || end == NULL || *end != '\0') {
+            size_t parsed = 0u;
+            if (!bx_args_parse_size_range(value, 0u, (size_t)-1, &parsed)) {
                 bx_diag(diag, "invalid number of components '%s'", value);
                 return false;
             }
-            options->strip_components = (size_t)parsed;
+            options->strip_components = parsed;
             return true;
         }
         case BX_TAR_OPT_ONE_TOP_LEVEL:
@@ -3956,11 +3983,15 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->mode_text = xstrdup(value);
             return true;
         case BX_TAR_OPT_OWNER:
-            options->owner = (uid_t)strtoul(value, NULL, 10);
+            if (!bx_tar_parse_owner_option(value, &options->owner, diag)) {
+                return false;
+            }
             options->owner_set = true;
             return true;
         case BX_TAR_OPT_GROUP:
-            options->group = (gid_t)strtoul(value, NULL, 10);
+            if (!bx_tar_parse_group_option(value, &options->group, diag)) {
+                return false;
+            }
             options->group_set = true;
             return true;
         case BX_TAR_OPT_GROUP_MAP:

@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <time.h>
@@ -145,10 +146,10 @@ static void mark_parse_error(const char* fmt, ...) {
     parse_error = true;
 }
 
-static bool parse_integer_string(const char* text, long long* out) {
+static bool parse_integer_string(const char* text, intmax_t* out) {
     char* end = NULL;
     errno = 0;
-    long long value = strtoll(text, &end, 10);
+    intmax_t value = strtoimax(text, &end, 10);
     if (errno != 0 || end == text || *end != '\0') {
         mark_parse_error("invalid integer '%s'", text);
         return false;
@@ -157,13 +158,18 @@ static bool parse_integer_string(const char* text, long long* out) {
     return true;
 }
 
-static bool parse_integer_operand_at(int index, long long* out, int* next) {
+static bool parse_integer_operand_at(int index, intmax_t* out, int* next) {
     if (index < argc_val && strcmp(argv_val[index], "-l") == 0) {
         if (index + 1 >= argc_val) {
             mark_parse_error("missing argument after '-l'");
             return false;
         }
-        *out = (long long)strlen(argv_val[index + 1]);
+        size_t len = strlen(argv_val[index + 1]);
+        if ((uintmax_t)len > (uintmax_t)INTMAX_MAX) {
+            mark_parse_error("invalid integer '%s'", argv_val[index + 1]);
+            return false;
+        }
+        *out = (intmax_t)len;
         *next = index + 2;
         return true;
     }
@@ -185,7 +191,7 @@ static bool is_arithmetic_binary(const char* op) {
            strcmp(op, "-lt") == 0 || strcmp(op, "-le") == 0;
 }
 
-static bool eval_arithmetic_binary(long long lhs, const char* op, long long rhs) {
+static bool eval_arithmetic_binary(intmax_t lhs, const char* op, intmax_t rhs) {
     if (strcmp(op, "-eq") == 0)
         return lhs == rhs;
     if (strcmp(op, "-ne") == 0)
@@ -256,7 +262,7 @@ static bool eval_file_binary(const char* lhs, const char* op, const char* rhs) {
 }
 
 static bool parse_fd(const char* text, int* fd) {
-    long long value;
+    intmax_t value;
     if (!parse_integer_string(text, &value))
         return false;
     if (value < 0 || value > INT_MAX) {
@@ -373,8 +379,8 @@ static bool primary(void) {
 
     if (pos + 3 < argc_val && strcmp(argv_val[pos], "-l") == 0 &&
         is_arithmetic_binary(argv_val[pos + 2])) {
-        long long lhs;
-        long long rhs;
+        intmax_t lhs;
+        intmax_t rhs;
         int next;
         if (!parse_integer_operand_at(pos, &lhs, &next))
             return false;
@@ -399,8 +405,8 @@ static bool primary(void) {
                 return eval_file_binary(s1, op, s2);
             }
             if (is_arithmetic_binary(op)) {
-                long long lhs;
-                long long rhs;
+                intmax_t lhs;
+                intmax_t rhs;
                 int next;
                 if (!parse_integer_operand_at(pos, &lhs, &next))
                     return false;

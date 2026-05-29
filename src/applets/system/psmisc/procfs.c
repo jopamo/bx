@@ -2,6 +2,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -92,10 +93,72 @@ static bool bx_proc_name_is_pid(const char* name) {
     return true;
 }
 
+static bool bx_proc_parse_pid_number(const char* text, const char** end_out, bool require_full, pid_t* pid_out) {
+    char* end = NULL;
+    intmax_t value;
+
+    if (text == NULL || text[0] == '\0' || !isdigit((unsigned char)text[0]) || pid_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    value = strtoimax(text, &end, 10);
+    if (errno == ERANGE || end == text || end == NULL || value <= 0 || value > INT_MAX) {
+        return false;
+    }
+    if (require_full && *end != '\0') {
+        return false;
+    }
+
+    *pid_out = (pid_t)value;
+    if (end_out != NULL) {
+        *end_out = end;
+    }
+    return true;
+}
+
+static bool bx_proc_parse_int_number(const char* text, int* value_out) {
+    char* end = NULL;
+    intmax_t value;
+
+    if (text == NULL || text[0] == '\0' || value_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    value = strtoimax(text, &end, 10);
+    if (errno == ERANGE || end == text || end == NULL || *end != '\0'
+        || value < INT_MIN || value > INT_MAX) {
+        return false;
+    }
+
+    *value_out = (int)value;
+    return true;
+}
+
+static bool bx_proc_parse_uid_token(const char* text, uid_t* uid_out) {
+    char* end = NULL;
+    uintmax_t value;
+
+    if (text == NULL || text[0] == '\0' || uid_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    value = strtoumax(text, &end, 10);
+    if (errno == ERANGE || end == text || end == NULL || value > (uintmax_t)((uid_t)-1)) {
+        return false;
+    }
+    if (*end != '\0' && !isspace((unsigned char)*end)) {
+        return false;
+    }
+
+    *uid_out = (uid_t)value;
+    return true;
+}
+
 bool bx_proc_parse_pid_arg(const char* text, pid_t* pid_out) {
     const char* number = text;
-    char* end;
-    long value;
 
     if (text == NULL || pid_out == NULL) {
         return false;
@@ -106,13 +169,7 @@ bool bx_proc_parse_pid_arg(const char* text, pid_t* pid_out) {
     if (!bx_proc_name_is_pid(number)) {
         return false;
     }
-    errno = 0;
-    value = strtol(number, &end, 10);
-    if (errno != 0 || end == number || *end != '\0' || value <= 0) {
-        return false;
-    }
-    *pid_out = (pid_t)value;
-    return true;
+    return bx_proc_parse_pid_number(number, NULL, true, pid_out);
 }
 
 static bool bx_proc_read_open_fd(int fd, struct bx_proc_buffer* buffer, bool* vanished_out) {
@@ -223,33 +280,75 @@ bool bx_proc_readlink_leaf(pid_t pid, const char* leaf, char** target_out, bool*
 
 static bool bx_proc_parse_unsigned_long_long(const char* text, unsigned long long* value_out) {
     char* end;
-    unsigned long long value;
+    uintmax_t value;
 
     errno = 0;
-    value = strtoull(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+    value = strtoumax(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value > ULLONG_MAX) {
         return false;
     }
-    *value_out = value;
+    *value_out = (unsigned long long)value;
     return true;
 }
 
 static bool bx_proc_parse_long_long(const char* text, long long* value_out) {
     char* end;
-    long long value;
+    intmax_t value;
 
     errno = 0;
-    value = strtoll(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0') {
+    value = strtoimax(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < LLONG_MIN || value > LLONG_MAX) {
         return false;
     }
-    *value_out = value;
+    *value_out = (long long)value;
+    return true;
+}
+
+static bool bx_proc_token_end(const char* end) {
+    return end != NULL && (*end == '\0' || isspace((unsigned char)*end));
+}
+
+static bool bx_proc_parse_fdinfo_position(const char* text, off_t* position_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(text, &end, 10);
+    if (errno != 0 || end == text || !bx_proc_token_end(end)) {
+        return false;
+    }
+
+    off_t position = (off_t)value;
+    if ((intmax_t)position != value) {
+        return false;
+    }
+
+    *position_out = position;
+    return true;
+}
+
+static bool bx_proc_parse_fdinfo_flags(const char* text, unsigned long* flags_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(text, &end, 8);
+    if (errno != 0 || end == text || !bx_proc_token_end(end) || value > ULONG_MAX) {
+        return false;
+    }
+
+    *flags_out = (unsigned long)value;
     return true;
 }
 
 static bool bx_proc_parse_stat_text(const char* text, struct bx_proc_stat* stat_out) {
     const char* lparen;
     const char* rparen;
+    const char* pid_end = NULL;
     char* remainder;
     char* saveptr = NULL;
     char* token;
@@ -260,16 +359,19 @@ static bool bx_proc_parse_stat_text(const char* text, struct bx_proc_stat* stat_
 
     memset(stat_out, 0, sizeof(*stat_out));
 
-    errno = 0;
-    signed_value = strtoll(text, NULL, 10);
-    if (errno != 0 || signed_value <= 0) {
+    if (!bx_proc_parse_pid_number(text, &pid_end, false, &stat_out->pid)) {
         return false;
     }
-    stat_out->pid = (pid_t)signed_value;
 
     lparen = strchr(text, '(');
     rparen = strrchr(text, ')');
     if (lparen == NULL || rparen == NULL || rparen <= lparen || rparen[1] != ' ') {
+        return false;
+    }
+    while (pid_end < lparen && isspace((unsigned char)*pid_end)) {
+        pid_end++;
+    }
+    if (pid_end != lparen) {
         return false;
     }
     stat_out->comm = xmalloc((size_t)(rparen - lparen));
@@ -397,11 +499,9 @@ bool bx_proc_read_uid(pid_t pid, uid_t* uid_out, bool* vanished_out) {
             while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
                 cursor++;
             }
-            errno = 0;
-            char* end = NULL;
-            unsigned long value = strtoul(cursor, &end, 10);
-            if (errno == 0 && end != cursor) {
-                *uid_out = (uid_t)value;
+            uid_t value = (uid_t)-1;
+            if (bx_proc_parse_uid_token(cursor, &value)) {
+                *uid_out = value;
                 ok = true;
             }
             break;
@@ -493,12 +593,12 @@ static bool bx_proc_read_last_status_pid_field(pid_t pid,
     line = strtok(text, "\n");
     while (line != NULL) {
         if (strncmp(line, key, key_len) == 0) {
-            char* cursor = line + key_len;
-            long last_value = (long)fallback;
+            const char* cursor = line + key_len;
+            pid_t last_value = fallback;
 
             while (*cursor != '\0') {
-                char* end;
-                long value;
+                const char* end = NULL;
+                pid_t value;
 
                 while (*cursor != '\0' && isspace((unsigned char)*cursor)) {
                     cursor++;
@@ -507,9 +607,7 @@ static bool bx_proc_read_last_status_pid_field(pid_t pid,
                     break;
                 }
 
-                errno = 0;
-                value = strtol(cursor, &end, 10);
-                if (errno != 0 || end == cursor) {
+                if (!bx_proc_parse_pid_number(cursor, &end, false, &value)) {
                     free(text);
                     errno = EINVAL;
                     return false;
@@ -520,7 +618,7 @@ static bool bx_proc_read_last_status_pid_field(pid_t pid,
             }
 
             if (found) {
-                *value_out = (pid_t)last_value;
+                *value_out = last_value;
             }
             break;
         }
@@ -736,25 +834,22 @@ static void bx_proc_parse_fdinfo_text(struct bx_proc_fd_entry* entry, const char
     while (*cursor != '\0') {
         if (strncmp(cursor, "pos:\t", 5u) == 0 || strncmp(cursor, "pos:", 4u) == 0) {
             const char* value = cursor + (cursor[4] == '\t' ? 5 : 4);
-            long long pos;
+            off_t pos;
             while (*value != '\0' && isspace((unsigned char)*value)) {
                 value++;
             }
-            if (bx_proc_parse_long_long(value, &pos)) {
-                entry->position = (off_t)pos;
+            if (bx_proc_parse_fdinfo_position(value, &pos)) {
+                entry->position = pos;
                 entry->have_position = true;
             }
         }
         else if (strncmp(cursor, "flags:\t", 7u) == 0 || strncmp(cursor, "flags:", 6u) == 0) {
             const char* value = cursor + (cursor[6] == '\t' ? 7 : 6);
-            char* end;
             unsigned long flags;
             while (*value != '\0' && isspace((unsigned char)*value)) {
                 value++;
             }
-            errno = 0;
-            flags = strtoul(value, &end, 8);
-            if (errno == 0 && end != value) {
+            if (bx_proc_parse_fdinfo_flags(value, &flags)) {
                 entry->flags = flags;
                 entry->have_flags = true;
             }
@@ -793,20 +888,17 @@ bool bx_proc_read_fds(pid_t pid, struct bx_proc_fd_list* list, bool* vanished_ou
         char fdinfo_leaf[64];
         char* fdinfo_text = NULL;
         bool local_vanished = false;
-        long value;
-        char* end;
+        int value;
 
         if (!bx_proc_name_is_pid(ent->d_name)) {
             continue;
         }
-        errno = 0;
-        value = strtol(ent->d_name, &end, 10);
-        if (errno != 0 || end == ent->d_name || *end != '\0' || value < 0 || value > INT_MAX) {
+        if (!bx_proc_parse_int_number(ent->d_name, &value) || value < 0) {
             continue;
         }
 
         memset(&entry, 0, sizeof(entry));
-        entry.fd = (int)value;
+        entry.fd = value;
 
         if (!bx_proc_make_path(path, sizeof(path), pid, "fd")) {
             bx_proc_fd_list_free(list);
@@ -904,14 +996,11 @@ pid_t bx_proc_self_host_pid(void) {
     path[len] = '\0';
 
     {
-        char* end;
-        long value;
+        pid_t value;
 
-        errno = 0;
-        value = strtol(path, &end, 10);
-        if (errno != 0 || end == path || *end != '\0' || value <= 0) {
+        if (!bx_proc_parse_pid_number(path, NULL, true, &value)) {
             return getpid();
         }
-        return (pid_t)value;
+        return value;
     }
 }

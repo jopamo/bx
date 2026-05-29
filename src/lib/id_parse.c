@@ -23,15 +23,15 @@ bool bx_id_parse_numeric(const char* text, uintmax_t max_value, uintmax_t* value
 
     errno = 0;
     char* end = NULL;
-    unsigned long long value = strtoull(text, &end, 10);
+    uintmax_t value = strtoumax(text, &end, 10);
     if (errno == ERANGE || end == text || end == NULL || end[0] != '\0') {
         return false;
     }
-    if ((uintmax_t)value > max_value) {
+    if (value > max_value) {
         return false;
     }
 
-    *value_out = (uintmax_t)value;
+    *value_out = value;
     return true;
 }
 

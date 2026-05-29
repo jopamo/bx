@@ -1,4 +1,7 @@
 #include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,14 +128,29 @@ static const struct bx_signal_name_entry bx_signal_names[] = {
 #endif
 };
 
+static bool bx_signal_parse_number(const char* name, int* number_out) {
+    if (name == NULL || name[0] == '\0' || !isdigit((unsigned char)name[0]) || number_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(name, &end, 10);
+    if (errno == ERANGE || end == name || end == NULL || *end != '\0' || value > INT_MAX) {
+        return false;
+    }
+
+    *number_out = (int)value;
+    return true;
+}
+
 bool bx_signal_name_lookup(const char* name, int* number_out) {
     if (name == NULL || name[0] == '\0') {
         return false;
     }
 
     if (isdigit((unsigned char)name[0])) {
-        *number_out = atoi(name);
-        return true;
+        return bx_signal_parse_number(name, number_out);
     }
 
     if (strncmp(name, "SIG", 3) == 0) {

@@ -14,6 +14,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 struct bx_head_options {
     const char* progname;
@@ -100,12 +101,11 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
         }
     }
 
-    opterr = 0;
-    optind = option_start;
+    bx_args_getopt_reset_at(option_start);
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "c:n:qvz", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "c:n:qvz", long_options, &option_index);
         if (c == -1) {
             break;
         }

@@ -1,0 +1,540 @@
+{
+  "manifest_version": 1,
+  "basis": "Central applet dispatch manifest. Generated C dispatch tables are built from this file; src/bx/main.c must not hand-maintain applet tables.",
+  "boot_critical": [
+    {
+      "name": "init",
+      "main": "bx_init_main"
+    },
+    {
+      "name": "switch_root",
+      "main": "bx_switch_root_main"
+    }
+  ],
+  "applets": [
+    {
+      "name": "ash",
+      "main": "bx_ash_main"
+    },
+    {
+      "name": "sh",
+      "main": "bx_ash_main"
+    },
+    {
+      "name": "bc",
+      "main": "bx_bc_main"
+    },
+    {
+      "name": "cat",
+      "main": "bx_cat_main"
+    },
+    {
+      "name": "cut",
+      "main": "bx_cut_main"
+    },
+    {
+      "name": "date",
+      "main": "bx_date_main"
+    },
+    {
+      "name": "which",
+      "main": "bx_which_main"
+    },
+    {
+      "name": "ln",
+      "main": "bx_ln_main"
+    },
+    {
+      "name": "link",
+      "main": "bx_link_main"
+    },
+    {
+      "name": "unlink",
+      "main": "bx_unlink_main"
+    },
+    {
+      "name": "readlink",
+      "main": "bx_readlink_main"
+    },
+    {
+      "name": "realpath",
+      "main": "bx_realpath_main"
+    },
+    {
+      "name": "basename",
+      "main": "bx_basename_main"
+    },
+    {
+      "name": "dirname",
+      "main": "bx_dirname_main"
+    },
+    {
+      "name": "dircolors",
+      "main": "bx_dircolors_main"
+    },
+    {
+      "name": "pathchk",
+      "main": "bx_pathchk_main"
+    },
+    {
+      "name": "ls",
+      "main": "bx_ls_main"
+    },
+    {
+      "name": "dir",
+      "main": "bx_dir_main"
+    },
+    {
+      "name": "vdir",
+      "main": "bx_vdir_main"
+    },
+    {
+      "name": "stat",
+      "main": "bx_stat_main"
+    },
+    {
+      "name": "df",
+      "main": "bx_df_main"
+    },
+    {
+      "name": "du",
+      "main": "bx_du_main"
+    },
+    {
+      "name": "sync",
+      "main": "bx_sync_main"
+    },
+    {
+      "name": "dd",
+      "main": "bx_dd_main"
+    },
+    {
+      "name": "printf",
+      "main": "bx_printf_main"
+    },
+    {
+      "name": "ed",
+      "main": "bx_ed_main"
+    },
+    {
+      "name": "vim",
+      "main": "bx_vim_main"
+    },
+    {
+      "name": "jq",
+      "main": "bx_jq_main"
+    },
+    {
+      "name": "xxd",
+      "main": "bx_xxd_main"
+    },
+    {
+      "name": "env",
+      "main": "bx_env_main"
+    },
+    {
+      "name": "printenv",
+      "main": "bx_printenv_main"
+    },
+    {
+      "name": "pwd",
+      "main": "bx_pwd_main"
+    },
+    {
+      "name": "tty",
+      "main": "bx_tty_main"
+    },
+    {
+      "name": "stty",
+      "main": "bx_stty_main"
+    },
+    {
+      "name": "screen",
+      "main": "bx_screen_main"
+    },
+    {
+      "name": "getty",
+      "main": "bx_getty_main"
+    },
+    {
+      "name": "setsid",
+      "main": "bx_setsid_main"
+    },
+    {
+      "name": "dhcp",
+      "main": "bx_dhcp_main"
+    },
+    {
+      "name": "udhcpc",
+      "main": "bx_dhcp_main"
+    },
+    {
+      "name": "nice",
+      "main": "bx_nice_main"
+    },
+    {
+      "name": "nohup",
+      "main": "bx_nohup_main"
+    },
+    {
+      "name": "timeout",
+      "main": "bx_timeout_main"
+    },
+    {
+      "name": "chroot",
+      "main": "bx_chroot_main"
+    },
+    {
+      "name": "mount",
+      "main": "bx_mount_main"
+    },
+    {
+      "name": "umount",
+      "main": "bx_umount_main"
+    },
+    {
+      "name": "fuser",
+      "main": "bx_fuser_main"
+    },
+    {
+      "name": "hdparm",
+      "main": "bx_hdparm_main"
+    },
+    {
+      "name": "kill",
+      "main": "bx_kill_main"
+    },
+    {
+      "name": "killall",
+      "main": "bx_killall_main"
+    },
+    {
+      "name": "peekfd",
+      "main": "bx_peekfd_main"
+    },
+    {
+      "name": "ps",
+      "main": "bx_ps_main"
+    },
+    {
+      "name": "pslog",
+      "main": "bx_pslog_main"
+    },
+    {
+      "name": "pstree",
+      "main": "bx_pstree_main"
+    },
+    {
+      "name": "prtstat",
+      "main": "bx_prtstat_main"
+    },
+    {
+      "name": "dmesg",
+      "main": "bx_dmesg_main"
+    },
+    {
+      "name": "reboot",
+      "main": "bx_reboot_main"
+    },
+    {
+      "name": "halt",
+      "main": "bx_reboot_main"
+    },
+    {
+      "name": "poweroff",
+      "main": "bx_reboot_main"
+    },
+    {
+      "name": "chmod",
+      "main": "bx_chmod_main"
+    },
+    {
+      "name": "chown",
+      "main": "bx_chown_main"
+    },
+    {
+      "name": "chgrp",
+      "main": "bx_chgrp_main"
+    },
+    {
+      "name": "rm",
+      "main": "bx_rm_main"
+    },
+    {
+      "name": "mkdir",
+      "main": "bx_mkdir_main"
+    },
+    {
+      "name": "rmdir",
+      "main": "bx_rmdir_main"
+    },
+    {
+      "name": "mkfifo",
+      "main": "bx_mkfifo_main"
+    },
+    {
+      "name": "mknod",
+      "main": "bx_mknod_main"
+    },
+    {
+      "name": "mktemp",
+      "main": "bx_mktemp_main"
+    },
+    {
+      "name": "touch",
+      "main": "bx_touch_main"
+    },
+    {
+      "name": "tree",
+      "main": "bx_tree_main"
+    },
+    {
+      "name": "truncate",
+      "main": "bx_truncate_main"
+    },
+    {
+      "name": "shred",
+      "main": "bx_shred_main"
+    },
+    {
+      "name": "install",
+      "main": "bx_install_main"
+    },
+    {
+      "name": "cp",
+      "main": "bx_cp_main"
+    },
+    {
+      "name": "mv",
+      "main": "bx_mv_main"
+    },
+    {
+      "name": "nl",
+      "main": "bx_nl_main"
+    },
+    {
+      "name": "od",
+      "main": "bx_od_main"
+    },
+    {
+      "name": "paste",
+      "main": "bx_paste_main"
+    },
+    {
+      "name": "nproc",
+      "main": "bx_nproc_main"
+    },
+    {
+      "name": "numfmt",
+      "main": "bx_numfmt_main"
+    },
+    {
+      "name": "nc",
+      "main": "bx_nc_main"
+    },
+    {
+      "name": "netcat",
+      "main": "bx_nc_main"
+    },
+    {
+      "name": "wget",
+      "main": "bx_wget_main"
+    },
+    {
+      "name": "traceroute",
+      "main": "bx_traceroute_main"
+    },
+    {
+      "name": "ping",
+      "main": "bx_ping_main"
+    },
+    {
+      "name": "expr",
+      "main": "bx_expr_main"
+    },
+    {
+      "name": "fold",
+      "main": "bx_fold_main"
+    },
+    {
+      "name": "head",
+      "main": "bx_head_main"
+    },
+    {
+      "name": "hostid",
+      "main": "bx_hostid_main"
+    },
+    {
+      "name": "hostname",
+      "main": "bx_hostname_main"
+    },
+    {
+      "name": "echo",
+      "main": "bx_echo_main"
+    },
+    {
+      "name": "expand",
+      "main": "bx_expand_main"
+    },
+    {
+      "name": "id",
+      "main": "bx_id_main"
+    },
+    {
+      "name": "logname",
+      "main": "bx_logname_main"
+    },
+    {
+      "name": "man",
+      "main": "bx_man_main"
+    },
+    {
+      "name": "mandoc",
+      "main": "bx_mandoc_main"
+    },
+    {
+      "name": "join",
+      "main": "bx_join_main"
+    },
+    {
+      "name": "comm",
+      "main": "bx_comm_main"
+    },
+    {
+      "name": "cksum",
+      "main": "bx_cksum_main"
+    },
+    {
+      "name": "md5sum",
+      "main": "bx_md5sum_main"
+    },
+    {
+      "name": "sha1sum",
+      "main": "bx_sha1sum_main"
+    },
+    {
+      "name": "sha256sum",
+      "main": "bx_sha256sum_main"
+    },
+    {
+      "name": "base64",
+      "main": "bx_base64_main"
+    },
+    {
+      "name": "shuf",
+      "main": "bx_shuf_main"
+    },
+    {
+      "name": "yes",
+      "main": "bx_yes_main"
+    },
+    {
+      "name": "whoami",
+      "main": "bx_whoami_main"
+    },
+    {
+      "name": "sleep",
+      "main": "bx_sleep_main"
+    },
+    {
+      "name": "uname",
+      "main": "bx_uname_main"
+    },
+    {
+      "name": "wc",
+      "main": "bx_wc_main"
+    },
+    {
+      "name": "uniq",
+      "main": "bx_uniq_main"
+    },
+    {
+      "name": "unexpand",
+      "main": "bx_unexpand_main"
+    },
+    {
+      "name": "sum",
+      "main": "bx_sum_main"
+    },
+    {
+      "name": "tac",
+      "main": "bx_tac_main"
+    },
+    {
+      "name": "tail",
+      "main": "bx_tail_main"
+    },
+    {
+      "name": "tee",
+      "main": "bx_tee_main"
+    },
+    {
+      "name": "test",
+      "main": "bx_test_main"
+    },
+    {
+      "name": "[",
+      "main": "bx_test_main"
+    },
+    {
+      "name": "tr",
+      "main": "bx_tr_main"
+    },
+    {
+      "name": "seq",
+      "main": "bx_seq_main"
+    },
+    {
+      "name": "split",
+      "main": "bx_split_main"
+    },
+    {
+      "name": "sort",
+      "main": "bx_sort_main"
+    },
+    {
+      "name": "tar",
+      "main": "bx_tar_main"
+    },
+    {
+      "name": "cpio",
+      "main": "bx_cpio_main"
+    },
+    {
+      "name": "true",
+      "main": "bx_true_main"
+    },
+    {
+      "name": "false",
+      "main": "bx_false_main"
+    },
+    {
+      "name": "grep",
+      "main": "bx_grep_main"
+    },
+    {
+      "name": "egrep",
+      "main": "bx_grep_main"
+    },
+    {
+      "name": "fgrep",
+      "main": "bx_grep_main"
+    },
+    {
+      "name": "rg",
+      "main": "bx_rg_main"
+    },
+    {
+      "name": "fd",
+      "main": "bx_fd_main"
+    },
+    {
+      "name": "find",
+      "main": "bx_find_main"
+    },
+    {
+      "name": "xargs",
+      "main": "bx_xargs_main"
+    }
+  ]
+}

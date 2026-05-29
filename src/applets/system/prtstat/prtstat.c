@@ -9,6 +9,7 @@
 #include "applets/system/psmisc/psmisc_wrapper.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct bx_prtstat_options {
     bool raw;
@@ -37,10 +38,9 @@ static bool bx_prtstat_parse_options(struct bx_prtstat_options* options,
     int c;
 
     memset(options, 0, sizeof(*options));
-    optind = 1;
-    opterr = 0;
+    bx_args_getopt_reset();
 
-    while ((c = getopt_long(argc, argv, "+rhV", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "+rhV", long_options, NULL)) != -1) {
         switch (c) {
             case 'r':
                 options->raw = true;

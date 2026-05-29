@@ -44,6 +44,7 @@
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include "lib/args_common.h"
 #ifdef USE_IO_URING
 #include <liburing.h>
 #endif
@@ -179,6 +180,20 @@ static void enforce_io_backend_policy(void) {
 #endif
 }
 
+static int parse_hex_tos_value(const char* text, int* value_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-')
+        return 0;
+
+    errno = 0;
+    char* end = NULL;
+    unsigned long value = strtoul(text, &end, 16);
+    if (errno == ERANGE || end == text || end == NULL || *end != '\0' || value > 255ul)
+        return 0;
+
+    *value_out = (int)value;
+    return 1;
+}
+
 int main(int argc, char* argv[]) {
     int ch, s = -1, ret, socksv;
     char *host, *uport;
@@ -255,7 +270,7 @@ int main(int argc, char* argv[]) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    while ((ch = getopt_long(argc, argv, "46C:cDde:FH:hI:i:jK:lM:m:NnO:o:P:p:R:rs:T:UuvW:w:X:x:Z:z", long_options,
+    while ((ch = bx_args_getopt_long(argc, argv, "46C:cDde:FH:hI:i:jK:lM:m:NnO:o:P:p:R:rs:T:UuvW:w:X:x:Z:z", long_options,
                              &option_index)) != -1) {
         switch (ch) {
             case 1001:
@@ -530,12 +545,16 @@ int main(int argc, char* argv[]) {
                     break;
                 if (process_tos_opt(optarg, &Tflag))
                     break;
-                if (strlen(optarg) > 1 && optarg[0] == '0' && optarg[1] == 'x')
-                    Tflag = (int)strtol(optarg, NULL, 16);
+                if (strlen(optarg) > 1 && optarg[0] == '0' && optarg[1] == 'x') {
+                    if (!parse_hex_tos_value(optarg, &Tflag))
+                        errstr = "invalid";
+                }
                 else
                     Tflag = (int)nc_strtonum(optarg, 0, 255, &errstr);
-                if (Tflag < 0 || Tflag > 255 || errstr || errno)
-                    errx(EXIT_USAGE, "illegal tos/tls value %s", optarg);
+                if (Tflag < 0 || Tflag > 255 || errstr || errno) {
+                    fprintf(stderr, "%s: illegal tos/tls value %s\n", progname, optarg);
+                    exit(EXIT_USAGE);
+                }
                 break;
             default:
                 usage(1);

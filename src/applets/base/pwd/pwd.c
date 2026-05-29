@@ -11,6 +11,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 enum bx_pwd_mode {
     BX_PWD_MODE_LOGICAL = 0,
@@ -44,11 +45,10 @@ static bool bx_pwd_parse_options(int argc, char** argv, struct bx_pwd_options* o
     options->mode = BX_PWD_MODE_PHYSICAL;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "LP", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "LP", long_options, NULL);
         if (c == -1) {
             break;
         }

@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -269,6 +270,39 @@ static bool bx_tar_parse_sparse_map(const unsigned char* payload,
     return true;
 }
 
+static bool bx_tar_parse_pax_int_value(const char* value, int min_value, int max_value, int* value_out) {
+    if (value == NULL || value[0] == '\0' || value_out == NULL || min_value > max_value) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t parsed = strtoimax(value, &end, 10);
+    if (errno == ERANGE || end == value || end == NULL || *end != '\0'
+        || parsed < (intmax_t)min_value || parsed > (intmax_t)max_value) {
+        return false;
+    }
+
+    *value_out = (int)parsed;
+    return true;
+}
+
+static bool bx_tar_parse_pax_size_value(const char* value, size_t* value_out) {
+    if (value == NULL || value[0] == '\0' || value[0] == '-' || value_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t parsed = strtoumax(value, &end, 10);
+    if (errno == ERANGE || end == value || end == NULL || *end != '\0' || parsed > SIZE_MAX) {
+        return false;
+    }
+
+    *value_out = (size_t)parsed;
+    return true;
+}
+
 static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
                                     char* record,
                                     bool skip_owner_group_names) {
@@ -309,17 +343,29 @@ static bool bx_tar_apply_pax_record(struct bx_tar_pax_info* pax,
         pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.major") == 0) {
-        pax->sparse_major = atoi(value);
+        int parsed = 0;
+        if (!bx_tar_parse_pax_int_value(value, 0, INT_MAX, &parsed)) {
+            return false;
+        }
+        pax->sparse_major = parsed;
         pax->sparse_enabled = true;
         pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.minor") == 0) {
-        pax->sparse_minor = atoi(value);
+        int parsed = 0;
+        if (!bx_tar_parse_pax_int_value(value, 0, INT_MAX, &parsed)) {
+            return false;
+        }
+        pax->sparse_minor = parsed;
         pax->sparse_enabled = true;
         pax->active = true;
     }
     else if (strcmp(key, "GNU.sparse.realsize") == 0) {
-        pax->sparse_realsize = (size_t)strtoull(value, NULL, 10);
+        size_t parsed = 0u;
+        if (!bx_tar_parse_pax_size_value(value, &parsed)) {
+            return false;
+        }
+        pax->sparse_realsize = parsed;
         pax->sparse_enabled = true;
         pax->active = true;
     }

@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 extern char** environ;
 
@@ -40,11 +41,10 @@ static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "printenv");
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+0", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+0", long_options, NULL);
         if (c == -1) {
             break;
         }

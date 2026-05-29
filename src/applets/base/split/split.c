@@ -11,6 +11,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 static void next_suffix(char* suffix, int length, bool numeric, bool hex) {
     for (int i = length - 1; i >= 0; i--) {
@@ -80,11 +81,10 @@ int bx_split_main(int argc, char** argv) {
     bool numeric = false;
     bool hex = false;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     int c;
-    while ((c = getopt_long(argc, argv, "b:l:a:dx", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "b:l:a:dx", long_options, NULL)) != -1) {
         switch (c) {
             case 'b': {
                 uintmax_t parsed = 0;
@@ -148,7 +148,7 @@ int bx_split_main(int argc, char** argv) {
         if (strcmp(argv[optind], "-") != 0) {
             in = fopen(argv[optind], "r");
             if (!in) {
-                bx_perror(argv[optind]);
+                bx_perror_path(&diag, argv[optind]);
                 return 1;
             }
         }
@@ -177,7 +177,7 @@ int bx_split_main(int argc, char** argv) {
         sprintf(out_name, "%s%s", prefix, suffix);
         FILE* out = fopen(out_name, "w");
         if (!out) {
-            bx_perror(out_name);
+            bx_perror_path(&diag, out_name);
             break;
         }
 

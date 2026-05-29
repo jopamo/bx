@@ -115,6 +115,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #if __MWERKS__ && !defined(BEBOX)
 # include <unix.h>	/* for fdopen() on MAC */
@@ -322,6 +323,69 @@ error_exit(int ret, char *msg)
 {
   fprintf(stderr, "%s: %s\n", pname, msg);
   exit(ret);
+}
+
+  static void
+numeric_error_exit(char *option, char *value)
+{
+  fprintf(stderr, "%s: invalid numeric argument for %s: %s\n", pname, option, value);
+  exit(1);
+}
+
+  static long
+parse_long_arg(char *option, char *value, int base, long min_value, long max_value)
+{
+  char *end = NULL;
+  long parsed;
+
+  if (value == NULL || value[0] == '\0')
+    numeric_error_exit(option, value ? value : "");
+
+  errno = 0;
+  parsed = strtol(value, &end, base);
+  if (errno == ERANGE || end == value || end == NULL || *end != '\0'
+      || parsed < min_value || parsed > max_value)
+    numeric_error_exit(option, value);
+
+  return parsed;
+}
+
+  static unsigned long
+parse_ulong_arg(char *option, char *value, int base)
+{
+  char *end = NULL;
+  unsigned long parsed;
+
+  if (value == NULL || value[0] == '\0' || value[0] == '-')
+    numeric_error_exit(option, value ? value : "");
+
+  errno = 0;
+  parsed = strtoul(value, &end, base);
+  if (errno == ERANGE || end == value || end == NULL || *end != '\0')
+    numeric_error_exit(option, value);
+
+  return parsed;
+}
+
+  static unsigned long
+parse_display_offset_arg(char *option, char *value)
+{
+  int negative = 0;
+
+  if (value == NULL || value[0] == '\0')
+    numeric_error_exit(option, value ? value : "");
+
+  if (value[0] == '+')
+    value++;
+  else if (value[0] == '-')
+    {
+      negative = 1;
+      value++;
+    }
+
+  if (negative)
+    return 0ul - parse_ulong_arg(option, value, 0);
+  return parse_ulong_arg(option, value, 0);
 }
 
   static int
@@ -817,14 +881,14 @@ bx_xxd_main(int argc, char *argv[])
 	  else if (pp[2] && STRNCMP("ols", pp + 2, 3))
 	    {
 	      colsgiven = 1;
-	      cols = (int)strtol(pp + 2, NULL, 0);
+	      cols = (int)parse_long_arg("-c", pp + 2, 0, INT_MIN, INT_MAX);
 	    }
 	  else
 	    {
 	      if (!argv[2])
 		exit_with_usage(1);
 	      colsgiven = 1;
-	      cols = (int)strtol(argv[2], NULL, 0);
+	      cols = (int)parse_long_arg("-c", argv[2], 0, INT_MIN, INT_MAX);
 	      argv++;
 	      argc--;
 	    }
@@ -832,36 +896,25 @@ bx_xxd_main(int argc, char *argv[])
       else if (!STRNCMP(pp, "-g", 2))
 	{
 	  if (pp[2] && STRNCMP("roup", pp + 2, 4))
-	    octspergrp = (int)strtol(pp + 2, NULL, 0);
+	    octspergrp = (int)parse_long_arg("-g", pp + 2, 0, INT_MIN, INT_MAX);
 	  else
 	    {
 	      if (!argv[2])
 		exit_with_usage(1);
-	      octspergrp = (int)strtol(argv[2], NULL, 0);
+	      octspergrp = (int)parse_long_arg("-g", argv[2], 0, INT_MIN, INT_MAX);
 	      argv++;
 	      argc--;
 	    }
 	}
       else if (!STRNCMP(pp, "-o", 2))
 	{
-	  int reloffset = 0;
-	  int negoffset = 0;
 	  if (pp[2] && STRNCMP("ffset", pp + 2, 5))
-	    displayoff = strtoul(pp + 2, NULL, 0);
+	    displayoff = parse_display_offset_arg("-o", pp + 2);
 	  else
 	    {
 	      if (!argv[2])
 		exit_with_usage(1);
-
-	      if (argv[2][0] == '+')
-	       reloffset++;
-	     if (argv[2][reloffset] == '-')
-	       negoffset++;
-
-	     if (negoffset)
-	       displayoff = ULONG_MAX - strtoul(argv[2] + reloffset+negoffset, NULL, 0) + 1;
-	     else
-	       displayoff = strtoul(argv[2] + reloffset+negoffset, NULL, 0);
+	      displayoff = parse_display_offset_arg("-o", argv[2]);
 
 	      argv++;
 	      argc--;
@@ -879,7 +932,7 @@ bx_xxd_main(int argc, char *argv[])
 	      if (pp[2+relseek] == '-')
 		negseek++;
 #endif
-	      seekoff = strtol(pp + 2+relseek+negseek, (char **)NULL, 0);
+	      seekoff = parse_long_arg("-s", pp + 2+relseek+negseek, 0, 0, LONG_MAX);
 	    }
 	  else
 	    {
@@ -891,7 +944,7 @@ bx_xxd_main(int argc, char *argv[])
 	      if (argv[2][relseek] == '-')
 		negseek++;
 #endif
-	      seekoff = strtol(argv[2] + relseek+negseek, (char **)NULL, 0);
+	      seekoff = parse_long_arg("-s", argv[2] + relseek+negseek, 0, 0, LONG_MAX);
 	      argv++;
 	      argc--;
 	    }
@@ -899,12 +952,12 @@ bx_xxd_main(int argc, char *argv[])
       else if (!STRNCMP(pp, "-l", 2))
 	{
 	  if (pp[2] && STRNCMP("en", pp + 2, 2))
-	    length = strtol(pp + 2, (char **)NULL, 0);
+	    length = parse_long_arg("-l", pp + 2, 0, LONG_MIN, LONG_MAX);
 	  else
 	    {
 	      if (!argv[2])
 		exit_with_usage(1);
-	      length = strtol(argv[2], (char **)NULL, 0);
+	      length = parse_long_arg("-l", argv[2], 0, LONG_MIN, LONG_MAX);
 	      argv++;
 	      argc--;
 	    }

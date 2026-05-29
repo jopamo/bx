@@ -6,6 +6,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void bx_logname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]\n", progname);
@@ -38,10 +39,9 @@ static bool bx_logname_parse_options(int argc,
     options->show_version = false;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
-    while ((c = getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
         switch (c) {
             case 1:
                 options->show_help = true;

@@ -4,6 +4,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +16,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct bx_ps_options {
     const char* progname;
@@ -55,11 +58,10 @@ static bool bx_ps_parse_options(int argc, char** argv, struct bx_ps_options* opt
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "ps");
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+hV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+hV", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -105,12 +107,31 @@ static bool bx_ps_parse_pid_name(const char* name, long* pid_out) {
 
     errno = 0;
     char* end = NULL;
-    long pid = strtol(name, &end, 10);
-    if (errno != 0 || end == name || *end != '\0' || pid <= 0) {
+    intmax_t pid = strtoimax(name, &end, 10);
+    if (errno != 0 || end == name || *end != '\0' || pid <= 0 || pid > LONG_MAX) {
         return false;
     }
 
-    *pid_out = pid;
+    *pid_out = (long)pid;
+    return true;
+}
+
+static bool bx_ps_parse_proc_status_ppid(const char* text, long* ppid_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(text, &end, 10);
+    if (errno != 0 || end == text || value < 0 || value > LONG_MAX) {
+        return false;
+    }
+    if (*end != '\0' && !isspace((unsigned char)*end)) {
+        return false;
+    }
+
+    *ppid_out = (long)value;
     return true;
 }
 
@@ -121,10 +142,8 @@ static void bx_ps_parse_status_line(const char* line, long* ppid_out, char* stat
             p++;
         }
 
-        errno = 0;
-        char* end = NULL;
-        long value = strtol(p, &end, 10);
-        if (errno == 0 && end != p) {
+        long value = 0;
+        if (bx_ps_parse_proc_status_ppid(p, &value)) {
             *ppid_out = value;
         }
         return;

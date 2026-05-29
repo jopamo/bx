@@ -12,6 +12,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 enum {
     BX_UNIQ_OPT_HELP = 256,
@@ -129,11 +130,10 @@ static bool bx_uniq_parse_options(int argc, char** argv, uniq_opts_t* opts, int*
     opts->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "uniq");
     diag->progname = opts->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, ":cduif:s:w:z", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, ":cduif:s:w:z", long_options, NULL);
         if (c == -1) {
             break;
         }

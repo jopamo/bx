@@ -3,6 +3,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 enum bx_dmesg_action {
     BX_DMESG_ACTION_READ = 0,
@@ -170,6 +173,28 @@ static bool bx_dmesg_parse_time_format(const char* text, enum bx_dmesg_time_form
     return false;
 }
 
+static bool bx_dmesg_parse_priority_prefix(const char** cursor, int* priority_out) {
+    if (cursor == NULL || *cursor == NULL || priority_out == NULL) {
+        return false;
+    }
+
+    const char* p = *cursor;
+    if (p[0] != '<') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t priority = strtoimax(p + 1, &end, 10);
+    if (errno != 0 || end == p + 1 || end == NULL || *end != '>' || priority < 0 || priority > INT_MAX) {
+        return false;
+    }
+
+    *priority_out = (int)priority;
+    *cursor = end + 1;
+    return true;
+}
+
 static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_options* options, struct bx_diag_ctx* diag) {
     static const struct option long_options[] = {
         {"clear", no_argument, NULL, 'C'},
@@ -195,11 +220,10 @@ static bool bx_dmesg_parse_options(int argc, char** argv, struct bx_dmesg_option
     options->time_format = BX_DMESG_TIME_RAW;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+CcDEn:rSs:TtxhV", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+CcDEn:rSs:TtxhV", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -304,14 +328,7 @@ static void bx_dmesg_print_line(const struct bx_dmesg_options* options, const ch
     const char* p = line;
     int priority = -1;
 
-    if (*p == '<') {
-        char* end = NULL;
-        long parsed = strtol(p + 1, &end, 10);
-        if (end != p + 1 && end != NULL && *end == '>') {
-            priority = (int)parsed;
-            p = end + 1;
-        }
-    }
+    (void)bx_dmesg_parse_priority_prefix(&p, &priority);
 
     while (*p == ' ') {
         p++;

@@ -25,6 +25,7 @@
 #include "lib/copy_tree.h"
 #include "lib/remove_ops.h"
 #include "lib/copy_metadata.h"
+#include "lib/args_common.h"
 
 #ifndef RENAME_EXCHANGE
 #define RENAME_EXCHANGE (1 << 1)
@@ -268,11 +269,10 @@ static bool bx_mv_parse_options(int argc, char** argv, struct bx_mv_options* opt
     diag->progname = options->progname;
     options->update_mode = BX_UPDATE_ALL;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     int c;
-    while ((c = getopt_long(argc, argv, short_opts, long_options, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, short_opts, long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 bx_args_enable_backup_mode(&options->backup_mode);

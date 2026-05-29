@@ -21,6 +21,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
+#include "lib/args_common.h"
 
 enum bx_od_endian_mode {
     BX_OD_ENDIAN_NATIVE = 0,
@@ -1158,12 +1159,11 @@ static bool bx_od_parse_options(int argc, char** argv, struct bx_od_options* opt
     options->endian_mode = BX_OD_ENDIAN_NATIVE;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "A:j:N:S:t:vw::abcdfilosx", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "A:j:N:S:t:vw::abcdfilosx", long_options, &option_index);
 
         if (c == -1) {
             break;

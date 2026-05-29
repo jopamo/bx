@@ -15,6 +15,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 enum bx_shred_remove_mode {
     BX_SHRED_REMOVE_UNLINK = 0,
@@ -163,12 +164,11 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
     options->remove_mode = BX_SHRED_REMOVE_WIPESYNC;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:fn:s:uvxz", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+:fn:s:uvxz", long_options, &option_index);
         if (c == -1) {
             break;
         }

@@ -1,3 +1,5 @@
+#include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +43,25 @@ void bx_backup_get_params(enum bx_backup_mode cmd_mode, const char* cmd_suffix, 
     }
 }
 
+static bool bx_backup_parse_numbered_suffix_version(const char* text, int* version_out) {
+    if (text == NULL || !isdigit((unsigned char)text[0])) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(text, &end, 10);
+    if (errno != 0 || end == text || end == NULL || value > INT_MAX) {
+        return false;
+    }
+    if (end[0] != '~' || end[1] != '\0') {
+        return false;
+    }
+
+    *version_out = (int)value;
+    return true;
+}
+
 static int get_max_backup_version(const char* dir, const char* base) {
     DIR* d = opendir(dir);
     if (!d)
@@ -52,11 +73,11 @@ static int get_max_backup_version(const char* dir, const char* base) {
 
     while ((de = readdir(d)) != NULL) {
         if (strncmp(de->d_name, base, base_len) == 0 && de->d_name[base_len] == '.' && de->d_name[base_len + 1] == '~') {
-            char* endptr;
-            long v = strtol(de->d_name + base_len + 2, &endptr, 10);
-            if (*endptr == '~' && endptr[1] == '\0') {
-                if (v > max_v)
-                    max_v = (int)v;
+            int v = 0;
+            if (bx_backup_parse_numbered_suffix_version(de->d_name + base_len + 2, &v)) {
+                if (v > max_v) {
+                    max_v = v;
+                }
             }
         }
     }
@@ -64,7 +85,16 @@ static int get_max_backup_version(const char* dir, const char* base) {
     return max_v;
 }
 
-static char* get_backup_path(const char* path, const struct bx_backup_params* params, enum bx_backup_mode* effective_mode_out) {
+static char* get_backup_path(
+    const char* path,
+    const struct bx_backup_params* params,
+    enum bx_backup_mode* effective_mode_out,
+    bool* version_overflow_out
+) {
+    if (version_overflow_out) {
+        *version_overflow_out = false;
+    }
+
     enum bx_backup_mode effective_mode = params->mode;
     if (effective_mode == BX_BACKUP_EXISTING) {
         char* dir_copy = xstrdup(path);
@@ -92,7 +122,16 @@ static char* get_backup_path(const char* path, const struct bx_backup_params* pa
         char* dir_copy = xstrdup(path);
         char* dname = dirname(dir_copy);
         char* base = bx_path_basename_dup(path);
-        int next_v = get_max_backup_version(dname, base) + 1;
+        int max_v = get_max_backup_version(dname, base);
+        if (max_v == INT_MAX) {
+            if (version_overflow_out) {
+                *version_overflow_out = true;
+            }
+            free(base);
+            free(dir_copy);
+            return NULL;
+        }
+        int next_v = max_v + 1;
         char* res = xmalloc(strlen(path) + 16);
         sprintf(res, "%s.~%d~", path, next_v);
         free(base);
@@ -125,9 +164,13 @@ enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_
     }
     (void)st;
 
-    char* backup_path = get_backup_path(path, params, NULL);
+    bool version_overflow = false;
+    char* backup_path = get_backup_path(path, params, NULL, &version_overflow);
     if (backup_path == NULL) {
-        bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
+        bx_diag(diag,
+                "cannot backup '%s': %s",
+                path,
+                version_overflow ? "numbered backup version overflow" : "unsupported backup mode");
         return BX_BACKUP_CREATE_FAILED;
     }
 
@@ -165,9 +208,13 @@ enum bx_backup_create_result bx_backup_create_copy(const char* path, const struc
         return BX_BACKUP_CREATE_FAILED;
     }
 
-    char* backup_path = get_backup_path(path, params, NULL);
+    bool version_overflow = false;
+    char* backup_path = get_backup_path(path, params, NULL, &version_overflow);
     if (backup_path == NULL) {
-        bx_diag(diag, "cannot backup '%s': unsupported backup mode", path);
+        bx_diag(diag,
+                "cannot backup '%s': %s",
+                path,
+                version_overflow ? "numbered backup version overflow" : "unsupported backup mode");
         return BX_BACKUP_CREATE_FAILED;
     }
 

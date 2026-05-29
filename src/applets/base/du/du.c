@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 enum bx_du_symlink_mode {
     BX_DU_SYMLINK_NEVER = 0,
@@ -159,12 +160,11 @@ static bool bx_du_parse_options(int argc, char** argv, struct bx_du_options* opt
     options->symlink_mode = BX_DU_SYMLINK_NEVER;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+0abclhksxd:B:DHLP", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+0abclhksxd:B:DHLP", long_options, &option_index);
         if (c == -1) {
             break;
         }

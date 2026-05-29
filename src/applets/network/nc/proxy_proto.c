@@ -1,5 +1,6 @@
 #include "netcat.h"
 #include "proxy_proto.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,9 +36,24 @@ struct proxy_hdr_v2 {
 
 static const uint8_t sig_v2[12] = {0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a};
 
+static int parse_proxy_port(const char* text, uint16_t* port_out) {
+    if (text == NULL || text[0] == '\0' || text[0] == '-')
+        return -1;
+
+    errno = 0;
+    char* end = NULL;
+    unsigned long value = strtoul(text, &end, 10);
+    if (errno == ERANGE || end == text || end == NULL || *end != '\0' || value > 65535ul)
+        return -1;
+
+    *port_out = (uint16_t)value;
+    return 0;
+}
+
 int parse_proxy_v1(const char* line, struct proxy_info* info) {
-    char protocol[16], src_addr[INET6_ADDRSTRLEN], dst_addr[INET6_ADDRSTRLEN];
-    int src_port, dst_port;
+    char marker[6], protocol[16], src_addr[INET6_ADDRSTRLEN], dst_addr[INET6_ADDRSTRLEN];
+    char src_port_text[16], dst_port_text[16], extra;
+    uint16_t src_port, dst_port;
 
     /* Sanitize: only printable ASCII allowed in v1 header */
     for (const char* p = line; *p; p++) {
@@ -45,7 +61,19 @@ int parse_proxy_v1(const char* line, struct proxy_info* info) {
             return -1;
     }
 
-    if (sscanf(line, "PROXY %15s %45s %45s %d %d", protocol, src_addr, dst_addr, &src_port, &dst_port) == 5) {
+    if (sscanf(line,
+               "%5s %15s %45s %45s %15s %15s %c",
+               marker,
+               protocol,
+               src_addr,
+               dst_addr,
+               src_port_text,
+               dst_port_text,
+               &extra)
+            == 6
+        && strcmp(marker, "PROXY") == 0
+        && parse_proxy_port(src_port_text, &src_port) == 0
+        && parse_proxy_port(dst_port_text, &dst_port) == 0) {
         if (strcmp(protocol, "TCP4") == 0) {
             struct sockaddr_in* sin_src = (struct sockaddr_in*)&info->src;
             struct sockaddr_in* sin_dst = (struct sockaddr_in*)&info->dst;

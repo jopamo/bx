@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "lib/argv_packer.h"
 #include "xargs_parse.h"
+#include "lib/args_common.h"
 
 static void xargs_warn_mutex(const char *progname, const char *left,
                              const char *right, const char *ignored) {
@@ -228,11 +229,10 @@ bool xargs_parse_main_args(int argc, char **argv, struct xargs_main_args *out) {
     out->opts.max_procs = 1;
     out->input = stdin;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     int c;
-    while ((c = getopt_long(argc, argv, "+0d:E:e::I:i::l::L:oprs:txa:n:P:",
+    while ((c = bx_args_getopt_long(argc, argv, "+0d:E:e::I:i::l::L:oprs:txa:n:P:",
                             long_opts, NULL)) != -1) {
         switch (c) {
         case 'r':

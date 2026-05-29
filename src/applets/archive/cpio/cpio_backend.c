@@ -16,6 +16,7 @@
 #include "applets/archive/cpio/cpio_backend.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
 
@@ -234,6 +235,35 @@ static void bx_cpio_format_octal_field(unsigned char* field, size_t len, size_t 
         field[len - 1u - i] = (unsigned char)('0' + (value & 0x07u));
         value >>= 3u;
     }
+}
+
+static bool bx_cpio_parse_owner_spec(const char* text,
+                                     struct bx_cpio_options* options,
+                                     struct bx_diag_ctx* diag) {
+    char* spec = xstrdup(text);
+    char* colon = strchr(spec, ':');
+    uintmax_t owner = 0u;
+    uintmax_t group = 0u;
+
+    if (colon == NULL) {
+        bx_diag(diag, "invalid owner spec '%s'", text);
+        free(spec);
+        return false;
+    }
+
+    *colon = '\0';
+    if (!bx_id_parse_numeric(spec, (uintmax_t)((uid_t)-1), &owner)
+        || !bx_id_parse_numeric(colon + 1, (uintmax_t)((gid_t)-1), &group)) {
+        bx_diag(diag, "invalid owner spec '%s'", text);
+        free(spec);
+        return false;
+    }
+
+    options->owner = (uid_t)owner;
+    options->group = (gid_t)group;
+    options->owner_override = true;
+    free(spec);
+    return true;
 }
 
 static bool bx_cpio_read_file(const char* path, struct bx_archive_buffer* buffer, struct bx_diag_ctx* diag) {
@@ -1233,33 +1263,15 @@ static bool bx_cpio_parse_options(struct bx_cpio_options* options,
                         goto next_arg;
                     case 'R':
                         if (*attached != '\0') {
-                            char* spec = xstrdup(attached);
-                            char* colon = strchr(spec, ':');
-                            if (colon == NULL) {
-                                free(spec);
-                                bx_diag(diag, "invalid owner spec '%s'", attached);
+                            if (!bx_cpio_parse_owner_spec(attached, options, diag)) {
                                 return false;
                             }
-                            *colon = '\0';
-                            options->owner = (uid_t)strtoul(spec, NULL, 10);
-                            options->group = (gid_t)strtoul(colon + 1, NULL, 10);
-                            options->owner_override = true;
-                            free(spec);
                             j = strlen(letters) - 1u;
                         }
                         else if (++i < argc) {
-                            char* spec = xstrdup(argv[i]);
-                            char* colon = strchr(spec, ':');
-                            if (colon == NULL) {
-                                free(spec);
-                                bx_diag(diag, "invalid owner spec '%s'", argv[i]);
+                            if (!bx_cpio_parse_owner_spec(argv[i], options, diag)) {
                                 return false;
                             }
-                            *colon = '\0';
-                            options->owner = (uid_t)strtoul(spec, NULL, 10);
-                            options->group = (gid_t)strtoul(colon + 1, NULL, 10);
-                            options->owner_override = true;
-                            free(spec);
                         }
                         else {
                             bx_diag(diag, "option requires an argument -- 'R'");

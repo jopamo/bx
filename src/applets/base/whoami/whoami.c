@@ -6,6 +6,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void bx_whoami_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -42,9 +43,8 @@ int bx_whoami_main(int argc, char** argv) {
         return c;
     }
 
-    opterr = 0;
-    optind = 1;
-    while ((c = getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "+", long_options, NULL)) != -1) {
         switch (c) {
             case '?':
                 bx_cli_diag_unrecognized_option(&diag, optopt, optind, argc, argv);

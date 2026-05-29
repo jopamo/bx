@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 typedef struct {
     unsigned long long lines;
@@ -122,8 +123,8 @@ int bx_wc_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     bool opt_c = false, opt_m = false, opt_l = false, opt_w = false, opt_L = false;
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, "cmwlL", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "cmwlL", long_options, NULL)) != -1) {
         switch (c) {
             case 'c':
                 opt_c = true;

@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static int count_decimal_places(const char* s) {
     const char* dot = strchr(s, '.');
@@ -30,8 +31,8 @@ int bx_seq_main(int argc, char** argv) {
     const char* separator = "\n";
     bool equal_width = false;
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, "+:f:s:whv", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "+:f:s:whv", long_options, NULL)) != -1) {
         switch (c) {
             case 'f':
                 format = optarg;
@@ -81,12 +82,12 @@ int bx_seq_main(int argc, char** argv) {
         last = atof(argv[optind + 2]);
     }
     else {
-        bx_err("missing operand");
+        bx_cli_diag_missing_operand(&diag);
         return 1;
     }
 
     if (inc == 0) {
-        bx_err("invalid increment '0'");
+        bx_diag(&diag, "invalid increment '0'");
         return 1;
     }
 

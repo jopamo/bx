@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "applets.h"
+#include "lib/args_common.h"
 
 enum {
     BASE64_EXIT_OK = 0,
@@ -122,12 +123,11 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
     options->wrap_cols = 76;
     options->input_path = "-";
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:diw:", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+:diw:", long_options, &option_index);
         if (c == -1) {
             break;
         }

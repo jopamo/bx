@@ -13,6 +13,7 @@
 #include "pcre2_matcher.h"
 #include "rg_generate.h"
 #include "search.h"
+#include "lib/args_common.h"
 
 enum {
     OPT_HELP = 256,
@@ -1122,14 +1123,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     const struct option *selected_long_opts =
         bx_search_personality_is_rg(personality) ? long_opts : grep_long_opts;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
     const char *short_opts = bx_search_personality_is_rg(personality)
                                  ? ":0.E:FHbhinovclLqr:RIszZd:M:aA:B:C:e:f:g:j:t:T:uwPxSm:UVNp"
                                  : ":0.EFGFHbhinovclLqrRIszZD:d:M:aA:B:C:e:f:g:j:t:uwPxSm:UVNpT";
 
     int c;
-    while ((c = getopt_long(argc, argv, short_opts, selected_long_opts, NULL)) != -1) {
+    while ((c = bx_args_getopt_long(argc, argv, short_opts, selected_long_opts, NULL)) != -1) {
         switch (c) {
         case ':':
             if (bx_search_personality_is_grep_family(personality)) {

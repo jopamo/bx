@@ -251,12 +251,48 @@ static bool bx_kill_parse_hex_mask(const char* text, uint64_t* mask_out) {
 
     errno = 0;
     char* end = NULL;
-    unsigned long long value = strtoull(text, &end, 16);
-    if (errno != 0 || end == text || *end != '\0') {
+    uintmax_t value = strtoumax(text, &end, 16);
+    if (errno != 0 || end == text || *end != '\0' || value > UINT64_MAX) {
         return false;
     }
 
     *mask_out = (uint64_t)value;
+    return true;
+}
+
+static bool bx_kill_status_token_end(const char* end) {
+    return end != NULL && (*end == '\0' || isspace((unsigned char)*end));
+}
+
+static bool bx_kill_parse_status_hex_mask(const char* text, uint64_t* mask_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(text, &end, 16);
+    if (errno != 0 || end == text || value > UINT64_MAX || !bx_kill_status_token_end(end)) {
+        return false;
+    }
+
+    *mask_out = (uint64_t)value;
+    return true;
+}
+
+static bool bx_kill_parse_status_uid(const char* text, uid_t* uid_out) {
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(text, &end, 10);
+    if (errno != 0 || end == text || value > (uintmax_t)((uid_t)-1) || !bx_kill_status_token_end(end)) {
+        return false;
+    }
+
+    *uid_out = (uid_t)value;
     return true;
 }
 
@@ -529,11 +565,9 @@ static bool bx_kill_read_status_mask(pid_t pid, const char* key, uint64_t* mask_
             while (*value == ' ' || *value == '\t') {
                 value++;
             }
-            errno = 0;
-            char* end = NULL;
-            unsigned long long parsed = strtoull(value, &end, 16);
-            if (errno == 0 && end != value) {
-                *mask_out = (uint64_t)parsed;
+            uint64_t parsed = 0;
+            if (bx_kill_parse_status_hex_mask(value, &parsed)) {
+                *mask_out = parsed;
                 found = true;
             }
             break;
@@ -566,11 +600,9 @@ static bool bx_kill_read_status_uid(pid_t pid, uid_t* uid_out) {
             while (*value == ' ' || *value == '\t') {
                 value++;
             }
-            errno = 0;
-            char* end = NULL;
-            unsigned long parsed = strtoul(value, &end, 10);
-            if (errno == 0 && end != value) {
-                *uid_out = (uid_t)parsed;
+            uid_t parsed = 0;
+            if (bx_kill_parse_status_uid(value, &parsed)) {
+                *uid_out = parsed;
                 found = true;
             }
             break;

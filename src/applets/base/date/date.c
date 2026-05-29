@@ -17,6 +17,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/time_parse.h"
+#include "lib/args_common.h"
 
 struct bx_date_options {
     const char* progname;
@@ -211,12 +212,11 @@ static bool bx_date_parse_options(int argc, char** argv, struct bx_date_options*
     options->progname = bx_cli_progname((argc > 0) ? argv[0] : NULL, "date");
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "d:f:I::Rr:s:u", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "d:f:I::Rr:s:u", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -466,6 +466,28 @@ static bool parse_date_string(const char* str, struct timespec* ts, const struct
     return false;
 }
 
+static bool bx_date_parse_fixed_decimal_field(const char* text, size_t len, int* value_out) {
+    int value = 0;
+
+    if (text == NULL || value_out == NULL || len == 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)text[i];
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        if (value > (INT_MAX - (int)(ch - '0')) / 10) {
+            return false;
+        }
+        value = value * 10 + (int)(ch - '0');
+    }
+
+    *value_out = value;
+    return true;
+}
+
 static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc) {
     size_t len = strlen(str);
     const char* dot = strchr(str, '.');
@@ -481,8 +503,12 @@ static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc
     }
 
     int month, day, hour, min, year = -1, sec = 0;
-    if (sscanf(str, "%2d%2d%2d%2d", &month, &day, &hour, &min) != 4)
+    if (!bx_date_parse_fixed_decimal_field(str, 2u, &month)
+        || !bx_date_parse_fixed_decimal_field(str + 2, 2u, &day)
+        || !bx_date_parse_fixed_decimal_field(str + 4, 2u, &hour)
+        || !bx_date_parse_fixed_decimal_field(str + 6, 2u, &min)) {
         return false;
+    }
 
     tm.tm_mon = month - 1;
     tm.tm_mday = day;
@@ -491,20 +517,24 @@ static bool parse_legacy_set_time(const char* str, struct timespec* ts, bool utc
 
     if (main_len >= 10) {
         if (main_len == 10) {
-            sscanf(str + 8, "%2d", &year);
+            if (!bx_date_parse_fixed_decimal_field(str + 8, 2u, &year)) {
+                return false;
+            }
             if (year < 69)
                 year += 2000;
             else
                 year += 1900;
         }
         else {
-            sscanf(str + 8, "%4d", &year);
+            if (!bx_date_parse_fixed_decimal_field(str + 8, 4u, &year)) {
+                return false;
+            }
         }
         tm.tm_year = year - 1900;
     }
 
     if (dot) {
-        if (strlen(dot + 1) != 2 || sscanf(dot + 1, "%2d", &sec) != 1) {
+        if (strlen(dot + 1) != 2 || !bx_date_parse_fixed_decimal_field(dot + 1, 2u, &sec)) {
             return false;
         }
         tm.tm_sec = sec;

@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -154,10 +155,14 @@ mode_t bx_mode_current_umask(void) {
 }
 
 bool bx_mode_parse_numeric(const char* text, mode_t max_mode, mode_t* mode_out) {
+    if (text == NULL || mode_out == NULL) {
+        return false;
+    }
+
     errno = 0;
     char* end = NULL;
-    unsigned long value = strtoul(text, &end, 8);
-    if (errno == ERANGE || end == text || end == NULL || end[0] != '\0' || value > (unsigned long)max_mode) {
+    uintmax_t value = strtoumax(text, &end, 8);
+    if (errno != 0 || end == text || end == NULL || end[0] != '\0' || value > (uintmax_t)max_mode) {
         return false;
     }
 

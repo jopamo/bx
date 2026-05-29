@@ -12,6 +12,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 struct bx_expand_options {
     const char* progname;
@@ -113,14 +114,13 @@ static bool bx_expand_parse_options(int argc, char** argv, struct bx_expand_opti
     options->progname = "expand";
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     const char* tabs_str = NULL;
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "it:", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "it:", long_options, &option_index);
         if (c == -1) {
             break;
         }

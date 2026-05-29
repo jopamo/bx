@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct bx_nice_options {
     const char* progname;
@@ -85,11 +86,10 @@ static bool bx_nice_parse_options(int argc, char** argv, struct bx_nice_options*
         }
     }
 
-    opterr = 0;
-    optind = option_start;
+    bx_args_getopt_reset_at(option_start);
 
     while (true) {
-        int c = getopt_long(argc, argv, "+n:", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+n:", long_options, NULL);
         if (c == -1) {
             break;
         }

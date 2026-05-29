@@ -12,6 +12,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 struct bx_fold_options {
     const char* progname;
@@ -46,12 +47,11 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
     options->width = 80;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "bsw:", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "bsw:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -64,8 +64,7 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
                 options->spaces = true;
                 break;
             case 'w':
-                options->width = strtoul(optarg, NULL, 10);
-                if (options->width == 0) {
+                if (!bx_args_parse_size_range(optarg, 1u, (size_t)-1, &options->width)) {
                     bx_diag(diag, "invalid width: '%s'", optarg);
                     return false;
                 }

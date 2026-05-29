@@ -7,182 +7,16 @@
 #include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include "applets/base/which/which.h"
-#include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-
-typedef int (*applet_main_t)(int argc, char** argv);
-
-struct applet {
-    const char* name;
-    applet_main_t main;
-};
-
-/*
- * Boot-critical dispatch order:
- * init is reserved as the first slot by design.
- * switch_root is intentionally kept as the first post-init applet.
- */
-static const struct applet boot_critical_applets[] = {
-    {"init", bx_init_main},
-    {"switch_root", bx_switch_root_main},
-};
-
-static const struct applet applets[] = {
-    {"ash", bx_ash_main},
-    {"sh", bx_ash_main},
-    {"bc", bx_bc_main},
-    {"cat", bx_cat_main},
-    {"cut", bx_cut_main},
-    {"date", bx_date_main},
-    {"which", bx_which_main},
-    {"ln", bx_ln_main},
-    {"link", bx_link_main},
-    {"unlink", bx_unlink_main},
-    {"readlink", bx_readlink_main},
-    {"realpath", bx_realpath_main},
-    {"basename", bx_basename_main},
-    {"dirname", bx_dirname_main},
-    {"dircolors", bx_dircolors_main},
-    {"pathchk", bx_pathchk_main},
-    {"ls", bx_ls_main},
-    {"dir", bx_dir_main},
-    {"vdir", bx_vdir_main},
-    {"stat", bx_stat_main},
-    {"df", bx_df_main},
-    {"du", bx_du_main},
-    {"sync", bx_sync_main},
-    {"dd", bx_dd_main},
-    {"printf", bx_printf_main},
-    {"ed", bx_ed_main},
-    {"vim", bx_vim_main},
-    {"jq", bx_jq_main},
-    {"xxd", bx_xxd_main},
-    {"env", bx_env_main},
-    {"printenv", bx_printenv_main},
-    {"pwd", bx_pwd_main},
-    {"tty", bx_tty_main},
-    {"stty", bx_stty_main},
-    {"screen", bx_screen_main},
-    {"getty", bx_getty_main},
-    {"setsid", bx_setsid_main},
-    {"dhcp", bx_dhcp_main},
-    {"udhcpc", bx_dhcp_main},
-    {"nice", bx_nice_main},
-    {"nohup", bx_nohup_main},
-    {"timeout", bx_timeout_main},
-    {"chroot", bx_chroot_main},
-    {"mount", bx_mount_main},
-    {"umount", bx_umount_main},
-    {"fuser", bx_fuser_main},
-    {"hdparm", bx_hdparm_main},
-    {"kill", bx_kill_main},
-    {"killall", bx_killall_main},
-    {"peekfd", bx_peekfd_main},
-    {"ps", bx_ps_main},
-    {"pslog", bx_pslog_main},
-    {"pstree", bx_pstree_main},
-    {"prtstat", bx_prtstat_main},
-    {"dmesg", bx_dmesg_main},
-    {"reboot", bx_reboot_main},
-    {"halt", bx_reboot_main},
-    {"poweroff", bx_reboot_main},
-    {"chmod", bx_chmod_main},
-    {"chown", bx_chown_main},
-    {"chgrp", bx_chgrp_main},
-    {"rm", bx_rm_main},
-    {"mkdir", bx_mkdir_main},
-    {"rmdir", bx_rmdir_main},
-    {"mkfifo", bx_mkfifo_main},
-    {"mknod", bx_mknod_main},
-    {"mktemp", bx_mktemp_main},
-    {"touch", bx_touch_main},
-    {"tree", bx_tree_main},
-    {"truncate", bx_truncate_main},
-    {"shred", bx_shred_main},
-    {"install", bx_install_main},
-    {"cp", bx_cp_main},
-    {"mv", bx_mv_main},
-    {"nl", bx_nl_main},
-    {"od", bx_od_main},
-    {"paste", bx_paste_main},
-    {"nproc", bx_nproc_main},
-    {"numfmt", bx_numfmt_main},
-    {"nc", bx_nc_main},
-    {"netcat", bx_nc_main},
-    {"wget", bx_wget_main},
-    {"traceroute", bx_traceroute_main},
-    {"ping", bx_ping_main},
-    {"expr", bx_expr_main},
-    {"fold", bx_fold_main},
-    {"head", bx_head_main},
-    {"hostid", bx_hostid_main},
-    {"hostname", bx_hostname_main},
-    {"echo", bx_echo_main},
-    {"expand", bx_expand_main},
-    {"id", bx_id_main},
-    {"logname", bx_logname_main},
-    {"man", bx_man_main},
-    {"mandoc", bx_mandoc_main},
-    {"join", bx_join_main},
-    {"comm", bx_comm_main},
-    {"cksum", bx_cksum_main},
-    {"md5sum", bx_md5sum_main},
-    {"sha1sum", bx_sha1sum_main},
-    {"sha256sum", bx_sha256sum_main},
-    {"base64", bx_base64_main},
-    {"shuf", bx_shuf_main},
-    {"yes", bx_yes_main},
-    {"whoami", bx_whoami_main},
-    {"sleep", bx_sleep_main},
-    {"uname", bx_uname_main},
-    {"wc", bx_wc_main},
-    {"uniq", bx_uniq_main},
-    {"unexpand", bx_unexpand_main},
-    {"sum", bx_sum_main},
-    {"tac", bx_tac_main},
-    {"tail", bx_tail_main},
-    {"tee", bx_tee_main},
-    {"test", bx_test_main},
-    {"[", bx_test_main},
-    {"tr", bx_tr_main},
-    {"seq", bx_seq_main},
-    {"split", bx_split_main},
-    {"sort", bx_sort_main},
-    {"tar", bx_tar_main},
-    {"cpio", bx_cpio_main},
-    {"true", bx_true_main},
-    {"false", bx_false_main},
-    {"grep", bx_grep_main},
-    {"egrep", bx_grep_main},
-    {"fgrep", bx_grep_main},
-    {"rg", bx_rg_main},
-    {"fd", bx_fd_main},
-    {"find", bx_find_main},
-    {"xargs", bx_xargs_main},
-};
+#include "dispatch/dispatch.h"
+#include "lib/status.h"
 
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";
 
 static const char* get_basename(const char* path) {
     const char* base = strrchr(path, '/');
     return base ? base + 1 : path;
-}
-
-static applet_main_t find_applet(const char* name) {
-    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
-        if (strcmp(boot_critical_applets[i].name, name) == 0) {
-            return boot_critical_applets[i].main;
-        }
-    }
-
-    for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
-        if (strcmp(applets[i].name, name) == 0) {
-            return applets[i].main;
-        }
-    }
-    return NULL;
 }
 
 static const char* get_shebang_applet(const char* arg) {
@@ -196,7 +30,7 @@ static const char* get_shebang_applet(const char* arg) {
     return (name[0] != '\0') ? name : NULL;
 }
 
-static int run_shebang_applet(applet_main_t applet_main, int argc, char** argv) {
+static int run_shebang_applet(bx_applet_main_t applet_main, int argc, char** argv) {
     int applet_argc = argc - 2;
     char** applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
     char* applet_argv0 = xstrdup(get_basename(argv[2]));
@@ -207,7 +41,7 @@ static int run_shebang_applet(applet_main_t applet_main, int argc, char** argv) 
     }
     applet_argv[applet_argc] = NULL;
 
-    int rc = applet_main(applet_argc, applet_argv);
+    int rc = bx_status_run_applet(applet_main, applet_argc, applet_argv);
     free(applet_argv0);
     free(applet_argv);
     return rc;
@@ -232,7 +66,13 @@ static char* resolve_self_path(const char* argv0) {
     return xstrdup(argv0 != NULL ? argv0 : "bx");
 }
 
-static int install_one_applet_shortcut(const char* bx_path, const char* install_dir, const char* applet_name, bool symlink_mode) {
+static int install_one_applet_shortcut(
+    const char* bx_path,
+    const char* install_dir,
+    const char* applet_name,
+    bool symlink_mode,
+    struct bx_diag_ctx* diag
+) {
     size_t dir_len = strlen(install_dir);
     size_t applet_len = strlen(applet_name);
     size_t needs_slash = (dir_len > 0 && install_dir[dir_len - 1] == '/') ? 0 : 1;
@@ -249,12 +89,12 @@ static int install_one_applet_shortcut(const char* bx_path, const char* install_
     struct stat st;
     if (lstat(destination_path, &st) == 0) {
         free(destination_path);
-        return 0;
+        return bx_status_success();
     }
     if (errno != ENOENT) {
-        bx_perror(destination_path);
+        bx_perror_path(diag, destination_path);
         free(destination_path);
-        return 1;
+        return bx_status_error();
     }
 
     int rc;
@@ -266,13 +106,13 @@ static int install_one_applet_shortcut(const char* bx_path, const char* install_
     }
 
     if (rc != 0) {
-        bx_perror(destination_path);
+        bx_perror_path(diag, destination_path);
         free(destination_path);
-        return 1;
+        return bx_status_error();
     }
 
     free(destination_path);
-    return 0;
+    return bx_status_success();
 }
 
 static bool applet_shortcut_install_supported(const char* applet_name) {
@@ -285,31 +125,30 @@ static bool applet_shortcut_install_supported(const char* applet_name) {
     return true;
 }
 
-static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode) {
+static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode, struct bx_diag_ctx* diag) {
     if (!path_is_directory(install_dir)) {
-        bx_err("install target is not a directory: %s", install_dir);
-        return 1;
+        bx_diag(diag, "install target is not a directory: '%s'", install_dir);
+        return bx_status_error();
     }
 
-    int status = 0;
-    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
-        if (install_one_applet_shortcut(bx_path, install_dir, boot_critical_applets[i].name, symlink_mode) != 0) {
-            status = 1;
-        }
-    }
-    for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
-        if (!applet_shortcut_install_supported(applets[i].name)) {
+    int status = bx_status_success();
+    for (size_t i = 0; i < bx_dispatch_count(); i++) {
+        const struct bx_dispatch_entry* entry = bx_dispatch_at(i);
+        if (entry == NULL) {
             continue;
         }
-        if (install_one_applet_shortcut(bx_path, install_dir, applets[i].name, symlink_mode) != 0) {
-            status = 1;
+        if (!applet_shortcut_install_supported(entry->name)) {
+            continue;
+        }
+        if (install_one_applet_shortcut(bx_path, install_dir, entry->name, symlink_mode, diag) != 0) {
+            status = bx_status_error();
         }
     }
 
     return status;
 }
 
-static int run_install_mode(int argc, char** argv) {
+static int run_install_mode(int argc, char** argv, struct bx_diag_ctx* diag) {
     bool symlink_mode = false;
     const char* install_dir = ".";
     bool install_dir_set = false;
@@ -320,54 +159,58 @@ static int run_install_mode(int argc, char** argv) {
             printf("usage: bx --install [-s|--symlink] [DIR]\n");
             printf("Install missing applet shortcuts into DIR (default: .).\n");
             printf("By default hard links are created; -s creates symlinks.\n");
-            return 0;
+            return bx_status_success();
         }
         if (strcmp(arg, "-s") == 0 || strcmp(arg, "--symlink") == 0) {
             symlink_mode = true;
             continue;
         }
         if (arg[0] == '-') {
-            bx_err("unknown --install option: %s", arg);
-            return 1;
+            bx_diag(diag, "unknown --install option '%s'", arg);
+            return bx_status_error();
         }
         if (install_dir_set) {
-            bx_err("unexpected --install operand: %s", arg);
-            return 1;
+            bx_diag(diag, "unexpected --install operand '%s'", arg);
+            return bx_status_error();
         }
         install_dir = arg;
         install_dir_set = true;
     }
 
     char* bx_path = resolve_self_path(argv[0]);
-    int rc = install_missing_applets(bx_path, install_dir, symlink_mode);
+    int rc = install_missing_applets(bx_path, install_dir, symlink_mode, diag);
     free(bx_path);
-    return rc;
+    return bx_status_from_applet(rc);
 }
 
 int main(int argc, char** argv) {
     if (argc < 1)
-        return 1;
+        return bx_status_error();
+
+    struct bx_diag_ctx diag = {
+        .progname = "bx",
+    };
 
     const char* progname = get_basename(argv[0]);
-    applet_main_t applet_main = find_applet(progname);
+    bx_applet_main_t applet_main = bx_dispatch_find(progname);
     if (!applet_main && progname[0] == '-' && progname[1] != '\0') {
-        applet_main = find_applet(progname + 1);
+        applet_main = bx_dispatch_find(progname + 1);
     }
 
     if (applet_main) {
-        return applet_main(argc, argv);
+        return bx_status_run_applet(applet_main, argc, argv);
     }
 
     const char* shebang_applet = (argc >= 2) ? get_shebang_applet(argv[1]) : NULL;
     if (shebang_applet) {
-        applet_main = find_applet(shebang_applet);
+        applet_main = bx_dispatch_find(shebang_applet);
         if (!applet_main) {
-            bx_err("unknown applet in shebang wrapper: %s", shebang_applet);
-            return 1;
+            bx_diag(&diag, "unknown applet in shebang wrapper: '%s'", shebang_applet);
+            return bx_status_error();
         }
         if (argc < 3) {
-            bx_err("invalid shebang wrapper invocation");
-            return 1;
+            bx_diag(&diag, "invalid shebang wrapper invocation");
+            return bx_status_error();
         }
         return run_shebang_applet(applet_main, argc, argv);
     }
@@ -381,21 +224,26 @@ int main(int argc, char** argv) {
     }
 
     if (strcmp(argv[1], "--install") == 0) {
-        return run_install_mode(argc, argv);
+        return bx_status_from_applet(run_install_mode(argc, argv, &diag));
     }
 
     if (strcmp(argv[1], "--version") == 0) {
         printf("bx version %s\n", BX_VERSION);
-        return 0;
+        return bx_status_success();
     }
 
-    applet_main = find_applet(argv[1]);
+    if (argv[1][0] == '-') {
+        bx_diag(&diag, "unknown option '%s'", argv[1]);
+        return bx_status_error();
+    }
+
+    applet_main = bx_dispatch_find(argv[1]);
     if (applet_main) {
-        return applet_main(argc - 1, argv + 1);
+        return bx_status_run_applet(applet_main, argc - 1, argv + 1);
     }
 
-    bx_err("unknown subcommand: %s", argv[1]);
-    return 1;
+    bx_diag(&diag, "unknown subcommand '%s'", argv[1]);
+    return bx_status_error();
 
 usage:
     printf("usage: bx SUBCOMMAND [options] ...\n");
@@ -405,11 +253,11 @@ usage:
     printf("Use -s to create symlinks (default is hard links).\n");
     printf("\n");
     printf("Currently supported subcommands:\n");
-    for (size_t i = 0; i < sizeof(boot_critical_applets) / sizeof(boot_critical_applets[0]); i++) {
-        printf("  %s\n", boot_critical_applets[i].name);
+    for (size_t i = 0; i < bx_dispatch_count(); i++) {
+        const struct bx_dispatch_entry* entry = bx_dispatch_at(i);
+        if (entry != NULL) {
+            printf("  %s\n", entry->name);
+        }
     }
-    for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
-        printf("  %s\n", applets[i].name);
-    }
-    return 0;
+    return bx_status_success();
 }

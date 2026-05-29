@@ -8,6 +8,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void sum_bsd(FILE* f, const char* name, bool print_name) {
     uint16_t checksum = 0;
@@ -43,8 +44,8 @@ int bx_sum_main(int argc, char** argv) {
 
     bool sysv = false;
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, ":rshv", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, ":rshv", long_options, NULL)) != -1) {
         switch (c) {
             case 'r':
                 sysv = false;
@@ -81,7 +82,7 @@ int bx_sum_main(int argc, char** argv) {
     for (int i = optind; i < argc; i++) {
         FILE* f = fopen(argv[i], "r");
         if (!f) {
-            bx_perror(argv[i]);
+            bx_perror_path(&diag, argv[i]);
             continue;
         }
         if (sysv)

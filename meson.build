@@ -224,6 +224,21 @@ bx_core_sources = [
   'src/bx/libbx.c',
 ]
 
+dispatch_tables_src = custom_target(
+  'bx-dispatch-tables-c',
+  input : 'src/dispatch/applets.json',
+  output : 'bx_dispatch_tables.c',
+  command : [
+    python3,
+    files('tools/dispatch/generate_dispatch_tables.py'),
+    '@INPUT@',
+    '@OUTPUT@',
+  ],
+  depend_files : files('tools/dispatch/generate_dispatch_tables.py'),
+)
+
+bx_core_sources += [dispatch_tables_src]
+
 bx_lib_sources = [
   'src/lib/cli_common.c',
   'src/lib/args_common.c',
@@ -1221,7 +1236,13 @@ bc_lib2_src = custom_target(
 
 sources += [bc_help_src, bc_lib_src, bc_lib2_src]
 
-applet_names = ['ash', 'sh', 'bc', 'cat', 'cut', 'comm', 'date', 'echo', 'ed', 'man', 'mandoc', 'vim', 'jq', 'xxd', 'expand', 'fold', 'head', 'hostid', 'hostname', 'id', 'join', 'logname', 'nl', 'od', 'paste', 'nproc', 'numfmt', 'nc', 'netcat', 'which', 'ln', 'link', 'unlink', 'readlink', 'realpath', 'basename', 'dirname', 'dircolors', 'pathchk', 'ls', 'dir', 'vdir', 'stat', 'df', 'du', 'sync', 'dd', 'printf', 'env', 'printenv', 'pwd', 'tty', 'stty', 'screen', 'getty', 'hdparm', 'setsid', 'dhcp', 'udhcpc', 'ping', 'nice', 'nohup', 'timeout', 'init', 'switch_root', 'mount', 'umount', 'chroot', 'fuser', 'kill', 'killall', 'peekfd', 'ps', 'pslog', 'pstree', 'prtstat', 'dmesg', 'reboot', 'halt', 'poweroff', 'chmod', 'chown', 'chgrp', 'rm', 'mkdir', 'rmdir', 'mkfifo', 'mknod', 'mktemp', 'touch', 'tree', 'truncate', 'shred', 'install', 'cp', 'mv', 'wget', 'traceroute', 'expr', 'cksum', 'md5sum', 'sha1sum', 'sha256sum', 'base64', 'shuf', 'yes', 'whoami', 'sleep', 'uname', 'wc', 'uniq', 'unexpand', 'sum', 'tac', 'tail', 'tee', 'test', '[', 'tr', 'seq', 'split', 'sort', 'tar', 'cpio', 'true', 'false', 'grep', 'egrep', 'fgrep', 'rg', 'fd', 'find', 'xargs']
+applet_names = run_command(
+  python3,
+  files('tools/dispatch/generate_dispatch_tables.py'),
+  '--meson-list',
+  files('src/dispatch/applets.json'),
+  check : true,
+).stdout().strip().split('\n')
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')

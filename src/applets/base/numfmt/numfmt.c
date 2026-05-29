@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 enum unit_type { UNIT_NONE, UNIT_SI, UNIT_IEC, UNIT_IEC_I, UNIT_AUTO };
 
@@ -198,12 +199,11 @@ static enum bx_numfmt_parse_status bx_numfmt_parse_options(
     options->field = 1;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "", long_options, &option_index);
         if (c == -1) {
             break;
         }

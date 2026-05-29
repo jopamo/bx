@@ -9,6 +9,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 enum {
     BX_UNEXPAND_OPT_FIRST_ONLY = 256,
@@ -88,11 +89,10 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
     options->tab_size = 8;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, ":at:", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, ":at:", long_options, NULL);
         if (c == -1) {
             break;
         }

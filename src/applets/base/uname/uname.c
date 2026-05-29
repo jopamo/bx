@@ -7,6 +7,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 static void bx_uname_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]...\n", progname);
@@ -50,9 +51,8 @@ int bx_uname_main(int argc, char** argv) {
     int opt_a = 0, opt_s = 0, opt_n = 0, opt_r = 0, opt_v = 0, opt_m = 0, opt_p = 0, opt_i = 0, opt_o = 0;
     int c;
 
-    opterr = 0;
-    optind = 1;
-    while ((c = getopt_long(argc, argv, "asnrvmpio", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, "asnrvmpio", long_options, NULL)) != -1) {
         switch (c) {
             case 'a':
                 opt_a = 1;

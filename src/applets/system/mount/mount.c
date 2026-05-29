@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/mount_table.h"
+#include "lib/args_common.h"
 
 #ifndef MS_MANDLOCK
 #define MS_MANDLOCK 0ul
@@ -340,11 +341,10 @@ static bool bx_mount_parse_options(int argc, char** argv, struct bx_mount_option
     diag->progname = options->progname;
     diag->verbose = false;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:BMo:t:rwnRL:U:v", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:BMo:t:rwnRL:U:v", long_options, NULL);
         if (c == -1) {
             break;
         }

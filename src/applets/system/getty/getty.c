@@ -19,6 +19,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
+#include "lib/args_common.h"
 
 enum bx_getty_clocal_mode {
     BX_GETTY_CLOCAL_AUTO = 0,
@@ -286,11 +287,10 @@ static bool bx_getty_parse_options(int argc, char** argv, struct bx_getty_option
     options->clocal_mode = BX_GETTY_CLOCAL_AUTO;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "8a:hiJl:L::no:t:", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "8a:hiJl:L::no:t:", long_options, NULL);
         if (c == -1) {
             break;
         }

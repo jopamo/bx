@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
+#include "lib/args_common.h"
 
 enum numbering_style { STYLE_ALL, STYLE_NONEMPTY, STYLE_NONE, STYLE_REGEX };
 
@@ -124,12 +126,11 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
     options->number_width = 6;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "b:d:f:h:i:l:n:ps:v:w:", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "b:d:f:h:i:l:n:ps:v:w:", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -161,10 +162,16 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
                     return false;
                 break;
             case 'i':
-                options->line_increment = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->line_increment)) {
+                    bx_diag(diag, "invalid line increment: '%s'", optarg);
+                    return false;
+                }
                 break;
             case 'l':
-                options->join_blank_lines = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->join_blank_lines)) {
+                    bx_diag(diag, "invalid blank line count: '%s'", optarg);
+                    return false;
+                }
                 break;
             case 'n':
                 options->number_format = optarg;
@@ -176,10 +183,16 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
                 options->number_separator = optarg;
                 break;
             case 'v':
-                options->starting_line_number = atoll(optarg);
+                if (!bx_args_parse_llong_range(optarg, LLONG_MIN, LLONG_MAX, &options->starting_line_number)) {
+                    bx_diag(diag, "invalid starting line number: '%s'", optarg);
+                    return false;
+                }
                 break;
             case 'w':
-                options->number_width = atoi(optarg);
+                if (!bx_args_parse_int_range(optarg, INT_MIN, INT_MAX, &options->number_width)) {
+                    bx_diag(diag, "invalid number width: '%s'", optarg);
+                    return false;
+                }
                 break;
             case 1:
                 options->show_help = true;

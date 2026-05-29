@@ -15,6 +15,7 @@
 #include "crypto/sha1.h"
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
+#include "lib/args_common.h"
 
 enum {
     CKSUM_EXIT_OK = 0,
@@ -280,11 +281,10 @@ static bool cksum_parse_options(int argc, char** argv, struct cksum_options* opt
     options->algorithm = CKSUM_ALGORITHM_CRC;
     options->output_mode = CKSUM_OUTPUT_AUTO;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:a:cl:wz", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:a:cl:wz", long_options, NULL);
         if (c == -1) {
             break;
         }
@@ -881,15 +881,31 @@ static bool cksum_algorithm_is_numeric(enum cksum_algorithm algorithm) {
     return algorithm == CKSUM_ALGORITHM_CRC || algorithm == CKSUM_ALGORITHM_CRC32B || algorithm == CKSUM_ALGORITHM_SYSV || algorithm == CKSUM_ALGORITHM_BSD;
 }
 
+static bool cksum_parse_numeric_check_field(const char* text, uintmax_t max_value, uintmax_t* out_value, char** out_end) {
+    if (text == NULL || out_value == NULL || out_end == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t parsed = strtoumax(text, &end, 10);
+    if (end == text || end == NULL || errno != 0 || parsed > max_value) {
+        return false;
+    }
+
+    *out_value = parsed;
+    *out_end = end;
+    return true;
+}
+
 static bool cksum_parse_numeric_check_line(char* line, uint32_t* out_value, uintmax_t* out_metric, const char** out_filename) {
     if (line == NULL || out_value == NULL || out_metric == NULL || out_filename == NULL) {
         return false;
     }
 
-    errno = 0;
     char* value_end = NULL;
-    uintmax_t parsed_value = strtoumax(line, &value_end, 10);
-    if (value_end == line || value_end == NULL || errno == ERANGE || parsed_value > UINT32_MAX) {
+    uintmax_t parsed_value = 0;
+    if (!cksum_parse_numeric_check_field(line, UINT32_MAX, &parsed_value, &value_end)) {
         return false;
     }
     if (*value_end != ' ') {
@@ -897,10 +913,9 @@ static bool cksum_parse_numeric_check_line(char* line, uint32_t* out_value, uint
     }
 
     char* metric_start = value_end + 1;
-    errno = 0;
     char* metric_end = NULL;
-    uintmax_t parsed_metric = strtoumax(metric_start, &metric_end, 10);
-    if (metric_end == metric_start || metric_end == NULL || errno == ERANGE) {
+    uintmax_t parsed_metric = 0;
+    if (!cksum_parse_numeric_check_field(metric_start, UINTMAX_MAX, &parsed_metric, &metric_end)) {
         return false;
     }
     if (*metric_end != ' ') {

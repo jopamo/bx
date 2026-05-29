@@ -7,6 +7,7 @@
 #include "applets.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 enum {
     BX_CHGRP_OPT_HELP = 1,
@@ -83,12 +84,11 @@ static void bx_chgrp_parse_options(int argc, char** argv, struct bx_chgrp_parse_
     result->ok = true;
     result->group_operand_index = -1;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+:RcfhHLPv", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+:RcfhHLPv", long_options, &option_index);
         if (c == -1) {
             break;
         }

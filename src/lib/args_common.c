@@ -1,11 +1,92 @@
+#include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
-#include <string.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "args_common.h"
 #include "copy_metadata.h"
 #include "update_policy.h"
 #include "bx/libbx.h"
+
+void bx_args_getopt_reset_at(int first_option_index) {
+    opterr = 0;
+    optind = first_option_index;
+}
+
+void bx_args_getopt_reset(void) {
+    bx_args_getopt_reset_at(1);
+}
+
+int bx_args_getopt_long(
+    int argc,
+    char* const argv[],
+    const char* short_options,
+    const struct option* long_options,
+    int* long_index
+) {
+    return getopt_long(argc, argv, short_options, long_options, long_index);
+}
+
+bool bx_args_parse_int_range(const char* arg, int min_value, int max_value, int* value_out) {
+    if (arg == NULL || arg[0] == '\0' || value_out == NULL || min_value > max_value) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(arg, &end, 10);
+    if (errno == ERANGE || end == arg || end == NULL || end[0] != '\0') {
+        return false;
+    }
+    if (value < (intmax_t)min_value || value > (intmax_t)max_value) {
+        return false;
+    }
+
+    *value_out = (int)value;
+    return true;
+}
+
+bool bx_args_parse_llong_range(const char* arg, long long min_value, long long max_value, long long* value_out) {
+    if (arg == NULL || arg[0] == '\0' || value_out == NULL || min_value > max_value) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    intmax_t value = strtoimax(arg, &end, 10);
+    if (errno == ERANGE || end == arg || end == NULL || end[0] != '\0') {
+        return false;
+    }
+    if (value < (intmax_t)min_value || value > (intmax_t)max_value) {
+        return false;
+    }
+
+    *value_out = (long long)value;
+    return true;
+}
+
+bool bx_args_parse_size_range(const char* arg, size_t min_value, size_t max_value, size_t* value_out) {
+    if (arg == NULL || arg[0] == '\0' || arg[0] == '-' || value_out == NULL || min_value > max_value) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    uintmax_t value = strtoumax(arg, &end, 10);
+    if (errno == ERANGE || end == arg || end == NULL || end[0] != '\0') {
+        return false;
+    }
+    if (value < (uintmax_t)min_value || value > (uintmax_t)max_value) {
+        return false;
+    }
+
+    *value_out = (size_t)value;
+    return true;
+}
 
 bool bx_args_parse_preserve_list(const char* arg, unsigned* mask, bool set_bits, bool* mode_mentioned_out, char** invalid_token_out) {
     char* copy = xstrdup(arg);

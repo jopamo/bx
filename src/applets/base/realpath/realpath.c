@@ -12,6 +12,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -81,12 +82,11 @@ static bool bx_realpath_parse_options(int argc, char** argv, struct bx_realpath_
     options->symlink_mode = BX_REALPATH_SYMLINK_PHYSICAL;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+EeLmPqsz", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+EeLmPqsz", long_options, &option_index);
         if (c == -1) {
             break;
         }

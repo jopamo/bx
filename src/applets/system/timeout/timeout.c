@@ -15,6 +15,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 struct bx_timeout_options {
     const char* progname;
@@ -190,11 +191,10 @@ static bool bx_timeout_parse_options(int argc, char** argv, struct bx_timeout_op
     options->timeout_signal = SIGTERM;
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
 
     while (true) {
-        int c = getopt_long(argc, argv, "+:s:k:v", long_options, NULL);
+        int c = bx_args_getopt_long(argc, argv, "+:s:k:v", long_options, NULL);
         if (c == -1) {
             break;
         }

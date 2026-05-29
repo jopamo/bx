@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/args_common.h"
 
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,
@@ -1147,8 +1148,8 @@ int bx_sort_main(int argc, char** argv) {
     bool has_global_mode = false;
 
     int c;
-    opterr = 0;
-    while ((c = getopt_long(argc, argv, ":bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
+    bx_args_getopt_reset();
+    while ((c = bx_args_getopt_long(argc, argv, ":bhnrufo:cCszt:k:V", long_options, NULL)) != -1) {
         switch (c) {
             case 'b':
                 opts.ignore_leading_blanks = true;

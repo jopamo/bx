@@ -22,6 +22,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/args_common.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -909,15 +910,14 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
     bx_ls_options_init(options, variant, (argc > 0) ? argv[0] : NULL);
     diag->progname = options->progname;
 
-    opterr = 0;
-    optind = 1;
+    bx_args_getopt_reset();
     unsigned long option_order = 0u;
     unsigned long explicit_sort_order = 0u;
     unsigned long short_time_sort_order = 0u;
 
     while (true) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "+1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &option_index);
+        int c = bx_args_getopt_long(argc, argv, "+1ABCDfFGHI:kLNQRST:UXZabcdghilmnopqrstuvw:x", long_options, &option_index);
         if (c == -1) {
             break;
         }
