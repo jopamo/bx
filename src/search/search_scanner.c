@@ -84,7 +84,8 @@ bool bx_search_scanner_can_raw_shortcut_file_presence(const struct bx_matcher *m
 
     if (!bx_search_scanner_can_shortcut_file_presence(opts))
         return false;
-    if (opts->binary_without_match && !opts->quiet)
+    if (opts->binary_without_match && !opts->quiet &&
+        !(opts->files_with_matches || opts->files_without_match))
         return false;
     literal = bx_search_matcher_literal(m);
     return literal != NULL

@@ -392,3 +392,55 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
     bx_search_dev_counters_note_record_materialized();
     return (ssize_t)len;
 }
+
+ssize_t bx_record_stream_read_live(FILE *f, struct bx_record_stream *stream, char delimiter) {
+    size_t len = 0u;
+
+    if (!f || !stream)
+        return -1;
+
+    stream->errnum = 0;
+    if (!bx_record_stream_reserve_record(stream, 0u)) {
+        stream->errnum = ENOMEM;
+        return -1;
+    }
+    stream->record[0] = '\0';
+
+    for (;;) {
+        size_t available = bx_record_stream_pending_available(stream);
+        if (available > 0u) {
+            const unsigned char *pending = stream->pending + stream->pending_off;
+            const unsigned char *hit = memchr(pending, (unsigned char)delimiter, available);
+            size_t take = hit ? (size_t)(hit - pending) + 1u : available;
+
+            if (!bx_record_stream_append_record(stream, &len, pending, take))
+                return -1;
+            stream->pending_off += take;
+            if (stream->pending_off == stream->pending_len)
+                bx_record_stream_reset_pending(stream);
+            if (hit)
+                break;
+        }
+
+        int ch = getc(f);
+        if (ch == EOF) {
+            if (ferror(f)) {
+                stream->errnum = errno ? errno : EIO;
+                return -1;
+            }
+            if (len == 0u)
+                return -1;
+            break;
+        }
+
+        unsigned char byte = (unsigned char)ch;
+        bx_search_dev_counters_note_content_read(1u);
+        if (!bx_record_stream_append_record(stream, &len, &byte, 1u))
+            return -1;
+        if (byte == (unsigned char)delimiter)
+            break;
+    }
+
+    bx_search_dev_counters_note_record_materialized();
+    return (ssize_t)len;
+}

@@ -481,7 +481,7 @@ static int search_file_handle_binary_prefix(FILE *f,
         return -1;
 
     bx_search_dev_counters_note_binary_policy_check();
-    if (opts->binary_without_match) {
+    if (opts->binary_without_match && !opts->quiet) {
         bx_search_dev_counters_note_file_cut_off_by_binary_prefix();
         if (!use_stdin)
             fclose(f);
@@ -847,24 +847,26 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
     }
 
     display_name = search_file_resolve_display_name(display_name_state, opts);
-    if (exec_plan && exec_plan->raw_presence_supported) {
-        return search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
-                                             f, false, filename, display_name, progname,
-                                             m, opts, match_count, scanner, record_stream,
-                                             stats);
-    }
-
     {
         int binary_result = search_file_handle_binary_prefix(
             f, false, display_name, progname, m, opts, match_count, record_stream, stats
         );
-        if (binary_result >= 0)
+        if (binary_result >= 0) {
+            if (candidate_triggered && opts->binary_without_match)
+                bx_search_dev_counters_note_literal_candidate_hit();
             return binary_result;
+        }
         if (binary_result == -2) {
             return search_file_run_opened_kernel(
                 exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
                 f, false, filename, display_name, progname, m, opts,
                 match_count, scanner, record_stream, stats);
+        }
+        if (exec_plan && exec_plan->raw_presence_supported) {
+            return search_file_run_opened_kernel(BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
+                                                 f, false, filename, display_name, progname,
+                                                 m, opts, match_count, scanner, record_stream,
+                                                 stats);
         }
 
         enum bx_search_file_kernel_kind nonbinary_kernel =
@@ -1070,26 +1072,33 @@ static int search_file(const char *filename,
         enum bx_search_file_kernel_kind stdin_kernel =
             exec_plan ? exec_plan->stdin_path_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
         FILE *f;
-        int binary_result;
         const char *display_name;
+        bool defer_binary_prefix_probe =
+            bx_search_streaming_uses_line_buffered_stdin(opts, true);
 
         f = bx_search_input_open_stream(filename, progname, opts, record_stream, NULL);
         if (!f)
             goto out_error;
+        if (defer_binary_prefix_probe)
+            setvbuf(f, NULL, _IONBF, 0);
 
         display_name = search_file_resolve_display_name(&display_name_state, opts);
-        binary_result = search_file_handle_binary_prefix(f, true, display_name, progname, m,
-                                                         opts, match_count, record_stream, stats);
-        if (binary_result >= 0) {
-            result = binary_result;
-            goto out;
-        }
-        if (binary_result == -2) {
-            result = search_file_run_opened_kernel(
-                exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
-                f, true, filename, display_name, progname, m, opts,
-                match_count, scanner, record_stream, stats);
-            goto out;
+        if (!defer_binary_prefix_probe) {
+            int binary_result = search_file_handle_binary_prefix(
+                f, true, display_name, progname, m, opts, match_count, record_stream, stats
+            );
+
+            if (binary_result >= 0) {
+                result = binary_result;
+                goto out;
+            }
+            if (binary_result == -2) {
+                result = search_file_run_opened_kernel(
+                    exec_plan ? exec_plan->binary_search_kernel : BX_SEARCH_FILE_KERNEL_STREAMING,
+                    f, true, filename, display_name, progname, m, opts,
+                    match_count, scanner, record_stream, stats);
+                goto out;
+            }
         }
 
         result = search_file_run_opened_kernel(stdin_kernel,

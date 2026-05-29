@@ -501,7 +501,7 @@ static void bx_search_parallel_process_job(void *user,
             job_status = 2;
             continue;
         }
-        if (status == 0) {
+        if (bx_search_status_counts_as_selected(BX_SEARCH_RG, state->opts, status)) {
             job_match_seen = true;
             if (job_status != 2)
                 job_status = 0;

@@ -18,6 +18,16 @@ bool bx_search_streaming_uses_line_buffered_stdin(const struct search_opts *opts
            !opts->files_with_matches && !opts->files_without_match;
 }
 
+static void bx_search_streaming_maybe_flush_line_buffered(const struct search_opts *opts) {
+    FILE *out;
+
+    if (!opts || !opts->line_buffered)
+        return;
+    out = bx_search_output_stream();
+    if (out)
+        fflush(out);
+}
+
 int bx_search_streaming_opened(FILE *f,
                                bool use_stdin,
                                const char *display_name,
@@ -42,7 +52,10 @@ int bx_search_streaming_opened(FILE *f,
     if (stats)
         stats->files_searched++;
 
-    while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
+    while ((len = line_buffered_stdin_binary_watch
+                      ? bx_record_stream_read_live(f, record_stream,
+                                                   bx_search_record_delimiter(opts))
+                      : bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *line = record_stream->record;
         size_t line_offset = file_offset;
         size_t record_len = (size_t)len;
@@ -128,9 +141,11 @@ int bx_search_streaming_opened(FILE *f,
                     if (len == 0 || line[len - 1] != bx_search_record_delimiter(opts))
                         bx_search_write_record_terminator(opts);
                     bx_search_dev_counters_note_output_line_emitted();
+                    bx_search_streaming_maybe_flush_line_buffered(opts);
                     stdout_emitted = true;
                 } else if (opts->replace) {
                     bx_search_print_replaced_record((unsigned char *)line, record_len, m, opts);
+                    bx_search_streaming_maybe_flush_line_buffered(opts);
                     stdout_emitted = true;
                 } else {
                     if (bx_search_should_omit_long_match_line(opts, record_len)) {
@@ -153,6 +168,7 @@ int bx_search_streaming_opened(FILE *f,
                                                              color,
                                                              delimiter);
                     }
+                    bx_search_streaming_maybe_flush_line_buffered(opts);
                     stdout_emitted = true;
                 }
             }
@@ -173,6 +189,7 @@ int bx_search_streaming_opened(FILE *f,
             if (len == 0 || line[len - 1] != bx_search_record_delimiter(opts))
                 bx_search_write_record_terminator(opts);
             bx_search_dev_counters_note_output_line_emitted();
+            bx_search_streaming_maybe_flush_line_buffered(opts);
             stdout_emitted = true;
         } else if (opts->stop_on_nonmatch && saw_match_record) {
             break;
@@ -206,6 +223,7 @@ int bx_search_streaming_opened(FILE *f,
         else
             bx_search_printf_out("%s\n", display_name);
         bx_search_dev_counters_note_output_line_emitted();
+        bx_search_streaming_maybe_flush_line_buffered(opts);
     }
     if (opts->files_without_match && file_matches == 0 && display_name) {
         if (opts->null_output)
@@ -213,6 +231,7 @@ int bx_search_streaming_opened(FILE *f,
         else
             bx_search_printf_out("%s\n", display_name);
         bx_search_dev_counters_note_output_line_emitted();
+        bx_search_streaming_maybe_flush_line_buffered(opts);
     }
     if (stats && file_matches > 0)
         stats->files_with_matches++;

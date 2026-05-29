@@ -277,5 +277,8 @@ struct bx_walk_ignore_opts bx_search_make_ignore_opts(const char *progname,
                                                       const struct search_opts *opts);
 bool bx_search_explicit_entry_selected(const struct search_opts *opts,
                                        const char *path);
+bool bx_search_status_counts_as_selected(enum bx_search_personality personality,
+                                         const struct search_opts *opts,
+                                         int status);
 
 #endif

@@ -19,6 +19,7 @@
 #include "traverse.h"
 
 struct grep_walk_state {
+    enum bx_search_personality personality;
     struct bx_matcher *matcher;
     const struct bx_search_exec_plan *exec_plan;
     struct search_opts *opts;
@@ -139,7 +140,7 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
             *state->error_seen = true;
         return BX_WALK_CONTINUE;
     }
-    if (rc == 0) {
+    if (bx_search_status_counts_as_selected(state->personality, state->opts, rc)) {
         *state->exit_status = 0;
         if (state->match_seen)
             *state->match_seen = true;
@@ -286,6 +287,17 @@ static int bx_search_run_status_from_flags(const struct search_opts *opts,
     if (error_seen)
         return 2;
     return match_seen ? 0 : 1;
+}
+
+bool bx_search_status_counts_as_selected(enum bx_search_personality personality,
+                                         const struct search_opts *opts,
+                                         int status) {
+    if (status == 2)
+        return false;
+    if (personality == BX_SEARCH_RG &&
+        opts && opts->files_without_match && !opts->files_with_matches)
+        return status == 1;
+    return status == 0;
 }
 
 static int bx_search_run_files_only(const struct bx_search_run_args *args) {
@@ -466,7 +478,7 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
                                        args->stats);
         if (rc == 2) {
             *error_seen = true;
-        } else if (rc == 0) {
+        } else if (bx_search_status_counts_as_selected(args->personality, args->opts, rc)) {
             *match_seen = true;
             if (args->opts->quiet)
                 break;
@@ -494,6 +506,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
             || (!bx_search_run_personality_is_rg(args->personality) && args->opts->recursive)) {
             bool stop = false;
             struct grep_walk_state state = {
+                .personality = args->personality,
                 .matcher = matcher,
                 .exec_plan = exec_plan,
                 .opts = args->opts,
@@ -531,7 +544,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                            args->opts,
                                            &global_matches, scanner, record_stream,
                                            args->stats);
-            if (rc == 0)
+            if (bx_search_status_counts_as_selected(args->personality, args->opts, rc))
                 *match_seen = true;
             else if (rc == 2)
                 *error_seen = true;
@@ -542,6 +555,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
     if (args->opts->recursive) {
         bool stop = false;
         struct grep_walk_state state = {
+            .personality = args->personality,
             .matcher = matcher,
             .exec_plan = exec_plan,
             .opts = args->opts,
@@ -647,7 +661,7 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                        record_stream, args->stats);
         if (rc == 2) {
             *error_seen = true;
-        } else if (rc == 0) {
+        } else if (bx_search_status_counts_as_selected(args->personality, args->opts, rc)) {
             *match_seen = true;
             if (args->opts->quiet)
                 break;

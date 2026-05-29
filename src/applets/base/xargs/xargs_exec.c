@@ -23,10 +23,15 @@ static void xargs_record_status(const char *progname, const char *cmdname,
                 cmdname, strerror(status));
         *abort_launch = true;
     } else if (WIFSIGNALED(status)) {
-        rc = 125;
-        fprintf(stderr, "%s: %s: terminated by signal %d\n", progname,
-                cmdname, WTERMSIG(status));
-        *abort_launch = true;
+        int signo = WTERMSIG(status);
+        if (signo == SIGPIPE) {
+            rc = 123;
+        } else {
+            rc = 125;
+            fprintf(stderr, "%s: %s: terminated by signal %d\n", progname,
+                    cmdname, signo);
+            *abort_launch = true;
+        }
     } else if (WIFEXITED(status)) {
         int exit_code = WEXITSTATUS(status);
         if (exit_code == 255) {

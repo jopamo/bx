@@ -31,7 +31,7 @@ int bx_seq_main(int argc, char** argv) {
     bool equal_width = false;
     int c;
     opterr = 0;
-    while ((c = getopt_long(argc, argv, ":f:s:whv", long_options, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "+:f:s:whv", long_options, NULL)) != -1) {
         switch (c) {
             case 'f':
                 format = optarg;
