@@ -20,6 +20,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
 
@@ -329,86 +330,47 @@ static enum bx_od_parse_result bx_od_parse_prefixed_uint(const char* text,
 }
 
 static enum bx_od_parse_result bx_od_parse_byte_suffix(const char* suffix, uintmax_t* multiplier_out) {
+    char canonical[4];
     char prefix;
-    unsigned int power = 0u;
-    unsigned int base = 0u;
-    uintmax_t value = 1u;
+    enum bx_size_suffix_parse_result status;
 
     if (suffix == NULL || multiplier_out == NULL) {
         return BX_OD_PARSE_INVALID;
     }
 
-    if (suffix[0] == '\0') {
-        *multiplier_out = 1u;
-        return BX_OD_PARSE_OK;
-    }
-
-    if (strcmp(suffix, "b") == 0) {
-        *multiplier_out = 512u;
-        return BX_OD_PARSE_OK;
-    }
-
-    prefix = suffix[0];
-    if (prefix == 'k') {
-        prefix = 'K';
-    }
-
-    switch (prefix) {
-        case 'K':
-            power = 1u;
-            break;
-        case 'M':
-            power = 2u;
-            break;
-        case 'G':
-            power = 3u;
-            break;
-        case 'T':
-            power = 4u;
-            break;
-        case 'P':
-            power = 5u;
-            break;
-        case 'E':
-            power = 6u;
-            break;
-        case 'Z':
-            power = 7u;
-            break;
-        case 'Y':
-            power = 8u;
-            break;
-        case 'R':
-            power = 9u;
-            break;
-        case 'Q':
-            power = 10u;
-            break;
-        default:
-            return BX_OD_PARSE_INVALID;
-    }
-
-    if (suffix[1] == '\0') {
-        base = 1024u;
-    }
-    else if ((suffix[1] == 'B' || suffix[1] == 'b') && suffix[2] == '\0') {
-        base = 1000u;
-    }
-    else if ((suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b') && suffix[3] == '\0') {
-        base = 1024u;
+    if (suffix[0] == '\0' || strcmp(suffix, "b") == 0) {
+        status = bx_size_suffix_multiplier_result(suffix, multiplier_out);
     }
     else {
-        return BX_OD_PARSE_INVALID;
-    }
-
-    for (unsigned int i = 0u; i < power; i++) {
-        if (!bx_od_safe_mul(value, (uintmax_t)base, &value)) {
-            return BX_OD_PARSE_TOO_LARGE;
+        prefix = suffix[0] == 'k' ? 'K' : suffix[0];
+        if (strchr("KMGTPEZYRQ", prefix) == NULL) {
+            return BX_OD_PARSE_INVALID;
         }
+
+        canonical[0] = prefix;
+        if (suffix[1] == '\0') {
+            canonical[1] = '\0';
+        }
+        else if ((suffix[1] == 'B' || suffix[1] == 'b') && suffix[2] == '\0') {
+            canonical[1] = 'B';
+            canonical[2] = '\0';
+        }
+        else if ((suffix[1] == 'i' || suffix[1] == 'I') && (suffix[2] == 'B' || suffix[2] == 'b') && suffix[3] == '\0') {
+            canonical[1] = 'i';
+            canonical[2] = 'B';
+            canonical[3] = '\0';
+        }
+        else {
+            return BX_OD_PARSE_INVALID;
+        }
+
+        status = bx_size_suffix_multiplier_result(canonical, multiplier_out);
     }
 
-    *multiplier_out = value;
-    return BX_OD_PARSE_OK;
+    if (status == BX_SIZE_SUFFIX_PARSE_OK) {
+        return BX_OD_PARSE_OK;
+    }
+    return status == BX_SIZE_SUFFIX_PARSE_TOO_LARGE ? BX_OD_PARSE_TOO_LARGE : BX_OD_PARSE_INVALID;
 }
 
 static enum bx_od_parse_result bx_od_parse_bytes(const char* text, uintmax_t* value_out) {
@@ -1844,6 +1806,43 @@ static bool bx_od_long_double_bits_equal(long double a, long double b) {
     return false;
 }
 
+static bool bx_od_generated_float_candidate_matches(const char* candidate, float value) {
+    char* end = NULL;
+    float parsed;
+
+    /*
+     * This strto* use is intentionally scoped to internally generated
+     * snprintf() candidates under the C numeric locale. It is a round-trip
+     * oracle for shortest-format selection, not an external input parser.
+     */
+    parsed = strtof(candidate, &end);
+    return end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value);
+}
+
+static bool bx_od_generated_double_candidate_matches(const char* candidate, double value) {
+    char* end = NULL;
+    double parsed;
+
+    /*
+     * See bx_od_generated_float_candidate_matches(): generated output
+     * candidates are parsed only to verify exact round-trip formatting.
+     */
+    parsed = strtod(candidate, &end);
+    return end != NULL && *end == '\0' && bx_od_double_bits_equal(parsed, value);
+}
+
+static bool bx_od_generated_long_double_candidate_matches(const char* candidate, long double value) {
+    char* end = NULL;
+    long double parsed;
+
+    /*
+     * See bx_od_generated_float_candidate_matches(): this is an internal
+     * generated-candidate round-trip check, not an input boundary.
+     */
+    parsed = strtold(candidate, &end);
+    return end != NULL && *end == '\0' && bx_od_long_double_bits_equal(parsed, value);
+}
+
 static void bx_od_format_shortest_float(float value, char* out, size_t out_size) {
     char candidate[128];
     char* saved_locale = bx_od_push_c_numeric_locale();
@@ -1862,12 +1861,8 @@ static void bx_od_format_shortest_float(float value, char* out, size_t out_size)
     }
 
     for (int precision = min_precision; precision <= max_precision; precision++) {
-        char* end = NULL;
-        float parsed;
-
         snprintf(candidate, sizeof(candidate), "%.*g", precision, (double)value);
-        parsed = strtof(candidate, &end);
-        if (end != NULL && *end == '\0' && bx_od_float_bits_equal(parsed, value)) {
+        if (bx_od_generated_float_candidate_matches(candidate, value)) {
             snprintf(out, out_size, "%s", candidate);
             bx_od_pop_numeric_locale(saved_locale);
             return;
@@ -1896,12 +1891,8 @@ static void bx_od_format_shortest_double(double value, char* out, size_t out_siz
     }
 
     for (int precision = min_precision; precision <= max_precision; precision++) {
-        char* end = NULL;
-        double parsed;
-
         snprintf(candidate, sizeof(candidate), "%.*g", precision, value);
-        parsed = strtod(candidate, &end);
-        if (end != NULL && *end == '\0' && bx_od_double_bits_equal(parsed, value)) {
+        if (bx_od_generated_double_candidate_matches(candidate, value)) {
             snprintf(out, out_size, "%s", candidate);
             bx_od_pop_numeric_locale(saved_locale);
             return;
@@ -1932,12 +1923,8 @@ static void bx_od_format_shortest_long_double(long double value, char* out, size
     }
 
     for (int precision = min_precision; precision <= max_precision; precision++) {
-        char* end = NULL;
-        long double parsed;
-
         snprintf(candidate, sizeof(candidate), "%.*Lg", precision, value);
-        parsed = strtold(candidate, &end);
-        if (end != NULL && *end == '\0' && bx_od_long_double_bits_equal(parsed, value)) {
+        if (bx_od_generated_long_double_candidate_matches(candidate, value)) {
             snprintf(out, out_size, "%s", candidate);
             bx_od_pop_numeric_locale(saved_locale);
             return;

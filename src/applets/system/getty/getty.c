@@ -22,6 +22,7 @@
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
 #include "lib/size_parse.h"
+#include "lib/tty_speed.h"
 
 enum bx_getty_clocal_mode {
     BX_GETTY_CLOCAL_AUTO = 0,
@@ -50,62 +51,6 @@ struct bx_getty_options {
     const char* termtype;
 };
 
-struct bx_getty_baud_entry {
-    const char* text;
-    speed_t speed;
-};
-
-static const struct bx_getty_baud_entry bx_getty_baud_table[] = {
-    {"0", B0},           {"50", B50},       {"75", B75},        {"110", B110},     {"134", B134},     {"150", B150},     {"200", B200},
-    {"300", B300},       {"600", B600},     {"1200", B1200},    {"1800", B1800},   {"2400", B2400},   {"4800", B4800},   {"9600", B9600},
-    {"19200", B19200},   {"38400", B38400},
-#ifdef B57600
-    {"57600", B57600},
-#endif
-#ifdef B115200
-    {"115200", B115200},
-#endif
-#ifdef B230400
-    {"230400", B230400},
-#endif
-#ifdef B460800
-    {"460800", B460800},
-#endif
-#ifdef B500000
-    {"500000", B500000},
-#endif
-#ifdef B576000
-    {"576000", B576000},
-#endif
-#ifdef B921600
-    {"921600", B921600},
-#endif
-#ifdef B1000000
-    {"1000000", B1000000},
-#endif
-#ifdef B1152000
-    {"1152000", B1152000},
-#endif
-#ifdef B1500000
-    {"1500000", B1500000},
-#endif
-#ifdef B2000000
-    {"2000000", B2000000},
-#endif
-#ifdef B2500000
-    {"2500000", B2500000},
-#endif
-#ifdef B3000000
-    {"3000000", B3000000},
-#endif
-#ifdef B3500000
-    {"3500000", B3500000},
-#endif
-#ifdef B4000000
-    {"4000000", B4000000},
-#endif
-};
-
 static void bx_getty_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage:\n");
     fprintf(stream, " %s [options] <line> [<baud_rate>,...] [<termtype>]\n", progname);
@@ -131,13 +76,17 @@ static void bx_getty_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_getty_parse_baud_rate(const char* text, speed_t* speed_out) {
-    for (size_t i = 0; i < sizeof(bx_getty_baud_table) / sizeof(bx_getty_baud_table[0]); i++) {
-        if (strcmp(text, bx_getty_baud_table[i].text) == 0) {
-            *speed_out = bx_getty_baud_table[i].speed;
-            return true;
+    if (text == NULL || text[0] == '\0') {
+        return false;
+    }
+
+    for (const char* p = text; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
         }
     }
-    return false;
+
+    return bx_tty_speed_parse(text, speed_out);
 }
 
 static bool bx_getty_looks_like_baud_list(const char* text) {
@@ -773,8 +722,11 @@ int bx_getty_main(int argc, char** argv) {
         return 0;
     }
     if (options.list_speeds) {
-        for (size_t i = 0; i < sizeof(bx_getty_baud_table) / sizeof(bx_getty_baud_table[0]); i++) {
-            printf("%10s\n", bx_getty_baud_table[i].text);
+        for (size_t i = 0; i < bx_tty_speed_entry_count(); i++) {
+            const struct bx_tty_speed_entry* entry = bx_tty_speed_entry_at(i);
+            if (entry != NULL && isdigit((unsigned char)entry->name[0])) {
+                printf("%10s\n", entry->name);
+            }
         }
         return 0;
     }

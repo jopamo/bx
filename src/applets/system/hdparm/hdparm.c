@@ -6,16 +6,18 @@
 
 #define _LARGEFILE64_SOURCE /*for lseek64*/
 #ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE	/* for strtoll() */
+#define _DEFAULT_SOURCE	/* for GNU/Linux interfaces */
 #endif
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #define __USE_GNU	/* for O_DIRECT */
+#include <inttypes.h>
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <ctype.h>
+#include <limits.h>
 #include <endian.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -697,15 +699,17 @@ static int translate_xfermode(char * name)
 {
 	const struct xfermode_entry *tmp;
 	char *endptr;
-	int val = -1;
+	intmax_t value;
 
 	for (tmp = xfermode_table; tmp->name != NULL; ++tmp) {
 		if (!strcmp(name, tmp->name))
 			return tmp->val;
 	}
-	val = strtol(name, &endptr, 10);
-	if (*endptr == '\0')
-		return val;
+
+	errno = 0;
+	value = strtoimax(name, &endptr, 10);
+	if (errno == 0 && endptr != name && *endptr == '\0' && value >= 0 && value <= INT_MAX)
+		return (int)value;
 	return -1;
 }
 
@@ -3092,6 +3096,42 @@ static const char *lba_emsg = "bad/missing sector value";
 static const char *count_emsg = "bad/missing sector count";
 static const __u64 lba_limit = (1ULL << 48) - 1;
 
+enum hdparm_num_parse_result {
+	HDPARM_NUM_INVALID = -1,
+	HDPARM_NUM_NONE = 0,
+	HDPARM_NUM_OK = 1,
+};
+
+static enum hdparm_num_parse_result
+hdparm_parse_u64_prefix (const char *text, char **endp, __u64 *value_p)
+{
+	const char *p = text;
+	uintmax_t parsed;
+
+	if (!text || !endp || !value_p)
+		return HDPARM_NUM_INVALID;
+
+	while (isspace((unsigned char)*p))
+		p++;
+
+	if (*p == '-') {
+		const char *q = p + 1;
+		if (isdigit((unsigned char)*q) || (q[0] == '0' && (q[1] == 'x' || q[1] == 'X')))
+			return HDPARM_NUM_INVALID;
+		return HDPARM_NUM_NONE;
+	}
+
+	errno = 0;
+	parsed = strtoumax(p, endp, 0);
+	if (*endp == p)
+		return HDPARM_NUM_NONE;
+	if (errno != 0 || parsed > (uintmax_t)((__u64)~0ULL))
+		return HDPARM_NUM_INVALID;
+
+	*value_p = (__u64)parsed;
+	return HDPARM_NUM_OK;
+}
+
 static int
 get_u64_parm (int optional, const char flag_c, int *flag_p, __u64 *value_p,
 		unsigned int min_value, __u64 limit, const char *eprefix, const char *emsg)
@@ -3099,6 +3139,7 @@ get_u64_parm (int optional, const char flag_c, int *flag_p, __u64 *value_p,
 	int got_value = 0;
 	__u64 value = *value_p;
 	char *endp = NULL;
+	enum hdparm_num_parse_result parsed;
 
 	if (!*argp && argc && (isdigit(**argv) || (flag_p && flag_c == **argv)))
 		argp = *argv++, --argc;
@@ -3111,13 +3152,13 @@ get_u64_parm (int optional, const char flag_c, int *flag_p, __u64 *value_p,
 		}
 	}
 
-	errno = 0;
-	value = strtoll(argp, &endp, 0);
-	if (errno != 0 || (endp != argp && ((__s64)value < (__s64)min_value || value > limit))) {
+	parsed = hdparm_parse_u64_prefix(argp, &endp, &value);
+	if (parsed == HDPARM_NUM_INVALID ||
+	    (parsed == HDPARM_NUM_OK && (value < min_value || value > limit))) {
 		fprintf(stderr, "  %s: %s\n", eprefix, emsg);
 		exit(EINVAL);
 	}
-	if (endp != argp) {
+	if (parsed == HDPARM_NUM_OK) {
 		got_value = 1;
 		*value_p = value;
 		argp = endp;

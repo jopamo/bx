@@ -2670,35 +2670,6 @@ static uintmax_t bx_ls_allocated_bytes(const struct stat* st) {
     return (uintmax_t)st->st_blocks * 512u;
 }
 
-static void bx_ls_format_human_bytes(uintmax_t size, bool si_units, char buffer[32]) {
-    const uintmax_t base = si_units ? 1000u : 1024u;
-    if (size < base) {
-        (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
-        return;
-    }
-
-    static const char* units_1024[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
-    static const char* units_1000[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
-    const char* const* units = si_units ? units_1000 : units_1024;
-    const size_t max_unit = (sizeof(units_1024) / sizeof(units_1024[0])) - 1u;
-
-    size_t unit = 0;
-    uintmax_t divisor = 1u;
-
-    while (size >= divisor * base && unit < max_unit) {
-        divisor *= base;
-        unit++;
-    }
-
-    if (size < divisor * 10u) {
-        uintmax_t tenths = bx_ls_ceil_div_uintmax(size * 10u, divisor);
-        (void)snprintf(buffer, 32u, "%" PRIuMAX ".%" PRIuMAX "%s", tenths / 10u, tenths % 10u, units[unit]);
-    }
-    else {
-        (void)snprintf(buffer, 32u, "%" PRIuMAX "%s", bx_ls_ceil_div_uintmax(size, divisor), units[unit]);
-    }
-}
-
 static void bx_ls_format_scaled_exact_or_human(uintmax_t size, const struct bx_ls_options* options, char buffer[32]) {
     if (options->block_size_set) {
         uintmax_t scaled = bx_ls_ceil_div_uintmax(size, options->block_size_divisor);
@@ -2707,7 +2678,9 @@ static void bx_ls_format_scaled_exact_or_human(uintmax_t size, const struct bx_l
     }
 
     if (options->human_readable) {
-        bx_ls_format_human_bytes(size, options->si_units, buffer);
+        const uintmax_t base = options->si_units ? 1000u : 1024u;
+        const char* suffixes = options->si_units ? "kMGTPEZYRQ" : "KMGTPEZYRQ";
+        bx_size_format_human_ceil(size, base, suffixes, buffer, 32u);
         return;
     }
 

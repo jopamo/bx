@@ -404,52 +404,13 @@ static char* bx_du_join_path(const char* parent, const char* child) {
     return path;
 }
 
-static void bx_du_format_human_size(uintmax_t size_bytes, uintmax_t base, const char* suffixes, char* buffer, size_t buffer_size) {
-    if (size_bytes == 0u) {
-        (void)snprintf(buffer, buffer_size, "0");
-        return;
-    }
-
-    size_t suffix_index = 0u;
-    size_t suffix_count = strlen(suffixes);
-    uintmax_t unit = 1u;
-
-    while (suffix_index < suffix_count) {
-        if (unit > UINTMAX_MAX / base) {
-            break;
-        }
-        uintmax_t next_unit = unit * base;
-        if (size_bytes < next_unit) {
-            break;
-        }
-        unit = next_unit;
-        suffix_index++;
-    }
-
-    if (suffix_index == 0u) {
-        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, size_bytes);
-        return;
-    }
-
-    uintmax_t tenths = bx_du_ceil_div(bx_du_saturating_mul(size_bytes, 10u), unit);
-    if (tenths < 100u) {
-        uintmax_t whole = tenths / 10u;
-        uintmax_t fractional = tenths % 10u;
-        (void)snprintf(buffer, buffer_size, "%" PRIuMAX ".%" PRIuMAX "%c", whole, fractional, suffixes[suffix_index - 1u]);
-    }
-    else {
-        uintmax_t whole = bx_du_ceil_div(size_bytes, unit);
-        (void)snprintf(buffer, buffer_size, "%" PRIuMAX "%c", whole, suffixes[suffix_index - 1u]);
-    }
-}
-
 static void bx_du_format_size(uintmax_t size_bytes, const struct bx_du_options* options, char* buffer, size_t buffer_size) {
     switch (options->output_mode) {
         case BX_DU_OUTPUT_HUMAN_1024:
-            bx_du_format_human_size(size_bytes, 1024u, "KMGTPEZYRQ", buffer, buffer_size);
+            bx_size_format_human_ceil(size_bytes, 1024u, "KMGTPEZYRQ", buffer, buffer_size);
             return;
         case BX_DU_OUTPUT_HUMAN_1000:
-            bx_du_format_human_size(size_bytes, 1000u, "kMGTPEZYRQ", buffer, buffer_size);
+            bx_size_format_human_ceil(size_bytes, 1000u, "kMGTPEZYRQ", buffer, buffer_size);
             return;
         case BX_DU_OUTPUT_BLOCKS:
             break;

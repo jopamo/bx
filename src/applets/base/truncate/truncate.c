@@ -55,44 +55,6 @@ static void bx_truncate_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --version         output version information and exit\n");
 }
 
-static bool bx_truncate_parse_size_magnitude(const char* text, uintmax_t* value_out) {
-    if (text == NULL || text[0] == '\0' || value_out == NULL) {
-        return false;
-    }
-
-    size_t pos = 0;
-    while (text[pos] >= '0' && text[pos] <= '9') {
-        pos++;
-    }
-    if (pos == 0) {
-        return false;
-    }
-
-    char digits[64];
-    if (pos >= sizeof(digits)) {
-        return false;
-    }
-    memcpy(digits, text, pos);
-    digits[pos] = '\0';
-
-    uintmax_t value = 0;
-    if (!bx_size_parse_uint(digits, &value)) {
-        return false;
-    }
-
-    uintmax_t multiplier = 0;
-    if (!bx_size_suffix_multiplier(text + pos, &multiplier)) {
-        return false;
-    }
-
-    if (value != 0 && multiplier > UINTMAX_MAX / value) {
-        return false;
-    }
-
-    *value_out = value * multiplier;
-    return true;
-}
-
 static bool bx_truncate_parse_size_spec(const char* text, struct bx_truncate_size_spec* spec_out) {
     if (text == NULL || text[0] == '\0' || spec_out == NULL) {
         return false;
@@ -132,7 +94,7 @@ static bool bx_truncate_parse_size_spec(const char* text, struct bx_truncate_siz
             break;
     }
 
-    if (!bx_truncate_parse_size_magnitude(p, &spec.value)) {
+    if (!bx_size_parse_scaled_uint(p, &spec.value)) {
         return false;
     }
 

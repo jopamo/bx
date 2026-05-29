@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -50,6 +51,82 @@ bool bx_time_parse_fractional_nanoseconds(const char** text, long* nsec_out) {
 
     *text = p;
     *nsec_out = nsec;
+    return true;
+}
+
+bool bx_time_duration_suffix_multiplier(char suffix, double* multiplier_out) {
+    if (multiplier_out == NULL) {
+        return false;
+    }
+
+    switch (suffix) {
+        case '\0':
+        case 's':
+            *multiplier_out = 1.0;
+            return true;
+        case 'm':
+            *multiplier_out = 60.0;
+            return true;
+        case 'h':
+            *multiplier_out = 3600.0;
+            return true;
+        case 'd':
+            *multiplier_out = 86400.0;
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool bx_time_parse_duration_seconds(const char* text, const struct bx_time_duration_parse_options* options, struct bx_time_duration_parse_result* result_out) {
+    const struct bx_time_duration_parse_options default_options = {
+        .allow_infinite = false,
+        .require_strtod_range = true,
+    };
+    if (options == NULL) {
+        options = &default_options;
+    }
+
+    if (text == NULL || text[0] == '\0' || result_out == NULL) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(text, &end);
+    if (end == text || isnan(value)) {
+        return false;
+    }
+    if (options->require_strtod_range && errno != 0) {
+        return false;
+    }
+
+    double multiplier = 1.0;
+    if (end[0] != '\0' && end[1] != '\0') {
+        return false;
+    }
+    if (!bx_time_duration_suffix_multiplier(*end, &multiplier)) {
+        return false;
+    }
+
+    double seconds = value * multiplier;
+    if (isnan(seconds) || seconds < 0.0) {
+        return false;
+    }
+    if (isinf(seconds)) {
+        if (!options->allow_infinite) {
+            return false;
+        }
+        result_out->seconds = 0.0;
+        result_out->infinite = true;
+        return true;
+    }
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    result_out->seconds = seconds;
+    result_out->infinite = false;
     return true;
 }
 

@@ -13,6 +13,7 @@
 #include "fswalk/walk.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
+#include "lib/size_parse.h"
 #include "tree_internal.h"
 
 struct bx_tree_collect_state {
@@ -444,20 +445,12 @@ static void bx_tree_format_size_value(off_t size,
         return;
     }
 
-    static const char *units[] = {"B", "K", "M", "G", "T", "P", "E"};
-    double value = (double)size;
-    size_t unit = 0u;
-    while (value >= 1024.0 && unit + 1u < sizeof(units) / sizeof(units[0])) {
-        value /= 1024.0;
-        unit++;
+    if (size < 0) {
+        snprintf(buffer, 32, "%jdB", (intmax_t)size);
+        return;
     }
 
-    if (unit == 0u)
-        snprintf(buffer, 32, "%jdB", (intmax_t)size);
-    else if (value >= 10.0)
-        snprintf(buffer, 32, "%.0f%s", value, units[unit]);
-    else
-        snprintf(buffer, 32, "%.1f%s", value, units[unit]);
+    bx_size_format_human_round((uintmax_t)size, 1024u, "BKMGTPE", true, buffer, 32);
 }
 
 static void bx_tree_collect_meta_widths_node(const struct bx_tree_node *node,

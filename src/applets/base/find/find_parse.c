@@ -13,6 +13,7 @@
 #include "find_parse_helpers.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
+#include "lib/size_parse.h"
 #include "search/metadata.h"
 
 static bool find_parse_main_int_arg(const char *progname, const char *optname,
@@ -150,41 +151,23 @@ static bool find_parse_size_arg(const char *progname, const char *text,
         return false;
     }
 
-    unsigned long long u = 512;
-    if (*end != '\0') {
-        if (end[1] != '\0') {
-            fprintf(stderr, "%s: invalid argument to -size: %s\n", progname,
-                    text);
-            return false;
-        }
-        switch (*end) {
-        case 'b':
-            u = 512;
-            break;
-        case 'c':
-            u = 1;
-            break;
-        case 'w':
-            u = 2;
-            break;
-        case 'k':
-            u = 1024;
-            break;
-        case 'M':
-            u = 1024ULL * 1024ULL;
-            break;
-        case 'G':
-            u = 1024ULL * 1024ULL * 1024ULL;
-            break;
-        default:
-            fprintf(stderr, "%s: invalid argument to -size: %s\n", progname,
-                    text);
-            return false;
-        }
+    if (*end != '\0' && (end[1] != '\0' || strchr("bcwkMG", *end) == NULL)) {
+        fprintf(stderr, "%s: invalid argument to -size: %s\n", progname,
+                text);
+        return false;
+    }
+
+    uintmax_t parsed_unit = 0;
+    const char* suffix = *end == '\0' ? "b" : end;
+    if (!bx_size_suffix_multiplier(suffix, &parsed_unit) ||
+        parsed_unit > (uintmax_t)ULLONG_MAX) {
+        fprintf(stderr, "%s: invalid argument to -size: %s\n", progname,
+                text);
+        return false;
     }
 
     *value = (long long)v;
-    *unit = u;
+    *unit = (unsigned long long)parsed_unit;
     return true;
 }
 

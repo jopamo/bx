@@ -8,6 +8,7 @@
 #include <string.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 #include "lib/thread_count.h"
 #include "options.h"
 #include "pcre2_matcher.h"
@@ -366,26 +367,14 @@ static bool bx_parse_rg_size_limit(const char *progname, const char *optname,
     if (pos == 0)
         return bx_rg_size_limit_parse_failed(progname, optname, text);
 
-    unsigned long long multiplier = 1;
-    if (text[pos] != '\0') {
-        if (text[pos + 1] != '\0')
-            return bx_rg_size_limit_parse_failed(progname, optname, text);
-        switch (text[pos]) {
-        case 'K':
-            multiplier = 1024ULL;
-            break;
-        case 'M':
-            multiplier = 1024ULL * 1024ULL;
-            break;
-        case 'G':
-            multiplier = 1024ULL * 1024ULL * 1024ULL;
-            break;
-        default:
-            return bx_rg_size_limit_parse_failed(progname, optname, text);
-        }
-    }
+    if (text[pos] != '\0' && (text[pos + 1] != '\0' || strchr("KMG", text[pos]) == NULL))
+        return bx_rg_size_limit_parse_failed(progname, optname, text);
 
-    if (value > (unsigned long long)SIZE_MAX / multiplier)
+    uintmax_t multiplier = 0;
+    if (!bx_size_suffix_multiplier(text + pos, &multiplier))
+        return bx_rg_size_limit_parse_failed(progname, optname, text);
+
+    if (value > ((uintmax_t)SIZE_MAX) / multiplier)
         return bx_rg_size_limit_parse_failed(progname, optname, text);
 
     *out = (size_t)(value * multiplier);

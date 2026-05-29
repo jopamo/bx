@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 
 enum bx_df_size_mode {
     BX_DF_SIZE_1K = 0,
@@ -424,29 +425,6 @@ static unsigned bx_df_usage_percent(uintmax_t used, uintmax_t available) {
     return (unsigned)percent;
 }
 
-static void bx_df_format_human_value(uintmax_t value, uintmax_t base, char* buffer, size_t buffer_size) {
-    static const char suffixes[] = "BKMGTPEZY";
-
-    if (value < base) {
-        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, value);
-        return;
-    }
-
-    double scaled = (double)value;
-    size_t suffix_index = 0;
-    while (scaled >= (double)base && suffix_index + 1 < (sizeof(suffixes) - 1u)) {
-        scaled /= (double)base;
-        suffix_index++;
-    }
-
-    if (scaled >= 10.0) {
-        (void)snprintf(buffer, buffer_size, "%.0f%c", scaled, suffixes[suffix_index]);
-    }
-    else {
-        (void)snprintf(buffer, buffer_size, "%.1f%c", scaled, suffixes[suffix_index]);
-    }
-}
-
 static void bx_df_format_blocks(uintmax_t blocks, uintmax_t block_size, enum bx_df_size_mode mode, char* buffer, size_t buffer_size) {
     if (mode == BX_DF_SIZE_1K) {
         uintmax_t value = bx_df_scale_blocks(blocks, block_size, 1024u);
@@ -456,7 +434,7 @@ static void bx_df_format_blocks(uintmax_t blocks, uintmax_t block_size, enum bx_
 
     uintmax_t bytes = bx_df_scale_blocks(blocks, block_size, 1u);
     uintmax_t base = (mode == BX_DF_SIZE_HUMAN_1000) ? 1000u : 1024u;
-    bx_df_format_human_value(bytes, base, buffer, buffer_size);
+    bx_size_format_human_round(bytes, base, "BKMGTPEZY", false, buffer, buffer_size);
 }
 
 static int bx_df_octal_digit(char c) {

@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/size_parse.h"
 #include "lib/args_common.h"
 
 typedef enum {
@@ -700,31 +701,11 @@ static int sort_compare_numeric_key(const char* left, const char* right) {
 }
 
 static unsigned int sort_human_suffix_magnitude(unsigned char suffix) {
-    switch (suffix) {
-        case 'K':
-        case 'k':
-            return 1u;
-        case 'M':
-            return 2u;
-        case 'G':
-            return 3u;
-        case 'T':
-            return 4u;
-        case 'P':
-            return 5u;
-        case 'E':
-            return 6u;
-        case 'Z':
-            return 7u;
-        case 'Y':
-            return 8u;
-        case 'R':
-            return 9u;
-        case 'Q':
-            return 10u;
-        default:
-            return 0u;
+    unsigned int power = 0u;
+    if (!bx_size_suffix_prefix_power((char)suffix, &power)) {
+        return 0u;
     }
+    return power;
 }
 
 static unsigned int sort_human_suffix_variant(unsigned char suffix) {

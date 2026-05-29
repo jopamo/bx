@@ -2,11 +2,9 @@
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
-#include <math.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/wait.h>
@@ -16,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/time_parse.h"
 #include "lib/args_common.h"
 
 struct bx_timeout_options {
@@ -46,47 +45,19 @@ static void bx_timeout_print_help(FILE* stream, const char* progname) {
 }
 
 static bool bx_timeout_parse_duration(const char* text, double* seconds_out) {
-    if (text == NULL || text[0] == '\0') {
+    if (seconds_out == NULL) {
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    double value = strtod(text, &end);
-    if (errno != 0 || end == text || value < 0.0 || !isfinite(value)) {
+    struct bx_time_duration_parse_result result = {
+        .seconds = 0.0,
+        .infinite = false,
+    };
+    if (!bx_time_parse_duration_seconds(text, NULL, &result)) {
         return false;
     }
 
-    double multiplier = 1.0;
-    if (*end != '\0') {
-        if (end[1] != '\0') {
-            return false;
-        }
-
-        switch (*end) {
-            case 's':
-                multiplier = 1.0;
-                break;
-            case 'm':
-                multiplier = 60.0;
-                break;
-            case 'h':
-                multiplier = 3600.0;
-                break;
-            case 'd':
-                multiplier = 86400.0;
-                break;
-            default:
-                return false;
-        }
-    }
-
-    double seconds = value * multiplier;
-    if (!isfinite(seconds)) {
-        return false;
-    }
-
-    *seconds_out = seconds;
+    *seconds_out = result.seconds;
     return true;
 }
 

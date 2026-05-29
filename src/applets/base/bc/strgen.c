@@ -35,6 +35,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -114,6 +115,31 @@ open_file(FILE** f, const char* filename, const char* mode)
 	fopen_s(f, filename, mode);
 
 #endif // _WIN32
+}
+
+static bool
+bc_gen_parse_bool_arg(const char* text)
+{
+	bool nonzero = false;
+
+	if (text == NULL) return false;
+
+	while (isspace((unsigned char) *text)) text += 1;
+
+	if (*text == '+') text += 1;
+	else if (*text == '-') return false;
+
+	if (!isdigit((unsigned char) *text)) return false;
+
+	while (isdigit((unsigned char) *text))
+	{
+		nonzero = nonzero || *text != '0';
+		text += 1;
+	}
+
+	while (isspace((unsigned char) *text)) text += 1;
+
+	return *text == '\0' && nonzero;
 }
 
 /**
@@ -351,7 +377,7 @@ main(int argc, char* argv[])
 		return INVALID_PARAMS;
 	}
 
-	exclude_extra_math = (strtoul(argv[3], NULL, 10) != 0);
+	exclude_extra_math = bc_gen_parse_bool_arg(argv[3]);
 
 	name = argv[4];
 
@@ -361,7 +387,7 @@ main(int argc, char* argv[])
 	has_define = (argc > 6 && strcmp("", argv[6]) != 0);
 	define = has_define ? argv[6] : "";
 
-	remove_tabs = (argc > 7 && atoi(argv[7]) != 0);
+	remove_tabs = (argc > 7 && bc_gen_parse_bool_arg(argv[7]));
 
 	in = bc_read_file(argv[1]);
 	if (in == NULL) return INVALID_INPUT_FILE;

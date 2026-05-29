@@ -18,6 +18,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/tty_speed.h"
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -81,12 +82,6 @@ enum bx_stty_op_kind {
     BX_STTY_OP_PRINT_SPEED,
     BX_STTY_OP_COMPOSITE,
     BX_STTY_OP_GSTATE,
-};
-
-struct bx_stty_speed_spec {
-    const char* name;
-    speed_t speed;
-    unsigned int baud;
 };
 
 struct bx_stty_cc_spec {
@@ -186,108 +181,6 @@ struct bx_stty_requirements {
     bool want_default_print;
     bool want_all_print;
     bool want_ldisc_print;
-};
-
-static const struct bx_stty_speed_spec bx_stty_speed_table[] = {
-#ifdef B0
-    {"0", B0, 0},
-#endif
-#ifdef B50
-    {"50", B50, 50},
-#endif
-#ifdef B75
-    {"75", B75, 75},
-#endif
-#ifdef B110
-    {"110", B110, 110},
-#endif
-#ifdef B134
-    {"134", B134, 134},
-#endif
-#ifdef B150
-    {"150", B150, 150},
-#endif
-#ifdef B200
-    {"200", B200, 200},
-#endif
-#ifdef B300
-    {"300", B300, 300},
-#endif
-#ifdef B600
-    {"600", B600, 600},
-#endif
-#ifdef B1200
-    {"1200", B1200, 1200},
-#endif
-#ifdef B1800
-    {"1800", B1800, 1800},
-#endif
-#ifdef B2400
-    {"2400", B2400, 2400},
-#endif
-#ifdef B4800
-    {"4800", B4800, 4800},
-#endif
-#ifdef B9600
-    {"9600", B9600, 9600},
-#endif
-#ifdef B19200
-    {"19200", B19200, 19200},
-#endif
-#ifdef B38400
-    {"38400", B38400, 38400},
-#endif
-#ifdef EXTA
-    {"exta", EXTA, 19200},
-#endif
-#ifdef EXTB
-    {"extb", EXTB, 38400},
-#endif
-#ifdef B57600
-    {"57600", B57600, 57600},
-#endif
-#ifdef B115200
-    {"115200", B115200, 115200},
-#endif
-#ifdef B230400
-    {"230400", B230400, 230400},
-#endif
-#ifdef B460800
-    {"460800", B460800, 460800},
-#endif
-#ifdef B500000
-    {"500000", B500000, 500000},
-#endif
-#ifdef B576000
-    {"576000", B576000, 576000},
-#endif
-#ifdef B921600
-    {"921600", B921600, 921600},
-#endif
-#ifdef B1000000
-    {"1000000", B1000000, 1000000},
-#endif
-#ifdef B1152000
-    {"1152000", B1152000, 1152000},
-#endif
-#ifdef B1500000
-    {"1500000", B1500000, 1500000},
-#endif
-#ifdef B2000000
-    {"2000000", B2000000, 2000000},
-#endif
-#ifdef B2500000
-    {"2500000", B2500000, 2500000},
-#endif
-#ifdef B3000000
-    {"3000000", B3000000, 3000000},
-#endif
-#ifdef B3500000
-    {"3500000", B3500000, 3500000},
-#endif
-#ifdef B4000000
-    {"4000000", B4000000, 4000000},
-#endif
 };
 
 static const struct bx_stty_cc_spec bx_stty_cc_table[] = {
@@ -614,33 +507,12 @@ static bool bx_stty_tokens_add(struct bx_stty_setting_tokens* tokens, const char
     return true;
 }
 
-static const struct bx_stty_speed_spec* bx_stty_lookup_speed_by_name(const char* name) {
-    for (size_t i = 0; i < sizeof(bx_stty_speed_table) / sizeof(bx_stty_speed_table[0]); i++) {
-        if (strcmp(name, bx_stty_speed_table[i].name) == 0) {
-            return &bx_stty_speed_table[i];
-        }
-    }
-    return NULL;
-}
-
 static unsigned int bx_stty_speed_to_baud(speed_t speed) {
-    for (size_t i = 0; i < sizeof(bx_stty_speed_table) / sizeof(bx_stty_speed_table[0]); i++) {
-        if (bx_stty_speed_table[i].speed == speed) {
-            return bx_stty_speed_table[i].baud;
-        }
-    }
-
-    return (unsigned int)speed;
+    return bx_tty_speed_to_baud(speed);
 }
 
 static bool bx_stty_parse_speed(const char* token, speed_t* speed_out) {
-    const struct bx_stty_speed_spec* spec = bx_stty_lookup_speed_by_name(token);
-    if (spec == NULL) {
-        return false;
-    }
-
-    *speed_out = spec->speed;
-    return true;
+    return bx_tty_speed_parse(token, speed_out);
 }
 
 static int bx_stty_set_input_speed(struct termios* tio, speed_t speed) {

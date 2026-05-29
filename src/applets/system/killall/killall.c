@@ -1,7 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
 #include <getopt.h>
-#include <math.h>
 #include <regex.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -21,6 +20,7 @@
 #include "lib/cli_common.h"
 #include "lib/id_parse.h"
 #include "lib/prompt_ops.h"
+#include "lib/time_parse.h"
 #include "lib/args_common.h"
 
 struct bx_killall_options {
@@ -81,38 +81,19 @@ static void bx_killall_options_cleanup(struct bx_killall_options* options) {
 }
 
 static bool bx_killall_parse_duration(const char* text, double* seconds_out) {
-    char* end;
-    double value;
-    double factor = 1.0;
-
-    if (text == NULL || text[0] == '\0' || seconds_out == NULL) {
+    if (seconds_out == NULL) {
         return false;
     }
 
-    errno = 0;
-    value = strtod(text, &end);
-    if (errno != 0 || end == text || value < 0.0 || !isfinite(value)) {
+    struct bx_time_duration_parse_result result = {
+        .seconds = 0.0,
+        .infinite = false,
+    };
+    if (!bx_time_parse_duration_seconds(text, NULL, &result)) {
         return false;
     }
-    if (*end == '\0') {
-        *seconds_out = value;
-        return true;
-    }
-    if (end[1] != '\0') {
-        return false;
-    }
-    switch (*end) {
-        case 's': factor = 1.0; break;
-        case 'm': factor = 60.0; break;
-        case 'h': factor = 3600.0; break;
-        case 'd': factor = 86400.0; break;
-        default: return false;
-    }
-    double seconds = value * factor;
-    if (!isfinite(seconds)) {
-        return false;
-    }
-    *seconds_out = seconds;
+
+    *seconds_out = result.seconds;
     return true;
 }
 

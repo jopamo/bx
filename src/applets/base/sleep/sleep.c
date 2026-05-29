@@ -3,7 +3,6 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -11,6 +10,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/time_parse.h"
 #include "lib/args_common.h"
 
 static void bx_sleep_print_help(FILE* stream, const char* progname) {
@@ -30,55 +30,20 @@ static bool bx_sleep_parse_interval(const char* text, double* seconds_out, bool*
         return false;
     }
 
-    errno = 0;
-    char* end = NULL;
-    double value = strtod(text, &end);
-
-    if (end == text || isnan(value)) {
+    const struct bx_time_duration_parse_options parse_options = {
+        .allow_infinite = true,
+        .require_strtod_range = false,
+    };
+    struct bx_time_duration_parse_result result = {
+        .seconds = 0.0,
+        .infinite = false,
+    };
+    if (!bx_time_parse_duration_seconds(text, &parse_options, &result)) {
         return false;
     }
 
-    double multiplier = 1.0;
-    if (*end != '\0') {
-        if (end[1] != '\0') {
-            return false;
-        }
-
-        switch (*end) {
-            case 's':
-                multiplier = 1.0;
-                break;
-            case 'm':
-                multiplier = 60.0;
-                break;
-            case 'h':
-                multiplier = 3600.0;
-                break;
-            case 'd':
-                multiplier = 86400.0;
-                break;
-            default:
-                return false;
-        }
-    }
-
-    value *= multiplier;
-    if (isnan(value) || value < 0.0) {
-        return false;
-    }
-
-    if (isinf(value)) {
-        *seconds_out = 0.0;
-        *infinite_out = true;
-        return true;
-    }
-
-    if (!isfinite(value)) {
-        return false;
-    }
-
-    *seconds_out = value;
-    *infinite_out = false;
+    *seconds_out = result.seconds;
+    *infinite_out = result.infinite;
     return true;
 }
 

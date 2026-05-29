@@ -302,10 +302,9 @@ static bool bx_numfmt_parse_suffix(const char* suffix, enum unit_type from, doub
         return false;
     }
 
+    unsigned int power = 0u;
     char unit_char = (char)toupper((unsigned char)suffix[0]);
-    const char* units = "KMGTPEZY";
-    const char* pos = strchr(units, unit_char);
-    if (pos == NULL) {
+    if (!bx_size_suffix_prefix_power(unit_char, &power) || power > 8u) {
         return false;
     }
 
@@ -327,7 +326,7 @@ static bool bx_numfmt_parse_suffix(const char* suffix, enum unit_type from, doub
         return false;
     }
 
-    int exponent = (int)(pos - units) + 1;
+    int exponent = (int)power;
     double base;
     if (from == UNIT_AUTO) {
         base = has_i ? 1024.0 : 1000.0;

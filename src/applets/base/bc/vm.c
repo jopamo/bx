@@ -474,6 +474,103 @@ bc_vm_getenvFree(char* val)
 #endif // _WIN32
 }
 
+static bool
+bc_vm_digit_for_base(unsigned char c, unsigned int base, uintmax_t* digit)
+{
+	uintmax_t value;
+
+	if (c >= '0' && c <= '9') value = (uintmax_t) (c - '0');
+	else if (c >= 'a' && c <= 'z') value = (uintmax_t) (c - 'a' + 10);
+	else if (c >= 'A' && c <= 'Z') value = (uintmax_t) (c - 'A' + 10);
+	else return false;
+
+	if (value >= (uintmax_t) base) return false;
+
+	*digit = value;
+	return true;
+}
+
+static bool
+bc_vm_parse_env_flag(const char* text)
+{
+	const char* p = text;
+	uintmax_t value = 0;
+	unsigned int base = 10;
+	size_t digits = 0;
+
+	if (p == NULL) return false;
+
+	while (isspace((unsigned char) *p)) p += 1;
+
+	if (*p == '+') p += 1;
+	else if (*p == '-') return false;
+
+	if (p[0] == '0')
+	{
+		base = 8;
+		if (p[1] == 'x' || p[1] == 'X')
+		{
+			base = 16;
+			p += 2;
+		}
+	}
+
+	while (*p)
+	{
+		uintmax_t digit;
+
+		if (!bc_vm_digit_for_base((unsigned char) *p, base, &digit)) break;
+		if (value > (UINTMAX_MAX - digit) / (uintmax_t) base) return false;
+		value = (value * (uintmax_t) base) + digit;
+		digits += 1;
+		p += 1;
+	}
+
+	if (digits == 0) return false;
+
+	while (isspace((unsigned char) *p)) p += 1;
+
+	return *p == '\0' && value != 0;
+}
+
+static bool
+bc_vm_parse_line_length(const char* text, size_t* line_len)
+{
+	const char* p = text;
+	size_t value = 0;
+
+	if (p == NULL || line_len == NULL) return false;
+
+	if (*p == '\0')
+	{
+		*line_len = 0;
+		return true;
+	}
+
+	while (*p)
+	{
+		size_t digit;
+
+		if (!isdigit((unsigned char) *p)) return false;
+		digit = (size_t) (*p - '0');
+		if (value > ((size_t) UINT16_MAX - digit) / 10u) return false;
+		value = (value * 10u) + digit;
+		p += 1;
+	}
+
+	if (value == 0)
+	{
+		*line_len = 0;
+		return true;
+	}
+
+	value -= 1;
+	if (value < 2 || value >= UINT16_MAX) return false;
+
+	*line_len = value;
+	return true;
+}
+
 /**
  * Sets a flag from an environment variable and the default.
  * @param var   The environment variable.
@@ -494,7 +591,7 @@ bc_vm_setenvFlag(const char* const var, int def, uint16_t flag)
 		else vm->flags &= ~(flag);
 	}
 	// Parse the value.
-	else if (strtoul(val, NULL, 0)) vm->flags |= flag;
+	else if (bc_vm_parse_env_flag(val)) vm->flags |= flag;
 	else vm->flags &= ~(flag);
 
 	bc_vm_getenvFree(val);
@@ -620,12 +717,7 @@ bc_vm_envLen(const char* var)
 	if (num)
 	{
 		// Parse it and clamp it if needed.
-		len = (size_t) strtol(lenv, NULL, 10);
-		if (len != 0)
-		{
-			len -= 1;
-			if (len < 2 || len >= UINT16_MAX) len = BC_NUM_PRINT_WIDTH;
-		}
+		if (!bc_vm_parse_line_length(lenv, &len)) len = BC_NUM_PRINT_WIDTH;
 	}
 	// Set the default.
 	else len = BC_NUM_PRINT_WIDTH;

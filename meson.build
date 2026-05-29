@@ -270,6 +270,7 @@ bx_lib_sources = [
   'src/lib/statx_compat.c',
   'src/lib/thread_count.c',
   'src/lib/time_parse.c',
+  'src/lib/tty_speed.c',
   'src/lib/update_policy.c',
   'src/lib/work_pool.c',
   'src/lib/xreadwrite.c',
