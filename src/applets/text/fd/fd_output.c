@@ -10,6 +10,7 @@
 #include "lib/file_info_fmt.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
+#include "lib/size_parse.h"
 
 struct fd_detail_widths {
     size_t nlink;
@@ -108,32 +109,19 @@ static const char *fd_group_name(gid_t gid, char numeric_buffer[32]) {
 }
 
 static void fd_format_size(intmax_t size, char buffer[32]) {
-    static const char *units[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
-    const double base = 1024.0;
-    const size_t max_unit = (sizeof(units) / sizeof(units[0])) - 1;
-
     bool negative = size < 0;
     uintmax_t magnitude = (uintmax_t)size;
     if (negative)
         magnitude = (uintmax_t)(-(size + 1)) + 1;
 
-    double value = (double)magnitude;
-    size_t unit = 0;
-    while (value >= base && unit < max_unit) {
-        value /= base;
-        unit++;
-    }
-
-    if (unit == 0) {
-        snprintf(buffer, 32, "%" PRIdMAX, size);
+    if (!negative) {
+        bx_size_format_human_round(magnitude, 1024u, "BKMGTPEZYRQ", false, buffer, 32);
         return;
     }
 
-    const char *sign = negative ? "-" : "";
-    if (value < 10.0)
-        snprintf(buffer, 32, "%s%.1f%s", sign, value, units[unit]);
-    else
-        snprintf(buffer, 32, "%s%.0f%s", sign, value, units[unit]);
+    char magnitude_text[32];
+    bx_size_format_human_round(magnitude, 1024u, "BKMGTPEZYRQ", false, magnitude_text, sizeof(magnitude_text));
+    snprintf(buffer, 32, "-%s", magnitude_text);
 }
 
 static size_t fd_uintmax_width(uintmax_t value) {

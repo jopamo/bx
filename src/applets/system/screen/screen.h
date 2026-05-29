@@ -205,11 +205,6 @@ struct acl
 /* register list */
 #define MAX_PLOP_DEFS 256
 
-struct baud_values {
-	int bps;	/* bits per seconds */
-	int sym;	/* symbol defined in bits/termios.h */
-};
-
 /*
  * windowlist orders
  */

@@ -51,9 +51,10 @@
 #include "misc.h"
 #include "pty.h"
 #include "tty.h"
+#include "lib/tty_speed.h"
 
 static void consredir_readev_fn(Event *, void *);
-static struct baud_values *lookup_baud (int);
+static const struct bx_tty_speed_entry *lookup_baud (int);
 
 bool separate_sids = true;
 
@@ -1075,127 +1076,17 @@ char *TtyGetModemStatus(int fd, char *buf)
 	return buf;
 }
 
-static struct baud_values btable[] = {
-#if defined(B4000000)
-	{4000000, B4000000},
-#endif
-#if defined(B3500000)
-	{3500000, B3500000},
-#endif
-#if defined(B3000000)
-	{3000000, B3000000},
-#endif
-#if defined(B2500000)
-	{2500000, B2500000},
-#endif
-#if defined(B2000000)
-	{2000000, B2000000},
-#endif
-#if defined(B1500000)
-	{1500000, B1500000},
-#endif
-#if defined(B1152000)
-	{1152000, B1152000},
-#endif
-#if defined(B1000000)
-	{1000000, B1000000},
-#endif
-#if defined(B921600)
-	{921600, B921600},
-#endif
-#if defined(B576000)
-	{576000, B576000},
-#endif
-#if defined(B500000)
-	{500000, B500000},
-#endif
-#if defined(B460800)
-	{460800, B460800},
-#endif
-#if defined(B230400)
-	{230400, B230400},
-#endif
-#if defined(B115200)
-	{115200, B115200},
-#endif
-#if defined(B57600)
-	{57600, B57600},
-#endif
-#if defined(EXTB)
-	{38400, EXTB},
-#endif
-#if defined(B38400)
-	{38400, B38400},
-#endif
-#if defined(EXTA)
-	{19200, EXTA},
-#endif
-#if defined(B19200)
-	{19200, B19200},
-#endif
-#if defined(B9600)
-	{9600, B9600},
-#endif
-#if defined(B7200)
-	{7200, B7200},
-#endif
-#if defined(B4800)
-	{4800, B4800},
-#endif
-#if defined(B3600)
-	{3600, B3600},
-#endif
-#if defined(B2400)
-	{2400, B2400},
-#endif
-#if defined(B1800)
-	{1800, B1800},
-#endif
-#if defined(B1200)
-	{1200, B1200},
-#endif
-#if defined(B900)
-	{900, B900},
-#endif
-#if defined(B600)
-	{600, B600},
-#endif
-#if defined(B300)
-	{300, B300},
-#endif
-#if defined(B200)
-	{200, B200},
-#endif
-#if defined(B150)
-	{150, B150},
-#endif
-#if defined(B134)
-	{134, B134},
-#endif
-#if defined(B110)
-	{110, B110},
-#endif
-#if defined(B75)
-	{75, B75},
-#endif
-#if defined(B50)
-	{50, B50},
-#endif
-#if defined(B0)
-	{0, B0},
-#endif
-	{-1, -1}
-};
-
 /*
  * baud may either be a bits-per-second value or a symbolic
  * value as returned by cfget?speed()
  */
-static struct baud_values *lookup_baud(int baud)
+static const struct bx_tty_speed_entry *lookup_baud(int baud)
 {
-	for (struct baud_values *p = btable; p->bps >= 0; p++)
-		if (baud == p->bps || baud == p->sym)
-			return p;
+	for (size_t i = 0; i < bx_tty_speed_entry_count(); i++) {
+		const struct bx_tty_speed_entry *entry = bx_tty_speed_entry_at(i);
+		if (entry && (baud == (int)entry->baud || baud == (int)entry->speed))
+			return entry;
+	}
 	return NULL;
 }
 
@@ -1207,15 +1098,15 @@ static struct baud_values *lookup_baud(int baud)
  */
 static int SetBaud(struct mode *m, int ibaud, int obaud)
 {
-	struct baud_values *ip, *op;
+	const struct bx_tty_speed_entry *ip, *op;
 
 	if ((!(ip = lookup_baud(ibaud)) && ibaud != -1) || (!(op = lookup_baud(obaud)) && obaud != -1))
 		return -1;
 
 	if (ip)
-		cfsetispeed(&m->tio, ip->sym);
+		cfsetispeed(&m->tio, ip->speed);
 	if (op)
-		cfsetospeed(&m->tio, op->sym);
+		cfsetospeed(&m->tio, op->speed);
 	return 0;
 }
 

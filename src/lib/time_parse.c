@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -127,6 +128,37 @@ bool bx_time_parse_duration_seconds(const char* text, const struct bx_time_durat
 
     result_out->seconds = seconds;
     result_out->infinite = false;
+    return true;
+}
+
+static long double bx_time_time_t_max_value(void) {
+    const int value_bits = (int)(sizeof(time_t) * CHAR_BIT) - (((time_t)-1 < (time_t)0) ? 1 : 0);
+    return ldexpl(1.0L, value_bits) - 1.0L;
+}
+
+bool bx_time_seconds_to_timespec(double seconds, struct timespec* ts_out) {
+    if (ts_out == NULL || !isfinite(seconds) || seconds < 0.0) {
+        return false;
+    }
+
+    double whole_seconds = 0.0;
+    double fractional_seconds = modf(seconds, &whole_seconds);
+    if (whole_seconds < 0.0 || (long double)whole_seconds > bx_time_time_t_max_value()) {
+        return false;
+    }
+
+    time_t tv_sec = (time_t)whole_seconds;
+    if ((long double)tv_sec != (long double)whole_seconds) {
+        return false;
+    }
+
+    long tv_nsec = (long)(fractional_seconds * 1000000000.0);
+    if (tv_nsec < 0L || tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    ts_out->tv_sec = tv_sec;
+    ts_out->tv_nsec = tv_nsec;
     return true;
 }
 

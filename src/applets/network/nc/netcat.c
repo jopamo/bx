@@ -45,6 +45,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 #ifdef USE_IO_URING
 #include <liburing.h>
 #endif
@@ -194,6 +195,19 @@ static int parse_hex_tos_value(const char* text, int* value_out) {
     return 1;
 }
 
+static int parse_pcap_rotate_size(const char* text, unsigned long long* size_out) {
+    uintmax_t value = 0;
+
+    if (size_out == NULL)
+        return 0;
+
+    if (!bx_size_parse_scaled_uint(text, &value) || value > (uintmax_t)LLONG_MAX)
+        return 0;
+
+    *size_out = (unsigned long long)value;
+    return 1;
+}
+
 int main(int argc, char* argv[]) {
     int ch, s = -1, ret, socksv;
     char *host, *uport;
@@ -329,9 +343,10 @@ int main(int argc, char* argv[]) {
                     errx(EXIT_USAGE, "pcap filter must be one of: in, out, both");
                 break;
             case 1031:
-                pcap_rotate_size = (unsigned long long)nc_strtonum(optarg, 0, LLONG_MAX, &errstr);
-                if (errstr)
-                    errx(EXIT_USAGE, "pcap rotate size is %s", errstr);
+                if (!parse_pcap_rotate_size(optarg, &pcap_rotate_size)) {
+                    fprintf(stderr, "%s: pcap rotate size is invalid\n", progname);
+                    exit(EXIT_USAGE);
+                }
                 break;
             case 1032:
                 pcap_rotate_seconds = (unsigned int)nc_strtonum(optarg, 0, INT_MAX, &errstr);

@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/size_parse.h"
+#include "lib/time_parse.h"
 #include "lib/args_common.h"
 
 typedef struct {
@@ -21,7 +22,7 @@ typedef struct {
     bool quiet;
     bool verbose;
     bool zero_terminated;
-    double sleep_interval;
+    struct timespec sleep_interval;
 } tail_opts_t;
 
 static bool bx_tail_parse_magnitude(const char* text, long long* value_out) {
@@ -90,6 +91,19 @@ static bool bx_tail_parse_legacy_lines_option(const char* arg, long long* lines_
 
     *lines_out = (arg[0] == '+') ? value : -value;
     return true;
+}
+
+static bool bx_tail_parse_sleep_interval(const char* text, struct timespec* interval_out) {
+    struct bx_time_duration_parse_result result = {
+        .seconds = 0.0,
+        .infinite = false,
+    };
+
+    if (!bx_time_parse_duration_seconds(text, NULL, &result) || result.infinite) {
+        return false;
+    }
+
+    return bx_time_seconds_to_timespec(result.seconds, interval_out);
 }
 
 static void tail_bytes(FILE* f, long long n) {
@@ -228,7 +242,15 @@ int bx_tail_main(int argc, char** argv) {
                                                  {"version", no_argument, NULL, 'V'},
                                                  {NULL, 0, NULL, 0}};
 
-    tail_opts_t opts = {.lines = -10, .bytes = 0, .follow = false, .quiet = false, .verbose = false, .zero_terminated = false, .sleep_interval = 1.0};
+    tail_opts_t opts = {
+        .lines = -10,
+        .bytes = 0,
+        .follow = false,
+        .quiet = false,
+        .verbose = false,
+        .zero_terminated = false,
+        .sleep_interval = {.tv_sec = 1, .tv_nsec = 0},
+    };
     struct bx_diag_ctx diag = {.progname = "tail", .exit_status = 0};
     int option_start = 1;
     if (argc > 1) {
@@ -274,7 +296,10 @@ int bx_tail_main(int argc, char** argv) {
                 opts.zero_terminated = true;
                 break;
             case 's':
-                opts.sleep_interval = atof(optarg);
+                if (!bx_tail_parse_sleep_interval(optarg, &opts.sleep_interval)) {
+                    bx_diag(&diag, "invalid sleep interval: '%s'", optarg != NULL ? optarg : "");
+                    return 1;
+                }
                 break;
             case 'h':
                 printf("Usage: %s [OPTION]... [FILE]...\n", argv[0]);
@@ -328,15 +353,12 @@ int bx_tail_main(int argc, char** argv) {
 
             if (opts.follow) {
                 // Simple follow
-                struct timespec ts;
-                ts.tv_sec = (time_t)opts.sleep_interval;
-                ts.tv_nsec = (long)((opts.sleep_interval - (double)ts.tv_sec) * 1000000000.0);
                 while (1) {
                     int ch;
                     while ((ch = getc(f)) != EOF)
                         putchar(ch);
                     fflush(stdout);
-                    nanosleep(&ts, NULL);
+                    nanosleep(&opts.sleep_interval, NULL);
                     clearerr(f);
                 }
             }

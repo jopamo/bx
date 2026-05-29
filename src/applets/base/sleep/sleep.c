@@ -61,20 +61,11 @@ static int bx_sleep_for_seconds(double total_seconds, struct bx_diag_ctx* diag) 
             break;
         }
 
-        time_t sec_part = (time_t)chunk;
-        long nsec_part = (long)((chunk - (double)sec_part) * 1000000000.0);
-        if (nsec_part >= 1000000000L) {
-            sec_part++;
-            nsec_part -= 1000000000L;
+        struct timespec ts;
+        if (!bx_time_seconds_to_timespec(chunk, &ts)) {
+            bx_diag(diag, "sleep interval is too large");
+            return 1;
         }
-        if (nsec_part < 0L) {
-            nsec_part = 0L;
-        }
-
-        struct timespec ts = {
-            .tv_sec = sec_part,
-            .tv_nsec = nsec_part,
-        };
 
         while (nanosleep(&ts, &ts) == -1) {
             if (errno != EINTR) {
