@@ -229,6 +229,38 @@ bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
     return true;
 }
 
+bool bx_search_scanner_candidate_record_is_buffered(const struct bx_search_scanner *scanner,
+                                                    const struct bx_search_candidate *candidate) {
+    size_t after;
+    const unsigned char *end_hit;
+
+    if (!scanner || !candidate)
+        return false;
+    if (candidate->chunk_off >= scanner->scan_len)
+        return false;
+    if (candidate->anchor_len > scanner->scan_len - candidate->chunk_off)
+        return false;
+
+    if (candidate->chunk_off == 0u) {
+        if (scanner->file_off != 0)
+            return false;
+    } else if (!memrchr(scanner->buf,
+                       (unsigned char)scanner->delimiter,
+                       candidate->chunk_off)) {
+        if (scanner->file_off != 0)
+            return false;
+    }
+
+    after = candidate->chunk_off + candidate->anchor_len;
+    if (after >= scanner->scan_len)
+        return scanner->eof;
+
+    end_hit = memchr(scanner->buf + after,
+                     (unsigned char)scanner->delimiter,
+                     scanner->scan_len - after);
+    return end_hit != NULL || scanner->eof;
+}
+
 size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,
                                                 size_t start_off,
                                                 size_t end_off) {

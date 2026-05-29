@@ -25,7 +25,7 @@ static bool bx_search_scanner_can_shortcut_file_presence(const struct search_opt
     return (opts->files_with_matches || opts->files_without_match) && !opts->stats;
 }
 
-static bool bx_search_scanner_matcher_is_exact_literal_candidate(
+bool bx_search_scanner_matcher_is_exact_literal_candidate(
     const struct bx_matcher *m,
     const struct search_opts *opts
 ) {

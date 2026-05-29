@@ -47,6 +47,8 @@ bool bx_search_scanner_next_literal_candidate(const struct bx_search_scanner *sc
 bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
                                      const struct bx_search_candidate *candidate,
                                      struct bx_search_record_slice *record);
+bool bx_search_scanner_candidate_record_is_buffered(const struct bx_search_scanner *scanner,
+                                                    const struct bx_search_candidate *candidate);
 size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,
                                                 size_t start_off,
                                                 size_t end_off);

@@ -15,6 +15,8 @@ bool bx_search_scanner_can_use(const struct bx_matcher *m,
                                bool use_stdin);
 bool bx_search_scanner_can_raw_shortcut_file_presence(const struct bx_matcher *m,
                                                       const struct search_opts *opts);
+bool bx_search_scanner_matcher_is_exact_literal_candidate(const struct bx_matcher *m,
+                                                          const struct search_opts *opts);
 int bx_search_scanner_opened(FILE *f,
                              bool use_stdin,
                              const char *display_name,

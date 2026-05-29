@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "dev_counters.h"
+#include "lib/color.h"
 #include "literal.h"
 #include "literal_scan.h"
 #include "pcre2_matcher.h"
@@ -59,6 +60,11 @@ struct bx_search_deferred_prefix_policy {
     bool transform_needed;
     bool binary_nul_found;
     size_t binary_nul_offset;
+};
+
+struct bx_search_deferred_precheck_state {
+    bool candidate_buffer_to_eof;
+    size_t bytes_searched;
 };
 
 struct bx_search_display_name_state {
@@ -288,6 +294,190 @@ search_file_check_deferred_prefix_policy(struct search_opts *opts,
     return policy;
 }
 
+static int search_file_try_buffer_deferred_fd_to_eof(int fd,
+                                                     struct bx_search_scanner *scanner,
+                                                     size_t *searched_len) {
+    if (fd < 0 || !scanner || !searched_len)
+        return -1;
+
+    while (scanner->len < scanner->cap) {
+        size_t read_cap = scanner->cap - scanner->len;
+        ssize_t nread;
+
+        do {
+            nread = read(fd, scanner->buf + scanner->len, read_cap);
+        } while (nread < 0 && errno == EINTR);
+        if (nread < 0)
+            return -1;
+        scanner->len += (size_t)nread;
+        *searched_len += (size_t)nread;
+        bx_search_dev_counters_note_content_read((size_t)nread);
+        if (nread == 0)
+            return 0;
+    }
+    return 1;
+}
+
+static void search_file_note_deferred_buffer_candidate(struct bx_search_deferred_precheck_state *state,
+                                                       int fd,
+                                                       struct bx_search_scanner *scanner,
+                                                       struct search_opts *opts,
+                                                       size_t *searched_len) {
+    int finish_status;
+
+    if (!state || !scanner || !opts || !searched_len)
+        return;
+    if (opts->null_data || opts->binary_as_text)
+        return;
+    finish_status = search_file_try_buffer_deferred_fd_to_eof(fd, scanner, searched_len);
+    if (finish_status != 0)
+        return;
+    scanner->scan_len = scanner->len;
+    scanner->eof = true;
+    if (memchr(scanner->buf, '\0', scanner->scan_len) != NULL)
+        return;
+    state->candidate_buffer_to_eof = true;
+}
+
+static bool search_file_deferred_buffered_output_supported(struct bx_matcher *m,
+                                                           struct search_opts *opts) {
+    if (!m || !opts)
+        return false;
+    if (!bx_search_scanner_matcher_is_exact_literal_candidate(m, opts))
+        return false;
+    if (opts->quiet || opts->count_only || opts->count_matches)
+        return false;
+    if (opts->files_with_matches || opts->files_without_match)
+        return false;
+    if (opts->only_matching || opts->replace || opts->passthru || opts->vimgrep)
+        return false;
+    if (opts->show_line_number || opts->max_count > 0)
+        return false;
+    if (opts->null_data)
+        return false;
+    return true;
+}
+
+static int search_file_output_deferred_buffered_candidates(
+    const char *display_name,
+    struct bx_matcher *m,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_search_scanner *scanner,
+    struct bx_search_stats *stats,
+    size_t bytes_searched
+) {
+    struct bx_literal_matcher *literal;
+    size_t cursor = 0u;
+    int file_matches = 0;
+    bool heading_printed_for_file = false;
+    bool heading_enabled;
+    bool need_initial_tab;
+    bool can_omit_long_line;
+    bool color;
+    bool plain_line_output;
+    const char *match_sep;
+    size_t match_sep_len;
+    size_t display_name_len = 0u;
+    bool display_name_len_ready = false;
+    unsigned char delimiter;
+    FILE *out;
+
+    if (!display_name || !scanner || !search_file_deferred_buffered_output_supported(m, opts))
+        return -1;
+    if (!scanner->eof)
+        return -1;
+
+    literal = bx_search_matcher_literal(m);
+    if (!literal)
+        return -1;
+
+    heading_enabled = bx_search_use_heading_output(display_name, opts);
+    need_initial_tab = opts->initial_tab;
+    can_omit_long_line = opts->max_columns > 0 && !opts->only_matching;
+    color = bx_color_enabled();
+    plain_line_output = !color
+        && !opts->trim
+        && !opts->only_matching
+        && !opts->show_line_number
+        && !opts->show_column
+        && !opts->show_byte_offset
+        && !need_initial_tab;
+    match_sep = bx_search_match_field_separator(opts);
+    match_sep_len = opts->null_filename ? 1u : strlen(match_sep);
+    delimiter = (unsigned char)bx_search_record_delimiter(opts);
+    out = bx_search_output_stream();
+    scanner->delimiter = (char)delimiter;
+
+    if (display_name && (opts->show_filename || heading_enabled)) {
+        display_name_len = strlen(display_name);
+        display_name_len_ready = true;
+    }
+    if (stats) {
+        stats->files_searched++;
+        stats->bytes_searched += bytes_searched;
+    }
+
+    while (cursor <= scanner->scan_len) {
+        struct bx_search_candidate candidate;
+        struct bx_search_record_slice record;
+        struct bx_match bm;
+        size_t candidate_record_off;
+
+        if (!bx_search_scanner_next_literal_candidate(scanner, literal, &cursor, &candidate))
+            break;
+        if (!bx_search_scanner_candidate_record_is_buffered(scanner, &candidate))
+            return -1;
+        if (!bx_search_scanner_expand_record(scanner, &candidate, &record))
+            continue;
+
+        candidate_record_off = candidate.chunk_off - record.chunk_off;
+        bm.start = candidate_record_off;
+        bm.end = candidate_record_off + candidate.anchor_len;
+        cursor = record.chunk_off + record.len;
+
+        file_matches++;
+        if (stats) {
+            stats->matches++;
+            stats->matched_lines++;
+        }
+
+        if (heading_enabled)
+            bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
+
+        if (can_omit_long_line && (int)record.len > opts->max_columns) {
+            bx_search_print_omitted_long_line(opts);
+        } else {
+            bool prefix_printed;
+
+            if (!heading_printed_for_file && display_name && !display_name_len_ready) {
+                display_name_len = strlen(display_name);
+                display_name_len_ready = true;
+            }
+            prefix_printed = bx_search_print_result_prefix_cached(
+                heading_printed_for_file ? NULL : display_name,
+                heading_printed_for_file ? 0u : display_name_len,
+                opts, 0, bm.start + 1u, true, (size_t)record.file_off,
+                match_sep, match_sep_len, out, color
+            );
+            bx_search_maybe_emit_initial_tab(opts, prefix_printed);
+            bx_search_print_match_colored_cached(record.data, record.len, bm.start, bm.end,
+                                                 record.has_delim, opts, out, color,
+                                                 delimiter);
+            if (plain_line_output)
+                bx_search_dev_counters_note_plain_line_output();
+        }
+    }
+
+    if (file_matches == 0)
+        return -1;
+    if (stats)
+        stats->files_with_matches++;
+    if (match_count)
+        *match_count += file_matches;
+    return 0;
+}
+
 static int search_file_deferred_literal_precheck_path(const char *filename,
                                                       struct bx_search_display_name_state *display_name_state,
                                                       const char *progname,
@@ -295,13 +485,18 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                                                       const struct bx_search_exec_plan *exec_plan,
                                                       struct search_opts *opts,
                                                       struct bx_search_scanner *scanner,
-                                                      struct bx_search_stats *stats) {
+                                                      struct bx_search_stats *stats,
+                                                      struct bx_search_deferred_precheck_state *state) {
     const struct bx_lit_plan *absence_plan;
     int fd;
     int result = BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
     size_t searched_len = 0u;
     bool prefix_policy_checked = false;
 
+    if (state)
+        state->candidate_buffer_to_eof = false;
+    if (state)
+        state->bytes_searched = 0u;
     if (!filename || !m || !exec_plan || !exec_plan->deferred_literal_precheck ||
         !opts || !scanner) {
         return BX_SEARCH_DEFERRED_PRECHECK_UNSUPPORTED;
@@ -385,6 +580,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                 size_t scan_start = bx_search_chunk_overlap_scan_start(carry, overlap);
                 size_t overlap_bytes_scanned =
                     bx_search_chunk_overlap_rescanned_bytes(carry, overlap);
+                size_t buffer_file_off = searched_len - scanner->len;
 
                 bx_search_dev_counters_note_literal_overlap_bytes_scanned(overlap_bytes_scanned);
                 if (search_file_find_literal_precheck_match(absence_plan,
@@ -393,6 +589,14 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                                                             scan_start,
                                                             &bm)) {
                     bx_search_chunk_overlap_note_cross_chunk_match(bm.start, bm.end, carry);
+                    scanner->file_off = (off_t)buffer_file_off;
+                    scanner->scan_len = scanner->len;
+                    scanner->delimiter = bx_search_record_delimiter(opts);
+                    scanner->records_before_buf = 0u;
+                    scanner->track_record_numbers = false;
+                    scanner->eof = false;
+                    search_file_note_deferred_buffer_candidate(state, fd, scanner,
+                                                              opts, &searched_len);
                     result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                     goto out;
                 }
@@ -415,6 +619,8 @@ out_error:
     result = BX_SEARCH_DEFERRED_PRECHECK_ERROR;
 
 out:
+    if (state)
+        state->bytes_searched = searched_len;
     bx_search_dev_counters_note_content_close_call();
     close(fd);
     if (stats && (result == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
@@ -895,9 +1101,10 @@ static int search_file_default_literal_raw_path(const char *filename,
                                                 struct bx_search_scanner *scanner,
                                                 struct bx_record_stream *record_stream,
                                                 struct bx_search_stats *stats) {
+    struct bx_search_deferred_precheck_state precheck_state = {0};
     int precheck = search_file_deferred_literal_precheck_path(filename, display_name_state,
                                                               progname, m, exec_plan, opts,
-                                                              scanner, stats);
+                                                              scanner, stats, &precheck_state);
 
     if (precheck == BX_SEARCH_DEFERRED_PRECHECK_NO_MATCH ||
         precheck == BX_SEARCH_DEFERRED_PRECHECK_ERROR) {
@@ -918,6 +1125,21 @@ static int search_file_default_literal_raw_path(const char *filename,
         if (match_count)
             (*match_count)++;
         return 0;
+    }
+    if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH &&
+        precheck_state.candidate_buffer_to_eof) {
+        const char *display_name = search_file_resolve_display_name(display_name_state, opts);
+        int buffered_result = search_file_output_deferred_buffered_candidates(
+            display_name, m, opts, match_count, scanner, stats,
+            precheck_state.bytes_searched
+        );
+        if (buffered_result >= 0) {
+            if (buffered_result == 0)
+                bx_search_dev_counters_note_raw_fd_to_output_entry();
+            if (buffered_result == 2)
+                bx_search_dev_counters_note_raw_fd_to_diagnostic_entry();
+            return buffered_result;
+        }
     }
     if (precheck == BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH) {
         bx_search_dev_counters_note_candidate_triggered_reopen_call();
