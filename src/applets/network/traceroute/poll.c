@@ -10,8 +10,8 @@
 #include <unistd.h>
 #include <poll.h>
 #include <errno.h>
-#include <math.h>
 
+#include "lib/time_parse.h"
 #include "traceroute.h"
 
 static struct pollfd* pfd = NULL;
@@ -80,8 +80,14 @@ void do_poll(double timeout, void (*callback)(int fd, int revents)) {
     if (!nfds)
         return;
 
+    int timeout_ms = 0;
+    if (!bx_time_seconds_to_milliseconds_int_ceil(timeout, &timeout_ms)) {
+        errno = EINVAL;
+        error("poll timeout");
+    }
+
     // Poll the file descriptors with the specified timeout
-    n = poll(pfd, nfds, ceil(timeout * 1000));
+    n = poll(pfd, nfds, timeout_ms);
     if (n < 0) {
         if (errno == EINTR)
             return;

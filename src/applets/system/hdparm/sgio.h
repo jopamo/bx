@@ -1,6 +1,10 @@
 /* prototypes and stuff for ATA command ioctls */
 
+#include <errno.h>
+#include <limits.h>
 #include <linux/types.h>
+
+#include "lib/time_parse.h"
 
 enum {
 	ATA_OP_DSM			= 0x06, // Data Set Management (TRIM)
@@ -198,6 +202,26 @@ struct scsi_sg_io_hdr {
 	unsigned int		duration;
 	unsigned int		info;
 };
+
+static inline bool hdparm_sgio_timeout_milliseconds(unsigned int timeout_secs,
+	unsigned int default_timeout_secs, unsigned int *milliseconds_out)
+{
+	uintmax_t milliseconds = 0;
+	unsigned int effective_timeout_secs = timeout_secs ? timeout_secs : default_timeout_secs;
+
+	if (milliseconds_out == NULL) {
+		errno = EINVAL;
+		return false;
+	}
+	if (!bx_time_seconds_to_milliseconds_uint(effective_timeout_secs, &milliseconds) ||
+	    milliseconds > (uintmax_t)UINT_MAX) {
+		errno = EOVERFLOW;
+		return false;
+	}
+
+	*milliseconds_out = (unsigned int)milliseconds;
+	return true;
+}
 
 #ifndef SG_DXFER_NONE
 	#define SG_DXFER_NONE		-1

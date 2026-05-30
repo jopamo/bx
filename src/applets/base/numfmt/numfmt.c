@@ -402,30 +402,33 @@ static double bx_numfmt_parse_number_text(
 }
 
 static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, int exponent) {
-    static const char* si_units[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y"};
-    static const char* iec_units[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y"};
-    static const char* iec_i_units[] = {"", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi"};
-
     if (exponent < 0) {
         exponent = 0;
     }
-    if (exponent > 8) {
-        exponent = 8;
-    }
+    unsigned int power = exponent > 8 ? 8u : (unsigned int)exponent;
+
+    enum bx_size_unit_label_style style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
 
     switch (to_unit) {
         case UNIT_SI:
-            return si_units[exponent];
+            style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
+            break;
         case UNIT_IEC:
-            return iec_units[exponent];
+            style = BX_SIZE_UNIT_LABEL_IEC_PREFIX;
+            break;
         case UNIT_IEC_I:
-            return iec_i_units[exponent];
+            style = BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX;
+            break;
         case UNIT_AUTO:
-            return si_units[exponent];
+            style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
+            break;
         case UNIT_NONE:
         default:
             return "";
     }
+
+    const char* label = bx_size_unit_label(style, power);
+    return label != NULL ? label : "";
 }
 
 static char* bx_numfmt_format_number(double value, const struct bx_numfmt_options* options) {

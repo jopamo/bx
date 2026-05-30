@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "lib/time_parse.h"
 #include "traceroute.h"
 
 static void json_escape(const char* s) {
@@ -74,8 +75,10 @@ void tr_export_jsonl_probe(probe* pb) {
     }
 
     if (pb->recv_time) {
-        double rtt = (pb->recv_time - pb->send_time) * 1000.0;
-        printf(", \"rtt_ms\":%.3f", rtt);
+        double rtt_ms = 0.0;
+        if (bx_time_seconds_to_milliseconds_double(pb->recv_time - pb->send_time, &rtt_ms)) {
+            printf(", \"rtt_ms\":%.3f", rtt_ms);
+        }
     }
 
     if (pb->err_str[0]) {

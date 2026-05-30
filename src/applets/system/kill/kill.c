@@ -22,6 +22,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/time_parse.h"
 
 #ifndef SYS_pidfd_open
 #if defined(__x86_64__)
@@ -922,7 +923,10 @@ static int bx_kill_wait_pidfd_for_timeout(int pidfd, int milliseconds) {
             return -1;
         }
 
-        int64_t elapsed_ms = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
+        int64_t elapsed_ms = 0;
+        if (!bx_time_timespec_elapsed_milliseconds_int64(&start, &now, &elapsed_ms)) {
+            return -1;
+        }
         if (elapsed_ms >= milliseconds) {
             return 1;
         }

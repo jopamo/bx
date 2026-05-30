@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include "lib/args_common.h"
 #include "lib/size_parse.h"
+#include "lib/time_parse.h"
 #ifdef USE_IO_URING
 #include <liburing.h>
 #endif
@@ -515,12 +516,18 @@ int main(int argc, char* argv[]) {
                 if (errstr)
                     errx(EXIT_USAGE, "receive limit %s: %s", errstr, optarg);
                 break;
-            case 'w':
-                timeout = nc_strtonum(optarg, 0, INT_MAX / 1000, &errstr);
+            case 'w': {
+                long long timeout_seconds;
+                int timeout_ms = 0;
+
+                timeout_seconds = nc_strtonum(optarg, 0, INT_MAX, &errstr);
                 if (errstr)
                     errx(EXIT_USAGE, "timeout %s: %s", errstr, optarg);
-                timeout *= 1000;
+                if (!bx_time_seconds_to_milliseconds_int((uintmax_t)timeout_seconds, &timeout_ms))
+                    errx(EXIT_USAGE, "timeout too large: %s", optarg);
+                timeout = timeout_ms;
                 break;
+            }
             case 'x':
                 xflag = 1;
                 free(proxy_alloc);

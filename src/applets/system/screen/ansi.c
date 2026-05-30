@@ -618,7 +618,7 @@ void WriteString(Window *win, char *buf, size_t len)
 		WLogString(win, buf, len);
 
 	if (win->w_silence)
-		SetTimeout(&win->w_silenceev, win->w_silencewait * 1000);
+		SetTimeoutSeconds(&win->w_silenceev, win->w_silencewait);
 
 	if (win->w_monitor == MON_ON) {
 		win->w_monitor = MON_FOUND;

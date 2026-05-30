@@ -232,6 +232,34 @@ void bx_size_format_human_round(uintmax_t value, uintmax_t base, const char* suf
     }
 }
 
+void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buffer_size) {
+    if (buffer == NULL || buffer_size == 0u) {
+        return;
+    }
+
+    double value = bytes_per_sec;
+    unsigned int power = 0u;
+    while (value >= 999.5 && power < 6u) {
+        value /= 1000.0;
+        power++;
+    }
+
+    unsigned int label_power = (value == 0.0 && power == 0u) ? 1u : power;
+    const char* label = bx_size_unit_label(BX_SIZE_UNIT_LABEL_SI_LOWER_K, label_power);
+    if (label == NULL) {
+        label = "";
+    }
+
+    if (value == 0.0) {
+        (void)snprintf(buffer, buffer_size, "0.0 %sB/s", label);
+        return;
+    }
+
+    char number[64];
+    (void)snprintf(number, sizeof(number), "%.3g", value);
+    (void)snprintf(buffer, buffer_size, "%s %sB/s", number, label);
+}
+
 bool bx_size_parse_scaled_count(const char* text, intmax_t* value_out) {
     if (text == NULL || text[0] == '\0' || value_out == NULL) {
         return false;
@@ -316,6 +344,27 @@ bool bx_size_suffix_prefix_power(char suffix, unsigned int* power_out) {
 
     *power_out = (unsigned int)(prefix - prefixes) + 2u;
     return true;
+}
+
+const char* bx_size_unit_label(enum bx_size_unit_label_style style, unsigned int power) {
+    static const char* const si_units[] = {"", "k", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
+    static const char* const iec_units[] = {"", "K", "M", "G", "T", "P", "E", "Z", "Y", "R", "Q"};
+    static const char* const iec_i_units[] = {"", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi", "Yi", "Ri", "Qi"};
+
+    if (power >= sizeof(si_units) / sizeof(si_units[0])) {
+        return NULL;
+    }
+
+    switch (style) {
+        case BX_SIZE_UNIT_LABEL_SI_LOWER_K:
+            return si_units[power];
+        case BX_SIZE_UNIT_LABEL_IEC_PREFIX:
+            return iec_units[power];
+        case BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX:
+            return iec_i_units[power];
+    }
+
+    return NULL;
 }
 
 enum bx_size_suffix_parse_result bx_size_suffix_multiplier_result(const char* suffix, uintmax_t* multiplier_out) {

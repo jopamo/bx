@@ -57,6 +57,7 @@
 #include "list_generic.h"
 #include "mark.h"
 #include "winmsg.h"
+#include "lib/time_parse.h"
 
 extern char **environ;
 
@@ -85,10 +86,19 @@ static int    IsSymbol(char *, char *);
 static char  *ParseChar(char *, char *);
 static int    ParseEscape(char *);
 static char  *MakeDefaultShellProg(const char *);
+static void   InitDefaultWaitMilliseconds(void);
 static void   SetTtyname(bool fatal, struct stat *st);
 int           main(int argc, char **argv);
 
 int nversion;			/* numerical version, used for secondary DA */
+
+static void InitDefaultWaitMilliseconds(void)
+{
+	if (!bx_time_seconds_to_milliseconds_int(VBELLWAIT, &VBellWait) ||
+	    !bx_time_seconds_to_milliseconds_int(MSGWAIT, &MsgWait) ||
+	    !bx_time_seconds_to_milliseconds_int(MSGMINWAIT, &MsgMinWait))
+		Panic(0, "invalid built-in wait time");
+}
 
 /* the attacher */
 bool          do_auth = false;
@@ -358,9 +368,7 @@ int main(int argc, char **argv)
 	PowDetachString   = NULL;
 	default_startup   = (argc > 1) ? false : true;
 	adaptflag         = false;
-	VBellWait         = VBELLWAIT * 1000;
-	MsgWait           = MSGWAIT * 1000;
-	MsgMinWait        = MSGMINWAIT * 1000;
+	InitDefaultWaitMilliseconds();
 	SilenceWait       = SILENCEWAIT;
 	zmodem_sendcmd    = SaveStr("!!! sz -vv -b ");
 	zmodem_recvcmd    = SaveStr("!!! rz -vv -b -E");
@@ -1266,7 +1274,7 @@ static void DoWait(void)
 					 */
 					win->w_destroyev.data = (char *)win;
 					win->w_exitstatus = wstat;
-					SetTimeout(&win->w_destroyev, 10 * 1000);
+					SetTimeoutSeconds(&win->w_destroyev, 10);
 					evenq(&win->w_destroyev);
 				}
 				break;
@@ -1848,7 +1856,7 @@ static void logflush_fn(Event *event, void *data)
 	logfflush(NULL);
 	n = log_flush ? log_flush : (logtstamp_after + 4) / 5;
 	if (n) {
-		SetTimeout(event, n * 1000);
+		SetTimeoutSeconds(event, n);
 		evenq(event);	/* re-enqueue ourself */
 	}
 	if (!logtstamp_on)

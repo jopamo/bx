@@ -162,6 +162,230 @@ bool bx_time_seconds_to_timespec(double seconds, struct timespec* ts_out) {
     return true;
 }
 
+bool bx_time_milliseconds_to_timespec(intmax_t milliseconds, struct timespec* ts_out) {
+    if (ts_out == NULL || milliseconds < 0) {
+        return false;
+    }
+
+    intmax_t seconds_value = milliseconds / 1000;
+    intmax_t milliseconds_remainder = milliseconds % 1000;
+    if ((long double)seconds_value > bx_time_time_t_max_value()) {
+        return false;
+    }
+
+    time_t tv_sec = (time_t)seconds_value;
+    if ((long double)tv_sec != (long double)seconds_value) {
+        return false;
+    }
+
+    ts_out->tv_sec = tv_sec;
+    ts_out->tv_nsec = (long)milliseconds_remainder * 1000000L;
+    return true;
+}
+
+bool bx_time_seconds_to_milliseconds_uint(uintmax_t seconds, uintmax_t* milliseconds_out) {
+    if (milliseconds_out == NULL || seconds > UINTMAX_MAX / 1000u) {
+        return false;
+    }
+
+    *milliseconds_out = seconds * 1000u;
+    return true;
+}
+
+bool bx_time_seconds_to_milliseconds_int(uintmax_t seconds, int* milliseconds_out) {
+    uintmax_t milliseconds = 0;
+
+    if (milliseconds_out == NULL ||
+        !bx_time_seconds_to_milliseconds_uint(seconds, &milliseconds) ||
+        milliseconds > (uintmax_t)INT_MAX) {
+        return false;
+    }
+
+    *milliseconds_out = (int)milliseconds;
+    return true;
+}
+
+bool bx_time_seconds_to_milliseconds_int_ceil(double seconds, int* milliseconds_out) {
+    if (milliseconds_out == NULL || !isfinite(seconds) || seconds < 0.0) {
+        return false;
+    }
+
+    double milliseconds = ceil(seconds * 1000.0);
+    if (!isfinite(milliseconds) || milliseconds < 0.0 || milliseconds > (double)INT_MAX) {
+        return false;
+    }
+
+    *milliseconds_out = (int)milliseconds;
+    return true;
+}
+
+bool bx_time_seconds_to_milliseconds_double(double seconds, double* milliseconds_out) {
+    if (milliseconds_out == NULL || !isfinite(seconds)) {
+        return false;
+    }
+
+    double milliseconds = seconds * 1000.0;
+    if (!isfinite(milliseconds)) {
+        return false;
+    }
+
+    *milliseconds_out = milliseconds;
+    return true;
+}
+
+bool bx_time_timespec_to_seconds_double(const struct timespec* ts, double* seconds_out) {
+    if (ts == NULL || seconds_out == NULL || ts->tv_nsec < 0L || ts->tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    double seconds = (double)ts->tv_sec + ((double)ts->tv_nsec / 1000000000.0);
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    *seconds_out = seconds;
+    return true;
+}
+
+bool bx_time_timeval_to_seconds_double(const struct timeval* tv, double* seconds_out) {
+    if (tv == NULL || seconds_out == NULL || tv->tv_usec < 0 || tv->tv_usec >= 1000000) {
+        return false;
+    }
+
+    double seconds = (double)tv->tv_sec + ((double)tv->tv_usec / 1000000.0);
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    *seconds_out = seconds;
+    return true;
+}
+
+bool bx_time_timeval_elapsed_seconds_double(const struct timeval* start, const struct timeval* end, double* seconds_out) {
+    double start_seconds = 0.0;
+    double end_seconds = 0.0;
+
+    if (seconds_out == NULL ||
+        !bx_time_timeval_to_seconds_double(start, &start_seconds) ||
+        !bx_time_timeval_to_seconds_double(end, &end_seconds) ||
+        end_seconds < start_seconds) {
+        return false;
+    }
+
+    double elapsed = end_seconds - start_seconds;
+    if (!isfinite(elapsed)) {
+        return false;
+    }
+
+    *seconds_out = elapsed;
+    return true;
+}
+
+bool bx_time_timeval_to_milliseconds_int64(const struct timeval* tv, int64_t* milliseconds_out) {
+    if (tv == NULL || milliseconds_out == NULL || tv->tv_usec < 0 || tv->tv_usec >= 1000000) {
+        return false;
+    }
+
+    long double milliseconds = ((long double)tv->tv_sec * 1000.0L) + ((long double)tv->tv_usec / 1000.0L);
+    if (milliseconds < (long double)INT64_MIN || milliseconds > (long double)INT64_MAX) {
+        return false;
+    }
+
+    *milliseconds_out = (int64_t)milliseconds;
+    return true;
+}
+
+bool bx_time_timeval_elapsed_milliseconds_int64(const struct timeval* start, const struct timeval* end, int64_t* milliseconds_out) {
+    int64_t start_ms = 0;
+    int64_t end_ms = 0;
+
+    if (milliseconds_out == NULL ||
+        !bx_time_timeval_to_milliseconds_int64(start, &start_ms) ||
+        !bx_time_timeval_to_milliseconds_int64(end, &end_ms) ||
+        end_ms < start_ms) {
+        return false;
+    }
+
+    *milliseconds_out = end_ms - start_ms;
+    return true;
+}
+
+bool bx_time_timespec_to_milliseconds_double(const struct timespec* ts, double* milliseconds_out) {
+    if (ts == NULL || milliseconds_out == NULL || ts->tv_nsec < 0L || ts->tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    double milliseconds = ((double)ts->tv_sec * 1000.0) + ((double)ts->tv_nsec / 1000000.0);
+    if (!isfinite(milliseconds)) {
+        return false;
+    }
+
+    *milliseconds_out = milliseconds;
+    return true;
+}
+
+bool bx_time_timespec_to_milliseconds_uint(const struct timespec* ts, uintmax_t* milliseconds_out) {
+    if (ts == NULL || milliseconds_out == NULL || ts->tv_nsec < 0L || ts->tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    long double seconds_as_long_double = (long double)ts->tv_sec;
+    if (seconds_as_long_double < 0.0L || seconds_as_long_double > (long double)UINTMAX_MAX) {
+        return false;
+    }
+
+    uintmax_t seconds = (uintmax_t)ts->tv_sec;
+    uintmax_t nanoseconds_milliseconds = (uintmax_t)(ts->tv_nsec / 1000000L);
+    if (seconds > (UINTMAX_MAX - nanoseconds_milliseconds) / 1000u) {
+        return false;
+    }
+
+    *milliseconds_out = (seconds * 1000u) + nanoseconds_milliseconds;
+    return true;
+}
+
+bool bx_time_timespec_elapsed_milliseconds_int64(const struct timespec* start, const struct timespec* end, int64_t* milliseconds_out) {
+    uintmax_t start_ms = 0;
+    uintmax_t end_ms = 0;
+
+    if (milliseconds_out == NULL ||
+        !bx_time_timespec_to_milliseconds_uint(start, &start_ms) ||
+        !bx_time_timespec_to_milliseconds_uint(end, &end_ms) ||
+        end_ms < start_ms) {
+        return false;
+    }
+
+    uintmax_t elapsed_ms = end_ms - start_ms;
+    if (elapsed_ms > (uintmax_t)INT64_MAX) {
+        return false;
+    }
+
+    *milliseconds_out = (int64_t)elapsed_ms;
+    return true;
+}
+
+bool bx_time_timespec_elapsed_seconds_double(const struct timespec* start, const struct timespec* end, double* seconds_out) {
+    if (start == NULL || end == NULL || seconds_out == NULL ||
+        start->tv_nsec < 0L || start->tv_nsec >= 1000000000L ||
+        end->tv_nsec < 0L || end->tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    long double elapsed = ((long double)end->tv_sec - (long double)start->tv_sec) +
+                          (((long double)end->tv_nsec - (long double)start->tv_nsec) / 1000000000.0L);
+    if (elapsed < 0.0L) {
+        return false;
+    }
+
+    double seconds = (double)elapsed;
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    *seconds_out = seconds;
+    return true;
+}
+
 bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_parse_options* options, struct timespec* ts_out) {
     struct bx_time_epoch_parse_options default_options = {
         .allow_trailing_space = false,

@@ -36,6 +36,7 @@
 #include "process.h"
 
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -71,6 +72,8 @@
 #include "tty.h"
 #include "viewport.h"
 #include "winmsg.h"
+#include "lib/args_common.h"
+#include "lib/time_parse.h"
 
 
 static int CheckArgNum(int, char **);
@@ -85,6 +88,7 @@ static int digraph_find(const char *buf);
 static int IsOnDisplay(Window *);
 static void ShowWindowsX(char *);
 static void DoCommandAttrcolor(struct action *act);
+static bool ParseIdleTimeoutMilliseconds(const char *text, int *milliseconds_out);
 
 char NullStr[] = "";
 
@@ -3122,7 +3126,7 @@ static void DoCommandSilence(struct action *act)
 				ACLBYTE(fore->w_lio_notify, n) |= ACLBIT(n);
 		fore->w_silencewait = i;
 		fore->w_silence = SILENCE_ON;
-		SetTimeout(&fore->w_silenceev, fore->w_silencewait * 1000);
+		SetTimeoutSeconds(&fore->w_silenceev, fore->w_silencewait);
 		evenq(&fore->w_silenceev);
 
 		if (!msgok)
@@ -4256,6 +4260,18 @@ static void DoCommandBlankerprg(struct action *act)
 		blankerprg = SaveArgs(args);
 }
 
+static bool ParseIdleTimeoutMilliseconds(const char *text, int *milliseconds_out)
+{
+	int seconds = 0;
+
+	if (milliseconds_out == NULL ||
+	    !bx_args_parse_int_range(text, 0, INT_MAX, &seconds) ||
+	    !bx_time_seconds_to_milliseconds_int((uintmax_t)seconds, milliseconds_out))
+		return false;
+
+	return true;
+}
+
 static void DoCommandIdle(struct action *act)
 {
 	char **args = act->args;
@@ -4267,8 +4283,10 @@ static void DoCommandIdle(struct action *act)
 		Display *olddisplay = display;
 		if (!strcmp(*args, "off"))
 			idletimo = 0;
-		else if (args[0][0])
-			idletimo = atoi(*args) * 1000;
+		else if (args[0][0] && !ParseIdleTimeoutMilliseconds(*args, &idletimo)) {
+			OutputMsg(0, "%s: idle: invalid argument. Give numeric argument.", rc_name);
+			return;
+		}
 		if (argc > 1) {
 			int i;
 			if (IsUnsupportedUtmpCommand(args[1])) {

@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include "lib/time_parse.h"
+
 static size_t hex_total_in, hex_total_out;
 ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = direct_sendfile;
 
@@ -307,12 +309,11 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
 
         if (mptcp_diag_enabled) {
             struct timespec now;
-            long long elapsed_ms;
+            int64_t elapsed_ms;
 
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            elapsed_ms = (now.tv_sec - mptcp_diag_last.tv_sec) * 1000LL;
-            elapsed_ms += (now.tv_nsec - mptcp_diag_last.tv_nsec) / 1000000LL;
-            if (elapsed_ms >= 1000) {
+            if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+                bx_time_timespec_elapsed_milliseconds_int64(&mptcp_diag_last, &now, &elapsed_ms) &&
+                elapsed_ms >= 1000) {
                 report_mptcp_info(net_fd);
                 mptcp_diag_last = now;
             }
@@ -630,13 +631,15 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
 
             if (res == -1) {
                 if (errno == EAGAIN || errno == EINTR) {
-                    usleep(1000);
+                    if (nc_sleep_milliseconds(1) == -1)
+                        return -1;
                     continue;
                 }
                 return -1;
             }
             if (res == TLS_WANT_POLLIN || res == TLS_WANT_POLLOUT) {
-                usleep(1000);
+                if (nc_sleep_milliseconds(1) == -1)
+                    return -1;
                 continue;
             }
             total_written += res;

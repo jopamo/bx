@@ -221,7 +221,7 @@ void SetCanvasWindow(Canvas *cv, Window *window)
 		if (p && cv == D_forecv) {
 			ReleaseAutoWritelock(display, p);
 			if (p->w_silence) {
-				SetTimeout(&p->w_silenceev, p->w_silencewait * 1000);
+				SetTimeoutSeconds(&p->w_silenceev, p->w_silencewait);
 				evenq(&p->w_silenceev);
 			}
 			D_other = fore;

@@ -45,6 +45,7 @@
 #include "mark.h"
 #include "process.h"
 #include "sched.h"
+#include "lib/time_parse.h"
 
 /* TODO: rid global variable (has been renamed to point this out; see commit
  * history) */
@@ -834,12 +835,16 @@ char *MakeWinMsgEv(WinMsgBuf *winmsg, char *str, Window *win,
 		ev->timeout = 0;
 	}
 	if (ev && tick) {
+		int64_t timeout_ms = 0;
 		now.tv_usec = 100000;
 		if (tick == 1)
 			now.tv_sec++;
 		else
 			now.tv_sec += tick - (now.tv_sec % tick);
-		ev->timeout = (now.tv_sec * 1000 + now.tv_usec / 1000);
+		if (bx_time_timeval_to_milliseconds_int64(&now, &timeout_ms))
+			ev->timeout = timeout_ms;
+		else
+			ev->timeout = 0;
 	}
 
 	free(cond);

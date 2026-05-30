@@ -1027,17 +1027,21 @@ void identify (int fd, __u16 *id_supplied)
 		if (!bbbig) bbbig = bb;
 		bbbig *= sector_bytes;
 
-		printf("\tdevice size with M = 1024*1024: %11llu MBytes\n", bbbig / (1024ull * 1024ull));
+		printf("\tdevice size with M = 1024*1024: %11llu %sBytes\n", bbbig / (1024ull * 1024ull),
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_IEC_PREFIX, 2u));
 		bbbig /= 1000ull;
-		printf("\tdevice size with M = 1000*1000: %11llu MBytes ",  bbbig / 1000ull);
-		if (bbbig > 1000ull) printf("(%llu GB)\n", bbbig/1000000ull);
+		printf("\tdevice size with M = 1000*1000: %11llu %sBytes ",  bbbig / 1000ull,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 2u));
+		if (bbbig > 1000ull) printf("(%llu %sB)\n", bbbig/1000000ull,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 3u));
 		else printf("\n");
 	}
 
 	/* device cache/buffer size, if reported (obsolete field, but usually valid regardless) */
 	printf("\tcache/buffer size  = ");
 	if (val[20] <= 3 && val[BUF_SIZE] && val[BUF_SIZE] != 0xffff) {
-		printf("%u KBytes", val[BUF_SIZE] / 2);
+		printf("%u %sBytes", val[BUF_SIZE] / 2,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_IEC_PREFIX, 1u));
 		if (val[20])
 			printf(" (type=%s)", BuffType[val[20]]);
 	} else {
@@ -1107,7 +1111,8 @@ void identify (int fd, __u16 *id_supplied)
 	}
 	jj = 0;
 	if((min_std == 1) && (val[BUF_SIZE] && (val[BUF_SIZE] != 0xffff))) {
-		printf("\tBuffer size: %.1fkB",(float)val[BUF_SIZE]/2);
+		printf("\tBuffer size: %.1f%sB",(float)val[BUF_SIZE]/2,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 1u));
 		jj = 1;
 	}
 	if((min_std < 4) && (val[RW_LONG])) {

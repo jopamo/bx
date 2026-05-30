@@ -150,6 +150,7 @@ uint32_t nc_random_u32(void);
 void nc_random_buf(void* buf, size_t len);
 uint32_t nc_random_uniform(uint32_t upper_bound);
 int nc_sleep_monotonic(double seconds);
+int nc_sleep_milliseconds(int milliseconds);
 int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms);
 int is_address(const char*);
 

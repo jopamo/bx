@@ -16,6 +16,7 @@
 #include "applets/archive/archive_ordered.h"
 #include "bx/libbx.h"
 #include "lib/cancel_state.h"
+#include "lib/time_parse.h"
 #include "lib/work_pool.h"
 
 #define BX_ARCHIVE_GZIP_IO_CHUNK 8192u
@@ -92,8 +93,9 @@ static void bx_archive_gzip_test_delay_job(const struct bx_archive_gzip_stream_s
         return;
     }
 
-    ts.tv_sec = (time_t)(state->test_delay_first_chunk_ms / 1000u);
-    ts.tv_nsec = (long)((state->test_delay_first_chunk_ms % 1000u) * 1000000u);
+    if (!bx_time_milliseconds_to_timespec((intmax_t)state->test_delay_first_chunk_ms, &ts)) {
+        return;
+    }
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
     }
 }

@@ -261,7 +261,8 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 	io_hdr.cmdp		= cdb;
 	io_hdr.sbp		= sb;
 	io_hdr.pack_id		= tf_to_lba(tf);
-	io_hdr.timeout		= (timeout_secs ? timeout_secs : default_timeout_secs) * 1000; /* msecs */
+	if (!hdparm_sgio_timeout_milliseconds(timeout_secs, default_timeout_secs, &io_hdr.timeout))
+		return -1;
 
 	if (verbose) {
 		dump_bytes("outgoing cdb", cdb, sizeof(cdb));

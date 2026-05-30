@@ -40,6 +40,7 @@
 #include <stdint.h>
 #include <unistd.h>
 
+#include "lib/time_parse.h"
 #include "screen.h"
 
 #include "canvas.h"
@@ -1578,11 +1579,12 @@ static void RemoveStatusMinWait(void)
 	/* XXX: should flush output first if D_status_obufpos is set */
 	if (!D_status_bell && !D_status_obufpos) {
 		struct timeval now;
-		int ti;
+		int64_t elapsed_ms = 0;
 		gettimeofday(&now, NULL);
-		ti = (now.tv_sec - D_status_time.tv_sec) * 1000 + (now.tv_usec - D_status_time.tv_usec) / 1000;
-		if (ti < MsgMinWait)
-			DisplaySleep1000(MsgMinWait - ti, 0);
+		if (!bx_time_timeval_elapsed_milliseconds_int64(&D_status_time, &now, &elapsed_ms))
+			elapsed_ms = 0;
+		if (elapsed_ms < MsgMinWait)
+			DisplaySleep1000((int)((int64_t)MsgMinWait - elapsed_ms), 0);
 	}
 	RemoveStatus();
 }
@@ -2327,7 +2329,13 @@ void DisplaySleep1000(int n, int eat)
 	if (n <= 0)
 		return;
 	if (!display) {
-		usleep(1000 * n);
+		struct timespec req;
+		if (!bx_time_milliseconds_to_timespec(n, &req))
+			return;
+		while (nanosleep(&req, &req) == -1) {
+			if (errno != EINTR)
+				break;
+		}
 		return;
 	}
 

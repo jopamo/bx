@@ -10,17 +10,18 @@
 #include <unistd.h>
 #include <time.h>
 
+#include "lib/time_parse.h"
 #include "traceroute.h"
 
 /*  Just returns current time as double, with most possible precision...  */
 
 double get_time(void) {
     struct timespec ts;
-    double d;
+    double d = 0.0;
 
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    d = ((double)ts.tv_nsec) / 1000000000. + (unsigned long)ts.tv_sec;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
+        !bx_time_timespec_to_seconds_double(&ts, &d))
+        return 0.0;
 
     return d;
 }

@@ -649,7 +649,7 @@ traceroute_c_args = cc.get_supported_arguments([
 
 traceroute_lib = static_library('bx_traceroute',
   traceroute_sources,
-  include_directories : include_directories('src/applets/network/traceroute'),
+  include_directories : include_directories('src', 'src/applets/network/traceroute'),
   c_args : traceroute_c_args,
 )
 
@@ -675,6 +675,7 @@ hdparm_c_args = cc.get_supported_arguments([
 
 hdparm_lib = static_library('bx_hdparm',
   hdparm_sources,
+  include_directories : include_directories('src'),
   c_args : hdparm_c_args,
 )
 

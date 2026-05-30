@@ -37,6 +37,7 @@
 #include "flowlabel.h"
 
 #include <clif.h>
+#include "lib/time_parse.h"
 #include "version.h"
 #include "traceroute.h"
 
@@ -946,8 +947,11 @@ static void print_probe(probe* pb) {
 
     if (pb->recv_time) {
         double diff = pb->recv_time - pb->send_time;
+        double diff_ms = 0.0;
 
-        printf("  %.3f ms", diff * 1000);
+        if (bx_time_seconds_to_milliseconds_double(diff, &diff_ms)) {
+            printf("  %.3f ms", diff_ms);
+        }
     }
 
     if (pb->err_str[0])
@@ -1543,23 +1547,27 @@ void recv_reply(int sk, int err, check_reply_t check_reply) {
         if (cm->cmsg_level == SOL_SOCKET) {
             if (cm->cmsg_type == SCM_TIMESTAMPNS) {
                 struct timespec* ts = (struct timespec*)ptr;
+                double timestamp = 0.0;
 
-                recv_time = ts->tv_sec + ts->tv_nsec / 1000000000.;
+                if (bx_time_timespec_to_seconds_double(ts, &timestamp))
+                    recv_time = timestamp;
             }
             else if (cm->cmsg_type == SO_TIMESTAMP) {
                 struct timeval* tv = (struct timeval*)ptr;
+                double timestamp = 0.0;
 
-                recv_time = tv->tv_sec + tv->tv_usec / 1000000.;
+                if (bx_time_timeval_to_seconds_double(tv, &timestamp))
+                    recv_time = timestamp;
             }
             else if (cm->cmsg_type == SCM_TIMESTAMPING) {
                 struct timespec* ts = (struct timespec*)ptr;
+                const struct timespec* selected_ts = &ts[0];
+                double timestamp = 0.0;
                 /* ts[0] is software, ts[1] is transformed hardware, ts[2] is raw hardware */
-                if (ts_mode == TS_KERNEL_HW && (ts[2].tv_sec || ts[2].tv_nsec)) {
-                    recv_time = ts[2].tv_sec + ts[2].tv_nsec / 1000000000.;
-                }
-                else {
-                    recv_time = ts[0].tv_sec + ts[0].tv_nsec / 1000000000.;
-                }
+                if (ts_mode == TS_KERNEL_HW && (ts[2].tv_sec || ts[2].tv_nsec))
+                    selected_ts = &ts[2];
+                if (bx_time_timespec_to_seconds_double(selected_ts, &timestamp))
+                    recv_time = timestamp;
             }
         }
         else if (cm->cmsg_level == SOL_IP) {

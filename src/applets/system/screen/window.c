@@ -379,7 +379,7 @@ int DoStartLog(Window *window, char *buf, int bufsize)
 	if (!logflushev.queued) {
 		n = log_flush ? log_flush : (logtstamp_after + 4) / 5;
 		if (n) {
-			SetTimeout(&logflushev, n * 1000);
+			SetTimeoutSeconds(&logflushev, n);
 			evenq(&logflushev);
 		}
 	}
@@ -687,7 +687,7 @@ int MakeWindow(struct NewWindow *newwin)
 	p->w_silenceev.data = (char *)p;
 	p->w_silenceev.handler = win_silenceev_fn;
 	if (p->w_silence > 0) {
-		SetTimeout(&p->w_silenceev, p->w_silencewait * 1000);
+		SetTimeoutSeconds(&p->w_silenceev, p->w_silencewait);
 		evenq(&p->w_silenceev);
 	}
 	p->w_destroyev.type = EV_TIMEOUT;
@@ -1897,7 +1897,7 @@ void WindowDied(Window *p, int wstat, int wstat_valid)
 		sprintf(buf, "\n\r=== Command %s (%s) ===", reason, s ? s : "?");
 		WriteString(p, buf, strlen(buf));
 		if (p->w_poll_zombie_timeout) {
-			SetTimeout(&p->w_zombieev, p->w_poll_zombie_timeout * 1000);
+			SetTimeoutSeconds(&p->w_zombieev, p->w_poll_zombie_timeout);
 			evenq(&p->w_zombieev);
 		}
 		WindowChanged(p, WINESC_WFLAGS);

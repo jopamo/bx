@@ -19,6 +19,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
+#include "lib/time_parse.h"
 #include "lib/xreadwrite.h"
 
 enum {
@@ -1141,39 +1142,12 @@ static bool bx_dd_now(struct timespec* ts_out) {
 }
 
 static double bx_dd_elapsed_seconds(const struct timespec* start, const struct timespec* end) {
-    time_t sec = end->tv_sec - start->tv_sec;
-    long nsec = end->tv_nsec - start->tv_nsec;
-
-    if (nsec < 0) {
-        sec -= 1;
-        nsec += 1000000000L;
-    }
-
-    if (sec < 0) {
+    double elapsed = 0.0;
+    if (!bx_time_timespec_elapsed_seconds_double(start, end, &elapsed)) {
         return 0.0;
     }
 
-    return (double)sec + (double)nsec / 1000000000.0;
-}
-
-static void bx_dd_format_rate(double bytes_per_sec, char* buf, size_t buf_size) {
-    static const char* units[] = { "B/s", "kB/s", "MB/s", "GB/s", "TB/s", "PB/s", "EB/s" };
-    size_t unit = 0;
-    double value = bytes_per_sec;
-
-    while (value >= 999.5 && unit + 1u < sizeof(units) / sizeof(units[0])) {
-        value /= 1000.0;
-        unit++;
-    }
-
-    if (value == 0.0) {
-        snprintf(buf, buf_size, "0.0 %s", units[(unit == 0) ? 1u : unit]);
-        return;
-    }
-
-    char number[64];
-    snprintf(number, sizeof(number), "%.3g", value);
-    snprintf(buf, buf_size, "%s %s", number, units[unit]);
+    return elapsed;
 }
 
 static void bx_dd_format_amount(double value, char* buf, size_t buf_size) {
@@ -1188,40 +1162,53 @@ static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size
         return false;
     }
 
-    static const char* decimal_units[] = { "kB", "MB", "GB", "TB", "PB", "EB" };
-    static const char* binary_units[] = { "KiB", "MiB", "GiB", "TiB", "PiB", "EiB" };
-
     double decimal = (double)bytes;
-    size_t decimal_unit = 0;
+    unsigned int decimal_power = 1u;
     do {
         decimal /= 1000.0;
-        if (decimal < 999.95 || decimal_unit + 1u >= sizeof(decimal_units) / sizeof(decimal_units[0])) {
+        if (decimal < 999.95 || decimal_power >= 6u) {
             break;
         }
-        decimal_unit++;
+        decimal_power++;
     } while (true);
+
+    const char* decimal_unit = bx_size_unit_label(BX_SIZE_UNIT_LABEL_SI_LOWER_K, decimal_power);
+    if (decimal_unit == NULL) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
+        }
+        return false;
+    }
 
     char decimal_number[64];
     bx_dd_format_amount(decimal, decimal_number, sizeof(decimal_number));
 
     if (bytes < 1024) {
-        snprintf(buf, buf_size, " (%s %s)", decimal_number, decimal_units[decimal_unit]);
+        snprintf(buf, buf_size, " (%s %sB)", decimal_number, decimal_unit);
         return true;
     }
 
     double binary = (double)bytes;
-    size_t binary_unit = 0;
+    unsigned int binary_power = 1u;
     do {
         binary /= 1024.0;
-        if (binary < 999.95 || binary_unit + 1u >= sizeof(binary_units) / sizeof(binary_units[0])) {
+        if (binary < 999.95 || binary_power >= 6u) {
             break;
         }
-        binary_unit++;
+        binary_power++;
     } while (true);
+
+    const char* binary_unit = bx_size_unit_label(BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX, binary_power);
+    if (binary_unit == NULL) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
+        }
+        return false;
+    }
 
     char binary_number[64];
     bx_dd_format_amount(binary, binary_number, sizeof(binary_number));
-    snprintf(buf, buf_size, " (%s %s, %s %s)", decimal_number, decimal_units[decimal_unit], binary_number, binary_units[binary_unit]);
+    snprintf(buf, buf_size, " (%s %sB, %s %sB)", decimal_number, decimal_unit, binary_number, binary_unit);
     return true;
 }
 
@@ -1231,7 +1218,7 @@ static void bx_dd_print_bytes_copied_line(uintmax_t bytes, double elapsed) {
     }
 
     char rate[128];
-    bx_dd_format_rate((double)bytes / elapsed, rate, sizeof(rate));
+    bx_size_format_decimal_rate((double)bytes / elapsed, rate, sizeof(rate));
 
     char humans[160];
     bx_dd_format_byte_humans(bytes, humans, sizeof(humans));

@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
@@ -20,6 +21,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/time_parse.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
 #define BX_PING_DEFAULT_TIMEOUT_MS 1000u
@@ -121,7 +123,12 @@ static bool bx_ping_parse_options(int argc, char** argv, struct bx_ping_options*
                     bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
                     return false;
                 }
-                options->timeout_ms = value * 1000u;
+                uintmax_t timeout_ms = 0;
+                if (!bx_time_seconds_to_milliseconds_uint(value, &timeout_ms) || timeout_ms > (uintmax_t)UINT_MAX) {
+                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                    return false;
+                }
+                options->timeout_ms = (unsigned int)timeout_ms;
                 break;
             case 's':
                 if (!bx_ping_parse_uint(optarg, 0u, BX_PING_MAX_PAYLOAD_SIZE, &value)) {
@@ -243,7 +250,12 @@ static double bx_ping_now_ms(void) {
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0.0;
     }
-    return ((double)ts.tv_sec * 1000.0) + ((double)ts.tv_nsec / 1000000.0);
+
+    double milliseconds = 0.0;
+    if (!bx_time_timespec_to_milliseconds_double(&ts, &milliseconds)) {
+        return 0.0;
+    }
+    return milliseconds;
 }
 
 static bool bx_ping_send_probe(const struct bx_ping_socket* socket_state,
@@ -404,8 +416,9 @@ static bool bx_ping_wait_for_reply(const struct bx_ping_socket* socket_state,
 
 static void bx_ping_sleep_between_probes(void) {
     struct timespec interval;
-    interval.tv_sec = 1;
-    interval.tv_nsec = 0;
+    if (!bx_time_seconds_to_timespec(1.0, &interval)) {
+        return;
+    }
 
     while (nanosleep(&interval, &interval) != 0 && errno == EINTR) {
     }

@@ -3,11 +3,19 @@
 //#undef __KERNEL_STRICT_NAMES
 #include <sys/types.h>
 
+#include "lib/size_parse.h"
+
 #if !defined(__GNUC__) && !defined(__attribute__)
 #define __attribute__(x)
 #endif
 
 #define lba28_limit ((__u64)(1<<28) - 1)
+
+static inline const char *hdparm_size_unit_prefix(enum bx_size_unit_label_style style, unsigned int power)
+{
+	const char *prefix = bx_size_unit_label(style, power);
+	return prefix != NULL ? prefix : "";
+}
 
 void identify (int fd, __u16 *id_supplied);
 void usage_error(int out) __attribute__((noreturn));

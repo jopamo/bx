@@ -51,6 +51,7 @@
 #include "misc.h"
 #include "pty.h"
 #include "tty.h"
+#include "lib/time_parse.h"
 #include "lib/tty_speed.h"
 
 static void consredir_readev_fn(Event *, void *);
@@ -59,6 +60,7 @@ static const struct bx_tty_speed_entry *lookup_baud (int);
 bool separate_sids = true;
 
 static void DoSendBreak(int, int, int);
+static void SleepBreakDuration(int);
 static void SigAlrmDummy(int);
 static int SttyMode(struct mode *, char *);
 static int SetBaud (struct mode *, int, int);
@@ -89,6 +91,19 @@ static void SigAlrmDummy( __attribute__ ((unused))
 			 int sigsig)
 {
 	return;
+}
+
+static void SleepBreakDuration(int quarters)
+{
+	struct timespec req;
+	intmax_t milliseconds = quarters > 0 ? (intmax_t)quarters * 250 : 250;
+
+	if (!bx_time_milliseconds_to_timespec(milliseconds, &req))
+		return;
+	while (nanosleep(&req, &req) == -1) {
+		if (errno != EINTR)
+			break;
+	}
 }
 
 /*
@@ -712,7 +727,7 @@ static void DoSendBreak(int fd, int n, int type)
 			Msg(errno, "Can't send BREAK (TIOCSBRK)");
 			return;
 		}
-		usleep(1000 * (n ? n * 250 : 250));
+		SleepBreakDuration(n);
 		if (ioctl(fd, TIOCCBRK, NULL) < 0) {
 			Msg(errno, "BREAK stuck!!! -- HELP! (TIOCCBRK)");
 			return;
@@ -756,7 +771,7 @@ void SendBreak(Window * wp, int n, int closeopen)
 #endif	/* TIOCEXCL && TIOCNXCL */
 		close(wp->w_ptyfd);
 
-		usleep(1000 * (n ? n * 250 : 250));
+		SleepBreakDuration(n);
 		if ((wp->w_ptyfd = OpenTTY(wp->w_tty, wp->w_cmdargs[1])) < 1) {
 			Msg(0, "Ouch, cannot reopen line %s, please try harder", wp->w_tty);
 			return;

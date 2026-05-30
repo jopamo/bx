@@ -14,6 +14,7 @@
 
 #include "applets/system/psmisc/procfs.h"
 #include "bx/libbx.h"
+#include "lib/time_parse.h"
 
 struct bx_proc_buffer {
     unsigned char* data;
@@ -951,8 +952,11 @@ bool bx_proc_uptime_seconds(double* uptime_out) {
 #ifdef CLOCK_BOOTTIME
     struct timespec ts;
     if (clock_gettime(CLOCK_BOOTTIME, &ts) == 0) {
-        *uptime_out = (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
-        return true;
+        if (bx_time_timespec_to_seconds_double(&ts, uptime_out)) {
+            return true;
+        }
+        errno = EINVAL;
+        return false;
     }
 #endif
     FILE* stream = fopen("/proc/uptime", "r");

@@ -38,6 +38,7 @@
 
 #include "hdparm.h"
 #include "sgio.h"
+#include "lib/time_parse.h"
 
 int bx_hdparm_main (int _argc, char **_argv);
 
@@ -293,6 +294,22 @@ static void *prepare_timing_buf (unsigned int len)
 	return buf;
 }
 
+static void print_timing_rate(unsigned int total_MB, double elapsed, int megabytes_at_one)
+{
+	const char *measured_unit_prefix = hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 2u);
+	double rate_mbytes_per_sec = total_MB / elapsed;
+
+	if (rate_mbytes_per_sec > 1.0 || (megabytes_at_one && rate_mbytes_per_sec == 1.0)) {
+		const char *rate_unit_prefix = hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 2u);
+		printf("%3u %sB in %5.2f seconds = %6.2f %sB/sec\n",
+			total_MB, measured_unit_prefix, elapsed, rate_mbytes_per_sec, rate_unit_prefix);
+	} else {
+		const char *rate_unit_prefix = hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 1u);
+		printf("%3u %sB in %5.2f seconds = %6.2f %sB/sec\n",
+			total_MB, measured_unit_prefix, elapsed, rate_mbytes_per_sec * 1024, rate_unit_prefix);
+	}
+}
+
 static void time_cache (int fd)
 {
 	char *buf;
@@ -326,13 +343,13 @@ static void time_cache (int fd)
 		if (seek_to_zero (fd) || read_big_block (fd, buf))
 			goto quit;
 		getitimer(ITIMER_REAL, &e2);
-		elapsed = (e1.it_value.tv_sec - e2.it_value.tv_sec)
-		 + ((e1.it_value.tv_usec - e2.it_value.tv_usec) / 1000000.0);
+		if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed))
+			goto quit;
 	} while (elapsed < 2.0);
 	total_MB = iterations * TIMING_BUF_MB;
 
-	elapsed = (e1.it_value.tv_sec - e2.it_value.tv_sec)
-	 + ((e1.it_value.tv_usec - e2.it_value.tv_usec) / 1000000.0);
+	if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed))
+		goto quit;
 
 	/* Now remove the lseek() and getitimer() overheads from the elapsed time */
 	getitimer(ITIMER_REAL, &e1);
@@ -340,20 +357,13 @@ static void time_cache (int fd)
 		if (seek_to_zero (fd))
 			goto quit;
 		getitimer(ITIMER_REAL, &e2);
-		elapsed2 = (e1.it_value.tv_sec - e2.it_value.tv_sec)
-		 + ((e1.it_value.tv_usec - e2.it_value.tv_usec) / 1000000.0);
+		if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed2))
+			goto quit;
 	} while (--iterations);
 
 	elapsed -= elapsed2;
 
-	if (total_MB >= elapsed)  /* more than 1MB/s */
-		printf("%3u MB in %5.2f seconds = %6.2f MB/sec\n",
-			total_MB, elapsed,
-			total_MB / elapsed);
-	else
-		printf("%3u MB in %5.2f seconds = %6.2f kB/sec\n",
-			total_MB, elapsed,
-			total_MB / elapsed * 1024);
+	print_timing_rate(total_MB, elapsed, 1);
 
 	flush_buffer_cache(fd);
 	sleep(1);
@@ -389,7 +399,8 @@ static int time_device (int fd)
 
 	printf(" Timing %s disk reads", (open_flags & O_DIRECT) ? "O_DIRECT" : "buffered");
 	if (set_timings_offset)
-		printf(" (offset %llu GB)", timings_offset / 0x40000000ULL);
+		printf(" (offset %llu %sB)", timings_offset / 0x40000000ULL,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_IEC_PREFIX, 3u));
 	printf(": ");
 	fflush(stdout);
 
@@ -413,17 +424,14 @@ static int time_device (int fd)
 		if ((err = read_big_block(fd, buf)))
 			goto quit;
 		getitimer(ITIMER_REAL, &e2);
-		elapsed = (e1.it_value.tv_sec - e2.it_value.tv_sec)
-		 + ((e1.it_value.tv_usec - e2.it_value.tv_usec) / 1000000.0);
+		if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed)) {
+			err = EINVAL;
+			goto quit;
+		}
 	} while (elapsed < 3.0 && iterations < max_iterations);
 
 	total_MB = iterations * TIMING_BUF_MB;
-	if ((total_MB / elapsed) > 1.0)  /* more than 1MB/s */
-		printf("%3u MB in %5.2f seconds = %6.2f MB/sec\n",
-			total_MB, elapsed, total_MB / elapsed);
-	else
-		printf("%3u MB in %5.2f seconds = %6.2f kB/sec\n",
-			total_MB, elapsed, total_MB / elapsed * 1024);
+	print_timing_rate(total_MB, elapsed, 0);
 quit:
 	munlockall();
 	if (buf)
@@ -491,7 +499,8 @@ static void dump_identity (__u16 *idw)
 		idw[1], idw[3], idw[6], idw[4], idw[5], idw[22]);
 	dmpstr(" BuffType=", idw[20], BuffType, 3);
 	if (idw[21] && idw[21] != 0xffff)
-		printf(", BuffSize=%ukB", idw[21] / 2);
+		printf(", BuffSize=%u%sB", idw[21] / 2,
+			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 1u));
 	else
 		printf(", BuffSize=unknown");
 	printf(", MaxMultSect=%u", idw[47] & 0xff);

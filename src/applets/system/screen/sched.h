@@ -30,6 +30,7 @@
 #ifndef SCREEN_SCHED_H
 #define SCREEN_SCHED_H
 
+#include <stdint.h>
 #include <stdbool.h>
 #include <sys/time.h>
 
@@ -48,7 +49,7 @@ struct Event {
 	int fd;
 	EventType type;
 	int priority;
-	int timeout;		/* timeout in milliseconds */
+	int64_t timeout;		/* timeout in milliseconds */
 	bool queued;		/* in evs queue */
 	int *condpos;		/* only active if condpos - condneg > 0 */
 	int *condneg;
@@ -56,7 +57,8 @@ struct Event {
 
 void evenq (Event *);
 void evdeq (Event *);
-void SetTimeout (Event *, int);
+void SetTimeout (Event *, int64_t);
+void SetTimeoutSeconds (Event *, int);
 void sched (void) __attribute__((__noreturn__));
 
 #endif /* SCREEN_SCHED_H */

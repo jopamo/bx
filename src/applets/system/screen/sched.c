@@ -30,12 +30,14 @@
 
 #include "sched.h"
 
+#include <limits.h>
 #include <poll.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
 #include <sys/time.h>
 
+#include "lib/time_parse.h"
 #include "screen.h"
 
 static Event *evs;
@@ -106,7 +108,7 @@ void evdeq(Event *ev)
 static Event *calctimo(void)
 {
 	Event *ev, *min;
-	long mins;
+	int64_t mins;
 
 	if ((min = tevs) == NULL)
 		return NULL;
@@ -132,11 +134,17 @@ void sched(void)
 			timeoutev = calctimo();
 		if (timeoutev) {
 			struct timeval now;
+			int64_t now_ms = 0;
+			int64_t remaining_ms = 0;
 			gettimeofday(&now, NULL);
 			/* tp - timeout */
-			timeout = timeoutev->timeout - (now.tv_sec * 1000 + now.tv_usec / 1000);
-			if (timeout < 0)
+			if (!bx_time_timeval_to_milliseconds_int64(&now, &now_ms) ||
+			    timeoutev->timeout <= now_ms) {
 				timeout = 0;
+			} else {
+				remaining_ms = timeoutev->timeout - now_ms;
+				timeout = remaining_ms > INT_MAX ? INT_MAX : (int)remaining_ms;
+			}
 		}
 
 		memset(pfd, 0, sizeof(struct pollfd) * pfd_cnt);
@@ -203,13 +211,32 @@ skip:
 	}
 }
 
-void SetTimeout(Event *ev, int timo)
+void SetTimeout(Event *ev, int64_t timo)
 {
 	struct timeval now;
+	int64_t now_ms = 0;
 	gettimeofday(&now, NULL);
 
-	ev->timeout = (now.tv_sec * 1000 + now.tv_usec / 1000) + timo;
+	if (!bx_time_timeval_to_milliseconds_int64(&now, &now_ms) ||
+	    (timo > 0 && now_ms > INT64_MAX - timo) ||
+	    (timo < 0 && now_ms < INT64_MIN - timo))
+		ev->timeout = 0;
+	else
+		ev->timeout = now_ms + timo;
 
 	if (ev->queued)
 		calctimeout = 1;
+}
+
+void SetTimeoutSeconds(Event *ev, int seconds)
+{
+	int milliseconds = 0;
+
+	if (seconds <= 0 ||
+	    !bx_time_seconds_to_milliseconds_int((uintmax_t)seconds, &milliseconds)) {
+		SetTimeout(ev, 0);
+		return;
+	}
+
+	SetTimeout(ev, milliseconds);
 }

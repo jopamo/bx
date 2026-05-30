@@ -249,7 +249,10 @@ static bool bx_timeout_get_monotonic_seconds(double* seconds_out, struct bx_diag
         return false;
     }
 
-    *seconds_out = (double)now.tv_sec + ((double)now.tv_nsec / 1000000000.0);
+    if (!bx_time_timespec_to_seconds_double(&now, seconds_out)) {
+        bx_diag(diag, "monotonic clock value is invalid");
+        return false;
+    }
     return true;
 }
 
@@ -263,14 +266,14 @@ static bool bx_timeout_sleep_for(double seconds, struct bx_diag_ctx* diag) {
     }
 
     struct timespec req;
-    req.tv_sec = (time_t)seconds;
-    req.tv_nsec = (long)((seconds - (double)req.tv_sec) * 1000000000.0);
-    if (req.tv_nsec >= 1000000000L) {
-        req.tv_sec += 1;
-        req.tv_nsec -= 1000000000L;
+    if (!bx_time_seconds_to_timespec(seconds, &req)) {
+        bx_diag(diag, "sleep interval is invalid");
+        return false;
     }
-    if (req.tv_sec == 0 && req.tv_nsec == 0) {
-        req.tv_nsec = 1000000L;
+    if (req.tv_sec == 0 && req.tv_nsec == 0 &&
+        !bx_time_milliseconds_to_timespec(1, &req)) {
+        bx_diag(diag, "sleep interval is invalid");
+        return false;
     }
 
     while (nanosleep(&req, &req) != 0) {

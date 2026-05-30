@@ -22,6 +22,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/time_parse.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
 #define BX_DHCP_PACKET_MIN_LEN 240u
@@ -199,7 +200,12 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
                     bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
                     return false;
                 }
-                options->timeout_ms = value * 1000u;
+                uintmax_t timeout_ms = 0;
+                if (!bx_time_seconds_to_milliseconds_uint(value, &timeout_ms) || timeout_ms > (uintmax_t)UINT_MAX) {
+                    bx_diag(diag, "invalid timeout '%s'", optarg != NULL ? optarg : "");
+                    return false;
+                }
+                options->timeout_ms = (unsigned int)timeout_ms;
                 break;
             case 'r':
                 if (!bx_dhcp_parse_uint(optarg, 1u, 100u, &value)) {
@@ -547,7 +553,12 @@ static uint64_t bx_dhcp_now_ms(void) {
         return 0u;
     }
 
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    uintmax_t milliseconds = 0;
+    if (!bx_time_timespec_to_milliseconds_uint(&ts, &milliseconds) ||
+        milliseconds > (uintmax_t)UINT64_MAX) {
+        return 0u;
+    }
+    return (uint64_t)milliseconds;
 }
 
 static int bx_dhcp_poll_timeout_ms(uint64_t deadline_ms) {

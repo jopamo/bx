@@ -19,6 +19,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/time_parse.h"
 
 enum bx_init_mode {
     BX_INIT_MODE_EXEC = 0,
@@ -79,6 +80,13 @@ static const struct bx_init_pseudo_mount bx_init_pseudo_mounts[] = {
     {"tmpfs", "/dev", "tmpfs", "mode=0755,nosuid"},
     {"tmpfs", "/run", "tmpfs", "mode=0755,nosuid,nodev"},
 };
+
+static void bx_init_sleep_poll_interval(void) {
+    struct timespec ts;
+    if (bx_time_milliseconds_to_timespec(100, &ts)) {
+        nanosleep(&ts, NULL);
+    }
+}
 
 static void bx_init_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... PROGRAM [ARG]...\n", progname);
@@ -761,7 +769,7 @@ static bool bx_init_shutdown_services(struct bx_init_service_config* config, str
             sent_sigkill = true;
         }
 
-        usleep(100000);
+        bx_init_sleep_poll_interval();
     }
 
     if (waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD) {
@@ -850,7 +858,7 @@ static int bx_init_run_service_supervisor(const struct bx_init_options* options,
             bx_init_cleanup_service_config(&config);
             return 1;
         }
-        usleep(100000);
+        bx_init_sleep_poll_interval();
     }
 
     if (!bx_init_shutdown_services(&config, diag)) {

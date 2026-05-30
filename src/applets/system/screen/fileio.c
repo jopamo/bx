@@ -30,6 +30,7 @@
 
 #include "fileio.h"
 
+#include <limits.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -46,8 +47,11 @@
 #include "termcap.h"
 #include "termcap.h"
 #include "encoding.h"
+#include "lib/args_common.h"
+#include "lib/time_parse.h"
 
 static char *CatExtra(const char *, char *);
+static bool ParseRcSleepMilliseconds(const char *, int *);
 static char *findrcfile(char *);
 static void ProcessStartRcLine(char *, int);
 static void RunRcBuffer(const char *, const char *, bool);
@@ -301,6 +305,18 @@ void do_source(char *rcfilename)
 	rc_recursion--;
 }
 
+static bool ParseRcSleepMilliseconds(const char *text, int *milliseconds_out)
+{
+	int seconds = 0;
+
+	if (milliseconds_out == NULL ||
+	    !bx_args_parse_int_range(text, 0, INT_MAX, &seconds) ||
+	    !bx_time_seconds_to_milliseconds_int((uintmax_t)seconds, milliseconds_out))
+		return false;
+
+	return true;
+}
+
 static void ProcessStartRcLine(char *buf, int buflen)
 {
 	int argc, len;
@@ -333,7 +349,12 @@ static void ProcessStartRcLine(char *buf, int buflen)
 			Msg(0, "%s: sleep: one numeric argument expected.", rc_name);
 			return;
 		}
-		DisplaySleep1000(1000 * atoi(args[1]), 1);
+		int milliseconds = 0;
+		if (!ParseRcSleepMilliseconds(args[1], &milliseconds)) {
+			Msg(0, "%s: sleep: one numeric argument expected.", rc_name);
+			return;
+		}
+		DisplaySleep1000(milliseconds, 1);
 		return;
 	}
 	if (!strcmp(args[0], "termcapinfo") || !strcmp(args[0], "terminfo")) {

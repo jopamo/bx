@@ -458,8 +458,10 @@ static bool bx_killall_wait_for_ids(const pid_t* ids, size_t len, bool process_g
         if (remaining == 0u) {
             break;
         }
-        struct timespec ts = {.tv_sec = 0, .tv_nsec = 100000000L};
-        nanosleep(&ts, NULL);
+        struct timespec ts;
+        if (bx_time_milliseconds_to_timespec(100, &ts)) {
+            nanosleep(&ts, NULL);
+        }
     }
     return true;
 }

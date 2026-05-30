@@ -200,7 +200,8 @@ static int apt_jmicron_int_sg(int fd, int rw, int dma, struct ata_tf *tf,
 	io_hdr.dxferp		= data;
 	io_hdr.cmdp		= cdb;
 	io_hdr.pack_id		= tf_to_lba(tf);
-	io_hdr.timeout		= (timeout_secs ? timeout_secs : 5) * 1000; /* msecs */
+	if (!hdparm_sgio_timeout_milliseconds(timeout_secs, 5u, &io_hdr.timeout))
+		return -1;
 	io_hdr.cmd_len 		= sizeof(cdb);
 
 	if (apt_data.verbose)

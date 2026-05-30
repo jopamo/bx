@@ -7,40 +7,34 @@
 #include <sys/timerfd.h>
 #endif
 
+#include "lib/time_parse.h"
+
 uint32_t (*nc_random)(void) = nc_random_u32;
 
-static void nc_msec_to_timespec(int timeout_ms, struct timespec* ts) {
+static int nc_msec_to_timespec(int timeout_ms, struct timespec* ts) {
+    if (ts == NULL)
+        return 0;
+
     if (timeout_ms <= 0) {
         ts->tv_sec = 0;
         ts->tv_nsec = 0;
-        return;
+        return 1;
     }
 
-    ts->tv_sec = timeout_ms / 1000;
-    ts->tv_nsec = (timeout_ms % 1000) * 1000000L;
+    return bx_time_milliseconds_to_timespec(timeout_ms, ts);
 }
 
-static void nc_seconds_to_timespec(double seconds, struct timespec* ts) {
-    time_t sec;
-    long nsec;
+static int nc_seconds_to_timespec(double seconds, struct timespec* ts) {
+    if (ts == NULL)
+        return 0;
 
     if (seconds <= 0) {
         ts->tv_sec = 0;
         ts->tv_nsec = 0;
-        return;
+        return 1;
     }
 
-    sec = (time_t)seconds;
-    nsec = (long)((seconds - (double)sec) * 1000000000.0);
-    if (nsec < 0)
-        nsec = 0;
-    if (nsec >= 1000000000L) {
-        sec++;
-        nsec -= 1000000000L;
-    }
-
-    ts->tv_sec = sec;
-    ts->tv_nsec = nsec;
+    return bx_time_seconds_to_timespec(seconds, ts);
 }
 
 static int nc_poll_retry(struct pollfd* pfd, nfds_t nfds, int timeout_ms) {
@@ -67,15 +61,17 @@ static int nc_poll_monotonic_deadline(struct pollfd* pfd, nfds_t nfds, int timeo
 
     for (;;) {
         struct timespec now;
-        long long elapsed_ms;
+        int64_t elapsed_ms;
         int remaining_ms;
         int ret;
 
         if (clock_gettime(CLOCK_MONOTONIC, &now) == -1)
             return nc_poll_retry(pfd, nfds, timeout_ms);
 
-        elapsed_ms = (now.tv_sec - start.tv_sec) * 1000LL;
-        elapsed_ms += (now.tv_nsec - start.tv_nsec) / 1000000LL;
+        if (!bx_time_timespec_elapsed_milliseconds_int64(&start, &now, &elapsed_ms))
+            return nc_poll_retry(pfd, nfds, timeout_ms);
+        if (elapsed_ms >= timeout_ms)
+            return 0;
         remaining_ms = timeout_ms - (int)elapsed_ms;
         if (remaining_ms <= 0)
             return 0;
@@ -102,8 +98,8 @@ int nc_sleep_monotonic(double seconds) {
         tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (tfd != -1) {
             memset(&its, 0, sizeof(its));
-            nc_seconds_to_timespec(seconds, &its.it_value);
-            if (timerfd_settime(tfd, 0, &its, NULL) == 0) {
+            if (nc_seconds_to_timespec(seconds, &its.it_value) &&
+                timerfd_settime(tfd, 0, &its, NULL) == 0) {
                 for (;;) {
                     ssize_t n = read(tfd, &expirations, sizeof(expirations));
                     if (n == (ssize_t)sizeof(expirations)) {
@@ -120,7 +116,26 @@ int nc_sleep_monotonic(double seconds) {
     }
 #endif
 
-    nc_seconds_to_timespec(seconds, &req);
+    if (!nc_seconds_to_timespec(seconds, &req)) {
+        errno = EINVAL;
+        return -1;
+    }
+    while (nanosleep(&req, &req) == -1) {
+        if (errno != EINTR)
+            return -1;
+    }
+    return 0;
+}
+
+int nc_sleep_milliseconds(int milliseconds) {
+    struct timespec req;
+
+    if (milliseconds <= 0)
+        return 0;
+    if (!nc_msec_to_timespec(milliseconds, &req)) {
+        errno = EINVAL;
+        return -1;
+    }
     while (nanosleep(&req, &req) == -1) {
         if (errno != EINTR)
             return -1;
@@ -151,8 +166,8 @@ int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms) {
         timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
         if (timerfd != -1) {
             memset(&its, 0, sizeof(its));
-            nc_msec_to_timespec(timeout_ms, &its.it_value);
-            if (timerfd_settime(timerfd, 0, &its, NULL) == 0) {
+            if (nc_msec_to_timespec(timeout_ms, &its.it_value) &&
+                timerfd_settime(timerfd, 0, &its, NULL) == 0) {
                 pfd[1].fd = timerfd;
                 pfd[1].events = POLLIN;
                 pfd[1].revents = 0;

@@ -48,6 +48,7 @@
 #include <unistd.h>
 
 #include "applets/archive/archive_codec.h"
+#include "lib/time_parse.h"
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "mandoc_xr.h"
@@ -1208,7 +1209,7 @@ run_pager(struct outstate *outst, char *tag_target)
 static pid_t
 spawn_pager(struct outstate *outst, char *tag_target)
 {
-	const struct timespec timeout = { 0, 100000000 };  /* 0.1s */
+	struct timespec timeout;
 #define MAX_PAGER_ARGS 16
 	char		*argv[MAX_PAGER_ARGS];
 	const char	*pager;
@@ -1222,6 +1223,12 @@ spawn_pager(struct outstate *outst, char *tag_target)
 
 	assert(outst->tag_files->ofd == -1);
 	assert(outst->tag_files->tfs == NULL);
+
+	if (!bx_time_milliseconds_to_timespec(100, &timeout)) {
+		mandoc_msg(MANDOCERR_WAIT, 0, 0,
+		    "%s", "invalid pager poll timeout");
+		exit(mandoc_msg_getrc());
+	}
 
 	pager = getenv("MANPAGER");
 	if (pager == NULL || *pager == '\0')
