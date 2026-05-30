@@ -25,6 +25,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 #include "lib/path_quote.h"
 
 struct bx_stat_options {
@@ -42,11 +43,13 @@ struct bx_stat_file_format_ctx {
     const char* path;
     const struct stat* st;
     const struct bx_stat_options* options;
+    struct bx_line_writer* writer;
 };
 
 struct bx_stat_fs_format_ctx {
     const char* path;
     const struct statfs* fs;
+    struct bx_line_writer* writer;
 };
 
 typedef bool (*bx_stat_format_conversion_fn)(char conv, void* ctx, struct bx_diag_ctx* diag);
@@ -358,51 +361,87 @@ static const char* bx_stat_fs_type_name(long type) {
     return "unknown";
 }
 
-static bool bx_stat_putc(struct bx_diag_ctx* diag, unsigned char ch) {
-    if (fputc((int)ch, stdout) == EOF) {
+static bool bx_stat_putc(struct bx_line_writer* writer, struct bx_diag_ctx* diag, unsigned char ch) {
+    if (!bx_line_writer_putc(writer, (char)ch)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
     return true;
 }
 
-static bool bx_stat_puts(struct bx_diag_ctx* diag, const char* text) {
-    if (fputs(text, stdout) == EOF) {
+static bool bx_stat_puts(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const char* text) {
+    if (!bx_line_writer_puts(writer, text)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
     return true;
 }
 
-static bool bx_stat_printf(struct bx_diag_ctx* diag, const char* fmt, ...) {
+static bool bx_stat_printf(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const char* fmt, ...) {
+    char stack_buffer[512];
     va_list ap;
     va_start(ap, fmt);
-    int rc = vprintf(fmt, ap);
+    va_list ap_copy;
+    va_copy(ap_copy, ap);
+    int rc = vsnprintf(stack_buffer, sizeof(stack_buffer), fmt, ap_copy);
+    va_end(ap_copy);
+
+    if (rc >= 0 && (size_t)rc < sizeof(stack_buffer)) {
+        bool ok = bx_line_writer_write(writer, stack_buffer, (size_t)rc);
+        va_end(ap);
+        if (!ok) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    char* heap_buffer = NULL;
+    if (rc >= 0) {
+        heap_buffer = malloc((size_t)rc + 1u);
+        if (heap_buffer != NULL) {
+            int heap_rc = vsnprintf(heap_buffer, (size_t)rc + 1u, fmt, ap);
+            if (heap_rc == rc) {
+                bool ok = bx_line_writer_write(writer, heap_buffer, (size_t)rc);
+                free(heap_buffer);
+                va_end(ap);
+                if (!ok) {
+                    bx_diag(diag, "write error: %s", strerror(errno));
+                    return false;
+                }
+                return true;
+            }
+            free(heap_buffer);
+        }
+        else {
+            errno = ENOMEM;
+        }
+    }
+    if (errno == 0) {
+        errno = EIO;
+    }
     va_end(ap);
 
-    if (rc < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
 }
 
-static bool bx_stat_print_quoted_path(struct bx_diag_ctx* diag, const char* text) {
+static bool bx_stat_print_quoted_path(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const char* text) {
     char* quoted = bx_path_quote_dup(text, BX_PATH_QUOTE_SINGLE_BACKSLASH);
-    bool ok = bx_stat_puts(diag, quoted);
+    bool ok = bx_stat_puts(writer, diag, quoted);
     free(quoted);
     return ok;
 }
 
 static bool bx_stat_print_file_quoted_name(const struct bx_stat_file_format_ctx* file_ctx, struct bx_diag_ctx* diag) {
-    if (!bx_stat_print_quoted_path(diag, file_ctx->path)) {
+    if (!bx_stat_print_quoted_path(file_ctx->writer, diag, file_ctx->path)) {
         return false;
     }
 
     if (!file_ctx->options->dereference && S_ISLNK(file_ctx->st->st_mode)) {
         char* link_target = bx_stat_readlink_target(file_ctx->path);
         if (link_target != NULL) {
-            bool ok = bx_stat_puts(diag, " -> ") && bx_stat_print_quoted_path(diag, link_target);
+            bool ok = bx_stat_puts(file_ctx->writer, diag, " -> ") && bx_stat_print_quoted_path(file_ctx->writer, diag, link_target);
             free(link_target);
             if (!ok) {
                 return false;
@@ -413,116 +452,118 @@ static bool bx_stat_print_file_quoted_name(const struct bx_stat_file_format_ctx*
     return true;
 }
 
-static bool bx_stat_print_human_timestamp(struct bx_diag_ctx* diag, const struct timespec* ts) {
+static bool bx_stat_print_human_timestamp(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const struct timespec* ts) {
     char buffer[96];
     bx_stat_format_timestamp(ts, buffer, sizeof(buffer));
-    return bx_stat_puts(diag, buffer);
+    return bx_stat_puts(writer, diag, buffer);
 }
 
 static bool bx_stat_print_file_conversion(char conv, void* ctx, struct bx_diag_ctx* diag) {
     const struct bx_stat_file_format_ctx* file_ctx = (const struct bx_stat_file_format_ctx*)ctx;
     const struct stat* st = file_ctx->st;
+    struct bx_line_writer* writer = file_ctx->writer;
 
     switch (conv) {
         case 'a':
-            return bx_stat_printf(diag, "%o", (unsigned int)(st->st_mode & 07777u));
+            return bx_stat_printf(writer, diag, "%o", (unsigned int)(st->st_mode & 07777u));
         case 'A': {
             char mode_buffer[11];
             bx_stat_mode_to_string(st->st_mode, mode_buffer);
-            return bx_stat_puts(diag, mode_buffer);
+            return bx_stat_puts(writer, diag, mode_buffer);
         }
         case 'b':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_blocks);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_blocks);
         case 'B':
-            return bx_stat_puts(diag, "512");
+            return bx_stat_puts(writer, diag, "512");
         case 'd':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)st->st_dev);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)st->st_dev);
         case 'D':
-            return bx_stat_printf(diag, "%" PRIxMAX, (uintmax_t)st->st_dev);
+            return bx_stat_printf(writer, diag, "%" PRIxMAX, (uintmax_t)st->st_dev);
         case 'f':
-            return bx_stat_printf(diag, "%" PRIxMAX, (uintmax_t)st->st_mode);
+            return bx_stat_printf(writer, diag, "%" PRIxMAX, (uintmax_t)st->st_mode);
         case 'F':
-            return bx_stat_puts(diag, bx_stat_file_type_description(st->st_mode));
+            return bx_stat_puts(writer, diag, bx_stat_file_type_description(st->st_mode));
         case 'g':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)st->st_gid);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)st->st_gid);
         case 'G': {
             char gid_buffer[32];
-            return bx_stat_puts(diag, bx_stat_group_name(st->st_gid, gid_buffer, sizeof(gid_buffer)));
+            return bx_stat_puts(writer, diag, bx_stat_group_name(st->st_gid, gid_buffer, sizeof(gid_buffer)));
         }
         case 'h':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)st->st_nlink);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)st->st_nlink);
         case 'i':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)st->st_ino);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)st->st_ino);
         case 'n':
-            return bx_stat_puts(diag, file_ctx->path);
+            return bx_stat_puts(writer, diag, file_ctx->path);
         case 'N':
             return bx_stat_print_file_quoted_name(file_ctx, diag);
         case 'o':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_blksize);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_blksize);
         case 's':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_size);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_size);
         case 't':
-            return bx_stat_printf(diag, "%" PRIxMAX, (uintmax_t)major(st->st_rdev));
+            return bx_stat_printf(writer, diag, "%" PRIxMAX, (uintmax_t)major(st->st_rdev));
         case 'T':
-            return bx_stat_printf(diag, "%" PRIxMAX, (uintmax_t)minor(st->st_rdev));
+            return bx_stat_printf(writer, diag, "%" PRIxMAX, (uintmax_t)minor(st->st_rdev));
         case 'u':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)st->st_uid);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)st->st_uid);
         case 'U': {
             char uid_buffer[32];
-            return bx_stat_puts(diag, bx_stat_user_name(st->st_uid, uid_buffer, sizeof(uid_buffer)));
+            return bx_stat_puts(writer, diag, bx_stat_user_name(st->st_uid, uid_buffer, sizeof(uid_buffer)));
         }
         case 'w':
-            return bx_stat_puts(diag, "-");
+            return bx_stat_puts(writer, diag, "-");
         case 'W':
-            return bx_stat_puts(diag, "0");
+            return bx_stat_puts(writer, diag, "0");
         case 'x':
-            return bx_stat_print_human_timestamp(diag, &st->st_atim);
+            return bx_stat_print_human_timestamp(writer, diag, &st->st_atim);
         case 'X':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_atim.tv_sec);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_atim.tv_sec);
         case 'y':
-            return bx_stat_print_human_timestamp(diag, &st->st_mtim);
+            return bx_stat_print_human_timestamp(writer, diag, &st->st_mtim);
         case 'Y':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_mtim.tv_sec);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_mtim.tv_sec);
         case 'z':
-            return bx_stat_print_human_timestamp(diag, &st->st_ctim);
+            return bx_stat_print_human_timestamp(writer, diag, &st->st_ctim);
         case 'Z':
-            return bx_stat_printf(diag, "%" PRIdMAX, (intmax_t)st->st_ctim.tv_sec);
+            return bx_stat_printf(writer, diag, "%" PRIdMAX, (intmax_t)st->st_ctim.tv_sec);
         default:
-            return bx_stat_putc(diag, '?');
+            return bx_stat_putc(writer, diag, '?');
     }
 }
 
 static bool bx_stat_print_fs_conversion(char conv, void* ctx, struct bx_diag_ctx* diag) {
     const struct bx_stat_fs_format_ctx* fs_ctx = (const struct bx_stat_fs_format_ctx*)ctx;
     const struct statfs* fs = fs_ctx->fs;
+    struct bx_line_writer* writer = fs_ctx->writer;
 
     switch (conv) {
         case 'a':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_bavail);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_bavail);
         case 'b':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_blocks);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_blocks);
         case 'c':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_files);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_files);
         case 'd':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_ffree);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_ffree);
         case 'f':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_bfree);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_bfree);
         case 'i':
-            return bx_stat_printf(diag, "%" PRIx64, bx_stat_fsid_value(&fs->f_fsid, sizeof(fs->f_fsid)));
+            return bx_stat_printf(writer, diag, "%" PRIx64, bx_stat_fsid_value(&fs->f_fsid, sizeof(fs->f_fsid)));
         case 'l':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_namelen);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_namelen);
         case 'n':
-            return bx_stat_puts(diag, fs_ctx->path);
+            return bx_stat_puts(writer, diag, fs_ctx->path);
         case 's':
-            return bx_stat_printf(diag, "%" PRIuMAX, (uintmax_t)fs->f_bsize);
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, (uintmax_t)fs->f_bsize);
         case 'S':
-            return bx_stat_printf(diag, "%" PRIuMAX, bx_stat_fs_fragment_size(fs));
+            return bx_stat_printf(writer, diag, "%" PRIuMAX, bx_stat_fs_fragment_size(fs));
         case 't':
-            return bx_stat_printf(diag, "%" PRIxMAX, (uintmax_t)(unsigned long)fs->f_type);
+            return bx_stat_printf(writer, diag, "%" PRIxMAX, (uintmax_t)(unsigned long)fs->f_type);
         case 'T':
-            return bx_stat_puts(diag, bx_stat_fs_type_name(fs->f_type));
+            return bx_stat_puts(writer, diag, bx_stat_fs_type_name(fs->f_type));
         default:
-            return bx_stat_putc(diag, '?');
+            return bx_stat_putc(writer, diag, '?');
     }
 }
 
@@ -539,38 +580,38 @@ static int bx_stat_hex_value(unsigned char ch) {
     return -1;
 }
 
-static bool bx_stat_emit_escape(struct bx_diag_ctx* diag, const char** cursor) {
+static bool bx_stat_emit_escape(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const char** cursor) {
     const unsigned char* p = (const unsigned char*)*cursor;
     if (*p == '\0') {
-        return bx_stat_putc(diag, '\\');
+        return bx_stat_putc(writer, diag, '\\');
     }
 
     unsigned char esc = *p++;
     switch (esc) {
         case 'a':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\a');
+            return bx_stat_putc(writer, diag, '\a');
         case 'b':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\b');
+            return bx_stat_putc(writer, diag, '\b');
         case 'f':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\f');
+            return bx_stat_putc(writer, diag, '\f');
         case 'n':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\n');
+            return bx_stat_putc(writer, diag, '\n');
         case 'r':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\r');
+            return bx_stat_putc(writer, diag, '\r');
         case 't':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\t');
+            return bx_stat_putc(writer, diag, '\t');
         case 'v':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\v');
+            return bx_stat_putc(writer, diag, '\v');
         case '\\':
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, '\\');
+            return bx_stat_putc(writer, diag, '\\');
         case 'x': {
             unsigned int value = 0;
             int digits = 0;
@@ -582,9 +623,9 @@ static bool bx_stat_emit_escape(struct bx_diag_ctx* diag, const char** cursor) {
             }
             *cursor = (const char*)p;
             if (digits == 0) {
-                return bx_stat_putc(diag, 'x');
+                return bx_stat_putc(writer, diag, 'x');
             }
-            return bx_stat_putc(diag, (unsigned char)(value & 0xFFu));
+            return bx_stat_putc(writer, diag, (unsigned char)(value & 0xFFu));
         }
         default:
             if (esc >= '0' && esc <= '7') {
@@ -596,26 +637,32 @@ static bool bx_stat_emit_escape(struct bx_diag_ctx* diag, const char** cursor) {
                     digits++;
                 }
                 *cursor = (const char*)p;
-                return bx_stat_putc(diag, (unsigned char)(value & 0xFFu));
+                return bx_stat_putc(writer, diag, (unsigned char)(value & 0xFFu));
             }
             *cursor = (const char*)p;
-            return bx_stat_putc(diag, esc);
+            return bx_stat_putc(writer, diag, esc);
     }
 }
 
-static bool bx_stat_render_format(const char* format, bool interpret_escapes, bool append_newline, bx_stat_format_conversion_fn conversion_fn, void* conversion_ctx, struct bx_diag_ctx* diag) {
+static bool bx_stat_render_format(const char* format,
+                                  bool interpret_escapes,
+                                  bool append_newline,
+                                  bx_stat_format_conversion_fn conversion_fn,
+                                  void* conversion_ctx,
+                                  struct bx_line_writer* writer,
+                                  struct bx_diag_ctx* diag) {
     const char* p = format;
     while (*p != '\0') {
         unsigned char ch = (unsigned char)*p++;
         if (interpret_escapes && ch == '\\') {
-            if (!bx_stat_emit_escape(diag, &p)) {
+            if (!bx_stat_emit_escape(writer, diag, &p)) {
                 return false;
             }
             continue;
         }
 
         if (ch != '%') {
-            if (!bx_stat_putc(diag, ch)) {
+            if (!bx_stat_putc(writer, diag, ch)) {
                 return false;
             }
             continue;
@@ -623,7 +670,7 @@ static bool bx_stat_render_format(const char* format, bool interpret_escapes, bo
 
         char conv = *p;
         if (conv == '\0') {
-            if (!bx_stat_putc(diag, '%')) {
+            if (!bx_stat_putc(writer, diag, '%')) {
                 return false;
             }
             break;
@@ -631,7 +678,7 @@ static bool bx_stat_render_format(const char* format, bool interpret_escapes, bo
         p++;
 
         if (conv == '%') {
-            if (!bx_stat_putc(diag, '%')) {
+            if (!bx_stat_putc(writer, diag, '%')) {
                 return false;
             }
             continue;
@@ -643,12 +690,16 @@ static bool bx_stat_render_format(const char* format, bool interpret_escapes, bo
     }
 
     if (append_newline) {
-        return bx_stat_putc(diag, '\n');
+        return bx_stat_putc(writer, diag, '\n');
     }
     return true;
 }
 
-static bool bx_stat_print_file_info(const char* path, const struct stat* st, const struct bx_stat_options* options, struct bx_diag_ctx* diag) {
+static bool bx_stat_print_file_info(const char* path,
+                                    const struct stat* st,
+                                    const struct bx_stat_options* options,
+                                    struct bx_line_writer* writer,
+                                    struct bx_diag_ctx* diag) {
     char mode_string[11];
     char uid_buffer[32];
     char gid_buffer[32];
@@ -664,13 +715,13 @@ static bool bx_stat_print_file_info(const char* path, const struct stat* st, con
     }
 
     if (link_target != NULL) {
-        if (!bx_stat_printf(diag, "  File: %s -> %s\n", path, link_target)) {
+        if (!bx_stat_printf(writer, diag, "  File: %s -> %s\n", path, link_target)) {
             free(link_target);
             return false;
         }
         free(link_target);
     }
-    else if (!bx_stat_printf(diag, "  File: %s\n", path)) {
+    else if (!bx_stat_printf(writer, diag, "  File: %s\n", path)) {
         return false;
     }
 
@@ -681,52 +732,52 @@ static bool bx_stat_print_file_info(const char* path, const struct stat* st, con
     uid_name = bx_stat_user_name(st->st_uid, uid_buffer, sizeof(uid_buffer));
     gid_name = bx_stat_group_name(st->st_gid, gid_buffer, sizeof(gid_buffer));
 
-    if (!bx_stat_printf(diag, "  Size: %" PRIdMAX "\tBlocks: %" PRIdMAX "\tIO Block: %" PRIdMAX "\t%s\n", (intmax_t)st->st_size, (intmax_t)st->st_blocks, (intmax_t)st->st_blksize,
+    if (!bx_stat_printf(writer, diag, "  Size: %" PRIdMAX "\tBlocks: %" PRIdMAX "\tIO Block: %" PRIdMAX "\t%s\n", (intmax_t)st->st_size, (intmax_t)st->st_blocks, (intmax_t)st->st_blksize,
                         bx_stat_file_type_description(st->st_mode))) {
         return false;
     }
 
-    if (!bx_stat_printf(diag, "Device: %" PRIuMAX ",%" PRIuMAX "\tInode: %" PRIuMAX "\tLinks: %" PRIuMAX "\n", (uintmax_t)major(st->st_dev), (uintmax_t)minor(st->st_dev), (uintmax_t)st->st_ino,
+    if (!bx_stat_printf(writer, diag, "Device: %" PRIuMAX ",%" PRIuMAX "\tInode: %" PRIuMAX "\tLinks: %" PRIuMAX "\n", (uintmax_t)major(st->st_dev), (uintmax_t)minor(st->st_dev), (uintmax_t)st->st_ino,
                         (uintmax_t)st->st_nlink)) {
         return false;
     }
 
-    if (!bx_stat_printf(diag, "Access: (%04o/%s)  Uid: (%5" PRIuMAX "/%s)   Gid: (%5" PRIuMAX "/%s)\n", (unsigned int)(st->st_mode & 07777u), mode_string, (uintmax_t)st->st_uid, uid_name,
+    if (!bx_stat_printf(writer, diag, "Access: (%04o/%s)  Uid: (%5" PRIuMAX "/%s)   Gid: (%5" PRIuMAX "/%s)\n", (unsigned int)(st->st_mode & 07777u), mode_string, (uintmax_t)st->st_uid, uid_name,
                         (uintmax_t)st->st_gid, gid_name)) {
         return false;
     }
 
-    if (!bx_stat_printf(diag, "Access: %s\n", atime_buffer)) {
+    if (!bx_stat_printf(writer, diag, "Access: %s\n", atime_buffer)) {
         return false;
     }
-    if (!bx_stat_printf(diag, "Modify: %s\n", mtime_buffer)) {
+    if (!bx_stat_printf(writer, diag, "Modify: %s\n", mtime_buffer)) {
         return false;
     }
-    if (!bx_stat_printf(diag, "Change: %s\n", ctime_buffer)) {
+    if (!bx_stat_printf(writer, diag, "Change: %s\n", ctime_buffer)) {
         return false;
     }
-    if (!bx_stat_printf(diag, " Birth: -\n")) {
+    if (!bx_stat_printf(writer, diag, " Birth: -\n")) {
         return false;
     }
 
     return true;
 }
 
-static bool bx_stat_print_fs_info(const char* path, const struct statfs* fs, struct bx_diag_ctx* diag) {
-    if (!bx_stat_printf(diag, "  File: \"%s\"\n", path)) {
+static bool bx_stat_print_fs_info(const char* path, const struct statfs* fs, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
+    if (!bx_stat_printf(writer, diag, "  File: \"%s\"\n", path)) {
         return false;
     }
-    if (!bx_stat_printf(diag, "    ID: %" PRIx64 " Namelen: %" PRIuMAX " Type: %s\n", bx_stat_fsid_value(&fs->f_fsid, sizeof(fs->f_fsid)), (uintmax_t)fs->f_namelen,
+    if (!bx_stat_printf(writer, diag, "    ID: %" PRIx64 " Namelen: %" PRIuMAX " Type: %s\n", bx_stat_fsid_value(&fs->f_fsid, sizeof(fs->f_fsid)), (uintmax_t)fs->f_namelen,
                         bx_stat_fs_type_name(fs->f_type))) {
         return false;
     }
-    if (!bx_stat_printf(diag, "Block size: %" PRIuMAX "       Fundamental block size: %" PRIuMAX "\n", (uintmax_t)fs->f_bsize, bx_stat_fs_fragment_size(fs))) {
+    if (!bx_stat_printf(writer, diag, "Block size: %" PRIuMAX "       Fundamental block size: %" PRIuMAX "\n", (uintmax_t)fs->f_bsize, bx_stat_fs_fragment_size(fs))) {
         return false;
     }
-    if (!bx_stat_printf(diag, "Blocks: Total: %" PRIuMAX "   Free: %" PRIuMAX "   Available: %" PRIuMAX "\n", (uintmax_t)fs->f_blocks, (uintmax_t)fs->f_bfree, (uintmax_t)fs->f_bavail)) {
+    if (!bx_stat_printf(writer, diag, "Blocks: Total: %" PRIuMAX "   Free: %" PRIuMAX "   Available: %" PRIuMAX "\n", (uintmax_t)fs->f_blocks, (uintmax_t)fs->f_bfree, (uintmax_t)fs->f_bavail)) {
         return false;
     }
-    if (!bx_stat_printf(diag, "Inodes: Total: %" PRIuMAX "   Free: %" PRIuMAX "\n", (uintmax_t)fs->f_files, (uintmax_t)fs->f_ffree)) {
+    if (!bx_stat_printf(writer, diag, "Inodes: Total: %" PRIuMAX "   Free: %" PRIuMAX "\n", (uintmax_t)fs->f_files, (uintmax_t)fs->f_ffree)) {
         return false;
     }
     return true;
@@ -738,23 +789,32 @@ static bool bx_stat_print_file_using_format(const char* path,
                                             const char* format,
                                             bool interpret_escapes,
                                             bool append_newline,
+                                            struct bx_line_writer* writer,
                                             struct bx_diag_ctx* diag) {
     struct bx_stat_file_format_ctx format_ctx = {
         .path = path,
         .st = st,
         .options = options,
+        .writer = writer,
     };
 
-    return bx_stat_render_format(format, interpret_escapes, append_newline, bx_stat_print_file_conversion, &format_ctx, diag);
+    return bx_stat_render_format(format, interpret_escapes, append_newline, bx_stat_print_file_conversion, &format_ctx, writer, diag);
 }
 
-static bool bx_stat_print_fs_using_format(const char* path, const struct statfs* fs, const char* format, bool interpret_escapes, bool append_newline, struct bx_diag_ctx* diag) {
+static bool bx_stat_print_fs_using_format(const char* path,
+                                          const struct statfs* fs,
+                                          const char* format,
+                                          bool interpret_escapes,
+                                          bool append_newline,
+                                          struct bx_line_writer* writer,
+                                          struct bx_diag_ctx* diag) {
     struct bx_stat_fs_format_ctx format_ctx = {
         .path = path,
         .fs = fs,
+        .writer = writer,
     };
 
-    return bx_stat_render_format(format, interpret_escapes, append_newline, bx_stat_print_fs_conversion, &format_ctx, diag);
+    return bx_stat_render_format(format, interpret_escapes, append_newline, bx_stat_print_fs_conversion, &format_ctx, writer, diag);
 }
 
 static const char* bx_stat_effective_format(const struct bx_stat_options* options, bool* interpret_escapes_out, bool* append_newline_out) {
@@ -807,6 +867,10 @@ int bx_stat_main(int argc, char** argv) {
     bool format_append_newline = false;
     const char* format = bx_stat_effective_format(&options, &format_interpret_escapes, &format_append_newline);
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     bool printed_entry = false;
     for (int i = first_operand; i < argc; i++) {
         if (options.file_system) {
@@ -817,17 +881,17 @@ int bx_stat_main(int argc, char** argv) {
             }
 
             if (format == NULL && printed_entry) {
-                if (!bx_stat_printf(&diag, "\n")) {
+                if (!bx_stat_printf(&writer, &diag, "\n")) {
                     break;
                 }
             }
 
             if (format != NULL) {
-                if (!bx_stat_print_fs_using_format(argv[i], &fs, format, format_interpret_escapes, format_append_newline, &diag)) {
+                if (!bx_stat_print_fs_using_format(argv[i], &fs, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
                     break;
                 }
             }
-            else if (!bx_stat_print_fs_info(argv[i], &fs, &diag)) {
+            else if (!bx_stat_print_fs_info(argv[i], &fs, &writer, &diag)) {
                 break;
             }
 
@@ -843,23 +907,23 @@ int bx_stat_main(int argc, char** argv) {
         }
 
         if (format == NULL && printed_entry) {
-            if (!bx_stat_printf(&diag, "\n")) {
+            if (!bx_stat_printf(&writer, &diag, "\n")) {
                 break;
             }
         }
 
         if (format != NULL) {
-            if (!bx_stat_print_file_using_format(argv[i], &st, &options, format, format_interpret_escapes, format_append_newline, &diag)) {
+            if (!bx_stat_print_file_using_format(argv[i], &st, &options, format, format_interpret_escapes, format_append_newline, &writer, &diag)) {
                 break;
             }
         }
-        else if (!bx_stat_print_file_info(argv[i], &st, &options, &diag)) {
+        else if (!bx_stat_print_file_info(argv[i], &st, &options, &writer, &diag)) {
             break;
         }
         printed_entry = true;
     }
 
-    if (fflush(stdout) == EOF) {
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 

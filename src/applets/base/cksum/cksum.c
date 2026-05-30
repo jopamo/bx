@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "crypto/digest_util.h"
@@ -16,6 +17,7 @@
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 
 enum {
@@ -1162,7 +1164,52 @@ static const char* cksum_plural_suffix(size_t count) {
     return (count == 1u) ? "" : "s";
 }
 
-static int cksum_verify_stream(FILE* stream, const char* source_name, const struct cksum_options* options) {
+static bool cksum_write_status_line(struct bx_line_writer* writer, const char* filename, const char* suffix) {
+    return bx_line_writer_puts(writer, filename)
+        && bx_line_writer_puts(writer, suffix)
+        && bx_line_writer_putc(writer, '\n');
+}
+
+static bool cksum_write_numeric_result(struct bx_line_writer* writer,
+                                       uint32_t value,
+                                       uintmax_t metric,
+                                       const char* path,
+                                       bool show_name,
+                                       bool bsd_format,
+                                       char terminator) {
+    char prefix[96];
+    int len = bsd_format
+        ? snprintf(prefix, sizeof(prefix), "%05" PRIu32 " %5" PRIuMAX, value, metric)
+        : snprintf(prefix, sizeof(prefix), "%" PRIu32 " %" PRIuMAX, value, metric);
+
+    return len >= 0 && (size_t)len < sizeof(prefix)
+        && bx_line_writer_write(writer, prefix, (size_t)len)
+        && (!show_name || (bx_line_writer_putc(writer, ' ') && bx_line_writer_puts(writer, path)))
+        && bx_line_writer_putc(writer, terminator);
+}
+
+static bool cksum_write_digest_result(struct bx_line_writer* writer,
+                                      const char* algorithm_label,
+                                      const char* digest_text,
+                                      const char* path,
+                                      bool tagged,
+                                      char terminator) {
+    if (tagged) {
+        return bx_line_writer_puts(writer, algorithm_label)
+            && bx_line_writer_write(writer, " (", 2u)
+            && bx_line_writer_puts(writer, path)
+            && bx_line_writer_write(writer, ") = ", 4u)
+            && bx_line_writer_puts(writer, digest_text)
+            && bx_line_writer_putc(writer, terminator);
+    }
+
+    return bx_line_writer_puts(writer, digest_text)
+        && bx_line_writer_write(writer, "  ", 2u)
+        && bx_line_writer_puts(writer, path)
+        && bx_line_writer_putc(writer, terminator);
+}
+
+static int cksum_verify_stream(FILE* stream, const char* source_name, const struct cksum_options* options, struct bx_line_writer* writer) {
     char* line = NULL;
     size_t cap = 0u;
     size_t line_no = 0u;
@@ -1210,7 +1257,10 @@ static int cksum_verify_stream(FILE* stream, const char* source_name, const stru
 
                 fprintf(stderr, "%s: %s: %s\n", options->progname, expected_filename, strerror(saved_errno));
                 if (!options->status) {
-                    printf("%s: FAILED open or read\n", expected_filename);
+                    if (!cksum_write_status_line(writer, expected_filename, ": FAILED open or read")) {
+                        free(line);
+                        return CKSUM_EXIT_FAIL;
+                    }
                 }
                 read_fail_count++;
                 failed = true;
@@ -1220,13 +1270,19 @@ static int cksum_verify_stream(FILE* stream, const char* source_name, const stru
             if (actual_value == expected_value && actual_metric == expected_metric) {
                 success_count++;
                 if (!options->quiet && !options->status) {
-                    printf("%s: OK\n", expected_filename);
+                    if (!cksum_write_status_line(writer, expected_filename, ": OK")) {
+                        free(line);
+                        return CKSUM_EXIT_FAIL;
+                    }
                 }
                 continue;
             }
 
             if (!options->status) {
-                printf("%s: FAILED\n", expected_filename);
+                if (!cksum_write_status_line(writer, expected_filename, ": FAILED")) {
+                    free(line);
+                    return CKSUM_EXIT_FAIL;
+                }
             }
             mismatch_count++;
             failed = true;
@@ -1261,7 +1317,10 @@ static int cksum_verify_stream(FILE* stream, const char* source_name, const stru
 
             fprintf(stderr, "%s: %s: %s\n", options->progname, expected.filename, strerror(saved_errno));
             if (!options->status) {
-                printf("%s: FAILED open or read\n", expected.filename);
+                if (!cksum_write_status_line(writer, expected.filename, ": FAILED open or read")) {
+                    free(line);
+                    return CKSUM_EXIT_FAIL;
+                }
             }
             read_fail_count++;
             failed = true;
@@ -1271,13 +1330,19 @@ static int cksum_verify_stream(FILE* stream, const char* source_name, const stru
         if (actual_len == expected.digest_len && memcmp(actual, expected.digest, expected.digest_len) == 0) {
             success_count++;
             if (!options->quiet && !options->status) {
-                printf("%s: OK\n", expected.filename);
+                if (!cksum_write_status_line(writer, expected.filename, ": OK")) {
+                    free(line);
+                    return CKSUM_EXIT_FAIL;
+                }
             }
             continue;
         }
 
         if (!options->status) {
-            printf("%s: FAILED\n", expected.filename);
+            if (!cksum_write_status_line(writer, expected.filename, ": FAILED")) {
+                free(line);
+                return CKSUM_EXIT_FAIL;
+            }
         }
         mismatch_count++;
         failed = true;
@@ -1321,9 +1386,9 @@ static int cksum_verify_stream(FILE* stream, const char* source_name, const stru
     return failed ? CKSUM_EXIT_FAIL : CKSUM_EXIT_OK;
 }
 
-static int cksum_check_file(const struct cksum_options* options, const char* path) {
+static int cksum_check_file(const struct cksum_options* options, const char* path, struct bx_line_writer* writer) {
     if (strcmp(path, "-") == 0) {
-        return cksum_verify_stream(stdin, "-", options);
+        return cksum_verify_stream(stdin, "-", options, writer);
     }
 
     FILE* stream = fopen(path, "r");
@@ -1332,7 +1397,7 @@ static int cksum_check_file(const struct cksum_options* options, const char* pat
         return CKSUM_EXIT_FAIL;
     }
 
-    int rc = cksum_verify_stream(stream, path, options);
+    int rc = cksum_verify_stream(stream, path, options, writer);
     fclose(stream);
     return rc;
 }
@@ -1490,7 +1555,10 @@ static void cksum_maybe_print_debug(const struct cksum_options* options) {
     }
 }
 
-static bool cksum_process_path(const struct cksum_options* options, const char* path, bool show_name_for_numeric_algorithms) {
+static bool cksum_process_path(const struct cksum_options* options,
+                               const char* path,
+                               bool show_name_for_numeric_algorithms,
+                               struct bx_line_writer* writer) {
     FILE* stream = NULL;
     bool is_stdin = false;
     struct cksum_result result;
@@ -1562,46 +1630,23 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 break;
         }
 
-        if (raw_len > 0u) {
-            (void)fwrite(raw_data, 1, raw_len, stdout);
-        }
-        return true;
+        return raw_len == 0u || bx_line_writer_write(writer, raw_data, raw_len);
     }
 
+    char terminator = options->zero_terminated ? '\0' : '\n';
     switch (result.algorithm) {
         case CKSUM_ALGORITHM_CRC:
         case CKSUM_ALGORITHM_CRC32B:
-            if (show_name_for_numeric_algorithms) {
-                printf("%" PRIu32 " %" PRIuMAX " %s", result.value, result.size, path);
-            }
-            else {
-                printf("%" PRIu32 " %" PRIuMAX, result.value, result.size);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_numeric_result(writer, result.value, result.size, path, show_name_for_numeric_algorithms, false, terminator);
         case CKSUM_ALGORITHM_SYSV: {
             uintmax_t blocks = 0;
             (void)bx_size_block_count_ceil(result.size, 512u, &blocks);
-            if (show_name_for_numeric_algorithms) {
-                printf("%" PRIu32 " %" PRIuMAX " %s", result.value, blocks, path);
-            }
-            else {
-                printf("%" PRIu32 " %" PRIuMAX, result.value, blocks);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_numeric_result(writer, result.value, blocks, path, show_name_for_numeric_algorithms, false, terminator);
         }
         case CKSUM_ALGORITHM_BSD: {
             uintmax_t blocks = 0;
             (void)bx_size_block_count_ceil(result.size, 1024u, &blocks);
-            if (show_name_for_numeric_algorithms) {
-                printf("%05" PRIu32 " %5" PRIuMAX " %s", result.value, blocks, path);
-            }
-            else {
-                printf("%05" PRIu32 " %5" PRIuMAX, result.value, blocks);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_numeric_result(writer, result.value, blocks, path, show_name_for_numeric_algorithms, true, terminator);
         }
         case CKSUM_ALGORITHM_MD5: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1613,14 +1658,7 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.md5, BX_MD5_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("MD5 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "MD5", digest_text, path, tagged, terminator);
         }
         case CKSUM_ALGORITHM_SHA1: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1632,14 +1670,7 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.sha1, BX_SHA1_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("SHA1 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "SHA1", digest_text, path, tagged, terminator);
         }
         case CKSUM_ALGORITHM_SHA224: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1651,14 +1682,7 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.sha224, BX_SHA224_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("SHA224 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "SHA224", digest_text, path, tagged, terminator);
         }
         case CKSUM_ALGORITHM_SHA256: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1670,14 +1694,7 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.sha256, BX_SHA256_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("SHA256 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "SHA256", digest_text, path, tagged, terminator);
         }
         case CKSUM_ALGORITHM_SHA384: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1689,14 +1706,7 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.sha384, BX_SHA384_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("SHA384 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "SHA384", digest_text, path, tagged, terminator);
         }
         case CKSUM_ALGORITHM_SHA512: {
             bool tagged = options->output_mode != CKSUM_OUTPUT_UNTAGGED;
@@ -1708,18 +1718,12 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
                 bx_hex_encode_lower(result.sha512, BX_SHA512_DIGEST_SIZE, digest_text);
             }
 
-            if (tagged) {
-                printf("SHA512 (%s) = %s", path, digest_text);
-            }
-            else {
-                printf("%s  %s", digest_text, path);
-            }
-            putchar(options->zero_terminated ? '\0' : '\n');
-            break;
+            return cksum_write_digest_result(writer, "SHA512", digest_text, path, tagged, terminator);
         }
     }
 
-    return true;
+    errno = EINVAL;
+    return false;
 }
 
 static const char* cksum_find_check_only_option(const struct cksum_options* options) {
@@ -1790,33 +1794,55 @@ int bx_cksum_main(int argc, char** argv) {
     }
 
     if (options.check_mode) {
-        if (options.first_operand >= argc) {
-            return cksum_check_file(&options, "-");
-        }
+        char output_buffer[8192];
+        struct bx_line_writer writer;
+        bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
         int rc = CKSUM_EXIT_OK;
-        for (int i = options.first_operand; i < argc; i++) {
-            if (cksum_check_file(&options, argv[i]) != CKSUM_EXIT_OK) {
-                rc = CKSUM_EXIT_FAIL;
+        if (options.first_operand >= argc) {
+            rc = cksum_check_file(&options, "-", &writer);
+        }
+        else {
+            for (int i = options.first_operand; i < argc; i++) {
+                if (cksum_check_file(&options, argv[i], &writer) != CKSUM_EXIT_OK) {
+                    rc = CKSUM_EXIT_FAIL;
+                    if (bx_line_writer_error(&writer) != 0) {
+                        break;
+                    }
+                }
             }
+        }
+
+        if (!bx_line_writer_flush(&writer)) {
+            return CKSUM_EXIT_FAIL;
         }
         return rc;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     int rc = CKSUM_EXIT_OK;
 
     if (options.first_operand >= argc) {
-        if (!cksum_process_path(&options, "-", false)) {
+        if (!cksum_process_path(&options, "-", false, &writer)) {
             rc = CKSUM_EXIT_FAIL;
         }
     }
     else {
         for (int i = options.first_operand; i < argc; i++) {
-            if (!cksum_process_path(&options, argv[i], true)) {
+            if (!cksum_process_path(&options, argv[i], true, &writer)) {
                 rc = CKSUM_EXIT_FAIL;
+                if (bx_line_writer_error(&writer) != 0) {
+                    break;
+                }
             }
         }
     }
 
+    if (!bx_line_writer_flush(&writer)) {
+        return CKSUM_EXIT_FAIL;
+    }
     return rc;
 }

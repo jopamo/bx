@@ -9,11 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
@@ -71,6 +73,7 @@ struct bx_du_inode_set {
 struct bx_du_context {
     const struct bx_du_options* options;
     struct bx_diag_ctx* diag;
+    struct bx_line_writer* writer;
     struct bx_du_inode_set seen;
 };
 
@@ -413,15 +416,14 @@ static void bx_du_format_size(uintmax_t size_bytes, const struct bx_du_options* 
     bx_size_format_human_ceil(size_bytes, base, suffixes, buffer, buffer_size);
 }
 
-static bool bx_du_emit_line(uintmax_t size_bytes, const char* path, const struct bx_du_options* options, struct bx_diag_ctx* diag) {
+static bool bx_du_emit_line(uintmax_t size_bytes, const char* path, const struct bx_du_options* options, struct bx_diag_ctx* diag, struct bx_line_writer* writer) {
     char size_text[64];
     bx_du_format_size(size_bytes, options, size_text, sizeof(size_text));
 
-    if (fprintf(stdout, "%s\t%s", size_text, path) < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    if (fputc(options->null_terminate ? '\0' : '\n', stdout) == EOF) {
+    if (!bx_line_writer_puts(writer, size_text)
+        || !bx_line_writer_putc(writer, '\t')
+        || !bx_line_writer_puts(writer, path)
+        || !bx_line_writer_putc(writer, options->null_terminate ? '\0' : '\n')) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -577,7 +579,7 @@ static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
     }
 
     bool within_max_depth = !options->limit_depth || depth <= options->max_depth;
-    if (should_print && within_max_depth && !bx_du_emit_line(total_bytes, path, options, ctx->diag)) {
+    if (should_print && within_max_depth && !bx_du_emit_line(total_bytes, path, options, ctx->diag, ctx->writer)) {
         ok = false;
     }
 
@@ -613,6 +615,10 @@ int bx_du_main(int argc, char** argv) {
         .options = &options,
         .diag = &diag,
     };
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    ctx.writer = &writer;
     bx_du_inode_set_init(&ctx.seen);
 
     uintmax_t grand_total_bytes = 0u;
@@ -630,12 +636,12 @@ int bx_du_main(int argc, char** argv) {
         }
     }
 
-    if (options.total && !bx_du_emit_line(grand_total_bytes, "total", &options, &diag)) {
+    if (options.total && !bx_du_emit_line(grand_total_bytes, "total", &options, &diag, &writer)) {
         bx_du_inode_set_free(&ctx.seen);
         return diag.exit_status != 0 ? diag.exit_status : 1;
     }
 
-    if (fflush(stdout) == EOF) {
+    if (!bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 

@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -446,10 +447,10 @@ static char* bx_realpath_format_output_path(const char* resolved_path, const cha
     return bx_path_relative_path_between(relative_to, resolved_path);
 }
 
-static bool bx_realpath_emit_path(const char* path, bool zero, struct bx_diag_ctx* diag) {
-    int delimiter = zero ? '\0' : '\n';
+static bool bx_realpath_emit_path(struct bx_line_writer* writer, const char* path, bool zero, struct bx_diag_ctx* diag) {
+    char delimiter = zero ? '\0' : '\n';
 
-    if (fputs(path, stdout) == EOF || fputc(delimiter, stdout) == EOF) {
+    if (!bx_line_writer_puts(writer, path) || !bx_line_writer_putc(writer, delimiter)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -463,7 +464,8 @@ static bool bx_realpath_process_path(const char* path,
                                      const char* relative_base,
                                      bool quiet,
                                      bool zero,
-                                     struct bx_diag_ctx* diag) {
+                                     struct bx_diag_ctx* diag,
+                                     struct bx_line_writer* writer) {
     char* resolved = bx_realpath_canonicalize_path(path, canonicalization_mode, symlink_mode);
     char* output_path = NULL;
     bool ok;
@@ -490,7 +492,7 @@ static bool bx_realpath_process_path(const char* path,
         return false;
     }
 
-    ok = bx_realpath_emit_path(output_path, zero, diag);
+    ok = bx_realpath_emit_path(writer, output_path, zero, diag);
     free(output_path);
     free(resolved);
     return ok;
@@ -551,14 +553,18 @@ int bx_realpath_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     char** operands = argv + first_operand;
     for (int i = 0; i < operand_count; i++) {
-        if (!bx_realpath_process_path(operands[i], options.canonicalization_mode, options.symlink_mode, relative_to, relative_base, options.quiet, options.zero, &diag)) {
+        if (!bx_realpath_process_path(operands[i], options.canonicalization_mode, options.symlink_mode, relative_to, relative_base, options.quiet, options.zero, &diag, &writer)) {
             continue;
         }
     }
 
-    if (fflush(stdout) == EOF) {
+    if (!bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 

@@ -15,6 +15,7 @@
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 typedef enum {
     SORT_MODE_LEXICOGRAPHIC,
@@ -1074,14 +1075,8 @@ sort_check_stream(FILE* stream,
     return SORT_STREAM_OK;
 }
 
-static bool sort_write_line(FILE* out, const char* line, int delimiter) {
-    if (fputs(line, out) == EOF) {
-        return false;
-    }
-    if (fputc(delimiter, out) == EOF) {
-        return false;
-    }
-    return true;
+static bool sort_write_line(struct bx_line_writer* writer, const char* line, char delimiter) {
+    return bx_line_writer_puts(writer, line) && bx_line_writer_putc(writer, delimiter);
 }
 
 int bx_sort_main(int argc, char** argv) {
@@ -1358,40 +1353,50 @@ int bx_sort_main(int argc, char** argv) {
     }
 
     if (!fatal_read_error && out) {
-        int delimiter = opts.zero_terminated ? '\0' : '\n';
+        char output_buffer[8192];
+        struct bx_line_writer writer;
+        int out_fd = fileno(out);
+        char delimiter = opts.zero_terminated ? '\0' : '\n';
         bool have_last_unique = false;
         size_t last_unique_index = 0;
 
-        for (size_t i = 0; i < lines.len; i++) {
-            if (opts.unique && have_last_unique) {
-                if (sort_compare_primary_for_unique(&opts,
-                                                    lines.items[last_unique_index].text,
-                                                    lines.items[last_unique_index].key_texts,
-                                                    lines.items[i].text,
-                                                    lines.items[i].key_texts) == 0) {
-                    continue;
+        if (out_fd < 0) {
+            sort_report_errno(progname, output_label);
+            had_error = true;
+        }
+        else {
+            bx_line_writer_init(&writer, out_fd, output_buffer, sizeof(output_buffer));
+
+            for (size_t i = 0; i < lines.len; i++) {
+                if (opts.unique && have_last_unique) {
+                    if (sort_compare_primary_for_unique(&opts,
+                                                        lines.items[last_unique_index].text,
+                                                        lines.items[last_unique_index].key_texts,
+                                                        lines.items[i].text,
+                                                        lines.items[i].key_texts) == 0) {
+                        continue;
+                    }
                 }
+
+                if (!sort_write_line(&writer, lines.items[i].text, delimiter)) {
+                    sort_report_errno(progname, output_label);
+                    had_error = true;
+                    break;
+                }
+
+                have_last_unique = true;
+                last_unique_index = i;
             }
 
-            if (!sort_write_line(out, lines.items[i].text, delimiter)) {
+            if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
                 sort_report_errno(progname, output_label);
                 had_error = true;
-                break;
             }
-
-            have_last_unique = true;
-            last_unique_index = i;
         }
     }
 
     if (output_opened) {
         if (fclose(out) != 0) {
-            sort_report_errno(progname, output_label);
-            had_error = true;
-        }
-    }
-    else if (!output_opened && out == stdout) {
-        if (fflush(stdout) == EOF) {
             sort_report_errno(progname, output_label);
             had_error = true;
         }

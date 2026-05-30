@@ -7,8 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "crypto/digestsum.h"
+#include "lib/line_writer.h"
 
 enum {
     BX_DIGESTSUM_EXIT_OK = 0,
@@ -128,25 +130,35 @@ static bool bx_digestsum_filename_needs_escape(const char* path) {
     return false;
 }
 
-static void bx_digestsum_write_path(FILE* stream, const char* path) {
-    (void)fwrite(path, 1, strlen(path), stream);
+static bool bx_digestsum_write_path(struct bx_line_writer* writer, const char* path) {
+    return bx_line_writer_write(writer, path, strlen(path));
 }
 
-static void bx_digestsum_write_escaped_path(FILE* stream, const char* path) {
+static bool bx_digestsum_write_escaped_path(struct bx_line_writer* writer, const char* path) {
     for (const unsigned char* p = (const unsigned char*)path; *p != '\0'; p++) {
         if (*p == '\\') {
-            fputs("\\\\", stream);
+            if (!bx_line_writer_write(writer, "\\\\", 2u)) {
+                return false;
+            }
         }
         else if (*p == '\n') {
-            fputs("\\n", stream);
+            if (!bx_line_writer_write(writer, "\\n", 2u)) {
+                return false;
+            }
         }
         else if (*p == '\r') {
-            fputs("\\r", stream);
+            if (!bx_line_writer_write(writer, "\\r", 2u)) {
+                return false;
+            }
         }
         else {
-            fputc(*p, stream);
+            if (!bx_line_writer_putc(writer, (char)*p)) {
+                return false;
+            }
         }
     }
+
+    return true;
 }
 
 static bool bx_digestsum_status_path_needs_quoting(const char* path) {
@@ -158,42 +170,57 @@ static bool bx_digestsum_status_path_needs_quoting(const char* path) {
     return false;
 }
 
-static void bx_digestsum_write_status_path(FILE* stream, const char* path) {
+static bool bx_digestsum_write_status_path(struct bx_line_writer* writer, const char* path) {
     if (!bx_digestsum_status_path_needs_quoting(path)) {
-        bx_digestsum_write_path(stream, path);
-        return;
+        return bx_digestsum_write_path(writer, path);
     }
 
     bool in_single_quotes = false;
     for (const unsigned char* p = (const unsigned char*)path; *p != '\0'; p++) {
         if (*p == '\n' || *p == '\r' || *p == '\'') {
             if (in_single_quotes) {
-                fputc('\'', stream);
+                if (!bx_line_writer_putc(writer, '\'')) {
+                    return false;
+                }
                 in_single_quotes = false;
             }
 
             if (*p == '\n') {
-                fputs("$'\\n'", stream);
+                if (!bx_line_writer_write(writer, "$'\\n'", 5u)) {
+                    return false;
+                }
             }
             else if (*p == '\r') {
-                fputs("$'\\r'", stream);
+                if (!bx_line_writer_write(writer, "$'\\r'", 5u)) {
+                    return false;
+                }
             }
             else {
-                fputs("'\\''", stream);
+                if (!bx_line_writer_write(writer, "'\\''", 4u)) {
+                    return false;
+                }
             }
             continue;
         }
 
         if (!in_single_quotes) {
-            fputc('\'', stream);
+            if (!bx_line_writer_putc(writer, '\'')) {
+                return false;
+            }
             in_single_quotes = true;
         }
-        fputc(*p, stream);
+        if (!bx_line_writer_putc(writer, (char)*p)) {
+            return false;
+        }
     }
 
     if (in_single_quotes) {
-        fputc('\'', stream);
+        if (!bx_line_writer_putc(writer, '\'')) {
+            return false;
+        }
     }
+
+    return true;
 }
 
 static bool bx_digestsum_unescape_path(char* text) {
@@ -341,7 +368,8 @@ static const char* bx_digestsum_plural_suffix(size_t count) {
 static int bx_digestsum_verify_stream(FILE* stream,
                                       const char* source_name,
                                       const struct bx_digestsum_impl* impl,
-                                      const struct bx_digestsum_options* options) {
+                                      const struct bx_digestsum_options* options,
+                                      struct bx_line_writer* writer) {
     char* line = NULL;
     size_t cap = 0u;
     size_t line_no = 0u;
@@ -390,8 +418,11 @@ static int bx_digestsum_verify_stream(FILE* stream,
 
             if (!options->status) {
                 fprintf(stderr, "%s: %s: %s\n", options->progname, expected.filename, strerror(saved_errno));
-                bx_digestsum_write_status_path(stdout, expected.filename);
-                printf(": FAILED open or read\n");
+                if (!bx_digestsum_write_status_path(writer, expected.filename)
+                    || !bx_line_writer_puts(writer, ": FAILED open or read\n")) {
+                    free(line);
+                    return BX_DIGESTSUM_EXIT_FAIL;
+                }
             }
             read_fail_count++;
             failed = true;
@@ -401,15 +432,21 @@ static int bx_digestsum_verify_stream(FILE* stream,
         if (memcmp(actual, expected.digest, impl->digest_size) == 0) {
             success_count++;
             if (!options->quiet && !options->status) {
-                bx_digestsum_write_status_path(stdout, expected.filename);
-                printf(": OK\n");
+                if (!bx_digestsum_write_status_path(writer, expected.filename)
+                    || !bx_line_writer_puts(writer, ": OK\n")) {
+                    free(line);
+                    return BX_DIGESTSUM_EXIT_FAIL;
+                }
             }
             continue;
         }
 
         if (!options->status) {
-            bx_digestsum_write_status_path(stdout, expected.filename);
-            printf(": FAILED\n");
+            if (!bx_digestsum_write_status_path(writer, expected.filename)
+                || !bx_line_writer_puts(writer, ": FAILED\n")) {
+                free(line);
+                return BX_DIGESTSUM_EXIT_FAIL;
+            }
         }
         mismatch_count++;
         failed = true;
@@ -459,9 +496,10 @@ static int bx_digestsum_verify_stream(FILE* stream,
 
 static int bx_digestsum_check_file(const struct bx_digestsum_impl* impl,
                                    const struct bx_digestsum_options* options,
-                                   const char* path) {
+                                   const char* path,
+                                   struct bx_line_writer* writer) {
     if (strcmp(path, "-") == 0) {
-        return bx_digestsum_verify_stream(stdin, "-", impl, options);
+        return bx_digestsum_verify_stream(stdin, "-", impl, options, writer);
     }
 
     FILE* stream = fopen(path, "r");
@@ -472,14 +510,15 @@ static int bx_digestsum_check_file(const struct bx_digestsum_impl* impl,
         return BX_DIGESTSUM_EXIT_FAIL;
     }
 
-    int rc = bx_digestsum_verify_stream(stream, path, impl, options);
+    int rc = bx_digestsum_verify_stream(stream, path, impl, options, writer);
     fclose(stream);
     return rc;
 }
 
 static int bx_digestsum_print_hash_result(const struct bx_digestsum_impl* impl,
                                           const struct bx_digestsum_options* options,
-                                          const char* path) {
+                                          const char* path,
+                                          struct bx_line_writer* writer) {
     uint8_t digest[64];
     char digest_hex[(64u * 2u) + 1u];
     bool escaped_path = !options->zero && bx_digestsum_filename_needs_escape(path);
@@ -492,30 +531,32 @@ static int bx_digestsum_print_hash_result(const struct bx_digestsum_impl* impl,
     bx_hex_encode_lower(digest, impl->digest_size, digest_hex);
 
     if (escaped_path) {
-        putchar('\\');
+        if (!bx_line_writer_putc(writer, '\\')) {
+            return BX_DIGESTSUM_EXIT_FAIL;
+        }
     }
 
     if (options->tag) {
-        printf("%s (", impl->algorithm_label);
-        if (escaped_path) {
-            bx_digestsum_write_escaped_path(stdout, path);
+        if (!bx_line_writer_puts(writer, impl->algorithm_label)
+            || !bx_line_writer_write(writer, " (", 2u)
+            || !(escaped_path ? bx_digestsum_write_escaped_path(writer, path) : bx_digestsum_write_path(writer, path))
+            || !bx_line_writer_write(writer, ") = ", 4u)
+            || !bx_line_writer_puts(writer, digest_hex)) {
+            return BX_DIGESTSUM_EXIT_FAIL;
         }
-        else {
-            bx_digestsum_write_path(stdout, path);
-        }
-        printf(") = %s", digest_hex);
     }
     else {
-        printf("%s %c", digest_hex, options->binary_mode ? '*' : ' ');
-        if (escaped_path) {
-            bx_digestsum_write_escaped_path(stdout, path);
-        }
-        else {
-            bx_digestsum_write_path(stdout, path);
+        if (!bx_line_writer_puts(writer, digest_hex)
+            || !bx_line_writer_putc(writer, ' ')
+            || !bx_line_writer_putc(writer, options->binary_mode ? '*' : ' ')
+            || !(escaped_path ? bx_digestsum_write_escaped_path(writer, path) : bx_digestsum_write_path(writer, path))) {
+            return BX_DIGESTSUM_EXIT_FAIL;
         }
     }
 
-    putchar(options->zero ? '\0' : '\n');
+    if (!bx_line_writer_putc(writer, options->zero ? '\0' : '\n')) {
+        return BX_DIGESTSUM_EXIT_FAIL;
+    }
     return BX_DIGESTSUM_EXIT_OK;
 }
 
@@ -679,29 +720,53 @@ int bx_digestsum_main(int argc, char** argv, const struct bx_digestsum_impl* imp
         return BX_DIGESTSUM_EXIT_FAIL;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     if (options.check_mode) {
+        int rc = BX_DIGESTSUM_EXIT_OK;
+
         if (options.first_operand >= argc) {
-            return bx_digestsum_check_file(impl, &options, "-");
+            rc = bx_digestsum_check_file(impl, &options, "-", &writer);
+        }
+        else {
+            for (int i = options.first_operand; i < argc; i++) {
+                if (bx_digestsum_check_file(impl, &options, argv[i], &writer) != BX_DIGESTSUM_EXIT_OK) {
+                    rc = BX_DIGESTSUM_EXIT_FAIL;
+                    if (bx_line_writer_error(&writer) != 0) {
+                        break;
+                    }
+                }
+            }
         }
 
-        int rc = BX_DIGESTSUM_EXIT_OK;
-        for (int i = options.first_operand; i < argc; i++) {
-            if (bx_digestsum_check_file(impl, &options, argv[i]) != BX_DIGESTSUM_EXIT_OK) {
-                rc = BX_DIGESTSUM_EXIT_FAIL;
-            }
+        if (!bx_line_writer_flush(&writer)) {
+            return BX_DIGESTSUM_EXIT_FAIL;
         }
         return rc;
     }
 
     if (options.first_operand >= argc) {
-        return bx_digestsum_print_hash_result(impl, &options, "-");
+        int rc = bx_digestsum_print_hash_result(impl, &options, "-", &writer);
+        if (!bx_line_writer_flush(&writer)) {
+            return BX_DIGESTSUM_EXIT_FAIL;
+        }
+        return rc;
     }
 
     int rc = BX_DIGESTSUM_EXIT_OK;
     for (int i = options.first_operand; i < argc; i++) {
-        if (bx_digestsum_print_hash_result(impl, &options, argv[i]) != BX_DIGESTSUM_EXIT_OK) {
+        if (bx_digestsum_print_hash_result(impl, &options, argv[i], &writer) != BX_DIGESTSUM_EXIT_OK) {
             rc = BX_DIGESTSUM_EXIT_FAIL;
+            if (bx_line_writer_error(&writer) != 0) {
+                break;
+            }
         }
+    }
+
+    if (!bx_line_writer_flush(&writer)) {
+        return BX_DIGESTSUM_EXIT_FAIL;
     }
     return rc;
 }

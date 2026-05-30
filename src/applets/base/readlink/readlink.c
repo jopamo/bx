@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -360,13 +361,13 @@ static void bx_readlink_report_path_error(struct bx_diag_ctx* diag, bool verbose
     bx_diag(diag, "cannot %s '%s': %s", action, path, strerror(errnum));
 }
 
-static bool bx_readlink_emit_target(const char* target, bool no_newline, bool zero_terminated, struct bx_diag_ctx* diag) {
-    if (fputs(target, stdout) == EOF) {
+static bool bx_readlink_emit_target(struct bx_line_writer* writer, const char* target, bool no_newline, bool zero_terminated, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_puts(writer, target)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
 
-    if (!no_newline && fputc(zero_terminated ? '\0' : '\n', stdout) == EOF) {
+    if (!no_newline && !bx_line_writer_putc(writer, zero_terminated ? '\0' : '\n')) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -374,7 +375,11 @@ static bool bx_readlink_emit_target(const char* target, bool no_newline, bool ze
     return true;
 }
 
-static bool bx_readlink_process_operand(const char* operand, const struct bx_readlink_options* options, bool no_newline, struct bx_diag_ctx* diag) {
+static bool bx_readlink_process_operand(const char* operand,
+                                        const struct bx_readlink_options* options,
+                                        bool no_newline,
+                                        struct bx_diag_ctx* diag,
+                                        struct bx_line_writer* writer) {
     char* output = NULL;
     const char* action = NULL;
 
@@ -396,7 +401,7 @@ static bool bx_readlink_process_operand(const char* operand, const struct bx_rea
         }
     }
 
-    bool emitted = bx_readlink_emit_target(output, no_newline, options->zero_terminated, diag);
+    bool emitted = bx_readlink_emit_target(writer, output, no_newline, options->zero_terminated, diag);
     free(output);
     return emitted;
 }
@@ -439,14 +444,18 @@ int bx_readlink_main(int argc, char** argv) {
         no_newline = false;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     char** operands = argv + first_operand;
     for (int i = 0; i < operand_count; i++) {
-        if (!bx_readlink_process_operand(operands[i], &options, no_newline, &diag)) {
+        if (!bx_readlink_process_operand(operands[i], &options, no_newline, &diag, &writer)) {
             continue;
         }
     }
 
-    if (fflush(stdout) == EOF) {
+    if (!bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 

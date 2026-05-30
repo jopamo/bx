@@ -10,9 +10,30 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 
-static void sum_bsd(FILE* f, const char* name, bool print_name) {
+static bool sum_write_bsd_result(struct bx_line_writer* writer, uint16_t checksum, uintmax_t blocks, const char* name, bool print_name) {
+    char buffer[128];
+    int len = snprintf(buffer, sizeof(buffer), "%05u %5" PRIuMAX, checksum, blocks);
+    return len >= 0 && (size_t)len < sizeof(buffer)
+        && bx_line_writer_write(writer, buffer, (size_t)len)
+        && (!print_name || bx_line_writer_putc(writer, ' '))
+        && (name == NULL || bx_line_writer_puts(writer, name))
+        && bx_line_writer_putc(writer, '\n');
+}
+
+static bool sum_write_sysv_result(struct bx_line_writer* writer, uint16_t checksum, uintmax_t blocks, const char* name, bool print_name) {
+    char buffer[128];
+    int len = snprintf(buffer, sizeof(buffer), "%u %" PRIuMAX, checksum, blocks);
+    return len >= 0 && (size_t)len < sizeof(buffer)
+        && bx_line_writer_write(writer, buffer, (size_t)len)
+        && (!print_name || bx_line_writer_putc(writer, ' '))
+        && (name == NULL || bx_line_writer_puts(writer, name))
+        && bx_line_writer_putc(writer, '\n');
+}
+
+static bool sum_bsd(FILE* f, const char* name, bool print_name, struct bx_line_writer* writer) {
     uint16_t checksum = 0;
     uintmax_t total_bytes = 0;
     int c;
@@ -23,10 +44,10 @@ static void sum_bsd(FILE* f, const char* name, bool print_name) {
     }
     uintmax_t blocks = 0;
     (void)bx_size_block_count_ceil(total_bytes, 1024u, &blocks);
-    printf("%05u %5" PRIuMAX "%s%s\n", checksum, blocks, print_name ? " " : "", name ? name : "");
+    return sum_write_bsd_result(writer, checksum, blocks, name, print_name);
 }
 
-static void sum_sysv(FILE* f, const char* name, bool print_name) {
+static bool sum_sysv(FILE* f, const char* name, bool print_name, struct bx_line_writer* writer) {
     uint32_t s = 0;
     uintmax_t total_bytes = 0;
     int c;
@@ -38,7 +59,7 @@ static void sum_sysv(FILE* f, const char* name, bool print_name) {
     uint16_t checksum = (r & 0xffff) + (r >> 16);
     uintmax_t blocks = 0;
     (void)bx_size_block_count_ceil(total_bytes, 512u, &blocks);
-    printf("%u %" PRIuMAX "%s%s\n", checksum, blocks, print_name ? " " : "", name ? name : "");
+    return sum_write_sysv_result(writer, checksum, blocks, name, print_name);
 }
 
 int bx_sum_main(int argc, char** argv) {
@@ -77,12 +98,13 @@ int bx_sum_main(int argc, char** argv) {
         }
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     if (optind == argc) {
-        if (sysv)
-            sum_sysv(stdin, NULL, false);
-        else
-            sum_bsd(stdin, NULL, false);
-        return 0;
+        bool ok = sysv ? sum_sysv(stdin, NULL, false, &writer) : sum_bsd(stdin, NULL, false, &writer);
+        return ok && bx_line_writer_flush(&writer) ? 0 : 1;
     }
 
     for (int i = optind; i < argc; i++) {
@@ -91,12 +113,11 @@ int bx_sum_main(int argc, char** argv) {
             bx_perror_path(&diag, argv[i]);
             continue;
         }
-        if (sysv)
-            sum_sysv(f, argv[i], true);
-        else
-            sum_bsd(f, argv[i], true);
+        bool ok = sysv ? sum_sysv(f, argv[i], true, &writer) : sum_bsd(f, argv[i], true, &writer);
         fclose(f);
+        if (!ok)
+            return 1;
     }
 
-    return 0;
+    return bx_line_writer_flush(&writer) ? 0 : 1;
 }

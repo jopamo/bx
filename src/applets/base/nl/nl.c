@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <regex.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -14,6 +15,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 enum numbering_style { STYLE_ALL, STYLE_NONEMPTY, STYLE_NONE, STYLE_REGEX };
 
@@ -212,27 +214,100 @@ static bool bx_nl_parse_options(int argc, char** argv, struct bx_nl_options* opt
     return true;
 }
 
-static void print_number(long long num, struct bx_nl_options* options) {
-    char fmt[32];
-    if (strcmp(options->number_format, "ln") == 0) {
-        sprintf(fmt, "%%-%lldlld%%s", (long long)options->number_width);
-        printf(fmt, num, options->number_separator);
-    }
-    else if (strcmp(options->number_format, "rn") == 0) {
-        sprintf(fmt, "%%%lldlld%%s", (long long)options->number_width);
-        printf(fmt, num, options->number_separator);
-    }
-    else if (strcmp(options->number_format, "rz") == 0) {
-        sprintf(fmt, "%%0%lldlld%%s", (long long)options->number_width);
-        printf(fmt, num, options->number_separator);
-    }
-    else {
-        // Fallback
-        printf("%*lld%s", options->number_width, num, options->number_separator);
-    }
+static bool bx_nl_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
 }
 
-static void nl_file(FILE* f, struct bx_nl_options* options) {
+static bool bx_nl_write_padding(struct bx_line_writer* writer, size_t count, struct bx_diag_ctx* diag) {
+    static const char spaces[] = "                                                                ";
+
+    while (count > 0u) {
+        size_t chunk = count < sizeof(spaces) - 1u ? count : sizeof(spaces) - 1u;
+        if (!bx_line_writer_write(writer, spaces, chunk)) {
+            return bx_nl_write_error(diag);
+        }
+        count -= chunk;
+    }
+
+    return true;
+}
+
+static bool bx_nl_write_number_field(struct bx_line_writer* writer, long long num, struct bx_nl_options* options, struct bx_diag_ctx* diag) {
+    char number_buffer[64];
+    int len = snprintf(number_buffer, sizeof(number_buffer), "%lld", num);
+    if (len < 0 || (size_t)len >= sizeof(number_buffer)) {
+        errno = EIO;
+        return bx_nl_write_error(diag);
+    }
+
+    size_t number_len = (size_t)len;
+    long long width_value = options->number_width;
+    bool left_adjust = width_value < 0;
+    bool zero_pad = false;
+
+    if (strcmp(options->number_format, "ln") == 0) {
+        left_adjust = true;
+    }
+    else if (strcmp(options->number_format, "rz") == 0 && width_value >= 0) {
+        zero_pad = true;
+    }
+
+    size_t width = (size_t)(width_value < 0 ? -width_value : width_value);
+    size_t pad = width > number_len ? width - number_len : 0u;
+
+    if (!left_adjust && !zero_pad && !bx_nl_write_padding(writer, pad, diag)) {
+        return false;
+    }
+
+    if (zero_pad && number_buffer[0] == '-') {
+        if (!bx_line_writer_putc(writer, '-')) {
+            return bx_nl_write_error(diag);
+        }
+        if (!bx_nl_write_padding(writer, pad, diag)) {
+            return false;
+        }
+        if (!bx_line_writer_write(writer, number_buffer + 1, number_len - 1u)) {
+            return bx_nl_write_error(diag);
+        }
+    }
+    else {
+        if (zero_pad) {
+            static const char zeros[] = "0000000000000000000000000000000000000000000000000000000000000000";
+            size_t remaining = pad;
+            while (remaining > 0u) {
+                size_t chunk = remaining < sizeof(zeros) - 1u ? remaining : sizeof(zeros) - 1u;
+                if (!bx_line_writer_write(writer, zeros, chunk)) {
+                    return bx_nl_write_error(diag);
+                }
+                remaining -= chunk;
+            }
+        }
+        if (!bx_line_writer_write(writer, number_buffer, number_len)) {
+            return bx_nl_write_error(diag);
+        }
+    }
+
+    if (left_adjust && !bx_nl_write_padding(writer, pad, diag)) {
+        return false;
+    }
+
+    if (!bx_line_writer_puts(writer, options->number_separator)) {
+        return bx_nl_write_error(diag);
+    }
+
+    return true;
+}
+
+static bool bx_nl_write_unnumbered_prefix(struct bx_line_writer* writer, struct bx_nl_options* options, struct bx_diag_ctx* diag) {
+    long long width = (long long)options->number_width + (long long)strlen(options->number_separator);
+    if (width < 0) {
+        width = -width;
+    }
+    return bx_nl_write_padding(writer, (size_t)width, diag);
+}
+
+static bool nl_file(FILE* f, struct bx_nl_options* options, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     char* line = NULL;
     size_t line_cap = 0;
     ssize_t len;
@@ -251,7 +326,10 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->header;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
-                printf("\n");
+                if (!bx_line_writer_putc(writer, '\n')) {
+                    free(line);
+                    return bx_nl_write_error(diag);
+                }
                 continue;
             }
             else if (line[2] == delim1 && line[3] == delim2 && (line[4] == '\n' || line[4] == '\0')) {
@@ -259,7 +337,10 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->body;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
-                printf("\n");
+                if (!bx_line_writer_putc(writer, '\n')) {
+                    free(line);
+                    return bx_nl_write_error(diag);
+                }
                 continue;
             }
             else if (line[2] == '\n' || line[2] == '\0') {
@@ -267,7 +348,10 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
                 current_style = &options->footer;
                 if (!options->no_renumber)
                     current_line = options->starting_line_number;
-                printf("\n");
+                if (!bx_line_writer_putc(writer, '\n')) {
+                    free(line);
+                    return bx_nl_write_error(diag);
+                }
                 continue;
             }
         }
@@ -305,15 +389,26 @@ static void nl_file(FILE* f, struct bx_nl_options* options) {
         }
 
         if (should_number) {
-            print_number(current_line, options);
+            if (!bx_nl_write_number_field(writer, current_line, options, diag)) {
+                free(line);
+                return false;
+            }
             current_line += options->line_increment;
         }
         else {
-            printf("%*s", options->number_width + (int)strlen(options->number_separator), "");
+            if (!bx_nl_write_unnumbered_prefix(writer, options, diag)) {
+                free(line);
+                return false;
+            }
         }
-        printf("%s", line);
+        if (!bx_line_writer_puts(writer, line)) {
+            free(line);
+            return bx_nl_write_error(diag);
+        }
     }
+
     free(line);
+    return true;
 }
 
 int bx_nl_main(int argc, char** argv) {
@@ -332,6 +427,10 @@ int bx_nl_main(int argc, char** argv) {
         return 0;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     int num_files = argc - first_operand;
     for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
@@ -341,8 +440,15 @@ int bx_nl_main(int argc, char** argv) {
             bx_diag(&diag, "%s: %s", filename, strerror(errno));
             continue;
         }
-        nl_file(f, &options);
+        bool ok = nl_file(f, &options, &writer, &diag);
         bx_fclose_nonstdio(f, is_stdio);
+        if (!ok) {
+            break;
+        }
+    }
+
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_nl_write_error(&diag);
     }
 
     if (options.body.style == STYLE_REGEX)

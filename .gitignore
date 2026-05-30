@@ -8,6 +8,3 @@ ref/
 build*
 .tmp/
 profiling/
-tools/audit/*
-!tools/audit/
-!tools/audit/*.py

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -11,6 +12,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_comm_options {
     const char* progname;
@@ -148,14 +150,56 @@ static ssize_t get_line(struct line_buffer* lb, FILE* stream, int delimiter) {
     return lb->len;
 }
 
-static void print_column(const char* line, ssize_t len, int col, struct bx_comm_options* options) {
+static bool bx_comm_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool print_column(struct bx_line_writer* writer, const char* line, ssize_t len, int col, struct bx_comm_options* options, struct bx_diag_ctx* diag) {
     if (col >= 2 && !options->suppress_1) {
-        fputs(options->output_delimiter, stdout);
+        if (!bx_line_writer_puts(writer, options->output_delimiter)) {
+            return bx_comm_write_error(diag);
+        }
     }
     if (col >= 3 && !options->suppress_2) {
-        fputs(options->output_delimiter, stdout);
+        if (!bx_line_writer_puts(writer, options->output_delimiter)) {
+            return bx_comm_write_error(diag);
+        }
     }
-    fwrite(line, 1, (size_t)len, stdout);
+    if (len > 0 && !bx_line_writer_write(writer, line, (size_t)len)) {
+        return bx_comm_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_comm_write_count(struct bx_line_writer* writer, unsigned long count, struct bx_diag_ctx* diag) {
+    char buffer[32];
+    int len = snprintf(buffer, sizeof(buffer), "%lu", count);
+    if (len < 0 || (size_t)len >= sizeof(buffer)) {
+        errno = EIO;
+        return bx_comm_write_error(diag);
+    }
+    if (!bx_line_writer_write(writer, buffer, (size_t)len)) {
+        return bx_comm_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_comm_write_text(struct bx_line_writer* writer, const char* text, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_puts(writer, text)) {
+        return bx_comm_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_comm_write_total(struct bx_line_writer* writer, unsigned long count1, unsigned long count2, unsigned long count3, const struct bx_comm_options* options, struct bx_diag_ctx* diag) {
+    return bx_comm_write_count(writer, count1, diag)
+        && bx_comm_write_text(writer, options->output_delimiter, diag)
+        && bx_comm_write_count(writer, count2, diag)
+        && bx_comm_write_text(writer, options->output_delimiter, diag)
+        && bx_comm_write_count(writer, count3, diag)
+        && bx_comm_write_text(writer, options->output_delimiter, diag)
+        && bx_comm_write_text(writer, "total\n", diag);
 }
 
 static bool check_file_order(struct bx_diag_ctx* diag, int filenum, struct line_buffer* prev, struct line_buffer* curr, bool* ok, bool force_fatal) {
@@ -239,6 +283,9 @@ int bx_comm_main(int argc, char** argv) {
     unsigned long count1 = 0, count2 = 0, count3 = 0;
     bool order_ok1 = true;
     bool order_ok2 = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     while (len1 != -1 || len2 != -1) {
         int cmp;
@@ -252,7 +299,9 @@ int bx_comm_main(int argc, char** argv) {
                         goto cleanup;
                 }
                 if (!options.suppress_3) {
-                    print_column(lb1.data, lb1.len, 3, &options);
+                    if (!print_column(&writer, lb1.data, lb1.len, 3, &options, &diag)) {
+                        goto cleanup;
+                    }
                 }
                 count3++;
                 free(prev1.data);
@@ -270,7 +319,9 @@ int bx_comm_main(int argc, char** argv) {
                         goto cleanup;
                 }
                 if (!options.suppress_1) {
-                    print_column(lb1.data, lb1.len, 1, &options);
+                    if (!print_column(&writer, lb1.data, lb1.len, 1, &options, &diag)) {
+                        goto cleanup;
+                    }
                 }
                 count1++;
                 free(prev1.data);
@@ -284,7 +335,9 @@ int bx_comm_main(int argc, char** argv) {
                         goto cleanup;
                 }
                 if (!options.suppress_2) {
-                    print_column(lb2.data, lb2.len, 2, &options);
+                    if (!print_column(&writer, lb2.data, lb2.len, 2, &options, &diag)) {
+                        goto cleanup;
+                    }
                 }
                 count2++;
                 free(prev2.data);
@@ -299,7 +352,9 @@ int bx_comm_main(int argc, char** argv) {
                     goto cleanup;
             }
             if (!options.suppress_1) {
-                print_column(lb1.data, lb1.len, 1, &options);
+                if (!print_column(&writer, lb1.data, lb1.len, 1, &options, &diag)) {
+                    goto cleanup;
+                }
             }
             count1++;
             free(prev1.data);
@@ -313,7 +368,9 @@ int bx_comm_main(int argc, char** argv) {
                     goto cleanup;
             }
             if (!options.suppress_2) {
-                print_column(lb2.data, lb2.len, 2, &options);
+                if (!print_column(&writer, lb2.data, lb2.len, 2, &options, &diag)) {
+                    goto cleanup;
+                }
             }
             count2++;
             free(prev2.data);
@@ -328,10 +385,15 @@ int bx_comm_main(int argc, char** argv) {
     }
 
     if (options.total) {
-        printf("%lu%s%lu%s%lu%stotal\n", count1, options.output_delimiter, count2, options.output_delimiter, count3, options.output_delimiter);
+        if (!bx_comm_write_total(&writer, count1, count2, count3, &options, &diag)) {
+            goto cleanup;
+        }
     }
 
 cleanup:
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_comm_write_error(&diag);
+    }
     free_line_buffer(&lb1);
     free_line_buffer(&lb2);
     free_line_buffer(&prev1);

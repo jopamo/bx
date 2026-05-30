@@ -13,6 +13,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 enum {
     BX_UNIQ_OPT_HELP = 256,
@@ -279,13 +280,25 @@ static void bx_uniq_record_copy(struct uniq_record* record, const char* data, si
     record->len = len;
 }
 
-static bool bx_uniq_emit_record(FILE* out, const struct uniq_record* record, unsigned long long count, const uniq_opts_t* opts, struct bx_diag_ctx* diag) {
-    if (opts->count && fprintf(out, "%7llu ", count) < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
+static bool bx_uniq_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_uniq_emit_record(struct bx_line_writer* writer, const struct uniq_record* record, unsigned long long count, const uniq_opts_t* opts, struct bx_diag_ctx* diag) {
+    if (opts->count) {
+        char prefix[32];
+        int len = snprintf(prefix, sizeof(prefix), "%7llu ", count);
+        if (len < 0 || (size_t)len >= sizeof(prefix)) {
+            errno = EIO;
+            return bx_uniq_write_error(diag);
+        }
+        if (!bx_line_writer_write(writer, prefix, (size_t)len)) {
+            return bx_uniq_write_error(diag);
+        }
     }
 
-    if (record->len > 0 && fwrite(record->data, 1, record->len, out) != record->len) {
+    if (record->len > 0 && !bx_line_writer_write(writer, record->data, record->len)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -303,7 +316,7 @@ static bool bx_uniq_should_print(unsigned long long count, const uniq_opts_t* op
     return true;
 }
 
-static bool do_uniq(FILE* in, FILE* out, const uniq_opts_t* opts, struct bx_diag_ctx* diag) {
+static bool do_uniq(FILE* in, struct bx_line_writer* writer, const uniq_opts_t* opts, struct bx_diag_ctx* diag) {
     char* line = NULL;
     size_t line_cap = 0;
     ssize_t read_len = 0;
@@ -327,7 +340,7 @@ static bool do_uniq(FILE* in, FILE* out, const uniq_opts_t* opts, struct bx_diag
             count++;
         }
         else {
-            if (bx_uniq_should_print(count, opts) && !bx_uniq_emit_record(out, &prev_record, count, opts, diag)) {
+            if (bx_uniq_should_print(count, opts) && !bx_uniq_emit_record(writer, &prev_record, count, opts, diag)) {
                 ok = false;
                 break;
             }
@@ -343,7 +356,7 @@ static bool do_uniq(FILE* in, FILE* out, const uniq_opts_t* opts, struct bx_diag
     }
 
     if (ok && have_prev && bx_uniq_should_print(count, opts)) {
-        if (!bx_uniq_emit_record(out, &prev_record, count, opts, diag)) {
+        if (!bx_uniq_emit_record(writer, &prev_record, count, opts, diag)) {
             ok = false;
         }
     }
@@ -403,14 +416,18 @@ int bx_uniq_main(int argc, char** argv) {
         }
     }
 
-    if (!do_uniq(in, out, &opts, &diag)) {
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, fileno(out), output_buffer, sizeof(output_buffer));
+
+    if (!do_uniq(in, &writer, &opts, &diag)) {
         bx_fclose_nonstdio(in, in_is_stdio);
         bx_fclose_nonstdio(out, out_is_stdio);
         return diag.exit_status == 0 ? 1 : diag.exit_status;
     }
 
-    if (fflush(out) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    if (!bx_line_writer_flush(&writer)) {
+        bx_uniq_write_error(&diag);
     }
     bx_fclose_nonstdio(in, in_is_stdio);
     bx_fclose_nonstdio(out, out_is_stdio);
