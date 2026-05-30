@@ -2604,7 +2604,7 @@ static void bx_ls_long_widths_init(struct bx_ls_long_widths* widths, const struc
     widths->group = options->show_group ? 1u : 0u;
     widths->author = options->show_author ? 1u : 0u;
     widths->context = options->show_context ? 1u : 0u;
-    widths->size = 1u;
+    widths->size = 4u;
 }
 
 static void bx_ls_short_widths_init(struct bx_ls_short_widths* widths, const struct bx_ls_options* options) {

@@ -1041,6 +1041,8 @@ static DIR *bx_rg_sched_open_donated_dir(const struct bx_walk_entry *entry) {
 
     bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, 1u);
     int fd;
+    /* Ownership handoff keeps the openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY)
+     * authority frame while routing through shared fd helpers for child-only validation. */
     if (parent_fd >= 0 && parent_fd != AT_FDCWD && bx_fd_at_name_is_child(name))
         fd = bx_fd_openat_child(parent_fd, name, O_RDONLY | O_DIRECTORY, 0);
     else

@@ -17,6 +17,7 @@ static void run_jq_exhaust_and_reuse_tests(void);
 #ifdef HAVE_PTHREAD
 static void run_jq_pthread_tests(void);
 #endif
+int jq_testsuite(jv libdirs, int verbose, int argc, char* argv[]);
 
 int jq_testsuite(jv libdirs, int verbose, int argc, char* argv[]) {
   int skip = -1;

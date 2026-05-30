@@ -47,6 +47,7 @@
 
 #include "jv_alloc.h"
 #include "jv.h"
+#include "jv_private.h"
 #include "jv_unicode.h"
 #include "util.h"
 
@@ -294,8 +295,8 @@ w32_service_thread_detach(void *unused)
 
 extern void jv_tsd_dtoa_ctx_init();
 extern void jv_tsd_dtoa_ctx_fini();
-void jv_tsd_dec_ctx_fini();
-void jv_tsd_dec_ctx_init();
+static void jv_tsd_dec_ctx_fini(void);
+static void jv_tsd_dec_ctx_init(void);
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL,
                     DWORD fdwReason,
@@ -488,12 +489,12 @@ static pthread_once_t dec_ctx_once = PTHREAD_ONCE_INIT;
 
 // atexit finalizer to clean up the tsd dec contexts if main() exits
 // without having called pthread_exit()
-void jv_tsd_dec_ctx_fini(void) {
+static void jv_tsd_dec_ctx_fini(void) {
   jv_mem_free(pthread_getspecific(dec_ctx_key));
   pthread_setspecific(dec_ctx_key, NULL);
 }
 
-void jv_tsd_dec_ctx_init(void) {
+static void jv_tsd_dec_ctx_init(void) {
   if (pthread_key_create(&dec_ctx_key, jv_mem_free) != 0) {
     fprintf(stderr, "error: cannot create thread specific key");
     abort();
@@ -930,9 +931,13 @@ static int jvp_contains(jv a, jv b, int depth);
 
 static int jvp_array_contains(jv a, jv b, int depth) {
   int r = 1;
-  jv_array_foreach(b, bi, belem) {
+  int b_len = jv_array_length(jv_copy(b));
+  int a_len = jv_array_length(jv_copy(a));
+  for (int bi = 0; bi < b_len; bi++) {
+    jv belem = jv_array_get(jv_copy(b), bi);
     int ri = 0;
-    jv_array_foreach(a, ai, aelem) {
+    for (int ai = 0; ai < a_len; ai++) {
+      jv aelem = jv_array_get(jv_copy(a), ai);
       ri = jvp_contains(aelem, jv_copy(belem), depth);
       if (ri) break;
     }

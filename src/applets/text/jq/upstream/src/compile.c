@@ -196,13 +196,13 @@ block gen_op_target(opcode op, block target) {
   return inst_block(i);
 }
 
-block gen_op_targetlater(opcode op) {
+static block gen_op_targetlater(opcode op) {
   assert(opcode_describe(op)->flags & OP_HAS_BRANCH);
   inst* i = inst_new(op);
   i->imm.target = 0;
   return inst_block(i);
 }
-void inst_set_target(block b, block target) {
+static void inst_set_target(block b, block target) {
   assert(block_is_single(b));
   assert(opcode_describe(b.first->op)->flags & OP_HAS_BRANCH);
   assert(target.last);
@@ -550,23 +550,23 @@ block gen_import_meta(block import, block metadata) {
 }
 
 block gen_function(const char* name, block formals, block body) {
-  inst* i = inst_new(CLOSURE_CREATE);
+  inst* closure = inst_new(CLOSURE_CREATE);
   int nformals = 0;
-  for (inst* i = formals.last; i; i = i->prev) {
+  for (inst* param = formals.last; param; param = param->prev) {
     nformals++;
-    i->nformals = 0;
-    if (i->op == CLOSURE_PARAM_REGULAR) {
-      i->op = CLOSURE_PARAM;
-      body = gen_var_binding(gen_call(i->symbol, gen_noop()), i->symbol, body);
+    param->nformals = 0;
+    if (param->op == CLOSURE_PARAM_REGULAR) {
+      param->op = CLOSURE_PARAM;
+      body = gen_var_binding(gen_call(param->symbol, gen_noop()), param->symbol, body);
     }
-    block_bind_subblock(inst_block(i), body, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
+    block_bind_subblock(inst_block(param), body, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
   }
-  i->subfn = body;
-  i->symbol = strdup(name);
-  i->any_unbound = -1;
-  i->nformals = nformals;
-  i->arglist = formals;
-  block b = inst_block(i);
+  closure->subfn = body;
+  closure->symbol = strdup(name);
+  closure->any_unbound = -1;
+  closure->nformals = nformals;
+  closure->arglist = formals;
+  block b = inst_block(closure);
   block_bind_subblock(b, b, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
   return b;
 }
@@ -1161,15 +1161,15 @@ static int expand_call_arglist(block* b, jv args, jv *env) {
         block callargs = gen_noop();
         for (inst* i; (i = block_take(&curr->arglist));) {
           assert(opcode_describe(i->op)->flags & OP_IS_CALL_PSEUDO);
-          block b = inst_block(i);
+          block arg = inst_block(i);
           switch (i->op) {
           default: assert(0 && "Unknown type of parameter"); break;
           case CLOSURE_REF:
-            block_append(&callargs, b);
+            block_append(&callargs, arg);
             break;
           case CLOSURE_CREATE:
-            block_append(&prelude, b);
-            block_append(&callargs, gen_op_bound(CLOSURE_REF, b));
+            block_append(&prelude, arg);
+            block_append(&callargs, gen_op_bound(CLOSURE_REF, arg));
             break;
           }
           actual_args++;

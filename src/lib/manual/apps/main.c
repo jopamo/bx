@@ -48,6 +48,7 @@
 
 #include "applets/archive/archive_codec.h"
 #include "lib/child_runner.h"
+#include "lib/time_parse.h"
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "mandoc_xr.h"
@@ -122,6 +123,17 @@ static	char		 *help_argv[] = {help_arg, NULL};
 struct pager_parent_setup {
 	int		 tty_fd;
 };
+
+static void
+pager_parent_poll_delay(void)
+{
+	struct timespec	timeout;
+
+	if (!bx_time_milliseconds_to_timespec(100, &timeout))
+		return;
+	while (nanosleep(&timeout, NULL) != 0 && errno == EINTR)
+		continue;
+}
 
 
 int
@@ -1162,6 +1174,7 @@ pager_parent_setup_apply(pid_t pid, void *user)
 
 	(void)setpgid(pid, 0);
 	(void)tcsetpgrp(tty_fd, pid);
+	pager_parent_poll_delay();
 	return 0;
 }
 

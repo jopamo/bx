@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "compile.h"
+#include "jq_parser.h"
 #include "jv_alloc.h"
 #include "builtin.h"
 #define YYMALLOC jv_mem_alloc
@@ -136,14 +137,14 @@ struct lexer_param {
     /*YYERROR*/;                                                   \
   } while (0)
 
-void yyerror(YYLTYPE* loc, block* answer, int* errors,
-             struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
+static void yyerror(YYLTYPE* loc, block* answer, int* errors,
+                    struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
   (*errors)++;
   locfile_locate(locations, *loc, "jq: error: %s", s);
 }
 
-int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
-          struct locfile* locations, struct lexer_param* lexer_param_ptr) {
+static int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
+                 struct locfile* locations, struct lexer_param* lexer_param_ptr) {
   yyscan_t lexer = lexer_param_ptr->lexer;
   int tok = jq_yylex(yylval, yylloc, lexer);
   if ((tok == LITERAL || tok == QQSTRING_TEXT) && !jv_is_valid(yylval->literal)) {

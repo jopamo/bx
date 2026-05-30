@@ -16,6 +16,8 @@
 #include "builtin.h"
 #include "linker.h"
 
+jv _jq_path_append(jq_state *jq, jv v, jv p, jv value_at_path);
+
 struct jq_state {
   void (*nomem_handler)(void *);
   void *nomem_handler_data;
@@ -159,14 +161,14 @@ static void frame_pop(struct jq_state* jq) {
   jq->curr_frame = stack_pop_block(&jq->stk, jq->curr_frame, frame_size(fp->bc));
 }
 
-void stack_push(jq_state *jq, jv val) {
+static void stack_push(jq_state *jq, jv val) {
   assert(jv_is_valid(val));
   jq->stk_top = stack_push_block(&jq->stk, jq->stk_top, sizeof(jv));
   jv* sval = stack_block(&jq->stk, jq->stk_top);
   *sval = val;
 }
 
-jv stack_pop(jq_state *jq) {
+static jv stack_pop(jq_state *jq) {
   jv* sval = stack_block(&jq->stk, jq->stk_top);
   jv val = *sval;
   if (!stack_pop_will_free(&jq->stk, jq->stk_top)) {
@@ -179,7 +181,7 @@ jv stack_pop(jq_state *jq) {
 
 // Like stack_pop(), but assert !stack_pop_will_free() and replace with
 // jv_null() on the stack.
-jv stack_popn(jq_state *jq) {
+static jv stack_popn(jq_state *jq) {
   jv* sval = stack_block(&jq->stk, jq->stk_top);
   jv val = *sval;
   if (!stack_pop_will_free(&jq->stk, jq->stk_top)) {
@@ -203,12 +205,12 @@ struct stack_pos {
   stack_ptr saved_data_stack, saved_curr_frame;
 };
 
-struct stack_pos stack_get_pos(jq_state* jq) {
+static struct stack_pos stack_get_pos(jq_state* jq) {
   struct stack_pos sp = {jq->stk_top, jq->curr_frame};
   return sp;
 }
 
-void stack_save(jq_state *jq, uint16_t* retaddr, struct stack_pos sp){
+static void stack_save(jq_state *jq, uint16_t* retaddr, struct stack_pos sp){
   jq->fork_top = stack_push_block(&jq->stk, jq->fork_top, sizeof(struct forkpoint));
   struct forkpoint* fork = stack_block(&jq->stk, jq->fork_top);
   fork->saved_data_stack = jq->stk_top;
@@ -267,7 +269,7 @@ _jq_path_append(jq_state *jq, jv v, jv p, jv value_at_path) {
   return jv_copy(jq->value_at_path = value_at_path);
 }
 
-uint16_t* stack_restore(jq_state *jq){
+static uint16_t* stack_restore(jq_state *jq){
   while (!stack_pop_will_free(&jq->stk, jq->fork_top)) {
     if (stack_pop_will_free(&jq->stk, jq->stk_top)) {
       jv_free(stack_pop(jq));

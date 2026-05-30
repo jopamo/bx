@@ -40,6 +40,9 @@ extern void jv_tsd_dtoa_ctx_init();
 #include "bx_jq_build_info.h"
 
 int jq_testsuite(jv lib_dirs, int verbose, int argc, char* argv[]);
+#ifndef WIN32
+int main(int argc, char* argv[]);
+#endif
 
 /*
  * For a longer help message we could use a better option parsing

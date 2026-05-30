@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "jv.h"
+#include "jv_alloc.h"
 
 struct nomem_handler {
     jv_nomem_handler_f handler;

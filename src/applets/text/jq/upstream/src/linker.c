@@ -18,6 +18,7 @@
 #include "jq.h"
 #include "util.h"
 #include "compile.h"
+#include "linker.h"
 #include "jv_alloc.h"
 
 struct lib_entry {

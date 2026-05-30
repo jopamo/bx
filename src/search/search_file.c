@@ -1118,6 +1118,11 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
             search_file_resolve_opened_kernel(f, nonbinary_kernel);
 
         if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER) {
+            /*
+             * Candidate-triggered scanner entry accounting stays in
+             * bx_search_scanner_opened() for the raw-fd transition path:
+             * bx_search_dev_counters_note_candidate_triggered_scanner_entry();
+             */
             bx_search_dev_counters_note_raw_fd_to_scanner_entry();
             return bx_search_scanner_opened(f, false, display_name, progname, m, opts,
                                             match_count, scanner, stats, true);

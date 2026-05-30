@@ -295,9 +295,13 @@ jv binop_minus(jv a, jv b) {
     return r;
   } else if (jv_get_kind(a) == JV_KIND_ARRAY && jv_get_kind(b) == JV_KIND_ARRAY) {
     jv out = jv_array();
-    jv_array_foreach(a, i, x) {
+    int a_len = jv_array_length(jv_copy(a));
+    int b_len = jv_array_length(jv_copy(b));
+    for (int i = 0; i < a_len; i++) {
+      jv x = jv_array_get(jv_copy(a), i);
       int include = 1;
-      jv_array_foreach(b, j, y) {
+      for (int j = 0; j < b_len; j++) {
+        jv y = jv_array_get(jv_copy(b), j);
         int equal = jv_equal(jv_copy(x), y);
         if (equal < 0) {
           jv_free(out);

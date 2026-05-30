@@ -383,6 +383,13 @@
     X(literal_avx2_target_available)
 
 struct bx_search_dev_counter_values {
+    /*
+     * Selected-pair distribution probes are sharded with the rest of the
+     * counter state now; historical audit anchors kept here:
+     * atomic_size_t literal_selected_pair_start;
+     * atomic_size_t literal_selected_pair_interior;
+     * atomic_size_t literal_selected_pair_end;
+     */
     size_t bytes_read;
     size_t files_opened;
     uint_fast64_t content_open_calls;

@@ -15,6 +15,7 @@
 #include "jv_unicode.h"
 #include "jv_alloc.h"
 #include "jv_private.h"
+#include "jq.h"
 #include "util.h"
 
 #ifndef MAX_PRINT_DEPTH
