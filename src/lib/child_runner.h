@@ -5,6 +5,19 @@
 #include <signal.h>
 #include <sys/types.h>
 
+#include "backpressure_limit.h"
+#include "cancel_state.h"
+#include "workqueue_contract.h"
+
+/*
+ * Child action queues must follow BX_WORKQUEUE_CONTRACT_CHILD_ACTIONS:
+ * an explicit BX_BACKPRESSURE_LIMIT_CHILD_PROCESSES slot bound plus
+ * BX_BACKPRESSURE_LIMIT_OPEN_FDS fd budget, producer-owned argv/env/cwd/fd
+ * actions before spawn, child_runner ownership after a successful slot claim,
+ * producer cleanup after failed slot claim, and stop-spawning-before-reap
+ * teardown.
+ */
+
 enum bx_child_prompt_result {
     BX_CHILD_PROMPT_ERROR = -1,
     BX_CHILD_PROMPT_SKIP = 0,
@@ -13,6 +26,7 @@ enum bx_child_prompt_result {
 
 typedef int (*bx_child_prompt_hook)(const char *progname, char *const *argv, void *user);
 typedef void (*bx_child_verbose_hook)(const char *progname, char *const *argv, void *user);
+typedef int (*bx_child_parent_setup_hook)(pid_t pid, void *user);
 
 struct bx_child_runner_opts {
     bool verbose;
@@ -27,10 +41,13 @@ struct bx_child_runner_opts {
     int stderr_fd;
     bool reset_common_signals;
     bool new_process_group;
+    bool wait_stdout_foreground;
     bx_child_prompt_hook prompt_hook;
     void *prompt_user;
     bx_child_verbose_hook verbose_hook;
     void *verbose_user;
+    bx_child_parent_setup_hook parent_setup_hook;
+    void *parent_setup_user;
 };
 
 static inline struct bx_child_runner_opts bx_child_runner_opts_default(void) {
@@ -53,10 +70,13 @@ bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
         .stderr_fd = -1,
         .reset_common_signals = false,
         .new_process_group = false,
+        .wait_stdout_foreground = false,
         .prompt_hook = NULL,
         .prompt_user = NULL,
         .verbose_hook = NULL,
         .verbose_user = NULL,
+        .parent_setup_hook = NULL,
+        .parent_setup_user = NULL,
     };
 }
 
@@ -69,6 +89,10 @@ struct bx_child {
 
 int bx_child_pick_slot(struct bx_child *children, int count, int max_procs);
 void bx_child_signal_all(struct bx_child *children, int count, int signo);
+int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
+                                  struct bx_child *children,
+                                  int *running,
+                                  int signo);
 int bx_child_exec_argv(char *const *argv);
 int bx_child_exec_argv_exact_or_path(char *const *argv);
 int bx_child_spawn_argv(const char *progname, char *const *argv,

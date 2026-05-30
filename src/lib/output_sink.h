@@ -6,17 +6,32 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#include "backpressure_limit.h"
+#include "workqueue_profile.h"
+#include "workqueue_contract.h"
+
 struct bx_output_sink_opts {
     size_t max_pending;
+    size_t max_pending_bytes;
     uint64_t first_seq;
     bool ordered;
     void *user;
+    struct bx_workqueue_profile_sink *profile;
     uint64_t (*record_seq)(const void *record, void *user);
+    size_t (*record_size)(const void *record, void *user);
     void (*emit_record)(void *user, void *record);
     void (*dispose_record)(void *user, void *record);
 };
 
 /*
+ * Output chunk workqueue contract:
+ *
+ * bx_output_sink implements BX_WORKQUEUE_CONTRACT_OUTPUT_CHUNKS for ordered
+ * publication. max_pending is an explicit record-count bound; max_pending_bytes
+ * is an optional BX_BACKPRESSURE_LIMIT_PENDING_OUTPUT_BYTES budget. Successful
+ * submit transfers record ownership, failed submit preserves producer
+ * ownership, and close happens before join/reclaim.
+ *
  * Single-owner record lifecycle:
  *
  * The producer owns a mutable record before bx_output_sink_submit. A successful
@@ -35,6 +50,7 @@ struct bx_output_sink {
     size_t skipped_len;
     size_t skipped_cap;
     size_t pending;
+    size_t pending_bytes;
     uint64_t next_seq;
     bool closed;
     bool failed;

@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <time.h>
 
+struct bx_cancel_state;
+
 enum bx_walk_cycle_mode {
     BX_WALK_CYCLE_NONE = 0,
     BX_WALK_CYCLE_DIR_REPEAT,
@@ -78,6 +80,7 @@ struct bx_walk_opts {
     bool post_order;
     bool stay_on_filesystem;
     bool *stop;
+    struct bx_cancel_state *cancel;
     bool suppress_eacces;
     bool suppress_errors;
     bool report_eacces;

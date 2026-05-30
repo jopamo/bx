@@ -87,6 +87,7 @@ int bx_walk_dirent_list_read_sorted(DIR *dir,
                                     const struct bx_walk_counter_ops *counter_ops);
 
 bool bx_walk_should_stop(const struct bx_walk_opts *opts);
+void bx_walk_mark_cancel_draining(const struct bx_walk_opts *opts);
 const char *bx_walk_error_prefix(const struct bx_walk_opts *opts);
 void bx_walk_report_error(const struct bx_walk_opts *opts, const char *path, int errnum);
 void bx_walk_report_loop(const struct bx_walk_opts *opts, const char *path);

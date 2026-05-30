@@ -44,11 +44,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "applets/archive/archive_codec.h"
-#include "lib/time_parse.h"
+#include "lib/child_runner.h"
 #include "mandoc_aux.h"
 #include "mandoc.h"
 #include "mandoc_xr.h"
@@ -119,6 +118,10 @@ static	int		  woptions(char *, enum mandoc_os *, int *);
 static	const int sec_prios[] = {1, 4, 5, 8, 6, 3, 7, 2, 9};
 static	char		  help_arg[] = "help";
 static	char		 *help_argv[] = {help_arg, NULL};
+
+struct pager_parent_setup {
+	int		 tty_fd;
+};
 
 
 int
@@ -1148,6 +1151,20 @@ woptions(char *arg, enum mandoc_os *os_e, int *wstop)
 	return 0;
 }
 
+static int
+pager_parent_setup_apply(pid_t pid, void *user)
+{
+	struct pager_parent_setup	*setup;
+	int				 tty_fd;
+
+	setup = user;
+	tty_fd = setup == NULL ? STDOUT_FILENO : setup->tty_fd;
+
+	(void)setpgid(pid, 0);
+	(void)tcsetpgrp(tty_fd, pid);
+	return 0;
+}
+
 /*
  * Wait until moved to the foreground,
  * then fork the pager and wait for the user to close it.
@@ -1209,7 +1226,6 @@ run_pager(struct outstate *outst, char *tag_target)
 static pid_t
 spawn_pager(struct outstate *outst, char *tag_target)
 {
-	struct timespec timeout;
 #define MAX_PAGER_ARGS 16
 	char		*argv[MAX_PAGER_ARGS];
 	const char	*pager;
@@ -1220,15 +1236,15 @@ spawn_pager(struct outstate *outst, char *tag_target)
 #endif
 	int		 argc, use_ofn;
 	pid_t		 pager_pid;
+	struct bx_child	 child;
+	int		 running;
+	bool		 exec_failed_now;
+	int		 exec_errno_now;
+	struct bx_child_runner_opts runner_opts;
+	struct pager_parent_setup parent_setup;
 
 	assert(outst->tag_files->ofd == -1);
 	assert(outst->tag_files->tfs == NULL);
-
-	if (!bx_time_milliseconds_to_timespec(100, &timeout)) {
-		mandoc_msg(MANDOCERR_WAIT, 0, 0,
-		    "%s", "invalid pager poll timeout");
-		exit(mandoc_msg_getrc());
-	}
 
 	pager = getenv("MANPAGER");
 	if (pager == NULL || *pager == '\0')
@@ -1274,37 +1290,37 @@ spawn_pager(struct outstate *outst, char *tag_target)
 	}
 	argv[argc] = NULL;
 
-	switch (pager_pid = fork()) {
-	case -1:
+	memset(&child, 0, sizeof(child));
+	running = 0;
+	exec_failed_now = false;
+	exec_errno_now = 0;
+	runner_opts = bx_child_runner_opts_default();
+	runner_opts.new_process_group = true;
+	runner_opts.wait_stdout_foreground = true;
+	parent_setup.tty_fd = STDOUT_FILENO;
+	runner_opts.parent_setup_hook = pager_parent_setup_apply;
+	runner_opts.parent_setup_user = &parent_setup;
+
+	if (bx_child_spawn_argv(getprogname(), argv, &runner_opts, 0,
+	    &child, &running, &exec_failed_now, &exec_errno_now) != 0) {
 		mandoc_msg(MANDOCERR_FORK, 0, 0, "%s", strerror(errno));
-		exit(mandoc_msg_getrc());
-	case 0:
-		break;
-	default:
 		while (argc > 0)
 			free(argv[--argc]);
-		(void)setpgid(pager_pid, 0);
-		(void)tcsetpgrp(STDOUT_FILENO, pager_pid);
-#if HAVE_PLEDGE
-		if (pledge("stdio rpath tmppath tty proc", NULL) == -1) {
-			mandoc_msg(MANDOCERR_PLEDGE, 0, 0,
-			    "%s", strerror(errno));
-			exit(mandoc_msg_getrc());
-		}
-#endif
-		outst->tag_files->pager_pid = pager_pid;
-		return pager_pid;
+		exit(mandoc_msg_getrc());
 	}
 
-	/*
-	 * The child process becomes the pager.
-	 * Do not start it before controlling the terminal.
-	 */
-
-	while (tcgetpgrp(STDOUT_FILENO) != getpid())
-		nanosleep(&timeout, NULL);
-
-	execvp(argv[0], argv);
-	mandoc_msg(MANDOCERR_EXEC, 0, 0, "%s: %s", argv[0], strerror(errno));
-	_exit(mandoc_msg_getrc());
+	pager_pid = child.pid;
+	if (exec_failed_now)
+		fprintf(stderr, "%s: SYSERR: exec: %s: %s\n",
+		    getprogname(), argv[0], strerror(exec_errno_now));
+	while (argc > 0)
+		free(argv[--argc]);
+#if HAVE_PLEDGE
+	if (pledge("stdio rpath tmppath tty proc", NULL) == -1) {
+		mandoc_msg(MANDOCERR_PLEDGE, 0, 0, "%s", strerror(errno));
+		exit(mandoc_msg_getrc());
+	}
+#endif
+	outst->tag_files->pager_pid = pager_pid;
+	return pager_pid;
 }

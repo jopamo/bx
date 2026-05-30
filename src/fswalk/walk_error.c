@@ -2,10 +2,29 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lib/cancel_state.h"
 #include "walk_internal.h"
 
 bool bx_walk_should_stop(const struct bx_walk_opts *opts) {
-    return opts && opts->stop && *opts->stop;
+    if (!opts)
+        return false;
+    if (opts->stop && *opts->stop)
+        return true;
+    if (opts->cancel && bx_cancel_state_requested(opts->cancel)) {
+        (void)bx_cancel_state_mark_observed(opts->cancel);
+        (void)bx_cancel_state_mark_draining(opts->cancel);
+        if (opts->stop)
+            *opts->stop = true;
+        return true;
+    }
+    return false;
+}
+
+void bx_walk_mark_cancel_draining(const struct bx_walk_opts *opts) {
+    if (!opts || !opts->cancel || !bx_cancel_state_requested(opts->cancel))
+        return;
+    (void)bx_cancel_state_mark_observed(opts->cancel);
+    (void)bx_cancel_state_mark_draining(opts->cancel);
 }
 
 const char *bx_walk_error_prefix(const struct bx_walk_opts *opts) {

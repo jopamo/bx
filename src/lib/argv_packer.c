@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
+#include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -8,10 +10,42 @@
 
 extern char **environ;
 
-static size_t bx_argv_pointer_bytes(int argc) {
+static bool bx_argv_add_size(size_t *total, size_t value) {
+    if (value > SIZE_MAX - *total)
+        return false;
+    *total += value;
+    return true;
+}
+
+static bool bx_argv_string_bytes(const char *arg, size_t *bytes) {
+    size_t len = strlen(arg);
+    if (len == SIZE_MAX)
+        return false;
+    *bytes = len + 1u;
+    return true;
+}
+
+static bool bx_argv_pointer_bytes_checked(int argc, size_t *bytes) {
     if (argc < 0)
-        return 0;
-    return (size_t)argc * sizeof(char *);
+        return false;
+    if ((size_t)argc > SIZE_MAX / sizeof(char *))
+        return false;
+    *bytes = (size_t)argc * sizeof(char *);
+    return true;
+}
+
+static size_t bx_argv_pointer_bytes(int argc) {
+    size_t bytes = 0;
+    if (!bx_argv_pointer_bytes_checked(argc, &bytes))
+        return (size_t)-1;
+    return bytes;
+}
+
+static bool bx_argv_count_one(int *argc) {
+    if (*argc == INT_MAX)
+        return false;
+    (*argc)++;
+    return true;
 }
 
 size_t bx_argv_environment_bytes(void) {
@@ -19,8 +53,12 @@ size_t bx_argv_environment_bytes(void) {
     if (!environ)
         return 0;
 
-    for (char **ep = environ; *ep; ep++)
-        env_bytes += strlen(*ep) + 1;
+    for (char **ep = environ; *ep; ep++) {
+        size_t arg_bytes = 0;
+        if (!bx_argv_string_bytes(*ep, &arg_bytes) ||
+            !bx_argv_add_size(&env_bytes, arg_bytes))
+            return (size_t)-1;
+    }
     return env_bytes;
 }
 
@@ -31,27 +69,63 @@ size_t bx_argv_bytes(char **argv) {
 
     int argc = 0;
     for (int i = 0; argv[i]; i++) {
-        total += strlen(argv[i]) + 1;
-        argc++;
+        size_t arg_bytes = 0;
+        if (!bx_argv_string_bytes(argv[i], &arg_bytes) ||
+            !bx_argv_add_size(&total, arg_bytes) ||
+            !bx_argv_count_one(&argc))
+            return (size_t)-1;
     }
-    total += bx_argv_pointer_bytes(argc);
+    size_t pointer_bytes = bx_argv_pointer_bytes(argc);
+    if (pointer_bytes == (size_t)-1 ||
+        !bx_argv_add_size(&total, pointer_bytes))
+        return (size_t)-1;
     return total;
 }
 
 size_t bx_argv_bytes_with_items(const char *const *base_argv, int base_argc,
                                 char **items, int start, int count) {
     size_t total = 0;
-    for (int i = 0; i < base_argc; i++)
-        total += strlen(base_argv[i]) + 1;
-    for (int i = 0; i < count; i++)
-        total += strlen(items[start + i]) + 1;
-    total += bx_argv_pointer_bytes(base_argc + count);
+    int argc = 0;
+    if (base_argc < 0 || start < 0 || count < 0)
+        return (size_t)-1;
+    for (int i = 0; i < base_argc; i++) {
+        size_t arg_bytes = 0;
+        if (!bx_argv_string_bytes(base_argv[i], &arg_bytes) ||
+            !bx_argv_add_size(&total, arg_bytes) ||
+            !bx_argv_count_one(&argc))
+            return (size_t)-1;
+    }
+    for (int i = 0; i < count; i++) {
+        if (start > INT_MAX - i)
+            return (size_t)-1;
+        size_t arg_bytes = 0;
+        if (!bx_argv_string_bytes(items[start + i], &arg_bytes) ||
+            !bx_argv_add_size(&total, arg_bytes) ||
+            !bx_argv_count_one(&argc))
+            return (size_t)-1;
+    }
+    size_t pointer_bytes = bx_argv_pointer_bytes(argc);
+    if (pointer_bytes == (size_t)-1 ||
+        !bx_argv_add_size(&total, pointer_bytes))
+        return (size_t)-1;
     return total;
 }
 
 static bool bx_argv_push_owned(char ***argvp, int *argc, int *cap, char *arg) {
+    if (*argc < 0 || *cap < 0 || *argc == INT_MAX) {
+        free(arg);
+        return false;
+    }
     if (*argc + 1 >= *cap) {
+        if (*cap > INT_MAX / 2) {
+            free(arg);
+            return false;
+        }
         int new_cap = *cap == 0 ? 8 : *cap * 2;
+        if ((size_t)new_cap > SIZE_MAX / sizeof(char *)) {
+            free(arg);
+            return false;
+        }
         char **tmp = realloc(*argvp, (size_t)new_cap * sizeof(*tmp));
         if (!tmp) {
             free(arg);
@@ -85,6 +159,8 @@ char **bx_argv_build_with_item_expansion(const char *const *base_argv, int base_
     int argc = 0;
     int cap = 0;
     int saw = 0;
+    if (base_argc < 0 || start < 0 || count < 0)
+        return NULL;
 
     for (int i = 0; i < base_argc; i++) {
         size_t marker_count = marker_count_fn ? marker_count_fn(base_argv[i], user) : 0;
@@ -138,42 +214,58 @@ size_t bx_argv_bytes_with_item_expansion(const char *const *base_argv, int base_
     size_t total = 0;
     int argc = 0;
     int saw = 0;
+    if (base_argc < 0 || start < 0 || count < 0)
+        return (size_t)-1;
 
     for (int i = 0; i < base_argc; i++) {
         size_t marker_count = marker_count_fn ? marker_count_fn(base_argv[i], user) : 0;
         if (marker_count == 0) {
-            size_t arg_bytes = expand_bytes_fn
-                                   ? expand_bytes_fn(base_argv[i], "", user)
-                                   : strlen(base_argv[i]) + 1;
+            size_t arg_bytes = 0;
+            if (expand_bytes_fn)
+                arg_bytes = expand_bytes_fn(base_argv[i], "", user);
+            else if (!bx_argv_string_bytes(base_argv[i], &arg_bytes))
+                return (size_t)-1;
             if (arg_bytes == (size_t)-1)
                 return (size_t)-1;
-            total += arg_bytes;
-            argc++;
+            if (!bx_argv_add_size(&total, arg_bytes) ||
+                !bx_argv_count_one(&argc))
+                return (size_t)-1;
             continue;
         }
 
         saw = 1;
         int item_total = batch_mode ? count : (count > 0 ? 1 : 0);
         for (int j = 0; j < item_total; j++) {
+            if (start > INT_MAX - j)
+                return (size_t)-1;
             if (!expand_bytes_fn)
                 return (size_t)-1;
             size_t arg_bytes = expand_bytes_fn(base_argv[i], items[start + j], user);
             if (arg_bytes == (size_t)-1)
                 return (size_t)-1;
-            total += arg_bytes;
-            argc++;
+            if (!bx_argv_add_size(&total, arg_bytes) ||
+                !bx_argv_count_one(&argc))
+                return (size_t)-1;
         }
     }
 
     if (!saw) {
         int item_total = batch_mode ? count : (count > 0 ? 1 : 0);
         for (int j = 0; j < item_total; j++) {
-            total += strlen(items[start + j]) + 1;
-            argc++;
+            if (start > INT_MAX - j)
+                return (size_t)-1;
+            size_t arg_bytes = 0;
+            if (!bx_argv_string_bytes(items[start + j], &arg_bytes) ||
+                !bx_argv_add_size(&total, arg_bytes) ||
+                !bx_argv_count_one(&argc))
+                return (size_t)-1;
         }
     }
 
-    total += bx_argv_pointer_bytes(argc);
+    size_t pointer_bytes = bx_argv_pointer_bytes(argc);
+    if (pointer_bytes == (size_t)-1 ||
+        !bx_argv_add_size(&total, pointer_bytes))
+        return (size_t)-1;
     if (saw_marker)
         *saw_marker = saw;
     return total;
@@ -200,7 +292,7 @@ int bx_argv_select_batch_count_by_bytes(int item_count, int start,
                                         size_t char_limit,
                                         bx_argv_batch_bytes_fn bytes_fn,
                                         void *user) {
-    if (!bytes_fn || start < 0 || start > item_count)
+    if (!bytes_fn || item_count < 0 || start < 0 || start > item_count)
         return -1;
 
     int capped_args = max_args > 0 ? max_args : (item_count - start);
@@ -237,6 +329,8 @@ int bx_argv_select_batch_count(const char *const *base_argv, int base_argc,
                                int item_count, int start,
                                int max_args, int max_lines,
                                size_t char_limit) {
+    if (base_argc < 0 || item_count < 0 || start < 0 || start > item_count)
+        return -1;
     int capped_args = max_args > 0 ? max_args : (item_count - start);
     int capped_lines = max_lines > 0 ? max_lines : (item_count - start);
     int take = 0;

@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "bx/runtime_snapshot.h"
 #include "dispatch/dispatch.h"
+#include "lib/output_policy.h"
 #include "lib/path_ops.h"
 #include "lib/status.h"
 
@@ -242,11 +243,38 @@ static struct bx_runtime_snapshot* create_runtime_snapshot(
     return bx_runtime_snapshot_create(&spec);
 }
 
+static void output_policy_from_runtime(
+    const struct bx_runtime_snapshot* runtime,
+    struct bx_output_policy* output_policy
+) {
+    bx_output_policy_init_stdout(output_policy);
+    bx_output_policy_set_json(output_policy, bx_runtime_snapshot_json_requested(runtime));
+
+    switch (bx_runtime_snapshot_color_policy(runtime)) {
+        case BX_RUNTIME_COLOR_EXPLICIT:
+            bx_output_policy_set_color_mode(
+                output_policy,
+                bx_color_parse(bx_runtime_snapshot_color_value(runtime))
+            );
+            break;
+        case BX_RUNTIME_COLOR_DISABLED:
+            bx_output_policy_set_color_mode(output_policy, BX_COLOR_NEVER);
+            break;
+        case BX_RUNTIME_COLOR_AUTO:
+        default:
+            bx_output_policy_set_color_mode(output_policy, BX_COLOR_AUTO);
+            break;
+    }
+}
+
 static int reject_unsupported_global_options_for_applet(
     const struct bx_runtime_snapshot* runtime,
     struct bx_diag_ctx* diag
 ) {
-    if (bx_runtime_snapshot_json_requested(runtime)) {
+    struct bx_output_policy output_policy;
+
+    output_policy_from_runtime(runtime, &output_policy);
+    if (bx_output_policy_json_requested(&output_policy)) {
         bx_diag(diag, "global option '--json' is recognized but applet JSON framing is not implemented");
         return bx_status_error();
     }
@@ -255,6 +283,7 @@ static int reject_unsupported_global_options_for_applet(
         return bx_status_error();
     }
     if (bx_runtime_snapshot_color_policy(runtime) == BX_RUNTIME_COLOR_DISABLED) {
+        (void)bx_output_policy_color_enabled(&output_policy);
         bx_diag(diag, "global option '--no-color' is recognized but global color policy is not implemented");
         return bx_status_error();
     }

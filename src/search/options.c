@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
-#include "lib/output_quote.h"
+#include "lib/output_policy.h"
 #include "lib/size_parse.h"
 #include "lib/thread_count.h"
 #include "options.h"
@@ -2015,9 +2015,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             opts->stop_on_nonmatch = true;
             break;
-        case OPT_JSON:
+        case OPT_JSON: {
+            struct bx_output_policy output_policy;
+
+            bx_output_policy_init_stdout(&output_policy);
+            bx_output_policy_set_json(&output_policy, true);
+            if (!bx_output_policy_json_requested(&output_policy)) {
+                return -1;
+            }
             return bx_search_unsupported_rg_option(
                 progname, personality, optind, argc, argv, "--json");
+        }
         case OPT_NO_JSON:
             if (bx_search_require_rg_option(progname, personality, optind, argc,
                                             argv, "--no-json") != 0)
@@ -2406,11 +2414,19 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->binary_without_match = false;
         opts->crlf = false;
     }
+    struct bx_output_policy output_policy;
+    bx_output_policy_init_stdout(&output_policy);
+    bx_output_policy_apply_color_mode(&output_policy, opts->color_mode);
+    bx_output_policy_allow_raw_exception(&output_policy,
+                                         BX_OUTPUT_POLICY_RAW_MATCHED_CONTENT);
+    if (opts->null_output || opts->null_filename || opts->null_data) {
+        bx_output_policy_set_nul_terminated(&output_policy, true);
+        bx_output_policy_allow_raw_exception(
+            &output_policy,
+            BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS);
+    }
     opts->terminal_quote_paths =
-        !opts->null_output &&
-        !opts->null_filename &&
-        !opts->null_data &&
-        bx_output_quote_terminal_should_hide_control(STDOUT_FILENO);
+        bx_output_policy_terminal_quote_paths(&output_policy);
 
     if (bx_search_personality_is_rg(personality)) {
         if (opts->files_with_matches || opts->files_without_match)

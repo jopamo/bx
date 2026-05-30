@@ -195,6 +195,7 @@ void bx_search_plan_build(struct bx_search_plan *plan,
         plan->kernel_kind = BX_SEARCH_PLAN_KERNEL_NONE;
         plan->output_kind = BX_SEARCH_PLAN_OUTPUT_MATCH_LINES;
         plan->publication_kind = BX_SEARCH_PLAN_PUBLICATION_DIRECT;
+        plan->order_relevance = BX_SEARCH_PLAN_OUTPUT_ORDER_REQUIRED;
         return;
     }
 
@@ -216,6 +217,7 @@ void bx_search_plan_build(struct bx_search_plan *plan,
     plan->kernel_kind = bx_search_plan_select_kernel_kind(personality, opts, metadata_sort,
                                                           rg_searches_stdin);
     plan->output_kind = bx_search_plan_select_output_kind(opts);
+    plan->order_relevance = BX_SEARCH_PLAN_OUTPUT_ORDER_REQUIRED;
 
     if (metadata_sort) {
         plan->orchestrator = BX_SEARCH_PLAN_ORCHESTRATOR_METADATA_SORTED;
@@ -227,15 +229,22 @@ void bx_search_plan_build(struct bx_search_plan *plan,
          * Policy decision: recursive subtree scheduling publishes unsorted
          * --threads >1 results as worker-completion order. Sorted output,
          * heading output, and other order-sensitive modes stay out of this
-         * scheduler instead of reintroducing per-file ordered batches.
+         * scheduler, so output order is explicitly irrelevant for this plan.
          */
         plan->orchestrator = BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_SUBTREE;
         plan->publication_kind = BX_SEARCH_PLAN_PUBLICATION_UNORDERED;
+        plan->order_relevance = BX_SEARCH_PLAN_OUTPUT_ORDER_IRRELEVANT;
         return;
     }
     if (parallel_supported) {
+        /*
+         * Generic recursive parallel rg is selected only after sorted output is
+         * rejected and rg's unsorted --threads >1 output policy makes worker
+         * completion order explicitly order-irrelevant.
+         */
         plan->orchestrator = BX_SEARCH_PLAN_ORCHESTRATOR_PARALLEL_GENERIC;
         plan->publication_kind = BX_SEARCH_PLAN_PUBLICATION_UNORDERED;
+        plan->order_relevance = BX_SEARCH_PLAN_OUTPUT_ORDER_IRRELEVANT;
         return;
     }
 
@@ -404,12 +413,23 @@ static const char *bx_search_plan_publication_kind_name(
     return "unknown";
 }
 
+static const char *bx_search_plan_order_relevance_name(
+    enum bx_search_plan_order_relevance value) {
+    switch (value) {
+    case BX_SEARCH_PLAN_OUTPUT_ORDER_REQUIRED:
+        return "required";
+    case BX_SEARCH_PLAN_OUTPUT_ORDER_IRRELEVANT:
+        return "irrelevant";
+    }
+    return "unknown";
+}
+
 void bx_search_plan_debug_dump(FILE *stream, const struct bx_search_plan *plan) {
     if (!stream || !plan)
         return;
 
     fprintf(stream,
-            "bx-rg-plan: orchestrator=%s input=%s kernel=%s output=%s publication=%s"
+            "bx-rg-plan: orchestrator=%s input=%s kernel=%s output=%s publication=%s order=%s"
             " rg_searches_stdin=%d metadata_sort=%d context=%d transform=%d multiline=%d"
             " parallel=%d subtree_parallel=%d\n",
             bx_search_plan_orchestrator_name(plan->orchestrator),
@@ -417,6 +437,7 @@ void bx_search_plan_debug_dump(FILE *stream, const struct bx_search_plan *plan) 
             bx_search_plan_kernel_kind_name(plan->kernel_kind),
             bx_search_plan_output_kind_name(plan->output_kind),
             bx_search_plan_publication_kind_name(plan->publication_kind),
+            bx_search_plan_order_relevance_name(plan->order_relevance),
             plan->rg_searches_stdin ? 1 : 0,
             plan->has_metadata_sort ? 1 : 0,
             plan->has_context ? 1 : 0,

@@ -13,6 +13,7 @@
 #include "find_exec.h"
 
 static volatile sig_atomic_t find_interrupt_signal = 0;
+static struct bx_cancel_state find_child_cancel;
 
 struct find_signal_handlers {
     struct sigaction old_int;
@@ -40,6 +41,7 @@ static int find_install_signal_handlers(const char *progname,
                                         struct find_signal_handlers *handlers) {
     memset(handlers, 0, sizeof(*handlers));
     find_interrupt_signal = 0;
+    bx_cancel_state_init(&find_child_cancel);
 
     if (find_install_one_signal_handler(SIGINT, &handlers->old_int) != 0) {
         fprintf(stderr, "%s: cannot install SIGINT handler: %s\n", progname,
@@ -85,12 +87,7 @@ static int find_finish_interrupted_exec(struct bx_child *child, int *running) {
     if (signo == 0)
         return 0;
 
-    bx_child_signal_all(child, *running, signo);
-    while (*running > 0) {
-        if (bx_child_reap(child, running, true, true, NULL, NULL) != 0)
-            return 1;
-    }
-    return 128 + signo;
+    return bx_child_finish_cancelled_run(&find_child_cancel, child, running, signo);
 }
 
 int find_interrupt_return_code(void) {

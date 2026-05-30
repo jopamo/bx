@@ -11,7 +11,7 @@
 #include "fd_parse.h"
 #include "search/metadata.h"
 #include "lib/args_common.h"
-#include "lib/output_quote.h"
+#include "lib/output_policy.h"
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
@@ -565,11 +565,22 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
     if (!fd_validate_main_args(out))
         return false;
 
+    struct bx_output_policy output_policy;
+    bx_output_policy_init_stdout(&output_policy);
+    if (out->opts.print0) {
+        bx_output_policy_set_nul_terminated(&output_policy, true);
+        bx_output_policy_allow_raw_exception(
+            &output_policy,
+            BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS);
+    }
+    if (out->opts.output_format) {
+        bx_output_policy_allow_raw_exception(&output_policy,
+                                             BX_OUTPUT_POLICY_RAW_USER_TEMPLATE);
+    }
     out->opts.terminal_quote_paths =
         out->opts.exec_mode == FD_EXEC_NONE &&
         !out->opts.output_format &&
-        !out->opts.print0 &&
-        bx_output_quote_terminal_should_hide_control(STDOUT_FILENO);
+        bx_output_policy_terminal_quote_paths(&output_policy);
 
     return true;
 }

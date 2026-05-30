@@ -299,18 +299,14 @@ static int xargs_reap_children(const char *progname, const char *cmdname,
 }
 
 static int xargs_finish_interrupted_run(volatile sig_atomic_t *interrupt_signal,
+                                        struct bx_cancel_state *cancel,
                                         struct bx_child *children,
                                         int *running) {
     int signo = (int)*interrupt_signal;
     if (signo == 0)
         return 0;
 
-    bx_child_signal_all(children, *running, signo);
-    while (*running > 0) {
-        if (bx_child_reap(children, running, true, true, NULL, NULL) != 0)
-            return 1;
-    }
-    return 128 + signo;
+    return bx_child_finish_cancelled_run(cancel, children, running, signo);
 }
 
 struct xargs_stream_batch {
@@ -551,6 +547,8 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
     int final_rc = 0;
     bool abort_launch = false;
     int running = 0;
+    struct bx_cancel_state cancel;
+    bx_cancel_state_init(&cancel);
 
     size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
     if (char_limit > 0 &&
@@ -571,7 +569,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
                                                   &running, &final_rc,
                                                   &abort_launch);
             if (*interrupt_signal != 0) {
-                int rc = xargs_finish_interrupted_run(interrupt_signal,
+                int rc = xargs_finish_interrupted_run(interrupt_signal, &cancel,
                                                       children, &running);
                 free(children);
                 return rc != 0 ? rc : 1;
@@ -581,7 +579,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
         }
         if (*interrupt_signal != 0) {
             int rc =
-                xargs_finish_interrupted_run(interrupt_signal, children, &running);
+                xargs_finish_interrupted_run(interrupt_signal, &cancel, children, &running);
             free(children);
             return rc != 0 ? rc : 1;
         }
@@ -590,7 +588,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
     for (int i = 0; i < items->count && !abort_launch;) {
         if (*interrupt_signal != 0) {
             int rc =
-                xargs_finish_interrupted_run(interrupt_signal, children, &running);
+                xargs_finish_interrupted_run(interrupt_signal, &cancel, children, &running);
             free(children);
             return rc != 0 ? rc : 1;
         }
@@ -602,7 +600,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
                 return 1;
             }
             if (*interrupt_signal != 0) {
-                int rc = xargs_finish_interrupted_run(interrupt_signal,
+                int rc = xargs_finish_interrupted_run(interrupt_signal, &cancel,
                                                       children, &running);
                 free(children);
                 return rc != 0 ? rc : 1;
@@ -625,7 +623,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
                                                   &running, &final_rc,
                                                   &abort_launch);
             if (*interrupt_signal != 0) {
-                int rc = xargs_finish_interrupted_run(interrupt_signal,
+                int rc = xargs_finish_interrupted_run(interrupt_signal, &cancel,
                                                       children, &running);
                 free(children);
                 return rc != 0 ? rc : 1;
@@ -653,7 +651,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
                                                   &running, &final_rc,
                                                   &abort_launch);
             if (*interrupt_signal != 0) {
-                int rc = xargs_finish_interrupted_run(interrupt_signal,
+                int rc = xargs_finish_interrupted_run(interrupt_signal, &cancel,
                                                       children, &running);
                 free(children);
                 return rc != 0 ? rc : 1;
@@ -665,7 +663,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
 
         if (*interrupt_signal != 0) {
             int rc =
-                xargs_finish_interrupted_run(interrupt_signal, children, &running);
+                xargs_finish_interrupted_run(interrupt_signal, &cancel, children, &running);
             free(children);
             return rc != 0 ? rc : 1;
         }
@@ -678,7 +676,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
                 return 1;
             }
             if (*interrupt_signal != 0) {
-                int rc = xargs_finish_interrupted_run(interrupt_signal,
+                int rc = xargs_finish_interrupted_run(interrupt_signal, &cancel,
                                                       children, &running);
                 free(children);
                 return rc != 0 ? rc : 1;
@@ -695,7 +693,7 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
         }
         if (*interrupt_signal != 0) {
             int rc =
-                xargs_finish_interrupted_run(interrupt_signal, children, &running);
+                xargs_finish_interrupted_run(interrupt_signal, &cancel, children, &running);
             free(children);
             return rc != 0 ? rc : 1;
         }
@@ -727,6 +725,8 @@ int xargs_run_streaming_batches(const char *progname, char **command,
     int running = 0;
     int final_rc = 0;
     bool abort_launch = false;
+    struct bx_cancel_state cancel;
+    bx_cancel_state_init(&cancel);
     struct xargs_stream_ctx ctx = {
         .progname = progname,
         .command = command,
@@ -767,7 +767,7 @@ int xargs_run_streaming_batches(const char *progname, char **command,
 
     if (*interrupt_signal != 0) {
         int rc =
-            xargs_finish_interrupted_run(interrupt_signal, ctx.children, &running);
+            xargs_finish_interrupted_run(interrupt_signal, &cancel, ctx.children, &running);
         xargs_stream_batch_free(&ctx.batch);
         free(ctx.children);
         return rc != 0 ? rc : 1;

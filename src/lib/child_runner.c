@@ -3,12 +3,16 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "child_runner.h"
 #include "fd_ops.h"
+
+extern char **environ;
 
 static struct bx_child *bx_child_find(struct bx_child *children, int count, pid_t pid) {
     for (int i = 0; i < count; i++) {
@@ -43,23 +47,102 @@ void bx_child_signal_all(struct bx_child *children, int count, int signo) {
     }
 }
 
+int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
+                                  struct bx_child *children,
+                                  int *running,
+                                  int signo) {
+    if (signo == 0)
+        return 0;
+    if (!children || !running)
+        return 1;
+
+    if (cancel) {
+        (void)bx_cancel_state_mark_requested(cancel);
+        (void)bx_cancel_state_mark_observed(cancel);
+        (void)bx_cancel_state_mark_draining(cancel);
+    }
+
+    bx_child_signal_all(children, *running, signo);
+    if (cancel && *running > 0)
+        (void)bx_cancel_state_mark_killed(cancel);
+
+    while (*running > 0) {
+        if (bx_child_reap(children, running, true, true, NULL, NULL) != 0)
+            return 1;
+    }
+
+    if (cancel)
+        (void)bx_cancel_state_mark_joined(cancel);
+    return 128 + signo;
+}
+
 int bx_child_exec_argv(char *const *argv) {
+    return bx_child_exec_argv_exact_or_path(argv);
+}
+
+static int bx_child_exec_argv_exact(char *const *argv) {
     if (!argv || !argv[0])
         return EINVAL;
 
-    execvp(argv[0], argv);
+    execve(argv[0], argv, environ);
     return errno != 0 ? errno : EIO;
 }
 
 int bx_child_exec_argv_exact_or_path(char *const *argv) {
     if (!argv || !argv[0])
         return EINVAL;
-
     if (strchr(argv[0], '/'))
-        execv(argv[0], argv);
-    else
-        execvp(argv[0], argv);
-    return errno != 0 ? errno : EIO;
+        return bx_child_exec_argv_exact(argv);
+
+    const char *command = argv[0];
+    size_t command_len = strlen(command);
+    if (command_len == 0)
+        return ENOENT;
+
+    const char *path = getenv("PATH");
+    if (!path)
+        path = "/bin:/usr/bin";
+
+    bool saw_eacces = false;
+    const char *segment = path;
+    for (;;) {
+        size_t dir_len = strcspn(segment, ":");
+        bool has_colon = segment[dir_len] == ':';
+        char *candidate_path = NULL;
+
+        if (dir_len == 0) {
+            candidate_path = malloc(command_len + 1);
+            if (!candidate_path)
+                return ENOMEM;
+            memcpy(candidate_path, command, command_len + 1);
+        } else {
+            if (dir_len > SIZE_MAX - 2 || command_len > SIZE_MAX - dir_len - 2)
+                return ENAMETOOLONG;
+            size_t candidate_len = dir_len + 1 + command_len;
+            candidate_path = malloc(candidate_len + 1);
+            if (!candidate_path)
+                return ENOMEM;
+            memcpy(candidate_path, segment, dir_len);
+            candidate_path[dir_len] = '/';
+            memcpy(candidate_path + dir_len + 1, command, command_len + 1);
+        }
+
+        execve(candidate_path, argv, environ);
+        int err = errno != 0 ? errno : EIO;
+        free(candidate_path);
+
+        if (err == EACCES) {
+            saw_eacces = true;
+        } else if (err != ENOENT && err != ENOTDIR) {
+            return err;
+        }
+
+        if (!has_colon)
+            break;
+        segment += dir_len + 1;
+    }
+
+    return saw_eacces ? EACCES : ENOENT;
 }
 
 static int bx_child_dup_stdio_fd(int source_fd, int target_fd) {
@@ -84,6 +167,27 @@ static void bx_child_reset_common_signal_handlers(void) {
     signal(SIGINT, SIG_DFL);
     signal(SIGHUP, SIG_DFL);
     signal(SIGPIPE, SIG_DFL);
+}
+
+static int bx_child_wait_stdout_foreground(void) {
+    struct timespec delay = {
+        .tv_sec = 0,
+        .tv_nsec = 10000000L,
+    };
+
+    for (;;) {
+        pid_t foreground = tcgetpgrp(STDOUT_FILENO);
+        if (foreground == getpid())
+            return 0;
+        if (foreground < 0)
+            return 0;
+        while (nanosleep(&delay, &delay) != 0) {
+            if (errno != EINTR)
+                return errno != 0 ? errno : EIO;
+        }
+        delay.tv_sec = 0;
+        delay.tv_nsec = 10000000L;
+    }
 }
 
 int bx_child_spawn_argv(const char *progname, char *const *argv,
@@ -183,9 +287,27 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
             (void)!write(errpipe[1], &errnum, sizeof(errnum));
             _exit(127);
         }
+        if (opts && opts->wait_stdout_foreground) {
+            errnum = bx_child_wait_stdout_foreground();
+            if (errnum != 0) {
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+        }
         errnum = bx_child_exec_argv(argv);
         (void)!write(errpipe[1], &errnum, sizeof(errnum));
         _exit(127);
+    }
+
+    close(errpipe[1]);
+    if (opts && opts->parent_setup_hook &&
+        opts->parent_setup_hook(pid, opts->parent_setup_user) != 0) {
+        int saved_errno = errno != 0 ? errno : EIO;
+        kill(pid, SIGTERM);
+        close(errpipe[0]);
+        (void)waitpid(pid, NULL, 0);
+        errno = saved_errno;
+        return 1;
     }
 
     if (opts && opts->verbose_hook) {
@@ -196,7 +318,6 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         fputc('\n', stderr);
     }
 
-    close(errpipe[1]);
     children[*running].pid = pid;
     children[*running].exec_failed = false;
     children[*running].exec_errno = 0;

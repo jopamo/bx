@@ -6,8 +6,18 @@
 struct bx_output_sink_node {
     void *record;
     uint64_t seq;
+    size_t size;
     struct bx_output_sink_node *next;
 };
+
+static bool bx_output_sink_has_byte_capacity(const struct bx_output_sink *sink,
+                                             const struct bx_output_sink_node *node) {
+    if (!sink || !node || sink->opts.max_pending_bytes == 0u)
+        return true;
+    return bx_backpressure_limit_can_add(sink->pending_bytes,
+                                         node->size,
+                                         sink->opts.max_pending_bytes);
+}
 
 static void bx_output_sink_insert_node(struct bx_output_sink *sink,
                                        struct bx_output_sink_node *node) {
@@ -48,10 +58,17 @@ static struct bx_output_sink_node *bx_output_sink_take_ready_node(struct bx_outp
     sink->head = node->next;
     node->next = NULL;
     sink->pending--;
+    if (node->size <= sink->pending_bytes)
+        sink->pending_bytes -= node->size;
+    else
+        sink->pending_bytes = 0u;
     if (sink->opts.ordered && node->seq == sink->next_seq) {
         sink->next_seq++;
         bx_output_sink_consume_skipped_locked(sink);
     }
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                     false);
     pthread_cond_signal(&sink->can_submit);
     return node;
 }
@@ -65,7 +82,12 @@ static void *bx_output_sink_thread_main(void *arg) {
         pthread_mutex_lock(&sink->lock);
         while (!(node = bx_output_sink_take_ready_node(sink)) &&
                !(sink->closed && sink->pending == 0u)) {
+            uint_fast64_t wait_start =
+                bx_workqueue_profile_wait_begin(sink->opts.profile);
             pthread_cond_wait(&sink->can_emit, &sink->lock);
+            bx_workqueue_profile_wait_end(sink->opts.profile,
+                                          BX_WORKQUEUE_PROFILE_CONSUMER_WAIT,
+                                          wait_start);
         }
         if (!node && sink->closed && sink->pending == 0u) {
             pthread_mutex_unlock(&sink->lock);
@@ -77,6 +99,7 @@ static void *bx_output_sink_thread_main(void *arg) {
         if (sink->opts.dispose_record)
             sink->opts.dispose_record(sink->opts.user, node->record);
         free(node);
+        bx_workqueue_profile_note_complete(sink->opts.profile);
     }
 
     return NULL;
@@ -84,6 +107,8 @@ static void *bx_output_sink_thread_main(void *arg) {
 
 bool bx_output_sink_init(struct bx_output_sink *sink, const struct bx_output_sink_opts *opts) {
     if (!sink || !opts || !opts->record_seq || !opts->emit_record || opts->max_pending == 0u)
+        return false;
+    if (opts->max_pending_bytes > 0u && !opts->record_size)
         return false;
 
     memset(sink, 0, sizeof(*sink));
@@ -122,10 +147,20 @@ bool bx_output_sink_submit(struct bx_output_sink *sink, void *record) {
         return false;
     node->record = record;
     node->seq = sink->opts.record_seq(record, sink->opts.user);
+    if (sink->opts.max_pending_bytes > 0u)
+        node->size = sink->opts.record_size(record, sink->opts.user);
 
     pthread_mutex_lock(&sink->lock);
-    while (!sink->closed && sink->pending >= sink->opts.max_pending)
+    while (!sink->closed &&
+           (sink->pending >= sink->opts.max_pending ||
+            !bx_output_sink_has_byte_capacity(sink, node))) {
+        uint_fast64_t wait_start =
+            bx_workqueue_profile_wait_begin(sink->opts.profile);
         pthread_cond_wait(&sink->can_submit, &sink->lock);
+        bx_workqueue_profile_wait_end(sink->opts.profile,
+                                      BX_WORKQUEUE_PROFILE_PRODUCER_WAIT,
+                                      wait_start);
+    }
     if (sink->closed) {
         pthread_mutex_unlock(&sink->lock);
         free(node);
@@ -134,6 +169,12 @@ bool bx_output_sink_submit(struct bx_output_sink *sink, void *record) {
 
     bx_output_sink_insert_node(sink, node);
     sink->pending++;
+    sink->pending_bytes += node->size;
+    bx_workqueue_profile_note_submit(sink->opts.profile);
+    bx_workqueue_profile_note_depth(sink->opts.profile, sink->pending);
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     false);
     pthread_cond_signal(&sink->can_emit);
     pthread_mutex_unlock(&sink->lock);
     return true;
@@ -180,6 +221,9 @@ bool bx_output_sink_skip_seq(struct bx_output_sink *sink, uint64_t seq) {
     sink->skipped_seqs[pos] = seq;
     sink->skipped_len++;
     bx_output_sink_consume_skipped_locked(sink);
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     false);
     pthread_cond_signal(&sink->can_emit);
     pthread_mutex_unlock(&sink->lock);
     return true;
@@ -191,6 +235,12 @@ void bx_output_sink_close(struct bx_output_sink *sink) {
 
     pthread_mutex_lock(&sink->lock);
     sink->closed = true;
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                     true);
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     true);
     pthread_cond_broadcast(&sink->can_submit);
     pthread_cond_broadcast(&sink->can_emit);
     pthread_mutex_unlock(&sink->lock);
@@ -201,6 +251,12 @@ void bx_output_sink_wake(struct bx_output_sink *sink) {
         return;
 
     pthread_mutex_lock(&sink->lock);
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                     true);
+    bx_workqueue_profile_note_wakeup(sink->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     true);
     pthread_cond_broadcast(&sink->can_submit);
     pthread_cond_broadcast(&sink->can_emit);
     pthread_mutex_unlock(&sink->lock);

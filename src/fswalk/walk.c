@@ -729,6 +729,10 @@ int bx_walk(const char *root,
         errno = EINVAL;
         return -1;
     }
+    if (bx_walk_should_stop(opts)) {
+        bx_walk_mark_cancel_draining(opts);
+        return 0;
+    }
 
     struct stat st;
     bx_walk_note_stat_call_for_reason(
@@ -762,6 +766,7 @@ int bx_walk(const char *root,
 
     if (S_ISDIR(st.st_mode)) {
         int status = bx_walk_process_directory_root(NULL, &st, &ctx, &path_buf);
+        bx_walk_mark_cancel_draining(opts);
         bx_walk_path_buf_free(&path_buf);
         return status;
     }
@@ -779,6 +784,7 @@ int bx_walk(const char *root,
         bx_walk_note_counter(opts->counter_ops, BX_WALK_COUNTER_FILES_SEEN, 1u);
     int status = 0;
     (void)bx_walk_apply_visit_action(&ctx, &entry, &status);
+    bx_walk_mark_cancel_draining(opts);
     bx_walk_path_buf_free(&path_buf);
     return status;
 }
@@ -793,6 +799,11 @@ int bx_walk_opened_dir(const char *root,
             closedir(root_dir);
         errno = EINVAL;
         return -1;
+    }
+    if (bx_walk_should_stop(opts)) {
+        closedir(root_dir);
+        bx_walk_mark_cancel_draining(opts);
+        return 0;
     }
 
     struct stat st;
@@ -829,6 +840,7 @@ int bx_walk_opened_dir(const char *root,
     ctx.path_buf = &path_buf;
 
     int status = bx_walk_process_directory_root(root_dir, &st, &ctx, &path_buf);
+    bx_walk_mark_cancel_draining(opts);
     bx_walk_path_buf_free(&path_buf);
     return status;
 }

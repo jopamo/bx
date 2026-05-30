@@ -9,6 +9,7 @@
 
 #include <pthread.h>
 
+#include "lib/backpressure_limit.h"
 #include "lib/cancel_state.h"
 #include "lib/output_alloc_counter.h"
 #include "lib/thread_count.h"
@@ -25,12 +26,16 @@
 #include "traverse.h"
 
 /*
- * Recursive rg parallel search keeps output ordered by path discovery order.
- * Batch multiple files into one worker record so tiny-file trees do not pay
- * one pool job plus one ordered-output record per file.
+ * Recursive rg parallel search uses the explicit unordered fast path only for
+ * unsorted --threads >1 rg plans that have already rejected sorted and
+ * order-sensitive modes. Batch multiple files into one worker record so
+ * tiny-file trees do not pay one pool job plus one output record per file.
  */
 #define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_FILES 64u
 #define BX_SEARCH_PARALLEL_JOB_BATCH_MAX_PATH_BYTES 16384u
+
+static const char bx_search_parallel_order_irrelevant_reason[] =
+    "generic rg parallel uses unsorted --threads >1 output after sorted/order-sensitive modes are rejected";
 
 struct bx_search_parallel_job_item {
     const char *path;
@@ -154,7 +159,7 @@ static void bx_search_parallel_merge_direct_result(struct bx_search_parallel_sta
     if (!state || !state->publish)
         return;
 
-    pthread_mutex_lock(&state->publish->unordered_lock);
+    bx_rg_publish_lock_unordered_fast(state->publish);
     if (stats) {
         state->stats.matches += stats->matches;
         state->stats.matched_lines += stats->matched_lines;
@@ -172,7 +177,7 @@ static void bx_search_parallel_merge_direct_result(struct bx_search_parallel_sta
         state->error_seen = true;
         state->exit_status = 2;
     }
-    pthread_mutex_unlock(&state->publish->unordered_lock);
+    bx_rg_publish_unlock_unordered_fast(state->publish);
 }
 
 static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *state,
@@ -182,7 +187,7 @@ static bool bx_search_parallel_submit_record(struct bx_search_parallel_state *st
     if (bx_rg_publish_submit(state->publish, record))
         return true;
 
-    bx_search_parallel_set_fatal(state, "rg: failed to submit ordered output record\n");
+    bx_search_parallel_set_fatal(state, "rg: failed to submit parallel output record\n");
     bx_search_parallel_dispose_record(NULL, record);
     return false;
 }
@@ -680,6 +685,8 @@ int bx_search_run_parallel_rg(int argc,
     struct bx_rg_publish_state publish = {0};
     size_t thread_count = bx_search_rg_auto_thread_count(opts);
     size_t queue_capacity = thread_count > (SIZE_MAX / 64u) ? thread_count : thread_count * 64u;
+    size_t output_byte_budget =
+        bx_backpressure_limit_default(BX_BACKPRESSURE_LIMIT_PENDING_OUTPUT_BYTES);
     int num_files = argc - first_file;
     bool pool_ready = false;
     bool publish_ready = false;
@@ -703,7 +710,10 @@ int bx_search_run_parallel_rg(int argc,
     struct bx_rg_publish_opts publish_opts = {
         .mode = BX_RG_PUBLISH_UNORDERED,
         .max_pending = queue_capacity,
+        .max_pending_bytes = output_byte_budget,
         .first_seq = 0u,
+        .order_irrelevant = true,
+        .order_irrelevant_reason = bx_search_parallel_order_irrelevant_reason,
         .user = &state,
         .record_seq = bx_search_parallel_record_seq,
         .emit_record = bx_search_parallel_emit_record,
@@ -719,6 +729,7 @@ int bx_search_run_parallel_rg(int argc,
     struct bx_work_pool_opts pool_opts = {
         .thread_count = thread_count,
         .queue_capacity = queue_capacity,
+        .queue_limit_kind = BX_BACKPRESSURE_LIMIT_PENDING_FILES,
         .user = &state,
         .cancel = &state.cancel,
         .worker_init = bx_search_parallel_worker_init,
@@ -740,6 +751,7 @@ int bx_search_run_parallel_rg(int argc,
         };
         struct bx_walk_opts walk_opts =
             bx_search_runtime_snapshot_walk_opts(state.runtime_snapshot, NULL);
+        walk_opts.cancel = &state.cancel;
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
             .filter_opts = bx_search_runtime_snapshot_filter_opts(state.runtime_snapshot),
@@ -753,6 +765,7 @@ int bx_search_run_parallel_rg(int argc,
     } else if (opts->recursive) {
         struct bx_walk_opts walk_opts =
             bx_search_runtime_snapshot_walk_opts(state.runtime_snapshot, NULL);
+        walk_opts.cancel = &state.cancel;
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
             .filter_opts = bx_search_runtime_snapshot_filter_opts(state.runtime_snapshot),
@@ -856,6 +869,8 @@ done:
         bx_rg_publish_close(&publish);
         bx_rg_publish_join(&publish);
     }
+    if (bx_cancel_state_requested(&state.cancel))
+        (void)bx_cancel_state_mark_published(&state.cancel);
     if (state.fatal_error) {
         state.error_seen = true;
         state.exit_status = 2;

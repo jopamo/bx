@@ -3,8 +3,11 @@
 
 #include "work_pool.h"
 
-static bool bx_work_pool_cancelled(const struct bx_work_pool *pool) {
-    return pool && pool->opts.cancel && bx_cancel_state_requested(pool->opts.cancel);
+static bool bx_work_pool_cancelled(struct bx_work_pool *pool) {
+    if (!pool || !pool->opts.cancel || !bx_cancel_state_requested(pool->opts.cancel))
+        return false;
+    (void)bx_cancel_state_mark_observed(pool->opts.cancel);
+    return true;
 }
 
 static void *bx_work_pool_worker_main(void *arg) {
@@ -18,6 +21,12 @@ static void *bx_work_pool_worker_main(void *arg) {
     if (pool->opts.worker_init && !worker_local) {
         pthread_mutex_lock(&pool->lock);
         pool->failed = true;
+        bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                         BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                         true);
+        bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                         BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                         true);
         pthread_cond_broadcast(&pool->can_push);
         pthread_cond_broadcast(&pool->can_pop);
         pthread_mutex_unlock(&pool->lock);
@@ -28,8 +37,14 @@ static void *bx_work_pool_worker_main(void *arg) {
         void *job = NULL;
 
         pthread_mutex_lock(&pool->lock);
-        while (pool->count == 0u && !pool->closed)
+        while (pool->count == 0u && !pool->closed) {
+            uint_fast64_t wait_start =
+                bx_workqueue_profile_wait_begin(pool->opts.profile);
             pthread_cond_wait(&pool->can_pop, &pool->lock);
+            bx_workqueue_profile_wait_end(pool->opts.profile,
+                                          BX_WORKQUEUE_PROFILE_CONSUMER_WAIT,
+                                          wait_start);
+        }
         if (pool->count == 0u && pool->closed) {
             pthread_mutex_unlock(&pool->lock);
             break;
@@ -40,11 +55,16 @@ static void *bx_work_pool_worker_main(void *arg) {
         bool was_full = pool->count == pool->queue_capacity;
         pool->head = (pool->head + 1u) % pool->queue_capacity;
         pool->count--;
-        if (was_full)
+        if (was_full) {
+            bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                             BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                             false);
             pthread_cond_signal(&pool->can_push);
+        }
         pthread_mutex_unlock(&pool->lock);
 
         pool->opts.process_job(pool->opts.user, worker_local, job, worker_index);
+        bx_workqueue_profile_note_complete(pool->opts.profile);
     }
 
     if (pool->opts.worker_fini)
@@ -54,6 +74,9 @@ static void *bx_work_pool_worker_main(void *arg) {
 
 bool bx_work_pool_init(struct bx_work_pool *pool, const struct bx_work_pool_opts *opts) {
     if (!pool || !opts || !opts->process_job || opts->thread_count == 0u || opts->queue_capacity == 0u)
+        return false;
+    if (opts->queue_limit_kind != BX_BACKPRESSURE_LIMIT_NONE &&
+        !bx_backpressure_limit_kind_valid(opts->queue_limit_kind))
         return false;
 
     memset(pool, 0, sizeof(*pool));
@@ -91,6 +114,12 @@ bool bx_work_pool_init(struct bx_work_pool *pool, const struct bx_work_pool_opts
             pthread_mutex_lock(&pool->lock);
             pool->closed = true;
             pool->failed = true;
+            bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                             BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                             true);
+            bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                             BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                             true);
             pthread_cond_broadcast(&pool->can_push);
             pthread_cond_broadcast(&pool->can_pop);
             pthread_mutex_unlock(&pool->lock);
@@ -112,7 +141,12 @@ bool bx_work_pool_submit(struct bx_work_pool *pool, void *job) {
     while (!pool->closed && !pool->failed && pool->count == pool->queue_capacity) {
         if (bx_work_pool_cancelled(pool))
             break;
+        uint_fast64_t wait_start =
+            bx_workqueue_profile_wait_begin(pool->opts.profile);
         pthread_cond_wait(&pool->can_push, &pool->lock);
+        bx_workqueue_profile_wait_end(pool->opts.profile,
+                                      BX_WORKQUEUE_PROFILE_PRODUCER_WAIT,
+                                      wait_start);
     }
 
     if (pool->closed || pool->failed || bx_work_pool_cancelled(pool)) {
@@ -123,8 +157,14 @@ bool bx_work_pool_submit(struct bx_work_pool *pool, void *job) {
     pool->items[pool->tail] = job;
     pool->tail = (pool->tail + 1u) % pool->queue_capacity;
     pool->count++;
-    if (pool->count <= pool->thread_count)
+    bx_workqueue_profile_note_submit(pool->opts.profile);
+    bx_workqueue_profile_note_depth(pool->opts.profile, pool->count);
+    if (pool->count <= pool->thread_count) {
+        bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                         BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                         false);
         pthread_cond_signal(&pool->can_pop);
+    }
     pthread_mutex_unlock(&pool->lock);
     return true;
 }
@@ -135,6 +175,16 @@ void bx_work_pool_close(struct bx_work_pool *pool) {
 
     pthread_mutex_lock(&pool->lock);
     pool->closed = true;
+    if (pool->opts.cancel && bx_cancel_state_requested(pool->opts.cancel)) {
+        (void)bx_cancel_state_mark_observed(pool->opts.cancel);
+        (void)bx_cancel_state_mark_draining(pool->opts.cancel);
+    }
+    bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                     true);
+    bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     true);
     pthread_cond_broadcast(&pool->can_push);
     pthread_cond_broadcast(&pool->can_pop);
     pthread_mutex_unlock(&pool->lock);
@@ -145,6 +195,12 @@ void bx_work_pool_wake(struct bx_work_pool *pool) {
         return;
 
     pthread_mutex_lock(&pool->lock);
+    bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_PRODUCER,
+                                     true);
+    bx_workqueue_profile_note_wakeup(pool->opts.profile,
+                                     BX_WORKQUEUE_PROFILE_WAKE_CONSUMER,
+                                     true);
     pthread_cond_broadcast(&pool->can_push);
     pthread_cond_broadcast(&pool->can_pop);
     pthread_mutex_unlock(&pool->lock);
@@ -164,6 +220,15 @@ bool bx_work_pool_join(struct bx_work_pool *pool) {
     }
 
     pool->joined = true;
+    if (pool->opts.cancel) {
+        if (bx_cancel_state_requested(pool->opts.cancel)) {
+            (void)bx_cancel_state_mark_observed(pool->opts.cancel);
+            (void)bx_cancel_state_mark_draining(pool->opts.cancel);
+            (void)bx_cancel_state_mark_joined(pool->opts.cancel);
+        } else if (bx_cancel_state_draining(pool->opts.cancel)) {
+            (void)bx_cancel_state_mark_joined(pool->opts.cancel);
+        }
+    }
     return ok && !pool->failed;
 }
 

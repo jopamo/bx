@@ -11,6 +11,7 @@
 #include "lib/child_runner.h"
 
 static volatile sig_atomic_t fd_interrupt_signal = 0;
+static struct bx_cancel_state fd_child_cancel;
 
 struct fd_signal_handlers {
     struct sigaction old_int;
@@ -76,6 +77,7 @@ static int fd_install_signal_handlers(const char *progname,
                                       struct fd_signal_handlers *handlers) {
     memset(handlers, 0, sizeof(*handlers));
     fd_interrupt_signal = 0;
+    bx_cancel_state_init(&fd_child_cancel);
 
     if (fd_install_one_signal_handler(SIGINT, &handlers->old_int) != 0) {
         fprintf(stderr, "%s: cannot install SIGINT handler: %s\n", progname, strerror(errno));
@@ -262,12 +264,7 @@ static int fd_finish_interrupted_exec(struct bx_child *child, int *running) {
     if (signo == 0)
         return 0;
 
-    bx_child_signal_all(child, *running, signo);
-    while (*running > 0) {
-        if (bx_child_reap(child, running, true, true, NULL, NULL) != 0)
-            return 1;
-    }
-    return 128 + signo;
+    return bx_child_finish_cancelled_run(&fd_child_cancel, child, running, signo);
 }
 
 static int fd_run_exec_commands_inner(const char *progname, const struct fd_opts *opts,

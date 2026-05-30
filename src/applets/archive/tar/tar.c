@@ -116,6 +116,8 @@ int bx_tar_main(int argc, char** argv) {
     pending_signal = bx_archive_temp_pending_signal();
     if (pending_signal != 0) {
         bx_archive_temp_cleanup_all();
+        (void)bx_cancel_state_mark_joined(bx_archive_temp_cancel_state());
+        (void)bx_cancel_state_mark_published(bx_archive_temp_cancel_state());
         bx_archive_temp_clear_pending_signal();
         return 128 + pending_signal;
     }

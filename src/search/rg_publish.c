@@ -66,20 +66,11 @@ static void bx_rg_publish_note_record_channel(const struct bx_rg_publish_record 
             BX_SEARCH_RG_SCHED_MATCH_RECORDS_SUBMITTED, 1u);
 }
 
-static void bx_rg_publish_emit_unordered_record_locked(
-    struct bx_rg_publish_state *state,
-    struct bx_rg_publish_record *record) {
-    bx_rg_publish_note_record_queued(record);
-    bx_rg_publish_debug_record("emit", record);
-    state->opts.emit_record(state->opts.user, record);
-    bx_rg_publish_note_record_channel(record);
-    bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_UNORDERED_OUTPUT_FLUSHES, 1u);
-}
-
 static bool bx_rg_publish_submit_unordered_split(
     struct bx_rg_publish_state *state,
     struct bx_rg_publish_record *record) {
     struct bx_rg_publish_record *diagnostic_record;
+    void *records[2];
 
     if (!state || !record)
         return false;
@@ -104,15 +95,20 @@ static bool bx_rg_publish_submit_unordered_split(
     if (record->status == 2)
         record->status = record->match_seen ? 0 : 1;
 
-    pthread_mutex_lock(&state->unordered_lock);
-    bx_rg_publish_emit_unordered_record_locked(state, record);
-    bx_rg_publish_emit_unordered_record_locked(state, diagnostic_record);
-    pthread_mutex_unlock(&state->unordered_lock);
-
-    if (state->opts.dispose_record)
-        state->opts.dispose_record(state->opts.user, record);
-    if (state->opts.dispose_record)
-        state->opts.dispose_record(state->opts.user, diagnostic_record);
+    records[0] = record;
+    records[1] = diagnostic_record;
+    if (!bx_output_publication_submit_unordered_batch(&state->publication,
+                                                      records,
+                                                      2u)) {
+        record->stderr_buf = diagnostic_record->stderr_buf;
+        record->stderr_len = diagnostic_record->stderr_len;
+        record->error_seen = diagnostic_record->error_seen;
+        record->status = diagnostic_record->status;
+        diagnostic_record->stderr_buf = NULL;
+        diagnostic_record->stderr_len = 0u;
+        free(diagnostic_record);
+        return false;
+    }
     return true;
 }
 
@@ -175,12 +171,30 @@ static uint64_t bx_rg_publish_record_seq_bridge(const void *record_ptr, void *us
     return state->opts.record_seq(record, state->opts.user);
 }
 
+static size_t bx_rg_publish_record_size_bridge(const void *record_ptr, void *user) {
+    const struct bx_rg_publish_record *record = record_ptr;
+
+    (void)user;
+    if (!record)
+        return 0u;
+    if (record->stdout_len > SIZE_MAX - record->stderr_len)
+        return SIZE_MAX;
+    return record->stdout_len + record->stderr_len;
+}
+
 static void bx_rg_publish_emit_record_bridge(void *user, void *record_ptr) {
     struct bx_rg_publish_state *state = user;
     struct bx_rg_publish_record *record = record_ptr;
 
+    if (state->opts.mode == BX_RG_PUBLISH_UNORDERED)
+        bx_rg_publish_note_record_queued(record);
     bx_rg_publish_debug_record("emit", record);
     state->opts.emit_record(state->opts.user, record);
+    if (state->opts.mode == BX_RG_PUBLISH_UNORDERED) {
+        bx_rg_publish_note_record_channel(record);
+        bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_UNORDERED_OUTPUT_FLUSHES,
+                                             1u);
+    }
 }
 
 static void bx_rg_publish_dispose_record_bridge(void *user, void *record_ptr) {
@@ -199,27 +213,25 @@ bool bx_rg_publish_init(struct bx_rg_publish_state *state,
     memset(state, 0, sizeof(*state));
     state->opts = *opts;
 
-    if (opts->mode == BX_RG_PUBLISH_ORDERED) {
-        if (!opts->record_seq)
-            return false;
-        struct bx_output_sink_opts sink_opts = {
+    if (!bx_output_publication_init(&state->publication,
+        &(struct bx_output_publication_opts){
+            .mode = opts->mode == BX_RG_PUBLISH_ORDERED
+                        ? BX_OUTPUT_PUBLICATION_ORDERED
+                        : BX_OUTPUT_PUBLICATION_UNORDERED_FAST,
             .max_pending = opts->max_pending,
+            .max_pending_bytes = opts->max_pending_bytes,
             .first_seq = opts->first_seq,
-            .ordered = true,
+            .order_irrelevant = opts->order_irrelevant,
+            .order_irrelevant_reason = opts->order_irrelevant_reason,
             .user = state,
             .record_seq = bx_rg_publish_record_seq_bridge,
+            .record_size = bx_rg_publish_record_size_bridge,
             .emit_record = bx_rg_publish_emit_record_bridge,
             .dispose_record = bx_rg_publish_dispose_record_bridge,
-        };
-        if (!bx_output_sink_init(&state->ordered_sink, &sink_opts))
-            return false;
-        state->ordered_sink_ready = true;
-        return true;
-    }
-
-    if (pthread_mutex_init(&state->unordered_lock, NULL) != 0)
+        })) {
         return false;
-    state->unordered_lock_ready = true;
+    }
+    state->publication_ready = true;
     return true;
 }
 
@@ -238,7 +250,7 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
 
     if (state->opts.mode == BX_RG_PUBLISH_ORDERED) {
         bx_rg_publish_note_record_queued(record);
-        if (!bx_output_sink_submit(&state->ordered_sink, record))
+        if (!bx_output_publication_submit(&state->publication, record))
             return false;
         bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_OUTPUT_RECORDS_SUBMITTED, 1u);
         bx_rg_publish_note_record_channel(record);
@@ -246,12 +258,7 @@ bool bx_rg_publish_submit(struct bx_rg_publish_state *state,
         return true;
     }
 
-    pthread_mutex_lock(&state->unordered_lock);
-    bx_rg_publish_emit_unordered_record_locked(state, record);
-    pthread_mutex_unlock(&state->unordered_lock);
-    if (state->opts.dispose_record)
-        state->opts.dispose_record(state->opts.user, record);
-    return true;
+    return bx_output_publication_submit(&state->publication, record);
 }
 
 bool bx_rg_publish_skip_seq(struct bx_rg_publish_state *state, uint64_t seq) {
@@ -259,40 +266,46 @@ bool bx_rg_publish_skip_seq(struct bx_rg_publish_state *state, uint64_t seq) {
         return false;
     if (state->opts.mode != BX_RG_PUBLISH_ORDERED)
         return true;
-    if (!bx_output_sink_skip_seq(&state->ordered_sink, seq))
+    if (!bx_output_publication_skip_seq(&state->publication, seq))
         return false;
     bx_search_dev_counters_note_rg_sched(BX_SEARCH_RG_SCHED_SKIPPED_OUTPUT_SEQS, 1u);
     return true;
 }
 
+void bx_rg_publish_lock_unordered_fast(struct bx_rg_publish_state *state) {
+    if (!state)
+        return;
+    bx_output_publication_lock_unordered_fast(&state->publication);
+}
+
+void bx_rg_publish_unlock_unordered_fast(struct bx_rg_publish_state *state) {
+    if (!state)
+        return;
+    bx_output_publication_unlock_unordered_fast(&state->publication);
+}
+
 void bx_rg_publish_close(struct bx_rg_publish_state *state) {
     if (!state)
         return;
-    if (state->opts.mode == BX_RG_PUBLISH_ORDERED)
-        bx_output_sink_close(&state->ordered_sink);
+    bx_output_publication_close(&state->publication);
 }
 
 void bx_rg_publish_wake(struct bx_rg_publish_state *state) {
     if (!state)
         return;
-    if (state->opts.mode == BX_RG_PUBLISH_ORDERED)
-        bx_output_sink_wake(&state->ordered_sink);
+    bx_output_publication_wake(&state->publication);
 }
 
 bool bx_rg_publish_join(struct bx_rg_publish_state *state) {
     if (!state)
         return false;
-    if (state->opts.mode == BX_RG_PUBLISH_ORDERED)
-        return bx_output_sink_join(&state->ordered_sink);
-    return true;
+    return bx_output_publication_join(&state->publication);
 }
 
 void bx_rg_publish_dispose(struct bx_rg_publish_state *state) {
     if (!state)
         return;
-    if (state->ordered_sink_ready)
-        bx_output_sink_dispose(&state->ordered_sink);
-    if (state->unordered_lock_ready)
-        pthread_mutex_destroy(&state->unordered_lock);
+    if (state->publication_ready)
+        bx_output_publication_dispose(&state->publication);
     memset(state, 0, sizeof(*state));
 }

@@ -23,9 +23,9 @@
 #include "lib/cli_common.h"
 #include "lib/line_writer_file.h"
 #include "lib/output_alloc_counter.h"
+#include "lib/output_policy.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
-#include "lib/output_quote.h"
 #include "lib/path_ops.h"
 #include "lib/path_quote.h"
 
@@ -159,12 +159,14 @@ struct bx_ls_options {
     bool si_units;
     bool escape_names;
     bool hide_control_chars;
+    bool explicit_control_char_policy;
     bool sort_entries;
     bool reverse_sort;
     enum bx_ls_sort_mode sort_mode;
     bool show_help;
     bool show_version;
     bool zero_terminated;
+    uint32_t raw_output_exceptions;
     bool width_set;
     size_t output_width;
     size_t tabsize;
@@ -228,6 +230,49 @@ struct bx_ls_dir_stack {
     size_t len;
     size_t cap;
 };
+
+static void bx_ls_output_policy_apply_options(
+    struct bx_output_policy* output_policy,
+    const struct bx_ls_options* options
+) {
+    bx_output_policy_init_stdout(output_policy);
+    if (options == NULL) {
+        return;
+    }
+    if (options->zero_terminated) {
+        bx_output_policy_set_nul_terminated(output_policy, true);
+    }
+    if ((options->raw_output_exceptions &
+         (uint32_t)BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS) != 0u) {
+        bx_output_policy_allow_raw_exception(
+            output_policy,
+            BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS);
+    }
+    if ((options->raw_output_exceptions &
+         (uint32_t)BX_OUTPUT_POLICY_RAW_EXPLICIT_PATH_FIELDS) != 0u) {
+        bx_output_policy_allow_raw_exception(
+            output_policy,
+            BX_OUTPUT_POLICY_RAW_EXPLICIT_PATH_FIELDS);
+    }
+    if ((options->raw_output_exceptions &
+         (uint32_t)BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS) != 0u) {
+        bx_output_policy_allow_raw_exception(
+            output_policy,
+            BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS);
+    }
+}
+
+static bool bx_ls_output_policy_terminal_quote_paths(
+    const struct bx_ls_options* options
+) {
+    struct bx_output_policy output_policy;
+
+    if (options == NULL || options->variant != BX_LS_VARIANT_LS) {
+        return false;
+    }
+    bx_ls_output_policy_apply_options(&output_policy, options);
+    return bx_output_policy_terminal_quote_paths(&output_policy);
+}
 
 struct bx_ls_dired_range {
     size_t start;
@@ -465,9 +510,7 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->sort_entries = true;
     options->sort_mode = BX_LS_SORT_NAME;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
-    options->hide_control_chars = (variant == BX_LS_VARIANT_LS)
-        ? bx_output_quote_terminal_should_hide_control(STDOUT_FILENO)
-        : false;
+    options->hide_control_chars = bx_ls_output_policy_terminal_quote_paths(options);
     options->color_when = BX_LS_COLOR_NEVER;
     options->indicator_style = BX_LS_INDICATOR_NONE;
     options->time_kind = BX_LS_TIME_MTIME;
@@ -535,10 +578,14 @@ static bool bx_ls_parse_color_option(const char* text, struct bx_ls_options* opt
 
     if (strcmp(when, "always") == 0) {
         options->color_when = BX_LS_COLOR_ALWAYS;
+        options->raw_output_exceptions |=
+            (uint32_t)BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS;
         return true;
     }
     if (strcmp(when, "auto") == 0) {
         options->color_when = BX_LS_COLOR_AUTO;
+        options->raw_output_exceptions |=
+            (uint32_t)BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS;
         return true;
     }
     if (strcmp(when, "never") == 0) {
@@ -666,10 +713,14 @@ static bool bx_ls_parse_hyperlink_option(const char* text, struct bx_ls_options*
 
     if (strcmp(when, "always") == 0) {
         options->hyperlink_when = BX_LS_HYPERLINK_ALWAYS;
+        options->raw_output_exceptions |=
+            (uint32_t)BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS;
         return true;
     }
     if (strcmp(when, "auto") == 0) {
         options->hyperlink_when = BX_LS_HYPERLINK_AUTO;
+        options->raw_output_exceptions |=
+            (uint32_t)BX_OUTPUT_POLICY_RAW_APPLET_TERMINAL_CONTROLS;
         return true;
     }
     if (strcmp(when, "never") == 0) {
@@ -1077,6 +1128,7 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->indicator_style = BX_LS_INDICATOR_SLASH;
                 break;
             case 'q':
+                options->explicit_control_char_policy = true;
                 options->hide_control_chars = true;
                 break;
             case 'r':
@@ -1165,6 +1217,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 options->indicator_style = BX_LS_INDICATOR_FILE_TYPE;
                 break;
             case BX_LS_OPT_SHOW_CONTROL_CHARS:
+                options->explicit_control_char_policy = true;
+                options->raw_output_exceptions |=
+                    (uint32_t)BX_OUTPUT_POLICY_RAW_EXPLICIT_PATH_FIELDS;
                 options->hide_control_chars = false;
                 break;
             case BX_LS_OPT_QUOTING_STYLE:
@@ -1190,6 +1245,8 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
                 break;
             case BX_LS_OPT_ZERO:
                 options->zero_terminated = true;
+                options->raw_output_exceptions |=
+                    (uint32_t)BX_OUTPUT_POLICY_RAW_MACHINE_DELIMITED_PATHS;
                 break;
             case '?':
                 if (optopt != 0) {
@@ -1210,6 +1267,9 @@ static bool bx_ls_parse_options(int argc, char** argv, enum bx_ls_variant varian
     if (short_time_sort_order > explicit_sort_order && options->format != BX_LS_FORMAT_LONG) {
         options->sort_entries = true;
         options->sort_mode = BX_LS_SORT_TIME;
+    }
+    if (!options->explicit_control_char_policy) {
+        options->hide_control_chars = bx_ls_output_policy_terminal_quote_paths(options);
     }
 
     *first_operand = optind;
@@ -2049,14 +2109,20 @@ static char bx_ls_indicator_char(mode_t mode, const struct bx_ls_options* option
 }
 
 static bool bx_ls_color_enabled(const struct bx_ls_options* options) {
+    struct bx_output_policy output_policy;
+
+    bx_output_policy_init_stdout(&output_policy);
     switch (options->color_when) {
         case BX_LS_COLOR_ALWAYS:
-            return true;
+            bx_output_policy_set_color_mode(&output_policy, BX_COLOR_ALWAYS);
+            return bx_output_policy_color_enabled(&output_policy);
         case BX_LS_COLOR_AUTO:
-            return isatty(STDOUT_FILENO);
+            bx_output_policy_set_color_mode(&output_policy, BX_COLOR_AUTO);
+            return bx_output_policy_color_enabled(&output_policy);
         case BX_LS_COLOR_NEVER:
         default:
-            return false;
+            bx_output_policy_set_color_mode(&output_policy, BX_COLOR_NEVER);
+            return bx_output_policy_color_enabled(&output_policy);
     }
 }
 
@@ -2515,7 +2581,10 @@ static bool bx_ls_entry_stat(const struct bx_ls_entry* entry, struct stat* st, s
 }
 
 static void bx_ls_put_line_terminator(FILE* out, const struct bx_ls_options* options) {
-    (void)fputc(options->zero_terminated ? '\0' : '\n', out);
+    struct bx_output_policy output_policy;
+
+    bx_ls_output_policy_apply_options(&output_policy, options);
+    (void)fputc(bx_output_policy_record_terminator(&output_policy), out);
 }
 
 static size_t bx_ls_uintmax_width(uintmax_t value) {

@@ -14,6 +14,7 @@
 #include <pthread.h>
 
 #include "dev_counters.h"
+#include "lib/backpressure_limit.h"
 #include "lib/cancel_state.h"
 #include "lib/fd_ops.h"
 #include "lib/thread_count.h"
@@ -30,6 +31,9 @@
 #include "traverse.h"
 
 #define BX_RG_SCHED_BATCH_MAX_FILES 64u
+
+static const char bx_rg_sched_order_irrelevant_reason[] =
+    "recursive subtree scheduler publishes unsorted --threads >1 output after sorted/order-sensitive modes are rejected";
 
 enum bx_rg_sched_work_kind {
     BX_RG_SCHED_WORK_DIR = 0,
@@ -249,10 +253,10 @@ static void bx_rg_sched_merge_direct_result(struct bx_rg_sched_state *sched,
         return;
 
     if (sched->publish_ready)
-        pthread_mutex_lock(&sched->publish.unordered_lock);
+        bx_rg_publish_lock_unordered_fast(&sched->publish);
     bx_rg_sched_apply_result_unlocked(sched, match_seen, error_seen);
     if (sched->publish_ready)
-        pthread_mutex_unlock(&sched->publish.unordered_lock);
+        bx_rg_publish_unlock_unordered_fast(&sched->publish);
 }
 
 static void bx_rg_sched_request_cancel_locked(
@@ -264,6 +268,14 @@ static void bx_rg_sched_request_cancel_locked(
         state->cancel_reason = reason;
     state->shutdown = true;
     bx_rg_sched_signal_workers_locked(state);
+}
+
+static bool bx_rg_sched_cancel_requested(struct bx_rg_sched_state *state) {
+    if (!state || !bx_cancel_state_requested(&state->cancel))
+        return false;
+    (void)bx_cancel_state_mark_observed(&state->cancel);
+    (void)bx_cancel_state_mark_draining(&state->cancel);
+    return true;
 }
 
 static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
@@ -279,6 +291,7 @@ static void bx_rg_sched_set_fatal(struct bx_rg_sched_state *state,
     pthread_mutex_unlock(&state->lock);
 
     bx_cancel_state_request(&state->cancel);
+    (void)bx_cancel_state_mark_draining(&state->cancel);
     if (state->publish_ready)
         bx_rg_publish_wake(&state->publish);
 }
@@ -1057,7 +1070,7 @@ static enum bx_walk_action bx_rg_sched_walk_visit(struct bx_walk_entry *entry,
 
     if (!state || !state->sched || !state->worker)
         return BX_WALK_ERROR;
-    if (bx_cancel_state_requested(&state->sched->cancel))
+    if (bx_rg_sched_cancel_requested(state->sched))
         return BX_WALK_STOP;
     if (entry->is_dir) {
         if (entry->depth > 0) {
@@ -1138,6 +1151,8 @@ static enum bx_walk_action bx_rg_sched_walk_error(const char *path,
             *state->error_seen = true;
         return BX_WALK_CONTINUE;
     }
+    if (state->error_seen)
+        *state->error_seen = true;
     char msg[4096];
     int n;
     n = bx_search_snprintf_path_error(msg, sizeof(msg),
@@ -1282,6 +1297,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             bx_search_runtime_snapshot_walk_opts_with_max_depth(sched->runtime_snapshot,
                                                                 NULL,
                                                                 relative_max_depth);
+        walk_opts.cancel = &sched->cancel;
         struct bx_walk_ignore_opts ignore_opts =
             bx_search_runtime_snapshot_ignore_opts_with_git_root(
                 sched->runtime_snapshot,
@@ -1339,7 +1355,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
                 job_error_seen = true;
             if (matched)
                 job_match_seen = true;
-            if (bx_cancel_state_requested(&sched->cancel))
+            if (bx_rg_sched_cancel_requested(sched))
                 break;
         }
     }
@@ -1437,7 +1453,7 @@ static void *bx_rg_sched_worker_main(void *arg) {
         return NULL;
 
     for (;;) {
-        if (bx_cancel_state_requested(&sched->cancel))
+        if (bx_rg_sched_cancel_requested(sched))
             break;
 
         bool stolen = false;
@@ -1450,7 +1466,7 @@ static void *bx_rg_sched_worker_main(void *arg) {
         }
 
         bx_rg_sched_lock_global(sched);
-        if (sched->fatal_error || sched->shutdown || bx_cancel_state_requested(&sched->cancel)) {
+        if (sched->fatal_error || sched->shutdown || bx_rg_sched_cancel_requested(sched)) {
             pthread_mutex_unlock(&sched->lock);
             break;
         }
@@ -1468,7 +1484,7 @@ static void *bx_rg_sched_worker_main(void *arg) {
         sched->idle_workers++;
         while (!sched->fatal_error &&
                !sched->shutdown &&
-               !bx_cancel_state_requested(&sched->cancel) &&
+               !bx_rg_sched_cancel_requested(sched) &&
                sched->pending_work == 0u &&
                sched->active_workers > 0u) {
             pthread_cond_wait(&sched->work_ready, &sched->lock);
@@ -1477,7 +1493,7 @@ static void *bx_rg_sched_worker_main(void *arg) {
 
         bool should_exit = sched->fatal_error ||
                            sched->shutdown ||
-                           bx_cancel_state_requested(&sched->cancel);
+                           bx_rg_sched_cancel_requested(sched);
         if (!should_exit && sched->pending_work == 0u && sched->active_workers == 0u) {
             sched->shutdown = true;
             bx_rg_sched_signal_workers_locked(sched);
@@ -1619,6 +1635,8 @@ int bx_rg_sched_run(int argc,
     pthread_t *threads = NULL;
     struct bx_rg_sched_thread_arg *thread_args = NULL;
     size_t started_threads = 0u;
+    size_t output_byte_budget =
+        bx_backpressure_limit_default(BX_BACKPRESSURE_LIMIT_PENDING_OUTPUT_BYTES);
 
     sched.quiet_opts = *opts;
     sched.quiet_opts.quiet = true;
@@ -1691,7 +1709,10 @@ int bx_rg_sched_run(int argc,
         !bx_rg_publish_init(&sched.publish, &(struct bx_rg_publish_opts){
             .mode = BX_RG_PUBLISH_UNORDERED,
             .max_pending = sched.thread_count > 0u ? sched.thread_count : 1u,
+            .max_pending_bytes = output_byte_budget,
             .first_seq = 0u,
+            .order_irrelevant = true,
+            .order_irrelevant_reason = bx_rg_sched_order_irrelevant_reason,
             .user = &sched,
             .record_seq = NULL,
             .emit_record = bx_rg_sched_publish_emit_record,
@@ -1729,11 +1750,17 @@ int bx_rg_sched_run(int argc,
     }
     if (started_threads > 0u && !join_ok && !sched.fatal_error)
         bx_rg_sched_set_fatal(&sched, "rg: subtree worker threads failed\n");
+    if (bx_cancel_state_requested(&sched.cancel)) {
+        (void)bx_cancel_state_mark_draining(&sched.cancel);
+        (void)bx_cancel_state_mark_joined(&sched.cancel);
+    }
 
     if (sched.publish_ready) {
         bx_rg_publish_close(&sched.publish);
         bx_rg_publish_join(&sched.publish);
     }
+    if (bx_cancel_state_requested(&sched.cancel))
+        (void)bx_cancel_state_mark_published(&sched.cancel);
     if (sched.fatal_error) {
         sched.error_seen = true;
         sched.exit_status = 2;

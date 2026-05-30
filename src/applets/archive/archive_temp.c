@@ -16,6 +16,7 @@ static struct bx_archive_temp_entry* bx_archive_temp_head = NULL;
 static bool bx_archive_temp_atexit_installed = false;
 static bool bx_archive_temp_signal_handlers_installed = false;
 static volatile sig_atomic_t bx_archive_temp_last_signal = 0;
+static struct bx_cancel_state bx_archive_temp_cancel;
 
 struct bx_archive_temp_signal_slot {
     int signo;
@@ -114,6 +115,9 @@ bool bx_archive_temp_install_signal_cleanup(void) {
     struct sigaction action;
     size_t i;
 
+    bx_cancel_state_init(&bx_archive_temp_cancel);
+    bx_archive_temp_last_signal = 0;
+
     if (bx_archive_temp_signal_handlers_installed) {
         return true;
     }
@@ -144,9 +148,19 @@ bool bx_archive_temp_install_signal_cleanup(void) {
 }
 
 int bx_archive_temp_pending_signal(void) {
-    return (int)bx_archive_temp_last_signal;
+    int signo = (int)bx_archive_temp_last_signal;
+    if (signo != 0) {
+        (void)bx_cancel_state_mark_requested(&bx_archive_temp_cancel);
+        (void)bx_cancel_state_mark_observed(&bx_archive_temp_cancel);
+        (void)bx_cancel_state_mark_draining(&bx_archive_temp_cancel);
+    }
+    return signo;
 }
 
 void bx_archive_temp_clear_pending_signal(void) {
     bx_archive_temp_last_signal = 0;
+}
+
+struct bx_cancel_state* bx_archive_temp_cancel_state(void) {
+    return &bx_archive_temp_cancel;
 }

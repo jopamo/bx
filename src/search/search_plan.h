@@ -45,6 +45,11 @@ enum bx_search_plan_publication_kind {
     BX_SEARCH_PLAN_PUBLICATION_UNORDERED,
 };
 
+enum bx_search_plan_order_relevance {
+    BX_SEARCH_PLAN_OUTPUT_ORDER_REQUIRED = 0,
+    BX_SEARCH_PLAN_OUTPUT_ORDER_IRRELEVANT,
+};
+
 enum bx_search_file_kernel_kind {
     BX_SEARCH_FILE_KERNEL_MULTILINE = 0,
     BX_SEARCH_FILE_KERNEL_RAW_PRESENCE,
@@ -64,8 +69,8 @@ enum bx_search_max_filesize_zero_policy {
  *
  * Built after option parsing and before bx_search_run. Recursive and parallel
  * workers observe it only through const struct bx_search_plan pointers, so
- * output policy and publication policy are selected once outside worker hot
- * loops.
+ * output policy, publication policy, and output-order relevance are selected
+ * once outside worker hot loops.
  */
 struct bx_search_plan {
     enum bx_search_plan_orchestrator orchestrator;
@@ -73,6 +78,7 @@ struct bx_search_plan {
     enum bx_search_plan_kernel_kind kernel_kind;
     enum bx_search_plan_output_kind output_kind;
     enum bx_search_plan_publication_kind publication_kind;
+    enum bx_search_plan_order_relevance order_relevance;
     bool rg_searches_stdin;
     bool has_metadata_sort;
     bool has_context;

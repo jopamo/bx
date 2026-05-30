@@ -13,8 +13,9 @@
 #include <zlib.h>
 
 #include "applets/archive/archive_gzip.h"
-#include "applets/archive/archive_ordered.h"
+#include "lib/ordered_publication.h"
 #include "bx/libbx.h"
+#include "lib/backpressure_limit.h"
 #include "lib/cancel_state.h"
 #include "lib/time_parse.h"
 #include "lib/work_pool.h"
@@ -31,7 +32,7 @@ enum bx_archive_gzip_packet_status {
 struct bx_archive_gzip_stream_state;
 
 struct bx_archive_gzip_stream_job {
-    struct bx_archive_ordered_packet ordered;
+    struct bx_ordered_publication_packet ordered;
     unsigned char* input;
     size_t input_len;
     unsigned char* compressed;
@@ -45,7 +46,7 @@ struct bx_archive_gzip_stream_state {
     struct bx_work_pool pool;
     struct bx_work_pool_opts pool_opts;
     struct bx_cancel_state cancel;
-    struct bx_archive_ordered_state ordered;
+    struct bx_ordered_publication_state ordered;
     struct bx_archive_buffer current_chunk;
     size_t chunk_size;
     size_t max_inflight_chunks;
@@ -394,13 +395,13 @@ static void bx_archive_gzip_stream_dispose_job(void* user, void* job_ptr) {
 }
 
 static void bx_archive_gzip_stream_dispose_packet(void* user,
-                                                  struct bx_archive_ordered_packet* packet) {
+                                                  struct bx_ordered_publication_packet* packet) {
     (void)user;
     bx_archive_gzip_stream_job_free((struct bx_archive_gzip_stream_job*)packet);
 }
 
 static bool bx_archive_gzip_stream_publish_packet(void* user,
-                                                  struct bx_archive_ordered_packet* packet) {
+                                                  struct bx_ordered_publication_packet* packet) {
     struct bx_archive_gzip_stream_state* state = user;
     struct bx_archive_gzip_stream_job* job = (struct bx_archive_gzip_stream_job*)packet;
 
@@ -446,7 +447,7 @@ static void bx_archive_gzip_stream_process_job(void* user,
         }
     }
 
-    bx_archive_ordered_publish_packet(&state->ordered, &job->ordered);
+    bx_ordered_publication_publish_packet(&state->ordered, &job->ordered);
 }
 
 static bool bx_archive_gzip_stream_submit_chunk(struct bx_archive_gzip_stream_state* state) {
@@ -456,7 +457,7 @@ static bool bx_archive_gzip_stream_submit_chunk(struct bx_archive_gzip_stream_st
     if (state->current_chunk.len == 0u) {
         return true;
     }
-    if (!bx_archive_ordered_reserve_slot(&state->ordered, &seq)) {
+    if (!bx_ordered_publication_reserve_slot(&state->ordered, &seq)) {
         return false;
     }
 
@@ -472,7 +473,7 @@ static bool bx_archive_gzip_stream_submit_chunk(struct bx_archive_gzip_stream_st
     if (!bx_work_pool_submit(&state->pool, job)) {
         bx_cancel_state_request(&state->cancel);
         bx_diag(state->diag, "failed to submit gzip compression work");
-        bx_archive_ordered_release_slot(&state->ordered);
+        bx_ordered_publication_release_slot(&state->ordered);
         bx_archive_gzip_stream_job_free(job);
         return false;
     }
@@ -508,7 +509,7 @@ static void bx_archive_gzip_stream_state_cleanup(struct bx_archive_gzip_stream_s
     if (state->pool_initialized) {
         bx_work_pool_dispose(&state->pool);
     }
-    bx_archive_ordered_cleanup(&state->ordered);
+    bx_ordered_publication_cleanup(&state->ordered);
     bx_archive_buffer_free(&state->current_chunk);
 }
 
@@ -534,6 +535,10 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     state.diag = diag;
     state.chunk_size = chunk_size;
     state.max_inflight_chunks = max_inflight_chunks != 0u ? max_inflight_chunks : thread_count * 4u;
+    size_t archive_member_limit =
+        bx_backpressure_limit_default(BX_BACKPRESSURE_LIMIT_PENDING_ARCHIVE_MEMBERS);
+    if (archive_member_limit > 0u && state.max_inflight_chunks > archive_member_limit)
+        state.max_inflight_chunks = archive_member_limit;
     state.test_delay_first_chunk_ms = bx_archive_gzip_test_delay_first_chunk_ms();
     if (state.max_inflight_chunks < thread_count) {
         state.max_inflight_chunks = thread_count;
@@ -544,6 +549,7 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     state.pool_opts = (struct bx_work_pool_opts){
         .thread_count = thread_count,
         .queue_capacity = state.max_inflight_chunks,
+        .queue_limit_kind = BX_BACKPRESSURE_LIMIT_PENDING_ARCHIVE_MEMBERS,
         .user = &state,
         .cancel = &state.cancel,
         .worker_init = NULL,
@@ -557,8 +563,8 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     }
     state.pool_initialized = true;
 
-    if (!bx_archive_ordered_init(&state.ordered,
-                                 &(struct bx_archive_ordered_opts){
+    if (!bx_ordered_publication_init(&state.ordered,
+                                 &(struct bx_ordered_publication_opts){
                                      .cancel = &state.cancel,
                                      .max_inflight = state.max_inflight_chunks,
                                      .user = &state,
@@ -580,7 +586,7 @@ bool bx_archive_run_gzip_filter_mt_stream(bx_archive_gzip_stream_producer_fn pro
     }
 
     bx_work_pool_close(&state.pool);
-    if (!bx_archive_ordered_drain(&state.ordered)) {
+    if (!bx_ordered_publication_drain(&state.ordered)) {
         goto out_join_no_ok;
     }
     ok = true;
@@ -594,6 +600,8 @@ out_join:
     }
 
 out:
+    if (bx_cancel_state_requested(&state.cancel))
+        (void)bx_cancel_state_mark_published(&state.cancel);
     bx_archive_gzip_stream_state_cleanup(&state);
     return ok;
 }
