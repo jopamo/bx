@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <sys/stat.h>
 
+#include "lib/compiler.h"
+
 #include "walk.h"
 
 struct bx_walk_ancestor {
@@ -40,7 +42,7 @@ struct bx_walk_ctx {
 static inline void bx_walk_note_counter(const struct bx_walk_counter_ops *ops,
                                         enum bx_walk_counter counter,
                                         uint64_t count) {
-    if (!ops || !ops->note || count == 0u)
+    if (BX_LIKELY(ops == NULL || ops->note == NULL || count == 0u))
         return;
     ops->note(counter, count, ops->user);
 }
@@ -56,8 +58,10 @@ static inline void bx_walk_ctx_note_counter(const struct bx_walk_ctx *ctx,
 static inline void bx_walk_note_stat_call_for_reason(const struct bx_walk_counter_ops *ops,
                                                      enum bx_walk_counter syscall_counter,
                                                      enum bx_walk_counter reason_counter) {
-    bx_walk_note_counter(ops, reason_counter, 1u);
-    bx_walk_note_counter(ops, syscall_counter, 1u);
+    if (BX_LIKELY(ops == NULL || ops->note == NULL))
+        return;
+    ops->note(reason_counter, 1u, ops->user);
+    ops->note(syscall_counter, 1u, ops->user);
 }
 
 void bx_walk_entry_fill_from_stat(struct bx_walk_entry *entry, const struct stat *st);

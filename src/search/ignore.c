@@ -23,7 +23,6 @@ struct bx_ignore_program_cache_key {
 };
 
 struct bx_ignore_program_cache_entry {
-    struct bx_ignore_program_cache_entry *next;
     uint64_t content_hash;
     bool casefold;
     char *content;
@@ -31,9 +30,19 @@ struct bx_ignore_program_cache_entry {
     struct bx_ignore_program *program;
 };
 
+struct bx_ignore_program_cache_snapshot {
+    size_t len;
+    struct bx_ignore_program_cache_entry entries[];
+};
+
+/*
+ * Ignore-program compilation is cold control-plane work. Keep the published
+ * cache as an immutable snapshot and replace it with a rebuilt candidate after
+ * a miss instead of mutating shared cache nodes in place.
+ */
 static pthread_mutex_t bx_ignore_program_cache_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t bx_ignore_program_cache_once = PTHREAD_ONCE_INIT;
-static struct bx_ignore_program_cache_entry *bx_ignore_program_cache = NULL;
+static struct bx_ignore_program_cache_snapshot *bx_ignore_program_cache_snapshot = NULL;
 
 static uint64_t bx_ignore_program_hash_bytes(uint64_t hash, const void *data, size_t len) {
     const unsigned char *bytes = data;
@@ -112,10 +121,15 @@ static bool bx_ignore_program_cache_build_key(struct bx_ignore_program_cache_key
 
 static struct bx_ignore_program *
 bx_ignore_program_cache_lookup_locked(const struct bx_ignore_program_cache_key *key) {
+    const struct bx_ignore_program_cache_snapshot *snapshot = bx_ignore_program_cache_snapshot;
+
     if (!key || !key->content || key->content_len == 0u)
         return NULL;
+    if (!snapshot)
+        return NULL;
 
-    for (struct bx_ignore_program_cache_entry *it = bx_ignore_program_cache; it; it = it->next) {
+    for (size_t i = 0u; i < snapshot->len; ++i) {
+        const struct bx_ignore_program_cache_entry *it = &snapshot->entries[i];
         if (it->content_hash != key->content_hash || it->casefold != key->casefold ||
             it->content_len != key->content_len) {
             continue;
@@ -126,21 +140,75 @@ bx_ignore_program_cache_lookup_locked(const struct bx_ignore_program_cache_key *
     return NULL;
 }
 
+static struct bx_ignore_program_cache_snapshot *
+bx_ignore_program_cache_snapshot_new(size_t len) {
+    if (len > (SIZE_MAX - sizeof(struct bx_ignore_program_cache_snapshot)) /
+                  sizeof(struct bx_ignore_program_cache_entry)) {
+        return NULL;
+    }
+
+    struct bx_ignore_program_cache_snapshot *snapshot =
+        calloc(1u, sizeof(*snapshot) + len * sizeof(snapshot->entries[0]));
+    if (!snapshot)
+        return NULL;
+    snapshot->len = len;
+    return snapshot;
+}
+
+static struct bx_ignore_program_cache_snapshot *
+bx_ignore_program_cache_snapshot_rebuild_with_entry(
+    const struct bx_ignore_program_cache_snapshot *old_snapshot,
+    const struct bx_ignore_program_cache_key *key,
+    struct bx_ignore_program *program) {
+    size_t old_len = old_snapshot ? old_snapshot->len : 0u;
+    if (old_len == SIZE_MAX)
+        return NULL;
+    struct bx_ignore_program_cache_snapshot *new_snapshot =
+        bx_ignore_program_cache_snapshot_new(old_len + 1u);
+    if (!new_snapshot)
+        return NULL;
+
+    struct bx_ignore_program_cache_entry *entry = &new_snapshot->entries[0];
+    entry->content_hash = key->content_hash;
+    entry->casefold = key->casefold;
+    entry->content = key->content;
+    entry->content_len = key->content_len;
+    entry->program = program;
+
+    if (old_len > 0u) {
+        memcpy(&new_snapshot->entries[1],
+               old_snapshot->entries,
+               old_len * sizeof(old_snapshot->entries[0]));
+    }
+    return new_snapshot;
+}
+
+static void bx_ignore_program_cache_snapshot_free_container(
+    struct bx_ignore_program_cache_snapshot *snapshot) {
+    free(snapshot);
+}
+
+static void bx_ignore_program_cache_snapshot_destroy(
+    struct bx_ignore_program_cache_snapshot *snapshot) {
+    if (!snapshot)
+        return;
+    for (size_t i = 0u; i < snapshot->len; ++i) {
+        struct bx_ignore_program_cache_entry *entry = &snapshot->entries[i];
+        bx_ignore_program_destroy_process_lifetime(entry->program);
+        free(entry->content);
+    }
+    free(snapshot);
+}
+
 static void bx_ignore_program_cache_dispose(void) {
-    struct bx_ignore_program_cache_entry *entries;
+    struct bx_ignore_program_cache_snapshot *snapshot;
 
     pthread_mutex_lock(&bx_ignore_program_cache_lock);
-    entries = bx_ignore_program_cache;
-    bx_ignore_program_cache = NULL;
+    snapshot = bx_ignore_program_cache_snapshot;
+    bx_ignore_program_cache_snapshot = NULL;
     pthread_mutex_unlock(&bx_ignore_program_cache_lock);
 
-    while (entries) {
-        struct bx_ignore_program_cache_entry *next = entries->next;
-        bx_ignore_program_destroy_process_lifetime(entries->program);
-        free(entries->content);
-        free(entries);
-        entries = next;
-    }
+    bx_ignore_program_cache_snapshot_destroy(snapshot);
 }
 
 static void bx_ignore_program_cache_init(void) {
@@ -149,23 +217,21 @@ static void bx_ignore_program_cache_init(void) {
 
 static bool bx_ignore_program_cache_insert_locked(struct bx_ignore_program_cache_key *key,
                                                   struct bx_ignore_program *program) {
-    struct bx_ignore_program_cache_entry *entry;
+    struct bx_ignore_program_cache_snapshot *old_snapshot;
+    struct bx_ignore_program_cache_snapshot *new_snapshot;
 
     if (!key || !key->content || key->content_len == 0u || !program)
         return false;
 
-    entry = calloc(1u, sizeof(*entry));
-    if (!entry)
+    old_snapshot = bx_ignore_program_cache_snapshot;
+    new_snapshot =
+        bx_ignore_program_cache_snapshot_rebuild_with_entry(old_snapshot, key, program);
+    if (!new_snapshot)
         return false;
 
-    entry->content_hash = key->content_hash;
-    entry->casefold = key->casefold;
-    entry->content = key->content;
-    entry->content_len = key->content_len;
-    entry->program = program;
-    entry->next = bx_ignore_program_cache;
     bx_ignore_program_make_process_lifetime(program);
-    bx_ignore_program_cache = entry;
+    bx_ignore_program_cache_snapshot = new_snapshot;
+    bx_ignore_program_cache_snapshot_free_container(old_snapshot);
 
     key->content = NULL;
     key->content_len = 0u;

@@ -1,540 +1,1023 @@
 {
   "manifest_version": 1,
-  "basis": "Central applet dispatch manifest. Generated C dispatch tables are built from this file; src/bx/main.c must not hand-maintain applet tables.",
+  "basis": "Central applet dispatch manifest. Generated C applet registry tables are built from this file; src/bx/main.c must not hand-maintain applet tables or capability flags.",
   "boot_critical": [
     {
       "name": "init",
-      "main": "bx_init_main"
+      "main": "bx_init_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "switch_root",
-      "main": "bx_switch_root_main"
+      "main": "bx_switch_root_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ]
     }
   ],
   "applets": [
     {
       "name": "ash",
-      "main": "bx_ash_main"
+      "main": "bx_ash_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "child-execution"
+      ]
     },
     {
       "name": "sh",
-      "main": "bx_ash_main"
+      "main": "bx_ash_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "child-execution"
+      ]
     },
     {
       "name": "bc",
-      "main": "bx_bc_main"
+      "main": "bx_bc_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "cat",
-      "main": "bx_cat_main"
+      "main": "bx_cat_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "cut",
-      "main": "bx_cut_main"
+      "main": "bx_cut_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "date",
-      "main": "bx_date_main"
+      "main": "bx_date_main",
+      "capabilities": []
     },
     {
       "name": "which",
-      "main": "bx_which_main"
+      "main": "bx_which_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "ln",
-      "main": "bx_ln_main"
+      "main": "bx_ln_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "link",
-      "main": "bx_link_main"
+      "main": "bx_link_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "unlink",
-      "main": "bx_unlink_main"
+      "main": "bx_unlink_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "readlink",
-      "main": "bx_readlink_main"
+      "main": "bx_readlink_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "realpath",
-      "main": "bx_realpath_main"
+      "main": "bx_realpath_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "basename",
-      "main": "bx_basename_main"
+      "main": "bx_basename_main",
+      "capabilities": []
     },
     {
       "name": "dirname",
-      "main": "bx_dirname_main"
+      "main": "bx_dirname_main",
+      "capabilities": []
     },
     {
       "name": "dircolors",
-      "main": "bx_dircolors_main"
+      "main": "bx_dircolors_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "pathchk",
-      "main": "bx_pathchk_main"
+      "main": "bx_pathchk_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "ls",
-      "main": "bx_ls_main"
+      "main": "bx_ls_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "dir",
-      "main": "bx_dir_main"
+      "main": "bx_dir_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "vdir",
-      "main": "bx_vdir_main"
+      "main": "bx_vdir_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "stat",
-      "main": "bx_stat_main"
+      "main": "bx_stat_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "df",
-      "main": "bx_df_main"
+      "main": "bx_df_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "du",
-      "main": "bx_du_main"
+      "main": "bx_du_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal"
+      ]
     },
     {
       "name": "sync",
-      "main": "bx_sync_main"
+      "main": "bx_sync_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "dd",
-      "main": "bx_dd_main"
+      "main": "bx_dd_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "printf",
-      "main": "bx_printf_main"
+      "main": "bx_printf_main",
+      "capabilities": []
     },
     {
       "name": "ed",
-      "main": "bx_ed_main"
+      "main": "bx_ed_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "vim",
-      "main": "bx_vim_main"
+      "main": "bx_vim_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "jq",
-      "main": "bx_jq_main"
+      "main": "bx_jq_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "xxd",
-      "main": "bx_xxd_main"
+      "main": "bx_xxd_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "env",
-      "main": "bx_env_main"
+      "main": "bx_env_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "printenv",
-      "main": "bx_printenv_main"
+      "main": "bx_printenv_main",
+      "capabilities": []
     },
     {
       "name": "pwd",
-      "main": "bx_pwd_main"
+      "main": "bx_pwd_main",
+      "capabilities": []
     },
     {
       "name": "tty",
-      "main": "bx_tty_main"
+      "main": "bx_tty_main",
+      "capabilities": []
     },
     {
       "name": "stty",
-      "main": "bx_stty_main"
+      "main": "bx_stty_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "screen",
-      "main": "bx_screen_main"
+      "main": "bx_screen_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "getty",
-      "main": "bx_getty_main"
+      "main": "bx_getty_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "privilege-sensitive",
+        "raw-output"
+      ]
     },
     {
       "name": "setsid",
-      "main": "bx_setsid_main"
+      "main": "bx_setsid_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "dhcp",
-      "main": "bx_dhcp_main"
+      "main": "bx_dhcp_main",
+      "capabilities": [
+        "network-access"
+      ]
     },
     {
       "name": "udhcpc",
-      "main": "bx_dhcp_main"
+      "main": "bx_dhcp_main",
+      "capabilities": [
+        "network-access"
+      ]
     },
     {
       "name": "nice",
-      "main": "bx_nice_main"
+      "main": "bx_nice_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "nohup",
-      "main": "bx_nohup_main"
+      "main": "bx_nohup_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "timeout",
-      "main": "bx_timeout_main"
+      "main": "bx_timeout_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "chroot",
-      "main": "bx_chroot_main"
+      "main": "bx_chroot_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "mount",
-      "main": "bx_mount_main"
+      "main": "bx_mount_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "umount",
-      "main": "bx_umount_main"
+      "main": "bx_umount_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "fuser",
-      "main": "bx_fuser_main"
+      "main": "bx_fuser_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "hdparm",
-      "main": "bx_hdparm_main"
+      "main": "bx_hdparm_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "kill",
-      "main": "bx_kill_main"
+      "main": "bx_kill_main",
+      "capabilities": []
     },
     {
       "name": "killall",
-      "main": "bx_killall_main"
+      "main": "bx_killall_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "peekfd",
-      "main": "bx_peekfd_main"
+      "main": "bx_peekfd_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "ps",
-      "main": "bx_ps_main"
+      "main": "bx_ps_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "pslog",
-      "main": "bx_pslog_main"
+      "main": "bx_pslog_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "pstree",
-      "main": "bx_pstree_main"
+      "main": "bx_pstree_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "prtstat",
-      "main": "bx_prtstat_main"
+      "main": "bx_prtstat_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "dmesg",
-      "main": "bx_dmesg_main"
+      "main": "bx_dmesg_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "reboot",
-      "main": "bx_reboot_main"
+      "main": "bx_reboot_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "halt",
-      "main": "bx_reboot_main"
+      "main": "bx_reboot_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "poweroff",
-      "main": "bx_reboot_main"
+      "main": "bx_reboot_main",
+      "capabilities": [
+        "filesystem-read",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "chmod",
-      "main": "bx_chmod_main"
+      "main": "bx_chmod_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "chown",
-      "main": "bx_chown_main"
+      "main": "bx_chown_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "chgrp",
-      "main": "bx_chgrp_main"
+      "main": "bx_chgrp_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "rm",
-      "main": "bx_rm_main"
+      "main": "bx_rm_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ]
     },
     {
       "name": "mkdir",
-      "main": "bx_mkdir_main"
+      "main": "bx_mkdir_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "rmdir",
-      "main": "bx_rmdir_main"
+      "main": "bx_rmdir_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "mkfifo",
-      "main": "bx_mkfifo_main"
+      "main": "bx_mkfifo_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "mknod",
-      "main": "bx_mknod_main"
+      "main": "bx_mknod_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "mktemp",
-      "main": "bx_mktemp_main"
+      "main": "bx_mktemp_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "touch",
-      "main": "bx_touch_main"
+      "main": "bx_touch_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "tree",
-      "main": "bx_tree_main"
+      "main": "bx_tree_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "truncate",
-      "main": "bx_truncate_main"
+      "main": "bx_truncate_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "shred",
-      "main": "bx_shred_main"
+      "main": "bx_shred_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "install",
-      "main": "bx_install_main"
+      "main": "bx_install_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "cp",
-      "main": "bx_cp_main"
+      "main": "bx_cp_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ]
     },
     {
       "name": "mv",
-      "main": "bx_mv_main"
+      "main": "bx_mv_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "nl",
-      "main": "bx_nl_main"
+      "main": "bx_nl_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "od",
-      "main": "bx_od_main"
+      "main": "bx_od_main",
+      "capabilities": [
+        "filesystem-read",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "paste",
-      "main": "bx_paste_main"
+      "main": "bx_paste_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "nproc",
-      "main": "bx_nproc_main"
+      "main": "bx_nproc_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "numfmt",
-      "main": "bx_numfmt_main"
+      "main": "bx_numfmt_main",
+      "capabilities": []
     },
     {
       "name": "nc",
-      "main": "bx_nc_main"
+      "main": "bx_nc_main",
+      "capabilities": [
+        "filesystem-read",
+        "network-access"
+      ]
     },
     {
       "name": "netcat",
-      "main": "bx_nc_main"
+      "main": "bx_nc_main",
+      "capabilities": [
+        "filesystem-read",
+        "network-access"
+      ]
     },
     {
       "name": "wget",
-      "main": "bx_wget_main"
+      "main": "bx_wget_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "network-access"
+      ]
     },
     {
       "name": "traceroute",
-      "main": "bx_traceroute_main"
+      "main": "bx_traceroute_main",
+      "capabilities": [
+        "filesystem-read",
+        "network-access",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "ping",
-      "main": "bx_ping_main"
+      "main": "bx_ping_main",
+      "capabilities": [
+        "filesystem-read",
+        "network-access",
+        "privilege-sensitive"
+      ]
     },
     {
       "name": "expr",
-      "main": "bx_expr_main"
+      "main": "bx_expr_main",
+      "capabilities": []
     },
     {
       "name": "fold",
-      "main": "bx_fold_main"
+      "main": "bx_fold_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "head",
-      "main": "bx_head_main"
+      "main": "bx_head_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "hostid",
-      "main": "bx_hostid_main"
+      "main": "bx_hostid_main",
+      "capabilities": []
     },
     {
       "name": "hostname",
-      "main": "bx_hostname_main"
+      "main": "bx_hostname_main",
+      "capabilities": []
     },
     {
       "name": "echo",
-      "main": "bx_echo_main"
+      "main": "bx_echo_main",
+      "capabilities": []
     },
     {
       "name": "expand",
-      "main": "bx_expand_main"
+      "main": "bx_expand_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "id",
-      "main": "bx_id_main"
+      "main": "bx_id_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "logname",
-      "main": "bx_logname_main"
+      "main": "bx_logname_main",
+      "capabilities": []
     },
     {
       "name": "man",
-      "main": "bx_man_main"
+      "main": "bx_man_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     },
     {
       "name": "mandoc",
-      "main": "bx_mandoc_main"
+      "main": "bx_mandoc_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "join",
-      "main": "bx_join_main"
+      "main": "bx_join_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "comm",
-      "main": "bx_comm_main"
+      "main": "bx_comm_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "cksum",
-      "main": "bx_cksum_main"
+      "main": "bx_cksum_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "md5sum",
-      "main": "bx_md5sum_main"
+      "main": "bx_md5sum_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "sha1sum",
-      "main": "bx_sha1sum_main"
+      "main": "bx_sha1sum_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "sha256sum",
-      "main": "bx_sha256sum_main"
+      "main": "bx_sha256sum_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "base64",
-      "main": "bx_base64_main"
+      "main": "bx_base64_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "shuf",
-      "main": "bx_shuf_main"
+      "main": "bx_shuf_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "yes",
-      "main": "bx_yes_main"
+      "main": "bx_yes_main",
+      "capabilities": []
     },
     {
       "name": "whoami",
-      "main": "bx_whoami_main"
+      "main": "bx_whoami_main",
+      "capabilities": []
     },
     {
       "name": "sleep",
-      "main": "bx_sleep_main"
+      "main": "bx_sleep_main",
+      "capabilities": []
     },
     {
       "name": "uname",
-      "main": "bx_uname_main"
+      "main": "bx_uname_main",
+      "capabilities": []
     },
     {
       "name": "wc",
-      "main": "bx_wc_main"
+      "main": "bx_wc_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "uniq",
-      "main": "bx_uniq_main"
+      "main": "bx_uniq_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "unexpand",
-      "main": "bx_unexpand_main"
+      "main": "bx_unexpand_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "sum",
-      "main": "bx_sum_main"
+      "main": "bx_sum_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "tac",
-      "main": "bx_tac_main"
+      "main": "bx_tac_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "tail",
-      "main": "bx_tail_main"
+      "main": "bx_tail_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "tee",
-      "main": "bx_tee_main"
+      "main": "bx_tee_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "test",
-      "main": "bx_test_main"
+      "main": "bx_test_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "[",
-      "main": "bx_test_main"
+      "main": "bx_test_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "tr",
-      "main": "bx_tr_main"
+      "main": "bx_tr_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
     },
     {
       "name": "seq",
-      "main": "bx_seq_main"
+      "main": "bx_seq_main",
+      "capabilities": []
     },
     {
       "name": "split",
-      "main": "bx_split_main"
+      "main": "bx_split_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "sort",
-      "main": "bx_sort_main"
+      "main": "bx_sort_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write"
+      ]
     },
     {
       "name": "tar",
-      "main": "bx_tar_main"
+      "main": "bx_tar_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ]
     },
     {
       "name": "cpio",
-      "main": "bx_cpio_main"
+      "main": "bx_cpio_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal"
+      ]
     },
     {
       "name": "true",
-      "main": "bx_true_main"
+      "main": "bx_true_main",
+      "capabilities": []
     },
     {
       "name": "false",
-      "main": "bx_false_main"
+      "main": "bx_false_main",
+      "capabilities": []
     },
     {
       "name": "grep",
-      "main": "bx_grep_main"
+      "main": "bx_grep_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "egrep",
-      "main": "bx_grep_main"
+      "main": "bx_grep_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "fgrep",
-      "main": "bx_grep_main"
+      "main": "bx_grep_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "rg",
-      "main": "bx_rg_main"
+      "main": "bx_rg_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "fd",
-      "main": "bx_fd_main"
+      "main": "bx_fd_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "child-execution",
+        "terminal-control",
+        "raw-output"
+      ]
     },
     {
       "name": "find",
-      "main": "bx_find_main"
+      "main": "bx_find_main",
+      "capabilities": [
+        "filesystem-read",
+        "recursive-traversal",
+        "child-execution"
+      ]
     },
     {
       "name": "xargs",
-      "main": "bx_xargs_main"
+      "main": "bx_xargs_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
     }
+  ],
+  "capability_flags": [
+    "filesystem-read",
+    "filesystem-write",
+    "recursive-traversal",
+    "child-execution",
+    "network-access",
+    "terminal-control",
+    "privilege-sensitive",
+    "raw-output"
   ]
 }

@@ -11,6 +11,7 @@
 #include "search_internal.h"
 #include "search_plan.h"
 #include "search_run.h"
+#include "runtime_snapshot.h"
 
 static int finish_search_main(int status) {
     bx_search_dev_counters_report(stderr);
@@ -25,6 +26,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     int first_file;
     const char *progname = argv[0] ? argv[0] : "grep";
     struct bx_line_writer_file stdout_file = {0};
+    struct bx_search_runtime_snapshot *runtime_snapshot = NULL;
     bool stdout_file_active = false;
 
     (void)setlocale(LC_ALL, "");
@@ -46,10 +48,10 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
     }
 
-    if (personality == BX_SEARCH_RG) {
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, &opts);
-        bx_ignore_validate_explicit_ignore_files(&ignore_opts);
-    }
+    runtime_snapshot = bx_search_runtime_snapshot_create(progname, personality, &opts);
+    if (personality == BX_SEARCH_RG)
+        bx_ignore_validate_explicit_ignore_files(
+            bx_search_runtime_snapshot_ignore_opts(runtime_snapshot));
 
     int num_files = argc - first_file;
     bool rg_searches_stdin = (personality == BX_SEARCH_RG
@@ -70,6 +72,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         if (!bx_line_writer_file_open(&stdout_file, STDOUT_FILENO, false)) {
             bx_search_report_write_error(progname,
                                          bx_line_writer_file_error(&stdout_file));
+            bx_search_runtime_snapshot_destroy(runtime_snapshot);
             bx_search_free_options(&opts);
             return finish_search_main(2);
         }
@@ -80,6 +83,11 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
 
     struct bx_search_output_ctx *previous_output_ctx = bx_search_output_ctx_push(&main_output_ctx);
 
+    /*
+     * Published shared search policy. Recursive/parallel backends borrow this
+     * snapshot read-only, and bx_search_run owns all worker joins before it
+     * returns. The coordinator reclaims the snapshot only after that point.
+     */
     struct bx_search_run_args run_args = {
         .argc = argc,
         .argv = argv,
@@ -88,6 +96,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         .progname = progname,
         .personality = personality,
         .plan = &plan,
+        .runtime_snapshot = runtime_snapshot,
         .opts = &opts,
         .stats = &stats,
     };
@@ -104,6 +113,7 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         run_result.status = 2;
     }
     bx_search_output_ctx_pop(previous_output_ctx);
+    bx_search_runtime_snapshot_destroy(runtime_snapshot);
     bx_search_free_options(&opts);
     return finish_search_main(run_result.status);
 }

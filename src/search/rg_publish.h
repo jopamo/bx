@@ -55,6 +55,11 @@ struct bx_rg_publish_state {
     bool ordered_sink_ready;
 };
 
+/*
+ * Successful bx_rg_publish_submit consumes record ownership. Failed submit
+ * leaves the caller responsible for disposal. Ordered publication transfers to
+ * bx_output_sink; unordered publication emits and disposes before returning.
+ */
 bool bx_rg_publish_init(struct bx_rg_publish_state *state,
                         const struct bx_rg_publish_opts *opts);
 bool bx_rg_publish_submit(struct bx_rg_publish_state *state,

@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "applets.h"
+#include "applets/system/chown/chown.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
@@ -156,7 +157,7 @@ int bx_chgrp_main(int argc, char** argv) {
         chown_argv[parse_result.group_operand_index] = converted_group;
     }
 
-    int rc = bx_chown_main(argc, chown_argv);
+    int rc = bx_chown_run(argc, chown_argv);
 
     free(converted_group);
     free(chown_argv);

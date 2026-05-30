@@ -25,6 +25,7 @@
 #include "scanner.h"
 #include "search_internal.h"
 #include "search_plan.h"
+#include "runtime_snapshot.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -58,6 +59,10 @@ struct bx_rg_sched_work {
         struct {
             size_t path_offset;
             size_t git_root_offset;
+            /*
+             * Owned by this work item. The walker borrows it read-only while
+             * processing the donated subtree; bx_rg_sched_free_work reclaims it.
+             */
             struct bx_ignore_state *parent_ignore_state_snapshot;
             DIR *owned_dir;
             bool donated_dir;
@@ -89,7 +94,10 @@ struct bx_rg_sched_state {
     const char *pattern;
     enum bx_search_personality personality;
     const struct bx_search_exec_plan *exec_plan;
+    /* Borrowed published snapshot; owner reclaims it after worker joins. */
+    const struct bx_search_runtime_snapshot *runtime_snapshot;
     struct bx_search_plan quiet_plan;
+    /* Coordinator-owned options; worker paths borrow this read-only. */
     struct search_opts *opts;
     struct search_opts quiet_opts;
     struct bx_cancel_state cancel;
@@ -1264,26 +1272,25 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
             .stolen = stolen,
             .defer_output_capture = defer_output_capture,
         };
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(sched->progname,
-                                                                 sched->personality,
-                                                                 sched->opts,
-                                                                 NULL);
         int relative_max_depth = -1;
         if (sched->opts->max_depth >= 0) {
             relative_max_depth = sched->opts->max_depth > work->base_depth
                 ? sched->opts->max_depth - work->base_depth
                 : 0;
         }
-        walk_opts.max_depth = relative_max_depth;
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(sched->opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(sched->progname,
-                                                                            sched->opts);
-        ignore_opts.git_root = git_root;
-        ignore_opts.git_root_resolved = work->u.dir.git_root_resolved;
-        ignore_opts.gitignore_enabled = work->u.dir.gitignore_enabled;
+        struct bx_walk_opts walk_opts =
+            bx_search_runtime_snapshot_walk_opts_with_max_depth(sched->runtime_snapshot,
+                                                                NULL,
+                                                                relative_max_depth);
+        struct bx_walk_ignore_opts ignore_opts =
+            bx_search_runtime_snapshot_ignore_opts_with_git_root(
+                sched->runtime_snapshot,
+                git_root,
+                work->u.dir.git_root_resolved,
+                work->u.dir.gitignore_enabled);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
+            .filter_opts = bx_search_runtime_snapshot_filter_opts(sched->runtime_snapshot),
             .ignore_opts = &ignore_opts,
             .visit_with_ignore = bx_rg_sched_walk_visit,
             .error = bx_rg_sched_walk_error,
@@ -1403,6 +1410,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
     record->match_seen = job_match_seen;
     record->error_seen = job_error_seen;
     record->used_heading = output_ctx.used_heading;
+    /* Successful publish consumes the record and its captured buffers. */
     worker->stdout_buf = NULL;
     worker->stdout_len = 0u;
     worker->stdout_cap = 0u;
@@ -1588,15 +1596,20 @@ int bx_rg_sched_run(int argc,
                     enum bx_search_personality personality,
                     const struct bx_search_exec_plan *exec_plan,
                     struct search_opts *opts,
+                    const struct bx_search_runtime_snapshot *runtime_snapshot,
                     size_t thread_count,
                     struct bx_search_stats *stats_out,
                     bool *match_seen_out,
                     bool *error_seen_out) {
+    if (!runtime_snapshot)
+        return 2;
+
     struct bx_rg_sched_state sched = {
         .progname = progname,
         .pattern = pattern,
         .personality = personality,
         .exec_plan = exec_plan,
+        .runtime_snapshot = runtime_snapshot,
         .opts = opts,
         .exit_status = 1,
         .stdout_stream = bx_search_output_stream(),

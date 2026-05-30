@@ -20,6 +20,7 @@
 #include "rg_publish.h"
 #include "scanner.h"
 #include "search_internal.h"
+#include "runtime_snapshot.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -62,6 +63,9 @@ struct bx_search_parallel_state {
     const char *pattern;
     enum bx_search_personality personality;
     const struct bx_search_exec_plan *exec_plan;
+    /* Borrowed published snapshot; owner reclaims it after the pool joins. */
+    const struct bx_search_runtime_snapshot *runtime_snapshot;
+    /* Coordinator-owned options; worker paths borrow this read-only. */
     struct search_opts *opts;
     struct bx_cancel_state cancel;
     struct bx_work_pool *pool;
@@ -254,6 +258,7 @@ static bool bx_search_parallel_flush_pending_job(struct bx_search_parallel_state
         return true;
 
     job = state->pending_job;
+    /* Detach first: successful submit transfers ownership to the pool. */
     state->pending_job = NULL;
     if (job->count == 0u) {
         bx_search_parallel_free_job(NULL, job);
@@ -655,14 +660,19 @@ int bx_search_run_parallel_rg(int argc,
                               enum bx_search_personality personality,
                               const struct bx_search_exec_plan *exec_plan,
                               struct search_opts *opts,
+                              const struct bx_search_runtime_snapshot *runtime_snapshot,
                               struct bx_search_stats *stats_out,
                               bool *match_seen_out,
                               bool *error_seen_out) {
+    if (!runtime_snapshot)
+        return 2;
+
     struct bx_search_parallel_state state = {
         .progname = progname,
         .pattern = pattern,
         .personality = personality,
         .exec_plan = exec_plan,
+        .runtime_snapshot = runtime_snapshot,
         .opts = opts,
         .exit_status = 1,
     };
@@ -728,13 +738,12 @@ int bx_search_run_parallel_rg(int argc,
             .parallel = &state,
             .strip_dot_prefix = true,
         };
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
+        struct bx_walk_opts walk_opts =
+            bx_search_runtime_snapshot_walk_opts(state.runtime_snapshot, NULL);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
+            .filter_opts = bx_search_runtime_snapshot_filter_opts(state.runtime_snapshot),
+            .ignore_opts = bx_search_runtime_snapshot_ignore_opts(state.runtime_snapshot),
             .visit = bx_search_parallel_walk_cb,
             .error = bx_search_parallel_walk_error_cb,
         };
@@ -742,13 +751,12 @@ int bx_search_run_parallel_rg(int argc,
         if (bx_search_walk(".", &walk_config, &walk_state) != 0)
             walk_error_seen = true;
     } else if (opts->recursive) {
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, NULL);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
+        struct bx_walk_opts walk_opts =
+            bx_search_runtime_snapshot_walk_opts(state.runtime_snapshot, NULL);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
+            .filter_opts = bx_search_runtime_snapshot_filter_opts(state.runtime_snapshot),
+            .ignore_opts = bx_search_runtime_snapshot_ignore_opts(state.runtime_snapshot),
             .visit = bx_search_parallel_walk_cb,
             .error = bx_search_parallel_walk_error_cb,
         };

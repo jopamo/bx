@@ -17,6 +17,7 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
+#include "applets/system/switch_root/switch_root.h"
 
 struct bx_switch_root_options {
     const char* progname;
@@ -338,7 +339,7 @@ static int bx_switch_root_exec_init(const struct bx_switch_root_options* options
     return 126;
 }
 
-int bx_switch_root_main(int argc, char** argv) {
+int bx_switch_root_run(int argc, char** argv) {
     struct bx_switch_root_options options;
     struct bx_diag_ctx diag = {
         .progname = "switch_root",
@@ -402,4 +403,8 @@ int bx_switch_root_main(int argc, char** argv) {
     }
 
     return bx_switch_root_exec_init(&options, argv, &diag);
+}
+
+int bx_switch_root_main(int argc, char** argv) {
+    return bx_switch_root_run(argc, argv);
 }

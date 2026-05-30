@@ -17,6 +17,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/args_common.h"
+#include "applets/system/chown/chown.h"
 
 enum bx_chown_report_mode {
     BX_CHOWN_REPORT_NONE = 0,
@@ -459,7 +460,7 @@ static bool bx_chown_apply_one(const char* path, uid_t owner, gid_t group, const
     return bx_chown_apply_path_recursive(path, true, owner, group, options, diag, NULL);
 }
 
-int bx_chown_main(int argc, char** argv) {
+int bx_chown_run(int argc, char** argv) {
     struct bx_chown_options options;
     struct bx_diag_ctx diag = {
         .progname = "chown",
@@ -544,4 +545,8 @@ int bx_chown_main(int argc, char** argv) {
     }
 
     return diag.exit_status;
+}
+
+int bx_chown_main(int argc, char** argv) {
+    return bx_chown_run(argc, argv);
 }

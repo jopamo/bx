@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -15,6 +16,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "applets/system/switch_root/switch_root.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/child_runner.h"
@@ -53,20 +55,33 @@ struct bx_init_pseudo_mount {
     const char* source;
     const char* target;
     const char* fstype;
-    const char* options;
+    unsigned long flags;
+    const char* data;
 };
 
 struct bx_init_service {
     char* name;
     char** argv;
     size_t argc;
-    pid_t pid;
 };
 
-struct bx_init_service_config {
+struct bx_init_service_snapshot {
+    size_t generation;
     struct bx_init_service* services;
     size_t service_count;
+};
+
+struct bx_init_retired_service_snapshot {
+    struct bx_init_service_snapshot snapshot;
+    struct bx_init_retired_service_snapshot* next;
+};
+
+struct bx_init_service_runtime {
+    const struct bx_init_service_snapshot* snapshot;
+    pid_t* pids;
     struct bx_child* children;
+    struct bx_init_retired_service_snapshot* retired_snapshot_head;
+    struct bx_init_retired_service_snapshot* retired_snapshot_tail;
     int running;
 };
 
@@ -78,10 +93,10 @@ struct bx_init_token_list {
 static volatile sig_atomic_t bx_init_shutdown_requested = 0;
 
 static const struct bx_init_pseudo_mount bx_init_pseudo_mounts[] = {
-    {"proc", "/proc", "proc", NULL},
-    {"sysfs", "/sys", "sysfs", NULL},
-    {"tmpfs", "/dev", "tmpfs", "mode=0755,nosuid"},
-    {"tmpfs", "/run", "tmpfs", "mode=0755,nosuid,nodev"},
+    {"proc", "/proc", "proc", 0, NULL},
+    {"sysfs", "/sys", "sysfs", 0, NULL},
+    {"tmpfs", "/dev", "tmpfs", MS_NOSUID, "mode=0755"},
+    {"tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV, "mode=0755"},
 };
 
 static void bx_init_sleep_poll_interval(void) {
@@ -140,25 +155,115 @@ static void bx_init_cleanup_tokens(struct bx_init_token_list* tokens) {
     tokens->count = 0;
 }
 
-static void bx_init_cleanup_service_config(struct bx_init_service_config* config) {
-    if (config == NULL) {
+static void bx_init_cleanup_service_snapshot(struct bx_init_service_snapshot* snapshot) {
+    if (snapshot == NULL) {
         return;
     }
 
-    for (size_t i = 0; i < config->service_count; i++) {
-        struct bx_init_service* service = &config->services[i];
+    for (size_t i = 0; i < snapshot->service_count; i++) {
+        struct bx_init_service* service = &snapshot->services[i];
         free(service->name);
         for (size_t j = 0; j < service->argc; j++) {
             free(service->argv[j]);
         }
         free(service->argv);
     }
-    free(config->services);
-    free(config->children);
-    config->services = NULL;
-    config->children = NULL;
-    config->service_count = 0;
-    config->running = 0;
+    free(snapshot->services);
+    snapshot->generation = 0;
+    snapshot->services = NULL;
+    snapshot->service_count = 0;
+}
+
+static void bx_init_service_runtime_reclaim_retired(
+    struct bx_init_service_runtime* runtime
+) {
+    if (runtime == NULL) {
+        return;
+    }
+
+    while (runtime->retired_snapshot_head != NULL) {
+        struct bx_init_retired_service_snapshot* retired =
+            runtime->retired_snapshot_head;
+        runtime->retired_snapshot_head = retired->next;
+        if (runtime->retired_snapshot_head == NULL) {
+            runtime->retired_snapshot_tail = NULL;
+        }
+        bx_init_cleanup_service_snapshot(&retired->snapshot);
+        free(retired);
+    }
+}
+
+static bool bx_init_service_runtime_init(
+    struct bx_init_service_runtime* runtime,
+    const struct bx_init_service_snapshot* snapshot
+) {
+    if (runtime == NULL || snapshot == NULL || snapshot->service_count == 0) {
+        return false;
+    }
+
+    memset(runtime, 0, sizeof(*runtime));
+    runtime->snapshot = snapshot;
+    runtime->pids = xmalloc(snapshot->service_count * sizeof(*runtime->pids));
+    runtime->children = xmalloc(snapshot->service_count * sizeof(*runtime->children));
+    memset(runtime->pids, 0, snapshot->service_count * sizeof(*runtime->pids));
+    memset(runtime->children, 0, snapshot->service_count * sizeof(*runtime->children));
+    return true;
+}
+
+static void bx_init_service_runtime_retire_snapshot(
+    struct bx_init_service_runtime* runtime,
+    struct bx_init_service_snapshot* snapshot
+) {
+    if (runtime == NULL || snapshot == NULL || snapshot->services == NULL) {
+        return;
+    }
+
+    struct bx_init_retired_service_snapshot* retired = xmalloc(sizeof(*retired));
+    *retired = (struct bx_init_retired_service_snapshot){
+        .snapshot = *snapshot,
+        .next = NULL,
+    };
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    if (runtime->snapshot == snapshot) {
+        runtime->snapshot = NULL;
+    }
+    if (runtime->retired_snapshot_tail != NULL) {
+        runtime->retired_snapshot_tail->next = retired;
+    } else {
+        runtime->retired_snapshot_head = retired;
+    }
+    runtime->retired_snapshot_tail = retired;
+}
+
+static void bx_init_cleanup_service_runtime(struct bx_init_service_runtime* runtime) {
+    if (runtime == NULL) {
+        return;
+    }
+
+    bx_init_service_runtime_reclaim_retired(runtime);
+    free(runtime->pids);
+    free(runtime->children);
+    runtime->snapshot = NULL;
+    runtime->pids = NULL;
+    runtime->children = NULL;
+    runtime->retired_snapshot_head = NULL;
+    runtime->retired_snapshot_tail = NULL;
+    runtime->running = 0;
+}
+
+static void bx_init_service_runtime_quiescent_point(
+    struct bx_init_service_runtime* runtime
+) {
+    /*
+     * Generation snapshot quiescent point. The current supervisor publishes
+     * only generation 1 and treats SIGHUP as shutdown. If live reload is added,
+     * build a new bx_init_service_snapshot off-loop, publish it here between
+     * reap/spawn phases, and retire the old generation on runtime's cold
+     * retired_snapshot list. This quiescent point drains that list after no
+     * child state refers to it. Do not add per-service or per-access refcounts.
+     */
+    bx_init_service_runtime_reclaim_retired(runtime);
 }
 
 static bool bx_init_select_mode(struct bx_init_options* options, enum bx_init_mode mode, const char* option_name, struct bx_diag_ctx* diag) {
@@ -351,7 +456,7 @@ static int bx_init_exec_switch_root(const struct bx_init_options* options, int a
     }
     switch_argv[switch_argc] = NULL;
 
-    int status = bx_switch_root_main(switch_argc, switch_argv);
+    int status = bx_switch_root_run(switch_argc, switch_argv);
     free(switch_argv[0]);
     free(switch_argv[1]);
     free(switch_argv);
@@ -416,47 +521,19 @@ static bool bx_init_ensure_mount_dir(const char* path, struct bx_diag_ctx* diag)
 }
 
 static int bx_init_mount_one_pseudo(const struct bx_init_pseudo_mount* pseudo, struct bx_diag_ctx* diag) {
-    char* fstype_copy = strdup(pseudo->fstype);
-    char* source_copy = strdup(pseudo->source);
-    char* target_copy = strdup(pseudo->target);
-    char* options_copy = NULL;
-    if (pseudo->options != NULL && pseudo->options[0] != '\0') {
-        options_copy = strdup(pseudo->options);
-    }
-
-    if (fstype_copy == NULL || source_copy == NULL || target_copy == NULL || ((pseudo->options != NULL && pseudo->options[0] != '\0') && options_copy == NULL)) {
-        bx_diag(diag, "memory allocation failure while preparing pseudo-fs mount '%s' -> '%s'", pseudo->source, pseudo->target);
-        free(fstype_copy);
-        free(source_copy);
-        free(target_copy);
-        free(options_copy);
+    if (mount(pseudo->source, pseudo->target, pseudo->fstype, pseudo->flags, pseudo->data) != 0) {
+        bx_diag(
+            diag,
+            "cannot mount pseudo-fs '%s' on '%s' as '%s': %s",
+            pseudo->source,
+            pseudo->target,
+            pseudo->fstype,
+            strerror(errno)
+        );
         return 1;
     }
 
-    char* mount_argv[8];
-    int mount_argc = 0;
-
-    mount_argv[mount_argc++] = "mount";
-    mount_argv[mount_argc++] = "-t";
-    mount_argv[mount_argc++] = fstype_copy;
-    if (options_copy != NULL && options_copy[0] != '\0') {
-        mount_argv[mount_argc++] = "-o";
-        mount_argv[mount_argc++] = options_copy;
-    }
-    mount_argv[mount_argc++] = source_copy;
-    mount_argv[mount_argc++] = target_copy;
-    mount_argv[mount_argc] = NULL;
-
-    int mount_status = bx_mount_main(mount_argc, mount_argv);
-    if (mount_status != 0) {
-        bx_diag(diag, "failed to mount pseudo-fs '%s' on '%s' via bx mount", pseudo->fstype, pseudo->target);
-    }
-
-    free(fstype_copy);
-    free(source_copy);
-    free(target_copy);
-    free(options_copy);
-    return mount_status;
+    return 0;
 }
 
 static int bx_init_mount_pseudo_filesystems(struct bx_diag_ctx* diag) {
@@ -514,16 +591,16 @@ static bool bx_init_tokenize_line(const char* line, struct bx_init_token_list* t
     return true;
 }
 
-static bool bx_init_add_service(struct bx_init_service_config* config, const struct bx_init_token_list* tokens, const char* path, size_t line_number, struct bx_diag_ctx* diag) {
+static bool bx_init_add_service(struct bx_init_service_snapshot* snapshot, const struct bx_init_token_list* tokens, const char* path, size_t line_number, struct bx_diag_ctx* diag) {
     if (tokens->count < 4 || strcmp(tokens->items[2], "--") != 0) {
         bx_diag(diag, "service file '%s' line %zu must be 'service NAME -- ARG...'", path, line_number);
         return false;
     }
 
-    struct bx_init_service* resized = xrealloc(config->services, (config->service_count + 1u) * sizeof(*config->services));
-    config->services = resized;
+    struct bx_init_service* resized = xrealloc(snapshot->services, (snapshot->service_count + 1u) * sizeof(*snapshot->services));
+    snapshot->services = resized;
 
-    struct bx_init_service* service = &config->services[config->service_count];
+    struct bx_init_service* service = &snapshot->services[snapshot->service_count];
     memset(service, 0, sizeof(*service));
     service->name = xstrdup(tokens->items[1]);
     service->argc = tokens->count - 3u;
@@ -532,14 +609,14 @@ static bool bx_init_add_service(struct bx_init_service_config* config, const str
         service->argv[i] = xstrdup(tokens->items[i + 3u]);
     }
     service->argv[service->argc] = NULL;
-    service->pid = 0;
 
-    config->service_count++;
+    snapshot->service_count++;
     return true;
 }
 
-static bool bx_init_parse_service_file(const char* path, struct bx_init_service_config* config, struct bx_diag_ctx* diag) {
-    memset(config, 0, sizeof(*config));
+static bool bx_init_parse_service_file(const char* path, struct bx_init_service_snapshot* snapshot, struct bx_diag_ctx* diag) {
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->generation = 1;
 
     FILE* stream = fopen(path, "r");
     if (stream == NULL) {
@@ -571,7 +648,7 @@ static bool bx_init_parse_service_file(const char* path, struct bx_init_service_
         }
 
         if (strcmp(tokens.items[0], "service") == 0) {
-            ok = bx_init_add_service(config, &tokens, path, line_number, diag);
+            ok = bx_init_add_service(snapshot, &tokens, path, line_number, diag);
         }
         else {
             bx_diag(diag, "service file '%s' line %zu has unknown directive '%s'", path, line_number, tokens.items[0]);
@@ -592,18 +669,13 @@ static bool bx_init_parse_service_file(const char* path, struct bx_init_service_
     free(line);
     fclose(stream);
 
-    if (ok && config->service_count == 0) {
+    if (ok && snapshot->service_count == 0) {
         bx_diag(diag, "service file '%s' does not declare any services", path);
         ok = false;
     }
-    if (ok) {
-        config->children = xmalloc(config->service_count * sizeof(*config->children));
-        memset(config->children, 0, config->service_count * sizeof(*config->children));
-        config->running = 0;
-    }
 
     if (!ok) {
-        bx_init_cleanup_service_config(config);
+        bx_init_cleanup_service_snapshot(snapshot);
     }
 
     return ok;
@@ -637,58 +709,76 @@ static bool bx_init_install_signal_handlers(struct bx_diag_ctx* diag) {
     return true;
 }
 
-static struct bx_init_service* bx_init_find_service_by_pid(struct bx_init_service_config* config, pid_t pid) {
-    for (size_t i = 0; i < config->service_count; i++) {
-        if (config->services[i].pid == pid) {
-            return &config->services[i];
+static const struct bx_init_service* bx_init_find_service_by_pid(
+    const struct bx_init_service_runtime* runtime,
+    pid_t pid,
+    size_t* index_out
+) {
+    if (runtime == NULL || runtime->snapshot == NULL) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < runtime->snapshot->service_count; i++) {
+        if (runtime->pids[i] == pid) {
+            if (index_out != NULL) {
+                *index_out = i;
+            }
+            return &runtime->snapshot->services[i];
         }
     }
 
     return NULL;
 }
 
-static int bx_init_service_slot(const struct bx_init_service_config* config, const struct bx_init_service* service) {
-    if (!config || !service || service < config->services ||
-        service >= config->services + config->service_count) {
-        return 0;
+static bool bx_init_spawn_service(
+    struct bx_init_service_runtime* runtime,
+    size_t service_index,
+    struct bx_diag_ctx* diag
+) {
+    if (runtime == NULL || runtime->snapshot == NULL ||
+        service_index >= runtime->snapshot->service_count) {
+        bx_diag(diag, "internal error: invalid service slot");
+        return false;
     }
-    return (int)(service - config->services);
-}
 
-static bool bx_init_spawn_service(struct bx_init_service_config* config, struct bx_init_service* service, struct bx_diag_ctx* diag) {
-    int running_before = config->running;
+    const struct bx_init_service* service = &runtime->snapshot->services[service_index];
+    int running_before = runtime->running;
     struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
 
     runner_opts.reset_common_signals = true;
     runner_opts.new_process_group = true;
 
     if (bx_child_spawn_argv(diag->progname, service->argv, &runner_opts,
-                            bx_init_service_slot(config, service),
-                            config->children, &config->running,
+                            (int)service_index,
+                            runtime->children, &runtime->running,
                             NULL, NULL) != 0) {
         bx_diag(diag, "cannot start service '%s'", service->name);
         return false;
     }
-    if (config->running <= running_before) {
+    if (runtime->running <= running_before) {
         bx_diag(diag, "service '%s' was not started", service->name);
         return false;
     }
 
-    pid_t pid = config->children[config->running - 1].pid;
+    pid_t pid = runtime->children[runtime->running - 1].pid;
     if (setpgid(pid, pid) != 0 && errno != EACCES && errno != ESRCH) {
         bx_diag(diag, "cannot place service '%s' in its own process group: %s", service->name, strerror(errno));
         kill(pid, SIGKILL);
-        bx_child_reap(config->children, &config->running, true, true, NULL, NULL);
+        bx_child_reap(runtime->children, &runtime->running, true, true, NULL, NULL);
         return false;
     }
 
-    service->pid = pid;
+    runtime->pids[service_index] = pid;
     return true;
 }
 
-static bool bx_init_any_service_running(const struct bx_init_service_config* config) {
-    for (size_t i = 0; i < config->service_count; i++) {
-        if (config->services[i].pid > 0) {
+static bool bx_init_any_service_running(const struct bx_init_service_runtime* runtime) {
+    if (runtime == NULL || runtime->snapshot == NULL) {
+        return false;
+    }
+
+    for (size_t i = 0; i < runtime->snapshot->service_count; i++) {
+        if (runtime->pids[i] > 0) {
             return true;
         }
     }
@@ -696,36 +786,58 @@ static bool bx_init_any_service_running(const struct bx_init_service_config* con
     return false;
 }
 
-static void bx_init_clear_all_service_pids(struct bx_init_service_config* config) {
-    for (size_t i = 0; i < config->service_count; i++) {
-        config->services[i].pid = 0;
+static void bx_init_clear_all_service_pids(struct bx_init_service_runtime* runtime) {
+    if (runtime == NULL || runtime->snapshot == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < runtime->snapshot->service_count; i++) {
+        runtime->pids[i] = 0;
     }
 }
 
-static void bx_init_signal_service_group(const struct bx_init_service* service, int signo, struct bx_diag_ctx* diag) {
-    if (service->pid <= 0) {
+static void bx_init_signal_service_group(
+    const struct bx_init_service* service,
+    pid_t pid,
+    int signo,
+    struct bx_diag_ctx* diag
+) {
+    if (pid <= 0) {
         return;
     }
 
-    if (kill(-service->pid, signo) == 0 || errno == ESRCH) {
+    if (kill(-pid, signo) == 0 || errno == ESRCH) {
         return;
     }
 
-    if (kill(service->pid, signo) == 0 || errno == ESRCH) {
+    if (kill(pid, signo) == 0 || errno == ESRCH) {
         return;
     }
 
     bx_diag(diag, "cannot signal service '%s': %s", service->name, strerror(errno));
 }
 
-static void bx_init_signal_all_services(const struct bx_init_service_config* config, int signo, struct bx_diag_ctx* diag) {
-    for (size_t i = 0; i < config->service_count; i++) {
-        bx_init_signal_service_group(&config->services[i], signo, diag);
+static void bx_init_signal_all_services(
+    const struct bx_init_service_runtime* runtime,
+    int signo,
+    struct bx_diag_ctx* diag
+) {
+    if (runtime == NULL || runtime->snapshot == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < runtime->snapshot->service_count; i++) {
+        bx_init_signal_service_group(
+            &runtime->snapshot->services[i],
+            runtime->pids[i],
+            signo,
+            diag
+        );
     }
 }
 
 struct bx_init_reap_context {
-    struct bx_init_service_config* config;
+    struct bx_init_service_runtime* runtime;
     bool respawn;
     struct bx_diag_ctx* diag;
     bool called;
@@ -737,7 +849,9 @@ static void bx_init_reap_child_cb(pid_t pid, int status, bool exec_failed, int e
     struct bx_init_reap_context* ctx = user;
     ctx->called = true;
 
-    struct bx_init_service* service = bx_init_find_service_by_pid(ctx->config, pid);
+    size_t service_index = 0;
+    const struct bx_init_service* service =
+        bx_init_find_service_by_pid(ctx->runtime, pid, &service_index);
     if (service == NULL) {
         return;
     }
@@ -747,22 +861,27 @@ static void bx_init_reap_child_cb(pid_t pid, int status, bool exec_failed, int e
                 service->name, service->argv[0], strerror(exec_errno));
     }
 
-    service->pid = 0;
-    if (ctx->respawn && !bx_init_spawn_service(ctx->config, service, ctx->diag)) {
+    ctx->runtime->pids[service_index] = 0;
+    if (ctx->respawn && !bx_init_spawn_service(ctx->runtime, service_index, ctx->diag)) {
         ctx->ok = false;
     }
 }
 
-static void bx_init_reap_children(struct bx_init_service_config* config, bool respawn, struct bx_diag_ctx* diag, bool* ok_out) {
+static void bx_init_reap_children(
+    struct bx_init_service_runtime* runtime,
+    bool respawn,
+    struct bx_diag_ctx* diag,
+    bool* ok_out
+) {
     while (true) {
         struct bx_init_reap_context ctx = {
-            .config = config,
+            .runtime = runtime,
             .respawn = respawn,
             .diag = diag,
             .called = false,
             .ok = true,
         };
-        if (bx_child_reap(config->children, &config->running, false, false,
+        if (bx_child_reap(runtime->children, &runtime->running, false, false,
                           bx_init_reap_child_cb, &ctx) != 0) {
             bx_diag(diag, "waitpid failed: %s", strerror(errno));
             *ok_out = false;
@@ -778,28 +897,28 @@ static void bx_init_reap_children(struct bx_init_service_config* config, bool re
     }
 }
 
-static bool bx_init_shutdown_services(struct bx_init_service_config* config, struct bx_diag_ctx* diag) {
-    if (!bx_init_any_service_running(config)) {
+static bool bx_init_shutdown_services(struct bx_init_service_runtime* runtime, struct bx_diag_ctx* diag) {
+    if (!bx_init_any_service_running(runtime)) {
         return true;
     }
 
     time_t deadline = time(NULL) + 1;
     bool sent_sigkill = false;
 
-    bx_init_signal_all_services(config, SIGTERM, diag);
+    bx_init_signal_all_services(runtime, SIGTERM, diag);
 
-    while (bx_init_any_service_running(config)) {
+    while (bx_init_any_service_running(runtime)) {
         bool ok = true;
-        bx_init_reap_children(config, false, diag, &ok);
+        bx_init_reap_children(runtime, false, diag, &ok);
         if (!ok) {
             return false;
         }
-        if (!bx_init_any_service_running(config)) {
+        if (!bx_init_any_service_running(runtime)) {
             return true;
         }
 
         if (!sent_sigkill && time(NULL) >= deadline) {
-            bx_init_signal_all_services(config, SIGKILL, diag);
+            bx_init_signal_all_services(runtime, SIGKILL, diag);
             sent_sigkill = true;
         }
 
@@ -807,7 +926,7 @@ static bool bx_init_shutdown_services(struct bx_init_service_config* config, str
     }
 
     if (waitpid(-1, NULL, WNOHANG) < 0 && errno == ECHILD) {
-        bx_init_clear_all_service_pids(config);
+        bx_init_clear_all_service_pids(runtime);
     }
 
     return true;
@@ -829,7 +948,7 @@ static int bx_init_shutdown_mount_compare(const void* lhs, const void* rhs) {
     return strcmp(left->target, right->target);
 }
 
-static int bx_init_run_shutdown_unmounts(const struct bx_init_options* options) {
+static int bx_init_run_shutdown_unmounts(const struct bx_init_options* options, struct bx_diag_ctx* diag) {
     if (options->shutdown_mount_count == 0) {
         return 0;
     }
@@ -843,18 +962,9 @@ static int bx_init_run_shutdown_unmounts(const struct bx_init_options* options) 
 
     int status = 0;
     for (size_t i = 0; i < options->shutdown_mount_count; i++) {
-        char* umount_argv[4];
-        int umount_argc = 0;
-
-        umount_argv[umount_argc++] = "umount";
-        if (ordered[i].lazy) {
-            umount_argv[umount_argc++] = "-l";
-        }
-        umount_argv[umount_argc++] = ordered[i].target;
-        umount_argv[umount_argc] = NULL;
-
-        status = bx_umount_main(umount_argc, umount_argv);
-        if (status != 0) {
+        if (umount2(ordered[i].target, ordered[i].lazy ? MNT_DETACH : 0) != 0) {
+            bx_diag(diag, "cannot unmount '%s': %s", ordered[i].target, strerror(errno));
+            status = 1;
             break;
         }
     }
@@ -864,44 +974,62 @@ static int bx_init_run_shutdown_unmounts(const struct bx_init_options* options) 
 }
 
 static int bx_init_run_service_supervisor(const struct bx_init_options* options, struct bx_diag_ctx* diag) {
-    struct bx_init_service_config config;
-    if (!bx_init_parse_service_file(options->service_file, &config, diag)) {
+    struct bx_init_service_snapshot snapshot;
+    struct bx_init_service_runtime runtime;
+    if (!bx_init_parse_service_file(options->service_file, &snapshot, diag)) {
+        return 1;
+    }
+
+    if (!bx_init_service_runtime_init(&runtime, &snapshot)) {
+        bx_diag(diag, "cannot initialize service runtime");
+        bx_init_cleanup_service_snapshot(&snapshot);
         return 1;
     }
 
     if (!bx_init_install_signal_handlers(diag)) {
-        bx_init_cleanup_service_config(&config);
+        bx_init_service_runtime_retire_snapshot(&runtime, &snapshot);
+        bx_init_service_runtime_quiescent_point(&runtime);
+        bx_init_cleanup_service_runtime(&runtime);
         return 1;
     }
 
     bx_init_shutdown_requested = 0;
 
-    for (size_t i = 0; i < config.service_count; i++) {
-        if (!bx_init_spawn_service(&config, &config.services[i], diag)) {
-            bx_init_shutdown_services(&config, diag);
-            bx_init_cleanup_service_config(&config);
+    for (size_t i = 0; i < snapshot.service_count; i++) {
+        if (!bx_init_spawn_service(&runtime, i, diag)) {
+            bx_init_shutdown_services(&runtime, diag);
+            bx_init_service_runtime_retire_snapshot(&runtime, &snapshot);
+            bx_init_service_runtime_quiescent_point(&runtime);
+            bx_init_cleanup_service_runtime(&runtime);
             return 1;
         }
     }
 
     while (!bx_init_shutdown_requested) {
         bool ok = true;
-        bx_init_reap_children(&config, true, diag, &ok);
+        bx_init_reap_children(&runtime, true, diag, &ok);
         if (!ok) {
-            bx_init_shutdown_services(&config, diag);
-            bx_init_cleanup_service_config(&config);
+            bx_init_shutdown_services(&runtime, diag);
+            bx_init_service_runtime_retire_snapshot(&runtime, &snapshot);
+            bx_init_service_runtime_quiescent_point(&runtime);
+            bx_init_cleanup_service_runtime(&runtime);
             return 1;
         }
+        bx_init_service_runtime_quiescent_point(&runtime);
         bx_init_sleep_poll_interval();
     }
 
-    if (!bx_init_shutdown_services(&config, diag)) {
-        bx_init_cleanup_service_config(&config);
+    if (!bx_init_shutdown_services(&runtime, diag)) {
+        bx_init_service_runtime_retire_snapshot(&runtime, &snapshot);
+        bx_init_service_runtime_quiescent_point(&runtime);
+        bx_init_cleanup_service_runtime(&runtime);
         return 1;
     }
 
-    int status = bx_init_run_shutdown_unmounts(options);
-    bx_init_cleanup_service_config(&config);
+    int status = bx_init_run_shutdown_unmounts(options, diag);
+    bx_init_service_runtime_retire_snapshot(&runtime, &snapshot);
+    bx_init_service_runtime_quiescent_point(&runtime);
+    bx_init_cleanup_service_runtime(&runtime);
     return status;
 }
 

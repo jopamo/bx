@@ -88,13 +88,17 @@ bool bx_work_pool_init(struct bx_work_pool *pool, const struct bx_work_pool_opts
         };
         if (pthread_create(&pool->threads[i], NULL, bx_work_pool_worker_main,
                            &pool->thread_args[i]) != 0) {
+            pthread_mutex_lock(&pool->lock);
             pool->closed = true;
             pool->failed = true;
-            pool->thread_count = i;
+            pthread_cond_broadcast(&pool->can_push);
             pthread_cond_broadcast(&pool->can_pop);
-            bx_work_pool_join(pool);
+            pthread_mutex_unlock(&pool->lock);
+            (void)bx_work_pool_join(pool);
+            bx_work_pool_dispose(pool);
             return false;
         }
+        pool->started_threads++;
     }
 
     return true;
@@ -151,18 +155,31 @@ bool bx_work_pool_join(struct bx_work_pool *pool) {
 
     if (!pool)
         return false;
+    if (pool->joined)
+        return !pool->failed;
 
-    for (size_t i = 0; i < pool->thread_count; i++) {
+    for (size_t i = 0; i < pool->started_threads; i++) {
         if (pthread_join(pool->threads[i], NULL) != 0)
             ok = false;
     }
 
+    pool->joined = true;
     return ok && !pool->failed;
 }
 
 void bx_work_pool_dispose(struct bx_work_pool *pool) {
     if (!pool)
         return;
+
+    /*
+     * bx work pools are one-shot command resources. Reclaim queued jobs and
+     * worker-owned state only after all workers have stopped; do not add
+     * epoch/retire-list machinery for this lifecycle.
+     */
+    if (pool->started_threads > 0u && !pool->joined) {
+        bx_work_pool_close(pool);
+        (void)bx_work_pool_join(pool);
+    }
 
     if (pool->items && pool->opts.dispose_job) {
         for (size_t i = 0; i < pool->queue_capacity; i++) {

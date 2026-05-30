@@ -18,6 +18,14 @@ struct bx_work_pool_opts {
     void (*dispose_job)(void *user, void *job);
 };
 
+/*
+ * Single-owner job lifecycle:
+ *
+ * The builder owns each mutable job before bx_work_pool_submit. A successful
+ * submit transfers ownership to the pool; a worker owns the job while
+ * process_job runs. A failed submit does not consume the job. dispose joins all
+ * started workers before reclaiming any queued leftovers with dispose_job.
+ */
 struct bx_work_pool_thread_arg {
     struct bx_work_pool *pool;
     size_t worker_index;
@@ -32,12 +40,14 @@ struct bx_work_pool {
     struct bx_work_pool_thread_arg *thread_args;
     void **items;
     size_t thread_count;
+    size_t started_threads;
     size_t queue_capacity;
     size_t head;
     size_t tail;
     size_t count;
     bool closed;
     bool failed;
+    bool joined;
 };
 
 bool bx_work_pool_init(struct bx_work_pool *pool, const struct bx_work_pool_opts *opts);

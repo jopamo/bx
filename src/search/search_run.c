@@ -15,6 +15,7 @@
 #include "search_internal.h"
 #include "search_plan.h"
 #include "search_run.h"
+#include "runtime_snapshot.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -309,7 +310,8 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
 
         if (bx_search_collect_metadata_sorted_paths(args->argc, args->argv, args->first_file,
                                                     args->progname, args->personality,
-                                                    args->opts, &sorted_paths,
+                                                    args->opts, args->runtime_snapshot,
+                                                    &sorted_paths,
                                                     &error_seen) != 0) {
             bx_search_sorted_paths_dispose(&sorted_paths);
             return 2;
@@ -331,18 +333,15 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
         .progname = args->progname,
         .error_seen = &error_seen,
     };
-    struct bx_walk_opts walk_opts = bx_search_make_walk_opts(args->progname, args->personality,
-                                                             args->opts, NULL);
+    struct bx_walk_opts walk_opts =
+        bx_search_runtime_snapshot_walk_opts(args->runtime_snapshot, NULL);
     walk_opts.cycle_mode = args->opts->follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
                                                        : BX_WALK_CYCLE_NONE;
     walk_opts.cycle_report = BX_WALK_CYCLE_ERROR;
-    struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(args->opts);
-    struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(args->progname,
-                                                                        args->opts);
     struct bx_search_walk_config walk_config = {
         .walk_opts = &walk_opts,
-        .filter_opts = &filter_opts,
-        .ignore_opts = &ignore_opts,
+        .filter_opts = bx_search_runtime_snapshot_filter_opts(args->runtime_snapshot),
+        .ignore_opts = bx_search_runtime_snapshot_ignore_opts(args->runtime_snapshot),
         .visit = bx_search_files_walk_cb,
         .error = bx_search_files_walk_error_cb,
     };
@@ -462,7 +461,8 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
 
     if (bx_search_collect_metadata_sorted_paths(args->argc, args->argv, args->first_file,
                                                 args->progname, args->personality,
-                                                args->opts, &sorted_paths,
+                                                args->opts, args->runtime_snapshot,
+                                                &sorted_paths,
                                                 error_seen) != 0) {
         *error_seen = true;
         bx_search_sorted_paths_dispose(&sorted_paths);
@@ -520,16 +520,12 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                 .stop = &stop,
                 .strip_dot_prefix = true,
             };
-            struct bx_walk_opts walk_opts = bx_search_make_walk_opts(args->progname,
-                                                                     args->personality,
-                                                                     args->opts, &stop);
-            struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(args->opts);
-            struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(args->progname,
-                                                                                args->opts);
+            struct bx_walk_opts walk_opts =
+                bx_search_runtime_snapshot_walk_opts(args->runtime_snapshot, &stop);
             struct bx_search_walk_config walk_config = {
                 .walk_opts = &walk_opts,
-                .filter_opts = &filter_opts,
-                .ignore_opts = &ignore_opts,
+                .filter_opts = bx_search_runtime_snapshot_filter_opts(args->runtime_snapshot),
+                .ignore_opts = bx_search_runtime_snapshot_ignore_opts(args->runtime_snapshot),
                 .visit = bx_search_grep_walk_cb,
                 .error = bx_search_grep_walk_error_cb,
             };
@@ -569,16 +565,12 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
             .stop = &stop,
             .strip_dot_prefix = false,
         };
-        struct bx_walk_opts walk_opts = bx_search_make_walk_opts(args->progname,
-                                                                 args->personality,
-                                                                 args->opts, &stop);
-        struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(args->opts);
-        struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(args->progname,
-                                                                            args->opts);
+        struct bx_walk_opts walk_opts =
+            bx_search_runtime_snapshot_walk_opts(args->runtime_snapshot, &stop);
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
-            .filter_opts = &filter_opts,
-            .ignore_opts = &ignore_opts,
+            .filter_opts = bx_search_runtime_snapshot_filter_opts(args->runtime_snapshot),
+            .ignore_opts = bx_search_runtime_snapshot_ignore_opts(args->runtime_snapshot),
             .visit = bx_search_grep_walk_cb,
             .error = bx_search_grep_walk_error_cb,
         };
@@ -684,7 +676,7 @@ void bx_search_run(const struct bx_search_run_args *args,
     bool match_seen = false;
     bool error_seen = false;
 
-    if (!args || !args->opts || !args->plan) {
+    if (!args || !args->opts || !args->plan || !args->runtime_snapshot) {
         if (result)
             *result = local_result;
         return;
@@ -732,6 +724,7 @@ void bx_search_run(const struct bx_search_run_args *args,
                                               sorted_operand_count, args->progname,
                                               search_pattern, args->personality,
                                               &exec_plan, args->opts,
+                                              args->runtime_snapshot,
                                               bx_search_rg_thread_count(args->opts),
                                               args->stats,
                                               &match_seen, &error_seen);
@@ -749,6 +742,7 @@ void bx_search_run(const struct bx_search_run_args *args,
                                                         sorted_operand_count, args->progname,
                                                         search_pattern, args->personality,
                                                         &exec_plan, args->opts,
+                                                        args->runtime_snapshot,
                                                         args->stats,
                                                         &match_seen, &error_seen);
         local_result.ran_search = true;

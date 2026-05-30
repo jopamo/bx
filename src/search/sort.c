@@ -10,6 +10,7 @@
 #include "dev_counters.h"
 #include "lib/statx_compat.h"
 #include "search_internal.h"
+#include "runtime_snapshot.h"
 #include "sort.h"
 #include "traverse.h"
 
@@ -317,16 +318,20 @@ static int bx_search_collect_metadata_sorted_root(
     const char *progname,
     enum bx_search_personality personality,
     const struct search_opts *opts,
+    const struct bx_search_runtime_snapshot *runtime_snapshot,
     struct bx_search_sort_collect_state *state,
     bool *stop
 ) {
-    struct bx_walk_opts walk_opts = bx_search_make_walk_opts(progname, personality, opts, stop);
-    struct bx_walk_filter_opts filter_opts = bx_search_make_filter_opts(opts);
-    struct bx_walk_ignore_opts ignore_opts = bx_search_make_ignore_opts(progname, opts);
+    (void)progname;
+    (void)personality;
+    (void)opts;
+
+    struct bx_walk_opts walk_opts =
+        bx_search_runtime_snapshot_walk_opts(runtime_snapshot, stop);
     struct bx_search_walk_config walk_config = {
         .walk_opts = &walk_opts,
-        .filter_opts = &filter_opts,
-        .ignore_opts = &ignore_opts,
+        .filter_opts = bx_search_runtime_snapshot_filter_opts(runtime_snapshot),
+        .ignore_opts = bx_search_runtime_snapshot_ignore_opts(runtime_snapshot),
         .visit = bx_search_sort_walk_cb,
         .error = bx_search_sort_walk_error_cb,
     };
@@ -341,9 +346,11 @@ int bx_search_collect_metadata_sorted_paths(int argc,
                                             const char *progname,
                                             enum bx_search_personality personality,
                                             const struct search_opts *opts,
+                                            const struct bx_search_runtime_snapshot *runtime_snapshot,
                                             struct bx_search_sorted_paths *out,
                                             bool *error_seen) {
-    if (!argv || !progname || !opts || !out || !bx_search_sort_is_metadata(opts)) {
+    if (!argv || !progname || !opts || !runtime_snapshot || !out ||
+        !bx_search_sort_is_metadata(opts)) {
         errno = EINVAL;
         return -1;
     }
@@ -362,7 +369,7 @@ int bx_search_collect_metadata_sorted_paths(int argc,
 
     if (num_files == 0) {
         if (bx_search_collect_metadata_sorted_root(".", true, progname, personality, opts,
-                                                   &state, &stop) != 0) {
+                                                   runtime_snapshot, &state, &stop) != 0) {
             bx_search_sorted_paths_dispose(out);
             return -1;
         }
@@ -380,8 +387,9 @@ int bx_search_collect_metadata_sorted_paths(int argc,
             }
             if (S_ISDIR(st.st_mode)) {
                 if (bx_search_collect_metadata_sorted_root(argv[j], false, progname,
-                                                           personality, opts, &state,
-                                                           &stop) != 0) {
+                                                           personality, opts,
+                                                           runtime_snapshot,
+                                                           &state, &stop) != 0) {
                     bx_search_sorted_paths_dispose(out);
                     return -1;
                 }

@@ -9,7 +9,11 @@
 #include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
-static size_t hex_total_in, hex_total_out;
+struct nc_hex_offsets {
+    size_t in;
+    size_t out;
+};
+
 ssize_t (*nc_sendfile_fn)(int out_fd, int in_fd, off_t* offset, size_t count) = direct_sendfile;
 
 static size_t io_buffer_capacity(struct tls* tls_ctx) {
@@ -204,6 +208,7 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
     ssize_t ret;
     int mptcp_diag_enabled = (mptcpflag && vflag >= 2 && !uflag);
     struct timespec mptcp_diag_last;
+    struct nc_hex_offsets hex_offsets = {0u, 0u};
 
     /* Use aligned heap memory for mprotect compatibility (Foliage Sleep) */
     if (posix_memalign((void**)&netinbuf, 4096, iobufsize))
@@ -226,7 +231,6 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
             hex_fp = stderr;
         else if ((hex_fp = fopen(hex_path, "w")) == NULL)
             err(EXIT_RUNTIME, "hex-dump");
-        hex_total_in = hex_total_out = 0;
     }
 
     /* don't read from stdin if requested or fuzzing */
@@ -373,7 +377,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
 
         /* try to read from stdin */
         if (pfd[POLL_STDIN].revents & POLLIN && stdinbufpos < iobufsize) {
-            ret = fillbuf(pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, NULL, net_fd);
+            ret = fillbuf(
+                pfd[POLL_STDIN].fd, stdinbuf, &stdinbufpos, iobufsize, NULL, net_fd, &hex_offsets);
             if (ret == TLS_WANT_POLLIN)
                 pfd[POLL_STDIN].events = POLLIN;
             else if (ret == TLS_WANT_POLLOUT)
@@ -417,7 +422,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         }
         /* try to write to network */
         if (!sendfile_enabled && (pfd[POLL_NETOUT].revents & POLLOUT) && stdinbufpos > 0) {
-            ret = drainbuf(pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, tls_ctx, net_fd);
+            ret = drainbuf(
+                pfd[POLL_NETOUT].fd, stdinbuf, &stdinbufpos, iobufsize, tls_ctx, net_fd, &hex_offsets);
             if (ret == TLS_WANT_POLLIN)
                 pfd[POLL_NETOUT].events = POLLIN;
             else if (ret == TLS_WANT_POLLOUT)
@@ -433,7 +439,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         }
         /* try to read from network */
         if (pfd[POLL_NETIN].revents & POLLIN && netinbufpos < iobufsize) {
-            ret = fillbuf(pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, tls_ctx, net_fd);
+            ret = fillbuf(
+                pfd[POLL_NETIN].fd, netinbuf, &netinbufpos, iobufsize, tls_ctx, net_fd, &hex_offsets);
             if (ret == TLS_WANT_POLLIN)
                 pfd[POLL_NETIN].events = POLLIN;
             else if (ret == TLS_WANT_POLLOUT)
@@ -460,7 +467,8 @@ void readwrite(int net_fd, struct tls* tls_ctx) {
         }
         /* try to write to stdout */
         if (pfd[POLL_STDOUT].revents & POLLOUT && netinbufpos > 0) {
-            ret = drainbuf(pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, NULL, net_fd);
+            ret = drainbuf(
+                pfd[POLL_STDOUT].fd, netinbuf, &netinbufpos, iobufsize, NULL, net_fd, &hex_offsets);
             if (ret == TLS_WANT_POLLIN)
                 pfd[POLL_STDOUT].events = POLLIN;
             else if (ret == TLS_WANT_POLLOUT)
@@ -493,7 +501,13 @@ cleanup:
     free(stdinbuf);
 }
 
-ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, struct tls* tls, int net_fd) {
+ssize_t drainbuf(int fd,
+                 unsigned char* buf,
+                 size_t* bufpos,
+                 size_t buflen,
+                 struct tls* tls,
+                 int net_fd,
+                 struct nc_hex_offsets* hex_offsets) {
     ssize_t n;
     ssize_t adjust;
     size_t write_len;
@@ -659,9 +673,9 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
         if (pcapfile)
             pcap_log(fd, write_buf, write_len, 1);
 
-        if (hex_fp) {
-            hexdump(hex_fp, ">", write_buf, write_len, hex_total_out);
-            hex_total_out += write_len;
+        if (hex_fp && hex_offsets != NULL) {
+            hexdump(hex_fp, ">", write_buf, write_len, hex_offsets->out);
+            hex_offsets->out += write_len;
         }
     }
     else {
@@ -686,9 +700,9 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
         if (pcapfile)
             pcap_log(fd, buf, n, 1);
 
-        if (hex_fp && fd == net_fd) {
-            hexdump(hex_fp, ">", buf, n, hex_total_out);
-            hex_total_out += n;
+        if (hex_fp && fd == net_fd && hex_offsets != NULL) {
+            hexdump(hex_fp, ">", buf, n, hex_offsets->out);
+            hex_offsets->out += n;
         }
     }
 
@@ -700,7 +714,13 @@ ssize_t drainbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, stru
     return n;
 }
 
-ssize_t fillbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, struct tls* tls, int net_fd) {
+ssize_t fillbuf(int fd,
+                unsigned char* buf,
+                size_t* bufpos,
+                size_t buflen,
+                struct tls* tls,
+                int net_fd,
+                struct nc_hex_offsets* hex_offsets) {
     size_t num;
     ssize_t n;
 
@@ -729,9 +749,9 @@ ssize_t fillbuf(int fd, unsigned char* buf, size_t* bufpos, size_t buflen, struc
     if (pcapfile)
         pcap_log(fd, buf + *bufpos, n, 0);
 
-    if (hex_fp && fd == net_fd) {
-        hexdump(hex_fp, "<", buf + *bufpos, n, hex_total_in);
-        hex_total_in += n;
+    if (hex_fp && fd == net_fd && hex_offsets != NULL) {
+        hexdump(hex_fp, "<", buf + *bufpos, n, hex_offsets->in);
+        hex_offsets->in += n;
     }
 
     *bufpos += n;

@@ -16,6 +16,14 @@ struct bx_output_sink_opts {
     void (*dispose_record)(void *user, void *record);
 };
 
+/*
+ * Single-owner record lifecycle:
+ *
+ * The producer owns a mutable record before bx_output_sink_submit. A successful
+ * submit transfers ownership to the sink; the emitter owns it while
+ * emit_record runs and then dispose_record releases it. A failed submit does
+ * not consume the record. dispose joins the emitter before draining leftovers.
+ */
 struct bx_output_sink {
     struct bx_output_sink_opts opts;
     pthread_mutex_t lock;
@@ -31,6 +39,7 @@ struct bx_output_sink {
     bool closed;
     bool failed;
     bool started;
+    bool joined;
 };
 
 bool bx_output_sink_init(struct bx_output_sink *sink, const struct bx_output_sink_opts *opts);

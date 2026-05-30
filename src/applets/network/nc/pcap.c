@@ -52,6 +52,25 @@ struct pcap_ring_entry {
     unsigned char packet[PCAP_MAX_PACKET_SIZE];
 };
 
+struct pcap_counter_shard {
+    unsigned long long packets_seen;
+    unsigned long long packets_written;
+    unsigned long long packets_filtered;
+    unsigned long long packets_truncated;
+    unsigned long long packets_dropped_queue;
+    unsigned long long packets_dropped_io;
+    unsigned long long rotations;
+    unsigned long long bytes_captured;
+    unsigned long long bytes_original;
+};
+
+struct pcap_writer_file_state {
+    unsigned int rotation_index;
+    unsigned long long current_file_bytes;
+    unsigned long long packets_current_file;
+    time_t current_file_opened_at;
+};
+
 static int pcap_file_fd = -1;
 static int pcap_fd = -1;
 static int pcap_family = AF_UNSPEC;
@@ -60,19 +79,9 @@ static int pcap_peer_valid;
 static struct sockaddr_storage local_addr, remote_addr;
 static uint32_t seq_local = 1000, seq_remote = 2000;
 static char pcap_base_path[PATH_MAX];
-static unsigned int pcap_rotation_index;
-static unsigned long long pcap_current_file_bytes;
-static unsigned long long pcap_packets_current_file;
-static time_t pcap_current_file_opened_at;
-static unsigned long long pcap_packets_seen;
-static unsigned long long pcap_packets_written;
-static unsigned long long pcap_packets_filtered;
-static unsigned long long pcap_packets_truncated;
-static unsigned long long pcap_packets_dropped_queue;
-static unsigned long long pcap_packets_dropped_io;
-static unsigned long long pcap_rotations;
-static unsigned long long pcap_bytes_captured;
-static unsigned long long pcap_bytes_original;
+static struct pcap_writer_file_state pcap_writer_file;
+static struct pcap_counter_shard pcap_capture_counter_shard;
+static struct pcap_counter_shard pcap_writer_counter_shard;
 
 static struct pcap_ring_entry pcap_ring[PCAP_RING_CAPACITY];
 static size_t pcap_ring_head;
@@ -96,19 +105,9 @@ static void pcap_reset_state(void) {
     seq_local = 1000;
     seq_remote = 2000;
     pcap_base_path[0] = '\0';
-    pcap_rotation_index = 0;
-    pcap_current_file_bytes = 0;
-    pcap_packets_current_file = 0;
-    pcap_current_file_opened_at = 0;
-    pcap_packets_seen = 0;
-    pcap_packets_written = 0;
-    pcap_packets_filtered = 0;
-    pcap_packets_truncated = 0;
-    pcap_packets_dropped_queue = 0;
-    pcap_packets_dropped_io = 0;
-    pcap_rotations = 0;
-    pcap_bytes_captured = 0;
-    pcap_bytes_original = 0;
+    memset(&pcap_writer_file, 0, sizeof(pcap_writer_file));
+    memset(&pcap_capture_counter_shard, 0, sizeof(pcap_capture_counter_shard));
+    memset(&pcap_writer_counter_shard, 0, sizeof(pcap_writer_counter_shard));
     pcap_ring_head = 0;
     pcap_ring_tail = 0;
     pcap_ring_count = 0;
@@ -178,9 +177,9 @@ static int pcap_write_global_header(int fd) {
     if (pcap_write_all_fd(fd, &hdr, sizeof(hdr), 0) != 0)
         return -1;
 
-    pcap_current_file_bytes = sizeof(hdr);
-    pcap_packets_current_file = 0;
-    pcap_current_file_opened_at = time(NULL);
+    pcap_writer_file.current_file_bytes = sizeof(hdr);
+    pcap_writer_file.packets_current_file = 0;
+    pcap_writer_file.current_file_opened_at = time(NULL);
     return 0;
 }
 
@@ -262,12 +261,14 @@ static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
 
     if (pcap_file_fd == -1)
         return -1;
-    if (pcap_packets_current_file == 0)
+    if (pcap_writer_file.packets_current_file == 0)
         return 0;
 
-    if (pcap_rotate_size > 0 && pcap_current_file_bytes + next_record_size > pcap_rotate_size)
+    if (pcap_rotate_size > 0 &&
+        pcap_writer_file.current_file_bytes + next_record_size > pcap_rotate_size)
         rotate = 1;
-    if (pcap_rotate_seconds > 0 && now - pcap_current_file_opened_at >= (time_t)pcap_rotate_seconds)
+    if (pcap_rotate_seconds > 0 &&
+        now - pcap_writer_file.current_file_opened_at >= (time_t)pcap_rotate_seconds)
         rotate = 1;
 
     if (!rotate)
@@ -277,19 +278,43 @@ static int pcap_maybe_rotate(size_t next_record_size, time_t now) {
         return -1;
     pcap_file_fd = -1;
 
-    pcap_rotation_index++;
-    if (pcap_open_file_for_index(pcap_rotation_index) == -1)
+    pcap_writer_file.rotation_index++;
+    if (pcap_open_file_for_index(pcap_writer_file.rotation_index) == -1)
         return -1;
 
-    pcap_rotations++;
+    pcap_writer_counter_shard.rotations++;
     return 0;
 }
 
+static void pcap_counter_shard_add(struct pcap_counter_shard* totals,
+                                   const struct pcap_counter_shard* shard) {
+    totals->packets_seen += shard->packets_seen;
+    totals->packets_written += shard->packets_written;
+    totals->packets_filtered += shard->packets_filtered;
+    totals->packets_truncated += shard->packets_truncated;
+    totals->packets_dropped_queue += shard->packets_dropped_queue;
+    totals->packets_dropped_io += shard->packets_dropped_io;
+    totals->rotations += shard->rotations;
+    totals->bytes_captured += shard->bytes_captured;
+    totals->bytes_original += shard->bytes_original;
+}
+
+static void pcap_counter_reduce(struct pcap_counter_shard* totals) {
+    memset(totals, 0, sizeof(*totals));
+    pcap_counter_shard_add(totals, &pcap_capture_counter_shard);
+    pcap_counter_shard_add(totals, &pcap_writer_counter_shard);
+}
+
 static void pcap_emit_summary(void) {
-    unsigned long long pcap_packets_dropped = pcap_packets_dropped_queue + pcap_packets_dropped_io;
+    struct pcap_counter_shard counters;
+    unsigned long long pcap_packets_dropped;
 
     if (pcap_base_path[0] == '\0')
         return;
+
+    pcap_counter_reduce(&counters);
+    pcap_packets_dropped =
+        counters.packets_dropped_queue + counters.packets_dropped_io;
 
     if (jflag) {
         json_event_begin(stderr, "info", "pcap_summary", NULL, uflag ? "udp" : "tcp", usetls ? "enabled" : "disabled",
@@ -299,15 +324,17 @@ static void pcap_emit_summary(void) {
                 "\"packets_seen\":%llu,\"packets_written\":%llu,\"packets_filtered\":%llu,"
                 "\"packets_truncated\":%llu,\"packets_dropped\":%llu,\"rotations\":%llu,"
                 "\"bytes_captured\":%llu,\"bytes_original\":%llu}\n",
-                pcap_base_path, pcap_packets_seen, pcap_packets_written, pcap_packets_filtered, pcap_packets_truncated,
-                pcap_packets_dropped, pcap_rotations, pcap_bytes_captured, pcap_bytes_original);
+                pcap_base_path, counters.packets_seen, counters.packets_written, counters.packets_filtered,
+                counters.packets_truncated, pcap_packets_dropped, counters.rotations, counters.bytes_captured,
+                counters.bytes_original);
     }
     else if (vflag >= 2) {
         fprintf(stderr,
                 "PCAP summary: path=%s mode=app packets_seen=%llu packets_written=%llu packets_filtered=%llu "
                 "packets_truncated=%llu packets_dropped=%llu rotations=%llu bytes_captured=%llu bytes_original=%llu\n",
-                pcap_base_path, pcap_packets_seen, pcap_packets_written, pcap_packets_filtered, pcap_packets_truncated,
-                pcap_packets_dropped, pcap_rotations, pcap_bytes_captured, pcap_bytes_original);
+                pcap_base_path, counters.packets_seen, counters.packets_written, counters.packets_filtered,
+                counters.packets_truncated, pcap_packets_dropped, counters.rotations, counters.bytes_captured,
+                counters.bytes_original);
     }
 }
 
@@ -320,7 +347,7 @@ static void pcap_disable_capture(void) {
 }
 
 static void pcap_drop_queued_locked(void) {
-    pcap_packets_dropped_queue += pcap_ring_count;
+    pcap_writer_counter_shard.packets_dropped_queue += pcap_ring_count;
     pcap_ring_head = 0;
     pcap_ring_tail = 0;
     pcap_ring_count = 0;
@@ -348,13 +375,13 @@ static void* pcap_writer_main(void* arg) {
         pthread_mutex_unlock(&pcap_ring_lock);
 
         if (pcap_maybe_rotate(sizeof(entry.rec) + entry.incl_len, entry.capture_time) == -1) {
-            pcap_packets_dropped_io++;
+            pcap_writer_counter_shard.packets_dropped_io++;
             continue;
         }
 
         wr = pcap_write_all_fd(pcap_file_fd, &entry.rec, sizeof(entry.rec), 1);
         if (wr != 0) {
-            pcap_packets_dropped_io++;
+            pcap_writer_counter_shard.packets_dropped_io++;
             if (wr == 1 && atomic_load(&pcap_writer_stop)) {
                 pthread_mutex_lock(&pcap_ring_lock);
                 pcap_drop_queued_locked();
@@ -366,7 +393,7 @@ static void* pcap_writer_main(void* arg) {
 
         wr = pcap_write_all_fd(pcap_file_fd, entry.packet, entry.incl_len, 1);
         if (wr != 0) {
-            pcap_packets_dropped_io++;
+            pcap_writer_counter_shard.packets_dropped_io++;
             if (wr == 1 && atomic_load(&pcap_writer_stop)) {
                 pthread_mutex_lock(&pcap_ring_lock);
                 pcap_drop_queued_locked();
@@ -376,11 +403,11 @@ static void* pcap_writer_main(void* arg) {
             continue;
         }
 
-        pcap_packets_written++;
-        pcap_bytes_captured += entry.incl_len;
-        pcap_bytes_original += entry.full_packet_len;
-        pcap_current_file_bytes += sizeof(entry.rec) + entry.incl_len;
-        pcap_packets_current_file++;
+        pcap_writer_counter_shard.packets_written++;
+        pcap_writer_counter_shard.bytes_captured += entry.incl_len;
+        pcap_writer_counter_shard.bytes_original += entry.full_packet_len;
+        pcap_writer_file.current_file_bytes += sizeof(entry.rec) + entry.incl_len;
+        pcap_writer_file.packets_current_file++;
     }
 
     return NULL;
@@ -454,17 +481,17 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     if (pcap_file_fd == -1 || !pcap_writer_running || fd != pcap_fd || pcap_family == AF_UNIX || !pcap_peer_valid)
         return;
 
-    pcap_packets_seen++;
+    pcap_capture_counter_shard.packets_seen++;
 
     if (direction == 1) {
         if (!(pcap_filter & PCAP_FILTER_OUT)) {
-            pcap_packets_filtered++;
+            pcap_capture_counter_shard.packets_filtered++;
             return;
         }
     }
     else {
         if (!(pcap_filter & PCAP_FILTER_IN)) {
-            pcap_packets_filtered++;
+            pcap_capture_counter_shard.packets_filtered++;
             return;
         }
     }
@@ -568,7 +595,7 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
     if (incl_len > pcap_snaplen)
         incl_len = pcap_snaplen;
     if (incl_len < full_packet_len)
-        pcap_packets_truncated++;
+        pcap_capture_counter_shard.packets_truncated++;
 
     if (pcap_family == AF_INET) {
         struct iphdr* ip = (struct iphdr*)packet;
@@ -613,7 +640,7 @@ void pcap_log(int fd, const unsigned char* buf, size_t len, int direction) {
 
     pthread_mutex_lock(&pcap_ring_lock);
     if (pcap_ring_count == PCAP_RING_CAPACITY) {
-        pcap_packets_dropped_queue++;
+        pcap_capture_counter_shard.packets_dropped_queue++;
         pthread_mutex_unlock(&pcap_ring_lock);
         return;
     }

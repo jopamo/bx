@@ -209,7 +209,13 @@ void bx_output_sink_wake(struct bx_output_sink *sink) {
 bool bx_output_sink_join(struct bx_output_sink *sink) {
     if (!sink || !sink->started)
         return false;
-    return pthread_join(sink->thread, NULL) == 0;
+    if (sink->joined)
+        return !sink->failed;
+    bool ok = pthread_join(sink->thread, NULL) == 0;
+    sink->joined = true;
+    if (!ok)
+        sink->failed = true;
+    return ok;
 }
 
 void bx_output_sink_dispose(struct bx_output_sink *sink) {
@@ -217,6 +223,16 @@ void bx_output_sink_dispose(struct bx_output_sink *sink) {
 
     if (!sink)
         return;
+
+    /*
+     * Ordered output sinks are one-shot command resources. Any records left in
+     * the sink are reclaimed only after the emitter thread has joined; this
+     * keeps reclamation lifecycle-local instead of requiring epoch/retire lists.
+     */
+    if (sink->started && !sink->joined) {
+        bx_output_sink_close(sink);
+        (void)bx_output_sink_join(sink);
+    }
 
     node = sink->head;
     while (node) {

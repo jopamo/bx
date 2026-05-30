@@ -212,7 +212,9 @@ int json_socket_tuple_from_fd(int fd,
                               char* dst_port,
                               size_t dst_port_len);
 void hexdump(FILE* fp, const char* prefix, const unsigned char* buf, size_t len, size_t total);
-ssize_t drainbuf(int, unsigned char*, size_t*, size_t, struct tls*, int);
-ssize_t fillbuf(int, unsigned char*, size_t*, size_t, struct tls*, int);
+
+struct nc_hex_offsets;
+ssize_t drainbuf(int, unsigned char*, size_t*, size_t, struct tls*, int, struct nc_hex_offsets*);
+ssize_t fillbuf(int, unsigned char*, size_t*, size_t, struct tls*, int, struct nc_hex_offsets*);
 void tls_setup_client(struct tls*, int, char*);
 struct tls* tls_setup_server(struct tls*, int, char*);

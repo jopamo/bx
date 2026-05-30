@@ -221,6 +221,8 @@ endif
 # shared bx runtime and helpers
 bx_core_sources = [
   'src/bx/main.c',
+  'src/bx/applet_profile.c',
+  'src/bx/runtime_snapshot.c',
   'src/bx/libbx.c',
 ]
 
@@ -234,7 +236,11 @@ dispatch_tables_src = custom_target(
     '@INPUT@',
     '@OUTPUT@',
   ],
-  depend_files : files('tools/dispatch/generate_dispatch_tables.py'),
+  depend_files : files(
+    'tools/dispatch/generate_dispatch_tables.py',
+    'tools/audit/generate_applets_json.py',
+    'audit/applet-classifications.json',
+  ),
 )
 
 bx_core_sources += [dispatch_tables_src]
@@ -251,6 +257,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/fd_ops.c',
+  'src/lib/fault_injection.c',
   'src/lib/file_info_fmt.c',
   'src/lib/fopen_dash.c',
   'src/lib/id_parse.c',
@@ -269,12 +276,15 @@ bx_lib_sources = [
   'src/lib/prompt_ops.c',
   'src/lib/remove_ops.c',
   'src/lib/same_file.c',
+  'src/lib/sandbox_explain.c',
   'src/lib/signal_names.c',
   'src/lib/size_parse.c',
   'src/lib/stat_ops.c',
   'src/lib/statx_compat.c',
+  'src/lib/syscall_counter.c',
   'src/lib/thread_count.c',
   'src/lib/time_parse.c',
+  'src/lib/trace.c',
   'src/lib/tty_speed.c',
   'src/lib/update_policy.c',
   'src/lib/work_pool.c',
@@ -516,6 +526,7 @@ bx_search_sources = [
   'src/search/rg_sched.c',
   'src/search/rg_text.c',
   'src/search/rg_transform.c',
+  'src/search/runtime_snapshot.c',
   'src/search/scanner.c',
   'src/search/search_file.c',
   'src/search/search_input.c',

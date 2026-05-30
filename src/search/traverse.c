@@ -175,6 +175,7 @@ static enum bx_walk_action bx_search_walk_push_dir_frame(struct bx_search_walk_s
         bx_ignore_program_release(program);
         return BX_WALK_ERROR;
     }
+    parent = bx_search_walk_active_ignore_state(state, depth);
 
     struct bx_search_walk_dir_frame *frame = &state->dir_frames[state->dir_frame_len];
     memset(frame, 0, sizeof(*frame));

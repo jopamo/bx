@@ -59,6 +59,14 @@ enum bx_search_max_filesize_zero_policy {
     BX_SEARCH_MAX_FILESIZE_ZERO_SKIP_NON_EMPTY_LITERAL_REGULARS,
 };
 
+/*
+ * Immutable search output/orchestration policy snapshot.
+ *
+ * Built after option parsing and before bx_search_run. Recursive and parallel
+ * workers observe it only through const struct bx_search_plan pointers, so
+ * output policy and publication policy are selected once outside worker hot
+ * loops.
+ */
 struct bx_search_plan {
     enum bx_search_plan_orchestrator orchestrator;
     enum bx_search_plan_input_kind input_kind;
@@ -74,6 +82,12 @@ struct bx_search_plan {
     bool subtree_parallel_supported;
 };
 
+/*
+ * Immutable compiled pattern plan and file-kernel snapshot.
+ *
+ * Built after matcher compilation and before any worker backend starts.
+ * Workers borrow it through const struct bx_search_exec_plan pointers.
+ */
 struct bx_search_exec_plan {
     enum bx_search_file_kernel_kind transformed_buffer_kernel;
     enum bx_search_file_kernel_kind opened_special_kernel;

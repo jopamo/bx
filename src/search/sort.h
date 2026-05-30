@@ -15,6 +15,8 @@ struct bx_search_sorted_path {
     size_t sequence;
 };
 
+struct bx_search_runtime_snapshot;
+
 struct bx_search_sorted_paths {
     struct bx_search_sorted_path *items;
     size_t len;
@@ -34,6 +36,7 @@ int bx_search_collect_metadata_sorted_paths(int argc,
                                             const char *progname,
                                             enum bx_search_personality personality,
                                             const struct search_opts *opts,
+                                            const struct bx_search_runtime_snapshot *runtime_snapshot,
                                             struct bx_search_sorted_paths *out,
                                             bool *error_seen);
 
