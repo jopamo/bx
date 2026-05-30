@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
+#include "lib/child_runner.h"
 #include "lib/copy_data.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
@@ -592,27 +593,64 @@ static enum bx_sparse_mode bx_install_copy_sparse_mode_for_source(const struct s
     return BX_SPARSE_AUTO;
 }
 
+struct bx_install_strip_result {
+    bool reaped;
+    int status;
+};
+
+static void bx_install_strip_reap(pid_t pid,
+                                  int status,
+                                  bool exec_failed,
+                                  int exec_errno,
+                                  void* user) {
+    struct bx_install_strip_result* result = user;
+
+    (void)pid;
+    (void)exec_failed;
+    (void)exec_errno;
+    result->reaped = true;
+    result->status = status;
+}
+
 static bool bx_install_run_strip(const char* strip_program, const char* path, struct bx_diag_ctx* diag) {
     const char* program = (strip_program != NULL && strip_program[0] != '\0') ? strip_program : "strip";
+    char* program_arg = xstrdup(program);
+    char* path_arg = xstrdup(path);
+    char* strip_argv[] = {program_arg, path_arg, NULL};
+    struct bx_child children[1] = {0};
+    int running = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    struct bx_install_strip_result result = {0};
+    int spawn_rc = bx_child_spawn_argv(diag->progname,
+                                       strip_argv,
+                                       &runner_opts,
+                                       0,
+                                       children,
+                                       &running,
+                                       NULL,
+                                       NULL);
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        bx_diag(diag, "failed to start strip program '%s': %s", program, strerror(errno));
+    free(path_arg);
+    free(program_arg);
+    if (spawn_rc != 0) {
         return false;
     }
 
-    if (pid == 0) {
-        execlp(program, program, path, (char*)NULL);
-        _exit(errno == ENOENT ? 127 : 126);
-    }
-
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
+    if (bx_child_reap(children,
+                      &running,
+                      true,
+                      true,
+                      bx_install_strip_reap,
+                      &result) != 0) {
         bx_diag(diag, "failed to wait for strip: %s", strerror(errno));
         return false;
     }
+    if (!result.reaped) {
+        bx_diag(diag, "failed to wait for strip: no child status");
+        return false;
+    }
 
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+    if (WIFEXITED(result.status) && WEXITSTATUS(result.status) == 0) {
         return true;
     }
 

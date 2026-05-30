@@ -6,6 +6,8 @@
 #include "fd_internal.h"
 #include "fswalk/walk.h"
 
+struct bx_line_writer;
+
 struct fd_detail_item {
     char *display_path;
     char *symlink_target;
@@ -24,12 +26,15 @@ struct fd_detail_items {
     int cap;
 };
 
-bool fd_print_match_output(const struct fd_render_ctx *ctx, const struct fd_opts *opts,
+bool fd_print_match_output(struct bx_line_writer *writer,
+                           const struct fd_render_ctx *ctx,
+                           const struct fd_opts *opts,
                            const char *path, bool is_dir);
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
                             struct bx_walk_entry *entry);
-int fd_detail_items_print(struct fd_detail_items *items);
+int fd_detail_items_print(struct fd_detail_items *items,
+                          struct bx_line_writer *writer);
 void fd_detail_items_free(struct fd_detail_items *items);
 
 #endif

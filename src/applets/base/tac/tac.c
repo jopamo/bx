@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,19 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
+
+static bool tac_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool tac_write(struct bx_line_writer* writer, const void* data, size_t len, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_write(writer, data, len)) {
+        return tac_write_error(diag);
+    }
+    return true;
+}
 
 static void tac_push_record(char*** records, size_t** record_lens, size_t* count, size_t* cap, const char* data, size_t len) {
     if (*count >= *cap) {
@@ -28,7 +42,7 @@ static void tac_push_record(char*** records, size_t** record_lens, size_t* count
     (*count)++;
 }
 
-static void tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_diag_ctx* diag) {
+static bool tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     int errcode;
     PCRE2_SIZE erroffset;
     pcre2_code* re = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, 0, &errcode, &erroffset, NULL);
@@ -36,7 +50,7 @@ static void tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_
         PCRE2_UCHAR errbuf[256];
         pcre2_get_error_message(errcode, errbuf, sizeof(errbuf));
         bx_diag(diag, "%s: %s", pattern, (const char*)errbuf);
-        return;
+        return true;
     }
 
     pcre2_match_data* md = pcre2_match_data_create_from_pattern(re, NULL);
@@ -65,6 +79,7 @@ static void tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_
     char** seps = malloc(record_cap * sizeof(char*));
     size_t* sep_lens = malloc(record_cap * sizeof(size_t));
     size_t nrecords = 0;
+    bool ok = true;
 
     if (data_len == 0)
         goto cleanup;
@@ -133,23 +148,36 @@ static void tac_file_regex(FILE* f, const char* pattern, bool before, struct bx_
         goto cleanup;
 
     if (before) {
-        if (sep_lens[nrecords - 1] > 0)
-            fwrite(seps[nrecords - 1], 1, sep_lens[nrecords - 1], stdout);
-        for (size_t i = nrecords - 1; i > 0; i--) {
-            if (sep_lens[i - 1] > 0)
-                fwrite(seps[i - 1], 1, sep_lens[i - 1], stdout);
-            if (body_lens[i] > 0)
-                fwrite(bodies[i], 1, body_lens[i], stdout);
+        if (sep_lens[nrecords - 1] > 0 && !tac_write(writer, seps[nrecords - 1], sep_lens[nrecords - 1], diag)) {
+            ok = false;
+            goto cleanup;
         }
-        if (body_lens[0] > 0)
-            fwrite(bodies[0], 1, body_lens[0], stdout);
-    } else {
+        for (size_t i = nrecords - 1; i > 0; i--) {
+            if (sep_lens[i - 1] > 0 && !tac_write(writer, seps[i - 1], sep_lens[i - 1], diag)) {
+                ok = false;
+                goto cleanup;
+            }
+            if (body_lens[i] > 0 && !tac_write(writer, bodies[i], body_lens[i], diag)) {
+                ok = false;
+                goto cleanup;
+            }
+        }
+        if (body_lens[0] > 0 && !tac_write(writer, bodies[0], body_lens[0], diag)) {
+            ok = false;
+            goto cleanup;
+        }
+    }
+    else {
         for (size_t i = nrecords; i > 0; i--) {
             size_t idx = i - 1;
-            if (body_lens[idx] > 0)
-                fwrite(bodies[idx], 1, body_lens[idx], stdout);
-            if (sep_lens[idx] > 0)
-                fwrite(seps[idx], 1, sep_lens[idx], stdout);
+            if (body_lens[idx] > 0 && !tac_write(writer, bodies[idx], body_lens[idx], diag)) {
+                ok = false;
+                goto cleanup;
+            }
+            if (sep_lens[idx] > 0 && !tac_write(writer, seps[idx], sep_lens[idx], diag)) {
+                ok = false;
+                goto cleanup;
+            }
         }
     }
 
@@ -165,9 +193,10 @@ cleanup:
     free(data);
     pcre2_match_data_free(md);
     pcre2_code_free(re);
+    return ok;
 }
 
-static void tac_file(FILE* f, const char* separator, bool before) {
+static bool tac_file(FILE* f, const char* separator, bool before, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     char* data = NULL;
     size_t data_len = 0;
     size_t data_cap = 0;
@@ -257,11 +286,20 @@ static void tac_file(FILE* f, const char* separator, bool before) {
     }
 
     for (size_t i = nrecords; i > 0; i--) {
-        fwrite(records[i - 1], 1, record_lens[i - 1], stdout);
+        bool ok = tac_write(writer, records[i - 1], record_lens[i - 1], diag);
         free(records[i - 1]);
+        if (!ok) {
+            for (size_t j = i - 1; j > 0; j--) {
+                free(records[j - 1]);
+            }
+            free(records);
+            free(record_lens);
+            return false;
+        }
     }
     free(records);
     free(record_lens);
+    return true;
 }
 
 int bx_tac_main(int argc, char** argv) {
@@ -310,13 +348,18 @@ int bx_tac_main(int argc, char** argv) {
         }
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    bool ok = true;
+
     if (regex) {
         if (optind == argc) {
-            tac_file_regex(stdin, separator, before, &diag);
+            ok = tac_file_regex(stdin, separator, before, &writer, &diag);
         }
         else {
             bool had_error = false;
-            for (int i = optind; i < argc; i++) {
+            for (int i = optind; ok && i < argc; i++) {
                 FILE* f;
                 if (strcmp(argv[i], "-") == 0) {
                     f = stdin;
@@ -329,21 +372,26 @@ int bx_tac_main(int argc, char** argv) {
                         continue;
                     }
                 }
-                tac_file_regex(f, separator, before, &diag);
+                ok = tac_file_regex(f, separator, before, &writer, &diag);
                 if (f != stdin)
                     fclose(f);
             }
+            if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+                ok = tac_write_error(&diag);
+            }
+            if (!ok)
+                return 1;
             if (had_error)
                 return 1;
         }
     }
     else {
         if (optind == argc) {
-            tac_file(stdin, separator, before);
+            ok = tac_file(stdin, separator, before, &writer, &diag);
         }
         else {
             bool had_error = false;
-            for (int i = optind; i < argc; i++) {
+            for (int i = optind; ok && i < argc; i++) {
                 FILE* f;
                 if (strcmp(argv[i], "-") == 0) {
                     f = stdin;
@@ -356,14 +404,25 @@ int bx_tac_main(int argc, char** argv) {
                         continue;
                     }
                 }
-                tac_file(f, separator, before);
+                ok = tac_file(f, separator, before, &writer, &diag);
                 if (f != stdin)
                     fclose(f);
             }
+            if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+                ok = tac_write_error(&diag);
+            }
+            if (!ok)
+                return 1;
             if (had_error)
                 return 1;
         }
     }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        ok = tac_write_error(&diag);
+    }
+    if (!ok)
+        return 1;
 
     return 0;
 }

@@ -8,3 +8,16 @@ ref/
 build*
 .tmp/
 profiling/
+/audit/out/
+/audit/results/
+/audit/artifacts/
+/profiling/out/
+/profiling/results/
+/profiling/artifacts/
+/profiling/reports/
+/profiling/*.json
+/profiling/*.jsonl
+/profiling/*.data
+/profiling/*.out
+/profiling/*.svg
+/profiling/*.html

@@ -15,6 +15,7 @@
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_head_options {
     const char* progname;
@@ -171,14 +172,61 @@ static bool bx_head_parse_options(int argc, char** argv, struct bx_head_options*
     return true;
 }
 
-static void head_file(FILE* f, struct bx_head_options* options) {
+static bool bx_head_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_head_write(
+    struct bx_line_writer* writer,
+    const void* data,
+    size_t length,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_write(writer, data, length)) {
+        return bx_head_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_head_putc(struct bx_line_writer* writer, int c, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_putc(writer, (char)c)) {
+        return bx_head_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_head_puts(struct bx_line_writer* writer, const char* text, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_puts(writer, text)) {
+        return bx_head_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_head_write_header(
+    struct bx_line_writer* writer,
+    const char* filename,
+    bool leading_newline,
+    struct bx_diag_ctx* diag
+) {
+    if (leading_newline && !bx_head_putc(writer, '\n', diag)) {
+        return false;
+    }
+    return bx_head_puts(writer, "==> ", diag) &&
+           bx_head_puts(writer, filename, diag) &&
+           bx_head_puts(writer, " <==\n", diag);
+}
+
+static bool head_file(FILE* f, struct bx_head_options* options, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     int delimiter = options->zero_terminated ? '\0' : '\n';
 
     if (options->bytes > 0) {
         long long count = options->bytes;
         int c;
         while (count-- > 0 && (c = getc(f)) != EOF) {
-            putchar(c);
+            if (!bx_head_putc(writer, c, diag)) {
+                return false;
+            }
         }
     }
     else if (options->bytes < 0) {
@@ -188,12 +236,15 @@ static void head_file(FILE* f, struct bx_head_options* options) {
         size_t n = fread(buf, 1, skip, f);
         if (n < (size_t)skip) {
             free(buf);
-            return;
+            return true;
         }
 
         int c;
         while ((c = getc(f)) != EOF) {
-            putchar(buf[0]);
+            if (!bx_head_putc(writer, buf[0], diag)) {
+                free(buf);
+                return false;
+            }
             memmove(buf, buf + 1, skip - 1);
             buf[skip - 1] = c;
         }
@@ -203,7 +254,9 @@ static void head_file(FILE* f, struct bx_head_options* options) {
         long long count = options->lines;
         int c;
         while (count > 0 && (c = getc(f)) != EOF) {
-            putchar(c);
+            if (!bx_head_putc(writer, c, diag)) {
+                return false;
+            }
             if (c == delimiter)
                 count--;
         }
@@ -223,7 +276,14 @@ static void head_file(FILE* f, struct bx_head_options* options) {
 
         while ((len = getdelim(&line, &line_cap, delimiter, f)) != -1) {
             if (full) {
-                fwrite(ring[idx], 1, lens[idx], stdout);
+                if (!bx_head_write(writer, ring[idx], lens[idx], diag)) {
+                    for (long long i = 0; i < skip; i++)
+                        free(ring[i]);
+                    free(ring);
+                    free(lens);
+                    free(line);
+                    return false;
+                }
                 free(ring[idx]);
             }
             ring[idx] = xstrdup(line);
@@ -238,6 +298,8 @@ static void head_file(FILE* f, struct bx_head_options* options) {
         free(lens);
         free(line);
     }
+
+    return true;
 }
 
 int bx_head_main(int argc, char** argv) {
@@ -257,7 +319,12 @@ int bx_head_main(int argc, char** argv) {
     }
 
     int num_files = argc - first_operand;
-    for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
@@ -267,18 +334,20 @@ int bx_head_main(int argc, char** argv) {
         }
 
         if (num_files > 1 && !options.quiet) {
-            if (i > 0)
-                printf("\n");
-            printf("==> %s <==\n", filename);
+            ok = bx_head_write_header(&writer, filename, i > 0, &diag);
         }
         else if (options.verbose) {
-            if (i > 0)
-                printf("\n");
-            printf("==> %s <==\n", filename);
+            ok = bx_head_write_header(&writer, filename, i > 0, &diag);
         }
 
-        head_file(f, &options);
+        if (ok) {
+            ok = head_file(f, &options, &writer, &diag);
+        }
         bx_fclose_nonstdio(f, is_stdio);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_head_write_error(&diag);
     }
 
     return diag.exit_status;

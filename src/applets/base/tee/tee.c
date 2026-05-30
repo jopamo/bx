@@ -12,12 +12,14 @@
 #include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/line_writer.h"
 
 struct tee_output {
     int fd;
     const char* name;
     bool close_fd;
     bool failed;
+    struct bx_line_writer writer;
 };
 
 static void tee_print_help(const char* progname) {
@@ -79,12 +81,20 @@ int bx_tee_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
+    char* output_buffers = calloc((size_t)num_files + 1u, 8192u);
+    if (!output_buffers) {
+        bx_diag(&diag, "memory exhausted");
+        free(outputs);
+        return diag.exit_status;
+    }
+
     outputs[0] = (struct tee_output){
         .fd = STDOUT_FILENO,
         .name = "standard output",
         .close_fd = false,
         .failed = false,
     };
+    bx_line_writer_init(&outputs[0].writer, outputs[0].fd, output_buffers, 8192u);
     int output_count = 1;
 
     for (int i = 0; i < num_files; i++) {
@@ -92,12 +102,18 @@ int bx_tee_main(int argc, char** argv) {
         int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
         int fd = bx_fd_open_cloexec(path, flags, 0666);
         if (fd >= 0) {
-            outputs[output_count++] = (struct tee_output){
+            int output_index = output_count;
+            outputs[output_index] = (struct tee_output){
                 .fd = fd,
                 .name = path,
                 .close_fd = true,
                 .failed = false,
             };
+            bx_line_writer_init(&outputs[output_index].writer,
+                                outputs[output_index].fd,
+                                output_buffers + ((size_t)output_index * 8192u),
+                                8192u);
+            output_count++;
         }
         else {
             bx_perror_path(&diag, path);
@@ -111,7 +127,7 @@ int bx_tee_main(int argc, char** argv) {
             if (outputs[i].failed) {
                 continue;
             }
-            if (!bx_xwrite_all(outputs[i].fd, buf, (size_t)n)) {
+            if (!bx_line_writer_write(&outputs[i].writer, buf, (size_t)n)) {
                 bx_perror_path(&diag, outputs[i].name);
                 outputs[i].failed = true;
             }
@@ -121,11 +137,23 @@ int bx_tee_main(int argc, char** argv) {
         bx_perror_path(&diag, "standard input");
     }
 
+    for (int i = 0; i < output_count; i++) {
+        if (outputs[i].failed) {
+            continue;
+        }
+        if (bx_line_writer_error(&outputs[i].writer) == 0 &&
+            !bx_line_writer_flush(&outputs[i].writer)) {
+            bx_perror_path(&diag, outputs[i].name);
+            outputs[i].failed = true;
+        }
+    }
+
     for (int i = 1; i < output_count; i++) {
         if (outputs[i].close_fd && close(outputs[i].fd) != 0 && !outputs[i].failed) {
             bx_perror_path(&diag, outputs[i].name);
         }
     }
+    free(output_buffers);
     free(outputs);
 
     return diag.exit_status;

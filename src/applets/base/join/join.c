@@ -9,6 +9,7 @@
 #include <strings.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -16,6 +17,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_join_options {
     const char* progname;
@@ -245,36 +247,93 @@ static int compare_lines(struct line* l1, int f1, struct line* l2, int f2, bool 
     return strcmp(s1, s2);
 }
 
-static void print_joined(struct line* l1, struct line* l2, struct bx_join_options* options) {
+static bool bx_join_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_join_write_text(
+    struct bx_line_writer* writer,
+    const char* text,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_puts(writer, text)) {
+        return bx_join_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_join_write_char(
+    struct bx_line_writer* writer,
+    char ch,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_putc(writer, ch)) {
+        return bx_join_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_join_write_record_delimiter(
+    struct bx_line_writer* writer,
+    const struct bx_join_options* options,
+    struct bx_diag_ctx* diag
+) {
+    return bx_join_write_char(writer, options->zero_terminated ? '\0' : '\n', diag);
+}
+
+static bool print_joined(
+    struct line* l1,
+    struct line* l2,
+    struct bx_join_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     if (options->suppress_joined)
-        return;
+        return true;
 
     char sep = options->separator ? options->separator : ' ';
 
     // Default format: join field, rest of l1, rest of l2
-    printf("%s", get_field(l1, options->join_field1, options->empty_fill));
+    if (!bx_join_write_text(writer, get_field(l1, options->join_field1, options->empty_fill), diag)) {
+        return false;
+    }
 
     for (size_t i = 1; i <= l1->nfields; i++) {
         if ((int)i == options->join_field1)
             continue;
-        printf("%c%s", sep, get_field(l1, i, options->empty_fill));
+        if (!bx_join_write_char(writer, sep, diag) ||
+            !bx_join_write_text(writer, get_field(l1, i, options->empty_fill), diag)) {
+            return false;
+        }
     }
     for (size_t i = 1; i <= l2->nfields; i++) {
         if ((int)i == options->join_field2)
             continue;
-        printf("%c%s", sep, get_field(l2, i, options->empty_fill));
+        if (!bx_join_write_char(writer, sep, diag) ||
+            !bx_join_write_text(writer, get_field(l2, i, options->empty_fill), diag)) {
+            return false;
+        }
     }
-    putchar(options->zero_terminated ? '\0' : '\n');
+    return bx_join_write_record_delimiter(writer, options, diag);
 }
 
-static void print_unpairable(struct line* l, struct bx_join_options* options) {
+static bool print_unpairable(
+    struct line* l,
+    struct bx_join_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     char sep = options->separator ? options->separator : ' ';
     for (size_t i = 1; i <= l->nfields; i++) {
-        if (i > 1)
-            putchar(sep);
-        printf("%s", get_field(l, i, options->empty_fill));
+        if (i > 1 && !bx_join_write_char(writer, sep, diag)) {
+            return false;
+        }
+        if (!bx_join_write_text(writer, get_field(l, i, options->empty_fill), diag)) {
+            return false;
+        }
     }
-    putchar(options->zero_terminated ? '\0' : '\n');
+    return bx_join_write_record_delimiter(writer, options, diag);
 }
 
 int bx_join_main(int argc, char** argv) {
@@ -319,6 +378,10 @@ int bx_join_main(int argc, char** argv) {
 
     struct line l1 = {0}, l2 = {0};
     bool has_l1 = false, has_l2 = false;
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     len1 = getdelim(&data1, &cap1, delimiter, f1);
     if (len1 != -1) {
@@ -336,15 +399,19 @@ int bx_join_main(int argc, char** argv) {
         has_l2 = true;
     }
 
-    while (has_l1 || has_l2) {
+    while (ok && (has_l1 || has_l2)) {
         int cmp;
         if (has_l1 && has_l2) {
             cmp = compare_lines(&l1, options.join_field1, &l2, options.join_field2, options.ignore_case);
             if (cmp == 0) {
-                print_joined(&l1, &l2, &options);
+                ok = print_joined(&l1, &l2, &options, &writer, &diag);
                 // Simple implementation doesn't handle duplicate keys yet
                 free_line(&l1);
                 has_l1 = false;
+                free_line(&l2);
+                has_l2 = false;
+                if (!ok)
+                    continue;
                 len1 = getdelim(&data1, &cap1, delimiter, f1);
                 if (len1 != -1) {
                     if (data1[len1 - 1] == delimiter)
@@ -352,8 +419,6 @@ int bx_join_main(int argc, char** argv) {
                     parse_line(&l1, data1, options.separator);
                     has_l1 = true;
                 }
-                free_line(&l2);
-                has_l2 = false;
                 len2 = getdelim(&data2, &cap2, delimiter, f2);
                 if (len2 != -1) {
                     if (data2[len2 - 1] == delimiter)
@@ -364,9 +429,11 @@ int bx_join_main(int argc, char** argv) {
             }
             else if (cmp < 0) {
                 if (options.print_unpairable1)
-                    print_unpairable(&l1, &options);
+                    ok = print_unpairable(&l1, &options, &writer, &diag);
                 free_line(&l1);
                 has_l1 = false;
+                if (!ok)
+                    continue;
                 len1 = getdelim(&data1, &cap1, delimiter, f1);
                 if (len1 != -1) {
                     if (data1[len1 - 1] == delimiter)
@@ -377,9 +444,11 @@ int bx_join_main(int argc, char** argv) {
             }
             else {
                 if (options.print_unpairable2)
-                    print_unpairable(&l2, &options);
+                    ok = print_unpairable(&l2, &options, &writer, &diag);
                 free_line(&l2);
                 has_l2 = false;
+                if (!ok)
+                    continue;
                 len2 = getdelim(&data2, &cap2, delimiter, f2);
                 if (len2 != -1) {
                     if (data2[len2 - 1] == delimiter)
@@ -391,9 +460,11 @@ int bx_join_main(int argc, char** argv) {
         }
         else if (has_l1) {
             if (options.print_unpairable1)
-                print_unpairable(&l1, &options);
+                ok = print_unpairable(&l1, &options, &writer, &diag);
             free_line(&l1);
             has_l1 = false;
+            if (!ok)
+                continue;
             len1 = getdelim(&data1, &cap1, delimiter, f1);
             if (len1 != -1) {
                 if (data1[len1 - 1] == delimiter)
@@ -404,9 +475,11 @@ int bx_join_main(int argc, char** argv) {
         }
         else {
             if (options.print_unpairable2)
-                print_unpairable(&l2, &options);
+                ok = print_unpairable(&l2, &options, &writer, &diag);
             free_line(&l2);
             has_l2 = false;
+            if (!ok)
+                continue;
             len2 = getdelim(&data2, &cap2, delimiter, f2);
             if (len2 != -1) {
                 if (data2[len2 - 1] == delimiter)
@@ -415,6 +488,17 @@ int bx_join_main(int argc, char** argv) {
                 has_l2 = true;
             }
         }
+    }
+
+    if (has_l1) {
+        free_line(&l1);
+    }
+    if (has_l2) {
+        free_line(&l2);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_join_write_error(&diag);
     }
 
     free(data1);

@@ -43,7 +43,50 @@ void bx_child_signal_all(struct bx_child *children, int count, int signo) {
     }
 }
 
-int bx_child_spawn_argv(const char *progname, char **argv,
+int bx_child_exec_argv(char *const *argv) {
+    if (!argv || !argv[0])
+        return EINVAL;
+
+    execvp(argv[0], argv);
+    return errno != 0 ? errno : EIO;
+}
+
+int bx_child_exec_argv_exact_or_path(char *const *argv) {
+    if (!argv || !argv[0])
+        return EINVAL;
+
+    if (strchr(argv[0], '/'))
+        execv(argv[0], argv);
+    else
+        execvp(argv[0], argv);
+    return errno != 0 ? errno : EIO;
+}
+
+static int bx_child_dup_stdio_fd(int source_fd, int target_fd) {
+    if (source_fd < 0)
+        return EBADF;
+    if (source_fd == target_fd)
+        return 0;
+    if (bx_fd_dup2_exact(source_fd, target_fd) < 0)
+        return errno != 0 ? errno : EIO;
+    return 0;
+}
+
+static void bx_child_close_redirect_fd(int fd, int target_fd,
+                                       int already_closed_1, int already_closed_2) {
+    if (fd < 0 || fd == target_fd || fd == already_closed_1 || fd == already_closed_2)
+        return;
+    close(fd);
+}
+
+static void bx_child_reset_common_signal_handlers(void) {
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGINT, SIG_DFL);
+    signal(SIGHUP, SIG_DFL);
+    signal(SIGPIPE, SIG_DFL);
+}
+
+int bx_child_spawn_argv(const char *progname, char *const *argv,
                         const struct bx_child_runner_opts *opts,
                         int slot,
                         struct bx_child *children, int *running,
@@ -82,6 +125,13 @@ int bx_child_spawn_argv(const char *progname, char **argv,
             snprintf(slot_buf, sizeof(slot_buf), "%d", slot);
             setenv(opts->process_slot_var, slot_buf, 1);
         }
+        if (opts && opts->reset_common_signals)
+            bx_child_reset_common_signal_handlers();
+        if (opts && opts->new_process_group && setpgid(0, 0) != 0) {
+            errnum = errno;
+            (void)!write(errpipe[1], &errnum, sizeof(errnum));
+            _exit(127);
+        }
         if (opts && opts->reopen_stdin_tty) {
             int tty_fd = bx_fd_open_cloexec("/dev/tty", O_RDONLY, 0);
             if (tty_fd < 0) {
@@ -98,13 +148,42 @@ int bx_child_spawn_argv(const char *progname, char **argv,
             if (tty_fd != STDIN_FILENO)
                 close(tty_fd);
         }
+        if (opts && opts->use_stdin_fd) {
+            errnum = bx_child_dup_stdio_fd(opts->stdin_fd, STDIN_FILENO);
+            if (errnum != 0) {
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+        }
+        if (opts && opts->use_stdout_fd) {
+            errnum = bx_child_dup_stdio_fd(opts->stdout_fd, STDOUT_FILENO);
+            if (errnum != 0) {
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+        }
+        if (opts && opts->use_stderr_fd) {
+            errnum = bx_child_dup_stdio_fd(opts->stderr_fd, STDERR_FILENO);
+            if (errnum != 0) {
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+        }
+        if (opts && opts->use_stdin_fd)
+            bx_child_close_redirect_fd(opts->stdin_fd, STDIN_FILENO, -1, -1);
+        if (opts && opts->use_stdout_fd)
+            bx_child_close_redirect_fd(opts->stdout_fd, STDOUT_FILENO,
+                                       opts && opts->use_stdin_fd ? opts->stdin_fd : -1, -1);
+        if (opts && opts->use_stderr_fd)
+            bx_child_close_redirect_fd(opts->stderr_fd, STDERR_FILENO,
+                                       opts && opts->use_stdin_fd ? opts->stdin_fd : -1,
+                                       opts && opts->use_stdout_fd ? opts->stdout_fd : -1);
         if (opts && opts->cwd && chdir(opts->cwd) != 0) {
             errnum = errno;
             (void)!write(errpipe[1], &errnum, sizeof(errnum));
             _exit(127);
         }
-        execvp(argv[0], argv);
-        errnum = errno;
+        errnum = bx_child_exec_argv(argv);
         (void)!write(errpipe[1], &errnum, sizeof(errnum));
         _exit(127);
     }
@@ -138,6 +217,49 @@ int bx_child_spawn_argv(const char *progname, char **argv,
     }
 
     return 0;
+}
+
+int bx_child_spawn_const_argv(const char *progname, const char *const *argv,
+                              const struct bx_child_runner_opts *opts,
+                              int slot,
+                              struct bx_child *children, int *running,
+                              bool *exec_failed_now, int *exec_errno_now) {
+    size_t argc = 0u;
+    char **mutable_argv = NULL;
+
+    if (!argv || !argv[0]) {
+        if (exec_failed_now)
+            *exec_failed_now = true;
+        if (exec_errno_now)
+            *exec_errno_now = EINVAL;
+        return 1;
+    }
+
+    while (argv[argc])
+        argc++;
+    mutable_argv = calloc(argc + 1u, sizeof(*mutable_argv));
+    if (!mutable_argv) {
+        fprintf(stderr, "%s: cannot allocate child argv: %s\n", progname, strerror(errno));
+        return 1;
+    }
+    for (size_t i = 0; i < argc; i++) {
+        mutable_argv[i] = strdup(argv[i]);
+        if (!mutable_argv[i]) {
+            int saved_errno = errno;
+            for (size_t j = 0; j < i; j++)
+                free(mutable_argv[j]);
+            free(mutable_argv);
+            fprintf(stderr, "%s: cannot allocate child argv: %s\n", progname, strerror(saved_errno));
+            return 1;
+        }
+    }
+
+    int rc = bx_child_spawn_argv(progname, mutable_argv, opts, slot, children,
+                                 running, exec_failed_now, exec_errno_now);
+    for (size_t i = 0; i < argc; i++)
+        free(mutable_argv[i]);
+    free(mutable_argv);
+    return rc;
 }
 
 int bx_child_reap(struct bx_child *children, int *running,

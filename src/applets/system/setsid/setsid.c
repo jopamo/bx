@@ -9,6 +9,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/child_runner.h"
 
 struct bx_setsid_options {
     const char* progname;
@@ -98,9 +99,7 @@ int bx_setsid_main(int argc, char** argv) {
         return 1;
     }
 
-    execvp(argv[options.command_index], argv + options.command_index);
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv(argv + options.command_index);
     bx_diag(&diag, "failed to run command '%s': %s", argv[options.command_index], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;

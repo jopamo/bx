@@ -10,6 +10,7 @@
 #include "applets.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/line_writer.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
 
@@ -61,15 +62,19 @@ static void bx_cat_print_write_error(const struct bx_cat_options* options) {
     fprintf(stderr, "%s: write error: %s\n", options->progname, strerror(saved_errno));
 }
 
-static bool bx_cat_emit_byte(unsigned char ch, const struct bx_cat_options* options) {
-    if (fputc((int)ch, stdout) == EOF) {
+static bool bx_cat_write(struct bx_line_writer* writer, const void* data, size_t len, const struct bx_cat_options* options) {
+    if (!bx_line_writer_write(writer, data, len)) {
         bx_cat_print_write_error(options);
         return false;
     }
     return true;
 }
 
-static bool bx_cat_emit_line_number(struct bx_cat_state* state, const struct bx_cat_options* options) {
+static bool bx_cat_emit_byte(struct bx_line_writer* writer, unsigned char ch, const struct bx_cat_options* options) {
+    return bx_cat_write(writer, &ch, 1u, options);
+}
+
+static bool bx_cat_emit_line_number(struct bx_line_writer* writer, struct bx_cat_state* state, const struct bx_cat_options* options) {
     char buffer[64];
     int len = snprintf(buffer, sizeof(buffer), "%6llu\t", state->line_number);
     if (len < 0) {
@@ -78,8 +83,7 @@ static bool bx_cat_emit_line_number(struct bx_cat_state* state, const struct bx_
         return false;
     }
 
-    if (fwrite(buffer, 1, (size_t)len, stdout) != (size_t)len) {
-        bx_cat_print_write_error(options);
+    if (!bx_cat_write(writer, buffer, (size_t)len, options)) {
         return false;
     }
 
@@ -89,42 +93,42 @@ static bool bx_cat_emit_line_number(struct bx_cat_state* state, const struct bx_
     return true;
 }
 
-static bool bx_cat_emit_visible_byte(unsigned char ch, const struct bx_cat_options* options) {
+static bool bx_cat_emit_visible_byte(struct bx_line_writer* writer, unsigned char ch, const struct bx_cat_options* options) {
     if (ch == '\t' && options->show_tabs) {
-        return bx_cat_emit_byte('^', options) && bx_cat_emit_byte('I', options);
+        return bx_cat_emit_byte(writer, '^', options) && bx_cat_emit_byte(writer, 'I', options);
     }
 
     if (!options->show_nonprinting || ch == '\t') {
-        return bx_cat_emit_byte(ch, options);
+        return bx_cat_emit_byte(writer, ch, options);
     }
 
     if (ch < 32u) {
-        return bx_cat_emit_byte('^', options) && bx_cat_emit_byte((unsigned char)(ch + 64u), options);
+        return bx_cat_emit_byte(writer, '^', options) && bx_cat_emit_byte(writer, (unsigned char)(ch + 64u), options);
     }
 
     if (ch == 127u) {
-        return bx_cat_emit_byte('^', options) && bx_cat_emit_byte('?', options);
+        return bx_cat_emit_byte(writer, '^', options) && bx_cat_emit_byte(writer, '?', options);
     }
 
     if (ch >= 128u) {
-        if (!bx_cat_emit_byte('M', options) || !bx_cat_emit_byte('-', options)) {
+        if (!bx_cat_emit_byte(writer, 'M', options) || !bx_cat_emit_byte(writer, '-', options)) {
             return false;
         }
 
         ch = (unsigned char)(ch - 128u);
 
         if (ch < 32u) {
-            return bx_cat_emit_byte('^', options) && bx_cat_emit_byte((unsigned char)(ch + 64u), options);
+            return bx_cat_emit_byte(writer, '^', options) && bx_cat_emit_byte(writer, (unsigned char)(ch + 64u), options);
         }
         if (ch == 127u) {
-            return bx_cat_emit_byte('^', options) && bx_cat_emit_byte('?', options);
+            return bx_cat_emit_byte(writer, '^', options) && bx_cat_emit_byte(writer, '?', options);
         }
     }
 
-    return bx_cat_emit_byte(ch, options);
+    return bx_cat_emit_byte(writer, ch, options);
 }
 
-static bool bx_cat_process_byte(unsigned char ch, const struct bx_cat_options* options, struct bx_cat_state* state) {
+static bool bx_cat_process_byte(unsigned char ch, const struct bx_cat_options* options, struct bx_cat_state* state, struct bx_line_writer* writer) {
     bool blank_line = state->at_line_start && ch == '\n';
 
     if (blank_line && options->squeeze_blank && state->previous_output_line_blank) {
@@ -140,16 +144,16 @@ static bool bx_cat_process_byte(unsigned char ch, const struct bx_cat_options* o
             number_this_line = true;
         }
 
-        if (number_this_line && !bx_cat_emit_line_number(state, options)) {
+        if (number_this_line && !bx_cat_emit_line_number(writer, state, options)) {
             return false;
         }
     }
 
     if (ch == '\n') {
-        if (options->show_ends && !bx_cat_emit_byte('$', options)) {
+        if (options->show_ends && !bx_cat_emit_byte(writer, '$', options)) {
             return false;
         }
-        if (!bx_cat_emit_byte('\n', options)) {
+        if (!bx_cat_emit_byte(writer, '\n', options)) {
             return false;
         }
         state->at_line_start = true;
@@ -157,7 +161,7 @@ static bool bx_cat_process_byte(unsigned char ch, const struct bx_cat_options* o
         return true;
     }
 
-    if (!bx_cat_emit_visible_byte(ch, options)) {
+    if (!bx_cat_emit_visible_byte(writer, ch, options)) {
         return false;
     }
 
@@ -166,8 +170,18 @@ static bool bx_cat_process_byte(unsigned char ch, const struct bx_cat_options* o
     return true;
 }
 
-static bool bx_cat_process_fd(int fd, const char* path, const struct bx_cat_options* options, struct bx_cat_state* state, int* exit_status) {
+static bool bx_cat_raw_mode(const struct bx_cat_options* options) {
+    return !options->show_nonprinting &&
+           !options->show_ends &&
+           !options->show_tabs &&
+           !options->number_nonblank &&
+           !options->number_all &&
+           !options->squeeze_blank;
+}
+
+static bool bx_cat_process_fd(int fd, const char* path, const struct bx_cat_options* options, struct bx_cat_state* state, struct bx_line_writer* writer, int* exit_status) {
     unsigned char buffer[8192];
+    bool raw_mode = bx_cat_raw_mode(options);
 
     while (true) {
         ssize_t nread = bx_xread(fd, buffer, sizeof(buffer));
@@ -180,15 +194,22 @@ static bool bx_cat_process_fd(int fd, const char* path, const struct bx_cat_opti
             return true;
         }
 
+        if (raw_mode) {
+            if (!bx_cat_write(writer, buffer, (size_t)nread, options)) {
+                return false;
+            }
+            continue;
+        }
+
         for (ssize_t i = 0; i < nread; i++) {
-            if (!bx_cat_process_byte(buffer[i], options, state)) {
+            if (!bx_cat_process_byte(buffer[i], options, state, writer)) {
                 return false;
             }
         }
     }
 }
 
-static bool bx_cat_process_path(const char* path, const struct bx_cat_options* options, struct bx_cat_state* state, int* exit_status) {
+static bool bx_cat_process_path(const char* path, const struct bx_cat_options* options, struct bx_cat_state* state, struct bx_line_writer* writer, int* exit_status) {
     int fd = STDIN_FILENO;
     bool must_close = false;
 
@@ -202,7 +223,7 @@ static bool bx_cat_process_path(const char* path, const struct bx_cat_options* o
         must_close = true;
     }
 
-    bool ok = bx_cat_process_fd(fd, path, options, state, exit_status);
+    bool ok = bx_cat_process_fd(fd, path, options, state, writer, exit_status);
 
     if (must_close && close(fd) < 0) {
         bx_cat_print_file_error(options, path);
@@ -322,21 +343,24 @@ int bx_cat_main(int argc, char** argv) {
         .previous_output_line_blank = false,
     };
     int exit_status = 0;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     if (first_operand >= argc) {
-        if (!bx_cat_process_path("-", &options, &state, &exit_status)) {
+        if (!bx_cat_process_path("-", &options, &state, &writer, &exit_status)) {
             return 1;
         }
     }
     else {
         for (int i = first_operand; i < argc; i++) {
-            if (!bx_cat_process_path(argv[i], &options, &state, &exit_status)) {
+            if (!bx_cat_process_path(argv[i], &options, &state, &writer, &exit_status)) {
                 return 1;
             }
         }
     }
 
-    if (fflush(stdout) == EOF) {
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_cat_print_write_error(&options);
         return 1;
     }

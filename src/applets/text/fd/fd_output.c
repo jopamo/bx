@@ -1,14 +1,17 @@
 #define _GNU_SOURCE
 #include <inttypes.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 
 #include "fd_output.h"
 #include "lib/file_info_fmt.h"
 #include "lib/id_parse.h"
+#include "lib/line_writer.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
 
@@ -19,11 +22,59 @@ struct fd_detail_widths {
     size_t size;
 };
 
-bool fd_print_match_output(const struct fd_render_ctx *ctx, const struct fd_opts *opts,
+static bool fd_writer_vprintf(struct bx_line_writer *writer, const char *format,
+                              va_list ap) {
+    char stack[256];
+    va_list copy;
+    va_copy(copy, ap);
+    int needed = vsnprintf(stack, sizeof(stack), format, copy);
+    va_end(copy);
+    if (needed < 0) {
+        if (errno == 0)
+            errno = EIO;
+        return false;
+    }
+
+    size_t len = (size_t)needed;
+    if (len < sizeof(stack))
+        return bx_line_writer_write(writer, stack, len);
+
+    char *buffer = malloc(len + 1u);
+    if (!buffer) {
+        errno = ENOMEM;
+        return false;
+    }
+
+    int written = vsnprintf(buffer, len + 1u, format, ap);
+    if (written < 0 || (size_t)written != len) {
+        int saved_errno = errno != 0 ? errno : EIO;
+        free(buffer);
+        errno = saved_errno;
+        return false;
+    }
+
+    bool ok = bx_line_writer_write(writer, buffer, len);
+    int saved_errno = errno;
+    free(buffer);
+    errno = saved_errno;
+    return ok;
+}
+
+static bool fd_writer_printf(struct bx_line_writer *writer, const char *format,
+                             ...) {
+    va_list ap;
+    va_start(ap, format);
+    bool ok = fd_writer_vprintf(writer, format, ap);
+    va_end(ap);
+    return ok;
+}
+
+bool fd_print_match_output(struct bx_line_writer *writer,
+                           const struct fd_render_ctx *ctx,
+                           const struct fd_opts *opts,
                            const char *path, bool is_dir) {
     if (!opts->output_format) {
-        fd_print_path(ctx, path, is_dir);
-        return true;
+        return fd_print_path(writer, ctx, path, is_dir);
     }
 
     char *format_path = fd_render_format_path(ctx, path);
@@ -35,9 +86,10 @@ bool fd_print_match_output(const struct fd_render_ctx *ctx, const struct fd_opts
     if (!expanded)
         return false;
 
-    printf("%s%c", expanded, opts->print0 ? '\0' : '\n');
+    bool ok = bx_line_writer_puts(writer, expanded) &&
+              bx_line_writer_putc(writer, opts->print0 ? '\0' : '\n');
     free(expanded);
-    return true;
+    return ok;
 }
 
 static bool fd_detail_items_reserve(struct fd_detail_items *items, int needed) {
@@ -179,7 +231,8 @@ static void fd_detail_widths_update(struct fd_detail_widths *widths,
         widths->size = size_width;
 }
 
-int fd_detail_items_print(struct fd_detail_items *items) {
+int fd_detail_items_print(struct fd_detail_items *items,
+                          struct bx_line_writer *writer) {
     if (items->count == 0)
         return 0;
 
@@ -216,24 +269,29 @@ int fd_detail_items_print(struct fd_detail_items *items) {
         bx_file_format_ls_timestamp(item->mtime_sec, timestamp);
         fd_format_size((intmax_t)item->size, size);
 
-        printf("%s %*" PRIuMAX " %-*s %-*s %*s %s %s",
-               mode,
-               (int)widths.nlink,
-               (uintmax_t)item->nlink,
-               (int)widths.user,
-               user_name,
-               (int)widths.group,
-               group_name,
-               (int)widths.size,
-               size,
-               timestamp,
-               display_path);
+        bool ok =
+            fd_writer_printf(writer, "%s %*" PRIuMAX " %-*s %-*s %*s %s ",
+                             mode,
+                             (int)widths.nlink,
+                             (uintmax_t)item->nlink,
+                             (int)widths.user,
+                             user_name,
+                             (int)widths.group,
+                             group_name,
+                             (int)widths.size,
+                             size,
+                             timestamp) &&
+            bx_line_writer_puts(writer, display_path);
 
-        if (symlink_target)
-            printf(" -> %s", symlink_target);
-        putchar('\n');
+        if (ok && symlink_target)
+            ok = bx_line_writer_puts(writer, " -> ") &&
+                 bx_line_writer_puts(writer, symlink_target);
+        if (ok)
+            ok = bx_line_writer_putc(writer, '\n');
         free(display_path);
         free(symlink_target);
+        if (!ok)
+            return 1;
     }
 
     return 0;

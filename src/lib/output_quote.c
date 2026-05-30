@@ -8,6 +8,7 @@
 
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/output_alloc_counter.h"
 #include "lib/output_quote.h"
 
 bool bx_output_quote_terminal_should_hide_control(int fd) {
@@ -19,6 +20,18 @@ static size_t bx_output_quote_capacity(size_t len, size_t multiplier, size_t ext
         bx_fatal(3, "path quote allocation overflow");
     }
     return len * multiplier + extra;
+}
+
+static char* bx_output_quote_alloc(size_t size) {
+    char* out = xmalloc(size);
+    bx_output_alloc_counter_note_alloc(size);
+    return out;
+}
+
+static char* bx_output_quote_strdup(const char* text) {
+    char* out = xstrdup(text);
+    bx_output_alloc_counter_note_cstring_alloc(text);
+    return out;
 }
 
 static size_t bx_output_quote_append_octal(char* out, size_t out_pos, unsigned char ch) {
@@ -106,7 +119,7 @@ static size_t bx_output_quote_append_escape_char(
 
 static char* bx_output_quote_literal_dup(const char* text, bool hide_nongraphic) {
     size_t len = strlen(text);
-    char* out = xmalloc(len + 1u);
+    char* out = bx_output_quote_alloc(len + 1u);
     size_t out_pos = 0u;
 
     for (size_t i = 0; i < len; i++) {
@@ -120,7 +133,7 @@ static char* bx_output_quote_literal_dup(const char* text, bool hide_nongraphic)
 
 static char* bx_output_quote_escape_dup(const char* text) {
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 4u, 1u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 4u, 1u));
     size_t out_pos = 0u;
 
     for (size_t i = 0; i < len; i++) {
@@ -133,7 +146,7 @@ static char* bx_output_quote_escape_dup(const char* text) {
 
 static char* bx_output_quote_c_dup(const char* text) {
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 4u, 3u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 4u, 3u));
     size_t out_pos = 0u;
 
     out[out_pos++] = '"';
@@ -147,7 +160,7 @@ static char* bx_output_quote_c_dup(const char* text) {
 
 static char* bx_output_quote_locale_dup(const char* text) {
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 4u, 3u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 4u, 3u));
     size_t out_pos = 0u;
 
     out[out_pos++] = '\'';
@@ -161,7 +174,7 @@ static char* bx_output_quote_locale_dup(const char* text) {
 
 static char* bx_output_quote_single_backslash_dup(const char* text) {
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 2u, 3u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 2u, 3u));
     size_t out_pos = 0u;
 
     out[out_pos++] = '\'';
@@ -257,7 +270,7 @@ static size_t bx_output_quote_append_shell_quoted_segment(
 
 static char* bx_output_quote_shell_dup(const char* text, bool always_quote) {
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 4u, 3u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 4u, 3u));
     size_t out_pos = 0u;
 
     out_pos = bx_output_quote_append_shell_quoted_segment(out, out_pos, text, len, always_quote);
@@ -279,7 +292,7 @@ static char* bx_output_quote_shell_escape_dup(const char* text, bool always_quot
     }
 
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 8u, 8u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 8u, 8u));
     size_t out_pos = 0u;
     size_t segment_start = 0u;
 
@@ -445,16 +458,16 @@ char* bx_output_quote_shell_reusable_dup(const char* text) {
     }
 
     if (text[0] == '\0') {
-        return xstrdup("''");
+        return bx_output_quote_strdup("''");
     }
 
     if (bx_output_quote_reusable_shell_safe_string(text)) {
-        return xstrdup(text);
+        return bx_output_quote_strdup(text);
     }
 
     size_t text_len = strlen(text);
     if (bx_output_quote_reusable_shell_can_use_double_quotes(text)) {
-        char* out = xmalloc(bx_output_quote_capacity(text_len, 1u, 3u));
+        char* out = bx_output_quote_alloc(bx_output_quote_capacity(text_len, 1u, 3u));
         size_t out_pos = 0u;
         out[0] = '\0';
 
@@ -467,7 +480,7 @@ char* bx_output_quote_shell_reusable_dup(const char* text) {
     }
 
     size_t out_cap = bx_output_quote_capacity(text_len, 12u, 8u);
-    char* out = xmalloc(out_cap);
+    char* out = bx_output_quote_alloc(out_cap);
     size_t out_pos = 0u;
     enum bx_output_quote_reusable_shell_mode mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE;
     bool emitted = false;
@@ -598,7 +611,7 @@ char* bx_output_quote_control_dup(const char* text, const struct bx_output_contr
     }
 
     size_t len = strlen(text);
-    char* out = xmalloc(bx_output_quote_capacity(len, 2u, 1u));
+    char* out = bx_output_quote_alloc(bx_output_quote_capacity(len, 2u, 1u));
     size_t out_pos = 0u;
 
     for (size_t i = 0; i < len; i++) {

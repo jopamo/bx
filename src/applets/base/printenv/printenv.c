@@ -4,10 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/line_writer.h"
 #include "lib/args_common.h"
 
 extern char** environ;
@@ -71,9 +73,27 @@ static bool bx_printenv_parse_options(int argc, char** argv, struct bx_printenv_
     return true;
 }
 
-static bool bx_printenv_print_all(bool zero_terminated, struct bx_diag_ctx* diag) {
+static bool bx_printenv_write_error(struct bx_diag_ctx* diag) {
+    int saved_errno = errno != 0 ? errno : EIO;
+    bx_diag(diag, "write error: %s", strerror(saved_errno));
+    errno = saved_errno;
+    return false;
+}
+
+static bool bx_printenv_emit_delimited(struct bx_line_writer* writer, const char* value, int delimiter, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_write(writer, value, strlen(value)) ||
+        !bx_line_writer_putc(writer, (char)delimiter)) {
+        return bx_printenv_write_error(diag);
+    }
+
+    return true;
+}
+
+static bool bx_printenv_print_all(struct bx_line_writer* writer, bool zero_terminated, struct bx_diag_ctx* diag) {
+    int delimiter = zero_terminated ? '\0' : '\n';
+
     for (char** entry = environ; entry != NULL && *entry != NULL; entry++) {
-        if (!bx_cli_emit_line(*entry, zero_terminated, diag)) {
+        if (!bx_printenv_emit_delimited(writer, *entry, delimiter, diag)) {
             return false;
         }
     }
@@ -107,9 +127,13 @@ int bx_printenv_main(int argc, char** argv) {
 
     int operand_count = argc - first_operand;
     bool all_found = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    int delimiter = options.zero_terminated ? '\0' : '\n';
 
     if (operand_count == 0) {
-        if (!bx_printenv_print_all(options.zero_terminated, &diag)) {
+        if (!bx_printenv_print_all(&writer, options.zero_terminated, &diag)) {
             return diag.exit_status;
         }
     }
@@ -121,13 +145,14 @@ int bx_printenv_main(int argc, char** argv) {
                 continue;
             }
 
-            if (!bx_cli_emit_line(value, options.zero_terminated, &diag)) {
+            if (!bx_printenv_emit_delimited(&writer, value, delimiter, &diag)) {
                 return diag.exit_status;
             }
         }
     }
 
-    if (!bx_cli_flush_stdout(&diag)) {
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_printenv_write_error(&diag);
         return diag.exit_status;
     }
 

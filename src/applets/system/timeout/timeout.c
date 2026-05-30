@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/child_runner.h"
 #include "lib/time_parse.h"
 #include "lib/args_common.h"
 
@@ -286,17 +287,6 @@ static bool bx_timeout_sleep_for(double seconds, struct bx_diag_ctx* diag) {
     return true;
 }
 
-static int bx_timeout_exec_command(char** command_argv, const char* progname) {
-    execvp(command_argv[0], command_argv);
-
-    int exec_error = errno;
-    fprintf(stderr, "%s: failed to run command '%s': %s\n", progname, command_argv[0], strerror(exec_error));
-    if (exec_error == ENOENT) {
-        return 127;
-    }
-    return 126;
-}
-
 static const char* bx_timeout_signal_label(int signal_number) {
     switch (signal_number) {
         case SIGHUP:
@@ -360,7 +350,33 @@ static void bx_timeout_report_signal(const struct bx_timeout_options* options, i
     }
 }
 
-static bool bx_timeout_wait_for_child(pid_t child_pid, const struct bx_timeout_options* options, int* wait_status_out, bool* timed_out_out, bool* kill_sent_out, struct bx_diag_ctx* diag) {
+struct bx_timeout_reap_result {
+    bool reaped;
+    int status;
+};
+
+static void bx_timeout_reap_status(pid_t pid,
+                                   int status,
+                                   bool exec_failed,
+                                   int exec_errno,
+                                   void* user) {
+    struct bx_timeout_reap_result* result = user;
+
+    (void)pid;
+    (void)exec_failed;
+    (void)exec_errno;
+    result->reaped = true;
+    result->status = status;
+}
+
+static bool bx_timeout_wait_for_child(struct bx_child* children,
+                                      int* running,
+                                      pid_t child_pid,
+                                      const struct bx_timeout_options* options,
+                                      int* wait_status_out,
+                                      bool* timed_out_out,
+                                      bool* kill_sent_out,
+                                      struct bx_diag_ctx* diag) {
     double now = 0.0;
     if (!bx_timeout_get_monotonic_seconds(&now, diag)) {
         return false;
@@ -376,20 +392,16 @@ static bool bx_timeout_wait_for_child(pid_t child_pid, const struct bx_timeout_o
     bool kill_sent = false;
 
     while (true) {
-        int status = 0;
-        pid_t wait_rc = waitpid(child_pid, &status, WNOHANG);
-        if (wait_rc == child_pid) {
-            *wait_status_out = status;
+        struct bx_timeout_reap_result reap_result = {0};
+        if (bx_child_reap(children, running, false, true, bx_timeout_reap_status, &reap_result) != 0) {
+            bx_diag(diag, "waitpid failed: %s", strerror(errno));
+            return false;
+        }
+        if (reap_result.reaped) {
+            *wait_status_out = reap_result.status;
             *timed_out_out = timed_out;
             *kill_sent_out = kill_sent;
             return true;
-        }
-        if (wait_rc < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            bx_diag(diag, "waitpid failed: %s", strerror(errno));
-            return false;
         }
 
         if (!timed_out) {
@@ -438,11 +450,11 @@ static bool bx_timeout_wait_for_child(pid_t child_pid, const struct bx_timeout_o
     }
 }
 
-static void bx_timeout_force_reap_child(pid_t child_pid) {
+static void bx_timeout_force_reap_child(struct bx_child* children, int* running, pid_t child_pid) {
     int saved_errno = errno;
     (void)kill(child_pid, SIGKILL);
-    while (waitpid(child_pid, NULL, 0) < 0) {
-        if (errno != EINTR) {
+    while (*running > 0) {
+        if (bx_child_reap(children, running, true, true, NULL, NULL) != 0) {
             break;
         }
     }
@@ -484,22 +496,41 @@ int bx_timeout_main(int argc, char** argv) {
     }
 
     char** command_argv = argv + options.first_operand;
-    pid_t child_pid = fork();
-    if (child_pid < 0) {
-        bx_diag(&diag, "failed to fork: %s", strerror(errno));
+    struct bx_child children[1] = {0};
+    int running = 0;
+    bool exec_failed_now = false;
+    int exec_errno_now = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    if (bx_child_spawn_argv(options.progname,
+                            command_argv,
+                            &runner_opts,
+                            0,
+                            children,
+                            &running,
+                            &exec_failed_now,
+                            &exec_errno_now) != 0) {
+        return 125;
+    }
+    if (running == 0) {
+        bx_diag(&diag, "failed to start command '%s'", command_argv[0]);
         return 125;
     }
 
-    if (child_pid == 0) {
-        int exec_status = bx_timeout_exec_command(command_argv, options.progname);
-        _exit(exec_status);
+    if (exec_failed_now) {
+        fprintf(stderr, "%s: failed to run command '%s': %s\n",
+                options.progname,
+                command_argv[0],
+                strerror(exec_errno_now));
+        (void)bx_child_reap(children, &running, true, true, NULL, NULL);
+        return exec_errno_now == ENOENT ? 127 : 126;
     }
 
+    pid_t child_pid = children[0].pid;
     int wait_status = 0;
     bool timed_out = false;
     bool kill_sent = false;
-    if (!bx_timeout_wait_for_child(child_pid, &options, &wait_status, &timed_out, &kill_sent, &diag)) {
-        bx_timeout_force_reap_child(child_pid);
+    if (!bx_timeout_wait_for_child(children, &running, child_pid, &options, &wait_status, &timed_out, &kill_sent, &diag)) {
+        bx_timeout_force_reap_child(children, &running, child_pid);
         return 125;
     }
 

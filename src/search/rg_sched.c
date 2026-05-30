@@ -58,7 +58,7 @@ struct bx_rg_sched_work {
         struct {
             size_t path_offset;
             size_t git_root_offset;
-            struct bx_ignore_state *parent_ignore_state;
+            struct bx_ignore_state *parent_ignore_state_snapshot;
             DIR *owned_dir;
             bool donated_dir;
             bool git_root_resolved;
@@ -106,6 +106,7 @@ struct bx_rg_sched_state {
     bool shutdown;
     enum bx_rg_sched_cancel_reason cancel_reason;
     struct bx_search_stats stats;
+    FILE *stdout_stream;
     char *fatal_message;
     size_t thread_count;
     size_t pending_work;
@@ -303,7 +304,7 @@ static void bx_rg_sched_free_work(struct bx_rg_sched_work *work) {
     if (work->kind == BX_RG_SCHED_WORK_DIR) {
         if (work->u.dir.owned_dir)
             closedir(work->u.dir.owned_dir);
-        bx_ignore_state_dispose_chain(work->u.dir.parent_ignore_state);
+        bx_ignore_state_dispose_chain(work->u.dir.parent_ignore_state_snapshot);
     }
     free(work->storage);
     free(work);
@@ -617,9 +618,9 @@ static struct bx_rg_sched_work *bx_rg_sched_work_new_dir(const char *path,
     work->u.dir.git_root_resolved = git_root_resolved;
     work->u.dir.gitignore_enabled = gitignore_enabled;
     if (parent_ignore_state) {
-        work->u.dir.parent_ignore_state =
+        work->u.dir.parent_ignore_state_snapshot =
             bx_ignore_state_clone_chain_for_subtree(parent_ignore_state, current_root, path);
-        if (!work->u.dir.parent_ignore_state) {
+        if (!work->u.dir.parent_ignore_state_snapshot) {
             bx_rg_sched_free_work(work);
             return NULL;
         }
@@ -799,16 +800,17 @@ static bool bx_rg_sched_worker_append_output(struct bx_rg_sched_state *sched,
 static void bx_rg_sched_publish_emit_record(void *user,
                                             struct bx_rg_publish_record *record) {
     struct bx_rg_sched_state *sched = user;
+    FILE *stdout_stream = sched && sched->stdout_stream ? sched->stdout_stream : stdout;
 
     if (!sched || !record)
         return;
 
     if (record->used_heading && record->stdout_len > 0u &&
         sched->heading_output_started) {
-        fputc('\n', stdout);
+        fputc('\n', stdout_stream);
     }
     if (record->stdout_len > 0u && record->stdout_buf)
-        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
+        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout_stream);
     if (record->stderr_len > 0u && record->stderr_buf)
         fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
     if (record->used_heading && record->stdout_len > 0u)
@@ -860,10 +862,7 @@ static int bx_rg_sched_search_one_captured(struct bx_rg_sched_state *sched,
                                                     &worker->display_path_buf);
 
     bx_search_output_ctx_pop(previous_ctx);
-    if (output_ctx.out)
-        fclose(output_ctx.out);
-    if (output_ctx.err)
-        fclose(output_ctx.err);
+    bx_search_output_ctx_close_captures(&output_ctx);
 
     if (output_ctx.capture_failed) {
         free(stdout_buf);
@@ -1231,8 +1230,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         if (!work_root_path) {
             if (output_ctx_pushed)
                 bx_search_output_ctx_pop(previous_ctx);
-            if (output_ctx.err)
-                fclose(output_ctx.err);
+            bx_search_output_ctx_close_captures(&output_ctx);
             free(stderr_buf);
             bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued subtree path\n");
             bx_rg_sched_free_work(work);
@@ -1242,8 +1240,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         if (work->u.dir.git_root_offset != SIZE_MAX && !git_root) {
             if (output_ctx_pushed)
                 bx_search_output_ctx_pop(previous_ctx);
-            if (output_ctx.err)
-                fclose(output_ctx.err);
+            bx_search_output_ctx_close_captures(&output_ctx);
             free(stderr_buf);
             bx_rg_sched_set_fatal(sched, "rg: failed to resolve queued ignore root\n");
             bx_rg_sched_free_work(work);
@@ -1284,15 +1281,13 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
         ignore_opts.git_root = git_root;
         ignore_opts.git_root_resolved = work->u.dir.git_root_resolved;
         ignore_opts.gitignore_enabled = work->u.dir.gitignore_enabled;
-        struct bx_ignore_state *inherited_ignore = work->u.dir.parent_ignore_state;
-        work->u.dir.parent_ignore_state = NULL;
         struct bx_search_walk_config walk_config = {
             .walk_opts = &walk_opts,
             .filter_opts = &filter_opts,
             .ignore_opts = &ignore_opts,
             .visit_with_ignore = bx_rg_sched_walk_visit,
             .error = bx_rg_sched_walk_error,
-            .inherited_parent_ignore_state = inherited_ignore,
+            .borrowed_parent_ignore_state = work->u.dir.parent_ignore_state_snapshot,
         };
         DIR *owned_dir = work->u.dir.owned_dir;
         work->u.dir.owned_dir = NULL;
@@ -1344,10 +1339,7 @@ static void bx_rg_sched_process_work(struct bx_rg_sched_state *sched,
 
     if (output_ctx_pushed)
         bx_search_output_ctx_pop(previous_ctx);
-    if (output_ctx.out)
-        fclose(output_ctx.out);
-    if (output_ctx.err)
-        fclose(output_ctx.err);
+    bx_search_output_ctx_close_captures(&output_ctx);
     if (capture_during_work)
         stderr_cap = stderr_len > 0u ? stderr_len + 1u : 0u;
 
@@ -1607,6 +1599,7 @@ int bx_rg_sched_run(int argc,
         .exec_plan = exec_plan,
         .opts = opts,
         .exit_status = 1,
+        .stdout_stream = bx_search_output_stream(),
         .thread_count = thread_count,
     };
     struct bx_rg_sched_work_vec frontier = {0};

@@ -16,7 +16,11 @@ struct bx_search_walk_config {
                                              const struct bx_walk_ignore_opts *ignore_opts,
                                              void *user);
     enum bx_walk_action (*error)(const char *path, int errnum, void *user);
-    struct bx_ignore_state *inherited_parent_ignore_state;
+    /*
+     * Borrowed immutable ignore-state snapshot for donated subtree workers.
+     * The caller owns the snapshot and must keep it alive for the walk.
+     */
+    const struct bx_ignore_state *borrowed_parent_ignore_state;
 };
 
 int bx_search_walk(const char *root,

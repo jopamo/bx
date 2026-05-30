@@ -29,6 +29,7 @@ struct bx_rg_publish_record {
 };
 
 struct bx_rg_publish_aggregate {
+    FILE *stdout_stream;
     struct bx_search_stats *stats;
     int *exit_status;
     bool *match_seen;

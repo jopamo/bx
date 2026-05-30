@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 
 enum bx_df_size_mode {
@@ -759,7 +760,47 @@ static int bx_df_field_base_width(enum bx_df_output_field field, bool custom_out
     return 0;
 }
 
-static bool bx_df_emit_cell(const char* text, enum bx_df_output_field field, bool custom_output, bool first_column, struct bx_diag_ctx* diag) {
+static bool bx_df_write_error(struct bx_diag_ctx* diag) {
+    int saved_errno = errno != 0 ? errno : EIO;
+    bx_diag(diag, "write error: %s", strerror(saved_errno));
+    errno = saved_errno;
+    return false;
+}
+
+static bool bx_df_write(struct bx_line_writer* writer, const void* data, size_t length, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_write(writer, data, length)) {
+        return bx_df_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_df_putc(struct bx_line_writer* writer, char ch, struct bx_diag_ctx* diag) {
+    return bx_df_write(writer, &ch, 1u, diag);
+}
+
+static bool bx_df_puts(struct bx_line_writer* writer, const char* text, struct bx_diag_ctx* diag) {
+    return bx_df_write(writer, text, strlen(text), diag);
+}
+
+static bool bx_df_write_spaces(struct bx_line_writer* writer, size_t count, struct bx_diag_ctx* diag) {
+    static const char spaces[64] = {
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    };
+
+    while (count > 0u) {
+        size_t chunk = count > sizeof(spaces) ? sizeof(spaces) : count;
+        if (!bx_df_write(writer, spaces, chunk, diag)) {
+            return false;
+        }
+        count -= chunk;
+    }
+    return true;
+}
+
+static bool bx_df_emit_cell(struct bx_line_writer* writer, const char* text, enum bx_df_output_field field, bool custom_output, bool first_column, struct bx_diag_ctx* diag) {
     const char* value = text != NULL ? text : "";
     int width = bx_df_field_base_width(field, custom_output);
     int text_width = (int)strlen(value);
@@ -768,46 +809,43 @@ static bool bx_df_emit_cell(const char* text, enum bx_df_output_field field, boo
     }
 
     bool left = bx_df_field_left_aligned(field);
-    int rc;
-    if (width > 0) {
-        if (first_column) {
-            rc = fprintf(stdout, left ? "%-*s" : "%*s", width, value);
-        }
-        else {
-            rc = fprintf(stdout, left ? " %-*s" : " %*s", width, value);
-        }
-    }
-    else if (first_column) {
-        rc = fprintf(stdout, "%s", value);
-    }
-    else {
-        rc = fprintf(stdout, " %s", value);
+    if (!first_column && !bx_df_putc(writer, ' ', diag)) {
+        return false;
     }
 
-    if (rc < 0) {
-        bx_diag(diag, "write error: %s", strerror(errno));
+    if (width > 0) {
+        size_t pad = (size_t)(width - text_width);
+        if (!left && !bx_df_write_spaces(writer, pad, diag)) {
+            return false;
+        }
+        if (!bx_df_puts(writer, value, diag)) {
+            return false;
+        }
+        if (left && !bx_df_write_spaces(writer, pad, diag)) {
+            return false;
+        }
+        return true;
+    }
+
+    if (!bx_df_puts(writer, value, diag)) {
         return false;
     }
 
     return true;
 }
 
-static bool bx_df_emit_header(const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
+static bool bx_df_emit_header(struct bx_line_writer* writer, const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
     bool first = true;
     for (size_t i = 0; i < columns->count; i++) {
         enum bx_df_output_field field = columns->fields[i];
         const char* label = bx_df_column_label(field, options, columns->custom_output);
-        if (!bx_df_emit_cell(label, field, columns->custom_output, first, diag)) {
+        if (!bx_df_emit_cell(writer, label, field, columns->custom_output, first, diag)) {
             return false;
         }
         first = false;
     }
 
-    if (fputc('\n', stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    return bx_df_putc(writer, '\n', diag);
 }
 
 static const char* bx_df_row_value(enum bx_df_output_field field, const struct bx_df_row* row, const struct bx_df_options* options, char* buffer, size_t buffer_size) {
@@ -851,23 +889,19 @@ static const char* bx_df_row_value(enum bx_df_output_field field, const struct b
     return "";
 }
 
-static bool bx_df_emit_row(const struct bx_df_row* row, const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
+static bool bx_df_emit_row(struct bx_line_writer* writer, const struct bx_df_row* row, const struct bx_df_column_set* columns, const struct bx_df_options* options, struct bx_diag_ctx* diag) {
     bool first = true;
     for (size_t i = 0; i < columns->count; i++) {
         enum bx_df_output_field field = columns->fields[i];
         char buffer[64];
         const char* value = bx_df_row_value(field, row, options, buffer, sizeof(buffer));
-        if (!bx_df_emit_cell(value, field, columns->custom_output, first, diag)) {
+        if (!bx_df_emit_cell(writer, value, field, columns->custom_output, first, diag)) {
             return false;
         }
         first = false;
     }
 
-    if (fputc('\n', stdout) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
-    }
-    return true;
+    return bx_df_putc(writer, '\n', diag);
 }
 
 static bool bx_df_type_list_contains(char* const* list, size_t count, const char* type_name) {
@@ -926,6 +960,7 @@ static bool bx_df_process_operand(const char* path,
                                   const struct bx_df_mount_table* mount_table,
                                   const struct bx_df_column_set* columns,
                                   struct bx_df_totals* totals,
+                                  struct bx_line_writer* writer,
                                   struct bx_diag_ctx* diag) {
     struct bx_df_row row;
     if (!bx_df_populate_row(path, mount_table, &row, diag)) {
@@ -940,7 +975,7 @@ static bool bx_df_process_operand(const char* path,
         bx_df_add_row_to_totals(totals, &row);
     }
 
-    return bx_df_emit_row(&row, columns, options, diag);
+    return bx_df_emit_row(writer, &row, columns, options, diag);
 }
 
 int bx_df_main(int argc, char** argv) {
@@ -977,21 +1012,25 @@ int bx_df_main(int argc, char** argv) {
     bx_df_load_mount_table(&mount_table);
     bx_df_build_columns(&options, &columns);
 
-    if (!bx_df_emit_header(&columns, &options, &diag)) {
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    if (!bx_df_emit_header(&writer, &columns, &options, &diag)) {
         rc = diag.exit_status;
         goto out;
     }
 
     int operand_count = argc - first_operand;
     if (operand_count <= 0) {
-        if (!bx_df_process_operand(".", &options, &mount_table, &columns, &totals, &diag)) {
+        if (!bx_df_process_operand(".", &options, &mount_table, &columns, &totals, &writer, &diag)) {
             rc = diag.exit_status;
             goto out;
         }
     }
     else {
         for (int i = first_operand; i < argc; i++) {
-            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &totals, &diag)) {
+            if (!bx_df_process_operand(argv[i], &options, &mount_table, &columns, &totals, &writer, &diag)) {
                 rc = diag.exit_status;
                 goto out;
             }
@@ -1005,14 +1044,14 @@ int bx_df_main(int argc, char** argv) {
     if (options.show_total && totals.has_rows) {
         struct bx_df_row total_row;
         bx_df_totals_to_row(&totals, &total_row);
-        if (!bx_df_emit_row(&total_row, &columns, &options, &diag)) {
+        if (!bx_df_emit_row(&writer, &total_row, &columns, &options, &diag)) {
             rc = diag.exit_status;
             goto out;
         }
     }
 
-    if (fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_df_write_error(&diag);
     }
     rc = diag.exit_status;
 

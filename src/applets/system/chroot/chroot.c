@@ -17,6 +17,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/child_runner.h"
 #include "lib/id_parse.h"
 
 struct bx_chroot_name_or_id {
@@ -547,9 +548,7 @@ static char** bx_chroot_resolve_command_argv(int argc, char** argv, int command_
 }
 
 static int bx_chroot_exec_command(char** command_argv, struct bx_diag_ctx* diag) {
-    execvp(command_argv[0], command_argv);
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv(command_argv);
     bx_diag(diag, "failed to run command '%s': %s", command_argv[0], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;

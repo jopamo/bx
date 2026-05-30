@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include <fnmatch.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,7 +43,6 @@ struct bx_ignore_anchored_prefix {
 };
 
 struct bx_ignore_program {
-    atomic_uint refcount;
     struct bx_ignore_rule *rules;
     int rule_count;
     struct bx_ignore_literal_basename *literal_basenames;
@@ -62,6 +60,7 @@ struct bx_ignore_program {
     unsigned anchored_prefix_source_mask;
     unsigned generic_glob_source_mask;
     bool casefold;
+    bool process_lifetime;
 };
 
 static enum bx_ignore_match_result
@@ -96,6 +95,19 @@ static void bx_ignore_rule_dispose(struct bx_ignore_rule *rule) {
     rule->negate = false;
     rule->uses_relative_path = false;
     rule->directory_only = false;
+}
+
+static void bx_ignore_program_destroy(struct bx_ignore_program *program) {
+    if (!program)
+        return;
+    for (int i = 0; i < program->rule_count; ++i)
+        bx_ignore_rule_dispose(&program->rules[i]);
+    free(program->anchored_prefixes);
+    free(program->literal_directories);
+    free(program->literal_extensions);
+    free(program->literal_basenames);
+    free(program->rules);
+    free(program);
 }
 
 static bool bx_ignore_source_kind_is_valid(enum bx_ignore_source_kind source) {
@@ -813,7 +825,6 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
         return NULL;
     }
 
-    atomic_init(&program->refcount, 1u);
     program->casefold = casefold;
     program->basename_only = bx_ignore_program_rules_are_basename_only(program);
     bx_ignore_program_build_source_masks(program);
@@ -828,14 +839,7 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
     return program;
 
 fail:
-    for (int i = 0; i < program->rule_count; ++i)
-        bx_ignore_rule_dispose(&program->rules[i]);
-    free(program->anchored_prefixes);
-    free(program->literal_directories);
-    free(program->literal_extensions);
-    free(program->literal_basenames);
-    free(program->rules);
-    free(program);
+    bx_ignore_program_destroy(program);
     return NULL;
 }
 
@@ -845,26 +849,28 @@ struct bx_ignore_program *bx_ignore_program_compile(char *const *patterns,
     return bx_ignore_program_compile_with_sources(patterns, NULL, pattern_count, casefold);
 }
 
-struct bx_ignore_program *bx_ignore_program_retain(struct bx_ignore_program *program) {
-    if (!program)
-        return NULL;
-    atomic_fetch_add_explicit(&program->refcount, 1u, memory_order_relaxed);
-    return program;
-}
-
 void bx_ignore_program_release(struct bx_ignore_program *program) {
     if (!program)
         return;
-    if (atomic_fetch_sub_explicit(&program->refcount, 1u, memory_order_acq_rel) != 1u)
+    if (program->process_lifetime)
         return;
-    for (int i = 0; i < program->rule_count; ++i)
-        bx_ignore_rule_dispose(&program->rules[i]);
-    free(program->anchored_prefixes);
-    free(program->literal_directories);
-    free(program->literal_extensions);
-    free(program->literal_basenames);
-    free(program->rules);
-    free(program);
+    bx_ignore_program_destroy(program);
+}
+
+void bx_ignore_program_make_process_lifetime(struct bx_ignore_program *program) {
+    if (program)
+        program->process_lifetime = true;
+}
+
+bool bx_ignore_program_is_process_lifetime(const struct bx_ignore_program *program) {
+    return program && program->process_lifetime;
+}
+
+void bx_ignore_program_destroy_process_lifetime(struct bx_ignore_program *program) {
+    if (!program)
+        return;
+    program->process_lifetime = false;
+    bx_ignore_program_destroy(program);
 }
 
 bool bx_ignore_program_is_basename_only(const struct bx_ignore_program *program) {

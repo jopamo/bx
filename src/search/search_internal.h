@@ -14,6 +14,7 @@ struct bx_matcher;
 struct bx_match;
 struct bx_lit_plan;
 struct bx_literal_matcher;
+struct bx_line_writer_file;
 struct bx_rg_display_path_buf;
 struct bx_search_exec_plan;
 
@@ -34,11 +35,13 @@ struct bx_search_output_ctx {
     char **capture_err_buf;
     size_t *capture_err_len;
     struct bx_search_stats *stats;
+    struct bx_line_writer_file *out_line_file;
     bool heading_output_started;
     bool context_output_started;
     bool used_heading;
     bool emitted_stdout;
     bool capture_failed;
+    bool output_error_reported;
 };
 
 bool bx_search_progname_uses_os_error_style(const char *progname);
@@ -93,6 +96,7 @@ void bx_search_print_path_record(const char *display_name,
                                  struct search_opts *opts);
 struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx);
 void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous);
+void bx_search_output_ctx_close_captures(struct bx_search_output_ctx *ctx);
 int bx_search_compute_offset_width_from_stat(const struct stat *st,
                                              const struct search_opts *opts);
 int bx_search_output_get_offset_width(void);

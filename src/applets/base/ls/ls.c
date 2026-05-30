@@ -21,6 +21,8 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/line_writer_file.h"
+#include "lib/output_alloc_counter.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 #include "lib/output_quote.h"
@@ -1355,6 +1357,7 @@ static void bx_ls_dired_output_append_range(struct bx_ls_dired_range** items,
     if (*len == *cap) {
         size_t new_cap = (*cap == 0u) ? 8u : (*cap * 2u);
         *items = xrealloc(*items, new_cap * sizeof(**items));
+        bx_output_alloc_counter_note_realloc(new_cap * sizeof(**items));
         *cap = new_cap;
     }
 
@@ -1386,6 +1389,7 @@ static bool bx_ls_dired_output_close(struct bx_ls_dired_output* output, struct b
     }
 
     output->stream = NULL;
+    bx_output_alloc_counter_note_alloc(output->len + 1u);
     return true;
 }
 
@@ -1757,6 +1761,7 @@ static void bx_ls_mode_to_string(mode_t mode, char out[11]) {
 static char* bx_ls_readlink_target(const char* path) {
     size_t capacity = 128u;
     char* target = xmalloc(capacity + 1u);
+    bx_output_alloc_counter_note_alloc(capacity + 1u);
 
     while (true) {
         ssize_t nread = readlink(path, target, capacity);
@@ -1778,6 +1783,7 @@ static char* bx_ls_readlink_target(const char* path) {
 
         capacity *= 2u;
         target = xrealloc(target, capacity + 1u);
+        bx_output_alloc_counter_note_realloc(capacity + 1u);
     }
 }
 
@@ -1877,6 +1883,7 @@ static void bx_ls_format_custom_timestamp(
         else {
             size_t first_len = (size_t)(newline - fmt);
             char* first = xmalloc(first_len + 1u);
+            bx_output_alloc_counter_note_alloc(first_len + 1u);
             memcpy(first, fmt, first_len);
             first[first_len] = '\0';
             if (!bx_ls_format_with_strftime(first, tm_value, buffer, buffer_size)) {
@@ -2261,13 +2268,17 @@ static const char* bx_ls_color_code_for_entry(const struct bx_ls_entry* entry, c
 
 static char* bx_ls_colorize_name(const char* text, const struct bx_ls_entry* entry, const struct stat* st, const struct bx_ls_options* options) {
     if (!bx_ls_color_enabled(options)) {
-        return xstrdup(text);
+        char* out = xstrdup(text);
+        bx_output_alloc_counter_note_cstring_alloc(text);
+        return out;
     }
 
     char color_buffer[128];
     const char* color = bx_ls_color_code_for_entry(entry, st, color_buffer, sizeof(color_buffer));
     if (color == NULL || color[0] == '\0') {
-        return xstrdup(text);
+        char* out = xstrdup(text);
+        bx_output_alloc_counter_note_cstring_alloc(text);
+        return out;
     }
 
     char reset_buffer[64];
@@ -2281,6 +2292,7 @@ static char* bx_ls_colorize_name(const char* text, const struct bx_ls_entry* ent
     size_t reset_len = strlen(reset);
     size_t output_len = 2u + color_len + 1u + text_len + 2u + reset_len + 1u;
     char* output = xmalloc(output_len + 1u);
+    bx_output_alloc_counter_note_alloc(output_len + 1u);
     size_t out_pos = 0;
 
     output[out_pos++] = '\033';
@@ -2316,19 +2328,26 @@ static bool bx_ls_hyperlink_enabled(const struct bx_ls_options* options) {
 static char* bx_ls_absolute_path_for_hyperlink(const char* path) {
     char* resolved = realpath(path, NULL);
     if (resolved != NULL) {
+        bx_output_alloc_counter_note_cstring_alloc(resolved);
         return resolved;
     }
 
     if (path[0] == '/') {
-        return xstrdup(path);
+        char* out = xstrdup(path);
+        bx_output_alloc_counter_note_cstring_alloc(path);
+        return out;
     }
 
     char* cwd = getcwd(NULL, 0u);
     if (cwd == NULL) {
-        return xstrdup(path);
+        char* out = xstrdup(path);
+        bx_output_alloc_counter_note_cstring_alloc(path);
+        return out;
     }
+    bx_output_alloc_counter_note_cstring_alloc(cwd);
 
     char* joined = bx_path_join(cwd, path);
+    bx_output_alloc_counter_note_cstring_alloc(joined);
     free(cwd);
     return joined;
 }
@@ -2336,6 +2355,7 @@ static char* bx_ls_absolute_path_for_hyperlink(const char* path) {
 static char* bx_ls_escape_uri_path(const char* path) {
     size_t len = strlen(path);
     char* out = xmalloc((len * 3u) + 1u);
+    bx_output_alloc_counter_note_alloc((len * 3u) + 1u);
     size_t out_pos = 0;
 
     for (size_t i = 0; i < len; i++) {
@@ -2361,7 +2381,9 @@ static char* bx_ls_hyperlink_target_for_entry(const struct bx_ls_entry* entry) {
 
 static char* bx_ls_hyperlink_wrap(const char* text, const char* target_path, const struct bx_ls_options* options) {
     if (!bx_ls_hyperlink_enabled(options) || target_path == NULL) {
-        return xstrdup(text);
+        char* out = xstrdup(text);
+        bx_output_alloc_counter_note_cstring_alloc(text);
+        return out;
     }
 
     char host[256];
@@ -2376,6 +2398,7 @@ static char* bx_ls_hyperlink_wrap(const char* text, const char* target_path, con
     size_t uri_len = strlen(uri_path);
     size_t total = 12u + host_len + uri_len + 2u + text_len + 7u;
     char* out = xmalloc(total + 1u);
+    bx_output_alloc_counter_note_alloc(total + 1u);
     size_t pos = 0u;
 
     pos += (size_t)snprintf(out + pos, total + 1u - pos, "\033]8;;file://%s%s\033\\", host, uri_path);
@@ -2453,6 +2476,7 @@ static char* bx_ls_append_indicator(char* name, char indicator) {
 
     size_t len = strlen(name);
     char* out = xmalloc(len + 2u);
+    bx_output_alloc_counter_note_alloc(len + 2u);
     memcpy(out, name, len);
     out[len] = indicator;
     out[len + 1u] = '\0';
@@ -2490,8 +2514,8 @@ static bool bx_ls_entry_stat(const struct bx_ls_entry* entry, struct stat* st, s
     return false;
 }
 
-static void bx_ls_put_line_terminator(const struct bx_ls_options* options) {
-    (void)fputc(options->zero_terminated ? '\0' : '\n', stdout);
+static void bx_ls_put_line_terminator(FILE* out, const struct bx_ls_options* options) {
+    (void)fputc(options->zero_terminated ? '\0' : '\n', out);
 }
 
 static size_t bx_ls_uintmax_width(uintmax_t value) {
@@ -2678,6 +2702,7 @@ static bool bx_ls_build_short_cell(const struct bx_ls_entry* entry,
 
     size_t name_len = strlen(name);
     char* combined = xmalloc(prefix_len + name_len + 1u);
+    bx_output_alloc_counter_note_alloc(prefix_len + name_len + 1u);
     memcpy(combined, prefix, prefix_len);
     memcpy(combined + prefix_len, name, name_len + 1u);
     free(name);
@@ -2814,7 +2839,7 @@ static size_t bx_ls_min_padding_bytes(size_t current_col, size_t target_col, siz
     return best;
 }
 
-static void bx_ls_print_column_padding(size_t current_col, size_t target_col, size_t tabsize) {
+static void bx_ls_print_column_padding(FILE* out, size_t current_col, size_t target_col, size_t tabsize) {
     while (current_col < target_col) {
         if (tabsize > 1u) {
             size_t next_tab = ((current_col / tabsize) + 1u) * tabsize;
@@ -2823,18 +2848,18 @@ static void bx_ls_print_column_padding(size_t current_col, size_t target_col, si
                 ? 1u + bx_ls_min_padding_bytes(next_tab, target_col, tabsize)
                 : SIZE_MAX;
             if (with_tab < spaces_only) {
-                (void)fputc('\t', stdout);
+                (void)fputc('\t', out);
                 current_col = next_tab;
                 continue;
             }
         }
 
-        (void)fputc(' ', stdout);
+        (void)fputc(' ', out);
         current_col++;
     }
 }
 
-static void bx_ls_print_entries_single(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+static void bx_ls_print_entries_single(FILE* out, const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     struct bx_ls_short_widths widths;
     bx_ls_compute_short_widths(entries, options, diag, &widths);
 
@@ -2844,13 +2869,13 @@ static void bx_ls_print_entries_single(const struct bx_ls_entry_list* entries, c
             continue;
         }
 
-        (void)fputs(cell, stdout);
-        bx_ls_put_line_terminator(options);
+        (void)fputs(cell, out);
+        bx_ls_put_line_terminator(out, options);
         free(cell);
     }
 }
 
-static void bx_ls_print_entries_commas(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+static void bx_ls_print_entries_commas(FILE* out, const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     size_t term_width = bx_ls_output_width(options);
     bool first_on_line = true;
     size_t current_width = 0u;
@@ -2868,26 +2893,26 @@ static void bx_ls_print_entries_commas(const struct bx_ls_entry_list* entries, c
         size_t item_width = cell_width + (is_last ? 0u : 1u);
 
         if (first_on_line) {
-            (void)fputs(cell, stdout);
+            (void)fputs(cell, out);
             if (!is_last) {
-                (void)fputc(',', stdout);
+                (void)fputc(',', out);
             }
             current_width = item_width;
             first_on_line = false;
         }
         else if (current_width + 1u + item_width <= term_width) {
-            (void)fputc(' ', stdout);
-            (void)fputs(cell, stdout);
+            (void)fputc(' ', out);
+            (void)fputs(cell, out);
             if (!is_last) {
-                (void)fputc(',', stdout);
+                (void)fputc(',', out);
             }
             current_width += 1u + item_width;
         }
         else {
-            bx_ls_put_line_terminator(options);
-            (void)fputs(cell, stdout);
+            bx_ls_put_line_terminator(out, options);
+            (void)fputs(cell, out);
             if (!is_last) {
-                (void)fputc(',', stdout);
+                (void)fputc(',', out);
             }
             current_width = item_width;
         }
@@ -2896,11 +2921,11 @@ static void bx_ls_print_entries_commas(const struct bx_ls_entry_list* entries, c
     }
 
     if (!first_on_line || entries->len == 0u) {
-        bx_ls_put_line_terminator(options);
+        bx_ls_put_line_terminator(out, options);
     }
 }
 
-static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
+static void bx_ls_print_entries_columns(FILE* out, const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag) {
     if (entries->len == 0) {
         return;
     }
@@ -2909,6 +2934,7 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
     bx_ls_compute_short_widths(entries, options, diag, &widths);
 
     char** cells = xmalloc(entries->len * sizeof(*cells));
+    bx_output_alloc_counter_note_alloc(entries->len * sizeof(*cells));
     size_t cell_count = 0;
 
     for (size_t i = 0; i < entries->len; i++) {
@@ -2962,6 +2988,8 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
     size_t row_count = (cell_count + column_count - 1u) / column_count;
     size_t* column_widths = xmalloc(column_count * sizeof(*column_widths));
     size_t* column_starts = xmalloc(column_count * sizeof(*column_starts));
+    bx_output_alloc_counter_note_alloc(column_count * sizeof(*column_widths));
+    bx_output_alloc_counter_note_alloc(column_count * sizeof(*column_starts));
     for (size_t col = 0; col < column_count; col++) {
         column_widths[col] = bx_ls_column_width_for(
             (const char* const*)cells,
@@ -2986,7 +3014,7 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
                 continue;
             }
 
-            (void)fputs(cells[idx], stdout);
+            (void)fputs(cells[idx], out);
             size_t current_col = column_starts[col] + bx_ls_display_width(cells[idx]);
 
             size_t next_col = col + 1u;
@@ -2999,10 +3027,10 @@ static void bx_ls_print_entries_columns(const struct bx_ls_entry_list* entries, 
             }
 
             if (next_col < column_count) {
-                bx_ls_print_column_padding(current_col, column_starts[next_col], options->tabsize);
+                bx_ls_print_column_padding(out, current_col, column_starts[next_col], options->tabsize);
             }
         }
-        bx_ls_put_line_terminator(options);
+        bx_ls_put_line_terminator(out, options);
     }
 
     for (size_t i = 0; i < cell_count; i++) {
@@ -3141,11 +3169,13 @@ static bool bx_ls_format_long_entry_line(
         return false;
     }
 
+    bx_output_alloc_counter_note_alloc(line_len + 1u);
     *line_out = line;
     return true;
 }
 
 static void bx_ls_print_long_entry(
+    FILE* out,
     const struct bx_ls_entry* entry,
     const struct bx_ls_options* options,
     const struct bx_ls_long_widths* widths,
@@ -3154,8 +3184,8 @@ static void bx_ls_print_long_entry(
     if (!bx_ls_format_long_entry_line(entry, options, widths, diag, &line, NULL, NULL)) {
         return;
     }
-    (void)fputs(line, stdout);
-    bx_ls_put_line_terminator(options);
+    (void)fputs(line, out);
+    bx_ls_put_line_terminator(out, options);
     free(line);
 }
 
@@ -3174,7 +3204,8 @@ static uintmax_t bx_ls_total_allocated_bytes(const struct bx_ls_entry_list* entr
     return total_bytes;
 }
 
-static void bx_ls_print_entries_long_with_widths(const struct bx_ls_entry_list* entries,
+static void bx_ls_print_entries_long_with_widths(FILE* out,
+                                                 const struct bx_ls_entry_list* entries,
                                                  const struct bx_ls_options* options,
                                                  const struct bx_ls_long_widths* widths,
                                                  bool print_total,
@@ -3182,19 +3213,19 @@ static void bx_ls_print_entries_long_with_widths(const struct bx_ls_entry_list* 
     if (print_total) {
         char total_text[32];
         bx_ls_format_block_count(bx_ls_total_allocated_bytes(entries, diag), options, total_text);
-        printf("total %s", total_text);
-        bx_ls_put_line_terminator(options);
+        fprintf(out, "total %s", total_text);
+        bx_ls_put_line_terminator(out, options);
     }
 
     for (size_t i = 0; i < entries->len; i++) {
-        bx_ls_print_long_entry(&entries->items[i], options, widths, diag);
+        bx_ls_print_long_entry(out, &entries->items[i], options, widths, diag);
     }
 }
 
-static void bx_ls_print_entries_long(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_total) {
+static void bx_ls_print_entries_long(FILE* out, const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_total) {
     struct bx_ls_long_widths widths;
     bx_ls_compute_long_widths(entries, options, diag, &widths);
-    bx_ls_print_entries_long_with_widths(entries, options, &widths, print_total, diag);
+    bx_ls_print_entries_long_with_widths(out, entries, options, &widths, print_total, diag);
 }
 
 static void bx_ls_print_entries_long_dired_with_widths(const struct bx_ls_entry_list* entries,
@@ -3264,52 +3295,53 @@ static void bx_ls_dired_write_directory_header(struct bx_ls_dired_output* output
     }
 }
 
-static void bx_ls_dired_emit_output(const struct bx_ls_dired_output* output, const struct bx_ls_options* options) {
-    (void)fwrite(output->data, 1u, output->len, stdout);
+static void bx_ls_dired_emit_output(FILE* out, const struct bx_ls_dired_output* output, const struct bx_ls_options* options) {
+    (void)fwrite(output->data, 1u, output->len, out);
 
-    (void)fputs("//DIRED//", stdout);
+    (void)fputs("//DIRED//", out);
     for (size_t i = 0; i < output->name_len; i++) {
-        (void)fprintf(stdout, " %zu %zu", output->name_ranges[i].start, output->name_ranges[i].end);
+        (void)fprintf(out, " %zu %zu", output->name_ranges[i].start, output->name_ranges[i].end);
     }
-    (void)fputc('\n', stdout);
+    (void)fputc('\n', out);
 
     if (output->subdir_len > 0u) {
-        (void)fputs("//SUBDIRED//", stdout);
+        (void)fputs("//SUBDIRED//", out);
         for (size_t i = 0; i < output->subdir_len; i++) {
-            (void)fprintf(stdout, " %zu %zu", output->subdir_ranges[i].start, output->subdir_ranges[i].end);
+            (void)fprintf(out, " %zu %zu", output->subdir_ranges[i].start, output->subdir_ranges[i].end);
         }
-        (void)fputc('\n', stdout);
+        (void)fputc('\n', out);
     }
 
-    (void)fprintf(stdout, "//DIRED-OPTIONS// --quoting-style=%s\n", bx_ls_quoting_style_name(options));
+    (void)fprintf(out, "//DIRED-OPTIONS// --quoting-style=%s\n", bx_ls_quoting_style_name(options));
 }
 
-static void bx_ls_print_entries(const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_total) {
+static void bx_ls_print_entries(FILE* out, const struct bx_ls_entry_list* entries, const struct bx_ls_options* options, struct bx_diag_ctx* diag, bool print_total) {
     if (print_total && options->format != BX_LS_FORMAT_LONG) {
         char total_text[32];
         bx_ls_format_block_count(bx_ls_total_allocated_bytes(entries, diag), options, total_text);
-        printf("total %s", total_text);
-        bx_ls_put_line_terminator(options);
+        fprintf(out, "total %s", total_text);
+        bx_ls_put_line_terminator(out, options);
     }
 
     switch (options->format) {
         case BX_LS_FORMAT_LONG:
-            bx_ls_print_entries_long(entries, options, diag, print_total);
+            bx_ls_print_entries_long(out, entries, options, diag, print_total);
             break;
         case BX_LS_FORMAT_COMMAS:
-            bx_ls_print_entries_commas(entries, options, diag);
+            bx_ls_print_entries_commas(out, entries, options, diag);
             break;
         case BX_LS_FORMAT_COLUMNS:
-            bx_ls_print_entries_columns(entries, options, diag);
+            bx_ls_print_entries_columns(out, entries, options, diag);
             break;
         case BX_LS_FORMAT_SINGLE:
         default:
-            bx_ls_print_entries_single(entries, options, diag);
+            bx_ls_print_entries_single(out, entries, options, diag);
             break;
     }
 }
 
-static void bx_ls_list_directory(const char* dir_path,
+static void bx_ls_list_directory(FILE* out,
+                                 const char* dir_path,
                                  const struct bx_ls_options* options,
                                  struct bx_diag_ctx* diag,
                                  bool print_header,
@@ -3321,7 +3353,7 @@ static void bx_ls_list_directory(const char* dir_path,
             bx_ls_dired_write_directory_header(dired_output, dir_path, true);
         }
         else {
-            printf("%s:\n", dir_path);
+            fprintf(out, "%s:\n", dir_path);
         }
     }
 
@@ -3332,7 +3364,7 @@ static void bx_ls_list_directory(const char* dir_path,
         bx_ls_print_entries_long_dired(&entries, options, diag, true, dired_output);
     }
     else {
-        bx_ls_print_entries(&entries, options, diag, options->format == BX_LS_FORMAT_LONG || options->show_size_blocks);
+        bx_ls_print_entries(out, &entries, options, diag, options->format == BX_LS_FORMAT_LONG || options->show_size_blocks);
     }
 
     struct stat current_dir_st;
@@ -3362,9 +3394,9 @@ static void bx_ls_list_directory(const char* dir_path,
                 (void)fputc('\n', dired_output->stream);
             }
             else {
-                (void)fputc('\n', stdout);
+                (void)fputc('\n', out);
             }
-            bx_ls_list_directory(entry->full_path, options, diag, true, false, dir_stack, dired_output);
+            bx_ls_list_directory(out, entry->full_path, options, diag, true, false, dir_stack, dired_output);
         }
     }
 
@@ -3474,7 +3506,7 @@ static void bx_ls_classify_operand(const char* operand, const struct bx_ls_optio
     bx_ls_add_operand_as_entry(operand, &lst, follow_for_display, file_entries);
 }
 
-static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv, int first_operand, struct bx_diag_ctx* diag) {
+static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv, int first_operand, struct bx_diag_ctx* diag, FILE* out) {
     struct bx_ls_entry_list file_entries = {0};
     struct bx_ls_path_list directory_paths = {0};
     bool use_dired_output = options->dired && options->format == BX_LS_FORMAT_LONG;
@@ -3517,14 +3549,14 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
                 bx_ls_print_entries_long_dired_with_widths(&file_entries, options, &widths, diag, false, &dired_output);
             }
             else {
-                bx_ls_print_entries_long_with_widths(&file_entries, options, &widths, false, diag);
+                bx_ls_print_entries_long_with_widths(out, &file_entries, options, &widths, false, diag);
             }
         }
         else if (use_dired_output) {
             bx_ls_print_entries_long_dired(&file_entries, options, diag, false, &dired_output);
         }
         else {
-            bx_ls_print_entries(&file_entries, options, diag, false);
+            bx_ls_print_entries(out, &file_entries, options, diag, false);
         }
         wrote_output = true;
     }
@@ -3536,10 +3568,11 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
                 (void)fputc('\n', dired_output.stream);
             }
             else {
-                (void)fputc('\n', stdout);
+                (void)fputc('\n', out);
             }
         }
-        bx_ls_list_directory(directory_paths.items[i],
+        bx_ls_list_directory(out,
+                             directory_paths.items[i],
                              options,
                              diag,
                              print_directory_headers,
@@ -3550,7 +3583,7 @@ static void bx_ls_run(const struct bx_ls_options* options, int argc, char** argv
     }
 
     if (use_dired_output && bx_ls_dired_output_close(&dired_output, diag)) {
-        bx_ls_dired_emit_output(&dired_output, options);
+        bx_ls_dired_emit_output(out, &dired_output, options);
     }
 
     bx_ls_entry_list_free(&file_entries);
@@ -3596,10 +3629,18 @@ static int bx_ls_main_variant(int argc, char** argv, enum bx_ls_variant variant)
         return 2;
     }
 
-    bx_ls_run(&options, argc, argv, first_operand, &diag);
+    struct bx_line_writer_file stdout_file = {0};
+    if (!bx_line_writer_file_open(&stdout_file, STDOUT_FILENO, false)) {
+        bx_diag(&diag, "write error: %s", strerror(bx_line_writer_file_error(&stdout_file)));
+        bx_ls_options_free(&options);
+        return 2;
+    }
 
-    if (fflush(stdout) == EOF) {
-        bx_diag(&diag, "write error: %s", strerror(errno));
+    bx_ls_run(&options, argc, argv, first_operand, &diag,
+              bx_line_writer_file_stream(&stdout_file));
+
+    if (!bx_line_writer_file_finish(&stdout_file)) {
+        bx_diag(&diag, "write error: %s", strerror(bx_line_writer_file_error(&stdout_file)));
     }
 
     int status = diag.exit_status;

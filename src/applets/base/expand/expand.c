@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -14,6 +15,7 @@
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_expand_options {
     const char* progname;
@@ -166,7 +168,28 @@ static bool bx_expand_parse_options(int argc, char** argv, struct bx_expand_opti
     return true;
 }
 
-static void expand_file(FILE* f, struct bx_expand_options* options) {
+static bool bx_expand_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_expand_write_char(
+    struct bx_line_writer* writer,
+    char ch,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_putc(writer, ch)) {
+        return bx_expand_write_error(diag);
+    }
+    return true;
+}
+
+static bool expand_file(
+    FILE* f,
+    struct bx_expand_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     int c;
     size_t col = 0;
     bool initial = true;
@@ -196,12 +219,16 @@ static void expand_file(FILE* f, struct bx_expand_options* options) {
             }
 
             while (col < next_stop) {
-                putchar(' ');
+                if (!bx_expand_write_char(writer, ' ', diag)) {
+                    return false;
+                }
                 col++;
             }
         }
         else {
-            putchar(c);
+            if (!bx_expand_write_char(writer, (char)c, diag)) {
+                return false;
+            }
             if (c == '\n') {
                 col = 0;
                 initial = true;
@@ -220,6 +247,8 @@ static void expand_file(FILE* f, struct bx_expand_options* options) {
             }
         }
     }
+
+    return true;
 }
 
 int bx_expand_main(int argc, char** argv) {
@@ -239,7 +268,12 @@ int bx_expand_main(int argc, char** argv) {
     }
 
     int num_files = argc - first_operand;
-    for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
@@ -247,8 +281,12 @@ int bx_expand_main(int argc, char** argv) {
             bx_diag(&diag, "%s: %s", filename, strerror(errno));
             continue;
         }
-        expand_file(f, &options);
+        ok = expand_file(f, &options, &writer, &diag);
         bx_fclose_nonstdio(f, is_stdio);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_expand_write_error(&diag);
     }
 
     free(options.tab_stops);

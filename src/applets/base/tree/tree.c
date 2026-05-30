@@ -1,17 +1,21 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
-#include "lib/cli_common.h"
-#include "tree_internal.h"
 #include "lib/args_common.h"
+#include "lib/cli_common.h"
+#include "lib/line_writer.h"
+#include "tree_internal.h"
 
 enum bx_tree_option_code {
     BX_TREE_OPT_HELP = 256,
@@ -317,10 +321,76 @@ static bool bx_tree_parse_options(int argc,
     return true;
 }
 
+struct bx_tree_stdout_output {
+    struct bx_line_writer writer;
+    char buffer[8192];
+    int error;
+};
+
+static ssize_t bx_tree_stdout_write(void *cookie,
+                                    const char *data,
+                                    size_t len) {
+    struct bx_tree_stdout_output *output = cookie;
+    if (!output || (!data && len > 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (len > (size_t)SSIZE_MAX) {
+        errno = EOVERFLOW;
+        output->error = errno;
+        return -1;
+    }
+
+    if (!bx_line_writer_write(&output->writer, data, len)) {
+        output->error = errno ? errno : EIO;
+        errno = output->error;
+        return -1;
+    }
+    return (ssize_t)len;
+}
+
+static int bx_tree_stdout_close(void *cookie) {
+    struct bx_tree_stdout_output *output = cookie;
+    if (!output) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (output->error != 0) {
+        errno = output->error;
+        return -1;
+    }
+    if (!bx_line_writer_flush(&output->writer)) {
+        output->error = errno ? errno : EIO;
+        errno = output->error;
+        return -1;
+    }
+    return 0;
+}
+
 static FILE *bx_tree_open_output(const struct bx_tree_options *opts,
-                                 struct bx_diag_ctx *diag) {
-    if (!opts->output_path)
-        return stdout;
+                                 struct bx_diag_ctx *diag,
+                                 struct bx_tree_stdout_output *stdout_output) {
+    if (!opts->output_path) {
+        memset(stdout_output, 0, sizeof(*stdout_output));
+        bx_line_writer_init(&stdout_output->writer, STDOUT_FILENO,
+                            stdout_output->buffer,
+                            sizeof(stdout_output->buffer));
+        cookie_io_functions_t io = {
+            .read = NULL,
+            .write = bx_tree_stdout_write,
+            .seek = NULL,
+            .close = bx_tree_stdout_close,
+        };
+        FILE *stream = fopencookie(stdout_output, "w", io);
+        if (!stream) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            return NULL;
+        }
+        (void)setvbuf(stream, NULL, _IONBF, 0);
+        return stream;
+    }
 
     FILE *stream = fopen(opts->output_path, "w");
     if (!stream) {
@@ -406,7 +476,8 @@ int bx_tree_main(int argc, char **argv) {
     for (size_t i = 0; i < root_count; i++)
         bx_tree_count_visible(&roots[i], &opts, &total_directories, &total_files);
 
-    FILE *stream = bx_tree_open_output(&opts, &diag);
+    struct bx_tree_stdout_output stdout_output;
+    FILE *stream = bx_tree_open_output(&opts, &diag, &stdout_output);
     if (!stream) {
         for (size_t i = 0; i < root_count; i++)
             bx_tree_free_root(&roots[i]);

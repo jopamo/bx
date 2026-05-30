@@ -11,6 +11,7 @@
 
 #include "dev_counters.h"
 #include "lib/color.h"
+#include "lib/child_runner.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "rg_output.h"
@@ -504,6 +505,21 @@ static bool bx_rg_hyperlink_format_has_token(const char *format, const char *tok
     return format && token && strstr(format, token) != NULL;
 }
 
+struct bx_rg_hostname_reap {
+    bool called;
+    int status;
+    bool exec_failed;
+};
+
+static void bx_rg_hostname_reap_cb(pid_t pid, int status, bool exec_failed, int exec_errno, void *user) {
+    (void)pid;
+    (void)exec_errno;
+    struct bx_rg_hostname_reap *state = user;
+    state->called = true;
+    state->status = status;
+    state->exec_failed = exec_failed;
+}
+
 bool bx_rg_parse_hyperlink_format(const char *progname, const char *arg,
                                   char **out_format) {
     const char *resolved = NULL;
@@ -540,32 +556,34 @@ bool bx_rg_parse_hyperlink_format(const char *progname, const char *arg,
 
 static bool bx_rg_hostname_from_command(const char *command, char **out) {
     int pipefd[2] = {-1, -1};
-    pid_t pid;
+    const char *command_argv[2];
+    struct bx_child child[1] = {0};
+    int running = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    struct bx_rg_hostname_reap reap = {0};
     char *buf = NULL;
     size_t cap = 0u;
     size_t len = 0u;
     char tmp[256];
     ssize_t nread;
-    int status = 0;
+    bool exec_failed_now = false;
+    int exec_errno_now = 0;
 
     if (!command || !*command || !out)
         return false;
     if (bx_fd_pipe_cloexec(pipefd) != 0)
         return false;
 
-    pid = fork();
-    if (pid < 0) {
+    command_argv[0] = command;
+    command_argv[1] = NULL;
+    runner_opts.use_stdout_fd = true;
+    runner_opts.stdout_fd = pipefd[1];
+
+    if (bx_child_spawn_const_argv("rg", command_argv, &runner_opts, 0, child, &running,
+                                  &exec_failed_now, &exec_errno_now) != 0) {
         close(pipefd[0]);
         close(pipefd[1]);
         return false;
-    }
-    if (pid == 0) {
-        close(pipefd[0]);
-        if (bx_fd_dup2_exact(pipefd[1], STDOUT_FILENO) < 0)
-            _exit(127);
-        close(pipefd[1]);
-        execlp(command, command, (char *)NULL);
-        _exit(127);
     }
 
     close(pipefd[1]);
@@ -578,7 +596,7 @@ static bool bx_rg_hostname_from_command(const char *command, char **out) {
             if (!grown) {
                 free(buf);
                 close(pipefd[0]);
-                waitpid(pid, &status, 0);
+                bx_child_reap(child, &running, true, true, NULL, NULL);
                 return false;
             }
             buf = grown;
@@ -588,7 +606,14 @@ static bool bx_rg_hostname_from_command(const char *command, char **out) {
         len += (size_t)nread;
     }
     close(pipefd[0]);
-    if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (exec_failed_now || exec_errno_now != 0) {
+        bx_child_reap(child, &running, true, true, NULL, NULL);
+        free(buf);
+        return false;
+    }
+    if (bx_child_reap(child, &running, true, true, bx_rg_hostname_reap_cb, &reap) != 0 ||
+        !reap.called || reap.exec_failed ||
+        !WIFEXITED(reap.status) || WEXITSTATUS(reap.status) != 0) {
         free(buf);
         return false;
     }

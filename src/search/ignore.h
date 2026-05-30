@@ -8,7 +8,7 @@
 #include "ignore_program.h"
 
 struct bx_ignore_state {
-    struct bx_ignore_state *parent;
+    const struct bx_ignore_state *parent;
     const char *dirpath;
     char *owned_dirpath;
     size_t dirpath_len;
@@ -21,7 +21,7 @@ struct bx_ignore_state {
 };
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
-                          struct bx_ignore_state *parent,
+                          const struct bx_ignore_state *parent,
                           const char *dirpath,
                           struct bx_ignore_program *program);
 

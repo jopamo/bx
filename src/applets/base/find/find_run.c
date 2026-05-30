@@ -1,10 +1,13 @@
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "find_exec.h"
 #include "find_internal.h"
+#include "lib/line_writer.h"
 
 static enum bx_walk_action find_walk_cb(struct bx_walk_entry *entry, void *user) {
     struct find_state *st = user;
@@ -73,12 +76,17 @@ bool find_prepare_expression(const char *progname, struct find_opts *opts,
 int find_run_search(const char *progname, struct find_opts *opts,
                     struct find_expr *expr, char **roots, int root_count) {
     bool stop = false;
+    char output_buffer[8192];
+    struct bx_line_writer stdout_writer;
+    bx_line_writer_init(&stdout_writer, STDOUT_FILENO, output_buffer,
+                        sizeof(output_buffer));
     struct find_state st = {
         .progname = progname,
         .opts = opts,
         .expr = expr,
         .stop = &stop,
         .status = 0,
+        .stdout_writer = &stdout_writer,
     };
     if (clock_gettime(CLOCK_REALTIME, &st.now) != 0) {
         st.now.tv_sec = time(NULL);
@@ -115,6 +123,13 @@ int find_run_search(const char *progname, struct find_opts *opts,
 
     if (find_interrupt_return_code() != 0 && st.status == 0)
         st.status = find_interrupt_return_code();
+
+    if (find_interrupt_return_code() == 0 &&
+        bx_line_writer_error(&stdout_writer) == 0 &&
+        !bx_line_writer_flush(&stdout_writer)) {
+        find_report_error(progname, "stdout", errno ? errno : EIO);
+        st.status = 1;
+    }
 
     if (find_interrupt_return_code() == 0) {
         int pending_rc = find_run_pending_exec_exprs(progname, expr);

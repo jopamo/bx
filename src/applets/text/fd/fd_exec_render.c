@@ -1,10 +1,10 @@
 #define _GNU_SOURCE
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "fd_exec_render.h"
+#include "lib/line_writer.h"
 #include "lib/path_ops.h"
 #include "lib/path_quote.h"
 
@@ -309,14 +309,18 @@ char *fd_quote_output_path_owned(const struct fd_opts *opts, char *path) {
     return quoted;
 }
 
-void fd_print_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir) {
+bool fd_print_path(struct bx_line_writer *writer,
+                   const struct fd_render_ctx *ctx, const char *path,
+                   bool is_dir) {
     char terminator = ctx->opts->print0 ? '\0' : '\n';
     char *rendered = fd_render_output_path(ctx, path, is_dir);
     if (!rendered)
-        return;
+        return true;
     rendered = fd_quote_output_path_owned(ctx->opts, rendered);
     if (!rendered)
-        return;
-    printf("%s%c", rendered, terminator);
+        return true;
+    bool ok = bx_line_writer_puts(writer, rendered) &&
+              bx_line_writer_putc(writer, terminator);
     free(rendered);
+    return ok;
 }

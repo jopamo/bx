@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/child_runner.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/path_ops.h"
@@ -329,14 +330,7 @@ static bool bx_switch_root_move_one_pseudo_mount(const char* source_path, const 
 static int bx_switch_root_exec_init(const struct bx_switch_root_options* options, char** argv, struct bx_diag_ctx* diag) {
     char** init_argv = argv + options->init_index;
 
-    if (strchr(init_argv[0], '/') != NULL) {
-        execv(init_argv[0], init_argv);
-    }
-    else {
-        execvp(init_argv[0], init_argv);
-    }
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv_exact_or_path(init_argv);
     bx_diag(diag, "failed to exec INIT '%s': %s", init_argv[0], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;

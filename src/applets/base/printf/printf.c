@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -9,11 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/line_writer.h"
 #include "lib/output_quote.h"
 
 struct bx_printf_options {
@@ -65,6 +68,12 @@ struct bx_printf_byte_buffer {
     unsigned char* data;
     size_t len;
     size_t cap;
+};
+
+struct bx_printf_output {
+    struct bx_line_writer* writer;
+    FILE* format_stream;
+    int error;
 };
 
 enum bx_printf_position_parse_result {
@@ -988,12 +997,44 @@ static bool bx_printf_byte_buffer_append(struct bx_printf_byte_buffer* buffer, c
     return true;
 }
 
-static bool bx_printf_write_bytes(struct bx_diag_ctx* diag, const unsigned char* data, size_t len) {
+static ssize_t bx_printf_cookie_write(void* cookie, const char* data, size_t len) {
+    struct bx_printf_output* output = cookie;
+    if (!output || !output->writer || (!data && len > 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!bx_line_writer_write(output->writer, data, len)) {
+        output->error = errno ? errno : EIO;
+        errno = output->error;
+        return -1;
+    }
+
+    if (len > (size_t)SSIZE_MAX)
+        return SSIZE_MAX;
+    return (ssize_t)len;
+}
+
+static FILE* bx_printf_open_format_stream(struct bx_printf_output* output) {
+    cookie_io_functions_t io = {
+        .read = NULL,
+        .write = bx_printf_cookie_write,
+        .seek = NULL,
+        .close = NULL,
+    };
+    FILE* stream = fopencookie(output, "w", io);
+    if (!stream)
+        return NULL;
+    (void)setvbuf(stream, NULL, _IONBF, 0);
+    return stream;
+}
+
+static bool bx_printf_write_bytes(struct bx_line_writer* writer, struct bx_diag_ctx* diag, const unsigned char* data, size_t len) {
     if (len == 0) {
         return true;
     }
 
-    if (fwrite(data, 1, len, stdout) != len) {
+    if (!bx_line_writer_write(writer, data, len)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         return false;
     }
@@ -1001,7 +1042,7 @@ static bool bx_printf_write_bytes(struct bx_diag_ctx* diag, const unsigned char*
     return true;
 }
 
-static bool bx_printf_write_padding(struct bx_diag_ctx* diag, size_t count) {
+static bool bx_printf_write_padding(struct bx_line_writer* writer, struct bx_diag_ctx* diag, size_t count) {
     static const unsigned char spaces[64] = {
         ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
         ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
@@ -1009,7 +1050,7 @@ static bool bx_printf_write_padding(struct bx_diag_ctx* diag, size_t count) {
 
     while (count > 0) {
         size_t chunk = (count > sizeof(spaces)) ? sizeof(spaces) : count;
-        if (!bx_printf_write_bytes(diag, spaces, chunk)) {
+        if (!bx_printf_write_bytes(writer, diag, spaces, chunk)) {
             return false;
         }
         count -= chunk;
@@ -1052,21 +1093,23 @@ static bool bx_printf_decode_b_argument(const char* text, struct bx_printf_byte_
     return true;
 }
 
-static int bx_printf_call_format(const char* format, ...) {
+static int bx_printf_call_format(struct bx_printf_output* output, const char* format, ...) {
     va_list ap;
     va_start(ap, format);
-    int result = vfprintf(stdout, format, ap);
+    int result = vfprintf(output->format_stream, format, ap);
     va_end(ap);
+    if (result < 0 && output->error != 0)
+        errno = output->error;
     return result;
 }
 
-#define BX_PRINTF_CALL_NO_VALUE(spec, width, precision)                                                                                                                         \
-    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (width), (precision)) : bx_printf_call_format((spec)->canonical, (width))) \
-                            : ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (precision)) : bx_printf_call_format((spec)->canonical)))
+#define BX_PRINTF_CALL_NO_VALUE(output, spec, width, precision)                                                                                                                                                 \
+    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((output), (spec)->canonical, (width), (precision)) : bx_printf_call_format((output), (spec)->canonical, (width)))             \
+                            : ((spec)->precision_from_arg ? bx_printf_call_format((output), (spec)->canonical, (precision)) : bx_printf_call_format((output), (spec)->canonical)))
 
-#define BX_PRINTF_CALL_VALUE(spec, width, precision, value)                                                                                                                                       \
-    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (width), (precision), (value)) : bx_printf_call_format((spec)->canonical, (width), (value))) \
-                            : ((spec)->precision_from_arg ? bx_printf_call_format((spec)->canonical, (precision), (value)) : bx_printf_call_format((spec)->canonical, (value))))
+#define BX_PRINTF_CALL_VALUE(output, spec, width, precision, value)                                                                                                                                                             \
+    ((spec)->width_from_arg ? ((spec)->precision_from_arg ? bx_printf_call_format((output), (spec)->canonical, (width), (precision), (value)) : bx_printf_call_format((output), (spec)->canonical, (width), (value)))             \
+                            : ((spec)->precision_from_arg ? bx_printf_call_format((output), (spec)->canonical, (precision), (value)) : bx_printf_call_format((output), (spec)->canonical, (value))))
 
 static bool bx_printf_check_fprintf_result(int result, struct bx_diag_ctx* diag) {
     if (result < 0) {
@@ -1076,7 +1119,7 @@ static bool bx_printf_check_fprintf_result(int result, struct bx_diag_ctx* diag)
     return true;
 }
 
-static bool bx_printf_render_b_conversion(const struct bx_printf_spec* spec, const char* value_arg, int runtime_width, int runtime_precision, bool* stop_output, struct bx_diag_ctx* diag) {
+static bool bx_printf_render_b_conversion(struct bx_printf_output* output, const struct bx_printf_spec* spec, const char* value_arg, int runtime_width, int runtime_precision, bool* stop_output, struct bx_diag_ctx* diag) {
     struct bx_printf_byte_buffer decoded;
     bx_printf_byte_buffer_init(&decoded);
 
@@ -1111,17 +1154,17 @@ static bool bx_printf_render_b_conversion(const struct bx_printf_spec* spec, con
         pad_len = (size_t)width - output_len;
     }
 
-    if (!left_adjust && !bx_printf_write_padding(diag, pad_len)) {
+    if (!left_adjust && !bx_printf_write_padding(output->writer, diag, pad_len)) {
         bx_printf_byte_buffer_free(&decoded);
         return false;
     }
 
-    if (!bx_printf_write_bytes(diag, decoded.data, output_len)) {
+    if (!bx_printf_write_bytes(output->writer, diag, decoded.data, output_len)) {
         bx_printf_byte_buffer_free(&decoded);
         return false;
     }
 
-    if (left_adjust && !bx_printf_write_padding(diag, pad_len)) {
+    if (left_adjust && !bx_printf_write_padding(output->writer, diag, pad_len)) {
         bx_printf_byte_buffer_free(&decoded);
         return false;
     }
@@ -1131,7 +1174,7 @@ static bool bx_printf_render_b_conversion(const struct bx_printf_spec* spec, con
     return true;
 }
 
-static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const char* const* arguments, size_t argument_count, size_t base, bool* stop_output, struct bx_diag_ctx* diag) {
+static bool bx_printf_render_conversion(struct bx_printf_output* output, const struct bx_printf_spec* spec, const char* const* arguments, size_t argument_count, size_t base, bool* stop_output, struct bx_diag_ctx* diag) {
     *stop_output = false;
 
     int width = spec->width_value;
@@ -1157,11 +1200,11 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
     switch (spec->conversion) {
         case '%':
         case 'm':
-            result = BX_PRINTF_CALL_NO_VALUE(spec, width, precision);
+            result = BX_PRINTF_CALL_NO_VALUE(output, spec, width, precision);
             return bx_printf_check_fprintf_result(result, diag);
 
         case 'b':
-            return bx_printf_render_b_conversion(spec, value_arg, width, precision, stop_output, diag);
+            return bx_printf_render_b_conversion(output, spec, value_arg, width, precision, stop_output, diag);
 
         case 'q': {
             const char* text = (value_arg != NULL) ? value_arg : "";
@@ -1171,7 +1214,7 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
                 return false;
             }
 
-            bool ok = bx_printf_write_bytes(diag, (const unsigned char*)quoted, strlen(quoted));
+            bool ok = bx_printf_write_bytes(output->writer, diag, (const unsigned char*)quoted, strlen(quoted));
             free(quoted);
             return ok;
         }
@@ -1183,27 +1226,27 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
                 case BX_PRINTF_LEN_HH:
                 case BX_PRINTF_LEN_H:
                 case BX_PRINTF_LEN_NONE:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (int)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (int)signed_value);
                     break;
                 case BX_PRINTF_LEN_L:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (long)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (long)signed_value);
                     break;
                 case BX_PRINTF_LEN_LL:
                 case BX_PRINTF_LEN_Q:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (long long)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (long long)signed_value);
                     break;
                 case BX_PRINTF_LEN_J:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (intmax_t)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (intmax_t)signed_value);
                     break;
                 case BX_PRINTF_LEN_Z:
                 case BX_PRINTF_LEN_CAP_Z:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (ssize_t)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (ssize_t)signed_value);
                     break;
                 case BX_PRINTF_LEN_T:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (ptrdiff_t)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (ptrdiff_t)signed_value);
                     break;
                 case BX_PRINTF_LEN_CAP_L:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (long long)signed_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (long long)signed_value);
                     break;
             }
             return bx_printf_check_fprintf_result(result, diag);
@@ -1218,27 +1261,27 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
                 case BX_PRINTF_LEN_HH:
                 case BX_PRINTF_LEN_H:
                 case BX_PRINTF_LEN_NONE:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (unsigned int)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (unsigned int)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_L:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (unsigned long)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (unsigned long)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_LL:
                 case BX_PRINTF_LEN_Q:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (unsigned long long)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (unsigned long long)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_J:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (uintmax_t)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (uintmax_t)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_Z:
                 case BX_PRINTF_LEN_CAP_Z:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (size_t)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (size_t)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_T:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (uintmax_t)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (uintmax_t)unsigned_value);
                     break;
                 case BX_PRINTF_LEN_CAP_L:
-                    result = BX_PRINTF_CALL_VALUE(spec, width, precision, (unsigned long long)unsigned_value);
+                    result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (unsigned long long)unsigned_value);
                     break;
             }
             return bx_printf_check_fprintf_result(result, diag);
@@ -1254,10 +1297,10 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
         case 'G': {
             long double float_value = bx_printf_parse_float_value(value_arg, diag);
             if (spec->length == BX_PRINTF_LEN_CAP_L) {
-                result = BX_PRINTF_CALL_VALUE(spec, width, precision, (long double)float_value);
+                result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (long double)float_value);
             }
             else {
-                result = BX_PRINTF_CALL_VALUE(spec, width, precision, (double)float_value);
+                result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (double)float_value);
             }
             return bx_printf_check_fprintf_result(result, diag);
         }
@@ -1267,20 +1310,20 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
             if (value_arg != NULL && value_arg[0] != '\0') {
                 ch = (unsigned char)value_arg[0];
             }
-            result = BX_PRINTF_CALL_VALUE(spec, width, precision, (int)ch);
+            result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, (int)ch);
             return bx_printf_check_fprintf_result(result, diag);
         }
 
         case 's': {
             const char* text = (value_arg != NULL) ? value_arg : "";
-            result = BX_PRINTF_CALL_VALUE(spec, width, precision, text);
+            result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, text);
             return bx_printf_check_fprintf_result(result, diag);
         }
 
         case 'p': {
             uintmax_t pointer_value = bx_printf_parse_unsigned_value(value_arg, diag);
             void* ptr = (void*)(uintptr_t)pointer_value;
-            result = BX_PRINTF_CALL_VALUE(spec, width, precision, ptr);
+            result = BX_PRINTF_CALL_VALUE(output, spec, width, precision, ptr);
             return bx_printf_check_fprintf_result(result, diag);
         }
 
@@ -1290,7 +1333,7 @@ static bool bx_printf_render_conversion(const struct bx_printf_spec* spec, const
     }
 }
 
-static bool bx_printf_render_cycle(const char* format, const char* const* arguments, size_t argument_count, size_t base, int* cycle_argument_count, bool* stop_output, struct bx_diag_ctx* diag) {
+static bool bx_printf_render_cycle(struct bx_printf_output* output, const char* format, const char* const* arguments, size_t argument_count, size_t base, int* cycle_argument_count, bool* stop_output, struct bx_diag_ctx* diag) {
     const char* p = format;
     int next_auto_position = 1;
     int max_position = 0;
@@ -1311,14 +1354,14 @@ static bool bx_printf_render_cycle(const char* format, const char* const* argume
                 *stop_output = true;
                 break;
             }
-            if (!bx_printf_write_bytes(diag, escaped, escaped_len)) {
+            if (!bx_printf_write_bytes(output->writer, diag, escaped, escaped_len)) {
                 return false;
             }
             continue;
         }
 
         if (ch != '%') {
-            if (!bx_printf_write_bytes(diag, &ch, 1)) {
+            if (!bx_printf_write_bytes(output->writer, diag, &ch, 1)) {
                 return false;
             }
             continue;
@@ -1330,7 +1373,7 @@ static bool bx_printf_render_cycle(const char* format, const char* const* argume
         }
 
         bool stop_from_conversion = false;
-        if (!bx_printf_render_conversion(&spec, arguments, argument_count, base, &stop_from_conversion, diag)) {
+        if (!bx_printf_render_conversion(output, &spec, arguments, argument_count, base, &stop_from_conversion, diag)) {
             return false;
         }
         if (stop_from_conversion) {
@@ -1369,12 +1412,25 @@ int bx_printf_main(int argc, char** argv) {
     const char* const* arguments = (const char* const*)(argv + options.first_argument);
     size_t argument_count = (size_t)(argc - options.first_argument);
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    struct bx_printf_output output = {
+        .writer = &writer,
+    };
+    output.format_stream = bx_printf_open_format_stream(&output);
+    if (!output.format_stream) {
+        bx_diag(&diag, "write error: %s", strerror(errno));
+        return (diag.exit_status != 0) ? diag.exit_status : 1;
+    }
+
     size_t base = 0;
     while (true) {
         int cycle_argument_count = 0;
         bool stop_output = false;
 
-        if (!bx_printf_render_cycle(options.format, arguments, argument_count, base, &cycle_argument_count, &stop_output, &diag)) {
+        if (!bx_printf_render_cycle(&output, options.format, arguments, argument_count, base, &cycle_argument_count, &stop_output, &diag)) {
+            (void)fclose(output.format_stream);
             return (diag.exit_status != 0) ? diag.exit_status : 1;
         }
 
@@ -1397,7 +1453,12 @@ int bx_printf_main(int argc, char** argv) {
         }
     }
 
-    if (fflush(stdout) == EOF) {
+    if (fflush(output.format_stream) == EOF) {
+        bx_diag(&diag, "write error: %s", strerror(errno));
+    }
+    (void)fclose(output.format_stream);
+
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
         bx_diag(&diag, "write error: %s", strerror(errno));
     }
 

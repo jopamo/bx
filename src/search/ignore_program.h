@@ -25,8 +25,10 @@ bx_ignore_program_compile_with_sources(char *const *patterns,
                                        const enum bx_ignore_source_kind *sources,
                                        int pattern_count,
                                        bool casefold);
-struct bx_ignore_program *bx_ignore_program_retain(struct bx_ignore_program *program);
 void bx_ignore_program_release(struct bx_ignore_program *program);
+void bx_ignore_program_make_process_lifetime(struct bx_ignore_program *program);
+bool bx_ignore_program_is_process_lifetime(const struct bx_ignore_program *program);
+void bx_ignore_program_destroy_process_lifetime(struct bx_ignore_program *program);
 bool bx_ignore_program_is_basename_only(const struct bx_ignore_program *program);
 bool bx_ignore_program_has_generic_glob_fallback(const struct bx_ignore_program *program);
 

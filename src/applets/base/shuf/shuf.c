@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 
@@ -454,35 +455,30 @@ static void bx_shuf_swap_records(struct bx_shuf_record* a, struct bx_shuf_record
     *b = tmp;
 }
 
-static bool bx_shuf_write_all(FILE* stream, const void* buffer, size_t length, const char* output_name, struct bx_diag_ctx* diag) {
-    const unsigned char* p = buffer;
-    size_t remaining = length;
-
-    while (remaining > 0) {
-        size_t written = fwrite(p, 1, remaining, stream);
-        if (written == 0) {
-            int saved_errno = errno;
-            if (saved_errno == 0) {
-                saved_errno = EIO;
-            }
-            bx_diag(diag, "%s: %s", output_name, strerror(saved_errno));
-            return false;
-        }
-
-        p += written;
-        remaining -= written;
+static bool bx_shuf_write_error(const char* output_name, struct bx_diag_ctx* diag) {
+    int saved_errno = errno;
+    if (saved_errno == 0) {
+        saved_errno = EIO;
     }
+    bx_diag(diag, "%s: %s", output_name, strerror(saved_errno));
+    errno = saved_errno;
+    return false;
+}
 
+static bool bx_shuf_write(struct bx_line_writer* writer, const void* buffer, size_t length, const char* output_name, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_write(writer, buffer, length)) {
+        return bx_shuf_write_error(output_name, diag);
+    }
     return true;
 }
 
-static bool bx_shuf_emit_record(const struct bx_shuf_record* record, int delimiter, FILE* output_stream, const char* output_name, struct bx_diag_ctx* diag) {
-    if (!bx_shuf_write_all(output_stream, record->data, record->len, output_name, diag)) {
+static bool bx_shuf_emit_record(const struct bx_shuf_record* record, int delimiter, struct bx_line_writer* writer, const char* output_name, struct bx_diag_ctx* diag) {
+    if (!bx_shuf_write(writer, record->data, record->len, output_name, diag)) {
         return false;
     }
 
     unsigned char delim_byte = (unsigned char)delimiter;
-    if (!bx_shuf_write_all(output_stream, &delim_byte, 1, output_name, diag)) {
+    if (!bx_shuf_write(writer, &delim_byte, 1, output_name, diag)) {
         return false;
     }
 
@@ -490,7 +486,7 @@ static bool bx_shuf_emit_record(const struct bx_shuf_record* record, int delimit
 }
 
 static bool
-bx_shuf_emit_without_repeat(struct bx_shuf_records* records, size_t output_count, int delimiter, FILE* output_stream, const char* output_name, struct bx_shuf_rng* rng, struct bx_diag_ctx* diag) {
+bx_shuf_emit_without_repeat(struct bx_shuf_records* records, size_t output_count, int delimiter, struct bx_line_writer* writer, const char* output_name, struct bx_shuf_rng* rng, struct bx_diag_ctx* diag) {
     for (size_t i = 0; i < output_count; i++) {
         size_t remaining = records->len - i;
         size_t pick_offset = 0;
@@ -503,7 +499,7 @@ bx_shuf_emit_without_repeat(struct bx_shuf_records* records, size_t output_count
         size_t pick_index = i + pick_offset;
         bx_shuf_swap_records(&records->items[i], &records->items[pick_index]);
 
-        if (!bx_shuf_emit_record(&records->items[i], delimiter, output_stream, output_name, diag)) {
+        if (!bx_shuf_emit_record(&records->items[i], delimiter, writer, output_name, diag)) {
             return false;
         }
     }
@@ -515,7 +511,7 @@ static bool bx_shuf_emit_with_repeat(const struct bx_shuf_records* records,
                                      bool bounded_output,
                                      uintmax_t output_count,
                                      int delimiter,
-                                     FILE* output_stream,
+                                     struct bx_line_writer* writer,
                                      const char* output_name,
                                      struct bx_shuf_rng* rng,
                                      struct bx_diag_ctx* diag) {
@@ -532,7 +528,7 @@ static bool bx_shuf_emit_with_repeat(const struct bx_shuf_records* records,
             }
         }
 
-        if (!bx_shuf_emit_record(&records->items[pick_index], delimiter, output_stream, output_name, diag)) {
+        if (!bx_shuf_emit_record(&records->items[pick_index], delimiter, writer, output_name, diag)) {
             return false;
         }
 
@@ -622,6 +618,9 @@ int bx_shuf_main(int argc, char** argv) {
 
     FILE* output_stream = stdout;
     bool close_output_stream = false;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bool writer_initialized = false;
 
     if (options.input_range_specified) {
         if (!bx_shuf_load_range_input(options.range_lo, options.range_hi, &records, &diag)) {
@@ -660,10 +659,18 @@ int bx_shuf_main(int argc, char** argv) {
         close_output_stream = true;
     }
 
+    int output_fd = fileno(output_stream);
+    if (output_fd < 0) {
+        bx_shuf_write_error(output_name, &diag);
+        goto cleanup;
+    }
+    bx_line_writer_init(&writer, output_fd, output_buffer, sizeof(output_buffer));
+    writer_initialized = true;
+
     if (options.repeat) {
         bool bounded_output = options.head_count_specified;
         uintmax_t output_count = options.head_count_specified ? options.head_count : 0;
-        if (!bx_shuf_emit_with_repeat(&records, bounded_output, output_count, delimiter, output_stream, output_name, &rng, &diag)) {
+        if (!bx_shuf_emit_with_repeat(&records, bounded_output, output_count, delimiter, &writer, output_name, &rng, &diag)) {
             goto cleanup;
         }
     }
@@ -673,10 +680,16 @@ int bx_shuf_main(int argc, char** argv) {
             output_count = (size_t)options.head_count;
         }
 
-        if (!bx_shuf_emit_without_repeat(&records, output_count, delimiter, output_stream, output_name, &rng, &diag)) {
+        if (!bx_shuf_emit_without_repeat(&records, output_count, delimiter, &writer, output_name, &rng, &diag)) {
             goto cleanup;
         }
     }
+
+    if (bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_shuf_write_error(output_name, &diag);
+        goto cleanup;
+    }
+    writer_initialized = false;
 
     if (close_output_stream) {
         if (fclose(output_stream) != 0) {
@@ -685,15 +698,12 @@ int bx_shuf_main(int argc, char** argv) {
         output_stream = NULL;
         close_output_stream = false;
     }
-    else if (fflush(output_stream) == EOF) {
-        int saved_errno = errno;
-        if (saved_errno == 0) {
-            saved_errno = EIO;
-        }
-        bx_diag(&diag, "%s: %s", output_name, strerror(saved_errno));
-    }
 
 cleanup:
+    if (writer_initialized && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_shuf_write_error(output_name, &diag);
+        writer_initialized = false;
+    }
     if (close_output_stream && output_stream != NULL) {
         (void)fclose(output_stream);
     }

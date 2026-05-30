@@ -8,6 +8,8 @@
 
 #include "dev_counters.h"
 #include "lib/color.h"
+#include "lib/line_writer_file.h"
+#include "lib/output_alloc_counter.h"
 #include "lib/path_quote.h"
 #include "literal.h"
 #include "pcre2_matcher.h"
@@ -58,6 +60,28 @@ struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_c
 
 void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous) {
     current_output_ctx = previous;
+}
+
+static void bx_search_output_ctx_close_capture(FILE **stream, size_t *len) {
+    FILE *open_stream;
+
+    if (stream == NULL || *stream == NULL)
+        return;
+
+    open_stream = *stream;
+    *stream = NULL;
+    if (fclose(open_stream) == 0 && len != NULL)
+        bx_output_alloc_counter_note_alloc(*len + 1u);
+}
+
+void bx_search_output_ctx_close_captures(struct bx_search_output_ctx *ctx) {
+    if (ctx == NULL)
+        return;
+
+    if (ctx->capture_out_buf != NULL && ctx->capture_out_len != NULL)
+        bx_search_output_ctx_close_capture(&ctx->out, ctx->capture_out_len);
+    if (ctx->capture_err_buf != NULL && ctx->capture_err_len != NULL)
+        bx_search_output_ctx_close_capture(&ctx->err, ctx->capture_err_len);
 }
 
 int bx_search_compute_offset_width_from_stat(const struct stat *st,
@@ -150,10 +174,18 @@ int bx_search_check_output_error(void) {
 
     if (!out)
         return 0;
+    if (current_output_ctx && current_output_ctx->out_line_file &&
+        !bx_line_writer_file_flush(current_output_ctx->out_line_file)) {
+        saved_errno = bx_line_writer_file_error(current_output_ctx->out_line_file);
+        current_output_ctx->output_error_reported = true;
+        return saved_errno != 0 ? saved_errno : (errno != 0 ? errno : EIO);
+    }
     if (fflush(out) == EOF)
         saved_errno = errno;
     if (!ferror(out))
         return 0;
+    if (current_output_ctx)
+        current_output_ctx->output_error_reported = true;
     return saved_errno != 0 ? saved_errno : (errno != 0 ? errno : EIO);
 }
 
@@ -770,14 +802,14 @@ void bx_search_print_count_result(const char *display_name,
 }
 
 void bx_search_print_stats_summary(struct bx_search_stats *stats) {
-    printf("\n%d matches\n", stats->matches);
-    printf("%d matched lines\n", stats->matched_lines);
-    printf("%d files contained matches\n", stats->files_with_matches);
-    printf("%d files searched\n", stats->files_searched);
-    printf("%zu bytes printed\n", stats->bytes_printed);
-    printf("%zu bytes searched\n", stats->bytes_searched);
-    printf("0.000000 seconds spent searching\n");
-    printf("0.000000 seconds total\n");
+    bx_search_printf_out("\n%d matches\n", stats->matches);
+    bx_search_printf_out("%d matched lines\n", stats->matched_lines);
+    bx_search_printf_out("%d files contained matches\n", stats->files_with_matches);
+    bx_search_printf_out("%d files searched\n", stats->files_searched);
+    bx_search_printf_out("%zu bytes printed\n", stats->bytes_printed);
+    bx_search_printf_out("%zu bytes searched\n", stats->bytes_searched);
+    bx_search_printf_out("0.000000 seconds spent searching\n");
+    bx_search_printf_out("0.000000 seconds total\n");
     for (int i = 0; i < 8; ++i)
         bx_search_dev_counters_note_output_line_emitted();
 }

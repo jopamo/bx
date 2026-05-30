@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "dev_counters.h"
+#include "lib/child_runner.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "options.h"
@@ -222,6 +223,22 @@ static bool bx_rg_slurp_stream(FILE *f, unsigned char **output, size_t *output_l
     return true;
 }
 
+struct bx_rg_capture_reap {
+    bool called;
+    int status;
+    bool exec_failed;
+    int exec_errno;
+};
+
+static void bx_rg_capture_reap_cb(pid_t pid, int status, bool exec_failed, int exec_errno, void *user) {
+    (void)pid;
+    struct bx_rg_capture_reap *state = user;
+    state->called = true;
+    state->status = status;
+    state->exec_failed = exec_failed;
+    state->exec_errno = exec_errno;
+}
+
 static bool bx_rg_run_capture(const char *const *argv,
                               bool capture_stderr,
                               int stdin_fd,
@@ -233,15 +250,16 @@ static bool bx_rg_run_capture(const char *const *argv,
                               int *exec_errno) {
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
-    int exec_pipe[2] = {-1, -1};
-    pid_t pid;
+    struct bx_child child[1] = {0};
+    int running = 0;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+    struct bx_rg_capture_reap reap = {0};
     FILE *out_stream = NULL;
     FILE *err_stream = NULL;
     unsigned char *raw_stdout = NULL;
     size_t raw_stdout_len = 0u;
     unsigned char *raw_stderr = NULL;
     size_t raw_stderr_len = 0u;
-    int child_status = 0;
 
     if (stdout_buf)
         *stdout_buf = NULL;
@@ -263,7 +281,20 @@ static bool bx_rg_run_capture(const char *const *argv,
         close(out_pipe[1]);
         return false;
     }
-    if (bx_fd_pipe_cloexec(exec_pipe) != 0) {
+
+    if (stdin_fd >= 0) {
+        runner_opts.use_stdin_fd = true;
+        runner_opts.stdin_fd = stdin_fd;
+    }
+    runner_opts.use_stdout_fd = true;
+    runner_opts.stdout_fd = out_pipe[1];
+    if (capture_stderr) {
+        runner_opts.use_stderr_fd = true;
+        runner_opts.stderr_fd = err_pipe[1];
+    }
+
+    if (bx_child_spawn_const_argv("rg", argv, &runner_opts, 0,
+                                  child, &running, NULL, NULL) != 0) {
         close(out_pipe[0]);
         close(out_pipe[1]);
         if (capture_stderr) {
@@ -273,68 +304,23 @@ static bool bx_rg_run_capture(const char *const *argv,
         if (stdin_fd >= 0)
             close(stdin_fd);
         return false;
-    }
-
-    pid = fork();
-    if (pid < 0) {
-        close(out_pipe[0]); close(out_pipe[1]);
-        if (capture_stderr) { close(err_pipe[0]); close(err_pipe[1]); }
-        close(exec_pipe[0]); close(exec_pipe[1]);
-        if (stdin_fd >= 0)
-            close(stdin_fd);
-        return false;
-    }
-    if (pid == 0) {
-        size_t argc = 0u;
-        char **exec_argv = NULL;
-        int errnum = 0;
-
-        while (argv && argv[argc])
-            argc++;
-        exec_argv = calloc(argc + 1u, sizeof(*exec_argv));
-        if (!exec_argv)
-            _exit(127);
-        for (size_t i = 0; i < argc; i++) {
-            exec_argv[i] = strdup(argv[i]);
-            if (!exec_argv[i])
-                _exit(127);
-        }
-
-        close(out_pipe[0]);
-        close(exec_pipe[0]);
-        if (capture_stderr)
-            close(err_pipe[0]);
-        if (stdin_fd >= 0) {
-            if (bx_fd_dup2_exact(stdin_fd, STDIN_FILENO) < 0)
-                goto child_fail;
-            close(stdin_fd);
-        }
-        if (bx_fd_dup2_exact(out_pipe[1], STDOUT_FILENO) < 0)
-            goto child_fail;
-        if (capture_stderr) {
-            if (bx_fd_dup2_exact(err_pipe[1], STDERR_FILENO) < 0)
-                goto child_fail;
-        }
-        close(out_pipe[1]);
-        if (capture_stderr)
-            close(err_pipe[1]);
-        execvp(exec_argv[0], exec_argv);
-child_fail:
-        errnum = errno;
-        (void)!write(exec_pipe[1], &errnum, sizeof(errnum));
-        _exit(127);
     }
 
     close(out_pipe[1]);
-    close(exec_pipe[1]);
-    if (capture_stderr)
+    out_pipe[1] = -1;
+    if (capture_stderr) {
         close(err_pipe[1]);
-    if (stdin_fd >= 0)
+        err_pipe[1] = -1;
+    }
+    if (stdin_fd >= 0) {
         close(stdin_fd);
+        stdin_fd = -1;
+    }
 
     out_stream = fdopen(out_pipe[0], "r");
     if (!out_stream)
         goto fail;
+    out_pipe[0] = -1;
     if (!bx_rg_slurp_stream(out_stream, &raw_stdout, &raw_stdout_len))
         goto fail;
     fclose(out_stream);
@@ -344,44 +330,41 @@ child_fail:
         err_stream = fdopen(err_pipe[0], "r");
         if (!err_stream)
             goto fail;
+        err_pipe[0] = -1;
         if (!bx_rg_slurp_stream(err_stream, &raw_stderr, &raw_stderr_len))
             goto fail;
         fclose(err_stream);
         err_stream = NULL;
     }
 
-    int child_exec_errno = 0;
-    ssize_t exec_read = read(exec_pipe[0], &child_exec_errno, sizeof(child_exec_errno));
-    close(exec_pipe[0]);
-    exec_pipe[0] = -1;
-    if (waitpid(pid, &child_status, 0) < 0)
+    if (bx_child_reap(child, &running, true, true, bx_rg_capture_reap_cb, &reap) != 0 || !reap.called)
         goto fail;
 
-    if (exec_read == (ssize_t)sizeof(child_exec_errno)) {
-        if (exec_failed)
-            *exec_failed = true;
-        if (exec_errno)
-            *exec_errno = child_exec_errno;
-    }
+    if (exec_failed)
+        *exec_failed = reap.exec_failed;
+    if (exec_errno)
+        *exec_errno = reap.exec_errno;
 
+    char *stderr_text = NULL;
+    if (stderr_buf) {
+        stderr_text = malloc(raw_stderr_len + 1u);
+        if (!stderr_text)
+            goto fail;
+        if (raw_stderr_len > 0u && raw_stderr)
+            memcpy(stderr_text, raw_stderr, raw_stderr_len);
+        stderr_text[raw_stderr_len] = '\0';
+    }
     if (stdout_buf)
         *stdout_buf = raw_stdout;
     else
         free(raw_stdout);
     if (stdout_len)
         *stdout_len = raw_stdout_len;
-    if (stderr_buf) {
-        char *tmp = malloc(raw_stderr_len + 1u);
-        if (!tmp)
-            goto fail;
-        if (raw_stderr_len > 0u && raw_stderr)
-            memcpy(tmp, raw_stderr, raw_stderr_len);
-        tmp[raw_stderr_len] = '\0';
-        *stderr_buf = tmp;
-    }
+    if (stderr_buf)
+        *stderr_buf = stderr_text;
     free(raw_stderr);
     if (status_out)
-        *status_out = child_status;
+        *status_out = reap.status;
     return true;
 
 fail:
@@ -389,15 +372,20 @@ fail:
         fclose(out_stream);
     else if (out_pipe[0] >= 0)
         close(out_pipe[0]);
+    if (out_pipe[1] >= 0)
+        close(out_pipe[1]);
     if (err_stream)
         fclose(err_stream);
     else if (capture_stderr && err_pipe[0] >= 0)
         close(err_pipe[0]);
-    if (exec_pipe[0] >= 0)
-        close(exec_pipe[0]);
+    if (capture_stderr && err_pipe[1] >= 0)
+        close(err_pipe[1]);
+    if (stdin_fd >= 0)
+        close(stdin_fd);
     free(raw_stdout);
     free(raw_stderr);
-    waitpid(pid, &child_status, 0);
+    if (running > 0)
+        bx_child_reap(child, &running, true, true, NULL, NULL);
     return false;
 }
 

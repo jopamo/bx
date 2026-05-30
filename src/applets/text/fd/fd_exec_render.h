@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include "fd_internal.h"
 
+struct bx_line_writer;
+
 struct fd_render_ctx {
     const struct fd_opts *opts;
     bool strip_implicit_dot_prefix;
@@ -21,6 +23,8 @@ char *fd_render_format_path(const struct fd_render_ctx *ctx, const char *path);
 char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path);
 char *fd_quote_output_path_dup(const struct fd_opts *opts, const char *path);
 char *fd_quote_output_path_owned(const struct fd_opts *opts, char *path);
-void fd_print_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir);
+bool fd_print_path(struct bx_line_writer *writer,
+                   const struct fd_render_ctx *ctx, const char *path,
+                   bool is_dir);
 
 #endif

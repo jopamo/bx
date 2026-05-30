@@ -84,6 +84,13 @@
  * Contributions by Bram Moolenaar et al.
  */
 
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__CYGWIN__)
+# ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
+# endif
+# define _XOPEN_SOURCE 700   /* for fdopen() */
+#endif
+
 /* Visual Studio 2005 has 'deprecated' many of the standard CRT functions */
 #if _MSC_VER >= 1400
 # define _CRT_SECURE_NO_DEPRECATE
@@ -91,10 +98,6 @@
 #endif
 #if !defined(CYGWIN) && defined(__CYGWIN__)
 # define CYGWIN
-#endif
-
-#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__CYGWIN__)
-# define _XOPEN_SOURCE 700   /* for fdopen() */
 #endif
 
 #include <stdio.h>
@@ -117,11 +120,16 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <sys/types.h>
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__CYGWIN__)
+# include <unistd.h>
+#endif
 #if __MWERKS__ && !defined(BEBOX)
 # include <unix.h>	/* for fdopen() on MAC */
 #endif
 
 #include "lib/fd_ops.h"
+#include "lib/line_writer.h"
 
 
 /*  This corrects the problem of missing prototypes for certain functions
@@ -276,6 +284,81 @@ l_colored[c++] = 'm';
 #define COLOR_WHITE '7'
 
 static char *pname;
+
+struct xxd_stdout_output {
+  struct bx_line_writer writer;
+  char buffer[8192];
+  int error;
+};
+
+  static ssize_t
+xxd_stdout_write(void *cookie, const char *data, size_t len)
+{
+  struct xxd_stdout_output *output = (struct xxd_stdout_output *)cookie;
+
+  if (!output || (!data && len > 0))
+    {
+      errno = EINVAL;
+      return -1;
+    }
+  if (len > (size_t)SSIZE_MAX)
+    {
+      output->error = EOVERFLOW;
+      errno = EOVERFLOW;
+      return -1;
+    }
+  if (!bx_line_writer_write(&output->writer, data, len))
+    {
+      output->error = errno ? errno : EIO;
+      errno = output->error;
+      return -1;
+    }
+  return (ssize_t)len;
+}
+
+  static int
+xxd_stdout_close(void *cookie)
+{
+  struct xxd_stdout_output *output = (struct xxd_stdout_output *)cookie;
+
+  if (!output)
+    {
+      errno = EINVAL;
+      return -1;
+    }
+  if (output->error)
+    {
+      errno = output->error;
+      return -1;
+    }
+  if (!bx_line_writer_flush(&output->writer))
+    {
+      output->error = errno ? errno : EIO;
+      errno = output->error;
+      return -1;
+    }
+  return 0;
+}
+
+  static FILE *
+xxd_open_stdout_output(struct xxd_stdout_output *output)
+{
+  memset(output, 0, sizeof(*output));
+  bx_line_writer_init(&output->writer, STDOUT_FILENO,
+		      output->buffer, sizeof(output->buffer));
+
+  cookie_io_functions_t io = {
+    .read = NULL,
+    .write = xxd_stdout_write,
+    .seek = NULL,
+    .close = xxd_stdout_close,
+  };
+  FILE *stream = fopencookie(output, "w", io);
+  if (!stream)
+    return NULL;
+  setvbuf(stream, NULL, _IONBF, 0);
+  return stream;
+}
 
   static void
 exit_with_usage(int status)
@@ -813,6 +896,7 @@ int bx_xxd_main(int argc, char *argv[]);
 bx_xxd_main(int argc, char *argv[])
 {
   FILE *fp, *fpo;
+  struct xxd_stdout_output stdout_output;
   int c, e, p = 0, relseek = 1, negseek = 0, revert = 0, i, x;
   int cols = 0, colsgiven = 0, nonzero = 0, autoskip = 0, hextype = HEX_NORMAL;
   int capitalize = 0, decimal_offset = 0;
@@ -1077,7 +1161,17 @@ bx_xxd_main(int argc, char *argv[])
     }
 
   if (argc < 3 || (argv[2][0] == '-' && !argv[2][1]))
-    BIN_ASSIGN(fpo = stdout, revert);
+    {
+      FILE *stdout_stream;
+      BIN_ASSIGN(stdout_stream = stdout, revert);
+      (void)stdout_stream;
+      if ((fpo = xxd_open_stdout_output(&stdout_output)) == NULL)
+	{
+	  fprintf(stderr, "%s: ", pname);
+	  perror("stdout");
+	  return 3;
+	}
+    }
   else
     {
       int fd;

@@ -21,6 +21,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/line_writer.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
@@ -258,11 +259,47 @@ static size_t bx_od_pad_at(size_t fields, size_t i, size_t pad) {
     return whole * i + (rem * i) / fields;
 }
 
-static void bx_od_print_spaces(size_t count) {
-    while (count > 0u) {
-        fputc(' ', stdout);
-        count--;
+static bool bx_od_write_error(struct bx_diag_ctx* diag) {
+    int saved_errno = errno != 0 ? errno : EIO;
+    bx_diag(diag, "write error: %s", strerror(saved_errno));
+    errno = saved_errno;
+    return false;
+}
+
+static bool bx_od_write(struct bx_line_writer* writer,
+                        const void* data,
+                        size_t len,
+                        struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_write(writer, data, len)) {
+        return bx_od_write_error(diag);
     }
+    return true;
+}
+
+static bool bx_od_putc(struct bx_line_writer* writer, char ch, struct bx_diag_ctx* diag) {
+    return bx_od_write(writer, &ch, 1u, diag);
+}
+
+static bool bx_od_puts(struct bx_line_writer* writer, const char* text, struct bx_diag_ctx* diag) {
+    return bx_od_write(writer, text, strlen(text), diag);
+}
+
+static bool bx_od_print_spaces(struct bx_line_writer* writer, size_t count, struct bx_diag_ctx* diag) {
+    static const char spaces[64] = {
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+        ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    };
+
+    while (count > 0u) {
+        size_t chunk = count > sizeof(spaces) ? sizeof(spaces) : count;
+        if (!bx_od_write(writer, spaces, chunk, diag)) {
+            return false;
+        }
+        count -= chunk;
+    }
+    return true;
 }
 
 static enum bx_od_parse_result bx_od_parse_prefixed_uint(const char* text,
@@ -2085,13 +2122,20 @@ static bool bx_od_render_token(const struct bx_od_format* format,
     return false;
 }
 
-static void bx_od_print_ascii_trailer(const unsigned char* buffer, size_t size) {
-    fputs("  >", stdout);
+static bool bx_od_print_ascii_trailer(struct bx_line_writer* writer,
+                                      const unsigned char* buffer,
+                                      size_t size,
+                                      struct bx_diag_ctx* diag) {
+    if (!bx_od_puts(writer, "  >", diag)) {
+        return false;
+    }
     for (size_t i = 0u; i < size; i++) {
         unsigned char ch = buffer[i];
-        fputc(isprint(ch) ? (int)ch : '.', stdout);
+        if (!bx_od_putc(writer, isprint(ch) ? (char)ch : '.', diag)) {
+            return false;
+        }
     }
-    fputc('<', stdout);
+    return bx_od_putc(writer, '<', diag);
 }
 
 static bool bx_od_print_block(const struct bx_od_options* options,
@@ -2099,7 +2143,9 @@ static bool bx_od_print_block(const struct bx_od_options* options,
                               size_t size,
                               uintmax_t address,
                               bool have_label,
-                              uintmax_t label) {
+                              uintmax_t label,
+                              struct bx_line_writer* writer,
+                              struct bx_diag_ctx* diag) {
     char prefix[256];
     char token[256];
     size_t prefix_len;
@@ -2115,10 +2161,14 @@ static bool bx_od_print_block(const struct bx_od_options* options,
         size_t pad_remaining = format->pad_width;
 
         if (i == 0u) {
-            fputs(prefix, stdout);
+            if (!bx_od_puts(writer, prefix, diag)) {
+                return false;
+            }
         }
         else {
-            bx_od_print_spaces(prefix_len);
+            if (!bx_od_print_spaces(writer, prefix_len, diag)) {
+                return false;
+            }
         }
 
         for (size_t field = fields; field > blank_fields; field--) {
@@ -2141,7 +2191,14 @@ static bool bx_od_print_block(const struct bx_od_options* options,
                 return false;
             }
 
-            printf("%*s", (int)adjusted_width, token);
+            size_t token_len = strlen(token);
+            if (adjusted_width > token_len &&
+                !bx_od_print_spaces(writer, adjusted_width - token_len, diag)) {
+                return false;
+            }
+            if (!bx_od_puts(writer, token, diag)) {
+                return false;
+            }
             pad_remaining = next_pad;
             field_index++;
         }
@@ -2151,32 +2208,42 @@ static bool bx_od_print_block(const struct bx_od_options* options,
                 if (format->intrinsic_width > 0u && blank_fields > SIZE_MAX / format->intrinsic_width) {
                     return false;
                 }
-                bx_od_print_spaces(blank_fields * format->intrinsic_width);
+                if (!bx_od_print_spaces(writer, blank_fields * format->intrinsic_width, diag)) {
+                    return false;
+                }
             }
-            bx_od_print_spaces(pad_remaining);
-            bx_od_print_ascii_trailer(buffer, size);
+            if (!bx_od_print_spaces(writer, pad_remaining, diag) ||
+                !bx_od_print_ascii_trailer(writer, buffer, size, diag)) {
+                return false;
+            }
         }
 
-        fputc('\n', stdout);
+        if (!bx_od_putc(writer, '\n', diag)) {
+            return false;
+        }
     }
 
     return true;
 }
 
-static void bx_od_print_final_line(const struct bx_od_options* options,
+static bool bx_od_print_final_line(const struct bx_od_options* options,
                                    uintmax_t address,
                                    bool have_label,
-                                   uintmax_t label) {
+                                   uintmax_t label,
+                                   struct bx_line_writer* writer,
+                                   struct bx_diag_ctx* diag) {
     char prefix[256];
 
     bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
     if (prefix[0] != '\0') {
-        puts(prefix);
+        return bx_od_puts(writer, prefix, diag) && bx_od_putc(writer, '\n', diag);
     }
+    return true;
 }
 
 static bool bx_od_dump_regular(const struct bx_od_options* options,
                                const struct bx_od_operands* operands,
+                               struct bx_line_writer* writer,
                                struct bx_diag_ctx* diag) {
     struct bx_od_input input;
     unsigned char* buffer = xmalloc((size_t)options->width);
@@ -2229,14 +2296,21 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
             nread == previous_size &&
             memcmp(previous, buffer, nread) == 0) {
             if (!suppressed) {
-                puts("*");
+                if (!bx_od_puts(writer, "*\n", diag)) {
+                    bx_od_input_close_current(&input);
+                    free(buffer);
+                    free(previous);
+                    return false;
+                }
                 suppressed = true;
             }
         }
         else {
             suppressed = false;
-            if (!bx_od_print_block(options, buffer, nread, address, operands->have_label, label)) {
-                bx_diag(diag, "failed to render output");
+            if (!bx_od_print_block(options, buffer, nread, address, operands->have_label, label, writer, diag)) {
+                if (bx_line_writer_error(writer) == 0) {
+                    bx_diag(diag, "failed to render output");
+                }
                 bx_od_input_close_current(&input);
                 free(buffer);
                 free(previous);
@@ -2259,29 +2333,38 @@ static bool bx_od_dump_regular(const struct bx_od_options* options,
 
     bx_od_input_close_current(&input);
     if (dumped > 0u || bx_od_input_opened_any(&input)) {
-        bx_od_print_final_line(options, address, operands->have_label, label);
+        if (!bx_od_print_final_line(options, address, operands->have_label, label, writer, diag)) {
+            free(buffer);
+            free(previous);
+            return false;
+        }
     }
     free(buffer);
     free(previous);
     return true;
 }
 
-static void bx_od_print_string_line(const struct bx_od_options* options,
+static bool bx_od_print_string_line(const struct bx_od_options* options,
                                     uintmax_t address,
                                     bool have_label,
                                     uintmax_t label,
-                                    const char* text) {
+                                    const char* text,
+                                    struct bx_line_writer* writer,
+                                    struct bx_diag_ctx* diag) {
     char prefix[256];
 
     bx_od_build_prefix(prefix, sizeof(prefix), options->address_radix, address, have_label, label);
     if (prefix[0] != '\0') {
-        printf("%s ", prefix);
+        if (!bx_od_puts(writer, prefix, diag) || !bx_od_putc(writer, ' ', diag)) {
+            return false;
+        }
     }
-    puts(text);
+    return bx_od_puts(writer, text, diag) && bx_od_putc(writer, '\n', diag);
 }
 
 static bool bx_od_dump_strings(const struct bx_od_options* options,
                                const struct bx_od_operands* operands,
+                               struct bx_line_writer* writer,
                                struct bx_diag_ctx* diag) {
     struct bx_od_input input;
     unsigned char chunk[4096];
@@ -2358,7 +2441,11 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
                     if (operands->have_label) {
                         label = operands->label + (string_start - operands->offset);
                     }
-                    bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf);
+                    if (!bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf, writer, diag)) {
+                        bx_od_input_close_current(&input);
+                        free(string_buf);
+                        return false;
+                    }
                 }
 
                 in_string = false;
@@ -2384,7 +2471,11 @@ static bool bx_od_dump_strings(const struct bx_od_options* options,
         if (operands->have_label) {
             label = operands->label + (string_start - operands->offset);
         }
-        bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf);
+        if (!bx_od_print_string_line(options, string_start, operands->have_label, label, string_buf, writer, diag)) {
+            bx_od_input_close_current(&input);
+            free(string_buf);
+            return false;
+        }
     }
 
     bx_od_input_close_current(&input);
@@ -2421,11 +2512,20 @@ int bx_od_main(int argc, char** argv) {
         return 1;
     }
 
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     if (options.strings_mode) {
-        ok = bx_od_dump_strings(&options, &operands, &diag);
+        ok = bx_od_dump_strings(&options, &operands, &writer, &diag);
     }
     else {
-        ok = bx_od_dump_regular(&options, &operands, &diag);
+        ok = bx_od_dump_regular(&options, &operands, &writer, &diag);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_od_write_error(&diag);
+        ok = false;
     }
 
     free((void*)operands.files);

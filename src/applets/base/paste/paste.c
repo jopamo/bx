@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -12,6 +13,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_paste_options {
     const char* progname;
@@ -170,15 +172,35 @@ static enum bx_paste_parse_status bx_paste_parse_options(
     return BX_PASTE_PARSE_OK;
 }
 
-static void bx_paste_emit_delimiter(const struct bx_paste_options* options, size_t index) {
-    int delim = options->delimiters[index % options->delimiters_len];
-    if (delim >= 0) {
-        putchar(delim);
-    }
+static bool bx_paste_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
 }
 
-static void paste_serial(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
+static bool bx_paste_emit_delimiter(
+    struct bx_line_writer* writer,
+    const struct bx_paste_options* options,
+    size_t index,
+    struct bx_diag_ctx* diag
+) {
+    int delim = options->delimiters[index % options->delimiters_len];
+    if (delim >= 0) {
+        if (!bx_line_writer_putc(writer, (char)delim)) {
+            return bx_paste_write_error(diag);
+        }
+    }
+    return true;
+}
+
+static bool paste_serial(
+    int num_files,
+    char** filenames,
+    struct bx_paste_options* options,
+    struct bx_diag_ctx* diag,
+    struct bx_line_writer* writer
+) {
     int delimiter = options->zero_terminated ? '\0' : '\n';
+    bool ok = true;
 
     for (int i = 0; i < num_files; i++) {
         bool is_stdio = false;
@@ -195,24 +217,44 @@ static void paste_serial(int num_files, char** filenames, struct bx_paste_option
         size_t delim_idx = 0;
         while ((len = getdelim(&line, &cap, delimiter, f)) != -1) {
             if (!first_line) {
-                bx_paste_emit_delimiter(options, delim_idx);
+                if (!bx_paste_emit_delimiter(writer, options, delim_idx, diag)) {
+                    ok = false;
+                    break;
+                }
                 delim_idx++;
             }
             if (line[len - 1] == delimiter)
                 line[len - 1] = '\0';
-            fputs(line, stdout);
+            if (!bx_line_writer_puts(writer, line)) {
+                ok = bx_paste_write_error(diag);
+                break;
+            }
             first_line = false;
         }
-        putchar(delimiter);
+        if (ok && !bx_line_writer_putc(writer, (char)delimiter)) {
+            ok = bx_paste_write_error(diag);
+        }
         free(line);
         bx_fclose_nonstdio(f, is_stdio);
+        if (!ok) {
+            break;
+        }
     }
+
+    return ok;
 }
 
-static void paste_parallel(int num_files, char** filenames, struct bx_paste_options* options, struct bx_diag_ctx* diag) {
+static bool paste_parallel(
+    int num_files,
+    char** filenames,
+    struct bx_paste_options* options,
+    struct bx_diag_ctx* diag,
+    struct bx_line_writer* writer
+) {
     FILE** files = xmalloc(num_files * sizeof(FILE*));
     bool* is_stdio = xmalloc(num_files * sizeof(bool));
     bool open_failed = false;
+    bool ok = true;
     for (int i = 0; i < num_files; i++) {
         files[i] = bx_fopen_dash(filenames[i], "r", &is_stdio[i]);
         if (!files[i]) {
@@ -227,7 +269,7 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
         }
         free(files);
         free(is_stdio);
-        return;
+        return true;
     }
 
     int delimiter = options->zero_terminated ? '\0' : '\n';
@@ -259,14 +301,22 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
             break;
 
         for (int i = 0; i < num_files; i++) {
-            if (row_fields[i])
-                fputs(row_fields[i], stdout);
+            if (ok && row_fields[i] && !bx_line_writer_puts(writer, row_fields[i])) {
+                ok = bx_paste_write_error(diag);
+            }
             if (i + 1 < num_files) {
-                bx_paste_emit_delimiter(options, (size_t)i);
+                if (ok && !bx_paste_emit_delimiter(writer, options, (size_t)i, diag)) {
+                    ok = false;
+                }
             }
             free(row_fields[i]);
         }
-        putchar(delimiter);
+        if (ok && !bx_line_writer_putc(writer, (char)delimiter)) {
+            ok = bx_paste_write_error(diag);
+        }
+        if (!ok) {
+            break;
+        }
     }
 
     for (int i = 0; i < num_files; i++)
@@ -275,6 +325,7 @@ static void paste_parallel(int num_files, char** filenames, struct bx_paste_opti
     free(is_stdio);
     free(line);
     free(row_fields);
+    return ok;
 }
 
 int bx_paste_main(int argc, char** argv) {
@@ -304,11 +355,16 @@ int bx_paste_main(int argc, char** argv) {
     char** filenames = (num_files == 0) ? default_filenames : &argv[first_operand];
     int real_num_files = (num_files == 0) ? 1 : num_files;
 
-    if (options.serial) {
-        paste_serial(real_num_files, filenames, &options, &diag);
-    }
-    else {
-        paste_parallel(real_num_files, filenames, &options, &diag);
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    bool ok = options.serial
+        ? paste_serial(real_num_files, filenames, &options, &diag, &writer)
+        : paste_parallel(real_num_files, filenames, &options, &diag, &writer);
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_paste_write_error(&diag);
     }
 
     free(options.delimiters);

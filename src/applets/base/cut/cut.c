@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -14,6 +15,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 enum cut_mode { CUT_MODE_BYTES, CUT_MODE_CHARS, CUT_MODE_FIELDS, CUT_MODE_NONE };
 
@@ -323,57 +325,148 @@ static bool is_selected(size_t pos, struct bx_cut_options* options) {
     return options->complement;
 }
 
-static void cut_line(char* line, ssize_t len, struct bx_cut_options* options) {
+static bool bx_cut_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_cut_write(
+    struct bx_line_writer* writer,
+    const void* data,
+    size_t length,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_write(writer, data, length)) {
+        return bx_cut_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_cut_write_record_delimiter(
+    struct bx_line_writer* writer,
+    const struct bx_cut_options* options,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_putc(writer, options->zero_terminated ? '\0' : '\n')) {
+        return bx_cut_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_cut_line_bytes(
+    const char* line,
+    size_t len,
+    struct bx_cut_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
+    if (!options->complement) {
+        for (size_t i = 0; i < options->num_ranges; i++) {
+            size_t start = options->ranges[i].start;
+            size_t end = options->ranges[i].end;
+
+            if (start > len) {
+                break;
+            }
+            if (end > len) {
+                end = len;
+            }
+            if (start <= end && !bx_cut_write(writer, line + start - 1u, end - start + 1u, diag)) {
+                return false;
+            }
+        }
+    }
+    else {
+        size_t next = 1;
+
+        for (size_t i = 0; i < options->num_ranges && next <= len; i++) {
+            size_t start = options->ranges[i].start;
+            size_t end = options->ranges[i].end;
+
+            if (start > next) {
+                size_t write_end = start - 1u;
+                if (write_end > len) {
+                    write_end = len;
+                }
+                if (!bx_cut_write(writer, line + next - 1u, write_end - next + 1u, diag)) {
+                    return false;
+                }
+            }
+            if (end == SIZE_MAX) {
+                next = len + 1u;
+                break;
+            }
+            if (end + 1u > next) {
+                next = end + 1u;
+            }
+        }
+        if (next <= len && !bx_cut_write(writer, line + next - 1u, len - next + 1u, diag)) {
+            return false;
+        }
+    }
+
+    return bx_cut_write_record_delimiter(writer, options, diag);
+}
+
+static bool cut_line(
+    char* line,
+    ssize_t len,
+    struct bx_cut_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     if (len > 0 && line[len - 1] == (options->zero_terminated ? '\0' : '\n')) {
         len--;
     }
+    size_t content_len = (size_t)len;
 
     if (options->mode == CUT_MODE_BYTES || options->mode == CUT_MODE_CHARS) {
         // Character mode is same as byte mode for now (UTF-8 support not implemented)
-        for (ssize_t i = 0; i < len; i++) {
-            if (is_selected((size_t)i + 1, options)) {
-                putchar(line[i]);
-            }
-        }
-        putchar(options->zero_terminated ? '\0' : '\n');
+        return bx_cut_line_bytes(line, content_len, options, writer, diag);
     }
-    else {
-        // Fields mode
-        size_t field_idx = 1;
-        bool first = true;
-        bool found_delimiter = false;
 
-        // First pass: check if delimiter exists
-        for (ssize_t i = 0; i < len; i++) {
-            if (line[i] == options->delimiter) {
-                found_delimiter = true;
-                break;
-            }
+    // Fields mode
+    size_t field_idx = 1;
+    bool first = true;
+    bool found_delimiter = false;
+
+    // First pass: check if delimiter exists
+    for (size_t i = 0; i < content_len; i++) {
+        if (line[i] == options->delimiter) {
+            found_delimiter = true;
+            break;
         }
+    }
 
-        if (!found_delimiter) {
-            if (!options->only_delimited) {
-                fwrite(line, 1, (size_t)len, stdout);
-                putchar(options->zero_terminated ? '\0' : '\n');
+    if (!found_delimiter) {
+        if (!options->only_delimited) {
+            if (!bx_cut_write(writer, line, content_len, diag)) {
+                return false;
             }
-            return;
+            return bx_cut_write_record_delimiter(writer, options, diag);
         }
+        return true;
+    }
 
-        char* start = line;
-        for (ssize_t i = 0; i <= len; i++) {
-            if (i == len || line[i] == options->delimiter) {
-                if (is_selected(field_idx, options)) {
-                    if (!first)
-                        fputs(options->output_delimiter, stdout);
-                    fwrite(start, 1, (size_t)(&line[i] - start), stdout);
-                    first = false;
+    char* start = line;
+    for (size_t i = 0; i <= content_len; i++) {
+        if (i == content_len || line[i] == options->delimiter) {
+            if (is_selected(field_idx, options)) {
+                if (!first) {
+                    if (!bx_line_writer_puts(writer, options->output_delimiter)) {
+                        return bx_cut_write_error(diag);
+                    }
                 }
-                start = &line[i + 1];
-                field_idx++;
+                if (!bx_cut_write(writer, start, (size_t)(&line[i] - start), diag)) {
+                    return false;
+                }
+                first = false;
             }
+            start = &line[i + 1];
+            field_idx++;
         }
-        putchar(options->zero_terminated ? '\0' : '\n');
     }
+    return bx_cut_write_record_delimiter(writer, options, diag);
 }
 
 int bx_cut_main(int argc, char** argv) {
@@ -397,8 +490,12 @@ int bx_cut_main(int argc, char** argv) {
 
     char* line = NULL;
     size_t line_cap = 0;
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
+    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
@@ -409,10 +506,17 @@ int bx_cut_main(int argc, char** argv) {
 
         ssize_t len;
         while ((len = getdelim(&line, &line_cap, delimiter, f)) != -1) {
-            cut_line(line, len, &options);
+            if (!cut_line(line, len, &options, &writer, &diag)) {
+                ok = false;
+                break;
+            }
         }
 
         bx_fclose_nonstdio(f, is_stdio);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_cut_write_error(&diag);
     }
 
     free(line);

@@ -153,7 +153,7 @@ static bool fd_record_match(struct fd_state *st, const char *path,
             return false;
         }
     } else if (!opts->quiet) {
-        if (!fd_print_match_output(&st->render, opts, path, is_dir)) {
+        if (!fd_print_match_output(st->writer, &st->render, opts, path, is_dir)) {
             st->output_collect_failed = true;
             if (st->stop)
                 *st->stop = true;
@@ -171,11 +171,13 @@ static bool fd_record_match(struct fd_state *st, const char *path,
 
 bool fd_state_init(struct fd_state *st, const char *progname,
                    struct fd_opts *opts, bool *stop,
-                   bool using_implicit_root) {
+                   bool using_implicit_root,
+                   struct bx_line_writer *writer) {
     memset(st, 0, sizeof(*st));
     st->opts = opts;
     st->stop = stop;
     st->strip_implicit_dot_prefix = using_implicit_root;
+    st->writer = writer;
 
     if (opts->absolute_path)
         st->cwd = bx_path_getcwd_dup();

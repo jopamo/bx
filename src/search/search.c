@@ -1,9 +1,11 @@
 #include <locale.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "dev_counters.h"
 #include "ignore.h"
+#include "lib/line_writer_file.h"
 #include "options.h"
 #include "search.h"
 #include "search_internal.h"
@@ -22,6 +24,8 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     const char *pattern;
     int first_file;
     const char *progname = argv[0] ? argv[0] : "grep";
+    struct bx_line_writer_file stdout_file = {0};
+    bool stdout_file_active = false;
 
     (void)setlocale(LC_ALL, "");
     bx_search_dev_counters_begin_from_env();
@@ -61,6 +65,19 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
         .err = stderr,
         .stats = opts.stats ? &stats : NULL,
     };
+
+    if (!opts.line_buffered) {
+        if (!bx_line_writer_file_open(&stdout_file, STDOUT_FILENO, false)) {
+            bx_search_report_write_error(progname,
+                                         bx_line_writer_file_error(&stdout_file));
+            bx_search_free_options(&opts);
+            return finish_search_main(2);
+        }
+        stdout_file_active = true;
+        main_output_ctx.out = bx_line_writer_file_stream(&stdout_file);
+        main_output_ctx.out_line_file = &stdout_file;
+    }
+
     struct bx_search_output_ctx *previous_output_ctx = bx_search_output_ctx_push(&main_output_ctx);
 
     struct bx_search_run_args run_args = {
@@ -79,6 +96,13 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     bx_search_run(&run_args, &run_result);
     if (opts.stats && run_result.ran_search)
         bx_search_print_stats_summary(&stats);
+    if (stdout_file_active && !bx_line_writer_file_finish(&stdout_file)) {
+        if (!main_output_ctx.output_error_reported) {
+            bx_search_report_write_error(progname,
+                                         bx_line_writer_file_error(&stdout_file));
+        }
+        run_result.status = 2;
+    }
     bx_search_output_ctx_pop(previous_output_ctx);
     bx_search_free_options(&opts);
     return finish_search_main(run_result.status);

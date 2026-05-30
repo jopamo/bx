@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/child_runner.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/time_parse.h"
@@ -65,6 +66,8 @@ struct bx_init_service {
 struct bx_init_service_config {
     struct bx_init_service* services;
     size_t service_count;
+    struct bx_child* children;
+    int running;
 };
 
 struct bx_init_token_list {
@@ -151,8 +154,11 @@ static void bx_init_cleanup_service_config(struct bx_init_service_config* config
         free(service->argv);
     }
     free(config->services);
+    free(config->children);
     config->services = NULL;
+    config->children = NULL;
     config->service_count = 0;
+    config->running = 0;
 }
 
 static bool bx_init_select_mode(struct bx_init_options* options, enum bx_init_mode mode, const char* option_name, struct bx_diag_ctx* diag) {
@@ -304,9 +310,7 @@ static bool bx_init_parse_options(int argc, char** argv, struct bx_init_options*
 }
 
 static int bx_init_exec_program_argv(char** command_argv, struct bx_diag_ctx* diag, const char* description) {
-    execvp(command_argv[0], command_argv);
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv(command_argv);
     bx_diag(diag, "cannot execute %s '%s': %s", description, command_argv[0], strerror(exec_error));
 
     if (exec_error == ENOENT) {
@@ -592,6 +596,11 @@ static bool bx_init_parse_service_file(const char* path, struct bx_init_service_
         bx_diag(diag, "service file '%s' does not declare any services", path);
         ok = false;
     }
+    if (ok) {
+        config->children = xmalloc(config->service_count * sizeof(*config->children));
+        memset(config->children, 0, config->service_count * sizeof(*config->children));
+        config->running = 0;
+    }
 
     if (!ok) {
         bx_init_cleanup_service_config(config);
@@ -628,13 +637,6 @@ static bool bx_init_install_signal_handlers(struct bx_diag_ctx* diag) {
     return true;
 }
 
-static void bx_init_reset_child_signals(void) {
-    signal(SIGTERM, SIG_DFL);
-    signal(SIGINT, SIG_DFL);
-    signal(SIGHUP, SIG_DFL);
-    signal(SIGPIPE, SIG_DFL);
-}
-
 static struct bx_init_service* bx_init_find_service_by_pid(struct bx_init_service_config* config, pid_t pid) {
     for (size_t i = 0; i < config->service_count; i++) {
         if (config->services[i].pid == pid) {
@@ -645,29 +647,38 @@ static struct bx_init_service* bx_init_find_service_by_pid(struct bx_init_servic
     return NULL;
 }
 
-static bool bx_init_spawn_service(struct bx_init_service* service, struct bx_diag_ctx* diag) {
-    pid_t pid = fork();
-    if (pid < 0) {
-        bx_diag(diag, "cannot fork service '%s': %s", service->name, strerror(errno));
+static int bx_init_service_slot(const struct bx_init_service_config* config, const struct bx_init_service* service) {
+    if (!config || !service || service < config->services ||
+        service >= config->services + config->service_count) {
+        return 0;
+    }
+    return (int)(service - config->services);
+}
+
+static bool bx_init_spawn_service(struct bx_init_service_config* config, struct bx_init_service* service, struct bx_diag_ctx* diag) {
+    int running_before = config->running;
+    struct bx_child_runner_opts runner_opts = bx_child_runner_opts_default();
+
+    runner_opts.reset_common_signals = true;
+    runner_opts.new_process_group = true;
+
+    if (bx_child_spawn_argv(diag->progname, service->argv, &runner_opts,
+                            bx_init_service_slot(config, service),
+                            config->children, &config->running,
+                            NULL, NULL) != 0) {
+        bx_diag(diag, "cannot start service '%s'", service->name);
+        return false;
+    }
+    if (config->running <= running_before) {
+        bx_diag(diag, "service '%s' was not started", service->name);
         return false;
     }
 
-    if (pid == 0) {
-        bx_init_reset_child_signals();
-        if (setpgid(0, 0) != 0) {
-            fprintf(stderr, "%s: cannot place service '%s' in its own process group: %s\n", diag->progname, service->name, strerror(errno));
-            _exit(1);
-        }
-
-        execvp(service->argv[0], service->argv);
-        fprintf(stderr, "%s: cannot execute service '%s' command '%s': %s\n", diag->progname, service->name, service->argv[0], strerror(errno));
-        _exit((errno == ENOENT) ? 127 : 126);
-    }
-
+    pid_t pid = config->children[config->running - 1].pid;
     if (setpgid(pid, pid) != 0 && errno != EACCES && errno != ESRCH) {
         bx_diag(diag, "cannot place service '%s' in its own process group: %s", service->name, strerror(errno));
         kill(pid, SIGKILL);
-        waitpid(pid, NULL, 0);
+        bx_child_reap(config->children, &config->running, true, true, NULL, NULL);
         return false;
     }
 
@@ -713,33 +724,56 @@ static void bx_init_signal_all_services(const struct bx_init_service_config* con
     }
 }
 
+struct bx_init_reap_context {
+    struct bx_init_service_config* config;
+    bool respawn;
+    struct bx_diag_ctx* diag;
+    bool called;
+    bool ok;
+};
+
+static void bx_init_reap_child_cb(pid_t pid, int status, bool exec_failed, int exec_errno, void* user) {
+    (void)status;
+    struct bx_init_reap_context* ctx = user;
+    ctx->called = true;
+
+    struct bx_init_service* service = bx_init_find_service_by_pid(ctx->config, pid);
+    if (service == NULL) {
+        return;
+    }
+
+    if (exec_failed) {
+        bx_diag(ctx->diag, "cannot execute service '%s' command '%s': %s",
+                service->name, service->argv[0], strerror(exec_errno));
+    }
+
+    service->pid = 0;
+    if (ctx->respawn && !bx_init_spawn_service(ctx->config, service, ctx->diag)) {
+        ctx->ok = false;
+    }
+}
+
 static void bx_init_reap_children(struct bx_init_service_config* config, bool respawn, struct bx_diag_ctx* diag, bool* ok_out) {
     while (true) {
-        int status = 0;
-        pid_t pid = waitpid(-1, &status, WNOHANG);
-        if (pid == 0) {
-            return;
-        }
-        if (pid < 0) {
-            if (errno == ECHILD || errno == EINTR) {
-                return;
-            }
+        struct bx_init_reap_context ctx = {
+            .config = config,
+            .respawn = respawn,
+            .diag = diag,
+            .called = false,
+            .ok = true,
+        };
+        if (bx_child_reap(config->children, &config->running, false, false,
+                          bx_init_reap_child_cb, &ctx) != 0) {
             bx_diag(diag, "waitpid failed: %s", strerror(errno));
             *ok_out = false;
             return;
         }
-
-        struct bx_init_service* service = bx_init_find_service_by_pid(config, pid);
-        if (service == NULL) {
-            continue;
+        if (!ctx.ok) {
+            *ok_out = false;
+            return;
         }
-
-        service->pid = 0;
-        if (respawn) {
-            if (!bx_init_spawn_service(service, diag)) {
-                *ok_out = false;
-                return;
-            }
+        if (!ctx.called) {
+            return;
         }
     }
 }
@@ -843,7 +877,7 @@ static int bx_init_run_service_supervisor(const struct bx_init_options* options,
     bx_init_shutdown_requested = 0;
 
     for (size_t i = 0; i < config.service_count; i++) {
-        if (!bx_init_spawn_service(&config.services[i], diag)) {
+        if (!bx_init_spawn_service(&config, &config.services[i], diag)) {
             bx_init_shutdown_services(&config, diag);
             bx_init_cleanup_service_config(&config);
             return 1;

@@ -13,6 +13,7 @@
 #include "find_exec.h"
 #include "find_internal.h"
 #include "find_output.h"
+#include "lib/line_writer.h"
 #include "lib/path_ops.h"
 #include "search/metadata.h"
 
@@ -149,6 +150,19 @@ static bool find_eval_fail(struct find_state *st) {
     if (st->stop)
         *st->stop = true;
     return false;
+}
+
+static bool find_eval_stdout_fail(struct find_state *st) {
+    find_report_error(st->progname, "stdout", errno ? errno : EIO);
+    return find_eval_fail(st);
+}
+
+static bool find_eval_flush_stdout(struct find_state *st) {
+    if (!st->stdout_writer)
+        return true;
+    if (!bx_line_writer_flush(st->stdout_writer))
+        return find_eval_stdout_fail(st);
+    return true;
 }
 
 static bool find_eval_file_output(struct find_state *st, const char *path,
@@ -355,19 +369,19 @@ bool find_eval_expr(struct find_expr *expr, struct bx_walk_entry *entry,
     case FIND_EXPR_EXECUTABLE:
         return access(entry->path, X_OK) == 0;
     case FIND_EXPR_PRINT:
-        printf("%s\n", entry->path);
+        if (!find_write_path_writer(st->stdout_writer, entry->path, '\n'))
+            return find_eval_stdout_fail(st);
         return true;
     case FIND_EXPR_PRINT0:
-        printf("%s%c", entry->path, '\0');
+        if (!find_write_path_writer(st->stdout_writer, entry->path, '\0'))
+            return find_eval_stdout_fail(st);
         return true;
     case FIND_EXPR_PRINTF:
-        if (!find_write_printf_format(stdout, expr->text, entry)) {
-            find_report_error(st->progname, "stdout", errno ? errno : EIO);
-            return find_eval_fail(st);
-        }
+        if (!find_write_printf_format_writer(st->stdout_writer, expr->text, entry))
+            return find_eval_stdout_fail(st);
         return true;
     case FIND_EXPR_LS:
-        if (!find_write_ls_entry(stdout, entry)) {
+        if (!find_write_ls_entry_writer(st->stdout_writer, entry)) {
             find_report_error(st->progname, entry->path,
                               errno ? errno : EIO);
             return find_eval_fail(st);
@@ -405,16 +419,24 @@ bool find_eval_expr(struct find_expr *expr, struct bx_walk_entry *entry,
             *st->stop = true;
         return true;
     case FIND_EXPR_EXEC:
+        if (!find_eval_flush_stdout(st))
+            return false;
         return find_run_exec_one(st, expr, entry->path, NULL);
     case FIND_EXPR_OK:
+        if (!find_eval_flush_stdout(st))
+            return false;
         if (!find_prompt_ok(expr->exec_argv[0], entry->path))
             return true;
         return find_run_exec_one(st, expr, entry->path, NULL);
     case FIND_EXPR_EXEC_PLUS:
         return find_eval_append_exec_item(st, expr, entry);
     case FIND_EXPR_EXECDIR:
+        if (!find_eval_flush_stdout(st))
+            return false;
         return find_eval_execdir(st, expr, entry, false);
     case FIND_EXPR_OKDIR:
+        if (!find_eval_flush_stdout(st))
+            return false;
         return find_eval_execdir(st, expr, entry, true);
     case FIND_EXPR_EXECDIR_PLUS:
         return find_eval_append_exec_item(st, expr, entry);

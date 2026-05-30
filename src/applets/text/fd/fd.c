@@ -13,6 +13,7 @@
 #include "fd_match.h"
 #include "fd_parse.h"
 #include "fswalk/walk.h"
+#include "lib/line_writer.h"
 #include "search/traverse.h"
 
 static const char *const fd_ignore_filenames[] = {
@@ -73,7 +74,12 @@ int bx_fd_main(int argc, char **argv) {
 
     struct fd_state state;
     memset(&state, 0, sizeof(state));
-    if (!fd_state_init(&state, progname, opts, &stop, args.using_implicit_root))
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer,
+                        sizeof(output_buffer));
+    if (!fd_state_init(&state, progname, opts, &stop,
+                       args.using_implicit_root, &writer))
         goto fail;
 
     int walk_rc = 0;
@@ -88,7 +94,13 @@ int bx_fd_main(int argc, char **argv) {
         exec_rc = fd_run_exec_commands(progname, opts, &state.exec_items);
     }
     if (!state.output_collect_failed && walk_rc == 0 && opts->list_details)
-        detail_rc = fd_detail_items_print(&state.detail_items);
+        detail_rc = fd_detail_items_print(&state.detail_items, &writer);
+    if (detail_rc != 0)
+        state.output_collect_failed = true;
+    if (opts->exec_mode == FD_EXEC_NONE && !opts->quiet &&
+        bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        state.output_collect_failed = true;
+    }
     bool exec_collect_failed = state.exec_collect_failed;
     bool output_collect_failed = state.output_collect_failed;
     fd_state_cleanup(&state);

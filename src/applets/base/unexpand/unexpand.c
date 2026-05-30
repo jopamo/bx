@@ -4,12 +4,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 enum {
     BX_UNEXPAND_OPT_FIRST_ONLY = 256,
@@ -140,10 +142,14 @@ static bool bx_unexpand_parse_options(int argc, char** argv, struct bx_unexpand_
     return true;
 }
 
-static bool bx_unexpand_putc(int c, struct bx_diag_ctx* diag) {
-    if (putchar(c) == EOF) {
-        bx_diag(diag, "write error: %s", strerror(errno));
-        return false;
+static bool bx_unexpand_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_unexpand_putc(struct bx_line_writer* writer, int c, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_putc(writer, (char)c)) {
+        return bx_unexpand_write_error(diag);
     }
     return true;
 }
@@ -156,7 +162,13 @@ static size_t bx_unexpand_next_tab_stop(size_t column, size_t tab_size) {
     return column + advance;
 }
 
-static bool bx_unexpand_flush_spaces(size_t start_column, size_t count, const struct bx_unexpand_options* options, struct bx_diag_ctx* diag) {
+static bool bx_unexpand_flush_spaces(
+    struct bx_line_writer* writer,
+    size_t start_column,
+    size_t count,
+    const struct bx_unexpand_options* options,
+    struct bx_diag_ctx* diag
+) {
     size_t end_column = 0;
     size_t column = start_column;
 
@@ -166,7 +178,7 @@ static bool bx_unexpand_flush_spaces(size_t start_column, size_t count, const st
 
     if (count > SIZE_MAX - start_column) {
         while (count-- > 0) {
-            if (!bx_unexpand_putc(' ', diag)) {
+            if (!bx_unexpand_putc(writer, ' ', diag)) {
                 return false;
             }
         }
@@ -180,7 +192,7 @@ static bool bx_unexpand_flush_spaces(size_t start_column, size_t count, const st
             if (next_stop <= column || next_stop > end_column) {
                 break;
             }
-            if (!bx_unexpand_putc('\t', diag)) {
+            if (!bx_unexpand_putc(writer, '\t', diag)) {
                 return false;
             }
             column = next_stop;
@@ -188,7 +200,7 @@ static bool bx_unexpand_flush_spaces(size_t start_column, size_t count, const st
     }
 
     while (column < end_column) {
-        if (!bx_unexpand_putc(' ', diag)) {
+        if (!bx_unexpand_putc(writer, ' ', diag)) {
             return false;
         }
         column++;
@@ -197,7 +209,12 @@ static bool bx_unexpand_flush_spaces(size_t start_column, size_t count, const st
     return true;
 }
 
-static bool unexpand_file(FILE* f, const struct bx_unexpand_options* options, struct bx_diag_ctx* diag) {
+static bool unexpand_file(
+    FILE* f,
+    const struct bx_unexpand_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     int c;
     size_t column = 0;
     size_t pending_start_column = 0;
@@ -213,11 +230,11 @@ static bool unexpand_file(FILE* f, const struct bx_unexpand_options* options, st
             column++;
         }
         else {
-            if (!bx_unexpand_flush_spaces(pending_start_column, pending_spaces, options, diag)) {
+            if (!bx_unexpand_flush_spaces(writer, pending_start_column, pending_spaces, options, diag)) {
                 return false;
             }
             pending_spaces = 0;
-            if (!bx_unexpand_putc(c, diag)) {
+            if (!bx_unexpand_putc(writer, c, diag)) {
                 return false;
             }
             if (c == '\n') {
@@ -249,7 +266,7 @@ static bool unexpand_file(FILE* f, const struct bx_unexpand_options* options, st
         return false;
     }
 
-    return bx_unexpand_flush_spaces(pending_start_column, pending_spaces, options, diag);
+    return bx_unexpand_flush_spaces(writer, pending_start_column, pending_spaces, options, diag);
 }
 
 int bx_unexpand_main(int argc, char** argv) {
@@ -274,29 +291,29 @@ int bx_unexpand_main(int argc, char** argv) {
         return 0;
     }
 
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     if (first_operand == argc) {
-        if (!unexpand_file(stdin, &options, &diag)) {
-            return diag.exit_status == 0 ? 1 : diag.exit_status;
-        }
+        ok = unexpand_file(stdin, &options, &writer, &diag);
     }
     else {
-        for (int i = first_operand; i < argc; i++) {
+        for (int i = first_operand; ok && i < argc; i++) {
             bool is_stdio = false;
             FILE* f = bx_fopen_dash(argv[i], "r", &is_stdio);
             if (!f) {
                 bx_perror_path(&diag, argv[i]);
                 continue;
             }
-            if (!unexpand_file(f, &options, &diag)) {
-                bx_fclose_nonstdio(f, is_stdio);
-                break;
-            }
+            ok = unexpand_file(f, &options, &writer, &diag);
             bx_fclose_nonstdio(f, is_stdio);
         }
     }
 
-    if (!bx_cli_flush_stdout(&diag)) {
-        return diag.exit_status == 0 ? 1 : diag.exit_status;
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_unexpand_write_error(&diag);
     }
 
     return diag.exit_status;

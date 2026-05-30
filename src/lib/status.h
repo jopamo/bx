@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+#include "lib/output_alloc_counter.h"
+
 enum bx_status_code {
     BX_STATUS_OK = 0,
     BX_STATUS_ERROR = 1,
@@ -37,10 +39,18 @@ static inline int bx_status_from_applet(int status) {
 typedef int (*bx_status_applet_main_fn)(int argc, char** argv);
 
 static inline int bx_status_run_applet(bx_status_applet_main_fn applet_main, int argc, char** argv) {
+    const char* applet_name = (argc > 0 && argv != NULL) ? argv[0] : NULL;
+    int status;
+
     if (applet_main == NULL) {
         return BX_STATUS_ERROR;
     }
-    return bx_status_from_applet(applet_main(argc, argv));
+
+    bx_output_alloc_counter_begin_from_env(applet_name);
+    status = bx_status_from_applet(applet_main(argc, argv));
+    bx_output_alloc_counter_report_stderr();
+    bx_output_alloc_counter_reset();
+    return status;
 }
 
 #endif /* BX_LIB_STATUS_H */

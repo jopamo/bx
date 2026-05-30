@@ -136,7 +136,7 @@ static void bx_ignore_program_cache_dispose(void) {
 
     while (entries) {
         struct bx_ignore_program_cache_entry *next = entries->next;
-        bx_ignore_program_release(entries->program);
+        bx_ignore_program_destroy_process_lifetime(entries->program);
         free(entries->content);
         free(entries);
         entries = next;
@@ -164,6 +164,7 @@ static bool bx_ignore_program_cache_insert_locked(struct bx_ignore_program_cache
     entry->content_len = key->content_len;
     entry->program = program;
     entry->next = bx_ignore_program_cache;
+    bx_ignore_program_make_process_lifetime(program);
     bx_ignore_program_cache = entry;
 
     key->content = NULL;
@@ -243,7 +244,7 @@ done:
 }
 
 void bx_ignore_state_init(struct bx_ignore_state *state,
-                          struct bx_ignore_state *parent,
+                          const struct bx_ignore_state *parent,
                           const char *dirpath,
                           struct bx_ignore_program *program) {
     if (!state)
@@ -284,15 +285,20 @@ void bx_ignore_state_dispose(struct bx_ignore_state *state) {
 
 void bx_ignore_state_dispose_chain(struct bx_ignore_state *state) {
     while (state) {
-        struct bx_ignore_state *parent = state->parent;
+        union {
+            const struct bx_ignore_state *const_parent;
+            struct bx_ignore_state *mutable_parent;
+        } parent = {.const_parent = state->parent};
         bx_ignore_state_dispose(state);
         free(state);
-        state = parent;
+        state = parent.mutable_parent;
     }
 }
 
 struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state *state) {
     if (!state)
+        return NULL;
+    if (state->program && !bx_ignore_program_is_process_lifetime(state->program))
         return NULL;
 
     struct bx_ignore_state *parent = bx_ignore_state_clone_chain(state->parent);
@@ -302,8 +308,7 @@ struct bx_ignore_state *bx_ignore_state_clone_chain(const struct bx_ignore_state
         return NULL;
     }
 
-    bx_ignore_state_init(copy, parent, state->dirpath,
-                         bx_ignore_program_retain(state->program));
+    bx_ignore_state_init(copy, parent, state->dirpath, state->program);
     if (state->dirpath) {
         copy->owned_dirpath = strdup(state->dirpath);
         if (!copy->owned_dirpath) {
@@ -334,7 +339,13 @@ static bool bx_ignore_state_rewrite_root_prefixes(struct bx_ignore_state *state,
                                                   const char *subtree_root) {
     if (!state)
         return true;
-    if (!bx_ignore_state_rewrite_root_prefixes(state->parent, current_root, subtree_root))
+    union {
+        const struct bx_ignore_state *const_parent;
+        struct bx_ignore_state *mutable_parent;
+    } parent = {.const_parent = state->parent};
+    if (!bx_ignore_state_rewrite_root_prefixes(parent.mutable_parent,
+                                              current_root,
+                                              subtree_root))
         return false;
 
     char *old_root_prefix = state->root_prefix ? strdup(state->root_prefix) : NULL;
@@ -482,7 +493,6 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
         pthread_mutex_lock(&bx_ignore_program_cache_lock);
         program = bx_ignore_program_cache_lookup_locked(&cache_key);
         if (program) {
-            program = bx_ignore_program_retain(program);
             pthread_mutex_unlock(&bx_ignore_program_cache_lock);
             bx_ignore_free_patterns(patterns, sources, pattern_count);
             bx_ignore_program_cache_key_dispose(&cache_key);
@@ -503,17 +513,15 @@ static struct bx_ignore_program *bx_ignore_program_from_patterns(char **patterns
         pthread_mutex_lock(&bx_ignore_program_cache_lock);
         struct bx_ignore_program *cached = bx_ignore_program_cache_lookup_locked(&cache_key);
         if (cached) {
-            struct bx_ignore_program *retained = bx_ignore_program_retain(cached);
             pthread_mutex_unlock(&bx_ignore_program_cache_lock);
             bx_ignore_program_release(program);
             bx_ignore_program_cache_key_dispose(&cache_key);
-            return retained;
+            return cached;
         }
         if (bx_ignore_program_cache_insert_locked(&cache_key, program)) {
-            struct bx_ignore_program *retained = bx_ignore_program_retain(program);
             pthread_mutex_unlock(&bx_ignore_program_cache_lock);
             bx_ignore_program_cache_key_dispose(&cache_key);
-            return retained;
+            return program;
         }
         pthread_mutex_unlock(&bx_ignore_program_cache_lock);
         bx_ignore_program_cache_key_dispose(&cache_key);

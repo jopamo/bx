@@ -14,6 +14,7 @@
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 typedef struct {
     long long lines;
@@ -106,13 +107,61 @@ static bool bx_tail_parse_sleep_interval(const char* text, struct timespec* inte
     return bx_time_seconds_to_timespec(result.seconds, interval_out);
 }
 
-static void tail_bytes(FILE* f, long long n) {
+static bool bx_tail_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_tail_putc(struct bx_line_writer* writer, int c, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_putc(writer, (char)c)) {
+        return bx_tail_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_tail_write(
+    struct bx_line_writer* writer,
+    const void* data,
+    size_t length,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_write(writer, data, length)) {
+        return bx_tail_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_tail_puts(struct bx_line_writer* writer, const char* text, struct bx_diag_ctx* diag) {
+    if (!bx_line_writer_puts(writer, text)) {
+        return bx_tail_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_tail_write_header(
+    struct bx_line_writer* writer,
+    const char* path,
+    bool leading_newline,
+    struct bx_diag_ctx* diag
+) {
+    if (leading_newline && !bx_tail_putc(writer, '\n', diag)) {
+        return false;
+    }
+    return bx_tail_puts(writer, "==> ", diag) &&
+           bx_tail_puts(writer, path, diag) &&
+           bx_tail_puts(writer, " <==\n", diag);
+}
+
+static bool tail_bytes(FILE* f, long long n, struct bx_line_writer* writer, struct bx_diag_ctx* diag) {
     if (n > 0) {
         // Output starting with byte n (1-indexed)
         if (fseek(f, n - 1, SEEK_SET) == 0) {
             int c;
-            while ((c = getc(f)) != EOF)
-                putchar(c);
+            while ((c = getc(f)) != EOF) {
+                if (!bx_tail_putc(writer, c, diag)) {
+                    return false;
+                }
+            }
         }
         else {
             // Not seekable, skip n-1 bytes
@@ -121,8 +170,11 @@ static void tail_bytes(FILE* f, long long n) {
                     break;
             }
             int c;
-            while ((c = getc(f)) != EOF)
-                putchar(c);
+            while ((c = getc(f)) != EOF) {
+                if (!bx_tail_putc(writer, c, diag)) {
+                    return false;
+                }
+            }
         }
     }
     else if (n < 0) {
@@ -130,14 +182,17 @@ static void tail_bytes(FILE* f, long long n) {
         n = -n;
         if (fseek(f, -n, SEEK_END) == 0) {
             int c;
-            while ((c = getc(f)) != EOF)
-                putchar(c);
+            while ((c = getc(f)) != EOF) {
+                if (!bx_tail_putc(writer, c, diag)) {
+                    return false;
+                }
+            }
         }
         else {
             // Not seekable, use a buffer
             char* buf = malloc(n);
             if (!buf)
-                return;
+                return true;
             size_t head = 0;
             size_t total = 0;
             int c;
@@ -149,14 +204,25 @@ static void tail_bytes(FILE* f, long long n) {
             size_t start = (total > (size_t)n) ? head : 0;
             size_t count = (total > (size_t)n) ? (size_t)n : total;
             for (size_t i = 0; i < count; i++) {
-                putchar(buf[(start + i) % n]);
+                if (!bx_tail_putc(writer, buf[(start + i) % n], diag)) {
+                    free(buf);
+                    return false;
+                }
             }
             free(buf);
         }
     }
+
+    return true;
 }
 
-static void tail_lines(FILE* f, long long n, char delimiter) {
+static bool tail_lines(
+    FILE* f,
+    long long n,
+    char delimiter,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     if (n > 0) {
         // Output starting with line n (1-indexed)
         long long current_line = 1;
@@ -165,8 +231,11 @@ static void tail_lines(FILE* f, long long n, char delimiter) {
             if (c == delimiter)
                 current_line++;
         }
-        while ((c = getc(f)) != EOF)
-            putchar(c);
+        while ((c = getc(f)) != EOF) {
+            if (!bx_tail_putc(writer, c, diag)) {
+                return false;
+            }
+        }
     }
     else if (n < 0) {
         // Output last -n lines
@@ -193,8 +262,11 @@ static void tail_lines(FILE* f, long long n, char delimiter) {
                 fseek(f, 0, SEEK_SET);
             }
             int c;
-            while ((c = getc(f)) != EOF)
-                putchar(c);
+            while ((c = getc(f)) != EOF) {
+                if (!bx_tail_putc(writer, c, diag)) {
+                    return false;
+                }
+            }
         }
         else {
             // Not seekable, use a circular buffer of lines
@@ -219,14 +291,26 @@ static void tail_lines(FILE* f, long long n, char delimiter) {
 
             size_t start = (total > (size_t)n) ? head : 0;
             size_t count = (total > (size_t)n) ? (size_t)n : total;
+            bool ok = true;
             for (size_t i = 0; i < count; i++) {
-                fwrite(lines[(start + i) % n], 1, lens[(start + i) % n], stdout);
-                free(lines[(start + i) % n]);
+                size_t slot = (start + i) % n;
+                if (ok && !bx_tail_write(writer, lines[slot], lens[slot], diag)) {
+                    ok = false;
+                }
+                free(lines[slot]);
+                lines[slot] = NULL;
             }
+            for (size_t i = 0; i < (size_t)n; i++)
+                free(lines[i]);
             free(lines);
             free(lens);
+            if (!ok) {
+                return false;
+            }
         }
     }
+
+    return true;
 }
 
 int bx_tail_main(int argc, char** argv) {
@@ -327,18 +411,23 @@ int bx_tail_main(int argc, char** argv) {
         }
     }
 
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     if (optind == argc) {
         if (opts.bytes != 0)
-            tail_bytes(stdin, opts.bytes);
+            ok = tail_bytes(stdin, opts.bytes, &writer, &diag);
         else
-            tail_lines(stdin, opts.lines, opts.zero_terminated ? '\0' : '\n');
+            ok = tail_lines(stdin, opts.lines, opts.zero_terminated ? '\0' : '\n', &writer, &diag);
     }
     else {
         bool multiple = (argc - optind > 1);
-        for (int i = optind; i < argc; i++) {
+        for (int i = optind; ok && i < argc; i++) {
             const char* path = argv[i];
             if ((multiple && !opts.quiet) || opts.verbose) {
-                printf("%s==> %s <==\n", (i > optind) ? "\n" : "", path);
+                ok = bx_tail_write_header(&writer, path, i > optind, &diag);
             }
 
             FILE* f = (strcmp(path, "-") == 0) ? stdin : fopen(path, "r");
@@ -346,18 +435,30 @@ int bx_tail_main(int argc, char** argv) {
                 bx_perror_path(&diag, path);
                 continue;
             }
-            if (opts.bytes != 0)
-                tail_bytes(f, opts.bytes);
-            else
-                tail_lines(f, opts.lines, opts.zero_terminated ? '\0' : '\n');
+            if (ok) {
+                if (opts.bytes != 0)
+                    ok = tail_bytes(f, opts.bytes, &writer, &diag);
+                else
+                    ok = tail_lines(f, opts.lines, opts.zero_terminated ? '\0' : '\n', &writer, &diag);
+            }
 
-            if (opts.follow) {
+            if (ok && opts.follow) {
                 // Simple follow
                 while (1) {
                     int ch;
-                    while ((ch = getc(f)) != EOF)
-                        putchar(ch);
-                    fflush(stdout);
+                    while ((ch = getc(f)) != EOF) {
+                        if (!bx_tail_putc(&writer, ch, &diag)) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (!ok || !bx_line_writer_flush(&writer)) {
+                        if (ok) {
+                            bx_tail_write_error(&diag);
+                            ok = false;
+                        }
+                        break;
+                    }
                     nanosleep(&opts.sleep_interval, NULL);
                     clearerr(f);
                 }
@@ -366,6 +467,10 @@ int bx_tail_main(int argc, char** argv) {
             if (f != stdin)
                 fclose(f);
         }
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_tail_write_error(&diag);
     }
 
     return diag.exit_status;

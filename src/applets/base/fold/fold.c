@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -13,6 +14,7 @@
 #include "lib/cli_common.h"
 #include "lib/fopen_dash.h"
 #include "lib/args_common.h"
+#include "lib/line_writer.h"
 
 struct bx_fold_options {
     const char* progname;
@@ -87,7 +89,40 @@ static bool bx_fold_parse_options(int argc, char** argv, struct bx_fold_options*
     return true;
 }
 
-static void fold_file(FILE* f, struct bx_fold_options* options) {
+static bool bx_fold_write_error(struct bx_diag_ctx* diag) {
+    bx_diag(diag, "write error: %s", strerror(errno));
+    return false;
+}
+
+static bool bx_fold_write(
+    struct bx_line_writer* writer,
+    const void* data,
+    size_t length,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_write(writer, data, length)) {
+        return bx_fold_write_error(diag);
+    }
+    return true;
+}
+
+static bool bx_fold_putc(
+    struct bx_line_writer* writer,
+    char ch,
+    struct bx_diag_ctx* diag
+) {
+    if (!bx_line_writer_putc(writer, ch)) {
+        return bx_fold_write_error(diag);
+    }
+    return true;
+}
+
+static bool fold_file(
+    FILE* f,
+    struct bx_fold_options* options,
+    struct bx_line_writer* writer,
+    struct bx_diag_ctx* diag
+) {
     char* line = NULL;
     size_t line_cap = 0;
     ssize_t len;
@@ -101,7 +136,10 @@ static void fold_file(FILE* f, struct bx_fold_options* options) {
             int c = (unsigned char)line[i];
 
             if (c == '\n') {
-                fwrite(&line[start], 1, i - start + 1, stdout);
+                if (!bx_fold_write(writer, &line[start], i - start + 1, diag)) {
+                    free(line);
+                    return false;
+                }
                 start = i + 1;
                 col = 0;
                 last_space_pos = 0;
@@ -128,8 +166,11 @@ static void fold_file(FILE* f, struct bx_fold_options* options) {
                 size_t wrap_pos = i;
                 if (options->spaces && last_space_pos > start) {
                     wrap_pos = last_space_pos;
-                    fwrite(&line[start], 1, wrap_pos - start, stdout);
-                    putchar('\n');
+                    if (!bx_fold_write(writer, &line[start], wrap_pos - start, diag) ||
+                        !bx_fold_putc(writer, '\n', diag)) {
+                        free(line);
+                        return false;
+                    }
                     start = wrap_pos;
                     // Skip the space that caused the break
                     if (line[start] == ' ') {
@@ -155,8 +196,11 @@ static void fold_file(FILE* f, struct bx_fold_options* options) {
                     last_space_pos = 0;
                 }
                 else {
-                    fwrite(&line[start], 1, i - start, stdout);
-                    putchar('\n');
+                    if (!bx_fold_write(writer, &line[start], i - start, diag) ||
+                        !bx_fold_putc(writer, '\n', diag)) {
+                        free(line);
+                        return false;
+                    }
                     start = i;
                     col = next_col - col;  // Column of char c on new line
                     if (c == '\t' && !options->bytes)
@@ -187,10 +231,14 @@ static void fold_file(FILE* f, struct bx_fold_options* options) {
             }
         }
         if (start < (size_t)len) {
-            fwrite(&line[start], 1, (size_t)len - start, stdout);
+            if (!bx_fold_write(writer, &line[start], (size_t)len - start, diag)) {
+                free(line);
+                return false;
+            }
         }
     }
     free(line);
+    return true;
 }
 
 int bx_fold_main(int argc, char** argv) {
@@ -210,7 +258,12 @@ int bx_fold_main(int argc, char** argv) {
     }
 
     int num_files = argc - first_operand;
-    for (int i = 0; i < num_files || (i == 0 && num_files == 0); i++) {
+    bool ok = true;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    for (int i = 0; ok && (i < num_files || (i == 0 && num_files == 0)); i++) {
         const char* filename = (num_files == 0) ? "-" : argv[first_operand + i];
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(filename, "r", &is_stdio);
@@ -218,8 +271,12 @@ int bx_fold_main(int argc, char** argv) {
             bx_diag(&diag, "%s: %s", filename, strerror(errno));
             continue;
         }
-        fold_file(f, &options);
+        ok = fold_file(f, &options, &writer, &diag);
         bx_fclose_nonstdio(f, is_stdio);
+    }
+
+    if (ok && bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer)) {
+        bx_fold_write_error(&diag);
     }
 
     return diag.exit_status;

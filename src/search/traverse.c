@@ -18,7 +18,7 @@
 struct bx_search_walk_dir_frame {
     int applies_depth;
     struct bx_ignore_state *owned_ignore_chain;
-    struct bx_ignore_state *ignore_state;
+    const struct bx_ignore_state *ignore_state;
     struct bx_ignore_state inline_ignore_state;
     bool have_inline_ignore_state;
 };
@@ -56,7 +56,7 @@ static bool bx_search_walk_dir_frames_reserve(struct bx_search_walk_state *state
         for (size_t i = 0u; i < old_len; i++) {
             if (tmp[i].have_inline_ignore_state) {
                 tmp[i].ignore_state = &tmp[i].inline_ignore_state;
-                struct bx_ignore_state *parent = tmp[i].inline_ignore_state.parent;
+                const struct bx_ignore_state *parent = tmp[i].inline_ignore_state.parent;
                 if (parent) {
                     uintptr_t parent_addr = (uintptr_t)parent;
                     for (size_t j = 0u; j < old_len; j++) {
@@ -65,7 +65,7 @@ static bool bx_search_walk_dir_frames_reserve(struct bx_search_walk_state *state
                             offsetof(struct bx_search_walk_dir_frame, inline_ignore_state);
                         if (parent_addr == old_inline_addr) {
                             tmp[i].inline_ignore_state.parent =
-                                (struct bx_ignore_state *)(void *)(new_base +
+                                (const struct bx_ignore_state *)(void *)(new_base +
                                     j * sizeof(*tmp) +
                                     offsetof(struct bx_search_walk_dir_frame,
                                              inline_ignore_state));
@@ -96,7 +96,7 @@ static void bx_search_walk_dir_frames_pop_to_depth(struct bx_search_walk_state *
     }
 }
 
-static struct bx_ignore_state *
+static const struct bx_ignore_state *
 bx_search_walk_active_ignore_state(const struct bx_search_walk_state *state, int depth) {
     (void)depth;
     if (!state || state->dir_frame_len == 0u)
@@ -135,7 +135,11 @@ static void bx_search_walk_note_rejected_entry(const struct bx_walk_entry *entry
 }
 
 static bool bx_search_walk_init_root_dir_frame(struct bx_search_walk_state *state,
-                                               struct bx_ignore_state *parent_ignore_state) {
+                                               struct bx_ignore_state *owned_parent_ignore_state,
+                                               const struct bx_ignore_state *borrowed_parent_ignore_state) {
+    const struct bx_ignore_state *parent_ignore_state =
+        owned_parent_ignore_state ? owned_parent_ignore_state : borrowed_parent_ignore_state;
+
     if (!state || !state->have_ignore_opts)
         return true;
     if (!parent_ignore_state)
@@ -145,7 +149,7 @@ static bool bx_search_walk_init_root_dir_frame(struct bx_search_walk_state *stat
 
     state->dir_frames[0] = (struct bx_search_walk_dir_frame){
         .applies_depth = 0,
-        .owned_ignore_chain = parent_ignore_state,
+        .owned_ignore_chain = owned_parent_ignore_state,
         .ignore_state = parent_ignore_state,
     };
     state->dir_frame_len = 1u;
@@ -155,7 +159,7 @@ static bool bx_search_walk_init_root_dir_frame(struct bx_search_walk_state *stat
 static enum bx_walk_action bx_search_walk_push_dir_frame(struct bx_search_walk_state *state,
                                                          struct bx_walk_entry *entry,
                                                          int depth) {
-    struct bx_ignore_state *parent = bx_search_walk_active_ignore_state(state, depth);
+    const struct bx_ignore_state *parent = bx_search_walk_active_ignore_state(state, depth);
     struct bx_ignore_program *program = NULL;
 
     if (state->have_ignore_opts && !state->ignore_opts.no_ignore) {
@@ -197,7 +201,7 @@ static enum bx_walk_action bx_search_walk_visit(struct bx_walk_entry *entry, voi
 
     uint64_t filter_start = entry->depth > 0 ? bx_search_walk_timing_start() : 0u;
     const char *name = bx_path_basename_ptr(entry->path);
-    struct bx_ignore_state *ignore_state =
+    const struct bx_ignore_state *ignore_state =
         bx_search_walk_active_ignore_state(state, entry->depth);
     bool entry_selected = true;
 
@@ -298,10 +302,10 @@ static int bx_search_walk_impl(const char *root,
             state.ignore_opts.git_root_resolved = true;
         }
 
-        if (config->inherited_parent_ignore_state) {
+        if (config->borrowed_parent_ignore_state) {
             if (!bx_search_walk_init_root_dir_frame(&state,
-                                                    config->inherited_parent_ignore_state)) {
-                bx_ignore_state_dispose_chain(config->inherited_parent_ignore_state);
+                                                    NULL,
+                                                    config->borrowed_parent_ignore_state)) {
                 if (root_dir)
                     closedir(root_dir);
                 free(state.git_root_owned);
@@ -320,7 +324,7 @@ static int bx_search_walk_impl(const char *root,
                 free(state.dir_frames);
                 return -1;
             }
-            if (!bx_search_walk_init_root_dir_frame(&state, parent_ignore_state)) {
+            if (!bx_search_walk_init_root_dir_frame(&state, parent_ignore_state, NULL)) {
                 bx_ignore_state_dispose_chain(parent_ignore_state);
                 if (root_dir)
                     closedir(root_dir);

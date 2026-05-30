@@ -119,16 +119,17 @@ static bool bx_rg_publish_submit_unordered_split(
 void bx_rg_publish_emit_record_default(void *user,
                                        struct bx_rg_publish_record *record) {
     struct bx_rg_publish_aggregate *state = user;
+    FILE *stdout_stream = state && state->stdout_stream ? state->stdout_stream : stdout;
 
     if (!state || !record)
         return;
 
     if (record->used_heading && record->stdout_len > 0u &&
         state->heading_output_started && *state->heading_output_started) {
-        fputc('\n', stdout);
+        fputc('\n', stdout_stream);
     }
     if (record->stdout_len > 0u && record->stdout_buf)
-        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout);
+        fwrite(record->stdout_buf, 1u, record->stdout_len, stdout_stream);
     if (record->stderr_len > 0u && record->stderr_buf)
         fwrite(record->stderr_buf, 1u, record->stderr_len, stderr);
     if (record->used_heading && record->stdout_len > 0u && state->heading_output_started)

@@ -18,6 +18,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/child_runner.h"
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
@@ -689,14 +690,8 @@ static int bx_getty_exec_login(const struct bx_getty_options* options, struct bx
     int login_argc = 0;
     char** login_argv = bx_getty_build_login_argv(options, username, &login_argc);
 
-    if (strchr(options->login_program, '/') != NULL) {
-        execv(options->login_program, login_argv);
-    }
-    else {
-        execvp(options->login_program, login_argv);
-    }
-
-    bx_diag(diag, "cannot execute '%s': %s", options->login_program, strerror(errno));
+    int exec_error = bx_child_exec_argv_exact_or_path(login_argv);
+    bx_diag(diag, "cannot execute '%s': %s", options->login_program, strerror(exec_error));
     bx_getty_free_login_argv(login_argv, login_argc);
     free(tty_path);
     return 1;

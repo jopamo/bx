@@ -19,6 +19,14 @@ struct bx_child_runner_opts {
     bool reopen_stdin_tty;
     const char *process_slot_var;
     const char *cwd;
+    bool use_stdin_fd;
+    int stdin_fd;
+    bool use_stdout_fd;
+    int stdout_fd;
+    bool use_stderr_fd;
+    int stderr_fd;
+    bool reset_common_signals;
+    bool new_process_group;
     bx_child_prompt_hook prompt_hook;
     void *prompt_user;
     bx_child_verbose_hook verbose_hook;
@@ -37,6 +45,14 @@ bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
         .reopen_stdin_tty = reopen_stdin_tty,
         .process_slot_var = process_slot_var,
         .cwd = NULL,
+        .use_stdin_fd = false,
+        .stdin_fd = -1,
+        .use_stdout_fd = false,
+        .stdout_fd = -1,
+        .use_stderr_fd = false,
+        .stderr_fd = -1,
+        .reset_common_signals = false,
+        .new_process_group = false,
         .prompt_hook = NULL,
         .prompt_user = NULL,
         .verbose_hook = NULL,
@@ -53,11 +69,18 @@ struct bx_child {
 
 int bx_child_pick_slot(struct bx_child *children, int count, int max_procs);
 void bx_child_signal_all(struct bx_child *children, int count, int signo);
-int bx_child_spawn_argv(const char *progname, char **argv,
+int bx_child_exec_argv(char *const *argv);
+int bx_child_exec_argv_exact_or_path(char *const *argv);
+int bx_child_spawn_argv(const char *progname, char *const *argv,
                         const struct bx_child_runner_opts *opts,
                         int slot,
                         struct bx_child *children, int *running,
                         bool *exec_failed_now, int *exec_errno_now);
+int bx_child_spawn_const_argv(const char *progname, const char *const *argv,
+                              const struct bx_child_runner_opts *opts,
+                              int slot,
+                              struct bx_child *children, int *running,
+                              bool *exec_failed_now, int *exec_errno_now);
 int bx_child_reap(struct bx_child *children, int *running,
                   bool block, bool drain_all,
                   void (*cb)(pid_t pid, int status, bool exec_failed, int exec_errno, void *user),

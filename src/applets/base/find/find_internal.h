@@ -9,6 +9,8 @@
 #include "find_regex.h"
 #include "fswalk/walk.h"
 
+struct bx_line_writer;
+
 struct find_opts {
     bool depth_first;
     int max_depth;
@@ -126,6 +128,7 @@ struct find_state {
     bool *stop;
     int status;
     struct timespec now;
+    struct bx_line_writer *stdout_writer;
 };
 
 void find_report_error(const char *progname, const char *path, int errnum);

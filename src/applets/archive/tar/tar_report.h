@@ -6,10 +6,13 @@
 #include <stdio.h>
 
 #include "bx/diag.h"
+#include "lib/line_writer_file.h"
 
 struct bx_tar_report_output {
     FILE* stream;
     bool close_stream;
+    bool line_file_active;
+    struct bx_line_writer_file line_file;
 };
 
 bool bx_tar_report_output_init(struct bx_tar_report_output* output,

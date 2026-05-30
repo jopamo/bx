@@ -11,6 +11,7 @@
 #include "bx/libbx.h"
 #include "lib/args_common.h"
 #include "lib/cli_common.h"
+#include "lib/line_writer.h"
 
 enum tr_array_kind {
     TR_ARRAY_STRING1 = 0,
@@ -631,6 +632,10 @@ int bx_tr_main(int argc, char** argv) {
 
     int prev_out = -1;
     int ch = 0;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
     while ((ch = getchar()) != EOF) {
         unsigned char byte = (unsigned char)ch;
         if (delete_set[byte]) {
@@ -642,7 +647,7 @@ int bx_tr_main(int argc, char** argv) {
             continue;
         }
 
-        if (putchar((int)out) == EOF) {
+        if (!bx_line_writer_putc(&writer, (char)out)) {
             tr_array_destroy(&set1);
             tr_array_destroy(&set2);
             return 1;
@@ -654,7 +659,8 @@ int bx_tr_main(int argc, char** argv) {
     tr_array_destroy(&set1);
     tr_array_destroy(&set2);
 
-    if (ferror(stdin) || fflush(stdout) == EOF) {
+    bool output_error = bx_line_writer_error(&writer) == 0 && !bx_line_writer_flush(&writer);
+    if (ferror(stdin) || output_error) {
         return 1;
     }
 

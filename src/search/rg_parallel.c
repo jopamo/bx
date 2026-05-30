@@ -10,6 +10,7 @@
 #include <pthread.h>
 
 #include "lib/cancel_state.h"
+#include "lib/output_alloc_counter.h"
 #include "lib/thread_count.h"
 #include "lib/work_pool.h"
 #include "dev_counters.h"
@@ -313,7 +314,8 @@ static bool bx_search_parallel_submit_path_error(struct bx_search_parallel_state
         bx_search_fprintf_path_io_error(err_stream, state->progname, path, errnum);
     else
         bx_search_fprintf_path_error(err_stream, state->progname, path, errnum);
-    fclose(err_stream);
+    if (fclose(err_stream) == 0)
+        bx_output_alloc_counter_note_alloc(record->stderr_len + 1u);
 
     if (!bx_search_parallel_submit_record(state, record))
         return false;
@@ -514,10 +516,7 @@ static void bx_search_parallel_process_job(void *user,
     }
     bx_search_output_ctx_pop(previous_ctx);
 
-    if (output_ctx.out)
-        fclose(output_ctx.out);
-    if (output_ctx.err)
-        fclose(output_ctx.err);
+    bx_search_output_ctx_close_captures(&output_ctx);
     if (output_ctx.capture_failed) {
         bx_search_parallel_set_fatal(state, "rg: failed to allocate worker output streams\n");
         free(stdout_buf);
@@ -683,6 +682,7 @@ int bx_search_run_parallel_rg(int argc,
     if (pthread_mutex_init(&state.lock, NULL) != 0)
         return 2;
     state.aggregate = (struct bx_rg_publish_aggregate){
+        .stdout_stream = bx_search_output_stream(),
         .stats = &state.stats,
         .exit_status = &state.exit_status,
         .match_seen = &state.match_seen,

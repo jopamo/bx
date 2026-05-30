@@ -18,6 +18,7 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
+#include "lib/line_writer.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
 
@@ -871,8 +872,14 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
                                    struct bx_diag_ctx* diag) {
     struct bx_archive_pending_dirs dirs = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
+    char list_output_buffer[8192];
+    struct bx_line_writer list_writer;
     size_t i;
     int status = 0;
+
+    if (options->list)
+        bx_line_writer_init(&list_writer, STDOUT_FILENO,
+                            list_output_buffer, sizeof(list_output_buffer));
 
     for (i = 0u; i < entries->len; i++) {
         const struct bx_cpio_entry* entry = &entries->items[i];
@@ -882,7 +889,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
             continue;
         }
         if (options->list) {
-            if (printf("%s\n", entry->name) < 0) {
+            if (!bx_line_writer_put_line(&list_writer, entry->name)) {
                 bx_diag(diag, "write error: %s", strerror(errno));
                 status = 2;
                 break;
@@ -1014,6 +1021,10 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
         free(dest_path);
     }
 
+    if (status == 0 && options->list && !bx_line_writer_flush(&list_writer)) {
+        bx_diag(diag, "write error: %s", strerror(errno));
+        status = 2;
+    }
     if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag)) {
         status = 2;
     }

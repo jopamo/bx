@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/child_runner.h"
 
 struct bx_nice_options {
     const char* progname;
@@ -160,9 +161,7 @@ static void bx_nice_apply_adjustment(int adjustment, struct bx_diag_ctx* diag) {
 }
 
 static int bx_nice_exec_command(char** command_argv, struct bx_diag_ctx* diag) {
-    execvp(command_argv[0], command_argv);
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv(command_argv);
     bx_diag(diag, "%s: %s", command_argv[0], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;

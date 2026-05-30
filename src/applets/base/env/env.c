@@ -10,6 +10,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/child_runner.h"
 #include "lib/args_common.h"
 
 extern char** environ;
@@ -186,9 +187,7 @@ static bool bx_env_print_environment(bool zero_terminated, struct bx_diag_ctx* d
 }
 
 static int bx_env_execute_command(char** command_argv, struct bx_diag_ctx* diag) {
-    execvp(command_argv[0], command_argv);
-
-    int exec_error = errno;
+    int exec_error = bx_child_exec_argv(command_argv);
     bx_diag(diag, "%s: %s", command_argv[0], strerror(exec_error));
     if (exec_error == ENOENT) {
         return 127;

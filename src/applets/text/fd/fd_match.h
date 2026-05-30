@@ -12,6 +12,8 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
 
+struct bx_line_writer;
+
 struct fd_state {
     struct fd_opts *opts;
     pcre2_code *regexes[FD_MAX_AND_PATTERNS + 1];
@@ -25,11 +27,13 @@ struct fd_state {
     bool exec_collect_failed;
     struct fd_detail_items detail_items;
     bool output_collect_failed;
+    struct bx_line_writer *writer;
 };
 
 bool fd_state_init(struct fd_state *st, const char *progname,
                    struct fd_opts *opts, bool *stop,
-                   bool using_implicit_root);
+                   bool using_implicit_root,
+                   struct bx_line_writer *writer);
 void fd_state_cleanup(struct fd_state *st);
 enum bx_walk_action fd_walk_callback(struct bx_walk_entry *entry, void *user);
 
