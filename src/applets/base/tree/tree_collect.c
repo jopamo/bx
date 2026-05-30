@@ -450,7 +450,12 @@ static void bx_tree_format_size_value(off_t size,
         return;
     }
 
-    bx_size_format_human_round((uintmax_t)size, 1024u, "BKMGTPE", true, buffer, 32);
+    uintmax_t base = 0;
+    if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &base)) {
+        snprintf(buffer, 32, "%jdB", (intmax_t)size);
+        return;
+    }
+    bx_size_format_human_round((uintmax_t)size, base, "BKMGTPE", true, buffer, 32);
 }
 
 static void bx_tree_collect_meta_widths_node(const struct bx_tree_node *node,

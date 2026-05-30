@@ -58,20 +58,7 @@ static mode_t bx_copy_regular_file_create_mode(const struct bx_copy_context* ctx
 }
 
 static char* bx_copy_parent_dir_dup(const char* path) {
-    char* copy = xstrdup(path);
-    char* slash = strrchr(copy, '/');
-
-    if (slash == NULL) {
-        free(copy);
-        return xstrdup(".");
-    }
-    if (slash == copy) {
-        slash[1] = '\0';
-        return copy;
-    }
-
-    *slash = '\0';
-    return copy;
+    return bx_path_parent_dir_dup(path);
 }
 
 static bool bx_copy_relative_symlink_stays_in_cwd(const char* dest_path) {
@@ -153,26 +140,10 @@ static enum bx_backup_create_result bx_copy_backup_same_file_copy(struct bx_copy
 }
 
 static bool bx_copy_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
-    char* stripped = bx_path_strip_trailing_slashes_dup(path);
-    char* parent_path = NULL;
-    char* slash = strrchr(stripped, '/');
-
-    if (slash == NULL) {
-        parent_path = xstrdup(".");
-    }
-    else if (slash == stripped) {
-        parent_path = xstrdup("/");
-    }
-    else {
-        size_t parent_len = (size_t)(slash - stripped);
-        parent_path = xmalloc(parent_len + 1u);
-        memcpy(parent_path, stripped, parent_len);
-        parent_path[parent_len] = '\0';
-    }
+    char* parent_path = bx_path_parent_dir_stripped_dup(path);
 
     bool ok = stat(parent_path, parent_stat_out) == 0;
     free(parent_path);
-    free(stripped);
     return ok;
 }
 
@@ -693,7 +664,7 @@ static bool bx_copy_create_socket_node(struct bx_copy_context* ctx, const char* 
         return false;
     }
 
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    fd = bx_fd_socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
         bx_perror_path(ctx->diag, dest_path);
         return false;

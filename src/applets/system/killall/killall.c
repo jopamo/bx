@@ -19,6 +19,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/id_parse.h"
+#include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/time_parse.h"
 #include "lib/args_common.h"
@@ -314,12 +315,12 @@ static const char* bx_killall_cmd0(const struct bx_proc_info* info, char* storag
         }
         memcpy(storage, info->cmdline, len);
         storage[len] = '\0';
-        src = strrchr(storage, '/');
-        return src != NULL && src[1] != '\0' ? src + 1 : storage;
+        src = bx_path_basename_ptr(storage);
+        return src[0] != '\0' ? src : storage;
     }
     if (info->exe != NULL && info->exe[0] != '\0') {
-        src = strrchr(info->exe, '/');
-        return src != NULL && src[1] != '\0' ? src + 1 : info->exe;
+        src = bx_path_basename_ptr(info->exe);
+        return src[0] != '\0' ? src : info->exe;
     }
     return info->comm;
 }

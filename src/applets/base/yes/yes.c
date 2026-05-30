@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 #include "applets.h"
+#include "lib/line_writer.h"
 
 int bx_yes_main(int argc, char** argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0)) {
@@ -17,6 +18,7 @@ int bx_yes_main(int argc, char** argv) {
 
     const char* output = "y";
     char* buffer = NULL;
+    size_t output_len = 1u;
 
     if (argc > 1) {
         size_t len = 0;
@@ -34,14 +36,17 @@ int bx_yes_main(int argc, char** argv) {
             }
         }
         output = buffer;
+        output_len = strlen(output);
     }
 
-    while (1) {
-        if (printf("%s\n", output) < 0) {
-            break;
-        }
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+    while (bx_line_writer_put_line_len(&writer, output, output_len)) {
+        ;
     }
 
     free(buffer);
-    return 0;
+    return 1;
 }

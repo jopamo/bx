@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/output_quote.h"
 #include "lib/size_parse.h"
 #include "lib/thread_count.h"
 #include "options.h"
@@ -2404,6 +2406,11 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         opts->binary_without_match = false;
         opts->crlf = false;
     }
+    opts->terminal_quote_paths =
+        !opts->null_output &&
+        !opts->null_filename &&
+        !opts->null_data &&
+        bx_output_quote_terminal_should_hide_control(STDOUT_FILENO);
 
     if (bx_search_personality_is_rg(personality)) {
         if (opts->files_with_matches || opts->files_without_match)

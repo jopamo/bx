@@ -7,10 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "dev_counters.h"
+#include "lib/fd_ops.h"
 #include "record_stream.h"
 #include "rg_transform.h"
 #include "search_input.h"
@@ -28,21 +28,8 @@ int bx_search_input_open_fd(const char *filename,
     flags |= O_CLOEXEC;
 #endif
 
-#ifdef SYS_openat
-    int fd;
     bx_search_dev_counters_note_content_open_call();
-    do {
-        fd = (int)syscall(SYS_openat, AT_FDCWD, filename, flags, 0);
-    } while (fd < 0 && errno == EINTR);
-    return fd;
-#else
-    int fd;
-    bx_search_dev_counters_note_content_open_call();
-    do {
-        fd = open(filename, flags);
-    } while (fd < 0 && errno == EINTR);
-    return fd;
-#endif
+    return bx_fd_openat_cloexec(AT_FDCWD, filename, flags, 0);
 }
 
 FILE *bx_search_input_fopen(const char *filename,

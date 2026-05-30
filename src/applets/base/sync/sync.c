@@ -13,6 +13,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 
 struct bx_sync_options {
     const char* progname;
@@ -89,7 +90,7 @@ static int bx_sync_syncfs_fd(int fd) {
 }
 
 static void bx_sync_one_path(const char* path, const struct bx_sync_options* options, struct bx_diag_ctx* diag) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0) {
         bx_diag(diag, "error opening '%s': %s", path, strerror(errno));
         return;

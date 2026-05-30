@@ -10,6 +10,8 @@
 #include "mptcp_pm.h"
 #endif
 
+#include "lib/fd_ops.h"
+
 #ifndef IPTOS_DSCP_CS0
 #define IPTOS_DSCP_CS0 0x00
 #define IPTOS_DSCP_CS1 0x20
@@ -72,7 +74,7 @@ int vsock_listen(const char* cid_str, const char* port_str) {
     else
         svm.svm_port = (unsigned int)nc_strtonum(port_str, 0, UINT_MAX, &errstr);
 
-    if ((s = direct_socket(AF_VSOCK, SOCK_STREAM, 0)) == -1)
+    if ((s = bx_fd_socket_cloexec(AF_VSOCK, SOCK_STREAM, 0)) == -1)
         return -1;
 
     set_common_sockopts(s, AF_VSOCK);
@@ -111,7 +113,7 @@ int vsock_connect(const char* cid_str, const char* port_str) {
 
     svm.svm_port = (unsigned int)nc_strtonum(port_str, 0, UINT_MAX, &errstr);
 
-    if ((s = direct_socket(AF_VSOCK, SOCK_STREAM, 0)) == -1)
+    if ((s = bx_fd_socket_cloexec(AF_VSOCK, SOCK_STREAM, 0)) == -1)
         return -1;
 
     set_common_sockopts(s, AF_VSOCK);
@@ -134,7 +136,7 @@ int unix_bind(char* path, int flags) {
     socklen_t len;
 
     /* Create unix domain socket. */
-    if ((s = direct_socket(AF_UNIX, flags | (uflag ? SOCK_DGRAM : SOCK_STREAM), 0)) == -1)
+    if ((s = bx_fd_socket_cloexec(AF_UNIX, flags | (uflag ? SOCK_DGRAM : SOCK_STREAM), 0)) == -1)
         return -1;
 
     memset(&s_un, 0, sizeof(struct sockaddr_un));
@@ -184,7 +186,7 @@ int unix_connect(char* path) {
             return -1;
     }
     else {
-        if ((s = direct_socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)) == -1)
+        if ((s = bx_fd_socket_cloexec(AF_UNIX, SOCK_STREAM, 0)) == -1)
             return -1;
     }
 
@@ -258,7 +260,7 @@ int remote_connect(const char* host, const char* port, struct addrinfo hints, ch
         if (mptcpflag && res->ai_protocol == IPPROTO_TCP)
             proto = IPPROTO_MPTCP;
 #endif
-        if ((s = direct_socket(res->ai_family, res->ai_socktype | SOCK_NONBLOCK, proto)) == -1)
+        if ((s = bx_fd_socket_cloexec(res->ai_family, res->ai_socktype | SOCK_NONBLOCK, proto)) == -1)
             continue;
 
         /* Bind to a local port or source address if specified. */
@@ -384,7 +386,7 @@ int local_listen(const char* host, const char* port, struct addrinfo hints) {
         if (mptcpflag && res->ai_protocol == IPPROTO_TCP)
             proto = IPPROTO_MPTCP;
 #endif
-        if ((s = direct_socket(res->ai_family, res->ai_socktype, proto)) == -1)
+        if ((s = bx_fd_socket_cloexec(res->ai_family, res->ai_socktype, proto)) == -1)
             continue;
 
         ret = setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &x, sizeof(x));
@@ -828,7 +830,7 @@ static int mptcp_pm_ensure(void) {
     if (mptcp_pm.initialized && mptcp_pm.fd != -1)
         return 0;
 
-    fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+    fd = bx_fd_socket_cloexec(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
     if (fd == -1) {
         mptcp_pm.unavailable = 1;
         return -1;

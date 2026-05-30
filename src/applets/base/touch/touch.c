@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 #include "lib/args_common.h"
 
@@ -371,7 +372,7 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
         return;
     }
 
-    int fd = open(path, O_WRONLY | O_CREAT, 0666u);
+    int fd = bx_fd_open_cloexec(path, O_WRONLY | O_CREAT, 0666u);
     if (fd < 0) {
         bx_perror_path(diag, path);
         return;

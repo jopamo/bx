@@ -27,6 +27,7 @@
 #include "lib/args_common.h"
 #include "lib/cli_common.h"
 #include "lib/copy_data.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
@@ -516,16 +517,6 @@ static bool bx_tar_set_unsupported_external_compress_program(struct bx_tar_optio
     return true;
 }
 
-static const char* bx_tar_program_basename(const char* path) {
-    const char* slash;
-
-    if (path == NULL) {
-        return NULL;
-    }
-    slash = strrchr(path, '/');
-    return slash != NULL ? slash + 1 : path;
-}
-
 static bool bx_tar_internal_xz_threads_arg_supported(const char* text) {
     char* end = NULL;
     long value;
@@ -609,7 +600,7 @@ static bool bx_tar_try_set_internal_xz_compress_program(struct bx_tar_options* o
         return true;
     }
 
-    program = bx_tar_program_basename(token);
+    program = bx_path_basename_ptr(token);
     if (strcmp(program, "xz") != 0
         && strcmp(program, "unxz") != 0
         && strcmp(program, "xzcat") != 0) {
@@ -1679,7 +1670,7 @@ static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
         return true;
     }
 
-    state->current_fd = open(state->current_fs_path, O_RDONLY);
+    state->current_fd = bx_fd_open_cloexec(state->current_fs_path, O_RDONLY, 0);
     if (state->current_fd < 0) {
         bx_tar_compare_report_error(state,
                                     diag,
@@ -2100,7 +2091,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     if (entry->kind == BX_TAR_KIND_REG) {
         int fd;
 
-        fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
+        fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
         if (fd < 0) {
             if (errno != EEXIST && errno != EISDIR) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -2113,7 +2104,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                 bx_tar_extract_clear_current_stream(state);
                 return true;
             }
-            fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
+            fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
             if (fd < 0) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
                 free(dest_path);
@@ -2838,7 +2829,7 @@ static bool bx_tar_source_archive_is_unsupported_compressed(const char* path,
         return false;
     }
 
-    fd = open(path, O_RDONLY);
+    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return true;
@@ -3232,7 +3223,7 @@ static int bx_tar_try_append_plain_in_place(const struct bx_archive_fs_list* app
 
     *total_bytes_written_out = 0u;
 
-    fd = open(options->archive_path, O_RDWR);
+    fd = bx_fd_open_cloexec(options->archive_path, O_RDWR, 0);
     if (fd < 0) {
         if (errno == ENOENT) {
             return bx_tar_write_create_archive_direct(appended_files,

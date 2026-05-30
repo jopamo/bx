@@ -21,6 +21,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
@@ -51,12 +52,16 @@ struct bx_ping_reply {
 };
 
 static void bx_ping_print_help(FILE* stream, const char* progname) {
+    int default_timeout_seconds = 0;
+
+    (void)bx_time_milliseconds_to_seconds_int_floor(BX_PING_DEFAULT_TIMEOUT_MS, &default_timeout_seconds);
+
     fprintf(stream, "Usage: %s [OPTION]... HOST\n", progname);
     fprintf(stream, "Send ICMP ECHO_REQUEST packets to an IPv4 host.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -4, --ipv4            use IPv4 (default and only mode in this phase)\n");
     fprintf(stream, "  -c, --count=COUNT     stop after COUNT probes (default: %u)\n", BX_PING_DEFAULT_COUNT);
-    fprintf(stream, "  -W, --timeout=SECS    wait up to SECS for each reply (default: %u)\n", BX_PING_DEFAULT_TIMEOUT_MS / 1000u);
+    fprintf(stream, "  -W, --timeout=SECS    wait up to SECS for each reply (default: %d)\n", default_timeout_seconds);
     fprintf(stream, "  -s, --size=BYTES      ICMP payload size (default: %u)\n", BX_PING_DEFAULT_PAYLOAD_SIZE);
     fprintf(stream, "  -h, --help            display this help and exit\n");
     fprintf(stream, "  -V, --version         output version information and exit\n");
@@ -209,13 +214,13 @@ static bool bx_ping_open_socket(struct bx_ping_socket* socket_state, struct bx_d
     socket_state->fd = -1;
     socket_state->raw = false;
 
-    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
+    int fd = bx_fd_socket_cloexec(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
     if (fd >= 0) {
         socket_state->fd = fd;
         return true;
     }
 
-    fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    fd = bx_fd_socket_cloexec(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (fd >= 0) {
         socket_state->fd = fd;
         socket_state->raw = true;

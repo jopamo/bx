@@ -25,10 +25,12 @@ char* bx_path_getcwd_dup(void);
 char* bx_path_realpath_dup(const char* path);
 char* bx_path_make_absolute_dup(const char* path);
 char* bx_path_normalize_absolute_lexical_dup(const char* path);
+char* bx_path_normalize_relative_lexical_dup(const char* path);
 bool bx_path_is_within(const char* path, const char* base);
 char* bx_path_relative_path_between(const char* from_abs, const char* to_abs);
 
 char* bx_path_join(const char* left, const char* right);
+char* bx_path_join_root_relative(const char* root, const char* path);
 char* bx_path_strip_trailing_slashes_dup(const char* path);
 const char* bx_path_strip_dot_slash_prefix_ptr(const char* path);
 const char* bx_path_basename_ptr(const char* path);

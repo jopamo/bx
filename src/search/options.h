@@ -97,6 +97,7 @@ struct search_opts {
     int   num_ignore_files;
     bool null_output;
     bool null_filename;
+    bool terminal_quote_paths;
     enum bx_search_sort_key sort_key;
     enum bx_search_sort_dir sort_dir;
     bool stay_on_filesystem;

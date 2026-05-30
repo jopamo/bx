@@ -44,6 +44,7 @@ struct fd_opts {
     bool fixed_strings;
     bool glob_match;
     bool print0;
+    bool terminal_quote_paths;
     bool quiet;
     bool list_details;
     bool show_errors;

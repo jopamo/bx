@@ -21,6 +21,7 @@
 #include <linux/fs.h>
 
 #include "hdparm.h"
+#include "lib/fd_ops.h"
 
 struct file_extent {
 	__u64 byte_offset;
@@ -222,7 +223,7 @@ int do_filemap (const char *file_name)
 	__u64 start_lba = 0;
 	unsigned int sectors_per_block, blksize, sector_bytes;
 
-	if ((fd = open(file_name, O_RDONLY)) == -1) {
+	if ((fd = bx_fd_open_cloexec(file_name, O_RDONLY, 0)) == -1) {
 		err = errno;
 		perror(file_name);
 		return err;

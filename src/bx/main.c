@@ -10,14 +10,10 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "dispatch/dispatch.h"
+#include "lib/path_ops.h"
 #include "lib/status.h"
 
 static const char shebang_applet_prefix[] = "--bx-applet-shebang=";
-
-static const char* get_basename(const char* path) {
-    const char* base = strrchr(path, '/');
-    return base ? base + 1 : path;
-}
 
 static const char* get_shebang_applet(const char* arg) {
     size_t prefix_len = sizeof(shebang_applet_prefix) - 1;
@@ -33,7 +29,7 @@ static const char* get_shebang_applet(const char* arg) {
 static int run_shebang_applet(bx_applet_main_t applet_main, int argc, char** argv) {
     int applet_argc = argc - 2;
     char** applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
-    char* applet_argv0 = xstrdup(get_basename(argv[2]));
+    char* applet_argv0 = xstrdup(bx_path_basename_ptr(argv[2]));
 
     applet_argv[0] = applet_argv0;
     for (int i = 1; i < applet_argc; i++) {
@@ -73,18 +69,7 @@ static int install_one_applet_shortcut(
     bool symlink_mode,
     struct bx_diag_ctx* diag
 ) {
-    size_t dir_len = strlen(install_dir);
-    size_t applet_len = strlen(applet_name);
-    size_t needs_slash = (dir_len > 0 && install_dir[dir_len - 1] == '/') ? 0 : 1;
-    size_t path_len = dir_len + needs_slash + applet_len + 1;
-
-    char* destination_path = xmalloc(path_len);
-    memcpy(destination_path, install_dir, dir_len);
-    if (needs_slash) {
-        destination_path[dir_len] = '/';
-    }
-    memcpy(destination_path + dir_len + needs_slash, applet_name, applet_len);
-    destination_path[path_len - 1] = '\0';
+    char* destination_path = bx_path_join(install_dir, applet_name);
 
     struct stat st;
     if (lstat(destination_path, &st) == 0) {
@@ -191,7 +176,7 @@ int main(int argc, char** argv) {
         .progname = "bx",
     };
 
-    const char* progname = get_basename(argv[0]);
+    const char* progname = bx_path_basename_ptr(argv[0]);
     bx_applet_main_t applet_main = bx_dispatch_find(progname);
     if (!applet_main && progname[0] == '-' && progname[1] != '\0') {
         applet_main = bx_dispatch_find(progname + 1);

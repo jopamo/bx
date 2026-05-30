@@ -37,6 +37,7 @@
 #include "flowlabel.h"
 
 #include <clif.h>
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 #include "version.h"
 #include "traceroute.h"
@@ -317,12 +318,12 @@ static void make_fd_used(int fd) {
     if (errno != EBADF)
         error("fcntl F_GETFL");
 
-    nfd = open("/dev/null", O_RDONLY);
+    nfd = bx_fd_open_cloexec("/dev/null", O_RDONLY, 0);
     if (nfd < 0)
         error("open /dev/null");
 
     if (nfd != fd) {
-        dup2(nfd, fd);
+        bx_fd_dup2_exact(nfd, fd);
         close(nfd);
     }
 
@@ -759,7 +760,7 @@ int main(int argc, char* argv[]) {
         probes_per_hop = ecmp;
 
     if (netns) {
-        int fd = open(netns, O_RDONLY);
+        int fd = bx_fd_open_cloexec(netns, O_RDONLY, 0);
         if (fd < 0) {
             fprintf(stderr, "open %s: %s\n", netns, strerror(errno));
             exit(2);

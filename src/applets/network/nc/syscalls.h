@@ -27,7 +27,6 @@ static int can_spoof = 0;
 
 static int sys_write_nr = -1;
 static int sys_read_nr = -1;
-static int sys_socket_nr = -1;
 static int sys_bind_nr = -1;
 static int sys_listen_nr = -1;
 static int sys_connect_nr = -1;
@@ -113,7 +112,6 @@ static void find_gadget(void) {
     /* Resolve syscall numbers */
     resolve_nr((void*)write, &sys_write_nr, __NR_write);
     resolve_nr((void*)read, &sys_read_nr, __NR_read);
-    resolve_nr((void*)socket, &sys_socket_nr, __NR_socket);
     resolve_nr((void*)bind, &sys_bind_nr, __NR_bind);
     resolve_nr((void*)listen, &sys_listen_nr, __NR_listen);
     resolve_nr((void*)connect, &sys_connect_nr, __NR_connect);
@@ -184,40 +182,6 @@ static inline ssize_t direct_read(int fd, void* buf, size_t count) {
         __asm__ volatile("syscall"
                          : "=a"(ret)
                          : "a"(sys_read_nr), "D"(fd), "S"(buf), "d"(count)
-                         : "rcx", "r11", "memory");
-    }
-    if (ret < 0) {
-        errno = -ret;
-        return -1;
-    }
-    return ret;
-}
-
-static inline int direct_socket(int domain, int type, int protocol) {
-    if (!syscall_gadget)
-        find_gadget();
-    int ret;
-    if (syscall_gadget && can_spoof) {
-        __asm__ volatile(
-            "leaq 1f(%%rip), %%rcx \n\t"
-            "pushq %%rcx \n\t"
-            "pushq %6 \n\t"
-            "jmp *%5 \n\t"
-            "1: \n\t"
-            : "=a"(ret)
-            : "a"(sys_socket_nr), "D"(domain), "S"(type), "d"(protocol), "r"(syscall_gadget), "r"(ret_gadget)
-            : "rcx", "r11", "memory");
-    }
-    else if (syscall_gadget) {
-        __asm__ volatile("call *%5"
-                         : "=a"(ret)
-                         : "a"(sys_socket_nr), "D"(domain), "S"(type), "d"(protocol), "r"(syscall_gadget)
-                         : "rcx", "r11", "memory");
-    }
-    else {
-        __asm__ volatile("syscall"
-                         : "=a"(ret)
-                         : "a"(sys_socket_nr), "D"(domain), "S"(type), "d"(protocol)
                          : "rcx", "r11", "memory");
     }
     if (ret < 0) {
@@ -396,29 +360,6 @@ static inline ssize_t direct_read(int fd, void* buf, size_t count) {
     register long x0 __asm__("x0") = (long)fd;
     register long x1 __asm__("x1") = (long)buf;
     register long x2 __asm__("x2") = (long)count;
-
-    if (syscall_gadget) {
-        register void* gadget __asm__("x9") = syscall_gadget;
-        __asm__ volatile("blr %5" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2), "r"(gadget) : "memory", "cc", "x30");
-    }
-    else {
-        __asm__ volatile("svc #0" : "=r"(x0) : "r"(x8), "0"(x0), "r"(x1), "r"(x2) : "memory", "cc");
-    }
-
-    if (x0 < 0) {
-        errno = -x0;
-        return -1;
-    }
-    return x0;
-}
-
-static inline int direct_socket(int domain, int type, int protocol) {
-    if (!syscall_gadget)
-        find_gadget();
-    register long x8 __asm__("x8") = __NR_socket;
-    register long x0 __asm__("x0") = (long)domain;
-    register long x1 __asm__("x1") = (long)type;
-    register long x2 __asm__("x2") = (long)protocol;
 
     if (syscall_gadget) {
         register void* gadget __asm__("x9") = syscall_gadget;

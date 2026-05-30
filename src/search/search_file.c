@@ -755,10 +755,7 @@ int bx_search_binary_without_match(const char *display_name,
     if (opts->count_only)
         bx_search_print_count_result(display_name, opts, 0);
     if (opts->files_without_match && display_name) {
-        if (opts->null_output)
-            bx_search_printf_out("%s%c", display_name, '\0');
-        else
-            bx_search_printf_out("%s\n", display_name);
+        bx_search_print_path_record(display_name, opts);
         bx_search_dev_counters_note_output_line_emitted();
     }
     if (match_count)
@@ -899,10 +896,7 @@ out_done:
         if (opts->quiet)
             return 0;
         if (opts->files_with_matches && display_name) {
-            if (opts->null_output)
-                bx_search_printf_out("%s%c", display_name, '\0');
-            else
-                bx_search_printf_out("%s\n", display_name);
+            bx_search_print_path_record(display_name, opts);
             bx_search_dev_counters_note_output_line_emitted();
             return 0;
         }
@@ -912,10 +906,7 @@ out_done:
     }
 
     if (opts->files_without_match && display_name) {
-        if (opts->null_output)
-            bx_search_printf_out("%s%c", display_name, '\0');
-        else
-            bx_search_printf_out("%s\n", display_name);
+        bx_search_print_path_record(display_name, opts);
         bx_search_dev_counters_note_output_line_emitted();
     }
     return 1;

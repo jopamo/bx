@@ -3,15 +3,16 @@
 #include <string.h>
 
 #include "lib/cli_common.h"
+#include "path_ops.h"
 
 const char* bx_cli_progname(const char* argv0, const char* fallback) {
     if (argv0 == NULL || argv0[0] == '\0') {
         return fallback;
     }
 
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
+    const char* base = bx_path_basename_ptr(argv0);
+    if (base[0] != '\0') {
+        return base;
     }
 
     return argv0;

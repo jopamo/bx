@@ -21,6 +21,34 @@
 #include <linux/fs.h>
 
 #include "hdparm.h"
+#include "lib/fd_ops.h"
+
+static int hdparm_geometry_bytes_to_512_sectors (__u64 bytes, __u64 *sectors_out)
+{
+	uintmax_t sectors = 0;
+
+	if (!sectors_out ||
+	    !bx_size_divide_by_power_floor((uintmax_t)bytes, 512u, 1u, &sectors) ||
+	    sectors > (uintmax_t)((__u64)~0ULL))
+		return 0;
+	*sectors_out = (__u64)sectors;
+	return 1;
+}
+
+static int hdparm_geometry_sector_byte_ratio (unsigned int sector_bytes, uintmax_t *ratio_out)
+{
+	uintmax_t ratio = 0;
+	uintmax_t aligned_bytes = 0;
+
+	if (!ratio_out ||
+	    !bx_size_divide_by_power_floor((uintmax_t)sector_bytes, 512u, 1u, &ratio) ||
+	    !bx_size_multiply_by_power_uint(ratio, 512u, 1u, &aligned_bytes) ||
+	    aligned_bytes != (uintmax_t)sector_bytes ||
+	    ratio == 0u)
+		return 0;
+	*ratio_out = ratio;
+	return 1;
+}
 
 static int get_driver_major (const char *driver, unsigned int *major)
 {
@@ -85,7 +113,8 @@ static int get_sector_count (int fd, __u64 *nsectors)
 		return 0;
 #ifdef BLKGETSIZE64
 	if (0 == ioctl(fd, BLKGETSIZE64, &nbytes64)) {	// returns bytes
-		*nsectors = nbytes64 / 512;
+		if (!hdparm_geometry_bytes_to_512_sectors(nbytes64, nsectors))
+			return EINVAL;
 		return 0;
 	}
 #endif
@@ -161,7 +190,10 @@ int get_dev_geometry (int fd, __u32 *cyls, __u32 *heads, __u32 *sects,
 		 */
 		__u64 result;
 		if (0 == sysfs_get_attr(fd, "start", "%llu", &result, NULL, 0)) {
-			result /= (sector_bytes / 512);   /* sysfs entry is broken for non-512byte sectors */
+			uintmax_t sector_ratio = 0;
+			if (!hdparm_geometry_sector_byte_ratio((unsigned int)sector_bytes, &sector_ratio))
+				return EINVAL;
+			result /= sector_ratio;   /* sysfs entry is broken for non-512byte sectors */
 			*start_lba = result;
 			start_lba = NULL;
 			try_getgeo_big_first = 0;	/* if kernel has sysfs, it probably lacks GETGEO_BIG */
@@ -260,7 +292,7 @@ int get_dev_t_geometry (dev_t dev, __u32 *cyls, __u32 *heads, __u32 *sects,
 	if (err)
 		return err;
 
-	fd = open(path, O_RDONLY|O_NONBLOCK);
+	fd = bx_fd_open_cloexec(path, O_RDONLY|O_NONBLOCK, 0);
 	if (fd == -1) {
 		err = errno;
 		perror(path);
@@ -272,4 +304,3 @@ int get_dev_t_geometry (dev_t dev, __u32 *cyls, __u32 *heads, __u32 *sects,
 	close(fd);
 	return err;
 }
-

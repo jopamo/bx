@@ -7,8 +7,9 @@
 #include <math.h>
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/cli_common.h"
+#include "lib/line_writer.h"
 
 static int count_decimal_places(const char* s) {
     const char* dot = strchr(s, '.');
@@ -17,6 +18,69 @@ static int count_decimal_places(const char* s) {
     for (const char* p = dot + 1; *p >= '0' && *p <= '9'; p++)
         n++;
     return n;
+}
+
+static bool seq_emit_number(struct bx_line_writer* writer, const char* format, double value) {
+    char stack_buffer[256];
+    int len = snprintf(stack_buffer, sizeof(stack_buffer), format, value);
+    if (len < 0) {
+        return false;
+    }
+
+    if ((size_t)len < sizeof(stack_buffer)) {
+        return bx_line_writer_write(writer, stack_buffer, (size_t)len);
+    }
+
+    char* heap_buffer = malloc((size_t)len + 1u);
+    if (!heap_buffer) {
+        return false;
+    }
+    int heap_len = snprintf(heap_buffer, (size_t)len + 1u, format, value);
+    bool ok = heap_len == len && bx_line_writer_write(writer, heap_buffer, (size_t)len);
+    free(heap_buffer);
+    return ok;
+}
+
+static bool seq_emit_range(
+    struct bx_line_writer* writer,
+    double first,
+    double inc,
+    double last,
+    const char* separator,
+    const char* format
+) {
+    double val = first;
+    bool first_out = true;
+
+    if (inc > 0) {
+        while (val <= last + inc / 1000.0) {
+            if (!first_out && !bx_line_writer_puts(writer, separator)) {
+                return false;
+            }
+            if (!seq_emit_number(writer, format, val)) {
+                return false;
+            }
+            first_out = false;
+            val += inc;
+        }
+    }
+    else {
+        while (val >= last + inc / 1000.0) {
+            if (!first_out && !bx_line_writer_puts(writer, separator)) {
+                return false;
+            }
+            if (!seq_emit_number(writer, format, val)) {
+                return false;
+            }
+            first_out = false;
+            val += inc;
+        }
+    }
+
+    if (first_out) {
+        return true;
+    }
+    return bx_line_writer_putc(writer, '\n') && bx_line_writer_flush(writer);
 }
 
 int bx_seq_main(int argc, char** argv) {
@@ -126,31 +190,8 @@ int bx_seq_main(int argc, char** argv) {
         snprintf(fmt_buf, sizeof(fmt_buf), "%%0%d.%df", total_width, max_prec > 0 ? max_prec : 0);
     }
 
-    double val = first;
-    bool first_out = true;
-
-    if (inc > 0) {
-        while (val <= last + inc / 1000.0) {
-            if (!first_out)
-                fputs(separator, stdout);
-            printf(format, val);
-            first_out = false;
-            val += inc;
-        }
-    }
-    else {
-        while (val >= last + inc / 1000.0) {
-            if (!first_out)
-                fputs(separator, stdout);
-            printf(format, val);
-            first_out = false;
-            val += inc;
-        }
-    }
-    if (!first_out && strcmp(separator, "\n") != 0)
-        putchar('\n');
-    else if (!first_out && strcmp(separator, "\n") == 0)
-        putchar('\n');
-
-    return 0;
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+    return seq_emit_range(&writer, first, inc, last, separator, format) ? 0 : 1;
 }

@@ -23,6 +23,9 @@
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/output_quote.h"
+#include "lib/path_ops.h"
+#include "lib/path_quote.h"
 
 char* realpath(const char* restrict path, char* restrict resolved_path);
 
@@ -460,7 +463,9 @@ static void bx_ls_options_init(struct bx_ls_options* options, enum bx_ls_variant
     options->sort_entries = true;
     options->sort_mode = BX_LS_SORT_NAME;
     options->escape_names = (variant != BX_LS_VARIANT_LS);
-    options->hide_control_chars = false;
+    options->hide_control_chars = (variant == BX_LS_VARIANT_LS)
+        ? bx_output_quote_terminal_should_hide_control(STDOUT_FILENO)
+        : false;
     options->color_when = BX_LS_COLOR_NEVER;
     options->indicator_style = BX_LS_INDICATOR_NONE;
     options->time_kind = BX_LS_TIME_MTIME;
@@ -1647,25 +1652,6 @@ static bool bx_ls_should_include_name(const char* name, const struct bx_ls_optio
     return name[0] != '.';
 }
 
-static char* bx_ls_join_path(const char* dir_path, const char* name) {
-    size_t dir_len = strlen(dir_path);
-    size_t name_len = strlen(name);
-    bool needs_slash = dir_len > 0 && dir_path[dir_len - 1u] != '/';
-
-    size_t total_len = dir_len + (needs_slash ? 1u : 0u) + name_len;
-    char* joined = xmalloc(total_len + 1u);
-
-    memcpy(joined, dir_path, dir_len);
-    size_t out_pos = dir_len;
-    if (needs_slash) {
-        joined[out_pos++] = '/';
-    }
-
-    memcpy(joined + out_pos, name, name_len);
-    joined[total_len] = '\0';
-    return joined;
-}
-
 static bool bx_ls_collect_directory_entries(const char* dir_path, const struct bx_ls_options* options, struct bx_ls_entry_list* entries, struct bx_diag_ctx* diag, int error_status) {
     DIR* dir = opendir(dir_path);
     if (dir == NULL) {
@@ -1694,7 +1680,7 @@ static bool bx_ls_collect_directory_entries(const char* dir_path, const struct b
         struct bx_ls_entry entry;
         memset(&entry, 0, sizeof(entry));
         entry.name = xstrdup(name);
-        entry.full_path = bx_ls_join_path(dir_path, name);
+        entry.full_path = bx_path_join(dir_path, name);
         (void)bx_ls_entry_load_stat(&entry, options->dereference_all);
 
         bx_ls_entry_list_append(entries, &entry);
@@ -1963,18 +1949,6 @@ static void bx_ls_format_timestamp(
     }
 }
 
-static size_t bx_ls_escape_append_octal(char* out, size_t out_pos, unsigned char ch) {
-    out[out_pos++] = '\\';
-    out[out_pos++] = (char)('0' + ((ch >> 6) & 7u));
-    out[out_pos++] = (char)('0' + ((ch >> 3) & 7u));
-    out[out_pos++] = (char)('0' + (ch & 7u));
-    return out_pos;
-}
-
-static bool bx_ls_is_nongraphic(unsigned char ch) {
-    return isprint(ch) == 0;
-}
-
 static enum bx_ls_quoting_style bx_ls_effective_quoting_style(const struct bx_ls_options* options) {
     if (options->quoting_style != BX_LS_QUOTING_DEFAULT) {
         return options->quoting_style;
@@ -2007,273 +1981,31 @@ static const char* bx_ls_quoting_style_name(const struct bx_ls_options* options)
     }
 }
 
-static size_t bx_ls_append_escape_char(
-    char* out,
-    size_t out_pos,
-    unsigned char ch,
-    bool escape_space,
-    bool escape_double_quote,
-    bool escape_single_quote) {
-    switch (ch) {
-        case ' ':
-            if (escape_space) {
-                out[out_pos++] = '\\';
-            }
-            out[out_pos++] = ' ';
-            break;
-        case '\\':
-            out[out_pos++] = '\\';
-            out[out_pos++] = '\\';
-            break;
-        case '"':
-            if (escape_double_quote) {
-                out[out_pos++] = '\\';
-            }
-            out[out_pos++] = '"';
-            break;
-        case '\'':
-            if (escape_single_quote) {
-                out[out_pos++] = '\\';
-            }
-            out[out_pos++] = '\'';
-            break;
-        case '\a':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'a';
-            break;
-        case '\b':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'b';
-            break;
-        case '\f':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'f';
-            break;
-        case '\n':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'n';
-            break;
-        case '\r':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'r';
-            break;
-        case '\t':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 't';
-            break;
-        case '\v':
-            out[out_pos++] = '\\';
-            out[out_pos++] = 'v';
-            break;
-        default:
-            if (!bx_ls_is_nongraphic(ch)) {
-                out[out_pos++] = (char)ch;
-            }
-            else {
-                out_pos = bx_ls_escape_append_octal(out, out_pos, ch);
-            }
-            break;
-    }
-
-    return out_pos;
-}
-
-static char* bx_ls_render_literal_name(const char* name, bool hide_control_chars) {
-    size_t len = strlen(name);
-    char* out = xmalloc(len + 1u);
-    size_t out_pos = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)name[i];
-        if (hide_control_chars && bx_ls_is_nongraphic(ch)) {
-            out[out_pos++] = '?';
-        }
-        else {
-            out[out_pos++] = (char)ch;
-        }
-    }
-
-    out[out_pos] = '\0';
-    return out;
-}
-
-static char* bx_ls_render_escape_style_name(const char* name) {
-    size_t len = strlen(name);
-    char* out = xmalloc((len * 4u) + 1u);
-    size_t out_pos = 0;
-
-    for (size_t i = 0; i < len; i++) {
-        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], true, false, false);
-    }
-
-    out[out_pos] = '\0';
-    return out;
-}
-
-static char* bx_ls_render_c_style_name(const char* name) {
-    size_t len = strlen(name);
-    char* out = xmalloc((len * 4u) + 3u);
-    size_t out_pos = 0;
-    out[out_pos++] = '"';
-
-    for (size_t i = 0; i < len; i++) {
-        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], false, true, false);
-    }
-
-    out[out_pos++] = '"';
-    out[out_pos] = '\0';
-    return out;
-}
-
-static char* bx_ls_render_locale_name(const char* name) {
-    size_t len = strlen(name);
-    char* out = xmalloc((len * 4u) + 3u);
-    size_t out_pos = 0;
-    out[out_pos++] = '\'';
-
-    for (size_t i = 0; i < len; i++) {
-        out_pos = bx_ls_append_escape_char(out, out_pos, (unsigned char)name[i], false, false, true);
-    }
-
-    out[out_pos++] = '\'';
-    out[out_pos] = '\0';
-    return out;
-}
-
-static bool bx_ls_shell_char_is_safe(unsigned char ch) {
-    return isalnum(ch) != 0
-        || ch == '-'
-        || ch == '_'
-        || ch == '.'
-        || ch == '/'
-        || ch == '~';
-}
-
-static bool bx_ls_name_has_nongraphic(const char* name) {
-    for (size_t i = 0; name[i] != '\0'; i++) {
-        if (bx_ls_is_nongraphic((unsigned char)name[i])) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static size_t bx_ls_append_shell_double_quoted_segment(char* out, size_t out_pos, const char* text, size_t len) {
-    out[out_pos++] = '"';
-    for (size_t i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)text[i];
-        if (ch == '"' || ch == '\\' || ch == '$' || ch == '`') {
-            out[out_pos++] = '\\';
-        }
-        out[out_pos++] = (char)ch;
-    }
-    out[out_pos++] = '"';
-    return out_pos;
-}
-
-static size_t bx_ls_append_shell_single_quoted_segment(char* out, size_t out_pos, const char* text, size_t len) {
-    out[out_pos++] = '\'';
-    memcpy(out + out_pos, text, len);
-    out_pos += len;
-    out[out_pos++] = '\'';
-    return out_pos;
-}
-
-static size_t bx_ls_append_shell_quoted_segment(char* out, size_t out_pos, const char* text, size_t len, bool always_quote) {
-    bool needs_quotes = always_quote;
-    if (!needs_quotes) {
-        for (size_t i = 0; i < len; i++) {
-            if (!bx_ls_shell_char_is_safe((unsigned char)text[i])) {
-                needs_quotes = true;
-                break;
-            }
-        }
-    }
-
-    if (!needs_quotes) {
-        memcpy(out + out_pos, text, len);
-        out_pos += len;
-        return out_pos;
-    }
-
-    if (memchr(text, '\'', len) == NULL) {
-        return bx_ls_append_shell_single_quoted_segment(out, out_pos, text, len);
-    }
-
-    return bx_ls_append_shell_double_quoted_segment(out, out_pos, text, len);
-}
-
-static char* bx_ls_render_shell_style_name(const char* name, bool always_quote) {
-    size_t len = strlen(name);
-    char* out = xmalloc((len * 4u) + 3u);
-    size_t out_pos = 0;
-
-    out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name, len, always_quote);
-    out[out_pos] = '\0';
-    return out;
-}
-
-static size_t bx_ls_append_shell_escape_fragment(char* out, size_t out_pos, unsigned char ch) {
-    memcpy(out + out_pos, "$'", 2u);
-    out_pos += 2u;
-    out_pos = bx_ls_append_escape_char(out, out_pos, ch, false, false, false);
-    out[out_pos++] = '\'';
-    return out_pos;
-}
-
-static char* bx_ls_render_shell_escape_style_name(const char* name, bool always_quote) {
-    if (!bx_ls_name_has_nongraphic(name)) {
-        return bx_ls_render_shell_style_name(name, always_quote);
-    }
-
-    size_t len = strlen(name);
-    char* out = xmalloc((len * 8u) + 8u);
-    size_t out_pos = 0;
-    size_t segment_start = 0u;
-
-    for (size_t i = 0; i < len; i++) {
-        unsigned char ch = (unsigned char)name[i];
-        if (!bx_ls_is_nongraphic(ch)) {
-            continue;
-        }
-
-        if (i > segment_start) {
-            out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name + segment_start, i - segment_start, true);
-        }
-        out_pos = bx_ls_append_shell_escape_fragment(out, out_pos, ch);
-        segment_start = i + 1u;
-    }
-
-    if (segment_start < len) {
-        out_pos = bx_ls_append_shell_quoted_segment(out, out_pos, name + segment_start, len - segment_start, true);
-    }
-
-    out[out_pos] = '\0';
-    return out;
-}
-
 static char* bx_ls_render_name(const char* name, const struct bx_ls_options* options) {
     switch (bx_ls_effective_quoting_style(options)) {
         case BX_LS_QUOTING_LITERAL:
-            return bx_ls_render_literal_name(name, options->hide_control_chars);
+            return bx_path_quote_dup(
+                name,
+                options->hide_control_chars ? BX_PATH_QUOTE_LITERAL_HIDE_NONGRAPHIC : BX_PATH_QUOTE_LITERAL);
         case BX_LS_QUOTING_LOCALE:
-            return bx_ls_render_locale_name(name);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_LOCALE);
         case BX_LS_QUOTING_SHELL:
-            return bx_ls_render_shell_style_name(name, false);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_SHELL);
         case BX_LS_QUOTING_SHELL_ALWAYS:
-            return bx_ls_render_shell_style_name(name, true);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_SHELL_ALWAYS);
         case BX_LS_QUOTING_SHELL_ESCAPE:
-            return bx_ls_render_shell_escape_style_name(name, false);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_SHELL_ESCAPE);
         case BX_LS_QUOTING_SHELL_ESCAPE_ALWAYS:
-            return bx_ls_render_shell_escape_style_name(name, true);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_SHELL_ESCAPE_ALWAYS);
         case BX_LS_QUOTING_C:
-            return bx_ls_render_c_style_name(name);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_C);
         case BX_LS_QUOTING_ESCAPE:
-            return bx_ls_render_escape_style_name(name);
+            return bx_path_quote_dup(name, BX_PATH_QUOTE_ESCAPE);
         case BX_LS_QUOTING_DEFAULT:
         default:
-            return bx_ls_render_literal_name(name, options->hide_control_chars);
+            return bx_path_quote_dup(
+                name,
+                options->hide_control_chars ? BX_PATH_QUOTE_LITERAL_HIDE_NONGRAPHIC : BX_PATH_QUOTE_LITERAL);
     }
 }
 
@@ -2596,7 +2328,7 @@ static char* bx_ls_absolute_path_for_hyperlink(const char* path) {
         return xstrdup(path);
     }
 
-    char* joined = bx_ls_join_path(cwd, path);
+    char* joined = bx_path_join(cwd, path);
     free(cwd);
     return joined;
 }
@@ -2667,7 +2399,11 @@ static uintmax_t bx_ls_allocated_bytes(const struct stat* st) {
     if (st->st_blocks <= 0) {
         return 0u;
     }
-    return (uintmax_t)st->st_blocks * 512u;
+    uintmax_t allocated_bytes = 0;
+    if (!bx_size_multiply_by_power_uint((uintmax_t)st->st_blocks, 512u, 1u, &allocated_bytes)) {
+        return UINTMAX_MAX;
+    }
+    return allocated_bytes;
 }
 
 static void bx_ls_format_scaled_exact_or_human(uintmax_t size, const struct bx_ls_options* options, char buffer[32]) {
@@ -2678,8 +2414,13 @@ static void bx_ls_format_scaled_exact_or_human(uintmax_t size, const struct bx_l
     }
 
     if (options->human_readable) {
-        const uintmax_t base = options->si_units ? 1000u : 1024u;
+        enum bx_size_unit_label_style style = options->si_units ? BX_SIZE_UNIT_LABEL_SI_LOWER_K : BX_SIZE_UNIT_LABEL_IEC_PREFIX;
+        uintmax_t base = 0;
         const char* suffixes = options->si_units ? "kMGTPEZYRQ" : "KMGTPEZYRQ";
+        if (!bx_size_unit_label_base_uintmax(style, &base)) {
+            (void)snprintf(buffer, 32u, "%" PRIuMAX, size);
+            return;
+        }
         bx_size_format_human_ceil(size, base, suffixes, buffer, 32u);
         return;
     }

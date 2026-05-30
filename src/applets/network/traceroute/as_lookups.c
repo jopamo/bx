@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 #define DEF_RADB_SERVER "whois.radb.net"
@@ -56,7 +57,7 @@ const char* get_as_path(const char* query) {
     }
 
     // Create socket
-    sk = socket(ra_addr.sa.sa_family, SOCK_STREAM, 0);
+    sk = bx_fd_socket_cloexec(ra_addr.sa.sa_family, SOCK_STREAM, 0);
     if (sk < 0) {
         perror("socket");
         return "!!";

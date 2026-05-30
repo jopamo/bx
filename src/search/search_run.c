@@ -88,8 +88,8 @@ static enum bx_walk_action bx_search_files_walk_cb(struct bx_walk_entry *entry, 
         char *display = bx_search_display_path_for_output(entry->path,
                                                           state && state->strip_dot_prefix,
                                                           state ? state->opts : NULL);
-        printf("%s%c", display ? display : entry->path,
-               (state && state->opts && state->opts->null_output) ? '\0' : '\n');
+        bx_search_print_path_record(display ? display : entry->path,
+                                    state ? state->opts : NULL);
         free(display);
     }
     return BX_WALK_CONTINUE;
@@ -318,9 +318,8 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
             char *display = bx_search_display_path_for_output(sorted_paths.items[i].path,
                                                               sorted_paths.items[i].strip_dot_prefix,
                                                               args->opts);
-            printf("%s%c",
-                   display ? display : sorted_paths.items[i].path,
-                   args->opts->null_output ? '\0' : '\n');
+            bx_search_print_path_record(display ? display : sorted_paths.items[i].path,
+                                        args->opts);
             free(display);
         }
         bx_search_sorted_paths_dispose(&sorted_paths);
@@ -379,7 +378,7 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
             if (S_ISDIR(st.st_mode))
                 error_seen |= bx_search_walk(args->argv[j], &walk_config, &state) != 0;
             else
-                printf("%s%c", args->argv[j], args->opts->null_output ? '\0' : '\n');
+                bx_search_print_path_record(args->argv[j], args->opts);
         }
     }
 

@@ -87,6 +87,10 @@ bool bx_search_entry_should_skip_recursive_special_input(struct bx_walk_entry *e
 char *bx_search_display_path_for_output(const char *path,
                                         bool strip_dot_prefix,
                                         const struct search_opts *opts);
+char *bx_search_quote_path_metadata_for_terminal(const char *path,
+                                                 const struct search_opts *opts);
+void bx_search_print_path_record(const char *display_name,
+                                 struct search_opts *opts);
 struct bx_search_output_ctx *bx_search_output_ctx_push(struct bx_search_output_ctx *ctx);
 void bx_search_output_ctx_pop(struct bx_search_output_ctx *previous);
 int bx_search_compute_offset_width_from_stat(const struct stat *st,

@@ -16,6 +16,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 static sockaddr_any dest_addr = {
@@ -71,13 +72,13 @@ static int icmp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pa
     protocol = (af == AF_INET) ? IPPROTO_ICMP : IPPROTO_ICMPV6;
 
     if (!raw) {
-        icmp_sk = socket(af, SOCK_DGRAM, protocol);
+        icmp_sk = bx_fd_socket_cloexec(af, SOCK_DGRAM, protocol);
         if (icmp_sk < 0 && dgram)
             error("socket");
     }
 
     if (!dgram) {
-        int raw_sk = socket(af, SOCK_RAW, protocol);
+        int raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, protocol);
         if (raw_sk < 0) {
             if (raw || icmp_sk < 0)
                 error_or_perm("socket");

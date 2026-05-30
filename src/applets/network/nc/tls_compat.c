@@ -22,6 +22,7 @@
 #include "mbedtls/private/entropy.h"
 #include "psa/crypto.h"
 
+#include "lib/fd_ops.h"
 #include "tls.h"
 
 extern int vflag;
@@ -76,7 +77,7 @@ static int psa_initialized;
 static int entropy_urandom(void* data, unsigned char* output, size_t len, size_t* olen) {
     (void)data;
 
-    int fd = open("/dev/urandom", O_RDONLY);
+    int fd = bx_fd_open_cloexec("/dev/urandom", O_RDONLY, 0);
     if (fd < 0) {
         return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
     }

@@ -11,6 +11,7 @@
 
 #include "dev_counters.h"
 #include "lib/color.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "rg_output.h"
 
@@ -549,7 +550,7 @@ static bool bx_rg_hostname_from_command(const char *command, char **out) {
 
     if (!command || !*command || !out)
         return false;
-    if (pipe(pipefd) != 0)
+    if (bx_fd_pipe_cloexec(pipefd) != 0)
         return false;
 
     pid = fork();
@@ -560,7 +561,7 @@ static bool bx_rg_hostname_from_command(const char *command, char **out) {
     }
     if (pid == 0) {
         close(pipefd[0]);
-        if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+        if (bx_fd_dup2_exact(pipefd[1], STDOUT_FILENO) < 0)
             _exit(127);
         close(pipefd[1]);
         execlp(command, command, (char *)NULL);

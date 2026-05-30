@@ -20,6 +20,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "lib/fd_ops.h"
+
 #define PCAP_MAX_PACKET_SIZE 65535
 #define PCAP_MAX_PAYLOAD_SIZE 65000
 #define PCAP_RING_CAPACITY 128
@@ -242,7 +244,7 @@ static int pcap_open_file_for_index(unsigned int index) {
     if (stat(path, &sb) == -1 || !S_ISFIFO(sb.st_mode))
         flags |= O_TRUNC;
 
-    fd = open(path, flags, 0600);
+    fd = bx_fd_open_cloexec(path, flags, 0600);
     if (fd == -1)
         return -1;
 

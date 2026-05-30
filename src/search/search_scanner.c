@@ -102,28 +102,39 @@ static char *bx_search_scanner_prepare_fast_plain_prefix(const char *display_nam
                                                          size_t *prefix_len_out) {
     size_t prefix_len = 0u;
     char *prefix;
+    char *quoted_display_name = NULL;
+    const char *output_display_name = display_name;
 
     if (!display_name || !opts || !prefix_len_out)
         return NULL;
 
+    quoted_display_name = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+    if (quoted_display_name) {
+        output_display_name = quoted_display_name;
+        display_name_len = strlen(output_display_name);
+    }
     prefix_len = display_name_len + (opts->null_filename ? 1u : match_sep_len);
     *prefix_len_out = prefix_len;
-    if (prefix_len == 0u)
+    if (prefix_len == 0u) {
+        free(quoted_display_name);
         return NULL;
+    }
 
     prefix = malloc(prefix_len);
     if (!prefix) {
+        free(quoted_display_name);
         *prefix_len_out = 0u;
         return NULL;
     }
 
     if (display_name_len > 0u)
-        memcpy(prefix, display_name, display_name_len);
+        memcpy(prefix, output_display_name, display_name_len);
     if (opts->null_filename) {
         prefix[display_name_len] = '\0';
     } else if (match_sep_len > 0u) {
         memcpy(prefix + display_name_len, match_sep, match_sep_len);
     }
+    free(quoted_display_name);
     bx_search_dev_counters_note_scanner_plain_prefix_alloc();
     return prefix;
 }
@@ -337,6 +348,12 @@ int bx_search_scanner_opened(FILE *f,
                     printed_bytes += fwrite_unlocked(fast_plain_prefix, 1u,
                                                      fast_plain_prefix_len, out);
                 } else if (opts->show_filename && prefix_name) {
+                    char *quoted_prefix_name =
+                        bx_search_quote_path_metadata_for_terminal(prefix_name, opts);
+                    if (quoted_prefix_name) {
+                        prefix_name = quoted_prefix_name;
+                        prefix_name_len = strlen(prefix_name);
+                    }
                     if (prefix_name_len > 0u)
                         printed_bytes += fwrite_unlocked(prefix_name, 1u, prefix_name_len, out);
                     if (opts->null_filename) {
@@ -345,6 +362,7 @@ int bx_search_scanner_opened(FILE *f,
                     } else if (match_sep_len > 0u) {
                         printed_bytes += fwrite_unlocked(match_sep, 1u, match_sep_len, out);
                     }
+                    free(quoted_prefix_name);
                 }
                 if (record.len > 0u)
                     printed_bytes += fwrite_unlocked(record.data, 1u, record.len, out);
@@ -393,17 +411,11 @@ int bx_search_scanner_opened(FILE *f,
     if (opts->count_only)
         bx_search_print_count_result(display_name, opts, file_matches);
     if (opts->files_with_matches && file_matches > 0 && display_name) {
-        if (opts->null_output)
-            bx_search_printf_out("%s%c", display_name, '\0');
-        else
-            bx_search_printf_out("%s\n", display_name);
+        bx_search_print_path_record(display_name, opts);
         bx_search_dev_counters_note_output_line_emitted();
     }
     if (opts->files_without_match && file_matches == 0 && display_name) {
-        if (opts->null_output)
-            bx_search_printf_out("%s%c", display_name, '\0');
-        else
-            bx_search_printf_out("%s\n", display_name);
+        bx_search_print_path_record(display_name, opts);
         bx_search_dev_counters_note_output_line_emitted();
     }
     if (stats && file_matches > 0)

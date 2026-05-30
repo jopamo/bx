@@ -19,6 +19,7 @@ struct fd_detail_item {
 
 struct fd_detail_items {
     struct fd_detail_item *v;
+    const struct fd_opts *render_opts;
     int count;
     int cap;
 };

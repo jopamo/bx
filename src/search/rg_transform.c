@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "dev_counters.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "options.h"
 #include "rg_text.h"
@@ -255,14 +256,14 @@ static bool bx_rg_run_capture(const char *const *argv,
     if (exec_errno)
         *exec_errno = 0;
 
-    if (pipe(out_pipe) != 0)
+    if (bx_fd_pipe_cloexec(out_pipe) != 0)
         return false;
-    if (capture_stderr && pipe(err_pipe) != 0) {
+    if (capture_stderr && bx_fd_pipe_cloexec(err_pipe) != 0) {
         close(out_pipe[0]);
         close(out_pipe[1]);
         return false;
     }
-    if (pipe(exec_pipe) != 0) {
+    if (bx_fd_pipe_cloexec(exec_pipe) != 0) {
         close(out_pipe[0]);
         close(out_pipe[1]);
         if (capture_stderr) {
@@ -304,14 +305,14 @@ static bool bx_rg_run_capture(const char *const *argv,
         if (capture_stderr)
             close(err_pipe[0]);
         if (stdin_fd >= 0) {
-            if (dup2(stdin_fd, STDIN_FILENO) < 0)
+            if (bx_fd_dup2_exact(stdin_fd, STDIN_FILENO) < 0)
                 goto child_fail;
             close(stdin_fd);
         }
-        if (dup2(out_pipe[1], STDOUT_FILENO) < 0)
+        if (bx_fd_dup2_exact(out_pipe[1], STDOUT_FILENO) < 0)
             goto child_fail;
         if (capture_stderr) {
-            if (dup2(err_pipe[1], STDERR_FILENO) < 0)
+            if (bx_fd_dup2_exact(err_pipe[1], STDERR_FILENO) < 0)
                 goto child_fail;
         }
         close(out_pipe[1]);
@@ -501,7 +502,7 @@ static enum bx_rg_transform_result bx_rg_run_preprocessor(const char *filename,
     argv[1] = filename;
     argv[2] = NULL;
 
-    stdin_fd = open(filename, O_RDONLY);
+    stdin_fd = bx_fd_open_cloexec(filename, O_RDONLY, 0);
     if (stdin_fd < 0) {
         if (!opts->suppress_errors) {
             fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",

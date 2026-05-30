@@ -18,6 +18,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 #include "lib/xreadwrite.h"
@@ -936,7 +937,7 @@ static bool bx_dd_open_files(struct bx_dd_ctx* ctx) {
     ctx->output_path = (ctx->cfg.ofile != NULL) ? ctx->cfg.ofile : "standard output";
 
     if (ctx->cfg.ifile == NULL) {
-        ctx->infd = dup(STDIN_FILENO);
+        ctx->infd = bx_fd_dup_cloexec(STDIN_FILENO);
         if (ctx->infd < 0) {
             bx_dd_perror_path(ctx->progname, ctx->input_path);
             return false;
@@ -950,7 +951,7 @@ static bool bx_dd_open_files(struct bx_dd_ctx* ctx) {
         if (!bx_dd_add_open_flags(ctx->cfg.iflag_mask, &in_flags, ctx->progname)) {
             return false;
         }
-        ctx->infd = open(ctx->input_path, in_flags);
+        ctx->infd = bx_fd_open_cloexec(ctx->input_path, in_flags, 0);
         if (ctx->infd < 0) {
             bx_dd_perror_path(ctx->progname, ctx->input_path);
             return false;
@@ -963,7 +964,7 @@ static bool bx_dd_open_files(struct bx_dd_ctx* ctx) {
     }
 
     if (ctx->cfg.ofile == NULL) {
-        ctx->outfd = dup(STDOUT_FILENO);
+        ctx->outfd = bx_fd_dup_cloexec(STDOUT_FILENO);
         if (ctx->outfd < 0) {
             bx_dd_perror_path(ctx->progname, ctx->output_path);
             return false;
@@ -987,7 +988,7 @@ static bool bx_dd_open_files(struct bx_dd_ctx* ctx) {
             return false;
         }
 
-        ctx->outfd = open(ctx->output_path, out_flags, ctx->cfg.create_mode);
+        ctx->outfd = bx_fd_open_cloexec(ctx->output_path, out_flags, ctx->cfg.create_mode);
         if (ctx->outfd < 0) {
             bx_dd_perror_path(ctx->progname, ctx->output_path);
             return false;
@@ -1162,9 +1163,11 @@ static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size
         return false;
     }
 
+    double decimal_base = 0.0;
     double decimal = 0.0;
     unsigned int decimal_power = 0u;
-    if (!bx_size_scale_human_double((double)bytes, 1000.0, 999.95, 6u, &decimal, &decimal_power)) {
+    if (!bx_size_unit_label_base_double(BX_SIZE_UNIT_LABEL_SI_LOWER_K, &decimal_base) ||
+        !bx_size_scale_human_double((double)bytes, decimal_base, 999.95, 6u, &decimal, &decimal_power)) {
         if (buf_size > 0) {
             buf[0] = '\0';
         }
@@ -1187,9 +1190,11 @@ static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size
         return true;
     }
 
+    double binary_base = 0.0;
     double binary = 0.0;
     unsigned int binary_power = 0u;
-    if (!bx_size_scale_human_double((double)bytes, 1024.0, 999.95, 6u, &binary, &binary_power)) {
+    if (!bx_size_unit_label_base_double(BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX, &binary_base) ||
+        !bx_size_scale_human_double((double)bytes, binary_base, 999.95, 6u, &binary, &binary_power)) {
         if (buf_size > 0) {
             buf[0] = '\0';
         }

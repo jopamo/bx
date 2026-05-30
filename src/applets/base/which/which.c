@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/path_ops.h"
 
 struct which_opts {
     bool all;
@@ -134,124 +135,30 @@ static bool path_starts_with_dot_component(const char* path) {
     return path[0] == '.';
 }
 
-static bool normalize_lexical_path(const char* path, bool absolute, char* out, size_t out_size) {
-    char temp[PATH_MAX];
-    char* parts[PATH_MAX / 2];
-    size_t count = 0;
-    char* saveptr = NULL;
-
-    if (absolute && path[0] != '/') {
-        return false;
-    }
-    if (snprintf(temp, sizeof(temp), "%s", path) < 0 || strlen(path) >= sizeof(temp)) {
-        return false;
-    }
-
-    for (char* token = strtok_r(temp, "/", &saveptr); token != NULL; token = strtok_r(NULL, "/", &saveptr)) {
-        if (strcmp(token, ".") == 0 || token[0] == '\0') {
-            continue;
-        }
-        if (strcmp(token, "..") == 0) {
-            if (count > 0 && (absolute || strcmp(parts[count - 1], "..") != 0)) {
-                count--;
-            }
-            else if (!absolute) {
-                if (count >= (sizeof(parts) / sizeof(parts[0]))) {
-                    return false;
-                }
-                parts[count++] = token;
-            }
-            continue;
-        }
-        if (count >= (sizeof(parts) / sizeof(parts[0]))) {
-            return false;
-        }
-        parts[count++] = token;
-    }
-
-    size_t pos = 0;
-    if (out_size < 2) {
-        return false;
-    }
-    if (absolute) {
-        out[pos++] = '/';
-    }
-    for (size_t i = 0; i < count; i++) {
-        size_t len = strlen(parts[i]);
-        if (pos + len + 1 >= out_size) {
-            return false;
-        }
-        memcpy(out + pos, parts[i], len);
-        pos += len;
-        if (i + 1 < count) {
-            out[pos++] = '/';
-        }
-    }
-    if (count == 0 && absolute) {
-        out[pos] = '\0';
-        return true;
-    }
-    if (count == 0) {
-        out[0] = '.';
-        out[1] = '\0';
-        return true;
-    }
-    out[pos] = '\0';
-    return true;
+static char* build_normalized_operand_path(const char* cmd) {
+    return bx_path_normalize_absolute_lexical_dup(cmd);
 }
 
-static bool build_normalized_operand_path(const char* cmd, char* out, size_t out_size) {
-    char absolute[PATH_MAX];
-
-    if (cmd[0] == '/') {
-        return normalize_lexical_path(cmd, true, out, out_size);
-    }
-
-    char cwd[PATH_MAX];
-    if (!getcwd(cwd, sizeof(cwd))) {
-        return false;
-    }
-    if (snprintf(absolute, sizeof(absolute), "%s/%s", cwd, cmd) < 0 || strlen(cwd) + 1 + strlen(cmd) >= sizeof(absolute)) {
-        return false;
-    }
-    return normalize_lexical_path(absolute, true, out, out_size);
+static char* build_normalized_search_hit_path(const char* dir, const char* cmd) {
+    char* full_path = bx_path_join(dir, cmd);
+    char* normalized = bx_path_normalize_absolute_lexical_dup(full_path);
+    free(full_path);
+    return normalized;
 }
 
-static bool build_normalized_search_hit_path(const char* dir, const char* cmd, char* out, size_t out_size) {
-    char full_path[PATH_MAX];
+static char* build_show_dot_search_hit_path(const char* dir, const char* cmd) {
+    char* relative_path = bx_path_join(dir, cmd);
+    char* normalized = bx_path_normalize_relative_lexical_dup(relative_path);
+    char* display_path = NULL;
 
-    if (dir[0] == '/') {
-        int r = snprintf(full_path, sizeof(full_path), "%s/%s", dir, cmd);
-        if (r < 0 || (size_t)r >= sizeof(full_path)) {
-            return false;
-        }
-        return normalize_lexical_path(full_path, true, out, out_size);
+    free(relative_path);
+    if (normalized == NULL) {
+        return NULL;
     }
 
-    char cwd[PATH_MAX];
-    if (!getcwd(cwd, sizeof(cwd))) {
-        return false;
-    }
-    int r = snprintf(full_path, sizeof(full_path), "%s/%s/%s", cwd, dir, cmd);
-    if (r < 0 || (size_t)r >= sizeof(full_path)) {
-        return false;
-    }
-    return normalize_lexical_path(full_path, true, out, out_size);
-}
-
-static bool build_show_dot_search_hit_path(const char* dir, const char* cmd, char* out, size_t out_size) {
-    char relative_path[PATH_MAX];
-    char normalized[PATH_MAX];
-
-    int r = snprintf(relative_path, sizeof(relative_path), "%s/%s", dir, cmd);
-    if (r < 0 || (size_t)r >= sizeof(relative_path)) {
-        return false;
-    }
-    if (!normalize_lexical_path(relative_path, false, normalized, sizeof(normalized))) {
-        return false;
-    }
-    r = snprintf(out, out_size, "./%s", normalized);
-    return r >= 0 && (size_t)r < out_size;
+    display_path = bx_path_join(".", normalized);
+    free(normalized);
+    return display_path;
 }
 
 static void print_path(const char* path, const struct which_opts* opts, const char* home) {
@@ -560,9 +467,10 @@ static bool find_command(const char* cmd, const struct which_opts* opts, struct 
 
     if (strchr(cmd, '/') != NULL) {
         if (is_executable(cmd)) {
-            char normalized_path[PATH_MAX];
-            if (build_normalized_operand_path(cmd, normalized_path, sizeof(normalized_path))) {
+            char* normalized_path = build_normalized_operand_path(cmd);
+            if (normalized_path != NULL) {
                 print_path(normalized_path, opts, home);
+                free(normalized_path);
             }
             else {
                 print_path(cmd, opts, home);
@@ -582,8 +490,8 @@ static bool find_command(const char* cmd, const struct which_opts* opts, struct 
     const char* next;
     do {
         char dir[PATH_MAX];
-        char lookup_path[PATH_MAX];
-        char display_path[PATH_MAX];
+        char* lookup_path = NULL;
+        char* display_path = NULL;
         next = strchr(p, ':');
         size_t len = next ? (size_t)(next - p) : strlen(p);
         if (len == 0)
@@ -611,29 +519,36 @@ static bool find_command(const char* cmd, const struct which_opts* opts, struct 
             search_dir = expanded_dir;
         }
 
-        int r = snprintf(lookup_path, sizeof(lookup_path), "%s/%s", search_dir, cmd);
-        if (r < 0 || (size_t)r >= sizeof(lookup_path)) {
-            goto next_comp;
-        }
+        lookup_path = bx_path_join(search_dir, cmd);
 
         bool show_dot_hit = opts->show_dot && effective_dir[0] != '/' && effective_dir[0] != '~' && path_starts_with_dot_component(effective_dir);
 
         if (show_dot_hit) {
-            if (!build_show_dot_search_hit_path(effective_dir, cmd, display_path, sizeof(display_path))) {
+            display_path = build_show_dot_search_hit_path(effective_dir, cmd);
+            if (display_path == NULL) {
                 goto next_comp;
             }
-        }
-        else if (!build_normalized_search_hit_path(search_dir, cmd, display_path, sizeof(display_path))) {
-            goto next_comp;
+        } else {
+            display_path = build_normalized_search_hit_path(search_dir, cmd);
+            if (display_path == NULL) {
+                goto next_comp;
+            }
         }
 
         if (is_executable(lookup_path)) {
             print_path(display_path, opts, home);
             found = true;
-            if (!opts->all)
+            free(display_path);
+            free(lookup_path);
+            display_path = NULL;
+            lookup_path = NULL;
+            if (!opts->all) {
                 return true;
+            }
         }
     next_comp:
+        free(display_path);
+        free(lookup_path);
         if (next)
             p = next + 1;
     } while (next);

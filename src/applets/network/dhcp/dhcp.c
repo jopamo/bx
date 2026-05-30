@@ -22,6 +22,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
@@ -274,7 +275,7 @@ static bool bx_dhcp_parse_options(int argc, char** argv, struct bx_dhcp_options*
 }
 
 static bool bx_dhcp_get_hwaddr(const char* ifname, unsigned char hwaddr[6], struct bx_diag_ctx* diag) {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = bx_fd_socket_cloexec(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
         bx_diag(diag, "failed to open socket for interface query: %s", strerror(errno));
         return false;
@@ -297,7 +298,7 @@ static bool bx_dhcp_get_hwaddr(const char* ifname, unsigned char hwaddr[6], stru
 }
 
 static int bx_dhcp_open_socket(const struct bx_dhcp_options* options, struct bx_diag_ctx* diag) {
-    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    int fd = bx_fd_socket_cloexec(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (fd < 0) {
         bx_diag(diag, "failed to open DHCP socket: %s", strerror(errno));
         return -1;

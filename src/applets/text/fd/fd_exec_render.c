@@ -6,10 +6,7 @@
 
 #include "fd_exec_render.h"
 #include "lib/path_ops.h"
-
-const char *fd_basename(const char *path) {
-    return bx_path_basename_ptr(path);
-}
+#include "lib/path_quote.h"
 
 static bool fd_match_placeholder_raw(const char *text, enum fd_placeholder_kind *kind, size_t *len) {
     if (strncmp(text, "{//}", 4) == 0) {
@@ -89,13 +86,13 @@ static char *fd_placeholder_value(enum fd_placeholder_kind kind, const char *pat
     case FD_PH_PATH:
         return strdup(path);
     case FD_PH_BASENAME:
-        return strdup(fd_basename(path));
+        return strdup(bx_path_basename_ptr(path));
     case FD_PH_DIRNAME:
         return bx_path_dirname_dup(path);
     case FD_PH_PATH_STEM:
         return fd_remove_last_extension(fd_stem_input_path(path));
     case FD_PH_BASENAME_STEM:
-        return fd_remove_last_extension(fd_basename(fd_stem_input_path(path)));
+        return fd_remove_last_extension(bx_path_basename_ptr(fd_stem_input_path(path)));
     case FD_PH_NONE:
         break;
     }
@@ -289,9 +286,35 @@ char *fd_render_exec_path(const struct fd_render_ctx *ctx, const char *path) {
     return fd_render_base_path(ctx, path, true);
 }
 
+char *fd_quote_output_path_dup(const struct fd_opts *opts, const char *path) {
+    if (!path)
+        return NULL;
+
+    if (!opts || !opts->terminal_quote_paths)
+        return strdup(path);
+
+    const struct bx_path_control_quote_options quote_options = {
+        .style = BX_PATH_CONTROL_QUOTE_QUESTION,
+        .high_bit_printable = true,
+    };
+    return bx_path_quote_control_dup(path, &quote_options);
+}
+
+char *fd_quote_output_path_owned(const struct fd_opts *opts, char *path) {
+    if (!path || !opts || !opts->terminal_quote_paths)
+        return path;
+
+    char *quoted = fd_quote_output_path_dup(opts, path);
+    free(path);
+    return quoted;
+}
+
 void fd_print_path(const struct fd_render_ctx *ctx, const char *path, bool is_dir) {
     char terminator = ctx->opts->print0 ? '\0' : '\n';
     char *rendered = fd_render_output_path(ctx, path, is_dir);
+    if (!rendered)
+        return;
+    rendered = fd_quote_output_path_owned(ctx->opts, rendered);
     if (!rendered)
         return;
     printf("%s%c", rendered, terminator);

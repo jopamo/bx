@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 #include "walk_internal.h"
 
@@ -329,7 +330,7 @@ static int bx_walk_open_directory_child(int parent_dirfd,
     }
 
     bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_OPENAT_CALLS, 1u);
-    int fd = openat(parent_dirfd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    int fd = bx_fd_openat_child(parent_dirfd, name, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         int join_err = 0;
         char *full = bx_walk_entry_path_ensure(path_state, ctx, &join_err);

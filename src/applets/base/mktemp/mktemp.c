@@ -14,6 +14,8 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 
 enum {
     BX_MKTEMP_OPT_TMPDIR = 256,
@@ -154,28 +156,6 @@ static const char* bx_mktemp_resolve_t_tmpdir(const struct bx_mktemp_options* op
     return "/tmp";
 }
 
-static char* bx_mktemp_join_path(const char* directory, const char* template_text) {
-    if (directory == NULL || directory[0] == '\0') {
-        return xstrdup(template_text);
-    }
-
-    size_t directory_len = strlen(directory);
-    size_t template_len = strlen(template_text);
-    bool need_slash = directory[directory_len - 1] != '/';
-
-    size_t joined_len = directory_len + (need_slash ? 1u : 0u) + template_len + 1u;
-    char* joined = xmalloc(joined_len);
-    memcpy(joined, directory, directory_len);
-
-    size_t offset = directory_len;
-    if (need_slash) {
-        joined[offset++] = '/';
-    }
-
-    memcpy(joined + offset, template_text, template_len + 1u);
-    return joined;
-}
-
 static void bx_mktemp_seed_rng(void) {
     static bool seeded = false;
     if (seeded) {
@@ -290,7 +270,7 @@ static bool bx_mktemp_try_create(const struct bx_mktemp_options* options, const 
         return mkdir(path, S_IRWXU) == 0;
     }
 
-    int fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+    int fd = bx_fd_open_cloexec(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
     if (fd < 0) {
         return false;
     }
@@ -375,7 +355,9 @@ int bx_mktemp_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    char* joined_template = use_tmpdir ? bx_mktemp_join_path(tmpdir, template_text) : xstrdup(template_text);
+    char* joined_template = (use_tmpdir && tmpdir != NULL && tmpdir[0] != '\0')
+        ? bx_path_join(tmpdir, template_text)
+        : xstrdup(template_text);
     char* full_template = NULL;
     size_t x_start = 0;
     size_t x_len = 0;

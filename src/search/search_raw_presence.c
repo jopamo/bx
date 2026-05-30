@@ -124,17 +124,11 @@ int bx_search_raw_presence_opened(FILE *f,
 
     if (status != 2) {
         if (opts->files_with_matches && file_matches > 0 && display_name) {
-            if (opts->null_output)
-                bx_search_printf_out("%s%c", display_name, '\0');
-            else
-                bx_search_printf_out("%s\n", display_name);
+            bx_search_print_path_record(display_name, opts);
             bx_search_dev_counters_note_output_line_emitted();
         }
         if (opts->files_without_match && file_matches == 0 && display_name) {
-            if (opts->null_output)
-                bx_search_printf_out("%s%c", display_name, '\0');
-            else
-                bx_search_printf_out("%s\n", display_name);
+            bx_search_print_path_record(display_name, opts);
             bx_search_dev_counters_note_output_line_emitted();
         }
         if (match_count)

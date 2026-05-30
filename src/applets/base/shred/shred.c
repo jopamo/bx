@@ -14,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 
@@ -336,7 +337,7 @@ static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, i
 }
 
 static int bx_shred_open_target(const char* path, bool force, struct bx_diag_ctx* diag) {
-    int fd = open(path, O_WRONLY);
+    int fd = bx_fd_open_cloexec(path, O_WRONLY, 0);
     if (fd >= 0) {
         return fd;
     }
@@ -357,7 +358,7 @@ static int bx_shred_open_target(const char* path, bool force, struct bx_diag_ctx
         return -1;
     }
 
-    fd = open(path, O_WRONLY);
+    fd = bx_fd_open_cloexec(path, O_WRONLY, 0);
     if (fd < 0) {
         bx_perror_path(diag, path);
     }
@@ -486,7 +487,7 @@ int bx_shred_main(int argc, char** argv) {
 
     int random_fd = -1;
     if (options.iterations > 0 || options.random_source_specified) {
-        random_fd = open(options.random_source_path, O_RDONLY);
+        random_fd = bx_fd_open_cloexec(options.random_source_path, O_RDONLY, 0);
         if (random_fd < 0) {
             bx_perror_path(&diag, options.random_source_path);
             return diag.exit_status;

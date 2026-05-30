@@ -38,6 +38,7 @@
 
 #include "hdparm.h"
 #include "sgio.h"
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 int bx_hdparm_main (int _argc, char **_argv);
@@ -57,8 +58,74 @@ extern const char *minor_str[];
 #define CDROM_SELECT_SPEED	0x5322
 #endif
 
-#define TIMING_BUF_MB		2
-#define TIMING_BUF_BYTES	(TIMING_BUF_MB * 1024 * 1024)
+#define TIMING_BUF_MB		2u
+
+static int
+hdparm_timing_buf_bytes (unsigned int *bytes_out)
+{
+	uintmax_t base = 0;
+	uintmax_t bytes = 0;
+
+	if (!bytes_out ||
+	    !bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &base) ||
+	    !bx_size_multiply_by_power_uint(TIMING_BUF_MB, base, 2u, &bytes) ||
+	    bytes > (uintmax_t)UINT_MAX)
+		return 0;
+	*bytes_out = (unsigned int)bytes;
+	return 1;
+}
+
+static int
+hdparm_timing_buf_sectors (unsigned int timing_buf_bytes, uintmax_t *sectors_out)
+{
+	uintmax_t sectors = 0;
+
+	if (!sectors_out ||
+	    !bx_size_divide_by_power_floor((uintmax_t)timing_buf_bytes, 512u, 1u, &sectors) ||
+	    sectors == 0u)
+		return 0;
+	*sectors_out = sectors;
+	return 1;
+}
+
+static int
+hdparm_trim_bytes_to_data_sectors (uintmax_t byte_count, unsigned int *sectors_out)
+{
+	uintmax_t sectors = 0;
+
+	if (!sectors_out ||
+	    !bx_size_block_count_ceil(byte_count, 512u, &sectors) ||
+	    sectors > (uintmax_t)UINT_MAX)
+		return 0;
+	*sectors_out = (unsigned int)sectors;
+	return 1;
+}
+
+static int
+hdparm_trim_data_sectors_to_bytes (unsigned int sectors, unsigned int *bytes_out)
+{
+	uintmax_t bytes = 0;
+
+	if (!bytes_out ||
+	    !bx_size_multiply_by_power_uint((uintmax_t)sectors, 512u, 1u, &bytes) ||
+	    bytes > (uintmax_t)UINT_MAX)
+		return 0;
+	*bytes_out = (unsigned int)bytes;
+	return 1;
+}
+
+static int
+hdparm_trim_kib_to_data_sectors (unsigned int kib, unsigned int *sectors_out)
+{
+	uintmax_t base = 0;
+	uintmax_t bytes = 0;
+
+	if (!sectors_out ||
+	    !bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX, &base) ||
+	    !bx_size_multiply_by_power_uint((uintmax_t)kib, base, 1u, &bytes))
+		return 0;
+	return hdparm_trim_bytes_to_data_sectors(bytes, sectors_out);
+}
 
 static char *progname;
 int verbose = 0;
@@ -249,22 +316,23 @@ static int seek_to_zero (int fd)
 	return 0;
 }
 
-static int read_big_block (int fd, char *buf)
+static int read_big_block (int fd, char *buf, unsigned int timing_buf_bytes)
 {
-	int i, rc;
-	if ((rc = read(fd, buf, TIMING_BUF_BYTES)) != TIMING_BUF_BYTES) {
+	unsigned int i;
+	ssize_t rc;
+	if ((rc = read(fd, buf, timing_buf_bytes)) != (ssize_t)timing_buf_bytes) {
 		if (rc) {
 			if (rc == -1)
 				perror("read() failed");
 			else
-				fprintf(stderr, "read(%u) returned %u bytes\n", TIMING_BUF_BYTES, rc);
+				fprintf(stderr, "read(%u) returned %zd bytes\n", timing_buf_bytes, rc);
 		} else {
 			fputs ("read() hit EOF - device too small\n", stderr);
 		}
 		return EIO;
 	}
 	/* access all sectors of buf to ensure the read fully completed */
-	for (i = 0; i < TIMING_BUF_BYTES; i += 512)
+	for (i = 0; i < timing_buf_bytes; i += 512)
 		buf[i] &= 1;
 	return 0;
 }
@@ -305,8 +373,13 @@ static void print_timing_rate(unsigned int total_MB, double elapsed, int megabyt
 			total_MB, measured_unit_prefix, elapsed, rate_mbytes_per_sec, rate_unit_prefix);
 	} else {
 		const char *rate_unit_prefix = hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 1u);
+		double rate_unit_base = 0.0;
+		double rate_kbytes_per_sec = 0.0;
+		if (!bx_size_unit_label_base_double(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &rate_unit_base) ||
+		    !bx_size_multiply_by_power_double(rate_mbytes_per_sec, rate_unit_base, 1u, &rate_kbytes_per_sec))
+			return;
 		printf("%3u %sB in %5.2f seconds = %6.2f %sB/sec\n",
-			total_MB, measured_unit_prefix, elapsed, rate_mbytes_per_sec * 1024, rate_unit_prefix);
+			total_MB, measured_unit_prefix, elapsed, rate_kbytes_per_sec, rate_unit_prefix);
 	}
 }
 
@@ -316,8 +389,11 @@ static void time_cache (int fd)
 	struct itimerval e1, e2;
 	double elapsed, elapsed2;
 	unsigned int iterations, total_MB;
+	unsigned int timing_buf_bytes = 0;
 
-	buf = prepare_timing_buf(TIMING_BUF_BYTES);
+	if (!hdparm_timing_buf_bytes(&timing_buf_bytes))
+		return;
+	buf = prepare_timing_buf(timing_buf_bytes);
 	if (!buf)
 		return;
 
@@ -327,7 +403,7 @@ static void time_cache (int fd)
 	 */
 	setitimer(ITIMER_REAL, &(struct itimerval){{1000,0},{1000,0}}, NULL);
 	if (seek_to_zero (fd)) return;
-	if (read_big_block (fd, buf)) return;
+	if (read_big_block (fd, buf, timing_buf_bytes)) return;
 	printf(" Timing %scached reads:   ", (open_flags & O_DIRECT) ? "O_DIRECT " : "");
 	fflush(stdout);
 
@@ -340,7 +416,7 @@ static void time_cache (int fd)
 	getitimer(ITIMER_REAL, &e1);
 	do {
 		++iterations;
-		if (seek_to_zero (fd) || read_big_block (fd, buf))
+		if (seek_to_zero (fd) || read_big_block (fd, buf, timing_buf_bytes))
 			goto quit;
 		getitimer(ITIMER_REAL, &e2);
 		if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed))
@@ -369,7 +445,7 @@ static void time_cache (int fd)
 	sleep(1);
 quit:
 	munlockall();
-	munmap(buf, TIMING_BUF_BYTES);
+	munmap(buf, timing_buf_bytes);
 }
 
 static int time_device (int fd)
@@ -379,6 +455,10 @@ static int time_device (int fd)
 	struct itimerval e1, e2;
 	int err = 0;
 	unsigned int max_iterations = 1024, total_MB, iterations;
+	unsigned int timing_buf_bytes = 0;
+
+	if (!hdparm_timing_buf_bytes(&timing_buf_bytes))
+		return EINVAL;
 
 	/*
 	 * get device size
@@ -387,20 +467,32 @@ static int time_device (int fd)
 		__u64 nsectors;
 		do_flush = 1;
 		err = get_dev_geometry(fd, NULL, NULL, NULL, NULL, &nsectors);
-		if (!err)
-			max_iterations = nsectors / (2 * 1024) / TIMING_BUF_MB;
+		if (!err) {
+			uintmax_t timing_buf_sectors = 0;
+			if (!hdparm_timing_buf_sectors(timing_buf_bytes, &timing_buf_sectors))
+				return EINVAL;
+			max_iterations = (unsigned int)((uintmax_t)nsectors / timing_buf_sectors);
+		}
 		err = 0;
 	}
-	buf = prepare_timing_buf(TIMING_BUF_BYTES);
+	buf = prepare_timing_buf(timing_buf_bytes);
 	if (!buf)
 		err = ENOMEM;
 	if (err)
 		goto quit;
 
 	printf(" Timing %s disk reads", (open_flags & O_DIRECT) ? "O_DIRECT" : "buffered");
-	if (set_timings_offset)
-		printf(" (offset %llu %sB)", timings_offset / 0x40000000ULL,
+	if (set_timings_offset) {
+		uintmax_t offset_base = 0;
+		uintmax_t offset_gbytes = 0;
+		if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &offset_base) ||
+		    !bx_size_divide_by_power_floor((uintmax_t)timings_offset, offset_base, 3u, &offset_gbytes)) {
+			err = EINVAL;
+			goto quit;
+		}
+		printf(" (offset %" PRIuMAX " %sB)", offset_gbytes,
 			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_IEC_PREFIX, 3u));
+	}
 	printf(": ");
 	fflush(stdout);
 
@@ -421,7 +513,7 @@ static int time_device (int fd)
 	getitimer(ITIMER_REAL, &e1);
 	do {
 		++iterations;
-		if ((err = read_big_block(fd, buf)))
+		if ((err = read_big_block(fd, buf, timing_buf_bytes)))
 			goto quit;
 		getitimer(ITIMER_REAL, &e2);
 		if (!bx_time_timeval_elapsed_seconds_double(&e2.it_value, &e1.it_value, &elapsed)) {
@@ -435,7 +527,7 @@ static int time_device (int fd)
 quit:
 	munlockall();
 	if (buf)
-		munmap(buf, TIMING_BUF_BYTES);
+		munmap(buf, timing_buf_bytes);
 	return err;
 }
 
@@ -1538,10 +1630,12 @@ static int trim_sectors (int fd, const char *devname, int nranges, void *data, _
 {
 	struct ata_tf tf;
 	int err = 0;
-	unsigned int data_bytes = nranges * sizeof(__u64);
-	unsigned int data_sects = (data_bytes + 511) / 512;
+	unsigned int data_bytes = 0;
+	unsigned int data_sects = 0;
 
-	data_bytes = data_sects * 512;
+	if (!hdparm_trim_bytes_to_data_sectors((uintmax_t)nranges * sizeof(__u64), &data_sects) ||
+	    !hdparm_trim_data_sectors_to_bytes(data_sects, &data_bytes))
+		return EINVAL;
 
 	abort_if_not_full_device(fd, 0, devname, NULL);
 	printf("trimming %llu sectors from %d ranges\n", nsectors, nranges);
@@ -1570,8 +1664,11 @@ static void do_trim_sector_ranges (int fd, const char *devname, int nranges, str
 
 	abort_if_not_full_device(fd, 0, devname, NULL);
 
-	data_sects = ((nranges * sizeof(range)) + 511) / 512;
-	data_bytes = data_sects * 512;
+	if (!hdparm_trim_bytes_to_data_sectors((uintmax_t)nranges * sizeof(range), &data_sects) ||
+	    !hdparm_trim_data_sectors_to_bytes(data_sects, &data_bytes)) {
+		fprintf(stderr, "trim-sector-ranges: data size too large\n");
+		exit(EINVAL);
+	}
 
 	data = mmap(NULL, data_bytes, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1, 0);
 	if (data == MAP_FAILED) {
@@ -1738,11 +1835,12 @@ do_trim_from_stdin (int fd, const char *devname)
 	err = sysfs_get_attr(fd, "queue/max_sectors_kb", "%u", &max_kb, NULL, 0);
 	if (err || max_kb == 0)
 		data_sects = 128;	/* "safe" default for most controllers */
-	else
-		data_sects = max_kb * 2;
+	else if (!hdparm_trim_kib_to_data_sectors(max_kb, &data_sects))
+		return EINVAL;
 	if (data_sects > dev_limit)
 		data_sects = dev_limit;
-	data_bytes = data_sects * 512;
+	if (!hdparm_trim_data_sectors_to_bytes(data_sects, &data_bytes))
+		return EINVAL;
 
 	data = mmap(NULL, data_bytes, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS, -1, 0);
 	if (data == MAP_FAILED) {
@@ -2050,7 +2148,7 @@ void process_dev (char *devname)
 	static long parm, multcount;
 
 	id = NULL;
-	fd = open(devname, open_flags);
+	fd = bx_fd_open_cloexec(devname, open_flags, 0);
 	if (fd < 0) {
 		err = errno;
 		perror(devname);
@@ -2718,7 +2816,7 @@ void process_dev (char *devname)
 				dump_sectors(id, 1, 1, 512);
 			} else if (do_IDentity == 3) {
 				/* Write raw binary IDENTIFY DEVICE data to the specified file */
-				int rfd = open(raw_identify_path, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+				int rfd = bx_fd_open_cloexec(raw_identify_path, O_WRONLY|O_TRUNC|O_CREAT, 0644);
 				if (rfd == -1) {
 					err = errno;
 					perror(raw_identify_path);
@@ -3291,7 +3389,12 @@ do_fallocate (const char *name)
 	get_filename_parm(&path, name);
 	if (num_flags_processed || argc)
 		usage_help(4,EINVAL);
-	exit(do_fallocate_syscall(path, blkcount * 1024));
+	uintmax_t block_base = 0;
+	uintmax_t bytecount = 0;
+	if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &block_base) ||
+	    !bx_size_multiply_by_power_uint((uintmax_t)blkcount, block_base, 1u, &bytecount))
+		usage_help(4,EINVAL);
+	exit(do_fallocate_syscall(path, (__u64)bytecount));
 }
 
 static void
@@ -3321,9 +3424,20 @@ get_longarg (void)
 		prefer_ata12 = 1;
 		--num_flags_processed;	/* doesn't count as an action flag */
 	} else if (0 == strcasecmp(name, "offset")) {
+		uintmax_t offset_base = 0;
+		uintmax_t offset_unit_bytes = 0;
+		uintmax_t offset_bytes = 0;
+
 		set_timings_offset = 1;
-		get_u64_parm(0, 0, NULL, &timings_offset, 0, ~0, name, "GB offset for -t flag");
-		timings_offset *= 0x40000000ULL;
+		if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &offset_base) ||
+		    !bx_size_multiply_by_power_uint(1u, offset_base, 3u, &offset_unit_bytes) ||
+		    offset_unit_bytes == 0u)
+			usage_help(1,EINVAL);
+		get_u64_parm(0, 0, NULL, &timings_offset, 0, ((__u64)~0ULL) / (__u64)offset_unit_bytes, name, "GB offset for -t flag");
+		if (!bx_size_multiply_by_power_uint((uintmax_t)timings_offset, offset_base, 3u, &offset_bytes) ||
+		    offset_bytes > (uintmax_t)((__u64)~0ULL))
+			usage_help(1,EINVAL);
+		timings_offset = (__u64)offset_bytes;
 	} else if (0 == strcasecmp(name, "yes-i-know-what-i-am-doing")) {
 		i_know_what_i_am_doing = 1;
 		--num_flags_processed;	/* doesn't count as an action flag */

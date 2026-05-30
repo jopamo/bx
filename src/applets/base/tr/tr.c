@@ -10,6 +10,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/args_common.h"
+#include "lib/cli_common.h"
 
 enum tr_array_kind {
     TR_ARRAY_STRING1 = 0,
@@ -39,16 +40,7 @@ struct tr_byte_array {
 };
 
 static const char* tr_progname(const char* argv0) {
-    if (argv0 == NULL || argv0[0] == '\0') {
-        return "tr";
-    }
-
-    const char* base = strrchr(argv0, '/');
-    if (base != NULL && base[1] != '\0') {
-        return base + 1;
-    }
-
-    return argv0;
+    return bx_cli_progname(argv0, "tr");
 }
 
 static void tr_print_help(FILE* stream, const char* progname) {

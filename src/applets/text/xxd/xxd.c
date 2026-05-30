@@ -121,6 +121,8 @@
 # include <unix.h>	/* for fdopen() on MAC */
 #endif
 
+#include "lib/fd_ops.h"
+
 
 /*  This corrects the problem of missing prototypes for certain functions
  *  in some GNU installations (e.g. SunOS 4.1.x).
@@ -194,9 +196,9 @@ static char osver[] = "";
 
 /* open has only to arguments on the Mac */
 #if __MWERKS__
-# define OPEN(name, mode, umask) open(name, mode)
+# define OPEN(name, mode, umask) bx_fd_open_cloexec(name, mode, 0)
 #else
-# define OPEN(name, mode, umask) open(name, mode, umask)
+# define OPEN(name, mode, umask) bx_fd_open_cloexec(name, mode, umask)
 #endif
 
 #ifdef AMIGA

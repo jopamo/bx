@@ -12,8 +12,9 @@
 #include <sys/stat.h>
 #include "applets.h"
 #include "bx/diag.h"
-#include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/cli_common.h"
+#include "lib/line_writer.h"
 
 typedef struct {
     unsigned long long lines;
@@ -71,10 +72,62 @@ static void value_str(unsigned long long n, char* buf) {
     sprintf(buf, "%llu", n);
 }
 
-static void print_one(const char* fmt, int width, unsigned long long val) {
+static bool wc_write_count(struct bx_line_writer* writer, bool leading_space, int width, unsigned long long val) {
     char buf[32];
+    char field[64];
+    int len;
+
     value_str(val, buf);
-    printf(fmt, width, buf);
+    len = snprintf(field, sizeof(field), leading_space ? " %*s" : "%*s", width, buf);
+    return len >= 0 && (size_t)len < sizeof(field) && bx_line_writer_write(writer, field, (size_t)len);
+}
+
+static bool wc_write_count_raw(struct bx_line_writer* writer, unsigned long long val) {
+    char buf[32];
+
+    value_str(val, buf);
+    return bx_line_writer_puts(writer, buf);
+}
+
+static bool wc_write_counts(
+    struct bx_line_writer* writer,
+    const wc_counts_t* counts,
+    int width,
+    bool pad_first,
+    bool opt_l,
+    bool opt_w,
+    bool opt_c,
+    bool opt_m,
+    bool opt_L
+) {
+    bool emitted = false;
+
+    if (opt_l) {
+        if (pad_first ? !wc_write_count(writer, emitted, width, counts->lines) : !wc_write_count_raw(writer, counts->lines))
+            return false;
+        emitted = true;
+    }
+    if (opt_w) {
+        if (pad_first ? !wc_write_count(writer, emitted, width, counts->words) : !wc_write_count_raw(writer, counts->words))
+            return false;
+        emitted = true;
+    }
+    if (opt_m) {
+        if (pad_first ? !wc_write_count(writer, emitted, width, counts->chars) : !wc_write_count_raw(writer, counts->chars))
+            return false;
+        emitted = true;
+    }
+    if (opt_c) {
+        if (pad_first ? !wc_write_count(writer, emitted, width, counts->bytes) : !wc_write_count_raw(writer, counts->bytes))
+            return false;
+        emitted = true;
+    }
+    if (opt_L) {
+        if (pad_first ? !wc_write_count(writer, emitted, width, counts->max_line_width) : !wc_write_count_raw(writer, counts->max_line_width))
+            return false;
+    }
+
+    return true;
 }
 
 static int compute_number_width(int num_files, char** files, int first_file_index) {
@@ -174,28 +227,28 @@ int bx_wc_main(int argc, char** argv) {
     if (num_files == 0) {
         int width = field_count > 1 ? 7 : 1;
         wc_counts_t res;
-        wc_count(stdin, &res);
+        char output_buffer[8192];
+        struct bx_line_writer writer;
 
-        if (field_count > 1) {
-            const char* fmt = "%*s";
-            if (opt_l) { print_one(fmt, width, res.lines); fmt = " %*s"; }
-            if (opt_w) { print_one(fmt, width, res.words); fmt = " %*s"; }
-            if (opt_m) { print_one(fmt, width, res.chars); fmt = " %*s"; }
-            if (opt_c) { print_one(fmt, width, res.bytes); fmt = " %*s"; }
-            if (opt_L) { print_one(fmt, width, res.max_line_width); }
-        } else {
-            if (opt_l) printf("%llu", res.lines);
-            if (opt_w) printf("%llu", res.words);
-            if (opt_m) printf("%llu", res.chars);
-            if (opt_c) printf("%llu", res.bytes);
-            if (opt_L) printf("%llu", res.max_line_width);
+        wc_count(stdin, &res);
+        bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
+
+        if (!wc_write_counts(&writer, &res, width, field_count > 1, opt_l, opt_w, opt_c, opt_m, opt_L)
+            || !bx_line_writer_putc(&writer, '\n')
+            || !bx_line_writer_flush(&writer)) {
+            return 1;
         }
-        printf("\n");
         return 0;
     }
 
     wc_counts_t* counts = malloc((size_t)num_files * sizeof(wc_counts_t));
     bool* file_ok = malloc((size_t)num_files * sizeof(bool));
+    if (!counts || !file_ok) {
+        free(counts);
+        free(file_ok);
+        return 1;
+    }
+
     int ncounts = 0;
     for (int i = 0; i < num_files; i++) {
         const char* name = argv[optind + i];
@@ -230,6 +283,9 @@ int bx_wc_main(int argc, char** argv) {
 
     bool show_total = num_files > 1;
     int width = compute_number_width(num_files, argv, optind);
+    char output_buffer[8192];
+    struct bx_line_writer writer;
+    bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
     int out_idx = 0;
     for (int i = 0; i < num_files; i++) {
@@ -237,24 +293,28 @@ int bx_wc_main(int argc, char** argv) {
             continue;
         wc_counts_t* r = &counts[out_idx++];
 
-        const char* fmt = "%*s";
-        if (opt_l) { print_one(fmt, width, r->lines); fmt = " %*s"; }
-        if (opt_w) { print_one(fmt, width, r->words); fmt = " %*s"; }
-        if (opt_m) { print_one(fmt, width, r->chars); fmt = " %*s"; }
-        if (opt_c) { print_one(fmt, width, r->bytes); fmt = " %*s"; }
-        if (opt_L) { print_one(fmt, width, r->max_line_width); }
-
-        printf(" %s\n", argv[optind + i]);
+        if (!wc_write_counts(&writer, r, width, true, opt_l, opt_w, opt_c, opt_m, opt_L)
+            || !bx_line_writer_putc(&writer, ' ')
+            || !bx_line_writer_put_line(&writer, argv[optind + i])) {
+            free(counts);
+            free(file_ok);
+            return 1;
+        }
     }
 
     if (show_total) {
-        const char* fmt = "%*s";
-        if (opt_l) { print_one(fmt, width, total.lines); fmt = " %*s"; }
-        if (opt_w) { print_one(fmt, width, total.words); fmt = " %*s"; }
-        if (opt_m) { print_one(fmt, width, total.chars); fmt = " %*s"; }
-        if (opt_c) { print_one(fmt, width, total.bytes); fmt = " %*s"; }
-        if (opt_L) { print_one(fmt, width, total.max_line_width); }
-        printf(" total\n");
+        if (!wc_write_counts(&writer, &total, width, true, opt_l, opt_w, opt_c, opt_m, opt_L)
+            || !bx_line_writer_puts(&writer, " total\n")) {
+            free(counts);
+            free(file_ok);
+            return 1;
+        }
+    }
+
+    if (!bx_line_writer_flush(&writer)) {
+        free(counts);
+        free(file_ok);
+        return 1;
     }
 
     free(counts);

@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/path_ops.h"
 
 struct bx_switch_root_options {
     const char* progname;
@@ -112,40 +113,6 @@ static bool bx_switch_root_is_root_path(const char* path) {
     return len == 1 && path[0] == '/';
 }
 
-static char* bx_switch_root_join_paths(const char* left, const char* right) {
-    size_t left_len = strlen(left);
-    while (left_len > 1 && left[left_len - 1] == '/') {
-        left_len--;
-    }
-
-    size_t right_start = 0;
-    while (right[right_start] == '/') {
-        right_start++;
-    }
-
-    size_t right_len = strlen(right + right_start);
-    bool need_sep = (left_len > 0 && !(left_len == 1 && left[0] == '/'));
-
-    size_t out_len = left_len + (need_sep ? 1 : 0) + right_len;
-    char* out = xmalloc(out_len + 1);
-
-    size_t pos = 0;
-    if (left_len > 0) {
-        memcpy(out + pos, left, left_len);
-        pos += left_len;
-    }
-    if (need_sep) {
-        out[pos++] = '/';
-    }
-    if (right_len > 0) {
-        memcpy(out + pos, right + right_start, right_len);
-        pos += right_len;
-    }
-    out[pos] = '\0';
-
-    return out;
-}
-
 static bool bx_switch_root_path_is_mountpoint(const char* path, bool* is_mountpoint_out, struct bx_diag_ctx* diag, const char* label) {
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -223,7 +190,7 @@ static bool bx_switch_root_candidate_is_executable(const char* path) {
 }
 
 static bool bx_switch_root_validate_init_path(const char* new_root, const char* init_path, struct bx_diag_ctx* diag) {
-    char* candidate = bx_switch_root_join_paths(new_root, init_path);
+    char* candidate = bx_path_join_root_relative(new_root, init_path);
 
     struct stat st;
     if (stat(candidate, &st) != 0) {
@@ -270,8 +237,8 @@ static bool bx_switch_root_validate_init_command(const char* new_root, const cha
         }
 
         const char* directory = (segment[0] == '\0') ? "." : segment;
-        char* relative_candidate = bx_switch_root_join_paths(directory, init_command);
-        char* full_candidate = bx_switch_root_join_paths(new_root, relative_candidate);
+        char* relative_candidate = bx_path_join_root_relative(directory, init_command);
+        char* full_candidate = bx_path_join_root_relative(new_root, relative_candidate);
 
         if (bx_switch_root_candidate_is_executable(full_candidate)) {
             found = true;

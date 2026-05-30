@@ -10,6 +10,8 @@
 #include "bx/diag.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
+#include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 
 struct tee_output {
     int fd;
@@ -17,15 +19,6 @@ struct tee_output {
     bool close_fd;
     bool failed;
 };
-
-static const char* tee_basename(const char* path) {
-    if (!path || !*path) {
-        return "tee";
-    }
-
-    const char* slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
 
 static void tee_print_help(const char* progname) {
     printf("Usage: %s [OPTION]... [FILE]...\n", progname);
@@ -41,7 +34,7 @@ int bx_tee_main(int argc, char** argv) {
     static const struct option long_options[] = {
         {"append", no_argument, NULL, 'a'}, {"ignore-interrupts", no_argument, NULL, 'i'}, {"help", no_argument, NULL, 'h'}, {"version", no_argument, NULL, 'v'}, {NULL, 0, NULL, 0}};
 
-    const char* progname = tee_basename(argc > 0 ? argv[0] : "tee");
+    const char* progname = bx_cli_progname(argc > 0 ? argv[0] : NULL, "tee");
     struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     bool append = false;
     bool ignore_interrupts = false;
@@ -97,7 +90,7 @@ int bx_tee_main(int argc, char** argv) {
     for (int i = 0; i < num_files; i++) {
         const char* path = argv[optind + i];
         int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
-        int fd = open(path, flags, 0666);
+        int fd = bx_fd_open_cloexec(path, flags, 0666);
         if (fd >= 0) {
             outputs[output_count++] = (struct tee_output){
                 .fd = fd,

@@ -246,7 +246,7 @@ enum bx_walk_action fd_walk_callback(struct bx_walk_entry *entry, void *user) {
         return BX_WALK_CONTINUE;
     }
 
-    const char *name = opts->full_path ? entry->path : fd_basename(entry->path);
+    const char *name = opts->full_path ? entry->path : bx_path_basename_ptr(entry->path);
 
     if (opts->extension) {
         const char *dot = bx_path_extension_ptr(entry->path);

@@ -17,6 +17,7 @@
 #include <netinet/ip6.h>
 #include <netdb.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 static sockaddr_any dest_addr = {
@@ -72,7 +73,7 @@ static int raw_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pac
     for (i = 0; i < *length_p; i++)
         data[i] = 0x40 + (i & 0x3f);
 
-    raw_sk = socket(af, SOCK_RAW, protocol);
+    raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, protocol);
     if (raw_sk < 0)
         error_or_perm("socket");
 

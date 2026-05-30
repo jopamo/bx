@@ -39,6 +39,7 @@
 #include "bpf.h"
 #include "syscalls.h"
 #include "version.h"
+#include "lib/fd_ops.h"
 #include <getopt.h>
 #include <sched.h>
 #include <fcntl.h>
@@ -593,10 +594,10 @@ int main(int argc, char* argv[]) {
     if (log_file_path != NULL) {
         int logfd;
 
-        logfd = open(log_file_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        logfd = bx_fd_open_cloexec(log_file_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (logfd == -1)
             err(EXIT_USAGE, "cannot open log file %s", log_file_path);
-        if (dup2(logfd, STDERR_FILENO) == -1) {
+        if (bx_fd_dup2_exact(logfd, STDERR_FILENO) == -1) {
             close(logfd);
             err(EXIT_RUNTIME, "dup2 log file");
         }
@@ -617,7 +618,7 @@ int main(int argc, char* argv[]) {
     if (netns) {
 #ifdef CLONE_NEWNET
         int fd;
-        if ((fd = open(netns, O_RDONLY)) == -1)
+        if ((fd = bx_fd_open_cloexec(netns, O_RDONLY, 0)) == -1)
             err(EXIT_USAGE, "open namespace %s", netns);
         if (setns(fd, CLONE_NEWNET) == -1)
             err(EXIT_USAGE, "setns %s", netns);

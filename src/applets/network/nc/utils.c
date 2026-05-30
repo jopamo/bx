@@ -7,6 +7,7 @@
 #include <sys/timerfd.h>
 #endif
 
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 uint32_t (*nc_random)(void) = nc_random_u32;
@@ -284,7 +285,7 @@ static int fill_random(void* buf, size_t len) {
     if (len == 0)
         return 0;
 #endif
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    int fd = bx_fd_open_cloexec("/dev/urandom", O_RDONLY, 0);
     if (fd == -1)
         return -1;
     while (len > 0) {
@@ -413,22 +414,29 @@ void build_ports(char* p) {
 void spawn_exec(int net_fd) {
     int pin[2], pout[2];
 
-    if (pipe(pin) == -1 || pipe(pout) == -1)
+    if (bx_fd_pipe_cloexec(pin) == -1)
         err(EXIT_RUNTIME, "pipe");
+    if (bx_fd_pipe_cloexec(pout) == -1) {
+        int saved_errno = errno;
+        close(pin[0]);
+        close(pin[1]);
+        errno = saved_errno;
+        err(EXIT_RUNTIME, "pipe");
+    }
 
     switch (child_pid = fork()) {
         case -1:
             err(EXIT_RUNTIME, "fork");
         case 0: /* Child */
             close(net_fd);
-            if (dup2(pin[0], STDIN_FILENO) == -1)
+            if (bx_fd_dup2_exact(pin[0], STDIN_FILENO) == -1)
                 err(EXIT_RUNTIME, "dup2 child stdin");
             close(pin[0]);
             close(pin[1]);
 
-            if (dup2(pout[1], STDOUT_FILENO) == -1)
+            if (bx_fd_dup2_exact(pout[1], STDOUT_FILENO) == -1)
                 err(EXIT_RUNTIME, "dup2 child stdout");
-            if (dup2(pout[1], STDERR_FILENO) == -1)
+            if (bx_fd_dup2_exact(pout[1], STDERR_FILENO) == -1)
                 err(EXIT_RUNTIME, "dup2 child stderr");
             close(pout[0]);
             close(pout[1]);
@@ -439,12 +447,12 @@ void spawn_exec(int net_fd) {
             else
                 err(EXIT_EXEC_FAILED, "execl");
         default: /* Parent */
-            if (dup2(pin[1], STDOUT_FILENO) == -1)
+            if (bx_fd_dup2_exact(pin[1], STDOUT_FILENO) == -1)
                 err(EXIT_RUNTIME, "dup2 parent stdout");
             close(pin[0]);
             close(pin[1]);
 
-            if (dup2(pout[0], STDIN_FILENO) == -1)
+            if (bx_fd_dup2_exact(pout[0], STDIN_FILENO) == -1)
                 err(EXIT_RUNTIME, "dup2 parent stdin");
             close(pout[0]);
             close(pout[1]);

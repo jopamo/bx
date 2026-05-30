@@ -22,6 +22,8 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include "lib/time_parse.h"
 
 #ifndef SYS_pidfd_open
@@ -522,16 +524,8 @@ static bool bx_kill_parse_pidfd_operand(const char* text, pid_t* pid_out, uintma
     return true;
 }
 
-static const char* bx_kill_basename(const char* path) {
-    if (path == NULL) {
-        return "";
-    }
-    const char* slash = strrchr(path, '/');
-    return slash != NULL ? slash + 1 : path;
-}
-
 static bool bx_kill_read_proc_text(const char* path, char* buf, size_t buf_size) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         return false;
     }
@@ -635,7 +629,7 @@ static bool bx_kill_name_matches_pid(pid_t pid, const char* name) {
 
     snprintf(path, sizeof(path), "/proc/%ld/cmdline", (long)pid);
     if (bx_kill_read_proc_text(path, buf, sizeof(buf))) {
-        if (buf[0] != '\0' && strcmp(bx_kill_basename(buf), name) == 0) {
+        if (buf[0] != '\0' && strcmp(bx_path_basename_ptr(buf), name) == 0) {
             return true;
         }
     }

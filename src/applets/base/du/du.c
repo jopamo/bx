@@ -16,6 +16,7 @@
 #include "lib/cli_common.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/path_ops.h"
 
 enum bx_du_symlink_mode {
     BX_DU_SYMLINK_NEVER = 0,
@@ -385,39 +386,31 @@ static bool bx_du_inode_set_mark_seen(struct bx_du_inode_set* set, dev_t dev, in
     return false;
 }
 
-static char* bx_du_join_path(const char* parent, const char* child) {
-    size_t parent_len = strlen(parent);
-    size_t child_len = strlen(child);
-    bool need_slash = parent_len > 0u && parent[parent_len - 1u] != '/';
-
-    size_t len = parent_len + (need_slash ? 1u : 0u) + child_len;
-    char* path = xmalloc(len + 1u);
-    memcpy(path, parent, parent_len);
-    if (need_slash) {
-        path[parent_len] = '/';
-        memcpy(path + parent_len + 1u, child, child_len);
-    }
-    else {
-        memcpy(path + parent_len, child, child_len);
-    }
-    path[len] = '\0';
-    return path;
-}
-
 static void bx_du_format_size(uintmax_t size_bytes, const struct bx_du_options* options, char* buffer, size_t buffer_size) {
+    enum bx_size_unit_label_style style = BX_SIZE_UNIT_LABEL_IEC_PREFIX;
+    const char* suffixes = "KMGTPEZYRQ";
+
     switch (options->output_mode) {
         case BX_DU_OUTPUT_HUMAN_1024:
-            bx_size_format_human_ceil(size_bytes, 1024u, "KMGTPEZYRQ", buffer, buffer_size);
-            return;
-        case BX_DU_OUTPUT_HUMAN_1000:
-            bx_size_format_human_ceil(size_bytes, 1000u, "kMGTPEZYRQ", buffer, buffer_size);
-            return;
-        case BX_DU_OUTPUT_BLOCKS:
             break;
+        case BX_DU_OUTPUT_HUMAN_1000:
+            style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
+            suffixes = "kMGTPEZYRQ";
+            break;
+        case BX_DU_OUTPUT_BLOCKS:
+            {
+                uintmax_t scaled_size = bx_du_ceil_div(size_bytes, options->output_block_size);
+                (void)snprintf(buffer, buffer_size, "%" PRIuMAX, scaled_size);
+                return;
+            }
     }
 
-    uintmax_t scaled_size = bx_du_ceil_div(size_bytes, options->output_block_size);
-    (void)snprintf(buffer, buffer_size, "%" PRIuMAX, scaled_size);
+    uintmax_t base = 0;
+    if (!bx_size_unit_label_base_uintmax(style, &base)) {
+        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, size_bytes);
+        return;
+    }
+    bx_size_format_human_ceil(size_bytes, base, suffixes, buffer, buffer_size);
 }
 
 static bool bx_du_emit_line(uintmax_t size_bytes, const char* path, const struct bx_du_options* options, struct bx_diag_ctx* diag) {
@@ -557,7 +550,7 @@ static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
                     continue;
                 }
 
-                char* child_path = bx_du_join_path(path, entry->d_name);
+                char* child_path = bx_path_join(path, entry->d_name);
                 bool child_ok = true;
                 uintmax_t child_depth = depth == UINTMAX_MAX ? UINTMAX_MAX : depth + 1u;
                 uintmax_t child_total = bx_du_walk_path(ctx, child_path, false, child_depth, root_dev, root_dev_set, &stack_entry, &child_ok);

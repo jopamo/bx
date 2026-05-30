@@ -22,6 +22,18 @@ extern int prefer_ata12;
 
 static const unsigned int default_timeout_secs = 15;
 
+static int hdparm_sgio_data_count_bytes (unsigned char data_count, unsigned int *bytes_out)
+{
+	uintmax_t bytes = 0;
+
+	if (!bytes_out ||
+	    !bx_size_multiply_by_power_uint((uintmax_t)data_count, 512u, 1u, &bytes) ||
+	    bytes > (uintmax_t)UINT_MAX)
+		return 0;
+	*bytes_out = (unsigned int)bytes;
+	return 1;
+}
+
 /*
  * Taskfile layout for SG_ATA_16 cdb:
  *
@@ -388,7 +400,10 @@ int do_drive_cmd (int fd, unsigned char *args, unsigned int timeout_secs)
 	tf.lob.nsect = args[1];
 	tf.lob.feat  = args[2];
 	if (args[3]) {
-		data_bytes   = args[3] * 512;
+		if (!hdparm_sgio_data_count_bytes(args[3], &data_bytes)) {
+			errno = EOVERFLOW;
+			return -1;
+		}
 		data         = args + 4;
 		if (!tf.lob.nsect)
 			tf.lob.nsect = args[3];

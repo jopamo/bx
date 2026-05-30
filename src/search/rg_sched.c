@@ -15,6 +15,7 @@
 
 #include "dev_counters.h"
 #include "lib/cancel_state.h"
+#include "lib/fd_ops.h"
 #include "lib/thread_count.h"
 #include "record_stream.h"
 #include "rg_output.h"
@@ -778,13 +779,19 @@ static bool bx_rg_sched_worker_append_output(struct bx_rg_sched_state *sched,
     if (!sched || !worker || !display_name)
         return false;
 
-    size_t len = strlen(display_name);
+    char *quoted_display_name =
+        bx_search_quote_path_metadata_for_terminal(display_name, sched->opts);
+    const char *output_name = quoted_display_name ? quoted_display_name : display_name;
+    size_t len = strlen(output_name);
     size_t needed = worker->stdout_len + len + 1u;
-    if (!bx_rg_sched_worker_out_reserve(worker, needed))
+    if (!bx_rg_sched_worker_out_reserve(worker, needed)) {
+        free(quoted_display_name);
         return false;
-    memcpy(worker->stdout_buf + worker->stdout_len, display_name, len);
+    }
+    memcpy(worker->stdout_buf + worker->stdout_len, output_name, len);
     worker->stdout_len += len;
     worker->stdout_buf[worker->stdout_len++] = sched->opts->null_output ? '\0' : '\n';
+    free(quoted_display_name);
     bx_search_dev_counters_note_output_line_emitted();
     return true;
 }
@@ -1013,7 +1020,11 @@ static DIR *bx_rg_sched_open_donated_dir(const struct bx_walk_entry *entry) {
         return NULL;
 
     bx_search_dev_counters_note_walk(BX_SEARCH_WALK_OPENAT_CALLS, 1u);
-    int fd = openat(parent_fd, name, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    int fd;
+    if (parent_fd >= 0 && parent_fd != AT_FDCWD && bx_fd_at_name_is_child(name))
+        fd = bx_fd_openat_child(parent_fd, name, O_RDONLY | O_DIRECTORY, 0);
+    else
+        fd = bx_fd_openat_cloexec(parent_fd, name, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         bx_search_dev_counters_note_rg_sched(
             BX_SEARCH_RG_SCHED_WORKER_DONATED_DIR_OPEN_FAILURES, 1u);

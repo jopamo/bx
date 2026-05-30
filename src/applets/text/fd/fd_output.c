@@ -69,6 +69,8 @@ static off_t fd_detail_display_size(const struct bx_walk_entry *entry) {
 bool fd_detail_items_append(struct fd_detail_items *items,
                             const struct fd_render_ctx *ctx,
                             struct bx_walk_entry *entry) {
+    items->render_opts = ctx->opts;
+
     if (!bx_walk_entry_load_metadata_for(entry, BX_WALK_METADATA_REASON_OUTPUT))
         return false;
     if (!fd_detail_items_reserve(items, items->count + 1))
@@ -114,13 +116,19 @@ static void fd_format_size(intmax_t size, char buffer[32]) {
     if (negative)
         magnitude = (uintmax_t)(-(size + 1)) + 1;
 
+    uintmax_t base = 0;
+    if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &base)) {
+        snprintf(buffer, 32, "%jd", size);
+        return;
+    }
+
     if (!negative) {
-        bx_size_format_human_round(magnitude, 1024u, "BKMGTPEZYRQ", false, buffer, 32);
+        bx_size_format_human_round(magnitude, base, "BKMGTPEZYRQ", false, buffer, 32);
         return;
     }
 
     char magnitude_text[32];
-    bx_size_format_human_round(magnitude, 1024u, "BKMGTPEZYRQ", false, magnitude_text, sizeof(magnitude_text));
+    bx_size_format_human_round(magnitude, base, "BKMGTPEZYRQ", false, magnitude_text, sizeof(magnitude_text));
     snprintf(buffer, 32, "-%s", magnitude_text);
 }
 
@@ -189,6 +197,18 @@ int fd_detail_items_print(struct fd_detail_items *items) {
         char group_numeric[32];
         char timestamp[32];
         char size[32];
+        char *display_path = fd_quote_output_path_dup(items->render_opts, item->display_path);
+        char *symlink_target = NULL;
+
+        if (!display_path)
+            return 1;
+        if (item->symlink_target) {
+            symlink_target = fd_quote_output_path_dup(items->render_opts, item->symlink_target);
+            if (!symlink_target) {
+                free(display_path);
+                return 1;
+            }
+        }
 
         bx_file_mode_to_string(item->mode, mode);
         const char *user_name = fd_user_name(item->uid, user_numeric);
@@ -207,11 +227,13 @@ int fd_detail_items_print(struct fd_detail_items *items) {
                (int)widths.size,
                size,
                timestamp,
-               item->display_path);
+               display_path);
 
-        if (item->symlink_target)
-            printf(" -> %s", item->symlink_target);
+        if (symlink_target)
+            printf(" -> %s", symlink_target);
         putchar('\n');
+        free(display_path);
+        free(symlink_target);
     }
 
     return 0;

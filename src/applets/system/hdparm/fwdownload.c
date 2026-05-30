@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <linux/types.h>
@@ -20,6 +21,7 @@
 
 #include "hdparm.h"
 #include "sgio.h"
+#include "lib/fd_ops.h"
 
 /* glibc-2.2 / linux-2.4 don't have MAP_POPULATE */
 #ifndef MAP_POPULATE
@@ -28,17 +30,49 @@
 
 extern int verbose;
 
+static int hdparm_fw_blocks_to_bytes (unsigned int blocks, unsigned int *bytes_out)
+{
+	uintmax_t bytes = 0;
+
+	if (!bytes_out ||
+	    !bx_size_multiply_by_power_uint((uintmax_t)blocks, 512u, 1u, &bytes) ||
+	    bytes > (uintmax_t)UINT_MAX)
+		return 0;
+	*bytes_out = (unsigned int)bytes;
+	return 1;
+}
+
+static int hdparm_fw_aligned_bytes_to_blocks (uintmax_t bytes, unsigned int *blocks_out)
+{
+	uintmax_t blocks = 0;
+	uintmax_t aligned_bytes = 0;
+
+	if (!blocks_out ||
+	    !bx_size_divide_by_power_floor(bytes, 512u, 1u, &blocks) ||
+	    !bx_size_multiply_by_power_uint(blocks, 512u, 1u, &aligned_bytes) ||
+	    aligned_bytes != bytes ||
+	    blocks > (uintmax_t)UINT_MAX)
+		return 0;
+	*blocks_out = (unsigned int)blocks;
+	return 1;
+}
+
 /* Download a firmware segment to the drive */
 static int send_firmware (int fd, unsigned int xfer_mode, unsigned int offset,
 			  const void *data, unsigned int bytecount)
 {
 	int err = 0;
 	struct hdio_taskfile *r;
-	unsigned int blockcount = bytecount / 512;
+	unsigned int blockcount = 0;
+	unsigned int offset_blocks = 0;
 	unsigned int timeout_secs = 120;
 	__u64 lba;
 
-	lba = ((offset / 512) << 8) | ((blockcount >> 8) & 0xff);
+	if (!hdparm_fw_aligned_bytes_to_blocks((uintmax_t)bytecount, &blockcount) ||
+	    !hdparm_fw_aligned_bytes_to_blocks((uintmax_t)offset, &offset_blocks))
+		return EINVAL;
+
+	lba = ((__u64)offset_blocks << 8) | ((blockcount >> 8) & 0xff);
 	r = malloc(sizeof(struct hdio_taskfile) + bytecount);
 	if (!r) {
 		if (xfer_mode == 3 || xfer_mode == 0x0e) {
@@ -91,11 +125,15 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 	int fwfd, err = 0;
 	struct stat st;
 	const char *fw = NULL;
-	const int max_bytes = 0xffff * 512;
+	unsigned int max_bytes = 0;
+	unsigned int file_blocks = 0;
 	int xfer_min = 1, xfer_max = 0xffff, xfer_size;
 	ssize_t offset;
 
-	if ((fwfd = open(fwpath, O_RDONLY)) == -1 || fstat(fwfd, &st) == -1) {
+	if (!hdparm_fw_blocks_to_bytes(0xffffu, &max_bytes))
+		return EINVAL;
+
+	if ((fwfd = bx_fd_open_cloexec(fwpath, O_RDONLY, 0)) == -1 || fstat(fwfd, &st) == -1) {
 		err = errno;
 		perror(fwpath);
 		return err;
@@ -107,13 +145,13 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 		goto done;
 	}
 
-	if (st.st_size > max_bytes) {
+	if (st.st_size > (off_t)max_bytes) {
 	    	fprintf(stderr, "%s: file size too large, max=%u bytes\n", fwpath, max_bytes);
 		err = EINVAL;
 		goto done;
 	}
 
-	if (st.st_size == 0 || st.st_size % 512) {
+	if (st.st_size == 0 || !hdparm_fw_aligned_bytes_to_blocks((uintmax_t)st.st_size, &file_blocks)) {
 	    	fprintf(stderr, "%s: file size (%llu) not a multiple of 512\n",
 			fwpath, (unsigned long long) st.st_size);
 		err = EINVAL;
@@ -171,7 +209,7 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 		xfer_size = xfer_max;
 #endif
 	} else {
-		xfer_size = st.st_size / 512;
+		xfer_size = (int)file_blocks;
 		if (xfer_size > 0xffff) {
 			fprintf(stderr, "Error: file size (%llu) too large for mode7 transfers\n", (__u64)st.st_size);
 			err = EINVAL;
@@ -179,7 +217,15 @@ int fwdownload (int fd, __u16 *id, const char *fwpath, int xfer_mode)
 		}
 	}
 
-	xfer_size *= 512;	/* bytecount */
+	{
+		unsigned int xfer_bytes = 0;
+		if (!hdparm_fw_blocks_to_bytes((unsigned int)xfer_size, &xfer_bytes) ||
+		    xfer_bytes > (uintmax_t)INT_MAX) {
+			err = EINVAL;
+			goto done;
+		}
+		xfer_size = (int)xfer_bytes;
+	}
 
 	fprintf(stderr, "%s: xfer_mode=%d min=%u max=%u size=%u\n",
 		__func__, xfer_mode, xfer_min, xfer_max, xfer_size);

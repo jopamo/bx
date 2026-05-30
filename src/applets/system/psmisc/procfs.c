@@ -14,6 +14,8 @@
 
 #include "applets/system/psmisc/procfs.h"
 #include "bx/libbx.h"
+#include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include "lib/time_parse.h"
 
 struct bx_proc_buffer {
@@ -208,7 +210,7 @@ bool bx_proc_read_text_file(pid_t pid, const char* leaf, char** text_out, bool* 
         errno = ENAMETOOLONG;
         return false;
     }
-    fd = open(path, O_RDONLY | O_CLOEXEC);
+    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         if (bx_proc_errno_is_vanished(errno)) {
             *vanished_out = true;
@@ -528,7 +530,7 @@ bool bx_proc_read_cmdline(pid_t pid, char** cmdline_out, bool* vanished_out) {
         errno = ENAMETOOLONG;
         return false;
     }
-    fd = open(path, O_RDONLY | O_CLOEXEC);
+    fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         if (bx_proc_errno_is_vanished(errno)) {
             *vanished_out = true;
@@ -982,9 +984,9 @@ char* bx_proc_basename_dup(const char* path) {
     if (path == NULL) {
         return NULL;
     }
-    base = strrchr(path, '/');
-    if (base != NULL && base[1] != '\0') {
-        return xstrdup(base + 1);
+    base = bx_path_basename_ptr(path);
+    if (base[0] != '\0') {
+        return xstrdup(base);
     }
     return xstrdup(path);
 }

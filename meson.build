@@ -254,13 +254,16 @@ bx_lib_sources = [
   'src/lib/file_info_fmt.c',
   'src/lib/fopen_dash.c',
   'src/lib/id_parse.c',
+  'src/lib/line_writer.c',
   'src/lib/mode_parse.c',
   'src/lib/mount_table.c',
   'src/lib/manual_runtime.c',
   'src/lib/output_sink.c',
   'src/lib/output.c',
+  'src/lib/output_quote.c',
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
+  'src/lib/path_quote.c',
   'src/lib/prompt_ops.c',
   'src/lib/remove_ops.c',
   'src/lib/same_file.c',
@@ -955,6 +958,7 @@ xxd_c_args += [
 
 xxd_lib = static_library('bx_xxd',
   'src/applets/text/xxd/xxd.c',
+  include_directories : include_directories('src'),
   c_args : xxd_c_args,
 )
 

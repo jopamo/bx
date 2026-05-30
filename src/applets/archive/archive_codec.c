@@ -22,6 +22,7 @@
 #include "applets/archive/archive_xz.h"
 #include "applets/archive/archive_zstd.h"
 #include "bx/libbx.h"
+#include "lib/fd_ops.h"
 
 #define BX_ARCHIVE_GZIP_STREAM_BUFFER_SIZE (1024u * 1024u)
 
@@ -587,7 +588,7 @@ bool bx_archive_codec_input_open_fd(struct bx_archive_codec_input** input_out,
         bx_diag(diag, "invalid archive codec reader configuration");
         return false;
     }
-    owned_fd = dup(fd);
+    owned_fd = bx_fd_dup_cloexec(fd);
     if (owned_fd < 0) {
         bx_diag(diag, "read error: %s", strerror(errno));
         return false;
@@ -606,14 +607,14 @@ bool bx_archive_codec_input_open(struct bx_archive_codec_input** input_out,
     }
 
     if (options->archive_path == NULL || strcmp(options->archive_path, "-") == 0) {
-        fd = dup(STDIN_FILENO);
+        fd = bx_fd_dup_cloexec(STDIN_FILENO);
         if (fd < 0) {
             bx_diag(diag, "read error: %s", strerror(errno));
             return false;
         }
     }
     else {
-        fd = open(options->archive_path, O_RDONLY);
+        fd = bx_fd_open_cloexec(options->archive_path, O_RDONLY, 0);
         if (fd < 0) {
             bx_diag(diag, "%s: %s", options->archive_path, strerror(errno));
             return false;

@@ -19,6 +19,7 @@
 #include <netinet/ip6.h>
 #include <netinet/tcp.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 #ifndef IP_MTU
@@ -275,7 +276,7 @@ static int check_sysctl(const char* name) {
     strcpy(sysctl_path, SYSCTL_PREFIX);
     strcat(sysctl_path, name);
 
-    fd = open(sysctl_path, O_RDONLY, 0);
+    fd = bx_fd_open_cloexec(sysctl_path, O_RDONLY, 0);
     if (fd < 0)
         return 0;
 
@@ -309,7 +310,7 @@ static int tcp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pac
 
     /*  Create raw socket for tcp   */
 
-    raw_sk = socket(af, SOCK_RAW, IPPROTO_TCP);
+    raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, IPPROTO_TCP);
     if (raw_sk < 0)
         error_or_perm("socket");
 
@@ -336,7 +337,7 @@ static int tcp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pac
 
     if (!raw_can_connect()) { /*  work-around for buggy kernels  */
         close(raw_sk);
-        raw_sk = socket(af, SOCK_RAW, IPPROTO_TCP);
+        raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, IPPROTO_TCP);
         if (raw_sk < 0)
             error("socket");
         tune_socket(raw_sk, NULL);
@@ -499,7 +500,7 @@ static void tcp_send_probe(probe* pb, int ttl) {
        just create, (auto)bind and hold a socket while the port is needed.
     */
 
-    sk = socket(af, SOCK_STREAM, 0);
+    sk = bx_fd_socket_cloexec(af, SOCK_STREAM, 0);
     if (sk < 0)
         error("socket");
 

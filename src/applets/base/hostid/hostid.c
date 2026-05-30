@@ -14,9 +14,10 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 
 static bool bx_hostid_try_file(uint32_t* id_out) {
-    int fd = open("/etc/hostid", O_RDONLY);
+    int fd = bx_fd_open_cloexec("/etc/hostid", O_RDONLY, 0);
     if (fd < 0) {
         return false;
     }

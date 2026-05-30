@@ -13,6 +13,7 @@
 #include "bx/libbx.h"
 #include "lib/file_info_fmt.h"
 #include "lib/id_parse.h"
+#include "lib/path_quote.h"
 #include "lib/size_parse.h"
 #include "tree_internal.h"
 
@@ -104,7 +105,12 @@ static void bx_tree_format_size_value(off_t size,
         return;
     }
 
-    bx_size_format_human_round((uintmax_t)size, 1024u, "BKMGTPE", true, buffer, 32);
+    uintmax_t base = 0;
+    if (!bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &base)) {
+        snprintf(buffer, 32, "%jdB", (intmax_t)size);
+        return;
+    }
+    bx_size_format_human_round((uintmax_t)size, base, "BKMGTPE", true, buffer, 32);
 }
 
 static bool bx_tree_lookup_ls_colors_key(const char *key,
@@ -283,32 +289,27 @@ static char *bx_tree_wrap_ansi_color(const struct bx_tree_node *node,
     return bx_tree_xasprintf("\033[%sm%s\033[%sm", color, text, reset);
 }
 
-static char *bx_tree_escape_name(const char *text,
+static char *bx_tree_render_name(const char *text,
                                  enum bx_tree_name_mode mode) {
-    size_t cap = strlen(text) * 4u + 1u;
-    char *out = xmalloc(cap);
-    size_t pos = 0u;
+    struct bx_path_control_quote_options quote_options = {
+        .style = BX_PATH_CONTROL_QUOTE_CARET,
+        .high_bit_printable = true,
+    };
 
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
-        unsigned char ch = *p;
-        if (mode == BX_TREE_NAME_LITERAL) {
-            out[pos++] = (char)ch;
-            continue;
-        }
-        if (isprint(ch) || ch >= 0x80u) {
-            out[pos++] = (char)ch;
-            continue;
-        }
-        if (mode == BX_TREE_NAME_QUESTION) {
-            out[pos++] = '?';
-            continue;
-        }
-        out[pos++] = '^';
-        out[pos++] = (ch == 127u) ? '?' : (char)(ch ^ 0x40u);
+    switch (mode) {
+    case BX_TREE_NAME_LITERAL:
+        quote_options.style = BX_PATH_CONTROL_QUOTE_LITERAL;
+        break;
+    case BX_TREE_NAME_QUESTION:
+        quote_options.style = BX_PATH_CONTROL_QUOTE_QUESTION;
+        break;
+    case BX_TREE_NAME_CARET:
+    default:
+        quote_options.style = BX_PATH_CONTROL_QUOTE_CARET;
+        break;
     }
 
-    out[pos] = '\0';
-    return out;
+    return bx_path_quote_control_dup(text, &quote_options);
 }
 
 static char bx_tree_indicator(const struct bx_tree_node *node) {
@@ -593,7 +594,7 @@ write_error:
 static char *bx_tree_display_name_text(const struct bx_tree_render_ctx *ctx,
                                        const struct bx_tree_node *node) {
     const char *base = ctx->opts->full_path ? node->path : node->label;
-    char *escaped = bx_tree_escape_name(base, ctx->opts->name_mode);
+    char *escaped = bx_tree_render_name(base, ctx->opts->name_mode);
     if (ctx->opts->classify) {
         char indicator = bx_tree_indicator(node);
         if (indicator != '\0') {
@@ -616,8 +617,12 @@ static bool bx_tree_write_plain_line(const struct bx_tree_render_ctx *ctx,
         ok = bx_tree_write_metadata(ctx, node);
     if (ok)
         ok = bx_tree_write_string(ctx->stream, ctx->diag, colored);
-    if (ok && node->is_symlink)
-        ok = fprintf(ctx->stream, " -> %s", node->link_target ? node->link_target : "") >= 0;
+    if (ok && node->is_symlink) {
+        char *target = bx_tree_render_name(node->link_target ? node->link_target : "",
+                                           ctx->opts->name_mode);
+        ok = fprintf(ctx->stream, " -> %s", target) >= 0;
+        free(target);
+    }
     if (ok && node->filelimit_exceeded)
         ok = fprintf(ctx->stream,
                      " [%zu entries exceeds filelimit, not opening dir]",

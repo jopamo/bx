@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "crypto/digest_util.h"
+#include "lib/fd_ops.h"
 
 static int bx_digest_hex_value(int ch) {
     if (ch >= '0' && ch <= '9') {
@@ -52,7 +53,7 @@ int bx_digest_file(void* ctx, size_t ctx_size, bx_digest_init_fn init_fn, bx_dig
         return bx_digest_fd(ctx, ctx_size, init_fn, update_fn, final_fn, STDIN_FILENO, out, out_len);
     }
 
-    int fd = open(path, O_RDONLY);
+    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         return -1;
     }

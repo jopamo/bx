@@ -12,6 +12,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 
@@ -347,7 +348,7 @@ static bool bx_truncate_apply_path(const char* path, const struct bx_truncate_op
         flags |= O_CREAT;
     }
 
-    int fd = open(path, flags, 0666u);
+    int fd = bx_fd_open_cloexec(path, flags, 0666u);
     if (fd < 0) {
         if (options->no_create && errno == ENOENT) {
             return true;

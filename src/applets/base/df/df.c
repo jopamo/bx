@@ -433,7 +433,12 @@ static void bx_df_format_blocks(uintmax_t blocks, uintmax_t block_size, enum bx_
     }
 
     uintmax_t bytes = bx_df_scale_blocks(blocks, block_size, 1u);
-    uintmax_t base = (mode == BX_DF_SIZE_HUMAN_1000) ? 1000u : 1024u;
+    enum bx_size_unit_label_style style = (mode == BX_DF_SIZE_HUMAN_1000) ? BX_SIZE_UNIT_LABEL_SI_UPPER_K : BX_SIZE_UNIT_LABEL_IEC_PREFIX;
+    uintmax_t base = 0;
+    if (!bx_size_unit_label_base_uintmax(style, &base)) {
+        (void)snprintf(buffer, buffer_size, "%" PRIuMAX, bytes);
+        return;
+    }
     bx_size_format_human_round(bytes, base, "BKMGTPEZY", false, buffer, buffer_size);
 }
 

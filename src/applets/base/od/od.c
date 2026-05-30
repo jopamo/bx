@@ -20,6 +20,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
@@ -1466,7 +1467,7 @@ static bool bx_od_input_open_next(struct bx_od_input* input) {
             return true;
         }
 
-        input->current_fd = open(input->current_name, O_RDONLY);
+        input->current_fd = bx_fd_open_cloexec(input->current_name, O_RDONLY, 0);
         if (input->current_fd >= 0) {
             input->current_is_stdin = false;
             input->retried_current_stdin_error = false;

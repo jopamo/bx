@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "child_runner.h"
+#include "fd_ops.h"
 
 static struct bx_child *bx_child_find(struct bx_child *children, int count, pid_t pid) {
     for (int i = 0; i < count; i++) {
@@ -61,12 +62,10 @@ int bx_child_spawn_argv(const char *progname, char **argv,
     }
 
     int errpipe[2];
-    if (pipe(errpipe) != 0) {
+    if (bx_fd_pipe_cloexec(errpipe) != 0) {
         fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
         return 1;
     }
-    fcntl(errpipe[0], F_SETFD, FD_CLOEXEC);
-    fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -84,13 +83,13 @@ int bx_child_spawn_argv(const char *progname, char **argv,
             setenv(opts->process_slot_var, slot_buf, 1);
         }
         if (opts && opts->reopen_stdin_tty) {
-            int tty_fd = open("/dev/tty", O_RDONLY);
+            int tty_fd = bx_fd_open_cloexec("/dev/tty", O_RDONLY, 0);
             if (tty_fd < 0) {
                 errnum = errno;
                 (void)!write(errpipe[1], &errnum, sizeof(errnum));
                 _exit(127);
             }
-            if (dup2(tty_fd, STDIN_FILENO) < 0) {
+            if (bx_fd_dup2_exact(tty_fd, STDIN_FILENO) < 0) {
                 errnum = errno;
                 close(tty_fd);
                 (void)!write(errpipe[1], &errnum, sizeof(errnum));

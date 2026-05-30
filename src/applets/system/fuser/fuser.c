@@ -275,8 +275,8 @@ static const char* bx_fuser_command_name(const struct bx_proc_info* info, char* 
         }
         memcpy(storage, info->cmdline, len);
         storage[len] = '\0';
-        base = strrchr(storage, '/');
-        return base != NULL && base[1] != '\0' ? base + 1 : storage;
+        base = bx_path_basename_ptr(storage);
+        return base[0] != '\0' ? base : storage;
     }
     return info->comm != NULL ? info->comm : "?";
 }

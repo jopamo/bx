@@ -134,7 +134,7 @@ void bx_path_components_append_normalized_part(struct bx_path_components* compon
     bx_path_components_push_dup(components, part);
 }
 
-void bx_path_components_append_normalized(struct bx_path_components* components, const char* path) {
+static void bx_path_components_append_normalized_mode(struct bx_path_components* components, const char* path, bool preserve_leading_dotdot) {
     const char* cursor = path;
 
     while (*cursor != '\0') {
@@ -159,11 +159,22 @@ void bx_path_components_append_normalized(struct bx_path_components* components,
             continue;
         }
         if (len == 2u && part[0] == '.' && part[1] == '.') {
-            bx_path_components_pop(components);
+            if (preserve_leading_dotdot &&
+                (components->count == 0u ||
+                 strcmp(components->parts[components->count - 1u], "..") == 0)) {
+                bx_path_components_push_range_dup(components, part, len);
+            }
+            else {
+                bx_path_components_pop(components);
+            }
             continue;
         }
         bx_path_components_push_range_dup(components, part, len);
     }
+}
+
+void bx_path_components_append_normalized(struct bx_path_components* components, const char* path) {
+    bx_path_components_append_normalized_mode(components, path, false);
 }
 
 void bx_path_components_prepend_raw_path(struct bx_path_components* components, const char* path) {
@@ -202,6 +213,33 @@ char* bx_path_components_to_absolute_path(const struct bx_path_components* compo
     char* path = xmalloc(len);
     size_t pos = 0u;
     path[pos++] = '/';
+    for (size_t i = 0; i < count; i++) {
+        size_t part_len = strlen(components->parts[i]);
+        memcpy(path + pos, components->parts[i], part_len);
+        pos += part_len;
+        if (i + 1u < count) {
+            path[pos++] = '/';
+        }
+    }
+    path[pos] = '\0';
+    return path;
+}
+
+static char* bx_path_components_to_relative_path(const struct bx_path_components* components, size_t count) {
+    if (count == 0u) {
+        return xstrdup(".");
+    }
+
+    size_t len = 1u;
+    for (size_t i = 0; i < count; i++) {
+        len += strlen(components->parts[i]);
+        if (i + 1u < count) {
+            len++;
+        }
+    }
+
+    char* path = xmalloc(len);
+    size_t pos = 0u;
     for (size_t i = 0; i < count; i++) {
         size_t part_len = strlen(components->parts[i]);
         memcpy(path + pos, components->parts[i], part_len);
@@ -281,6 +319,22 @@ char* bx_path_normalize_absolute_lexical_dup(const char* path) {
     normalized = bx_path_components_to_absolute_path(&components, components.count);
 
     free(cwd);
+    bx_path_components_free(&components);
+    return normalized;
+}
+
+char* bx_path_normalize_relative_lexical_dup(const char* path) {
+    struct bx_path_components components = {0};
+    char* normalized = NULL;
+
+    if (path == NULL || path[0] == '/') {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    bx_path_components_append_normalized_mode(&components, path, true);
+    normalized = bx_path_components_to_relative_path(&components, components.count);
+
     bx_path_components_free(&components);
     return normalized;
 }
@@ -376,6 +430,37 @@ char* bx_path_join(const char* left, const char* right) {
     }
     memcpy(res + pos, right, right_len);
     res[pos + right_len] = '\0';
+    return res;
+}
+
+char* bx_path_join_root_relative(const char* root, const char* path) {
+    size_t root_len = strlen(root);
+    while (root_len > 1u && root[root_len - 1u] == '/') {
+        root_len--;
+    }
+
+    size_t path_start = 0u;
+    while (path[path_start] == '/') {
+        path_start++;
+    }
+
+    size_t path_len = strlen(path + path_start);
+    bool need_slash = root_len > 0u && !(root_len == 1u && root[0] == '/');
+    char* res = xmalloc(root_len + (need_slash ? 1u : 0u) + path_len + 1u);
+
+    size_t pos = 0u;
+    if (root_len > 0u) {
+        memcpy(res + pos, root, root_len);
+        pos += root_len;
+    }
+    if (need_slash) {
+        res[pos++] = '/';
+    }
+    if (path_len > 0u) {
+        memcpy(res + pos, path + path_start, path_len);
+        pos += path_len;
+    }
+    res[pos] = '\0';
     return res;
 }
 

@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
+#include "lib/fd_ops.h"
 #include "lib/time_parse.h"
 
 static size_t hex_total_in, hex_total_out;
@@ -117,8 +118,15 @@ static void splice_loop(int net_fd) {
     int stdout_fd = STDOUT_FILENO;
     int n, num_fds;
 
-    if (pipe(p_in) == -1 || pipe(p_out) == -1)
+    if (bx_fd_pipe_cloexec(p_in) == -1)
         err(EXIT_RUNTIME, "pipe");
+    if (bx_fd_pipe_cloexec(p_out) == -1) {
+        int saved_errno = errno;
+        close(p_in[0]);
+        close(p_in[1]);
+        errno = saved_errno;
+        err(EXIT_RUNTIME, "pipe");
+    }
 
     if (dflag)
         stdin_fd = -1;

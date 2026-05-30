@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 
 struct bx_nohup_options {
     const char* progname;
@@ -97,7 +98,7 @@ static char* bx_nohup_home_output_path(const char* home) {
 
 static bool bx_nohup_open_output_file(int* output_fd, char** output_path, struct bx_diag_ctx* diag) {
     const char default_output[] = "nohup.out";
-    int fd = open(default_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    int fd = bx_fd_open_cloexec(default_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     if (fd >= 0) {
         *output_fd = fd;
         *output_path = xstrdup(default_output);
@@ -111,7 +112,7 @@ static bool bx_nohup_open_output_file(int* output_fd, char** output_path, struct
     }
 
     char* home_output = bx_nohup_home_output_path(home);
-    fd = open(home_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+    fd = bx_fd_open_cloexec(home_output, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
     if (fd >= 0) {
         *output_fd = fd;
         *output_path = home_output;
@@ -127,13 +128,13 @@ static int bx_nohup_setup_standard_streams(const struct bx_nohup_options* option
     if (isatty(STDIN_FILENO)) {
         bx_nohup_notice(options->progname, "ignoring input");
 
-        int null_fd = open("/dev/null", O_RDONLY);
+        int null_fd = bx_fd_open_cloexec("/dev/null", O_RDONLY, 0);
         if (null_fd < 0) {
             bx_diag(diag, "failed to open /dev/null: %s", strerror(errno));
             return 125;
         }
 
-        if (dup2(null_fd, STDIN_FILENO) < 0) {
+        if (bx_fd_dup2_exact(null_fd, STDIN_FILENO) < 0) {
             bx_diag(diag, "failed to redirect standard input: %s", strerror(errno));
             close(null_fd);
             return 125;
@@ -156,7 +157,7 @@ static int bx_nohup_setup_standard_streams(const struct bx_nohup_options* option
 
         bx_nohup_notice(options->progname, "appending output to '%s'", output_path);
 
-        if (dup2(output_fd, STDOUT_FILENO) < 0) {
+    if (bx_fd_dup2_exact(output_fd, STDOUT_FILENO) < 0) {
             bx_diag(diag, "failed to redirect standard output: %s", strerror(errno));
             close(output_fd);
             free(output_path);
@@ -173,7 +174,7 @@ static int bx_nohup_setup_standard_streams(const struct bx_nohup_options* option
     }
 
     if (stderr_is_tty) {
-        if (dup2(STDOUT_FILENO, STDERR_FILENO) < 0) {
+    if (bx_fd_dup2_exact(STDOUT_FILENO, STDERR_FILENO) < 0) {
             bx_diag(diag, "failed to redirect standard error: %s", strerror(errno));
             return 125;
         }

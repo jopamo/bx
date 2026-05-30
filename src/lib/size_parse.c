@@ -242,26 +242,47 @@ void bx_size_format_human_round(uintmax_t value, uintmax_t base, const char* suf
     }
 }
 
-bool bx_size_scale_human_double(double value, double base, double rollover_threshold, unsigned int max_power, double* scaled_out, unsigned int* power_out) {
+bool bx_size_scale_magnitude_double(double value, double base, double rollover_threshold, unsigned int max_power, double* scaled_out, unsigned int* power_out) {
     if (scaled_out == NULL || power_out == NULL ||
-        !isfinite(value) || !isfinite(base) || !isfinite(rollover_threshold) ||
-        value < 0.0 || base <= 1.0 || rollover_threshold <= 0.0) {
+        !isfinite(base) || !isfinite(rollover_threshold) ||
+        base <= 1.0 || rollover_threshold <= 0.0) {
         return false;
     }
 
-    double scaled = value;
+    if (isnan(value)) {
+        *scaled_out = value;
+        *power_out = 0u;
+        return true;
+    }
+    if (isinf(value)) {
+        *scaled_out = value;
+        *power_out = max_power;
+        return true;
+    }
+
+    double sign = signbit(value) ? -1.0 : 1.0;
+    double magnitude = fabs(value);
+    double scaled = magnitude;
     unsigned int power = 0u;
-    while (scaled >= rollover_threshold && power < max_power) {
+    while (magnitude >= rollover_threshold && power < max_power) {
         scaled /= base;
         if (!isfinite(scaled)) {
             return false;
         }
+        magnitude = scaled;
         power++;
     }
 
-    *scaled_out = scaled;
+    *scaled_out = sign * scaled;
     *power_out = power;
     return true;
+}
+
+bool bx_size_scale_human_double(double value, double base, double rollover_threshold, unsigned int max_power, double* scaled_out, unsigned int* power_out) {
+    if (!isfinite(value) || value < 0.0) {
+        return false;
+    }
+    return bx_size_scale_magnitude_double(value, base, rollover_threshold, max_power, scaled_out, power_out);
 }
 
 void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buffer_size) {
@@ -269,9 +290,11 @@ void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buff
         return;
     }
 
+    double base = 0.0;
     double value = bytes_per_sec;
     unsigned int power = 0u;
-    if (!bx_size_scale_human_double(bytes_per_sec, 1000.0, 999.5, 6u, &value, &power)) {
+    if (!bx_size_unit_label_base_double(BX_SIZE_UNIT_LABEL_SI_LOWER_K, &base) ||
+        !bx_size_scale_human_double(bytes_per_sec, base, 999.5, 6u, &value, &power)) {
         (void)snprintf(buffer, buffer_size, "0.0 kB/s");
         return;
     }
@@ -354,6 +377,64 @@ static enum bx_size_suffix_parse_result bx_size_pow_result(uintmax_t base, unsig
     return BX_SIZE_SUFFIX_PARSE_OK;
 }
 
+bool bx_size_divide_by_power_floor(uintmax_t value, uintmax_t base, unsigned int power, uintmax_t* value_out) {
+    uintmax_t divisor = 0;
+
+    if (value_out == NULL || base < 2u ||
+        bx_size_pow_result(base, power, &divisor) != BX_SIZE_SUFFIX_PARSE_OK ||
+        divisor == 0u) {
+        return false;
+    }
+
+    *value_out = value / divisor;
+    return true;
+}
+
+bool bx_size_multiply_by_power_uint(uintmax_t value, uintmax_t base, unsigned int power, uintmax_t* value_out) {
+    uintmax_t multiplier = 0;
+
+    if (value_out == NULL || base < 2u ||
+        bx_size_pow_result(base, power, &multiplier) != BX_SIZE_SUFFIX_PARSE_OK) {
+        return false;
+    }
+
+    return bx_size_safe_mul(value, multiplier, value_out);
+}
+
+bool bx_size_power_double(double base, unsigned int power, double* value_out) {
+    if (value_out == NULL || !isfinite(base) || base <= 1.0) {
+        return false;
+    }
+
+    double value = 1.0;
+    for (unsigned int i = 0; i < power; i++) {
+        value *= base;
+        if (!isfinite(value)) {
+            return false;
+        }
+    }
+
+    *value_out = value;
+    return true;
+}
+
+bool bx_size_multiply_by_power_double(double value, double base, unsigned int power, double* value_out) {
+    if (value_out == NULL || !isfinite(value) || !isfinite(base) || value < 0.0 || base <= 1.0) {
+        return false;
+    }
+
+    double scaled = value;
+    for (unsigned int i = 0; i < power; i++) {
+        scaled *= base;
+        if (!isfinite(scaled)) {
+            return false;
+        }
+    }
+
+    *value_out = scaled;
+    return true;
+}
+
 bool bx_size_suffix_prefix_power(char suffix, unsigned int* power_out) {
     if (power_out == NULL) {
         return false;
@@ -390,6 +471,8 @@ const char* bx_size_unit_label(enum bx_size_unit_label_style style, unsigned int
     switch (style) {
         case BX_SIZE_UNIT_LABEL_SI_LOWER_K:
             return si_units[power];
+        case BX_SIZE_UNIT_LABEL_SI_UPPER_K:
+            return iec_units[power];
         case BX_SIZE_UNIT_LABEL_IEC_PREFIX:
             return iec_units[power];
         case BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX:
@@ -397,6 +480,36 @@ const char* bx_size_unit_label(enum bx_size_unit_label_style style, unsigned int
     }
 
     return NULL;
+}
+
+bool bx_size_unit_label_base_uintmax(enum bx_size_unit_label_style style, uintmax_t* base_out) {
+    if (base_out == NULL) {
+        return false;
+    }
+
+    switch (style) {
+        case BX_SIZE_UNIT_LABEL_SI_LOWER_K:
+        case BX_SIZE_UNIT_LABEL_SI_UPPER_K:
+            *base_out = 1000u;
+            return true;
+        case BX_SIZE_UNIT_LABEL_IEC_PREFIX:
+        case BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX:
+            *base_out = 1024u;
+            return true;
+    }
+
+    return false;
+}
+
+bool bx_size_unit_label_base_double(enum bx_size_unit_label_style style, double* base_out) {
+    uintmax_t base = 0;
+
+    if (base_out == NULL || !bx_size_unit_label_base_uintmax(style, &base)) {
+        return false;
+    }
+
+    *base_out = (double)base;
+    return true;
 }
 
 enum bx_size_suffix_parse_result bx_size_suffix_multiplier_result(const char* suffix, uintmax_t* multiplier_out) {

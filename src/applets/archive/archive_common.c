@@ -15,6 +15,7 @@
 #include "bx/libbx.h"
 
 #define BX_ARCHIVE_FILE_STREAM_BUFFER_SIZE (1024u * 1024u)
+#include "lib/fd_ops.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
@@ -528,7 +529,7 @@ bool bx_archive_snapshot_input_path(const char* archive_path,
         src_fd = STDIN_FILENO;
     }
     else {
-        src_fd = open(archive_path, O_RDONLY);
+        src_fd = bx_fd_open_cloexec(archive_path, O_RDONLY, 0);
         if (src_fd < 0) {
             bx_diag(diag, "%s: %s", archive_path, strerror(errno));
             goto out;

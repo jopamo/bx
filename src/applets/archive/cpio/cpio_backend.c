@@ -16,6 +16,7 @@
 #include "applets/archive/cpio/cpio_backend.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/path_ops.h"
 #include "lib/xreadwrite.h"
@@ -944,7 +945,7 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
                 }
             }
             else if (entry->kind == BX_CPIO_KIND_REG) {
-                int fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
+                int fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
                 if (fd < 0) {
                     bx_diag(diag, "%s: %s", dest_path, strerror(errno));
                     free(dest_path);
@@ -1077,7 +1078,7 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
                     status = 2;
                     break;
                 }
-                fd = open(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->st.st_mode & 07777u);
+                fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->st.st_mode & 07777u);
                 if (fd < 0) {
                     bx_archive_buffer_free(&data);
                     bx_diag(diag, "%s: %s", dest_path, strerror(errno));

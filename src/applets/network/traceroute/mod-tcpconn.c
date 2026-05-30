@@ -18,6 +18,7 @@
 #include <netinet/tcp.h>
 #include <errno.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 #if defined(__GLIBC__)
@@ -50,7 +51,7 @@ static int tcp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pac
     /*  Currently an ICMP socket is the only way
       to obtain the needed info...
     */
-    icmp_sk = socket(af, SOCK_RAW, (af == AF_INET) ? IPPROTO_ICMP : IPPROTO_ICMPV6);
+    icmp_sk = bx_fd_socket_cloexec(af, SOCK_RAW, (af == AF_INET) ? IPPROTO_ICMP : IPPROTO_ICMPV6);
     if (icmp_sk < 0)
         error_or_perm("socket");
 
@@ -70,7 +71,7 @@ static void tcp_send_probe(probe* pb, int ttl) {
     sockaddr_any addr;
     socklen_t length = sizeof(addr);
 
-    sk = socket(af, SOCK_STREAM, 0);
+    sk = bx_fd_socket_cloexec(af, SOCK_STREAM, 0);
     if (sk < 0)
         error("socket");
 

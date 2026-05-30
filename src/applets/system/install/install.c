@@ -14,10 +14,12 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
+#include "lib/size_parse.h"
 #include "lib/cli_common.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
@@ -555,7 +557,7 @@ static bool bx_install_update_existing_destination(const char* src_path,
                                                    const struct stat* src_st,
                                                    const struct bx_install_options* options,
                                                    struct bx_diag_ctx* diag) {
-    int dest_fd = open(dest_path, O_WRONLY);
+    int dest_fd = bx_fd_open_cloexec(dest_path, O_WRONLY, 0);
     if (dest_fd < 0) {
         bx_perror_path(diag, dest_path);
         return false;
@@ -579,7 +581,10 @@ static enum bx_sparse_mode bx_install_copy_sparse_mode_for_source(const struct s
         return BX_SPARSE_AUTO;
     }
 
-    uintmax_t allocated_bytes = (uintmax_t)src_st->st_blocks * 512u;
+    uintmax_t allocated_bytes = 0;
+    if (!bx_size_multiply_by_power_uint((uintmax_t)src_st->st_blocks, 512u, 1u, &allocated_bytes)) {
+        return BX_SPARSE_NEVER;
+    }
     if (allocated_bytes >= (uintmax_t)src_st->st_size) {
         return BX_SPARSE_NEVER;
     }
@@ -638,13 +643,13 @@ static bool bx_install_copy_regular_file(const char* src_path,
         return false;
     }
 
-    src_fd = open(src_path, O_RDONLY);
+    src_fd = bx_fd_open_cloexec(src_path, O_RDONLY, 0);
     if (src_fd < 0) {
         bx_perror_path(diag, src_path);
         return false;
     }
 
-    dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    dest_fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (dest_fd >= 0) {
         dest_created = true;
     }
@@ -673,7 +678,7 @@ static bool bx_install_copy_regular_file(const char* src_path,
         bool same_contents = false;
         int compare_dest_fd = -1;
 
-        compare_dest_fd = open(dest_path, O_RDONLY);
+        compare_dest_fd = bx_fd_open_cloexec(dest_path, O_RDONLY, 0);
         if (compare_dest_fd < 0) {
             bx_perror_path(diag, dest_path);
             goto fail_keep;
@@ -724,7 +729,7 @@ static bool bx_install_copy_regular_file(const char* src_path,
     }
 
     if (!dest_created) {
-        dest_fd = open(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+        dest_fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
         if (dest_fd < 0) {
             bx_perror_path(diag, dest_path);
             goto fail_keep;

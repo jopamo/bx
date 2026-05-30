@@ -4,12 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "fd_exec.h"
 #include "fd_parse.h"
 #include "search/metadata.h"
 #include "lib/args_common.h"
+#include "lib/output_quote.h"
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
@@ -562,6 +564,12 @@ bool fd_parse_main_args(int argc, char **argv, struct fd_main_args *out) {
 
     if (!fd_validate_main_args(out))
         return false;
+
+    out->opts.terminal_quote_paths =
+        out->opts.exec_mode == FD_EXEC_NONE &&
+        !out->opts.output_format &&
+        !out->opts.print0 &&
+        bx_output_quote_terminal_should_hide_control(STDOUT_FILENO);
 
     return true;
 }

@@ -9,6 +9,7 @@
 
 #include "applets.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
 
@@ -192,7 +193,7 @@ static bool bx_cat_process_path(const char* path, const struct bx_cat_options* o
     bool must_close = false;
 
     if (strcmp(path, "-") != 0) {
-        fd = open(path, O_RDONLY);
+        fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
         if (fd < 0) {
             bx_cat_print_file_error(options, path);
             *exit_status = 1;

@@ -1027,12 +1027,23 @@ void identify (int fd, __u16 *id_supplied)
 		if (!bbbig) bbbig = bb;
 		bbbig *= sector_bytes;
 
-		printf("\tdevice size with M = 1024*1024: %11llu %sBytes\n", bbbig / (1024ull * 1024ull),
+		uintmax_t binary_mbytes = 0;
+		uintmax_t decimal_mbytes = 0;
+		uintmax_t decimal_gbytes = 0;
+		uintmax_t binary_base = 0;
+		uintmax_t decimal_base = 0;
+		if (bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_IEC_PREFIX, &binary_base))
+			(void)bx_size_divide_by_power_floor((uintmax_t)bbbig, binary_base, 2u, &binary_mbytes);
+		if (bx_size_unit_label_base_uintmax(BX_SIZE_UNIT_LABEL_SI_LOWER_K, &decimal_base)) {
+			(void)bx_size_divide_by_power_floor((uintmax_t)bbbig, decimal_base, 2u, &decimal_mbytes);
+			(void)bx_size_divide_by_power_floor((uintmax_t)bbbig, decimal_base, 3u, &decimal_gbytes);
+		}
+
+		printf("\tdevice size with M = 1024*1024: %11llu %sBytes\n", (unsigned long long)binary_mbytes,
 			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_IEC_PREFIX, 2u));
-		bbbig /= 1000ull;
-		printf("\tdevice size with M = 1000*1000: %11llu %sBytes ",  bbbig / 1000ull,
+		printf("\tdevice size with M = 1000*1000: %11llu %sBytes ", (unsigned long long)decimal_mbytes,
 			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 2u));
-		if (bbbig > 1000ull) printf("(%llu %sB)\n", bbbig/1000000ull,
+		if (decimal_base != 0u && decimal_mbytes > decimal_base) printf("(%llu %sB)\n", (unsigned long long)decimal_gbytes,
 			hdparm_size_unit_prefix(BX_SIZE_UNIT_LABEL_SI_LOWER_K, 3u));
 		else printf("\n");
 	}

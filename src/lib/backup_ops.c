@@ -8,7 +8,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <limits.h>
-#include <libgen.h>
 #include <fcntl.h>
 
 #include "backup_ops.h"
@@ -97,8 +96,7 @@ static char* get_backup_path(
 
     enum bx_backup_mode effective_mode = params->mode;
     if (effective_mode == BX_BACKUP_EXISTING) {
-        char* dir_copy = xstrdup(path);
-        char* dname = dirname(dir_copy);
+        char* dname = bx_path_dirname_dup(path);
         char* base = bx_path_basename_dup(path);
         if (get_max_backup_version(dname, base) > 0) {
             effective_mode = BX_BACKUP_NUMBERED;
@@ -107,7 +105,7 @@ static char* get_backup_path(
             effective_mode = BX_BACKUP_SIMPLE;
         }
         free(base);
-        free(dir_copy);
+        free(dname);
     }
 
     if (effective_mode_out)
@@ -119,8 +117,7 @@ static char* get_backup_path(
         return res;
     }
     else if (effective_mode == BX_BACKUP_NUMBERED) {
-        char* dir_copy = xstrdup(path);
-        char* dname = dirname(dir_copy);
+        char* dname = bx_path_dirname_dup(path);
         char* base = bx_path_basename_dup(path);
         int max_v = get_max_backup_version(dname, base);
         if (max_v == INT_MAX) {
@@ -128,14 +125,14 @@ static char* get_backup_path(
                 *version_overflow_out = true;
             }
             free(base);
-            free(dir_copy);
+            free(dname);
             return NULL;
         }
         int next_v = max_v + 1;
         char* res = xmalloc(strlen(path) + 16);
         sprintf(res, "%s.~%d~", path, next_v);
         free(base);
-        free(dir_copy);
+        free(dname);
         return res;
     }
     return NULL;

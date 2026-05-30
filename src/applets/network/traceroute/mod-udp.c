@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <netinet/udp.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 #ifndef IPPROTO_UDPLITE
@@ -112,7 +113,7 @@ static void udp_send_probe(probe* pb, int ttl) {
     int sk;
     int af = dest_addr.sa.sa_family;
 
-    sk = socket(af, SOCK_DGRAM, protocol);
+    sk = bx_fd_socket_cloexec(af, SOCK_DGRAM, protocol);
     if (sk < 0)
         error("socket");
 

@@ -25,6 +25,7 @@
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/path_quote.h"
 
 struct bx_stat_options {
     const char* progname;
@@ -386,34 +387,22 @@ static bool bx_stat_printf(struct bx_diag_ctx* diag, const char* fmt, ...) {
     return true;
 }
 
-static bool bx_stat_print_single_quoted(struct bx_diag_ctx* diag, const char* text) {
-    if (!bx_stat_putc(diag, '\'')) {
-        return false;
-    }
-
-    for (const unsigned char* p = (const unsigned char*)text; *p != '\0'; p++) {
-        if (*p == '\'' || *p == '\\') {
-            if (!bx_stat_putc(diag, '\\')) {
-                return false;
-            }
-        }
-        if (!bx_stat_putc(diag, *p)) {
-            return false;
-        }
-    }
-
-    return bx_stat_putc(diag, '\'');
+static bool bx_stat_print_quoted_path(struct bx_diag_ctx* diag, const char* text) {
+    char* quoted = bx_path_quote_dup(text, BX_PATH_QUOTE_SINGLE_BACKSLASH);
+    bool ok = bx_stat_puts(diag, quoted);
+    free(quoted);
+    return ok;
 }
 
 static bool bx_stat_print_file_quoted_name(const struct bx_stat_file_format_ctx* file_ctx, struct bx_diag_ctx* diag) {
-    if (!bx_stat_print_single_quoted(diag, file_ctx->path)) {
+    if (!bx_stat_print_quoted_path(diag, file_ctx->path)) {
         return false;
     }
 
     if (!file_ctx->options->dereference && S_ISLNK(file_ctx->st->st_mode)) {
         char* link_target = bx_stat_readlink_target(file_ctx->path);
         if (link_target != NULL) {
-            bool ok = bx_stat_puts(diag, " -> ") && bx_stat_print_single_quoted(diag, link_target);
+            bool ok = bx_stat_puts(diag, " -> ") && bx_stat_print_quoted_path(diag, link_target);
             free(link_target);
             if (!ok) {
                 return false;

@@ -17,6 +17,8 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
+#include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 
 extern char** environ;
 
@@ -127,15 +129,7 @@ struct ash_shell {
 };
 
 static const char* ash_basename(const char* path) {
-    if (path == NULL) {
-        return "ash";
-    }
-
-    const char* slash = strrchr(path, '/');
-    if (slash != NULL && slash[1] != '\0') {
-        return slash + 1;
-    }
-    return path;
+    return bx_cli_progname(path, "ash");
 }
 
 static const char* ash_effective_name(const char* argv0) {
@@ -381,7 +375,7 @@ static void ash_saved_fds_restore(const struct ash_shell* shell, struct ash_save
     for (size_t idx = saved->len; idx > 0; idx--) {
         struct ash_saved_fd item = saved->items[idx - 1u];
         if (item.saved_fd >= 0) {
-            if (dup2(item.saved_fd, item.target_fd) < 0) {
+            if (bx_fd_dup2_exact(item.saved_fd, item.target_fd) < 0) {
                 ash_exec_error(shell, "dup2", errno);
             }
             close(item.saved_fd);
@@ -1046,7 +1040,7 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
         const struct ash_redir* redir = &command->redirs[i];
 
         if (saved != NULL && !ash_saved_fds_has_target(saved, redir->fd)) {
-            int dup_fd = dup(redir->fd);
+            int dup_fd = bx_fd_dup_cloexec(redir->fd);
             if (dup_fd < 0 && errno != EBADF) {
                 ash_exec_error(shell, "dup", errno);
                 return 1;
@@ -1068,13 +1062,13 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
                 break;
         }
 
-        int fd = open(redir->target, open_flags, mode);
+        int fd = bx_fd_open_cloexec(redir->target, open_flags, mode);
         if (fd < 0) {
             ash_exec_error(shell, redir->target, errno);
             return 1;
         }
 
-        if (dup2(fd, redir->fd) < 0) {
+        if (bx_fd_dup2_exact(fd, redir->fd) < 0) {
             int err = errno;
             close(fd);
             ash_exec_error(shell, "dup2", err);
@@ -1602,7 +1596,7 @@ static int ash_execute_pipeline_forked(struct ash_shell* shell, const struct ash
         int pipe_fds[2] = {-1, -1};
 
         if (i + 1u < command_count) {
-            if (pipe(pipe_fds) != 0) {
+            if (bx_fd_pipe_cloexec(pipe_fds) != 0) {
                 ash_exec_error(shell, "pipe", errno);
                 if (prev_read >= 0) {
                     close(prev_read);
@@ -1638,14 +1632,14 @@ static int ash_execute_pipeline_forked(struct ash_shell* shell, const struct ash
 
         if (pid == 0) {
             if (prev_read >= 0) {
-                if (dup2(prev_read, STDIN_FILENO) < 0) {
+                if (bx_fd_dup2_exact(prev_read, STDIN_FILENO) < 0) {
                     ash_exec_error(shell, "dup2", errno);
                     _exit(1);
                 }
             }
 
             if (pipe_fds[1] >= 0) {
-                if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) {
+                if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
                     ash_exec_error(shell, "dup2", errno);
                     _exit(1);
                 }

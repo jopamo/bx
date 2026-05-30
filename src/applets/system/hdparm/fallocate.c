@@ -16,6 +16,7 @@
 #include <linux/fs.h>
 
 #include "hdparm.h"
+#include "lib/fd_ops.h"
 
 int do_fallocate_syscall (const char *path, __u64 bytecount)
 {
@@ -31,7 +32,7 @@ int do_fallocate_syscall (const char *path, __u64 bytecount)
 	unsigned long long len;
 	int mode = 0;
 
-	fd = open(path, O_WRONLY|O_CREAT|O_EXCL, 0600);
+	fd = bx_fd_open_cloexec(path, O_WRONLY|O_CREAT|O_EXCL, 0600);
 	if (fd == -1) {
 		err = errno;
 	} else {

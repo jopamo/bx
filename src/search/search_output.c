@@ -8,6 +8,7 @@
 
 #include "dev_counters.h"
 #include "lib/color.h"
+#include "lib/path_quote.h"
 #include "literal.h"
 #include "pcre2_matcher.h"
 #include "rg_output.h"
@@ -16,6 +17,29 @@
 
 static _Thread_local struct bx_search_output_ctx *current_output_ctx = NULL;
 static _Thread_local int current_offset_width = 0;
+
+char *bx_search_quote_path_metadata_for_terminal(const char *path,
+                                                 const struct search_opts *opts) {
+    if (!path || !opts || !opts->terminal_quote_paths)
+        return NULL;
+
+    const struct bx_path_control_quote_options quote_options = {
+        .style = BX_PATH_CONTROL_QUOTE_QUESTION,
+        .high_bit_printable = true,
+    };
+    return bx_path_quote_control_dup(path, &quote_options);
+}
+
+void bx_search_print_path_record(const char *display_name,
+                                 struct search_opts *opts) {
+    if (!display_name)
+        return;
+
+    char *quoted = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+    const char *output_name = quoted ? quoted : display_name;
+    bx_search_printf_out("%s%c", output_name, opts && opts->null_output ? '\0' : '\n');
+    free(quoted);
+}
 
 static FILE *bx_search_null_stream(void) {
     static FILE *stream = NULL;
@@ -222,9 +246,11 @@ static void bx_search_print_only_matches_exact_literal_fast(
     enum { BX_SEARCH_ONLY_MATCHING_STACK_BUF = 512 };
     size_t match_len = bx_search_record_match_len(line, len, opts);
     const char *sep = bx_search_match_field_separator(opts);
-    size_t display_name_len = display_name ? strlen(display_name) : 0u;
+    char *quoted_display_name = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+    const char *output_display_name = quoted_display_name ? quoted_display_name : display_name;
+    size_t display_name_len = output_display_name ? strlen(output_display_name) : 0u;
     size_t sep_len = opts->null_filename ? 1u : strlen(sep);
-    size_t prefix_len = (opts->show_filename && display_name) ? display_name_len + sep_len : 0u;
+    size_t prefix_len = (opts->show_filename && output_display_name) ? display_name_len + sep_len : 0u;
     unsigned char delimiter = (unsigned char)bx_search_record_delimiter(opts);
     unsigned char stack_buf[BX_SEARCH_ONLY_MATCHING_STACK_BUF];
     unsigned char *prefix_buf = stack_buf;
@@ -236,12 +262,14 @@ static void bx_search_print_only_matches_exact_literal_fast(
         return;
     if (prefix_len > sizeof(stack_buf)) {
         prefix_buf = malloc(prefix_len);
-        if (!prefix_buf)
+        if (!prefix_buf) {
+            free(quoted_display_name);
             return;
+        }
     }
 
     if (prefix_len > 0u) {
-        memcpy(prefix_buf, display_name, display_name_len);
+        memcpy(prefix_buf, output_display_name, display_name_len);
         if (opts->null_filename)
             prefix_buf[display_name_len] = '\0';
         else
@@ -270,6 +298,7 @@ static void bx_search_print_only_matches_exact_literal_fast(
 
     if (prefix_buf != stack_buf)
         free(prefix_buf);
+    free(quoted_display_name);
 }
 
 int bx_search_printf_out(const char *fmt, ...) {
@@ -440,13 +469,17 @@ bool bx_search_print_result_prefix_cached(const char *display_name,
             && opts->hyperlink_format
             && opts->hyperlink_format[0] != '\0';
         char *hyperlink = NULL;
+        char *quoted_display_name = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+        const char *output_display_name = quoted_display_name ? quoted_display_name : display_name;
+        size_t output_display_name_len = quoted_display_name ? strlen(quoted_display_name) : display_name_len;
 
         if (!color && !opts->show_line_number && !opts->show_column
             && !opts->show_byte_offset && !opts->null_filename) {
-            bx_search_fwrite_stream(out, display_name, display_name_len);
-            bx_search_stats_count_bytes(display_name_len);
+            bx_search_fwrite_stream(out, output_display_name, output_display_name_len);
+            bx_search_stats_count_bytes(output_display_name_len);
             bx_search_fwrite_stream(out, sep, sep_len);
             bx_search_stats_count_bytes(sep_len);
+            free(quoted_display_name);
             return true;
         }
 
@@ -463,8 +496,8 @@ bool bx_search_print_result_prefix_cached(const char *display_name,
             bx_search_fputs_stream(out, hyperlink);
         if (color)
             bx_rg_emit_color_style_start_file(out, &opts->rg_colors.path);
-        bx_search_fwrite_stream(out, display_name, display_name_len);
-        bx_search_stats_count_bytes(display_name_len);
+        bx_search_fwrite_stream(out, output_display_name, output_display_name_len);
+        bx_search_stats_count_bytes(output_display_name_len);
         if (color)
             bx_rg_emit_color_reset_file(out);
         if (hyperlink) {
@@ -476,6 +509,7 @@ bool bx_search_print_result_prefix_cached(const char *display_name,
         else
             bx_search_fwrite_stream(out, sep, sep_len);
         bx_search_stats_count_bytes(sep_len);
+        free(quoted_display_name);
         printed = true;
     }
     if (opts->show_line_number) {
@@ -581,15 +615,18 @@ void bx_search_maybe_print_heading(const char *display_name,
     char *hyperlink = bx_rg_hyperlink_open_dup(opts->hyperlink_format,
                                                opts->hostname_bin,
                                                display_name, 1u, 1u, false, false);
+    char *quoted_display_name = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+    const char *output_display_name = quoted_display_name ? quoted_display_name : display_name;
     if (hyperlink)
         bx_search_fputs_out(hyperlink);
     bx_rg_emit_color_style_start_file(bx_search_output_stream(), &opts->rg_colors.path);
-    bx_search_printf_out("%s", display_name);
+    bx_search_printf_out("%s", output_display_name);
     bx_rg_emit_color_reset_file(bx_search_output_stream());
     if (hyperlink) {
         bx_search_fputs_out(bx_rg_hyperlink_close());
         free(hyperlink);
     }
+    free(quoted_display_name);
     bx_search_putc_out('\n');
     bx_search_dev_counters_note_output_line_emitted();
     *heading_printed_for_file = true;
@@ -720,9 +757,13 @@ void bx_search_print_count_result(const char *display_name,
                                   int file_matches) {
     if (opts->omit_zero_count_output && file_matches == 0)
         return;
-    if (opts->show_filename && display_name)
-        bx_search_printf_out("%s%c%d\n", display_name,
+    if (opts->show_filename && display_name) {
+        char *quoted_display_name = bx_search_quote_path_metadata_for_terminal(display_name, opts);
+        const char *output_display_name = quoted_display_name ? quoted_display_name : display_name;
+        bx_search_printf_out("%s%c%d\n", output_display_name,
                              opts->null_filename ? '\0' : ':', file_matches);
+        free(quoted_display_name);
+    }
     else
         bx_search_printf_out("%d\n", file_matches);
     bx_search_dev_counters_note_output_line_emitted();

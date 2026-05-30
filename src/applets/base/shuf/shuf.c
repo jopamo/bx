@@ -14,6 +14,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
 
@@ -363,7 +364,7 @@ static bool bx_shuf_load_file_input(const char* path, int delimiter, struct bx_s
 }
 
 static bool bx_shuf_rng_open(struct bx_shuf_rng* rng, const char* source_path, struct bx_diag_ctx* diag) {
-    rng->fd = open(source_path, O_RDONLY);
+    rng->fd = bx_fd_open_cloexec(source_path, O_RDONLY, 0);
     if (rng->fd < 0) {
         bx_perror_path(diag, source_path);
         return false;

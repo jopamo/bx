@@ -326,19 +326,27 @@ static bool bx_numfmt_parse_suffix(const char* suffix, enum unit_type from, doub
         return false;
     }
 
-    int exponent = (int)power;
-    double base;
+    enum bx_size_unit_label_style style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
     if (from == UNIT_AUTO) {
-        base = has_i ? 1024.0 : 1000.0;
+        style = has_i ? BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX : BX_SIZE_UNIT_LABEL_SI_LOWER_K;
     }
     else if (from == UNIT_SI) {
-        base = 1000.0;
+        style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
     }
     else {
-        base = 1024.0;
+        style = has_i ? BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX : BX_SIZE_UNIT_LABEL_IEC_PREFIX;
     }
 
-    *value_out *= pow(base, exponent);
+    double base = 0.0;
+    if (!bx_size_unit_label_base_double(style, &base)) {
+        return false;
+    }
+
+    double multiplier = 1.0;
+    if (!bx_size_power_double(base, power, &multiplier)) {
+        return false;
+    }
+    *value_out *= multiplier;
     return true;
 }
 
@@ -401,12 +409,10 @@ static double bx_numfmt_parse_number_text(
     return value;
 }
 
-static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, int exponent) {
-    if (exponent < 0) {
-        exponent = 0;
+static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, unsigned int power) {
+    if (power > 8u) {
+        power = 8u;
     }
-    unsigned int power = exponent > 8 ? 8u : (unsigned int)exponent;
-
     enum bx_size_unit_label_style style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
 
     switch (to_unit) {
@@ -434,13 +440,25 @@ static const char* bx_numfmt_output_unit_label(enum unit_type to_unit, int expon
 static char* bx_numfmt_format_number(double value, const struct bx_numfmt_options* options) {
     char number_buf[256];
     double scaled = value;
-    int exponent = 0;
+    unsigned int power = 0u;
 
     if (options->to_unit != UNIT_NONE) {
-        double base = (options->to_unit == UNIT_IEC || options->to_unit == UNIT_IEC_I) ? 1024.0 : 1000.0;
-        while (fabs(scaled) >= base && exponent < 8) {
-            scaled /= base;
-            exponent++;
+        enum bx_size_unit_label_style style = BX_SIZE_UNIT_LABEL_SI_LOWER_K;
+        if (options->to_unit == UNIT_IEC) {
+            style = BX_SIZE_UNIT_LABEL_IEC_PREFIX;
+        }
+        else if (options->to_unit == UNIT_IEC_I) {
+            style = BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX;
+        }
+
+        double base = 0.0;
+        if (!bx_size_unit_label_base_double(style, &base)) {
+            scaled = value;
+            power = 0u;
+        }
+        else if (!bx_size_scale_magnitude_double(value, base, base, 8u, &scaled, &power)) {
+            scaled = value;
+            power = 0u;
         }
     }
 
@@ -456,7 +474,7 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
 
     snprintf(number_buf, sizeof(number_buf), format, scaled);
 
-    const char* unit = bx_numfmt_output_unit_label(options->to_unit, exponent);
+    const char* unit = bx_numfmt_output_unit_label(options->to_unit, power);
     size_t suffix_len = (options->suffix != NULL) ? strlen(options->suffix) : 0;
     size_t total_len = strlen(number_buf) + strlen(unit) + suffix_len;
 

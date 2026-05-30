@@ -17,6 +17,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/tty_speed.h"
 
@@ -2006,7 +2007,7 @@ static int bx_stty_open_target(const struct bx_stty_plan* plan, bool* close_fd, 
         return STDIN_FILENO;
     }
 
-    int fd = open(plan->device_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    int fd = bx_fd_open_cloexec(plan->device_path, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0) {
         bx_stty_diag_target_errno(diag, plan->device_path, errno);
         return -1;

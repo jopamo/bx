@@ -14,6 +14,7 @@
 #include <netinet/ip6.h>
 #include <linux/dccp.h>
 
+#include "lib/fd_ops.h"
 #include "traceroute.h"
 
 #define DEF_SERVICE_CODE 1885957735
@@ -57,7 +58,7 @@ static int dccp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pa
     dest_port = htons(port_seq);
 
     /*  Create raw socket for DCCP   */
-    raw_sk = socket(af, SOCK_RAW, IPPROTO_DCCP);
+    raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, IPPROTO_DCCP);
     if (raw_sk < 0)
         error_or_perm("socket");
 
@@ -72,7 +73,7 @@ static int dccp_init(const sockaddr_any* dest, unsigned int port_seq, size_t* pa
 
     if (!raw_can_connect()) { /*  work-around for buggy kernels  */
         close(raw_sk);
-        raw_sk = socket(af, SOCK_RAW, IPPROTO_DCCP);
+        raw_sk = bx_fd_socket_cloexec(af, SOCK_RAW, IPPROTO_DCCP);
         if (raw_sk < 0)
             error("socket");
         tune_socket(raw_sk, NULL);
@@ -166,7 +167,7 @@ static void dccp_send_probe(probe* pb, int ttl) {
        just create, (auto)bind and hold a socket while the port is needed.
     */
 
-    sk = socket(af, SOCK_DCCP, IPPROTO_DCCP);
+    sk = bx_fd_socket_cloexec(af, SOCK_DCCP, IPPROTO_DCCP);
     if (sk < 0)
         error("socket");
 

@@ -21,6 +21,8 @@
 #include "lib/cli_common.h"
 #include "lib/xreadwrite.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include "lib/size_parse.h"
 #include "lib/tty_speed.h"
 
@@ -462,7 +464,9 @@ static bool bx_getty_prepare_tty(int tty_fd, const struct bx_getty_options* opti
 }
 
 static bool bx_getty_attach_stdio(int tty_fd, struct bx_diag_ctx* diag) {
-    if (dup2(tty_fd, STDIN_FILENO) < 0 || dup2(tty_fd, STDOUT_FILENO) < 0 || dup2(tty_fd, STDERR_FILENO) < 0) {
+    if (bx_fd_dup2_exact(tty_fd, STDIN_FILENO) < 0
+        || bx_fd_dup2_exact(tty_fd, STDOUT_FILENO) < 0
+        || bx_fd_dup2_exact(tty_fd, STDERR_FILENO) < 0) {
         bx_diag(diag, "cannot attach tty to stdio: %s", strerror(errno));
         return false;
     }
@@ -473,7 +477,7 @@ static bool bx_getty_attach_stdio(int tty_fd, struct bx_diag_ctx* diag) {
 }
 
 static bool bx_getty_copy_file_to_stdout(const char* path, struct bx_diag_ctx* diag) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = bx_fd_open_cloexec(path, O_RDONLY, 0);
     if (fd < 0) {
         return errno == ENOENT;
     }
@@ -503,8 +507,7 @@ static bool bx_getty_should_clear(const char* tty_path, const struct bx_getty_op
         return false;
     }
 
-    const char* base = strrchr(tty_path, '/');
-    base = base != NULL ? base + 1 : tty_path;
+    const char* base = bx_path_basename_ptr(tty_path);
     return strncmp(base, "tty", 3) == 0 && isdigit((unsigned char)base[3]);
 }
 
@@ -635,7 +638,7 @@ static void bx_getty_free_login_argv(char** argv, int argc) {
 
 static int bx_getty_exec_login(const struct bx_getty_options* options, struct bx_diag_ctx* diag) {
     char* tty_path = bx_getty_resolve_tty_path(options->tty_operand);
-    int tty_fd = open(tty_path, O_RDWR | O_NOCTTY);
+    int tty_fd = bx_fd_open_cloexec(tty_path, O_RDWR | O_NOCTTY, 0);
     if (tty_fd < 0) {
         bx_diag(diag, "cannot open tty '%s': %s", tty_path, strerror(errno));
         free(tty_path);
