@@ -791,8 +791,13 @@ int main(int argc, char* argv[]) {
         ex_error("IP version mismatch in addresses specified");
     if (send_secs < 0)
         ex_error("bad sendtime `%g' specified", send_secs);
-    if (send_secs >= 10) /*  it is milliseconds   */
-        send_secs /= 1000;
+    if (send_secs >= 10) { /*  it is milliseconds   */
+        double send_seconds = 0.0;
+
+        if (!bx_time_milliseconds_double_to_seconds_double(send_secs, &send_seconds))
+            ex_error("bad sendtime `%g' specified", send_secs);
+        send_secs = send_seconds;
+    }
 
     if (af == AF_INET6 && (tos || flow_label))
         dst_addr.sin6.sin6_flowinfo = htonl(((tos & 0xff) << 20) | (flow_label & 0x000fffff));

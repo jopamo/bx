@@ -183,6 +183,48 @@ bool bx_time_milliseconds_to_timespec(intmax_t milliseconds, struct timespec* ts
     return true;
 }
 
+bool bx_time_milliseconds_to_seconds_double(intmax_t milliseconds, double* seconds_out) {
+    if (seconds_out == NULL || milliseconds < 0) {
+        return false;
+    }
+
+    double seconds = (double)milliseconds / 1000.0;
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    *seconds_out = seconds;
+    return true;
+}
+
+bool bx_time_milliseconds_double_to_seconds_double(double milliseconds, double* seconds_out) {
+    if (seconds_out == NULL || !isfinite(milliseconds) || milliseconds < 0.0) {
+        return false;
+    }
+
+    double seconds = milliseconds / 1000.0;
+    if (!isfinite(seconds)) {
+        return false;
+    }
+
+    *seconds_out = seconds;
+    return true;
+}
+
+bool bx_time_milliseconds_to_seconds_int_floor(intmax_t milliseconds, int* seconds_out) {
+    if (seconds_out == NULL || milliseconds < 0) {
+        return false;
+    }
+
+    intmax_t seconds = milliseconds / 1000;
+    if (seconds > INT_MAX) {
+        return false;
+    }
+
+    *seconds_out = (int)seconds;
+    return true;
+}
+
 bool bx_time_seconds_to_milliseconds_uint(uintmax_t seconds, uintmax_t* milliseconds_out) {
     if (milliseconds_out == NULL || seconds > UINTMAX_MAX / 1000u) {
         return false;
@@ -230,6 +272,23 @@ bool bx_time_seconds_to_milliseconds_double(double seconds, double* milliseconds
     }
 
     *milliseconds_out = milliseconds;
+    return true;
+}
+
+bool bx_time_timespec_to_nanoseconds_u64(const struct timespec* ts, uint64_t* nanoseconds_out) {
+    if (ts == NULL || nanoseconds_out == NULL ||
+        (((time_t)-1 < (time_t)0) && ts->tv_sec < (time_t)0) ||
+        ts->tv_nsec < 0L || ts->tv_nsec >= 1000000000L) {
+        return false;
+    }
+
+    uintmax_t seconds = (uintmax_t)ts->tv_sec;
+    uintmax_t nanoseconds = (uintmax_t)ts->tv_nsec;
+    if (seconds > (UINT64_MAX - nanoseconds) / UINT64_C(1000000000)) {
+        return false;
+    }
+
+    *nanoseconds_out = (uint64_t)((seconds * UINT64_C(1000000000)) + nanoseconds);
     return true;
 }
 

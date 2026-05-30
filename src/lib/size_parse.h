@@ -25,8 +25,10 @@ const char* bx_size_unit_label(enum bx_size_unit_label_style style, unsigned int
 enum bx_size_suffix_parse_result bx_size_suffix_multiplier_result(const char* suffix, uintmax_t* multiplier_out);
 bool bx_size_suffix_multiplier(const char* suffix, uintmax_t* multiplier_out);
 bool bx_size_parse_scaled_uint(const char* text, uintmax_t* value_out);
+bool bx_size_block_count_ceil(uintmax_t bytes, uintmax_t block_size, uintmax_t* blocks_out);
 void bx_size_format_human_ceil(uintmax_t value, uintmax_t base, const char* suffixes, char* buffer, size_t buffer_size);
 void bx_size_format_human_round(uintmax_t value, uintmax_t base, const char* suffixes, bool include_base_suffix, char* buffer, size_t buffer_size);
+bool bx_size_scale_human_double(double value, double base, double rollover_threshold, unsigned int max_power, double* scaled_out, unsigned int* power_out);
 void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buffer_size);
 /* Applet-specific prefixes and legacy +/- count spellings stay applet-local. */
 bool bx_size_parse_scaled_count(const char* text, intmax_t* value_out);

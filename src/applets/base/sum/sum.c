@@ -3,28 +3,32 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 
 static void sum_bsd(FILE* f, const char* name, bool print_name) {
     uint16_t checksum = 0;
-    long long total_bytes = 0;
+    uintmax_t total_bytes = 0;
     int c;
     while ((c = getc(f)) != EOF) {
         checksum = (checksum >> 1) + ((checksum & 1) << 15);
         checksum += (uint8_t)c;
         total_bytes++;
     }
-    printf("%05u %5lld%s%s\n", checksum, (total_bytes + 1023) / 1024, print_name ? " " : "", name ? name : "");
+    uintmax_t blocks = 0;
+    (void)bx_size_block_count_ceil(total_bytes, 1024u, &blocks);
+    printf("%05u %5" PRIuMAX "%s%s\n", checksum, blocks, print_name ? " " : "", name ? name : "");
 }
 
 static void sum_sysv(FILE* f, const char* name, bool print_name) {
     uint32_t s = 0;
-    long long total_bytes = 0;
+    uintmax_t total_bytes = 0;
     int c;
     while ((c = getc(f)) != EOF) {
         s += (uint8_t)c;
@@ -32,7 +36,9 @@ static void sum_sysv(FILE* f, const char* name, bool print_name) {
     }
     uint32_t r = (s & 0xffff) + (s >> 16);
     uint16_t checksum = (r & 0xffff) + (r >> 16);
-    printf("%u %lld%s%s\n", checksum, (total_bytes + 511) / 512, print_name ? " " : "", name ? name : "");
+    uintmax_t blocks = 0;
+    (void)bx_size_block_count_ceil(total_bytes, 512u, &blocks);
+    printf("%u %" PRIuMAX "%s%s\n", checksum, blocks, print_name ? " " : "", name ? name : "");
 }
 
 int bx_sum_main(int argc, char** argv) {

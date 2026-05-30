@@ -2,6 +2,8 @@
 
 #include "process_parse.h"
 
+#include <inttypes.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,7 @@
 #include "misc.h"
 #include "process.h"
 #include "screen.h"
+#include "lib/time_parse.h"
 
 int MsgOk(void)
 {
@@ -94,40 +97,57 @@ int ParseNum(struct action *act, int *var)
 
 int ParseNum1000(struct action *act, int *var)
 {
-	int i;
 	char *p, **args = act->args;
-	int dig = 0;
+	uintmax_t seconds = 0;
+	unsigned int fraction_digits = 0;
+	unsigned int fraction_ms = 0;
+	bool have_fraction = false;
+	bool saturated = false;
 
 	p = *args;
 	if (p == NULL || *p == 0 || args[1]) {
 		Msg(0, "%s: %s: invalid argument. Give one argument.", rc_name, comms[act->nr].name);
 		return -1;
 	}
-	i = 0;
 	while (*p) {
 		if (*p >= '0' && *p <= '9') {
-			if (dig < 4)
-				i = 10 * i + (*p - '0');
-			else if (dig == 4 && *p >= '5')
-				i++;
-			if (dig)
-				dig++;
-		} else if (*p == '.' && !dig)
-			dig++;
-		else {
+			unsigned int digit = (unsigned int)(*p - '0');
+
+			if (!have_fraction) {
+				if (seconds <= (UINTMAX_MAX - digit) / 10u)
+					seconds = (seconds * 10u) + digit;
+				else
+					saturated = true;
+			} else if (fraction_digits < 3u) {
+				fraction_ms = (fraction_ms * 10u) + digit;
+				fraction_digits++;
+			} else if (fraction_digits == 3u) {
+				if (digit >= 5u)
+					fraction_ms++;
+				fraction_digits = 4u;
+			}
+		} else if (*p == '.' && !have_fraction) {
+			have_fraction = true;
+		} else {
 			Msg(0, "%s: %s: invalid argument. Give floating point argument.", rc_name, comms[act->nr].name);
 			return -1;
 		}
 		p++;
 	}
-	if (dig == 0)
-		i *= 1000;
-	else
-		while (dig++ < 4)
-			i *= 10;
-	if (i < 0)
-		i = (int)((unsigned int)~0 >> 1);
-	*var = i;
+	while (have_fraction && fraction_digits < 3u) {
+		fraction_ms *= 10u;
+		fraction_digits++;
+	}
+
+	int milliseconds = 0;
+	if (saturated || !bx_time_seconds_to_milliseconds_int(seconds, &milliseconds)) {
+		milliseconds = INT_MAX;
+	} else if (fraction_ms > (unsigned int)(INT_MAX - milliseconds)) {
+		milliseconds = INT_MAX;
+	} else {
+		milliseconds += (int)fraction_ms;
+	}
+	*var = milliseconds;
 	return 0;
 }
 

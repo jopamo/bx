@@ -10,6 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "lib/time_parse.h"
 #include "walk_internal.h"
 
 static int bx_walk_recursive(DIR *dir,
@@ -57,9 +58,13 @@ struct bx_walk_entry_path_state {
 
 static uint64_t bx_walk_monotonic_ns(void) {
     struct timespec ts;
+    uint64_t nanoseconds = 0;
+
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
         return 0u;
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+    if (!bx_time_timespec_to_nanoseconds_u64(&ts, &nanoseconds))
+        return 0u;
+    return nanoseconds;
 }
 
 static void bx_walk_note_elapsed_ns(const struct bx_walk_counter_ops *counter_ops,

@@ -1,4 +1,5 @@
 #include <inttypes.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -153,6 +154,15 @@ static uintmax_t bx_size_ceil_div(uintmax_t value, uintmax_t divisor) {
     return (value / divisor) + ((value % divisor) != 0u ? 1u : 0u);
 }
 
+bool bx_size_block_count_ceil(uintmax_t bytes, uintmax_t block_size, uintmax_t* blocks_out) {
+    if (blocks_out == NULL || block_size == 0u) {
+        return false;
+    }
+
+    *blocks_out = bx_size_ceil_div(bytes, block_size);
+    return true;
+}
+
 void bx_size_format_human_ceil(uintmax_t value, uintmax_t base, const char* suffixes, char* buffer, size_t buffer_size) {
     if (buffer == NULL || buffer_size == 0u) {
         return;
@@ -232,6 +242,28 @@ void bx_size_format_human_round(uintmax_t value, uintmax_t base, const char* suf
     }
 }
 
+bool bx_size_scale_human_double(double value, double base, double rollover_threshold, unsigned int max_power, double* scaled_out, unsigned int* power_out) {
+    if (scaled_out == NULL || power_out == NULL ||
+        !isfinite(value) || !isfinite(base) || !isfinite(rollover_threshold) ||
+        value < 0.0 || base <= 1.0 || rollover_threshold <= 0.0) {
+        return false;
+    }
+
+    double scaled = value;
+    unsigned int power = 0u;
+    while (scaled >= rollover_threshold && power < max_power) {
+        scaled /= base;
+        if (!isfinite(scaled)) {
+            return false;
+        }
+        power++;
+    }
+
+    *scaled_out = scaled;
+    *power_out = power;
+    return true;
+}
+
 void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buffer_size) {
     if (buffer == NULL || buffer_size == 0u) {
         return;
@@ -239,9 +271,9 @@ void bx_size_format_decimal_rate(double bytes_per_sec, char* buffer, size_t buff
 
     double value = bytes_per_sec;
     unsigned int power = 0u;
-    while (value >= 999.5 && power < 6u) {
-        value /= 1000.0;
-        power++;
+    if (!bx_size_scale_human_double(bytes_per_sec, 1000.0, 999.5, 6u, &value, &power)) {
+        (void)snprintf(buffer, buffer_size, "0.0 kB/s");
+        return;
     }
 
     unsigned int label_power = (value == 0.0 && power == 0u) ? 1u : power;

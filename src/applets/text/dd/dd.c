@@ -1162,15 +1162,14 @@ static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size
         return false;
     }
 
-    double decimal = (double)bytes;
-    unsigned int decimal_power = 1u;
-    do {
-        decimal /= 1000.0;
-        if (decimal < 999.95 || decimal_power >= 6u) {
-            break;
+    double decimal = 0.0;
+    unsigned int decimal_power = 0u;
+    if (!bx_size_scale_human_double((double)bytes, 1000.0, 999.95, 6u, &decimal, &decimal_power)) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
         }
-        decimal_power++;
-    } while (true);
+        return false;
+    }
 
     const char* decimal_unit = bx_size_unit_label(BX_SIZE_UNIT_LABEL_SI_LOWER_K, decimal_power);
     if (decimal_unit == NULL) {
@@ -1188,15 +1187,14 @@ static bool bx_dd_format_byte_humans(uintmax_t bytes, char* buf, size_t buf_size
         return true;
     }
 
-    double binary = (double)bytes;
-    unsigned int binary_power = 1u;
-    do {
-        binary /= 1024.0;
-        if (binary < 999.95 || binary_power >= 6u) {
-            break;
+    double binary = 0.0;
+    unsigned int binary_power = 0u;
+    if (!bx_size_scale_human_double((double)bytes, 1024.0, 999.95, 6u, &binary, &binary_power)) {
+        if (buf_size > 0) {
+            buf[0] = '\0';
         }
-        binary_power++;
-    } while (true);
+        return false;
+    }
 
     const char* binary_unit = bx_size_unit_label(BX_SIZE_UNIT_LABEL_IEC_I_SUFFIX, binary_power);
     if (binary_unit == NULL) {

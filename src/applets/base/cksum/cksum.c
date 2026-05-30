@@ -16,6 +16,7 @@
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
 #include "lib/args_common.h"
+#include "lib/size_parse.h"
 
 enum {
     CKSUM_EXIT_OK = 0,
@@ -1132,10 +1133,16 @@ static int cksum_hash_numeric_path(enum cksum_algorithm algorithm, const char* p
             *out_metric = result.size;
             return 0;
         case CKSUM_ALGORITHM_SYSV:
-            *out_metric = (result.size + 511u) / 512u;
+            if (!bx_size_block_count_ceil(result.size, 512u, out_metric)) {
+                errno = EINVAL;
+                return -1;
+            }
             return 0;
         case CKSUM_ALGORITHM_BSD:
-            *out_metric = (result.size + 1023u) / 1024u;
+            if (!bx_size_block_count_ceil(result.size, 1024u, out_metric)) {
+                errno = EINVAL;
+                return -1;
+            }
             return 0;
         case CKSUM_ALGORITHM_MD5:
         case CKSUM_ALGORITHM_SHA1:
@@ -1573,7 +1580,8 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
             putchar(options->zero_terminated ? '\0' : '\n');
             break;
         case CKSUM_ALGORITHM_SYSV: {
-            uintmax_t blocks = (result.size + 511u) / 512u;
+            uintmax_t blocks = 0;
+            (void)bx_size_block_count_ceil(result.size, 512u, &blocks);
             if (show_name_for_numeric_algorithms) {
                 printf("%" PRIu32 " %" PRIuMAX " %s", result.value, blocks, path);
             }
@@ -1584,7 +1592,8 @@ static bool cksum_process_path(const struct cksum_options* options, const char* 
             break;
         }
         case CKSUM_ALGORITHM_BSD: {
-            uintmax_t blocks = (result.size + 1023u) / 1024u;
+            uintmax_t blocks = 0;
+            (void)bx_size_block_count_ceil(result.size, 1024u, &blocks);
             if (show_name_for_numeric_algorithms) {
                 printf("%05" PRIu32 " %5" PRIuMAX " %s", result.value, blocks, path);
             }

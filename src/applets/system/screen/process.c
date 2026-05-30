@@ -826,9 +826,11 @@ static void StuffFin(char *buf, size_t len, void *data)
 static void OutputNum1000Setting(struct action *act, int *var, const char *name)
 {
 	int msgok = MsgOk();
+	double seconds = 0.0;
 
-	if (ParseNum1000(act, var) == 0 && msgok)
-		OutputMsg(0, "%s set to %.10g seconds", name, *var / 1000.);
+	if (ParseNum1000(act, var) == 0 && msgok &&
+	    bx_time_milliseconds_to_seconds_double(*var, &seconds))
+		OutputMsg(0, "%s set to %.10g seconds", name, seconds);
 }
 
 static void DoCommandSelect(struct action *act)
@@ -3673,8 +3675,12 @@ static void DoCommandNonblock(struct action *act)
 		OutputMsg(0, "display set to blocking mode");
 	else if (msgok && n == 0)
 		OutputMsg(0, "display set to nonblocking mode, no timeout");
-	else if (msgok)
-		OutputMsg(0, "display set to nonblocking mode, %.10gs timeout", n / 1000.);
+	else if (msgok) {
+		double seconds = 0.0;
+
+		if (bx_time_milliseconds_to_seconds_double(n, &seconds))
+			OutputMsg(0, "display set to nonblocking mode, %.10gs timeout", seconds);
+	}
 	D_nonblock = n;
 	if (D_nonblock <= 0)
 		evdeq(&D_blockedev);
@@ -4307,9 +4313,12 @@ static void DoCommandIdle(struct action *act)
 		display = olddisplay;
 	}
 	if (msgok) {
-		if (idletimo)
-			OutputMsg(0, "idle timeout %ds, %s", idletimo / 1000, comms[idleaction.nr].name);
-		else
+		if (idletimo) {
+			int idle_seconds = 0;
+
+			if (bx_time_milliseconds_to_seconds_int_floor(idletimo, &idle_seconds))
+				OutputMsg(0, "idle timeout %ds, %s", idle_seconds, comms[idleaction.nr].name);
+		} else
 			OutputMsg(0, "idle off");
 	}
 }

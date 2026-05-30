@@ -12,6 +12,7 @@
 #include "fswalk/walk.h"
 #include "ignore.h"
 #include "lib/path_ops.h"
+#include "lib/time_parse.h"
 #include "traverse.h"
 
 struct bx_search_walk_dir_frame {
@@ -105,9 +106,13 @@ bx_search_walk_active_ignore_state(const struct bx_search_walk_state *state, int
 
 static uint64_t bx_search_walk_monotonic_ns(void) {
     struct timespec ts;
+    uint64_t nanoseconds = 0;
+
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
         return 0u;
-    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+    if (!bx_time_timespec_to_nanoseconds_u64(&ts, &nanoseconds))
+        return 0u;
+    return nanoseconds;
 }
 
 static uint64_t bx_search_walk_timing_start(void) {
