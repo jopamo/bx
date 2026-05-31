@@ -201,7 +201,6 @@ static enum bx_walk_action bx_search_walk_visit(struct bx_walk_entry *entry, voi
     bx_search_walk_dir_frames_pop_to_depth(state, entry->depth);
 
     uint64_t filter_start = entry->depth > 0 ? bx_search_walk_timing_start() : 0u;
-    const char *name = bx_path_basename_ptr(entry->path);
     const struct bx_ignore_state *ignore_state =
         bx_search_walk_active_ignore_state(state, entry->depth);
     bool entry_selected = true;
@@ -217,7 +216,9 @@ static enum bx_walk_action bx_search_walk_visit(struct bx_walk_entry *entry, voi
         state->config->filter_opts &&
         state->config->filter_opts->num_include_patterns > 0 &&
         !entry->is_dir &&
-        !bx_walk_filter_matches_include(&state->filter_state, name, entry->path)) {
+        !bx_walk_filter_matches_include(&state->filter_state,
+                                        bx_path_basename_ptr(entry->path),
+                                        entry->path)) {
         bx_search_walk_note_elapsed(BX_SEARCH_WALK_FILTER_NS, filter_start);
         bx_search_walk_note_rejected_entry(entry);
         return BX_WALK_CONTINUE;

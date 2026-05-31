@@ -212,7 +212,6 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     const char *path;
     bool entry_selected = true;
     bool metadata_type_pending = false;
-    bool basename_only_fast_path = false;
 
     if (entry_selected_out)
         *entry_selected_out = true;
@@ -247,53 +246,37 @@ bool bx_walk_filter_should_skip(const struct bx_walk_filter_state *state,
     if (!relative_path)
         relative_path = bx_walk_filter_relative_path(state, path);
 
-    enum bx_ignore_match_result basename_ignore =
-        bx_ignore_state_match_literal_basename(ignore_state,
-                                               name,
-                                               path,
-                                               relative_path,
-                                               entry->is_dir);
-    enum bx_ignore_match_result extension_ignore = BX_IGNORE_NO_MATCH;
-    enum bx_ignore_match_result directory_ignore = BX_IGNORE_NO_MATCH;
-    enum bx_ignore_match_result anchored_prefix_ignore = BX_IGNORE_NO_MATCH;
-    if (basename_ignore == BX_IGNORE_EXCLUDE)
-        return true;
-    if (basename_ignore == BX_IGNORE_NO_MATCH &&
-        bx_ignore_state_is_basename_only_chain(ignore_state)) {
+    if (bx_ignore_state_is_basename_only_chain(ignore_state)) {
+        if (bx_ignore_state_match_literal_basename(ignore_state,
+                                                   name,
+                                                   path,
+                                                   relative_path,
+                                                   entry->is_dir) == BX_IGNORE_EXCLUDE) {
+            return true;
+        }
         bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_BASENAME_ONLY_FAST_PATHS, 1u);
-        basename_only_fast_path = true;
         goto ignore_complete;
     }
-    if (basename_ignore == BX_IGNORE_NO_MATCH) {
-        extension_ignore = bx_ignore_state_match_literal_extension(ignore_state,
-                                                                   name,
-                                                                   path,
-                                                                   relative_path,
-                                                                   entry->is_dir);
-    }
-    if (extension_ignore == BX_IGNORE_EXCLUDE)
-        return true;
-    if (basename_ignore == BX_IGNORE_NO_MATCH &&
-        extension_ignore == BX_IGNORE_NO_MATCH) {
-        directory_ignore = bx_ignore_state_match_literal_directory(ignore_state,
-                                                                  name,
-                                                                  path,
-                                                                  relative_path,
-                                                                  entry->is_dir);
-    }
-    if (directory_ignore == BX_IGNORE_EXCLUDE)
-        return true;
-    if (basename_ignore == BX_IGNORE_NO_MATCH &&
-        extension_ignore == BX_IGNORE_NO_MATCH &&
-        directory_ignore == BX_IGNORE_NO_MATCH) {
-        anchored_prefix_ignore = bx_ignore_state_match_anchored_prefix(ignore_state,
+
+    if (bx_ignore_state_has_generic_glob_fallback_chain(ignore_state)) {
+        if (bx_ignore_state_matches_path(ignore_state,
+                                         name,
+                                         path,
+                                         relative_path,
+                                         entry->is_dir)) {
+            return true;
+        }
+    } else {
+        if (bx_ignore_state_matches_path_without_generic_glob_fallback(ignore_state,
                                                                        name,
                                                                        path,
                                                                        relative_path,
-                                                                       entry->is_dir);
+                                                                       entry->is_dir)) {
+            return true;
+        }
+        bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_NO_GENERIC_GLOB_FAST_PATHS,
+                                         1u);
     }
-    if (anchored_prefix_ignore == BX_IGNORE_EXCLUDE)
-        return true;
 
 ignore_complete:
     if (metadata_type_pending) {
@@ -303,24 +286,6 @@ ignore_complete:
             if (entry_selected_out)
                 *entry_selected_out = false;
             return false;
-        }
-    }
-
-    if (!basename_only_fast_path &&
-        basename_ignore == BX_IGNORE_NO_MATCH &&
-        extension_ignore == BX_IGNORE_NO_MATCH &&
-        directory_ignore == BX_IGNORE_NO_MATCH &&
-        anchored_prefix_ignore == BX_IGNORE_NO_MATCH) {
-        if (bx_ignore_state_has_generic_glob_fallback_chain(ignore_state)) {
-            if (bx_ignore_state_match_generic_glob_fallback(ignore_state,
-                                                           name,
-                                                           path,
-                                                           relative_path,
-                                                           entry->is_dir) == BX_IGNORE_EXCLUDE)
-                return true;
-        } else {
-            bx_search_dev_counters_note_walk(BX_SEARCH_WALK_IGNORE_NO_GENERIC_GLOB_FAST_PATHS,
-                                             1u);
         }
     }
 

@@ -84,6 +84,12 @@ bool bx_ignore_state_matches_path(const struct bx_ignore_state *state,
                                   const char *path,
                                   const char *root_relative_path,
                                   bool is_dir);
+bool bx_ignore_state_matches_path_without_generic_glob_fallback(
+    const struct bx_ignore_state *state,
+    const char *name,
+    const char *path,
+    const char *root_relative_path,
+    bool is_dir);
 
 bool bx_ignore_enable_gitignore_for_root(const char *root, const struct bx_walk_ignore_opts *opts);
 char *bx_ignore_find_git_root(const char *root, const struct bx_walk_ignore_opts *opts);

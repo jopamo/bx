@@ -62,6 +62,12 @@ bx_ignore_program_match_generic_glob_fallback(const struct bx_ignore_program *pr
                                               const char *relative_path,
                                               bool is_dir);
 
+enum bx_ignore_match_result
+bx_ignore_program_match_without_generic_glob_fallback(const struct bx_ignore_program *program,
+                                                      const char *name,
+                                                      const char *relative_path,
+                                                      bool is_dir);
+
 enum bx_ignore_match_result bx_ignore_program_match(const struct bx_ignore_program *program,
                                                     const char *name,
                                                     const char *relative_path,
