@@ -109,6 +109,49 @@ static bool bx_mkfifo_parse_options(int argc, char** argv, struct bx_mkfifo_opti
     return true;
 }
 
+static int bx_mkfifo_create_fifo(const char* path, mode_t mode, bool explicit_mode) {
+    if (!explicit_mode) {
+        return bx_fd_mkfifoat(AT_FDCWD, path, mode);
+    }
+
+    mode_t old_umask = umask(0u);
+    int rc = bx_fd_mkfifoat(AT_FDCWD, path, mode | S_IRUSR);
+    int saved_errno = errno;
+    umask(old_umask);
+    errno = saved_errno;
+    return rc;
+}
+
+static bool bx_mkfifo_chmod_created_fifo(const char* path, mode_t mode, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
+    if (fd < 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        bx_perror_path(diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+
+    if (!S_ISFIFO(st.st_mode)) {
+        errno = EEXIST;
+        bx_perror_path(diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+
+    if (bx_fd_fchmod(fd, mode) != 0) {
+        bx_perror_path(diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+
+    return bx_fd_close(&fd, path, diag);
+}
+
 int bx_mkfifo_main(int argc, char** argv) {
     struct bx_mkfifo_options options;
     struct bx_diag_ctx diag = {
@@ -141,11 +184,11 @@ int bx_mkfifo_main(int argc, char** argv) {
 
     for (int i = first_operand; i < argc; i++) {
         mode_t create_mode = options.mode_set ? options.mode : 0666u;
-        if (bx_fd_mkfifoat(AT_FDCWD, argv[i], create_mode) != 0) {
+        if (bx_mkfifo_create_fifo(argv[i], create_mode, options.mode_set) != 0) {
             bx_perror_path(&diag, argv[i]);
         }
-        else if (options.mode_set && chmod(argv[i], options.mode) != 0) {
-            bx_perror_path(&diag, argv[i]);
+        else if (options.mode_set) {
+            (void)bx_mkfifo_chmod_created_fifo(argv[i], options.mode, &diag);
         }
     }
 

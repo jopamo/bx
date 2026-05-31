@@ -138,11 +138,39 @@ static bool bx_mkdir_emit_created(const char* path, struct bx_diag_ctx* diag) {
     return true;
 }
 
+static bool bx_mkdir_chmod_created_dir(const char* path, mode_t mode, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    if (bx_fd_fchmod(fd, mode) != 0) {
+        bx_perror_path(diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+
+    return bx_fd_close(&fd, path, diag);
+}
+
+static int bx_mkdir_create_dir(const char* path, mode_t mode, bool explicit_final_mode) {
+    if (!explicit_final_mode) {
+        return bx_fd_mkdirat(AT_FDCWD, path, mode);
+    }
+
+    mode_t old_umask = umask(0u);
+    int rc = bx_fd_mkdirat(AT_FDCWD, path, mode | S_IRWXU);
+    int saved_errno = errno;
+    umask(old_umask);
+    errno = saved_errno;
+    return rc;
+}
+
 static bool bx_mkdir_create_component(const char* path, bool final_component, const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
     mode_t create_mode = (options->mode_set && final_component) ? options->mode : 0777u;
-    if (bx_fd_mkdirat(AT_FDCWD, path, create_mode) == 0) {
-        if (options->mode_set && final_component && chmod(path, options->mode) != 0) {
-            bx_perror_path(diag, path);
+    if (bx_mkdir_create_dir(path, create_mode, options->mode_set && final_component) == 0) {
+        if (options->mode_set && final_component && !bx_mkdir_chmod_created_dir(path, options->mode, diag)) {
             return false;
         }
         if (options->verbose && !bx_mkdir_emit_created(path, diag)) {
@@ -212,13 +240,12 @@ static bool bx_mkdir_one(const char* path, const struct bx_mkdir_options* option
     }
 
     mode_t create_mode = options->mode_set ? options->mode : 0777u;
-    if (bx_fd_mkdirat(AT_FDCWD, path, create_mode) != 0) {
+    if (bx_mkdir_create_dir(path, create_mode, options->mode_set) != 0) {
         bx_perror_path(diag, path);
         return false;
     }
 
-    if (options->mode_set && chmod(path, options->mode) != 0) {
-        bx_perror_path(diag, path);
+    if (options->mode_set && !bx_mkdir_chmod_created_dir(path, options->mode, diag)) {
         return false;
     }
 

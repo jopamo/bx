@@ -1,5 +1,6 @@
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <stdbool.h>
@@ -11,9 +12,11 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/cli_common.h"
 #include "lib/path_ops.h"
+#include "lib/same_file.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/args_common.h"
@@ -345,17 +348,233 @@ static bool bx_chown_apply_existing(const char* path, const struct stat* st, boo
     return true;
 }
 
+static bool bx_chown_apply_existing_fd(const char* path, int fd, const struct stat* st, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
+    uid_t old_owner = st->st_uid;
+    gid_t old_group = st->st_gid;
+    uid_t new_owner = owner;
+    gid_t new_group = group;
+    bool should_apply = true;
+
+    if (owner == (uid_t)-1) {
+        new_owner = old_owner;
+    }
+    if (group == (gid_t)-1) {
+        new_group = old_group;
+    }
+
+    if (options->from_filter_set) {
+        should_apply = bx_chown_matches_from_filter(options, old_owner, old_group);
+    }
+
+    if (should_apply) {
+        if (bx_fd_fchown(fd, owner, group) != 0) {
+            bx_chown_perror_path(options, diag, path);
+            return false;
+        }
+    }
+    else {
+        new_owner = old_owner;
+        new_group = old_group;
+    }
+
+    if (options->report_mode != BX_CHOWN_REPORT_NONE) {
+        bool changed = should_apply && ((old_owner != new_owner) || (old_group != new_group));
+        return bx_chown_emit_report(options, path, old_owner, old_group, new_owner, new_group, changed, diag);
+    }
+
+    return true;
+}
+
+static bool bx_chown_diag_source_changed(const char* path, struct bx_diag_ctx* diag) {
+    bx_diag(diag, "source '%s' changed during chown", path);
+    return false;
+}
+
+static bool bx_chown_open_error_is_changed_source(const char* path, const struct stat* expected_st) {
+    struct stat current_st;
+
+    if (expected_st == NULL) {
+        return false;
+    }
+    if (lstat(path, &current_st) != 0) {
+        return false;
+    }
+    return !bx_same_file(expected_st, &current_st);
+}
+
+static bool bx_chown_verify_selected_source_lstat(const char* path, const struct stat* expected_st, struct bx_diag_ctx* diag) {
+    struct stat current_st;
+
+    if (lstat(path, &current_st) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+    if (!bx_same_file(expected_st, &current_st)) {
+        return bx_chown_diag_source_changed(path, diag);
+    }
+    return true;
+}
+
+static bool bx_chown_apply_opened_regular_file(const char* path,
+                                               const struct stat* expected_st,
+                                               uid_t owner,
+                                               gid_t group,
+                                               const struct bx_chown_options* options,
+                                               struct bx_diag_ctx* diag) {
+#ifdef O_PATH
+    int fd = bx_fd_open_nofollow_cloexec(path, O_PATH, 0);
+#else
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY, 0);
+#endif
+    if (fd < 0) {
+        if (bx_chown_open_error_is_changed_source(path, expected_st)) {
+            return bx_chown_diag_source_changed(path, diag);
+        }
+        bx_chown_perror_path(options, diag, path);
+        return false;
+    }
+
+    struct stat opened_st;
+    if (fstat(fd, &opened_st) != 0) {
+        bx_chown_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    if (!S_ISREG(opened_st.st_mode) || !bx_same_file(expected_st, &opened_st)) {
+        bx_fd_cleanup(&fd);
+        return bx_chown_diag_source_changed(path, diag);
+    }
+
+    bool ok = bx_chown_apply_existing_fd(path, fd, &opened_st, owner, group, options, diag);
+    bx_fd_cleanup(&fd);
+    return ok;
+}
+
 static bool bx_chown_apply_path_recursive(const char* path,
                                           bool top_level,
                                           uid_t owner,
                                           gid_t group,
                                           const struct bx_chown_options* options,
                                           struct bx_diag_ctx* diag,
-                                          const struct bx_chown_dir_stack_entry* dir_stack) {
-    struct stat path_lstat;
-    if (lstat(path, &path_lstat) != 0) {
+                                          const struct bx_chown_dir_stack_entry* dir_stack);
+
+static bool bx_chown_apply_path_recursive_selected(const char* path,
+                                                   bool top_level,
+                                                   const struct stat* selected_lstat,
+                                                   uid_t owner,
+                                                   gid_t group,
+                                                   const struct bx_chown_options* options,
+                                                   struct bx_diag_ctx* diag,
+                                                   const struct bx_chown_dir_stack_entry* dir_stack);
+
+static bool bx_chown_apply_opened_top_directory_recursive(const char* path,
+                                                          const struct stat* expected_st,
+                                                          uid_t owner,
+                                                          gid_t group,
+                                                          const struct bx_chown_options* options,
+                                                          struct bx_diag_ctx* diag,
+                                                          const struct bx_chown_dir_stack_entry* dir_stack) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) {
         bx_chown_perror_path(options, diag, path);
         return false;
+    }
+
+    struct stat opened_st;
+    if (fstat(fd, &opened_st) != 0) {
+        bx_chown_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    if (!S_ISDIR(opened_st.st_mode) || !bx_same_file(expected_st, &opened_st)) {
+        bx_fd_cleanup(&fd);
+        return bx_chown_diag_source_changed(path, diag);
+    }
+
+    bool ok = bx_chown_apply_existing_fd(path, fd, &opened_st, owner, group, options, diag);
+
+    if (bx_chown_dir_stack_contains(dir_stack, opened_st.st_dev, opened_st.st_ino)) {
+        bx_fd_cleanup(&fd);
+        return ok;
+    }
+
+    struct bx_chown_dir_stack_entry stack_entry = {
+        .dev = opened_st.st_dev,
+        .ino = opened_st.st_ino,
+        .next = dir_stack,
+    };
+
+    DIR* dir = fdopendir(fd);
+    if (dir == NULL) {
+        bx_chown_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    fd = -1;
+
+    bool recurse_ok = true;
+    int dir_fd = dirfd(dir);
+    if (dir_fd < 0) {
+        bx_chown_perror_path(options, diag, path);
+        recurse_ok = false;
+    }
+
+    while (dir_fd >= 0) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (entry == NULL) {
+            if (errno != 0) {
+                bx_chown_perror_path(options, diag, path);
+                recurse_ok = false;
+            }
+            break;
+        }
+        if (bx_path_is_dot_or_dotdot(entry->d_name)) {
+            continue;
+        }
+
+        char* child_path = bx_path_join(path, entry->d_name);
+        struct stat child_lstat;
+        if (bx_fd_fstatat_child_nofollow(dir_fd, entry->d_name, &child_lstat) != 0) {
+            bx_chown_perror_path(options, diag, child_path);
+            recurse_ok = false;
+            free(child_path);
+            continue;
+        }
+        if (!bx_chown_apply_path_recursive_selected(child_path, false, &child_lstat, owner, group, options, diag, &stack_entry)) {
+            recurse_ok = false;
+        }
+        free(child_path);
+    }
+
+    if (closedir(dir) != 0) {
+        bx_chown_perror_path(options, diag, path);
+        recurse_ok = false;
+    }
+
+    return ok && recurse_ok;
+}
+
+static bool bx_chown_apply_path_recursive_selected(const char* path,
+                                                   bool top_level,
+                                                   const struct stat* selected_lstat,
+                                                   uid_t owner,
+                                                   gid_t group,
+                                                   const struct bx_chown_options* options,
+                                                   struct bx_diag_ctx* diag,
+                                                   const struct bx_chown_dir_stack_entry* dir_stack) {
+    struct stat path_lstat;
+    if (selected_lstat != NULL) {
+        path_lstat = *selected_lstat;
+        if (!bx_chown_verify_selected_source_lstat(path, selected_lstat, diag)) {
+            return false;
+        }
+    }
+    else {
+        if (lstat(path, &path_lstat) != 0) {
+            bx_chown_perror_path(options, diag, path);
+            return false;
+        }
     }
 
     bool is_symlink = S_ISLNK(path_lstat.st_mode);
@@ -404,6 +623,14 @@ static bool bx_chown_apply_path_recursive(const char* path,
         }
     }
 
+    if (should_recurse && !is_symlink) {
+        return bx_chown_apply_opened_top_directory_recursive(path, recurse_stat, owner, group, options, diag, dir_stack);
+    }
+
+    if (!top_level && options->recursive && selected_lstat != NULL && !is_symlink && S_ISREG(path_lstat.st_mode)) {
+        return bx_chown_apply_opened_regular_file(path, &path_lstat, owner, group, options, diag);
+    }
+
     bool ok = bx_chown_apply_existing(path, &apply_stat, no_follow, owner, group, options, diag);
 
     if (!should_recurse) {
@@ -426,6 +653,13 @@ static bool bx_chown_apply_path_recursive(const char* path,
         return false;
     }
 
+    int dir_fd = dirfd(dir);
+    if (dir_fd < 0) {
+        bx_chown_perror_path(options, diag, path);
+        (void)closedir(dir);
+        return false;
+    }
+
     bool recurse_ok = true;
     for (;;) {
         errno = 0;
@@ -442,7 +676,14 @@ static bool bx_chown_apply_path_recursive(const char* path,
         }
 
         char* child_path = bx_path_join(path, entry->d_name);
-        if (!bx_chown_apply_path_recursive(child_path, false, owner, group, options, diag, &stack_entry)) {
+        struct stat child_lstat;
+        if (bx_fd_fstatat_child_nofollow(dir_fd, entry->d_name, &child_lstat) != 0) {
+            bx_chown_perror_path(options, diag, child_path);
+            recurse_ok = false;
+            free(child_path);
+            continue;
+        }
+        if (!bx_chown_apply_path_recursive_selected(child_path, false, &child_lstat, owner, group, options, diag, &stack_entry)) {
             recurse_ok = false;
         }
         free(child_path);
@@ -454,6 +695,16 @@ static bool bx_chown_apply_path_recursive(const char* path,
     }
 
     return ok && recurse_ok;
+}
+
+static bool bx_chown_apply_path_recursive(const char* path,
+                                          bool top_level,
+                                          uid_t owner,
+                                          gid_t group,
+                                          const struct bx_chown_options* options,
+                                          struct bx_diag_ctx* diag,
+                                          const struct bx_chown_dir_stack_entry* dir_stack) {
+    return bx_chown_apply_path_recursive_selected(path, top_level, NULL, owner, group, options, diag, dir_stack);
 }
 
 static bool bx_chown_apply_one(const char* path, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {

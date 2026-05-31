@@ -157,6 +157,9 @@ static bool bx_remove_recursive_child(int parent_fd,
     }
 
     if (!S_ISDIR(st.st_mode)) {
+        if (!bx_remove_verify_child_entry(parent_fd, name, path, &st, diag)) {
+            return false;
+        }
         if (bx_fd_unlinkat_child(parent_fd, name, 0) != 0) {
             bx_perror_path(diag, path);
             return false;

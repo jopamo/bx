@@ -484,6 +484,20 @@ static bool bx_copy_verify_opened_source(struct bx_copy_context* ctx, const char
     return true;
 }
 
+static bool bx_copy_verify_selected_source_lstat(struct bx_copy_context* ctx, const char* src_path, const struct stat* expected_stat) {
+    struct stat current_stat;
+
+    if (lstat(src_path, &current_stat) != 0) {
+        bx_perror_path(ctx->diag, src_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &current_stat)) {
+        bx_diag(ctx->diag, "source '%s' changed during copy", src_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_copy_verify_opened_destination(struct bx_copy_context* ctx, const char* dest_path, int fd, const struct stat* expected_stat) {
     struct stat opened_stat;
 
@@ -524,6 +538,97 @@ static bool bx_copy_verify_destination_socket(struct bx_copy_context* ctx, const
         return false;
     }
     return true;
+}
+
+static bool bx_copy_device_type_matches(mode_t expected_mode, mode_t actual_mode) {
+    return (S_ISCHR(expected_mode) && S_ISCHR(actual_mode)) ||
+           (S_ISBLK(expected_mode) && S_ISBLK(actual_mode));
+}
+
+static bool bx_copy_verify_destination_device(struct bx_copy_context* ctx,
+                                              const char* dest_path,
+                                              const struct stat* src_stat,
+                                              struct stat* created_stat_out) {
+    if (fstatat(AT_FDCWD, dest_path, created_stat_out, AT_SYMLINK_NOFOLLOW) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!bx_copy_device_type_matches(src_stat->st_mode, created_stat_out->st_mode) ||
+        created_stat_out->st_rdev != src_stat->st_rdev) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_apply_device_fd_path_attrs(struct bx_copy_context* ctx,
+                                               const char* src_path,
+                                               const char* dest_path,
+                                               const struct stat* src_stat,
+                                               const struct stat* created_stat) {
+#ifdef O_PATH
+    int dest_fd = bx_fd_open_nofollow_cloexec(dest_path, O_PATH, 0);
+    if (dest_fd < 0) {
+        if (errno == ELOOP || errno == ENOENT || errno == ENOTDIR) {
+            bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        }
+        else {
+            bx_perror_path(ctx->diag, dest_path);
+        }
+        return false;
+    }
+
+    bool ok = true;
+    struct stat opened_stat;
+    if (fstat(dest_fd, &opened_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        ok = false;
+        goto out;
+    }
+    if (!bx_copy_device_type_matches(src_stat->st_mode, opened_stat.st_mode) ||
+        opened_stat.st_rdev != src_stat->st_rdev ||
+        !bx_same_file(created_stat, &opened_stat)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        ok = false;
+        goto out;
+    }
+
+    char proc_fd_path[64];
+    int n = snprintf(proc_fd_path, sizeof(proc_fd_path), "/proc/self/fd/%d", dest_fd);
+    if (n < 0 || (size_t)n >= sizeof(proc_fd_path)) {
+        errno = ENAMETOOLONG;
+        bx_perror_path(ctx->diag, dest_path);
+        ok = false;
+        goto out;
+    }
+
+    if (!bx_copy_path_metadata(src_path, proc_fd_path, src_stat, ctx->options->preserve_mask, false)) {
+        bx_perror_path(ctx->diag, dest_path);
+        ok = false;
+        goto out;
+    }
+
+    if (fstat(dest_fd, &opened_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        ok = false;
+        goto out;
+    }
+    if (!bx_same_file(created_stat, &opened_stat)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        ok = false;
+    }
+
+out:
+    bx_fd_cleanup(&dest_fd);
+    return ok;
+#else
+    (void)src_path;
+    (void)src_stat;
+    (void)created_stat;
+    errno = ENOTSUP;
+    bx_perror_path(ctx->diag, dest_path);
+    return false;
+#endif
 }
 
 static bool bx_copy_cleanup_failed_created_destination(struct bx_copy_context* ctx, const char* dest_path) {
@@ -801,7 +906,7 @@ static bool bx_copy_create_socket_node(struct bx_copy_context* ctx, const char* 
 }
 
 static bool bx_copy_create_device_node(struct bx_copy_context* ctx, const char* dest_path, mode_t create_mode, dev_t rdev) {
-    if (mknod(dest_path, create_mode, rdev) != 0) {
+    if (bx_fd_mknodat(AT_FDCWD, dest_path, create_mode, rdev) != 0) {
         bx_perror_path(ctx->diag, dest_path);
         return false;
     }
@@ -837,7 +942,12 @@ static bool bx_copy_device_node(struct bx_copy_context* ctx, const char* src_pat
         return false;
     }
 
-    if (!bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, false)) {
+    struct stat created_stat;
+    if (!bx_copy_verify_destination_device(ctx, dest_path, src_stat, &created_stat)) {
+        return false;
+    }
+
+    if (!bx_copy_apply_device_fd_path_attrs(ctx, src_path, dest_path, src_stat, &created_stat)) {
         return false;
     }
 
@@ -1162,6 +1272,13 @@ static bool bx_copy_prepare_parents(struct bx_copy_context* ctx, const char* sou
     return true;
 }
 
+static bool bx_copy_path_selected(struct bx_copy_context* ctx,
+                                  const char* src_path,
+                                  const char* source_operand,
+                                  const char* dest_path,
+                                  bool top_level,
+                                  const struct stat* selected_lstat);
+
 static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat, bool top_level) {
     struct bx_dest_state dest_state;
     bool created = false;
@@ -1259,7 +1376,7 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
         }
 
         char* dest_child = bx_path_join(dest_path, entry->d_name);
-        if (!bx_copy_path(ctx, src_child, src_child, dest_child, false)) {
+        if (!bx_copy_path_selected(ctx, src_child, src_child, dest_child, false, &child_lstat)) {
             ok = false;
             free(dest_child);
             free(src_child);
@@ -1307,7 +1424,12 @@ finish:
     return ok;
 }
 
-bool bx_copy_path(struct bx_copy_context* ctx, const char* src_path, const char* source_operand, const char* dest_path, bool top_level) {
+static bool bx_copy_path_selected(struct bx_copy_context* ctx,
+                                  const char* src_path,
+                                  const char* source_operand,
+                                  const char* dest_path,
+                                  bool top_level,
+                                  const struct stat* selected_lstat) {
     struct stat src_lstat;
     struct stat src_stat;
     bool source_is_symlink;
@@ -1315,9 +1437,17 @@ bool bx_copy_path(struct bx_copy_context* ctx, const char* src_path, const char*
     bool ok = false;
     bool parents_prepared = false;
 
-    if (lstat(src_path, &src_lstat) != 0) {
-        bx_perror_path(ctx->diag, src_path);
-        return false;
+    if (selected_lstat != NULL) {
+        src_lstat = *selected_lstat;
+        if (!bx_copy_verify_selected_source_lstat(ctx, src_path, selected_lstat)) {
+            return false;
+        }
+    }
+    else {
+        if (lstat(src_path, &src_lstat) != 0) {
+            bx_perror_path(ctx->diag, src_path);
+            return false;
+        }
     }
 
     if (!top_level && ctx->options->one_file_system && src_lstat.st_dev != ctx->source_root_dev) {
@@ -1424,4 +1554,8 @@ finish:
     }
 
     return ok;
+}
+
+bool bx_copy_path(struct bx_copy_context* ctx, const char* src_path, const char* source_operand, const char* dest_path, bool top_level) {
+    return bx_copy_path_selected(ctx, src_path, source_operand, dest_path, top_level, NULL);
 }

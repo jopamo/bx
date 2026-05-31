@@ -233,6 +233,22 @@ int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2],
     return utimensat(dirfd, path, times, flags);
 }
 
+int bx_fd_fchmod(int fd, mode_t mode) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return fchmod(fd, mode);
+}
+
+int bx_fd_fchown(int fd, uid_t owner, gid_t group) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return fchown(fd, owner, group);
+}
+
 int bx_fd_futimens(int fd, const struct timespec times[2]) {
     if (fd < 0) {
         errno = EBADF;

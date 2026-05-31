@@ -50,6 +50,64 @@ struct bx_install_options {
     bool show_version;
 };
 
+struct bx_install_created_dir_guard {
+    bool active;
+    char* path;
+    struct stat st;
+};
+
+static void bx_install_created_dir_guard_free(struct bx_install_created_dir_guard* guard) {
+    if (guard == NULL) {
+        return;
+    }
+    free(guard->path);
+    guard->path = NULL;
+    guard->active = false;
+}
+
+static bool bx_install_created_dir_guard_capture(struct bx_install_created_dir_guard* guard,
+                                                 const char* path,
+                                                 int fd,
+                                                 struct bx_diag_ctx* diag) {
+    if (guard == NULL) {
+        return true;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        bx_diag(diag, "leading directory '%s' changed during install", path);
+        return false;
+    }
+
+    bx_install_created_dir_guard_free(guard);
+    guard->path = xstrdup(path);
+    guard->st = st;
+    guard->active = true;
+    return true;
+}
+
+static bool bx_install_created_dir_guard_verify(const struct bx_install_created_dir_guard* guard,
+                                                struct bx_diag_ctx* diag) {
+    if (guard == NULL || !guard->active) {
+        return true;
+    }
+
+    struct stat st;
+    if (bx_fd_fstatat_nofollow(AT_FDCWD, guard->path, &st) != 0) {
+        bx_perror_path(diag, guard->path);
+        return false;
+    }
+    if (!S_ISDIR(st.st_mode) || !bx_same_file(&guard->st, &st)) {
+        bx_diag(diag, "leading directory '%s' changed during install", guard->path);
+        return false;
+    }
+    return true;
+}
+
 static void bx_install_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "Usage: %s [OPTION]... [-T] SOURCE DEST\n", progname);
     fprintf(stream, "  or:  %s [OPTION]... SOURCE... DIRECTORY\n", progname);
@@ -337,8 +395,53 @@ static bool bx_install_emit_copy(const char* src_path, const char* dest_path, st
     return true;
 }
 
+static bool bx_install_apply_created_dir_metadata_fd(int fd,
+                                                     const char* path,
+                                                     mode_t mode,
+                                                     bool apply_final_owner_group,
+                                                     const struct bx_install_options* options,
+                                                     struct bx_diag_ctx* diag) {
+    if (apply_final_owner_group && !bx_install_apply_owner_group_fd(fd, path, options, diag)) {
+        return false;
+    }
+    if (bx_fd_fchmod(fd, mode) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_install_apply_created_dir_metadata(const char* path,
+                                                  mode_t mode,
+                                                  bool apply_final_owner_group,
+                                                  struct bx_install_created_dir_guard* guard,
+                                                  const struct bx_install_options* options,
+                                                  struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+
+    bool ok = bx_install_apply_created_dir_metadata_fd(fd, path, mode, apply_final_owner_group, options, diag);
+    if (ok && !bx_install_created_dir_guard_capture(guard, path, fd, diag)) {
+        ok = false;
+    }
+    if (!bx_fd_close(&fd, path, diag)) {
+        ok = false;
+    }
+    return ok;
+}
+
 static bool
-bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_final_mode, bool apply_final_owner_group, const struct bx_install_options* options, bool verbose, struct bx_diag_ctx* diag) {
+bx_install_mkdir_p(const char* path,
+                   mode_t final_mode,
+                   bool set_final_mode,
+                   bool apply_final_owner_group,
+                   struct bx_install_created_dir_guard* created_final_dir_guard,
+                   const struct bx_install_options* options,
+                   bool verbose,
+                   struct bx_diag_ctx* diag) {
     char* normalized = bx_path_strip_trailing_slashes_dup(path);
     if (normalized[0] == '\0') {
         errno = ENOENT;
@@ -369,13 +472,13 @@ bx_install_mkdir_p(const char* path, mode_t final_mode, bool set_final_mode, boo
         bool final_component = (saved == '\0');
         mode_t create_mode = (final_component && set_final_mode) ? final_mode : 0755u;
 
-        if (mkdir(normalized, create_mode) == 0) {
-            if (final_component && apply_final_owner_group && !bx_install_apply_owner_group_path(normalized, options->owner_set, options->owner, options->group_set, options->group, diag)) {
-                free(normalized);
-                return false;
-            }
-            if (chmod(normalized, create_mode) != 0) {
-                bx_perror_path(diag, normalized);
+        if (bx_fd_mkdirat(AT_FDCWD, normalized, create_mode) == 0) {
+            if (!bx_install_apply_created_dir_metadata(normalized,
+                                                       create_mode,
+                                                       final_component && apply_final_owner_group,
+                                                       final_component ? created_final_dir_guard : NULL,
+                                                       options,
+                                                       diag)) {
                 free(normalized);
                 return false;
             }
@@ -924,7 +1027,7 @@ int bx_install_main(int argc, char** argv) {
         }
 
         for (int i = first_operand; i < argc; i++) {
-            (void)bx_install_mkdir_p(argv[i], install_mode, true, true, &options, options.verbose, &diag);
+            (void)bx_install_mkdir_p(argv[i], install_mode, true, true, NULL, &options, options.verbose, &diag);
         }
 
         if (options.verbose && fflush(stdout) == EOF) {
@@ -979,7 +1082,7 @@ int bx_install_main(int argc, char** argv) {
 
     if (destination_is_directory) {
         if (options.make_leading_dirs && options.target_directory != NULL) {
-            if (!bx_install_mkdir_p(destination_root, 0755u, false, false, &options, options.verbose, &diag)) {
+            if (!bx_install_mkdir_p(destination_root, 0755u, false, false, NULL, &options, options.verbose, &diag)) {
                 return diag.exit_status;
             }
         }
@@ -995,12 +1098,16 @@ int bx_install_main(int argc, char** argv) {
 
         if (options.make_leading_dirs) {
             char* parent_dir = bx_install_parent_dir_dup(dest_path);
+            struct bx_install_created_dir_guard leading_dir_guard = {0};
             if (parent_dir != NULL) {
-                if (!bx_install_mkdir_p(parent_dir, 0755u, false, false, &options, options.verbose, &diag)) {
+                if (!bx_install_mkdir_p(parent_dir, 0755u, false, false, &leading_dir_guard, &options, options.verbose, &diag) ||
+                    !bx_install_created_dir_guard_verify(&leading_dir_guard, &diag)) {
+                    bx_install_created_dir_guard_free(&leading_dir_guard);
                     free(parent_dir);
                     free(dest_path);
                     continue;
                 }
+                bx_install_created_dir_guard_free(&leading_dir_guard);
                 free(parent_dir);
             }
         }

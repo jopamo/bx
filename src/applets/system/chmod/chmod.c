@@ -1,15 +1,19 @@
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "applets.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/mode_parse.h"
+#include "lib/same_file.h"
 #include "bx/diag.h"
 #include "bx/libbx.h"
 
@@ -248,7 +252,13 @@ static bool bx_chmod_emit_report(const struct bx_chmod_options* options, const c
     return true;
 }
 
-static bool bx_chmod_apply_existing(const char* path, const struct stat* st, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+static bool bx_chmod_compute_mode(const char* path,
+                                  const struct stat* st,
+                                  const struct bx_chmod_mode_spec* mode_spec,
+                                  mode_t* old_mode_out,
+                                  mode_t* new_mode_out,
+                                  struct bx_diag_ctx* diag) {
+    (void)path;
     mode_t old_mode = st->st_mode & 07777u;
     mode_t mode_value = old_mode;
 
@@ -264,6 +274,18 @@ static bool bx_chmod_apply_existing(const char* path, const struct stat* st, con
         }
     }
 
+    *old_mode_out = old_mode;
+    *new_mode_out = mode_value;
+    return true;
+}
+
+static bool bx_chmod_apply_existing(const char* path, const struct stat* st, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+    mode_t old_mode = 0;
+    mode_t mode_value = 0;
+    if (!bx_chmod_compute_mode(path, st, mode_spec, &old_mode, &mode_value, diag)) {
+        return false;
+    }
+
     if (chmod(path, mode_value) != 0) {
         bx_chmod_perror_path(options, diag, path);
         return false;
@@ -273,13 +295,228 @@ static bool bx_chmod_apply_existing(const char* path, const struct stat* st, con
     return bx_chmod_emit_report(options, path, old_mode, mode_value, changed, diag);
 }
 
-static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+static bool bx_chmod_apply_existing_fd(const char* path,
+                                       int fd,
+                                       const struct stat* st,
+                                       const struct bx_chmod_mode_spec* mode_spec,
+                                       const struct bx_chmod_options* options,
+                                       struct bx_diag_ctx* diag) {
+    mode_t old_mode = 0;
+    mode_t mode_value = 0;
+    if (!bx_chmod_compute_mode(path, st, mode_spec, &old_mode, &mode_value, diag)) {
+        return false;
+    }
+
+    if (bx_fd_fchmod(fd, mode_value) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    bool changed = (old_mode != mode_value);
+    return bx_chmod_emit_report(options, path, old_mode, mode_value, changed, diag);
+}
+
+#ifdef O_PATH
+static bool bx_chmod_apply_existing_proc_fd_path(const char* path,
+                                                 int fd,
+                                                 const struct stat* st,
+                                                 const struct bx_chmod_mode_spec* mode_spec,
+                                                 const struct bx_chmod_options* options,
+                                                 struct bx_diag_ctx* diag) {
+    mode_t old_mode = 0;
+    mode_t mode_value = 0;
+    if (!bx_chmod_compute_mode(path, st, mode_spec, &old_mode, &mode_value, diag)) {
+        return false;
+    }
+
+    char proc_fd_path[64];
+    int n = snprintf(proc_fd_path, sizeof(proc_fd_path), "/proc/self/fd/%d", fd);
+    if (n < 0 || (size_t)n >= sizeof(proc_fd_path)) {
+        errno = ENAMETOOLONG;
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    if (chmod(proc_fd_path, mode_value) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    bool changed = (old_mode != mode_value);
+    return bx_chmod_emit_report(options, path, old_mode, mode_value, changed, diag);
+}
+#endif
+
+static bool bx_chmod_diag_source_changed(const char* path, struct bx_diag_ctx* diag) {
+    bx_diag(diag, "source '%s' changed during chmod", path);
+    return false;
+}
+
+static bool bx_chmod_verify_selected_source_lstat(const char* path, const struct stat* expected_st, struct bx_diag_ctx* diag) {
+    struct stat current_st;
+
+    if (lstat(path, &current_st) != 0) {
+        bx_perror_path(diag, path);
+        return false;
+    }
+    if (!bx_same_file(expected_st, &current_st)) {
+        return bx_chmod_diag_source_changed(path, diag);
+    }
+    return true;
+}
+
+static bool bx_chmod_apply_opened_regular_file(const char* path,
+                                               const struct stat* expected_st,
+                                               const struct bx_chmod_mode_spec* mode_spec,
+                                               const struct bx_chmod_options* options,
+                                               struct bx_diag_ctx* diag) {
+#ifdef O_PATH
+    int fd = bx_fd_open_nofollow_cloexec(path, O_PATH, 0);
+#else
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY, 0);
+#endif
+    if (fd < 0) {
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    struct stat opened_st;
+    if (fstat(fd, &opened_st) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    if (!S_ISREG(opened_st.st_mode) || !bx_same_file(expected_st, &opened_st)) {
+        bx_fd_cleanup(&fd);
+        return bx_chmod_diag_source_changed(path, diag);
+    }
+
+#ifdef O_PATH
+    bool ok = bx_chmod_apply_existing_proc_fd_path(path, fd, &opened_st, mode_spec, options, diag);
+#else
+    bool ok = bx_chmod_apply_existing_fd(path, fd, &opened_st, mode_spec, options, diag);
+#endif
+    bx_fd_cleanup(&fd);
+    return ok;
+}
+
+static bool bx_chmod_apply_path_recursive(const char* path,
+                                          bool top_level,
+                                          const struct bx_chmod_mode_spec* mode_spec,
+                                          const struct bx_chmod_options* options,
+                                          struct bx_diag_ctx* diag);
+
+static bool bx_chmod_apply_path_recursive_selected(const char* path,
+                                                   bool top_level,
+                                                   const struct stat* selected_lstat,
+                                                   const struct bx_chmod_mode_spec* mode_spec,
+                                                   const struct bx_chmod_options* options,
+                                                   struct bx_diag_ctx* diag);
+
+static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
+                                                          const struct stat* expected_st,
+                                                          const struct bx_chmod_mode_spec* mode_spec,
+                                                          const struct bx_chmod_options* options,
+                                                          struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) {
+        bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    struct stat opened_st;
+    if (fstat(fd, &opened_st) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    if (!S_ISDIR(opened_st.st_mode) || !bx_same_file(expected_st, &opened_st)) {
+        bx_fd_cleanup(&fd);
+        return bx_chmod_diag_source_changed(path, diag);
+    }
+
+    bool ok = bx_chmod_apply_existing_fd(path, fd, &opened_st, mode_spec, options, diag);
+
+    DIR* dir = fdopendir(fd);
+    if (dir == NULL) {
+        bx_chmod_perror_path(options, diag, path);
+        bx_fd_cleanup(&fd);
+        return false;
+    }
+    fd = -1;
+
+    bool recurse_ok = true;
+    int dir_fd = dirfd(dir);
+    if (dir_fd < 0) {
+        bx_chmod_perror_path(options, diag, path);
+        recurse_ok = false;
+    }
+
+    while (dir_fd >= 0) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (entry == NULL) {
+            if (errno != 0) {
+                bx_chmod_perror_path(options, diag, path);
+                recurse_ok = false;
+            }
+            break;
+        }
+        if (bx_path_is_dot_or_dotdot(entry->d_name)) {
+            continue;
+        }
+
+        char* child_path = bx_path_join(path, entry->d_name);
+        struct stat child_lstat;
+        if (bx_fd_fstatat_child_nofollow(dir_fd, entry->d_name, &child_lstat) != 0) {
+            bx_chmod_perror_path(options, diag, child_path);
+            recurse_ok = false;
+            free(child_path);
+            continue;
+        }
+        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, mode_spec, options, diag)) {
+            recurse_ok = false;
+        }
+        free(child_path);
+    }
+
+    if (closedir(dir) != 0) {
+        bx_chmod_perror_path(options, diag, path);
+        recurse_ok = false;
+    }
+
+    return ok && recurse_ok;
+}
+
+static bool bx_chmod_apply_path_recursive_selected(const char* path,
+                                                   bool top_level,
+                                                   const struct stat* selected_lstat,
+                                                   const struct bx_chmod_mode_spec* mode_spec,
+                                                   const struct bx_chmod_options* options,
+                                                   struct bx_diag_ctx* diag) {
     struct stat st;
+    struct stat top_lstat;
+    bool have_top_lstat = false;
 
     if (top_level) {
+        if (options->recursive) {
+            have_top_lstat = lstat(path, &top_lstat) == 0;
+        }
         if (stat(path, &st) != 0) {
             bx_chmod_perror_path(options, diag, path);
             return false;
+        }
+    }
+    else if (selected_lstat != NULL) {
+        st = *selected_lstat;
+        if (!bx_chmod_verify_selected_source_lstat(path, selected_lstat, diag)) {
+            return false;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            return true;
+        }
+        if (S_ISREG(st.st_mode)) {
+            return bx_chmod_apply_opened_regular_file(path, &st, mode_spec, options, diag);
         }
     }
     else {
@@ -292,6 +529,17 @@ static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, cons
         }
     }
 
+    if (top_level && options->recursive && S_ISDIR(st.st_mode) && have_top_lstat && !S_ISLNK(top_lstat.st_mode)) {
+        if (!S_ISDIR(top_lstat.st_mode) || !bx_same_file(&top_lstat, &st)) {
+            return bx_chmod_diag_source_changed(path, diag);
+        }
+        return bx_chmod_apply_opened_top_directory_recursive(path, &st, mode_spec, options, diag);
+    }
+
+    if (!top_level && options->recursive && S_ISDIR(st.st_mode)) {
+        return bx_chmod_apply_opened_top_directory_recursive(path, &st, mode_spec, options, diag);
+    }
+
     bool ok = bx_chmod_apply_existing(path, &st, mode_spec, options, diag);
 
     if (!options->recursive || !S_ISDIR(st.st_mode)) {
@@ -301,6 +549,13 @@ static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, cons
     DIR* dir = opendir(path);
     if (dir == NULL) {
         bx_chmod_perror_path(options, diag, path);
+        return false;
+    }
+
+    int dir_fd = dirfd(dir);
+    if (dir_fd < 0) {
+        bx_chmod_perror_path(options, diag, path);
+        (void)closedir(dir);
         return false;
     }
 
@@ -320,7 +575,14 @@ static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, cons
         }
 
         char* child_path = bx_path_join(path, entry->d_name);
-        if (!bx_chmod_apply_path_recursive(child_path, false, mode_spec, options, diag)) {
+        struct stat child_lstat;
+        if (bx_fd_fstatat_child_nofollow(dir_fd, entry->d_name, &child_lstat) != 0) {
+            bx_chmod_perror_path(options, diag, child_path);
+            recurse_ok = false;
+            free(child_path);
+            continue;
+        }
+        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, mode_spec, options, diag)) {
             recurse_ok = false;
         }
         free(child_path);
@@ -332,6 +594,10 @@ static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, cons
     }
 
     return ok && recurse_ok;
+}
+
+static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
+    return bx_chmod_apply_path_recursive_selected(path, top_level, NULL, mode_spec, options, diag);
 }
 
 static void bx_chmod_apply_one(const char* path, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
