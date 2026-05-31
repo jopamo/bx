@@ -336,12 +336,6 @@ static bool bx_truncate_get_reference_size(const char* path, uintmax_t* size_out
     return true;
 }
 
-static void bx_truncate_close_quietly(int fd) {
-    if (fd >= 0) {
-        (void)close(fd);
-    }
-}
-
 static bool bx_truncate_apply_path(const char* path, const struct bx_truncate_options* options, uintmax_t reference_size, bool has_reference, struct bx_diag_ctx* diag) {
     int flags = O_WRONLY;
     if (!options->no_create) {
@@ -359,18 +353,17 @@ static bool bx_truncate_apply_path(const char* path, const struct bx_truncate_op
 
     off_t target_size = 0;
     if (!bx_truncate_resolve_target_size(options, fd, reference_size, has_reference, path, &target_size, diag)) {
-        bx_truncate_close_quietly(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
-    if (ftruncate(fd, target_size) != 0) {
+    if (bx_fd_ftruncate(fd, target_size) != 0) {
         bx_perror_path(diag, path);
-        bx_truncate_close_quietly(fd);
+        bx_fd_cleanup(&fd);
         return false;
     }
 
-    if (close(fd) != 0) {
-        bx_perror_path(diag, path);
+    if (!bx_fd_close(&fd, path, diag)) {
         return false;
     }
 

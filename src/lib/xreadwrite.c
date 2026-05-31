@@ -15,7 +15,7 @@ ssize_t bx_xread(int fd, void* buffer, size_t count) {
     }
 }
 
-bool bx_xwrite_all(int fd, const void* buffer, size_t count) {
+enum bx_xwrite_status bx_xwrite_all_status(int fd, const void* buffer, size_t count) {
     const unsigned char* p = (const unsigned char*)buffer;
     size_t done = 0;
 
@@ -25,14 +25,18 @@ bool bx_xwrite_all(int fd, const void* buffer, size_t count) {
             if (errno == EINTR) {
                 continue;
             }
-            return false;
+            return BX_XWRITE_ERROR;
         }
         if (nwritten == 0) {
             errno = EIO;
-            return false;
+            return BX_XWRITE_ZERO;
         }
         done += (size_t)nwritten;
     }
 
-    return true;
+    return BX_XWRITE_OK;
+}
+
+bool bx_xwrite_all(int fd, const void* buffer, size_t count) {
+    return bx_xwrite_all_status(fd, buffer, count) == BX_XWRITE_OK;
 }

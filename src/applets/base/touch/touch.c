@@ -354,7 +354,7 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
     const struct timespec* requested_times = bx_touch_requested_times(options, times);
     int utimensat_flags = options->no_dereference ? AT_SYMLINK_NOFOLLOW : 0;
 
-    if (utimensat(AT_FDCWD, path, requested_times, utimensat_flags) == 0) {
+    if (bx_fd_utimensat(AT_FDCWD, path, requested_times, utimensat_flags) == 0) {
         return;
     }
 
@@ -378,12 +378,11 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
         return;
     }
 
-    if (close(fd) != 0) {
-        bx_perror_path(diag, path);
+    if (!bx_fd_close(&fd, path, diag)) {
         return;
     }
 
-    if (utimensat(AT_FDCWD, path, requested_times, utimensat_flags) != 0) {
+    if (bx_fd_utimensat(AT_FDCWD, path, requested_times, utimensat_flags) != 0) {
         bx_perror_path(diag, path);
     }
 }

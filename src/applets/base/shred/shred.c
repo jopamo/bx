@@ -17,6 +17,7 @@
 #include "lib/fd_ops.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/xreadwrite.h"
 
 enum bx_shred_remove_mode {
     BX_SHRED_REMOVE_UNLINK = 0,
@@ -268,11 +269,8 @@ static bool bx_shred_parse_options(int argc, char** argv, struct bx_shred_option
 static bool bx_shred_fill_random(int random_fd, const char* random_source_path, unsigned char* buffer, size_t count, struct bx_diag_ctx* diag) {
     size_t done = 0;
     while (done < count) {
-        ssize_t nread = read(random_fd, buffer + done, count - done);
+        ssize_t nread = bx_xread(random_fd, buffer + done, count - done);
         if (nread < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
             bx_perror_path(diag, random_source_path);
             return false;
         }
@@ -286,23 +284,16 @@ static bool bx_shred_fill_random(int random_fd, const char* random_source_path, 
 }
 
 static bool bx_shred_write_all(int fd, const unsigned char* buffer, size_t count, const char* path, struct bx_diag_ctx* diag) {
-    size_t done = 0;
-    while (done < count) {
-        ssize_t nwritten = write(fd, buffer + done, count - done);
-        if (nwritten < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            bx_perror_path(diag, path);
-            return false;
-        }
-        if (nwritten == 0) {
-            bx_diag(diag, "%s: short write", path);
-            return false;
-        }
-        done += (size_t)nwritten;
+    enum bx_xwrite_status status = bx_xwrite_all_status(fd, buffer, count);
+    if (status == BX_XWRITE_OK) {
+        return true;
     }
-    return true;
+    if (status == BX_XWRITE_ZERO) {
+        bx_diag(diag, "%s: short write", path);
+        return false;
+    }
+    bx_perror_path(diag, path);
+    return false;
 }
 
 static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, int random_fd, const char* random_source_path, bool zero_fill, struct bx_diag_ctx* diag) {
@@ -328,7 +319,7 @@ static bool bx_shred_overwrite_pass(int fd, const char* path, uintmax_t bytes, i
         remaining -= (uintmax_t)chunk;
     }
 
-    if (fsync(fd) != 0) {
+    if (bx_fd_fsync(fd) != 0) {
         bx_perror_path(diag, path);
         return false;
     }
@@ -373,7 +364,7 @@ static bool bx_shred_remove_path(const char* path, enum bx_shred_remove_mode rem
             break;
     }
 
-    if (unlink(path) != 0) {
+    if (bx_fd_unlinkat(AT_FDCWD, path, 0) != 0) {
         bx_perror_path(diag, path);
         return false;
     }
@@ -438,8 +429,7 @@ static bool bx_shred_apply_path(const char* path, const struct bx_shred_options*
         }
     }
 
-    if (close(fd) != 0) {
-        bx_perror_path(diag, path);
+    if (!bx_fd_close(&fd, path, diag)) {
         ok = false;
     }
 
@@ -498,9 +488,7 @@ int bx_shred_main(int argc, char** argv) {
         (void)bx_shred_apply_path(argv[i], &options, random_fd, options.random_source_path, &diag);
     }
 
-    if (random_fd >= 0 && close(random_fd) != 0) {
-        bx_perror_path(&diag, options.random_source_path);
-    }
+    (void)bx_fd_close(&random_fd, options.random_source_path, &diag);
 
     return diag.exit_status;
 }

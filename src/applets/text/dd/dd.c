@@ -1037,7 +1037,7 @@ static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx) {
         off_t skip_offset = 0;
         bool offset_ok = bx_dd_u64_to_off_t(skip_bytes, &skip_offset);
 
-        if (!offset_ok || lseek(ctx->infd, skip_offset, SEEK_CUR) < 0) {
+        if (!offset_ok || bx_fd_lseek(ctx->infd, skip_offset, SEEK_CUR) < 0) {
             if (offset_ok && errno != ESPIPE && errno != EINVAL) {
                 bx_dd_perror_path(ctx->progname, ctx->input_path);
                 return false;
@@ -1065,7 +1065,7 @@ static bool bx_dd_apply_skip_seek(struct bx_dd_ctx* ctx) {
             return false;
         }
 
-        if (lseek(ctx->outfd, seek_offset, SEEK_CUR) < 0) {
+        if (bx_fd_lseek(ctx->outfd, seek_offset, SEEK_CUR) < 0) {
             bx_dd_perror_path(ctx->progname, ctx->output_path);
             return false;
         }
@@ -1092,7 +1092,7 @@ static bool bx_dd_finalize_output_size(struct bx_dd_ctx* ctx) {
         return true;
     }
 
-    off_t end_pos = lseek(ctx->outfd, 0, SEEK_CUR);
+    off_t end_pos = bx_fd_lseek(ctx->outfd, 0, SEEK_CUR);
     if (end_pos < 0) {
         bx_dd_perror_path(ctx->progname, ctx->output_path);
         return false;
@@ -1102,7 +1102,7 @@ static bool bx_dd_finalize_output_size(struct bx_dd_ctx* ctx) {
         return true;
     }
 
-    if (ftruncate(ctx->outfd, end_pos) != 0) {
+    if (bx_fd_ftruncate(ctx->outfd, end_pos) != 0) {
         bx_dd_perror_path(ctx->progname, ctx->output_path);
         return false;
     }
@@ -1128,6 +1128,16 @@ static bool bx_dd_drop_cache_if_requested(struct bx_dd_ctx* ctx, int fd, unsigne
     bx_dd_diag(ctx->progname, "nocache is not supported on this platform");
     return false;
 #endif
+}
+
+static bool bx_dd_close_fd(struct bx_dd_ctx* ctx, int* fd, const char* path) {
+    struct bx_diag_ctx diag = {
+        .progname = ctx->progname,
+        .exit_status = 0,
+        .verbose = false,
+        .debug = false,
+    };
+    return bx_fd_close(fd, path, &diag);
 }
 
 static bool bx_dd_now(struct timespec* ts_out) {
@@ -1397,7 +1407,7 @@ static void bx_dd_advance_after_read_error(struct bx_dd_ctx* ctx) {
         return;
     }
 
-    if (lseek(ctx->infd, ibs_offset, SEEK_CUR) < 0) {
+    if (bx_fd_lseek(ctx->infd, ibs_offset, SEEK_CUR) < 0) {
         return;
     }
 }
@@ -1476,7 +1486,7 @@ static bool bx_dd_write_chunk(struct bx_dd_ctx* ctx, const unsigned char* data, 
 
         if (all_zero) {
             off_t skip = (off_t)len;
-            if (skip >= 0 && (uintmax_t)skip == (uintmax_t)len && lseek(ctx->outfd, skip, SEEK_CUR) >= 0) {
+            if (skip >= 0 && (uintmax_t)skip == (uintmax_t)len && bx_fd_lseek(ctx->outfd, skip, SEEK_CUR) >= 0) {
                 wrote = true;
             }
         }
@@ -1994,13 +2004,13 @@ out:
         }
 
         if ((ctx.cfg.conv_mask & BX_DD_CONV_FDATASYNC) != 0u) {
-            if (fdatasync(ctx.outfd) != 0) {
+            if (bx_fd_fdatasync(ctx.outfd) != 0) {
                 bx_dd_perror_path(ctx.progname, ctx.output_path);
                 rc = 1;
             }
         }
         else if ((ctx.cfg.conv_mask & BX_DD_CONV_FSYNC) != 0u) {
-            if (fsync(ctx.outfd) != 0) {
+            if (bx_fd_fsync(ctx.outfd) != 0) {
                 bx_dd_perror_path(ctx.progname, ctx.output_path);
                 rc = 1;
             }
@@ -2019,13 +2029,11 @@ out:
         rc = 1;
     }
 
-    if (ctx.infd >= 0 && close(ctx.infd) != 0) {
-        bx_dd_perror_path(ctx.progname, ctx.input_path);
+    if (ctx.infd >= 0 && !bx_dd_close_fd(&ctx, &ctx.infd, ctx.input_path)) {
         rc = 1;
     }
 
-    if (ctx.outfd >= 0 && close(ctx.outfd) != 0) {
-        bx_dd_perror_path(ctx.progname, ctx.output_path);
+    if (ctx.outfd >= 0 && !bx_dd_close_fd(&ctx, &ctx.outfd, ctx.output_path)) {
         rc = 1;
     }
 

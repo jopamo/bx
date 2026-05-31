@@ -484,6 +484,20 @@ static bool bx_copy_verify_opened_source(struct bx_copy_context* ctx, const char
     return true;
 }
 
+static bool bx_copy_verify_destination_directory(struct bx_copy_context* ctx, const char* dest_path, const struct stat* expected_stat) {
+    struct stat current_stat;
+
+    if (lstat(dest_path, &current_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!S_ISDIR(current_stat.st_mode) || !bx_same_file(expected_stat, &current_stat)) {
+        bx_diag(ctx->diag, "destination directory '%s' changed during copy", dest_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_copy_cleanup_failed_created_destination(struct bx_copy_context* ctx, const char* dest_path) {
     if (unlink(dest_path) != 0 && errno != ENOENT) {
         bx_perror_path(ctx->diag, dest_path);
@@ -1035,6 +1049,7 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
     ino_t prev_dest_root_ino = ctx->dest_root_ino;
     DIR* dir = NULL;
     bool ok = true;
+    bool dest_dir_changed = false;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
@@ -1099,6 +1114,12 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
             continue;
         }
 
+        if (!bx_copy_verify_destination_directory(ctx, dest_path, &dest_state.lst)) {
+            dest_dir_changed = true;
+            ok = false;
+            break;
+        }
+
         char* src_child = bx_path_join(src_path, entry->d_name);
         struct stat child_lstat;
         if (lstat(src_child, &child_lstat) != 0) {
@@ -1138,13 +1159,18 @@ finish:
         dir = NULL;
     }
 
-    if (created && restore_mode) {
+    if (!dest_dir_changed && !bx_copy_verify_destination_directory(ctx, dest_path, &dest_state.lst)) {
+        dest_dir_changed = true;
+        ok = false;
+    }
+
+    if (!dest_dir_changed && created && restore_mode) {
         if (chmod(dest_path, final_mode) != 0) {
             bx_perror_path(ctx->diag, dest_path);
             ok = false;
         }
     }
-    if (!bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, true)) {
+    if (!dest_dir_changed && !bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, true)) {
         ok = false;
     }
     if (ok && created) {

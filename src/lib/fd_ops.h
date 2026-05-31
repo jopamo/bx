@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -51,6 +52,11 @@ int bx_fd_symlinkat(const char* target, int linkdirfd, const char* linkpath);
 int bx_fd_mkdirat(int dirfd, const char* path, mode_t mode);
 int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev);
 int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode);
+int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2], int flags);
+int bx_fd_ftruncate(int fd, off_t length);
+int bx_fd_fsync(int fd);
+int bx_fd_fdatasync(int fd);
+off_t bx_fd_lseek(int fd, off_t offset, int whence);
 
 /* fd-relative child helpers are for recursive mutation/walk frames.
  * They require an already-open directory fd and a single child name.

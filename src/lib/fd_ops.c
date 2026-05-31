@@ -225,6 +225,34 @@ int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode) {
     return bx_fd_mknodat(dirfd, path, S_IFIFO | mode, 0);
 }
 
+int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2], int flags) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return utimensat(dirfd, path, times, flags);
+}
+
+int bx_fd_ftruncate(int fd, off_t length) {
+    if (length < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ftruncate(fd, length);
+}
+
+int bx_fd_fsync(int fd) {
+    return fsync(fd);
+}
+
+int bx_fd_fdatasync(int fd) {
+    return fdatasync(fd);
+}
+
+off_t bx_fd_lseek(int fd, off_t offset, int whence) {
+    return lseek(fd, offset, whence);
+}
+
 int bx_fd_unlinkat_child(int dirfd, const char* name, int flags) {
     if (bx_fd_at_check_child(dirfd, name) != 0) {
         return -1;

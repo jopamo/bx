@@ -149,8 +149,14 @@ int bx_tee_main(int argc, char** argv) {
     }
 
     for (int i = 1; i < output_count; i++) {
-        if (outputs[i].close_fd && close(outputs[i].fd) != 0 && !outputs[i].failed) {
-            bx_perror_path(&diag, outputs[i].name);
+        if (!outputs[i].close_fd) {
+            continue;
+        }
+        if (outputs[i].failed) {
+            bx_fd_cleanup(&outputs[i].fd);
+        }
+        else if (!bx_fd_close(&outputs[i].fd, outputs[i].name, &diag)) {
+            outputs[i].failed = true;
         }
     }
     free(output_buffers);
