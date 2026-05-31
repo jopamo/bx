@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -8,6 +9,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/args_common.h"
 
 struct bx_unlink_options {
@@ -103,7 +105,7 @@ int bx_unlink_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    if (unlink(operands[0]) != 0) {
+    if (bx_fd_unlinkat(AT_FDCWD, operands[0], 0) != 0) {
         bx_diag(&diag, "cannot unlink '%s': %s", operands[0], strerror(errno));
     }
 

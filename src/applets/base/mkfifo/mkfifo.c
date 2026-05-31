@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "bx/diag.h"
 #include "lib/mode_parse.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/args_common.h"
 
 struct bx_mkfifo_options {
@@ -139,7 +141,7 @@ int bx_mkfifo_main(int argc, char** argv) {
 
     for (int i = first_operand; i < argc; i++) {
         mode_t create_mode = options.mode_set ? options.mode : 0666u;
-        if (mkfifo(argv[i], create_mode) != 0) {
+        if (bx_fd_mkfifoat(AT_FDCWD, argv[i], create_mode) != 0) {
             bx_perror_path(&diag, argv[i]);
         }
         else if (options.mode_set && chmod(argv[i], options.mode) != 0) {

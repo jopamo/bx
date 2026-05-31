@@ -12,6 +12,7 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/prompt_ops.h"
 #include "lib/same_file.h"
@@ -300,18 +301,40 @@ out:
     return same_entry;
 }
 
-static bool bx_ln_hard_link_already_exists(const char* source_path, const char* destination_path, bool follow_symlinks) {
-    struct stat src_stat;
+static bool bx_ln_source_stat_for_hard_link(const struct bx_ln_options* options, const char* source_path, struct stat* source_stat_out, int* err_out) {
+    int rc = options->follow_symlinks ? stat(source_path, source_stat_out) : lstat(source_path, source_stat_out);
+    if (rc == 0) {
+        return true;
+    }
+    *err_out = errno;
+    return false;
+}
+
+static bool bx_ln_verify_source_path_unchanged(const struct bx_ln_options* options, const char* source_path, const struct stat* expected_source_stat, struct bx_diag_ctx* diag) {
+    struct stat current_stat;
+    int ignored_err = 0;
+
+    if (options->symbolic || expected_source_stat == NULL) {
+        return true;
+    }
+    if (!bx_ln_source_stat_for_hard_link(options, source_path, &current_stat, &ignored_err)) {
+        bx_diag(diag, "source '%s' changed during link", source_path);
+        return false;
+    }
+    if (!bx_same_file(expected_source_stat, &current_stat)) {
+        bx_diag(diag, "source '%s' changed during link", source_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_ln_destination_matches_expected_source(const char* destination_path, const struct stat* expected_source_stat) {
     struct stat dest_stat;
 
-    int src_rc = follow_symlinks ? stat(source_path, &src_stat) : lstat(source_path, &src_stat);
-    if (src_rc != 0) {
+    if (expected_source_stat == NULL || lstat(destination_path, &dest_stat) != 0) {
         return false;
     }
-    if (lstat(destination_path, &dest_stat) != 0) {
-        return false;
-    }
-    return bx_same_file(&src_stat, &dest_stat);
+    return bx_same_file(expected_source_stat, &dest_stat);
 }
 
 static bool bx_ln_remove_destination_for_force(const char* destination_path, struct bx_diag_ctx* diag) {
@@ -330,7 +353,7 @@ static bool bx_ln_remove_destination_for_force(const char* destination_path, str
         return false;
     }
 
-    if (unlink(destination_path) != 0) {
+    if (bx_fd_unlinkat(AT_FDCWD, destination_path, 0) != 0) {
         if (errno == ENOENT) {
             return true;
         }
@@ -365,18 +388,45 @@ static bool bx_ln_prepare_destination_for_replace(const char* destination_path, 
     return bx_ln_remove_destination_for_force(destination_path, diag);
 }
 
-static bool bx_ln_create_link_once(const struct bx_ln_options* options, const char* source_path, const char* destination_path, int* err_out) {
+static bool bx_ln_verify_created_hard_link(const struct bx_ln_options* options,
+                                           const char* source_path,
+                                           const char* destination_path,
+                                           const struct stat* expected_source_stat,
+                                           struct bx_diag_ctx* diag,
+                                           int* err_out) {
+    if (options->symbolic || expected_source_stat == NULL) {
+        return true;
+    }
+
+    if (bx_ln_destination_matches_expected_source(destination_path, expected_source_stat)) {
+        return true;
+    }
+
+    bx_diag(diag, "source '%s' changed during link", source_path);
+    if (bx_fd_unlinkat(AT_FDCWD, destination_path, 0) != 0 && errno != ENOENT) {
+        bx_diag(diag, "cannot remove '%s': %s", destination_path, strerror(errno));
+    }
+    *err_out = 0;
+    return false;
+}
+
+static bool bx_ln_create_link_once(const struct bx_ln_options* options,
+                                   const char* source_path,
+                                   const char* destination_path,
+                                   const struct stat* expected_source_stat,
+                                   struct bx_diag_ctx* diag,
+                                   int* err_out) {
     int rc;
     if (options->symbolic) {
-        rc = symlink(source_path, destination_path);
+        rc = bx_fd_symlinkat(source_path, AT_FDCWD, destination_path);
     }
     else {
         int flags = options->follow_symlinks ? AT_SYMLINK_FOLLOW : 0;
-        rc = linkat(AT_FDCWD, source_path, AT_FDCWD, destination_path, flags);
+        rc = bx_fd_linkat(AT_FDCWD, source_path, AT_FDCWD, destination_path, flags);
     }
 
     if (rc == 0) {
-        return true;
+        return bx_ln_verify_created_hard_link(options, source_path, destination_path, expected_source_stat, diag, err_out);
     }
 
     *err_out = errno;
@@ -414,15 +464,28 @@ static void bx_ln_print_verbose_line(const struct bx_ln_options* options, const 
 static bool bx_ln_create_link(const struct bx_ln_options* options, const struct bx_backup_params* backup_params, struct bx_diag_ctx* diag, const char* source_path, const char* destination_path) {
     int err = 0;
     bool backup_enabled = bx_args_backup_mode_enabled(backup_params->mode);
+    struct stat expected_source_stat;
+    const struct stat* expected_source_stat_ptr = NULL;
 
     if (!options->symbolic && !options->allow_directory_hard_links && bx_ln_path_is_directory(source_path, options->follow_symlinks)) {
         bx_diag(diag, "%s: hard link not allowed for directory", source_path);
         return false;
     }
 
-    if (bx_ln_create_link_once(options, source_path, destination_path, &err)) {
+    if (!options->symbolic) {
+        if (!bx_ln_source_stat_for_hard_link(options, source_path, &expected_source_stat, &err)) {
+            bx_ln_diag_create_failure(options, diag, source_path, destination_path, err);
+            return false;
+        }
+        expected_source_stat_ptr = &expected_source_stat;
+    }
+
+    if (bx_ln_create_link_once(options, source_path, destination_path, expected_source_stat_ptr, diag, &err)) {
         bx_ln_print_verbose_line(options, source_path, destination_path);
         return true;
+    }
+    if (err == 0) {
+        return false;
     }
 
     if (err != EEXIST || (!options->force && !options->interactive && !backup_enabled)) {
@@ -442,18 +505,29 @@ static bool bx_ln_create_link(const struct bx_ln_options* options, const struct 
         return true;
     }
 
-    if (!backup_enabled && !options->symbolic && bx_ln_hard_link_already_exists(source_path, destination_path, options->follow_symlinks)) {
+    if (!backup_enabled && !options->symbolic && bx_ln_destination_matches_expected_source(destination_path, expected_source_stat_ptr)) {
         bx_ln_print_verbose_line(options, source_path, destination_path);
         return true;
+    }
+
+    if (!bx_ln_verify_source_path_unchanged(options, source_path, expected_source_stat_ptr, diag)) {
+        return false;
     }
 
     if (!bx_ln_prepare_destination_for_replace(destination_path, backup_params, backup_enabled, diag)) {
         return false;
     }
 
-    if (bx_ln_create_link_once(options, source_path, destination_path, &err)) {
+    if (!bx_ln_verify_source_path_unchanged(options, source_path, expected_source_stat_ptr, diag)) {
+        return false;
+    }
+
+    if (bx_ln_create_link_once(options, source_path, destination_path, expected_source_stat_ptr, diag, &err)) {
         bx_ln_print_verbose_line(options, source_path, destination_path);
         return true;
+    }
+    if (err == 0) {
+        return false;
     }
 
     bx_ln_diag_create_failure(options, diag, source_path, destination_path, err);

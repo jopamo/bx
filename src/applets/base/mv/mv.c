@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
-#include <sys/syscall.h>
 
 #include "applets.h"
 #include "bx/diag.h"
@@ -26,28 +25,11 @@
 #include "lib/remove_ops.h"
 #include "lib/copy_metadata.h"
 #include "lib/args_common.h"
+#include "lib/fd_ops.h"
 
 #ifndef RENAME_EXCHANGE
 #define RENAME_EXCHANGE (1 << 1)
 #endif
-
-#ifndef AT_FDCWD
-#define AT_FDCWD -100
-#endif
-
-static int bx_renameat2(int oldfd, const char* oldpath, int newfd, const char* newpath, unsigned int flags) {
-#ifdef SYS_renameat2
-    return (int)syscall(SYS_renameat2, oldfd, oldpath, newfd, newpath, flags);
-#else
-    (void)oldfd;
-    (void)oldpath;
-    (void)newfd;
-    (void)newpath;
-    (void)flags;
-    errno = ENOSYS;
-    return -1;
-#endif
-}
 
 struct bx_mv_options {
     const char* progname;
@@ -514,6 +496,20 @@ static bool bx_mv_prepare_cross_device_destination(struct bx_mv_context* ctx, co
     return true;
 }
 
+static bool bx_mv_verify_source_path_unchanged(struct bx_mv_context* ctx, const char* src_path, const struct stat* expected_stat) {
+    struct stat current_stat;
+
+    if (lstat(src_path, &current_stat) != 0) {
+        bx_perror_path(ctx->diag, src_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &current_stat)) {
+        bx_diag(ctx->diag, "source '%s' changed during move", src_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_mv_cross_device_fallback(struct bx_mv_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat) {
     struct bx_copy_context* copy_ctx = &ctx->cross_device_copy_ctx;
 
@@ -536,7 +532,11 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context* ctx, const char* s
 
     bx_mv_reset_cross_device_copy_call_state(ctx);
 
-    if (!bx_remove_recursive(src_path, ctx->diag)) {
+    if (!bx_mv_verify_source_path_unchanged(ctx, src_path, src_stat)) {
+        return false;
+    }
+
+    if (!bx_remove_recursive_expected(src_path, src_stat, ctx->diag)) {
         return false;
     }
 
@@ -628,7 +628,7 @@ static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, c
     }
 
     if (ctx->options->exchange) {
-        if (bx_renameat2(AT_FDCWD, src_path, AT_FDCWD, dest_path, RENAME_EXCHANGE) == 0) {
+        if (bx_fd_renameat2(AT_FDCWD, src_path, AT_FDCWD, dest_path, RENAME_EXCHANGE) == 0) {
             if (ctx->options->verbose) {
                 bx_info(ctx->diag, "exchanged '%s' and '%s'", src_path, dest_path);
             }

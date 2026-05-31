@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -13,6 +14,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/args_common.h"
 
 struct bx_mknod_options {
@@ -188,7 +190,7 @@ int bx_mknod_main(int argc, char** argv) {
         return diag.exit_status;
     }
 
-    if (mknod(path, type_mode | 0666u, device) != 0) {
+    if (bx_fd_mknodat(AT_FDCWD, path, type_mode | 0666u, device) != 0) {
         bx_perror_path(&diag, path);
     }
 

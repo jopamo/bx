@@ -132,6 +132,20 @@ static bool bx_install_apply_owner_group_fd(int fd, const char* path, const stru
     return true;
 }
 
+static bool bx_install_verify_opened_source(const char* src_path, int fd, const struct stat* expected_stat, struct bx_diag_ctx* diag) {
+    struct stat opened_stat;
+
+    if (fstat(fd, &opened_stat) != 0) {
+        bx_perror_path(diag, src_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &opened_stat)) {
+        bx_diag(diag, "source '%s' changed during install", src_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_install_apply_owner_group_path(const char* path, bool owner_set, uid_t owner, bool group_set, gid_t group, struct bx_diag_ctx* diag) {
     if (!owner_set && !group_set) {
         return true;
@@ -685,6 +699,9 @@ static bool bx_install_copy_regular_file(const char* src_path,
     if (src_fd < 0) {
         bx_perror_path(diag, src_path);
         return false;
+    }
+    if (!bx_install_verify_opened_source(src_path, src_fd, &src_st, diag)) {
+        goto fail_keep;
     }
 
     dest_fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);

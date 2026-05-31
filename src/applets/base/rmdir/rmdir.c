@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/args_common.h"
 
 enum {
@@ -141,7 +143,7 @@ static bool bx_rmdir_remove_path(const char* path, const struct bx_rmdir_options
         return false;
     }
 
-    if (rmdir(path) == 0) {
+    if (bx_fd_unlinkat(AT_FDCWD, path, AT_REMOVEDIR) == 0) {
         *removed_out = true;
         return true;
     }

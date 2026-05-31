@@ -319,24 +319,24 @@ static bool bx_rm_remove_operand(const char* path, const struct bx_rm_options* o
             }
             if (options->one_file_system) {
                 if (!options->verbose) {
-                    return bx_remove_recursive_one_file_system(path, st.st_dev, diag);
+                    return bx_remove_recursive_one_file_system_expected(path, &st, st.st_dev, diag);
                 }
 
                 struct bx_rm_recursive_report_ctx report_ctx = {
                     .options = options,
                     .diag = diag,
                 };
-                return bx_remove_recursive_one_file_system_report(path, st.st_dev, diag, bx_rm_report_recursive_removed, &report_ctx);
+                return bx_remove_recursive_one_file_system_expected_report(path, &st, st.st_dev, diag, bx_rm_report_recursive_removed, &report_ctx);
             }
             if (!options->verbose) {
-                return bx_remove_recursive(path, diag);
+                return bx_remove_recursive_expected(path, &st, diag);
             }
 
             struct bx_rm_recursive_report_ctx report_ctx = {
                 .options = options,
                 .diag = diag,
             };
-            return bx_remove_recursive_report(path, diag, bx_rm_report_recursive_removed, &report_ctx);
+            return bx_remove_recursive_expected_report(path, &st, diag, bx_rm_report_recursive_removed, &report_ctx);
         }
 
         if (options->remove_empty_dirs) {

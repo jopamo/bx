@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/fd_ops.h"
 #include "lib/mode_parse.h"
 #include "lib/args_common.h"
 
@@ -138,7 +140,7 @@ static bool bx_mkdir_emit_created(const char* path, struct bx_diag_ctx* diag) {
 
 static bool bx_mkdir_create_component(const char* path, bool final_component, const struct bx_mkdir_options* options, struct bx_diag_ctx* diag) {
     mode_t create_mode = (options->mode_set && final_component) ? options->mode : 0777u;
-    if (mkdir(path, create_mode) == 0) {
+    if (bx_fd_mkdirat(AT_FDCWD, path, create_mode) == 0) {
         if (options->mode_set && final_component && chmod(path, options->mode) != 0) {
             bx_perror_path(diag, path);
             return false;
@@ -210,7 +212,7 @@ static bool bx_mkdir_one(const char* path, const struct bx_mkdir_options* option
     }
 
     mode_t create_mode = options->mode_set ? options->mode : 0777u;
-    if (mkdir(path, create_mode) != 0) {
+    if (bx_fd_mkdirat(AT_FDCWD, path, create_mode) != 0) {
         bx_perror_path(diag, path);
         return false;
     }

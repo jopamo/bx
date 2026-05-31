@@ -470,6 +470,20 @@ static int bx_copy_data_internal(int src_fd, int dest_fd, struct bx_diag_ctx* di
     return res;
 }
 
+static bool bx_copy_verify_opened_source(struct bx_copy_context* ctx, const char* src_path, int fd, const struct stat* expected_stat) {
+    struct stat opened_stat;
+
+    if (fstat(fd, &opened_stat) != 0) {
+        bx_perror_path(ctx->diag, src_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &opened_stat)) {
+        bx_diag(ctx->diag, "source '%s' changed during copy", src_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_copy_cleanup_failed_created_destination(struct bx_copy_context* ctx, const char* dest_path) {
     if (unlink(dest_path) != 0 && errno != ENOENT) {
         bx_perror_path(ctx->diag, dest_path);
@@ -562,6 +576,9 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     if (!ctx->options->attributes_only || open_source_for_attributes_only || (ctx->options->preserve_mask & (BX_PRESERVE_XATTR | BX_PRESERVE_MODE)) != 0u) {
         src_fd = bx_fd_open_read(src_path, ctx->diag);
         if (src_fd < 0) {
+            goto fail;
+        }
+        if (S_ISREG(src_stat->st_mode) && !bx_copy_verify_opened_source(ctx, src_path, src_fd, src_stat)) {
             goto fail;
         }
     }
@@ -1059,6 +1076,10 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
         ok = false;
         goto finish;
     }
+    if (!bx_copy_verify_opened_source(ctx, src_path, dirfd(dir), src_stat)) {
+        ok = false;
+        goto finish;
+    }
 
     char* required_child = bx_copy_required_self_copy_child(ctx, src_path);
     for (;;) {
@@ -1108,13 +1129,15 @@ static bool bx_copy_directory(struct bx_copy_context* ctx, const char* src_path,
     }
     free(required_child);
 
-    if (closedir(dir) != 0) {
-        bx_perror_path(ctx->diag, src_path);
-        ok = false;
-    }
-    dir = NULL;
-
 finish:
+    if (dir != NULL) {
+        if (closedir(dir) != 0) {
+            bx_perror_path(ctx->diag, src_path);
+            ok = false;
+        }
+        dir = NULL;
+    }
+
     if (created && restore_mode) {
         if (chmod(dest_path, final_mode) != 0) {
             bx_perror_path(ctx->diag, dest_path);

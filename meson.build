@@ -281,6 +281,7 @@ bx_lib_sources = [
   'src/lib/path_ops.c',
   'src/lib/path_quote.c',
   'src/lib/prompt_ops.c',
+  'src/lib/random_bytes.c',
   'src/lib/remove_ops.c',
   'src/lib/same_file.c',
   'src/lib/sandbox_explain.c',

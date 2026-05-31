@@ -181,11 +181,55 @@ int bx_fd_fstatat_child_nofollow(int dirfd, const char* name, struct stat* st) {
     return bx_fd_fstatat_child(dirfd, name, st, AT_SYMLINK_NOFOLLOW);
 }
 
+int bx_fd_unlinkat(int dirfd, const char* path, int flags) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return unlinkat(dirfd, path, flags);
+}
+
+int bx_fd_linkat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, int flags) {
+    if (oldpath == NULL || newpath == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return linkat(olddirfd, oldpath, newdirfd, newpath, flags);
+}
+
+int bx_fd_symlinkat(const char* target, int linkdirfd, const char* linkpath) {
+    if (target == NULL || linkpath == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return symlinkat(target, linkdirfd, linkpath);
+}
+
+int bx_fd_mkdirat(int dirfd, const char* path, mode_t mode) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return mkdirat(dirfd, path, mode);
+}
+
+int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    return mknodat(dirfd, path, mode, dev);
+}
+
+int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode) {
+    return bx_fd_mknodat(dirfd, path, S_IFIFO | mode, 0);
+}
+
 int bx_fd_unlinkat_child(int dirfd, const char* name, int flags) {
     if (bx_fd_at_check_child(dirfd, name) != 0) {
         return -1;
     }
-    return unlinkat(dirfd, name, flags);
+    return bx_fd_unlinkat(dirfd, name, flags);
 }
 
 int bx_fd_renameat_child(int olddirfd, const char* oldname, int newdirfd, const char* newname) {
@@ -198,22 +242,36 @@ int bx_fd_renameat_child(int olddirfd, const char* oldname, int newdirfd, const 
     return renameat(olddirfd, oldname, newdirfd, newname);
 }
 
+int bx_fd_renameat2(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, unsigned int flags) {
+    if (oldpath == NULL || newpath == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef SYS_renameat2
+    return (int)syscall(SYS_renameat2, olddirfd, oldpath, newdirfd, newpath, flags);
+#else
+    (void)olddirfd;
+    (void)oldpath;
+    (void)newdirfd;
+    (void)newpath;
+    (void)flags;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
 int bx_fd_mkdirat_child(int dirfd, const char* name, mode_t mode) {
     if (bx_fd_at_check_child(dirfd, name) != 0) {
         return -1;
     }
-    return mkdirat(dirfd, name, mode);
+    return bx_fd_mkdirat(dirfd, name, mode);
 }
 
 int bx_fd_symlinkat_child(const char* target, int linkdirfd, const char* linkname) {
-    if (target == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
     if (bx_fd_at_check_child(linkdirfd, linkname) != 0) {
         return -1;
     }
-    return symlinkat(target, linkdirfd, linkname);
+    return bx_fd_symlinkat(target, linkdirfd, linkname);
 }
 
 int bx_fd_linkat_child(int olddirfd, const char* oldname, int newdirfd, const char* newname, int flags) {
@@ -223,5 +281,5 @@ int bx_fd_linkat_child(int olddirfd, const char* oldname, int newdirfd, const ch
     if (bx_fd_at_check_child(newdirfd, newname) != 0) {
         return -1;
     }
-    return linkat(olddirfd, oldname, newdirfd, newname, flags);
+    return bx_fd_linkat(olddirfd, oldname, newdirfd, newname, flags);
 }

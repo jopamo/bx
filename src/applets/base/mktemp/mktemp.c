@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -16,6 +15,7 @@
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
+#include "lib/random_bytes.h"
 
 enum {
     BX_MKTEMP_OPT_TMPDIR = 256,
@@ -156,25 +156,27 @@ static const char* bx_mktemp_resolve_t_tmpdir(const struct bx_mktemp_options* op
     return "/tmp";
 }
 
-static void bx_mktemp_seed_rng(void) {
-    static bool seeded = false;
-    if (seeded) {
-        return;
-    }
-
-    unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)getpid();
-    srand(seed);
-    seeded = true;
-}
-
-static void bx_mktemp_fill_random(char* out, size_t count) {
+static bool bx_mktemp_fill_random(char* out, size_t count) {
     static const char alphabet[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     const size_t alphabet_len = sizeof(alphabet) - 1u;
+    const unsigned int usable_limit = (unsigned int)(256u - (256u % alphabet_len));
 
-    bx_mktemp_seed_rng();
-    for (size_t i = 0; i < count; i++) {
-        out[i] = alphabet[(size_t)(rand() % (int)alphabet_len)];
+    size_t filled = 0;
+    while (filled < count) {
+        unsigned char buffer[64];
+        if (!bx_random_bytes(buffer, sizeof(buffer))) {
+            return false;
+        }
+
+        for (size_t i = 0; i < sizeof(buffer) && filled < count; i++) {
+            if ((unsigned int)buffer[i] >= usable_limit) {
+                continue;
+            }
+            out[filled++] = alphabet[(size_t)(buffer[i] % alphabet_len)];
+        }
     }
+
+    return true;
 }
 
 static bool bx_mktemp_prepare_template(const char* full_template,
@@ -254,7 +256,7 @@ static bool bx_mktemp_prepare_template(const char* full_template,
 static bool bx_mktemp_try_create(const struct bx_mktemp_options* options, const char* path) {
     if (options->dry_run) {
         struct stat st;
-        if (lstat(path, &st) == 0) {
+        if (bx_fd_fstatat_nofollow(AT_FDCWD, path, &st) == 0) {
             errno = EEXIST;
             return false;
         }
@@ -267,7 +269,7 @@ static bool bx_mktemp_try_create(const struct bx_mktemp_options* options, const 
     }
 
     if (options->create_directory) {
-        return mkdir(path, S_IRWXU) == 0;
+        return bx_fd_mkdirat(AT_FDCWD, path, S_IRWXU) == 0;
     }
 
     int fd = bx_fd_open_cloexec(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
@@ -275,9 +277,9 @@ static bool bx_mktemp_try_create(const struct bx_mktemp_options* options, const 
         return false;
     }
 
-    if (close(fd) != 0) {
+    if (!bx_fd_close(&fd, NULL, NULL)) {
         int saved_errno = errno;
-        (void)unlink(path);
+        (void)bx_fd_unlinkat(AT_FDCWD, path, 0);
         errno = saved_errno;
         return false;
     }
@@ -289,7 +291,9 @@ static bool bx_mktemp_create_path(const struct bx_mktemp_options* options, char*
     enum { BX_MKTEMP_MAX_ATTEMPTS = 16384 };
 
     for (int attempt = 0; attempt < BX_MKTEMP_MAX_ATTEMPTS; attempt++) {
-        bx_mktemp_fill_random(path_out + x_start, x_len);
+        if (!bx_mktemp_fill_random(path_out + x_start, x_len)) {
+            return false;
+        }
         if (bx_mktemp_try_create(options, path_out)) {
             return true;
         }

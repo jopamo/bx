@@ -43,6 +43,15 @@ int bx_fd_dup2_exact(int oldfd, int newfd);
 int bx_fd_open_nofollow_cloexec(const char* path, int flags, mode_t mode);
 int bx_fd_fstatat_nofollow(int dirfd, const char* path, struct stat* st);
 
+/* Path-relative filesystem mutation constructors centralize direct syscall
+ * policy for applets that still need full pathname semantics. */
+int bx_fd_unlinkat(int dirfd, const char* path, int flags);
+int bx_fd_linkat(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, int flags);
+int bx_fd_symlinkat(const char* target, int linkdirfd, const char* linkpath);
+int bx_fd_mkdirat(int dirfd, const char* path, mode_t mode);
+int bx_fd_mknodat(int dirfd, const char* path, mode_t mode, dev_t dev);
+int bx_fd_mkfifoat(int dirfd, const char* path, mode_t mode);
+
 /* fd-relative child helpers are for recursive mutation/walk frames.
  * They require an already-open directory fd and a single child name.
  * Empty names, "."/"..", names containing '/', and AT_FDCWD-style
@@ -54,6 +63,7 @@ int bx_fd_fstatat_child(int dirfd, const char* name, struct stat* st, int flags)
 int bx_fd_fstatat_child_nofollow(int dirfd, const char* name, struct stat* st);
 int bx_fd_unlinkat_child(int dirfd, const char* name, int flags);
 int bx_fd_renameat_child(int olddirfd, const char* oldname, int newdirfd, const char* newname);
+int bx_fd_renameat2(int olddirfd, const char* oldpath, int newdirfd, const char* newpath, unsigned int flags);
 int bx_fd_mkdirat_child(int dirfd, const char* name, mode_t mode);
 int bx_fd_symlinkat_child(const char* target, int linkdirfd, const char* linkname);
 int bx_fd_linkat_child(int olddirfd, const char* oldname, int newdirfd, const char* newname, int flags);
