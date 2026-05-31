@@ -233,6 +233,14 @@ int bx_fd_utimensat(int dirfd, const char* path, const struct timespec times[2],
     return utimensat(dirfd, path, times, flags);
 }
 
+int bx_fd_futimens(int fd, const struct timespec times[2]) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+    return futimens(fd, times);
+}
+
 int bx_fd_ftruncate(int fd, off_t length) {
     if (length < 0) {
         errno = EINVAL;

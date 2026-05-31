@@ -484,6 +484,20 @@ static bool bx_copy_verify_opened_source(struct bx_copy_context* ctx, const char
     return true;
 }
 
+static bool bx_copy_verify_opened_destination(struct bx_copy_context* ctx, const char* dest_path, int fd, const struct stat* expected_stat) {
+    struct stat opened_stat;
+
+    if (fstat(fd, &opened_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &opened_stat)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        return false;
+    }
+    return true;
+}
+
 static bool bx_copy_verify_destination_directory(struct bx_copy_context* ctx, const char* dest_path, const struct stat* expected_stat) {
     struct stat current_stat;
 
@@ -493,6 +507,20 @@ static bool bx_copy_verify_destination_directory(struct bx_copy_context* ctx, co
     }
     if (!S_ISDIR(current_stat.st_mode) || !bx_same_file(expected_stat, &current_stat)) {
         bx_diag(ctx->diag, "destination directory '%s' changed during copy", dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_verify_destination_socket(struct bx_copy_context* ctx, const char* dest_path, const struct stat* expected_stat) {
+    struct stat current_stat;
+
+    if (lstat(dest_path, &current_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!S_ISSOCK(current_stat.st_mode) || !bx_same_file(expected_stat, &current_stat)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
         return false;
     }
     return true;
@@ -684,6 +712,52 @@ static bool bx_copy_create_fifo_node(struct bx_copy_context* ctx, const char* de
     return true;
 }
 
+static int bx_copy_open_fifo_metadata_fd(struct bx_copy_context* ctx, const char* path) {
+    int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
+
+    if (fd < 0) {
+        bx_perror_path(ctx->diag, path);
+    }
+    return fd;
+}
+
+static bool bx_copy_apply_fifo_fd_attrs(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat, const struct stat* dest_stat) {
+    int src_fd = -1;
+    int dest_fd = -1;
+    bool ok = true;
+
+    if ((ctx->options->preserve_mask & (BX_PRESERVE_MODE | BX_PRESERVE_XATTR)) != 0u) {
+        src_fd = bx_copy_open_fifo_metadata_fd(ctx, src_path);
+        if (src_fd < 0) {
+            ok = false;
+            goto out;
+        }
+        if (!bx_copy_verify_opened_source(ctx, src_path, src_fd, src_stat)) {
+            ok = false;
+            goto out;
+        }
+    }
+
+    dest_fd = bx_copy_open_fifo_metadata_fd(ctx, dest_path);
+    if (dest_fd < 0) {
+        ok = false;
+        goto out;
+    }
+    if (!bx_copy_verify_opened_destination(ctx, dest_path, dest_fd, dest_stat)) {
+        ok = false;
+        goto out;
+    }
+
+    if (!bx_copy_apply_fd_attrs(ctx, src_fd, dest_fd, src_stat)) {
+        ok = false;
+    }
+
+out:
+    bx_fd_cleanup(&src_fd);
+    bx_fd_cleanup(&dest_fd);
+    return ok;
+}
+
 static bool bx_copy_create_socket_node(struct bx_copy_context* ctx, const char* dest_path, mode_t create_mode) {
     size_t path_len = strlen(dest_path);
     struct sockaddr_un addr;
@@ -705,14 +779,15 @@ static bool bx_copy_create_socket_node(struct bx_copy_context* ctx, const char* 
     addr.sun_family = AF_UNIX;
     memcpy(addr.sun_path, dest_path, path_len + 1u);
 
+    mode_t socket_umask = (mode_t)(0777u & ~(create_mode & 0777u));
+    mode_t old_umask = umask(socket_umask);
     socklen_t addr_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + path_len + 1u);
-    if (bind(fd, (const struct sockaddr*)&addr, addr_len) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
-        bx_fd_cleanup(&fd);
-        return false;
-    }
+    int bind_rc = bind(fd, (const struct sockaddr*)&addr, addr_len);
+    int bind_errno = errno;
+    umask(old_umask);
+    errno = bind_errno;
 
-    if (chmod(dest_path, create_mode) != 0) {
+    if (bind_rc != 0) {
         bx_perror_path(ctx->diag, dest_path);
         bx_fd_cleanup(&fd);
         return false;
@@ -722,47 +797,6 @@ static bool bx_copy_create_socket_node(struct bx_copy_context* ctx, const char* 
         return false;
     }
 
-    return true;
-}
-
-static bool bx_copy_special_node(struct bx_copy_context* ctx,
-                                 const char* src_path,
-                                 const char* dest_path,
-                                 const struct stat* src_stat,
-                                 bool (*create_node)(struct bx_copy_context* ctx, const char* dest_path, mode_t create_mode)) {
-    struct bx_dest_state dest_state;
-    mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
-
-    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
-        return false;
-    }
-
-    if (dest_state.exists_lstat && bx_same_file(src_stat, &dest_state.lst)) {
-        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
-        return false;
-    }
-
-    if (dest_state.exists_lstat) {
-        enum bx_copy_overwrite_result result = bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst, &dest_state, true, true, NULL);
-        if (result == BX_COPY_OVERWRITE_FAILED) {
-            return false;
-        }
-        if (result == BX_COPY_OVERWRITE_SKIP) {
-            return true;
-        }
-    }
-
-    if (!create_node(ctx, dest_path, create_mode)) {
-        return false;
-    }
-
-    if (!bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, false, false)) {
-        return false;
-    }
-
-    bx_copy_add_link_entry(ctx, src_stat, dest_path);
-    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     return true;
 }
 
@@ -813,7 +847,50 @@ static bool bx_copy_device_node(struct bx_copy_context* ctx, const char* src_pat
 }
 
 static bool bx_copy_fifo(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat) {
-    return bx_copy_special_node(ctx, src_path, dest_path, src_stat, bx_copy_create_fifo_node);
+    struct bx_dest_state dest_state;
+    struct stat created_stat;
+    mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
+
+    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat && bx_same_file(src_stat, &dest_state.lst)) {
+        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat) {
+        enum bx_copy_overwrite_result result = bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst, &dest_state, true, true, NULL);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
+            return false;
+        }
+        if (result == BX_COPY_OVERWRITE_SKIP) {
+            return true;
+        }
+    }
+
+    if (!bx_copy_create_fifo_node(ctx, dest_path, create_mode)) {
+        return false;
+    }
+
+    if (lstat(dest_path, &created_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!S_ISFIFO(created_stat.st_mode)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        return false;
+    }
+
+    if (!bx_copy_apply_fifo_fd_attrs(ctx, src_path, dest_path, src_stat, &created_stat)) {
+        return false;
+    }
+
+    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
+    return true;
 }
 
 static bool bx_copy_socket_contents(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat) {
@@ -821,7 +898,53 @@ static bool bx_copy_socket_contents(struct bx_copy_context* ctx, const char* src
 }
 
 static bool bx_copy_socket(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat) {
-    return bx_copy_special_node(ctx, src_path, dest_path, src_stat, bx_copy_create_socket_node);
+    struct bx_dest_state dest_state;
+    struct stat created_stat;
+    mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
+
+    if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat && bx_same_file(src_stat, &dest_state.lst)) {
+        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+        return false;
+    }
+
+    if (dest_state.exists_lstat) {
+        enum bx_copy_overwrite_result result = bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, &dest_state.lst, &dest_state, true, true, NULL);
+        if (result == BX_COPY_OVERWRITE_FAILED) {
+            return false;
+        }
+        if (result == BX_COPY_OVERWRITE_SKIP) {
+            return true;
+        }
+    }
+
+    if (!bx_copy_create_socket_node(ctx, dest_path, create_mode)) {
+        return false;
+    }
+
+    if (lstat(dest_path, &created_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!S_ISSOCK(created_stat.st_mode)) {
+        bx_diag(ctx->diag, "destination '%s' changed during copy", dest_path);
+        return false;
+    }
+
+    if (!bx_copy_apply_path_attrs(ctx, src_path, dest_path, src_stat, true, false)) {
+        return false;
+    }
+    if (!bx_copy_verify_destination_socket(ctx, dest_path, &created_stat)) {
+        return false;
+    }
+
+    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
+    return true;
 }
 
 static bool bx_copy_symlink_object(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_lstat) {

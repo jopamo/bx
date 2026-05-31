@@ -378,12 +378,14 @@ static void bx_touch_path(const char* path, const struct bx_touch_options* optio
         return;
     }
 
-    if (!bx_fd_close(&fd, path, diag)) {
+    if (bx_fd_futimens(fd, requested_times) != 0) {
+        bx_perror_path(diag, path);
+        bx_fd_cleanup(&fd);
         return;
     }
 
-    if (bx_fd_utimensat(AT_FDCWD, path, requested_times, utimensat_flags) != 0) {
-        bx_perror_path(diag, path);
+    if (!bx_fd_close(&fd, path, diag)) {
+        return;
     }
 }
 
