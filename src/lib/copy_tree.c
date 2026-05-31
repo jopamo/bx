@@ -298,23 +298,42 @@ static struct bx_link_entry* bx_copy_find_link_entry(struct bx_copy_context* ctx
     return NULL;
 }
 
-static void bx_copy_add_link_entry(struct bx_copy_context* ctx, const struct stat* st, const char* dest_path) {
+static bool bx_copy_should_track_link_entry(const struct bx_copy_context* ctx, const struct stat* st) {
     if ((ctx->options->preserve_mask & BX_PRESERVE_LINKS) == 0 && !ctx->options->hard_link && !ctx->options->move_mode) {
-        return;
+        return false;
     }
     if (st->st_nlink < 2) {
-        return;
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_add_link_entry(struct bx_copy_context* ctx, const struct stat* st, const char* dest_path, const struct stat* dest_stat) {
+    struct stat captured_dest_stat;
+
+    if (!bx_copy_should_track_link_entry(ctx, st)) {
+        return true;
     }
     if (bx_copy_find_link_entry(ctx, st->st_dev, st->st_ino) != NULL) {
-        return;
+        return true;
+    }
+
+    if (dest_stat == NULL) {
+        if (lstat(dest_path, &captured_dest_stat) != 0) {
+            bx_perror_path(ctx->diag, dest_path);
+            return false;
+        }
+        dest_stat = &captured_dest_stat;
     }
 
     struct bx_link_entry* entry = xmalloc(sizeof(*entry));
     entry->dev = st->st_dev;
     entry->ino = st->st_ino;
+    entry->dest_stat = *dest_stat;
     entry->dest_path = xstrdup(dest_path);
     entry->next = ctx->links;
     ctx->links = entry;
+    return true;
 }
 
 void bx_copy_free_links(struct bx_copy_context* ctx) {
@@ -663,6 +682,8 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     const struct stat* overwrite_stat = NULL;
     char* backup_path = NULL;
     bool created_destination_from_scratch = false;
+    struct stat link_dest_stat;
+    bool have_link_dest_stat = false;
     mode_t create_mode = bx_copy_regular_file_create_mode(ctx, src_stat);
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
@@ -768,6 +789,13 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
     if (!bx_copy_apply_fd_attrs(ctx, src_fd, dest_fd, src_stat)) {
         goto fail;
     }
+    if (bx_copy_should_track_link_entry(ctx, src_stat)) {
+        if (fstat(dest_fd, &link_dest_stat) != 0) {
+            bx_perror_path(ctx->diag, dest_path);
+            goto fail;
+        }
+        have_link_dest_stat = true;
+    }
 
     if (!bx_fd_close(&dest_fd, dest_path, ctx->diag)) {
         goto fail;
@@ -777,7 +805,10 @@ static bool bx_copy_regular_file(struct bx_copy_context* ctx, const char* src_pa
         return false;
     }
 
-    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, have_link_dest_stat ? &link_dest_stat : NULL)) {
+        free(backup_path);
+        return false;
+    }
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     free(backup_path);
     return true;
@@ -951,7 +982,9 @@ static bool bx_copy_device_node(struct bx_copy_context* ctx, const char* src_pat
         return false;
     }
 
-    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, &created_stat)) {
+        return false;
+    }
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     return true;
 }
@@ -998,7 +1031,9 @@ static bool bx_copy_fifo(struct bx_copy_context* ctx, const char* src_path, cons
         return false;
     }
 
-    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, &created_stat)) {
+        return false;
+    }
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     return true;
 }
@@ -1052,7 +1087,9 @@ static bool bx_copy_socket(struct bx_copy_context* ctx, const char* src_path, co
         return false;
     }
 
-    bx_copy_add_link_entry(ctx, src_stat, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, &created_stat)) {
+        return false;
+    }
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     return true;
 }
@@ -1108,7 +1145,10 @@ static bool bx_copy_symlink_object(struct bx_copy_context* ctx, const char* src_
         return false;
     }
 
-    bx_copy_add_link_entry(ctx, src_lstat, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_lstat, dest_path, NULL)) {
+        free(link_target);
+        return false;
+    }
     bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
     free(link_target);
     return true;
@@ -1159,25 +1199,82 @@ static bool bx_copy_create_symbolic_link(struct bx_copy_context* ctx, const char
     return true;
 }
 
-static bool bx_copy_create_hard_link(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat, bool follow_source) {
+static bool bx_copy_verify_hard_link_source(struct bx_copy_context* ctx,
+                                            const char* path,
+                                            const struct stat* expected_stat,
+                                            bool follow_source,
+                                            bool internal_destination) {
+    struct stat current_stat;
+    int rc = follow_source ? stat(path, &current_stat) : lstat(path, &current_stat);
+
+    if (rc != 0) {
+        bx_perror_path(ctx->diag, path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &current_stat)) {
+        bx_diag(ctx->diag, "%s '%s' changed during copy", internal_destination ? "destination" : "source", path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_cleanup_created_hard_link(struct bx_copy_context* ctx, const char* dest_path) {
+    if (unlink(dest_path) != 0 && errno != ENOENT) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    return true;
+}
+
+static bool bx_copy_verify_created_hard_link(struct bx_copy_context* ctx,
+                                             const char* changed_path,
+                                             const char* dest_path,
+                                             const struct stat* expected_stat,
+                                             bool internal_destination,
+                                             struct stat* created_stat_out) {
+    struct stat created_stat;
+
+    if (lstat(dest_path, &created_stat) != 0) {
+        bx_perror_path(ctx->diag, dest_path);
+        return false;
+    }
+    if (!bx_same_file(expected_stat, &created_stat)) {
+        bx_diag(ctx->diag, "%s '%s' changed during copy", internal_destination ? "destination" : "source", changed_path);
+        (void)bx_copy_cleanup_created_hard_link(ctx, dest_path);
+        return false;
+    }
+
+    *created_stat_out = created_stat;
+    return true;
+}
+
+static bool bx_copy_create_hard_link_checked(struct bx_copy_context* ctx,
+                                             const char* display_src_path,
+                                             const char* link_src_path,
+                                             const char* dest_path,
+                                             const struct stat* src_stat,
+                                             const struct stat* link_src_stat,
+                                             bool follow_source,
+                                             bool internal_destination) {
     struct bx_dest_state dest_state;
     const struct stat* overwrite_stat = NULL;
+    struct stat created_stat;
 
     if (bx_stat_collect_dest_state(dest_path, &dest_state) != 0) {
         bx_perror_path(ctx->diag, dest_path);
         return false;
     }
 
-    if (dest_state.exists_stat && bx_same_file(src_stat, &dest_state.st)) {
-        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", src_path, dest_path);
-        bx_diag(ctx->diag, "'%s' and '%s' are the same file", src_path, dest_path);
+    if (dest_state.exists_stat && bx_same_file(link_src_stat, &dest_state.st)) {
+        bx_debug(ctx->diag, "skipping '%s' because it is the same file as '%s'", display_src_path, dest_path);
+        bx_diag(ctx->diag, "'%s' and '%s' are the same file", display_src_path, dest_path);
         return false;
     }
 
     overwrite_stat = bx_copy_overwrite_dest_stat(ctx, &dest_state);
 
     if (overwrite_stat != NULL) {
-        enum bx_copy_overwrite_result result = bx_copy_prepare_overwrite(ctx, src_path, dest_path, src_stat, overwrite_stat, &dest_state, false, false, NULL);
+        enum bx_copy_overwrite_result result = bx_copy_prepare_overwrite(ctx, display_src_path, dest_path, src_stat, overwrite_stat, &dest_state, false, false, NULL);
         if (result == BX_COPY_OVERWRITE_FAILED) {
             return false;
         }
@@ -1186,17 +1283,35 @@ static bool bx_copy_create_hard_link(struct bx_copy_context* ctx, const char* sr
         }
     }
 
-    if (!bx_copy_prepare_link_destination(ctx, src_path, dest_path, &dest_state)) {
+    if (!bx_copy_prepare_link_destination(ctx, display_src_path, dest_path, &dest_state)) {
         return false;
     }
 
-    if (linkat(AT_FDCWD, src_path, AT_FDCWD, dest_path, follow_source ? AT_SYMLINK_FOLLOW : 0) != 0) {
+    if (!bx_copy_verify_hard_link_source(ctx, link_src_path, link_src_stat, follow_source, internal_destination)) {
+        return false;
+    }
+
+    if (linkat(AT_FDCWD, link_src_path, AT_FDCWD, dest_path, follow_source ? AT_SYMLINK_FOLLOW : 0) != 0) {
         bx_perror_path(ctx->diag, dest_path);
         return false;
     }
+    if (!bx_copy_verify_created_hard_link(ctx, link_src_path, dest_path, link_src_stat, internal_destination, &created_stat)) {
+        return false;
+    }
 
-    bx_info(ctx->diag, "'%s' -> '%s'", src_path, dest_path);
+    if (!bx_copy_add_link_entry(ctx, src_stat, dest_path, &created_stat)) {
+        return false;
+    }
+    bx_info(ctx->diag, "'%s' -> '%s'", display_src_path, dest_path);
     return true;
+}
+
+static bool bx_copy_create_hard_link(struct bx_copy_context* ctx, const char* src_path, const char* dest_path, const struct stat* src_stat, bool follow_source) {
+    return bx_copy_create_hard_link_checked(ctx, src_path, src_path, dest_path, src_stat, src_stat, follow_source, false);
+}
+
+static bool bx_copy_create_preserved_hard_link(struct bx_copy_context* ctx, const struct bx_link_entry* entry, const char* src_path, const char* dest_path, const struct stat* src_stat) {
+    return bx_copy_create_hard_link_checked(ctx, src_path, entry->dest_path, dest_path, src_stat, &entry->dest_stat, false, true);
 }
 
 static bool bx_copy_prepare_parents(struct bx_copy_context* ctx, const char* source_operand) {
@@ -1506,7 +1621,7 @@ static bool bx_copy_path_selected(struct bx_copy_context* ctx,
     if ((ctx->options->preserve_mask & BX_PRESERVE_LINKS) != 0u && !ctx->options->hard_link && !ctx->options->symbolic_link) {
         struct bx_link_entry* entry = bx_copy_find_link_entry(ctx, src_stat.st_dev, src_stat.st_ino);
         if (entry != NULL) {
-            ok = bx_copy_create_hard_link(ctx, entry->dest_path, dest_path, &src_stat, false);
+            ok = bx_copy_create_preserved_hard_link(ctx, entry, src_path, dest_path, &src_stat);
             goto finish;
         }
     }

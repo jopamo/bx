@@ -49,6 +49,7 @@ struct bx_copy_options {
 struct bx_link_entry {
     dev_t dev;
     ino_t ino;
+    struct stat dest_stat;
     char* dest_path;
     struct bx_link_entry* next;
 };

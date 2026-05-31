@@ -9,6 +9,7 @@ ref/
 build*
 .tmp/
 profiling/
+/audit/applets/
 /audit/out/
 /audit/results/
 /audit/artifacts/
