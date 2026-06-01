@@ -44,6 +44,8 @@ static bool search_file_find_literal_precheck_match(const struct bx_lit_plan *ab
                                                     size_t len,
                                                     size_t start,
                                                     struct bx_match *out);
+static bool search_file_deferred_buffered_output_supported(struct bx_matcher *m,
+                                                           struct search_opts *opts);
 
 #define BX_SEARCH_DEFERRED_CHUNK_CAP (256u * 1024u)
 #define BX_SEARCH_DEFERRED_PREFIX_POLICY_CAP 1024u
@@ -334,11 +336,14 @@ static int search_file_try_buffer_deferred_fd_to_eof(int fd,
 static void search_file_note_deferred_buffer_candidate(struct bx_search_deferred_precheck_state *state,
                                                        int fd,
                                                        struct bx_search_scanner *scanner,
+                                                       struct bx_matcher *m,
                                                        struct search_opts *opts,
                                                        size_t *searched_len) {
     int finish_status;
 
     if (!state || !scanner || !opts || !searched_len)
+        return;
+    if (!search_file_deferred_buffered_output_supported(m, opts))
         return;
     if (opts->null_data || opts->binary_as_text)
         return;
@@ -640,7 +645,7 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
                     scanner->records_before_buf = 0u;
                     scanner->track_record_numbers = false;
                     scanner->eof = false;
-                    search_file_note_deferred_buffer_candidate(state, fd, scanner,
+                    search_file_note_deferred_buffer_candidate(state, fd, scanner, m,
                                                               opts, &searched_len);
                     result = BX_SEARCH_DEFERRED_PRECHECK_POSSIBLE_MATCH;
                     goto out;

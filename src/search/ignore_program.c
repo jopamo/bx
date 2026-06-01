@@ -146,32 +146,67 @@ static void bx_ignore_note_source_reject(enum bx_ignore_source_kind source) {
     }
 }
 
+static bool bx_ignore_rule_is_literal_basename(bool directory_only,
+                                               const char *pattern) {
+    return !directory_only &&
+           pattern &&
+           pattern[0] != '\0' &&
+           strpbrk(pattern, "*?[\\") == NULL &&
+           strchr(pattern, '/') == NULL;
+}
+
+static bool bx_ignore_rule_is_literal_extension(bool directory_only,
+                                                const char *pattern) {
+    return !directory_only &&
+           pattern &&
+           pattern[0] == '*' &&
+           pattern[1] == '.' &&
+           pattern[2] != '\0' &&
+           strpbrk(pattern + 1, "*?[\\") == NULL &&
+           strchr(pattern + 1, '/') == NULL;
+}
+
+static bool bx_ignore_rule_is_literal_directory(bool directory_only,
+                                                const char *pattern) {
+    return directory_only &&
+           pattern &&
+           pattern[0] != '\0' &&
+           strpbrk(pattern, "*?[\\") == NULL &&
+           strchr(pattern, '/') == NULL;
+}
+
+static bool bx_ignore_rule_is_anchored_prefix_candidate(bool uses_relative_path,
+                                                        bool directory_only,
+                                                        const char *pattern) {
+    return (directory_only || uses_relative_path) &&
+           pattern &&
+           pattern[0] != '\0' &&
+           strpbrk(pattern, "*?[\\") == NULL;
+}
+
+static bool bx_ignore_rule_uses_generic_glob_fallback(
+    const struct bx_ignore_rule *rule) {
+    return rule && rule->kind == BX_IGNORE_RULE_GENERIC_GLOB;
+}
+
 static enum bx_ignore_rule_kind
 bx_ignore_rule_classify(bool uses_relative_path,
                         bool directory_only,
                         const char *pattern) {
     if (!pattern || pattern[0] == '\0')
         return BX_IGNORE_RULE_INVALID;
-    if (!directory_only &&
-        strpbrk(pattern, "*?[\\") == NULL &&
-        strchr(pattern, '/') == NULL) {
+    if (bx_ignore_rule_is_literal_basename(directory_only, pattern)) {
         return BX_IGNORE_RULE_LITERAL_BASENAME;
     }
-    if (!directory_only &&
-        pattern[0] == '*' &&
-        pattern[1] == '.' &&
-        pattern[2] != '\0' &&
-        strpbrk(pattern + 1, "*?[\\") == NULL &&
-        strchr(pattern + 1, '/') == NULL) {
+    if (bx_ignore_rule_is_literal_extension(directory_only, pattern)) {
         return BX_IGNORE_RULE_LITERAL_EXTENSION;
     }
-    if (directory_only &&
-        strpbrk(pattern, "*?[\\") == NULL &&
-        strchr(pattern, '/') == NULL) {
+    if (bx_ignore_rule_is_literal_directory(directory_only, pattern)) {
         return BX_IGNORE_RULE_LITERAL_DIRECTORY;
     }
-    if ((directory_only || uses_relative_path) &&
-        strpbrk(pattern, "*?[\\") == NULL) {
+    if (bx_ignore_rule_is_anchored_prefix_candidate(uses_relative_path,
+                                                   directory_only,
+                                                   pattern)) {
         return BX_IGNORE_RULE_ANCHORED_PREFIX;
     }
     return BX_IGNORE_RULE_GENERIC_GLOB;
@@ -235,9 +270,10 @@ static void bx_ignore_program_build_source_masks(struct bx_ignore_program *progr
             program->literal_basename_source_mask |= source_mask;
         else if (rule->kind == BX_IGNORE_RULE_LITERAL_EXTENSION)
             program->literal_extension_source_mask |= source_mask;
-        else if (rule->kind == BX_IGNORE_RULE_LITERAL_DIRECTORY)
+        else if (rule->kind == BX_IGNORE_RULE_LITERAL_DIRECTORY) {
             program->literal_directory_source_mask |= source_mask;
-        else if (rule->kind == BX_IGNORE_RULE_ANCHORED_PREFIX)
+            program->anchored_prefix_source_mask |= source_mask;
+        } else if (rule->kind == BX_IGNORE_RULE_ANCHORED_PREFIX)
             program->anchored_prefix_source_mask |= source_mask;
         else if (rule->kind == BX_IGNORE_RULE_GENERIC_GLOB)
             program->generic_glob_source_mask |= source_mask;
@@ -504,7 +540,7 @@ static enum bx_ignore_match_result bx_ignore_program_match_rule(const struct bx_
     if (rule->directory_only && !is_dir)
         return BX_IGNORE_NO_MATCH;
 
-    bool generic_glob = rule->kind == BX_IGNORE_RULE_GENERIC_GLOB;
+    bool generic_glob = bx_ignore_rule_uses_generic_glob_fallback(rule);
     bool count_generic_glob = false;
     /* Literal tables are accelerators only; generic glob rules still fall back to fnmatch(). */
     if (generic_glob) {
@@ -543,6 +579,74 @@ static enum bx_ignore_match_result bx_ignore_program_match_rules_from(const stru
             return result;
     }
     return BX_IGNORE_NO_MATCH;
+}
+
+static enum bx_ignore_match_result
+bx_ignore_program_match_after_literal_basename(
+    const struct bx_ignore_program *program,
+    const char *name,
+    const char *relative_path,
+    bool is_dir,
+    const struct bx_ignore_literal_basename *literal_basename) {
+    if (!literal_basename)
+        return BX_IGNORE_NO_MATCH;
+    return bx_ignore_program_match_rules_from(program,
+                                              name,
+                                              relative_path,
+                                              is_dir,
+                                              program->rule_count - 1,
+                                              literal_basename->rule_index + 1);
+}
+
+static enum bx_ignore_match_result
+bx_ignore_program_match_after_literal_extension(
+    const struct bx_ignore_program *program,
+    const char *name,
+    const char *relative_path,
+    bool is_dir,
+    const struct bx_ignore_literal_extension *literal_extension) {
+    if (!literal_extension)
+        return BX_IGNORE_NO_MATCH;
+    return bx_ignore_program_match_rules_from(program,
+                                              name,
+                                              relative_path,
+                                              is_dir,
+                                              program->rule_count - 1,
+                                              literal_extension->rule_index + 1);
+}
+
+static enum bx_ignore_match_result
+bx_ignore_program_match_after_literal_directory(
+    const struct bx_ignore_program *program,
+    const char *name,
+    const char *relative_path,
+    bool is_dir,
+    const struct bx_ignore_literal_directory *literal_directory) {
+    if (!literal_directory)
+        return BX_IGNORE_NO_MATCH;
+    return bx_ignore_program_match_rules_from(program,
+                                              name,
+                                              relative_path,
+                                              is_dir,
+                                              program->rule_count - 1,
+                                              literal_directory->rule_index + 1);
+}
+
+static enum bx_ignore_match_result
+bx_ignore_program_match_after_anchored_prefix(
+    const struct bx_ignore_program *program,
+    const char *name,
+    const char *relative_path,
+    bool is_dir,
+    const struct bx_ignore_anchored_prefix *anchored_prefix) {
+    if (!anchored_prefix)
+        return BX_IGNORE_NO_MATCH;
+    return bx_ignore_program_match_rules_from(program,
+                                              name,
+                                              relative_path,
+                                              is_dir,
+                                              program->rule_count - 1,
+                                              anchored_prefix->rule_index + 1);
 }
 
 static enum bx_ignore_match_result
@@ -635,8 +739,10 @@ static bool bx_ignore_program_build_anchored_prefix_table(struct bx_ignore_progr
 
     int candidate_count = 0;
     for (int i = 0; i < program->rule_count; ++i) {
-        if (program->rules[i].kind == BX_IGNORE_RULE_ANCHORED_PREFIX)
+        if (program->rules[i].kind == BX_IGNORE_RULE_ANCHORED_PREFIX ||
+            program->rules[i].kind == BX_IGNORE_RULE_LITERAL_DIRECTORY) {
             candidate_count++;
+        }
     }
     if (candidate_count == 0)
         return true;
@@ -648,8 +754,10 @@ static bool bx_ignore_program_build_anchored_prefix_table(struct bx_ignore_progr
 
     for (int i = 0; i < program->rule_count; ++i) {
         const struct bx_ignore_rule *rule = &program->rules[i];
-        if (rule->kind != BX_IGNORE_RULE_ANCHORED_PREFIX)
+        if (rule->kind != BX_IGNORE_RULE_ANCHORED_PREFIX &&
+            rule->kind != BX_IGNORE_RULE_LITERAL_DIRECTORY) {
             continue;
+        }
         program->anchored_prefixes[program->anchored_prefix_count++] =
             (struct bx_ignore_anchored_prefix){
                 .prefix = rule->pattern,
@@ -895,12 +1003,11 @@ bx_ignore_program_match_literal_basename(const struct bx_ignore_program *program
         bx_ignore_program_find_literal_basename(program, name);
     if (literal_basename) {
         enum bx_ignore_match_result later =
-            bx_ignore_program_match_rules_from(program,
-                                               name,
-                                               relative_path,
-                                               is_dir,
-                                               program->rule_count - 1,
-                                               literal_basename->rule_index + 1);
+            bx_ignore_program_match_after_literal_basename(program,
+                                                           name,
+                                                           relative_path,
+                                                           is_dir,
+                                                           literal_basename);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
         if (literal_basename->result == BX_IGNORE_EXCLUDE && count_literal_basename) {
@@ -931,12 +1038,11 @@ bx_ignore_program_match_literal_extension(const struct bx_ignore_program *progra
         bx_ignore_program_find_literal_extension(program, name);
     if (literal_extension) {
         enum bx_ignore_match_result later =
-            bx_ignore_program_match_rules_from(program,
-                                               name,
-                                               relative_path,
-                                               is_dir,
-                                               program->rule_count - 1,
-                                               literal_extension->rule_index + 1);
+            bx_ignore_program_match_after_literal_extension(program,
+                                                            name,
+                                                            relative_path,
+                                                            is_dir,
+                                                            literal_extension);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
         if (literal_extension->result == BX_IGNORE_EXCLUDE && count_literal_extension) {
@@ -965,12 +1071,11 @@ bx_ignore_program_match_literal_directory(const struct bx_ignore_program *progra
         is_dir ? bx_ignore_program_find_literal_directory(program, name) : NULL;
     if (literal_directory) {
         enum bx_ignore_match_result later =
-            bx_ignore_program_match_rules_from(program,
-                                               name,
-                                               relative_path,
-                                               is_dir,
-                                               program->rule_count - 1,
-                                               literal_directory->rule_index + 1);
+            bx_ignore_program_match_after_literal_directory(program,
+                                                            name,
+                                                            relative_path,
+                                                            is_dir,
+                                                            literal_directory);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
         if (literal_directory->result == BX_IGNORE_EXCLUDE && count_literal_directory)
@@ -999,12 +1104,11 @@ bx_ignore_program_match_anchored_prefix(const struct bx_ignore_program *program,
         bx_ignore_program_find_anchored_prefix(program, relative_path, is_dir);
     if (anchored_prefix) {
         enum bx_ignore_match_result later =
-            bx_ignore_program_match_rules_from(program,
-                                               name,
-                                               relative_path,
-                                               is_dir,
-                                               program->rule_count - 1,
-                                               anchored_prefix->rule_index + 1);
+            bx_ignore_program_match_after_anchored_prefix(program,
+                                                          name,
+                                                          relative_path,
+                                                          is_dir,
+                                                          anchored_prefix);
         if (later != BX_IGNORE_NO_MATCH)
             return later;
         if (anchored_prefix->result == BX_IGNORE_EXCLUDE && count_anchored_prefix) {

@@ -2596,7 +2596,9 @@ static size_t bx_ls_uintmax_width(uintmax_t value) {
     return width;
 }
 
-static void bx_ls_long_widths_init(struct bx_ls_long_widths* widths, const struct bx_ls_options* options) {
+static void bx_ls_long_widths_init_with_size_floor(struct bx_ls_long_widths* widths,
+                                                   const struct bx_ls_options* options,
+                                                   size_t size_floor) {
     widths->inode = options->show_inode ? 1u : 0u;
     widths->blocks = options->show_size_blocks ? 1u : 0u;
     widths->nlink = 1u;
@@ -2604,7 +2606,7 @@ static void bx_ls_long_widths_init(struct bx_ls_long_widths* widths, const struc
     widths->group = options->show_group ? 1u : 0u;
     widths->author = options->show_author ? 1u : 0u;
     widths->context = options->show_context ? 1u : 0u;
-    widths->size = 4u;
+    widths->size = size_floor;
 }
 
 static void bx_ls_short_widths_init(struct bx_ls_short_widths* widths, const struct bx_ls_options* options) {
@@ -2648,12 +2650,13 @@ static void bx_ls_compute_short_widths(
     }
 }
 
-static void bx_ls_compute_long_widths(
+static void bx_ls_compute_long_widths_with_size_floor(
     const struct bx_ls_entry_list* entries,
     const struct bx_ls_options* options,
     struct bx_diag_ctx* diag,
-    struct bx_ls_long_widths* widths) {
-    bx_ls_long_widths_init(widths, options);
+    struct bx_ls_long_widths* widths,
+    size_t size_floor) {
+    bx_ls_long_widths_init_with_size_floor(widths, options, size_floor);
 
     for (size_t i = 0; i < entries->len; i++) {
         const struct bx_ls_entry* entry = &entries->items[i];
@@ -2711,6 +2714,14 @@ static void bx_ls_compute_long_widths(
             widths->size = size_width;
         }
     }
+}
+
+static void bx_ls_compute_long_widths(
+    const struct bx_ls_entry_list* entries,
+    const struct bx_ls_options* options,
+    struct bx_diag_ctx* diag,
+    struct bx_ls_long_widths* widths) {
+    bx_ls_compute_long_widths_with_size_floor(entries, options, diag, widths, 4u);
 }
 
 static bool bx_ls_build_short_cell(const struct bx_ls_entry* entry,
@@ -3332,7 +3343,11 @@ static void bx_ls_print_entries_long_dired(const struct bx_ls_entry_list* entrie
                                            bool print_total,
                                            struct bx_ls_dired_output* output) {
     struct bx_ls_long_widths widths;
-    bx_ls_compute_long_widths(entries, options, diag, &widths);
+    bx_ls_compute_long_widths_with_size_floor(entries,
+                                              options,
+                                              diag,
+                                              &widths,
+                                              print_total ? 1u : 4u);
     bx_ls_print_entries_long_dired_with_widths(entries, options, &widths, diag, print_total, output);
 }
 

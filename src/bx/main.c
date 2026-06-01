@@ -274,7 +274,8 @@ static int reject_unsupported_global_options_for_applet(
     struct bx_output_policy output_policy;
 
     output_policy_from_runtime(runtime, &output_policy);
-    if (bx_runtime_snapshot_json_requested(runtime)) {
+    if (bx_runtime_snapshot_json_requested(runtime)
+        && bx_output_policy_json_requested(&output_policy)) {
         bx_diag(diag, "global option '--json' is recognized but applet JSON framing is not implemented");
         return bx_status_error();
     }
