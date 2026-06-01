@@ -18,6 +18,7 @@
 #include "copy_tree.h"
 #include "copy_data.h"
 #include "copy_metadata.h"
+#include "dir_cycle.h"
 #include "update_policy.h"
 #include "args_common.h"
 #include "backup_ops.h"
@@ -348,30 +349,23 @@ void bx_copy_free_links(struct bx_copy_context* ctx) {
 }
 
 static void bx_copy_push_source_dir(struct bx_copy_context* ctx, const struct stat* st) {
-    struct bx_dir_entry* entry = xmalloc(sizeof(*entry));
+    struct bx_dir_stack* entry = xmalloc(sizeof(*entry));
     entry->dev = st->st_dev;
     entry->ino = st->st_ino;
-    entry->next = ctx->source_dirs;
+    entry->parent = ctx->source_dirs;
     ctx->source_dirs = entry;
 }
 
 static void bx_copy_pop_source_dir(struct bx_copy_context* ctx) {
     if (ctx->source_dirs) {
-        struct bx_dir_entry* top = ctx->source_dirs;
-        ctx->source_dirs = top->next;
+        struct bx_dir_stack* top = ctx->source_dirs;
+        ctx->source_dirs = top->parent;
         free(top);
     }
 }
 
-static bool bx_copy_source_dir_in_stack(const struct bx_copy_context* ctx, dev_t dev, ino_t ino) {
-    struct bx_dir_entry* curr = ctx->source_dirs;
-    while (curr) {
-        if (curr->dev == dev && curr->ino == ino) {
-            return true;
-        }
-        curr = curr->next;
-    }
-    return false;
+static bool bx_copy_source_dir_in_stack(const struct bx_copy_context* ctx, const struct stat* st) {
+    return bx_dir_stack_contains(ctx->source_dirs, st);
 }
 
 void bx_copy_free_source_dirs(struct bx_copy_context* ctx) {
@@ -438,6 +432,10 @@ static void bx_copy_diag_self_recursive_copy(struct bx_copy_context* ctx, const 
 
 static void bx_copy_diag_cyclic_symlink(struct bx_copy_context* ctx, const char* src_path) {
     bx_diag(ctx->diag, "cannot copy cyclic symbolic link '%s'", src_path);
+}
+
+static void bx_copy_diag_directory_cycle(struct bx_copy_context* ctx, const char* src_path) {
+    bx_diag(ctx->diag, "source '%s' directory cycle detected during copy", src_path);
 }
 
 static char* bx_copy_required_self_copy_child(struct bx_copy_context* ctx, const char* src_path) {
@@ -1586,8 +1584,12 @@ static bool bx_copy_path_selected(struct bx_copy_context* ctx,
         ctx->source_root_dev = src_stat.st_dev;
     }
 
-    if (follow_source && source_is_symlink && S_ISDIR(src_stat.st_mode) && bx_copy_source_dir_in_stack(ctx, src_stat.st_dev, src_stat.st_ino)) {
+    if (follow_source && source_is_symlink && S_ISDIR(src_stat.st_mode) && bx_copy_source_dir_in_stack(ctx, &src_stat)) {
         bx_copy_diag_cyclic_symlink(ctx, src_path);
+        return false;
+    }
+    if (S_ISDIR(src_stat.st_mode) && bx_copy_source_dir_in_stack(ctx, &src_stat)) {
+        bx_copy_diag_directory_cycle(ctx, src_path);
         return false;
     }
 

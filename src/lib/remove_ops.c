@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "remove_ops.h"
+#include "lib/dir_cycle.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/same_file.h"
@@ -15,6 +16,10 @@
 
 static void bx_remove_diag_changed(const char* path, struct bx_diag_ctx* diag) {
     bx_diag(diag, "refusing to remove '%s': path changed during recursive removal", path);
+}
+
+static void bx_remove_diag_cycle(const char* path, struct bx_diag_ctx* diag) {
+    bx_diag(diag, "refusing to remove '%s': directory cycle detected during recursive removal", path);
 }
 
 static bool bx_remove_stat_matches_expected(const char* path, const struct stat* expected, const struct stat* actual, struct bx_diag_ctx* diag) {
@@ -126,6 +131,7 @@ static bool bx_remove_recursive_opened_dir(int fd,
                                            bool one_file_system,
                                            dev_t root_dev,
                                            bool top_level,
+                                           struct bx_dir_stack* ancestor_stack,
                                            struct bx_diag_ctx* diag,
                                            bx_remove_report_removed_fn report_removed,
                                            void* report_removed_user_data);
@@ -136,6 +142,7 @@ static bool bx_remove_recursive_child(int parent_fd,
                                       const struct stat* expected,
                                       bool one_file_system,
                                       dev_t root_dev,
+                                      struct bx_dir_stack* ancestor_stack,
                                       struct bx_diag_ctx* diag,
                                       bx_remove_report_removed_fn report_removed,
                                       void* report_removed_user_data) {
@@ -170,12 +177,17 @@ static bool bx_remove_recursive_child(int parent_fd,
         return true;
     }
 
+    if (bx_dir_stack_contains(ancestor_stack, &st)) {
+        bx_remove_diag_cycle(path, diag);
+        return false;
+    }
+
     struct stat opened_st;
     int child_fd = bx_remove_open_dir_child(parent_fd, name, path, &st, &opened_st, diag);
     if (child_fd < 0) {
         return false;
     }
-    return bx_remove_recursive_opened_dir(child_fd, &opened_st, path, parent_fd, name, one_file_system, root_dev, false, diag, report_removed, report_removed_user_data);
+    return bx_remove_recursive_opened_dir(child_fd, &opened_st, path, parent_fd, name, one_file_system, root_dev, false, ancestor_stack, diag, report_removed, report_removed_user_data);
 }
 
 static bool bx_remove_recursive_opened_dir(int fd,
@@ -186,6 +198,7 @@ static bool bx_remove_recursive_opened_dir(int fd,
                                            bool one_file_system,
                                            dev_t root_dev,
                                            bool top_level,
+                                           struct bx_dir_stack* ancestor_stack,
                                            struct bx_diag_ctx* diag,
                                            bx_remove_report_removed_fn report_removed,
                                            void* report_removed_user_data) {
@@ -203,6 +216,12 @@ static bool bx_remove_recursive_opened_dir(int fd,
         ok = false;
     }
 
+    struct bx_dir_stack stack_entry = {
+        .dev = opened_st->st_dev,
+        .ino = opened_st->st_ino,
+        .parent = ancestor_stack,
+    };
+
     if (dir_fd >= 0) {
         for (;;) {
             errno = 0;
@@ -219,7 +238,7 @@ static bool bx_remove_recursive_opened_dir(int fd,
             }
 
             char* child_path = bx_path_join(path, entry->d_name);
-            if (!bx_remove_recursive_child(dir_fd, entry->d_name, child_path, NULL, one_file_system, root_dev, diag, report_removed, report_removed_user_data)) {
+            if (!bx_remove_recursive_child(dir_fd, entry->d_name, child_path, NULL, one_file_system, root_dev, &stack_entry, diag, report_removed, report_removed_user_data)) {
                 ok = false;
             }
             free(child_path);
@@ -290,7 +309,7 @@ bx_remove_recursive_impl(const char* path, const struct stat* expected, bool one
     if (fd < 0) {
         return false;
     }
-    return bx_remove_recursive_opened_dir(fd, &opened_st, path, AT_FDCWD, NULL, one_file_system, root_dev, true, diag, report_removed, report_removed_user_data);
+    return bx_remove_recursive_opened_dir(fd, &opened_st, path, AT_FDCWD, NULL, one_file_system, root_dev, true, NULL, diag, report_removed, report_removed_user_data);
 }
 
 bool bx_remove_recursive(const char* path, struct bx_diag_ctx* diag) {

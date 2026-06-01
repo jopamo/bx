@@ -258,6 +258,7 @@ bx_lib_sources = [
   'src/lib/copy_data.c',
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
+  'src/lib/dir_cycle.c',
   'src/lib/fd_ops.c',
   'src/lib/fault_injection.c',
   'src/lib/file_info_fmt.c',

@@ -10,6 +10,7 @@
 
 #include "applets.h"
 #include "lib/cli_common.h"
+#include "lib/dir_cycle.h"
 #include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 #include "lib/mode_parse.h"
@@ -352,6 +353,11 @@ static bool bx_chmod_diag_source_changed(const char* path, struct bx_diag_ctx* d
     return false;
 }
 
+static bool bx_chmod_diag_directory_cycle(const char* path, struct bx_diag_ctx* diag) {
+    bx_diag(diag, "source '%s' directory cycle detected during chmod", path);
+    return false;
+}
+
 static bool bx_chmod_verify_selected_source_lstat(const char* path, const struct stat* expected_st, struct bx_diag_ctx* diag) {
     struct stat current_st;
 
@@ -409,12 +415,14 @@ static bool bx_chmod_apply_path_recursive(const char* path,
 static bool bx_chmod_apply_path_recursive_selected(const char* path,
                                                    bool top_level,
                                                    const struct stat* selected_lstat,
+                                                   struct bx_dir_stack* ancestor_stack,
                                                    const struct bx_chmod_mode_spec* mode_spec,
                                                    const struct bx_chmod_options* options,
                                                    struct bx_diag_ctx* diag);
 
 static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
                                                           const struct stat* expected_st,
+                                                          struct bx_dir_stack* ancestor_stack,
                                                           const struct bx_chmod_mode_spec* mode_spec,
                                                           const struct bx_chmod_options* options,
                                                           struct bx_diag_ctx* diag) {
@@ -434,6 +442,12 @@ static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
         bx_fd_cleanup(&fd);
         return bx_chmod_diag_source_changed(path, diag);
     }
+
+    struct bx_dir_stack stack_entry = {
+        .dev = opened_st.st_dev,
+        .ino = opened_st.st_ino,
+        .parent = ancestor_stack,
+    };
 
     bool ok = bx_chmod_apply_existing_fd(path, fd, &opened_st, mode_spec, options, diag);
 
@@ -474,7 +488,7 @@ static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
             free(child_path);
             continue;
         }
-        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, mode_spec, options, diag)) {
+        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, &stack_entry, mode_spec, options, diag)) {
             recurse_ok = false;
         }
         free(child_path);
@@ -491,6 +505,7 @@ static bool bx_chmod_apply_opened_top_directory_recursive(const char* path,
 static bool bx_chmod_apply_path_recursive_selected(const char* path,
                                                    bool top_level,
                                                    const struct stat* selected_lstat,
+                                                   struct bx_dir_stack* ancestor_stack,
                                                    const struct bx_chmod_mode_spec* mode_spec,
                                                    const struct bx_chmod_options* options,
                                                    struct bx_diag_ctx* diag) {
@@ -533,11 +548,14 @@ static bool bx_chmod_apply_path_recursive_selected(const char* path,
         if (!S_ISDIR(top_lstat.st_mode) || !bx_same_file(&top_lstat, &st)) {
             return bx_chmod_diag_source_changed(path, diag);
         }
-        return bx_chmod_apply_opened_top_directory_recursive(path, &st, mode_spec, options, diag);
+        return bx_chmod_apply_opened_top_directory_recursive(path, &st, ancestor_stack, mode_spec, options, diag);
     }
 
     if (!top_level && options->recursive && S_ISDIR(st.st_mode)) {
-        return bx_chmod_apply_opened_top_directory_recursive(path, &st, mode_spec, options, diag);
+        if (bx_dir_stack_contains(ancestor_stack, &st)) {
+            return bx_chmod_diag_directory_cycle(path, diag);
+        }
+        return bx_chmod_apply_opened_top_directory_recursive(path, &st, ancestor_stack, mode_spec, options, diag);
     }
 
     bool ok = bx_chmod_apply_existing(path, &st, mode_spec, options, diag);
@@ -582,7 +600,7 @@ static bool bx_chmod_apply_path_recursive_selected(const char* path,
             free(child_path);
             continue;
         }
-        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, mode_spec, options, diag)) {
+        if (!bx_chmod_apply_path_recursive_selected(child_path, false, &child_lstat, ancestor_stack, mode_spec, options, diag)) {
             recurse_ok = false;
         }
         free(child_path);
@@ -597,7 +615,7 @@ static bool bx_chmod_apply_path_recursive_selected(const char* path,
 }
 
 static bool bx_chmod_apply_path_recursive(const char* path, bool top_level, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {
-    return bx_chmod_apply_path_recursive_selected(path, top_level, NULL, mode_spec, options, diag);
+    return bx_chmod_apply_path_recursive_selected(path, top_level, NULL, NULL, mode_spec, options, diag);
 }
 
 static void bx_chmod_apply_one(const char* path, const struct bx_chmod_mode_spec* mode_spec, const struct bx_chmod_options* options, struct bx_diag_ctx* diag) {

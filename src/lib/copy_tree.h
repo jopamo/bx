@@ -7,6 +7,7 @@
 #include "lib/args_common.h"
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
+#include "lib/dir_cycle.h"
 
 enum bx_deref_mode {
     BX_DEREF_DEFAULT = 0,
@@ -54,12 +55,6 @@ struct bx_link_entry {
     struct bx_link_entry* next;
 };
 
-struct bx_dir_entry {
-    dev_t dev;
-    ino_t ino;
-    struct bx_dir_entry* next;
-};
-
 struct bx_parent_attr_entry {
     char* src_path;
     char* dest_path;
@@ -74,7 +69,7 @@ struct bx_copy_context {
     mode_t umask_value;
 
     struct bx_link_entry* links;
-    struct bx_dir_entry* source_dirs;
+    struct bx_dir_stack* source_dirs;
     struct bx_parent_attr_entry* parent_attrs;
 
     bool dest_root_active;

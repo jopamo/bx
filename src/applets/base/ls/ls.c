@@ -21,6 +21,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/dir_cycle.h"
 #include "lib/line_writer_file.h"
 #include "lib/output_alloc_counter.h"
 #include "lib/output_policy.h"
@@ -220,15 +221,8 @@ struct bx_ls_short_widths {
     size_t blocks;
 };
 
-struct bx_ls_dir_identity {
-    dev_t dev;
-    ino_t ino;
-};
-
 struct bx_ls_dir_stack {
-    struct bx_ls_dir_identity* items;
-    size_t len;
-    size_t cap;
+    struct bx_dir_stack* top;
 };
 
 static void bx_ls_output_policy_apply_options(
@@ -1375,38 +1369,29 @@ static bool bx_ls_entry_load_stat(struct bx_ls_entry* entry, bool follow_for_dis
 }
 
 static void bx_ls_dir_stack_push(struct bx_ls_dir_stack* stack, const struct stat* st) {
-    if (stack->len == stack->cap) {
-        size_t new_cap = (stack->cap == 0u) ? 8u : stack->cap * 2u;
-        stack->items = xrealloc(stack->items, new_cap * sizeof(*stack->items));
-        stack->cap = new_cap;
-    }
-
-    stack->items[stack->len].dev = st->st_dev;
-    stack->items[stack->len].ino = st->st_ino;
-    stack->len++;
+    struct bx_dir_stack* entry = xmalloc(sizeof(*entry));
+    entry->dev = st->st_dev;
+    entry->ino = st->st_ino;
+    entry->parent = stack->top;
+    stack->top = entry;
 }
 
 static void bx_ls_dir_stack_pop(struct bx_ls_dir_stack* stack) {
-    if (stack->len > 0u) {
-        stack->len--;
+    if (stack->top != NULL) {
+        struct bx_dir_stack* top = stack->top;
+        stack->top = top->parent;
+        free(top);
     }
 }
 
 static bool bx_ls_dir_stack_contains(const struct bx_ls_dir_stack* stack, const struct stat* st) {
-    for (size_t i = 0; i < stack->len; i++) {
-        if (stack->items[i].dev == st->st_dev && stack->items[i].ino == st->st_ino) {
-            return true;
-        }
-    }
-
-    return false;
+    return bx_dir_stack_contains(stack->top, st);
 }
 
 static void bx_ls_dir_stack_free(struct bx_ls_dir_stack* stack) {
-    free(stack->items);
-    stack->items = NULL;
-    stack->len = 0u;
-    stack->cap = 0u;
+    while (stack->top != NULL) {
+        bx_ls_dir_stack_pop(stack);
+    }
 }
 
 static void bx_ls_dired_output_append_range(struct bx_ls_dired_range** items,

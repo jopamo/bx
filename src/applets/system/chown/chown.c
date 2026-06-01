@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "lib/dir_cycle.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/cli_common.h"
@@ -58,12 +59,6 @@ struct bx_chown_options {
     struct bx_id_owner_group from_owner_group;
     bool show_help;
     bool show_version;
-};
-
-struct bx_chown_dir_stack_entry {
-    dev_t dev;
-    ino_t ino;
-    const struct bx_chown_dir_stack_entry* next;
 };
 
 static void bx_chown_print_help(FILE* stream, const char* progname) {
@@ -301,15 +296,6 @@ static bool bx_chown_stat_is_root_directory(const struct stat* st, struct bx_dia
     return true;
 }
 
-static bool bx_chown_dir_stack_contains(const struct bx_chown_dir_stack_entry* stack, dev_t dev, ino_t ino) {
-    for (const struct bx_chown_dir_stack_entry* curr = stack; curr != NULL; curr = curr->next) {
-        if (curr->dev == dev && curr->ino == ino) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool bx_chown_apply_existing(const char* path, const struct stat* st, bool no_follow, uid_t owner, gid_t group, const struct bx_chown_options* options, struct bx_diag_ctx* diag) {
     uid_t old_owner = st->st_uid;
     gid_t old_group = st->st_gid;
@@ -390,6 +376,11 @@ static bool bx_chown_diag_source_changed(const char* path, struct bx_diag_ctx* d
     return false;
 }
 
+static bool bx_chown_diag_directory_cycle(const char* path, struct bx_diag_ctx* diag) {
+    bx_diag(diag, "source '%s' directory cycle detected during chown", path);
+    return false;
+}
+
 static bool bx_chown_open_error_is_changed_source(const char* path, const struct stat* expected_st) {
     struct stat current_st;
 
@@ -456,7 +447,7 @@ static bool bx_chown_apply_path_recursive(const char* path,
                                           gid_t group,
                                           const struct bx_chown_options* options,
                                           struct bx_diag_ctx* diag,
-                                          const struct bx_chown_dir_stack_entry* dir_stack);
+                                          struct bx_dir_stack* dir_stack);
 
 static bool bx_chown_apply_path_recursive_selected(const char* path,
                                                    bool top_level,
@@ -465,7 +456,7 @@ static bool bx_chown_apply_path_recursive_selected(const char* path,
                                                    gid_t group,
                                                    const struct bx_chown_options* options,
                                                    struct bx_diag_ctx* diag,
-                                                   const struct bx_chown_dir_stack_entry* dir_stack);
+                                                   struct bx_dir_stack* dir_stack);
 
 static bool bx_chown_apply_opened_top_directory_recursive(const char* path,
                                                           const struct stat* expected_st,
@@ -473,7 +464,7 @@ static bool bx_chown_apply_opened_top_directory_recursive(const char* path,
                                                           gid_t group,
                                                           const struct bx_chown_options* options,
                                                           struct bx_diag_ctx* diag,
-                                                          const struct bx_chown_dir_stack_entry* dir_stack) {
+                                                          struct bx_dir_stack* dir_stack) {
     int fd = bx_fd_open_nofollow_cloexec(path, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         bx_chown_perror_path(options, diag, path);
@@ -491,18 +482,18 @@ static bool bx_chown_apply_opened_top_directory_recursive(const char* path,
         return bx_chown_diag_source_changed(path, diag);
     }
 
-    bool ok = bx_chown_apply_existing_fd(path, fd, &opened_st, owner, group, options, diag);
-
-    if (bx_chown_dir_stack_contains(dir_stack, opened_st.st_dev, opened_st.st_ino)) {
+    if (bx_dir_stack_contains(dir_stack, &opened_st)) {
         bx_fd_cleanup(&fd);
-        return ok;
+        return bx_chown_diag_directory_cycle(path, diag);
     }
 
-    struct bx_chown_dir_stack_entry stack_entry = {
+    struct bx_dir_stack stack_entry = {
         .dev = opened_st.st_dev,
         .ino = opened_st.st_ino,
-        .next = dir_stack,
+        .parent = dir_stack,
     };
+
+    bool ok = bx_chown_apply_existing_fd(path, fd, &opened_st, owner, group, options, diag);
 
     DIR* dir = fdopendir(fd);
     if (dir == NULL) {
@@ -562,7 +553,7 @@ static bool bx_chown_apply_path_recursive_selected(const char* path,
                                                    gid_t group,
                                                    const struct bx_chown_options* options,
                                                    struct bx_diag_ctx* diag,
-                                                   const struct bx_chown_dir_stack_entry* dir_stack) {
+                                                   struct bx_dir_stack* dir_stack) {
     struct stat path_lstat;
     if (selected_lstat != NULL) {
         path_lstat = *selected_lstat;
@@ -623,6 +614,10 @@ static bool bx_chown_apply_path_recursive_selected(const char* path,
         }
     }
 
+    if (should_recurse && bx_dir_stack_contains(dir_stack, recurse_stat)) {
+        return bx_chown_diag_directory_cycle(path, diag);
+    }
+
     if (should_recurse && !is_symlink) {
         return bx_chown_apply_opened_top_directory_recursive(path, recurse_stat, owner, group, options, diag, dir_stack);
     }
@@ -637,14 +632,10 @@ static bool bx_chown_apply_path_recursive_selected(const char* path,
         return ok;
     }
 
-    if (bx_chown_dir_stack_contains(dir_stack, recurse_stat->st_dev, recurse_stat->st_ino)) {
-        return ok;
-    }
-
-    struct bx_chown_dir_stack_entry stack_entry = {
+    struct bx_dir_stack stack_entry = {
         .dev = recurse_stat->st_dev,
         .ino = recurse_stat->st_ino,
-        .next = dir_stack,
+        .parent = dir_stack,
     };
 
     DIR* dir = opendir(path);
@@ -703,7 +694,7 @@ static bool bx_chown_apply_path_recursive(const char* path,
                                           gid_t group,
                                           const struct bx_chown_options* options,
                                           struct bx_diag_ctx* diag,
-                                          const struct bx_chown_dir_stack_entry* dir_stack) {
+                                          struct bx_dir_stack* dir_stack) {
     return bx_chown_apply_path_recursive_selected(path, top_level, NULL, owner, group, options, diag, dir_stack);
 }
 

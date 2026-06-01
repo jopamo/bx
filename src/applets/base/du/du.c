@@ -18,6 +18,7 @@
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
 #include "lib/args_common.h"
+#include "lib/dir_cycle.h"
 #include "lib/path_ops.h"
 
 enum bx_du_symlink_mode {
@@ -75,12 +76,6 @@ struct bx_du_context {
     struct bx_diag_ctx* diag;
     struct bx_line_writer* writer;
     struct bx_du_inode_set seen;
-};
-
-struct bx_du_dir_stack_entry {
-    dev_t dev;
-    ino_t ino;
-    const struct bx_du_dir_stack_entry* next;
 };
 
 static void bx_du_print_help(FILE* stream, const char* progname) {
@@ -466,22 +461,13 @@ static bool bx_du_should_follow_symlink(const struct bx_du_options* options, boo
     return false;
 }
 
-static bool bx_du_dir_stack_contains(const struct bx_du_dir_stack_entry* stack, dev_t dev, ino_t ino) {
-    for (const struct bx_du_dir_stack_entry* curr = stack; curr != NULL; curr = curr->next) {
-        if (curr->dev == dev && curr->ino == ino) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
                                  const char* path,
                                  bool top_level,
                                  uintmax_t depth,
                                  dev_t root_dev,
                                  bool root_dev_set,
-                                 const struct bx_du_dir_stack_entry* dir_stack,
+                                 struct bx_dir_stack* dir_stack,
                                  bool* ok_out) {
     const struct bx_du_options* options = ctx->options;
 
@@ -511,7 +497,7 @@ static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
         return 0u;
     }
 
-    if (S_ISDIR(st.st_mode) && bx_du_dir_stack_contains(dir_stack, st.st_dev, st.st_ino)) {
+    if (S_ISDIR(st.st_mode) && bx_dir_stack_contains(dir_stack, &st)) {
         *ok_out = true;
         return 0u;
     }
@@ -525,10 +511,10 @@ static uintmax_t bx_du_walk_path(struct bx_du_context* ctx,
     uintmax_t total_bytes = bx_du_path_usage_bytes(&st, options);
 
     if (S_ISDIR(st.st_mode)) {
-        struct bx_du_dir_stack_entry stack_entry = {
+        struct bx_dir_stack stack_entry = {
             .dev = st.st_dev,
             .ino = st.st_ino,
-            .next = dir_stack,
+            .parent = dir_stack,
         };
 
         DIR* dir = opendir(path);
