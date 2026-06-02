@@ -5,20 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "lib/checked_math.h"
 #include "lib/size_parse.h"
-
-static bool bx_size_safe_mul(uintmax_t a, uintmax_t b, uintmax_t* out) {
-    if (out == NULL) {
-        return false;
-    }
-
-    if (a != 0 && b > UINTMAX_MAX / a) {
-        return false;
-    }
-
-    *out = a * b;
-    return true;
-}
 
 bool bx_size_parse_uint(const char* text, uintmax_t* value_out) {
     if (text == NULL || text[0] == '\0' || value_out == NULL) {
@@ -127,7 +115,7 @@ static bool bx_size_parse_scaled_uint_len(const char* text, size_t len, uintmax_
         return false;
     }
 
-    return bx_size_safe_mul(value, multiplier, value_out);
+    return bx_checked_uintmax_mul(value, multiplier, value_out);
 }
 
 bool bx_size_parse_scaled_uint(const char* text, uintmax_t* value_out) {
@@ -155,12 +143,7 @@ static uintmax_t bx_size_ceil_div(uintmax_t value, uintmax_t divisor) {
 }
 
 bool bx_size_block_count_ceil(uintmax_t bytes, uintmax_t block_size, uintmax_t* blocks_out) {
-    if (blocks_out == NULL || block_size == 0u) {
-        return false;
-    }
-
-    *blocks_out = bx_size_ceil_div(bytes, block_size);
-    return true;
+    return bx_checked_uintmax_bytes_to_blocks_ceil(bytes, block_size, blocks_out);
 }
 
 void bx_size_format_human_ceil(uintmax_t value, uintmax_t base, const char* suffixes, char* buffer, size_t buffer_size) {
@@ -368,7 +351,7 @@ static enum bx_size_suffix_parse_result bx_size_pow_result(uintmax_t base, unsig
     }
 
     for (unsigned int i = 0; i < power; i++) {
-        if (!bx_size_safe_mul(value, base, &value)) {
+        if (!bx_checked_uintmax_mul(value, base, &value)) {
             return BX_SIZE_SUFFIX_PARSE_TOO_LARGE;
         }
     }
@@ -398,7 +381,7 @@ bool bx_size_multiply_by_power_uint(uintmax_t value, uintmax_t base, unsigned in
         return false;
     }
 
-    return bx_size_safe_mul(value, multiplier, value_out);
+    return bx_checked_uintmax_mul(value, multiplier, value_out);
 }
 
 bool bx_size_power_double(double base, unsigned int power, double* value_out) {
@@ -609,7 +592,7 @@ bool bx_dd_parse_size(const char* text, uintmax_t* value_out) {
             if (!bx_size_parse_factor(factor_start, (size_t)(p - factor_start), &factor)) {
                 return false;
             }
-            if (!bx_size_safe_mul(total, factor, &total)) {
+            if (!bx_checked_uintmax_mul(total, factor, &total)) {
                 return false;
             }
             if (*p == '\0') {

@@ -1494,8 +1494,13 @@ check_argument_types(
  * Returns a pointer to the character after the type.  "syn_error" is set to
  * TRUE on syntax error.
  */
+#define VIM9_TYPE_PARSE_MAX_DEPTH 1001
+#define VIM9_TYPE_SKIP_MAX_DEPTH VIM9_TYPE_PARSE_MAX_DEPTH
+
+static char_u *skip_type_depth(char_u *start, int optional, int depth);
+
     static char_u *
-skip_member_type(char_u *start, char_u *p, int *syn_error)
+skip_member_type(char_u *start, char_u *p, int *syn_error, int depth)
 {
     if (STRNCMP("tuple", start, 5) == 0)
     {
@@ -1507,7 +1512,7 @@ skip_member_type(char_u *start, char_u *p, int *syn_error)
 
 	    if (STRNCMP(p, "...", 3) == 0)
 		p += 3;
-	    p = skip_type(p, TRUE);
+	    p = skip_type_depth(p, TRUE, depth);
 	    if (p == sp)
 	    {
 		*syn_error = TRUE;
@@ -1522,7 +1527,7 @@ skip_member_type(char_u *start, char_u *p, int *syn_error)
     else
     {
 	p = skipwhite(p);
-	p = skip_type(skipwhite(p + 1), FALSE);
+	p = skip_type_depth(skipwhite(p + 1), FALSE, depth);
 	p = skipwhite(p);
 	if (*p == '>')
 	    ++p;
@@ -1536,7 +1541,7 @@ skip_member_type(char_u *start, char_u *p, int *syn_error)
  * type.  "syn_error" is set to TRUE on syntax error.
  */
     static char_u *
-skip_func_type(char_u *p, int *syn_error)
+skip_func_type(char_u *p, int *syn_error, int depth)
 {
     if (*p == '(')
     {
@@ -1548,7 +1553,7 @@ skip_func_type(char_u *p, int *syn_error)
 
 	    if (STRNCMP(p, "...", 3) == 0)
 		p += 3;
-	    p = skip_type(p, TRUE);
+	    p = skip_type_depth(p, TRUE, depth);
 	    if (p == sp)
 	    {
 		*syn_error = TRUE;
@@ -1560,7 +1565,7 @@ skip_func_type(char_u *p, int *syn_error)
 	if (*p == ')')
 	{
 	    if (p[1] == ':')
-		p = skip_type(skipwhite(p + 2), FALSE);
+		p = skip_type_depth(skipwhite(p + 2), FALSE, depth);
 	    else
 		++p;
 	}
@@ -1568,7 +1573,7 @@ skip_func_type(char_u *p, int *syn_error)
     else
     {
 	// handle func: return_type
-	p = skip_type(skipwhite(p + 1), FALSE);
+	p = skip_type_depth(skipwhite(p + 1), FALSE, depth);
     }
 
     return p;
@@ -1578,8 +1583,8 @@ skip_func_type(char_u *p, int *syn_error)
  * Skip over a type definition and return a pointer to just after it.
  * When "optional" is TRUE then a leading "?" is accepted.
  */
-    char_u *
-skip_type(char_u *start, int optional)
+    static char_u *
+skip_type_depth(char_u *start, int optional, int depth)
 {
     char_u	*p = start;
     int		syn_error = FALSE;
@@ -1594,7 +1599,12 @@ skip_type(char_u *start, int optional)
     // Skip over "<type>"; this is permissive about white space.
     if (*skipwhite(p) == '<')
     {
-	p = skip_member_type(start, p, &syn_error);
+	if (depth + 1 >= VIM9_TYPE_SKIP_MAX_DEPTH)
+	{
+	    semsg(_(e_expression_too_recursive_str), start);
+	    return start;
+	}
+	p = skip_member_type(start, p, &syn_error, depth + 1);
 	if (syn_error)
 	    return p;
     }
@@ -1602,12 +1612,23 @@ skip_type(char_u *start, int optional)
 					     && STRNCMP("func", start, 4) == 0)
     {
 	// skip over function type
-	p = skip_func_type(p, &syn_error);
+	if (depth + 1 >= VIM9_TYPE_SKIP_MAX_DEPTH)
+	{
+	    semsg(_(e_expression_too_recursive_str), start);
+	    return start;
+	}
+	p = skip_func_type(p, &syn_error, depth + 1);
 	if (syn_error)
 	    return p;
     }
 
     return p;
+}
+
+    char_u *
+skip_type(char_u *start, int optional)
+{
+    return skip_type_depth(start, optional, 0);
 }
 
 /*
@@ -2056,8 +2077,10 @@ parse_type_user_defined(
  * When "give_error" is TRUE give error messages, otherwise be quiet.
  * Return NULL for failure.
  */
-    type_T *
-parse_type(
+static int vim9_type_parse_recurse = 0;
+
+    static type_T *
+parse_type_inner(
     char_u	**arg,
     garray_T	*type_gap,
     ufunc_T	*ufunc,
@@ -2176,6 +2199,30 @@ parse_type(
     // User defined type
     return parse_type_user_defined(arg, len, type_gap, give_error, ufunc,
 									cctx);
+}
+
+    type_T *
+parse_type(
+    char_u	**arg,
+    garray_T	*type_gap,
+    ufunc_T	*ufunc,
+    cctx_T	*cctx,
+    int		give_error)
+{
+    type_T	*ret;
+
+    // Limit nested Vim9 type expressions to 1000 container levels.  The extra
+    // parser frame admits the scalar member at the bottom of the type.
+    if (vim9_type_parse_recurse == VIM9_TYPE_PARSE_MAX_DEPTH)
+    {
+	if (give_error)
+	    semsg(_(e_expression_too_recursive_str), *arg);
+	return NULL;
+    }
+    ++vim9_type_parse_recurse;
+    ret = parse_type_inner(arg, type_gap, ufunc, cctx, give_error);
+    --vim9_type_parse_recurse;
+    return ret;
 }
 
 /*

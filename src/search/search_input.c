@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,16 +105,24 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
     size_t len = 0u;
     unsigned char *buf = malloc(cap + 1u);
 
-    if (!buf)
+    if (!buf) {
+        errno = ENOMEM;
         return NULL;
+    }
 
     for (;;) {
         if (len == cap) {
+            if (cap > (SIZE_MAX - 1u) / 2u) {
+                free(buf);
+                errno = ENOMEM;
+                return NULL;
+            }
             size_t new_cap = cap * 2u;
             unsigned char *tmp = realloc(buf, new_cap + 1u);
 
             if (!tmp) {
                 free(buf);
+                errno = ENOMEM;
                 return NULL;
             }
             buf = tmp;
@@ -128,7 +137,9 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
     }
 
     if (ferror(f)) {
+        int saved_errno = errno != 0 ? errno : EIO;
         free(buf);
+        errno = saved_errno;
         return NULL;
     }
 

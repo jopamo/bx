@@ -185,7 +185,7 @@ static int search_file_run_opened_kernel(enum bx_search_file_kernel_kind kernel,
                                          struct bx_search_stats *stats) {
     switch (kernel) {
     case BX_SEARCH_FILE_KERNEL_MULTILINE:
-        return bx_search_multiline_opened(f, use_stdin, display_name, m, opts,
+        return bx_search_multiline_opened(f, use_stdin, display_name, progname, m, opts,
                                           match_count, stats);
     case BX_SEARCH_FILE_KERNEL_RAW_PRESENCE:
         return bx_search_raw_presence_opened(f, use_stdin, filename, display_name, progname,

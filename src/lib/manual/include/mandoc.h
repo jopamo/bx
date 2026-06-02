@@ -237,12 +237,16 @@ enum	mandocerr {
 	MANDOCERR_ARG_SKIP, /* skipping all arguments: macro args */
 	MANDOCERR_ARG_EXCESS, /* skipping excess arguments: macro ... args */
 	MANDOCERR_DIVZERO, /* divide by zero */
+	MANDOCERR_ROFFNUMDEPTH, /* numeric expression nesting too deep */
+	MANDOCERR_EQNDEPTH, /* eqn expression nesting too deep */
+	MANDOCERR_ROFFBLKDEPTH, /* roff block nesting too deep */
 
 	/* related to escape sequences */
 	MANDOCERR_ESC_INCOMPLETE, /* incomplete escape sequence: esc */
 	MANDOCERR_ESC_BADCHAR, /* invalid special character: esc */
 	MANDOCERR_ESC_UNKCHAR, /* unknown special character: esc */
 	MANDOCERR_ESC_DELIM, /* invalid escape argument delimiter: esc */
+	MANDOCERR_ESCDEPTH, /* escape sequence nesting too deep */
 
 	MANDOCERR_UNSUPP, /* ===== start of unsupported features ===== */
 

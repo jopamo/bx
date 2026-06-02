@@ -163,7 +163,10 @@ static enum bx_walk_action bx_search_walk_push_dir_frame(struct bx_search_walk_s
     struct bx_ignore_program *program = NULL;
 
     if (state->have_ignore_opts && !state->ignore_opts.no_ignore) {
+        errno = 0;
         program = bx_ignore_load_program(entry->path, &state->ignore_opts);
+        if (!program && errno != 0)
+            return BX_WALK_ERROR;
     }
 
     if (!program) {

@@ -102,6 +102,7 @@ struct expr_parser {
     const struct expr_token* tokens;
     size_t count;
     size_t pos;
+    size_t recursion_depth;
     char* error;
 };
 
@@ -144,6 +145,9 @@ struct char_span {
 };
 
 static const int PREFIX_BINDING_POWER = 70;
+enum {
+    EXPR_PARSE_MAX_DEPTH = 256,
+};
 
 static char* vformat_alloc(const char* fmt, va_list ap) {
     va_list copy;
@@ -291,6 +295,22 @@ static bool parser_accept(struct expr_parser* parser, enum expr_token_kind kind)
 
     parser_consume(parser);
     return true;
+}
+
+static bool parser_enter_expr(struct expr_parser* parser) {
+    if (parser->recursion_depth >= EXPR_PARSE_MAX_DEPTH) {
+        parser_set_error(parser, "expression nesting too deep");
+        return false;
+    }
+
+    parser->recursion_depth++;
+    return true;
+}
+
+static void parser_leave_expr(struct expr_parser* parser) {
+    if (parser->recursion_depth > 0) {
+        parser->recursion_depth--;
+    }
 }
 
 static int token_lbp(enum expr_token_kind kind) {
@@ -523,15 +543,20 @@ static struct expr_node* parse_led(struct expr_parser* parser, struct expr_token
 }
 
 static struct expr_node* parse_expr(struct expr_parser* parser, int rbp) {
-    const struct expr_token* tok_ptr = parser_consume(parser);
-    if (!tok_ptr || tok_ptr->kind == TOK_END) {
-        parser_set_error(parser, "missing operand");
+    if (!parser_enter_expr(parser)) {
         return NULL;
     }
 
-    struct expr_node* left = parse_nud(parser, *tok_ptr);
+    struct expr_node* left = NULL;
+    const struct expr_token* tok_ptr = parser_consume(parser);
+    if (!tok_ptr || tok_ptr->kind == TOK_END) {
+        parser_set_error(parser, "missing operand");
+        goto out;
+    }
+
+    left = parse_nud(parser, *tok_ptr);
     if (!left) {
-        return NULL;
+        goto out;
     }
 
     for (;;) {
@@ -544,11 +569,14 @@ static struct expr_node* parse_expr(struct expr_parser* parser, int rbp) {
         struct expr_node* combined = parse_led(parser, op, left);
         if (!combined) {
             node_free(left);
-            return NULL;
+            left = NULL;
+            goto out;
         }
         left = combined;
     }
 
+out:
+    parser_leave_expr(parser);
     return left;
 }
 
@@ -1702,6 +1730,7 @@ int bx_expr_main(int argc, char** argv) {
     parser.tokens = tokens;
     parser.count = token_count;
     parser.pos = 0;
+    parser.recursion_depth = 0;
     parser.error = NULL;
 
     struct expr_node* root = parse_expr(&parser, 0);

@@ -525,20 +525,38 @@ static bool bx_ignore_load_patterns_from_path(const char *path,
     loaded_any = true;
     char *line = NULL;
     size_t lcap = 0;
-    while (getline(&line, &lcap, f) != -1) {
+    int read_errno = 0;
+    for (;;) {
+        errno = 0;
+        ssize_t line_len = getline(&line, &lcap, f);
+        if (line_len == -1)
+            break;
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
         if (len == 0 || line[0] == '#')
             continue;
         if (!bx_ignore_append_pattern(patterns, sources, n, &cap, line, source)) {
+            read_errno = ENOMEM;
+            bx_ignore_report_error(opts, path, read_errno);
             free(line);
             fclose(f);
-            return loaded_any || *n > 0;
+            errno = read_errno;
+            return false;
         }
     }
+    if (errno == ENOMEM)
+        read_errno = ENOMEM;
+    else if (ferror(f))
+        read_errno = errno ? errno : EIO;
     free(line);
     fclose(f);
+    if (read_errno != 0) {
+        bx_ignore_report_error(opts, path, read_errno);
+        errno = read_errno;
+        return false;
+    }
+    errno = 0;
     return loaded_any && *n > 0;
 }
 
@@ -673,8 +691,11 @@ struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
 
         size_t plen = strlen(dirpath) + 1 + strlen(filename) + 1;
         char *ignore_path = malloc(plen);
-        if (!ignore_path)
-            continue;
+        if (!ignore_path) {
+            errno = ENOMEM;
+            bx_ignore_free_patterns(patterns, sources, pattern_count);
+            return NULL;
+        }
 
         snprintf(ignore_path, plen, "%s/%s", dirpath, filename);
         if (stat(ignore_path, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -686,13 +707,26 @@ struct bx_ignore_program *bx_ignore_load_program(const char *dirpath,
             : strcmp(filename, ".ignore") == 0
                 ? BX_IGNORE_SOURCE_DOTIGNORE
                 : BX_IGNORE_SOURCE_BUILTIN;
-        (void)bx_ignore_load_patterns_from_path(ignore_path, opts, &patterns, &sources,
-                                                &pattern_count, false, source);
+        if (!bx_ignore_load_patterns_from_path(ignore_path, opts, &patterns,
+                                               &sources, &pattern_count, false,
+                                               source) &&
+            errno != 0) {
+            int saved_errno = errno;
+            free(ignore_path);
+            bx_ignore_free_patterns(patterns, sources, pattern_count);
+            errno = saved_errno;
+            return NULL;
+        }
         free(ignore_path);
     }
 
-    return bx_ignore_program_from_patterns(patterns, sources, pattern_count,
-                                           opts->ignore_file_case_insensitive);
+    errno = 0;
+    struct bx_ignore_program *program =
+        bx_ignore_program_from_patterns(patterns, sources, pattern_count,
+                                        opts->ignore_file_case_insensitive);
+    if (!program && pattern_count > 0 && errno == ENOMEM)
+        bx_ignore_report_error(opts, dirpath, ENOMEM);
+    return program;
 }
 
 void bx_ignore_validate_explicit_ignore_files(const struct bx_walk_ignore_opts *opts) {

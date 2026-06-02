@@ -1552,6 +1552,31 @@ theend:
 
 // like NAMESPACE_CHAR but with 'a' and 'l'.
 #define VIM9_NAMESPACE_CHAR	(char_u *)"bgstvw"
+#define VIM9_COMPILE_COLLECTION_MAX_DEPTH 1000
+
+static int vim9_compile_collection_recurse = 0;
+
+/*
+ * Limit nested list/dict literal compilation.  These expressions recurse
+ * through compile_expr0() without passing through compile_parenthesis().
+ */
+    static int
+vim9_compile_enter_collection(char_u *arg)
+{
+    if (vim9_compile_collection_recurse == VIM9_COMPILE_COLLECTION_MAX_DEPTH)
+    {
+	semsg(_(e_expression_too_recursive_str), arg);
+	return FAIL;
+    }
+    ++vim9_compile_collection_recurse;
+    return OK;
+}
+
+    static void
+vim9_compile_leave_collection(void)
+{
+    --vim9_compile_collection_recurse;
+}
 
 /*
  * Find the end of a variable or function name.  Unlike find_name_end() this
@@ -1617,18 +1642,22 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
     int		is_const;
     int		is_all_const = TRUE;	// reset when non-const encountered
     int		must_end = FALSE;
+    int		ret = FAIL;
+
+    if (vim9_compile_enter_collection(*arg) == FAIL)
+	return FAIL;
 
     for (;;)
     {
 	if (may_get_next_line(whitep, &p, cctx) == FAIL)
 	{
 	    semsg(_(e_missing_end_of_list_rsb_str), *arg);
-	    return FAIL;
+	    goto done;
 	}
 	if (*p == ',')
 	{
 	    semsg(_(e_no_white_space_allowed_before_str_str), ",", p);
-	    return FAIL;
+	    goto done;
 	}
 	if (*p == ']')
 	{
@@ -1638,10 +1667,10 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	if (must_end)
 	{
 	    semsg(_(e_missing_comma_in_list_str), p);
-	    return FAIL;
+	    goto done;
 	}
 	if (compile_expr0_ext(&p, cctx, &is_const) == FAIL)
-	    return FAIL;
+	    goto done;
 	if (!is_const)
 	    is_all_const = FALSE;
 	++count;
@@ -1651,7 +1680,7 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    if (*p != ']' && !IS_WHITE_OR_NUL(*p))
 	    {
 		semsg(_(e_white_space_required_after_str_str), ",", p - 1);
-		return FAIL;
+		goto done;
 	    }
 	}
 	else
@@ -1662,7 +1691,10 @@ compile_list(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
     *arg = p;
 
     ppconst->pp_is_const = is_all_const;
-    return generate_NEWLIST(cctx, count, FALSE);
+    ret = generate_NEWLIST(cctx, count, FALSE);
+done:
+    vim9_compile_leave_collection();
+    return ret;
 }
 
 /*
@@ -1896,19 +1928,23 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 {
     garray_T	*instr = &cctx->ctx_instr;
     int		count = 0;
-    dict_T	*d = dict_alloc();
+    dict_T	*d;
     dictitem_T	*item;
     char_u	*whitep = *arg + 1;
     char_u	*p;
     int		is_const;
     int		is_all_const = TRUE;	// reset when non-const encountered
+    int		ret = FAIL;
 
-    if (d == NULL)
+    if (vim9_compile_enter_collection(*arg) == FAIL)
 	return FAIL;
+    d = dict_alloc();
+    if (d == NULL)
+	goto done;
     if (generate_ppconst(cctx, ppconst) == FAIL)
     {
 	dict_unref(d);
-	return FAIL;
+	goto done;
     }
     for (;;)
     {
@@ -1930,7 +1966,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    // {[expr]: value} uses an evaluated key.
 	    *arg = skipwhite(*arg + 1);
 	    if (compile_expr0(arg, cctx) == FAIL)
-		return FAIL;
+		goto failret;
 	    isn = ((isn_T *)instr->ga_data) + instr->ga_len - 1;
 	    if (isn->isn_type == ISN_PUSHNR)
 	    {
@@ -1944,12 +1980,12 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    if (isn->isn_type == ISN_PUSHS)
 		key = isn->isn_arg.string;
 	    else if (may_generate_2STRING(-1, TOSTRING_NONE, cctx) == FAIL)
-		return FAIL;
+		goto failret;
 	    *arg = skipwhite(*arg);
 	    if (**arg != ']')
 	    {
 		emsg(_(e_missing_matching_bracket_after_dict_key));
-		return FAIL;
+		goto failret;
 	    }
 	    ++*arg;
 	}
@@ -1960,9 +1996,9 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	    // {name: value} use "name" as a literal key
 	    key = get_literal_key(arg);
 	    if (key == NULL)
-		return FAIL;
+		goto failret;
 	    if (generate_PUSHS(cctx, &key) == FAIL)
-		return FAIL;
+		goto failret;
 	}
 
 	// Check for duplicate keys, if using string keys.
@@ -1990,13 +2026,13 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 		semsg(_(e_no_white_space_allowed_before_str_str), ":", *arg);
 	    else
 		semsg(_(e_missing_colon_in_dictionary_str), *arg);
-	    return FAIL;
+	    goto failret;
 	}
 	whitep = *arg + 1;
 	if (!IS_WHITE_OR_NUL(*whitep))
 	{
 	    semsg(_(e_white_space_required_after_str_str), ":", *arg);
-	    return FAIL;
+	    goto failret;
 	}
 
 	if (may_get_next_line(whitep, arg, cctx) == FAIL)
@@ -2006,7 +2042,7 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	}
 
 	if (compile_expr0_ext(arg, cctx, &is_const) == FAIL)
-	    return FAIL;
+	    goto failret;
 	if (!is_const)
 	    is_all_const = FALSE;
 	++count;
@@ -2027,13 +2063,13 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	if (IS_WHITE_OR_NUL(*whitep))
 	{
 	    semsg(_(e_no_white_space_allowed_before_str_str), ",", whitep);
-	    return FAIL;
+	    goto failret;
 	}
 	whitep = *arg + 1;
 	if (!IS_WHITE_OR_NUL(*whitep))
 	{
 	    semsg(_(e_white_space_required_after_str_str), ",", *arg);
-	    return FAIL;
+	    goto failret;
 	}
 	*arg = skipwhite(whitep);
     }
@@ -2047,7 +2083,8 @@ compile_dict(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 
     dict_unref(d);
     ppconst->pp_is_const = is_all_const;
-    return generate_NEWDICT(cctx, count, FALSE);
+    ret = generate_NEWDICT(cctx, count, FALSE);
+    goto done;
 
 failret:
     if (*arg == NULL)
@@ -2056,7 +2093,9 @@ failret:
 	*arg = (char_u *)"";
     }
     dict_unref(d);
-    return FAIL;
+done:
+    vim9_compile_leave_collection();
+    return ret;
 }
 
 /*
@@ -2461,13 +2500,29 @@ compile_parenthesis(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 {
     int	    ret;
     char_u  *p = *arg + 1;
+    static int recurse = 0;
+
+    // Limit recursion to 1000 levels.  This mirrors eval9() and avoids stack
+    // exhaustion while compiling deeply nested parenthesized Vim9 expressions.
+    if (recurse == 1000)
+    {
+	semsg(_(e_expression_too_recursive_str), *arg);
+	return FAIL;
+    }
+    ++recurse;
 
     if (may_get_next_line_error(p, arg, cctx) == FAIL)
-	return FAIL;
+    {
+	ret = FAIL;
+	goto done;
+    }
 
     if (**arg == ')')
+    {
 	// empty tuple
-	return compile_tuple(arg, cctx, ppconst, FALSE);
+	ret = compile_tuple(arg, cctx, ppconst, FALSE);
+	goto done;
+    }
 
     if (ppconst->pp_used <= PPSIZE - 10)
     {
@@ -2477,18 +2532,28 @@ compile_parenthesis(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
     {
 	// Not enough space in ppconst, flush constants.
 	if (generate_ppconst(cctx, ppconst) == FAIL)
-	    return FAIL;
+	{
+	    ret = FAIL;
+	    goto done;
+	}
 	ret = compile_expr0(arg, cctx);
     }
     if (may_get_next_line_error(*arg, arg, cctx) == FAIL)
-	return FAIL;
+    {
+	ret = FAIL;
+	goto done;
+    }
     if (ret == OK && **arg == ',')
     {
 	// tuple
 	int is_const = ppconst->pp_used > 0 || ppconst->pp_is_const;
 	if (generate_ppconst(cctx, ppconst) == FAIL)
-	    return FAIL;
-	return compile_tuple(arg, cctx, ppconst, is_const);
+	{
+	    ret = FAIL;
+	    goto done;
+	}
+	ret = compile_tuple(arg, cctx, ppconst, is_const);
+	goto done;
     }
 
     if (**arg == ')')
@@ -2498,6 +2563,8 @@ compile_parenthesis(char_u **arg, cctx_T *cctx, ppconst_T *ppconst)
 	emsg(_(e_missing_closing_paren));
 	ret = FAIL;
     }
+done:
+    --recurse;
     return ret;
 }
 

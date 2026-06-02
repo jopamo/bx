@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -15,11 +16,20 @@ bool bx_output_quote_terminal_should_hide_control(int fd) {
     return isatty(fd) == 1;
 }
 
-static size_t bx_output_quote_capacity(size_t len, size_t multiplier, size_t extra) {
+static bool bx_output_quote_capacity_checked(size_t len, size_t multiplier, size_t extra, size_t* capacity_out) {
     if (multiplier != 0u && len > (SIZE_MAX - extra) / multiplier) {
+        return false;
+    }
+    *capacity_out = len * multiplier + extra;
+    return true;
+}
+
+static size_t bx_output_quote_capacity(size_t len, size_t multiplier, size_t extra) {
+    size_t capacity = 0u;
+    if (!bx_output_quote_capacity_checked(len, multiplier, extra, &capacity)) {
         bx_fatal(3, "path quote allocation overflow");
     }
-    return len * multiplier + extra;
+    return capacity;
 }
 
 static char* bx_output_quote_alloc(size_t size) {
@@ -28,8 +38,38 @@ static char* bx_output_quote_alloc(size_t size) {
     return out;
 }
 
+static char* bx_output_quote_try_alloc(size_t size) {
+    char* out = malloc(size);
+    if (out != NULL) {
+        bx_output_alloc_counter_note_alloc(size);
+    }
+    return out;
+}
+
 static char* bx_output_quote_strdup(const char* text) {
     char* out = xstrdup(text);
+    bx_output_alloc_counter_note_cstring_alloc(text);
+    return out;
+}
+
+static char* bx_output_quote_try_strdup(const char* text) {
+    size_t len;
+    char* out;
+
+    if (text == NULL) {
+        text = "";
+    }
+
+    len = strlen(text);
+    if (len == SIZE_MAX) {
+        return NULL;
+    }
+
+    out = malloc(len + 1u);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, text, len + 1u);
     bx_output_alloc_counter_note_cstring_alloc(text);
     return out;
 }
@@ -446,7 +486,41 @@ static bool bx_output_quote_append_reusable_shell_dollar_escape(char* out, size_
     }
 }
 
-char* bx_output_quote_shell_reusable_dup(const char* text) {
+static char* bx_output_quote_shell_reusable_alloc(size_t size, bool fatal_alloc) {
+    return fatal_alloc ? bx_output_quote_alloc(size) : bx_output_quote_try_alloc(size);
+}
+
+static char* bx_output_quote_shell_reusable_strdup(const char* text, bool fatal_alloc) {
+    return fatal_alloc ? bx_output_quote_strdup(text) : bx_output_quote_try_strdup(text);
+}
+
+static bool bx_output_quote_shell_reusable_capacity(
+    size_t len,
+    size_t multiplier,
+    size_t extra,
+    bool fatal_alloc,
+    size_t* capacity_out) {
+    if (bx_output_quote_capacity_checked(len, multiplier, extra, capacity_out)) {
+        return true;
+    }
+    if (fatal_alloc) {
+        bx_fatal(3, "path quote allocation overflow");
+    }
+    return false;
+}
+
+static bool bx_output_quote_shell_reusable_append_or_fail(char* out, bool fatal_alloc, bool ok) {
+    if (ok) {
+        return true;
+    }
+    if (fatal_alloc) {
+        bx_fatal(3, "output quote allocation overflow");
+    }
+    free(out);
+    return false;
+}
+
+static char* bx_output_quote_shell_reusable_dup_impl(const char* text, bool fatal_alloc) {
     enum bx_output_quote_reusable_shell_mode {
         BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE = 0,
         BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE,
@@ -458,29 +532,42 @@ char* bx_output_quote_shell_reusable_dup(const char* text) {
     }
 
     if (text[0] == '\0') {
-        return bx_output_quote_strdup("''");
+        return bx_output_quote_shell_reusable_strdup("''", fatal_alloc);
     }
 
     if (bx_output_quote_reusable_shell_safe_string(text)) {
-        return bx_output_quote_strdup(text);
+        return bx_output_quote_shell_reusable_strdup(text, fatal_alloc);
     }
 
     size_t text_len = strlen(text);
     if (bx_output_quote_reusable_shell_can_use_double_quotes(text)) {
-        char* out = bx_output_quote_alloc(bx_output_quote_capacity(text_len, 1u, 3u));
+        size_t out_cap = 0u;
+        if (!bx_output_quote_shell_reusable_capacity(text_len, 1u, 3u, fatal_alloc, &out_cap)) {
+            return NULL;
+        }
+        char* out = bx_output_quote_shell_reusable_alloc(out_cap, fatal_alloc);
+        if (out == NULL) {
+            return NULL;
+        }
         size_t out_pos = 0u;
         out[0] = '\0';
 
-        if (!bx_output_quote_append_char(out, text_len + 3u, &out_pos, '"') ||
-            !bx_output_quote_append_text(out, text_len + 3u, &out_pos, text) ||
-            !bx_output_quote_append_char(out, text_len + 3u, &out_pos, '"')) {
-            bx_fatal(3, "output quote allocation overflow");
+        if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '"')) ||
+            !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, text)) ||
+            !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '"'))) {
+            return NULL;
         }
         return out;
     }
 
-    size_t out_cap = bx_output_quote_capacity(text_len, 12u, 8u);
-    char* out = bx_output_quote_alloc(out_cap);
+    size_t out_cap = 0u;
+    if (!bx_output_quote_shell_reusable_capacity(text_len, 12u, 8u, fatal_alloc, &out_cap)) {
+        return NULL;
+    }
+    char* out = bx_output_quote_shell_reusable_alloc(out_cap, fatal_alloc);
+    if (out == NULL) {
+        return NULL;
+    }
     size_t out_pos = 0u;
     enum bx_output_quote_reusable_shell_mode mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE;
     bool emitted = false;
@@ -490,86 +577,98 @@ char* bx_output_quote_shell_reusable_dup(const char* text) {
         unsigned char ch = (unsigned char)text[i];
         if (isprint((int)ch) == 0) {
             if (mode == BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE) {
-                if (!bx_output_quote_append_char(out, out_cap, &out_pos, '\'')) {
-                    bx_fatal(3, "output quote allocation overflow");
+                if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '\''))) {
+                    return NULL;
                 }
                 mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE;
             }
             if (mode != BX_OUTPUT_QUOTE_REUSABLE_SHELL_DOLLAR) {
-                if (!emitted && !bx_output_quote_append_text(out, out_cap, &out_pos, "''")) {
-                    bx_fatal(3, "output quote allocation overflow");
+                if (!emitted &&
+                    !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "''"))) {
+                    return NULL;
                 }
                 emitted = true;
-                if (!bx_output_quote_append_text(out, out_cap, &out_pos, "$'")) {
-                    bx_fatal(3, "output quote allocation overflow");
+                if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "$'"))) {
+                    return NULL;
                 }
                 mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_DOLLAR;
             }
-            if (!bx_output_quote_append_reusable_shell_dollar_escape(out, out_cap, &out_pos, ch)) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_reusable_shell_dollar_escape(out, out_cap, &out_pos, ch))) {
+                return NULL;
             }
             emitted = true;
             continue;
         }
 
         if (mode == BX_OUTPUT_QUOTE_REUSABLE_SHELL_DOLLAR) {
-            if (!bx_output_quote_append_char(out, out_cap, &out_pos, '\'')) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '\''))) {
+                return NULL;
             }
             mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE;
         }
 
         if (ch == '\'') {
             if (mode == BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE) {
-                if (!bx_output_quote_append_char(out, out_cap, &out_pos, '\'')) {
-                    bx_fatal(3, "output quote allocation overflow");
+                if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '\''))) {
+                    return NULL;
                 }
                 mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_NONE;
             }
-            if (!emitted && !bx_output_quote_append_text(out, out_cap, &out_pos, "''")) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!emitted &&
+                !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "''"))) {
+                return NULL;
             }
             emitted = true;
-            if (!bx_output_quote_append_text(out, out_cap, &out_pos, "\\'")) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "\\'"))) {
+                return NULL;
             }
             bool next_is_printable_non_quote = false;
             if (i + 1u < text_len) {
                 unsigned char next = (unsigned char)text[i + 1u];
                 next_is_printable_non_quote = (next != '\'') && (isprint((int)next) != 0);
             }
-            if (!next_is_printable_non_quote && !bx_output_quote_append_text(out, out_cap, &out_pos, "''")) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!next_is_printable_non_quote &&
+                !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "''"))) {
+                return NULL;
             }
             emitted = true;
             continue;
         }
 
         if (mode != BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE) {
-            if (!bx_output_quote_append_char(out, out_cap, &out_pos, '\'')) {
-                bx_fatal(3, "output quote allocation overflow");
+            if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '\''))) {
+                return NULL;
             }
             mode = BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE;
             emitted = true;
         }
 
-        if (!bx_output_quote_append_char(out, out_cap, &out_pos, (char)ch)) {
-            bx_fatal(3, "output quote allocation overflow");
+        if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, (char)ch))) {
+            return NULL;
         }
         emitted = true;
     }
 
     if (mode == BX_OUTPUT_QUOTE_REUSABLE_SHELL_SINGLE || mode == BX_OUTPUT_QUOTE_REUSABLE_SHELL_DOLLAR) {
-        if (!bx_output_quote_append_char(out, out_cap, &out_pos, '\'')) {
-            bx_fatal(3, "output quote allocation overflow");
+        if (!bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_char(out, out_cap, &out_pos, '\''))) {
+            return NULL;
         }
     }
 
-    if (!emitted && !bx_output_quote_append_text(out, out_cap, &out_pos, "''")) {
-        bx_fatal(3, "output quote allocation overflow");
+    if (!emitted &&
+        !bx_output_quote_shell_reusable_append_or_fail(out, fatal_alloc, bx_output_quote_append_text(out, out_cap, &out_pos, "''"))) {
+        return NULL;
     }
 
     return out;
+}
+
+char* bx_output_quote_shell_reusable_dup(const char* text) {
+    return bx_output_quote_shell_reusable_dup_impl(text, true);
+}
+
+char* bx_output_quote_shell_reusable_try_dup(const char* text) {
+    return bx_output_quote_shell_reusable_dup_impl(text, false);
 }
 
 char* bx_output_quote_dup(const char* text, enum bx_output_quote_style style) {

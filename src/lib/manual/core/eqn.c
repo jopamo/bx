@@ -36,6 +36,7 @@
 #include "eqn_parse.h"
 
 #define	EQN_NEST_MAX	 128 /* maximum nesting of defines */
+#define	EQN_EXPR_MAX_DEPTH 256 /* maximum nesting of expression boxes */
 #define	STRNEQ(p1, sz1, p2, sz2) \
 	((sz1) == (sz2) && 0 == strncmp((p1), (p2), (sz1)))
 
@@ -294,6 +295,11 @@ struct	eqn_def {
 };
 
 static	struct eqn_box	*eqn_box_alloc(struct eqn_node *, struct eqn_box *);
+static	struct eqn_box	*eqn_box_alloc_scope(struct eqn_node *,
+				struct eqn_box *);
+static	int		 eqn_box_can_nest(struct eqn_node *,
+				struct eqn_box *);
+static	size_t		 eqn_box_depth(const struct eqn_box *);
 static	struct eqn_box	*eqn_box_makebinary(struct eqn_node *,
 				struct eqn_box *);
 static	void		 eqn_def(struct eqn_node *);
@@ -535,6 +541,37 @@ eqn_box_alloc(struct eqn_node *ep, struct eqn_box *parent)
 	return bp;
 }
 
+static size_t
+eqn_box_depth(const struct eqn_box *bp)
+{
+	size_t		 depth;
+
+	depth = 0;
+	while (bp != NULL && bp->parent != NULL) {
+		depth++;
+		bp = bp->parent;
+	}
+	return depth;
+}
+
+static int
+eqn_box_can_nest(struct eqn_node *ep, struct eqn_box *parent)
+{
+	if (eqn_box_depth(parent) + 1u < EQN_EXPR_MAX_DEPTH)
+		return 1;
+	mandoc_msg(MANDOCERR_EQNDEPTH, ep->node->line, ep->node->pos,
+	    NULL);
+	return 0;
+}
+
+static struct eqn_box *
+eqn_box_alloc_scope(struct eqn_node *ep, struct eqn_box *parent)
+{
+	if (eqn_box_can_nest(ep, parent) == 0)
+		return NULL;
+	return eqn_box_alloc(ep, parent);
+}
+
 /*
  * Reparent the current last node (of the current parent) under a new
  * EQN_SUBEXPR as the first element.
@@ -547,6 +584,8 @@ eqn_box_makebinary(struct eqn_node *ep, struct eqn_box *parent)
 	struct eqn_box	*b, *newb;
 
 	assert(NULL != parent->last);
+	if (eqn_box_can_nest(ep, parent) == 0)
+		return NULL;
 	b = parent->last;
 	if (parent->last == parent->first)
 		parent->first = NULL;
@@ -726,7 +765,8 @@ next_tok:
 			cur->type = EQN_TEXT;
 			cur->text = mandoc_strdup("");
 		}
-		parent = eqn_box_makebinary(ep, parent);
+		if ((parent = eqn_box_makebinary(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_LIST;
 		parent->expectargs = 1;
 		parent->font = EQNFONT_ROMAN;
@@ -779,7 +819,8 @@ next_tok:
 		 * words; thus, we mark that we'll have a child with
 		 * exactly one of those.
 		 */
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_LIST;
 		parent->expectargs = 1;
 		switch (tok) {
@@ -819,7 +860,8 @@ next_tok:
 		}
 		while (parent->args == parent->expectargs)
 			parent = parent->parent;
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_LIST;
 		parent->expectargs = 1;
 		parent->size = size;
@@ -863,7 +905,8 @@ next_tok:
 			parent->pos = EQNPOS_FROMTO;
 			break;
 		}
-		parent = eqn_box_makebinary(ep, parent);
+		if ((parent = eqn_box_makebinary(ep, parent)) == NULL)
+			return;
 		switch (tok) {
 		case EQN_TOK_FROM:
 			parent->pos = EQNPOS_FROM;
@@ -889,7 +932,8 @@ next_tok:
 		 * like sub and sup and friends but without rebalancing
 		 * under a pivot.
 		 */
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_SUBEXPR;
 		parent->pos = EQNPOS_SQRT;
 		parent->expectargs = 1;
@@ -911,7 +955,8 @@ next_tok:
 			parent = parent->parent;
 		while (EQN_SUBEXPR == parent->type)
 			parent = parent->parent;
-		parent = eqn_box_makebinary(ep, parent);
+		if ((parent = eqn_box_makebinary(ep, parent)) == NULL)
+			return;
 		parent->pos = EQNPOS_OVER;
 		break;
 	case EQN_TOK_RIGHT:
@@ -975,7 +1020,8 @@ next_tok:
 			    ep->node->pos, "%s", eqn_toks[tok]);
 			break;
 		}
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_LIST;
 		if (EQN_TOK_LEFT == tok) {
 			if (STRNEQ(ep->start, ep->toksz, "ceiling", 7))
@@ -996,7 +1042,8 @@ next_tok:
 	case EQN_TOK_RCOL:
 		while (parent->args == parent->expectargs)
 			parent = parent->parent;
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_PILE;
 		parent->expectargs = 1;
 		break;
@@ -1009,13 +1056,15 @@ next_tok:
 			    ep->node->pos, "%s", eqn_toks[tok]);
 			break;
 		}
-		parent = eqn_box_alloc(ep, cur);
+		if ((parent = eqn_box_alloc_scope(ep, cur)) == NULL)
+			return;
 		parent->type = EQN_LIST;
 		break;
 	case EQN_TOK_MATRIX:
 		while (parent->args == parent->expectargs)
 			parent = parent->parent;
-		parent = eqn_box_alloc(ep, parent);
+		if ((parent = eqn_box_alloc_scope(ep, parent)) == NULL)
+			return;
 		parent->type = EQN_MATRIX;
 		parent->expectargs = 1;
 		break;
@@ -1083,7 +1132,9 @@ next_tok:
 					parent->last = cur->prev;
 					parent->args--;
 					/* Set up a list instead. */
-					split = eqn_box_alloc(ep, parent);
+					if ((split = eqn_box_alloc_scope(ep,
+					    parent)) == NULL)
+						return;
 					split->type = EQN_LIST;
 					/* Insert the word into the list. */
 					split->first = split->last = cur;

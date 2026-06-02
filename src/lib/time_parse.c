@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "lib/checked_math.h"
 #include "lib/time_parse.h"
 
 bool bx_time_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out) {
@@ -169,12 +170,8 @@ bool bx_time_milliseconds_to_timespec(intmax_t milliseconds, struct timespec* ts
 
     intmax_t seconds_value = milliseconds / 1000;
     intmax_t milliseconds_remainder = milliseconds % 1000;
-    if ((long double)seconds_value > bx_time_time_t_max_value()) {
-        return false;
-    }
-
-    time_t tv_sec = (time_t)seconds_value;
-    if ((long double)tv_sec != (long double)seconds_value) {
+    time_t tv_sec = 0;
+    if (!bx_checked_intmax_to_time_t(seconds_value, &tv_sec)) {
         return false;
     }
 
@@ -226,12 +223,7 @@ bool bx_time_milliseconds_to_seconds_int_floor(intmax_t milliseconds, int* secon
 }
 
 bool bx_time_seconds_to_milliseconds_uint(uintmax_t seconds, uintmax_t* milliseconds_out) {
-    if (milliseconds_out == NULL || seconds > UINTMAX_MAX / 1000u) {
-        return false;
-    }
-
-    *milliseconds_out = seconds * 1000u;
-    return true;
+    return bx_checked_uintmax_mul(seconds, 1000u, milliseconds_out);
 }
 
 bool bx_time_seconds_to_milliseconds_int(uintmax_t seconds, int* milliseconds_out) {
@@ -284,11 +276,15 @@ bool bx_time_timespec_to_nanoseconds_u64(const struct timespec* ts, uint64_t* na
 
     uintmax_t seconds = (uintmax_t)ts->tv_sec;
     uintmax_t nanoseconds = (uintmax_t)ts->tv_nsec;
-    if (seconds > (UINT64_MAX - nanoseconds) / UINT64_C(1000000000)) {
+    uintmax_t seconds_nanoseconds = 0;
+    uintmax_t total_nanoseconds = 0;
+    if (!bx_checked_uintmax_mul(seconds, UINT64_C(1000000000), &seconds_nanoseconds) ||
+        !bx_checked_uintmax_add(seconds_nanoseconds, nanoseconds, &total_nanoseconds) ||
+        total_nanoseconds > (uintmax_t)UINT64_MAX) {
         return false;
     }
 
-    *nanoseconds_out = (uint64_t)((seconds * UINT64_C(1000000000)) + nanoseconds);
+    *nanoseconds_out = (uint64_t)total_nanoseconds;
     return true;
 }
 
@@ -395,11 +391,12 @@ bool bx_time_timespec_to_milliseconds_uint(const struct timespec* ts, uintmax_t*
 
     uintmax_t seconds = (uintmax_t)ts->tv_sec;
     uintmax_t nanoseconds_milliseconds = (uintmax_t)(ts->tv_nsec / 1000000L);
-    if (seconds > (UINTMAX_MAX - nanoseconds_milliseconds) / 1000u) {
+    uintmax_t seconds_milliseconds = 0;
+    if (!bx_checked_uintmax_mul(seconds, 1000u, &seconds_milliseconds) ||
+        !bx_checked_uintmax_add(seconds_milliseconds, nanoseconds_milliseconds, milliseconds_out)) {
         return false;
     }
 
-    *milliseconds_out = (seconds * 1000u) + nanoseconds_milliseconds;
     return true;
 }
 
@@ -454,7 +451,7 @@ bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_pa
         options = &default_options;
     }
 
-    if (text == NULL || text[0] != '@' || text[1] == '\0') {
+    if (text == NULL || text[0] != '@' || text[1] == '\0' || ts_out == NULL) {
         return false;
     }
 
@@ -493,8 +490,8 @@ bool bx_time_parse_epoch_literal(const char* text, const struct bx_time_epoch_pa
         nsec = 1000000000L - nsec;
     }
 
-    time_t seconds = (time_t)seconds_value;
-    if ((intmax_t)seconds != seconds_value) {
+    time_t seconds = 0;
+    if (!bx_checked_intmax_to_time_t(seconds_value, &seconds)) {
         return false;
     }
 

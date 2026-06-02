@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "fd_match.h"
+#include "lib/checked_math.h"
 #include "lib/path_ops.h"
 
 static uint32_t fd_compile_flags(const struct fd_opts *opts,
@@ -58,7 +59,25 @@ static pcre2_code *fd_compile_pattern(const char *progname,
     }
 
     if (opts->glob_match) {
-        char buf[4096];
+        size_t translated_len = 0;
+        for (const char *ch = pattern; *ch; ch++) {
+            size_t add = (*ch == '*' || *ch == '.') ? 2u : 1u;
+            if (!bx_checked_size_add(translated_len, add, &translated_len)) {
+                fprintf(stderr, "%s: out of memory\n", progname);
+                return NULL;
+            }
+        }
+        size_t alloc_len = 0;
+        if (!bx_checked_size_add(translated_len, 1u, &alloc_len)) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            return NULL;
+        }
+        char *buf = malloc(alloc_len);
+        if (!buf) {
+            fprintf(stderr, "%s: out of memory\n", progname);
+            return NULL;
+        }
+
         char *p = buf;
         for (const char *ch = pattern; *ch; ch++) {
             switch (*ch) {
@@ -79,14 +98,18 @@ static pcre2_code *fd_compile_pattern(const char *progname,
             }
         }
         *p = '\0';
-        return fd_compile_regex(progname, buf, pattern,
-                                fd_compile_flags(opts, pattern));
+        pcre2_code *re = fd_compile_regex(progname, buf, pattern,
+                                          fd_compile_flags(opts, pattern));
+        free(buf);
+        return re;
     }
 
     size_t len = strlen(pattern);
     char *buf = malloc(len * 2 + 3);
-    if (!buf)
+    if (!buf) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return NULL;
+    }
 
     char *p = buf;
     for (size_t i = 0; i < len; i++) {
@@ -125,6 +148,7 @@ static bool fd_record_match(struct fd_state *st, const char *path,
 
     if (opts->exec_mode != FD_EXEC_NONE) {
         if (!fd_exec_items_append_path(&st->exec_items, &st->render, path)) {
+            fprintf(stderr, "%s: out of memory\n", st->progname);
             st->exec_collect_failed = true;
             if (st->stop)
                 *st->stop = true;
@@ -133,6 +157,7 @@ static bool fd_record_match(struct fd_state *st, const char *path,
     } else if (opts->list_details) {
         char *path_copy = strdup(path);
         if (!path_copy) {
+            fprintf(stderr, "%s: out of memory\n", st->progname);
             st->output_collect_failed = true;
             if (st->stop)
                 *st->stop = true;
@@ -147,6 +172,7 @@ static bool fd_record_match(struct fd_state *st, const char *path,
             fd_detail_items_append(&st->detail_items, &st->render, &entry);
         free(path_copy);
         if (!ok) {
+            fprintf(stderr, "%s: out of memory\n", st->progname);
             st->output_collect_failed = true;
             if (st->stop)
                 *st->stop = true;
@@ -175,6 +201,7 @@ bool fd_state_init(struct fd_state *st, const char *progname,
                    struct bx_line_writer *writer) {
     memset(st, 0, sizeof(*st));
     st->opts = opts;
+    st->progname = progname;
     st->stop = stop;
     st->strip_implicit_dot_prefix = using_implicit_root;
     st->writer = writer;
@@ -196,8 +223,10 @@ bool fd_state_init(struct fd_state *st, const char *progname,
             return false;
         st->match_data[i] =
             pcre2_match_data_create_from_pattern(st->regexes[i], NULL);
-        if (!st->match_data[i])
+        if (!st->match_data[i]) {
+            fprintf(stderr, "%s: out of memory\n", progname);
             return false;
+        }
     }
 
     return true;

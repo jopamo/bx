@@ -690,10 +690,9 @@ void bx_search_run(const struct bx_search_run_args *args,
     search_pattern = bx_search_run_build_search_pattern(args->pattern, args->personality,
                                                         args->opts);
     if (!search_pattern) {
+        fprintf(stderr, "%s: out of memory\n", args->progname);
         local_result.status = 2;
-        if (result)
-            *result = local_result;
-        return;
+        goto done;
     }
     if (!bx_search_run_compile_matcher(args, search_pattern, &matcher)) {
         local_result.status = 2;

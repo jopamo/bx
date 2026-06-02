@@ -15,15 +15,11 @@
 
 static bool fd_parse_nonnegative_int(const char *progname, const char *optname,
                                      const char *text, int *out) {
-    char *end = NULL;
-    long v = strtol(text, &end, 10);
-    if (!text || *text == '\0' || (end && *end != '\0') || v < 0 ||
-        v > (1 << 20)) {
+    if (!bx_args_parse_int_range(text, 0, 1 << 20, out)) {
         fprintf(stderr, "%s: invalid argument for %s: %s\n", progname, optname,
                 text ? text : "(null)");
         return false;
     }
-    *out = (int)v;
     return true;
 }
 
@@ -207,6 +203,7 @@ static bool fd_prepare_exec_argv(const char *progname, int argc, char **argv,
     out->exec_argv_storage =
         calloc((size_t)exec_argc + 1, sizeof(*out->exec_argv_storage));
     if (!out->exec_argv_storage) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         out->exit_code = 1;
         return false;
     }

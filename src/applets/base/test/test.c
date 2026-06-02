@@ -22,6 +22,11 @@ static int argc_val;
 static char** argv_val;
 static struct bx_diag_ctx* test_diag;
 static bool parse_error;
+static size_t recursion_depth;
+
+enum {
+    TEST_PARSE_MAX_EXPR_DEPTH = 256,
+};
 
 static bool primary(void);
 static bool and_expr(void);
@@ -144,6 +149,21 @@ static void mark_parse_error(const char* fmt, ...) {
         va_end(ap);
     }
     parse_error = true;
+}
+
+static bool test_parse_enter_expr(void) {
+    if (recursion_depth >= TEST_PARSE_MAX_EXPR_DEPTH) {
+        mark_parse_error("expression nesting too deep");
+        return false;
+    }
+
+    recursion_depth++;
+    return true;
+}
+
+static void test_parse_leave_expr(void) {
+    if (recursion_depth > 0)
+        recursion_depth--;
 }
 
 static bool parse_integer_string(const char* text, intmax_t* out) {
@@ -334,7 +354,7 @@ static bool is_file_type(const char* op, const char* path) {
     }
 }
 
-static bool primary(void) {
+static bool primary_inner(void) {
     if (pos >= argc_val)
         return false;
 
@@ -426,6 +446,15 @@ static bool primary(void) {
     return strlen(arg) > 0;
 }
 
+static bool primary(void) {
+    if (!test_parse_enter_expr())
+        return false;
+
+    bool result = primary_inner();
+    test_parse_leave_expr();
+    return result;
+}
+
 static bool and_expr(void) {
     bool res = primary();
     while (pos < argc_val && strcmp(argv_val[pos], "-a") == 0) {
@@ -475,6 +504,7 @@ int bx_test_main(int argc, char** argv) {
     struct bx_diag_ctx diag = {.progname = progname, .exit_status = 0};
     test_diag = &diag;
     parse_error = false;
+    recursion_depth = 0;
 
     bool result = or_expr();
     if (!parse_error && pos < argc_val) {

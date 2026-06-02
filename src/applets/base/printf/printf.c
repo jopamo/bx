@@ -980,7 +980,12 @@ static bool bx_printf_byte_buffer_reserve(struct bx_printf_byte_buffer* buffer, 
         new_cap *= 2u;
     }
 
-    buffer->data = xrealloc(buffer->data, new_cap);
+    unsigned char* grown = realloc(buffer->data, new_cap);
+    if (grown == NULL) {
+        return false;
+    }
+
+    buffer->data = grown;
     buffer->cap = new_cap;
     return true;
 }
@@ -1208,7 +1213,7 @@ static bool bx_printf_render_conversion(struct bx_printf_output* output, const s
 
         case 'q': {
             const char* text = (value_arg != NULL) ? value_arg : "";
-            char* quoted = bx_output_quote_shell_reusable_dup(text);
+            char* quoted = bx_output_quote_shell_reusable_try_dup(text);
             if (quoted == NULL) {
                 bx_diag(diag, "out of memory");
                 return false;

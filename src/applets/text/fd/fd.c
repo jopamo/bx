@@ -60,6 +60,7 @@ int bx_fd_main(int argc, char **argv) {
         .no_ignore_dot = false,
         .no_require_git = opts->no_require_git,
         .gitignore_enabled = false,
+        .error_prefix = progname,
         .ignore_filenames = fd_ignore_filenames,
         .num_ignore_filenames = 3,
     };

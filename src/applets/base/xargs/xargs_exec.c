@@ -190,8 +190,10 @@ static int xargs_spawn_batch(const char *progname, char **command,
     char **argv = bx_argv_build_with_item_expansion(
         (const char *const *)command, command_argc, items, 0, item_count, 1,
         NULL, NULL, NULL, NULL);
-    if (!argv)
+    if (!argv) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return 1;
+    }
 
     struct bx_child_runner_opts runner_opts = bx_child_runner_opts_make(
         false, opts && opts->open_tty,
@@ -222,8 +224,10 @@ static int xargs_spawn_replacement(const char *progname, char **command,
     struct xargs_replacement_ctx expand_ctx = {.marker = marker};
     char *item_argv[] = {NULL};
     item_argv[0] = strdup(item);
-    if (!item_argv[0])
+    if (!item_argv[0]) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return 1;
+    }
     if (char_limit > 0 &&
         bx_argv_bytes_with_item_expansion(
             (const char *const *)command, command_argc, item_argv, 0, 1, 0,
@@ -238,8 +242,10 @@ static int xargs_spawn_replacement(const char *progname, char **command,
         xargs_replacement_marker_count, xargs_expand_replacement_arg, NULL,
         &expand_ctx);
     free(item_argv[0]);
-    if (!argv)
+    if (!argv) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return 1;
+    }
 
     if (char_limit > 0 && bx_argv_bytes(argv) > char_limit) {
         fprintf(stderr, "%s: argument line too long\n", progname);
@@ -509,6 +515,7 @@ static bool xargs_stream_sink(const char *item, int line_group, void *user) {
     }
 
     if (!xargs_stream_batch_append(batch, item, line_group)) {
+        fprintf(stderr, "%s: out of memory\n", ctx->progname);
         ctx->failed = true;
         return false;
     }
@@ -541,8 +548,10 @@ int xargs_run_batches(const char *progname, char **command, int command_argc,
     int max_procs =
         opts->max_procs > 0 ? opts->max_procs : (items->count > 0 ? items->count : 1);
     struct bx_child *children = calloc((size_t)max_procs, sizeof(*children));
-    if (!children)
+    if (!children) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return 1;
+    }
 
     int final_rc = 0;
     bool abort_launch = false;
@@ -710,8 +719,10 @@ int xargs_run_streaming_batches(const char *progname, char **command,
     int initial_max_procs = opts->max_procs > 0 ? opts->max_procs : 1;
     struct bx_child *children =
         calloc((size_t)initial_max_procs, sizeof(*children));
-    if (!children)
+    if (!children) {
+        fprintf(stderr, "%s: out of memory\n", progname);
         return 1;
+    }
 
     size_t char_limit = bx_argv_effective_char_limit(opts->max_chars);
     if (char_limit > 0 &&

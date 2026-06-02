@@ -1,5 +1,7 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +29,23 @@ static void bx_search_buffered_free_lines(struct bx_search_buffered_line *lines,
     for (int i = 0; i < count; i++)
         free(lines[i].text);
     free(lines);
+}
+
+static int bx_search_buffered_allocation_error(FILE *f,
+                                               bool use_stdin,
+                                               const char *display_name,
+                                               const char *progname,
+                                               struct search_opts *opts,
+                                               struct bx_search_buffered_line *lines,
+                                               int nlines) {
+    if (!use_stdin)
+        fclose(f);
+    bx_search_buffered_free_lines(lines, nlines);
+    bx_search_report_path_error(progname,
+                                display_name ? display_name : "(standard input)",
+                                ENOMEM,
+                                opts);
+    return 2;
 }
 
 static int bx_search_buffered_emit_summary(const char *display_name,
@@ -72,17 +91,37 @@ int bx_search_buffered_opened(FILE *f,
     bool heading_printed_for_file = false;
     bool count_context_buffer_entries = bx_search_plan_needs_line_buffering(opts);
 
+    if (!lines)
+        return bx_search_buffered_allocation_error(f, use_stdin, display_name, progname,
+                                                   opts, NULL, 0);
+
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *raw = record_stream->record;
 
         if (!opts->null_data && memchr(raw, '\0', (size_t)len) != NULL)
             saw_binary = true;
         if (nlines >= cap) {
-            cap *= 2;
-            lines = realloc(lines, (size_t)cap * sizeof(*lines));
+            if (cap > INT_MAX / 2)
+                return bx_search_buffered_allocation_error(f, use_stdin, display_name,
+                                                           progname, opts, lines, nlines);
+            int new_cap = cap * 2;
+            struct bx_search_buffered_line *grown =
+                realloc(lines, (size_t)new_cap * sizeof(*lines));
+            if (!grown)
+                return bx_search_buffered_allocation_error(f, use_stdin, display_name,
+                                                           progname, opts, lines, nlines);
+            lines = grown;
+            cap = new_cap;
         }
-        lines[nlines].text = malloc((size_t)len + 1u);
-        memcpy(lines[nlines].text, raw, (size_t)len + 1u);
+        if ((size_t)len > SIZE_MAX - 1u)
+            return bx_search_buffered_allocation_error(f, use_stdin, display_name,
+                                                       progname, opts, lines, nlines);
+        char *line_text = malloc((size_t)len + 1u);
+        if (!line_text)
+            return bx_search_buffered_allocation_error(f, use_stdin, display_name,
+                                                       progname, opts, lines, nlines);
+        memcpy(line_text, raw, (size_t)len + 1u);
+        lines[nlines].text = line_text;
         lines[nlines].len = (size_t)len;
         lines[nlines].byte_offset = file_offset;
         lines[nlines].print = false;

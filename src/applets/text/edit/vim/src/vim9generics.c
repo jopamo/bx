@@ -29,7 +29,48 @@ struct gfitem_S
 #define GFITEM_KEY_OFF	offsetof(gfitem_T, gfi_name)
 #define HI2GFITEM(hi)	((gfitem_T *)((hi)->hi_key - GFITEM_KEY_OFF))
 
+#define VIM9_GENERIC_TYPE_ARG_MAX_DEPTH 256
+
 static type_T *find_generic_type_in_cctx(char_u *gt_name, size_t len, cctx_T *cctx);
+
+/*
+ * Keep generic function call type-argument scanning shallower than the general
+ * type parser.  This scanner runs before concrete type parsing and otherwise
+ * recurses through skip_type() just to find the closing generic ">".
+ */
+    static int
+generic_type_arg_depth_exceeded(char_u *start)
+{
+    char_u	*p = start;
+    int		depth = 0;
+
+    while (*p != NUL)
+    {
+	if (*p == '<')
+	{
+	    if (++depth >= VIM9_GENERIC_TYPE_ARG_MAX_DEPTH)
+	    {
+		char_u *name = p;
+
+		while (name > start
+			&& (ASCII_ISALNUM(name[-1]) || name[-1] == '_'))
+		    --name;
+		semsg(_(e_expression_too_recursive_str), name);
+		return TRUE;
+	    }
+	}
+	else if (*p == '>')
+	{
+	    if (depth == 0)
+		return FALSE;
+	    --depth;
+	}
+	else if (*p == '(' && depth == 0)
+	    return FALSE;
+	++p;
+    }
+    return FALSE;
+}
 
 /*
  * Returns a pointer to the first '<' character in "name" that starts the
@@ -89,6 +130,7 @@ generic_func_find_close_bracket(char_u *start)
 {
     char_u	*p = start + 1;
     int		type_count = 0;
+    int		did_emsg_before;
 
     while (*p && *p != '>')
     {
@@ -102,7 +144,12 @@ generic_func_find_close_bracket(char_u *start)
 	    return NULL;
 	}
 
+	did_emsg_before = did_emsg;
+	if (generic_type_arg_depth_exceeded(p))
+	    return NULL;
 	p = skip_type(p, FALSE);
+	if (did_emsg != did_emsg_before)
+	    return NULL;
 	if (p == typename)
 	{
 	    char_u cc = *p;

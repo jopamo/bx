@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,12 +54,18 @@ void xargs_items_free(struct xargs_items *items) {
     items->cap = 0;
 }
 
-static bool xargs_buf_append(char **buf, size_t *len, size_t *cap, int ch) {
+static bool xargs_report_out_of_memory(const char *progname) {
+    fprintf(stderr, "%s: out of memory\n", progname ? progname : "xargs");
+    return false;
+}
+
+static bool xargs_buf_append(char **buf, size_t *len, size_t *cap, int ch,
+                             const char *progname) {
     if (*len + 1 >= *cap) {
         size_t new_cap = *cap == 0 ? 64 : *cap * 2;
         char *tmp = realloc(*buf, new_cap);
         if (!tmp)
-            return false;
+            return xargs_report_out_of_memory(progname);
         *buf = tmp;
         *cap = new_cap;
     }
@@ -81,8 +88,8 @@ static bool xargs_emit_item(const char *buf, bool have_item,
     return sink(buf ? buf : "", line_group, user);
 }
 
-static bool xargs_read_items_null(FILE *input, xargs_item_sink_fn sink,
-                                  void *user) {
+static bool xargs_read_items_null(FILE *input, const char *progname,
+                                  xargs_item_sink_fn sink, void *user) {
     char *buf = NULL;
     size_t len = 0, cap = 0;
     int line_group = 1;
@@ -100,7 +107,7 @@ static bool xargs_read_items_null(FILE *input, xargs_item_sink_fn sink,
             cap = 0;
             continue;
         }
-        if (!xargs_buf_append(&buf, &len, &cap, ch)) {
+        if (!xargs_buf_append(&buf, &len, &cap, ch, progname)) {
             free(buf);
             return false;
         }
@@ -116,7 +123,8 @@ static bool xargs_read_items_null(FILE *input, xargs_item_sink_fn sink,
     return true;
 }
 
-static bool xargs_read_items_delim(FILE *input, char delimiter,
+static bool xargs_read_items_delim(FILE *input, const char *progname,
+                                   char delimiter,
                                    const char *logical_eof,
                                    xargs_item_sink_fn sink, void *user) {
     char *buf = NULL;
@@ -140,7 +148,7 @@ static bool xargs_read_items_delim(FILE *input, char delimiter,
             continue;
         }
 
-        if (!xargs_buf_append(&buf, &len, &cap, ch)) {
+        if (!xargs_buf_append(&buf, &len, &cap, ch, progname)) {
             free(buf);
             return false;
         }
@@ -179,7 +187,7 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
                 have_item = true;
                 continue;
             }
-            if (!xargs_buf_append(&buf, &len, &cap, ch))
+            if (!xargs_buf_append(&buf, &len, &cap, ch, progname))
                 goto oom;
             if (current_line_group == 0)
                 current_line_group = next_line_group;
@@ -189,7 +197,7 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
 
         if (quote == '"') {
             if (escaped) {
-                if (!xargs_buf_append(&buf, &len, &cap, ch))
+                if (!xargs_buf_append(&buf, &len, &cap, ch, progname))
                     goto oom;
                 escaped = false;
                 if (current_line_group == 0)
@@ -211,7 +219,7 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
                 have_item = true;
                 continue;
             }
-            if (!xargs_buf_append(&buf, &len, &cap, ch))
+            if (!xargs_buf_append(&buf, &len, &cap, ch, progname))
                 goto oom;
             if (current_line_group == 0)
                 current_line_group = next_line_group;
@@ -220,7 +228,7 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
         }
 
         if (escaped) {
-            if (!xargs_buf_append(&buf, &len, &cap, ch))
+            if (!xargs_buf_append(&buf, &len, &cap, ch, progname))
                 goto oom;
             escaped = false;
             if (current_line_group == 0)
@@ -263,7 +271,7 @@ static bool xargs_read_items_default(FILE *input, const char *progname,
             continue;
         }
 
-        if (!xargs_buf_append(&buf, &len, &cap, ch))
+        if (!xargs_buf_append(&buf, &len, &cap, ch, progname))
             goto oom;
         if (current_line_group == 0)
             current_line_group = next_line_group;
@@ -294,6 +302,7 @@ oom:
 }
 
 static bool xargs_read_items_replace_lines(FILE *input,
+                                           const char *progname,
                                            const char *logical_eof,
                                            xargs_item_sink_fn sink,
                                            void *user) {
@@ -302,7 +311,11 @@ static bool xargs_read_items_replace_lines(FILE *input,
     ssize_t len;
     int line_group = 1;
 
-    while ((len = getline(&line, &cap, input)) != -1) {
+    for (;;) {
+        errno = 0;
+        len = getline(&line, &cap, input);
+        if (len == -1)
+            break;
         while (len > 0 &&
                (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = '\0';
@@ -323,6 +336,18 @@ static bool xargs_read_items_replace_lines(FILE *input,
         }
     }
 
+    if (errno == ENOMEM) {
+        free(line);
+        return xargs_report_out_of_memory(progname);
+    }
+    if (ferror(input)) {
+        int saved_errno = errno ? errno : EIO;
+        fprintf(stderr, "%s: input read error: %s\n",
+                progname ? progname : "xargs", strerror(saved_errno));
+        free(line);
+        return false;
+    }
+
     free(line);
     return true;
 }
@@ -334,12 +359,13 @@ bool xargs_read_stream(FILE *input, const char *progname,
         return false;
 
     if (opts->replace_mode)
-        return xargs_read_items_replace_lines(input, opts->logical_eof, sink,
-                                              user);
+        return xargs_read_items_replace_lines(input, progname,
+                                              opts->logical_eof, sink, user);
     if (opts->nul_delim)
-        return xargs_read_items_null(input, sink, user);
+        return xargs_read_items_null(input, progname, sink, user);
     if (opts->delimiter_mode)
-        return xargs_read_items_delim(input, opts->delimiter, NULL, sink, user);
+        return xargs_read_items_delim(input, progname, opts->delimiter, NULL,
+                                      sink, user);
     return xargs_read_items_default(input, progname, opts->logical_eof, sink,
                                     user);
 }

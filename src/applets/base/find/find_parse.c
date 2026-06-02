@@ -16,6 +16,10 @@
 #include "lib/size_parse.h"
 #include "search/metadata.h"
 
+enum {
+    FIND_PARSE_MAX_EXPR_DEPTH = 256,
+};
+
 static bool find_parse_main_int_arg(const char *progname, const char *optname,
                                     const char *text, int *out) {
     if (!text || *text == '\0') {
@@ -259,7 +263,11 @@ bool find_load_files0_roots(const char *progname, const char *source,
     size_t cap = 0;
     ssize_t len = 0;
     bool ok = true;
-    while ((len = getdelim(&item, &cap, '\0', fp)) != -1) {
+    for (;;) {
+        errno = 0;
+        len = getdelim(&item, &cap, '\0', fp);
+        if (len == -1)
+            break;
         size_t item_len = (size_t)len;
         if (item_len > 0 && item[item_len - 1] == '\0')
             item_len--;
@@ -272,9 +280,14 @@ bool find_load_files0_roots(const char *progname, const char *source,
         }
     }
 
-    if (ok && ferror(fp)) {
-        find_report_error(progname, source, errno ? errno : EIO);
-        ok = false;
+    if (ok) {
+        if (errno == ENOMEM) {
+            find_report_error(progname, source, ENOMEM);
+            ok = false;
+        } else if (ferror(fp)) {
+            find_report_error(progname, source, errno ? errno : EIO);
+            ok = false;
+        }
     }
 
     free(item);
@@ -407,6 +420,21 @@ bool find_collect_expression_argv(const char *progname, int argc, char **argv,
     *expr_argv_out = expr_argv;
     *expr_argc_out = expr_argc;
     return true;
+}
+
+static bool find_parse_enter_expr_depth(struct find_parser *parser) {
+    if (parser->recursion_depth >= FIND_PARSE_MAX_EXPR_DEPTH) {
+        fprintf(stderr, "%s: expression nesting too deep\n", parser->progname);
+        return false;
+    }
+
+    parser->recursion_depth++;
+    return true;
+}
+
+static void find_parse_leave_expr_depth(struct find_parser *parser) {
+    if (parser->recursion_depth > 0)
+        parser->recursion_depth--;
 }
 
 static struct find_expr *find_parse_or(struct find_parser *parser);
@@ -662,7 +690,10 @@ static struct find_expr *find_parse_not(struct find_parser *parser) {
     if (parser->pos < parser->argc &&
         find_is_not_token(parser->argv[parser->pos])) {
         parser->pos++;
+        if (!find_parse_enter_expr_depth(parser))
+            return NULL;
         struct find_expr *child = find_parse_not(parser);
+        find_parse_leave_expr_depth(parser);
         if (!child)
             return NULL;
         struct find_expr *expr = find_expr_new(FIND_EXPR_NOT);
@@ -731,9 +762,12 @@ static struct find_expr *find_parse_or(struct find_parser *parser) {
 }
 
 struct find_expr *find_parse_expr(struct find_parser *parser) {
+    if (!find_parse_enter_expr_depth(parser))
+        return NULL;
+
     struct find_expr *expr = find_parse_or(parser);
     if (!expr)
-        return NULL;
+        goto out;
 
     while (parser->pos < parser->argc &&
            strcmp(parser->argv[parser->pos], ",") == 0) {
@@ -741,14 +775,17 @@ struct find_expr *find_parse_expr(struct find_parser *parser) {
         struct find_expr *rhs = find_parse_or(parser);
         if (!rhs) {
             find_expr_free(expr);
-            return NULL;
+            expr = NULL;
+            goto out;
         }
         expr = find_make_binary(FIND_EXPR_COMMA, expr, rhs);
         if (!expr) {
             fprintf(stderr, "%s: out of memory\n", parser->progname);
-            return NULL;
+            goto out;
         }
     }
 
+out:
+    find_parse_leave_expr_depth(parser);
     return expr;
 }

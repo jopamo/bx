@@ -530,6 +530,9 @@ typedef enum BcErr
 	/// Expression is empty error.
 	BC_ERR_PARSE_EMPTY_EXPR,
 
+	/// Expression parser recursion depth was exceeded.
+	BC_ERR_PARSE_EXPR_DEPTH,
+
 	/// Print statement is invalid error.
 	BC_ERR_PARSE_PRINT,
 

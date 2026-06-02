@@ -320,8 +320,10 @@ static int fd_run_exec_commands_inner(const char *progname, const struct fd_opts
         char **argv = fd_build_exec_argv(opts->exec_argv, opts->exec_argc,
                                          items->v, i, take,
                                          opts->exec_mode == FD_EXEC_BATCH);
-        if (!argv)
+        if (!argv) {
+            fprintf(stderr, "%s: out of memory\n", progname);
             return 1;
+        }
 
         bool exec_failed_now = false;
         int exec_errno_now = 0;

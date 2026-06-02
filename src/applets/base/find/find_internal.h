@@ -3,6 +3,7 @@
 
 #include <regex.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -116,6 +117,7 @@ struct find_parser {
     char **argv;
     int argc;
     int pos;
+    size_t recursion_depth;
     bool explicit_action;
     struct find_opts *opts;
     enum find_regex_type regex_type;

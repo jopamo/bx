@@ -895,7 +895,17 @@ int bx_date_main(int argc, char** argv) {
         }
         char* line = NULL;
         size_t len = 0;
-        while (getline(&line, &len, f) != -1) {
+        int read_errno = 0;
+        for (;;) {
+            errno = 0;
+            ssize_t line_len = getline(&line, &len, f);
+            if (line_len < 0) {
+                if (errno != 0)
+                    read_errno = errno;
+                else if (ferror(f))
+                    read_errno = errno != 0 ? errno : EIO;
+                break;
+            }
             char* nl = strchr(line, '\n');
             if (nl)
                 *nl = '\0';
@@ -904,7 +914,12 @@ int bx_date_main(int argc, char** argv) {
             }
         }
         free(line);
-        bx_fclose_nonstdio(f, is_stdio);
+        if (!is_stdio && fclose(f) != 0 && read_errno == 0)
+            read_errno = errno != 0 ? errno : EIO;
+        if (read_errno != 0) {
+            bx_diag(&diag, "%s: %s", options.file, strerror(read_errno));
+            return 1;
+        }
         return diag.exit_status;
     }
 

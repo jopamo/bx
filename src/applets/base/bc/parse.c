@@ -209,6 +209,7 @@ bc_parse_reset(BcParse* p)
 	{
 		// Get rid of the bc parser state.
 		p->auto_part = false;
+		p->expr_recursion_depth = 0;
 		bc_vec_npop(&p->flags, p->flags.len - 1);
 		bc_vec_popAll(&p->exits);
 		bc_vec_popAll(&p->conds);
@@ -272,6 +273,7 @@ bc_parse_init(BcParse* p, BcProgram* prog, size_t func)
 		bc_vec_init(&p->buf, sizeof(char), BC_DTOR_NONE);
 
 		p->auto_part = false;
+		p->expr_recursion_depth = 0;
 	}
 #endif // BC_ENABLED
 

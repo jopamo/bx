@@ -43,6 +43,10 @@
 /* Maximum number of string expansions per line, to break infinite loops. */
 #define	EXPAND_LIMIT	1000
 
+enum {
+	ROFF_BLOCK_MAX_DEPTH = 256
+};
+
 /* Types of definitions of macros and strings. */
 #define	ROFFDEF_USER	(1 << 1)  /* User-defined. */
 #define	ROFFDEF_PRE	(1 << 2)  /* Predefined. */
@@ -116,6 +120,7 @@ struct	roff {
 	struct tbl_node	*tbl; /* current table being parsed */
 	struct eqn_node	*last_eqn; /* equation parser */
 	struct eqn_node	*eqn; /* active equation parser */
+	size_t		 node_depth; /* depth of roffnode stack */
 	int		 eqn_inline; /* current equation is inline */
 	int		 options; /* parse options */
 	int		 mstacksz; /* current size of mstack */
@@ -171,7 +176,7 @@ struct	predef {
 
 static	int		 roffnode_cleanscope(struct roff *);
 static	int		 roffnode_pop(struct roff *);
-static	void		 roffnode_push(struct roff *, enum roff_tok,
+static	int		 roffnode_push(struct roff *, enum roff_tok,
 				const char *, int, int);
 static	void		 roff_addtbl(struct roff_man *, int, struct tbl_node *);
 static	int		 roff_als(ROFF_ARGS);
@@ -192,8 +197,6 @@ static	int		 roff_ec(ROFF_ARGS);
 static	int		 roff_eo(ROFF_ARGS);
 static	int		 roff_eqndelim(struct roff *, struct buf *, int);
 static	int		 roff_evalcond(struct roff *, int, char *, int *);
-static	int		 roff_evalpar(int, const char *, int *, int *,
-				char, int);
 static	int		 roff_evalstrcond(const char *, int *);
 static	int		 roff_expand(struct roff *, struct buf *,
 				int, int, char);
@@ -700,6 +703,8 @@ roffnode_pop(struct roff *r)
 	free(p->name);
 	free(p->end);
 	free(p);
+	assert(r->node_depth > 0);
+	r->node_depth--;
 	return inloop;
 }
 
@@ -707,11 +712,16 @@ roffnode_pop(struct roff *r)
  * Push a roff node onto the instruction stack.  This must later be
  * removed with roffnode_pop().
  */
-static void
+static int
 roffnode_push(struct roff *r, enum roff_tok tok, const char *name,
 		int line, int col)
 {
 	struct roffnode	*p;
+
+	if (r->node_depth + 1u >= ROFF_BLOCK_MAX_DEPTH) {
+		mandoc_msg(MANDOCERR_ROFFBLKDEPTH, line, col, NULL);
+		return 0;
+	}
 
 	p = mandoc_calloc(1, sizeof(struct roffnode));
 	p->tok = tok;
@@ -723,6 +733,8 @@ roffnode_push(struct roff *r, enum roff_tok tok, const char *name,
 	p->rule = p->parent ? p->parent->rule : 0;
 
 	r->last = p;
+	r->node_depth++;
+	return 1;
 }
 
 /* --- roff parser state data management ---------------------------------- */
@@ -743,6 +755,7 @@ roff_free1(struct roff *r)
 
 	while (r->last)
 		roffnode_pop(r);
+	r->node_depth = 0;
 
 	free (r->rstack);
 	r->rstack = NULL;
@@ -2175,7 +2188,8 @@ roff_block(ROFF_ARGS)
 		return ROFF_IGN;
 	}
 
-	roffnode_push(r, tok, name, ln, ppos);
+	if (roffnode_push(r, tok, name, ln, ppos) == 0)
+		return ROFF_IGN;
 
 	/*
 	 * At the beginning of a `de' macro, clear the existing string
@@ -2420,6 +2434,10 @@ roff_cond_text(ROFF_ARGS)
 }
 
 /* --- handling of numeric and conditional expressions -------------------- */
+
+enum {
+	ROFF_NUMERIC_EXPR_MAX_DEPTH = 256,
+};
 
 /*
  * Parse a single signed decimal number.  Stop at the first non-digit.
@@ -2671,7 +2689,8 @@ roff_cond(ROFF_ARGS)
 {
 	int	 irc;
 
-	roffnode_push(r, tok, NULL, ln, ppos);
+	if (roffnode_push(r, tok, NULL, ln, ppos) == 0)
+		return ROFF_IGN;
 
 	/*
 	 * An `.el' has no conditional body: it will consume the value
@@ -2859,20 +2878,28 @@ roff_getop(const char *v, int *pos, char *res)
 	return *res;
 }
 
+static int	 roff_evalnum_depth(int, const char *, int *, int *, char,
+			int, size_t);
+
 /*
  * Evaluate either a parenthesized numeric expression
  * or a single signed integer number.
  */
 static int
-roff_evalpar(int ln, const char *v, int *pos, int *res, char unit,
-    int skipspace)
+roff_evalpar_depth(int ln, const char *v, int *pos, int *res, char unit,
+    int skipspace, size_t depth)
 {
 
 	if ('(' != v[*pos])
 		return roff_getnum(v, pos, res, unit, skipspace);
 
+	if (depth + 1u >= ROFF_NUMERIC_EXPR_MAX_DEPTH) {
+		mandoc_msg(MANDOCERR_ROFFNUMDEPTH, ln, *pos, NULL);
+		return 0;
+	}
+
 	(*pos)++;
-	if ( ! roff_evalnum(ln, v, pos, res, unit, 1))
+	if ( ! roff_evalnum_depth(ln, v, pos, res, unit, 1, depth + 1u))
 		return 0;
 
 	/*
@@ -2893,9 +2920,9 @@ roff_evalpar(int ln, const char *v, int *pos, int *res, char unit,
  * Evaluate a complete numeric expression.
  * Proceed left to right, there is no concept of precedence.
  */
-int
-roff_evalnum(int ln, const char *v, int *pos, int *res, char unit,
-    int skipspace)
+static int
+roff_evalnum_depth(int ln, const char *v, int *pos, int *res, char unit,
+    int skipspace, size_t depth)
 {
 	int		 mypos, operand2;
 	char		 operator;
@@ -2909,7 +2936,7 @@ roff_evalnum(int ln, const char *v, int *pos, int *res, char unit,
 		while (isspace((unsigned char)v[*pos]))
 			(*pos)++;
 
-	if ( ! roff_evalpar(ln, v, pos, res, unit, skipspace))
+	if ( ! roff_evalpar_depth(ln, v, pos, res, unit, skipspace, depth))
 		return 0;
 
 	while (1) {
@@ -2924,7 +2951,8 @@ roff_evalnum(int ln, const char *v, int *pos, int *res, char unit,
 			while (isspace((unsigned char)v[*pos]))
 				(*pos)++;
 
-		if ( ! roff_evalpar(ln, v, pos, &operand2, unit, skipspace))
+		if ( ! roff_evalpar_depth(ln, v, pos, &operand2, unit,
+		    skipspace, depth))
 			return 0;
 
 		if (skipspace)
@@ -2999,6 +3027,14 @@ roff_evalnum(int ln, const char *v, int *pos, int *res, char unit,
 		}
 	}
 	return 1;
+}
+
+int
+roff_evalnum(int ln, const char *v, int *pos, int *res, char unit,
+    int skipspace)
+{
+
+	return roff_evalnum_depth(ln, v, pos, res, unit, skipspace, 0);
 }
 
 /* --- register management ------------------------------------------------ */

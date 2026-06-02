@@ -29,6 +29,11 @@
 #include "roff.h"
 #include "roff_int.h"
 
+#define ROFF_ESCAPE_MAX_DEPTH 10000
+
+static enum mandoc_esc roff_escape_depth(const char *, const int, const int,
+    int *, int *, int *, int *, int *, size_t);
+
 /*
  * Traditional escape sequence interpreter for general use
  * including in high-level formatters.  This function does not issue
@@ -66,6 +71,14 @@ enum mandoc_esc
 roff_escape(const char *buf, const int ln, const int aesc,
     int *resc, int *rnam, int *rarg, int *rendarg, int *rend)
 {
+	return roff_escape_depth(buf, ln, aesc, resc, rnam, rarg, rendarg,
+	    rend, 0);
+}
+
+static enum mandoc_esc
+roff_escape_depth(const char *buf, const int ln, const int aesc,
+    int *resc, int *rnam, int *rarg, int *rendarg, int *rend, size_t depth)
+{
 	int		 iesc;		/* index of leading escape char */
 	int		 inam;		/* index of escape name */
 	int		 iarg;		/* index beginning the argument */
@@ -81,6 +94,22 @@ roff_escape(const char *buf, const int ln, const int aesc,
 	enum mandoc_esc	 stype;		/* for sub-escape */
 	enum mandocerr	 err;		/* diagnostic code */
 	char		 term;		/* byte terminating the argument */
+
+	if (depth >= ROFF_ESCAPE_MAX_DEPTH) {
+		if (resc != NULL)
+			*resc = aesc;
+		if (rnam != NULL)
+			*rnam = aesc + 1;
+		if (rarg != NULL)
+			*rarg = aesc + 1;
+		if (rendarg != NULL)
+			*rendarg = aesc + 1;
+		if (rend != NULL)
+			*rend = aesc + 1;
+		if (ln != 0)
+			mandoc_msg(MANDOCERR_ESCDEPTH, ln, aesc, NULL);
+		return ESCAPE_ERROR;
+	}
 
 	/*
 	 * Treat "\E" just like "\";
@@ -270,8 +299,8 @@ roff_escape(const char *buf, const int ln, const int aesc,
 	stype = ESCAPE_EXPAND;
 	if ((term == '\b' || (term == '\0' && maxl == INT_MAX)) &&
 	    buf[iarg] == buf[iesc]) {
-		stype = roff_escape(buf, ln, iendarg,
-		    &sesc, &snam, &sarg, &sendarg, &send);
+		stype = roff_escape_depth(buf, ln, iendarg,
+		    &sesc, &snam, &sarg, &sendarg, &send, depth + 1);
 		if (stype == ESCAPE_EXPAND)
 			goto out_sub;
 	}
@@ -346,8 +375,9 @@ roff_escape(const char *buf, const int ln, const int aesc,
 			break;
 		}
 		if (buf[iendarg] == buf[iesc]) {
-			stype = roff_escape(buf, ln, iendarg,
-			    &sesc, &snam, &sarg, &sendarg, &send);
+			stype = roff_escape_depth(buf, ln, iendarg,
+			    &sesc, &snam, &sarg, &sendarg, &send,
+			    depth + 1);
 			if (stype == ESCAPE_EXPAND)
 				goto out_sub;
 			iend = send;

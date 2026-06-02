@@ -375,11 +375,30 @@ static double bx_numfmt_parse_number_text(
     size_t len,
     const struct bx_numfmt_options* options,
     struct bx_diag_ctx* diag,
-    bool* ok_out
+    bool* ok_out,
+    bool* fatal_out
 ) {
     *ok_out = false;
+    if (fatal_out != NULL) {
+        *fatal_out = false;
+    }
 
-    char* scratch = xmalloc(len + 1);
+    if (len > SIZE_MAX - 1u) {
+        bx_diag(diag, "out of memory");
+        if (fatal_out != NULL) {
+            *fatal_out = true;
+        }
+        return NAN;
+    }
+
+    char* scratch = malloc(len + 1);
+    if (scratch == NULL) {
+        bx_diag(diag, "out of memory");
+        if (fatal_out != NULL) {
+            *fatal_out = true;
+        }
+        return NAN;
+    }
     memcpy(scratch, text, len);
     scratch[len] = '\0';
 
@@ -475,10 +494,20 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
     snprintf(number_buf, sizeof(number_buf), format, scaled);
 
     const char* unit = bx_numfmt_output_unit_label(options->to_unit, power);
+    size_t number_len = strlen(number_buf);
+    size_t unit_len = strlen(unit);
     size_t suffix_len = (options->suffix != NULL) ? strlen(options->suffix) : 0;
-    size_t total_len = strlen(number_buf) + strlen(unit) + suffix_len;
+    if (number_len > SIZE_MAX - unit_len
+        || number_len + unit_len > SIZE_MAX - suffix_len
+        || number_len + unit_len + suffix_len > SIZE_MAX - 1u) {
+        return NULL;
+    }
+    size_t total_len = number_len + unit_len + suffix_len;
 
-    char* unpadded = xmalloc(total_len + 1);
+    char* unpadded = malloc(total_len + 1);
+    if (unpadded == NULL) {
+        return NULL;
+    }
     strcpy(unpadded, number_buf);
     strcat(unpadded, unit);
     if (options->suffix != NULL) {
@@ -487,13 +516,30 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
 
     size_t width = strlen(unpadded);
     size_t target_width = width;
-    int abs_padding = (options->padding < 0) ? -options->padding : options->padding;
-    if (abs_padding > 0 && (size_t)abs_padding > target_width) {
-        target_width = (size_t)abs_padding;
+    size_t abs_padding = 0u;
+    if (options->padding < 0) {
+        abs_padding = options->padding == INT_MIN
+            ? (size_t)INT_MAX + 1u
+            : (size_t)(-options->padding);
+    }
+    else {
+        abs_padding = (size_t)options->padding;
+    }
+    if (abs_padding > 0 && abs_padding > target_width) {
+        target_width = abs_padding;
     }
 
-    char* padded = xmalloc(target_width + 1);
-    if ((size_t)abs_padding <= width || options->padding == 0) {
+    if (target_width > SIZE_MAX - 1u) {
+        free(unpadded);
+        return NULL;
+    }
+
+    char* padded = malloc(target_width + 1);
+    if (padded == NULL) {
+        free(unpadded);
+        return NULL;
+    }
+    if (abs_padding <= width || options->padding == 0) {
         memcpy(padded, unpadded, width + 1);
     }
     else if (options->padding > 0) {
@@ -511,43 +557,57 @@ static char* bx_numfmt_format_number(double value, const struct bx_numfmt_option
     return padded;
 }
 
-static void bx_numfmt_process_direct_number(
+static bool bx_numfmt_process_direct_number(
     const char* text,
     size_t len,
     const struct bx_numfmt_options* options,
     struct bx_diag_ctx* diag
 ) {
     bool ok = false;
-    double value = bx_numfmt_parse_number_text(text, len, options, diag, &ok);
+    bool fatal = false;
+    double value = bx_numfmt_parse_number_text(text, len, options, diag, &ok, &fatal);
     if (!ok) {
-        return;
+        return !fatal;
     }
 
     char* formatted = bx_numfmt_format_number(value, options);
+    if (formatted == NULL) {
+        bx_diag(diag, "out of memory");
+        return false;
+    }
     puts(formatted);
     free(formatted);
+    return true;
 }
 
-static void bx_numfmt_process_line(char* line, const struct bx_numfmt_options* options, struct bx_diag_ctx* diag) {
+static bool bx_numfmt_process_line(char* line, const struct bx_numfmt_options* options, struct bx_diag_ctx* diag) {
     size_t len = strlen(line);
     bool has_newline = (len > 0 && line[len - 1] == '\n');
     size_t content_len = has_newline ? (len - 1) : len;
 
     if (options->field == 1 && options->delimiter == '\0') {
         bool ok = false;
-        double value = bx_numfmt_parse_number_text(line, content_len, options, diag, &ok);
+        bool fatal = false;
+        double value = bx_numfmt_parse_number_text(line, content_len, options, diag, &ok, &fatal);
         if (!ok) {
+            if (fatal) {
+                return false;
+            }
             fputs(line, stdout);
-            return;
+            return true;
         }
 
         char* formatted = bx_numfmt_format_number(value, options);
+        if (formatted == NULL) {
+            bx_diag(diag, "out of memory");
+            return false;
+        }
         fputs(formatted, stdout);
         if (has_newline) {
             fputc('\n', stdout);
         }
         free(formatted);
-        return;
+        return true;
     }
 
     const char* field_start = NULL;
@@ -561,7 +621,7 @@ static void bx_numfmt_process_line(char* line, const struct bx_numfmt_options* o
             const char* delim = strchr(field_start, options->delimiter);
             if (delim == NULL || (has_newline && delim >= line + content_len)) {
                 fputs(line, stdout);
-                return;
+                return true;
             }
             field_start = delim + 1;
             current_field++;
@@ -599,21 +659,30 @@ static void bx_numfmt_process_line(char* line, const struct bx_numfmt_options* o
 
     if (field_start == NULL || field_end == NULL) {
         fputs(line, stdout);
-        return;
+        return true;
     }
 
     bool ok = false;
-    double value = bx_numfmt_parse_number_text(field_start, (size_t)(field_end - field_start), options, diag, &ok);
+    bool fatal = false;
+    double value = bx_numfmt_parse_number_text(field_start, (size_t)(field_end - field_start), options, diag, &ok, &fatal);
     if (!ok) {
+        if (fatal) {
+            return false;
+        }
         fputs(line, stdout);
-        return;
+        return true;
     }
 
     char* formatted = bx_numfmt_format_number(value, options);
+    if (formatted == NULL) {
+        bx_diag(diag, "out of memory");
+        return false;
+    }
     fwrite(line, 1, (size_t)(field_start - line), stdout);
     fputs(formatted, stdout);
     fputs(field_end, stdout);
     free(formatted);
+    return true;
 }
 
 int bx_numfmt_main(int argc, char** argv) {
@@ -644,7 +713,9 @@ int bx_numfmt_main(int argc, char** argv) {
     int num_args = argc - first_operand;
     if (num_args > 0) {
         for (int i = 0; i < num_args; i++) {
-            bx_numfmt_process_direct_number(argv[first_operand + i], strlen(argv[first_operand + i]), &options, &diag);
+            if (!bx_numfmt_process_direct_number(argv[first_operand + i], strlen(argv[first_operand + i]), &options, &diag)) {
+                return diag.exit_status;
+            }
         }
         return diag.exit_status;
     }
@@ -652,15 +723,33 @@ int bx_numfmt_main(int argc, char** argv) {
     char* line = NULL;
     size_t cap = 0;
     int header_count = 0;
-    while (getline(&line, &cap, stdin) != -1) {
+    int read_errno = 0;
+    for (;;) {
+        errno = 0;
+        ssize_t line_len = getline(&line, &cap, stdin);
+        if (line_len < 0) {
+            if (errno != 0) {
+                read_errno = errno;
+            }
+            else if (ferror(stdin)) {
+                read_errno = errno != 0 ? errno : EIO;
+            }
+            break;
+        }
         if (header_count < options.header) {
             fputs(line, stdout);
             header_count++;
             continue;
         }
-        bx_numfmt_process_line(line, &options, &diag);
+        if (!bx_numfmt_process_line(line, &options, &diag)) {
+            free(line);
+            return diag.exit_status;
+        }
     }
     free(line);
+    if (read_errno != 0) {
+        bx_diag(&diag, "standard input: %s", strerror(read_errno));
+    }
 
     return diag.exit_status;
 }

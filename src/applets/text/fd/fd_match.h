@@ -16,6 +16,7 @@ struct bx_line_writer;
 
 struct fd_state {
     struct fd_opts *opts;
+    const char *progname;
     pcre2_code *regexes[FD_MAX_AND_PATTERNS + 1];
     pcre2_match_data *match_data[FD_MAX_AND_PATTERNS + 1];
     int regex_count;

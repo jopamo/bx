@@ -69,6 +69,29 @@ bc_parse_expr_err(BcParse* p, uint8_t flags, BcParseNext next);
 static void
 bc_parse_expr_status(BcParse* p, uint8_t flags, BcParseNext next);
 
+enum
+{
+	BC_PARSE_MAX_EXPR_DEPTH = 256,
+};
+
+static void
+bc_parse_enterExpr(BcParse* p)
+{
+	if (BC_ERR(p->expr_recursion_depth >= BC_PARSE_MAX_EXPR_DEPTH))
+	{
+		bc_parse_err(p, BC_ERR_PARSE_EXPR_DEPTH);
+	}
+
+	p->expr_recursion_depth += 1;
+}
+
+static void
+bc_parse_leaveExpr(BcParse* p)
+{
+	assert(p->expr_recursion_depth > 0);
+	p->expr_recursion_depth -= 1;
+}
+
 /**
  * Returns true if an instruction could only have come from a "leaf" expression.
  * For more on what leaf expressions are, read the comment for BC_PARSE_LEAF().
@@ -2002,6 +2025,7 @@ bc_parse_expr_err(BcParse* p, uint8_t flags, BcParseNext next)
 	BcInst prev = BC_INST_PRINT;
 	uchar inst = BC_INST_INVALID;
 	BcLexType top, t;
+	BcParseStatus status;
 	size_t nexprs, ops_bgn;
 	uint32_t i, nparens, nrelops;
 	bool pfirst, rprn, array_last, done, get_token, assign;
@@ -2009,6 +2033,9 @@ bc_parse_expr_err(BcParse* p, uint8_t flags, BcParseNext next)
 
 	// One of these *must* be true.
 	assert(!(flags & BC_PARSE_PRINT) || !(flags & BC_PARSE_NEEDVAL));
+
+	bc_parse_enterExpr(p);
+	status = BC_PARSE_STATUS_SUCCESS;
 
 	// These are set very carefully. In fact, controlling the values of these
 	// locals is the biggest part of making this work. ops_bgn especially is
@@ -2214,7 +2241,8 @@ bc_parse_expr_err(BcParse* p, uint8_t flags, BcParseNext next)
 				// bc_parse_expr_status().
 				if (BC_ERR(p->l.last == BC_LEX_LPAREN))
 				{
-					return BC_PARSE_STATUS_EMPTY_EXPR;
+					status = BC_PARSE_STATUS_EMPTY_EXPR;
+					goto err;
 				}
 
 				// The right paren must not come after a prefix or binary
@@ -2613,7 +2641,9 @@ bc_parse_expr_err(BcParse* p, uint8_t flags, BcParseNext next)
 		}
 	}
 
-	return BC_PARSE_STATUS_SUCCESS;
+err:
+	bc_parse_leaveExpr(p);
+	return status;
 }
 
 /**

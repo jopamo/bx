@@ -202,6 +202,23 @@ static bool bx_tar_parse_octal_field(const unsigned char* field, size_t len, siz
     return bx_tar_parse_octal_field_slow(field, len, value_out);
 }
 
+static bool bx_tar_header_checksum_valid(const unsigned char* header) {
+    size_t recorded = 0u;
+    size_t unsigned_sum = 0u;
+    int64_t signed_sum = 0;
+    size_t i;
+
+    if (!bx_tar_parse_octal_field(header + 148u, 8u, &recorded)) {
+        return false;
+    }
+    for (i = 0u; i < BX_TAR_BLOCK_SIZE; i++) {
+        unsigned char byte = (i >= 148u && i < 156u) ? (unsigned char)' ' : header[i];
+        unsigned_sum += (size_t)byte;
+        signed_sum += (int8_t)byte;
+    }
+    return recorded == unsigned_sum || (signed_sum >= 0 && recorded == (size_t)signed_sum);
+}
+
 static bool bx_tar_parse_sparse_map(const unsigned char* payload,
                                     size_t payload_size,
                                     struct bx_tar_entry* entry,
@@ -604,6 +621,13 @@ bool bx_tar_parse_archive_buffer(const struct bx_archive_buffer* archive,
             continue;
         }
 
+        if (!bx_tar_header_checksum_valid(header)) {
+            bx_tar_pax_info_clear(&pax);
+            free(gnu_long_name);
+            free(gnu_long_link);
+            bx_diag(diag, "invalid tar header");
+            return false;
+        }
         if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
             bx_tar_pax_info_clear(&pax);
             free(gnu_long_name);
@@ -1334,6 +1358,10 @@ bool bx_tar_visit_archive_stream(const struct bx_tar_reader_stream_options* opti
             continue;
         }
 
+        if (!bx_tar_header_checksum_valid(header)) {
+            bx_diag(diag, "invalid tar header");
+            goto out;
+        }
         if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
             bx_diag(diag, "invalid tar header");
             goto out;
@@ -1504,6 +1532,10 @@ bool bx_tar_read_volume_label_stream(const struct bx_tar_reader_stream_options* 
             continue;
         }
 
+        if (!bx_tar_header_checksum_valid(header)) {
+            bx_diag(diag, "invalid tar header");
+            goto out;
+        }
         if (!bx_tar_parse_octal_field(header + 124, 12u, &size)) {
             bx_diag(diag, "invalid tar header");
             goto out;

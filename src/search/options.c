@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -163,6 +164,19 @@ static bool bx_parse_nonnegative_int(const char *progname, const char *optname,
         return false;
     }
     return true;
+}
+
+static int bx_search_parse_out_of_memory(const char *progname) {
+    fprintf(stderr, "%s: out of memory\n", progname);
+    return -1;
+}
+
+static int bx_search_parse_path_error(const char *progname,
+                                      const char *path,
+                                      int errnum) {
+    fprintf(stderr, "%s: %s: %s\n",
+            progname, path ? path : "", strerror(errnum ? errnum : EIO));
+    return -1;
 }
 
 static void bx_grep_print_usage_try_help(const char *progname) {
@@ -1638,12 +1652,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case 'e':
-            if (opts->num_extra_patterns < 16)
-                opts->extra_patterns[opts->num_extra_patterns++] = strdup(optarg);
+            if (opts->num_extra_patterns < 16) {
+                char *copy = strdup(optarg);
+                if (!copy)
+                    return bx_search_parse_out_of_memory(progname);
+                opts->extra_patterns[opts->num_extra_patterns++] = copy;
+            }
             break;
         case 'f': {
             FILE *pf = NULL;
             bool close_pf = false;
+            int read_errno = 0;
             if (strcmp(optarg, "-") == 0) {
                 pf = stdin;
             } else {
@@ -1655,16 +1674,35 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             }
             char *line = NULL; size_t cap = 0;
-            while (getline(&line, &cap, pf) != -1) {
+            for (;;) {
+                ssize_t line_len;
+
+                errno = 0;
+                line_len = getline(&line, &cap, pf);
+                if (line_len < 0) {
+                    if (errno != 0)
+                        read_errno = errno;
+                    else if (ferror(pf))
+                        read_errno = errno != 0 ? errno : EIO;
+                    break;
+                }
                 size_t llen = strlen(line);
                 while (llen > 0 && line[llen-1] == '\n')
                     line[--llen] = '\0';
-                if (opts->num_extra_patterns < 16)
-                    opts->extra_patterns[opts->num_extra_patterns++] = strdup(line);
+                if (opts->num_extra_patterns < 16) {
+                    char *copy = strdup(line);
+                    if (!copy) {
+                        read_errno = ENOMEM;
+                        break;
+                    }
+                    opts->extra_patterns[opts->num_extra_patterns++] = copy;
+                }
             }
             free(line);
-            if (close_pf)
-                fclose(pf);
+            if (close_pf && fclose(pf) != 0 && read_errno == 0)
+                read_errno = errno != 0 ? errno : EIO;
+            if (read_errno != 0)
+                return bx_search_parse_path_error(progname, optarg, read_errno);
             break;
         }
         case 'A':
@@ -1699,23 +1737,44 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude-from");
             FILE *ef = fopen(optarg, "r");
+            int read_errno = 0;
             if (!ef) {
                 fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
                 return -1;
             }
             char *line = NULL;
             size_t cap = 0;
-            while (getline(&line, &cap, ef) != -1) {
+            for (;;) {
+                ssize_t line_len;
+
+                errno = 0;
+                line_len = getline(&line, &cap, ef);
+                if (line_len < 0) {
+                    if (errno != 0)
+                        read_errno = errno;
+                    else if (ferror(ef))
+                        read_errno = errno != 0 ? errno : EIO;
+                    break;
+                }
                 size_t len = strlen(line);
                 while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
                     line[--len] = '\0';
                 if (len == 0)
                     continue;
-                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
-                    opts->exclude_patterns[opts->num_exclude++] = strdup(line);
+                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS) {
+                    char *copy = strdup(line);
+                    if (!copy) {
+                        read_errno = ENOMEM;
+                        break;
+                    }
+                    opts->exclude_patterns[opts->num_exclude++] = copy;
+                }
             }
             free(line);
-            fclose(ef);
+            if (fclose(ef) != 0 && read_errno == 0)
+                read_errno = errno != 0 ? errno : EIO;
+            if (read_errno != 0)
+                return bx_search_parse_path_error(progname, optarg, read_errno);
             break;
         }
         case OPT_EXCLUDE_DIR:

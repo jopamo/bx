@@ -31,6 +31,7 @@ struct bx_output_control_quote_options {
 char* bx_output_quote_dup(const char* text, enum bx_output_quote_style style);
 char* bx_output_quote_control_dup(const char* text, const struct bx_output_control_quote_options* options);
 char* bx_output_quote_shell_reusable_dup(const char* text);
+char* bx_output_quote_shell_reusable_try_dup(const char* text);
 bool bx_output_quote_terminal_should_hide_control(int fd);
 
 #endif /* BX_COMMON_OUTPUT_QUOTE_H */

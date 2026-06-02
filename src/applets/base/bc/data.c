@@ -266,7 +266,7 @@ const uchar bc_err_ids[] = {
 #if BC_ENABLED
 	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
 	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
-	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
+	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
 
 	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
 	BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE, BC_ERR_IDX_PARSE,
@@ -326,6 +326,7 @@ const char* const bc_err_msgs[] = {
 #if BC_ENABLED
 	"bad expression",
 	"empty expression",
+	"expression nesting too deep",
 	"bad print or stream statement",
 	"bad function definition",
 	("bad assignment: left side must be scale, ibase, "

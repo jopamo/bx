@@ -209,10 +209,17 @@ int bx_search_multiline_path(const char *filename,
     }
 
     buf = bx_search_input_read_stream_all(f, &len);
+    int read_errno = buf ? 0 : errno;
     if (!use_stdin)
         fclose(f);
-    if (!buf)
+    if (!buf) {
+        bx_search_report_path_error(progname,
+                                    display_name ? display_name :
+                                        (use_stdin ? "(standard input)" : filename),
+                                    read_errno != 0 ? read_errno : EIO,
+                                    opts);
         return 2;
+    }
     if (stats)
         stats->files_searched++;
     return bx_search_multiline_buffer(buf, len, display_name, m, opts, match_count, stats);
@@ -221,17 +228,24 @@ int bx_search_multiline_path(const char *filename,
 int bx_search_multiline_opened(FILE *f,
                                bool use_stdin,
                                const char *display_name,
+                               const char *progname,
                                struct bx_matcher *m,
                                struct search_opts *opts,
                                int *match_count,
                                struct bx_search_stats *stats) {
     size_t len = 0u;
     unsigned char *buf = bx_search_input_read_stream_all(f, &len);
+    int read_errno = buf ? 0 : errno;
 
     if (!use_stdin)
         fclose(f);
-    if (!buf)
+    if (!buf) {
+        bx_search_report_path_error(progname,
+                                    display_name ? display_name : "(standard input)",
+                                    read_errno != 0 ? read_errno : EIO,
+                                    opts);
         return 2;
+    }
     if (stats)
         stats->files_searched++;
     return bx_search_multiline_buffer(buf, len, display_name, m, opts, match_count, stats);

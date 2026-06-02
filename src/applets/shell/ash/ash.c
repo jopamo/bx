@@ -16,7 +16,6 @@
 
 #include "applets.h"
 #include "bx/diag.h"
-#include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 
@@ -149,6 +148,11 @@ static void ash_diag(const struct ash_shell* shell, const char* fmt, ...) {
     fputc('\n', stderr);
 }
 
+static bool ash_diag_oom(const struct ash_shell* shell) {
+    ash_diag(shell, "out of memory");
+    return false;
+}
+
 static void ash_exec_error(const struct ash_shell* shell, const char* path, int err) {
     fprintf(stderr, "%s: %s: %s\n", shell->progname, path, strerror(err));
 }
@@ -163,48 +167,117 @@ static void ash_string_init(struct ash_string* string) {
     string->cap = 0;
 }
 
-static void ash_string_reserve(struct ash_string* string, size_t needed) {
+static void* ash_malloc_bytes(const struct ash_shell* shell, size_t size) {
+    void* out = malloc(size);
+    if (out == NULL && size != 0u) {
+        ash_diag_oom(shell);
+        return NULL;
+    }
+    return out;
+}
+
+static bool ash_allocation_size(const struct ash_shell* shell, size_t count, size_t size, size_t* bytes_out) {
+    if (size != 0u && count > SIZE_MAX / size) {
+        return ash_diag_oom(shell);
+    }
+
+    *bytes_out = count * size;
+    return true;
+}
+
+static void* ash_realloc_array(const struct ash_shell* shell, void* ptr, size_t count, size_t size) {
+    size_t bytes = 0u;
+    if (!ash_allocation_size(shell, count, size, &bytes)) {
+        return NULL;
+    }
+
+    void* out = realloc(ptr, bytes);
+    if (out == NULL && bytes != 0u) {
+        ash_diag_oom(shell);
+        return NULL;
+    }
+    return out;
+}
+
+static char* ash_slice_dup(const struct ash_shell* shell, const char* text, size_t len) {
+    if (len == SIZE_MAX) {
+        ash_diag_oom(shell);
+        return NULL;
+    }
+
+    char* out = ash_malloc_bytes(shell, len + 1u);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, text, len);
+    out[len] = '\0';
+    return out;
+}
+
+static char* ash_strdup_text(const struct ash_shell* shell, const char* text) {
+    return ash_slice_dup(shell, text, strlen(text));
+}
+
+static bool ash_string_reserve(const struct ash_shell* shell, struct ash_string* string, size_t needed) {
     if (string->cap >= needed) {
-        return;
+        return true;
     }
 
     size_t new_cap = (string->cap == 0) ? 32u : string->cap;
     while (new_cap < needed) {
+        if (new_cap > SIZE_MAX / 2u) {
+            new_cap = needed;
+            break;
+        }
         new_cap *= 2u;
     }
 
-    string->data = xrealloc(string->data, new_cap);
-    string->cap = new_cap;
-}
-
-static void ash_string_append_char(struct ash_string* string, char ch) {
-    ash_string_reserve(string, string->len + 2u);
-    string->data[string->len++] = ch;
-    string->data[string->len] = '\0';
-}
-
-static void ash_string_append_text(struct ash_string* string, const char* text) {
-    size_t len = strlen(text);
-    ash_string_reserve(string, string->len + len + 1u);
-    memcpy(string->data + string->len, text, len + 1u);
-    string->len += len;
-}
-
-static void ash_string_append_span(struct ash_string* string, const char* text, size_t len) {
-    if (len > (size_t)PTRDIFF_MAX || string->len > SIZE_MAX - len - 1u) {
-        bx_fatal(3, "ash string overflow");
-        return;
+    char* grown = ash_realloc_array(shell, string->data, new_cap, sizeof(*string->data));
+    if (grown == NULL) {
+        return false;
     }
 
-    ash_string_reserve(string, string->len + len + 1u);
+    string->data = grown;
+    string->cap = new_cap;
+    return true;
+}
+
+static bool ash_string_append_char(const struct ash_shell* shell, struct ash_string* string, char ch) {
+    if (string->len > SIZE_MAX - 2u || !ash_string_reserve(shell, string, string->len + 2u)) {
+        return false;
+    }
+    string->data[string->len++] = ch;
+    string->data[string->len] = '\0';
+    return true;
+}
+
+static bool ash_string_append_text(const struct ash_shell* shell, struct ash_string* string, const char* text) {
+    size_t len = strlen(text);
+    if (string->len > SIZE_MAX - len - 1u || !ash_string_reserve(shell, string, string->len + len + 1u)) {
+        return false;
+    }
+    memcpy(string->data + string->len, text, len + 1u);
+    string->len += len;
+    return true;
+}
+
+static bool ash_string_append_span(const struct ash_shell* shell, struct ash_string* string, const char* text, size_t len) {
+    if (len > (size_t)PTRDIFF_MAX || string->len > SIZE_MAX - len - 1u) {
+        return ash_diag_oom(shell);
+    }
+
+    if (!ash_string_reserve(shell, string, string->len + len + 1u)) {
+        return false;
+    }
     memcpy(string->data + string->len, text, len);
     string->len += len;
     string->data[string->len] = '\0';
+    return true;
 }
 
-static char* ash_string_take(struct ash_string* string) {
+static char* ash_string_take(const struct ash_shell* shell, struct ash_string* string) {
     if (string->data == NULL) {
-        return xstrdup("");
+        return ash_strdup_text(shell, "");
     }
 
     char* out = string->data;
@@ -227,14 +300,22 @@ static void ash_tokens_init(struct ash_tokens* tokens) {
     tokens->cap = 0;
 }
 
-static void ash_tokens_push(struct ash_tokens* tokens, struct ash_token token) {
+static bool ash_tokens_push(const struct ash_shell* shell, struct ash_tokens* tokens, struct ash_token token) {
     if (tokens->len == tokens->cap) {
         size_t new_cap = (tokens->cap == 0) ? 16u : tokens->cap * 2u;
-        tokens->items = xrealloc(tokens->items, new_cap * sizeof(*tokens->items));
+        if (tokens->cap != 0u && tokens->cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        struct ash_token* grown = ash_realloc_array(shell, tokens->items, new_cap, sizeof(*tokens->items));
+        if (grown == NULL) {
+            return false;
+        }
+        tokens->items = grown;
         tokens->cap = new_cap;
     }
 
     tokens->items[tokens->len++] = token;
+    return true;
 }
 
 static void ash_tokens_destroy(struct ash_tokens* tokens) {
@@ -261,38 +342,77 @@ static void ash_command_init(struct ash_command* command) {
     command->redir_cap = 0;
 }
 
-static void ash_command_push_word(struct ash_command* command, const char* text) {
+static bool ash_command_push_word(const struct ash_shell* shell, struct ash_command* command, const char* text) {
     if (command->word_count == command->word_cap) {
         size_t new_cap = (command->word_cap == 0) ? 8u : command->word_cap * 2u;
-        command->words = xrealloc(command->words, (new_cap + 1u) * sizeof(*command->words));
+        if (command->word_cap != 0u && command->word_cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        if (new_cap == SIZE_MAX) {
+            return ash_diag_oom(shell);
+        }
+        char** grown = ash_realloc_array(shell, command->words, new_cap + 1u, sizeof(*command->words));
+        if (grown == NULL) {
+            return false;
+        }
+        command->words = grown;
         command->word_cap = new_cap;
     }
 
-    command->words[command->word_count++] = xstrdup(text);
+    char* word = ash_strdup_text(shell, text);
+    if (word == NULL) {
+        return false;
+    }
+    command->words[command->word_count++] = word;
     command->words[command->word_count] = NULL;
+    return true;
 }
 
-static void ash_command_push_assignment(struct ash_command* command, const char* text) {
+static bool ash_command_push_assignment(const struct ash_shell* shell, struct ash_command* command, const char* text) {
     if (command->assignment_count == command->assignment_cap) {
         size_t new_cap = (command->assignment_cap == 0) ? 4u : command->assignment_cap * 2u;
-        command->assignments = xrealloc(command->assignments, new_cap * sizeof(*command->assignments));
+        if (command->assignment_cap != 0u && command->assignment_cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        char** grown = ash_realloc_array(shell, command->assignments, new_cap, sizeof(*command->assignments));
+        if (grown == NULL) {
+            return false;
+        }
+        command->assignments = grown;
         command->assignment_cap = new_cap;
     }
 
-    command->assignments[command->assignment_count++] = xstrdup(text);
+    char* assignment = ash_strdup_text(shell, text);
+    if (assignment == NULL) {
+        return false;
+    }
+    command->assignments[command->assignment_count++] = assignment;
+    return true;
 }
 
-static void ash_command_push_redir(struct ash_command* command, int fd, enum ash_redir_kind kind, const char* target) {
+static bool ash_command_push_redir(struct ash_shell* shell, struct ash_command* command, int fd, enum ash_redir_kind kind, const char* target) {
     if (command->redir_count == command->redir_cap) {
         size_t new_cap = (command->redir_cap == 0) ? 4u : command->redir_cap * 2u;
-        command->redirs = xrealloc(command->redirs, new_cap * sizeof(*command->redirs));
+        if (command->redir_cap != 0u && command->redir_cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        struct ash_redir* grown = ash_realloc_array(shell, command->redirs, new_cap, sizeof(*command->redirs));
+        if (grown == NULL) {
+            return false;
+        }
+        command->redirs = grown;
         command->redir_cap = new_cap;
     }
 
     struct ash_redir* redir = &command->redirs[command->redir_count++];
     redir->fd = fd;
     redir->kind = kind;
-    redir->target = xstrdup(target);
+    redir->target = ash_strdup_text(shell, target);
+    if (redir->target == NULL) {
+        command->redir_count--;
+        return false;
+    }
+    return true;
 }
 
 static bool ash_command_is_empty(const struct ash_command* command) {
@@ -324,14 +444,22 @@ static void ash_pipeline_init(struct ash_pipeline* pipeline) {
     pipeline->cap = 0;
 }
 
-static void ash_pipeline_push_command(struct ash_pipeline* pipeline, const struct ash_command* command) {
+static bool ash_pipeline_push_command(const struct ash_shell* shell, struct ash_pipeline* pipeline, const struct ash_command* command) {
     if (pipeline->count == pipeline->cap) {
         size_t new_cap = (pipeline->cap == 0) ? 4u : pipeline->cap * 2u;
-        pipeline->commands = xrealloc(pipeline->commands, new_cap * sizeof(*pipeline->commands));
+        if (pipeline->cap != 0u && pipeline->cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        struct ash_command* grown = ash_realloc_array(shell, pipeline->commands, new_cap, sizeof(*pipeline->commands));
+        if (grown == NULL) {
+            return false;
+        }
+        pipeline->commands = grown;
         pipeline->cap = new_cap;
     }
 
     pipeline->commands[pipeline->count++] = *command;
+    return true;
 }
 
 static void ash_pipeline_destroy(struct ash_pipeline* pipeline) {
@@ -359,16 +487,24 @@ static bool ash_saved_fds_has_target(const struct ash_saved_fds* saved, int fd) 
     return false;
 }
 
-static void ash_saved_fds_push(struct ash_saved_fds* saved, int target_fd, int saved_fd) {
+static bool ash_saved_fds_push(const struct ash_shell* shell, struct ash_saved_fds* saved, int target_fd, int saved_fd) {
     if (saved->len == saved->cap) {
         size_t new_cap = (saved->cap == 0) ? 4u : saved->cap * 2u;
-        saved->items = xrealloc(saved->items, new_cap * sizeof(*saved->items));
+        if (saved->cap != 0u && saved->cap > SIZE_MAX / 2u) {
+            return ash_diag_oom(shell);
+        }
+        struct ash_saved_fd* grown = ash_realloc_array(shell, saved->items, new_cap, sizeof(*saved->items));
+        if (grown == NULL) {
+            return false;
+        }
+        saved->items = grown;
         saved->cap = new_cap;
     }
 
     saved->items[saved->len].target_fd = target_fd;
     saved->items[saved->len].saved_fd = saved_fd;
     saved->len++;
+    return true;
 }
 
 static void ash_saved_fds_restore(const struct ash_shell* shell, struct ash_saved_fds* saved) {
@@ -452,13 +588,6 @@ static bool ash_is_assignment_word(const char* text) {
     return ash_parse_assignment(text, &name_len, &value);
 }
 
-static char* ash_slice_dup(const char* text, size_t len) {
-    char* out = xmalloc(len + 1u);
-    memcpy(out, text, len);
-    out[len] = '\0';
-    return out;
-}
-
 static struct ash_var* ash_var_find_len(struct ash_shell* shell, const char* name, size_t len) {
     for (struct ash_var* var = shell->vars; var != NULL; var = var->next) {
         if (strlen(var->name) == len && memcmp(var->name, name, len) == 0) {
@@ -490,43 +619,69 @@ static bool ash_var_exists(const struct ash_shell* shell, const char* name) {
     return ash_var_get(shell, name) != NULL;
 }
 
-static void ash_var_set_with_export(struct ash_shell* shell, const char* name, size_t name_len, const char* value, bool mark_export) {
+static bool ash_var_publish_exported(struct ash_shell* shell, struct ash_var* var) {
+    if (!var->exported) {
+        return true;
+    }
+
+    if (setenv(var->name, var->value, 1) != 0) {
+        if (errno == ENOMEM) {
+            return ash_diag_oom(shell);
+        }
+        ash_exec_error(shell, var->name, errno);
+        return false;
+    }
+
+    return true;
+}
+
+static bool ash_var_set_with_export(struct ash_shell* shell, const char* name, size_t name_len, const char* value, bool mark_export) {
     struct ash_var* var = ash_var_find_len(shell, name, name_len);
     if (var == NULL) {
-        var = xmalloc(sizeof(*var));
-        var->name = ash_slice_dup(name, name_len);
-        var->value = xstrdup(value);
+        var = ash_malloc_bytes(shell, sizeof(*var));
+        if (var == NULL) {
+            return false;
+        }
+        var->name = ash_slice_dup(shell, name, name_len);
+        var->value = ash_strdup_text(shell, value);
+        if (var->name == NULL || var->value == NULL) {
+            free(var->name);
+            free(var->value);
+            free(var);
+            return false;
+        }
         var->exported = mark_export;
         var->next = shell->vars;
         shell->vars = var;
     }
     else {
+        char* new_value = ash_strdup_text(shell, value);
+        if (new_value == NULL) {
+            return false;
+        }
         free(var->value);
-        var->value = xstrdup(value);
+        var->value = new_value;
         if (mark_export) {
             var->exported = true;
         }
     }
 
-    if (var->exported) {
-        setenv(var->name, var->value, 1);
-    }
+    return ash_var_publish_exported(shell, var);
 }
 
-static void ash_var_set(struct ash_shell* shell, const char* name, const char* value, bool mark_export) {
-    ash_var_set_with_export(shell, name, strlen(name), value, mark_export);
+static bool ash_var_set(struct ash_shell* shell, const char* name, const char* value, bool mark_export) {
+    return ash_var_set_with_export(shell, name, strlen(name), value, mark_export);
 }
 
-static void ash_var_export(struct ash_shell* shell, const char* name) {
+static bool ash_var_export(struct ash_shell* shell, const char* name) {
     size_t name_len = strlen(name);
     struct ash_var* var = ash_var_find_len(shell, name, name_len);
     if (var == NULL) {
-        ash_var_set_with_export(shell, name, name_len, "", true);
-        return;
+        return ash_var_set_with_export(shell, name, name_len, "", true);
     }
 
     var->exported = true;
-    setenv(var->name, var->value, 1);
+    return ash_var_publish_exported(shell, var);
 }
 
 static void ash_var_unset(struct ash_shell* shell, const char* name) {
@@ -566,7 +721,7 @@ static void ash_vars_destroy(struct ash_shell* shell) {
     shell->vars = NULL;
 }
 
-static void ash_import_environment(struct ash_shell* shell) {
+static bool ash_import_environment(struct ash_shell* shell) {
     for (char** envp = environ; envp != NULL && *envp != NULL; envp++) {
         const char* entry = *envp;
         const char* eq = strchr(entry, '=');
@@ -579,20 +734,29 @@ static void ash_import_environment(struct ash_shell* shell) {
             continue;
         }
 
-        ash_var_set_with_export(shell, entry, name_len, eq + 1, true);
+        if (!ash_var_set_with_export(shell, entry, name_len, eq + 1, true)) {
+            return false;
+        }
     }
 
     if (!ash_var_exists(shell, "PWD")) {
         char* cwd = getcwd(NULL, 0);
         if (cwd != NULL) {
-            ash_var_set(shell, "PWD", cwd, true);
+            if (!ash_var_set(shell, "PWD", cwd, true)) {
+                free(cwd);
+                return false;
+            }
             free(cwd);
         }
     }
 
     if (!ash_var_exists(shell, "PATH")) {
-        ash_var_set(shell, "PATH", "/bin:/usr/bin", true);
+        if (!ash_var_set(shell, "PATH", "/bin:/usr/bin", true)) {
+            return false;
+        }
     }
+
+    return true;
 }
 
 static const char* ash_parameter_positional(const struct ash_shell* shell, long index) {
@@ -618,7 +782,9 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
 
     char ch = input[i];
     if (ch == '\0') {
-        ash_string_append_char(out, '$');
+        if (!ash_string_append_char(shell, out, '$')) {
+            *error_out = true;
+        }
         *pos = i;
         return;
     }
@@ -626,7 +792,10 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
     if (ch == '?') {
         char numbuf[32];
         snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
-        ash_string_append_text(out, numbuf);
+        if (!ash_string_append_text(shell, out, numbuf)) {
+            *error_out = true;
+            return;
+        }
         i++;
         *pos = i;
         return;
@@ -635,7 +804,10 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
     if (ch == '$') {
         char numbuf[32];
         snprintf(numbuf, sizeof(numbuf), "%ld", (long)getpid());
-        ash_string_append_text(out, numbuf);
+        if (!ash_string_append_text(shell, out, numbuf)) {
+            *error_out = true;
+            return;
+        }
         i++;
         *pos = i;
         return;
@@ -654,7 +826,10 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
 
             char numbuf[32];
             snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
-            ash_string_append_text(out, numbuf);
+            if (!ash_string_append_text(shell, out, numbuf)) {
+                *error_out = true;
+                return;
+            }
             i++;
             *pos = i;
             return;
@@ -671,7 +846,10 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
             return;
         }
 
-        ash_string_append_text(out, ash_parameter_named(shell, input + start, i - start));
+        if (!ash_string_append_text(shell, out, ash_parameter_named(shell, input + start, i - start))) {
+            *error_out = true;
+            return;
+        }
         i++;
         *pos = i;
         return;
@@ -684,13 +862,18 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
             i++;
         }
 
-        ash_string_append_text(out, ash_parameter_positional(shell, value));
+        if (!ash_string_append_text(shell, out, ash_parameter_positional(shell, value))) {
+            *error_out = true;
+            return;
+        }
         *pos = i;
         return;
     }
 
     if (!ash_is_name_start((unsigned char)ch)) {
-        ash_string_append_char(out, '$');
+        if (!ash_string_append_char(shell, out, '$')) {
+            *error_out = true;
+        }
         *pos = i;
         return;
     }
@@ -700,7 +883,10 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
         i++;
     }
 
-    ash_string_append_text(out, ash_parameter_named(shell, input + start, i - start));
+    if (!ash_string_append_text(shell, out, ash_parameter_named(shell, input + start, i - start))) {
+        *error_out = true;
+        return;
+    }
     *pos = i;
 }
 
@@ -709,7 +895,9 @@ static bool ash_parse_single_quote(struct ash_shell* shell, const char* input, s
     size_t i = *pos + 1u;
 
     while (input[i] != '\0' && input[i] != '\'') {
-        ash_string_append_char(out, input[i]);
+        if (!ash_string_append_char(shell, out, input[i])) {
+            return false;
+        }
         i++;
     }
 
@@ -740,14 +928,18 @@ static bool ash_parse_double_quote(struct ash_shell* shell, const char* input, s
 
             char escaped = input[i];
             if (escaped == '$' || escaped == '"' || escaped == '\\' || escaped == '`') {
-                ash_string_append_char(out, escaped);
+                if (!ash_string_append_char(shell, out, escaped)) {
+                    return false;
+                }
             }
             else if (escaped == '\n') {
                 /* line continuation */
             }
             else {
-                ash_string_append_char(out, '\\');
-                ash_string_append_char(out, escaped);
+                if (!ash_string_append_char(shell, out, '\\') ||
+                    !ash_string_append_char(shell, out, escaped)) {
+                    return false;
+                }
             }
             i++;
             continue;
@@ -764,7 +956,9 @@ static bool ash_parse_double_quote(struct ash_shell* shell, const char* input, s
             continue;
         }
 
-        ash_string_append_char(out, ch);
+        if (!ash_string_append_char(shell, out, ch)) {
+            return false;
+        }
         i++;
     }
 
@@ -787,7 +981,10 @@ static bool ash_lex_word(struct ash_shell* shell, const char* input, size_t* pos
         if (ch == '\\') {
             i++;
             if (input[i] == '\0') {
-                ash_string_append_char(&word, '\\');
+                if (!ash_string_append_char(shell, &word, '\\')) {
+                    ash_string_destroy(&word);
+                    return false;
+                }
                 break;
             }
 
@@ -796,7 +993,10 @@ static bool ash_lex_word(struct ash_shell* shell, const char* input, size_t* pos
                 continue;
             }
 
-            ash_string_append_char(&word, input[i]);
+            if (!ash_string_append_char(shell, &word, input[i])) {
+                ash_string_destroy(&word);
+                return false;
+            }
             i++;
             continue;
         }
@@ -833,17 +1033,24 @@ static bool ash_lex_word(struct ash_shell* shell, const char* input, size_t* pos
             continue;
         }
 
-        ash_string_append_char(&word, ch);
+        if (!ash_string_append_char(shell, &word, ch)) {
+            ash_string_destroy(&word);
+            return false;
+        }
         i++;
     }
 
     *pos = i;
-    *out_word = ash_string_take(&word);
+    *out_word = ash_string_take(shell, &word);
+    if (*out_word == NULL) {
+        return false;
+    }
     return true;
 }
 
-static bool ash_lex_redir(const char* input, size_t* pos, struct ash_token* token_out) {
+static bool ash_lex_redir(struct ash_shell* shell, const char* input, size_t* pos, struct ash_token* token_out, bool* error_out) {
     size_t i = *pos;
+    *error_out = false;
 
     int fd = -1;
     size_t number_start = i;
@@ -852,13 +1059,22 @@ static bool ash_lex_redir(const char* input, size_t* pos, struct ash_token* toke
     }
 
     if (i > number_start && (input[i] == '<' || input[i] == '>')) {
-        char* number_text = ash_slice_dup(input + number_start, i - number_start);
+        char* number_text = ash_slice_dup(shell, input + number_start, i - number_start);
+        if (number_text == NULL) {
+            *error_out = true;
+            return false;
+        }
         char* endptr = NULL;
         errno = 0;
         long parsed = strtol(number_text, &endptr, 10);
         free(number_text);
         if (errno == 0 && endptr != NULL && *endptr == '\0' && parsed >= 0 && parsed <= INT_MAX) {
             fd = (int)parsed;
+        }
+        else {
+            ash_diag(shell, "invalid redirection fd");
+            *error_out = true;
+            return false;
         }
     }
     else {
@@ -906,7 +1122,9 @@ static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_t
                 .text = NULL,
                 .redir_fd = -1,
             };
-            ash_tokens_push(tokens, token);
+            if (!ash_tokens_push(shell, tokens, token)) {
+                return 1;
+            }
             pos++;
             continue;
         }
@@ -924,15 +1142,23 @@ static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_t
                 .text = NULL,
                 .redir_fd = -1,
             };
-            ash_tokens_push(tokens, token);
+            if (!ash_tokens_push(shell, tokens, token)) {
+                return 1;
+            }
             pos++;
             continue;
         }
 
         struct ash_token redir_token;
-        if (ash_lex_redir(input, &pos, &redir_token)) {
-            ash_tokens_push(tokens, redir_token);
+        bool redir_error = false;
+        if (ash_lex_redir(shell, input, &pos, &redir_token, &redir_error)) {
+            if (!ash_tokens_push(shell, tokens, redir_token)) {
+                return 1;
+            }
             continue;
+        }
+        if (redir_error) {
+            return 1;
         }
 
         char* word = NULL;
@@ -945,7 +1171,10 @@ static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_t
             .text = word,
             .redir_fd = -1,
         };
-        ash_tokens_push(tokens, token);
+        if (!ash_tokens_push(shell, tokens, token)) {
+            free(word);
+            return 1;
+        }
     }
 
     struct ash_token eof_token = {
@@ -953,7 +1182,9 @@ static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_t
         .text = NULL,
         .redir_fd = -1,
     };
-    ash_tokens_push(tokens, eof_token);
+    if (!ash_tokens_push(shell, tokens, eof_token)) {
+        return 1;
+    }
 
     return 0;
 }
@@ -966,11 +1197,15 @@ static int ash_parse_command(const struct ash_tokens* tokens, size_t* index, str
 
         if (token->kind == ASH_TOK_WORD) {
             if (!saw_command_word && ash_is_assignment_word(token->text)) {
-                ash_command_push_assignment(command, token->text);
+                if (!ash_command_push_assignment(shell, command, token->text)) {
+                    return 1;
+                }
             }
             else {
                 saw_command_word = true;
-                ash_command_push_word(command, token->text);
+                if (!ash_command_push_word(shell, command, token->text)) {
+                    return 1;
+                }
             }
             (*index)++;
             continue;
@@ -992,7 +1227,9 @@ static int ash_parse_command(const struct ash_tokens* tokens, size_t* index, str
                 return 1;
             }
 
-            ash_command_push_redir(command, redir_fd, redir_kind, tokens->items[*index].text);
+            if (!ash_command_push_redir(shell, command, redir_fd, redir_kind, tokens->items[*index].text)) {
+                return 1;
+            }
             (*index)++;
             continue;
         }
@@ -1019,7 +1256,10 @@ static int ash_parse_pipeline(const struct ash_tokens* tokens, size_t* index, st
             return 1;
         }
 
-        ash_pipeline_push_command(pipeline, &command);
+        if (!ash_pipeline_push_command(shell, pipeline, &command)) {
+            ash_command_destroy(&command);
+            return 1;
+        }
 
         if (*index >= tokens->len || tokens->items[*index].kind != ASH_TOK_PIPE) {
             break;
@@ -1045,7 +1285,12 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
                 ash_exec_error(shell, "dup", errno);
                 return 1;
             }
-            ash_saved_fds_push(saved, redir->fd, dup_fd);
+            if (!ash_saved_fds_push(shell, saved, redir->fd, dup_fd)) {
+                if (dup_fd >= 0) {
+                    close(dup_fd);
+                }
+                return 1;
+            }
         }
 
         int open_flags = 0;
@@ -1122,15 +1367,28 @@ static int ash_exec_external(struct ash_shell* shell, char** argv) {
         ash_string_init(&candidate);
 
         if (dir_len == 0u) {
-            ash_string_append_text(&candidate, "./");
+            if (!ash_string_append_text(shell, &candidate, "./")) {
+                ash_string_destroy(&candidate);
+                return 126;
+            }
         }
         else {
-            ash_string_append_span(&candidate, segment, dir_len);
-            ash_string_append_char(&candidate, '/');
+            if (!ash_string_append_span(shell, &candidate, segment, dir_len) ||
+                !ash_string_append_char(shell, &candidate, '/')) {
+                ash_string_destroy(&candidate);
+                return 126;
+            }
         }
-        ash_string_append_text(&candidate, command);
+        if (!ash_string_append_text(shell, &candidate, command)) {
+            ash_string_destroy(&candidate);
+            return 126;
+        }
 
-        char* candidate_path = ash_string_take(&candidate);
+        char* candidate_path = ash_string_take(shell, &candidate);
+        if (candidate_path == NULL) {
+            ash_string_destroy(&candidate);
+            return 126;
+        }
         execve(candidate_path, argv, environ);
 
         int err = errno;
@@ -1193,7 +1451,11 @@ static char* ash_getcwd_dup(void) {
     size_t size = 128u;
 
     while (true) {
-        char* buffer = xmalloc(size);
+        char* buffer = malloc(size);
+        if (buffer == NULL) {
+            errno = ENOMEM;
+            return NULL;
+        }
         if (getcwd(buffer, size) != NULL) {
             return buffer;
         }
@@ -1223,7 +1485,9 @@ static int ash_apply_command_assignments_shell(struct ash_shell* shell, const st
             return 1;
         }
 
-        ash_var_set_with_export(shell, command->assignments[i], name_len, value, false);
+        if (!ash_var_set_with_export(shell, command->assignments[i], name_len, value, false)) {
+            return 1;
+        }
     }
 
     return 0;
@@ -1238,8 +1502,21 @@ static int ash_apply_command_assignments_env(struct ash_shell* shell, const stru
             return 1;
         }
 
-        char* name = ash_slice_dup(command->assignments[i], name_len);
-        setenv(name, value, 1);
+        char* name = ash_slice_dup(shell, command->assignments[i], name_len);
+        if (name == NULL) {
+            return 1;
+        }
+        if (setenv(name, value, 1) != 0) {
+            int err = errno;
+            free(name);
+            if (err == ENOMEM) {
+                ash_diag_oom(shell);
+            }
+            else {
+                ash_exec_error(shell, "setenv", err);
+            }
+            return 1;
+        }
         free(name);
     }
 
@@ -1312,11 +1589,19 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
 
     char* newcwd = ash_getcwd_dup();
     if (newcwd != NULL) {
-        ash_var_set(shell, "PWD", newcwd, false);
+        if (!ash_var_set(shell, "PWD", newcwd, false)) {
+            free(oldcwd);
+            free(newcwd);
+            return 1;
+        }
     }
 
     if (oldcwd != NULL) {
-        ash_var_set(shell, "OLDPWD", oldcwd, false);
+        if (!ash_var_set(shell, "OLDPWD", oldcwd, false)) {
+            free(oldcwd);
+            free(newcwd);
+            return 1;
+        }
     }
 
     if (print_new_dir) {
@@ -1373,7 +1658,9 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
         const char* value = NULL;
 
         if (ash_parse_assignment(arg, &name_len, &value)) {
-            ash_var_set_with_export(shell, arg, name_len, value, true);
+            if (!ash_var_set_with_export(shell, arg, name_len, value, true)) {
+                status = 1;
+            }
             continue;
         }
 
@@ -1384,7 +1671,9 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
             continue;
         }
 
-        ash_var_export(shell, arg);
+        if (!ash_var_export(shell, arg)) {
+            status = 1;
+        }
     }
 
     return status;
@@ -1481,7 +1770,9 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
             continue;
         }
 
-        ash_var_set_with_export(shell, arg, name_len, value, false);
+        if (!ash_var_set_with_export(shell, arg, name_len, value, false)) {
+            status = 1;
+        }
     }
 
     return status;
@@ -1587,7 +1878,10 @@ static int ash_execute_single_command_forked(struct ash_shell* shell, const stru
 
 static int ash_execute_pipeline_forked(struct ash_shell* shell, const struct ash_pipeline* pipeline) {
     size_t command_count = pipeline->count;
-    pid_t* pids = xmalloc(command_count * sizeof(*pids));
+    pid_t* pids = ash_realloc_array(shell, NULL, command_count, sizeof(*pids));
+    if (pids == NULL) {
+        return 1;
+    }
 
     size_t spawned = 0;
     int prev_read = -1;
@@ -1732,9 +2026,12 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
     return ash_execute_pipeline_forked(shell, pipeline);
 }
 
-static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_tokens* tokens) {
+static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_tokens* tokens, bool* parser_error_out) {
     size_t index = 0;
     int status = shell->last_status;
+    if (parser_error_out != NULL) {
+        *parser_error_out = false;
+    }
 
     while (index < tokens->len) {
         while (index < tokens->len && tokens->items[index].kind == ASH_TOK_SEMI) {
@@ -1750,6 +2047,9 @@ static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_token
 
         if (ash_parse_pipeline(tokens, &index, &pipeline, shell) != 0) {
             ash_pipeline_destroy(&pipeline);
+            if (parser_error_out != NULL) {
+                *parser_error_out = true;
+            }
             return 2;
         }
 
@@ -1770,46 +2070,65 @@ static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_token
     return status;
 }
 
-static int ash_execute_segment(struct ash_shell* shell, const char* input) {
+static int ash_execute_segment(struct ash_shell* shell, const char* input, bool* parser_error_out) {
     struct ash_tokens tokens;
     ash_tokens_init(&tokens);
+    if (parser_error_out != NULL) {
+        *parser_error_out = false;
+    }
 
     int rc = ash_tokenize(shell, input, &tokens);
     if (rc != 0) {
         ash_tokens_destroy(&tokens);
         shell->last_status = 2;
+        if (parser_error_out != NULL) {
+            *parser_error_out = true;
+        }
         return 2;
     }
 
-    rc = ash_parse_and_execute(shell, &tokens);
+    rc = ash_parse_and_execute(shell, &tokens, parser_error_out);
     ash_tokens_destroy(&tokens);
     shell->last_status = rc;
     return rc;
 }
 
-static int ash_execute_buffer(struct ash_shell* shell, const char* input) {
+static int ash_execute_buffer(struct ash_shell* shell, const char* input, bool* parser_error_out) {
     size_t start = 0;
     size_t i = 0;
     bool in_single = false;
     bool in_double = false;
     bool escape = false;
     int status = shell->last_status;
+    if (parser_error_out != NULL) {
+        *parser_error_out = false;
+    }
 
     while (true) {
         char ch = input[i];
         bool at_end = (ch == '\0');
         bool separator = false;
 
-        if (!in_single && !in_double && !escape && (ch == ';' || ch == '\n' || ch == '\0')) {
+        if (at_end || (!in_single && !in_double && !escape && (ch == ';' || ch == '\n'))) {
             separator = true;
         }
 
         if (separator) {
             size_t len = i - start;
             if (len > 0u) {
-                char* segment = ash_slice_dup(input + start, len);
-                status = ash_execute_segment(shell, segment);
+                char* segment = ash_slice_dup(shell, input + start, len);
+                if (segment == NULL) {
+                    return 2;
+                }
+                bool segment_parser_error = false;
+                status = ash_execute_segment(shell, segment, &segment_parser_error);
                 free(segment);
+                if (segment_parser_error) {
+                    if (parser_error_out != NULL) {
+                        *parser_error_out = true;
+                    }
+                    return status;
+                }
                 if (shell->should_exit) {
                     return status;
                 }
@@ -1892,7 +2211,11 @@ static int ash_execute_stream(struct ash_shell* shell, FILE* stream, bool prompt
             break;
         }
 
-        status = ash_execute_buffer(shell, line);
+        bool parser_error = false;
+        status = ash_execute_buffer(shell, line, &parser_error);
+        if (parser_error && !shell->interactive) {
+            break;
+        }
     }
 
     free(line);
@@ -2029,7 +2352,10 @@ int bx_ash_main(int argc, char** argv) {
         .requested_exit_status = 0,
     };
 
-    ash_import_environment(&shell);
+    if (!ash_import_environment(&shell)) {
+        ash_vars_destroy(&shell);
+        return 1;
+    }
 
     bool interactive = force_interactive;
     if (!interactive && command_string == NULL && script_path == NULL) {
@@ -2039,12 +2365,15 @@ int bx_ash_main(int argc, char** argv) {
     shell.interactive = interactive;
 
     if (shell.interactive && !ash_var_exists(&shell, "PS1")) {
-        ash_var_set(&shell, "PS1", ash_default_prompt(), false);
+        if (!ash_var_set(&shell, "PS1", ash_default_prompt(), false)) {
+            ash_vars_destroy(&shell);
+            return 1;
+        }
     }
 
     int status = 0;
     if (command_string != NULL) {
-        status = ash_execute_buffer(&shell, command_string);
+        status = ash_execute_buffer(&shell, command_string, NULL);
     }
     else if (script_path != NULL) {
         FILE* script = fopen(script_path, "r");

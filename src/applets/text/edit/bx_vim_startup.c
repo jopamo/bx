@@ -2,9 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "applets/text/edit/bx_vim_runtime.h"
 #include "applets/text/edit/bx_vim_startup.h"
-#include "bx/libbx.h"
 
 static bool bx_vim_is_exact_version_request(int argc, char** argv) {
     return argc == 2 && strcmp(argv[1], "--version") == 0;
@@ -18,6 +18,25 @@ static int bx_vim_reject_unsafe_arg(const char* progname, const char* arg) {
         arg,
         progname);
     return 2;
+}
+
+static int bx_vim_allocation_error(const char* progname) {
+    fprintf(stderr, "%s: out of memory\n", progname);
+    return 1;
+}
+
+static char* bx_vim_strdup(const char* text) {
+    size_t len = strlen(text);
+    if (len == SIZE_MAX) {
+        return NULL;
+    }
+
+    char* out = malloc(len + 1u);
+    if (out == NULL) {
+        return NULL;
+    }
+    memcpy(out, text, len + 1u);
+    return out;
 }
 
 void bx_vim_print_help(const char* progname) {
@@ -57,13 +76,22 @@ int bx_vim_prepare_invocation(struct bx_vim_invocation* invocation, int argc, ch
     }
 
     invocation->runtime_dir = bx_vim_runtime_resolve_dir();
+    if (invocation->runtime_dir == NULL) {
+        return bx_vim_allocation_error(argv[0]);
+    }
     invocation->runtime_cmd = bx_vim_runtime_make_runtime_cmd(invocation->runtime_dir);
-    invocation->policy_cmd = xstrdup(bx_vim_runtime_policy_cmd());
-    invocation->defaults_cmd = xstrdup(bx_vim_runtime_defaults_cmd());
+    invocation->policy_cmd = bx_vim_strdup(bx_vim_runtime_policy_cmd());
+    invocation->defaults_cmd = bx_vim_strdup(bx_vim_runtime_defaults_cmd());
+    if (invocation->runtime_cmd == NULL || invocation->policy_cmd == NULL || invocation->defaults_cmd == NULL) {
+        return bx_vim_allocation_error(argv[0]);
+    }
 
     const int prefix_argc = 16;
     invocation->argc = prefix_argc + argc - 1;
-    invocation->argv = xmalloc(((size_t)invocation->argc + 1) * sizeof(*invocation->argv));
+    invocation->argv = malloc(((size_t)invocation->argc + 1u) * sizeof(*invocation->argv));
+    if (invocation->argv == NULL) {
+        return bx_vim_allocation_error(argv[0]);
+    }
 
     int out = 0;
     invocation->argv[out++] = argv[0];

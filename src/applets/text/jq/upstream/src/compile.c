@@ -1215,11 +1215,24 @@ static int expand_call_arglist(block* b, jv args, jv *env) {
   return errors;
 }
 
-static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv *env) {
+static int compile_depth(struct bytecode* bc, block b, struct locfile* lf,
+                         jv args, jv *env, size_t depth, size_t max_depth);
+
+static int compile_depth(struct bytecode* bc, block b, struct locfile* lf,
+                         jv args, jv *env, size_t depth, size_t max_depth) {
   int errors = 0;
   int pos = 0;
   int var_frame_idx = 0;
   bc->nsubfunctions = 0;
+  bc->subfunctions = 0;
+  bc->code = 0;
+  bc->codelen = 0;
+  bc->constants = jv_invalid();
+  if (depth > max_depth) {
+    locfile_locate(lf, UNKNOWN_LOCATION, "compiler recursion depth exceeded");
+    block_free(b);
+    return 1;
+  }
   errors += expand_call_arglist(&b, args, env);
   b = BLOCK(b, gen_op_simple(RET));
   jv localnames = jv_array();
@@ -1297,7 +1310,8 @@ static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv
           params = jv_array_append(params, jv_string(param->symbol));
         }
         subfn->debuginfo = jv_object_set(subfn->debuginfo, jv_string("params"), params);
-        errors += compile(subfn, curr->subfn, lf, args, env);
+        errors += compile_depth(subfn, curr->subfn, lf, args, env,
+                                depth + 1, max_depth);
         curr->subfn = gen_noop();
       }
     }
@@ -1362,6 +1376,11 @@ static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv
   bc->nlocals = maxvar + 2; // FIXME: frames of size zero?
   block_free(b);
   return errors;
+}
+
+static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv *env) {
+  enum { JQ_COMPILE_MAX_RECURSION_DEPTH = 1024 };
+  return compile_depth(bc, b, lf, args, env, 0, JQ_COMPILE_MAX_RECURSION_DEPTH);
 }
 
 int block_compile(block b, struct bytecode** out, struct locfile* lf, jv args) {
