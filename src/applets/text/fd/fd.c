@@ -44,8 +44,7 @@ int bx_fd_main(int argc, char **argv) {
         .os_error_style = opts->show_errors,
         .error_prefix = opts->show_errors ? "[fd error]" : progname,
         .max_depth = opts->max_depth,
-        .cycle_mode = opts->follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
-                                            : BX_WALK_CYCLE_NONE,
+        .cycle_mode = BX_WALK_CYCLE_DIR_REPEAT,
         .cycle_report = BX_WALK_CYCLE_IGNORE,
     };
     struct bx_walk_filter_opts filter_opts = {

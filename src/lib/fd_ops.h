@@ -59,6 +59,7 @@ int bx_fd_futimens(int fd, const struct timespec times[2]);
 int bx_fd_ftruncate(int fd, off_t length);
 int bx_fd_fsync(int fd);
 int bx_fd_fdatasync(int fd);
+int bx_fd_syncfs(int fd);
 off_t bx_fd_lseek(int fd, off_t offset, int whence);
 
 /* fd-relative child helpers are for recursive mutation/walk frames.

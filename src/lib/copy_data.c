@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "copy_data.h"
+#include "lib/xreadwrite.h"
 
 static bool is_all_zeros(const char* buf, size_t size) {
     for (size_t i = 0; i < size; i++) {
@@ -35,7 +36,7 @@ static int bx_copy_data_buffered(int src_fd, int dest_fd, enum bx_sparse_mode sp
     bool sparse_detected = false;
 
     while (true) {
-        ssize_t nread = read(src_fd, buffer, sizeof(buffer));
+        ssize_t nread = bx_xread(src_fd, buffer, sizeof(buffer));
         if (nread == 0) {
             if (sparse_detected) {
                 if (ftruncate(dest_fd, last_write_end) != 0) {
@@ -61,13 +62,8 @@ static int bx_copy_data_buffered(int src_fd, int dest_fd, enum bx_sparse_mode sp
             sparse_detected = true;
         }
         else {
-            ssize_t written_total = 0;
-            while (written_total < nread) {
-                ssize_t nwritten = write(dest_fd, buffer + written_total, (size_t)(nread - written_total));
-                if (nwritten < 0) {
-                    return BX_COPY_DATA_WRITE_ERROR;
-                }
-                written_total += nwritten;
+            if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
+                return BX_COPY_DATA_WRITE_ERROR;
             }
             last_write_end += nread;
         }
@@ -84,18 +80,13 @@ static int bx_copy_data_copy_range(int src_fd, int dest_fd, off_t length) {
             chunk = (size_t)remaining;
         }
 
-        ssize_t nread = read(src_fd, buffer, chunk);
+        ssize_t nread = bx_xread(src_fd, buffer, chunk);
         if (nread <= 0) {
             return BX_COPY_DATA_READ_ERROR;
         }
 
-        ssize_t written_total = 0;
-        while (written_total < nread) {
-            ssize_t nwritten = write(dest_fd, buffer + written_total, (size_t)(nread - written_total));
-            if (nwritten < 0) {
-                return BX_COPY_DATA_WRITE_ERROR;
-            }
-            written_total += nwritten;
+        if (!bx_xwrite_all(dest_fd, buffer, (size_t)nread)) {
+            return BX_COPY_DATA_WRITE_ERROR;
         }
 
         remaining -= nread;

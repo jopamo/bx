@@ -335,9 +335,6 @@ static int bx_search_run_files_only(const struct bx_search_run_args *args) {
     };
     struct bx_walk_opts walk_opts =
         bx_search_runtime_snapshot_walk_opts(args->runtime_snapshot, NULL);
-    walk_opts.cycle_mode = args->opts->follow_symlinks ? BX_WALK_CYCLE_SYMLINK_REPEAT
-                                                       : BX_WALK_CYCLE_NONE;
-    walk_opts.cycle_report = BX_WALK_CYCLE_ERROR;
     struct bx_search_walk_config walk_config = {
         .walk_opts = &walk_opts,
         .filter_opts = bx_search_runtime_snapshot_filter_opts(args->runtime_snapshot),

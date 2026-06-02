@@ -271,8 +271,7 @@ static bool bx_tree_build_with_walk(const char *operand,
         .os_error_style = false,
         .error_prefix = opts->progname,
         .max_depth = opts->max_depth,
-        .cycle_mode = opts->follow_symlink_dirs ? BX_WALK_CYCLE_SYMLINK_REPEAT
-                                                : BX_WALK_CYCLE_NONE,
+        .cycle_mode = BX_WALK_CYCLE_DIR_REPEAT,
         .cycle_report = BX_WALK_CYCLE_WARN,
     };
     struct bx_walk_ops ops = {

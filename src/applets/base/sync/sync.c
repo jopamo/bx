@@ -6,7 +6,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -79,16 +78,6 @@ static bool bx_sync_parse_options(int argc, char** argv, struct bx_sync_options*
     return true;
 }
 
-static int bx_sync_syncfs_fd(int fd) {
-#ifdef SYS_syncfs
-    return (int)syscall(SYS_syncfs, fd);
-#else
-    (void)fd;
-    errno = ENOSYS;
-    return -1;
-#endif
-}
-
 static void bx_sync_one_path(const char* path, const struct bx_sync_options* options, struct bx_diag_ctx* diag) {
     int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0) {
@@ -98,16 +87,16 @@ static void bx_sync_one_path(const char* path, const struct bx_sync_options* opt
 
     int rc = 0;
     if (options->data_only) {
-        rc = fdatasync(fd);
+        rc = bx_fd_fdatasync(fd);
     }
     else if (options->file_system) {
-        rc = bx_sync_syncfs_fd(fd);
+        rc = bx_fd_syncfs(fd);
         if (rc != 0 && errno == ENOSYS) {
-            rc = fsync(fd);
+            rc = bx_fd_fsync(fd);
         }
     }
     else {
-        rc = fsync(fd);
+        rc = bx_fd_fsync(fd);
     }
 
     if (rc != 0) {

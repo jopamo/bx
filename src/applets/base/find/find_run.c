@@ -106,10 +106,8 @@ int find_run_search(const char *progname, struct find_opts *opts,
         .os_error_style = false,
         .error_prefix = progname,
         .max_depth = opts->max_depth,
-        .cycle_mode = opts->follow_symlinks ? BX_WALK_CYCLE_DIR_REPEAT
-                                            : BX_WALK_CYCLE_NONE,
-        .cycle_report = opts->follow_symlinks ? BX_WALK_CYCLE_ERROR
-                                              : BX_WALK_CYCLE_IGNORE,
+        .cycle_mode = BX_WALK_CYCLE_DIR_REPEAT,
+        .cycle_report = BX_WALK_CYCLE_ERROR,
     };
     struct bx_walk_ops ops = {
         .visit = find_walk_cb,

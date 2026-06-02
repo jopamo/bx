@@ -273,6 +273,19 @@ int bx_fd_fdatasync(int fd) {
     return fdatasync(fd);
 }
 
+int bx_fd_syncfs(int fd) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+#ifdef SYS_syncfs
+    return (int)syscall(SYS_syncfs, fd);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
 off_t bx_fd_lseek(int fd, off_t offset, int whence) {
     return lseek(fd, offset, whence);
 }

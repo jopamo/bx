@@ -438,7 +438,7 @@ bool bx_archive_output_file_finish(struct bx_archive_output_file* out,
     }
     if (ok && out->transactional) {
         fd = fileno(out->stream);
-        if (fd < 0 || fsync(fd) != 0) {
+        if (fd < 0 || bx_fd_fsync(fd) != 0) {
             bx_diag(diag, "write error: %s", strerror(errno));
             ok = false;
         }

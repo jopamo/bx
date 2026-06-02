@@ -320,11 +320,10 @@ static bool bx_search_use_rg_sort_policy(enum bx_search_personality personality,
 
 static int bx_search_cycle_mode(enum bx_search_personality personality,
                                 const struct search_opts *opts) {
+    (void)personality;
     if (!opts->follow_symlinks)
         return BX_WALK_CYCLE_NONE;
-    return bx_search_personality_is_rg(personality)
-        ? BX_WALK_CYCLE_SYMLINK_REPEAT
-        : BX_WALK_CYCLE_DIR_REPEAT;
+    return BX_WALK_CYCLE_DIR_REPEAT;
 }
 
 static int bx_search_cycle_report(enum bx_search_personality personality,
