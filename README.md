@@ -5,3 +5,9 @@
 `bx` is a multi-tool multicall utility.
 
 One binary, many commands.
+
+## Licensing
+
+`bx` is a mixed-license tree. bx-owned code is GPL-2.0-or-later; imported code
+keeps its upstream license. See `LICENSE`, `COPYING.GPL-2`, and per-subtree
+`COPYING*`/`README*` files for the actual carve-outs.
