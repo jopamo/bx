@@ -1,0 +1,42 @@
+bx is a mixed-license source tree.
+
+bx-owned code
+-------------
+bx-owned code in this repository is available under the GNU General Public
+License, version 2 or (at your option) any later version
+("GPL-2.0-or-later"). The full GPLv2 text is included in COPYING.GPL-2.
+
+Imported and upstream-derived code
+----------------------------------
+Copied or imported code keeps its original license and notices. Known upstream
+areas include:
+
+- src/applets/base/bc/ — BSD-2-Clause, plus extra third-party notices in some
+  files
+- src/applets/network/nc/atomicio.[ch], netcat.[ch], socks.c — OpenBSD/BSD-style
+  notices
+- src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
+  LGPL-2.1-or-later
+- src/applets/system/hdparm/ — hdparm BSD-style notice; some files additionally
+  allow GPLv2 redistribution
+- src/applets/system/screen/ — GNU Screen, GPL-3.0-or-later
+- src/applets/text/ed/ — GNU ed, GPL-2.0-or-later
+- src/applets/text/edit/vim/ — Vim license
+- src/applets/text/edit/runtime/ — curated Vim runtime subset; some files carry
+  their own upstream notices
+- src/applets/text/jq/upstream/ — jq and bundled upstream components under the
+  terms collected in src/applets/text/jq/COPYING.jq
+- src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
+  src/lib/manual/COPYING.mandoc
+
+Subtree README/COPYING/LICENSE files and per-file headers control when they
+differ from this top-level default.
+
+Combined binary note
+--------------------
+bx is linked as one multicall executable. Because that combined work includes
+components under different copyleft terms, the binary you ship must satisfy the
+obligations of the included parts. In particular, builds that include the
+Screen-derived applet must be distributable under GPL-3.0-or-later-compatible
+terms. For that reason the bx-owned default above is GPL-2.0-or-later, not
+GPL-2.0-only.
