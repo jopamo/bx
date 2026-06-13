@@ -690,6 +690,13 @@
       ]
     },
     {
+      "name": "fmt",
+      "main": "bx_fmt_main",
+      "capabilities": [
+        "filesystem-read"
+      ]
+    },
+    {
       "name": "head",
       "main": "bx_head_main",
       "capabilities": [
