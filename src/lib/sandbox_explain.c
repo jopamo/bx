@@ -13,7 +13,7 @@ void bx_sandbox_explain_set_enabled(bool enabled) {
 }
 
 void bx_sandbox_explain_emit_enabled(bx_sandbox_explain_emit_fn emit, void* user) {
-    if (emit != NULL) {
+    if (emit) {
         emit(user);
     }
 }
