@@ -79,6 +79,7 @@ int bx_nc_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
 int bx_expr_main(int argc, char** argv);
 int bx_fold_main(int argc, char** argv);
+int bx_fmt_main(int argc, char** argv);
 int bx_head_main(int argc, char** argv);
 int bx_hostid_main(int argc, char** argv);
 int bx_hostname_main(int argc, char** argv);
