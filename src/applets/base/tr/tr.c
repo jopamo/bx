@@ -515,6 +515,9 @@ int bx_tr_main(int argc, char** argv) {
                 options.show_version = true;
                 break;
             case '?':
+                if (optopt != 0) {
+                    return tr_usage_error(options.progname, "invalid option -- '%c'", optopt);
+                }
                 if (optind > 0 && optind - 1 < argc && argv[optind - 1] != NULL) {
                     return tr_usage_error(options.progname, "unrecognized option '%s'", argv[optind - 1]);
                 }
