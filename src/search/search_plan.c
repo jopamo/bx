@@ -88,7 +88,8 @@ static bool bx_search_plan_deferred_fastpath_requested(const struct search_opts 
     return opts->quiet
         || opts->files_with_matches
         || opts->files_without_match
-        || opts->recursive;
+        || opts->recursive
+        || (!opts->count_only && !opts->stats);
 }
 
 static bool bx_search_plan_fastpath_is_deferred_candidate(
@@ -97,7 +98,8 @@ static bool bx_search_plan_fastpath_is_deferred_candidate(
     bool has_metadata_sort,
     bool rg_searches_stdin
 ) {
-    if (!opts || personality != BX_SEARCH_RG)
+    (void)personality;
+    if (!opts)
         return false;
     if (rg_searches_stdin)
         return false;

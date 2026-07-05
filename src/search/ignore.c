@@ -491,13 +491,16 @@ struct bx_ignore_state *bx_ignore_state_clone_chain_for_subtree(const struct bx_
 static void bx_ignore_report_error(const struct bx_walk_ignore_opts *opts,
                                    const char *path,
                                    int errnum) {
+    const char *error_text;
+
     if (!opts || opts->suppress_ignore_messages || !opts->error_prefix || !path)
         return;
+    error_text = errnum == ENOMEM ? "Out of memory" : strerror(errnum);
     if (opts->os_error_style) {
         fprintf(stderr, "%s: %s: %s (os error %d)\n",
-                opts->error_prefix, path, strerror(errnum), errnum);
+                opts->error_prefix, path, error_text, errnum);
     } else {
-        fprintf(stderr, "%s: %s: %s\n", opts->error_prefix, path, strerror(errnum));
+        fprintf(stderr, "%s: %s: %s\n", opts->error_prefix, path, error_text);
     }
 }
 

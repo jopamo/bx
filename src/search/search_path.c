@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <dirent.h>
 #include <fnmatch.h>
 #include <stdbool.h>
@@ -26,6 +27,12 @@ static bool progname_uses_os_error_style(const char *progname) {
     return strcmp(progname, "rg") == 0;
 }
 
+static const char *bx_search_error_text(int errnum) {
+    if (errnum == ENOMEM)
+        return "Out of memory";
+    return strerror(errnum);
+}
+
 bool bx_search_progname_uses_os_error_style(const char *progname) {
     return progname_uses_os_error_style(progname);
 }
@@ -42,10 +49,10 @@ int bx_search_fprintf_path_error(FILE *stream,
 
     if (progname_uses_os_error_style(progname))
         return fprintf(stream, "%s: %s: %s (os error %d)\n",
-                       display_progname, display_path, strerror(errnum), errnum);
+                       display_progname, display_path, bx_search_error_text(errnum), errnum);
 
     return fprintf(stream, "%s: %s: %s\n",
-                   display_progname, display_path, strerror(errnum));
+                   display_progname, display_path, bx_search_error_text(errnum));
 }
 
 int bx_search_fprintf_path_io_error(FILE *stream,
@@ -70,7 +77,7 @@ int bx_search_fprintf_path_io_error(FILE *stream,
     return fprintf(stream,
                    "%s: %s: IO error for operation on %s: %s (os error %d)\n",
                    display_progname, display_path, display_path,
-                   strerror(errnum), errnum);
+                   bx_search_error_text(errnum), errnum);
 }
 
 int bx_search_snprintf_path_error(char *buf,
@@ -83,10 +90,10 @@ int bx_search_snprintf_path_error(char *buf,
 
     if (progname_uses_os_error_style(progname))
         return snprintf(buf, cap, "%s: %s: %s (os error %d)\n",
-                        display_progname, display_path, strerror(errnum), errnum);
+                        display_progname, display_path, bx_search_error_text(errnum), errnum);
 
     return snprintf(buf, cap, "%s: %s: %s\n",
-                    display_progname, display_path, strerror(errnum));
+                    display_progname, display_path, bx_search_error_text(errnum));
 }
 
 static bool bx_search_loaded_mode_size_exceeds_max_filesize(

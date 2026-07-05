@@ -156,8 +156,6 @@ static size_t bx_record_stream_configure_limit(FILE *f) {
     bx_search_dev_counters_note_content_fstat_call();
     if (fstat(fd, &st) != 0)
         return 0u;
-    if (S_ISREG(st.st_mode))
-        return 0u;
     return BX_RECORD_STREAM_SPECIAL_RECORD_LIMIT;
 }
 
