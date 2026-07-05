@@ -54,8 +54,9 @@ static_link_probe_src = 'int main(void) { return 0; }'
 static_link_probe_args = []
 
 # Probe the exact static-link argument combination we will pass later. Some
-# toolchains only produce a working static executable when -no-pie accompanies
-# -static, so checking -static in isolation can reject a usable setup.
+# toolchains only produce a working fully static executable with a particular
+# mode: plain -static, -static combined with -no-pie, or static PIE via
+# -static-pie. Checking only one form can reject a usable clang/musl setup.
 if cc.links(
   static_link_probe_src,
   args : ['-static', '-no-pie'],
@@ -68,13 +69,19 @@ elif cc.links(
   name : 'static link',
 )
   static_link_probe_args = ['-static']
+elif cc.links(
+  static_link_probe_src,
+  args : ['-static-pie'],
+  name : 'static pie link',
+)
+  static_link_probe_args = ['-static-pie']
 endif
 static_link_supported = static_link_probe_args.length() != 0
 
 use_static_binary = false
 if static_binary_opt == 'enabled'
   if not static_link_supported
-    error('static_binary=enabled requires a toolchain that supports -static')
+    error('static_binary=enabled requires a toolchain that supports a fully static link via -static or -static-pie')
   endif
   use_static_binary = true
 elif static_binary_opt == 'auto'
