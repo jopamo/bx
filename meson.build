@@ -48,10 +48,28 @@ warn_flags = [
 add_project_arguments(cc.get_supported_arguments(warn_flags), language : 'c')
 
 static_binary_opt = get_option('static_binary')
-static_link_supported = cc.has_link_argument('-static')
-static_no_pie_supported = cc.has_link_argument('-no-pie')
 compiler_targets_glibc = cc.has_header_symbol('features.h', '__GLIBC__')
 musl_gcc = find_program('musl-gcc', required : false)
+static_link_probe_src = 'int main(void) { return 0; }'
+static_link_probe_args = []
+
+# Probe the exact static-link argument combination we will pass later. Some
+# toolchains only produce a working static executable when -no-pie accompanies
+# -static, so checking -static in isolation can reject a usable setup.
+if cc.links(
+  static_link_probe_src,
+  args : ['-static', '-no-pie'],
+  name : 'static link with -no-pie',
+)
+  static_link_probe_args = ['-static', '-no-pie']
+elif cc.links(
+  static_link_probe_src,
+  args : ['-static'],
+  name : 'static link',
+)
+  static_link_probe_args = ['-static']
+endif
+static_link_supported = static_link_probe_args.length() != 0
 
 use_static_binary = false
 if static_binary_opt == 'enabled'
@@ -73,10 +91,7 @@ endif
 
 bx_static_link_args = []
 if use_static_binary
-  bx_static_link_args += ['-static']
-  if static_no_pie_supported and cc.get_id() != 'clang'
-    bx_static_link_args += ['-no-pie']
-  endif
+  bx_static_link_args = static_link_probe_args
 endif
 bx_link_args = bx_static_link_args
 
