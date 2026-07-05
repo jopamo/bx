@@ -27,9 +27,11 @@ struct bx_search_scanner {
     size_t cap;
     size_t len;
     size_t scan_len;
+    size_t record_limit;
     off_t file_off;
     size_t records_before_buf;
     char delimiter;
+    int errnum;
     bool track_record_numbers;
     bool eof;
 };
@@ -51,6 +53,8 @@ bool bx_search_scanner_expand_record(const struct bx_search_scanner *scanner,
                                      struct bx_search_record_slice *record);
 bool bx_search_scanner_candidate_record_is_buffered(const struct bx_search_scanner *scanner,
                                                     const struct bx_search_candidate *candidate);
+bool bx_search_scanner_had_error(const struct bx_search_scanner *scanner);
+int bx_search_scanner_error(const struct bx_search_scanner *scanner);
 size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,
                                                 size_t start_off,
                                                 size_t end_off);

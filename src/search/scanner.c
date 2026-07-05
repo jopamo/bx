@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -8,6 +9,7 @@
 
 #include "dev_counters.h"
 #include "literal.h"
+#include "record_stream.h"
 #include "scanner.h"
 
 #define BX_SEARCH_SCANNER_CHUNK_CAP 65536u
@@ -94,9 +96,11 @@ void bx_search_scanner_dispose(struct bx_search_scanner *scanner) {
     scanner->cap = 0u;
     scanner->len = 0u;
     scanner->scan_len = 0u;
+    scanner->record_limit = 0u;
     scanner->file_off = 0;
     scanner->records_before_buf = 0u;
     scanner->delimiter = '\n';
+    scanner->errnum = 0;
     scanner->track_record_numbers = false;
     scanner->eof = false;
 }
@@ -109,9 +113,11 @@ void bx_search_scanner_begin_file(struct bx_search_scanner *scanner,
 
     scanner->len = 0u;
     scanner->scan_len = 0u;
+    scanner->record_limit = bx_record_stream_default_record_limit();
     scanner->file_off = 0;
     scanner->records_before_buf = 0u;
     scanner->delimiter = delimiter;
+    scanner->errnum = 0;
     scanner->track_record_numbers = track_record_numbers;
     scanner->eof = false;
 }
@@ -148,8 +154,10 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
 
     for (;;) {
         if (!scanner->eof) {
-            if (!bx_search_scanner_reserve(scanner, scanner->len + BX_SEARCH_SCANNER_CHUNK_CAP))
+            if (!bx_search_scanner_reserve(scanner, scanner->len + BX_SEARCH_SCANNER_CHUNK_CAP)) {
+                scanner->errnum = ENOMEM;
                 return false;
+            }
 
             size_t nread = fread(scanner->buf + scanner->len, 1u, scanner->cap - scanner->len, stream);
             scanner->len += nread;
@@ -157,8 +165,10 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
             if (candidate_triggered_scanner_entry)
                 bx_search_dev_counters_note_candidate_triggered_line_recovery_reread(nread);
             if (nread == 0u) {
-                if (ferror(stream))
+                if (ferror(stream)) {
+                    scanner->errnum = errno ? errno : EIO;
                     return false;
+                }
                 scanner->eof = true;
             }
         }
@@ -169,6 +179,11 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
             return true;
         }
 
+        if (scanner->record_limit > 0u && scanner->len > scanner->record_limit) {
+            scanner->errnum = EOVERFLOW;
+            return false;
+        }
+
         if (scanner->eof) {
             scanner->scan_len = scanner->len;
             return scanner->scan_len > 0u;
@@ -177,6 +192,7 @@ bool bx_search_scanner_read_chunk(struct bx_search_scanner *scanner,
         if (!bx_search_scanner_reserve(scanner, scanner->cap == 0u
                                                     ? BX_SEARCH_SCANNER_CHUNK_CAP
                                                     : scanner->cap * 2u)) {
+            scanner->errnum = ENOMEM;
             return false;
         }
     }
@@ -263,6 +279,14 @@ bool bx_search_scanner_candidate_record_is_buffered(const struct bx_search_scann
                      (unsigned char)scanner->delimiter,
                      scanner->scan_len - after);
     return end_hit != NULL || scanner->eof;
+}
+
+bool bx_search_scanner_had_error(const struct bx_search_scanner *scanner) {
+    return scanner && scanner->errnum != 0;
+}
+
+int bx_search_scanner_error(const struct bx_search_scanner *scanner) {
+    return scanner ? scanner->errnum : 0;
 }
 
 size_t bx_search_scanner_count_delimiters_range(const struct bx_search_scanner *scanner,

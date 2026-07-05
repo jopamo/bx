@@ -171,11 +171,17 @@ static int bx_search_parse_out_of_memory(const char *progname) {
     return -1;
 }
 
+static const char *bx_search_parse_error_text(int errnum) {
+    if (errnum == ENOMEM)
+        return "Out of memory";
+    return strerror(errnum ? errnum : EIO);
+}
+
 static int bx_search_parse_path_error(const char *progname,
                                       const char *path,
                                       int errnum) {
     fprintf(stderr, "%s: %s: %s\n",
-            progname, path ? path : "", strerror(errnum ? errnum : EIO));
+            progname, path ? path : "", bx_search_parse_error_text(errnum));
     return -1;
 }
 
