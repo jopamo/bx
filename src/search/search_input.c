@@ -100,11 +100,34 @@ size_t bx_search_record_match_len(const unsigned char *buf,
     return bx_rg_record_match_len(buf, len, bx_search_record_delimiter(opts), opts->crlf);
 }
 
-unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
-    size_t cap = 4096u;
+unsigned char *bx_search_input_read_stream_limited(FILE *f,
+                                                   size_t *out_len,
+                                                   size_t limit) {
+    size_t cap;
     size_t len = 0u;
-    unsigned char *buf = malloc(cap + 1u);
+    unsigned char *buf;
+    struct stat st;
+    int fd;
 
+    if (out_len)
+        *out_len = 0u;
+    if (!f || limit == 0u || limit == SIZE_MAX) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    fd = fileno(f);
+    if (fd >= 0) {
+        bx_search_dev_counters_note_content_fstat_call();
+        if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+            (st.st_size < 0 || (uintmax_t)st.st_size > (uintmax_t)limit)) {
+            errno = EFBIG;
+            return NULL;
+        }
+    }
+
+    cap = limit < 4096u ? limit : 4096u;
+    buf = malloc(cap + 1u);
     if (!buf) {
         errno = ENOMEM;
         return NULL;
@@ -112,14 +135,29 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
 
     for (;;) {
         if (len == cap) {
-            if (cap > (SIZE_MAX - 1u) / 2u) {
+            size_t new_cap;
+            unsigned char *tmp;
+
+            if (cap == limit) {
+                unsigned char extra;
+                size_t nread = fread(&extra, 1u, 1u, f);
+
+                bx_search_dev_counters_note_content_read(nread);
+                if (nread != 0u) {
+                    free(buf);
+                    errno = EFBIG;
+                    return NULL;
+                }
+                break;
+            }
+
+            new_cap = cap > limit / 2u ? limit : cap * 2u;
+            if (new_cap <= cap) {
                 free(buf);
-                errno = ENOMEM;
+                errno = EFBIG;
                 return NULL;
             }
-            size_t new_cap = cap * 2u;
-            unsigned char *tmp = realloc(buf, new_cap + 1u);
-
+            tmp = realloc(buf, new_cap + 1u);
             if (!tmp) {
                 free(buf);
                 errno = ENOMEM;
@@ -147,6 +185,11 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
     if (out_len)
         *out_len = len;
     return buf;
+}
+
+unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len) {
+    return bx_search_input_read_stream_limited(f, out_len,
+                                               BX_SEARCH_MATERIALIZED_INPUT_LIMIT);
 }
 
 bool bx_search_input_needs_early_transform_load(const char *filename,

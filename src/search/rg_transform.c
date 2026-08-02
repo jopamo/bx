@@ -18,6 +18,7 @@
 #include "options.h"
 #include "rg_text.h"
 #include "rg_transform.h"
+#include "search_input.h"
 
 static bool bx_rg_pre_glob_matches(const struct search_opts *opts, const char *filename) {
     bool selected = true;
@@ -178,51 +179,6 @@ bool bx_rg_transform_auto_encoding_needs_fd(const struct search_opts *opts,
     return bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)nread);
 }
 
-static bool bx_rg_slurp_stream(FILE *f, unsigned char **output, size_t *output_len) {
-    size_t cap = 0u;
-    size_t len = 0u;
-    unsigned char *buf = NULL;
-    unsigned char chunk[4096];
-
-    if (!output || !output_len)
-        return false;
-    *output = NULL;
-    *output_len = 0u;
-
-    while (!feof(f)) {
-        size_t nread = fread(chunk, 1u, sizeof(chunk), f);
-        if (nread == 0u)
-            break;
-        if (len + nread + 1u > cap) {
-            size_t new_cap = cap == 0u ? 8192u : cap * 2u;
-            while (new_cap < len + nread + 1u)
-                new_cap *= 2u;
-            unsigned char *grown = realloc(buf, new_cap);
-            if (!grown) {
-                free(buf);
-                return false;
-            }
-            buf = grown;
-            cap = new_cap;
-        }
-        memcpy(buf + len, chunk, nread);
-        len += nread;
-    }
-    if (ferror(f)) {
-        free(buf);
-        return false;
-    }
-    if (!buf) {
-        buf = malloc(1u);
-        if (!buf)
-            return false;
-    }
-    buf[len] = '\0';
-    *output = buf;
-    *output_len = len;
-    return true;
-}
-
 struct bx_rg_capture_reap {
     bool called;
     int status;
@@ -321,7 +277,8 @@ static bool bx_rg_run_capture(const char *const *argv,
     if (!out_stream)
         goto fail;
     out_pipe[0] = -1;
-    if (!bx_rg_slurp_stream(out_stream, &raw_stdout, &raw_stdout_len))
+    raw_stdout = bx_search_input_read_stream_all(out_stream, &raw_stdout_len);
+    if (!raw_stdout)
         goto fail;
     fclose(out_stream);
     out_stream = NULL;
@@ -331,7 +288,8 @@ static bool bx_rg_run_capture(const char *const *argv,
         if (!err_stream)
             goto fail;
         err_pipe[0] = -1;
-        if (!bx_rg_slurp_stream(err_stream, &raw_stderr, &raw_stderr_len))
+        raw_stderr = bx_search_input_read_stream_all(err_stream, &raw_stderr_len);
+        if (!raw_stderr)
             goto fail;
         fclose(err_stream);
         err_stream = NULL;
@@ -404,8 +362,15 @@ static enum bx_rg_transform_result bx_rg_load_file_bytes(const char *filename,
         }
         return BX_RG_TRANSFORM_ERROR;
     }
-    if (!bx_rg_slurp_stream(f, output, output_len)) {
+    *output = bx_search_input_read_stream_all(f, output_len);
+    if (!*output) {
+        int read_errno = errno != 0 ? errno : EIO;
         fclose(f);
+        if (!opts || !opts->suppress_errors) {
+            fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
+                    progname, filename, strerror(read_errno), read_errno);
+        }
+        errno = read_errno;
         return BX_RG_TRANSFORM_ERROR;
     }
     fclose(f);
@@ -587,7 +552,8 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
             rc = bx_rg_load_file_bytes(filename, progname, opts, err_stream, &raw, &raw_len);
         }
     } else if (use_stdin) {
-        if (!bx_rg_slurp_stream(stdin, &raw, &raw_len))
+        raw = bx_search_input_read_stream_all(stdin, &raw_len);
+        if (!raw)
             return BX_RG_TRANSFORM_ERROR;
         rc = BX_RG_TRANSFORM_OK;
     } else {
