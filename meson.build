@@ -1,10 +1,26 @@
 project('bx', 'c',
-  version : '0.1',
   meson_version : '>=1.6.0',
   default_options : ['warning_level=3', 'c_std=c11', 'werror=true']
 )
 
-add_project_arguments('-D_POSIX_C_SOURCE=200809L', '-DBX_VERSION="' + meson.project_version() + '"', language : 'c')
+python3 = find_program('python3', required : true)
+bx_version_source = vcs_tag(
+  input : 'src/bx/version.c.in',
+  output : 'bx-version.c',
+  fallback : 'unknown-00000000',
+  command : [
+    python3,
+    join_paths(meson.project_source_root(), 'tools', 'version', 'generate.py'),
+    meson.project_source_root(),
+    get_option('build_version'),
+  ],
+)
+add_project_arguments(
+  '-D_POSIX_C_SOURCE=200809L',
+  '-include',
+  'bx/version.h',
+  language : 'c',
+)
 
 lscolors_install_subdir = '/etc'
 lscolors_install_path = join_paths(lscolors_install_subdir, 'LS_COLORS')
@@ -19,7 +35,6 @@ edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'a
 
 cc = meson.get_compiler('c')
 can_run = meson.can_run_host_binaries()
-python3 = find_program('python3', required : true)
 arm64_sve_intrinsics = cc.compiles(
   '''
   #if !defined(__aarch64__) || !defined(__ARM_FEATURE_SVE)
@@ -242,6 +257,7 @@ endif
 
 # shared bx runtime and helpers
 bx_core_sources = [
+  bx_version_source,
   'src/bx/main.c',
   'src/bx/applet_profile.c',
   'src/bx/runtime_snapshot.c',

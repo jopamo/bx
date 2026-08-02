@@ -90,11 +90,7 @@
 
 #define ttl2hops(X) (((X) <= 64 ? 65 : ((X) <= 128 ? 129 : 256)) - (X))
 
-static char version_string[] =
-    "Modern traceroute for Linux, "
-    "version " TRACEROUTE_VERSION
-    "\nCopyright (c) 2016  Dmitry Butskoy, "
-    "  License: GPL v2 or any later";
+static char version_string[256];
 int debug = 0;
 static int jsonl = 0;
 static int quiet = 0;
@@ -752,6 +748,10 @@ int main(int argc, char* argv[]) {
     setlocale(LC_NUMERIC, "C"); /*  avoid commas in msec printed  */
 
     check_progname(argv[0]);
+    snprintf(version_string, sizeof(version_string),
+             "Modern traceroute for Linux, version %s\n"
+             "Copyright (c) 2016  Dmitry Butskoy,   License: GPL v2 or any later",
+             TRACEROUTE_VERSION);
 
     if (CLIF_parse(argc, argv, option_list, arg_list, CLIF_MAY_JOIN_ARG | CLIF_MAY_NOEQUAL | CLIF_HELP_EMPTY) < 0)
         exit(2);
