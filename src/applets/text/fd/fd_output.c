@@ -179,9 +179,9 @@ static void fd_format_size(intmax_t size, char buffer[32]) {
         return;
     }
 
-    char magnitude_text[32];
-    bx_size_format_human_round(magnitude, base, "BKMGTPEZYRQ", false, magnitude_text, sizeof(magnitude_text));
-    snprintf(buffer, 32, "-%s", magnitude_text);
+    buffer[0] = '-';
+    bx_size_format_human_round(magnitude, base, "BKMGTPEZYRQ", false,
+                               buffer + 1, 31);
 }
 
 static size_t fd_uintmax_width(uintmax_t value) {
