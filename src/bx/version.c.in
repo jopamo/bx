@@ -1,0 +1,3 @@
+#include "bx/version.h"
+
+const char bx_version[] = "@VCS_TAG@";

@@ -1,5 +1,11 @@
 option('tests', type : 'boolean', value : false, description : 'Deprecated: tests moved to the sibling bx-tests Meson project')
 option(
+  'build_version',
+  type : 'string',
+  value : '',
+  description : 'Override auto-generated <commit-hash>-<YYYYMMDD> metadata when Git and export-subst metadata are unavailable'
+)
+option(
   'static_binary',
   type : 'combo',
   choices : ['auto', 'enabled', 'disabled'],
