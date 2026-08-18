@@ -187,7 +187,12 @@ void Add_history(const char *string);
 #define Umask(m) umask(m)
 #define Creat(p,m) creat(p,m)
 #define Lseek(f,o,w) lseek(f,o,w)
-#define Lseek64(f,o,w) lseek64(f,o,w)
+/*
+ * bx builds with _FILE_OFFSET_BITS=64.  The POSIX entry points therefore
+ * already carry the large-file ABI, while the direct *64 names are not
+ * declared consistently across libc implementations.
+ */
+#define Lseek64(f,o,w) lseek(f,o,w)
 #define Getpid() getpid()
 #define Getppid() getppid()
 #define Getpgrp() getpgrp()
@@ -214,16 +219,16 @@ void Add_history(const char *string);
 #define Mknod(p,m,d) mknod(p,m,d)
 #define Mkfifo(p,m) mkfifo(p,m)
 #define Stat(f,b) stat(f,b)
-#define Stat64(f,b) stat64(f,b)
+#define Stat64(f,b) stat(f,b)
 #define Fstat(f,b) fstat(f,b)
-#define Fstat64(f,b) fstat64(f,b)
+#define Fstat64(f,b) fstat(f,b)
 #define Lstat(f,b) lstat(f,b)
-#define Lstat64(f,b) lstat64(f,b)
+#define Lstat64(f,b) lstat(f,b)
 #define Dup(o) dup(o)
 #define Dup2(o,n) dup2(o,n)
 #define Pipe(f) pipe(f)
 #define Ftruncate(f,l) ftruncate(f,l)
-#define Ftruncate64(f,l) ftruncate64(f,l)
+#define Ftruncate64(f,l) ftruncate(f,l)
 #define Close(f) close(f)
 #define Fchown(f,o,g) fchown(f,o,g)
 #define Fchmod(f,m) fchmod(f,m)

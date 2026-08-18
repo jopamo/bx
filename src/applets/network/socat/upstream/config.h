@@ -145,22 +145,27 @@
 #define HAVE_SIGACTION 1
 
 /* Define if you have the stat64 function */
-#define HAVE_STAT64 1
+/*
+ * Use the large-file-aware POSIX interfaces selected by bx's build flags.
+ * The direct *64 entry points are not declared consistently across libc
+ * families (notably musl), even when the underlying ABI is available.
+ */
+/* #undef HAVE_STAT64 */
 
 /* Define if you have the fstat64 function */
-#define HAVE_FSTAT64 1
+/* #undef HAVE_FSTAT64 */
 
 /* Define if you have the lstat64 function */
-#define HAVE_LSTAT64 1
+/* #undef HAVE_LSTAT64 */
 
 /* Define if you have the lseek64 function */
-#define HAVE_LSEEK64 1
+/* #undef HAVE_LSEEK64 */
 
 /* Define if you have the truncate64 function */
-#define HAVE_TRUNCATE64 1
+/* #undef HAVE_TRUNCATE64 */
 
 /* Define if you have the ftruncate64 function */
-#define HAVE_FTRUNCATE64 1
+/* #undef HAVE_FTRUNCATE64 */
 
 /* Define if you have the gettimeofday function */
 #define HAVE_PROTOTYPE_LIB_gettimeofday 1
