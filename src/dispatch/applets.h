@@ -76,6 +76,7 @@ int bx_paste_main(int argc, char** argv);
 int bx_nproc_main(int argc, char** argv);
 int bx_numfmt_main(int argc, char** argv);
 int bx_nc_main(int argc, char** argv);
+int bx_socat_main(int argc, char** argv);
 int bx_wget_main(int argc, char** argv);
 int bx_expr_main(int argc, char** argv);
 int bx_fold_main(int argc, char** argv);

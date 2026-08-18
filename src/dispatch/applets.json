@@ -643,6 +643,18 @@
       ]
     },
     {
+      "name": "socat",
+      "main": "bx_socat_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "network-access",
+        "privilege-sensitive",
+        "terminal-control",
+        "raw-output"
+      ]
+    },
+    {
       "name": "netcat",
       "main": "bx_nc_main",
       "capabilities": [
