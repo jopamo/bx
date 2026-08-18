@@ -1,0 +1,9 @@
+socat 1.8.1.1
+
+Source snapshot identifier: socat-4ce8786
+Imported from the supplied socat-4ce8786 source tree; upstream/VERSION is
+the authoritative embedded version file.
+
+The upstream source remains fenced under upstream/ and is built only through
+this applet's private static-library target. No upstream configure or runtime
+shell wrapper is used by bx.
