@@ -116,7 +116,12 @@
 /* #undef HAVE_PROTOTYPE_LIB_getipnodebyname */
 
 /* Define if you have the getprotobynumber_r function. */
-#define HAVE_GETPROTOBYNUMBER_R 1
+/*
+ * The reentrant getprotobynumber_r ABI differs across libc families and is
+ * not consistently declared even when a configure probe finds a symbol.
+ * Keep the portable getprotobynumber() fallback until Meson owns this probe.
+ */
+/* #undef HAVE_GETPROTOBYNUMBER_R */
 
 /* Define if you have the getprotobynumber function. */
 #define HAVE_GETPROTOBYNUMBER 1
