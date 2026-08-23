@@ -59,6 +59,7 @@ struct bx_tar_create_filter_state {
     bool exclude_caches_under;
     bool exclude_vcs;
     bool exclude_vcs_ignores;
+    bool ignore_failed_read;
     struct bx_diag_ctx* diag;
     bool* had_create_errors;
 };
@@ -68,6 +69,7 @@ struct bx_tar_create_collect_ctx {
     void* visit_user_data;
     bool sort_children;
     bool had_create_errors;
+    bool ignore_failed_read;
     struct bx_diag_ctx* diag;
 };
 
@@ -770,12 +772,15 @@ bx_tar_create_handle_fs_error(const char* source_path,
     struct bx_tar_create_filter_state* state = user_data;
 
     fprintf(stderr,
-            "%s: %s: Cannot %s: %s\n",
+            "%s: %s: %sCannot %s: %s\n",
             state->diag->progname,
             source_path,
+            state->ignore_failed_read ? "Warning: " : "",
             bx_tar_create_error_verb(op),
             strerror(errnum));
-    *state->had_create_errors = true;
+    if (!state->ignore_failed_read) {
+        *state->had_create_errors = true;
+    }
     return BX_ARCHIVE_FS_ERROR_SKIP;
 }
 
@@ -815,6 +820,7 @@ static bool bx_tar_create_add_path(struct bx_tar_create_collect_ctx* ctx,
         .exclude_caches_under = state->exclude_caches_under,
         .exclude_vcs = state->exclude_vcs,
         .exclude_vcs_ignores = state->exclude_vcs_ignores,
+        .ignore_failed_read = ctx->ignore_failed_read,
         .diag = ctx->diag,
         .had_create_errors = &ctx->had_create_errors,
     };
@@ -1462,6 +1468,7 @@ bool bx_tar_create_visit_fs_entries(const struct bx_tar_create_options* create_o
         .visit_user_data = visit_user_data,
         .sort_children = sort_children,
         .had_create_errors = false,
+        .ignore_failed_read = create_options->ignore_failed_read,
         .diag = diag,
     };
     size_t i;
