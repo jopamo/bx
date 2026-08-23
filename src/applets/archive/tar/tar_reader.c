@@ -430,6 +430,18 @@ static char* bx_tar_header_name_join_dup(const unsigned char* name_field,
     }
 }
 
+/*
+ * Old GNU headers use the POSIX prefix field (offset 345) for atime, ctime,
+ * sparse, and multivolume metadata.  In particular, incremental dumpdir
+ * records have type 'D'; treating that field as a ustar prefix corrupts every
+ * member name with the stored atime.
+ */
+static bool bx_tar_header_is_oldgnu(const unsigned char* header) {
+    static const unsigned char magic[] = {'u', 's', 't', 'a', 'r', ' ', ' ', '\0'};
+
+    return memcmp(header + 257u, magic, sizeof(magic)) == 0;
+}
+
 static bool bx_tar_parse_pax_records(struct bx_tar_pax_info* pax,
                                      const unsigned char* data,
                                      size_t len,
@@ -489,7 +501,9 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
 
     (void)diag;
     memset(entry, 0, sizeof(*entry));
-    name = bx_tar_header_name_join_dup(header, 100u, header + 345, 155u);
+    name = bx_tar_header_is_oldgnu(header)
+        ? bx_tar_header_text_dup(header, 100u)
+        : bx_tar_header_name_join_dup(header, 100u, header + 345, 155u);
 
     if (pax->path != NULL) {
         free(name);
@@ -500,7 +514,7 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
         name = *gnu_long_name;
         *gnu_long_name = NULL;
     }
-    if (typeflag == '5') {
+    if (typeflag == '5' || typeflag == 'D') {
         size_t name_len = strlen(name);
         while (name_len > 0u && name[name_len - 1u] == '/') {
             name[--name_len] = '\0';
@@ -559,6 +573,7 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
             entry->kind = BX_TAR_KIND_REG;
             break;
         case '5':
+        case 'D':
             entry->kind = BX_TAR_KIND_DIR;
             break;
         case '2':
@@ -582,7 +597,9 @@ static bool bx_tar_prepare_entry_from_header(const unsigned char* header,
 static char* bx_tar_header_name_dup(const unsigned char* header,
                                     const struct bx_tar_pax_info* pax,
                                     char** gnu_long_name) {
-    char* name = bx_tar_header_name_join_dup(header, 100u, header + 345, 155u);
+    char* name = bx_tar_header_is_oldgnu(header)
+        ? bx_tar_header_text_dup(header, 100u)
+        : bx_tar_header_name_join_dup(header, 100u, header + 345, 155u);
 
     if (pax->path != NULL) {
         free(name);
