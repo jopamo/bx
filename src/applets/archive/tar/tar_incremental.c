@@ -268,7 +268,7 @@ static bool bx_tar_incremental_dump_append(struct bx_tar_incremental_directory* 
     size_t i;
 
     for (i = 0u; i < directory->dump_len; i++) {
-        if (directory->dump[i].snapshot_visible == snapshot_visible && strcmp(directory->dump[i].name, name) == 0 && (snapshot_visible || directory->dump[i].marker == marker)) {
+        if (snapshot_visible && directory->dump[i].snapshot_visible && strcmp(directory->dump[i].name, name) == 0) {
             if (directory->dump[i].marker != 'D' && marker == 'Y') {
                 directory->dump[i].marker = marker;
             }
