@@ -39,6 +39,7 @@ struct bx_tar_entry {
     unsigned char* data;
     size_t data_len;
     size_t size;
+    bool dumpdir;
     bool sparse;
     struct bx_tar_sparse_extent* extents;
     size_t extent_count;

@@ -17,6 +17,7 @@
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
+#include "applets/archive/tar/tar_dumpdir.h"
 #include "applets/archive/tar/tar_id_map.h"
 #include "applets/archive/tar/tar_incremental.h"
 #include "applets/archive/tar/tar_names.h"
@@ -32,6 +33,7 @@
 #include "lib/id_parse.h"
 #include "lib/mode_parse.h"
 #include "lib/path_ops.h"
+#include "lib/remove_ops.h"
 #include "lib/size_parse.h"
 #include "lib/time_parse.h"
 #include "lib/thread_count.h"
@@ -71,6 +73,7 @@ struct bx_tar_options {
     bool unlink_first;
     bool recursive_unlink;
     bool verbose_reports;
+    unsigned int verbose_count;
     bool report_mapped_names;
     bool report_block_numbers;
     bool report_totals;
@@ -107,6 +110,7 @@ struct bx_tar_options {
     struct bx_tar_create_options create_options;
     struct bx_archive_name_list source_archives;
     char* incremental_snapshot_path;
+    bool incremental_mode;
     struct bx_tar_incremental_plan* incremental_plan;
 };
 
@@ -205,6 +209,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_WARNING,
     BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_LISTED_INCREMENTAL,
+    BX_TAR_OPT_INCREMENTAL,
 };
 
 struct bx_tar_long_option_spec {
@@ -235,7 +240,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--get", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--listed-incremental", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
-    {"--incremental", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--incremental", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
     {"--hole-detection", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_FAILED_READ},
     {"--level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
@@ -406,7 +411,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'u', "-u", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
-    {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'C', "-C", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
@@ -1005,6 +1010,7 @@ struct bx_tar_extract_state {
     const struct bx_tar_options* options;
     FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
+    bool incremental_mode;
     struct bx_archive_pending_dirs dirs;
     struct bx_archive_parent_dir_cache parent_dir_cache;
     struct bx_tar_name_policy name_policy;
@@ -1038,6 +1044,7 @@ struct bx_tar_list_state {
     FILE* report_stream;
     bool starting_file_reached;
     const struct bx_tar_select_plan* select_plan;
+    bool incremental_mode;
     struct bx_tar_name_policy name_policy;
     bool warned_absolute;
     bool warned_dotdot;
@@ -1087,6 +1094,8 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
     state->options = options;
     state->report_stream = report_stream;
     state->select_plan = select_plan;
+    state->incremental_mode = options->incremental_mode
+        || options->incremental_snapshot_path != NULL;
     state->starting_file_reached = options->starting_file == NULL;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
     state->name_policy = (struct bx_tar_name_policy){
@@ -1119,6 +1128,8 @@ static void bx_tar_list_state_init(struct bx_tar_list_state* state,
     state->report_stream = report_stream;
     state->starting_file_reached = options->starting_file == NULL;
     state->select_plan = select_plan;
+    state->incremental_mode = options->incremental_mode
+        || options->incremental_snapshot_path != NULL;
     state->name_policy = (struct bx_tar_name_policy){
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
@@ -1191,6 +1202,279 @@ static void bx_tar_warn_name_adjustments(const struct bx_diag_ctx* diag,
 static void bx_tar_report_empty_name(const struct bx_tar_entry* entry,
                                      const struct bx_diag_ctx* diag) {
     fprintf(stderr, "%s: %s: transforms to empty name\n", diag->progname, entry->name);
+}
+
+static bool bx_tar_dumpdir_map_control_name(const struct bx_tar_options* options,
+                                            const char* stored_name,
+                                            char** mapped_name_out,
+                                            bool* stripped_absolute,
+                                            bool* stripped_dotdot,
+                                            struct bx_diag_ctx* diag) {
+    struct bx_tar_name_policy policy = {
+        .absolute_names = options->absolute_names,
+    };
+    struct bx_tar_mapped_name mapped_name;
+
+    if (strcmp(stored_name, ".") == 0 || strcmp(stored_name, "./") == 0) {
+        *mapped_name_out = xstrdup(".");
+        *stripped_absolute = false;
+        *stripped_dotdot = false;
+        return true;
+    }
+    mapped_name = bx_tar_map_member_name(stored_name, &policy, stripped_absolute, stripped_dotdot);
+    if (stored_name[0] != '\0' && mapped_name.text[0] == '\0') {
+        bx_diag(diag, "invalid incremental dumpdir path");
+        bx_tar_release_mapped_name(&mapped_name);
+        return false;
+    }
+    *mapped_name_out = xstrdup(mapped_name.text);
+    bx_tar_release_mapped_name(&mapped_name);
+    return true;
+}
+
+static char* bx_tar_dumpdir_join_extract_root(const char* extract_dir, const char* path) {
+    if (path[0] == '/' || extract_dir == NULL) {
+        return xstrdup(path);
+    }
+    return bx_path_join(extract_dir, path);
+}
+
+static bool bx_tar_dumpdir_apply_renames(const struct bx_tar_options* options,
+                                         const struct bx_tar_dumpdir* dumpdir,
+                                         const char* extract_dir,
+                                         bool* warned_absolute,
+                                         bool* warned_dotdot,
+                                         struct bx_diag_ctx* diag) {
+    char* temporary_path = NULL;
+    size_t i;
+    bool ok = true;
+
+    for (i = 0u; i < dumpdir->len; i++) {
+        const struct bx_tar_dumpdir_record* record = &dumpdir->records[i];
+
+        if (record->marker == 'X') {
+            char* parent = NULL;
+            char* pattern = NULL;
+            bool stripped_absolute = false;
+            bool stripped_dotdot = false;
+
+            if (!bx_tar_dumpdir_map_control_name(options, record->name, &parent, &stripped_absolute, &stripped_dotdot, diag)) {
+                ok = false;
+                break;
+            }
+            bx_tar_warn_name_adjustments(diag, stripped_absolute, warned_absolute, stripped_dotdot, warned_dotdot);
+            pattern = bx_tar_dumpdir_join_extract_root(extract_dir, parent);
+            free(parent);
+            {
+                char* next_pattern = bx_path_join(pattern, "tar.XXXXXX");
+                free(pattern);
+                pattern = next_pattern;
+            }
+            if (mkdtemp(pattern) == NULL) {
+                bx_diag(diag, "%s: %s", pattern, strerror(errno));
+                free(pattern);
+                ok = false;
+                break;
+            }
+            free(temporary_path);
+            temporary_path = pattern;
+            continue;
+        }
+        if (record->marker != 'R') {
+            continue;
+        }
+
+        if (i + 1u >= dumpdir->len || dumpdir->records[i + 1u].marker != 'T') {
+            bx_diag(diag, "invalid incremental dumpdir rename sequence");
+            ok = false;
+            break;
+        }
+        {
+            const struct bx_tar_dumpdir_record* target_record = &dumpdir->records[++i];
+            char* source = NULL;
+            char* target = NULL;
+            char* source_path = NULL;
+            char* target_path = NULL;
+            bool source_stripped_absolute = false;
+            bool source_stripped_dotdot = false;
+            bool target_stripped_absolute = false;
+            bool target_stripped_dotdot = false;
+            const char* source_name;
+            const char* target_name;
+
+            if (!bx_tar_dumpdir_map_control_name(options, record->name, &source, &source_stripped_absolute, &source_stripped_dotdot, diag) ||
+                !bx_tar_dumpdir_map_control_name(options, target_record->name, &target, &target_stripped_absolute, &target_stripped_dotdot, diag)) {
+                free(source);
+                free(target);
+                ok = false;
+                break;
+            }
+            bx_tar_warn_name_adjustments(diag, source_stripped_absolute, warned_absolute, source_stripped_dotdot, warned_dotdot);
+            bx_tar_warn_name_adjustments(diag, target_stripped_absolute, warned_absolute, target_stripped_dotdot, warned_dotdot);
+            source_name = source[0] == '\0' ? temporary_path : source;
+            target_name = target[0] == '\0' ? temporary_path : target;
+            if (source_name == NULL || target_name == NULL) {
+                bx_diag(diag, "invalid incremental dumpdir temporary rename");
+                free(source);
+                free(target);
+                ok = false;
+                break;
+            }
+            source_path = source[0] == '\0' ? xstrdup(source_name) : bx_tar_dumpdir_join_extract_root(extract_dir, source_name);
+            target_path = target[0] == '\0' ? xstrdup(target_name) : bx_tar_dumpdir_join_extract_root(extract_dir, target_name);
+            if (rename(source_path, target_path) != 0) {
+                bx_diag(diag, "%s: %s", source_path, strerror(errno));
+                free(source_path);
+                free(target_path);
+                free(source);
+                free(target);
+                ok = false;
+                break;
+            }
+            if (source[0] == '\0') {
+                free(temporary_path);
+                temporary_path = NULL;
+            }
+            free(source_path);
+            free(target_path);
+            free(source);
+            free(target);
+        }
+    }
+    if (temporary_path != NULL) {
+        if (ok && !bx_remove_recursive(temporary_path, diag)) {
+            ok = false;
+        }
+        free(temporary_path);
+    }
+    return ok;
+}
+
+static bool bx_tar_dumpdir_should_remove(const struct bx_tar_dumpdir* dumpdir, const char* name, const struct stat* stat_data) {
+    const struct bx_tar_dumpdir_record* record = bx_tar_dumpdir_find(dumpdir, name);
+
+    return record == NULL || (record->marker == 'D' && !S_ISDIR(stat_data->st_mode)) || (record->marker == 'Y' && S_ISDIR(stat_data->st_mode));
+}
+
+static bool bx_tar_dumpdir_purge_directory(const struct bx_tar_dumpdir* dumpdir, const char* directory, bool report_removed, FILE* report_stream, struct bx_diag_ctx* diag) {
+    int fd = bx_fd_open_nofollow_cloexec(directory, O_RDONLY | O_DIRECTORY, 0);
+    DIR* stream;
+    int directory_fd;
+    bool ok = true;
+
+    if (fd < 0) {
+        if (errno == ENOENT || errno == ENOTDIR || errno == ELOOP) {
+            return true;
+        }
+        bx_diag(diag, "%s: %s", directory, strerror(errno));
+        return false;
+    }
+    stream = fdopendir(fd);
+    if (stream == NULL) {
+        bx_diag(diag, "%s: %s", directory, strerror(errno));
+        close(fd);
+        return false;
+    }
+    directory_fd = dirfd(stream);
+    if (directory_fd < 0) {
+        bx_diag(diag, "%s: %s", directory, strerror(errno));
+        closedir(stream);
+        return false;
+    }
+    while (true) {
+        struct dirent* directory_entry;
+        struct stat stat_data;
+        char* child_path;
+
+        errno = 0;
+        directory_entry = readdir(stream);
+        if (directory_entry == NULL) {
+            if (errno != 0) {
+                bx_diag(diag, "%s: %s", directory, strerror(errno));
+                ok = false;
+            }
+            break;
+        }
+        if (bx_path_is_dot_or_dotdot(directory_entry->d_name)) {
+            continue;
+        }
+        if (bx_fd_fstatat_child_nofollow(directory_fd, directory_entry->d_name, &stat_data) != 0) {
+            if (errno == ENOENT) {
+                continue;
+            }
+            child_path = bx_path_join(directory, directory_entry->d_name);
+            bx_diag(diag, "%s: %s", child_path, strerror(errno));
+            free(child_path);
+            ok = false;
+            break;
+        }
+        if (!bx_tar_dumpdir_should_remove(dumpdir, directory_entry->d_name, &stat_data)) {
+            continue;
+        }
+        child_path = bx_path_join(directory, directory_entry->d_name);
+        if (!bx_remove_recursive_expected(child_path, &stat_data, diag)) {
+            free(child_path);
+            ok = false;
+            break;
+        }
+        if (report_removed && !bx_tar_report_printf(report_stream, diag, "%s: Deleting '%s'\n", diag->progname, child_path)) {
+            free(child_path);
+            ok = false;
+            break;
+        }
+        free(child_path);
+    }
+    if (closedir(stream) != 0) {
+        bx_diag(diag, "%s: %s", directory, strerror(errno));
+        ok = false;
+    }
+    return ok;
+}
+
+static bool bx_tar_extract_process_dumpdir(struct bx_tar_extract_state* state, const struct bx_tar_entry* entry, const char* dest_path, const char* extract_dir, struct bx_diag_ctx* diag) {
+    struct bx_tar_dumpdir dumpdir = {0};
+    bool ok;
+
+    if (!state->incremental_mode || !entry->dumpdir) {
+        return true;
+    }
+    ok = bx_tar_dumpdir_parse(entry->data, entry->data_len, &dumpdir, diag);
+    if (ok) {
+        ok = bx_tar_dumpdir_apply_renames(state->options, &dumpdir, extract_dir, &state->warned_absolute, &state->warned_dotdot, diag);
+    }
+    if (ok) {
+        ok = bx_tar_dumpdir_purge_directory(&dumpdir, dest_path, state->options->verbose_reports, state->report_stream, diag);
+    }
+    bx_tar_dumpdir_free(&dumpdir);
+    return ok;
+}
+
+static bool bx_tar_list_report_dumpdir(struct bx_tar_list_state* state, const struct bx_tar_entry* entry, struct bx_diag_ctx* diag) {
+    struct bx_tar_dumpdir dumpdir = {0};
+    size_t i;
+    bool ok;
+
+    if (!state->incremental_mode || !entry->dumpdir) {
+        return true;
+    }
+    ok = bx_tar_dumpdir_parse(entry->data, entry->data_len, &dumpdir, diag);
+    if (!ok) {
+        return false;
+    }
+    if (state->options->verbose_count >= 3u) {
+        for (i = 0u; i < dumpdir.len; i++) {
+            if (!bx_tar_report_printf(state->report_stream, diag, "%c %s\n", dumpdir.records[i].marker, dumpdir.records[i].name)) {
+                bx_tar_dumpdir_free(&dumpdir);
+                return false;
+            }
+        }
+        if (!bx_tar_report_printf(state->report_stream, diag, "\n")) {
+            bx_tar_dumpdir_free(&dumpdir);
+            return false;
+        }
+    }
+    bx_tar_dumpdir_free(&dumpdir);
+    return true;
 }
 
 static bool bx_tar_report_totals_line(bool writing,
@@ -2062,6 +2346,14 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     if (entry->kind == BX_TAR_KIND_DIR) {
         bool mkdir_needed = false;
 
+        if (!bx_tar_extract_process_dumpdir(state,
+                                            entry,
+                                            dest_path,
+                                            extract_dir,
+                                            diag)) {
+            free(dest_path);
+            return false;
+        }
         if (mkdir(dest_path, 0777u) != 0) {
             if (errno != EEXIST) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -2391,6 +2683,10 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                           report_name,
                                           entry->kind == BX_TAR_KIND_DIR,
                                           diag))) {
+        bx_tar_release_mapped_name(&clean_name);
+        return false;
+    }
+    if (!bx_tar_list_report_dumpdir(state, entry, diag)) {
         bx_tar_release_mapped_name(&clean_name);
         return false;
     }
@@ -3767,7 +4063,13 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_MODE_TEST_LABEL:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_TEST_LABEL, NULL, diag);
         case BX_TAR_OPT_MODE_LIST:
-            return bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag);
+            if (!bx_tar_set_mode_option(options, BX_TAR_MODE_LIST, NULL, diag)) {
+                return false;
+            }
+            if (options->verbose_count < 3u) {
+                options->verbose_count++;
+            }
+            return true;
         case BX_TAR_OPT_MODE_EXTRACT:
             return bx_tar_set_mode_option(options, BX_TAR_MODE_EXTRACT, NULL, diag);
         case BX_TAR_OPT_MODE_APPEND:
@@ -3804,6 +4106,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_VERBOSE:
             options->verbose_reports = true;
+            if (options->verbose_count < 3u) {
+                options->verbose_count++;
+            }
             return true;
         case BX_TAR_OPT_REPORT_MAPPED_NAMES:
             options->report_mapped_names = true;
@@ -3883,6 +4188,10 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_LISTED_INCREMENTAL:
             free(options->incremental_snapshot_path);
             options->incremental_snapshot_path = xstrdup(value);
+            options->incremental_mode = true;
+            return true;
+        case BX_TAR_OPT_INCREMENTAL:
+            options->incremental_mode = true;
             return true;
         case BX_TAR_OPT_THREADS:
             return bx_thread_count_parse(diag->progname, "--threads", value, &options->threads);
