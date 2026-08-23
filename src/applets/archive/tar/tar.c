@@ -40,6 +40,10 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --delete          remove named members from an archive\n");
     fprintf(stream, "      --test-label      print or match the archive volume label\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
+    fprintf(stream, "  -k, --keep-old-files  do not overwrite existing files; report an error\n");
+    fprintf(stream, "      --skip-old-files  do not overwrite existing files; continue\n");
+    fprintf(stream, "      --keep-newer-files\n");
+    fprintf(stream, "                        preserve files newer than their archive copies\n");
     fprintf(stream, "      --no-seek         archive is not seekable\n");
     fprintf(stream, "  -n, --seek            archive is seekable\n");
     fprintf(stream, "  -v                    report processed member names\n");

@@ -60,6 +60,15 @@ enum bx_tar_mode {
     BX_TAR_MODE_DELETE,
 };
 
+enum bx_tar_old_file_mode {
+    BX_TAR_OLD_FILES_DEFAULT = 0,
+    BX_TAR_OLD_FILES_OVERWRITE,
+    BX_TAR_OLD_FILES_UNLINK_FIRST,
+    BX_TAR_OLD_FILES_KEEP,
+    BX_TAR_OLD_FILES_SKIP,
+    BX_TAR_OLD_FILES_KEEP_NEWER,
+};
+
 struct bx_tar_options {
     enum bx_tar_mode mode;
     const char* unsupported_mode;
@@ -68,9 +77,8 @@ struct bx_tar_options {
     bool saw_mode_option;
     const char* archive_path;
     bool to_stdout;
-    bool keep_old_files;
-    bool overwrite;
-    bool unlink_first;
+    enum bx_tar_old_file_mode old_file_mode;
+    const char* old_file_mode_name;
     bool recursive_unlink;
     bool verbose_reports;
     unsigned int verbose_count;
@@ -140,6 +148,8 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_KEEP_OLD_FILES,
     BX_TAR_OPT_OVERWRITE,
     BX_TAR_OPT_UNLINK_FIRST,
+    BX_TAR_OPT_SKIP_OLD_FILES,
+    BX_TAR_OPT_KEEP_NEWER_FILES,
     BX_TAR_OPT_RECURSIVE_UNLINK,
     BX_TAR_OPT_INDEX_FILE,
     BX_TAR_OPT_VERBOSE,
@@ -290,7 +300,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--wildcards-match-slash", BX_TAR_OPTARG_NONE, BX_TAR_OPT_WILDCARDS_MATCH_SLASH_ON},
     {"--keep-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_OLD_FILES},
     {"--keep-directory-symlink", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--keep-newer-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--keep-newer-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_KEEP_NEWER_FILES},
     {"--no-overwrite-dir", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--one-top-level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ONE_TOP_LEVEL},
     {"--overwrite", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OVERWRITE},
@@ -301,7 +311,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--compress-threads", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_COMPRESS_THREADS},
     {"--mt-chunk-size", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MT_CHUNK_SIZE},
     {"--no-mt", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NO_MT},
-    {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--skip-old-files", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SKIP_OLD_FILES},
     {"--unlink-first", BX_TAR_OPTARG_NONE, BX_TAR_OPT_UNLINK_FIRST},
     {"--verify", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--ignore-command-error", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -1639,6 +1649,56 @@ static bool bx_tar_extract_prepare_parent_dirs_safe(struct bx_tar_extract_state*
     return bx_archive_ensure_parent_dirs_safe_cached(dest_path, &state->parent_dir_cache, diag);
 }
 
+enum bx_tar_existing_target_action {
+    BX_TAR_EXISTING_TARGET_PROCEED = 0,
+    BX_TAR_EXISTING_TARGET_SKIP,
+    BX_TAR_EXISTING_TARGET_ERROR,
+};
+
+static enum bx_tar_existing_target_action bx_tar_extract_existing_target_action(
+    struct bx_tar_extract_state* state,
+    const struct bx_tar_entry* entry,
+    const char* dest_path,
+    struct bx_diag_ctx* diag) {
+    struct stat st;
+
+    if (entry->kind == BX_TAR_KIND_DIR) {
+        return BX_TAR_EXISTING_TARGET_PROCEED;
+    }
+    if (state->options->recursive_unlink
+        || state->options->old_file_mode == BX_TAR_OLD_FILES_DEFAULT
+        || state->options->old_file_mode == BX_TAR_OLD_FILES_OVERWRITE
+        || state->options->old_file_mode == BX_TAR_OLD_FILES_UNLINK_FIRST) {
+        return BX_TAR_EXISTING_TARGET_PROCEED;
+    }
+    if (lstat(dest_path, &st) != 0) {
+        if (errno == ENOENT) {
+            return BX_TAR_EXISTING_TARGET_PROCEED;
+        }
+        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+        return BX_TAR_EXISTING_TARGET_ERROR;
+    }
+
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_KEEP) {
+        fprintf(stderr, "%s: %s: Cannot open: File exists\n", diag->progname, entry->name);
+        state->status = 2;
+        return BX_TAR_EXISTING_TARGET_SKIP;
+    }
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_SKIP) {
+        return BX_TAR_EXISTING_TARGET_SKIP;
+    }
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_KEEP_NEWER
+        && !S_ISDIR(st.st_mode)
+        && bx_tar_timespec_compare(st.st_mtim, entry->mtime) >= 0) {
+        fprintf(stderr,
+                "%s: Current '%s' is newer or same age\n",
+                diag->progname,
+                entry->name);
+        return BX_TAR_EXISTING_TARGET_SKIP;
+    }
+    return BX_TAR_EXISTING_TARGET_PROCEED;
+}
+
 static bool bx_tar_extract_remove_empty_dir_default(const char* path,
                                                     struct bx_diag_ctx* diag) {
     if (rmdir(path) == 0) {
@@ -1679,11 +1739,11 @@ static bool bx_tar_extract_prepare_final_non_dir_target(struct bx_tar_extract_st
         bx_tar_extract_invalidate_parent_cache(state);
         return bx_archive_remove_path_tree(dest_path, diag);
     }
-    if (state->options->overwrite) {
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_OVERWRITE) {
         bx_diag(diag, "%s: %s", dest_path, strerror(EISDIR));
         return false;
     }
-    if (state->options->unlink_first) {
+    if (state->options->old_file_mode == BX_TAR_OLD_FILES_UNLINK_FIRST) {
         bx_tar_extract_invalidate_parent_cache(state);
         if (rmdir(dest_path) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -2356,15 +2416,22 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
 
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name.text) : xstrdup(clean_name.text);
 
-    if (state->options->keep_old_files
-        && access(dest_path, F_OK) == 0
-        && entry->kind != BX_TAR_KIND_DIR) {
-        fprintf(stderr, "%s: %s: Cannot open: File exists\n", diag->progname, entry->name);
-        state->status = 2;
-        bx_tar_release_mapped_name(&clean_name);
-        free(dest_path);
-        bx_tar_extract_clear_current_stream(state);
-        return true;
+    {
+        enum bx_tar_existing_target_action existing_action =
+            bx_tar_extract_existing_target_action(state, entry, dest_path, diag);
+
+        if (existing_action == BX_TAR_EXISTING_TARGET_ERROR) {
+            bx_tar_release_mapped_name(&clean_name);
+            free(dest_path);
+            bx_tar_extract_clear_current_stream(state);
+            return false;
+        }
+        if (existing_action == BX_TAR_EXISTING_TARGET_SKIP) {
+            bx_tar_release_mapped_name(&clean_name);
+            free(dest_path);
+            bx_tar_extract_clear_current_stream(state);
+            return true;
+        }
     }
     if (state->options->verbose_reports
         && !(state->options->report_block_numbers
@@ -2415,11 +2482,15 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                 return false;
             }
         }
-        bx_archive_pending_dirs_record(&state->dirs,
-                                       dest_path,
-                                       entry->mode,
-                                       !state->options->touch_mtime,
-                                       entry->mtime);
+        if (mkdir_needed
+            || (state->options->old_file_mode != BX_TAR_OLD_FILES_KEEP
+                && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
+            bx_archive_pending_dirs_record(&state->dirs,
+                                           dest_path,
+                                           entry->mode,
+                                           !state->options->touch_mtime,
+                                           entry->mtime);
+        }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,
                                                  mapped_owner,
@@ -4160,6 +4231,23 @@ static bool bx_tar_parse_group_option(const char* value,
     return true;
 }
 
+static bool bx_tar_set_old_file_mode(struct bx_tar_options* options,
+                                     enum bx_tar_old_file_mode mode,
+                                     const char* name,
+                                     struct bx_diag_ctx* diag) {
+    if (options->old_file_mode != BX_TAR_OLD_FILES_DEFAULT
+        && options->old_file_mode != mode) {
+        bx_diag(diag,
+                "'%s' cannot be used with '%s'",
+                name,
+                options->old_file_mode_name);
+        return false;
+    }
+    options->old_file_mode = mode;
+    options->old_file_mode_name = name;
+    return true;
+}
+
 static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
                                        enum bx_tar_option_effect effect,
                                        const char* display,
@@ -4203,14 +4291,30 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             options->to_stdout = true;
             return true;
         case BX_TAR_OPT_KEEP_OLD_FILES:
-            options->keep_old_files = true;
-            return true;
+            return bx_tar_set_old_file_mode(options,
+                                            BX_TAR_OLD_FILES_KEEP,
+                                            "--keep-old-files",
+                                            diag);
         case BX_TAR_OPT_OVERWRITE:
-            options->overwrite = true;
-            return true;
+            return bx_tar_set_old_file_mode(options,
+                                            BX_TAR_OLD_FILES_OVERWRITE,
+                                            "--overwrite",
+                                            diag);
         case BX_TAR_OPT_UNLINK_FIRST:
-            options->unlink_first = true;
-            return true;
+            return bx_tar_set_old_file_mode(options,
+                                            BX_TAR_OLD_FILES_UNLINK_FIRST,
+                                            "--unlink-first",
+                                            diag);
+        case BX_TAR_OPT_SKIP_OLD_FILES:
+            return bx_tar_set_old_file_mode(options,
+                                            BX_TAR_OLD_FILES_SKIP,
+                                            "--skip-old-files",
+                                            diag);
+        case BX_TAR_OPT_KEEP_NEWER_FILES:
+            return bx_tar_set_old_file_mode(options,
+                                            BX_TAR_OLD_FILES_KEEP_NEWER,
+                                            "--keep-newer-files",
+                                            diag);
         case BX_TAR_OPT_RECURSIVE_UNLINK:
             options->recursive_unlink = true;
             return true;
