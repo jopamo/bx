@@ -26,6 +26,8 @@
 struct bx_tar_incremental_dump_item {
     char marker;
     char* name;
+    size_t sequence;
+    bool snapshot_visible;
 };
 
 struct bx_tar_incremental_directory {
@@ -35,8 +37,10 @@ struct bx_tar_incremental_directory {
     ino_t inode;
     size_t traversal_index;
     bool nfs;
+    bool claimed;
     bool all_children;
     const struct bx_tar_incremental_directory* previous;
+    const struct bx_tar_incremental_directory* renamed_from;
     struct bx_tar_incremental_dump_item* dump;
     size_t dump_len;
     size_t dump_cap;
@@ -228,6 +232,12 @@ static int bx_tar_incremental_dump_compare_qsort(const void* left, const void* r
     const struct bx_tar_incremental_dump_item* a = left;
     const struct bx_tar_incremental_dump_item* b = right;
 
+    if (a->snapshot_visible != b->snapshot_visible) {
+        return a->snapshot_visible ? -1 : 1;
+    }
+    if (!a->snapshot_visible && a->sequence != b->sequence) {
+        return a->sequence < b->sequence ? -1 : 1;
+    }
     return strcmp(a->name, b->name);
 }
 
@@ -254,11 +264,11 @@ static int bx_tar_incremental_ordered_entry_compare(const void* left, const void
     return 0;
 }
 
-static bool bx_tar_incremental_dump_append(struct bx_tar_incremental_directory* directory, char marker, const char* name) {
+static bool bx_tar_incremental_dump_append(struct bx_tar_incremental_directory* directory, char marker, const char* name, bool snapshot_visible) {
     size_t i;
 
     for (i = 0u; i < directory->dump_len; i++) {
-        if (strcmp(directory->dump[i].name, name) == 0) {
+        if (directory->dump[i].snapshot_visible == snapshot_visible && strcmp(directory->dump[i].name, name) == 0 && (snapshot_visible || directory->dump[i].marker == marker)) {
             if (directory->dump[i].marker != 'D' && marker == 'Y') {
                 directory->dump[i].marker = marker;
             }
@@ -272,6 +282,8 @@ static bool bx_tar_incremental_dump_append(struct bx_tar_incremental_directory* 
     }
     directory->dump[directory->dump_len].marker = marker;
     directory->dump[directory->dump_len].name = xstrdup(name);
+    directory->dump[directory->dump_len].sequence = directory->dump_len;
+    directory->dump[directory->dump_len].snapshot_visible = snapshot_visible;
     directory->dump_len++;
     return true;
 }
@@ -476,7 +488,7 @@ static bool bx_tar_incremental_read_snapshot(struct bx_tar_incremental_state* st
                 bx_tar_incremental_directory_free(&directory);
                 return false;
             }
-            if (!bx_tar_incremental_dump_append(&directory, (char)field[0], (const char*)field + 1u)) {
+            if (!bx_tar_incremental_dump_append(&directory, (char)field[0], (const char*)field + 1u, true)) {
                 bx_archive_buffer_free(&buffer);
                 bx_tar_incremental_directory_free(&directory);
                 return false;
@@ -522,6 +534,185 @@ static int bx_tar_incremental_timespec_compare(struct timespec left, struct time
         return 1;
     }
     return 0;
+}
+
+static bool bx_tar_incremental_directory_identity_equal(const struct bx_tar_incremental_directory* current, const struct bx_tar_incremental_directory* previous) {
+    return current->inode == previous->inode && ((current->nfs && previous->nfs) || ((!current->nfs || !previous->nfs) && current->device == previous->device));
+}
+
+static struct bx_tar_incremental_directory* bx_tar_incremental_find_previous_identity(const struct bx_tar_incremental_state* state, const struct bx_tar_incremental_directory* current) {
+    size_t i;
+
+    for (i = 0u; i < state->previous_len; i++) {
+        struct bx_tar_incremental_directory* previous = &state->previous[i];
+
+        if (!previous->claimed && bx_tar_incremental_directory_identity_equal(current, previous)) {
+            return previous;
+        }
+    }
+    return NULL;
+}
+
+static struct bx_tar_incremental_directory* bx_tar_incremental_find_rename_anchor(struct bx_tar_incremental_state* state) {
+    size_t i;
+
+    for (i = 0u; i < state->current_len; i++) {
+        if (strchr(state->current[i].name, '/') == NULL) {
+            return &state->current[i];
+        }
+    }
+    return state->current_len == 0u ? NULL : &state->current[0];
+}
+
+struct bx_tar_incremental_rename_edge {
+    const char* from;
+    const char* to;
+    bool emitted;
+};
+
+static char* bx_tar_incremental_parent_name_dup(const char* path) {
+    char* normalized = bx_tar_incremental_trim_slashes_dup(path);
+    char* slash = strrchr(normalized, '/');
+
+    if (slash == NULL) {
+        free(normalized);
+        return xstrdup(".");
+    }
+    if (slash == normalized) {
+        slash[1] = '\0';
+    }
+    else {
+        *slash = '\0';
+    }
+    return normalized;
+}
+
+static size_t bx_tar_incremental_rename_edge_find_source(const struct bx_tar_incremental_rename_edge* edges, size_t edge_len, const char* source) {
+    size_t i;
+
+    for (i = 0u; i < edge_len; i++) {
+        if (!edges[i].emitted && strcmp(edges[i].from, source) == 0) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+static bool bx_tar_incremental_append_rename_records(struct bx_tar_incremental_state* state, struct bx_tar_incremental_directory* anchor, struct bx_diag_ctx* diag) {
+    struct bx_tar_incremental_rename_edge* edges;
+    size_t edge_len = 0u;
+    size_t remaining;
+    size_t i;
+
+    for (i = 0u; i < state->current_len; i++) {
+        if (state->current[i].renamed_from != NULL) {
+            edge_len++;
+        }
+    }
+    if (edge_len == 0u) {
+        return true;
+    }
+
+    edges = xmalloc(edge_len * sizeof(*edges));
+    edge_len = 0u;
+    for (i = 0u; i < state->current_len; i++) {
+        if (state->current[i].renamed_from != NULL) {
+            edges[edge_len++] = (struct bx_tar_incremental_rename_edge){
+                .from = state->current[i].renamed_from->name,
+                .to = state->current[i].name,
+                .emitted = false,
+            };
+        }
+    }
+
+    remaining = edge_len;
+    while (remaining != 0u) {
+        bool emitted = false;
+
+        for (i = 0u; i < edge_len; i++) {
+            size_t destination_source;
+
+            if (edges[i].emitted) {
+                continue;
+            }
+            destination_source = bx_tar_incremental_rename_edge_find_source(edges, edge_len, edges[i].to);
+            if (destination_source != SIZE_MAX) {
+                continue;
+            }
+            if (!bx_tar_incremental_dump_append(anchor, 'R', edges[i].from, false) || !bx_tar_incremental_dump_append(anchor, 'T', edges[i].to, false)) {
+                free(edges);
+                return false;
+            }
+            edges[i].emitted = true;
+            remaining--;
+            emitted = true;
+        }
+        if (emitted) {
+            continue;
+        }
+
+        {
+            size_t cycle_start = SIZE_MAX;
+            size_t* cycle = xmalloc(remaining * sizeof(*cycle));
+            size_t cycle_len = 0u;
+            size_t current;
+            char* temporary_parent;
+
+            for (i = 0u; i < edge_len; i++) {
+                if (!edges[i].emitted && (cycle_start == SIZE_MAX || strcmp(edges[i].from, edges[cycle_start].from) < 0)) {
+                    cycle_start = i;
+                }
+            }
+            current = cycle_start;
+            while (true) {
+                size_t next;
+
+                if (current == SIZE_MAX || cycle_len == remaining) {
+                    bx_diag(diag, "invalid incremental directory rename cycle");
+                    free(cycle);
+                    free(edges);
+                    return false;
+                }
+                cycle[cycle_len++] = current;
+                next = bx_tar_incremental_rename_edge_find_source(edges, edge_len, edges[current].to);
+                if (next == cycle_start) {
+                    break;
+                }
+                current = next;
+            }
+
+            temporary_parent = bx_tar_incremental_parent_name_dup(edges[cycle_start].from);
+            if (!bx_tar_incremental_dump_append(anchor, 'X', temporary_parent, false) || !bx_tar_incremental_dump_append(anchor, 'R', edges[cycle[cycle_len - 1u]].from, false) ||
+                !bx_tar_incremental_dump_append(anchor, 'T', "", false)) {
+                free(temporary_parent);
+                free(cycle);
+                free(edges);
+                return false;
+            }
+            for (i = 0u; i + 1u < cycle_len; i++) {
+                if (!bx_tar_incremental_dump_append(anchor, 'R', edges[cycle[i]].from, false) || !bx_tar_incremental_dump_append(anchor, 'T', edges[cycle[i]].to, false)) {
+                    free(temporary_parent);
+                    free(cycle);
+                    free(edges);
+                    return false;
+                }
+            }
+            if (!bx_tar_incremental_dump_append(anchor, 'R', "", false) || !bx_tar_incremental_dump_append(anchor, 'T', edges[cycle[cycle_len - 1u]].to, false)) {
+                free(temporary_parent);
+                free(cycle);
+                free(edges);
+                return false;
+            }
+            free(temporary_parent);
+            for (i = 0u; i < cycle_len; i++) {
+                edges[cycle[i]].emitted = true;
+                remaining--;
+            }
+            free(cycle);
+        }
+    }
+    free(edges);
+    return true;
 }
 
 static bool bx_tar_incremental_append_current_directory(struct bx_tar_incremental_state* state, const struct bx_archive_fs_entry* entry) {
@@ -619,6 +810,9 @@ bool bx_tar_incremental_plan_prepare(struct bx_tar_incremental_plan* plan, const
     }
     state = plan->state;
     bx_tar_incremental_directory_list_free(&state->current, &state->current_len);
+    for (i = 0u; i < state->previous_len; i++) {
+        state->previous[i].claimed = false;
+    }
     free(state->include);
     state->include = xmalloc((files->len ? files->len : 1u) * sizeof(*state->include));
     memset(state->include, 0, (files->len ? files->len : 1u) * sizeof(*state->include));
@@ -633,15 +827,28 @@ bool bx_tar_incremental_plan_prepare(struct bx_tar_incremental_plan* plan, const
         qsort(state->current, state->current_len, sizeof(*state->current), bx_tar_incremental_directory_compare);
     }
     for (i = 0u; i < state->current_len; i++) {
+        struct bx_tar_incremental_directory* previous;
+
         if (i > 0u && strcmp(state->current[i - 1u].name, state->current[i].name) == 0) {
             bx_diag(diag, "duplicate directory name in incremental create: %s", state->current[i].name);
             return false;
         }
-        state->current[i].previous = bx_tar_incremental_directory_find(state->previous, state->previous_len, state->current[i].name);
-        state->current[i].all_children = state->current[i].previous == NULL;
-        if (state->current[i].previous != NULL) {
-            state->current[i].all_children = state->current[i].inode != state->current[i].previous->inode ||
-                                             ((!state->current[i].nfs || !state->current[i].previous->nfs) && state->current[i].device != state->current[i].previous->device);
+        previous = bx_tar_incremental_directory_find(state->previous, state->previous_len, state->current[i].name);
+        if (previous == NULL || previous->claimed || !bx_tar_incremental_directory_identity_equal(&state->current[i], previous)) {
+            struct bx_tar_incremental_directory* identity_previous = bx_tar_incremental_find_previous_identity(state, &state->current[i]);
+
+            if (identity_previous != NULL || previous == NULL || previous->claimed) {
+                previous = identity_previous;
+            }
+        }
+        state->current[i].previous = previous;
+        state->current[i].all_children = previous == NULL;
+        if (previous != NULL) {
+            previous->claimed = true;
+            state->current[i].all_children = !bx_tar_incremental_directory_identity_equal(&state->current[i], previous);
+            if (strcmp(state->current[i].name, previous->name) != 0) {
+                state->current[i].renamed_from = previous;
+            }
         }
     }
 
@@ -668,7 +875,7 @@ bool bx_tar_incremental_plan_prepare(struct bx_tar_incremental_plan* plan, const
             continue;
         }
         marker = is_directory ? 'D' : (bx_tar_incremental_file_should_be_written(state, parent, basename, &files->entries[i].st) ? 'Y' : 'N');
-        if (!bx_tar_incremental_dump_append(parent, marker, basename)) {
+        if (!bx_tar_incremental_dump_append(parent, marker, basename, true)) {
             free(parent_name);
             free(basename);
             free(normalized);
@@ -678,6 +885,14 @@ bool bx_tar_incremental_plan_prepare(struct bx_tar_incremental_plan* plan, const
         free(parent_name);
         free(basename);
         free(normalized);
+    }
+
+    {
+        struct bx_tar_incremental_directory* rename_anchor = bx_tar_incremental_find_rename_anchor(state);
+
+        if (rename_anchor != NULL && !bx_tar_incremental_append_rename_records(state, rename_anchor, diag)) {
+            return false;
+        }
     }
 
     return bx_tar_incremental_build_payloads(state, diag);
@@ -845,6 +1060,9 @@ bool bx_tar_incremental_plan_publish(const struct bx_tar_incremental_plan* plan,
              bx_tar_incremental_write_uint(output.stream, (uintmax_t)directory->inode, state->snapshot_path, diag) &&
              bx_tar_incremental_write_bytes(output.stream, directory->name, strlen(directory->name) + 1u, state->snapshot_path, diag);
         for (j = 0u; ok && j < directory->dump_len; j++) {
+            if (!directory->dump[j].snapshot_visible) {
+                continue;
+            }
             ok = bx_tar_incremental_write_byte(output.stream, (unsigned char)directory->dump[j].marker, state->snapshot_path, diag) &&
                  bx_tar_incremental_write_bytes(output.stream, directory->dump[j].name, strlen(directory->dump[j].name) + 1u, state->snapshot_path, diag);
         }
