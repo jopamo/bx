@@ -75,6 +75,12 @@ enum bx_tar_owner_policy {
     BX_TAR_OWNER_DISABLE,
 };
 
+enum bx_tar_permission_policy {
+    BX_TAR_PERMISSIONS_DEFAULT = 0,
+    BX_TAR_PERMISSIONS_FORCE,
+    BX_TAR_PERMISSIONS_DISABLE,
+};
+
 struct bx_tar_options {
     enum bx_tar_mode mode;
     const char* unsupported_mode;
@@ -109,6 +115,7 @@ struct bx_tar_options {
     bool fixed_mtime;
     struct timespec mtime;
     enum bx_tar_owner_policy owner_policy;
+    enum bx_tar_permission_policy permission_policy;
     bool xattrs;
     bool acls;
     bool no_mt;
@@ -226,6 +233,8 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_OWNER_MAP,
     BX_TAR_OPT_OWNER_RESTORE_ON,
     BX_TAR_OPT_OWNER_RESTORE_OFF,
+    BX_TAR_OPT_PERMISSIONS_ON,
+    BX_TAR_OPT_PERMISSIONS_OFF,
     BX_TAR_OPT_XATTRS_ON,
     BX_TAR_OPT_XATTRS_OFF,
     BX_TAR_OPT_ACLS_ON,
@@ -340,9 +349,9 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MTIME},
     {"--touch", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
     {"--no-same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_OFF},
-    {"--no-same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--preserve-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_OFF},
+    {"--preserve-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
+    {"--same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
     {"--same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_ON},
     {"--set-mtime-command", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--set-mtime-format", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
@@ -447,7 +456,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'W', "-W", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'O', "-O", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TO_STDOUT},
     {'m', "-m", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
-    {'p', "-p", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'p', "-p", BX_TAR_OPTARG_NONE, BX_TAR_OPT_PERMISSIONS_ON},
     {'F', "-F", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {'L', "-L", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {'M', "-M", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -1034,6 +1043,8 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
 struct bx_tar_extract_state {
     const struct bx_tar_options* options;
     bool restore_owner;
+    bool preserve_permissions;
+    mode_t umask_value;
     FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
     bool incremental_mode;
@@ -1145,6 +1156,9 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
     state->options = options;
     state->restore_owner = options->owner_policy == BX_TAR_OWNER_FORCE
         || (options->owner_policy == BX_TAR_OWNER_DEFAULT && geteuid() == 0);
+    state->preserve_permissions = options->permission_policy == BX_TAR_PERMISSIONS_FORCE
+        || (options->permission_policy == BX_TAR_PERMISSIONS_DEFAULT && geteuid() == 0);
+    state->umask_value = state->preserve_permissions ? 0u : bx_mode_current_umask();
     state->report_stream = report_stream;
     state->select_plan = select_plan;
     state->incremental_mode = options->incremental_mode
@@ -1611,6 +1625,13 @@ static void bx_tar_extract_entry_ids(const struct bx_tar_extract_state* state,
     *group_out = entry->gid;
     *owner_restore_out = state->restore_owner;
     *group_restore_out = state->restore_owner;
+}
+
+static mode_t bx_tar_extract_mode(const struct bx_tar_extract_state* state,
+                                  mode_t archive_mode) {
+    mode_t mode = archive_mode & (state->preserve_permissions ? 07777u : 0777u);
+
+    return state->preserve_permissions ? mode : mode & ~state->umask_value;
 }
 
 static bool bx_tar_extract_apply_path_ownership(const char* path,
@@ -2337,6 +2358,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     bool stripped_dotdot;
     uid_t archive_owner = 0;
     gid_t archive_group = 0;
+    mode_t extract_mode = 0;
     bool owner_restore = false;
     bool group_restore = false;
 
@@ -2406,6 +2428,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                              &archive_group,
                              &owner_restore,
                              &group_restore);
+    extract_mode = bx_tar_extract_mode(state, entry->mode);
 
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name.text) : xstrdup(clean_name.text);
 
@@ -2480,7 +2503,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                 && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
             bx_archive_pending_dirs_record(&state->dirs,
                                            dest_path,
-                                           entry->mode,
+                                           extract_mode,
                                            !state->options->touch_mtime,
                                            entry->mtime);
         }
@@ -2502,7 +2525,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     if (entry->kind == BX_TAR_KIND_REG) {
         int fd;
 
-        fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
+        fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, extract_mode);
         if (fd < 0) {
             if (errno != EEXIST && errno != EISDIR) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
@@ -2515,7 +2538,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                 bx_tar_extract_clear_current_stream(state);
                 return true;
             }
-            fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
+            fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_EXCL, extract_mode);
             if (fd < 0) {
                 bx_diag(diag, "%s: %s", dest_path, strerror(errno));
                 free(dest_path);
@@ -2525,7 +2548,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         bx_tar_extract_clear_current_stream(state);
         state->current_fd = fd;
         state->current_dest_path = dest_path;
-        state->current_mode_bits = entry->mode;
+        state->current_mode_bits = extract_mode;
         state->current_mtime = entry->mtime;
         state->current_owner = archive_owner;
         state->current_group = archive_group;
@@ -2597,6 +2620,11 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
             free(dest_path);
             return false;
         }
+        if (chmod(dest_path, extract_mode) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+            free(dest_path);
+            return false;
+        }
     }
     else if (entry->kind == BX_TAR_KIND_FIFO) {
         if (!bx_tar_extract_prepare_final_non_dir_target(state, entry, dest_path, diag)) {
@@ -2604,7 +2632,7 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
             state->status = 2;
             return true;
         }
-        if (mkfifo(dest_path, entry->mode & 07777u) != 0) {
+        if (mkfifo(dest_path, extract_mode) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
             return false;
@@ -2621,6 +2649,11 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
                                                  owner_restore,
                                                  group_restore,
                                                  diag)) {
+            free(dest_path);
+            return false;
+        }
+        if (chmod(dest_path, extract_mode) != 0) {
+            bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             free(dest_path);
             return false;
         }
@@ -4549,6 +4582,12 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return true;
         case BX_TAR_OPT_OWNER_RESTORE_OFF:
             options->owner_policy = BX_TAR_OWNER_DISABLE;
+            return true;
+        case BX_TAR_OPT_PERMISSIONS_ON:
+            options->permission_policy = BX_TAR_PERMISSIONS_FORCE;
+            return true;
+        case BX_TAR_OPT_PERMISSIONS_OFF:
+            options->permission_policy = BX_TAR_PERMISSIONS_DISABLE;
             return true;
         case BX_TAR_OPT_XATTRS_ON:
             options->xattrs = true;

@@ -46,6 +46,10 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "                        preserve files newer than their archive copies\n");
     fprintf(stream, "      --same-owner      restore archive ownership when permitted\n");
     fprintf(stream, "      --no-same-owner   do not restore archive ownership\n");
+    fprintf(stream, "  -p, --same-permissions\n");
+    fprintf(stream, "                        preserve archive permission bits\n");
+    fprintf(stream, "      --no-same-permissions\n");
+    fprintf(stream, "                        apply the process umask to archive permissions\n");
     fprintf(stream, "      --no-seek         archive is not seekable\n");
     fprintf(stream, "  -n, --seek            archive is seekable\n");
     fprintf(stream, "  -v                    report processed member names\n");
