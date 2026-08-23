@@ -44,6 +44,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --skip-old-files  do not overwrite existing files; continue\n");
     fprintf(stream, "      --keep-newer-files\n");
     fprintf(stream, "                        preserve files newer than their archive copies\n");
+    fprintf(stream, "      --same-owner      restore archive ownership when permitted\n");
+    fprintf(stream, "      --no-same-owner   do not restore archive ownership\n");
     fprintf(stream, "      --no-seek         archive is not seekable\n");
     fprintf(stream, "  -n, --seek            archive is seekable\n");
     fprintf(stream, "  -v                    report processed member names\n");
