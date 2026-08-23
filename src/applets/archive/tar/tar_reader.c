@@ -760,6 +760,7 @@ static bool bx_tar_stream_input_open(struct bx_tar_stream_input* input,
                                        &(struct bx_archive_codec_input_options){
                                            .archive_path = options->archive_path,
                                            .required_codec = options->required_codec,
+                                           .seek_mode = options->seek_mode,
                                        },
                                        diag);
 }

@@ -10,6 +10,12 @@
 struct bx_archive_codec;
 struct bx_archive_codec_input;
 
+enum bx_archive_codec_seek_mode {
+    BX_ARCHIVE_CODEC_SEEK_AUTO = 0,
+    BX_ARCHIVE_CODEC_SEEK_FORCE,
+    BX_ARCHIVE_CODEC_SEEK_DISABLE,
+};
+
 struct bx_archive_codec_stream_sink {
     void* user;
     bool (*write)(void* user, const void* data, size_t len);
@@ -28,6 +34,7 @@ struct bx_archive_codec_mt_options {
 struct bx_archive_codec_input_options {
     const char* archive_path;
     const struct bx_archive_codec* required_codec;
+    enum bx_archive_codec_seek_mode seek_mode;
 };
 
 const struct bx_archive_codec* bx_archive_codec_none(void);
