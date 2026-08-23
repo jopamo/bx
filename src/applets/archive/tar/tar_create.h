@@ -55,6 +55,7 @@ struct bx_tar_create_directive_list {
 
 struct bx_tar_create_options {
     bool remove_files;
+    bool ignore_failed_read;
     struct bx_tar_create_directive_list directives;
 };
 

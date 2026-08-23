@@ -203,6 +203,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ACLS_ON,
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_WARNING,
+    BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_LISTED_INCREMENTAL,
 };
 
@@ -236,7 +237,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--listed-incremental", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {"--incremental", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--hole-detection", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
-    {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_FAILED_READ},
     {"--level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--no-check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -3875,6 +3876,9 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_create_options_set_exclude_vcs_ignores(&options->create_options);
         case BX_TAR_OPT_REMOVE_FILES:
             options->create_options.remove_files = true;
+            return true;
+        case BX_TAR_OPT_IGNORE_FAILED_READ:
+            options->create_options.ignore_failed_read = true;
             return true;
         case BX_TAR_OPT_LISTED_INCREMENTAL:
             free(options->incremental_snapshot_path);
