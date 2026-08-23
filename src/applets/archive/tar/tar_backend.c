@@ -18,6 +18,7 @@
 #include "applets/archive/tar/tar_backend.h"
 #include "applets/archive/tar/tar_create.h"
 #include "applets/archive/tar/tar_id_map.h"
+#include "applets/archive/tar/tar_incremental.h"
 #include "applets/archive/tar/tar_names.h"
 #include "applets/archive/tar/tar_report.h"
 #include "applets/archive/tar/tar_reader.h"
@@ -105,6 +106,8 @@ struct bx_tar_options {
     struct bx_tar_transform_rule name_transform;
     struct bx_tar_create_options create_options;
     struct bx_archive_name_list source_archives;
+    char* incremental_snapshot_path;
+    struct bx_tar_incremental_plan* incremental_plan;
 };
 
 enum bx_tar_option_arg_mode {
@@ -200,6 +203,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_ACLS_ON,
     BX_TAR_OPT_ACLS_OFF,
     BX_TAR_OPT_WARNING,
+    BX_TAR_OPT_LISTED_INCREMENTAL,
 };
 
 struct bx_tar_long_option_spec {
@@ -229,7 +233,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--extract", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--get", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {"--check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--listed-incremental", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--listed-incremental", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {"--incremental", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--hole-detection", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -400,7 +404,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'t', "-t", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_LIST},
     {'u', "-u", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_UPDATE},
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
-    {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -460,6 +464,7 @@ static struct bx_tar_stream_options
 bx_tar_make_stream_options(const struct bx_tar_options* options) {
     return (struct bx_tar_stream_options){
         .format_ustar = options->format_ustar,
+        .old_gnu = options->incremental_plan != NULL,
         .numeric_owner = options->numeric_owner,
         .owner_set = options->owner_set,
         .group_set = options->group_set,
@@ -470,6 +475,10 @@ bx_tar_make_stream_options(const struct bx_tar_options* options) {
         .mtime = options->mtime,
         .owner_map = &options->owner_map,
         .group_map = &options->group_map,
+        .directory_data_fn = options->incremental_plan != NULL
+            ? bx_tar_incremental_directory_data
+            : NULL,
+        .directory_data_user_data = options->incremental_plan,
     };
 }
 
@@ -3867,6 +3876,10 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_REMOVE_FILES:
             options->create_options.remove_files = true;
             return true;
+        case BX_TAR_OPT_LISTED_INCREMENTAL:
+            free(options->incremental_snapshot_path);
+            options->incremental_snapshot_path = xstrdup(value);
+            return true;
         case BX_TAR_OPT_THREADS:
             return bx_thread_count_parse(diag->progname, "--threads", value, &options->threads);
         case BX_TAR_OPT_COMPRESS_THREADS:
@@ -4020,6 +4033,8 @@ static void bx_tar_options_cleanup(struct bx_tar_options* options) {
     bx_tar_id_map_cleanup(&options->group_map);
     free(options->index_file_path);
     options->index_file_path = NULL;
+    free(options->incremental_snapshot_path);
+    options->incremental_snapshot_path = NULL;
     bx_tar_clear_unsupported_external_compress_program(options);
     free(options->mode_text);
     options->mode_text = NULL;
@@ -4121,7 +4136,8 @@ static bool bx_tar_create_stream_entries_produce(void* user,
 static bool bx_tar_can_stream_create(const struct bx_tar_options* options) {
     return !options->verbose_reports
         && !options->create_options.remove_files
-        && !options->newer_active;
+        && !options->newer_active
+        && options->incremental_snapshot_path == NULL;
 }
 
 static bool bx_tar_parse_options(struct bx_tar_options* options,
@@ -4246,6 +4262,10 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
         bx_diag(diag, "archive file not specified; use -f");
         return false;
     }
+    if (options->incremental_snapshot_path != NULL && options->format_ustar) {
+        bx_diag(diag, "GNU features wanted on incompatible archive format");
+        return false;
+    }
     if ((options->mode == BX_TAR_MODE_CREATE
             || options->mode == BX_TAR_MODE_APPEND
             || options->mode == BX_TAR_MODE_UPDATE)
@@ -4316,6 +4336,8 @@ int bx_tar_run(int argc, char** argv) {
 
         struct bx_archive_fs_list files = {0};
         struct bx_tar_report_output report_output = {0};
+        struct bx_tar_incremental_plan incremental_plan = {0};
+        bool incremental_active = options.incremental_snapshot_path != NULL;
         bool had_create_errors = false;
         bool had_postwrite_errors = false;
         uint64_t total_bytes_written = 0u;
@@ -4323,16 +4345,39 @@ int bx_tar_run(int argc, char** argv) {
         bool use_mt = compress_threads > 1u
             && bx_archive_codec_supports_mt_encode(bx_tar_output_codec(&options));
 
+        if (incremental_active) {
+            if (!bx_tar_incremental_plan_init(&incremental_plan,
+                                              options.incremental_snapshot_path,
+                                              &diag)) {
+                bx_tar_options_cleanup(&options);
+                return 2;
+            }
+            options.incremental_plan = &incremental_plan;
+        }
         if (!bx_tar_create_collect_fs_entries(&files,
                                               &options.create_options,
                                               options.sort_name,
                                               &had_create_errors,
                                               &diag)) {
+            bx_tar_incremental_plan_cleanup(&incremental_plan);
             bx_tar_options_cleanup(&options);
             return 2;
         }
+        if (incremental_active
+            && (!bx_tar_incremental_plan_prepare(&incremental_plan, &files, &diag))) {
+            bx_archive_fs_list_free(&files);
+            bx_tar_incremental_plan_cleanup(&incremental_plan);
+            bx_tar_options_cleanup(&options);
+            return 2;
+        }
+        if (incremental_active) {
+            bx_tar_incremental_plan_filter_files(&incremental_plan, &files);
+        }
         if (options.newer_active) {
             bx_tar_filter_newer_entries(&files, options.newer_time, options.newer_use_ctime);
+        }
+        if (incremental_active) {
+            bx_tar_incremental_plan_order_files(&incremental_plan, &files);
         }
         if (options.verbose_reports
             && !bx_tar_report_output_init(&report_output,
@@ -4340,12 +4385,14 @@ int bx_tar_run(int argc, char** argv) {
                                           stderr,
                                           &diag)) {
             bx_archive_fs_list_free(&files);
+            bx_tar_incremental_plan_cleanup(&incremental_plan);
             bx_tar_options_cleanup(&options);
             return 2;
         }
         if (options.verbose_reports && !bx_tar_report_fs_entries(report_output.stream, &files, &diag)) {
             bx_tar_report_output_cleanup(&report_output);
             bx_archive_fs_list_free(&files);
+            bx_tar_incremental_plan_cleanup(&incremental_plan);
             bx_tar_options_cleanup(&options);
             return 2;
         }
@@ -4381,7 +4428,13 @@ int bx_tar_run(int argc, char** argv) {
         if (!bx_tar_report_output_finish(&report_output, &diag)) {
             rc = 2;
         }
+        if (rc == 0
+            && incremental_active
+            && !bx_tar_incremental_plan_publish(&incremental_plan, &diag)) {
+            rc = 2;
+        }
         bx_archive_fs_list_free(&files);
+        bx_tar_incremental_plan_cleanup(&incremental_plan);
         bx_tar_options_cleanup(&options);
         return rc;
     }

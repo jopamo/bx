@@ -366,6 +366,7 @@ bx_archive_applet_sources = [
   'src/applets/archive/tar/tar_create.c',
   'src/applets/archive/tar/tar_files_from.c',
   'src/applets/archive/tar/tar_id_map.c',
+  'src/applets/archive/tar/tar_incremental.c',
   'src/applets/archive/tar/tar_names.c',
   'src/applets/archive/tar/tar_patterns.c',
   'src/applets/archive/tar/tar_report.c',
