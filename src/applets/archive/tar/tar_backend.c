@@ -97,6 +97,7 @@ struct bx_tar_options {
     bool xattrs;
     bool acls;
     bool no_mt;
+    enum bx_archive_codec_seek_mode seek_mode;
     char* mode_text;
     bool newer_active;
     bool newer_use_ctime;
@@ -184,6 +185,8 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_GZIP_ON,
     BX_TAR_OPT_XZ_ON,
     BX_TAR_OPT_ZSTD_ON,
+    BX_TAR_OPT_SEEK_ON,
+    BX_TAR_OPT_SEEK_OFF,
     BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM,
     BX_TAR_OPT_AUTO_COMPRESS_ON,
     BX_TAR_OPT_AUTO_COMPRESS_OFF,
@@ -248,8 +251,8 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--ignore-failed-read", BX_TAR_OPTARG_NONE, BX_TAR_OPT_IGNORE_FAILED_READ},
     {"--level", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--no-check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--no-seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_OFF},
+    {"--seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
     {"--occurrence", BX_TAR_OPTARG_OPTIONAL, BX_TAR_OPT_OCCURRENCE},
     {"--sparse-version", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -415,7 +418,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'x', "-x", BX_TAR_OPTARG_NONE, BX_TAR_OPT_MODE_EXTRACT},
     {'g', "-g", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_LISTED_INCREMENTAL},
     {'G', "-G", BX_TAR_OPTARG_NONE, BX_TAR_OPT_INCREMENTAL},
-    {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'n', "-n", BX_TAR_OPTARG_NONE, BX_TAR_OPT_SEEK_ON},
     {'S', "-S", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'C', "-C", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_DIRECTORY},
     {'X', "-X", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_EXCLUDE_FROM},
@@ -2849,6 +2852,7 @@ static int bx_tar_process_archive_stream(const struct bx_tar_options* options,
     struct bx_tar_reader_stream_options reader_options = {
         .archive_path = options->archive_path,
         .required_codec = bx_tar_input_required_codec(options),
+        .seek_mode = options->seek_mode,
         .skip_owner_group_names = options->owner_map.len == 0u && options->group_map.len == 0u,
         .skip_owner_group_ids = options->owner_map.len == 0u && options->group_map.len == 0u,
     };
@@ -3424,6 +3428,7 @@ static bool bx_tar_write_catenate_sources_body(const struct bx_tar_rewrite_strea
         struct bx_tar_reader_stream_options reader_options = {
             .archive_path = ctx->source_archives->items[i],
             .required_codec = bx_tar_codec_from_suffix(ctx->source_archives->items[i]),
+            .seek_mode = ctx->options->seek_mode,
         };
 
         if (bx_tar_source_archive_is_unsupported_compressed(reader_options.archive_path, diag)) {
@@ -3655,6 +3660,7 @@ static int bx_tar_catenate_archive(const struct bx_tar_options* options,
     struct bx_tar_reader_stream_options reader_options = {
         .archive_path = NULL,
         .required_codec = bx_tar_input_required_codec(options),
+        .seek_mode = options->seek_mode,
     };
     struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
         .reader_options = NULL,
@@ -3715,6 +3721,7 @@ static int bx_tar_update_archive(const struct bx_tar_options* options,
     struct bx_tar_reader_stream_options reader_options = {
         .archive_path = NULL,
         .required_codec = bx_tar_input_required_codec(options),
+        .seek_mode = options->seek_mode,
     };
     struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
         .reader_options = NULL,
@@ -3899,6 +3906,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     struct bx_tar_reader_stream_options reader_options = {
         .archive_path = NULL,
         .required_codec = bx_tar_input_required_codec(options),
+        .seek_mode = options->seek_mode,
     };
     struct bx_tar_rewrite_stream_ctx rewrite_ctx = {
         .reader_options = &reader_options,
@@ -4339,6 +4347,12 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_ZSTD_ON:
             bx_tar_set_codec_option(options, bx_archive_codec_zstd());
             return true;
+        case BX_TAR_OPT_SEEK_ON:
+            options->seek_mode = BX_ARCHIVE_CODEC_SEEK_FORCE;
+            return true;
+        case BX_TAR_OPT_SEEK_OFF:
+            options->seek_mode = BX_ARCHIVE_CODEC_SEEK_DISABLE;
+            return true;
         case BX_TAR_OPT_EXTERNAL_COMPRESS_PROGRAM:
             return bx_tar_apply_external_compress_program(options, display, value);
         case BX_TAR_OPT_AUTO_COMPRESS_ON:
@@ -4483,6 +4497,7 @@ static int bx_tar_test_label_archive(const struct bx_tar_options* options,
     struct bx_tar_reader_stream_options reader_options = {
         .archive_path = options->archive_path,
         .required_codec = bx_tar_input_required_codec(options),
+        .seek_mode = options->seek_mode,
     };
     struct bx_tar_report_output report_output = {0};
     char* label = NULL;

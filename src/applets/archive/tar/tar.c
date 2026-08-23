@@ -40,6 +40,8 @@ static void bx_tar_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "      --delete          remove named members from an archive\n");
     fprintf(stream, "      --test-label      print or match the archive volume label\n");
     fprintf(stream, "      --occurrence[=N]  process only the Nth occurrence of each named member\n");
+    fprintf(stream, "      --no-seek         archive is not seekable\n");
+    fprintf(stream, "  -n, --seek            archive is seekable\n");
     fprintf(stream, "  -v                    report processed member names\n");
     fprintf(stream, "      --index-file=FILE write listing or verbose output to FILE\n");
     fprintf(stream, "      --block-number    prefix archive-read reports with parser block numbers\n");
