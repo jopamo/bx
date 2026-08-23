@@ -2,6 +2,7 @@
 #define BX_APPLETS_ARCHIVE_TAR_TAR_SELECT_H
 
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stddef.h>
 
 #include "applets/archive/archive_common.h"
@@ -39,8 +40,22 @@ bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
                               bool* matched_members,
                               const char** extract_dir_out);
 
+bool bx_tar_select_plan_match_occurrence(const struct bx_tar_select_plan* plan,
+                                         const char* name,
+                                         bool default_select_all,
+                                         bool* matched_members,
+                                         uintmax_t occurrence,
+                                         uintmax_t* occurrence_counts,
+                                         const char** extract_dir_out);
+
 bool bx_tar_select_plan_report_unmatched(const struct bx_tar_select_plan* plan,
                                          const bool* matched_members,
                                          const struct bx_diag_ctx* diag);
+
+bool bx_tar_select_plan_report_unmatched_occurrence(const struct bx_tar_select_plan* plan,
+                                                    const bool* matched_members,
+                                                    uintmax_t occurrence,
+                                                    const uintmax_t* occurrence_counts,
+                                                    const struct bx_diag_ctx* diag);
 
 #endif /* BX_APPLETS_ARCHIVE_TAR_TAR_SELECT_H */
