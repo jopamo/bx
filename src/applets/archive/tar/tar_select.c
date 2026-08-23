@@ -528,21 +528,51 @@ bool bx_tar_select_member_matches_name(const struct bx_tar_select_member* member
     return bx_tar_match_member_name(member->name, &member->policy, member->recurse, name);
 }
 
-bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
-                              const char* name,
-                              bool default_select_all,
-                              bool* matched_members,
-                              const char** extract_dir_out) {
+static bool bx_tar_select_member_occurrence_is_descendant(const struct bx_tar_select_member* member,
+                                                          const char* name) {
+    size_t member_len = strlen(member->name);
+    size_t name_len = strlen(name);
+
+    while (member_len > 0u && member->name[member_len - 1u] == '/') {
+        member_len--;
+    }
+    return member->recurse
+        && name_len > member_len
+        && name[member_len] == '/';
+}
+
+bool bx_tar_select_plan_match_occurrence(const struct bx_tar_select_plan* plan,
+                                         const char* name,
+                                         bool default_select_all,
+                                         bool* matched_members,
+                                         uintmax_t occurrence,
+                                         uintmax_t* occurrence_counts,
+                                         const char** extract_dir_out) {
     size_t i;
     const char* extract_dir = plan->default_extract_dir;
     bool selected = default_select_all;
 
     for (i = 0u; i < plan->len; i++) {
         if (bx_tar_select_member_matches_name(&plan->members[i], name)) {
-            if (matched_members != NULL) {
+            bool occurrence_selected = true;
+
+            if (occurrence > 0u && occurrence_counts != NULL) {
+                if (!bx_tar_select_member_occurrence_is_descendant(&plan->members[i], name)
+                    || occurrence_counts[i] == 0u) {
+                    if (occurrence_counts[i] < UINTMAX_MAX) {
+                        occurrence_counts[i]++;
+                    }
+                }
+                if (occurrence_counts[i] >= occurrence
+                    && matched_members != NULL) {
+                    matched_members[i] = true;
+                }
+                occurrence_selected = occurrence_counts[i] == occurrence;
+            }
+            else if (matched_members != NULL) {
                 matched_members[i] = true;
             }
-            if (!selected) {
+            if (occurrence_selected && !selected) {
                 selected = true;
                 extract_dir = plan->members[i].extract_dir;
             }
@@ -562,9 +592,35 @@ bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
     return true;
 }
 
+bool bx_tar_select_plan_match(const struct bx_tar_select_plan* plan,
+                              const char* name,
+                              bool default_select_all,
+                              bool* matched_members,
+                              const char** extract_dir_out) {
+    return bx_tar_select_plan_match_occurrence(plan,
+                                               name,
+                                               default_select_all,
+                                               matched_members,
+                                               0u,
+                                               NULL,
+                                               extract_dir_out);
+}
+
 bool bx_tar_select_plan_report_unmatched(const struct bx_tar_select_plan* plan,
                                          const bool* matched_members,
                                          const struct bx_diag_ctx* diag) {
+    return bx_tar_select_plan_report_unmatched_occurrence(plan,
+                                                          matched_members,
+                                                          0u,
+                                                          NULL,
+                                                          diag);
+}
+
+bool bx_tar_select_plan_report_unmatched_occurrence(const struct bx_tar_select_plan* plan,
+                                                    const bool* matched_members,
+                                                    uintmax_t occurrence,
+                                                    const uintmax_t* occurrence_counts,
+                                                    const struct bx_diag_ctx* diag) {
     bool had_errors = false;
     size_t i;
 
@@ -573,10 +629,23 @@ bool bx_tar_select_plan_report_unmatched(const struct bx_tar_select_plan* plan,
     }
 
     for (i = 0u; i < plan->len; i++) {
-        if (matched_members[i]) {
+        bool found = matched_members[i];
+
+        if (occurrence > 0u
+            && occurrence_counts != NULL
+            && occurrence_counts[i] >= occurrence) {
+            found = true;
+        }
+        if (found) {
             continue;
         }
-        fprintf(stderr, "%s: %s: Not found in archive\n", diag->progname, plan->members[i].name);
+        fprintf(stderr,
+                "%s: %s: %s\n",
+                diag->progname,
+                plan->members[i].name,
+                occurrence > 0u && occurrence_counts != NULL && occurrence_counts[i] > 0u
+                    ? "Required occurrence not found in archive"
+                    : "Not found in archive");
         had_errors = true;
     }
 

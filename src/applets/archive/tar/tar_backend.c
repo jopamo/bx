@@ -111,12 +111,14 @@ struct bx_tar_options {
     struct bx_archive_name_list source_archives;
     char* incremental_snapshot_path;
     bool incremental_mode;
+    uintmax_t occurrence;
     struct bx_tar_incremental_plan* incremental_plan;
 };
 
 enum bx_tar_option_arg_mode {
     BX_TAR_OPTARG_NONE = 0,
     BX_TAR_OPTARG_REQUIRED,
+    BX_TAR_OPTARG_OPTIONAL,
 };
 
 enum bx_tar_option_effect {
@@ -210,6 +212,7 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_IGNORE_FAILED_READ,
     BX_TAR_OPT_LISTED_INCREMENTAL,
     BX_TAR_OPT_INCREMENTAL,
+    BX_TAR_OPT_OCCURRENCE,
 };
 
 struct bx_tar_long_option_spec {
@@ -247,7 +250,7 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--no-check-device", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--no-seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--seek", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--occurrence", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
+    {"--occurrence", BX_TAR_OPTARG_OPTIONAL, BX_TAR_OPT_OCCURRENCE},
     {"--sparse-version", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sparse", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--add-file", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ADD_FILE},
@@ -1018,6 +1021,7 @@ struct bx_tar_extract_state {
     bool warned_dotdot;
     bool starting_file_reached;
     bool* matched_members;
+    uintmax_t* occurrence_counts;
     int status;
     int current_fd;
     char* current_dest_path;
@@ -1049,6 +1053,7 @@ struct bx_tar_list_state {
     bool warned_absolute;
     bool warned_dotdot;
     bool* matched_members;
+    uintmax_t* occurrence_counts;
     uint64_t total_bytes_read;
 };
 
@@ -1060,6 +1065,7 @@ struct bx_tar_compare_state {
     bool warned_absolute;
     bool warned_dotdot;
     bool* matched_members;
+    uintmax_t* occurrence_counts;
     int status;
     int current_fd;
     char* current_fs_path;
@@ -1084,6 +1090,28 @@ static bool* bx_tar_alloc_matched_members(const struct bx_tar_select_plan* selec
     return matched_members;
 }
 
+static uintmax_t* bx_tar_alloc_occurrence_counts(const struct bx_tar_select_plan* select_plan,
+                                                 uintmax_t occurrence) {
+    uintmax_t* occurrence_counts;
+
+    if (select_plan->len == 0u || occurrence == 0u) {
+        return NULL;
+    }
+    occurrence_counts = xmalloc(select_plan->len * sizeof(*occurrence_counts));
+    memset(occurrence_counts, 0, select_plan->len * sizeof(*occurrence_counts));
+    return occurrence_counts;
+}
+
+static bool bx_tar_validate_occurrence_selection(const struct bx_tar_options* options,
+                                                 const struct bx_tar_select_plan* select_plan,
+                                                 struct bx_diag_ctx* diag) {
+    if (options->occurrence == 0u || select_plan->len > 0u) {
+        return true;
+    }
+    bx_diag(diag, "--occurrence is meaningless without a file list");
+    return false;
+}
+
 static int bx_tar_timespec_compare(struct timespec left, struct timespec right);
 
 static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
@@ -1098,6 +1126,7 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
         || options->incremental_snapshot_path != NULL;
     state->starting_file_reached = options->starting_file == NULL;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
+    state->occurrence_counts = bx_tar_alloc_occurrence_counts(select_plan, options->occurrence);
     state->name_policy = (struct bx_tar_name_policy){
         .absolute_names = options->absolute_names,
         .strip_components = options->strip_components,
@@ -1115,6 +1144,7 @@ static void bx_tar_extract_state_cleanup(struct bx_tar_extract_state* state) {
     free(state->current_dest_path);
     state->current_dest_path = NULL;
     free(state->matched_members);
+    free(state->occurrence_counts);
     bx_archive_parent_dir_cache_cleanup(&state->parent_dir_cache);
     bx_archive_pending_dirs_free(&state->dirs);
 }
@@ -1137,10 +1167,12 @@ static void bx_tar_list_state_init(struct bx_tar_list_state* state,
         .transform = options->name_transform.active ? &options->name_transform : NULL,
     };
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
+    state->occurrence_counts = bx_tar_alloc_occurrence_counts(select_plan, options->occurrence);
 }
 
 static void bx_tar_list_state_cleanup(struct bx_tar_list_state* state) {
     free(state->matched_members);
+    free(state->occurrence_counts);
 }
 
 static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
@@ -1152,6 +1184,7 @@ static void bx_tar_compare_state_init(struct bx_tar_compare_state* state,
     state->report_stream = report_stream;
     state->select_plan = select_plan;
     state->matched_members = bx_tar_alloc_matched_members(select_plan);
+    state->occurrence_counts = bx_tar_alloc_occurrence_counts(select_plan, options->occurrence);
     state->current_fd = -1;
     state->name_policy = (struct bx_tar_name_policy){
         .absolute_names = options->absolute_names,
@@ -1169,6 +1202,7 @@ static void bx_tar_compare_state_cleanup(struct bx_tar_compare_state* state) {
     free(state->current_fs_path);
     state->current_fs_path = NULL;
     free(state->matched_members);
+    free(state->occurrence_counts);
 }
 
 static bool bx_tar_starting_file_gate_reached(bool* reached_io,
@@ -1844,11 +1878,13 @@ static bool bx_tar_compare_one_entry(struct bx_tar_compare_state* state,
     bool stripped_dotdot;
 
     bx_tar_compare_clear_current_stream(state);
-    if (!bx_tar_select_plan_match(state->select_plan,
-                                  entry->name,
-                                  state->select_plan->len == 0u,
-                                  state->matched_members,
-                                  NULL)) {
+    if (!bx_tar_select_plan_match_occurrence(state->select_plan,
+                                             entry->name,
+                                             state->select_plan->len == 0u,
+                                             state->matched_members,
+                                             state->options->occurrence,
+                                             state->occurrence_counts,
+                                             NULL)) {
         state->current_skip = true;
         return true;
     }
@@ -2145,7 +2181,11 @@ static bool bx_tar_compare_end_entry(struct bx_tar_compare_state* state,
 
 static int bx_tar_compare_finish(struct bx_tar_compare_state* state,
                                  struct bx_diag_ctx* diag) {
-    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
+    if (bx_tar_select_plan_report_unmatched_occurrence(state->select_plan,
+                                                       state->matched_members,
+                                                       state->options->occurrence,
+                                                       state->occurrence_counts,
+                                                       diag)) {
         state->status = 2;
     }
     if (state->status == 2) {
@@ -2251,11 +2291,13 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         return true;
     }
 
-    if (!bx_tar_select_plan_match(state->select_plan,
-                                  entry->name,
-                                  state->select_plan->len == 0u,
-                                  state->matched_members,
-                                  &extract_dir)) {
+    if (!bx_tar_select_plan_match_occurrence(state->select_plan,
+                                             entry->name,
+                                             state->select_plan->len == 0u,
+                                             state->matched_members,
+                                             state->options->occurrence,
+                                             state->occurrence_counts,
+                                             &extract_dir)) {
         bx_tar_extract_clear_current_stream(state);
         return true;
     }
@@ -2626,7 +2668,11 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
 
 static int bx_tar_extract_finish(struct bx_tar_extract_state* state,
                                  struct bx_diag_ctx* diag) {
-    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
+    if (bx_tar_select_plan_report_unmatched_occurrence(state->select_plan,
+                                                       state->matched_members,
+                                                       state->options->occurrence,
+                                                       state->occurrence_counts,
+                                                       diag)) {
         state->status = 2;
     }
     if (!bx_archive_pending_dirs_apply(&state->dirs, diag)) {
@@ -2651,11 +2697,13 @@ static bool bx_tar_list_one_entry(struct bx_tar_list_state* state,
                                            entry)) {
         return true;
     }
-    if (!bx_tar_select_plan_match(state->select_plan,
-                                  entry->name,
-                                  state->select_plan->len == 0u,
-                                  state->matched_members,
-                                  NULL)) {
+    if (!bx_tar_select_plan_match_occurrence(state->select_plan,
+                                             entry->name,
+                                             state->select_plan->len == 0u,
+                                             state->matched_members,
+                                             state->options->occurrence,
+                                             state->occurrence_counts,
+                                             NULL)) {
         return true;
     }
     clean_name = bx_tar_map_member_name(entry->name,
@@ -2710,7 +2758,11 @@ static bool bx_tar_list_stream_finish(void* user,
 
 static int bx_tar_list_finish(struct bx_tar_list_state* state,
                               struct bx_diag_ctx* diag) {
-    if (bx_tar_select_plan_report_unmatched(state->select_plan, state->matched_members, diag)) {
+    if (bx_tar_select_plan_report_unmatched_occurrence(state->select_plan,
+                                                       state->matched_members,
+                                                       state->options->occurrence,
+                                                       state->occurrence_counts,
+                                                       diag)) {
         bx_tar_report_previous_errors(diag);
         return 2;
     }
@@ -2977,6 +3029,8 @@ struct bx_tar_rewrite_stream_ctx {
     const struct bx_tar_reader_stream_options* reader_options;
     const struct bx_tar_select_plan* delete_plan;
     bool* matched_members;
+    uintmax_t* occurrence_counts;
+    uintmax_t occurrence;
     bool* had_selection_errors;
     const struct bx_archive_fs_list* appended_files;
     const struct bx_archive_name_list* source_archives;
@@ -3030,11 +3084,27 @@ static bool bx_tar_rewrite_stream_begin_entry(void* user,
                                               struct bx_diag_ctx* diag) {
     struct bx_tar_rewrite_visit_state* state = user;
     ssize_t match_index;
+    bool occurrence_selected = false;
 
     state->current_skip = false;
-    match_index = bx_tar_rewrite_find_delete_match(state->ctx->delete_plan, entry->name);
-    if (match_index >= 0) {
-        if (state->ctx->matched_members != NULL) {
+    match_index = -1;
+    if (state->ctx->delete_plan != NULL) {
+        if (state->ctx->occurrence > 0u) {
+            occurrence_selected = bx_tar_select_plan_match_occurrence(state->ctx->delete_plan,
+                                                                       entry->name,
+                                                                       false,
+                                                                       state->ctx->matched_members,
+                                                                       state->ctx->occurrence,
+                                                                       state->ctx->occurrence_counts,
+                                                                       NULL);
+        }
+        else {
+            match_index = bx_tar_rewrite_find_delete_match(state->ctx->delete_plan, entry->name);
+        }
+    }
+    if (occurrence_selected || match_index >= 0) {
+        if (state->ctx->occurrence == 0u
+            && state->ctx->matched_members != NULL) {
             state->ctx->matched_members[(size_t)match_index] = true;
         }
         state->current_skip = true;
@@ -3408,7 +3478,11 @@ static bool bx_tar_write_rewrite_stream_body(const struct bx_tar_rewrite_stream_
     }
     *total_bytes_written_out = bx_tar_total_archive_size_from_body(state.bytes_written);
     if (ctx->delete_plan != NULL
-        && bx_tar_select_plan_report_unmatched(ctx->delete_plan, ctx->matched_members, diag)) {
+        && bx_tar_select_plan_report_unmatched_occurrence(ctx->delete_plan,
+                                                          ctx->matched_members,
+                                                          ctx->occurrence,
+                                                          ctx->occurrence_counts,
+                                                          diag)) {
         if (ctx->had_selection_errors != NULL) {
             *ctx->had_selection_errors = true;
         }
@@ -3837,6 +3911,7 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
     struct bx_tar_select_plan select_plan = {0};
     char* snapshot_path = NULL;
     bool* matched_members = NULL;
+    uintmax_t* occurrence_counts = NULL;
     bool had_append_errors = false;
     bool had_postwrite_errors = false;
     bool had_selection_errors = false;
@@ -3849,6 +3924,11 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
                                      &options->create_options,
                                      &had_selection_errors,
                                      diag)) {
+        return 2;
+    }
+    if (options->mode == BX_TAR_MODE_DELETE
+        && !bx_tar_validate_occurrence_selection(options, &select_plan, diag)) {
+        bx_tar_select_plan_cleanup(&select_plan);
         return 2;
     }
 
@@ -3887,7 +3967,10 @@ static int bx_tar_rewrite_archive(const struct bx_tar_options* options,
 
     if (options->mode == BX_TAR_MODE_DELETE) {
         matched_members = bx_tar_alloc_matched_members(&select_plan);
+        occurrence_counts = bx_tar_alloc_occurrence_counts(&select_plan, options->occurrence);
         rewrite_ctx.matched_members = matched_members;
+        rewrite_ctx.occurrence_counts = occurrence_counts;
+        rewrite_ctx.occurrence = options->occurrence;
     }
     {
         size_t compress_threads = bx_tar_effective_compress_threads(options);
@@ -3931,6 +4014,7 @@ postwrite:
     }
 out:
     free(matched_members);
+    free(occurrence_counts);
     if (snapshot_path != NULL) {
         unlink(snapshot_path);
         free(snapshot_path);
@@ -3982,6 +4066,28 @@ static bool bx_tar_create_has_inputs(const struct bx_tar_options* options,
                                      int argc) {
     (void)argc;
     return bx_tar_create_options_has_inputs(&options->create_options);
+}
+
+static const char* bx_tar_occurrence_mode_option(enum bx_tar_mode mode) {
+    switch (mode) {
+        case BX_TAR_MODE_CREATE:
+            return "-c";
+        case BX_TAR_MODE_APPEND:
+            return "-r";
+        case BX_TAR_MODE_UPDATE:
+            return "-u";
+        case BX_TAR_MODE_CATENATE:
+            return "-A";
+        case BX_TAR_MODE_TEST_LABEL:
+            return "--test-label";
+        case BX_TAR_MODE_NONE:
+        case BX_TAR_MODE_COMPARE:
+        case BX_TAR_MODE_LIST:
+        case BX_TAR_MODE_EXTRACT:
+        case BX_TAR_MODE_DELETE:
+            return NULL;
+    }
+    return NULL;
 }
 
 static bool bx_tar_report_missing_mode(const struct bx_diag_ctx* diag) {
@@ -4193,6 +4299,18 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
         case BX_TAR_OPT_INCREMENTAL:
             options->incremental_mode = true;
             return true;
+        case BX_TAR_OPT_OCCURRENCE: {
+            uintmax_t parsed = 1u;
+
+            if (value != NULL
+                && (!bx_size_parse_uint(value, &parsed)
+                    || parsed > (uintmax_t)INTMAX_MAX)) {
+                bx_diag(diag, "%s: Invalid number", value != NULL ? value : "");
+                return false;
+            }
+            options->occurrence = parsed;
+            return true;
+        }
         case BX_TAR_OPT_THREADS:
             return bx_thread_count_parse(diag->progname, "--threads", value, &options->threads);
         case BX_TAR_OPT_COMPRESS_THREADS:
@@ -4505,6 +4623,9 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
                 }
                 parsed_value = value ? value + 1 : argv[i];
             }
+            else if (spec->arg_mode == BX_TAR_OPTARG_OPTIONAL && value != NULL) {
+                parsed_value = value + 1;
+            }
 
             if (!bx_tar_apply_option_effect(options, spec->effect, spec->name, parsed_value, diag)) {
                 return false;
@@ -4574,6 +4695,14 @@ static bool bx_tar_parse_options(struct bx_tar_options* options,
     if (options->archive_path == NULL) {
         bx_diag(diag, "archive file not specified; use -f");
         return false;
+    }
+    if (options->occurrence > 0u) {
+        const char* mode_option = bx_tar_occurrence_mode_option(options->mode);
+
+        if (mode_option != NULL) {
+            bx_diag(diag, "'--occurrence' cannot be used with '%s'", mode_option);
+            return false;
+        }
     }
     if (options->incremental_snapshot_path != NULL && options->format_ustar) {
         bx_diag(diag, "GNU features wanted on incompatible archive format");
@@ -4778,6 +4907,11 @@ int bx_tar_run(int argc, char** argv) {
                                       &options.create_options,
                                       &had_selection_errors,
                                       &diag)) {
+            bx_tar_options_cleanup(&options);
+            return 2;
+        }
+        if (!bx_tar_validate_occurrence_selection(&options, &select_plan, &diag)) {
+            bx_tar_select_plan_cleanup(&select_plan);
             bx_tar_options_cleanup(&options);
             return 2;
         }
