@@ -12,6 +12,7 @@
 
 struct bx_tar_stream_options {
     bool format_ustar;
+    bool old_gnu;
     bool numeric_owner;
     bool owner_set;
     bool group_set;
@@ -22,6 +23,12 @@ struct bx_tar_stream_options {
     struct timespec mtime;
     const struct bx_tar_id_map* owner_map;
     const struct bx_tar_id_map* group_map;
+    bool (*directory_data_fn)(const char* archive_path,
+                              const unsigned char** data_out,
+                              size_t* data_len_out,
+                              void* user_data,
+                              struct bx_diag_ctx* diag);
+    void* directory_data_user_data;
 };
 
 struct bx_tar_sparse_extent;
@@ -29,6 +36,7 @@ struct bx_tar_sparse_extent;
 enum bx_tar_stream_kind {
     BX_TAR_STREAM_KIND_REG = 0,
     BX_TAR_STREAM_KIND_DIR,
+    BX_TAR_STREAM_KIND_DUMP_DIR,
     BX_TAR_STREAM_KIND_SYMLINK,
     BX_TAR_STREAM_KIND_HARDLINK,
     BX_TAR_STREAM_KIND_FIFO,
