@@ -69,6 +69,12 @@ enum bx_tar_old_file_mode {
     BX_TAR_OLD_FILES_KEEP_NEWER,
 };
 
+enum bx_tar_owner_policy {
+    BX_TAR_OWNER_DEFAULT = 0,
+    BX_TAR_OWNER_FORCE,
+    BX_TAR_OWNER_DISABLE,
+};
+
 struct bx_tar_options {
     enum bx_tar_mode mode;
     const char* unsupported_mode;
@@ -102,6 +108,7 @@ struct bx_tar_options {
     struct bx_tar_id_map group_map;
     bool fixed_mtime;
     struct timespec mtime;
+    enum bx_tar_owner_policy owner_policy;
     bool xattrs;
     bool acls;
     bool no_mt;
@@ -217,6 +224,8 @@ enum bx_tar_option_effect {
     BX_TAR_OPT_GROUP,
     BX_TAR_OPT_GROUP_MAP,
     BX_TAR_OPT_OWNER_MAP,
+    BX_TAR_OPT_OWNER_RESTORE_ON,
+    BX_TAR_OPT_OWNER_RESTORE_OFF,
     BX_TAR_OPT_XATTRS_ON,
     BX_TAR_OPT_XATTRS_OFF,
     BX_TAR_OPT_ACLS_ON,
@@ -330,11 +339,11 @@ static const struct bx_tar_long_option_spec bx_tar_long_options[] = {
     {"--mode", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MODE},
     {"--mtime", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_MTIME},
     {"--touch", BX_TAR_OPTARG_NONE, BX_TAR_OPT_TOUCH_MTIME_ON},
-    {"--no-same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--no-same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_OFF},
     {"--no-same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--preserve-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {"--same-permissions", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {"--same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {"--same-owner", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_ON},
     {"--set-mtime-command", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--set-mtime-format", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_NOOP},
     {"--sort", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_SORT},
@@ -462,7 +471,7 @@ static const struct bx_tar_short_option_spec bx_tar_short_options[] = {
     {'R', "-R", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'v', "-v", BX_TAR_OPTARG_NONE, BX_TAR_OPT_VERBOSE},
     {'w', "-w", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
-    {'o', "-o", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
+    {'o', "-o", BX_TAR_OPTARG_NONE, BX_TAR_OPT_OWNER_RESTORE_OFF},
     {'f', "-f", BX_TAR_OPTARG_REQUIRED, BX_TAR_OPT_ARCHIVE_PATH},
     {'?', "-?", BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
     {'\0', NULL, BX_TAR_OPTARG_NONE, BX_TAR_OPT_NOOP},
@@ -1024,6 +1033,7 @@ static bool bx_tar_write_create_archive_stream_mt_direct(bx_tar_stream_fs_entry_
 
 struct bx_tar_extract_state {
     const struct bx_tar_options* options;
+    bool restore_owner;
     FILE* report_stream;
     const struct bx_tar_select_plan* select_plan;
     bool incremental_mode;
@@ -1042,8 +1052,8 @@ struct bx_tar_extract_state {
     struct timespec current_mtime;
     uid_t current_owner;
     gid_t current_group;
-    bool current_owner_mapped;
-    bool current_group_mapped;
+    bool current_owner_restore;
+    bool current_group_restore;
     bool current_sparse;
     size_t current_sparse_extent_index;
     size_t current_sparse_extent_offset;
@@ -1133,6 +1143,8 @@ static void bx_tar_extract_state_init(struct bx_tar_extract_state* state,
                                       FILE* report_stream) {
     memset(state, 0, sizeof(*state));
     state->options = options;
+    state->restore_owner = options->owner_policy == BX_TAR_OWNER_FORCE
+        || (options->owner_policy == BX_TAR_OWNER_DEFAULT && geteuid() == 0);
     state->report_stream = report_stream;
     state->select_plan = select_plan;
     state->incremental_mode = options->incremental_mode
@@ -1579,8 +1591,8 @@ static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* sta
     state->current_mtime.tv_nsec = 0;
     state->current_owner = 0;
     state->current_group = 0;
-    state->current_owner_mapped = false;
-    state->current_group_mapped = false;
+    state->current_owner_restore = false;
+    state->current_group_restore = false;
     state->current_sparse = false;
     state->current_sparse_extent_index = 0u;
     state->current_sparse_extent_offset = 0u;
@@ -1589,53 +1601,34 @@ static void bx_tar_extract_clear_current_stream(struct bx_tar_extract_state* sta
     state->current_dest_path = NULL;
 }
 
-static bool bx_tar_extract_map_entry_ids(const struct bx_tar_extract_state* state,
-                                         const struct bx_tar_entry* entry,
-                                         uid_t* owner_out,
-                                         gid_t* group_out,
-                                         bool* owner_mapped_out,
-                                         bool* group_mapped_out) {
+static void bx_tar_extract_entry_ids(const struct bx_tar_extract_state* state,
+                                     const struct bx_tar_entry* entry,
+                                     uid_t* owner_out,
+                                     gid_t* group_out,
+                                     bool* owner_restore_out,
+                                     bool* group_restore_out) {
     *owner_out = entry->uid;
     *group_out = entry->gid;
-    *owner_mapped_out = false;
-    *group_mapped_out = false;
-
-    if (state->options->owner_map.len > 0u
-        && bx_tar_id_map_apply_owner(&state->options->owner_map,
-                                     entry->uid,
-                                     entry->uname,
-                                     owner_out,
-                                     NULL)) {
-        *owner_mapped_out = true;
-    }
-    if (state->options->group_map.len > 0u
-        && bx_tar_id_map_apply_group(&state->options->group_map,
-                                     entry->gid,
-                                     entry->gname,
-                                     group_out,
-                                     NULL)) {
-        *group_mapped_out = true;
-    }
-
-    return true;
+    *owner_restore_out = state->restore_owner;
+    *group_restore_out = state->restore_owner;
 }
 
 static bool bx_tar_extract_apply_path_ownership(const char* path,
                                                 bool nofollow,
                                                 uid_t owner,
                                                 gid_t group,
-                                                bool owner_mapped,
-                                                bool group_mapped,
+                                                bool owner_restore,
+                                                bool group_restore,
                                                 struct bx_diag_ctx* diag) {
     int rc;
 
-    if (!owner_mapped && !group_mapped) {
+    if (!owner_restore && !group_restore) {
         return true;
     }
 
     rc = nofollow
-        ? lchown(path, owner_mapped ? owner : (uid_t)-1, group_mapped ? group : (gid_t)-1)
-        : chown(path, owner_mapped ? owner : (uid_t)-1, group_mapped ? group : (gid_t)-1);
+        ? lchown(path, owner_restore ? owner : (uid_t)-1, group_restore ? group : (gid_t)-1)
+        : chown(path, owner_restore ? owner : (uid_t)-1, group_restore ? group : (gid_t)-1);
     if (rc != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
         return false;
@@ -2342,10 +2335,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
     const char* report_name;
     bool stripped_absolute;
     bool stripped_dotdot;
-    uid_t mapped_owner = 0;
-    gid_t mapped_group = 0;
-    bool owner_mapped = false;
-    bool group_mapped = false;
+    uid_t archive_owner = 0;
+    gid_t archive_group = 0;
+    bool owner_restore = false;
+    bool group_restore = false;
 
     if (!bx_tar_starting_file_gate_reached(&state->starting_file_reached,
                                            state->options->starting_file,
@@ -2407,12 +2400,12 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         return ok;
     }
 
-    bx_tar_extract_map_entry_ids(state,
-                                 entry,
-                                 &mapped_owner,
-                                 &mapped_group,
-                                 &owner_mapped,
-                                 &group_mapped);
+    bx_tar_extract_entry_ids(state,
+                             entry,
+                             &archive_owner,
+                             &archive_group,
+                             &owner_restore,
+                             &group_restore);
 
     dest_path = extract_dir ? bx_path_join(extract_dir, clean_name.text) : xstrdup(clean_name.text);
 
@@ -2493,10 +2486,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,
-                                                 mapped_owner,
-                                                 mapped_group,
-                                                 owner_mapped,
-                                                 group_mapped,
+                                                 archive_owner,
+                                                 archive_group,
+                                                 owner_restore,
+                                                 group_restore,
                                                  diag)) {
             free(dest_path);
             return false;
@@ -2534,10 +2527,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         state->current_dest_path = dest_path;
         state->current_mode_bits = entry->mode;
         state->current_mtime = entry->mtime;
-        state->current_owner = mapped_owner;
-        state->current_group = mapped_group;
-        state->current_owner_mapped = owner_mapped;
-        state->current_group_mapped = group_mapped;
+        state->current_owner = archive_owner;
+        state->current_group = archive_group;
+        state->current_owner_restore = owner_restore;
+        state->current_group_restore = group_restore;
         state->current_stream_mode = BX_TAR_EXTRACT_STREAM_FILE;
         state->current_sparse = entry->sparse;
         return true;
@@ -2560,10 +2553,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  true,
-                                                 mapped_owner,
-                                                 mapped_group,
-                                                 owner_mapped,
-                                                 group_mapped,
+                                                 archive_owner,
+                                                 archive_group,
+                                                 owner_restore,
+                                                 group_restore,
                                                  diag)) {
             free(dest_path);
             return false;
@@ -2596,10 +2589,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         free(target);
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,
-                                                 mapped_owner,
-                                                 mapped_group,
-                                                 owner_mapped,
-                                                 group_mapped,
+                                                 archive_owner,
+                                                 archive_group,
+                                                 owner_restore,
+                                                 group_restore,
                                                  diag)) {
             free(dest_path);
             return false;
@@ -2623,10 +2616,10 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,
-                                                 mapped_owner,
-                                                 mapped_group,
-                                                 owner_mapped,
-                                                 group_mapped,
+                                                 archive_owner,
+                                                 archive_group,
+                                                 owner_restore,
+                                                 group_restore,
                                                  diag)) {
             free(dest_path);
             return false;
@@ -2700,10 +2693,10 @@ static bool bx_tar_extract_end_entry(struct bx_tar_extract_state* state,
             return false;
         }
     }
-    if (state->current_owner_mapped || state->current_group_mapped) {
+    if (state->current_owner_restore || state->current_group_restore) {
         if (fchown(fd,
-                   state->current_owner_mapped ? state->current_owner : (uid_t)-1,
-                   state->current_group_mapped ? state->current_group : (gid_t)-1) != 0) {
+                   state->current_owner_restore ? state->current_owner : (uid_t)-1,
+                   state->current_group_restore ? state->current_group : (gid_t)-1) != 0) {
             bx_diag(diag, "%s: %s", dest_path, strerror(errno));
             bx_tar_extract_clear_current_stream(state);
             return false;
@@ -4551,6 +4544,12 @@ static bool bx_tar_apply_option_effect(struct bx_tar_options* options,
             return bx_tar_id_map_load_group(&options->group_map, value, diag);
         case BX_TAR_OPT_OWNER_MAP:
             return bx_tar_id_map_load_owner(&options->owner_map, value, diag);
+        case BX_TAR_OPT_OWNER_RESTORE_ON:
+            options->owner_policy = BX_TAR_OWNER_FORCE;
+            return true;
+        case BX_TAR_OPT_OWNER_RESTORE_OFF:
+            options->owner_policy = BX_TAR_OWNER_DISABLE;
+            return true;
         case BX_TAR_OPT_XATTRS_ON:
             options->xattrs = true;
             return true;
