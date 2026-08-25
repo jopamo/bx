@@ -62,8 +62,8 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
 
 
 def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[str, object]]) -> None:
-    if [entry["name"] for entry in boot_critical[:2]] != ["init", "switch_root"]:
-        raise SystemExit("boot-critical dispatch order must begin with init, switch_root")
+    if not boot_critical or boot_critical[0]["name"] != "switch_root":
+        raise SystemExit("boot-critical dispatch order must begin with switch_root")
 
     seen: dict[str, str] = {}
     for group, entries in (("boot_critical", boot_critical), ("applets", applets)):

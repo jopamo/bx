@@ -119,7 +119,7 @@ static int sort_cmp_sign(int value) {
 }
 
 static void sort_report_errno(const char* progname, const char* path) {
-    fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errno));
+    fprintf(stderr, "%s: %s: %s\n", progname, path, bx_strerror(errno));
 }
 
 static void sort_report_memory_exhausted(const char* progname) {

@@ -19,6 +19,23 @@ struct bx_diag_ctx {
     void* emit_user;
 };
 
+/*
+ * Keep replayed diagnostics byte-stable across supported libc
+ * implementations. Other errno text remains libc-owned.
+ */
+static inline const char* bx_strerror(int errnum) {
+    switch (errnum) {
+    case ENOMEM:
+        return "Out of memory";
+    case ESPIPE:
+        return "Invalid seek";
+    case ELOOP:
+        return "Symbolic link loop";
+    default:
+        return strerror(errnum);
+    }
+}
+
 static inline void bx_vdiag(const struct bx_diag_ctx* ctx, const char* fmt, va_list ap) {
     if (ctx->emit != NULL) {
         va_list ap_copy;
@@ -55,18 +72,18 @@ static inline void bx_diag(struct bx_diag_ctx* ctx, const char* fmt, ...) {
 
 static inline void bx_perror_path(struct bx_diag_ctx* ctx, const char* path) {
     if (ctx->emit != NULL) {
-        size_t needed = strlen(path) + 2u + strlen(strerror(errno)) + 1u;
+        size_t needed = strlen(path) + 2u + strlen(bx_strerror(errno)) + 1u;
         char* message = malloc(needed);
 
         if (message != NULL) {
-            (void)snprintf(message, needed, "%s: %s", path, strerror(errno));
+            (void)snprintf(message, needed, "%s: %s", path, bx_strerror(errno));
             ctx->emit(ctx->emit_user, ctx->progname, message);
             free(message);
             ctx->exit_status = 1;
             return;
         }
     }
-    fprintf(stderr, "%s: %s: %s\n", ctx->progname, path, strerror(errno));
+    fprintf(stderr, "%s: %s: %s\n", ctx->progname, path, bx_strerror(errno));
     ctx->exit_status = 1;
 }
 
@@ -122,7 +139,7 @@ static inline void bx_fatal(int code, const char* fmt, ...) {
     exit(code);
 }
 
-#define bx_perror(msg) fprintf(stderr, "bx: %s: %s\n", msg, strerror(errno))
+#define bx_perror(msg) fprintf(stderr, "bx: %s: %s\n", msg, bx_strerror(errno))
 
 #define bx_pfatal(code, msg) \
     do {                     \

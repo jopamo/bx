@@ -34,6 +34,9 @@ struct bx_matcher {
 };
 
 static char *bx_regex_strerror_dup(int rc, const regex_t *regex) {
+    if (rc == REG_EPAREN)
+        return strdup("Unmatched ( or \\(");
+
     size_t needed = regerror(rc, regex, NULL, 0);
     char *buf = malloc(needed > 0 ? needed : 1u);
 

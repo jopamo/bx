@@ -38,7 +38,6 @@ int bx_dhcp_main(int argc, char** argv);
 int bx_nice_main(int argc, char** argv);
 int bx_nohup_main(int argc, char** argv);
 int bx_timeout_main(int argc, char** argv);
-int bx_init_main(int argc, char** argv);
 int bx_switch_root_main(int argc, char** argv);
 int bx_chroot_main(int argc, char** argv);
 int bx_mount_main(int argc, char** argv);

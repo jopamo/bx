@@ -523,7 +523,6 @@ bx_system_applet_sources = [
   'src/applets/system/dmesg/dmesg.c',
   'src/applets/system/fuser/fuser.c',
   'src/applets/system/getty/getty.c',
-  'src/applets/system/init/init.c',
   'src/applets/system/install/install.c',
   'src/applets/system/kill/kill.c',
   'src/applets/system/killall/killall.c',
@@ -1423,15 +1422,11 @@ applet_names = run_command(
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
-install_init_shortcut = get_option('install_init_shortcut')
 install_wget_shortcut = mira_embed_enabled
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
-if install_init_shortcut and install_bindir.startswith('/usr/')
-  install_bx_bindir = '/bin'
-endif
 install_bx_path = join_paths(install_bx_bindir, 'bx')
 applet_link_target = 'bx'
 if install_bx_bindir != install_bindir
@@ -1464,9 +1459,6 @@ if multicall_install_mode == 'symlink'
     if applet == 'sh' and not install_sh_shortcut
       continue
     endif
-    if applet == 'init' and not install_init_shortcut
-      continue
-    endif
     if applet == 'wget' and not install_wget_shortcut
       continue
     endif
@@ -1484,9 +1476,6 @@ if multicall_install_mode == 'symlink'
 else
   foreach applet : applet_names
     if applet == 'sh' and not install_sh_shortcut
-      continue
-    endif
-    if applet == 'init' and not install_init_shortcut
       continue
     endif
     if applet == 'wget' and not install_wget_shortcut
@@ -1511,22 +1500,6 @@ else
       install_mode : 'rwxr-xr-x'
     )
   endforeach
-endif
-
-if install_init_shortcut
-  if install_bx_bindir != '/'
-    install_symlink('init',
-      pointing_to : install_bx_path,
-      install_dir : '/'
-    )
-  endif
-
-  if install_bx_bindir != '/sbin'
-    install_symlink('init',
-      pointing_to : install_bx_path,
-      install_dir : '/sbin'
-    )
-  endif
 endif
 
 if get_option('install_ls_colors')
