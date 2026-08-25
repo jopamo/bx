@@ -3,14 +3,6 @@
   "basis": "Central applet dispatch manifest. Generated C applet registry tables are built from this file; src/bx/main.c must not hand-maintain applet tables or capability flags.",
   "boot_critical": [
     {
-      "name": "init",
-      "main": "bx_init_main",
-      "capabilities": [
-        "filesystem-read",
-        "privilege-sensitive"
-      ]
-    },
-    {
       "name": "switch_root",
       "main": "bx_switch_root_main",
       "capabilities": [

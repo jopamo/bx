@@ -748,7 +748,7 @@ int bx_numfmt_main(int argc, char** argv) {
     }
     free(line);
     if (read_errno != 0) {
-        bx_diag(&diag, "standard input: %s", strerror(read_errno));
+        bx_diag(&diag, "standard input: %s", bx_strerror(read_errno));
     }
 
     return diag.exit_status;

@@ -34,7 +34,13 @@ bool find_compile_regex(const char *progname, const char *optname,
         return true;
 
     char errbuf[256];
-    regerror(rc, out, errbuf, sizeof(errbuf));
+    if (rc == REG_EBRACK) {
+        snprintf(errbuf, sizeof(errbuf), "Missing ']'");
+    } else if (rc == REG_BADBR) {
+        snprintf(errbuf, sizeof(errbuf), "Invalid contents of {}");
+    } else {
+        regerror(rc, out, errbuf, sizeof(errbuf));
+    }
     fprintf(stderr, "%s: invalid argument to %s: %s (%s)\n",
             progname, optname, pattern ? pattern : "(null)", errbuf);
     return false;

@@ -154,7 +154,7 @@ static bool ash_diag_oom(const struct ash_shell* shell) {
 }
 
 static void ash_exec_error(const struct ash_shell* shell, const char* path, int err) {
-    fprintf(stderr, "%s: %s: %s\n", shell->progname, path, strerror(err));
+    fprintf(stderr, "%s: %s: %s\n", shell->progname, path, bx_strerror(err));
 }
 
 static void ash_exec_not_found(const struct ash_shell* shell, const char* path) {

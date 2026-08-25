@@ -1278,6 +1278,11 @@ static bool value_to_bigint_required(const struct expr_value* value, struct expr
 }
 
 static bool regex_set_error(int rc, regex_t* re, struct expr_eval_ctx* ctx, const char* prefix) {
+    if (rc == REG_ESPACE) {
+        eval_set_error(ctx, "%s: Out of memory", prefix);
+        return false;
+    }
+
     size_t needed = regerror(rc, re, NULL, 0);
     char* buf = xmalloc(needed > 0 ? needed : 1);
     (void)regerror(rc, re, buf, needed > 0 ? needed : 1);

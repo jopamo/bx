@@ -890,7 +890,7 @@ int bx_date_main(int argc, char** argv) {
         bool is_stdio = false;
         FILE* f = bx_fopen_dash(options.file, "r", &is_stdio);
         if (!f) {
-            bx_diag(&diag, "%s: %s", options.file, strerror(errno));
+            bx_diag(&diag, "%s: %s", options.file, bx_strerror(errno));
             return 1;
         }
         char* line = NULL;
@@ -917,7 +917,7 @@ int bx_date_main(int argc, char** argv) {
         if (!is_stdio && fclose(f) != 0 && read_errno == 0)
             read_errno = errno != 0 ? errno : EIO;
         if (read_errno != 0) {
-            bx_diag(&diag, "%s: %s", options.file, strerror(read_errno));
+            bx_diag(&diag, "%s: %s", options.file, bx_strerror(read_errno));
             return 1;
         }
         return diag.exit_status;

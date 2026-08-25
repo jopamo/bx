@@ -44,9 +44,3 @@ option(
   value : false,
   description : 'Install applet shortcuts that can collide with procps/systemd/iputils/iproute2/util-linux binaries'
 )
-option(
-  'install_init_shortcut',
-  type : 'boolean',
-  value : false,
-  description : 'Install init multicall shortcut plus /init and /sbin/init entrypoint symlinks'
-)

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bx/diag.h"
 #include "lib/cancel_state.h"
 #include "walk_internal.h"
 
@@ -37,12 +38,12 @@ void bx_walk_report_error(const struct bx_walk_opts *opts, const char *path, int
 
     if (opts && opts->os_error_style) {
         fprintf(stderr, "%s: %s: %s (os error %d)\n",
-                bx_walk_error_prefix(opts), path, strerror(errnum), errnum);
+                bx_walk_error_prefix(opts), path, bx_strerror(errnum), errnum);
         return;
     }
 
     fprintf(stderr, "%s: %s: %s\n",
-            bx_walk_error_prefix(opts), path, strerror(errnum));
+            bx_walk_error_prefix(opts), path, bx_strerror(errnum));
 }
 
 void bx_walk_report_loop(const struct bx_walk_opts *opts, const char *path) {

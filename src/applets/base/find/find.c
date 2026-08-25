@@ -5,10 +5,11 @@
 #include <string.h>
 
 #include "applets.h"
+#include "bx/diag.h"
 #include "find_internal.h"
 
 void find_report_error(const char *progname, const char *path, int errnum) {
-    fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errnum));
+    fprintf(stderr, "%s: %s: %s\n", progname, path, bx_strerror(errnum));
 }
 
 int bx_find_main(int argc, char **argv) {
