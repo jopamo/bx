@@ -5,7 +5,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
 
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_.+\\[-][A-Za-z0-9_.+\\[-]*$")
@@ -77,37 +76,6 @@ def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[
             seen[name] = group
 
 
-def source_root_from_manifest(manifest_path: Path) -> Path:
-    resolved = manifest_path.resolve()
-    if (
-        resolved.name == "applets.json"
-        and resolved.parent.name == "dispatch"
-        and resolved.parent.parent.name == "src"
-    ):
-        return resolved.parent.parent.parent
-    raise SystemExit(f"cannot derive source root from dispatch manifest path: {manifest_path}")
-
-
-def load_audit_generator() -> Any:
-    audit_tools = Path(__file__).resolve().parents[1] / "audit"
-    sys.path.insert(0, str(audit_tools))
-    try:
-        import generate_applets_json  # type: ignore[import-not-found]
-    finally:
-        try:
-            sys.path.remove(str(audit_tools))
-        except ValueError:
-            pass
-    return generate_applets_json
-
-
-def classification_records(source_root: Path, names: list[str]) -> dict[str, dict[str, object]]:
-    audit_generator = load_audit_generator()
-    _path, policy = audit_generator.load_classification_policy(source_root)
-    records = audit_generator.validate_classification_policy(policy, inventory_names=set(names))
-    return records
-
-
 def dispatch_names(boot_critical: list[dict[str, object]], applets: list[dict[str, object]]) -> list[str]:
     return [str(entry["name"]) for entry in boot_critical] + [str(entry["name"]) for entry in applets]
 
@@ -154,31 +122,12 @@ def metadata_record(
     entry: dict[str, object],
     boot_critical: bool,
     aliases: list[str],
-    classification: dict[str, object],
-    audit_generator: Any,
 ) -> dict[str, object]:
-    risk_labels = audit_generator.risk_labels_record(classification)
-    audit_requirement = audit_generator.audit_requirement_record(classification)
     return {
         "name": str(entry["name"]),
         "boot_critical": boot_critical,
         "capabilities": [str(capability) for capability in entry["capabilities"]],
         "aliases": aliases,
-        "security_risk_labels": [
-            str(label)
-            for label in risk_labels.get("security_labels", [])
-            if isinstance(label, str)
-        ],
-        "performance_risk_labels": [
-            str(label)
-            for label in risk_labels.get("performance_labels", [])
-            if isinstance(label, str)
-        ],
-        "audit_levels": [
-            str(level)
-            for level in audit_requirement.get("levels", [])
-            if isinstance(level, str)
-        ],
     }
 
 
@@ -189,11 +138,8 @@ def write_dispatch_c(
     boot_critical: list[dict[str, object]],
     applets: list[dict[str, object]],
 ) -> None:
-    source_root = source_root_from_manifest(manifest_path)
     raw_entries = boot_critical + applets
-    classifications = classification_records(source_root, dispatch_names(boot_critical, applets))
     aliases = aliases_by_name(raw_entries)
-    audit_generator = load_audit_generator()
     entries = [
         (str(entry["name"]), str(entry["main"]), entry["capabilities"], True, entry)
         for entry in boot_critical
@@ -206,8 +152,6 @@ def write_dispatch_c(
             entry=entry,
             boot_critical=bool(boot),
             aliases=aliases[str(entry["name"])],
-            classification=classifications[str(entry["name"])],
-            audit_generator=audit_generator,
         )
         for _name, _main, _capabilities, boot, entry in entries
     ]
@@ -249,40 +193,12 @@ def write_dispatch_c(
             [str(item) for item in record["aliases"]],
             lines,
         )
-        string_list_var(
-            "bx_applet_metadata",
-            index,
-            "security_risk_labels",
-            [str(item) for item in record["security_risk_labels"]],
-            lines,
-        )
-        string_list_var(
-            "bx_applet_metadata",
-            index,
-            "performance_risk_labels",
-            [str(item) for item in record["performance_risk_labels"]],
-            lines,
-        )
-        string_list_var(
-            "bx_applet_metadata",
-            index,
-            "audit_levels",
-            [str(item) for item in record["audit_levels"]],
-            lines,
-        )
-
     lines.append("static const struct bx_applet_metadata bx_applet_metadata[] = {")
     for index, record in enumerate(metadata_records):
         capabilities_var = c_identifier("bx_applet_metadata", index, "capabilities")
         aliases_var = c_identifier("bx_applet_metadata", index, "aliases")
-        security_var = c_identifier("bx_applet_metadata", index, "security_risk_labels")
-        performance_var = c_identifier("bx_applet_metadata", index, "performance_risk_labels")
-        audit_var = c_identifier("bx_applet_metadata", index, "audit_levels")
         capabilities = record["capabilities"]
         aliases_for_record = record["aliases"]
-        security_labels = record["security_risk_labels"]
-        performance_labels = record["performance_risk_labels"]
-        audit_levels = record["audit_levels"]
         lines.append("    {")
         lines.append(f"        .name = {c_string(str(record['name']))},")
         lines.append(f"        .boot_critical = {'true' if record['boot_critical'] else 'false'},")
@@ -290,12 +206,6 @@ def write_dispatch_c(
         lines.append(f"        .capability_count = {len(capabilities)}u,")
         lines.append(f"        .aliases = {aliases_var if aliases_for_record else 'NULL'},")
         lines.append(f"        .alias_count = {len(aliases_for_record)}u,")
-        lines.append(f"        .security_risk_labels = {security_var if security_labels else 'NULL'},")
-        lines.append(f"        .security_risk_label_count = {len(security_labels)}u,")
-        lines.append(f"        .performance_risk_labels = {performance_var if performance_labels else 'NULL'},")
-        lines.append(f"        .performance_risk_label_count = {len(performance_labels)}u,")
-        lines.append(f"        .audit_levels = {audit_var if audit_levels else 'NULL'},")
-        lines.append(f"        .audit_level_count = {len(audit_levels)}u,")
         lines.append("    },")
     lines.append("};")
     lines.append("")

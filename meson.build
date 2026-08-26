@@ -280,8 +280,6 @@ dispatch_tables_src = custom_target(
   ],
   depend_files : files(
     'tools/dispatch/generate_dispatch_tables.py',
-    'tools/audit/generate_applets_json.py',
-    'audit/applet-classifications.json',
   ),
 )
 
@@ -1544,10 +1542,4 @@ if get_option('install_ls_colors')
     install_dir : join_paths(get_option('sysconfdir'), 'profile.d'),
     install_mode : 'rw-r--r--'
   )
-endif
-
-subdir('audit')
-
-if get_option('tests')
-  warning('bx tests moved to the sibling bx-tests Meson project; run meson test from ../bx-tests instead')
 endif

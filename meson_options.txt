@@ -1,4 +1,3 @@
-option('tests', type : 'boolean', value : false, description : 'Deprecated: tests moved to the sibling bx-tests Meson project')
 option(
   'build_version',
   type : 'string',

@@ -592,13 +592,7 @@ static int run_list_applets_mode(int argc, char** argv, int first_arg_index, str
         print_json_string_list(metadata->capabilities, metadata->capability_count);
         fputs(",\"aliases\":", stdout);
         print_json_string_list(metadata->aliases, metadata->alias_count);
-        fputs(",\"risk_labels\":{\"security\":", stdout);
-        print_json_string_list(metadata->security_risk_labels, metadata->security_risk_label_count);
-        fputs(",\"performance\":", stdout);
-        print_json_string_list(metadata->performance_risk_labels, metadata->performance_risk_label_count);
-        fputs("},\"audit\":{\"required_levels\":", stdout);
-        print_json_string_list(metadata->audit_levels, metadata->audit_level_count);
-        fputs("}}", stdout);
+        fputc('}', stdout);
     }
     fputs("]}\n", stdout);
     bx_runtime_snapshot_destroy(runtime);

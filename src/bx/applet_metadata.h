@@ -11,12 +11,6 @@ struct bx_applet_metadata {
     size_t capability_count;
     const char* const* aliases;
     size_t alias_count;
-    const char* const* security_risk_labels;
-    size_t security_risk_label_count;
-    const char* const* performance_risk_labels;
-    size_t performance_risk_label_count;
-    const char* const* audit_levels;
-    size_t audit_level_count;
 };
 
 size_t bx_applet_metadata_count(void);
