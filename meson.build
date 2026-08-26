@@ -32,6 +32,10 @@ screen_system_rc_path = join_paths(get_option('prefix'), get_option('sysconfdir'
 edit_vim_runtime_install_subdir = join_paths(get_option('datadir'), 'bx', 'vim')
 edit_vim_runtime_install_path = join_paths(get_option('prefix'), edit_vim_runtime_install_subdir)
 edit_vim_runtime_source_path = join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'edit', 'runtime')
+stdbuf_install_subdir = join_paths(get_option('libexecdir'), 'bx')
+stdbuf_installed_path = join_paths(get_option('prefix'), stdbuf_install_subdir, 'libstdbuf.so')
+add_project_arguments('-DBX_STDBUF_INSTALLED_PATH="' + stdbuf_installed_path + '"', language : 'c')
+add_project_arguments('-DBX_STDBUF_INSTALL_SUBDIR="' + stdbuf_install_subdir + '"', language : 'c')
 
 cc = meson.get_compiler('c')
 can_run = meson.can_run_host_binaries()
@@ -320,6 +324,7 @@ bx_lib_sources = [
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
   'src/lib/path_quote.c',
+  'src/lib/preload_ops.c',
   'src/lib/prompt_ops.c',
   'src/lib/random_bytes.c',
   'src/lib/remove_ops.c',
@@ -540,6 +545,7 @@ bx_system_applet_sources = [
   'src/applets/system/screen/screen_applet.c',
   'src/applets/system/setsid/setsid.c',
   'src/applets/system/stty/stty.c',
+  'src/applets/system/stdbuf/stdbuf.c',
   'src/applets/system/switch_root/switch_root.c',
   'src/applets/system/timeout/timeout.c',
   'src/applets/system/umount/umount.c',
@@ -1434,6 +1440,22 @@ if install_bx_bindir != install_bindir
 endif
 
 bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/bc/include')
+
+stdbuf_preload = shared_module(
+  'stdbuf',
+  [
+    'src/lib/stdio_buffer_preload.c',
+    'src/lib/size_parse.c',
+  ],
+  include_directories : bx_include_dirs,
+  dependencies : [cc.find_library('m', required : false)],
+  # This module is injected into arbitrary non-sanitized COMMAND processes.
+  # Instrumenting it would add unresolved sanitizer-runtime dependencies.
+  override_options : ['b_sanitize=none'],
+  c_args : cc.get_supported_arguments(['-fno-sanitize=all']),
+  install : true,
+  install_dir : stdbuf_install_subdir,
+)
 
 bx_exe = executable('bx',
   sources,
