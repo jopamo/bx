@@ -326,6 +326,14 @@
       ]
     },
     {
+      "name": "stdbuf",
+      "main": "bx_stdbuf_main",
+      "capabilities": [
+        "filesystem-read",
+        "child-execution"
+      ]
+    },
+    {
       "name": "chroot",
       "main": "bx_chroot_main",
       "capabilities": [
