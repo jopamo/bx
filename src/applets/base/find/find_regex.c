@@ -3,6 +3,38 @@
 
 #include "find_regex.h"
 
+static bool find_regex_has_unclosed_bracket(const char *pattern) {
+    bool in_bracket = false;
+    bool first_bracket_char = false;
+
+    if (!pattern)
+        return false;
+
+    for (const unsigned char *p = (const unsigned char *)pattern; *p; p++) {
+        if (*p == '\\' && p[1] != '\0') {
+            p++;
+            continue;
+        }
+        if (!in_bracket) {
+            if (*p == '[') {
+                in_bracket = true;
+                first_bracket_char = true;
+            }
+            continue;
+        }
+        if (first_bracket_char && *p == '^')
+            continue;
+        if (first_bracket_char && *p == ']') {
+            first_bracket_char = false;
+            continue;
+        }
+        first_bracket_char = false;
+        if (*p == ']')
+            in_bracket = false;
+    }
+    return in_bracket;
+}
+
 bool find_parse_regextype(const char *progname, const char *text,
                           enum find_regex_type *out) {
     if (text && strcmp(text, "posix-extended") == 0) {
@@ -34,7 +66,7 @@ bool find_compile_regex(const char *progname, const char *optname,
         return true;
 
     char errbuf[256];
-    if (rc == REG_EBRACK) {
+    if (rc == REG_EBRACK || find_regex_has_unclosed_bracket(pattern)) {
         snprintf(errbuf, sizeof(errbuf), "Missing ']'");
     } else if (rc == REG_BADBR) {
         snprintf(errbuf, sizeof(errbuf), "Invalid contents of {}");
