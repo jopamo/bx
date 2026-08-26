@@ -391,13 +391,14 @@ int main(int argc, const char *argv[]) {
 #if HAVE_SIGACTION
       struct sigaction act;
 #endif
-      int i, m;
+      int i;
+      unsigned long m;
 
       sigfillset(&act.sa_mask); 	/* while in sighandler block all signals */
       act.sa_flags = 0;
       act.sa_handler = socat_signal;
       /* not sure which signals should be caught and print a message */
-      for (i = 0, m = 1; i < 8*sizeof(unsigned long); ++i, m <<= 1) {
+      for (i = 0, m = 1UL; i < 8*sizeof(unsigned long); ++i, m <<= 1) {
 	 if (socat_opts.log_sigs & m) {
 #if HAVE_SIGACTION
 	    Sigaction(i,  &act, NULL);
