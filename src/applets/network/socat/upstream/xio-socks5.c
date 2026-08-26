@@ -342,7 +342,7 @@ static struct socks5_request *_xioopen_socks5_prepare_request(
 {
 	struct socks5_request *req;
 	char ipaddr[16];
-	uint16_t *dstport;
+	uint16_t dstport;
 
 	*bytes = 0;
 
@@ -357,8 +357,8 @@ static struct socks5_request *_xioopen_socks5_prepare_request(
 		req->address_type = SOCKS5_ATYPE_IPv4;
 		memcpy(req->dstdata, ipaddr, 4);
 
-		dstport = (uint16_t *) &req->dstdata[4];
-		*dstport = parseport(target_port, IPPROTO_TCP);
+		dstport = parseport(target_port, IPPROTO_TCP);
+		memcpy(&req->dstdata[4], &dstport, sizeof(dstport));
 	} else if (inet_pton(AF_INET6, target_name, ipaddr)) { /* else if(valid_ipv6) */
 		*bytes = sizeof(struct socks5_request) + 16 + sizeof(uint16_t);
 		req = (struct socks5_request *)Malloc(*bytes);
@@ -370,8 +370,8 @@ static struct socks5_request *_xioopen_socks5_prepare_request(
 		req->address_type = SOCKS5_ATYPE_IPv6;
 		memcpy(req->dstdata, ipaddr, 16);
 
-		dstport = (uint16_t *) &req->dstdata[16];
-		*dstport = parseport(target_port, IPPROTO_TCP);
+		dstport = parseport(target_port, IPPROTO_TCP);
+		memcpy(&req->dstdata[16], &dstport, sizeof(dstport));
 	} else { /* invalid IP, assume hostname */
 		int hlen = strlen(target_name);
 		if (hlen > 255) {
@@ -391,12 +391,12 @@ static struct socks5_request *_xioopen_socks5_prepare_request(
 		req->dstdata[0] = (unsigned char) hlen;
 		memcpy(&req->dstdata[1], target_name, hlen);
 
-		dstport = (uint16_t *) &req->dstdata[hlen + 1];
-		*dstport = parseport(target_port, IPPROTO_TCP);
+		dstport = parseport(target_port, IPPROTO_TCP);
+		memcpy(&req->dstdata[hlen + 1], &dstport, sizeof(dstport));
 	}
 
 
-	if (*dstport == 0){
+	if (dstport == 0){
 		free(req);
 		return NULL;
 	}
