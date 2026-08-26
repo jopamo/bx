@@ -15,6 +15,7 @@ struct bx_time_epoch_parse_options {
 struct bx_time_duration_parse_options {
     bool allow_infinite;
     bool require_strtod_range;
+    bool clamp_positive_underflow;
 };
 
 struct bx_time_duration_parse_result {

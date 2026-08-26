@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "lib/signal_names.h"
 
@@ -144,6 +145,43 @@ static bool bx_signal_parse_number(const char* name, int* number_out) {
     return true;
 }
 
+static bool bx_signal_parse_rt_offset(const char* text, int* offset_out) {
+    return bx_signal_parse_number(text, offset_out);
+}
+
+static bool bx_signal_parse_realtime_name(const char* name, int* number_out) {
+#if defined(SIGRTMIN) && defined(SIGRTMAX)
+    int rtmin = SIGRTMIN;
+    int rtmax = SIGRTMAX;
+    if (strcasecmp(name, "RTMIN") == 0) {
+        *number_out = rtmin;
+        return true;
+    }
+    if (strcasecmp(name, "RTMAX") == 0) {
+        *number_out = rtmax;
+        return true;
+    }
+
+    int offset = 0;
+    if (strncasecmp(name, "RTMIN+", 6) == 0 &&
+        bx_signal_parse_rt_offset(name + 6, &offset) &&
+        offset <= rtmax - rtmin) {
+        *number_out = rtmin + offset;
+        return true;
+    }
+    if (strncasecmp(name, "RTMAX-", 6) == 0 &&
+        bx_signal_parse_rt_offset(name + 6, &offset) &&
+        offset <= rtmax - rtmin) {
+        *number_out = rtmax - offset;
+        return true;
+    }
+#else
+    (void)name;
+    (void)number_out;
+#endif
+    return false;
+}
+
 bool bx_signal_name_lookup(const char* name, int* number_out) {
     if (name == NULL || name[0] == '\0') {
         return false;
@@ -153,12 +191,16 @@ bool bx_signal_name_lookup(const char* name, int* number_out) {
         return bx_signal_parse_number(name, number_out);
     }
 
-    if (strncmp(name, "SIG", 3) == 0) {
+    if (strncasecmp(name, "SIG", 3) == 0) {
         name += 3;
     }
 
+    if (bx_signal_parse_realtime_name(name, number_out)) {
+        return true;
+    }
+
     for (size_t i = 0; i < (sizeof(bx_signal_names) / sizeof(bx_signal_names[0])); i++) {
-        if (strcmp(bx_signal_names[i].name, name) == 0) {
+        if (strcasecmp(bx_signal_names[i].name, name) == 0) {
             *number_out = bx_signal_names[i].number;
             return true;
         }
