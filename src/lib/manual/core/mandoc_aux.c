@@ -22,15 +22,23 @@
 #if HAVE_ERR
 #include <err.h>
 #endif
+#include <errno.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "bx/diag.h"
+
 #define DEBUG_NODEF 1
 #include "mandoc.h"
 #include "mandoc_aux.h"
 
+static void
+mandoc_oom(void)
+{
+	errx((int)MANDOCLEVEL_SYSERR, "%s", bx_strerror(ENOMEM));
+}
 
 int
 mandoc_asprintf(char **dest, const char *fmt, ...)
@@ -43,7 +51,7 @@ mandoc_asprintf(char **dest, const char *fmt, ...)
 	va_end(ap);
 
 	if (ret == -1)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ret;
 }
 
@@ -54,7 +62,7 @@ mandoc_calloc(size_t num, size_t size)
 
 	ptr = calloc(num, size);
 	if (ptr == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ptr;
 }
 
@@ -65,7 +73,7 @@ mandoc_malloc(size_t size)
 
 	ptr = malloc(size);
 	if (ptr == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ptr;
 }
 
@@ -74,7 +82,7 @@ mandoc_realloc(void *ptr, size_t size)
 {
 	ptr = realloc(ptr, size);
 	if (ptr == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ptr;
 }
 
@@ -83,7 +91,7 @@ mandoc_reallocarray(void *ptr, size_t num, size_t size)
 {
 	ptr = reallocarray(ptr, num, size);
 	if (ptr == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ptr;
 }
 
@@ -92,7 +100,7 @@ mandoc_recallocarray(void *ptr, size_t oldnum, size_t num, size_t size)
 {
 	ptr = recallocarray(ptr, oldnum, num, size);
 	if (ptr == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return ptr;
 }
 
@@ -103,7 +111,7 @@ mandoc_strdup(const char *ptr)
 
 	p = strdup(ptr);
 	if (p == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return p;
 }
 
@@ -114,6 +122,6 @@ mandoc_strndup(const char *ptr, size_t sz)
 
 	p = strndup(ptr, sz);
 	if (p == NULL)
-		err((int)MANDOCLEVEL_SYSERR, NULL);
+		mandoc_oom();
 	return p;
 }
