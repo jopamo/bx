@@ -637,6 +637,7 @@ static int bx_timeout_publish_child_status(int wait_status,
                                            bool timed_out,
                                            bool preserve_status,
                                            const char* progname) {
+    (void)progname;
     int status = bx_timeout_status_from_wait_status(wait_status);
     if (timed_out) {
         if (preserve_status || (WIFSIGNALED(wait_status) &&
