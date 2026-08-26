@@ -8,6 +8,9 @@
 #include <string.h>
 #include <time.h>
 #include <sys/wait.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <unistd.h>
 #include "child_runner.h"
 #include "fd_ops.h"
@@ -35,6 +38,37 @@ int bx_child_pick_slot(struct bx_child *children, int count, int max_procs) {
             return slot;
     }
     return 0;
+}
+
+int bx_child_ensure_current_process_group(void) {
+    if (setpgid(0, 0) == 0)
+        return 0;
+
+    int saved_errno = errno;
+    if (getpgrp() == getpid())
+        return 0;
+
+    errno = saved_errno;
+    return -1;
+}
+
+int bx_child_signal_current_process_group(int signo, bool ignore_self) {
+    if (signo < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (ignore_self && signo > 0) {
+        struct sigaction ignored_action;
+        memset(&ignored_action, 0, sizeof(ignored_action));
+        ignored_action.sa_handler = SIG_IGN;
+        sigemptyset(&ignored_action.sa_mask);
+        if (sigaction(signo, &ignored_action, NULL) != 0 &&
+            signo != SIGKILL && signo != SIGSTOP)
+            return -1;
+    }
+
+    return kill(0, signo);
 }
 
 void bx_child_signal_all(struct bx_child *children, int count, int signo) {
@@ -169,6 +203,11 @@ static void bx_child_reset_common_signal_handlers(void) {
     signal(SIGPIPE, SIG_DFL);
 }
 
+static void bx_child_reset_tty_stop_signal_handlers(void) {
+    signal(SIGTTIN, SIG_DFL);
+    signal(SIGTTOU, SIG_DFL);
+}
+
 static int bx_child_wait_stdout_foreground(void) {
     struct timespec delay = {
         .tv_sec = 0,
@@ -214,6 +253,7 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         return 1;
     }
 
+    pid_t parent_pid = getpid();
     pid_t pid = fork();
     if (pid < 0) {
         fprintf(stderr, "%s: fork failed: %s\n", progname, strerror(errno));
@@ -231,6 +271,24 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         }
         if (opts && opts->reset_common_signals)
             bx_child_reset_common_signal_handlers();
+        if (opts && opts->reset_tty_stop_signals)
+            bx_child_reset_tty_stop_signal_handlers();
+#ifdef __linux__
+        if (opts && opts->parent_death_signal > 0) {
+            if (prctl(PR_SET_PDEATHSIG, opts->parent_death_signal) != 0) {
+                errnum = errno != 0 ? errno : EIO;
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+            if (getppid() != parent_pid) {
+                errnum = ECANCELED;
+                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                _exit(127);
+            }
+        }
+#else
+        (void)parent_pid;
+#endif
         if (opts && opts->new_process_group && setpgid(0, 0) != 0) {
             errnum = errno;
             (void)!write(errpipe[1], &errnum, sizeof(errnum));

@@ -84,6 +84,7 @@ bool bx_time_parse_duration_seconds(const char* text, const struct bx_time_durat
     const struct bx_time_duration_parse_options default_options = {
         .allow_infinite = false,
         .require_strtod_range = true,
+        .clamp_positive_underflow = false,
     };
     if (options == NULL) {
         options = &default_options;
@@ -99,8 +100,20 @@ bool bx_time_parse_duration_seconds(const char* text, const struct bx_time_durat
     if (end == text || isnan(value)) {
         return false;
     }
-    if (options->require_strtod_range && errno != 0) {
+    int parse_errno = errno;
+    if (options->require_strtod_range && parse_errno != 0) {
         return false;
+    }
+    const char* sign = text;
+    while (isspace((unsigned char)*sign)) {
+        sign++;
+    }
+    if (parse_errno == ERANGE && value == 0.0 && *sign == '-') {
+        return false;
+    }
+    if (options->clamp_positive_underflow && parse_errno == ERANGE &&
+        value == 0.0) {
+        value = nextafter(0.0, 1.0);
     }
 
     double multiplier = 1.0;

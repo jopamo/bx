@@ -40,6 +40,8 @@ struct bx_child_runner_opts {
     bool use_stderr_fd;
     int stderr_fd;
     bool reset_common_signals;
+    bool reset_tty_stop_signals;
+    int parent_death_signal;
     bool new_process_group;
     bool wait_stdout_foreground;
     bx_child_prompt_hook prompt_hook;
@@ -69,6 +71,8 @@ bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
         .use_stderr_fd = false,
         .stderr_fd = -1,
         .reset_common_signals = false,
+        .reset_tty_stop_signals = false,
+        .parent_death_signal = 0,
         .new_process_group = false,
         .wait_stdout_foreground = false,
         .prompt_hook = NULL,
@@ -88,6 +92,8 @@ struct bx_child {
 };
 
 int bx_child_pick_slot(struct bx_child *children, int count, int max_procs);
+int bx_child_ensure_current_process_group(void);
+int bx_child_signal_current_process_group(int signo, bool ignore_self);
 void bx_child_signal_all(struct bx_child *children, int count, int signo);
 int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   struct bx_child *children,
