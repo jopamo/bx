@@ -114,21 +114,27 @@ int bx_child_exec_argv(char *const *argv) {
     return bx_child_exec_argv_exact_or_path(argv);
 }
 
-static int bx_child_exec_argv_exact(char *const *argv) {
-    if (!argv || !argv[0])
+static int bx_child_exec_exact(const char *executable, char *const *argv) {
+    if (!executable || !argv || !argv[0])
         return EINVAL;
 
-    execve(argv[0], argv, environ);
+    execve(executable, argv, environ);
     return errno != 0 ? errno : EIO;
 }
 
 int bx_child_exec_argv_exact_or_path(char *const *argv) {
     if (!argv || !argv[0])
         return EINVAL;
-    if (strchr(argv[0], '/'))
-        return bx_child_exec_argv_exact(argv);
+    return bx_child_exec_file_argv(argv[0], argv);
+}
 
-    const char *command = argv[0];
+int bx_child_exec_file_argv(const char *executable, char *const *argv) {
+    if (!executable || !argv || !argv[0])
+        return EINVAL;
+    if (strchr(executable, '/'))
+        return bx_child_exec_exact(executable, argv);
+
+    const char *command = executable;
     size_t command_len = strlen(command);
     if (command_len == 0)
         return ENOENT;
@@ -179,6 +185,40 @@ int bx_child_exec_argv_exact_or_path(char *const *argv) {
     return saw_eacces ? EACCES : ENOENT;
 }
 
+pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
+                                   void *user) {
+    if (!callback) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        int status = callback(user);
+        _exit(status >= 0 && status <= 255 ? status : 255);
+    }
+    return pid;
+}
+
+int bx_child_fork_callback_wait(bx_child_fork_callback callback,
+                                void *user,
+                                int *status_out) {
+    pid_t pid = bx_child_fork_callback_start(callback, user);
+    if (pid < 0)
+        return -1;
+
+    int status;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR)
+            return -1;
+    }
+    if (status_out)
+        *status_out = status;
+    return 0;
+}
+
 static int bx_child_dup_stdio_fd(int source_fd, int target_fd) {
     if (source_fd < 0)
         return EBADF;
@@ -206,6 +246,20 @@ static void bx_child_reset_common_signal_handlers(void) {
 static void bx_child_reset_tty_stop_signal_handlers(void) {
     signal(SIGTTIN, SIG_DFL);
     signal(SIGTTOU, SIG_DFL);
+}
+
+static int bx_child_failure_status(int configured_status) {
+    return configured_status > 0 && configured_status <= 255
+        ? configured_status
+        : 127;
+}
+
+static void bx_child_report_exec_error(
+    int fd,
+    int errnum,
+    const struct bx_child_runner_opts *opts) {
+    if (!opts || !opts->defer_exec_check)
+        (void)!write(fd, &errnum, sizeof(errnum));
 }
 
 static int bx_child_wait_stdout_foreground(void) {
@@ -249,14 +303,16 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
 
     int errpipe[2];
     if (bx_fd_pipe_cloexec(errpipe) != 0) {
-        fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
+        if (!opts || !opts->suppress_spawn_diagnostics)
+            fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
         return 1;
     }
 
     pid_t parent_pid = getpid();
     pid_t pid = fork();
     if (pid < 0) {
-        fprintf(stderr, "%s: fork failed: %s\n", progname, strerror(errno));
+        if (!opts || !opts->suppress_spawn_diagnostics)
+            fprintf(stderr, "%s: fork failed: %s\n", progname, strerror(errno));
         close(errpipe[0]);
         close(errpipe[1]);
         return 1;
@@ -277,12 +333,12 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         if (opts && opts->parent_death_signal > 0) {
             if (prctl(PR_SET_PDEATHSIG, opts->parent_death_signal) != 0) {
                 errnum = errno != 0 ? errno : EIO;
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
             if (getppid() != parent_pid) {
                 errnum = ECANCELED;
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
         }
@@ -291,20 +347,26 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
 #endif
         if (opts && opts->new_process_group && setpgid(0, 0) != 0) {
             errnum = errno;
-            (void)!write(errpipe[1], &errnum, sizeof(errnum));
+            bx_child_report_exec_error(errpipe[1], errnum, opts);
             _exit(127);
+        }
+        if (opts && opts->child_setup_hook &&
+            opts->child_setup_hook(opts->child_setup_user) != 0) {
+            errnum = errno != 0 ? errno : EIO;
+            bx_child_report_exec_error(errpipe[1], errnum, opts);
+            _exit(bx_child_failure_status(opts->setup_failure_status));
         }
         if (opts && opts->reopen_stdin_tty) {
             int tty_fd = bx_fd_open_cloexec("/dev/tty", O_RDONLY, 0);
             if (tty_fd < 0) {
                 errnum = errno;
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
             if (bx_fd_dup2_exact(tty_fd, STDIN_FILENO) < 0) {
                 errnum = errno;
                 close(tty_fd);
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
             if (tty_fd != STDIN_FILENO)
@@ -313,21 +375,21 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
         if (opts && opts->use_stdin_fd) {
             errnum = bx_child_dup_stdio_fd(opts->stdin_fd, STDIN_FILENO);
             if (errnum != 0) {
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
         }
         if (opts && opts->use_stdout_fd) {
             errnum = bx_child_dup_stdio_fd(opts->stdout_fd, STDOUT_FILENO);
             if (errnum != 0) {
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
         }
         if (opts && opts->use_stderr_fd) {
             errnum = bx_child_dup_stdio_fd(opts->stderr_fd, STDERR_FILENO);
             if (errnum != 0) {
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
         }
@@ -342,19 +404,28 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
                                        opts && opts->use_stdout_fd ? opts->stdout_fd : -1);
         if (opts && opts->cwd && chdir(opts->cwd) != 0) {
             errnum = errno;
-            (void)!write(errpipe[1], &errnum, sizeof(errnum));
+            bx_child_report_exec_error(errpipe[1], errnum, opts);
             _exit(127);
         }
         if (opts && opts->wait_stdout_foreground) {
             errnum = bx_child_wait_stdout_foreground();
             if (errnum != 0) {
-                (void)!write(errpipe[1], &errnum, sizeof(errnum));
+                bx_child_report_exec_error(errpipe[1], errnum, opts);
                 _exit(127);
             }
         }
-        errnum = bx_child_exec_argv(argv);
-        (void)!write(errpipe[1], &errnum, sizeof(errnum));
-        _exit(127);
+        errnum = opts && opts->executable
+            ? bx_child_exec_file_argv(opts->executable, argv)
+            : bx_child_exec_argv(argv);
+        if (opts && opts->child_exec_error_hook) {
+            opts->child_exec_error_hook(
+                opts->executable ? opts->executable : argv[0],
+                errnum,
+                opts->child_exec_error_user);
+        }
+        bx_child_report_exec_error(errpipe[1], errnum, opts);
+        _exit(bx_child_failure_status(
+            opts ? opts->exec_failure_status : 127));
     }
 
     close(errpipe[1]);
@@ -383,7 +454,9 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
     (*running)++;
 
     int exec_errno = 0;
-    ssize_t nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
+    ssize_t nread = 0;
+    if (!opts || !opts->defer_exec_check)
+        nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
     close(errpipe[0]);
 
     if (nread == (ssize_t)sizeof(exec_errno)) {
@@ -473,5 +546,46 @@ int bx_child_reap(struct bx_child *children, int *running,
         if (*running == 0)
             return 0;
         block = false;
+    }
+}
+
+int bx_child_reap_all_waitable(
+    struct bx_child *children, int *running, int *reaped_count,
+    void (*cb)(pid_t pid, int status, bool exec_failed, int exec_errno,
+               void *user),
+    void *user) {
+    int count = 0;
+
+    if (!running || (*running > 0 && !children)) {
+        errno = EINVAL;
+        return 1;
+    }
+
+    for (;;) {
+        int status = 0;
+        pid_t pid = waitpid(-1, &status, WNOHANG);
+        if (pid == 0 || (pid < 0 && errno == ECHILD)) {
+            if (reaped_count)
+                *reaped_count = count;
+            return 0;
+        }
+        if (pid < 0) {
+            if (errno == EINTR)
+                continue;
+            if (reaped_count)
+                *reaped_count = count;
+            return 1;
+        }
+
+        struct bx_child *child = bx_child_find(children, *running, pid);
+        bool exec_failed = child && child->exec_failed;
+        int exec_errno = child ? child->exec_errno : 0;
+        if (child) {
+            *child = children[*running - 1];
+            (*running)--;
+        }
+        count++;
+        if (cb)
+            cb(pid, status, exec_failed, exec_errno, user);
     }
 }

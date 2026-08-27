@@ -43,3 +43,17 @@ option(
   value : false,
   description : 'Install applet shortcuts that can collide with procps/systemd/iputils/iproute2/util-linux binaries'
 )
+option(
+  'init_kill_removed',
+  type : 'boolean',
+  value : false,
+  description : 'Match BusyBox CONFIG_FEATURE_KILL_REMOVED for init'
+)
+option(
+  'init_kill_delay',
+  type : 'integer',
+  min : 0,
+  max : 1024,
+  value : 0,
+  description : 'Match BusyBox CONFIG_FEATURE_KILL_DELAY for init'
+)

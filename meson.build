@@ -21,6 +21,16 @@ add_project_arguments(
   'bx/version.h',
   language : 'c',
 )
+init_kill_removed = get_option('init_kill_removed')
+init_kill_delay = get_option('init_kill_delay')
+if not init_kill_removed and init_kill_delay != 0
+  error('init_kill_delay requires init_kill_removed=true')
+endif
+add_project_arguments(
+  '-DBX_INIT_FEATURE_KILL_REMOVED=' + (init_kill_removed ? '1' : '0'),
+  '-DBX_INIT_FEATURE_KILL_DELAY=' + init_kill_delay.to_string(),
+  language : 'c',
+)
 
 lscolors_install_subdir = '/etc'
 lscolors_install_path = join_paths(lscolors_install_subdir, 'LS_COLORS')
@@ -39,6 +49,15 @@ add_project_arguments('-DBX_STDBUF_INSTALL_SUBDIR="' + stdbuf_install_subdir + '
 
 cc = meson.get_compiler('c')
 can_run = meson.can_run_host_binaries()
+have_updwtmpx = cc.has_function(
+  'updwtmpx',
+  prefix : '#define _GNU_SOURCE\n#include <utmpx.h>',
+)
+if have_updwtmpx
+  add_project_arguments('-DBX_HAVE_UPDWTMPX=1', language : 'c')
+else
+  add_project_arguments('-DBX_HAVE_UPDWTMPX=0', language : 'c')
+endif
 arm64_sve_intrinsics = cc.compiles(
   '''
   #if !defined(__aarch64__) || !defined(__ARM_FEATURE_SVE)
@@ -338,6 +357,7 @@ bx_lib_sources = [
   'src/lib/trace.c',
   'src/lib/tty_speed.c',
   'src/lib/update_policy.c',
+  'src/lib/utmp_ops.c',
   'src/lib/workqueue_contract.c',
   'src/lib/workqueue_profile.c',
   'src/lib/work_pool.c',
@@ -526,6 +546,10 @@ bx_system_applet_sources = [
   'src/applets/system/dmesg/dmesg.c',
   'src/applets/system/fuser/fuser.c',
   'src/applets/system/getty/getty.c',
+  'src/applets/system/init/init.c',
+  'src/applets/system/init/init_command.c',
+  'src/applets/system/init/init_config.c',
+  'src/applets/system/init/init_runtime.c',
   'src/applets/system/install/install.c',
   'src/applets/system/kill/kill.c',
   'src/applets/system/killall/killall.c',
@@ -1427,7 +1451,7 @@ multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_wget_shortcut = mira_embed_enabled
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
