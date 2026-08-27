@@ -351,6 +351,8 @@ bx_lib_sources = [
   'src/lib/size_parse.c',
   'src/lib/stat_ops.c',
   'src/lib/statx_compat.c',
+  'src/lib/system/syslog_config.c',
+  'src/lib/system/syslog_core.c',
   'src/lib/syscall_counter.c',
   'src/lib/thread_count.c',
   'src/lib/time_parse.c',
