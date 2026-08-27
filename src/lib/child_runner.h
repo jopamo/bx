@@ -27,6 +27,9 @@ enum bx_child_prompt_result {
 typedef int (*bx_child_prompt_hook)(const char *progname, char *const *argv, void *user);
 typedef void (*bx_child_verbose_hook)(const char *progname, char *const *argv, void *user);
 typedef int (*bx_child_parent_setup_hook)(pid_t pid, void *user);
+typedef int (*bx_child_setup_hook)(void *user);
+typedef void (*bx_child_exec_error_hook)(const char *executable, int errnum, void *user);
+typedef int (*bx_child_fork_callback)(void *user);
 
 struct bx_child_runner_opts {
     bool verbose;
@@ -40,10 +43,19 @@ struct bx_child_runner_opts {
     bool use_stderr_fd;
     int stderr_fd;
     bool reset_common_signals;
+    bool suppress_spawn_diagnostics;
     bool reset_tty_stop_signals;
     int parent_death_signal;
     bool new_process_group;
     bool wait_stdout_foreground;
+    const char *executable;
+    bool defer_exec_check;
+    int setup_failure_status;
+    int exec_failure_status;
+    bx_child_setup_hook child_setup_hook;
+    void *child_setup_user;
+    bx_child_exec_error_hook child_exec_error_hook;
+    void *child_exec_error_user;
     bx_child_prompt_hook prompt_hook;
     void *prompt_user;
     bx_child_verbose_hook verbose_hook;
@@ -71,10 +83,19 @@ bx_child_runner_opts_make(bool verbose, bool reopen_stdin_tty,
         .use_stderr_fd = false,
         .stderr_fd = -1,
         .reset_common_signals = false,
+        .suppress_spawn_diagnostics = false,
         .reset_tty_stop_signals = false,
         .parent_death_signal = 0,
         .new_process_group = false,
         .wait_stdout_foreground = false,
+        .executable = NULL,
+        .defer_exec_check = false,
+        .setup_failure_status = 127,
+        .exec_failure_status = 127,
+        .child_setup_hook = NULL,
+        .child_setup_user = NULL,
+        .child_exec_error_hook = NULL,
+        .child_exec_error_user = NULL,
         .prompt_hook = NULL,
         .prompt_user = NULL,
         .verbose_hook = NULL,
@@ -101,6 +122,12 @@ int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   int signo);
 int bx_child_exec_argv(char *const *argv);
 int bx_child_exec_argv_exact_or_path(char *const *argv);
+int bx_child_exec_file_argv(const char *executable, char *const *argv);
+int bx_child_fork_callback_wait(bx_child_fork_callback callback,
+                                void *user,
+                                int *status_out);
+pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
+                                   void *user);
 int bx_child_spawn_argv(const char *progname, char *const *argv,
                         const struct bx_child_runner_opts *opts,
                         int slot,
@@ -115,5 +142,10 @@ int bx_child_reap(struct bx_child *children, int *running,
                   bool block, bool drain_all,
                   void (*cb)(pid_t pid, int status, bool exec_failed, int exec_errno, void *user),
                   void *user);
+int bx_child_reap_all_waitable(
+    struct bx_child *children, int *running, int *reaped_count,
+    void (*cb)(pid_t pid, int status, bool exec_failed, int exec_errno,
+               void *user),
+    void *user);
 
 #endif
