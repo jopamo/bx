@@ -198,7 +198,9 @@ bool bx_syslog_config_load(
     if (stream == NULL) {
         if (missing_is_ok && errno == ENOENT)
             return true;
-        bx_syslog_error(error, error_capacity, path, 0u, strerror(errno));
+        if (error != NULL && error_capacity != 0u)
+            (void)snprintf(error, error_capacity, "can't open '%s': %s",
+                           path, strerror(errno));
         return false;
     }
 

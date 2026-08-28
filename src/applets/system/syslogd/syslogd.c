@@ -367,12 +367,19 @@ static bool send_remote(struct bx_syslog_remote *r, const void *p, size_t n) {
 
 static bool emit_local(struct state *s, struct bx_syslog_record *r) {
     if (s->opt.kmsg) {
+        const unsigned char *message = r->message;
+        size_t message_len = r->message_len;
+        if (r->has_client_timestamp && message_len >= 16u) {
+            message += 16u;
+            message_len -= 16u;
+        }
         int k = snprintf(s->outbuf, sizeof(s->outbuf), "<%d>", r->pri);
-        if (k < 0 || (size_t)k + r->message_len + 1 > sizeof(s->outbuf))
+        if (k < 0 || (size_t)k + message_len + 1 > sizeof(s->outbuf))
             return false;
-        memcpy(s->outbuf + k, r->message, r->message_len);
-        s->outbuf[(size_t)k + r->message_len] = '\n';
-        if (!bx_xwrite_all(s->kmsg_fd, s->outbuf, (size_t)k + r->message_len + 1))
+        memcpy(s->outbuf + k, message, message_len);
+        s->outbuf[(size_t)k + message_len] = '\n';
+        if (!bx_xwrite_all(s->kmsg_fd, s->outbuf,
+                           (size_t)k + message_len + 1))
             return false;
         s->counters.locally_emitted_records++; return true;
     }
