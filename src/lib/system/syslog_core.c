@@ -30,7 +30,7 @@ const struct bx_syslog_name bx_syslog_priority_names[] = {
     {"emerg", LOG_EMERG},     {"panic", LOG_EMERG},
     {"alert", LOG_ALERT},     {"crit", LOG_CRIT},
     {"err", LOG_ERR},         {"error", LOG_ERR},
-    {"warning", LOG_WARNING}, {"warn", LOG_WARNING},
+    {"warn", LOG_WARNING},    {"warning", LOG_WARNING},
     {"notice", LOG_NOTICE},   {"info", LOG_INFO},
     {"debug", LOG_DEBUG},     {"none", -2},
     {NULL, -1},
@@ -125,14 +125,22 @@ static size_t bx_syslog_parse_pri(
                 value = value * 10u + digit;
             index++;
         }
+        /*
+         * bb_strtou() is called with the byte after '<' and always publishes
+         * that starting position through its end pointer, even when no
+         * decimal digit was accepted. Thus a leading '<' is consumed for
+         * malformed negative-looking, empty, and nonnumeric prefixes too.
+         */
+        cursor = index;
         if (any) {
             pri = overflow ? -1 : (int)value;
-            cursor = index;
-            if (cursor < length && segment[cursor] == '>')
-                cursor++;
-            if ((pri & ~(LOG_FACMASK | LOG_PRIMASK)) != 0)
-                pri = BX_SYSLOG_DEFAULT_PRI;
         }
+        if (cursor < length && segment[cursor] == '>')
+            cursor++;
+        else
+            pri = BX_SYSLOG_DEFAULT_PRI;
+        if ((pri & ~(LOG_FACMASK | LOG_PRIMASK)) != 0)
+            pri = BX_SYSLOG_DEFAULT_PRI;
     }
 
     *pri_out = pri;
