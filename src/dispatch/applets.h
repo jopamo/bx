@@ -53,7 +53,6 @@ int bx_pstree_main(int argc, char** argv);
 int bx_prtstat_main(int argc, char** argv);
 int bx_dmesg_main(int argc, char** argv);
 int bx_fuser_main(int argc, char** argv);
-int bx_hdparm_main(int argc, char** argv);
 int bx_reboot_main(int argc, char** argv);
 int bx_chmod_main(int argc, char** argv);
 int bx_chown_main(int argc, char** argv);
