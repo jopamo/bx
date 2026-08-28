@@ -318,6 +318,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
+  'src/lib/daemon_ops.c',
   'src/lib/fd_ops.c',
   'src/lib/fault_injection.c',
   'src/lib/file_info_fmt.c',
@@ -341,6 +342,7 @@ bx_lib_sources = [
   'src/lib/overwrite_ops.c',
   'src/lib/path_ops.c',
   'src/lib/path_quote.c',
+  'src/lib/pidfile_ops.c',
   'src/lib/preload_ops.c',
   'src/lib/prompt_ops.c',
   'src/lib/random_bytes.c',
@@ -552,6 +554,7 @@ bx_system_applet_sources = [
   'src/applets/system/init/init_command.c',
   'src/applets/system/init/init_config.c',
   'src/applets/system/init/init_runtime.c',
+  'src/applets/system/syslogd/syslogd.c',
   'src/applets/system/install/install.c',
   'src/applets/system/kill/kill.c',
   'src/applets/system/killall/killall.c',
@@ -1453,7 +1456,7 @@ multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_wget_shortcut = mira_embed_enabled
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
