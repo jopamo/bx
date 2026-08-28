@@ -402,14 +402,6 @@
       ]
     },
     {
-      "name": "hdparm",
-      "main": "bx_hdparm_main",
-      "capabilities": [
-        "filesystem-read",
-        "privilege-sensitive"
-      ]
-    },
-    {
       "name": "kill",
       "main": "bx_kill_main",
       "capabilities": []

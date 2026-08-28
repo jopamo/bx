@@ -17,8 +17,6 @@ areas include:
   notices
 - src/applets/network/traceroute/ — GPL-2.0-or-later, with clif.[ch] under
   LGPL-2.1-or-later
-- src/applets/system/hdparm/ — hdparm BSD-style notice; some files additionally
-  allow GPLv2 redistribution
 - src/applets/system/init/ — BusyBox init-derived policy, GPL-2.0-or-later
 - src/applets/system/screen/ — GNU Screen, GPL-3.0-or-later
 - src/applets/text/ed/ — GNU ed, GPL-2.0-or-later

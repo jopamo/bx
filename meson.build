@@ -857,32 +857,6 @@ traceroute_lib = static_library('bx_traceroute',
   c_args : traceroute_c_args,
 )
 
-hdparm_sources = files(
-  'src/applets/system/hdparm/apt.c',
-  'src/applets/system/hdparm/dvdspeed.c',
-  'src/applets/system/hdparm/fallocate.c',
-  'src/applets/system/hdparm/fibmap.c',
-  'src/applets/system/hdparm/fwdownload.c',
-  'src/applets/system/hdparm/geom.c',
-  'src/applets/system/hdparm/hdparm.c',
-  'src/applets/system/hdparm/identify.c',
-  'src/applets/system/hdparm/sgio.c',
-  'src/applets/system/hdparm/sysfs.c',
-  'src/applets/system/hdparm/wdidle3.c',
-)
-
-hdparm_c_args = cc.get_supported_arguments([
-  '-D_DEFAULT_SOURCE',
-  '-Wno-overlength-strings',
-  '-Wno-pedantic',
-])
-
-hdparm_lib = static_library('bx_hdparm',
-  hdparm_sources,
-  include_directories : include_directories('src'),
-  c_args : hdparm_c_args,
-)
-
 screen_termcap_dep = declare_dependency()
 screen_termcap_found = false
 foreach dep_name : ['tinfotw', 'ncursestw', 'tinfo', 'ncurses', 'tinfow', 'ncursesw']
@@ -1456,7 +1430,7 @@ multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_wget_shortcut = mira_embed_enabled
-system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'hdparm', 'kill', 'mount', 'screen', 'setsid', 'umount']
+system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
 install_bx_bindir = install_bindir
@@ -1488,7 +1462,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, socat_lib, traceroute_lib, hdparm_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib],
+  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
