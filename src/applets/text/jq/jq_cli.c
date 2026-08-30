@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
-#include <libgen.h>
 #ifdef HAVE_SETLOCALE
 #include <locale.h>
 #endif
@@ -38,11 +37,11 @@ extern void jv_tsd_dtoa_ctx_init();
 #include "jq.h"
 #include "util.h"
 #include "bx_jq_build_info.h"
+#include "lib/args_common.h"
+#include "lib/path_ops.h"
 
 int jq_testsuite(jv lib_dirs, int verbose, int argc, char* argv[]);
-#ifndef WIN32
-int main(int argc, char* argv[]);
-#endif
+int bx_jq_cli_main(int argc, char* argv[]);
 
 /*
  * For a longer help message we could use a better option parsing
@@ -288,7 +287,7 @@ int wmain(int argc, wchar_t* wargv[]) {
 
 int umain(int argc, char* argv[]) {
 #else /*}*/
-int main(int argc, char* argv[]) {
+int bx_jq_cli_main(int argc, char* argv[]) {
 #endif
   jq_state *jq = NULL;
   jq_util_input_state *input_state = NULL;
@@ -435,11 +434,9 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "jq: --indent takes one parameter\n");
             die();
           }
-          char* end = NULL;
-          errno = 0;
-          long indent = strtol(argv[i+1], &end, 10);
-          if (errno || indent < -1 || indent > 7 ||
-              isspace(*argv[i+1]) || end == argv[i+1] || *end) {
+          int indent = 0;
+          if (isspace((unsigned char)argv[i+1][0]) ||
+              !bx_args_parse_int_range(argv[i+1], -1, 7, &indent)) {
             fprintf(stderr, "jq: --indent takes a number between -1 and 7\n");
             die();
           }
@@ -578,12 +575,12 @@ int main(int argc, char* argv[]) {
   }
   jq_set_attr(jq, jv_string("JQ_LIBRARY_PATH"), lib_search_paths);
 
-  char *origin = strdup(argv[0]);
+  char *origin = bx_path_dirname_dup(argv[0]);
   if (origin == NULL) {
     fprintf(stderr, "jq: error: out of memory\n");
     exit(1);
   }
-  jq_set_attr(jq, jv_string("JQ_ORIGIN"), jv_string(dirname(origin)));
+  jq_set_attr(jq, jv_string("JQ_ORIGIN"), jv_string(origin));
   free(origin);
 
   if (strchr(JQ_VERSION, '-') == NULL)
@@ -599,7 +596,7 @@ int main(int argc, char* argv[]) {
   if (!program) usage(2, 1);
 
   if (options & FROM_FILE) {
-    char *program_origin = strdup(program);
+    char *program_origin = bx_path_dirname_dup(program);
     if (program_origin == NULL) {
       perror("malloc");
       exit(2);
@@ -622,7 +619,7 @@ int main(int argc, char* argv[]) {
       ret = JQ_ERROR_SYSTEM;
       goto out;
     }
-    jq_set_attr(jq, jv_string("PROGRAM_ORIGIN"), jq_realpath(jv_string(dirname(program_origin))));
+    jq_set_attr(jq, jv_string("PROGRAM_ORIGIN"), jq_realpath(jv_string(program_origin)));
     ARGS = JV_OBJECT(jv_string("positional"), ARGS,
                      jv_string("named"), jv_copy(program_arguments));
     program_arguments = jv_object_set(program_arguments, jv_string("ARGS"), jv_copy(ARGS));

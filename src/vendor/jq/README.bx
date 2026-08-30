@@ -1,0 +1,19 @@
+# jq engine import
+
+This directory contains the jq engine snapshot from commit
+`a829f678f340da83a75fb35457d918c98524fdc7`.
+
+Boundary:
+
+- `src/vendor/jq/` owns imported jq engine code and generated parser sources.
+- `src/lib/jq/` owns bx runtime adapters used by the engine.
+- `src/applets/text/jq/` owns CLI parsing, compatibility defaults, help,
+  diagnostics, and exit policy.
+
+The imported jq `main.c` is intentionally absent. bx links the engine and
+adapter libraries directly into the multicall executable and enters through
+`bx_jq_main()` and `bx_jq_cli_main()`. There is no external jq process and no
+preprocessor renaming of `main`.
+
+Local engine patches are pinned by the jq allocation, JSON-parser, filter
+recursion, and regex policy audits in `bx-tests`.

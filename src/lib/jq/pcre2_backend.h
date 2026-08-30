@@ -1,5 +1,5 @@
-#ifndef BX_JQ_PCRE2_H
-#define BX_JQ_PCRE2_H
+#ifndef BX_LIB_JQ_PCRE2_BACKEND_H
+#define BX_LIB_JQ_PCRE2_BACKEND_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -16,4 +16,4 @@ jv bx_jq_pcre2_match(jv input,
                      bool global,
                      bool longest);
 
-#endif /* BX_JQ_PCRE2_H */
+#endif /* BX_LIB_JQ_PCRE2_BACKEND_H */

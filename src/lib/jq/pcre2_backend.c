@@ -1,4 +1,4 @@
-#include "bx_jq_pcre2.h"
+#include "lib/jq/pcre2_backend.h"
 
 #include <stddef.h>
 #include <string.h>
