@@ -24,5 +24,8 @@ void zu_cli_warn(const char* tool, const char* fmt, ...) __attribute__((format(p
 void zu_cli_print_opt(FILE* to, const char* flags, const char* desc);
 void zu_cli_print_section(FILE* to, const char* title);
 void zu_cli_emit_option_trace(const char* tool, ZContext* ctx);
+int zu_cli_map_zip_exit(int status);
+int zu_cli_map_unzip_exit(int status);
+int zu_cli_open_log(ZContext* ctx);
 
 #endif

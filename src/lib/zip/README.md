@@ -6,10 +6,26 @@ I/O mechanics integrated from `zip-utils` commit
 
 The code is compiled directly into the bx multicall binary. It does not build,
 spawn, or dispatch through standalone `zip-utils` executables. User-facing
-argument grammar and diagnostics remain in:
+argument grammar and diagnostics remain in applet policy modules:
 
-- `src/applets/archive/zip/zip.c`
-- `src/applets/archive/unzip/unzip.c` (`zipinfo` shares this frontend by argv0)
+- `src/applets/archive/zip/zip.c`: thin lifecycle entrypoint
+- `src/applets/archive/zip/zip_parse.c`: zip/zipnote option grammar and help
+- `src/applets/archive/zip/zipnote.c`: zipnote edit-stream policy
+- `src/applets/archive/unzip/unzip.c`: thin lifecycle entrypoint
+- `src/applets/archive/unzip/unzip_parse.c`: unzip/zipinfo grammar and help
+
+Shared boundaries:
+
+- `comments.c` owns archive comment mutation and publication.
+- `extract_path.c` owns ZIP extraction-path construction and uses bx
+  `path_ops`/`fd_ops` for generic path and syscall mechanics.
+- `input_walk.c` owns ZIP operand traversal and filtering semantics.
+- `ops.c` uses bx `argv_packer` and `child_runner`; no shell is involved.
+- `publish.c` uses bx `copy_data`, `fd_ops`, and `path_ops` for
+  cross-filesystem publication mechanics; the writer only selects when to
+  publish.
+- `cli_common.c` shares status mapping and delegates color/path mechanics to
+  bx-wide libraries.
 
 bx modifications are an altered implementation and are not an official
 Info-ZIP release. See `LICENSE.InfoZIP`.

@@ -155,6 +155,7 @@ ZContext* zu_context_create(void) {
     ctx->has_filter_before = false;
 
     ctx->line_mode = ZU_LINE_NONE;
+    ctx->d_flag = 0;
     ctx->no_dir_entries = false;
     ctx->exclude_extra_attrs = false;
     ctx->store_symlinks = false;

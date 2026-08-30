@@ -29,10 +29,13 @@
 
 #include "crc32.h"
 #include "fileio.h"
+#include "input_walk.h"
+#include "publish.h"
 #include "zip_headers.h"
 #include "zipcrypto.h"
 #include "bzip2_shim.h"
 #include "zlib_shim.h"
+#include "lib/path_ops.h"
 #include "lib/size_parse.h"
 
 #define ZU_EXTRA_ZIP64 0x0001
@@ -361,14 +364,6 @@ static void make_attrs(const ZContext* ctx, const struct stat* st, bool is_dir, 
         *version_made = vmade;
 }
 
-static const char* basename_component(const char* path) {
-    const char* slash = strrchr(path, '/');
-    if (slash && slash[1] != '\0') {
-        return slash + 1;
-    }
-    return path;
-}
-
 static int translate_buffer(ZContext* ctx, const uint8_t* in, size_t in_len, uint8_t** out_buf, size_t* out_len, bool* prev_cr) {
     if (!ctx || ctx->line_mode == ZU_LINE_NONE) {
         *out_buf = (uint8_t*)in;
@@ -419,67 +414,6 @@ static int translate_buffer(ZContext* ctx, const uint8_t* in, size_t in_len, uin
     *out_buf = out;
     *out_len = o;
     return ZU_STATUS_OK;
-}
-
-static char* make_temp_path(const ZContext* ctx, const char* target_path) {
-    const char* base = basename_component(target_path);
-    const char* dir_sep = strrchr(target_path, '/');
-    char dirbuf[PATH_MAX];
-    const char* dir = ".";
-
-    if (ctx->temp_dir) {
-        dir = ctx->temp_dir;
-    }
-    else if (dir_sep) {
-        size_t len = (size_t)(dir_sep - target_path);
-        if (len >= sizeof(dirbuf))
-            len = sizeof(dirbuf) - 1;
-        memcpy(dirbuf, target_path, len);
-        dirbuf[len] = '\0';
-        dir = dirbuf;
-    }
-
-    size_t len = strlen(dir) + strlen(base) + 6 + 3; /* / + .tmp + nul */
-    char* path = malloc(len);
-    if (!path)
-        return NULL;
-    snprintf(path, len, "%s/%s.tmp", dir, base);
-    return path;
-}
-
-static int rename_or_copy(const char* src, const char* dst) {
-    if (rename(src, dst) == 0) {
-        return 0;
-    }
-    if (errno != EXDEV) {
-        return -1;
-    }
-
-    FILE* in = fopen(src, "rb");
-    FILE* out = fopen(dst, "wb");
-    if (!in || !out) {
-        if (in)
-            fclose(in);
-        if (out)
-            fclose(out);
-        return -1;
-    }
-    uint8_t buf[8192];
-    size_t got;
-    int rc = 0;
-    while ((got = fread(buf, 1, sizeof(buf), in)) > 0) {
-        if (fwrite(buf, 1, got, out) != got) {
-            rc = -1;
-            break;
-        }
-    }
-    if (ferror(in) || ferror(out))
-        rc = -1;
-    fclose(in);
-    fclose(out);
-    if (rc == 0)
-        unlink(src);
-    return rc;
 }
 
 static void update_newest_mtime(ZContext* ctx, time_t t) {
@@ -2381,7 +2315,7 @@ int zu_modify_archive(ZContext* ctx) {
             ctx->current_offset = 0;
         }
         else {
-            temp_path = make_temp_path(ctx, target_path);
+            temp_path = zu_publish_make_temp_path(ctx->temp_dir, target_path);
             if (!temp_path) {
                 return ZU_STATUS_OOM;
             }
@@ -2415,7 +2349,8 @@ int zu_modify_archive(ZContext* ctx) {
                 continue;
             }
 
-            const char* stored = ctx->store_paths ? path : basename_component(path);
+            const char* stored =
+                ctx->store_paths ? path : bx_path_basename_ptr(path);
             char* allocated = NULL;
             const char* entry_name = stored;
 
@@ -2935,7 +2870,7 @@ cleanup:
     ctx->in_file = NULL;
 
     if (rc == ZU_STATUS_OK && temp_path) {
-        if (rename_or_copy(temp_path, target_path) != 0) {
+        if (zu_publish_replace(temp_path, target_path) != 0) {
             zu_context_set_error(ctx, ZU_STATUS_IO, "rename temp file failed");
             rc = ZU_STATUS_IO;
         }
