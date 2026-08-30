@@ -1162,8 +1162,14 @@ static jv f_match(jq_state *jq, jv input, jv regex, jv modifiers, jv testmode) {
         onig_foreach_name(reg, f_match_name_iter, &captures);
         match = jv_object_set(match, jv_string("captures"), captures);
         result = jv_array_append(result, match);
-        // ensure '"qux" | match("(?=u)"; "g")' matches just once
-        start = (const UChar*)(input_string+region->end[0]+1);
+        // ensure '"qux" | match("(?=u)"; "g")' matches just once; advance the
+        // search start past the whole codepoint, not a single byte, so we don't
+        // land in the middle of a multibyte character (which would yield a
+        // spurious duplicate match at the same offset).
+        start = (const UChar*)(input_string + region->end[0] +
+            ((size_t)region->end[0] < length
+                 ? jvp_utf8_decode_length(input_string[region->end[0]])
+                 : 1));
         continue;
       }
 
@@ -1510,6 +1516,7 @@ static jv f_string_implode(jq_state *jq, jv a) {
     if (nv < 0 || nv > 0x10FFFF || (nv >= 0xD800 && nv <= 0xDFFF))
       nv = 0xFFFD; // U+FFFD REPLACEMENT CHARACTER
     s = jv_string_append_codepoint(s, nv);
+    if (!jv_is_valid(s)) break;
   }
 
   jv_free(a);
@@ -1922,7 +1929,13 @@ static jv f_strftime(jq_state *jq, jv a, jv b) {
    * account ... */
   tzset();
 #endif
+#ifdef __NetBSD__
+  timezone_t tz_utc = tzalloc("UTC");
+  size_t n = strftime_z(tz_utc, buf, max_size, fmt, &tm);
+  tzfree(tz_utc);
+#else
   size_t n = strftime(buf, max_size, fmt, &tm);
+#endif
 #if defined(__APPLE__) || defined(__sun)
   if (tz) {
     setenv("TZ", tz, 1);

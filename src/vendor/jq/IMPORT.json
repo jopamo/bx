@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "remote": "https://github.com/jqlang/jq.git",
-  "commit": "a829f678f340da83a75fb35457d918c98524fdc7",
-  "commit_date": "2026-05-23T09:36:15+09:00",
+  "commit": "41b8edfe5437fcd25a072081c05f9f770f9e9b85",
+  "commit_date": "2026-08-24T00:06:16+09:00",
   "engine_files": [
     "builtin.c",
     "builtin.h",
