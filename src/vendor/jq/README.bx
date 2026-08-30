@@ -17,3 +17,36 @@ preprocessor renaming of `main`.
 
 Local engine patches are pinned by the jq allocation, JSON-parser, filter
 recursion, and regex policy audits in `bx-tests`.
+
+## Updating
+
+From the `bx` repository:
+
+```sh
+./tools/update-jq
+```
+
+That resolves jq's current upstream HEAD to an exact commit, constructs the
+engine and complete test-corpus candidates privately, applies the checked-in
+patch series, regenerates metadata, then builds bx and runs every jq test
+before committing the update. Any failure restores the prior engine, tests,
+and metadata.
+
+When the sibling `../bx-tests` repository exists, the command also imports
+every tracked upstream jq test there, regenerates its corpus manifest, and
+runs the full jq matrix. Without that repository, the same command remains
+self-contained: it runs the fetched upstream corpus directly against the
+candidate `bx` binary.
+
+To reproduce or select a specific revision:
+
+```sh
+./tools/update-jq a829f678f340da83a75fb35457d918c98524fdc7
+```
+
+To test whether the latest source and patch series are compatible without
+changing either repository:
+
+```sh
+./tools/update-jq --check
+```

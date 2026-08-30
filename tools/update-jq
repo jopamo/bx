@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+
+REMOTE = "https://github.com/jqlang/jq.git"
+ENGINE_FILES = (
+    "builtin.c",
+    "builtin.h",
+    "builtin.jq",
+    "bytecode.c",
+    "bytecode.h",
+    "compile.c",
+    "compile.h",
+    "exec_stack.h",
+    "execute.c",
+    "jq.h",
+    "jq_parser.h",
+    "jq_test.c",
+    "jv.c",
+    "jv.h",
+    "jv_alloc.c",
+    "jv_alloc.h",
+    "jv_aux.c",
+    "jv_dtoa.c",
+    "jv_dtoa.h",
+    "jv_dtoa_tsd.c",
+    "jv_dtoa_tsd.h",
+    "jv_file.c",
+    "jv_parse.c",
+    "jv_print.c",
+    "jv_private.h",
+    "jv_thread.h",
+    "jv_unicode.c",
+    "jv_unicode.h",
+    "jv_utf8_tables.h",
+    "lexer.c",
+    "lexer.h",
+    "lexer.l",
+    "libm.h",
+    "linker.c",
+    "linker.h",
+    "locfile.c",
+    "locfile.h",
+    "opcode_list.h",
+    "parser.c",
+    "parser.h",
+    "parser.y",
+    "util.c",
+    "util.h",
+)
+DECNUMBER_FILES = (
+    "ICU-license.html",
+    "decContext.c",
+    "decContext.h",
+    "decNumber.c",
+    "decNumber.h",
+    "decNumberLocal.h",
+)
+JQ_TEST_NAMES = (
+    "jq option replay",
+    "jq allocation limit policy",
+    "jq JSON parser fuzz",
+    "jq recursion depth policy",
+    "jq filter recursion depth policy",
+    "jq bx policy",
+    "jq native corpus",
+    "jq native integration audit",
+    "jq allocation limit policy audit",
+    "jq JSON parser fuzz harness audit",
+    "jq recursion depth policy audit",
+    "jq filter recursion depth policy audit",
+    "jq behavior baseline presence audit",
+    "jq option matrix coverage audit",
+    "jq replay default no reference",
+)
+CORPUS_DRIVERS = (
+    "jqtest",
+    "base64test",
+    "mantest",
+    "optionaltest",
+    "uritest",
+    "onigtest",
+    "manonigtest",
+    "utf8test",
+    "shtest",
+)
+CORPUS_TIMEOUTS = {
+    "jqtest": 60,
+    "base64test": 15,
+    "mantest": 30,
+    "optionaltest": 15,
+    "uritest": 15,
+    "onigtest": 30,
+    "manonigtest": 15,
+    "utf8test": 30,
+    "shtest": 60,
+}
+
+
+class UpdateError(RuntimeError):
+    pass
+
+
+def run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    capture: bool = False,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            argv,
+            cwd=cwd,
+            check=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = ""
+        if capture:
+            detail = f"\nstdout:\n{exc.stdout or ''}\nstderr:\n{exc.stderr or ''}"
+        status = exc.returncode if isinstance(exc, subprocess.CalledProcessError) else "timeout"
+        raise UpdateError(f"command failed ({status}): {' '.join(argv)}{detail}") from exc
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def replace_exact(text: str, old: str, new: str, owner: Path) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise UpdateError(f"{owner}: expected exactly one {old!r}, found {count}")
+    return text.replace(old, new)
+
+
+def replace_commit(text: str, old: str, new: str, owner: Path) -> str:
+    count = text.count(old)
+    if count < 1:
+        raise UpdateError(f"{owner}: pinned commit {old} not found")
+    return text.replace(old, new)
+
+
+def generate_builtin(source: Path, destination: Path) -> None:
+    data = source.read_bytes()
+    lines: list[str] = []
+    for offset in range(0, len(data), 16):
+        values = []
+        for value in data[offset : offset + 16]:
+            values.append(f"  {value:03o}" if value < 64 else f" 0{value:03o}")
+        lines.append(",".join(values) + ",\n")
+    destination.write_text("".join(lines), encoding="ascii")
+
+
+def tracked_test_files(checkout: Path, commit: str) -> list[str]:
+    output = run(
+        ["git", "-C", os.fspath(checkout), "ls-tree", "-r", "--name-only", commit, "tests"],
+        capture=True,
+    ).stdout
+    paths = [line.removeprefix("tests/") for line in output.splitlines() if line.startswith("tests/")]
+    if not paths or any(path == "" or path.startswith("../") for path in paths):
+        raise UpdateError("jq tests/ inventory is empty or unsafe")
+    return paths
+
+
+def copy_allowlist(source: Path, destination: Path, names: Iterable[str]) -> None:
+    destination.mkdir(parents=True)
+    for name in names:
+        src = source / name
+        if not src.is_file():
+            raise UpdateError(f"required jq import file is missing: {src}")
+        shutil.copy2(src, destination / name)
+
+
+def copy_tests(source: Path, destination: Path, names: Iterable[str]) -> None:
+    destination.mkdir(parents=True)
+    for name in names:
+        src = source / name
+        if not src.is_file():
+            raise UpdateError(f"tracked jq test file is missing: {src}")
+        dest = destination / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def corpus_manifest(commit: str, corpus: Path) -> dict[str, object]:
+    files = {
+        path.relative_to(corpus).as_posix(): sha256(path)
+        for path in sorted(corpus.rglob("*"))
+        if path.is_file()
+    }
+    return {
+        "schema": 1,
+        "source": "jqlang/jq tests/",
+        "source_commit": commit,
+        "file_count": len(files),
+        "files": files,
+    }
+
+
+@dataclass
+class Candidate:
+    commit: str
+    commit_date: str
+    engine: Path
+    decnumber: Path
+    tests: Path
+    metadata: dict[Path, bytes]
+
+
+def resolve_commit(repo: Path, revision: str) -> str:
+    ref = "origin/HEAD" if revision == "latest" else revision
+    result = run(
+        ["git", "-C", os.fspath(repo), "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        capture=True,
+    ).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", result):
+        raise UpdateError(f"jq revision did not resolve to a full commit: {result!r}")
+    return result
+
+
+def prepare_candidate(
+    *,
+    bx_root: Path,
+    tests_root: Path | None,
+    repo: Path,
+    revision: str,
+    temp_root: Path,
+) -> Candidate:
+    commit = resolve_commit(repo, revision)
+    checkout = temp_root / "checkout"
+    run(["git", "-C", os.fspath(repo), "worktree", "add", "--quiet", "--detach", os.fspath(checkout), commit])
+    try:
+        patch_paths = sorted((bx_root / "src/vendor/jq/patches").glob("*.patch"))
+        if not patch_paths:
+            raise UpdateError("jq patch series is empty")
+        for patch in patch_paths:
+            run(["git", "-C", os.fspath(checkout), "apply", "--check", os.fspath(patch)])
+            run(["git", "-C", os.fspath(checkout), "apply", os.fspath(patch)])
+
+        candidate_root = temp_root / "candidate"
+        engine = candidate_root / "engine"
+        decnumber = candidate_root / "decNumber"
+        corpus = candidate_root / "tests"
+        copy_allowlist(checkout / "src", engine, ENGINE_FILES)
+        generate_builtin(engine / "builtin.jq", engine / "builtin.inc")
+        copy_allowlist(checkout / "vendor/decNumber", decnumber, DECNUMBER_FILES)
+        test_names = tracked_test_files(checkout, commit)
+        copy_tests(checkout / "tests", corpus, test_names)
+        actual_drivers = {
+            path.name
+            for path in corpus.iterdir()
+            if path.is_file() and os.access(path, os.X_OK) and path.name != "setup"
+        }
+        actual_drivers.discard("jq-f-test.sh")
+        if actual_drivers != set(CORPUS_DRIVERS):
+            raise UpdateError(
+                "jq test-driver surface changed; update CORPUS_DRIVERS and "
+                f"bx-tests matrix deliberately: {sorted(actual_drivers)}"
+            )
+
+        commit_date = run(
+            ["git", "-C", os.fspath(checkout), "show", "-s", "--format=%cI", commit],
+            capture=True,
+        ).stdout.strip()
+        current_import_path = bx_root / "src/vendor/jq/IMPORT.json"
+        if current_import_path.exists():
+            current_import = json.loads(current_import_path.read_text(encoding="utf-8"))
+            old_commit = str(current_import["commit"])
+        else:
+            old_commit = re.search(
+                r"[0-9a-f]{40}",
+                (bx_root / "src/vendor/jq/README.bx").read_text(encoding="utf-8"),
+            ).group(0)  # type: ignore[union-attr]
+
+        import_record = {
+            "schema": 1,
+            "remote": REMOTE,
+            "commit": commit,
+            "commit_date": commit_date,
+            "engine_files": [*ENGINE_FILES, "builtin.inc"],
+            "decnumber_files": list(DECNUMBER_FILES),
+            "patches": {
+                path.relative_to(bx_root).as_posix(): sha256(path)
+                for path in patch_paths
+            },
+            "test_file_count": len(test_names),
+        }
+        metadata: dict[Path, bytes] = {}
+
+        metadata[current_import_path] = (json.dumps(import_record, indent=2) + "\n").encode()
+
+        source_readme = bx_root / "src/vendor/jq/README.bx"
+        metadata[source_readme] = replace_commit(
+            source_readme.read_text(encoding="utf-8"), old_commit, commit, source_readme
+        ).encode()
+
+        build_info = bx_root / "src/applets/text/jq/bx_jq_build_info.h"
+        build_text = build_info.read_text(encoding="utf-8")
+        build_text, count = re.subn(
+            r'#define JQ_VERSION "master-[0-9a-f]{7}\+bx"',
+            f'#define JQ_VERSION "master-{commit[:7]}+bx"',
+            build_text,
+        )
+        if count != 1:
+            raise UpdateError(f"{build_info}: JQ_VERSION seam changed")
+        metadata[build_info] = build_text.encode()
+
+        if tests_root is not None:
+            for path in (
+                tests_root / "docs/audit/imports/jq.md",
+                tests_root / "tests/fixtures/jq/README.md",
+            ):
+                metadata[path] = replace_commit(
+                    path.read_text(encoding="utf-8"), old_commit, commit, path
+                ).encode()
+
+            cases_path = tests_root / "tests/applets/text/jq/jq_native_corpus_cases.json"
+            cases = json.loads(cases_path.read_text(encoding="utf-8"))
+            if cases.get("source_commit") != old_commit:
+                raise UpdateError(f"{cases_path}: source commit does not match current import")
+            cases["source_commit"] = commit
+            metadata[cases_path] = (json.dumps(cases, indent=2) + "\n").encode()
+
+            manifest_path = tests_root / "tests/fixtures/jq/MANIFEST.json"
+            metadata[manifest_path] = (
+                json.dumps(corpus_manifest(commit, corpus), indent=2) + "\n"
+            ).encode()
+
+        return Candidate(
+            commit=commit,
+            commit_date=commit_date,
+            engine=engine,
+            decnumber=decnumber,
+            tests=corpus,
+            metadata=metadata,
+        )
+    finally:
+        run(["git", "-C", os.fspath(repo), "worktree", "remove", "--force", os.fspath(checkout)])
+
+
+@dataclass
+class Published:
+    target: Path
+    backup: Path | None
+
+
+class Transaction:
+    def __init__(self, roots: Iterable[Path]) -> None:
+        self._published: list[Published] = []
+        self._staged: list[Path] = []
+        self._committed = False
+        self._token = uuid.uuid4().hex
+        self._roots = tuple(sorted((root.resolve() for root in roots), key=lambda path: len(path.parts), reverse=True))
+        self._rollback_roots: set[Path] = set()
+
+    def _backup_for(self, target: Path) -> Path:
+        resolved = target.resolve()
+        for root in self._roots:
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            rollback_root = root.parent / f".{root.name}.jq-update-rollback-{self._token}"
+            backup = rollback_root / relative
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            self._rollback_roots.add(rollback_root)
+            return backup
+        raise UpdateError(f"transaction target is outside owned repositories: {target}")
+
+    def stage_directory(self, source: Path, target: Path) -> tuple[Path, Path]:
+        token = uuid.uuid4().hex
+        staged = target.with_name(f".{target.name}.jq-update-new-{token}")
+        backup = self._backup_for(target)
+        shutil.copytree(source, staged, copy_function=shutil.copy2)
+        self._staged.append(staged)
+        return staged, backup
+
+    def stage_file(self, data: bytes, target: Path) -> tuple[Path, Path]:
+        token = uuid.uuid4().hex
+        staged = target.with_name(f".{target.name}.jq-update-new-{token}")
+        backup = self._backup_for(target)
+        staged.write_bytes(data)
+        if target.exists():
+            shutil.copymode(target, staged)
+        self._staged.append(staged)
+        return staged, backup
+
+    def publish(self, staged: Path, target: Path, backup: Path) -> None:
+        had_target = target.exists()
+        if had_target:
+            os.replace(target, backup)
+        try:
+            os.replace(staged, target)
+        except BaseException:
+            if had_target:
+                os.replace(backup, target)
+            raise
+        self._staged.remove(staged)
+        self._published.append(Published(target, backup if had_target else None))
+
+    def commit(self) -> None:
+        self._committed = True
+        for rollback_root in self._rollback_roots:
+            try:
+                shutil.rmtree(rollback_root)
+            except OSError as exc:
+                print(
+                    f"update-jq: warning: could not remove rollback tree {rollback_root}: {exc}",
+                    file=sys.stderr,
+                )
+        self._published.clear()
+        self._rollback_roots.clear()
+
+    def rollback(self) -> None:
+        if self._committed:
+            return
+        for item in reversed(self._published):
+            if item.target.is_dir():
+                shutil.rmtree(item.target)
+            elif item.target.exists():
+                item.target.unlink()
+            if item.backup is not None:
+                os.replace(item.backup, item.target)
+        self._published.clear()
+        for staged in self._staged:
+            if staged.is_dir():
+                shutil.rmtree(staged, ignore_errors=True)
+            else:
+                staged.unlink(missing_ok=True)
+        self._staged.clear()
+        for rollback_root in self._rollback_roots:
+            shutil.rmtree(rollback_root, ignore_errors=True)
+        self._rollback_roots.clear()
+
+
+def normalize_missing_zoneinfo(corpus_root: Path) -> None:
+    shtest = corpus_root / "shtest"
+    text = shtest.read_text(encoding="utf-8")
+    for zone_name, posix_rule in (
+        ("Asia/Tokyo", "JST-9"),
+        ("Europe/Paris", "CET-1CEST,M3.5.0,M10.5.0/3"),
+        ("Etc/GMT+7", "GMT+7"),
+    ):
+        if Path("/usr/share/zoneinfo", zone_name).exists():
+            continue
+        token = f"TZ={zone_name} $JQ"
+        if token not in text:
+            raise UpdateError(f"jq shell corpus lost the {zone_name} timezone case")
+        text = text.replace(token, f"TZ={posix_rule} $JQ")
+    shtest.write_text(text, encoding="utf-8")
+
+
+def run_corpus(bx_binary: Path, corpus: Path, temp_root: Path) -> None:
+    execution_root = temp_root / "corpus"
+    execution_root.mkdir()
+    (execution_root / "jq").symlink_to(bx_binary)
+    copied_corpus = execution_root / "tests"
+    shutil.copytree(corpus, copied_corpus, symlinks=True)
+    normalize_missing_zoneinfo(copied_corpus)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": os.fspath(execution_root),
+            "LC_ALL": "C",
+            "LANG": "C",
+            "PAGER": "less",
+            "TRACE_TESTS": "",
+            "ENABLE_VALGRIND": "",
+        }
+    )
+    env.pop("JQ", None)
+    for driver_name in CORPUS_DRIVERS:
+        driver = copied_corpus / driver_name
+        run(
+            [os.fspath(driver)],
+            cwd=execution_root,
+            capture=True,
+            env=env,
+            timeout=CORPUS_TIMEOUTS[driver_name],
+        )
+
+
+def validate_build(
+    bx_root: Path,
+    tests_root: Path | None,
+    corpus: Path,
+    temp_root: Path,
+) -> None:
+    temp_root.mkdir(parents=True)
+    build = temp_root / "build"
+    run(
+        [
+            "meson",
+            "setup",
+            os.fspath(build),
+            os.fspath(bx_root),
+            "-Dmira_embed=disabled",
+        ],
+        capture=True,
+    )
+    run(["ninja", "-C", os.fspath(build), "bx"], capture=True)
+    if tests_root is None:
+        run_corpus(build / "bx", corpus, temp_root)
+        return
+
+    test_build = temp_root / "test-build"
+    run(
+        [
+            "meson",
+            "setup",
+            os.fspath(test_build),
+            os.fspath(tests_root),
+            f"-Dbx_source_root={bx_root}",
+            f"-Dbx_exe={build / 'bx'}",
+            f"-Dbx_build_root={build}",
+            "-Dbx_auto_build=false",
+        ],
+        capture=True,
+    )
+    command = ["meson", "test", "-C", os.fspath(test_build), "--print-errorlogs"]
+    command.extend(JQ_TEST_NAMES)
+    run(command, capture=True)
+
+
+def publish_candidate(
+    candidate: Candidate,
+    *,
+    bx_root: Path,
+    tests_root: Path | None,
+    temp_root: Path,
+) -> None:
+    transaction = Transaction(
+        (bx_root,) if tests_root is None else (bx_root, tests_root)
+    )
+    staged_items: list[tuple[Path, Path, Path]] = []
+    try:
+        directories = [
+            (candidate.engine, bx_root / "src/vendor/jq/src"),
+            (candidate.decnumber, bx_root / "src/vendor/jq/vendor/decNumber"),
+        ]
+        if tests_root is not None:
+            directories.append((candidate.tests, tests_root / "tests/fixtures/jq/tests"))
+        for source, target in directories:
+            staged, backup = transaction.stage_directory(source, target)
+            staged_items.append((staged, target, backup))
+        for target, data in candidate.metadata.items():
+            staged, backup = transaction.stage_file(data, target)
+            staged_items.append((staged, target, backup))
+
+        for staged, target, backup in staged_items:
+            transaction.publish(staged, target, backup)
+
+        validate_build(bx_root, tests_root, candidate.tests, temp_root / "validation")
+        transaction.commit()
+    except BaseException:
+        transaction.rollback()
+        raise
+
+
+def import_summary(repo: Path, old_commit: str | None, new_commit: str) -> str:
+    if old_commit is None or old_commit == new_commit:
+        return "no upstream commit delta"
+    return run(
+        [
+            "git",
+            "-C",
+            os.fspath(repo),
+            "diff",
+            "--stat",
+            f"{old_commit}..{new_commit}",
+            "--",
+            "src",
+            "tests",
+            "vendor/decNumber",
+        ],
+        capture=True,
+    ).stdout.strip() or "upstream commit changed without selected-tree differences"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Transactionally update bx's native jq engine and complete jq test corpus."
+    )
+    parser.add_argument(
+        "revision",
+        nargs="?",
+        default="latest",
+        help="exact jq commit/tag/ref; defaults to origin HEAD",
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        help="existing jq Git checkout (avoids the temporary network clone)",
+    )
+    parser.add_argument(
+        "--tests-root",
+        type=Path,
+        help=(
+            "bx-tests checkout; defaults to ../bx-tests when present, "
+            "otherwise validates with the imported upstream corpus"
+        ),
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="prepare and patch the candidate without publishing it",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    bx_root = Path(__file__).resolve().parents[1]
+    requested_tests_root = (
+        args.tests_root.resolve()
+        if args.tests_root is not None
+        else bx_root.parent / "bx-tests"
+    )
+    tests_root = requested_tests_root if requested_tests_root.is_dir() else None
+    if tests_root is None:
+        print(
+            f"update-jq: {requested_tests_root} is absent; "
+            "using standalone upstream-corpus validation"
+        )
+
+    import_path = bx_root / "src/vendor/jq/IMPORT.json"
+    old_commit = None
+    if import_path.exists():
+        old_commit = str(json.loads(import_path.read_text(encoding="utf-8"))["commit"])
+    else:
+        match = re.search(
+            r"[0-9a-f]{40}",
+            (bx_root / "src/vendor/jq/README.bx").read_text(encoding="utf-8"),
+        )
+        old_commit = match.group(0) if match else None
+
+    with tempfile.TemporaryDirectory(prefix="bx-update-jq-") as tmp:
+        temp_root = Path(tmp)
+        if args.source is None:
+            repo = temp_root / "jq"
+            run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout", REMOTE, os.fspath(repo)])
+        else:
+            repo = args.source.resolve()
+            if not (repo / ".git").exists():
+                raise UpdateError(f"--source is not a Git checkout: {repo}")
+
+        candidate = prepare_candidate(
+            bx_root=bx_root,
+            tests_root=tests_root,
+            repo=repo,
+            revision=args.revision,
+            temp_root=temp_root,
+        )
+        print(f"jq candidate: {candidate.commit} ({candidate.commit_date})")
+        print(import_summary(repo, old_commit, candidate.commit))
+        if args.check:
+            print("candidate prepared and bx patch series applied; working trees were not changed")
+            return 0
+
+        publish_candidate(
+            candidate,
+            bx_root=bx_root,
+            tests_root=tests_root,
+            temp_root=temp_root,
+        )
+        print(f"jq update committed: {candidate.commit}")
+        print(f"reproduce with: ./tools/update-jq {candidate.commit}")
+        return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except UpdateError as exc:
+        print(f"update-jq: {exc}", file=sys.stderr)
+        raise SystemExit(1)
