@@ -1,0 +1,501 @@
+diff --git a/src/builtin.c b/src/builtin.c
+--- a/src/builtin.c
++++ b/src/builtin.c
+@@ -31,6 +31,7 @@
+ #include "jq_parser.h"
+ #include "bytecode.h"
+ #include "linker.h"
++#include "lib/jq/pcre2_backend.h"
+ #include "locfile.h"
+ #include "jv_unicode.h"
+ #include "jv_alloc.h"
+@@ -294,9 +295,13 @@
+     return r;
+   } else if (jv_get_kind(a) == JV_KIND_ARRAY && jv_get_kind(b) == JV_KIND_ARRAY) {
+     jv out = jv_array();
+-    jv_array_foreach(a, i, x) {
++    int a_len = jv_array_length(jv_copy(a));
++    int b_len = jv_array_length(jv_copy(b));
++    for (int i = 0; i < a_len; i++) {
++      jv x = jv_array_get(jv_copy(a), i);
+       int include = 1;
+-      jv_array_foreach(b, j, y) {
++      for (int j = 0; j < b_len; j++) {
++        jv y = jv_array_get(jv_copy(b), j);
+         int equal = jv_equal(jv_copy(x), y);
+         if (equal < 0) {
+           jv_free(out);
+@@ -945,7 +950,78 @@
+   }
+ }
+ 
+-#ifdef HAVE_LIBONIG
++#if defined(BX_JQ_HAVE_PCRE2)
++static jv f_match(jq_state *jq, jv input, jv regex, jv modifiers, jv testmode) {
++  int test = jv_equal(testmode, jv_true());
++  int global = 0;
++  uint32_t compile_options = 0;
++  uint32_t match_options = 0;
++
++  (void)jq;
++
++  if (jv_get_kind(input) != JV_KIND_STRING) {
++    jv_free(regex);
++    jv_free(modifiers);
++    return type_error(input, "cannot be matched, as it is not a string");
++  }
++
++  if (jv_get_kind(regex) != JV_KIND_STRING) {
++    jv_free(input);
++    jv_free(modifiers);
++    return type_error(regex, "is not a string");
++  }
++
++  if (jv_get_kind(modifiers) == JV_KIND_STRING) {
++    jv modarray = jv_string_explode(jv_copy(modifiers));
++    jv_array_foreach(modarray, i, mod) {
++      switch ((int)jv_number_value(mod)) {
++        case 'g':
++          global = 1;
++          break;
++        case 'i':
++          compile_options |= PCRE2_CASELESS;
++          break;
++        case 'x':
++          compile_options |= PCRE2_EXTENDED;
++          break;
++        case 'm':
++          compile_options |= PCRE2_MULTILINE;
++          break;
++        case 's':
++          compile_options |= PCRE2_DOTALL;
++          break;
++        case 'p':
++          compile_options |= PCRE2_MULTILINE | PCRE2_DOTALL;
++          break;
++        case 'l':
++          jv_free(input);
++          jv_free(regex);
++          jv_free(modarray);
++          return jv_invalid_with_msg(
++                jv_string("jq PCRE2 backend does not support the 'l' regex modifier"));
++        case 'n':
++          match_options |= PCRE2_NOTEMPTY;
++          break;
++        default:
++          jv_free(input);
++          jv_free(regex);
++          jv_free(modarray);
++          return jv_invalid_with_msg(jv_string_concat(modifiers,
++                jv_string(" is not a valid modifier string")));
++      }
++    }
++    jv_free(modarray);
++  } else if (jv_get_kind(modifiers) != JV_KIND_NULL) {
++    jv_free(input);
++    jv_free(regex);
++    return type_error(modifiers, "is not a string");
++  }
++
++  jv_free(modifiers);
++  return bx_jq_pcre2_match(input, regex, test, compile_options,
++                           match_options, global, false);
++}
++#elif defined(HAVE_LIBONIG)
+ static int f_match_name_iter(const UChar* name, const UChar *name_end, int ngroups,
+     int *groups, regex_t *reg, void *arg) {
+   jv captures = *(jv*)arg;
+diff --git a/src/compile.c b/src/compile.c
+--- a/src/compile.c
++++ b/src/compile.c
+@@ -196,13 +196,13 @@
+   return inst_block(i);
+ }
+ 
+-block gen_op_targetlater(opcode op) {
++static block gen_op_targetlater(opcode op) {
+   assert(opcode_describe(op)->flags & OP_HAS_BRANCH);
+   inst* i = inst_new(op);
+   i->imm.target = 0;
+   return inst_block(i);
+ }
+-void inst_set_target(block b, block target) {
++static void inst_set_target(block b, block target) {
+   assert(block_is_single(b));
+   assert(opcode_describe(b.first->op)->flags & OP_HAS_BRANCH);
+   assert(target.last);
+@@ -550,23 +550,23 @@
+ }
+ 
+ block gen_function(const char* name, block formals, block body) {
+-  inst* i = inst_new(CLOSURE_CREATE);
++  inst* closure = inst_new(CLOSURE_CREATE);
+   int nformals = 0;
+-  for (inst* i = formals.last; i; i = i->prev) {
++  for (inst* param = formals.last; param; param = param->prev) {
+     nformals++;
+-    i->nformals = 0;
+-    if (i->op == CLOSURE_PARAM_REGULAR) {
+-      i->op = CLOSURE_PARAM;
+-      body = gen_var_binding(gen_call(i->symbol, gen_noop()), i->symbol, body);
+-    }
+-    block_bind_subblock(inst_block(i), body, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
+-  }
+-  i->subfn = body;
+-  i->symbol = strdup(name);
+-  i->any_unbound = -1;
+-  i->nformals = nformals;
+-  i->arglist = formals;
+-  block b = inst_block(i);
++    param->nformals = 0;
++    if (param->op == CLOSURE_PARAM_REGULAR) {
++      param->op = CLOSURE_PARAM;
++      body = gen_var_binding(gen_call(param->symbol, gen_noop()), param->symbol, body);
++    }
++    block_bind_subblock(inst_block(param), body, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
++  }
++  closure->subfn = body;
++  closure->symbol = strdup(name);
++  closure->any_unbound = -1;
++  closure->nformals = nformals;
++  closure->arglist = formals;
++  block b = inst_block(closure);
+   block_bind_subblock(b, b, OP_IS_CALL_PSEUDO | OP_HAS_BINDING, 0);
+   return b;
+ }
+@@ -1161,15 +1161,15 @@
+         block callargs = gen_noop();
+         for (inst* i; (i = block_take(&curr->arglist));) {
+           assert(opcode_describe(i->op)->flags & OP_IS_CALL_PSEUDO);
+-          block b = inst_block(i);
++          block arg = inst_block(i);
+           switch (i->op) {
+           default: assert(0 && "Unknown type of parameter"); break;
+           case CLOSURE_REF:
+-            block_append(&callargs, b);
++            block_append(&callargs, arg);
+             break;
+           case CLOSURE_CREATE:
+-            block_append(&prelude, b);
+-            block_append(&callargs, gen_op_bound(CLOSURE_REF, b));
++            block_append(&prelude, arg);
++            block_append(&callargs, gen_op_bound(CLOSURE_REF, arg));
+             break;
+           }
+           actual_args++;
+@@ -1215,11 +1215,24 @@
+   return errors;
+ }
+ 
+-static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv *env) {
++static int compile_depth(struct bytecode* bc, block b, struct locfile* lf,
++                         jv args, jv *env, size_t depth, size_t max_depth);
++
++static int compile_depth(struct bytecode* bc, block b, struct locfile* lf,
++                         jv args, jv *env, size_t depth, size_t max_depth) {
+   int errors = 0;
+   int pos = 0;
+   int var_frame_idx = 0;
+   bc->nsubfunctions = 0;
++  bc->subfunctions = 0;
++  bc->code = 0;
++  bc->codelen = 0;
++  bc->constants = jv_invalid();
++  if (depth > max_depth) {
++    locfile_locate(lf, UNKNOWN_LOCATION, "compiler recursion depth exceeded");
++    block_free(b);
++    return 1;
++  }
+   errors += expand_call_arglist(&b, args, env);
+   b = BLOCK(b, gen_op_simple(RET));
+   jv localnames = jv_array();
+@@ -1297,7 +1310,8 @@
+           params = jv_array_append(params, jv_string(param->symbol));
+         }
+         subfn->debuginfo = jv_object_set(subfn->debuginfo, jv_string("params"), params);
+-        errors += compile(subfn, curr->subfn, lf, args, env);
++        errors += compile_depth(subfn, curr->subfn, lf, args, env,
++                                depth + 1, max_depth);
+         curr->subfn = gen_noop();
+       }
+     }
+@@ -1364,6 +1378,11 @@
+   return errors;
+ }
+ 
++static int compile(struct bytecode* bc, block b, struct locfile* lf, jv args, jv *env) {
++  enum { JQ_COMPILE_MAX_RECURSION_DEPTH = 1024 };
++  return compile_depth(bc, b, lf, args, env, 0, JQ_COMPILE_MAX_RECURSION_DEPTH);
++}
++
+ int block_compile(block b, struct bytecode** out, struct locfile* lf, jv args) {
+   struct bytecode* bc = jv_mem_alloc(sizeof(struct bytecode));
+   bc->parent = 0;
+diff --git a/src/execute.c b/src/execute.c
+--- a/src/execute.c
++++ b/src/execute.c
+@@ -15,6 +15,8 @@
+ #include "jq.h"
+ #include "builtin.h"
+ #include "linker.h"
++
++jv _jq_path_append(jq_state *jq, jv v, jv p, jv value_at_path);
+ 
+ struct jq_state {
+   void (*nomem_handler)(void *);
+@@ -159,14 +161,14 @@
+   jq->curr_frame = stack_pop_block(&jq->stk, jq->curr_frame, frame_size(fp->bc));
+ }
+ 
+-void stack_push(jq_state *jq, jv val) {
++static void stack_push(jq_state *jq, jv val) {
+   assert(jv_is_valid(val));
+   jq->stk_top = stack_push_block(&jq->stk, jq->stk_top, sizeof(jv));
+   jv* sval = stack_block(&jq->stk, jq->stk_top);
+   *sval = val;
+ }
+ 
+-jv stack_pop(jq_state *jq) {
++static jv stack_pop(jq_state *jq) {
+   jv* sval = stack_block(&jq->stk, jq->stk_top);
+   jv val = *sval;
+   if (!stack_pop_will_free(&jq->stk, jq->stk_top)) {
+@@ -179,7 +181,7 @@
+ 
+ // Like stack_pop(), but assert !stack_pop_will_free() and replace with
+ // jv_null() on the stack.
+-jv stack_popn(jq_state *jq) {
++static jv stack_popn(jq_state *jq) {
+   jv* sval = stack_block(&jq->stk, jq->stk_top);
+   jv val = *sval;
+   if (!stack_pop_will_free(&jq->stk, jq->stk_top)) {
+@@ -203,12 +205,12 @@
+   stack_ptr saved_data_stack, saved_curr_frame;
+ };
+ 
+-struct stack_pos stack_get_pos(jq_state* jq) {
++static struct stack_pos stack_get_pos(jq_state* jq) {
+   struct stack_pos sp = {jq->stk_top, jq->curr_frame};
+   return sp;
+ }
+ 
+-void stack_save(jq_state *jq, uint16_t* retaddr, struct stack_pos sp){
++static void stack_save(jq_state *jq, uint16_t* retaddr, struct stack_pos sp){
+   jq->fork_top = stack_push_block(&jq->stk, jq->fork_top, sizeof(struct forkpoint));
+   struct forkpoint* fork = stack_block(&jq->stk, jq->fork_top);
+   fork->saved_data_stack = jq->stk_top;
+@@ -267,7 +269,7 @@
+   return jv_copy(jq->value_at_path = value_at_path);
+ }
+ 
+-uint16_t* stack_restore(jq_state *jq){
++static uint16_t* stack_restore(jq_state *jq){
+   while (!stack_pop_will_free(&jq->stk, jq->fork_top)) {
+     if (stack_pop_will_free(&jq->stk, jq->stk_top)) {
+       jv_free(stack_pop(jq));
+diff --git a/src/jq_test.c b/src/jq_test.c
+--- a/src/jq_test.c
++++ b/src/jq_test.c
+@@ -17,6 +17,7 @@
+ #ifdef HAVE_PTHREAD
+ static void run_jq_pthread_tests(void);
+ #endif
++int jq_testsuite(jv libdirs, int verbose, int argc, char* argv[]);
+ 
+ int jq_testsuite(jv libdirs, int verbose, int argc, char* argv[]) {
+   int skip = -1;
+diff --git a/src/jv.c b/src/jv.c
+--- a/src/jv.c
++++ b/src/jv.c
+@@ -47,6 +47,7 @@
+ 
+ #include "jv_alloc.h"
+ #include "jv.h"
++#include "jv_private.h"
+ #include "jv_unicode.h"
+ #include "util.h"
+ 
+@@ -294,8 +295,8 @@
+ 
+ extern void jv_tsd_dtoa_ctx_init();
+ extern void jv_tsd_dtoa_ctx_fini();
+-void jv_tsd_dec_ctx_fini();
+-void jv_tsd_dec_ctx_init();
++static void jv_tsd_dec_ctx_fini(void);
++static void jv_tsd_dec_ctx_init(void);
+ 
+ BOOL WINAPI DllMain(HINSTANCE hinstDLL,
+                     DWORD fdwReason,
+@@ -488,12 +489,12 @@
+ 
+ // atexit finalizer to clean up the tsd dec contexts if main() exits
+ // without having called pthread_exit()
+-void jv_tsd_dec_ctx_fini(void) {
++static void jv_tsd_dec_ctx_fini(void) {
+   jv_mem_free(pthread_getspecific(dec_ctx_key));
+   pthread_setspecific(dec_ctx_key, NULL);
+ }
+ 
+-void jv_tsd_dec_ctx_init(void) {
++static void jv_tsd_dec_ctx_init(void) {
+   if (pthread_key_create(&dec_ctx_key, jv_mem_free) != 0) {
+     fprintf(stderr, "error: cannot create thread specific key");
+     abort();
+@@ -930,9 +931,13 @@
+ 
+ static int jvp_array_contains(jv a, jv b, int depth) {
+   int r = 1;
+-  jv_array_foreach(b, bi, belem) {
++  int b_len = jv_array_length(jv_copy(b));
++  int a_len = jv_array_length(jv_copy(a));
++  for (int bi = 0; bi < b_len; bi++) {
++    jv belem = jv_array_get(jv_copy(b), bi);
+     int ri = 0;
+-    jv_array_foreach(a, ai, aelem) {
++    for (int ai = 0; ai < a_len; ai++) {
++      jv aelem = jv_array_get(jv_copy(a), ai);
+       ri = jvp_contains(aelem, jv_copy(belem), depth);
+       if (ri) break;
+     }
+diff --git a/src/jv.h b/src/jv.h
+--- a/src/jv.h
++++ b/src/jv.h
+@@ -244,6 +244,7 @@
+ 
+ jv jv_parse(const char* string);
+ jv jv_parse_sized(const char* string, int length);
++jv jv_parse_sized_custom_flags(const char* string, int length, int flags);
+ jv jv_parse_custom_flags(const char* string, int flags);
+ 
+ typedef void (*jv_nomem_handler_f)(void *);
+diff --git a/src/jv_alloc.c b/src/jv_alloc.c
+--- a/src/jv_alloc.c
++++ b/src/jv_alloc.c
+@@ -3,6 +3,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include "jv.h"
++#include "jv_alloc.h"
+ 
+ struct nomem_handler {
+     jv_nomem_handler_f handler;
+diff --git a/src/jv_aux.c b/src/jv_aux.c
+--- a/src/jv_aux.c
++++ b/src/jv_aux.c
+@@ -526,6 +526,10 @@
+     return jv_invalid_with_msg(jv_string("Paths must be specified as an array"));
+   }
+   paths = jv_sort(paths, jv_copy(paths));
++  if (!jv_is_valid(paths)) {
++    jv_free(object);
++    return paths;
++  }
+   jv_array_foreach(paths, i, elem) {
+     if (jv_get_kind(elem) != JV_KIND_ARRAY) {
+       jv_free(object);
+diff --git a/src/jv_print.c b/src/jv_print.c
+--- a/src/jv_print.c
++++ b/src/jv_print.c
+@@ -15,6 +15,7 @@
+ #include "jv_unicode.h"
+ #include "jv_alloc.h"
+ #include "jv_private.h"
++#include "jq.h"
+ #include "util.h"
+ 
+ #ifndef MAX_PRINT_DEPTH
+diff --git a/src/linker.c b/src/linker.c
+--- a/src/linker.c
++++ b/src/linker.c
+@@ -18,6 +18,7 @@
+ #include "jq.h"
+ #include "util.h"
+ #include "compile.h"
++#include "linker.h"
+ #include "jv_alloc.h"
+ 
+ struct lib_entry {
+diff --git a/src/locfile.c b/src/locfile.c
+--- a/src/locfile.c
++++ b/src/locfile.c
+@@ -78,7 +78,11 @@
+ 
+   int startline = locfile_get_line(l, loc.start);
+   int offset = l->linemap[startline];
+-  int end = MIN(loc.end, MAX(l->linemap[startline+1] - 1, loc.start + 1));
++  int line_end = l->linemap[startline + 1] - 1;
++  if (line_end < loc.start + 1) {
++    line_end = loc.start + 1;
++  }
++  int end = loc.end < line_end ? loc.end : line_end;
+   jv underline = jv_string_repeat(jv_string("^"), end - loc.start);
+   jv m2 = jv_string_fmt("%s at %s, line %d, column %d:\n    %.*s\n    %*s",
+                         jv_string_value(m1), jv_string_value(l->fname),
+diff --git a/src/parser.c b/src/parser.c
+--- a/src/parser.c
++++ b/src/parser.c
+@@ -74,6 +74,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include "compile.h"
++#include "jq_parser.h"
+ #include "jv_alloc.h"
+ #include "builtin.h"
+ #define YYMALLOC jv_mem_alloc
+@@ -403,14 +404,14 @@
+     /*YYERROR*/;                                                   \
+   } while (0)
+ 
+-void yyerror(YYLTYPE* loc, block* answer, int* errors,
+-             struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
++static void yyerror(YYLTYPE* loc, block* answer, int* errors,
++                    struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
+   (*errors)++;
+   locfile_locate(locations, *loc, "jq: error: %s", s);
+ }
+ 
+-int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
+-          struct locfile* locations, struct lexer_param* lexer_param_ptr) {
++static int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
++                 struct locfile* locations, struct lexer_param* lexer_param_ptr) {
+   yyscan_t lexer = lexer_param_ptr->lexer;
+   int tok = jq_yylex(yylval, yylloc, lexer);
+   if ((tok == LITERAL || tok == QQSTRING_TEXT) && !jv_is_valid(yylval->literal)) {
+@@ -2239,6 +2240,7 @@
+ 
+     /* Number of syntax errors so far.  */
+     int yynerrs = 0;
++    (void)yynerrs;
+ 
+     yy_state_fast_t yystate = 0;
+     /* Number of tokens to shift before error messages enabled.  */
+diff --git a/src/parser.y b/src/parser.y
+--- a/src/parser.y
++++ b/src/parser.y
+@@ -4,6 +4,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include "compile.h"
++#include "jq_parser.h"
+ #include "jv_alloc.h"
+ #include "builtin.h"
+ #define YYMALLOC jv_mem_alloc
+@@ -136,14 +137,14 @@
+     /*YYERROR*/;                                                   \
+   } while (0)
+ 
+-void yyerror(YYLTYPE* loc, block* answer, int* errors,
+-             struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
++static void yyerror(YYLTYPE* loc, block* answer, int* errors,
++                    struct locfile* locations, struct lexer_param* lexer_param_ptr, const char *s){
+   (*errors)++;
+   locfile_locate(locations, *loc, "jq: error: %s", s);
+ }
+ 
+-int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
+-          struct locfile* locations, struct lexer_param* lexer_param_ptr) {
++static int yylex(YYSTYPE* yylval, YYLTYPE* yylloc, block* answer, int* errors,
++                 struct locfile* locations, struct lexer_param* lexer_param_ptr) {
+   yyscan_t lexer = lexer_param_ptr->lexer;
+   int tok = jq_yylex(yylval, yylloc, lexer);
+   if ((tok == LITERAL || tok == QQSTRING_TEXT) && !jv_is_valid(yylval->literal)) {
