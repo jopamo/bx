@@ -10,6 +10,7 @@ typedef char *(*bx_argv_expand_arg_fn)(const char *arg, const char *item, void *
 
 size_t bx_argv_environment_bytes(void);
 size_t bx_argv_bytes(char **argv);
+int bx_argv_parse_command(const char *command, char ***argv_out);
 size_t bx_argv_bytes_with_items(const char *const *base_argv, int base_argc,
                                 char **items, int start, int count);
 char **bx_argv_build_with_item_expansion(const char *const *base_argv, int base_argc,
