@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <limits.h>
+#include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -138,6 +139,102 @@ static bool bx_argv_push_owned(char ***argvp, int *argc, int *cap, char *arg) {
     (*argvp)[(*argc)++] = arg;
     (*argvp)[*argc] = NULL;
     return true;
+}
+
+static bool bx_argv_word_push_char(char **word, size_t *len, size_t *cap, char ch) {
+    if (*len == SIZE_MAX)
+        return false;
+    if (*len + 1u >= *cap) {
+        size_t new_cap = *cap == 0 ? 32u : *cap * 2u;
+        if (new_cap <= *cap)
+            return false;
+        char *tmp = realloc(*word, new_cap);
+        if (!tmp)
+            return false;
+        *word = tmp;
+        *cap = new_cap;
+    }
+    (*word)[(*len)++] = ch;
+    (*word)[*len] = '\0';
+    return true;
+}
+
+int bx_argv_parse_command(const char *command, char ***argv_out) {
+    char **argv = NULL;
+    int argc = 0;
+    int argv_cap = 0;
+    const unsigned char *cursor = (const unsigned char *)command;
+
+    if (!command || !argv_out)
+        return -1;
+    *argv_out = NULL;
+
+    while (*cursor != '\0') {
+        char *word = NULL;
+        size_t word_len = 0;
+        size_t word_cap = 0;
+        unsigned char quote = '\0';
+        bool started = false;
+
+        while (isspace(*cursor))
+            cursor++;
+        if (*cursor == '\0')
+            break;
+
+        while (*cursor != '\0') {
+            unsigned char ch = *cursor;
+
+            if (quote == '\0' && isspace(ch))
+                break;
+            if (ch == '\'' && quote != '"') {
+                quote = quote == '\'' ? '\0' : '\'';
+                started = true;
+                cursor++;
+                continue;
+            }
+            if (ch == '"' && quote != '\'') {
+                quote = quote == '"' ? '\0' : '"';
+                started = true;
+                cursor++;
+                continue;
+            }
+            if (ch == '\\' && quote != '\'') {
+                cursor++;
+                if (*cursor == '\0')
+                    goto invalid;
+                ch = *cursor;
+            }
+            if (!bx_argv_word_push_char(&word, &word_len, &word_cap, (char)ch))
+                goto invalid;
+            started = true;
+            cursor++;
+        }
+
+        if (quote != '\0' || !started)
+            goto invalid;
+        if (!word) {
+            word = strdup("");
+            if (!word)
+                goto invalid;
+        }
+        if (!bx_argv_push_owned(&argv, &argc, &argv_cap, word))
+            goto invalid;
+        while (isspace(*cursor))
+            cursor++;
+        continue;
+
+invalid:
+        free(word);
+        bx_argv_free(argv);
+        return -1;
+    }
+
+    if (!argv || argc == 0) {
+        bx_argv_free(argv);
+        return -1;
+    }
+    *argv_out = argv;
+    return 0;
 }
 
 void bx_argv_free(char **argv) {

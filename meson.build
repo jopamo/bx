@@ -403,6 +403,43 @@ bx_archive_applet_sources = [
   'src/applets/archive/tar/tar_stream.c',
 ]
 
+bx_zip_include_dirs = include_directories(
+  'src',
+  'src/lib/zip',
+  'src/lib/zip/include',
+  'src/lib/zip/common',
+  'src/lib/zip/compression',
+  'src/lib/zip/format',
+)
+
+bx_zip_sources = files(
+  'src/lib/zip/common/status.c',
+  'src/lib/zip/common/strlist.c',
+  'src/lib/zip/common/ctx.c',
+  'src/lib/zip/common/fileio.c',
+  'src/lib/zip/compression/buffer_utils.c',
+  'src/lib/zip/compression/zlib_shim.c',
+  'src/lib/zip/compression/bzip2_shim.c',
+  'src/lib/zip/compression/crc32.c',
+  'src/lib/zip/compression/zipcrypto.c',
+  'src/lib/zip/format/reader.c',
+  'src/lib/zip/format/writer.c',
+  'src/lib/zip/format/recovery.c',
+  'src/lib/zip/cli_common.c',
+  'src/lib/zip/ops.c',
+  'src/applets/archive/zip/zip.c',
+  'src/applets/archive/unzip/unzip.c',
+)
+
+bx_zip_lib = static_library(
+  'bx_zip',
+  bx_zip_sources,
+  include_directories : bx_zip_include_dirs,
+  dependencies : [zlib_dep, libbz2_dep],
+  # zlib and libbz2 expose historically non-const input pointer types.
+  c_args : cc.get_supported_arguments(['-Wno-cast-qual']),
+)
+
 # applet groups
 bx_base_applet_sources = [
   'src/applets/base/base64/base64.c',
@@ -1462,7 +1499,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib],
+  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib, bx_zip_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
