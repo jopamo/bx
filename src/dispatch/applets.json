@@ -989,6 +989,18 @@
       ]
     },
     {
+      "name": "zipnote",
+      "main": "bx_zip_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "recursive-traversal",
+        "child-execution",
+        "terminal-control",
+        "raw-output"
+      ]
+    },
+    {
       "name": "unzip",
       "main": "bx_unzip_main",
       "capabilities": [
@@ -1003,6 +1015,7 @@
       "main": "bx_unzip_main",
       "capabilities": [
         "filesystem-read",
+        "filesystem-write",
         "terminal-control",
         "raw-output"
       ]

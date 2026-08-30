@@ -656,6 +656,25 @@ bool bx_path_is_dot_or_dotdot(const char* name) {
     return (strcmp(name, ".") == 0 || strcmp(name, "..") == 0);
 }
 
+bool bx_path_is_absolute(const char* path) {
+    return path != NULL && path[0] == '/';
+}
+
+bool bx_path_has_parent_reference(const char* path) {
+    if (path == NULL) {
+        return false;
+    }
+    for (const char* cursor = path; *cursor != '\0'; cursor++) {
+        if (cursor[0] == '.'
+            && cursor[1] == '.'
+            && (cursor == path || cursor[-1] == '/')
+            && (cursor[2] == '/' || cursor[2] == '\0')) {
+            return true;
+        }
+    }
+    return false;
+}
+
 char* bx_path_build_dest(const char* source_operand, const char* destination_root, bool destination_is_directory, bool parents) {
     if (parents) {
         char* parents_path = bx_path_parents_layout_dup(source_operand);

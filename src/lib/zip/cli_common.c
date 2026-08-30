@@ -4,7 +4,9 @@
 
 #include <stdarg.h>
 #include <string.h>
-#include <unistd.h>
+
+#include "lib/color.h"
+#include "lib/path_ops.h"
 
 /*
  * CLI formatting and logging helpers shared by zip/unzip front-ends
@@ -27,35 +29,6 @@
  * - Set during zu_cli_init_terminal
  * - Consulted by zu_cli_colors
  */
-static bool g_use_color = false;
-
-/*
- * ANSI escape sequences used when colors are enabled
- * - reset must be emitted after colored spans to avoid leaking styles to user shell
- * - bold is used for primary headings in usage output
- */
-static const ZuCliColors kCliColorsEnabled = {
-    .reset = "\033[0m",
-    .bold = "\033[1m",
-    .red = "\033[31m",
-    .green = "\033[32m",
-    .yellow = "\033[33m",
-    .cyan = "\033[36m",
-};
-
-/*
- * Empty strings used when colors are disabled
- * - Keeping the same struct layout avoids conditionals at every callsite
- */
-static const ZuCliColors kCliColorsDisabled = {
-    .reset = "",
-    .bold = "",
-    .red = "",
-    .green = "",
-    .yellow = "",
-    .cyan = "",
-};
-
 /*
  * Initialize terminal-related behavior for this process
  *
@@ -64,7 +37,7 @@ static const ZuCliColors kCliColorsDisabled = {
  *   This keeps piped output clean and avoids writing escape sequences into files
  */
 void zu_cli_init_terminal(void) {
-    g_use_color = isatty(STDOUT_FILENO);
+    (void)bx_color_enabled();
 }
 
 /*
@@ -73,7 +46,14 @@ void zu_cli_init_terminal(void) {
  * - Callers should not cache the pointer across zu_cli_init_terminal in other programs
  */
 const ZuCliColors* zu_cli_colors(void) {
-    return g_use_color ? &kCliColorsEnabled : &kCliColorsDisabled;
+    static ZuCliColors colors;
+    colors.reset = bx_color_reset();
+    colors.bold = bx_color_bold();
+    colors.red = bx_color_red();
+    colors.green = bx_color_green();
+    colors.yellow = bx_color_yellow();
+    colors.cyan = bx_color_cyan();
+    return &colors;
 }
 
 /*
@@ -91,16 +71,7 @@ bool zu_cli_name_matches(const char* argv0, const char* name) {
     if (!argv0 || !name)
         return false;
 
-    const char* base = strrchr(argv0, '/');
-    base = base ? base + 1 : argv0;
-
-#ifdef _WIN32
-    const char* backslash = strrchr(base, '\\');
-    if (backslash)
-        base = backslash + 1;
-#endif
-
-    return strcmp(base, name) == 0;
+    return strcmp(bx_path_basename_ptr(argv0), name) == 0;
 }
 
 /*
@@ -188,4 +159,51 @@ void zu_cli_emit_option_trace(const char* tool, ZContext* ctx) {
     for (size_t i = 0; i < ctx->option_events.len; ++i) {
         zu_log(ctx, "  %s\n", ctx->option_events.items[i]);
     }
+}
+
+int zu_cli_map_zip_exit(int status) {
+    switch (status) {
+        case ZU_STATUS_OK:
+            return 0;
+        case ZU_STATUS_USAGE:
+            return 16;
+        case ZU_STATUS_IO:
+            return 2;
+        case ZU_STATUS_OOM:
+            return 5;
+        case ZU_STATUS_NO_FILES:
+            return 12;
+        case ZU_STATUS_NOT_IMPLEMENTED:
+        default:
+            return 3;
+    }
+}
+
+int zu_cli_map_unzip_exit(int status) {
+    switch (status) {
+        case ZU_STATUS_OK:
+            return 0;
+        case ZU_STATUS_USAGE:
+            return 10;
+        case ZU_STATUS_NO_FILES:
+            return 11;
+        case ZU_STATUS_IO:
+            return 2;
+        case ZU_STATUS_OOM:
+            return 5;
+        case ZU_STATUS_NOT_IMPLEMENTED:
+        default:
+            return 3;
+    }
+}
+
+int zu_cli_open_log(ZContext* ctx) {
+    if (!ctx)
+        return ZU_STATUS_USAGE;
+    if (!ctx->log_path)
+        return ZU_STATUS_OK;
+
+    ctx->log_file = fopen(
+        ctx->log_path, ctx->log_append ? "ab" : "wb");
+    return ctx->log_file ? ZU_STATUS_OK : ZU_STATUS_IO;
 }

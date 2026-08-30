@@ -426,9 +426,16 @@ bx_zip_sources = files(
   'src/lib/zip/format/writer.c',
   'src/lib/zip/format/recovery.c',
   'src/lib/zip/cli_common.c',
+  'src/lib/zip/comments.c',
+  'src/lib/zip/extract_path.c',
+  'src/lib/zip/input_walk.c',
   'src/lib/zip/ops.c',
+  'src/lib/zip/publish.c',
   'src/applets/archive/zip/zip.c',
+  'src/applets/archive/zip/zip_parse.c',
+  'src/applets/archive/zip/zipnote.c',
   'src/applets/archive/unzip/unzip.c',
+  'src/applets/archive/unzip/unzip_parse.c',
 )
 
 bx_zip_lib = static_library(

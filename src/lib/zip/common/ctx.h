@@ -86,6 +86,8 @@ struct ZContext {
     bool zi_allow_pager;
     bool zi_show_comments;
     int zi_format;            /* enum-like selector for zipinfo output style */
+    /* 0 restores all timestamps, 1 skips directory timestamps, 2 skips all. */
+    unsigned d_flag;
     bool no_dir_entries;      /* -D */
     bool exclude_extra_attrs; /* -X */
     bool store_symlinks;      /* -y */

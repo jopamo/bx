@@ -25,6 +25,7 @@
 #include "crc32.h"
 #include "zlib_shim.h"
 #include "zip_headers.h"
+#include "extract_path.h"
 #include "zipcrypto.h"
 
 #ifndef FNM_CASEFOLD
@@ -589,115 +590,6 @@ static bool match_and_track(const ZContext* ctx, const char* name, bool* include
     return matched;
 }
 
-/*
- * Detect unsafe archive paths
- *
- * Rejects
- * - absolute paths
- * - any ".." segment that would traverse upward
- *
- * This prevents classic zip slip attacks during extraction
- */
-static bool path_has_traversal(const char* name) {
-    if (!name)
-        return true;
-
-    if (name[0] == '/')
-        return true;
-
-    for (const char* p = name; *p; ++p) {
-        if (p[0] == '.' && p[1] == '.' && (p == name || p[-1] == '/') && (p[2] == '/' || p[2] == '\0')) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-/*
- * Ensure that a directory exists
- *
- * - If the path exists and is a directory: OK
- * - If the path does not exist: try mkdir(0755)
- * - Otherwise: usage/io error depending on failure mode
- */
-static int ensure_dir(const char* path) {
-    struct stat st;
-    if (lstat(path, &st) == 0) {
-        return S_ISDIR(st.st_mode) ? ZU_STATUS_OK : ZU_STATUS_USAGE;
-    }
-    if (mkdir(path, 0755) == 0) {
-        return ZU_STATUS_OK;
-    }
-    if (errno == EEXIST && lstat(path, &st) == 0 && S_ISDIR(st.st_mode))
-        return ZU_STATUS_OK;
-    return ZU_STATUS_IO;
-}
-
-/*
- * Create every parent directory needed for a file path
- *
- * The function walks the string and temporarily terminates it at each '/'
- * calling ensure_dir on each prefix
- */
-static int ensure_parent_dirs(const char* path) {
-    char* dup = strdup(path);
-    if (!dup)
-        return ZU_STATUS_OOM;
-
-    for (char* p = dup + 1; *p; ++p) {
-        if (*p == '/') {
-            *p = '\0';
-            if (dup[0] != '\0' && ensure_dir(dup) != ZU_STATUS_OK) {
-                free(dup);
-                return ZU_STATUS_IO;
-            }
-            *p = '/';
-        }
-    }
-
-    free(dup);
-    return ZU_STATUS_OK;
-}
-
-/*
- * Build an extraction target path according to ctx settings
- *
- * Rules
- * - If ctx->store_paths is false, strip directories and keep only basename
- * - If ctx->target_dir is set, prefix the output path with it
- * - Returns a malloc'd string or NULL on OOM
- */
-static char* build_output_path(const ZContext* ctx, const char* name) {
-    const char* name_part = name;
-
-    if (!ctx->store_paths) {
-        const char* slash = strrchr(name, '/');
-        name_part = slash ? slash + 1 : name;
-    }
-
-    const char* base = ctx->target_dir ? ctx->target_dir : "";
-    size_t base_len = strlen(base);
-    bool need_sep = base_len > 0 && base[base_len - 1] != '/';
-
-    size_t total = base_len + (need_sep ? 1 : 0) + strlen(name_part) + 1;
-    char* out = malloc(total);
-    if (!out)
-        return NULL;
-
-    if (base_len == 0) {
-        snprintf(out, total, "%s", name_part);
-    }
-    else if (need_sep) {
-        snprintf(out, total, "%s/%s", base, name_part);
-    }
-    else {
-        snprintf(out, total, "%s%s", base, name_part);
-    }
-
-    return out;
-}
-
 static void parse_extra_fields(const unsigned char* extra, uint16_t extra_len, zu_extra_fields* out) {
     if (!extra || extra_len == 0 || !out)
         return;
@@ -1047,6 +939,64 @@ static int zi_print_verbose_entry(const ZContext* ctx,
     return zi_print_line(ctx, line_count, "\n");
 }
 
+struct zu_pending_dir_timestamp {
+    char* path;
+    struct timeval times[2];
+};
+
+struct zu_pending_dir_timestamps {
+    struct zu_pending_dir_timestamp* entries;
+    size_t len;
+    size_t cap;
+};
+
+static void pending_dir_timestamps_free(struct zu_pending_dir_timestamps* pending) {
+    if (!pending)
+        return;
+    for (size_t i = 0; i < pending->len; ++i)
+        free(pending->entries[i].path);
+    free(pending->entries);
+    memset(pending, 0, sizeof(*pending));
+}
+
+static bool pending_dir_timestamps_record(struct zu_pending_dir_timestamps* pending,
+                                          const char* path,
+                                          time_t atime,
+                                          time_t mtime) {
+    if (!pending || !path)
+        return false;
+    if (pending->len == pending->cap) {
+        size_t new_cap = pending->cap == 0 ? 8 : pending->cap * 2;
+        if (new_cap < pending->cap || new_cap > SIZE_MAX / sizeof(*pending->entries))
+            return false;
+        struct zu_pending_dir_timestamp* grown =
+            realloc(pending->entries, new_cap * sizeof(*grown));
+        if (!grown)
+            return false;
+        pending->entries = grown;
+        pending->cap = new_cap;
+    }
+
+    struct zu_pending_dir_timestamp* entry = &pending->entries[pending->len];
+    entry->path = strdup(path);
+    if (!entry->path)
+        return false;
+    entry->times[0].tv_sec = atime;
+    entry->times[0].tv_usec = 0;
+    entry->times[1].tv_sec = mtime;
+    entry->times[1].tv_usec = 0;
+    pending->len++;
+    return true;
+}
+
+static void pending_dir_timestamps_apply(const struct zu_pending_dir_timestamps* pending) {
+    if (!pending)
+        return;
+    /* Children first, then parents, so restoring a child cannot dirty its parent. */
+    for (size_t i = pending->len; i > 0; --i)
+        (void)utimes(pending->entries[i - 1].path, pending->entries[i - 1].times);
+}
+
 /*
  * Extract or test a single entry selected by the central directory
  *
@@ -1062,7 +1012,14 @@ static int zi_print_verbose_entry(const ZContext* ctx,
  * - Verify CRC and uncompressed byte count against central directory values
  * - When writing to filesystem, restore permissions and timestamps when possible
  */
-static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, const char* name, bool test_only, uint64_t comp_size, uint64_t uncomp_size, uint64_t lho_offset) {
+static int extract_or_test_entry(ZContext* ctx,
+                                 const zu_central_header* hdr,
+                                 const char* name,
+                                 bool test_only,
+                                 uint64_t comp_size,
+                                 uint64_t uncomp_size,
+                                 uint64_t lho_offset,
+                                 struct zu_pending_dir_timestamps* pending_dirs) {
     size_t name_len = strlen(name);
     bool is_dir = name_len > 0 && name[name_len - 1] == '/';
     int rc = ZU_STATUS_OK;
@@ -1071,7 +1028,7 @@ static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, co
     uint64_t written = 0;
     bool skipped = false;
 
-    if (path_has_traversal(name)) {
+    if (!zu_extract_path_is_safe(name)) {
         zu_context_set_error(ctx, ZU_STATUS_USAGE, "unsafe path in archive entry");
         return ZU_STATUS_USAGE;
     }
@@ -1125,7 +1082,7 @@ static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, co
                 goto cleanup;
             }
 
-            char* dir_path = build_output_path(ctx, name);
+            char* dir_path = zu_extract_build_output_path(ctx, name);
             if (!dir_path) {
                 zu_context_set_error(ctx, ZU_STATUS_OOM, "allocating output path failed");
                 rc = ZU_STATUS_OOM;
@@ -1137,19 +1094,19 @@ static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, co
                 dir_path[out_len - 1] = '\0';
             }
 
-            int dir_rc = ensure_dir(dir_path);
+            int dir_rc = zu_extract_ensure_dir(dir_path);
             if (dir_rc == ZU_STATUS_OK) {
                 if (ef.has_uid || ef.has_gid) {
                     (void)lchown(dir_path, ef.has_uid ? (uid_t)ef.uid : (uid_t)-1, ef.has_gid ? (gid_t)ef.gid : (gid_t)-1);
                 }
-                struct timeval times[2];
-                time_t mtime = ef.has_mtime ? ef.mtime : dos_to_unix_time(hdr->mod_date, hdr->mod_time);
-                time_t atime = ef.has_atime ? ef.atime : mtime;
-                times[0].tv_sec = atime;
-                times[0].tv_usec = 0;
-                times[1].tv_sec = mtime;
-                times[1].tv_usec = 0;
-                (void)utimes(dir_path, times);
+                if (ctx->d_flag == 0) {
+                    time_t mtime = ef.has_mtime ? ef.mtime : dos_to_unix_time(hdr->mod_date, hdr->mod_time);
+                    time_t atime = ef.has_atime ? ef.atime : mtime;
+                    if (!pending_dir_timestamps_record(pending_dirs, dir_path, atime, mtime)) {
+                        zu_context_set_error(ctx, ZU_STATUS_OOM, "recording directory timestamp failed");
+                        dir_rc = ZU_STATUS_OOM;
+                    }
+                }
             }
             free(dir_path);
             if (dir_rc != ZU_STATUS_OK) {
@@ -1214,14 +1171,14 @@ static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, co
             fp = stdout;
         }
         else {
-            out_path = build_output_path(ctx, name);
+            out_path = zu_extract_build_output_path(ctx, name);
             if (!out_path) {
                 zu_context_set_error(ctx, ZU_STATUS_OOM, "allocating output path failed");
                 rc = ZU_STATUS_OOM;
                 goto cleanup;
             }
 
-            if (ensure_parent_dirs(out_path) != ZU_STATUS_OK) {
+            if (zu_extract_ensure_parent_dirs(out_path) != ZU_STATUS_OK) {
                 zu_context_set_error(ctx, ZU_STATUS_IO, "creating parent directories failed");
                 rc = ZU_STATUS_IO;
                 goto cleanup;
@@ -1555,7 +1512,7 @@ static int extract_or_test_entry(ZContext* ctx, const zu_central_header* hdr, co
                 }
             }
 
-            if (rc == ZU_STATUS_OK) {
+            if (rc == ZU_STATUS_OK && ctx->d_flag < 2) {
                 time_t mtime = ef.has_mtime ? ef.mtime : dos_to_unix_time(hdr->mod_date, hdr->mod_time);
                 time_t atime = ef.has_atime ? ef.atime : mtime;
                 struct timeval times[2];
@@ -1786,6 +1743,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
         return ZU_STATUS_USAGE;
 
     bool* include_hits = NULL;
+    struct zu_pending_dir_timestamps pending_dirs = {0};
     if (ctx->include.len > 0) {
         include_hits = calloc(ctx->include.len, sizeof(bool));
         if (!include_hits)
@@ -1794,6 +1752,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
 
     int rc = zu_open_input(ctx, ctx->archive_path);
     if (rc != ZU_STATUS_OK) {
+        pending_dir_timestamps_free(&pending_dirs);
         free(include_hits);
         return rc;
     }
@@ -1802,6 +1761,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
     rc = read_cd_info(ctx, &cdinfo, false);
     if (rc != ZU_STATUS_OK) {
         zu_close_files(ctx);
+        pending_dir_timestamps_free(&pending_dirs);
         free(include_hits);
         return rc;
     }
@@ -1809,6 +1769,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
     if (fseeko(ctx->in_file, (off_t)cdinfo.cd_offset, SEEK_SET) != 0) {
         zu_context_set_error(ctx, ZU_STATUS_IO, "seek to central directory failed");
         zu_close_files(ctx);
+        pending_dir_timestamps_free(&pending_dirs);
         free(include_hits);
         return ZU_STATUS_IO;
     }
@@ -1823,6 +1784,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
         rc = read_central_entry(ctx, &hdr, &name, NULL, NULL, NULL, NULL, &comp_size, &uncomp_size, &lho_offset);
         if (rc != ZU_STATUS_OK) {
             zu_close_files(ctx);
+            pending_dir_timestamps_free(&pending_dirs);
             free(include_hits);
             free(name);
             return rc;
@@ -1832,13 +1794,21 @@ static int walk_entries(ZContext* ctx, bool test_only) {
         if (next_cd_pos < 0) {
             free(name);
             zu_close_files(ctx);
+            pending_dir_timestamps_free(&pending_dirs);
             free(include_hits);
             zu_context_set_error(ctx, ZU_STATUS_IO, "ftello failed");
             return ZU_STATUS_IO;
         }
 
         if (match_and_track(ctx, name, include_hits)) {
-            rc = extract_or_test_entry(ctx, &hdr, name, test_only, comp_size, uncomp_size, lho_offset);
+            rc = extract_or_test_entry(ctx,
+                                       &hdr,
+                                       name,
+                                       test_only,
+                                       comp_size,
+                                       uncomp_size,
+                                       lho_offset,
+                                       &pending_dirs);
         }
         else {
             rc = ZU_STATUS_OK;
@@ -1848,6 +1818,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
 
         if (rc != ZU_STATUS_OK) {
             zu_close_files(ctx);
+            pending_dir_timestamps_free(&pending_dirs);
             free(include_hits);
             return rc;
         }
@@ -1855,12 +1826,15 @@ static int walk_entries(ZContext* ctx, bool test_only) {
         if (fseeko(ctx->in_file, next_cd_pos, SEEK_SET) != 0) {
             zu_context_set_error(ctx, ZU_STATUS_IO, "seek to next central header failed");
             zu_close_files(ctx);
+            pending_dir_timestamps_free(&pending_dirs);
             free(include_hits);
             return ZU_STATUS_IO;
         }
     }
 
     zu_close_files(ctx);
+    if (!test_only && ctx->d_flag == 0)
+        pending_dir_timestamps_apply(&pending_dirs);
 
     int final_rc = ZU_STATUS_OK;
     if (include_hits && ctx->include.len > 0) {
@@ -1873,6 +1847,7 @@ static int walk_entries(ZContext* ctx, bool test_only) {
     }
 
     free(include_hits);
+    pending_dir_timestamps_free(&pending_dirs);
     return final_rc;
 }
 
