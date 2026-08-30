@@ -31,7 +31,7 @@
 #include "jq_parser.h"
 #include "bytecode.h"
 #include "linker.h"
-#include "bx_jq_pcre2.h"
+#include "lib/jq/pcre2_backend.h"
 #include "locfile.h"
 #include "jv_unicode.h"
 #include "jv_alloc.h"

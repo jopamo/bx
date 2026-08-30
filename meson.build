@@ -1181,40 +1181,43 @@ xxd_lib = static_library('bx_xxd',
   c_args : xxd_c_args,
 )
 
-jq_sources = files(
+jq_applet_sources = files(
   'src/applets/text/jq/jq_applet.c',
-  'src/applets/text/jq/bx_jq_pcre2.c',
-  'src/applets/text/jq/upstream/src/builtin.c',
-  'src/applets/text/jq/upstream/src/bytecode.c',
-  'src/applets/text/jq/upstream/src/compile.c',
-  'src/applets/text/jq/upstream/src/execute.c',
-  'src/applets/text/jq/upstream/src/jq_test.c',
-  'src/applets/text/jq/upstream/src/jv.c',
-  'src/applets/text/jq/upstream/src/jv_alloc.c',
-  'src/applets/text/jq/upstream/src/jv_aux.c',
-  'src/applets/text/jq/upstream/src/jv_dtoa.c',
-  'src/applets/text/jq/upstream/src/jv_dtoa_tsd.c',
-  'src/applets/text/jq/upstream/src/jv_file.c',
-  'src/applets/text/jq/upstream/src/jv_parse.c',
-  'src/applets/text/jq/upstream/src/jv_print.c',
-  'src/applets/text/jq/upstream/src/jv_unicode.c',
-  'src/applets/text/jq/upstream/src/linker.c',
-  'src/applets/text/jq/upstream/src/locfile.c',
-  'src/applets/text/jq/upstream/src/main.c',
-  'src/applets/text/jq/upstream/src/parser.c',
-  'src/applets/text/jq/upstream/src/lexer.c',
-  'src/applets/text/jq/upstream/src/util.c',
-  'src/applets/text/jq/upstream/vendor/decNumber/decContext.c',
-  'src/applets/text/jq/upstream/vendor/decNumber/decNumber.c',
+  'src/applets/text/jq/jq_cli.c',
+  'src/lib/jq/pcre2_backend.c',
+)
+
+jq_vendor_sources = files(
+  'src/vendor/jq/src/builtin.c',
+  'src/vendor/jq/src/bytecode.c',
+  'src/vendor/jq/src/compile.c',
+  'src/vendor/jq/src/execute.c',
+  'src/vendor/jq/src/jq_test.c',
+  'src/vendor/jq/src/jv.c',
+  'src/vendor/jq/src/jv_alloc.c',
+  'src/vendor/jq/src/jv_aux.c',
+  'src/vendor/jq/src/jv_dtoa.c',
+  'src/vendor/jq/src/jv_dtoa_tsd.c',
+  'src/vendor/jq/src/jv_file.c',
+  'src/vendor/jq/src/jv_parse.c',
+  'src/vendor/jq/src/jv_print.c',
+  'src/vendor/jq/src/jv_unicode.c',
+  'src/vendor/jq/src/linker.c',
+  'src/vendor/jq/src/locfile.c',
+  'src/vendor/jq/src/parser.c',
+  'src/vendor/jq/src/lexer.c',
+  'src/vendor/jq/src/util.c',
+  'src/vendor/jq/vendor/decNumber/decContext.c',
+  'src/vendor/jq/vendor/decNumber/decNumber.c',
 )
 
 jq_include_dirs = include_directories(
   'src',
   'src/dispatch',
   'src/applets/text/jq',
-  'src/applets/text/jq/upstream',
-  'src/applets/text/jq/upstream/src',
-  'src/applets/text/jq/upstream/vendor',
+  'src/vendor/jq',
+  'src/vendor/jq/src',
+  'src/vendor/jq/vendor',
 )
 
 jq_c_args = cc.get_supported_arguments([
@@ -1227,13 +1230,19 @@ jq_c_args = cc.get_supported_arguments([
   '-Wno-unused-parameter',
 ])
 jq_c_args += [
-  '-Dmain=bx_jq_main_impl',
   '-include',
-  join_paths(meson.project_source_root(), 'src', 'applets', 'text', 'jq', 'bx_jq_config.h'),
+  join_paths(meson.project_source_root(), 'src', 'vendor', 'jq', 'bx_jq_config.h'),
 ]
 
-jq_lib = static_library('bx_jq',
-  jq_sources,
+jq_vendor_lib = static_library('bx_jq_vendor',
+  jq_vendor_sources,
+  include_directories : jq_include_dirs,
+  dependencies : [threads_dep, pcre2_dep],
+  c_args : jq_c_args,
+)
+
+jq_lib = static_library('bx_jq_integration',
+  jq_applet_sources,
   include_directories : jq_include_dirs,
   dependencies : [threads_dep, pcre2_dep],
   c_args : jq_c_args,
@@ -1506,7 +1515,7 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_lib, manual_lib, bx_zip_lib],
+  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_vendor_lib, jq_lib, manual_lib, bx_zip_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir

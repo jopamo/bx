@@ -793,7 +793,8 @@ int zu_zip_parse_args(int argc, char** argv, ZContext* ctx, bool is_zipnote) {
             const char* rest = tok + 2;
 
             // Options that take arguments: -b, -t, -P, -O, -Z
-            if (strchr("btPOZ", first)) {
+            if (first == 'b' || first == 't' || first == 'P' ||
+                first == 'O' || first == 'Z') {
                 const char* arg = rest[0] ? rest : NULL;
                 if (!arg) {
                     if (i + 1 >= argc) {
