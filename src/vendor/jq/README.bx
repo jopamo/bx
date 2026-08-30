@@ -1,7 +1,7 @@
 # jq engine import
 
 This directory contains the jq engine snapshot from commit
-`a829f678f340da83a75fb35457d918c98524fdc7`.
+`41b8edfe5437fcd25a072081c05f9f770f9e9b85`.
 
 Boundary:
 
@@ -38,10 +38,14 @@ runs the full jq matrix. Without that repository, the same command remains
 self-contained: it runs the fetched upstream corpus directly against the
 candidate `bx` binary.
 
+Known upstream diagnostic transitions are migrated as exact bx replay
+baselines in the same transaction. Unknown behavior changes still fail the
+matrix instead of being recorded implicitly.
+
 To reproduce or select a specific revision:
 
 ```sh
-./tools/update-jq a829f678f340da83a75fb35457d918c98524fdc7
+./tools/update-jq 41b8edfe5437fcd25a072081c05f9f770f9e9b85
 ```
 
 To test whether the latest source and patch series are compatible without

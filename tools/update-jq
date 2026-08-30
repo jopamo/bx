@@ -109,6 +109,12 @@ CORPUS_TIMEOUTS = {
     "utf8test": 30,
     "shtest": 60,
 }
+RAW_NUL_OLD_DIAGNOSTIC = (
+    "jq: parse error: Invalid numeric literal at EOF at line 1, column 1\n"
+)
+RAW_NUL_REJECT_DIAGNOSTIC = (
+    "jq: parse error: Invalid character at line 1, column 1\n"
+)
 
 
 class UpdateError(RuntimeError):
@@ -220,6 +226,39 @@ def corpus_manifest(commit: str, corpus: Path) -> dict[str, object]:
         "file_count": len(files),
         "files": files,
     }
+
+
+def raw_nul_diagnostic(checkout: Path) -> str:
+    parser = (checkout / "src/jv_parse.c").read_text(encoding="utf-8")
+    match = re.search(
+        r"static chclass classify\(char c\) \{(?P<body>.*?)\n\}",
+        parser,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise UpdateError("jq raw-NUL parser policy seam changed")
+    if "case '\\0':" in match.group("body"):
+        return RAW_NUL_REJECT_DIAGNOSTIC
+    return RAW_NUL_OLD_DIAGNOSTIC
+
+
+def update_raw_nul_baseline(path: Path, expected_stderr: str) -> bytes:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    matches = [
+        case
+        for case in data.get("cases", [])
+        if isinstance(case, dict) and case.get("name") == "stdin_nul_byte_rejected"
+    ]
+    if len(matches) != 1:
+        raise UpdateError(f"{path}: raw-NUL parser baseline seam changed")
+    expected = matches[0].get("expected")
+    if not isinstance(expected, dict):
+        raise UpdateError(f"{path}: raw-NUL expected result is not an object")
+    current = expected.get("stderr")
+    if current not in (RAW_NUL_OLD_DIAGNOSTIC, RAW_NUL_REJECT_DIAGNOSTIC):
+        raise UpdateError(f"{path}: unknown raw-NUL diagnostic baseline {current!r}")
+    expected["stderr"] = expected_stderr
+    return (json.dumps(data, indent=2) + "\n").encode()
 
 
 @dataclass
@@ -345,6 +384,14 @@ def prepare_candidate(
                 raise UpdateError(f"{cases_path}: source commit does not match current import")
             cases["source_commit"] = commit
             metadata[cases_path] = (json.dumps(cases, indent=2) + "\n").encode()
+
+            fuzz_cases_path = (
+                tests_root / "tests/applets/text/jq/jq_json_parser_fuzz_cases.json"
+            )
+            metadata[fuzz_cases_path] = update_raw_nul_baseline(
+                fuzz_cases_path,
+                raw_nul_diagnostic(checkout),
+            )
 
             manifest_path = tests_root / "tests/fixtures/jq/MANIFEST.json"
             metadata[manifest_path] = (
