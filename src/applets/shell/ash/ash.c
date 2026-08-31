@@ -593,8 +593,32 @@ static int ash_builtin_export(struct ash_shell* shell, const struct ash_command*
 
 static int ash_builtin_unset(struct ash_shell* shell, const struct ash_command* command) {
     int status = 0;
+    bool unset_functions = false;
+    size_t first_name = 1u;
 
-    for (size_t i = 1; i < command->word_count; i++) {
+    if (command->word_count > 1u) {
+        if (strcmp(command->words[1], "-f") == 0) {
+            unset_functions = true;
+            first_name = 2u;
+        }
+        else if (strcmp(command->words[1], "-v") == 0) {
+            first_name = 2u;
+        }
+        else if (strcmp(command->words[1], "--") == 0) {
+            first_name = 2u;
+        }
+        else if (command->words[1][0] == '-' &&
+                 command->words[1][1] != '\0') {
+            ash_diag(
+                shell,
+                "unset: invalid option '%s'",
+                command->words[1]
+            );
+            return 2;
+        }
+    }
+
+    for (size_t i = first_name; i < command->word_count; i++) {
         const char* name = command->words[i];
         size_t len = strlen(name);
         if (!ash_is_valid_name_span(name, len)) {
@@ -602,7 +626,12 @@ static int ash_builtin_unset(struct ash_shell* shell, const struct ash_command* 
             status = 1;
             continue;
         }
-        ash_var_unset(shell, name);
+        if (unset_functions) {
+            ash_function_unset(shell, name);
+        }
+        else {
+            ash_var_unset(shell, name);
+        }
     }
 
     return status;
