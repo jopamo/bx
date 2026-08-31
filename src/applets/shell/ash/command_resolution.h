@@ -17,6 +17,8 @@ enum ash_builtin_kind {
     ASH_BUILTIN_PWD,
     ASH_BUILTIN_EXEC,
     ASH_BUILTIN_SET,
+    ASH_BUILTIN_BREAK,
+    ASH_BUILTIN_CONTINUE,
 };
 
 enum ash_command_resolution_kind {

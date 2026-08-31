@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "applets/shell/ash/control.h"
+
 struct ash_alias;
 struct ash_command_cache;
 struct ash_function;
@@ -75,6 +77,7 @@ struct ash_shell {
     bool login_shell;
     bool should_exit;
     int requested_exit_status;
+    struct ash_control_state control;
     ash_command_substitution_fn command_substitution;
 };
 
