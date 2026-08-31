@@ -475,10 +475,9 @@ void ash_expanded_fields_destroy(struct ash_expanded_fields* fields) {
     *fields = (struct ash_expanded_fields){0};
 }
 
-static bool ash_expanded_fields_push(
+static bool ash_expanded_fields_reserve_one(
     struct ash_shell* shell,
-    struct ash_expanded_fields* fields,
-    const char* value
+    struct ash_expanded_fields* fields
 ) {
     if (fields->count == fields->capacity) {
         size_t capacity = fields->capacity == 0u ?
@@ -497,11 +496,120 @@ static bool ash_expanded_fields_push(
         fields->values = values;
         fields->capacity = capacity;
     }
-    fields->values[fields->count] = strdup(value);
-    if (fields->values[fields->count] == NULL) {
+    return true;
+}
+
+static bool ash_ifs_contains(const char* ifs, unsigned char character) {
+    return strchr(ifs, (int)character) != NULL;
+}
+
+static bool ash_ifs_whitespace(const char* ifs, unsigned char character) {
+    return (character == ' ' || character == '\t' || character == '\n') &&
+        ash_ifs_contains(ifs, character);
+}
+
+static bool ash_expanded_fields_push_span(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    const char* value,
+    size_t length
+) {
+    if (length == SIZE_MAX) {
         return ash_expansion_oom(shell);
     }
-    fields->count++;
+    char* copy = malloc(length + 1u);
+    if (copy == NULL) {
+        return ash_expansion_oom(shell);
+    }
+    memcpy(copy, value, length);
+    copy[length] = '\0';
+
+    if (!ash_expanded_fields_reserve_one(shell, fields)) {
+        free(copy);
+        return false;
+    }
+    fields->values[fields->count++] = copy;
+    return true;
+}
+
+static bool ash_expanded_fields_push(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    const char* value
+) {
+    return ash_expanded_fields_push_span(
+        shell,
+        fields,
+        value,
+        strlen(value)
+    );
+}
+
+static bool ash_split_expansion(
+    struct ash_shell* shell,
+    const char* text,
+    struct ash_expanded_fields* split
+) {
+    ash_expanded_fields_init(split);
+    const char* ifs = ash_var_get(shell, "IFS");
+    if (ifs == NULL) {
+        ifs = " \t\n";
+    }
+    if (text[0] == '\0') {
+        return true;
+    }
+    if (ifs[0] == '\0') {
+        return ash_expanded_fields_push(shell, split, text);
+    }
+
+    size_t position = 0u;
+    size_t length = strlen(text);
+    while (position < length &&
+           ash_ifs_whitespace(ifs, (unsigned char)text[position])) {
+        position++;
+    }
+    while (position < length) {
+        size_t start = position;
+        while (position < length &&
+               !ash_ifs_contains(ifs, (unsigned char)text[position])) {
+            position++;
+        }
+        if (!ash_expanded_fields_push_span(
+                shell,
+                split,
+                text + start,
+                position - start
+            )) {
+            ash_expanded_fields_destroy(split);
+            return false;
+        }
+        if (position == length) {
+            break;
+        }
+
+        unsigned char delimiter = (unsigned char)text[position++];
+        if (ash_ifs_whitespace(ifs, delimiter)) {
+            while (position < length &&
+                   ash_ifs_whitespace(
+                       ifs,
+                       (unsigned char)text[position]
+                   )) {
+                position++;
+            }
+            if (position < length &&
+                ash_ifs_contains(ifs, (unsigned char)text[position]) &&
+                !ash_ifs_whitespace(
+                    ifs,
+                    (unsigned char)text[position]
+                )) {
+                position++;
+            }
+        }
+        while (position < length &&
+               ash_ifs_whitespace(ifs, (unsigned char)text[position])) {
+            position++;
+        }
+    }
     return true;
 }
 
@@ -544,6 +652,14 @@ static bool ash_parameter_is(
           part->text[3] == '}'));
 }
 
+static bool ash_part_requires_splitting(const struct ash_word_part* part) {
+    return part->quote == ASH_QUOTE_NONE &&
+        (part->kind == ASH_WORD_PARAMETER ||
+         part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
+         part->kind == ASH_WORD_BACKQUOTE ||
+         part->kind == ASH_WORD_ARITHMETIC);
+}
+
 bool ash_expand_argument(
     struct ash_shell* shell,
     const struct ash_word* word,
@@ -558,41 +674,113 @@ bool ash_expand_argument(
             if (shell->positionals.count == 0) {
                 continue;
             }
+            bool first = true;
             for (int j = 0; j < shell->positionals.count; j++) {
-                bool added = j == 0 ?
-                    ash_expanded_fields_append(
-                        shell,
-                        fields,
-                        shell->positionals.values[j]
-                    ) :
-                    ash_expanded_fields_push(
-                        shell,
-                        fields,
-                        shell->positionals.values[j]
-                    );
-                if (!added) {
-                    ash_expanded_fields_destroy(fields);
-                    return false;
+                struct ash_expanded_fields split;
+                if (part->quote == ASH_QUOTE_NONE) {
+                    if (!ash_split_expansion(
+                            shell,
+                            shell->positionals.values[j],
+                            &split
+                        )) {
+                        ash_expanded_fields_destroy(fields);
+                        return false;
+                    }
                 }
+                else {
+                    ash_expanded_fields_init(&split);
+                    if (!ash_expanded_fields_push(
+                            shell,
+                            &split,
+                            shell->positionals.values[j]
+                        )) {
+                        ash_expanded_fields_destroy(fields);
+                        return false;
+                    }
+                }
+                for (size_t k = 0u; k < split.count; k++) {
+                    bool added = first ?
+                        ash_expanded_fields_append(
+                            shell,
+                            fields,
+                            split.values[k]
+                        ) :
+                        ash_expanded_fields_push(
+                            shell,
+                            fields,
+                            split.values[k]
+                        );
+                    if (!added) {
+                        ash_expanded_fields_destroy(&split);
+                        ash_expanded_fields_destroy(fields);
+                        return false;
+                    }
+                    first = false;
+                    field_present = true;
+                }
+                ash_expanded_fields_destroy(&split);
             }
-            field_present = true;
             continue;
         }
 
         struct bx_text_buffer component;
         bx_text_buffer_init(&component);
-        if (!ash_expand_part(shell, part, &component) ||
-            !ash_expanded_fields_append(
-                shell,
-                fields,
-                component.data != NULL ? component.data : ""
-            )) {
+        if (!ash_expand_part(shell, part, &component)) {
             bx_text_buffer_destroy(&component);
             ash_expanded_fields_destroy(fields);
             return false;
         }
-        if (component.length != 0u || part->quote != ASH_QUOTE_NONE) {
-            field_present = true;
+
+        const char* component_text =
+            component.data != NULL ? component.data : "";
+        if (ash_part_requires_splitting(part)) {
+            struct ash_expanded_fields split;
+            if (!ash_split_expansion(shell, component_text, &split)) {
+                bx_text_buffer_destroy(&component);
+                ash_expanded_fields_destroy(fields);
+                return false;
+            }
+            if (split.count != 0u) {
+                if (!ash_expanded_fields_append(
+                        shell,
+                        fields,
+                        split.values[0]
+                    )) {
+                    ash_expanded_fields_destroy(&split);
+                    bx_text_buffer_destroy(&component);
+                    ash_expanded_fields_destroy(fields);
+                    return false;
+                }
+                for (size_t j = 1u; j < split.count; j++) {
+                    if (!ash_expanded_fields_push(
+                            shell,
+                            fields,
+                            split.values[j]
+                        )) {
+                        ash_expanded_fields_destroy(&split);
+                        bx_text_buffer_destroy(&component);
+                        ash_expanded_fields_destroy(fields);
+                        return false;
+                    }
+                }
+                field_present = true;
+            }
+            ash_expanded_fields_destroy(&split);
+        }
+        else {
+            if (!ash_expanded_fields_append(
+                    shell,
+                    fields,
+                    component_text
+                )) {
+                bx_text_buffer_destroy(&component);
+                ash_expanded_fields_destroy(fields);
+                return false;
+            }
+            if (component.length != 0u ||
+                part->quote != ASH_QUOTE_NONE) {
+                field_present = true;
+            }
         }
         bx_text_buffer_destroy(&component);
     }
