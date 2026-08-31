@@ -269,6 +269,7 @@ static struct ash_ast* ash_parse_simple(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 ) {
+    (void)stop;
     struct ash_token* first = ash_parser_peek(parser);
     if (first == NULL) {
         return NULL;
@@ -280,7 +281,7 @@ static struct ash_ast* ash_parse_simple(
     }
 
     bool command_word_seen = false;
-    while (!ash_parser_at_stop(parser, stop)) {
+    while (true) {
         struct ash_token* token = ash_parser_peek(parser);
         if (token == NULL) {
             ash_ast_destroy(node);
@@ -343,6 +344,218 @@ static struct ash_ast* ash_parse_simple(
             (token != NULL) ? token->location : node->location,
             error
         );
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    return node;
+}
+
+static bool ash_parser_take_case_pattern(
+    struct ash_parser* parser,
+    struct ash_case_clause* clause
+) {
+    struct ash_token* token = ash_parser_peek(parser);
+    if (token == NULL) {
+        return false;
+    }
+    if (token->kind != ASH_TOKEN_WORD) {
+        ash_parser_fail(
+            parser,
+            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            token->location,
+            "case pattern expected"
+        );
+        return false;
+    }
+
+    struct ash_token pattern;
+    (void)ash_parser_take(parser, &pattern);
+    if (ash_case_clause_add_pattern(clause, &pattern.word) != 0) {
+        ash_parser_fail(
+            parser,
+            ASH_PARSER_ERROR,
+            pattern.location,
+            "out of memory"
+        );
+        ash_token_destroy(&pattern);
+        return false;
+    }
+    ash_token_destroy(&pattern);
+    return true;
+}
+
+static struct ash_ast* ash_parser_empty_list(
+    struct ash_parser* parser,
+    struct ash_source_location location
+) {
+    struct ash_ast* list = ash_ast_create(ASH_AST_LIST, location);
+    if (list == NULL) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+    }
+    return list;
+}
+
+static struct ash_ast* ash_parse_case_after_keyword(
+    struct ash_parser* parser,
+    struct ash_source_location location
+) {
+    struct ash_ast* node = ash_ast_create(ASH_AST_CASE, location);
+    if (node == NULL) {
+        ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
+        return NULL;
+    }
+
+    struct ash_token* token = ash_parser_peek(parser);
+    if (token == NULL) {
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    if (token->kind != ASH_TOKEN_WORD) {
+        ash_parser_fail(
+            parser,
+            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            token->location,
+            "word expected after 'case'"
+        );
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    struct ash_token subject;
+    (void)ash_parser_take(parser, &subject);
+    node->value.case_command.subject = subject.word;
+    subject.word = (struct ash_word){0};
+    ash_token_destroy(&subject);
+
+    ash_parser_skip_newlines(parser);
+    if (!ash_parser_consume_word(parser, "in", "'in' expected")) {
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    ash_parser_skip_newlines(parser);
+
+    while (true) {
+        token = ash_parser_peek(parser);
+        if (token == NULL) {
+            ash_ast_destroy(node);
+            return NULL;
+        }
+        if (token->kind == ASH_TOKEN_WORD &&
+            ash_word_is_unquoted_literal(&token->word, "esac")) {
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            break;
+        }
+        if (token->kind == ASH_TOKEN_EOF) {
+            ash_parser_fail(
+                parser,
+                ASH_PARSER_INCOMPLETE,
+                token->location,
+                "'esac' expected"
+            );
+            ash_ast_destroy(node);
+            return NULL;
+        }
+
+        struct ash_case_clause clause = {0};
+        if (token->kind == ASH_TOKEN_LPAREN) {
+            struct ash_token opening;
+            (void)ash_parser_take(parser, &opening);
+            ash_token_destroy(&opening);
+        }
+        if (!ash_parser_take_case_pattern(parser, &clause)) {
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+        while (true) {
+            token = ash_parser_peek(parser);
+            if (token == NULL) {
+                ash_case_clause_destroy(&clause);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            if (token->kind != ASH_TOKEN_PIPE) {
+                break;
+            }
+            struct ash_token separator;
+            (void)ash_parser_take(parser, &separator);
+            ash_token_destroy(&separator);
+            if (!ash_parser_take_case_pattern(parser, &clause)) {
+                ash_case_clause_destroy(&clause);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+        }
+        token = ash_parser_peek(parser);
+        if (token == NULL || token->kind != ASH_TOKEN_RPAREN) {
+            ash_parser_fail(
+                parser,
+                token != NULL && token->kind != ASH_TOKEN_EOF ?
+                    ASH_PARSER_ERROR : ASH_PARSER_INCOMPLETE,
+                token != NULL ? token->location : location,
+                "')' expected after case pattern"
+            );
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+        struct ash_token closing;
+        (void)ash_parser_take(parser, &closing);
+        struct ash_source_location body_location = closing.location;
+        ash_token_destroy(&closing);
+        ash_parser_skip_newlines(parser);
+
+        token = ash_parser_peek(parser);
+        if (token == NULL) {
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+        bool empty = token->kind == ASH_TOKEN_DSEMI ||
+            (token->kind == ASH_TOKEN_WORD &&
+             ash_word_is_unquoted_literal(&token->word, "esac"));
+        clause.body = empty ?
+            ash_parser_empty_list(parser, body_location) :
+            ash_parse_list(
+                parser,
+                &(struct ash_parse_stop){
+                    .token = ASH_TOKEN_DSEMI,
+                    .words = {"esac"},
+                }
+            );
+        if (clause.body == NULL) {
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+
+        token = ash_parser_peek(parser);
+        if (token == NULL) {
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+        if (token->kind == ASH_TOKEN_DSEMI) {
+            struct ash_token terminator;
+            (void)ash_parser_take(parser, &terminator);
+            ash_token_destroy(&terminator);
+            ash_parser_skip_newlines(parser);
+        }
+        if (ash_ast_case_add_clause(node, &clause) != 0) {
+            ash_parser_fail(
+                parser,
+                ASH_PARSER_ERROR,
+                body_location,
+                "out of memory"
+            );
+            ash_case_clause_destroy(&clause);
+            ash_ast_destroy(node);
+            return NULL;
+        }
+    }
+
+    if (!ash_parser_take_trailing_redirections(parser, node)) {
         ash_ast_destroy(node);
         return NULL;
     }
@@ -812,6 +1025,14 @@ static struct ash_ast* ash_parse_command(
         (void)ash_parser_take(parser, &keyword);
         ash_token_destroy(&keyword);
         return ash_parse_for_after_keyword(parser, location);
+    }
+    if (token->kind == ASH_TOKEN_WORD &&
+        ash_word_is_unquoted_literal(&token->word, "case")) {
+        struct ash_source_location location = token->location;
+        struct ash_token keyword;
+        (void)ash_parser_take(parser, &keyword);
+        ash_token_destroy(&keyword);
+        return ash_parse_case_after_keyword(parser, location);
     }
     return ash_parse_simple(parser, stop);
 }
