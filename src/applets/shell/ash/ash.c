@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "applets/shell/ash/command_resolution.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
@@ -35,18 +36,6 @@ enum ash_redir_kind {
     ASH_REDIR_IN = 0,
     ASH_REDIR_OUT,
     ASH_REDIR_APPEND,
-};
-
-enum ash_builtin_kind {
-    ASH_BUILTIN_NONE = 0,
-    ASH_BUILTIN_CD,
-    ASH_BUILTIN_EXIT,
-    ASH_BUILTIN_EXPORT,
-    ASH_BUILTIN_UNSET,
-    ASH_BUILTIN_UMASK,
-    ASH_BUILTIN_PWD,
-    ASH_BUILTIN_EXEC,
-    ASH_BUILTIN_SET,
 };
 
 struct ash_var {
@@ -1523,34 +1512,6 @@ static int ash_apply_command_assignments_env(struct ash_shell* shell, const stru
     return 0;
 }
 
-static enum ash_builtin_kind ash_lookup_builtin(const char* name) {
-    if (strcmp(name, "cd") == 0) {
-        return ASH_BUILTIN_CD;
-    }
-    if (strcmp(name, "exit") == 0) {
-        return ASH_BUILTIN_EXIT;
-    }
-    if (strcmp(name, "export") == 0) {
-        return ASH_BUILTIN_EXPORT;
-    }
-    if (strcmp(name, "unset") == 0) {
-        return ASH_BUILTIN_UNSET;
-    }
-    if (strcmp(name, "umask") == 0) {
-        return ASH_BUILTIN_UMASK;
-    }
-    if (strcmp(name, "pwd") == 0) {
-        return ASH_BUILTIN_PWD;
-    }
-    if (strcmp(name, "exec") == 0) {
-        return ASH_BUILTIN_EXEC;
-    }
-    if (strcmp(name, "set") == 0) {
-        return ASH_BUILTIN_SET;
-    }
-    return ASH_BUILTIN_NONE;
-}
-
 static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* command) {
     if (command->word_count > 2u) {
         ash_diag(shell, "cd: too many arguments");
@@ -1780,6 +1741,8 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
 
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
+        case ASH_BUILTIN_COLON:
+            return 0;
         case ASH_BUILTIN_CD:
             return ash_builtin_cd(shell, command);
         case ASH_BUILTIN_EXIT:
@@ -1796,7 +1759,7 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_exec(shell, command);
         case ASH_BUILTIN_SET:
             return ash_builtin_set(shell, command);
-        case ASH_BUILTIN_NONE:
+        case ASH_BUILTIN_INVALID:
             break;
     }
 
@@ -1815,12 +1778,12 @@ static int ash_execute_in_child(struct ash_shell* shell, const struct ash_comman
         return 0;
     }
 
-    enum ash_builtin_kind builtin = ash_lookup_builtin(command->words[0]);
-    if (builtin != ASH_BUILTIN_NONE) {
+    struct ash_command_resolution resolution = ash_command_resolve_builtin(command->words[0]);
+    if (ash_command_resolution_is_builtin(&resolution)) {
         if (ash_apply_command_assignments_shell(shell, command) != 0) {
             return 1;
         }
-        return ash_run_builtin(shell, builtin, command, true);
+        return ash_run_builtin(shell, resolution.target.builtin, command, true);
     }
 
     if (ash_apply_command_assignments_env(shell, command) != 0) {
@@ -2015,9 +1978,9 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
             return 0;
         }
 
-        enum ash_builtin_kind builtin = ash_lookup_builtin(command->words[0]);
-        if (builtin != ASH_BUILTIN_NONE) {
-            return ash_execute_single_command_parent(shell, command, builtin);
+        struct ash_command_resolution resolution = ash_command_resolve_builtin(command->words[0]);
+        if (ash_command_resolution_is_builtin(&resolution)) {
+            return ash_execute_single_command_parent(shell, command, resolution.target.builtin);
         }
 
         return ash_execute_single_command_forked(shell, command);
