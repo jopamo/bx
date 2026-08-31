@@ -16,6 +16,7 @@
 
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
+#include "applets/shell/ash/shell_context.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
@@ -98,22 +99,6 @@ struct ash_string {
     char* data;
     size_t len;
     size_t cap;
-};
-
-struct ash_shell {
-    const char* progname;
-    const char* argv0_param;
-    char** positional_args;
-    int positional_count;
-
-    struct ash_var* vars;
-
-    int last_status;
-    bool interactive;
-    bool login_shell;
-
-    bool should_exit;
-    int requested_exit_status;
 };
 
 static const char* ash_basename(const char* path) {
@@ -722,21 +707,48 @@ static bool ash_import_environment(struct ash_shell* shell) {
         if (!ash_is_valid_name_span(entry, name_len)) {
             continue;
         }
+        if (name_len == 3u && memcmp(entry, "IFS", 3u) == 0) {
+            continue;
+        }
 
         if (!ash_var_set_with_export(shell, entry, name_len, eq + 1, true)) {
             return false;
         }
     }
 
-    if (!ash_var_exists(shell, "PWD")) {
-        char* cwd = getcwd(NULL, 0);
-        if (cwd != NULL) {
-            if (!ash_var_set(shell, "PWD", cwd, true)) {
-                free(cwd);
-                return false;
-            }
-            free(cwd);
+    if (unsetenv("IFS") != 0 || !ash_var_set(shell, "IFS", " \t\n", false)) {
+        return false;
+    }
+
+    char* cwd = getcwd(NULL, 0);
+    if (cwd != NULL) {
+        const char* inherited_pwd = ash_var_get(shell, "PWD");
+        struct stat cwd_stat;
+        struct stat pwd_stat;
+        bool inherited_pwd_valid = inherited_pwd != NULL &&
+            inherited_pwd[0] == '/' &&
+            stat(".", &cwd_stat) == 0 &&
+            stat(inherited_pwd, &pwd_stat) == 0 &&
+            cwd_stat.st_dev == pwd_stat.st_dev &&
+            cwd_stat.st_ino == pwd_stat.st_ino;
+        const char* logical = inherited_pwd_valid ? inherited_pwd : cwd;
+
+        shell->cwd.physical = ash_strdup_text(shell, cwd);
+        shell->cwd.logical = ash_strdup_text(shell, logical);
+        const char* inherited_oldpwd = ash_var_get(shell, "OLDPWD");
+        if (inherited_oldpwd != NULL) {
+            shell->cwd.old_logical = ash_strdup_text(shell, inherited_oldpwd);
         }
+        if (shell->cwd.physical == NULL || shell->cwd.logical == NULL ||
+            (inherited_oldpwd != NULL && shell->cwd.old_logical == NULL)) {
+            free(cwd);
+            return false;
+        }
+        if (!inherited_pwd_valid && !ash_var_set(shell, "PWD", cwd, true)) {
+            free(cwd);
+            return false;
+        }
+        free(cwd);
     }
 
     if (!ash_var_exists(shell, "PATH")) {
@@ -750,19 +762,50 @@ static bool ash_import_environment(struct ash_shell* shell) {
 
 static const char* ash_parameter_positional(const struct ash_shell* shell, long index) {
     if (index == 0) {
-        return shell->argv0_param;
+        return shell->positionals.argv0;
     }
 
-    if (index < 0 || index > shell->positional_count) {
+    if (index < 0 || index > shell->positionals.count) {
         return "";
     }
 
-    return shell->positional_args[index - 1];
+    return shell->positionals.values[index - 1];
 }
 
 static const char* ash_parameter_named(const struct ash_shell* shell, const char* name, size_t len) {
     const char* value = ash_var_get_len(shell, name, len);
     return (value != NULL) ? value : "";
+}
+
+static bool ash_append_special_parameter(struct ash_shell* shell, char parameter, struct ash_string* out) {
+    char numbuf[32];
+
+    switch (parameter) {
+        case '?':
+            snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
+            return ash_string_append_text(shell, out, numbuf);
+        case '$':
+            snprintf(numbuf, sizeof(numbuf), "%ld", (long)shell->shell_pid);
+            return ash_string_append_text(shell, out, numbuf);
+        case '#':
+            snprintf(numbuf, sizeof(numbuf), "%d", shell->positionals.count);
+            return ash_string_append_text(shell, out, numbuf);
+        case '-': {
+            char letters[16];
+            ash_shell_option_letters(shell, letters, sizeof(letters));
+            return ash_string_append_text(shell, out, letters);
+        }
+        case '!':
+            if (shell->last_async_pid <= 0) {
+                return true;
+            }
+            snprintf(numbuf, sizeof(numbuf), "%ld", (long)shell->last_async_pid);
+            return ash_string_append_text(shell, out, numbuf);
+        case '0':
+            return ash_string_append_text(shell, out, ash_parameter_positional(shell, 0));
+        default:
+            return false;
+    }
 }
 
 static void ash_expand_parameter(struct ash_shell* shell, const char* input, size_t* pos, struct ash_string* out, bool* error_out) {
@@ -778,44 +821,27 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
         return;
     }
 
-    if (ch == '?') {
-        char numbuf[32];
-        snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
-        if (!ash_string_append_text(shell, out, numbuf)) {
+    if (strchr("?$#-!", ch) != NULL) {
+        if (!ash_append_special_parameter(shell, ch, out)) {
             *error_out = true;
             return;
         }
-        i++;
-        *pos = i;
-        return;
-    }
-
-    if (ch == '$') {
-        char numbuf[32];
-        snprintf(numbuf, sizeof(numbuf), "%ld", (long)getpid());
-        if (!ash_string_append_text(shell, out, numbuf)) {
-            *error_out = true;
-            return;
-        }
-        i++;
-        *pos = i;
+        *pos = i + 1u;
         return;
     }
 
     if (ch == '{') {
         i++;
 
-        if (input[i] == '?') {
+        if (strchr("?$#-!0", input[i]) != NULL) {
+            char special = input[i];
             i++;
             if (input[i] != '}') {
                 ash_diag(shell, "bad substitution");
                 *error_out = true;
                 return;
             }
-
-            char numbuf[32];
-            snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
-            if (!ash_string_append_text(shell, out, numbuf)) {
+            if (!ash_append_special_parameter(shell, special, out)) {
                 *error_out = true;
                 return;
             }
@@ -1550,6 +1576,26 @@ static int ash_builtin_cd(struct ash_shell* shell, const struct ash_command* com
 
     char* newcwd = ash_getcwd_dup();
     if (newcwd != NULL) {
+        char* new_physical = ash_strdup_text(shell, newcwd);
+        char* new_logical = ash_strdup_text(shell, newcwd);
+        char* new_old_logical = shell->cwd.logical != NULL
+            ? ash_strdup_text(shell, shell->cwd.logical)
+            : (oldcwd != NULL ? ash_strdup_text(shell, oldcwd) : NULL);
+        if (new_physical == NULL || new_logical == NULL ||
+            ((shell->cwd.logical != NULL || oldcwd != NULL) && new_old_logical == NULL)) {
+            free(new_physical);
+            free(new_logical);
+            free(new_old_logical);
+            free(oldcwd);
+            free(newcwd);
+            return 1;
+        }
+        free(shell->cwd.physical);
+        free(shell->cwd.logical);
+        free(shell->cwd.old_logical);
+        shell->cwd.physical = new_physical;
+        shell->cwd.logical = new_logical;
+        shell->cwd.old_logical = new_old_logical;
         if (!ash_var_set(shell, "PWD", newcwd, false)) {
             free(oldcwd);
             free(newcwd);
@@ -2304,10 +2350,23 @@ int bx_ash_main(int argc, char** argv) {
 
     struct ash_shell shell = {
         .progname = progname,
-        .argv0_param = argv0_param,
-        .positional_args = positional_args,
-        .positional_count = positional_count,
+        .positionals = {
+            .argv0 = argv0_param,
+            .values = positional_args,
+            .count = positional_count,
+            .previous = NULL,
+        },
         .vars = NULL,
+        .options = read_stdin ? ASH_SHELL_OPTION_STDIN : 0u,
+        .aliases = NULL,
+        .functions = NULL,
+        .traps = NULL,
+        .jobs = NULL,
+        .command_cache = NULL,
+        .input_stack = NULL,
+        .cwd = {0},
+        .shell_pid = getpid(),
+        .last_async_pid = -1,
         .last_status = 0,
         .interactive = false,
         .login_shell = login_shell,
@@ -2317,6 +2376,7 @@ int bx_ash_main(int argc, char** argv) {
 
     if (!ash_import_environment(&shell)) {
         ash_vars_destroy(&shell);
+        ash_shell_context_release_owned(&shell);
         return 1;
     }
 
@@ -2326,10 +2386,14 @@ int bx_ash_main(int argc, char** argv) {
     }
 
     shell.interactive = interactive;
+    if (interactive) {
+        shell.options |= ASH_SHELL_OPTION_INTERACTIVE;
+    }
 
     if (shell.interactive && !ash_var_exists(&shell, "PS1")) {
         if (!ash_var_set(&shell, "PS1", ash_default_prompt(), false)) {
             ash_vars_destroy(&shell);
+            ash_shell_context_release_owned(&shell);
             return 1;
         }
     }
@@ -2343,6 +2407,7 @@ int bx_ash_main(int argc, char** argv) {
         if (script == NULL) {
             ash_exec_error(&shell, script_path, errno);
             ash_vars_destroy(&shell);
+            ash_shell_context_release_owned(&shell);
             return 1;
         }
 
@@ -2358,5 +2423,6 @@ int bx_ash_main(int argc, char** argv) {
     }
 
     ash_vars_destroy(&shell);
+    ash_shell_context_release_owned(&shell);
     return status;
 }
