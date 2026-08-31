@@ -121,6 +121,14 @@ void ash_ast_destroy(struct ash_ast* node) {
             ash_ast_destroy(node->value.loop.condition);
             ash_ast_destroy(node->value.loop.body);
             break;
+        case ASH_AST_FOR:
+            free(node->value.for_loop.name);
+            for (size_t i = 0u; i < node->value.for_loop.word_count; i++) {
+                ash_word_destroy(&node->value.for_loop.words[i]);
+            }
+            free(node->value.for_loop.words);
+            ash_ast_destroy(node->value.for_loop.body);
+            break;
     }
 
     ash_ast_destroy_redirections(

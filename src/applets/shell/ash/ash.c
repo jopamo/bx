@@ -1839,6 +1839,45 @@ static int ash_execute_ast_loop(
     return status;
 }
 
+static int ash_execute_ast_for(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int status = 0;
+    size_t count = node->value.for_loop.explicit_words ?
+        node->value.for_loop.word_count : (size_t)shell->positionals.count;
+    for (size_t i = 0u; i < count && !shell->should_exit; i++) {
+        char* value = NULL;
+        if (node->value.for_loop.explicit_words) {
+            if (!ash_expand_lexed_word(
+                    shell,
+                    &node->value.for_loop.words[i],
+                    &value
+                )) {
+                return 2;
+            }
+        }
+        else {
+            value = ash_strdup_text(shell, shell->positionals.values[i]);
+            if (value == NULL) {
+                return 2;
+            }
+        }
+        bool assigned = ash_var_set(
+            shell,
+            node->value.for_loop.name,
+            value,
+            false
+        );
+        free(value);
+        if (!assigned) {
+            return 2;
+        }
+        status = ash_execute_ast(shell, node->value.for_loop.body);
+    }
+    return status;
+}
+
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     switch (node->kind) {
         case ASH_AST_SIMPLE:
@@ -1858,6 +1897,8 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
         case ASH_AST_WHILE:
         case ASH_AST_UNTIL:
             return ash_execute_ast_loop(shell, node);
+        case ASH_AST_FOR:
+            return ash_execute_ast_for(shell, node);
     }
     return 2;
 }
