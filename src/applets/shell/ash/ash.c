@@ -18,22 +18,13 @@
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 
 extern char** environ;
-
-enum ash_exec_token_kind {
-    ASH_TOK_WORD = 0,
-    ASH_TOK_PIPE,
-    ASH_TOK_SEMI,
-    ASH_TOK_REDIR_IN,
-    ASH_TOK_REDIR_OUT,
-    ASH_TOK_REDIR_APPEND,
-    ASH_TOK_EOF,
-};
 
 enum ash_redir_kind {
     ASH_REDIR_IN = 0,
@@ -46,18 +37,6 @@ struct ash_var {
     char* value;
     bool exported;
     struct ash_var* next;
-};
-
-struct ash_exec_token {
-    enum ash_exec_token_kind kind;
-    char* text;
-    int redir_fd;
-};
-
-struct ash_exec_tokens {
-    struct ash_exec_token* items;
-    size_t len;
-    size_t cap;
 };
 
 struct ash_redir {
@@ -268,40 +247,6 @@ static void ash_string_destroy(struct ash_string* string) {
     string->data = NULL;
     string->len = 0;
     string->cap = 0;
-}
-
-static void ash_tokens_init(struct ash_exec_tokens* tokens) {
-    tokens->items = NULL;
-    tokens->len = 0;
-    tokens->cap = 0;
-}
-
-static bool ash_tokens_push(const struct ash_shell* shell, struct ash_exec_tokens* tokens, struct ash_exec_token token) {
-    if (tokens->len == tokens->cap) {
-        size_t new_cap = (tokens->cap == 0) ? 16u : tokens->cap * 2u;
-        if (tokens->cap != 0u && tokens->cap > SIZE_MAX / 2u) {
-            return ash_diag_oom(shell);
-        }
-        struct ash_exec_token* grown = ash_realloc_array(shell, tokens->items, new_cap, sizeof(*tokens->items));
-        if (grown == NULL) {
-            return false;
-        }
-        tokens->items = grown;
-        tokens->cap = new_cap;
-    }
-
-    tokens->items[tokens->len++] = token;
-    return true;
-}
-
-static void ash_tokens_destroy(struct ash_exec_tokens* tokens) {
-    for (size_t i = 0; i < tokens->len; i++) {
-        free(tokens->items[i].text);
-    }
-    free(tokens->items);
-    tokens->items = NULL;
-    tokens->len = 0;
-    tokens->cap = 0;
 }
 
 static void ash_command_init(struct ash_command* command) {
@@ -1076,190 +1021,6 @@ static bool ash_parse_lexed_io_number(
     return true;
 }
 
-static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_exec_tokens* tokens) {
-    struct ash_lexer lexer;
-    ash_lexer_init(&lexer, ash_input_source_name(shell), input, strlen(input));
-    int pending_io_number = -1;
-
-    while (true) {
-        struct ash_token lexical_token;
-        enum ash_lexer_result result = ash_lexer_next(&lexer, &lexical_token);
-        if (result == ASH_LEXER_INCOMPLETE || result == ASH_LEXER_ERROR) {
-            const char* diagnostic =
-                (lexer.error != NULL) ? lexer.error : "lexical error";
-            if (strcmp(diagnostic, "unterminated parameter expansion") == 0) {
-                diagnostic = "bad substitution";
-            }
-            ash_diag(shell, "%s", diagnostic);
-            ash_token_destroy(&lexical_token);
-            return 1;
-        }
-
-        if (result == ASH_LEXER_END) {
-            struct ash_exec_token eof_token = {
-                .kind = ASH_TOK_EOF,
-                .text = NULL,
-                .redir_fd = -1,
-            };
-            ash_token_destroy(&lexical_token);
-            return ash_tokens_push(shell, tokens, eof_token) ? 0 : 1;
-        }
-
-        if (lexical_token.kind == ASH_TOKEN_IO_NUMBER) {
-            bool valid = ash_parse_lexed_io_number(
-                shell,
-                lexical_token.io_number,
-                &pending_io_number
-            );
-            ash_token_destroy(&lexical_token);
-            if (!valid) {
-                return 1;
-            }
-            continue;
-        }
-
-        struct ash_exec_token token = {
-            .text = NULL,
-            .redir_fd = -1,
-        };
-        switch (lexical_token.kind) {
-            case ASH_TOKEN_WORD:
-                if (pending_io_number >= 0 ||
-                    !ash_expand_lexed_word(shell, &lexical_token.word, &token.text)) {
-                    ash_token_destroy(&lexical_token);
-                    if (pending_io_number >= 0) {
-                        ash_diag(shell, "redirection operator expected after IO number");
-                    }
-                    return 1;
-                }
-                token.kind = ASH_TOK_WORD;
-                break;
-            case ASH_TOKEN_NEWLINE:
-            case ASH_TOKEN_SEMI:
-                token.kind = ASH_TOK_SEMI;
-                break;
-            case ASH_TOKEN_PIPE:
-                token.kind = ASH_TOK_PIPE;
-                break;
-            case ASH_TOKEN_LESS:
-                token.kind = ASH_TOK_REDIR_IN;
-                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 0;
-                pending_io_number = -1;
-                break;
-            case ASH_TOKEN_GREAT:
-                token.kind = ASH_TOK_REDIR_OUT;
-                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 1;
-                pending_io_number = -1;
-                break;
-            case ASH_TOKEN_DGREAT:
-                token.kind = ASH_TOK_REDIR_APPEND;
-                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 1;
-                pending_io_number = -1;
-                break;
-            default:
-                ash_diag(
-                    shell,
-                    "unexpected token: %s",
-                    ash_token_kind_name(lexical_token.kind)
-                );
-                ash_token_destroy(&lexical_token);
-                return 1;
-        }
-
-        ash_token_destroy(&lexical_token);
-        if (!ash_tokens_push(shell, tokens, token)) {
-            free(token.text);
-            return 1;
-        }
-    }
-}
-
-static int ash_parse_command(const struct ash_exec_tokens* tokens, size_t* index, struct ash_command* command, struct ash_shell* shell) {
-    bool saw_command_word = false;
-
-    while (*index < tokens->len) {
-        const struct ash_exec_token* token = &tokens->items[*index];
-
-        if (token->kind == ASH_TOK_WORD) {
-            if (!saw_command_word && ash_is_assignment_word(token->text)) {
-                if (!ash_command_push_assignment(shell, command, token->text)) {
-                    return 1;
-                }
-            }
-            else {
-                saw_command_word = true;
-                if (!ash_command_push_word(shell, command, token->text)) {
-                    return 1;
-                }
-            }
-            (*index)++;
-            continue;
-        }
-
-        if (token->kind == ASH_TOK_REDIR_IN || token->kind == ASH_TOK_REDIR_OUT || token->kind == ASH_TOK_REDIR_APPEND) {
-            enum ash_redir_kind redir_kind = ASH_REDIR_IN;
-            if (token->kind == ASH_TOK_REDIR_OUT) {
-                redir_kind = ASH_REDIR_OUT;
-            }
-            else if (token->kind == ASH_TOK_REDIR_APPEND) {
-                redir_kind = ASH_REDIR_APPEND;
-            }
-
-            int redir_fd = token->redir_fd;
-            (*index)++;
-            if (*index >= tokens->len || tokens->items[*index].kind != ASH_TOK_WORD) {
-                ash_diag(shell, "redirection requires a target");
-                return 1;
-            }
-
-            if (!ash_command_push_redir(shell, command, redir_fd, redir_kind, tokens->items[*index].text)) {
-                return 1;
-            }
-            (*index)++;
-            continue;
-        }
-
-        break;
-    }
-
-    return 0;
-}
-
-static int ash_parse_pipeline(const struct ash_exec_tokens* tokens, size_t* index, struct ash_pipeline* pipeline, struct ash_shell* shell) {
-    while (true) {
-        struct ash_command command;
-        ash_command_init(&command);
-
-        if (ash_parse_command(tokens, index, &command, shell) != 0) {
-            ash_command_destroy(&command);
-            return 1;
-        }
-
-        if (ash_command_is_empty(&command)) {
-            ash_command_destroy(&command);
-            ash_diag(shell, "syntax error near unexpected token");
-            return 1;
-        }
-
-        if (!ash_pipeline_push_command(shell, pipeline, &command)) {
-            ash_command_destroy(&command);
-            return 1;
-        }
-
-        if (*index >= tokens->len || tokens->items[*index].kind != ASH_TOK_PIPE) {
-            break;
-        }
-
-        (*index)++;
-        if (*index >= tokens->len || tokens->items[*index].kind == ASH_TOK_PIPE || tokens->items[*index].kind == ASH_TOK_SEMI || tokens->items[*index].kind == ASH_TOK_EOF) {
-            ash_diag(shell, "syntax error near unexpected token '|'");
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
 static int ash_apply_redirections(const struct ash_shell* shell, const struct ash_command* command, struct ash_saved_fds* saved) {
     for (size_t i = 0; i < command->redir_count; i++) {
         const struct ash_redir* redir = &command->redirs[i];
@@ -2005,154 +1766,372 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
     return ash_execute_pipeline_forked(shell, pipeline);
 }
 
-static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_exec_tokens* tokens, bool* parser_error_out) {
-    size_t index = 0;
-    int status = shell->last_status;
-    if (parser_error_out != NULL) {
-        *parser_error_out = false;
-    }
-
-    while (index < tokens->len) {
-        while (index < tokens->len && tokens->items[index].kind == ASH_TOK_SEMI) {
-            index++;
-        }
-
-        if (index >= tokens->len || tokens->items[index].kind == ASH_TOK_EOF) {
-            break;
-        }
-
-        struct ash_pipeline pipeline;
-        ash_pipeline_init(&pipeline);
-
-        if (ash_parse_pipeline(tokens, &index, &pipeline, shell) != 0) {
-            ash_pipeline_destroy(&pipeline);
-            if (parser_error_out != NULL) {
-                *parser_error_out = true;
-            }
-            return 2;
-        }
-
-        status = ash_execute_pipeline(shell, &pipeline);
-        ash_pipeline_destroy(&pipeline);
-
-        shell->last_status = status;
-
-        if (shell->should_exit) {
-            break;
-        }
-
-        if (index < tokens->len && tokens->items[index].kind == ASH_TOK_SEMI) {
-            index++;
+static bool ash_ast_add_redirection(
+    struct ash_shell* shell,
+    struct ash_command* command,
+    const struct ash_redirection* redirection
+) {
+    int fd;
+    if (redirection->io_number != NULL) {
+        if (!ash_parse_lexed_io_number(shell, redirection->io_number, &fd)) {
+            return false;
         }
     }
+    else {
+        fd = (redirection->operator == ASH_TOKEN_LESS) ? 0 : 1;
+    }
 
-    return status;
+    enum ash_redir_kind kind;
+    switch (redirection->operator) {
+        case ASH_TOKEN_LESS:
+            kind = ASH_REDIR_IN;
+            break;
+        case ASH_TOKEN_GREAT:
+        case ASH_TOKEN_CLOBBER:
+            kind = ASH_REDIR_OUT;
+            break;
+        case ASH_TOKEN_DGREAT:
+            kind = ASH_REDIR_APPEND;
+            break;
+        default:
+            ash_diag(
+                shell,
+                "redirection not implemented: %s",
+                ash_token_kind_name(redirection->operator)
+            );
+            return false;
+    }
+
+    char* target = NULL;
+    if (!ash_expand_lexed_word(shell, &redirection->target, &target)) {
+        return false;
+    }
+    bool added = ash_command_push_redir(shell, command, fd, kind, target);
+    free(target);
+    return added;
 }
 
-static int ash_execute_segment(struct ash_shell* shell, const char* input, bool* parser_error_out) {
-    struct ash_exec_tokens tokens;
-    ash_tokens_init(&tokens);
-    if (parser_error_out != NULL) {
-        *parser_error_out = false;
-    }
-
-    int rc = ash_tokenize(shell, input, &tokens);
-    if (rc != 0) {
-        ash_tokens_destroy(&tokens);
-        shell->last_status = 2;
-        if (parser_error_out != NULL) {
-            *parser_error_out = true;
+static bool ash_ast_simple_to_command(
+    struct ash_shell* shell,
+    const struct ash_ast* node,
+    struct ash_command* command
+) {
+    ash_command_init(command);
+    for (size_t i = 0u; i < node->value.simple.count; i++) {
+        const struct ash_simple_item* item = &node->value.simple.items[i];
+        if (item->kind == ASH_SIMPLE_REDIRECTION) {
+            if (!ash_ast_add_redirection(
+                    shell,
+                    command,
+                    &item->value.redirection
+                )) {
+                ash_command_destroy(command);
+                return false;
+            }
+            continue;
         }
+
+        char* text = NULL;
+        if (!ash_expand_lexed_word(shell, &item->value.word, &text)) {
+            ash_command_destroy(command);
+            return false;
+        }
+        bool added = (item->kind == ASH_SIMPLE_ASSIGNMENT) ?
+            ash_command_push_assignment(shell, command, text) :
+            ash_command_push_word(shell, command, text);
+        free(text);
+        if (!added) {
+            ash_command_destroy(command);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ash_ast_trailing_redirections_to_command(
+    struct ash_shell* shell,
+    const struct ash_ast* node,
+    struct ash_command* command
+) {
+    ash_command_init(command);
+    for (size_t i = 0u; i < node->trailing_redirection_count; i++) {
+        if (!ash_ast_add_redirection(
+                shell,
+                command,
+                &node->trailing_redirections[i]
+            )) {
+            ash_command_destroy(command);
+            return false;
+        }
+    }
+    return true;
+}
+
+static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
+
+static int ash_execute_ast_simple(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    struct ash_command command;
+    if (!ash_ast_simple_to_command(shell, node, &command)) {
         return 2;
     }
 
-    rc = ash_parse_and_execute(shell, &tokens, parser_error_out);
-    ash_tokens_destroy(&tokens);
-    shell->last_status = rc;
-    return rc;
+    struct ash_pipeline pipeline;
+    ash_pipeline_init(&pipeline);
+    if (!ash_pipeline_push_command(shell, &pipeline, &command)) {
+        ash_command_destroy(&command);
+        ash_pipeline_destroy(&pipeline);
+        return 2;
+    }
+
+    int status = ash_execute_pipeline(shell, &pipeline);
+    ash_pipeline_destroy(&pipeline);
+    return status;
 }
 
-static int ash_execute_buffer(struct ash_shell* shell, const char* input, bool* parser_error_out) {
-    size_t start = 0;
-    size_t i = 0;
-    bool in_single = false;
-    bool in_double = false;
-    bool escape = false;
-    int status = shell->last_status;
-    if (parser_error_out != NULL) {
-        *parser_error_out = false;
+static int ash_execute_ast_group(
+    struct ash_shell* shell,
+    const struct ash_ast* node,
+    bool subshell
+) {
+    if (subshell) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            ash_exec_error(shell, "fork", errno);
+            return 1;
+        }
+        if (pid == 0) {
+            struct ash_command redirections;
+            if (!ash_ast_trailing_redirections_to_command(
+                    shell,
+                    node,
+                    &redirections
+                )) {
+                _exit(2);
+            }
+            struct ash_saved_fds saved;
+            ash_saved_fds_init(&saved);
+            if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
+                ash_command_destroy(&redirections);
+                ash_saved_fds_destroy(&saved);
+                _exit(1);
+            }
+            ash_command_destroy(&redirections);
+            int status = ash_execute_ast(shell, node->value.group.body);
+            ash_saved_fds_destroy(&saved);
+            _exit(status);
+        }
+
+        int wait_status;
+        while (waitpid(pid, &wait_status, 0) < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            ash_exec_error(shell, "waitpid", errno);
+            return 1;
+        }
+        return ash_wait_status_to_exit_status(wait_status);
     }
 
-    while (true) {
-        char ch = input[i];
-        bool at_end = (ch == '\0');
-        bool separator = false;
+    struct ash_command redirections;
+    if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
+        return 2;
+    }
+    struct ash_saved_fds saved;
+    ash_saved_fds_init(&saved);
+    if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
+        ash_command_destroy(&redirections);
+        ash_saved_fds_restore(shell, &saved);
+        return 1;
+    }
+    ash_command_destroy(&redirections);
+    int status = ash_execute_ast(shell, node->value.group.body);
+    ash_saved_fds_restore(shell, &saved);
+    return status;
+}
 
-        if (at_end || (!in_single && !in_double && !escape && (ch == ';' || ch == '\n'))) {
-            separator = true;
-        }
-
-        if (separator) {
-            size_t len = i - start;
-            if (len > 0u) {
-                char* segment = ash_slice_dup(shell, input + start, len);
-                if (segment == NULL) {
-                    return 2;
-                }
-                bool segment_parser_error = false;
-                status = ash_execute_segment(shell, segment, &segment_parser_error);
-                free(segment);
-                if (segment_parser_error) {
-                    if (parser_error_out != NULL) {
-                        *parser_error_out = true;
-                    }
-                    return status;
-                }
-                if (shell->should_exit) {
-                    return status;
-                }
+static int ash_execute_ast_pipeline(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int status;
+    if (node->value.pipeline.count == 1u) {
+        status = ash_execute_ast(shell, node->value.pipeline.commands[0]);
+    }
+    else {
+        struct ash_pipeline pipeline;
+        ash_pipeline_init(&pipeline);
+        for (size_t i = 0u; i < node->value.pipeline.count; i++) {
+            const struct ash_ast* command_node = node->value.pipeline.commands[i];
+            if (command_node->kind != ASH_AST_SIMPLE) {
+                ash_diag(shell, "compound command in pipeline is not implemented");
+                ash_pipeline_destroy(&pipeline);
+                return 2;
+            }
+            if (i != 0u &&
+                node->value.pipeline.operators[i - 1u] ==
+                    ASH_PIPE_STDOUT_STDERR) {
+                ash_diag(shell, "|& pipelines are not implemented");
+                ash_pipeline_destroy(&pipeline);
+                return 2;
             }
 
-            if (at_end) {
-                break;
+            struct ash_command command;
+            if (!ash_ast_simple_to_command(shell, command_node, &command)) {
+                ash_pipeline_destroy(&pipeline);
+                return 2;
             }
-
-            start = i + 1u;
-            i++;
-            continue;
+            if (!ash_pipeline_push_command(shell, &pipeline, &command)) {
+                ash_command_destroy(&command);
+                ash_pipeline_destroy(&pipeline);
+                return 2;
+            }
         }
+        status = ash_execute_pipeline(shell, &pipeline);
+        ash_pipeline_destroy(&pipeline);
+    }
 
-        if (escape) {
-            escape = false;
-            i++;
-            continue;
+    return node->value.pipeline.negated ? (status == 0 ? 1 : 0) : status;
+}
+
+static int ash_execute_ast_and_or(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int status = shell->last_status;
+    for (size_t i = 0u; i < node->value.and_or.count; i++) {
+        if (i != 0u) {
+            enum ash_and_or_operator operator =
+                node->value.and_or.operators[i - 1u];
+            if ((operator == ASH_AND_IF && status != 0) ||
+                (operator == ASH_OR_IF && status == 0)) {
+                continue;
+            }
         }
-
-        if (!in_single && ch == '\\') {
-            escape = true;
-            i++;
-            continue;
-        }
-
-        if (!in_double && ch == '\'') {
-            in_single = !in_single;
-            i++;
-            continue;
-        }
-
-        if (!in_single && ch == '\"') {
-            in_double = !in_double;
-            i++;
-            continue;
-        }
-
-        if (at_end) {
+        status = ash_execute_ast(shell, node->value.and_or.pipelines[i]);
+        shell->last_status = status;
+        if (shell->should_exit) {
             break;
         }
+    }
+    return status;
+}
 
-        i++;
+static int ash_execute_ast_async(
+    struct ash_shell* shell,
+    const struct ash_ast* command
+) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        ash_exec_error(shell, "fork", errno);
+        return 1;
+    }
+    if (pid == 0) {
+        if (!shell->interactive) {
+            int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (null_fd >= 0) {
+                (void)bx_fd_dup2_exact(null_fd, STDIN_FILENO);
+                close(null_fd);
+            }
+        }
+        shell->should_exit = false;
+        _exit(ash_execute_ast(shell, command));
+    }
+    shell->last_async_pid = pid;
+    return 0;
+}
+
+static int ash_execute_ast_list(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int status = shell->last_status;
+    for (size_t i = 0u; i < node->value.list.count; i++) {
+        const struct ash_list_entry* entry = &node->value.list.entries[i];
+        status = entry->asynchronous ?
+            ash_execute_ast_async(shell, entry->command) :
+            ash_execute_ast(shell, entry->command);
+        shell->last_status = status;
+        if (shell->should_exit) {
+            break;
+        }
+    }
+    return status;
+}
+
+static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
+    switch (node->kind) {
+        case ASH_AST_SIMPLE:
+            return ash_execute_ast_simple(shell, node);
+        case ASH_AST_LIST:
+            return ash_execute_ast_list(shell, node);
+        case ASH_AST_AND_OR:
+            return ash_execute_ast_and_or(shell, node);
+        case ASH_AST_PIPELINE:
+            return ash_execute_ast_pipeline(shell, node);
+        case ASH_AST_SUBSHELL:
+            return ash_execute_ast_group(shell, node, true);
+        case ASH_AST_BRACE_GROUP:
+            return ash_execute_ast_group(shell, node, false);
+    }
+    return 2;
+}
+
+static const char* ash_parser_diagnostic(const char* diagnostic) {
+    if (diagnostic == NULL) {
+        return "syntax error";
+    }
+    if (strcmp(diagnostic, "unterminated parameter expansion") == 0) {
+        return "bad substitution";
+    }
+    if (strcmp(diagnostic, "command expected after pipe") == 0) {
+        return "syntax error near unexpected token '|'";
+    }
+    if (strcmp(diagnostic, "redirection target expected") == 0 ||
+        strcmp(diagnostic, "redirection target must be a word") == 0) {
+        return "redirection requires a target";
+    }
+    return diagnostic;
+}
+
+static int ash_execute_buffer(
+    struct ash_shell* shell,
+    const char* input,
+    bool final_input,
+    bool* incomplete_out,
+    bool* parser_error_out
+) {
+    *incomplete_out = false;
+    *parser_error_out = false;
+
+    struct ash_parser parser;
+    ash_parser_init(
+        &parser,
+        ash_input_source_name(shell),
+        input,
+        strlen(input)
+    );
+    struct ash_ast* program = NULL;
+    enum ash_parser_result result = ash_parser_parse_program(&parser, &program);
+    if (result == ASH_PARSER_INCOMPLETE && !final_input) {
+        *incomplete_out = true;
+        ash_parser_destroy(&parser);
+        return shell->last_status;
+    }
+    if (result != ASH_PARSER_COMPLETE) {
+        ash_diag(shell, "%s", ash_parser_diagnostic(parser.error));
+        *parser_error_out = true;
+        ash_parser_destroy(&parser);
+        shell->last_status = 2;
+        return 2;
     }
 
+    int status = ash_execute_ast(shell, program);
+    shell->last_status = status;
+    ash_ast_destroy(program);
+    ash_parser_destroy(&parser);
     return status;
 }
 
@@ -2160,10 +2139,10 @@ static const char* ash_default_prompt(void) {
     return (geteuid() == 0) ? "# " : "$ ";
 }
 
-static void ash_print_prompt(struct ash_shell* shell) {
-    const char* prompt = ash_var_get(shell, "PS1");
+static void ash_print_prompt(struct ash_shell* shell, bool continuation) {
+    const char* prompt = ash_var_get(shell, continuation ? "PS2" : "PS1");
     if (prompt == NULL) {
-        prompt = ash_default_prompt();
+        prompt = continuation ? "> " : ash_default_prompt();
     }
 
     fputs(prompt, stdout);
@@ -2174,10 +2153,13 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
     char* line = NULL;
     size_t cap = 0;
     int status = shell->last_status;
+    struct ash_string pending;
+    ash_string_init(&pending);
+    bool continuation = false;
 
     while (!shell->should_exit) {
         if (prompt) {
-            ash_print_prompt(shell);
+            ash_print_prompt(shell, continuation);
         }
 
         errno = 0;
@@ -2199,16 +2181,51 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
                 );
                 status = 1;
             }
+            else if (pending.len != 0u) {
+                bool incomplete = false;
+                bool parser_error = false;
+                status = ash_execute_buffer(
+                    shell,
+                    pending.data,
+                    true,
+                    &incomplete,
+                    &parser_error
+                );
+                (void)incomplete;
+            }
             break;
         }
 
+        if (!ash_string_append_span(shell, &pending, line, (size_t)nread)) {
+            status = 2;
+            break;
+        }
+
+        bool incomplete = false;
         bool parser_error = false;
-        status = ash_execute_buffer(shell, line, &parser_error);
+        status = ash_execute_buffer(
+            shell,
+            pending.data,
+            false,
+            &incomplete,
+            &parser_error
+        );
+        if (incomplete) {
+            continuation = true;
+            continue;
+        }
+
+        pending.len = 0u;
+        if (pending.data != NULL) {
+            pending.data[0] = '\0';
+        }
+        continuation = false;
         if (parser_error && !shell->interactive) {
             break;
         }
     }
 
+    ash_string_destroy(&pending);
     free(line);
     return status;
 }
