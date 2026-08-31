@@ -1515,18 +1515,45 @@ static bool ash_ast_simple_to_command(
             continue;
         }
 
-        char* text = NULL;
-        if (!ash_expand_word(shell, &item->value.word, &text)) {
-            ash_command_destroy(command);
-            return false;
+        if (item->kind == ASH_SIMPLE_ASSIGNMENT) {
+            char* text = NULL;
+            if (!ash_expand_word(shell, &item->value.word, &text)) {
+                ash_command_destroy(command);
+                return false;
+            }
+            bool added = ash_command_push_assignment(
+                shell,
+                command,
+                text
+            );
+            free(text);
+            if (!added) {
+                ash_command_destroy(command);
+                return false;
+            }
         }
-        bool added = (item->kind == ASH_SIMPLE_ASSIGNMENT) ?
-            ash_command_push_assignment(shell, command, text) :
-            ash_command_push_word(shell, command, text);
-        free(text);
-        if (!added) {
-            ash_command_destroy(command);
-            return false;
+        else {
+            struct ash_expanded_fields fields;
+            if (!ash_expand_argument(
+                    shell,
+                    &item->value.word,
+                    &fields
+                )) {
+                ash_command_destroy(command);
+                return false;
+            }
+            for (size_t j = 0u; j < fields.count; j++) {
+                if (!ash_command_push_word(
+                        shell,
+                        command,
+                        fields.values[j]
+                    )) {
+                    ash_expanded_fields_destroy(&fields);
+                    ash_command_destroy(command);
+                    return false;
+                }
+            }
+            ash_expanded_fields_destroy(&fields);
         }
     }
     return true;
@@ -1903,46 +1930,74 @@ static int ash_execute_ast_for(
     const struct ash_ast* node
 ) {
     int status = 0;
-    size_t count = node->value.for_loop.explicit_words ?
-        node->value.for_loop.word_count : (size_t)shell->positionals.count;
     ash_control_enter_loop(shell);
-    for (size_t i = 0u; i < count && !shell->should_exit; i++) {
-        char* value = NULL;
-        if (node->value.for_loop.explicit_words) {
-            if (!ash_expand_word(
+    if (node->value.for_loop.explicit_words) {
+        for (size_t i = 0u;
+             i < node->value.for_loop.word_count && !shell->should_exit;
+             i++) {
+            struct ash_expanded_fields fields;
+            if (!ash_expand_argument(
                     shell,
                     &node->value.for_loop.words[i],
-                    &value
+                    &fields
                 )) {
                 status = 2;
                 break;
             }
-        }
-        else {
-            value = ash_strdup_text(shell, shell->positionals.values[i]);
-            if (value == NULL) {
-                status = 2;
+            bool stop = false;
+            for (size_t j = 0u;
+                 j < fields.count && !shell->should_exit;
+                 j++) {
+                if (!ash_var_set(
+                        shell,
+                        node->value.for_loop.name,
+                        fields.values[j],
+                        false
+                    )) {
+                    status = 2;
+                    stop = true;
+                    break;
+                }
+                status = ash_execute_ast(
+                    shell,
+                    node->value.for_loop.body
+                );
+                if (ash_control_pending(shell)) {
+                    enum ash_loop_control control =
+                        ash_control_consume_loop(shell);
+                    if (control != ASH_LOOP_CONTROL_CONTINUE) {
+                        stop = true;
+                        break;
+                    }
+                }
+            }
+            ash_expanded_fields_destroy(&fields);
+            if (stop) {
                 break;
             }
         }
-        bool assigned = ash_var_set(
-            shell,
-            node->value.for_loop.name,
-            value,
-            false
-        );
-        free(value);
-        if (!assigned) {
-            status = 2;
-            break;
-        }
-        status = ash_execute_ast(shell, node->value.for_loop.body);
-        if (ash_control_pending(shell)) {
-            enum ash_loop_control control = ash_control_consume_loop(shell);
-            if (control == ASH_LOOP_CONTROL_CONTINUE) {
-                continue;
+    }
+    else {
+        for (int i = 0;
+             i < shell->positionals.count && !shell->should_exit;
+             i++) {
+            if (!ash_var_set(
+                    shell,
+                    node->value.for_loop.name,
+                    shell->positionals.values[i],
+                    false
+                )) {
+                status = 2;
+                break;
             }
-            break;
+            status = ash_execute_ast(shell, node->value.for_loop.body);
+            if (ash_control_pending(shell)) {
+                enum ash_loop_control control =
+                    ash_control_consume_loop(shell);
+                if (control != ASH_LOOP_CONTROL_CONTINUE) {
+                    break;
+                }
+            }
         }
     }
     ash_control_leave_loop(shell);
