@@ -815,6 +815,57 @@ static int ash_builtin_shift(
     return 0;
 }
 
+static int ash_builtin_wait(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    if (command->word_count == 1u) {
+        while (true) {
+            int wait_status;
+            pid_t waited = waitpid(-1, &wait_status, 0);
+            if (waited > 0) {
+                continue;
+            }
+            if (waited < 0 && errno == EINTR) {
+                continue;
+            }
+            if (waited < 0 && errno == ECHILD) {
+                return 0;
+            }
+            ash_exec_error(shell, "wait", errno);
+            return 1;
+        }
+    }
+
+    int status = 0;
+    for (size_t i = 1u; i < command->word_count; i++) {
+        char* end = NULL;
+        errno = 0;
+        long parsed = strtol(command->words[i], &end, 10);
+        if (errno != 0 || end == command->words[i] || *end != '\0' ||
+            parsed <= 0 || parsed > INT_MAX) {
+            ash_diag(shell, "wait: invalid pid '%s'", command->words[i]);
+            status = 127;
+            continue;
+        }
+
+        int wait_status;
+        while (waitpid((pid_t)parsed, &wait_status, 0) < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            ash_exec_error(shell, command->words[i], errno);
+            status = 127;
+            wait_status = -1;
+            break;
+        }
+        if (wait_status != -1) {
+            status = ash_wait_status_to_exit_status(wait_status);
+        }
+    }
+    return status;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
         case ASH_BUILTIN_COLON:
@@ -851,6 +902,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_return(shell, command);
         case ASH_BUILTIN_SHIFT:
             return ash_builtin_shift(shell, command);
+        case ASH_BUILTIN_WAIT:
+            return ash_builtin_wait(shell, command);
         case ASH_BUILTIN_INVALID:
             break;
     }
