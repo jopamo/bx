@@ -36,6 +36,8 @@ enum ash_redir_kind {
     ASH_REDIR_IN = 0,
     ASH_REDIR_OUT,
     ASH_REDIR_APPEND,
+    ASH_REDIR_READWRITE,
+    ASH_REDIR_DUP,
 };
 
 struct ash_redir {
@@ -374,7 +376,7 @@ static void ash_saved_fds_destroy(struct ash_saved_fds* saved) {
 }
 
 static bool ash_parse_lexed_io_number(
-    struct ash_shell* shell,
+    const struct ash_shell* shell,
     const char* text,
     int* fd_out
 ) {
@@ -390,11 +392,21 @@ static bool ash_parse_lexed_io_number(
 }
 
 static int ash_apply_redirections(const struct ash_shell* shell, const struct ash_command* command, struct ash_saved_fds* saved) {
+    int minimum_saved_fd = 10;
+    for (size_t i = 0u; i < command->redir_count; i++) {
+        if (command->redirs[i].fd >= minimum_saved_fd &&
+            command->redirs[i].fd < INT_MAX) {
+            minimum_saved_fd = command->redirs[i].fd + 1;
+        }
+    }
     for (size_t i = 0; i < command->redir_count; i++) {
         const struct ash_redir* redir = &command->redirs[i];
 
         if (saved != NULL && !ash_saved_fds_has_target(saved, redir->fd)) {
-            int dup_fd = bx_fd_dup_cloexec(redir->fd);
+            int dup_fd = bx_fd_dup_cloexec_min(
+                redir->fd,
+                minimum_saved_fd
+            );
             if (dup_fd < 0 && errno != EBADF) {
                 ash_exec_error(shell, "dup", errno);
                 return 1;
@@ -405,6 +417,29 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
                 }
                 return 1;
             }
+        }
+
+        if (redir->kind == ASH_REDIR_DUP) {
+            if (strcmp(redir->target, "-") == 0) {
+                if (close(redir->fd) != 0 && errno != EBADF) {
+                    ash_exec_error(shell, "close", errno);
+                    return 1;
+                }
+                continue;
+            }
+            int source_fd;
+            if (!ash_parse_lexed_io_number(
+                    shell,
+                    redir->target,
+                    &source_fd
+                )) {
+                return 1;
+            }
+            if (bx_fd_dup2_exact(source_fd, redir->fd) < 0) {
+                ash_exec_error(shell, redir->target, errno);
+                return 1;
+            }
+            continue;
         }
 
         int open_flags = 0;
@@ -419,6 +454,11 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
             case ASH_REDIR_APPEND:
                 open_flags = O_WRONLY | O_CREAT | O_APPEND;
                 break;
+            case ASH_REDIR_READWRITE:
+                open_flags = O_RDWR | O_CREAT;
+                break;
+            case ASH_REDIR_DUP:
+                break;
         }
 
         int fd = bx_fd_open_cloexec(redir->target, open_flags, mode);
@@ -427,14 +467,23 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
             return 1;
         }
 
-        if (bx_fd_dup2_exact(fd, redir->fd) < 0) {
-            int err = errno;
-            close(fd);
-            ash_exec_error(shell, "dup2", err);
-            return 1;
+        if (fd == redir->fd) {
+            if (bx_fd_set_cloexec(fd, false) != 0) {
+                int err = errno;
+                close(fd);
+                ash_exec_error(shell, "fcntl", err);
+                return 1;
+            }
         }
-
-        close(fd);
+        else {
+            if (bx_fd_dup2_exact(fd, redir->fd) < 0) {
+                int err = errno;
+                close(fd);
+                ash_exec_error(shell, "dup2", err);
+                return 1;
+            }
+            close(fd);
+        }
     }
 
     return 0;
@@ -1462,7 +1511,9 @@ static bool ash_ast_add_redirection(
         }
     }
     else {
-        fd = (redirection->operator == ASH_TOKEN_LESS) ? 0 : 1;
+        fd = (redirection->operator == ASH_TOKEN_LESS ||
+              redirection->operator == ASH_TOKEN_LESS_AND ||
+              redirection->operator == ASH_TOKEN_LESS_GREAT) ? 0 : 1;
     }
 
     enum ash_redir_kind kind;
@@ -1476,6 +1527,13 @@ static bool ash_ast_add_redirection(
             break;
         case ASH_TOKEN_DGREAT:
             kind = ASH_REDIR_APPEND;
+            break;
+        case ASH_TOKEN_LESS_GREAT:
+            kind = ASH_REDIR_READWRITE;
+            break;
+        case ASH_TOKEN_LESS_AND:
+        case ASH_TOKEN_GREAT_AND:
+            kind = ASH_REDIR_DUP;
             break;
         default:
             ash_diag(
@@ -1841,7 +1899,11 @@ static int ash_execute_ast_async(
     }
     if (pid == 0) {
         if (!shell->interactive) {
-            int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            int null_fd = bx_fd_open_cloexec(
+                "/dev/null",
+                O_RDONLY,
+                0
+            );
             if (null_fd >= 0) {
                 (void)bx_fd_dup2_exact(null_fd, STDIN_FILENO);
                 close(null_fd);

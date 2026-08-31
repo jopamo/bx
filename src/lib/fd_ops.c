@@ -105,8 +105,24 @@ int bx_fd_dup_cloexec(int oldfd) {
     return fcntl(oldfd, F_DUPFD_CLOEXEC, 0);
 }
 
+int bx_fd_dup_cloexec_min(int oldfd, int minimum) {
+    return fcntl(oldfd, F_DUPFD_CLOEXEC, minimum);
+}
+
 int bx_fd_dup2_exact(int oldfd, int newfd) {
     return dup2(oldfd, newfd);
+}
+
+int bx_fd_set_cloexec(int fd, bool enabled) {
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0) {
+        return -1;
+    }
+    return fcntl(
+        fd,
+        F_SETFD,
+        enabled ? flags | FD_CLOEXEC : flags & ~FD_CLOEXEC
+    );
 }
 
 int bx_fd_open_nofollow_cloexec(const char* path, int flags, mode_t mode) {
