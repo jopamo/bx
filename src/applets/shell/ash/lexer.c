@@ -624,12 +624,23 @@ static enum ash_lexer_result ash_lexer_scan_word(
             struct ash_source_location escaped_location = ash_lexer_location(lexer);
             (void)ash_lexer_advance(lexer);
             if (ash_lexer_at_end(lexer)) {
-                return ash_lexer_fail(
-                    lexer,
-                    ASH_LEXER_INCOMPLETE,
-                    escaped_location,
-                    "trailing backslash"
-                );
+                const char backslash = '\\';
+                if (ash_word_append_span(
+                        &token->word,
+                        ASH_WORD_TEXT,
+                        ASH_QUOTE_NONE,
+                        escaped_location,
+                        &backslash,
+                        1u
+                    ) != 0) {
+                    return ash_lexer_fail(
+                        lexer,
+                        ASH_LEXER_ERROR,
+                        escaped_location,
+                        "out of memory"
+                    );
+                }
+                continue;
             }
             char escaped = ash_lexer_advance(lexer);
             if (escaped == '\n') {

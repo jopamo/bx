@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/input.h"
+#include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/shell_context.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
@@ -24,7 +25,7 @@
 
 extern char** environ;
 
-enum ash_token_kind {
+enum ash_exec_token_kind {
     ASH_TOK_WORD = 0,
     ASH_TOK_PIPE,
     ASH_TOK_SEMI,
@@ -47,14 +48,14 @@ struct ash_var {
     struct ash_var* next;
 };
 
-struct ash_token {
-    enum ash_token_kind kind;
+struct ash_exec_token {
+    enum ash_exec_token_kind kind;
     char* text;
     int redir_fd;
 };
 
-struct ash_tokens {
-    struct ash_token* items;
+struct ash_exec_tokens {
+    struct ash_exec_token* items;
     size_t len;
     size_t cap;
 };
@@ -269,19 +270,19 @@ static void ash_string_destroy(struct ash_string* string) {
     string->cap = 0;
 }
 
-static void ash_tokens_init(struct ash_tokens* tokens) {
+static void ash_tokens_init(struct ash_exec_tokens* tokens) {
     tokens->items = NULL;
     tokens->len = 0;
     tokens->cap = 0;
 }
 
-static bool ash_tokens_push(const struct ash_shell* shell, struct ash_tokens* tokens, struct ash_token token) {
+static bool ash_tokens_push(const struct ash_shell* shell, struct ash_exec_tokens* tokens, struct ash_exec_token token) {
     if (tokens->len == tokens->cap) {
         size_t new_cap = (tokens->cap == 0) ? 16u : tokens->cap * 2u;
         if (tokens->cap != 0u && tokens->cap > SIZE_MAX / 2u) {
             return ash_diag_oom(shell);
         }
-        struct ash_token* grown = ash_realloc_array(shell, tokens->items, new_cap, sizeof(*tokens->items));
+        struct ash_exec_token* grown = ash_realloc_array(shell, tokens->items, new_cap, sizeof(*tokens->items));
         if (grown == NULL) {
             return false;
         }
@@ -293,7 +294,7 @@ static bool ash_tokens_push(const struct ash_shell* shell, struct ash_tokens* to
     return true;
 }
 
-static void ash_tokens_destroy(struct ash_tokens* tokens) {
+static void ash_tokens_destroy(struct ash_exec_tokens* tokens) {
     for (size_t i = 0; i < tokens->len; i++) {
         free(tokens->items[i].text);
     }
@@ -906,310 +907,278 @@ static void ash_expand_parameter(struct ash_shell* shell, const char* input, siz
     *pos = i;
 }
 
-static bool ash_parse_single_quote(struct ash_shell* shell, const char* input, size_t* pos, struct ash_string* out) {
-    (void)shell;
-    size_t i = *pos + 1u;
-
-    while (input[i] != '\0' && input[i] != '\'') {
-        if (!ash_string_append_char(shell, out, input[i])) {
-            return false;
-        }
-        i++;
+static int ash_hex_value(unsigned char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return (int)(ch - '0');
     }
-
-    if (input[i] != '\'') {
-        ash_diag(shell, "unterminated single quote");
-        return false;
+    if (ch >= 'a' && ch <= 'f') {
+        return (int)(ch - 'a') + 10;
     }
-
-    *pos = i + 1u;
-    return true;
+    if (ch >= 'A' && ch <= 'F') {
+        return (int)(ch - 'A') + 10;
+    }
+    return -1;
 }
 
-static bool ash_parse_double_quote(struct ash_shell* shell, const char* input, size_t* pos, struct ash_string* out) {
-    size_t i = *pos + 1u;
-
-    while (input[i] != '\0') {
-        char ch = input[i];
-        if (ch == '"') {
-            *pos = i + 1u;
-            return true;
-        }
-
-        if (ch == '\\') {
-            i++;
-            if (input[i] == '\0') {
-                break;
-            }
-
-            char escaped = input[i];
-            if (escaped == '$' || escaped == '"' || escaped == '\\' || escaped == '`') {
-                if (!ash_string_append_char(shell, out, escaped)) {
-                    return false;
-                }
-            }
-            else if (escaped == '\n') {
-                /* line continuation */
-            }
-            else {
-                if (!ash_string_append_char(shell, out, '\\') ||
-                    !ash_string_append_char(shell, out, escaped)) {
-                    return false;
-                }
-            }
-            i++;
-            continue;
-        }
-
-        if (ch == '$') {
-            bool expansion_error = false;
-            size_t expansion_pos = i;
-            ash_expand_parameter(shell, input, &expansion_pos, out, &expansion_error);
-            if (expansion_error) {
+static bool ash_append_dollar_single(
+    struct ash_shell* shell,
+    struct ash_string* output,
+    const char* text,
+    size_t length
+) {
+    for (size_t i = 0u; i < length; i++) {
+        unsigned char ch = (unsigned char)text[i];
+        if (ch != '\\' || i + 1u == length) {
+            if (!ash_string_append_char(shell, output, (char)ch)) {
                 return false;
             }
-            i = expansion_pos;
             continue;
         }
 
-        if (!ash_string_append_char(shell, out, ch)) {
-            return false;
-        }
-        i++;
-    }
-
-    ash_diag(shell, "unterminated double quote");
-    return false;
-}
-
-static bool ash_lex_word(struct ash_shell* shell, const char* input, size_t* pos, char** out_word) {
-    struct ash_string word;
-    ash_string_init(&word);
-
-    size_t i = *pos;
-    while (input[i] != '\0') {
-        char ch = input[i];
-
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == ';' || ch == '|' || ch == '<' || ch == '>') {
-            break;
-        }
-
-        if (ch == '\\') {
-            i++;
-            if (input[i] == '\0') {
-                if (!ash_string_append_char(shell, &word, '\\')) {
-                    ash_string_destroy(&word);
-                    return false;
+        unsigned char escaped = (unsigned char)text[++i];
+        char decoded = '\0';
+        switch (escaped) {
+            case 'a': decoded = '\a'; break;
+            case 'b': decoded = '\b'; break;
+            case 'e':
+            case 'E': decoded = 0x1b; break;
+            case 'f': decoded = '\f'; break;
+            case 'n': decoded = '\n'; break;
+            case 'r': decoded = '\r'; break;
+            case 't': decoded = '\t'; break;
+            case 'v': decoded = '\v'; break;
+            case '\\': decoded = '\\'; break;
+            case '\'': decoded = '\''; break;
+            case '"': decoded = '"'; break;
+            case '\n': continue;
+            case 'c':
+                if (i + 1u < length) {
+                    decoded = (char)((unsigned char)text[++i] & 0x1fu);
+                }
+                else {
+                    decoded = 'c';
+                }
+                break;
+            case 'x': {
+                int value = 0;
+                size_t digits = 0u;
+                while (digits < 2u && i + 1u < length) {
+                    int digit = ash_hex_value((unsigned char)text[i + 1u]);
+                    if (digit < 0) {
+                        break;
+                    }
+                    value = value * 16 + digit;
+                    i++;
+                    digits++;
+                }
+                if (digits == 0u) {
+                    if (!ash_string_append_char(shell, output, '\\')) {
+                        return false;
+                    }
+                    decoded = 'x';
+                }
+                else {
+                    decoded = (char)(unsigned char)value;
                 }
                 break;
             }
-
-            if (input[i] == '\n') {
-                i++;
-                continue;
-            }
-
-            if (!ash_string_append_char(shell, &word, input[i])) {
-                ash_string_destroy(&word);
-                return false;
-            }
-            i++;
-            continue;
+            default:
+                if (escaped >= '0' && escaped <= '7') {
+                    unsigned int value = (unsigned int)(escaped - '0');
+                    size_t digits = 1u;
+                    while (digits < 3u && i + 1u < length &&
+                           text[i + 1u] >= '0' && text[i + 1u] <= '7') {
+                        value = value * 8u + (unsigned int)(text[++i] - '0');
+                        digits++;
+                    }
+                    decoded = (char)(unsigned char)value;
+                }
+                else {
+                    if (!ash_string_append_char(shell, output, '\\')) {
+                        return false;
+                    }
+                    decoded = (char)escaped;
+                }
+                break;
         }
 
-        if (ch == '\'') {
-            size_t quote_pos = i;
-            if (!ash_parse_single_quote(shell, input, &quote_pos, &word)) {
-                ash_string_destroy(&word);
-                return false;
-            }
-            i = quote_pos;
-            continue;
-        }
-
-        if (ch == '"') {
-            size_t quote_pos = i;
-            if (!ash_parse_double_quote(shell, input, &quote_pos, &word)) {
-                ash_string_destroy(&word);
-                return false;
-            }
-            i = quote_pos;
-            continue;
-        }
-
-        if (ch == '$') {
-            bool expansion_error = false;
-            size_t expansion_pos = i;
-            ash_expand_parameter(shell, input, &expansion_pos, &word, &expansion_error);
-            if (expansion_error) {
-                ash_string_destroy(&word);
-                return false;
-            }
-            i = expansion_pos;
-            continue;
-        }
-
-        if (!ash_string_append_char(shell, &word, ch)) {
-            ash_string_destroy(&word);
+        if (!ash_string_append_char(shell, output, decoded)) {
             return false;
         }
-        i++;
-    }
-
-    *pos = i;
-    *out_word = ash_string_take(shell, &word);
-    if (*out_word == NULL) {
-        return false;
     }
     return true;
 }
 
-static bool ash_lex_redir(struct ash_shell* shell, const char* input, size_t* pos, struct ash_token* token_out, bool* error_out) {
-    size_t i = *pos;
-    *error_out = false;
+static bool ash_expand_lexed_word(
+    struct ash_shell* shell,
+    const struct ash_word* word,
+    char** output_word
+) {
+    struct ash_string output;
+    ash_string_init(&output);
 
-    int fd = -1;
-    size_t number_start = i;
-    while (isdigit((unsigned char)input[i])) {
-        i++;
-    }
+    for (size_t i = 0u; i < word->count; i++) {
+        const struct ash_word_part* part = &word->parts[i];
+        if (part->kind == ASH_WORD_PARAMETER) {
+            size_t position = 0u;
+            bool expansion_error = false;
+            ash_expand_parameter(
+                shell,
+                part->text,
+                &position,
+                &output,
+                &expansion_error
+            );
+            if (expansion_error) {
+                ash_string_destroy(&output);
+                return false;
+            }
+            continue;
+        }
 
-    if (i > number_start && (input[i] == '<' || input[i] == '>')) {
-        char* number_text = ash_slice_dup(shell, input + number_start, i - number_start);
-        if (number_text == NULL) {
-            *error_out = true;
+        if (part->kind == ASH_WORD_TEXT &&
+            part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
+            if (!ash_append_dollar_single(
+                    shell,
+                    &output,
+                    part->text,
+                    part->length
+                )) {
+                ash_string_destroy(&output);
+                return false;
+            }
+            continue;
+        }
+
+        if (!ash_string_append_span(shell, &output, part->text, part->length)) {
+            ash_string_destroy(&output);
             return false;
         }
-        char* endptr = NULL;
-        errno = 0;
-        long parsed = strtol(number_text, &endptr, 10);
-        free(number_text);
-        if (errno == 0 && endptr != NULL && *endptr == '\0' && parsed >= 0 && parsed <= INT_MAX) {
-            fd = (int)parsed;
-        }
-        else {
-            ash_diag(shell, "invalid redirection fd");
-            *error_out = true;
-            return false;
-        }
-    }
-    else {
-        i = *pos;
     }
 
-    if (input[i] == '<') {
-        token_out->kind = ASH_TOK_REDIR_IN;
-        token_out->text = NULL;
-        token_out->redir_fd = (fd >= 0) ? fd : 0;
-        *pos = i + 1u;
-        return true;
-    }
-
-    if (input[i] == '>') {
-        token_out->kind = ASH_TOK_REDIR_OUT;
-        token_out->text = NULL;
-        token_out->redir_fd = (fd >= 0) ? fd : 1;
-        i++;
-        if (input[i] == '>') {
-            token_out->kind = ASH_TOK_REDIR_APPEND;
-            i++;
-        }
-        *pos = i;
-        return true;
-    }
-
-    return false;
+    *output_word = ash_string_take(shell, &output);
+    return *output_word != NULL;
 }
 
-static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_tokens* tokens) {
-    size_t pos = 0;
+static bool ash_parse_lexed_io_number(
+    struct ash_shell* shell,
+    const char* text,
+    int* fd_out
+) {
+    char* end = NULL;
+    errno = 0;
+    long value = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value < 0 || value > INT_MAX) {
+        ash_diag(shell, "invalid redirection fd");
+        return false;
+    }
+    *fd_out = (int)value;
+    return true;
+}
 
-    while (input[pos] != '\0') {
-        char ch = input[pos];
+static int ash_tokenize(struct ash_shell* shell, const char* input, struct ash_exec_tokens* tokens) {
+    struct ash_lexer lexer;
+    ash_lexer_init(&lexer, ash_input_source_name(shell), input, strlen(input));
+    int pending_io_number = -1;
 
-        if (ch == ' ' || ch == '\t' || ch == '\r') {
-            pos++;
-            continue;
-        }
-
-        if (ch == '\n' || ch == ';') {
-            struct ash_token token = {
-                .kind = ASH_TOK_SEMI,
-                .text = NULL,
-                .redir_fd = -1,
-            };
-            if (!ash_tokens_push(shell, tokens, token)) {
-                return 1;
+    while (true) {
+        struct ash_token lexical_token;
+        enum ash_lexer_result result = ash_lexer_next(&lexer, &lexical_token);
+        if (result == ASH_LEXER_INCOMPLETE || result == ASH_LEXER_ERROR) {
+            const char* diagnostic =
+                (lexer.error != NULL) ? lexer.error : "lexical error";
+            if (strcmp(diagnostic, "unterminated parameter expansion") == 0) {
+                diagnostic = "bad substitution";
             }
-            pos++;
-            continue;
-        }
-
-        if (ch == '#') {
-            while (input[pos] != '\0' && input[pos] != '\n') {
-                pos++;
-            }
-            continue;
-        }
-
-        if (ch == '|') {
-            struct ash_token token = {
-                .kind = ASH_TOK_PIPE,
-                .text = NULL,
-                .redir_fd = -1,
-            };
-            if (!ash_tokens_push(shell, tokens, token)) {
-                return 1;
-            }
-            pos++;
-            continue;
-        }
-
-        struct ash_token redir_token;
-        bool redir_error = false;
-        if (ash_lex_redir(shell, input, &pos, &redir_token, &redir_error)) {
-            if (!ash_tokens_push(shell, tokens, redir_token)) {
-                return 1;
-            }
-            continue;
-        }
-        if (redir_error) {
+            ash_diag(shell, "%s", diagnostic);
+            ash_token_destroy(&lexical_token);
             return 1;
         }
 
-        char* word = NULL;
-        if (!ash_lex_word(shell, input, &pos, &word)) {
-            return 1;
+        if (result == ASH_LEXER_END) {
+            struct ash_exec_token eof_token = {
+                .kind = ASH_TOK_EOF,
+                .text = NULL,
+                .redir_fd = -1,
+            };
+            ash_token_destroy(&lexical_token);
+            return ash_tokens_push(shell, tokens, eof_token) ? 0 : 1;
         }
 
-        struct ash_token token = {
-            .kind = ASH_TOK_WORD,
-            .text = word,
+        if (lexical_token.kind == ASH_TOKEN_IO_NUMBER) {
+            bool valid = ash_parse_lexed_io_number(
+                shell,
+                lexical_token.io_number,
+                &pending_io_number
+            );
+            ash_token_destroy(&lexical_token);
+            if (!valid) {
+                return 1;
+            }
+            continue;
+        }
+
+        struct ash_exec_token token = {
+            .text = NULL,
             .redir_fd = -1,
         };
+        switch (lexical_token.kind) {
+            case ASH_TOKEN_WORD:
+                if (pending_io_number >= 0 ||
+                    !ash_expand_lexed_word(shell, &lexical_token.word, &token.text)) {
+                    ash_token_destroy(&lexical_token);
+                    if (pending_io_number >= 0) {
+                        ash_diag(shell, "redirection operator expected after IO number");
+                    }
+                    return 1;
+                }
+                token.kind = ASH_TOK_WORD;
+                break;
+            case ASH_TOKEN_NEWLINE:
+            case ASH_TOKEN_SEMI:
+                token.kind = ASH_TOK_SEMI;
+                break;
+            case ASH_TOKEN_PIPE:
+                token.kind = ASH_TOK_PIPE;
+                break;
+            case ASH_TOKEN_LESS:
+                token.kind = ASH_TOK_REDIR_IN;
+                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 0;
+                pending_io_number = -1;
+                break;
+            case ASH_TOKEN_GREAT:
+                token.kind = ASH_TOK_REDIR_OUT;
+                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 1;
+                pending_io_number = -1;
+                break;
+            case ASH_TOKEN_DGREAT:
+                token.kind = ASH_TOK_REDIR_APPEND;
+                token.redir_fd = (pending_io_number >= 0) ? pending_io_number : 1;
+                pending_io_number = -1;
+                break;
+            default:
+                ash_diag(
+                    shell,
+                    "unexpected token: %s",
+                    ash_token_kind_name(lexical_token.kind)
+                );
+                ash_token_destroy(&lexical_token);
+                return 1;
+        }
+
+        ash_token_destroy(&lexical_token);
         if (!ash_tokens_push(shell, tokens, token)) {
-            free(word);
+            free(token.text);
             return 1;
         }
     }
-
-    struct ash_token eof_token = {
-        .kind = ASH_TOK_EOF,
-        .text = NULL,
-        .redir_fd = -1,
-    };
-    if (!ash_tokens_push(shell, tokens, eof_token)) {
-        return 1;
-    }
-
-    return 0;
 }
 
-static int ash_parse_command(const struct ash_tokens* tokens, size_t* index, struct ash_command* command, struct ash_shell* shell) {
+static int ash_parse_command(const struct ash_exec_tokens* tokens, size_t* index, struct ash_command* command, struct ash_shell* shell) {
     bool saw_command_word = false;
 
     while (*index < tokens->len) {
-        const struct ash_token* token = &tokens->items[*index];
+        const struct ash_exec_token* token = &tokens->items[*index];
 
         if (token->kind == ASH_TOK_WORD) {
             if (!saw_command_word && ash_is_assignment_word(token->text)) {
@@ -1256,7 +1225,7 @@ static int ash_parse_command(const struct ash_tokens* tokens, size_t* index, str
     return 0;
 }
 
-static int ash_parse_pipeline(const struct ash_tokens* tokens, size_t* index, struct ash_pipeline* pipeline, struct ash_shell* shell) {
+static int ash_parse_pipeline(const struct ash_exec_tokens* tokens, size_t* index, struct ash_pipeline* pipeline, struct ash_shell* shell) {
     while (true) {
         struct ash_command command;
         ash_command_init(&command);
@@ -2036,7 +2005,7 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
     return ash_execute_pipeline_forked(shell, pipeline);
 }
 
-static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_tokens* tokens, bool* parser_error_out) {
+static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_exec_tokens* tokens, bool* parser_error_out) {
     size_t index = 0;
     int status = shell->last_status;
     if (parser_error_out != NULL) {
@@ -2081,7 +2050,7 @@ static int ash_parse_and_execute(struct ash_shell* shell, const struct ash_token
 }
 
 static int ash_execute_segment(struct ash_shell* shell, const char* input, bool* parser_error_out) {
-    struct ash_tokens tokens;
+    struct ash_exec_tokens tokens;
     ash_tokens_init(&tokens);
     if (parser_error_out != NULL) {
         *parser_error_out = false;
