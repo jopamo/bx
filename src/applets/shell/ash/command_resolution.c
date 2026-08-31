@@ -23,6 +23,8 @@ struct ash_command_resolution ash_command_resolve_builtin(const char* name) {
         enum ash_builtin_kind builtin;
     } builtins[] = {
         {":", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_COLON},
+        {"break", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_BREAK},
+        {"continue", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_CONTINUE},
         {"exec", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXEC},
         {"exit", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXIT},
         {"export", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXPORT},

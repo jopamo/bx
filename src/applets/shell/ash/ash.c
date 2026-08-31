@@ -884,6 +884,38 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
     return status;
 }
 
+static int ash_builtin_loop_control(
+    struct ash_shell* shell,
+    const struct ash_command* command,
+    enum ash_control_kind kind
+) {
+    const char* name = kind == ASH_CONTROL_BREAK ? "break" : "continue";
+    if (command->word_count > 2u) {
+        ash_diag(shell, "%s: too many arguments", name);
+        return 2;
+    }
+
+    unsigned long levels = 1u;
+    if (command->word_count == 2u) {
+        char* end = NULL;
+        errno = 0;
+        levels = strtoul(command->words[1], &end, 10);
+        if (errno != 0 || end == command->words[1] || *end != '\0' ||
+            levels == 0u || levels > UINT_MAX) {
+            ash_diag(
+                shell,
+                "%s: Illegal number: %s",
+                name,
+                command->words[1]
+            );
+            return 2;
+        }
+    }
+
+    ash_control_request_loop(shell, kind, (unsigned int)levels);
+    return 0;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
         case ASH_BUILTIN_COLON:
@@ -904,6 +936,18 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_exec(shell, command);
         case ASH_BUILTIN_SET:
             return ash_builtin_set(shell, command);
+        case ASH_BUILTIN_BREAK:
+            return ash_builtin_loop_control(
+                shell,
+                command,
+                ASH_CONTROL_BREAK
+            );
+        case ASH_BUILTIN_CONTINUE:
+            return ash_builtin_loop_control(
+                shell,
+                command,
+                ASH_CONTROL_CONTINUE
+            );
         case ASH_BUILTIN_INVALID:
             break;
     }
@@ -1493,7 +1537,7 @@ static int ash_execute_ast_and_or(
         }
         status = ash_execute_ast(shell, node->value.and_or.pipelines[i]);
         shell->last_status = status;
-        if (shell->should_exit) {
+        if (shell->should_exit || ash_control_pending(shell)) {
             break;
         }
     }
@@ -1535,7 +1579,7 @@ static int ash_execute_ast_list(
             ash_execute_ast_async(shell, entry->command) :
             ash_execute_ast(shell, entry->command);
         shell->last_status = status;
-        if (shell->should_exit) {
+        if (shell->should_exit || ash_control_pending(shell)) {
             break;
         }
     }
@@ -1547,6 +1591,9 @@ static int ash_execute_ast_if(
     const struct ash_ast* node
 ) {
     int condition = ash_execute_ast(shell, node->value.conditional.condition);
+    if (shell->should_exit || ash_control_pending(shell)) {
+        return condition;
+    }
     if (condition == 0) {
         return ash_execute_ast(shell, node->value.conditional.then_branch);
     }
@@ -1561,15 +1608,34 @@ static int ash_execute_ast_loop(
     const struct ash_ast* node
 ) {
     int status = 0;
+    ash_control_enter_loop(shell);
     while (!shell->should_exit) {
         int condition = ash_execute_ast(shell, node->value.loop.condition);
+        if (shell->should_exit) {
+            break;
+        }
+        if (ash_control_pending(shell)) {
+            enum ash_loop_control control = ash_control_consume_loop(shell);
+            if (control == ASH_LOOP_CONTROL_CONTINUE) {
+                continue;
+            }
+            break;
+        }
         bool run = (node->kind == ASH_AST_WHILE) ?
             condition == 0 : condition != 0;
         if (!run) {
             break;
         }
         status = ash_execute_ast(shell, node->value.loop.body);
+        if (ash_control_pending(shell)) {
+            enum ash_loop_control control = ash_control_consume_loop(shell);
+            if (control == ASH_LOOP_CONTROL_CONTINUE) {
+                continue;
+            }
+            break;
+        }
     }
+    ash_control_leave_loop(shell);
     return status;
 }
 
@@ -1580,6 +1646,7 @@ static int ash_execute_ast_for(
     int status = 0;
     size_t count = node->value.for_loop.explicit_words ?
         node->value.for_loop.word_count : (size_t)shell->positionals.count;
+    ash_control_enter_loop(shell);
     for (size_t i = 0u; i < count && !shell->should_exit; i++) {
         char* value = NULL;
         if (node->value.for_loop.explicit_words) {
@@ -1588,13 +1655,15 @@ static int ash_execute_ast_for(
                     &node->value.for_loop.words[i],
                     &value
                 )) {
-                return 2;
+                status = 2;
+                break;
             }
         }
         else {
             value = ash_strdup_text(shell, shell->positionals.values[i]);
             if (value == NULL) {
-                return 2;
+                status = 2;
+                break;
             }
         }
         bool assigned = ash_var_set(
@@ -1605,10 +1674,19 @@ static int ash_execute_ast_for(
         );
         free(value);
         if (!assigned) {
-            return 2;
+            status = 2;
+            break;
         }
         status = ash_execute_ast(shell, node->value.for_loop.body);
+        if (ash_control_pending(shell)) {
+            enum ash_loop_control control = ash_control_consume_loop(shell);
+            if (control == ASH_LOOP_CONTROL_CONTINUE) {
+                continue;
+            }
+            break;
+        }
     }
+    ash_control_leave_loop(shell);
     return status;
 }
 
