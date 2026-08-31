@@ -313,6 +313,8 @@ bx_lib_sources = [
   'src/lib/argv_packer.c',
   'src/lib/backpressure_limit.c',
   'src/lib/backup_ops.c',
+  'src/lib/byte_count.c',
+  'src/lib/byte_count_arm64.c',
   'src/lib/byte_transform.c',
   'src/lib/byte_transform_arm64.c',
   'src/lib/bx_seq.c',
