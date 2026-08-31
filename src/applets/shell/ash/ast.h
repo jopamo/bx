@@ -18,6 +18,7 @@ enum ash_ast_kind {
     ASH_AST_WHILE,
     ASH_AST_UNTIL,
     ASH_AST_FOR,
+    ASH_AST_CASE,
 };
 
 enum ash_simple_item_kind {
@@ -57,6 +58,13 @@ enum ash_and_or_operator {
 enum ash_pipe_operator {
     ASH_PIPE_STDOUT = 0,
     ASH_PIPE_STDOUT_STDERR,
+};
+
+struct ash_case_clause {
+    struct ash_word* patterns;
+    size_t pattern_count;
+    size_t pattern_capacity;
+    struct ash_ast* body;
 };
 
 struct ash_ast {
@@ -110,6 +118,12 @@ struct ash_ast {
             bool explicit_words;
             struct ash_ast* body;
         } for_loop;
+        struct {
+            struct ash_word subject;
+            struct ash_case_clause* clauses;
+            size_t clause_count;
+            size_t clause_capacity;
+        } case_command;
     } value;
 };
 
@@ -143,8 +157,17 @@ int ash_ast_pipeline_add(
     struct ash_ast* command,
     enum ash_pipe_operator operator_before
 );
+int ash_case_clause_add_pattern(
+    struct ash_case_clause* clause,
+    struct ash_word* pattern
+);
+int ash_ast_case_add_clause(
+    struct ash_ast* node,
+    struct ash_case_clause* clause
+);
 
 void ash_redirection_destroy(struct ash_redirection* redirection);
+void ash_case_clause_destroy(struct ash_case_clause* clause);
 bool ash_word_is_unquoted_literal(const struct ash_word* word, const char* text);
 bool ash_word_is_assignment(const struct ash_word* word);
 

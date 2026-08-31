@@ -59,6 +59,18 @@ void ash_redirection_destroy(struct ash_redirection* redirection) {
     *redirection = (struct ash_redirection){0};
 }
 
+void ash_case_clause_destroy(struct ash_case_clause* clause) {
+    if (clause == NULL) {
+        return;
+    }
+    for (size_t i = 0u; i < clause->pattern_count; i++) {
+        ash_word_destroy(&clause->patterns[i]);
+    }
+    free(clause->patterns);
+    ash_ast_destroy(clause->body);
+    *clause = (struct ash_case_clause){0};
+}
+
 static void ash_ast_destroy_redirections(
     struct ash_redirection* redirections,
     size_t count
@@ -128,6 +140,17 @@ void ash_ast_destroy(struct ash_ast* node) {
             }
             free(node->value.for_loop.words);
             ash_ast_destroy(node->value.for_loop.body);
+            break;
+        case ASH_AST_CASE:
+            ash_word_destroy(&node->value.case_command.subject);
+            for (size_t i = 0u;
+                 i < node->value.case_command.clause_count;
+                 i++) {
+                ash_case_clause_destroy(
+                    &node->value.case_command.clauses[i]
+                );
+            }
+            free(node->value.case_command.clauses);
             break;
     }
 
@@ -309,6 +332,46 @@ int ash_ast_pipeline_add(
         node->value.pipeline.operators[needed - 2u] = operator_before;
     }
     node->value.pipeline.commands[node->value.pipeline.count++] = command;
+    return 0;
+}
+
+int ash_case_clause_add_pattern(
+    struct ash_case_clause* clause,
+    struct ash_word* pattern
+) {
+    if (ash_ast_grow(
+            (void**)&clause->patterns,
+            &clause->pattern_capacity,
+            clause->pattern_count + 1u,
+            sizeof(*clause->patterns)
+        ) != 0) {
+        return -1;
+    }
+    clause->patterns[clause->pattern_count++] = *pattern;
+    *pattern = (struct ash_word){0};
+    return 0;
+}
+
+int ash_ast_case_add_clause(
+    struct ash_ast* node,
+    struct ash_case_clause* clause
+) {
+    if (node == NULL || node->kind != ASH_AST_CASE) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (ash_ast_grow(
+            (void**)&node->value.case_command.clauses,
+            &node->value.case_command.clause_capacity,
+            node->value.case_command.clause_count + 1u,
+            sizeof(*node->value.case_command.clauses)
+        ) != 0) {
+        return -1;
+    }
+    node->value.case_command.clauses[
+        node->value.case_command.clause_count++
+    ] = *clause;
+    *clause = (struct ash_case_clause){0};
     return 0;
 }
 

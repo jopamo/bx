@@ -19,6 +19,7 @@
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/lexer.h"
+#include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
@@ -1611,6 +1612,73 @@ static int ash_execute_ast_for(
     return status;
 }
 
+static int ash_execute_ast_case_body(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    char* subject = NULL;
+    if (!ash_expand_word(
+            shell,
+            &node->value.case_command.subject,
+            &subject
+        )) {
+        return 2;
+    }
+
+    int status = 0;
+    for (size_t i = 0u;
+         i < node->value.case_command.clause_count;
+         i++) {
+        const struct ash_case_clause* clause =
+            &node->value.case_command.clauses[i];
+        bool clause_matched = false;
+        for (size_t j = 0u; j < clause->pattern_count; j++) {
+            if (!ash_pattern_matches(
+                    shell,
+                    &clause->patterns[j],
+                    subject,
+                    &clause_matched
+                )) {
+                free(subject);
+                return 2;
+            }
+            if (clause_matched) {
+                break;
+            }
+        }
+        if (!clause_matched) {
+            continue;
+        }
+        if (clause->body->value.list.count != 0u) {
+            status = ash_execute_ast(shell, clause->body);
+        }
+        break;
+    }
+    free(subject);
+    return status;
+}
+
+static int ash_execute_ast_case(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    struct ash_command redirections;
+    if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
+        return 2;
+    }
+    struct ash_saved_fds saved;
+    ash_saved_fds_init(&saved);
+    if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
+        ash_command_destroy(&redirections);
+        ash_saved_fds_restore(shell, &saved);
+        return 1;
+    }
+    ash_command_destroy(&redirections);
+    int status = ash_execute_ast_case_body(shell, node);
+    ash_saved_fds_restore(shell, &saved);
+    return status;
+}
+
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     switch (node->kind) {
         case ASH_AST_SIMPLE:
@@ -1632,6 +1700,8 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
             return ash_execute_ast_loop(shell, node);
         case ASH_AST_FOR:
             return ash_execute_ast_for(shell, node);
+        case ASH_AST_CASE:
+            return ash_execute_ast_case(shell, node);
     }
     return 2;
 }

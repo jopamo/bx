@@ -289,9 +289,91 @@ static bool ash_append_dollar_single(
     return true;
 }
 
-bool ash_expand_word(
+static bool ash_expand_part(
+    struct ash_shell* shell,
+    const struct ash_word_part* part,
+    struct bx_text_buffer* output
+) {
+    if (part->kind == ASH_WORD_PARAMETER) {
+        return ash_expand_parameter(shell, part->text, output);
+    }
+    if (part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
+        part->kind == ASH_WORD_BACKQUOTE) {
+        size_t prefix = part->kind == ASH_WORD_COMMAND_SUBSTITUTION ?
+            2u : 1u;
+        size_t suffix = 1u;
+        if (part->length < prefix + suffix ||
+            shell->command_substitution == NULL) {
+            fprintf(
+                stderr,
+                "%s: command substitution is unavailable\n",
+                shell->progname
+            );
+            return false;
+        }
+
+        char* substitution = NULL;
+        bool expanded = shell->command_substitution(
+            shell,
+            part->text + prefix,
+            part->length - prefix - suffix,
+            &substitution
+        );
+        if (expanded) {
+            expanded = ash_expansion_append_text(
+                shell,
+                output,
+                substitution
+            );
+        }
+        free(substitution);
+        return expanded;
+    }
+    if (part->kind == ASH_WORD_TEXT &&
+        part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
+        return ash_append_dollar_single(
+            shell,
+            output,
+            part->text,
+            part->length
+        );
+    }
+    return ash_expansion_append_span(
+        shell,
+        output,
+        part->text,
+        part->length
+    );
+}
+
+static bool ash_append_pattern_component(
+    struct ash_shell* shell,
+    struct bx_text_buffer* output,
+    const struct bx_text_buffer* component,
+    bool quoted
+) {
+    for (size_t i = 0u; i < component->length; i++) {
+        char character = component->data[i];
+        if (quoted &&
+            (character == '\\' || character == '*' ||
+             character == '?' || character == '[' ||
+             character == ']' || character == '!' ||
+             character == '^' || character == '-')) {
+            if (!ash_expansion_append_char(shell, output, '\\')) {
+                return false;
+            }
+        }
+        if (!ash_expansion_append_char(shell, output, character)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ash_expand(
     struct ash_shell* shell,
     const struct ash_word* word,
+    enum ash_expansion_context context,
     char** output_word
 ) {
     struct bx_text_buffer output;
@@ -299,60 +381,29 @@ bool ash_expand_word(
 
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
-        bool expanded;
-        if (part->kind == ASH_WORD_PARAMETER) {
-            expanded = ash_expand_parameter(shell, part->text, &output);
+        struct bx_text_buffer component;
+        bx_text_buffer_init(&component);
+        if (!ash_expand_part(shell, part, &component)) {
+            bx_text_buffer_destroy(&component);
+            bx_text_buffer_destroy(&output);
+            return false;
         }
-        else if (part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
-                 part->kind == ASH_WORD_BACKQUOTE) {
-            size_t prefix = part->kind == ASH_WORD_COMMAND_SUBSTITUTION ?
-                2u : 1u;
-            size_t suffix = 1u;
-            if (part->length < prefix + suffix ||
-                shell->command_substitution == NULL) {
-                fprintf(
-                    stderr,
-                    "%s: command substitution is unavailable\n",
-                    shell->progname
-                );
-                expanded = false;
-            }
-            else {
-                char* substitution = NULL;
-                expanded = shell->command_substitution(
-                    shell,
-                    part->text + prefix,
-                    part->length - prefix - suffix,
-                    &substitution
-                );
-                if (expanded) {
-                    expanded = ash_expansion_append_text(
-                        shell,
-                        &output,
-                        substitution
-                    );
-                }
-                free(substitution);
-            }
-        }
-        else if (part->kind == ASH_WORD_TEXT &&
-                 part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
-            expanded = ash_append_dollar_single(
+
+        bool appended = context == ASH_EXPANSION_PATTERN ?
+            ash_append_pattern_component(
                 shell,
                 &output,
-                part->text,
-                part->length
-            );
-        }
-        else {
-            expanded = ash_expansion_append_span(
+                &component,
+                part->quote != ASH_QUOTE_NONE
+            ) :
+            ash_expansion_append_span(
                 shell,
                 &output,
-                part->text,
-                part->length
+                component.data,
+                component.length
             );
-        }
-        if (!expanded) {
+        bx_text_buffer_destroy(&component);
+        if (!appended) {
             bx_text_buffer_destroy(&output);
             return false;
         }
@@ -364,4 +415,12 @@ bool ash_expand_word(
         return ash_expansion_oom(shell);
     }
     return true;
+}
+
+bool ash_expand_word(
+    struct ash_shell* shell,
+    const struct ash_word* word,
+    char** output_word
+) {
+    return ash_expand(shell, word, ASH_EXPANSION_WORD, output_word);
 }
