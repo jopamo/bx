@@ -1133,6 +1133,119 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
     return ash_execute_pipeline_forked(shell, pipeline);
 }
 
+static int ash_execute_buffer(
+    struct ash_shell* shell,
+    const char* input,
+    bool final_input,
+    bool* incomplete_out,
+    bool* parser_error_out
+);
+
+static bool ash_command_substitute(
+    struct ash_shell* shell,
+    const char* command,
+    size_t length,
+    char** output
+) {
+    int pipe_fds[2];
+    if (bx_fd_pipe_cloexec(pipe_fds) != 0) {
+        ash_exec_error(shell, "pipe", errno);
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        int error = errno;
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        ash_exec_error(shell, "fork", error);
+        return false;
+    }
+    if (pid == 0) {
+        close(pipe_fds[0]);
+        if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
+            ash_exec_error(shell, "dup2", errno);
+            _exit(1);
+        }
+        close(pipe_fds[1]);
+
+        char* input = ash_slice_dup(shell, command, length);
+        if (input == NULL) {
+            _exit(2);
+        }
+        struct ash_shell child = *shell;
+        child.should_exit = false;
+        child.requested_exit_status = 0;
+        bool incomplete = false;
+        bool parser_error = false;
+        int status = ash_execute_buffer(
+            &child,
+            input,
+            true,
+            &incomplete,
+            &parser_error
+        );
+        free(input);
+        _exit(status);
+    }
+
+    close(pipe_fds[1]);
+    struct bx_text_buffer captured;
+    bx_text_buffer_init(&captured);
+    bool read_ok = true;
+    char chunk[4096];
+    while (true) {
+        ssize_t count = read(pipe_fds[0], chunk, sizeof(chunk));
+        if (count > 0) {
+            if (!bx_text_buffer_append_span(
+                    &captured,
+                    chunk,
+                    (size_t)count
+                )) {
+                ash_diag_oom(shell);
+                read_ok = false;
+                break;
+            }
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count < 0) {
+            ash_exec_error(shell, "read", errno);
+            read_ok = false;
+        }
+        break;
+    }
+    close(pipe_fds[0]);
+
+    int wait_status;
+    while (waitpid(pid, &wait_status, 0) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        ash_exec_error(shell, "waitpid", errno);
+        bx_text_buffer_destroy(&captured);
+        return false;
+    }
+    shell->last_status = ash_wait_status_to_exit_status(wait_status);
+    if (!read_ok) {
+        bx_text_buffer_destroy(&captured);
+        return false;
+    }
+
+    while (captured.length != 0u &&
+           captured.data[captured.length - 1u] == '\n') {
+        captured.data[--captured.length] = '\0';
+    }
+    *output = bx_text_buffer_take(&captured);
+    if (*output == NULL) {
+        bx_text_buffer_destroy(&captured);
+        return ash_diag_oom(shell);
+    }
+    return true;
+}
+
 static bool ash_ast_add_redirection(
     struct ash_shell* shell,
     struct ash_command* command,
@@ -1813,6 +1926,7 @@ int bx_ash_main(int argc, char** argv) {
         .login_shell = login_shell,
         .should_exit = false,
         .requested_exit_status = 0,
+        .command_substitution = ash_command_substitute,
     };
 
     if (!ash_import_environment(&shell)) {
