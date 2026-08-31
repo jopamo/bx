@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +26,9 @@ static enum ash_parser_result ash_parser_fail(
 }
 
 static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
+    if (parser->result != ASH_PARSER_COMPLETE) {
+        return parser->result;
+    }
     if (parser->has_lookahead) {
         return ASH_PARSER_COMPLETE;
     }
@@ -118,9 +122,25 @@ static bool ash_parser_take_redirection(
     if (token->kind == ASH_TOKEN_IO_NUMBER) {
         struct ash_token io;
         (void)ash_parser_take(parser, &io);
+        struct ash_source_location io_location = io.location;
         io_number = io.io_number;
         io.io_number = NULL;
         ash_token_destroy(&io);
+
+        char* end = NULL;
+        errno = 0;
+        long parsed = strtol(io_number, &end, 10);
+        if (errno != 0 || end == io_number || *end != '\0' ||
+            parsed < 0 || parsed > INT_MAX) {
+            ash_parser_fail(
+                parser,
+                ASH_PARSER_ERROR,
+                io_location,
+                "invalid redirection fd"
+            );
+            free(io_number);
+            return false;
+        }
 
         token = ash_parser_peek(parser);
         if (token == NULL) {
@@ -282,11 +302,15 @@ static struct ash_ast* ash_parse_simple(
 
     if (node->value.simple.count == 0u) {
         struct ash_token* token = ash_parser_peek(parser);
+        const char* error = "command expected";
+        if (token != NULL && token->kind != ASH_TOKEN_EOF) {
+            error = "syntax error near unexpected token";
+        }
         ash_parser_fail(
             parser,
             ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
             (token != NULL) ? token->location : node->location,
-            "command expected"
+            error
         );
         ash_ast_destroy(node);
         return NULL;
@@ -451,6 +475,18 @@ static struct ash_ast* ash_parse_pipeline(
                     "command expected after pipe"
                 );
             }
+            else if (parser->result == ASH_PARSER_INCOMPLETE) {
+                parser->error_location = operator_location;
+                parser->error = "command expected after pipe";
+            }
+            else if (parser->error != NULL &&
+                     strcmp(
+                         parser->error,
+                         "syntax error near unexpected token"
+                     ) == 0) {
+                parser->error_location = operator_location;
+                parser->error = "command expected after pipe";
+            }
             ash_ast_destroy(node);
             return NULL;
         }
@@ -527,6 +563,10 @@ static struct ash_ast* ash_parse_and_or(
                     operator_location,
                     "pipeline expected after AND-OR operator"
                 );
+            }
+            else if (parser->result == ASH_PARSER_INCOMPLETE) {
+                parser->error_location = operator_location;
+                parser->error = "pipeline expected after AND-OR operator";
             }
             ash_ast_destroy(node);
             return NULL;
@@ -670,6 +710,7 @@ enum ash_parser_result ash_parser_parse_program(
     struct ash_ast** program
 ) {
     *program = NULL;
+    ash_parser_skip_newlines(parser);
     struct ash_token* first = ash_parser_peek(parser);
     if (first == NULL) {
         return parser->result;
