@@ -10,6 +10,7 @@
 
 #include "applets.h"
 #include "lib/args_common.h"
+#include "lib/base64.h"
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
 
@@ -32,8 +33,6 @@ struct base64_options {
 struct base64_encode_state {
     size_t wrap_cols;
     size_t line_len;
-    uint8_t tail[3];
-    size_t tail_len;
     bool wrote_output;
 };
 
@@ -48,8 +47,6 @@ enum base64_decode_step {
     BASE64_DECODE_STEP_INVALID,
     BASE64_DECODE_STEP_IO_ERROR,
 };
-
-static const char base64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static const char* base64_progname(const char* argv0) {
     return (argv0 && argv0[0] != '\0') ? argv0 : "base64";
@@ -187,129 +184,35 @@ static bool base64_parse_options(int argc, char** argv, struct base64_options* o
     return true;
 }
 
-static bool base64_emit_encoded_char(struct base64_encode_state* state, struct bx_line_writer* writer, char ch, const char* progname) {
-    if (state->wrap_cols != 0 && state->line_len == state->wrap_cols) {
-        if (!base64_write_char(writer, '\n', progname)) {
-            return false;
-        }
-        state->line_len = 0;
-    }
+static bool base64_write_encoded(struct base64_encode_state* state, struct bx_line_writer* writer, const char* data, size_t len, const char* progname) {
+    size_t offset = 0u;
 
-    if (!base64_write_char(writer, ch, progname)) {
-        return false;
-    }
-
-    state->line_len++;
-    state->wrote_output = true;
-    return true;
-}
-
-static bool base64_emit_triplet(struct base64_encode_state* state, struct bx_line_writer* writer, uint8_t a, uint8_t b, uint8_t c, const char* progname) {
-    const char out[4] = {
-        base64_alphabet[a >> 2],
-        base64_alphabet[((a & 0x03u) << 4) | (b >> 4)],
-        base64_alphabet[((b & 0x0fu) << 2) | (c >> 6)],
-        base64_alphabet[c & 0x3fu],
-    };
-
-    for (size_t i = 0; i < 4; i++) {
-        if (!base64_emit_encoded_char(state, writer, out[i], progname)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool base64_encode_update(struct base64_encode_state* state, struct bx_line_writer* writer, const uint8_t* data, size_t len, const char* progname) {
-    size_t i = 0;
-
-    if (state->tail_len != 0) {
-        while (state->tail_len < 3 && i < len) {
-            state->tail[state->tail_len++] = data[i++];
-        }
-        if (state->tail_len == 3) {
-            if (!base64_emit_triplet(state, writer, state->tail[0], state->tail[1], state->tail[2], progname)) {
-                return false;
-            }
-            state->tail_len = 0;
-        }
-    }
-
-    while (i + 3 <= len) {
-        if (!base64_emit_triplet(state, writer, data[i], data[i + 1], data[i + 2], progname)) {
-            return false;
-        }
-        i += 3;
-    }
-
-    while (i < len) {
-        state->tail[state->tail_len++] = data[i++];
-    }
-
-    return true;
-}
-
-static bool base64_encode_finish(struct base64_encode_state* state, struct bx_line_writer* writer, const char* progname) {
-    if (state->tail_len == 1) {
-        uint8_t a = state->tail[0];
-        const char out[4] = {
-            base64_alphabet[a >> 2],
-            base64_alphabet[(a & 0x03u) << 4],
-            '=',
-            '=',
-        };
-        for (size_t i = 0; i < 4; i++) {
-            if (!base64_emit_encoded_char(state, writer, out[i], progname)) {
-                return false;
+    while (offset < len) {
+        size_t chunk = len - offset;
+        if (state->wrap_cols != 0u) {
+            size_t line_space = state->wrap_cols - state->line_len;
+            if (chunk > line_space) {
+                chunk = line_space;
             }
         }
-    }
-    else if (state->tail_len == 2) {
-        uint8_t a = state->tail[0];
-        uint8_t b = state->tail[1];
-        const char out[4] = {
-            base64_alphabet[a >> 2],
-            base64_alphabet[((a & 0x03u) << 4) | (b >> 4)],
-            base64_alphabet[(b & 0x0fu) << 2],
-            '=',
-        };
-        for (size_t i = 0; i < 4; i++) {
-            if (!base64_emit_encoded_char(state, writer, out[i], progname)) {
-                return false;
-            }
-        }
-    }
-
-    if (state->wrote_output) {
-        if (!base64_write_char(writer, '\n', progname)) {
+        if (!base64_write_bytes(writer, (const uint8_t*)data + offset, chunk, progname)) {
             return false;
         }
+        state->line_len += chunk;
+        state->wrote_output = true;
+        offset += chunk;
+        if (state->wrap_cols != 0u && state->line_len == state->wrap_cols) {
+            if (!base64_write_char(writer, '\n', progname)) {
+                return false;
+            }
+            state->line_len = 0u;
+        }
     }
-
     return true;
 }
 
 static bool base64_is_decode_whitespace(unsigned char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
-static int base64_decode_value(unsigned char c) {
-    if (c >= 'A' && c <= 'Z') {
-        return (int)(c - 'A');
-    }
-    if (c >= 'a' && c <= 'z') {
-        return (int)(c - 'a') + 26;
-    }
-    if (c >= '0' && c <= '9') {
-        return (int)(c - '0') + 52;
-    }
-    if (c == '+') {
-        return 62;
-    }
-    if (c == '/') {
-        return 63;
-    }
-    return -1;
 }
 
 static enum base64_decode_step base64_decode_emit_quartet(struct base64_decode_state* state, struct bx_line_writer* writer, const char* progname) {
@@ -354,7 +257,7 @@ static enum base64_decode_step base64_decode_update_byte(struct base64_decode_st
     }
 
     if (state->finished) {
-        int val = base64_decode_value(ch);
+        int val = bx_base64_decode_value(ch);
         if (val >= 0 || ch == '=') {
             return BASE64_DECODE_STEP_INVALID;
         }
@@ -368,7 +271,7 @@ static enum base64_decode_step base64_decode_update_byte(struct base64_decode_st
         state->quartet[state->quartet_len++] = 64;
     }
     else {
-        int val = base64_decode_value(ch);
+        int val = bx_base64_decode_value(ch);
         if (val < 0) {
             return options->ignore_garbage ? BASE64_DECODE_STEP_OK : BASE64_DECODE_STEP_INVALID;
         }
@@ -388,22 +291,29 @@ static enum base64_decode_step base64_decode_update_byte(struct base64_decode_st
 }
 
 static bool base64_encode_stream(FILE* stream, const char* source_name, const struct base64_options* options, struct bx_line_writer* writer) {
-    uint8_t buf[8192];
+    uint8_t input[8192u + 2u];
+    char encoded[10924u];
+    size_t tail_len = 0u;
     struct base64_encode_state state = {
         .wrap_cols = options->wrap_cols,
         .line_len = 0,
-        .tail = {0, 0, 0},
-        .tail_len = 0,
         .wrote_output = false,
     };
 
     while (true) {
-        size_t nread = fread(buf, 1, sizeof(buf), stream);
+        size_t nread = fread(input + tail_len, 1, 8192u, stream);
         if (nread == 0) {
             break;
         }
-        if (!base64_encode_update(&state, writer, buf, nread, options->progname)) {
+        size_t available = tail_len + nread;
+        size_t complete = available - (available % 3u);
+        size_t encoded_len = bx_base64_encode_complete(input, complete, encoded);
+        if (!base64_write_encoded(&state, writer, encoded, encoded_len, options->progname)) {
             return false;
+        }
+        tail_len = available - complete;
+        if (tail_len > 0u) {
+            memmove(input, input + complete, tail_len);
         }
     }
 
@@ -412,11 +322,18 @@ static bool base64_encode_stream(FILE* stream, const char* source_name, const st
         return false;
     }
 
-    return base64_encode_finish(&state, writer, options->progname);
+    if (tail_len > 0u) {
+        size_t encoded_len = bx_base64_encode(input, tail_len, encoded);
+        if (!base64_write_encoded(&state, writer, encoded, encoded_len, options->progname)) {
+            return false;
+        }
+    }
+    return !state.wrote_output || state.line_len == 0u || base64_write_char(writer, '\n', options->progname);
 }
 
 static bool base64_decode_stream(FILE* stream, const char* source_name, const struct base64_options* options, struct bx_line_writer* writer) {
     unsigned char buf[8192];
+    uint8_t decoded[6144];
     struct base64_decode_state state = {
         .quartet = {0, 0, 0, 0},
         .quartet_len = 0,
@@ -429,8 +346,21 @@ static bool base64_decode_stream(FILE* stream, const char* source_name, const st
             break;
         }
 
-        for (size_t i = 0; i < nread; i++) {
+        size_t i = 0u;
+        while (i < nread) {
+            if (state.quartet_len == 0u && !state.finished) {
+                size_t consumed = bx_base64_decode_blocks(buf + i, nread - i, decoded);
+                if (consumed > 0u) {
+                    size_t decoded_len = (consumed / 4u) * 3u;
+                    if (!base64_write_bytes(writer, decoded, decoded_len, options->progname)) {
+                        return false;
+                    }
+                    i += consumed;
+                    continue;
+                }
+            }
             enum base64_decode_step step = base64_decode_update_byte(&state, writer, buf[i], options);
+            i++;
             if (step == BASE64_DECODE_STEP_OK) {
                 continue;
             }

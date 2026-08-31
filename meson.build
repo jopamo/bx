@@ -306,6 +306,8 @@ bx_core_sources += [dispatch_tables_src]
 
 bx_lib_sources = [
   'src/lib/arm64_features.c',
+  'src/lib/base64.c',
+  'src/lib/base64_arm64.c',
   'src/lib/cli_common.c',
   'src/lib/args_common.c',
   'src/lib/argv_packer.c',

@@ -18,6 +18,7 @@
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
 #include "lib/args_common.h"
+#include "lib/base64.h"
 #include "lib/line_writer.h"
 #include "lib/size_parse.h"
 
@@ -146,8 +147,6 @@ static bool cksum_compute_result(FILE* stream, enum cksum_algorithm algorithm, s
 
 static uint32_t cksum_crc_table[256];
 static bool cksum_crc_table_ready;
-
-static const char cksum_base64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 static const char* cksum_progname(const char* argv0) {
     return (argv0 && argv0[0] != '\0') ? argv0 : "cksum";
@@ -632,111 +631,24 @@ static int cksum_hex_value(int ch) {
     return -1;
 }
 
-static int cksum_base64_value(int ch) {
-    if (ch >= 'A' && ch <= 'Z') {
-        return ch - 'A';
-    }
-    if (ch >= 'a' && ch <= 'z') {
-        return ch - 'a' + 26;
-    }
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0' + 52;
-    }
-    if (ch == '+') {
-        return 62;
-    }
-    if (ch == '/') {
-        return 63;
-    }
-    return -1;
-}
-
 static size_t cksum_base64_encoded_length(size_t input_len) {
-    return ((input_len + 2u) / 3u) * 4u;
+    return bx_base64_encoded_size(input_len);
 }
 
 static void cksum_base64_encode(const uint8_t* in, size_t len, char* out) {
-    size_t in_i = 0u;
-    size_t out_i = 0u;
-
-    while ((len - in_i) >= 3u) {
-        uint8_t a = in[in_i];
-        uint8_t b = in[in_i + 1u];
-        uint8_t c = in[in_i + 2u];
-
-        out[out_i++] = cksum_base64_alphabet[a >> 2u];
-        out[out_i++] = cksum_base64_alphabet[((a & 0x03u) << 4u) | (b >> 4u)];
-        out[out_i++] = cksum_base64_alphabet[((b & 0x0fu) << 2u) | (c >> 6u)];
-        out[out_i++] = cksum_base64_alphabet[c & 0x3fu];
-        in_i += 3u;
-    }
-
-    if ((len - in_i) == 1u) {
-        uint8_t a = in[in_i];
-        out[out_i++] = cksum_base64_alphabet[a >> 2u];
-        out[out_i++] = cksum_base64_alphabet[(a & 0x03u) << 4u];
-        out[out_i++] = '=';
-        out[out_i++] = '=';
-    }
-    else if ((len - in_i) == 2u) {
-        uint8_t a = in[in_i];
-        uint8_t b = in[in_i + 1u];
-        out[out_i++] = cksum_base64_alphabet[a >> 2u];
-        out[out_i++] = cksum_base64_alphabet[((a & 0x03u) << 4u) | (b >> 4u)];
-        out[out_i++] = cksum_base64_alphabet[(b & 0x0fu) << 2u];
-        out[out_i++] = '=';
-    }
-
-    out[out_i] = '\0';
+    size_t out_len = bx_base64_encode(in, len, out);
+    out[out_len] = '\0';
 }
 
 static bool cksum_decode_base64(const char* text, size_t expected_len, uint8_t* out) {
     size_t text_len = strlen(text);
     size_t expected_text_len = cksum_base64_encoded_length(expected_len);
-    size_t out_i = 0u;
+    size_t out_len = 0u;
 
     if (text_len != expected_text_len) {
         return false;
     }
-
-    for (size_t i = 0; i < text_len; i += 4u) {
-        int v0 = cksum_base64_value((unsigned char)text[i]);
-        int v1 = cksum_base64_value((unsigned char)text[i + 1u]);
-        char c2 = text[i + 2u];
-        char c3 = text[i + 3u];
-        int v2 = (c2 == '=') ? 0 : cksum_base64_value((unsigned char)c2);
-        int v3 = (c3 == '=') ? 0 : cksum_base64_value((unsigned char)c3);
-
-        if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0) {
-            return false;
-        }
-        if (c2 == '=' && c3 != '=') {
-            return false;
-        }
-        if ((c2 == '=' || c3 == '=') && (i + 4u) != text_len) {
-            return false;
-        }
-
-        if (out_i >= expected_len) {
-            return false;
-        }
-        out[out_i++] = (uint8_t)((v0 << 2) | (v1 >> 4));
-
-        if (c2 != '=') {
-            if (out_i >= expected_len) {
-                return false;
-            }
-            out[out_i++] = (uint8_t)(((v1 & 0x0f) << 4) | (v2 >> 2));
-        }
-        if (c3 != '=') {
-            if (out_i >= expected_len) {
-                return false;
-            }
-            out[out_i++] = (uint8_t)(((v2 & 0x03) << 6) | v3);
-        }
-    }
-
-    return out_i == expected_len;
+    return bx_base64_decode_exact(text, text_len, out, &out_len) && out_len == expected_len;
 }
 
 static bool cksum_parse_digest_text(const char* text, size_t digest_len, uint8_t* out) {
