@@ -752,6 +752,40 @@ static int ash_builtin_return(
     return status;
 }
 
+static int ash_builtin_shift(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    if (command->word_count > 2u) {
+        ash_diag(shell, "shift: too many arguments");
+        return 2;
+    }
+    unsigned long count = 1u;
+    if (command->word_count == 2u) {
+        char* end = NULL;
+        errno = 0;
+        count = strtoul(command->words[1], &end, 10);
+        if (errno != 0 || end == command->words[1] || *end != '\0' ||
+            count > INT_MAX) {
+            ash_diag(
+                shell,
+                "shift: Illegal number: %s",
+                command->words[1]
+            );
+            return 2;
+        }
+    }
+    if (count > (unsigned long)shell->positionals.count) {
+        ash_diag(shell, "shift: can't shift that many");
+        return 1;
+    }
+    if (count != 0u) {
+        shell->positionals.values += count;
+    }
+    shell->positionals.count -= (int)count;
+    return 0;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
         case ASH_BUILTIN_COLON:
@@ -786,6 +820,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             );
         case ASH_BUILTIN_RETURN:
             return ash_builtin_return(shell, command);
+        case ASH_BUILTIN_SHIFT:
+            return ash_builtin_shift(shell, command);
         case ASH_BUILTIN_INVALID:
             break;
     }
