@@ -3,7 +3,6 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -17,6 +16,7 @@
 
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
+#include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/input.h"
@@ -25,7 +25,6 @@
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
-#include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
@@ -90,28 +89,6 @@ static const char* ash_effective_name(const char* argv0) {
         base++;
     }
     return (*base != '\0') ? base : "ash";
-}
-
-static void ash_diag(const struct ash_shell* shell, const char* fmt, ...) {
-    va_list ap;
-    fprintf(stderr, "%s: ", shell->progname);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-}
-
-static bool ash_diag_oom(const struct ash_shell* shell) {
-    ash_diag(shell, "out of memory");
-    return false;
-}
-
-static void ash_exec_error(const struct ash_shell* shell, const char* path, int err) {
-    fprintf(stderr, "%s: %s: %s\n", shell->progname, path, bx_strerror(err));
-}
-
-static void ash_exec_not_found(const struct ash_shell* shell, const char* path) {
-    fprintf(stderr, "%s: %s: not found\n", shell->progname, path);
 }
 
 static void* ash_malloc_bytes(const struct ash_shell* shell, size_t size) {
