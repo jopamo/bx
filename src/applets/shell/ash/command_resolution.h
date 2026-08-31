@@ -20,6 +20,7 @@ enum ash_builtin_kind {
     ASH_BUILTIN_BREAK,
     ASH_BUILTIN_CONTINUE,
     ASH_BUILTIN_RETURN,
+    ASH_BUILTIN_SHIFT,
 };
 
 enum ash_command_resolution_kind {
