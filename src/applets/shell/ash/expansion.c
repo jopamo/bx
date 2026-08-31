@@ -62,6 +62,41 @@ static const char* ash_positional(
     return shell->positionals.values[index - 1];
 }
 
+static const char* ash_ifs_joiner(const struct ash_shell* shell) {
+    const char* ifs = ash_var_get(shell, "IFS");
+    if (ifs == NULL) {
+        return " ";
+    }
+    return ifs;
+}
+
+static bool ash_append_positionals_joined(
+    struct ash_shell* shell,
+    struct bx_text_buffer* output
+) {
+    const char* ifs = ash_ifs_joiner(shell);
+    size_t separator_length = ifs[0] == '\0' ? 0u : 1u;
+    for (int i = 0; i < shell->positionals.count; i++) {
+        if (i != 0 &&
+            !ash_expansion_append_span(
+                shell,
+                output,
+                ifs,
+                separator_length
+            )) {
+            return false;
+        }
+        if (!ash_expansion_append_text(
+                shell,
+                output,
+                shell->positionals.values[i]
+            )) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool ash_append_special(
     struct ash_shell* shell,
     char parameter,
@@ -100,6 +135,9 @@ static bool ash_append_special(
                 output,
                 ash_positional(shell, 0)
             );
+        case '@':
+        case '*':
+            return ash_append_positionals_joined(shell, output);
         default:
             return false;
     }
@@ -116,14 +154,14 @@ static bool ash_expand_parameter(
         return ash_expansion_append_char(shell, output, '$');
     }
 
-    if (strchr("?$#-!", character) != NULL) {
+    if (strchr("?$#-!@*", character) != NULL) {
         return input[position + 1u] == '\0' &&
             ash_append_special(shell, character, output);
     }
 
     if (character == '{') {
         position++;
-        if (strchr("?$#-!0", input[position]) != NULL) {
+        if (strchr("?$#-!0@*", input[position]) != NULL) {
             char special = input[position++];
             if (input[position] != '}' || input[position + 1u] != '\0') {
                 return ash_expansion_bad_substitution(shell);
@@ -423,4 +461,144 @@ bool ash_expand_word(
     char** output_word
 ) {
     return ash_expand(shell, word, ASH_EXPANSION_WORD, output_word);
+}
+
+void ash_expanded_fields_init(struct ash_expanded_fields* fields) {
+    *fields = (struct ash_expanded_fields){0};
+}
+
+void ash_expanded_fields_destroy(struct ash_expanded_fields* fields) {
+    for (size_t i = 0u; i < fields->count; i++) {
+        free(fields->values[i]);
+    }
+    free(fields->values);
+    *fields = (struct ash_expanded_fields){0};
+}
+
+static bool ash_expanded_fields_push(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    const char* value
+) {
+    if (fields->count == fields->capacity) {
+        size_t capacity = fields->capacity == 0u ?
+            4u : fields->capacity * 2u;
+        if (capacity < fields->capacity ||
+            capacity > SIZE_MAX / sizeof(*fields->values)) {
+            return ash_expansion_oom(shell);
+        }
+        char** values = realloc(
+            fields->values,
+            capacity * sizeof(*values)
+        );
+        if (values == NULL) {
+            return ash_expansion_oom(shell);
+        }
+        fields->values = values;
+        fields->capacity = capacity;
+    }
+    fields->values[fields->count] = strdup(value);
+    if (fields->values[fields->count] == NULL) {
+        return ash_expansion_oom(shell);
+    }
+    fields->count++;
+    return true;
+}
+
+static bool ash_expanded_fields_append(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    const char* value
+) {
+    if (fields->count == 0u &&
+        !ash_expanded_fields_push(shell, fields, "")) {
+        return false;
+    }
+    size_t index = fields->count - 1u;
+    size_t old_length = strlen(fields->values[index]);
+    size_t added = strlen(value);
+    if (added > SIZE_MAX - old_length - 1u) {
+        return ash_expansion_oom(shell);
+    }
+    char* replacement = realloc(
+        fields->values[index],
+        old_length + added + 1u
+    );
+    if (replacement == NULL) {
+        return ash_expansion_oom(shell);
+    }
+    memcpy(replacement + old_length, value, added + 1u);
+    fields->values[index] = replacement;
+    return true;
+}
+
+static bool ash_parameter_is(
+    const struct ash_word_part* part,
+    char parameter
+) {
+    return part->kind == ASH_WORD_PARAMETER &&
+        ((part->length == 2u && part->text[0] == '$' &&
+          part->text[1] == parameter) ||
+         (part->length == 4u && part->text[0] == '$' &&
+          part->text[1] == '{' && part->text[2] == parameter &&
+          part->text[3] == '}'));
+}
+
+bool ash_expand_argument(
+    struct ash_shell* shell,
+    const struct ash_word* word,
+    struct ash_expanded_fields* fields
+) {
+    ash_expanded_fields_init(fields);
+    bool field_present = false;
+
+    for (size_t i = 0u; i < word->count; i++) {
+        const struct ash_word_part* part = &word->parts[i];
+        if (ash_parameter_is(part, '@')) {
+            if (shell->positionals.count == 0) {
+                continue;
+            }
+            for (int j = 0; j < shell->positionals.count; j++) {
+                bool added = j == 0 ?
+                    ash_expanded_fields_append(
+                        shell,
+                        fields,
+                        shell->positionals.values[j]
+                    ) :
+                    ash_expanded_fields_push(
+                        shell,
+                        fields,
+                        shell->positionals.values[j]
+                    );
+                if (!added) {
+                    ash_expanded_fields_destroy(fields);
+                    return false;
+                }
+            }
+            field_present = true;
+            continue;
+        }
+
+        struct bx_text_buffer component;
+        bx_text_buffer_init(&component);
+        if (!ash_expand_part(shell, part, &component) ||
+            !ash_expanded_fields_append(
+                shell,
+                fields,
+                component.data != NULL ? component.data : ""
+            )) {
+            bx_text_buffer_destroy(&component);
+            ash_expanded_fields_destroy(fields);
+            return false;
+        }
+        if (component.length != 0u || part->quote != ASH_QUOTE_NONE) {
+            field_present = true;
+        }
+        bx_text_buffer_destroy(&component);
+    }
+
+    if (!field_present) {
+        ash_expanded_fields_destroy(fields);
+    }
+    return true;
 }
