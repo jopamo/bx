@@ -145,7 +145,7 @@ void bx_sha256_update(struct bx_sha256_ctx* ctx, const void* data_, size_t len) 
 
     size_t block_count = len / BX_SHA256_BLOCK_SIZE;
     if (block_count > 0u) {
-        if (!bx_sha256_x86_transform_blocks(ctx, data, block_count)) {
+        if (!bx_sha256_arm64_transform_blocks(ctx, data, block_count) && !bx_sha256_x86_transform_blocks(ctx, data, block_count)) {
             size_t generic_blocks = block_count;
             const uint8_t* generic_data = data;
             while (generic_blocks > 0u) {
