@@ -10,6 +10,7 @@
 #include "bx/diag.h"
 #include "bx/libbx.h"
 #include "lib/args_common.h"
+#include "lib/byte_transform.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
 
@@ -633,30 +634,34 @@ int bx_tr_main(int argc, char** argv) {
         }
     }
 
-    int prev_out = -1;
-    int ch = 0;
+    uint8_t input_buffer[32768];
+    uint8_t transformed[32768];
     char output_buffer[8192];
+    struct bx_byte_transform_state transform_state = {
+        .previous_output = -1,
+    };
     struct bx_line_writer writer;
     bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
-    while ((ch = getchar()) != EOF) {
-        unsigned char byte = (unsigned char)ch;
-        if (delete_set[byte]) {
-            continue;
+    while (true) {
+        size_t input_len = fread(input_buffer, 1u, sizeof(input_buffer), stdin);
+        if (input_len == 0u) {
+            break;
         }
-
-        unsigned char out = map[byte];
-        if (options.squeeze && prev_out == (int)out && squeeze_set[out]) {
-            continue;
-        }
-
-        if (!bx_line_writer_putc(&writer, (char)out)) {
+        size_t output_len = bx_byte_transform(input_buffer,
+                                              input_len,
+                                              transformed,
+                                              map,
+                                              delete_set,
+                                              squeeze_set,
+                                              options.delete_bytes,
+                                              options.squeeze,
+                                              &transform_state);
+        if (!bx_line_writer_write(&writer, transformed, output_len)) {
             tr_array_destroy(&set1);
             tr_array_destroy(&set2);
             return 1;
         }
-
-        prev_out = (int)out;
     }
 
     tr_array_destroy(&set1);
