@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -1633,6 +1634,137 @@ static int ash_execute_ast_group(
     return status;
 }
 
+static void ash_reap_spawned_pipeline(
+    const pid_t* pids,
+    size_t count,
+    bool terminate
+) {
+    if (terminate) {
+        for (size_t i = 0u; i < count; i++) {
+            (void)kill(pids[i], SIGTERM);
+        }
+    }
+    for (size_t i = 0u; i < count; i++) {
+        int ignored;
+        while (waitpid(pids[i], &ignored, 0) < 0 && errno == EINTR) {
+        }
+    }
+}
+
+static int ash_execute_ast_pipeline_forked(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    size_t command_count = node->value.pipeline.count;
+    pid_t* pids = ash_realloc_array(
+        shell,
+        NULL,
+        command_count,
+        sizeof(*pids)
+    );
+    if (pids == NULL) {
+        return 1;
+    }
+
+    size_t spawned = 0u;
+    int previous_read = -1;
+    for (size_t i = 0u; i < command_count; i++) {
+        int pipe_fds[2] = {-1, -1};
+        if (i + 1u < command_count &&
+            bx_fd_pipe_cloexec(pipe_fds) != 0) {
+            ash_exec_error(shell, "pipe", errno);
+            if (previous_read >= 0) {
+                close(previous_read);
+            }
+            ash_reap_spawned_pipeline(pids, spawned, true);
+            free(pids);
+            return 1;
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            ash_exec_error(shell, "fork", errno);
+            if (previous_read >= 0) {
+                close(previous_read);
+            }
+            if (pipe_fds[0] >= 0) {
+                close(pipe_fds[0]);
+                close(pipe_fds[1]);
+            }
+            ash_reap_spawned_pipeline(pids, spawned, true);
+            free(pids);
+            return 1;
+        }
+        if (pid == 0) {
+            if (previous_read >= 0 &&
+                bx_fd_dup2_exact(previous_read, STDIN_FILENO) < 0) {
+                ash_exec_error(shell, "dup2", errno);
+                _exit(1);
+            }
+            if (pipe_fds[1] >= 0) {
+                if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
+                    ash_exec_error(shell, "dup2", errno);
+                    _exit(1);
+                }
+                if (node->value.pipeline.operators[i] ==
+                        ASH_PIPE_STDOUT_STDERR &&
+                    bx_fd_dup2_exact(pipe_fds[1], STDERR_FILENO) < 0) {
+                    ash_exec_error(shell, "dup2", errno);
+                    _exit(1);
+                }
+            }
+            if (previous_read >= 0) {
+                close(previous_read);
+            }
+            if (pipe_fds[0] >= 0) {
+                close(pipe_fds[0]);
+                close(pipe_fds[1]);
+            }
+            shell->should_exit = false;
+            shell->control = (struct ash_control_state){0};
+            _exit(ash_execute_ast(
+                shell,
+                node->value.pipeline.commands[i]
+            ));
+        }
+
+        pids[spawned++] = pid;
+        if (previous_read >= 0) {
+            close(previous_read);
+        }
+        if (pipe_fds[1] >= 0) {
+            close(pipe_fds[1]);
+        }
+        previous_read = pipe_fds[0];
+    }
+    if (previous_read >= 0) {
+        close(previous_read);
+    }
+
+    int last_status = 1;
+    for (size_t i = 0u; i < command_count; i++) {
+        int wait_status;
+        while (waitpid(pids[i], &wait_status, 0) < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            ash_exec_error(shell, "waitpid", errno);
+            ash_reap_spawned_pipeline(
+                pids + i + 1u,
+                command_count - i - 1u,
+                true
+            );
+            free(pids);
+            return 1;
+        }
+        if (i + 1u == command_count) {
+            last_status = ash_wait_status_to_exit_status(wait_status);
+        }
+    }
+    free(pids);
+    return last_status;
+}
+
 static int ash_execute_ast_pipeline(
     struct ash_shell* shell,
     const struct ash_ast* node
@@ -1642,36 +1774,7 @@ static int ash_execute_ast_pipeline(
         status = ash_execute_ast(shell, node->value.pipeline.commands[0]);
     }
     else {
-        struct ash_pipeline pipeline;
-        ash_pipeline_init(&pipeline);
-        for (size_t i = 0u; i < node->value.pipeline.count; i++) {
-            const struct ash_ast* command_node = node->value.pipeline.commands[i];
-            if (command_node->kind != ASH_AST_SIMPLE) {
-                ash_diag(shell, "compound command in pipeline is not implemented");
-                ash_pipeline_destroy(&pipeline);
-                return 2;
-            }
-            if (i != 0u &&
-                node->value.pipeline.operators[i - 1u] ==
-                    ASH_PIPE_STDOUT_STDERR) {
-                ash_diag(shell, "|& pipelines are not implemented");
-                ash_pipeline_destroy(&pipeline);
-                return 2;
-            }
-
-            struct ash_command command;
-            if (!ash_ast_simple_to_command(shell, command_node, &command)) {
-                ash_pipeline_destroy(&pipeline);
-                return 2;
-            }
-            if (!ash_pipeline_push_command(shell, &pipeline, &command)) {
-                ash_command_destroy(&command);
-                ash_pipeline_destroy(&pipeline);
-                return 2;
-            }
-        }
-        status = ash_execute_pipeline(shell, &pipeline);
-        ash_pipeline_destroy(&pipeline);
+        status = ash_execute_ast_pipeline_forked(shell, node);
     }
 
     return node->value.pipeline.negated ? (status == 0 ? 1 : 0) : status;
