@@ -13,6 +13,7 @@
 #include "applets.h"
 #include "bx/diag.h"
 #include "lib/args_common.h"
+#include "lib/byte_count.h"
 #include "lib/cli_common.h"
 #include "lib/line_writer.h"
 
@@ -24,39 +25,95 @@ typedef struct {
     unsigned long long max_line_width;
 } wc_counts_t;
 
-static void wc_count(FILE* f, wc_counts_t* res) {
+struct wc_count_options {
+    bool lines;
+    bool words;
+    bool chars;
+    bool bytes;
+    bool max_line_width;
+};
+
+static bool wc_count_regular_bytes(FILE* f, unsigned long long* count) {
+    struct stat st;
+    int fd = fileno(f);
+    off_t current = ftello(f);
+    if (fd < 0 || current < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return false;
+    }
+    if (fseeko(f, 0, SEEK_END) != 0) {
+        return false;
+    }
+    off_t end = ftello(f);
+    if (end < 0) {
+        (void)fseeko(f, current, SEEK_SET);
+        return false;
+    }
+    *count = end > current ? (unsigned long long)(end - current) : 0u;
+    return true;
+}
+
+static void wc_count(FILE* f, wc_counts_t* res, const struct wc_count_options* options) {
     memset(res, 0, sizeof(*res));
-    unsigned long long current_line_width = 0;
-    bool in_word = false;
-
-    int c;
-    while ((c = getc(f)) != EOF) {
-        res->bytes++;
-        res->chars++;
-
-        if (c == '\n') {
-            res->lines++;
-            if (current_line_width > res->max_line_width) {
-                res->max_line_width = current_line_width;
-            }
-            current_line_width = 0;
-        }
-        else if (c == '\t') {
-            current_line_width += 8 - (current_line_width % 8);
-        }
-        else if (isprint(c)) {
-            current_line_width++;
-        }
-
-        if (isspace(c)) {
-            in_word = false;
-        }
-        else if (!in_word) {
-            in_word = true;
-            res->words++;
+    if (!options->lines && !options->words && !options->max_line_width && (options->bytes || options->chars)) {
+        unsigned long long count = 0u;
+        if (wc_count_regular_bytes(f, &count)) {
+            res->bytes = count;
+            res->chars = count;
+            return;
         }
     }
-    if (current_line_width > res->max_line_width) {
+
+    uint8_t buffer[65536];
+    unsigned long long current_line_width = 0u;
+    bool in_word = false;
+
+    while (true) {
+        size_t len = fread(buffer, 1u, sizeof(buffer), f);
+        if (len == 0u) {
+            break;
+        }
+        if (options->bytes) {
+            res->bytes += (unsigned long long)len;
+        }
+        if (options->chars) {
+            res->chars += (unsigned long long)len;
+        }
+        if (options->lines) {
+            res->lines += bx_byte_count(buffer, len, '\n');
+        }
+        if (!options->words && !options->max_line_width) {
+            continue;
+        }
+
+        for (size_t i = 0u; i < len; i++) {
+            int c = buffer[i];
+            if (options->max_line_width) {
+                if (c == '\n') {
+                    if (current_line_width > res->max_line_width) {
+                        res->max_line_width = current_line_width;
+                    }
+                    current_line_width = 0u;
+                }
+                else if (c == '\t') {
+                    current_line_width += 8u - (current_line_width % 8u);
+                }
+                else if (isprint(c)) {
+                    current_line_width++;
+                }
+            }
+
+            if (options->words) {
+                if (isspace(c)) {
+                    in_word = false;
+                }
+                else if (!in_word) {
+                    in_word = true;
+                    res->words++;
+                }
+            }
+        }
+    }
+    if (options->max_line_width && current_line_width > res->max_line_width) {
         res->max_line_width = current_line_width;
     }
 }
@@ -223,6 +280,13 @@ int bx_wc_main(int argc, char** argv) {
 
     int num_files = argc - optind;
     int field_count = (opt_l ? 1 : 0) + (opt_w ? 1 : 0) + (opt_c ? 1 : 0) + (opt_m ? 1 : 0) + (opt_L ? 1 : 0);
+    const struct wc_count_options count_options = {
+        .lines = opt_l,
+        .words = opt_w,
+        .chars = opt_m,
+        .bytes = opt_c,
+        .max_line_width = opt_L,
+    };
 
     if (num_files == 0) {
         int width = field_count > 1 ? 7 : 1;
@@ -230,7 +294,7 @@ int bx_wc_main(int argc, char** argv) {
         char output_buffer[8192];
         struct bx_line_writer writer;
 
-        wc_count(stdin, &res);
+        wc_count(stdin, &res, &count_options);
         bx_line_writer_init(&writer, STDOUT_FILENO, output_buffer, sizeof(output_buffer));
 
         if (!wc_write_counts(&writer, &res, width, field_count > 1, opt_l, opt_w, opt_c, opt_m, opt_L)
@@ -264,7 +328,7 @@ int bx_wc_main(int argc, char** argv) {
                 continue;
             }
         }
-        wc_count(f, &counts[ncounts]);
+        wc_count(f, &counts[ncounts], &count_options);
         if (f != stdin)
             fclose(f);
         file_ok[i] = true;
