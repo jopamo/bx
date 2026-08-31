@@ -581,6 +581,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/parser.c',
   'src/applets/shell/ash/shell_context.c',
   'src/applets/shell/ash/syntax.c',
+  'src/applets/shell/ash/variables.c',
 ]
 
 bx_text_applet_sources = [
