@@ -3,14 +3,10 @@
 #include <stdint.h>
 
 #include "crypto/sha256_internal.h"
+#include "lib/arm64_features.h"
 
 #if !defined(BX_SHA256_DISABLE_HW_ACCEL) && defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
 #include <arm_neon.h>
-
-#if defined(__linux__)
-#include <asm/hwcap.h>
-#include <sys/auxv.h>
-#endif
 
 #define BX_SHA256_ARM64_TARGET __attribute__((target("+sha2")))
 
@@ -83,18 +79,8 @@ static BX_SHA256_ARM64_TARGET void bx_sha256_arm64_sha2(uint32_t state[8], const
     vst1q_u32(&state[4], state1);
 }
 
-static bool bx_sha256_arm64_has_sha2(void) {
-#if defined(__linux__) && defined(HWCAP_SHA2)
-    return (getauxval(AT_HWCAP) & HWCAP_SHA2) != 0u;
-#elif defined(__ARM_FEATURE_SHA2)
-    return true;
-#else
-    return false;
-#endif
-}
-
 bool bx_sha256_arm64_transform_blocks(struct bx_sha256_ctx* ctx, const uint8_t* data, size_t block_count) {
-    if (!bx_sha256_arm64_has_sha2()) {
+    if (!bx_arm64_has_sha2()) {
         return false;
     }
 
