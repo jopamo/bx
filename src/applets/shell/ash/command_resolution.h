@@ -21,6 +21,7 @@ enum ash_builtin_kind {
     ASH_BUILTIN_CONTINUE,
     ASH_BUILTIN_RETURN,
     ASH_BUILTIN_SHIFT,
+    ASH_BUILTIN_WAIT,
 };
 
 enum ash_command_resolution_kind {

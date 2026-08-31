@@ -35,6 +35,7 @@ struct ash_command_resolution ash_command_resolve_builtin(const char* name) {
         {"cd", ASH_COMMAND_REGULAR_BUILTIN, ASH_BUILTIN_CD},
         {"pwd", ASH_COMMAND_REGULAR_BUILTIN, ASH_BUILTIN_PWD},
         {"umask", ASH_COMMAND_REGULAR_BUILTIN, ASH_BUILTIN_UMASK},
+        {"wait", ASH_COMMAND_REGULAR_BUILTIN, ASH_BUILTIN_WAIT},
     };
 
     for (size_t i = 0u; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
