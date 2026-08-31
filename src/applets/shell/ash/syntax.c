@@ -1,0 +1,124 @@
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "applets/shell/ash/syntax.h"
+
+static int ash_syntax_grow_array(
+    void** items,
+    size_t* capacity,
+    size_t needed,
+    size_t item_size
+) {
+    if (*capacity >= needed) {
+        return 0;
+    }
+
+    size_t grown = (*capacity == 0u) ? 4u : *capacity;
+    while (grown < needed) {
+        if (grown > SIZE_MAX / 2u) {
+            grown = needed;
+            break;
+        }
+        grown *= 2u;
+    }
+    if (item_size != 0u && grown > SIZE_MAX / item_size) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    void* replacement = realloc(*items, grown * item_size);
+    if (replacement == NULL) {
+        return -1;
+    }
+    *items = replacement;
+    *capacity = grown;
+    return 0;
+}
+
+void ash_word_init(struct ash_word* word, struct ash_source_location location) {
+    *word = (struct ash_word){
+        .location = location,
+    };
+}
+
+void ash_word_destroy(struct ash_word* word) {
+    if (word == NULL) {
+        return;
+    }
+    for (size_t i = 0u; i < word->count; i++) {
+        free(word->parts[i].text);
+    }
+    free(word->parts);
+    *word = (struct ash_word){0};
+}
+
+static int ash_word_part_reserve(struct ash_word_part* part, size_t needed) {
+    if (part->capacity >= needed) {
+        return 0;
+    }
+
+    size_t grown = (part->capacity == 0u) ? 16u : part->capacity;
+    while (grown < needed) {
+        if (grown > SIZE_MAX / 2u) {
+            grown = needed;
+            break;
+        }
+        grown *= 2u;
+    }
+
+    char* replacement = realloc(part->text, grown);
+    if (replacement == NULL) {
+        return -1;
+    }
+    part->text = replacement;
+    part->capacity = grown;
+    return 0;
+}
+
+int ash_word_append(
+    struct ash_word* word,
+    enum ash_word_part_kind kind,
+    enum ash_quote_kind quote,
+    struct ash_source_location location,
+    const char* text,
+    size_t length
+) {
+    struct ash_word_part* part = NULL;
+    if (word->count != 0u) {
+        struct ash_word_part* last = &word->parts[word->count - 1u];
+        if (last->kind == kind && last->quote == quote) {
+            part = last;
+        }
+    }
+
+    if (part == NULL) {
+        if (ash_syntax_grow_array(
+                (void**)&word->parts,
+                &word->capacity,
+                word->count + 1u,
+                sizeof(*word->parts)
+            ) != 0) {
+            return -1;
+        }
+        part = &word->parts[word->count++];
+        *part = (struct ash_word_part){
+            .kind = kind,
+            .quote = quote,
+            .location = location,
+        };
+    }
+
+    if (length > SIZE_MAX - part->length - 1u ||
+        ash_word_part_reserve(part, part->length + length + 1u) != 0) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (length != 0u) {
+        memcpy(part->text + part->length, text, length);
+    }
+    part->length += length;
+    part->text[part->length] = '\0';
+    return 0;
+}
