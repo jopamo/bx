@@ -579,6 +579,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/command_resolution.c',
   'src/applets/shell/ash/control.c',
   'src/applets/shell/ash/expansion.c',
+  'src/applets/shell/ash/functions.c',
   'src/applets/shell/ash/input.c',
   'src/applets/shell/ash/lexer.c',
   'src/applets/shell/ash/pattern.c',

@@ -54,6 +54,25 @@ void ash_word_destroy(struct ash_word* word) {
     *word = (struct ash_word){0};
 }
 
+int ash_word_clone(struct ash_word* destination, const struct ash_word* source) {
+    ash_word_init(destination, source->location);
+    for (size_t i = 0u; i < source->count; i++) {
+        const struct ash_word_part* part = &source->parts[i];
+        if (ash_word_append(
+                destination,
+                part->kind,
+                part->quote,
+                part->location,
+                part->text,
+                part->length
+            ) != 0) {
+            ash_word_destroy(destination);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int ash_word_part_reserve(struct ash_word_part* part, size_t needed) {
     if (part->capacity >= needed) {
         return 0;

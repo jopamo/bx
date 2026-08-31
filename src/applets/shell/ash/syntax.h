@@ -44,6 +44,7 @@ struct ash_word {
 
 void ash_word_init(struct ash_word* word, struct ash_source_location location);
 void ash_word_destroy(struct ash_word* word);
+int ash_word_clone(struct ash_word* destination, const struct ash_word* source);
 int ash_word_append(
     struct ash_word* word,
     enum ash_word_part_kind kind,

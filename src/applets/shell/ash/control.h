@@ -23,6 +23,7 @@ struct ash_control_state {
     enum ash_control_kind pending;
     unsigned int remaining_levels;
     unsigned int loop_depth;
+    unsigned int function_depth;
     int status;
 };
 
@@ -35,5 +36,9 @@ void ash_control_request_loop(
 );
 bool ash_control_pending(const struct ash_shell* shell);
 enum ash_loop_control ash_control_consume_loop(struct ash_shell* shell);
+void ash_control_enter_function(struct ash_shell* shell);
+void ash_control_leave_function(struct ash_shell* shell);
+bool ash_control_request_return(struct ash_shell* shell, int status);
+bool ash_control_consume_return(struct ash_shell* shell, int* status);
 
 #endif /* BX_APPLETS_SHELL_ASH_CONTROL_H */

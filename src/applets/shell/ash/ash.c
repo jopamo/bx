@@ -17,6 +17,7 @@
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/expansion.h"
+#include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
@@ -72,6 +73,8 @@ struct ash_saved_fds {
     size_t len;
     size_t cap;
 };
+
+static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
 
 static const char* ash_basename(const char* path) {
     return bx_cli_progname(path, "ash");
@@ -916,6 +919,27 @@ static int ash_builtin_loop_control(
     return 0;
 }
 
+static int ash_builtin_return(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    if (command->word_count > 2u) {
+        ash_diag(shell, "return: too many arguments");
+        return 2;
+    }
+    int status = shell->last_status;
+    if (command->word_count == 2u &&
+        ash_parse_status_code(command->words[1], &status) != 0) {
+        ash_diag(shell, "return: numeric argument required");
+        return 2;
+    }
+    if (!ash_control_request_return(shell, status)) {
+        ash_diag(shell, "return: not in a function");
+        return 2;
+    }
+    return status;
+}
+
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
         case ASH_BUILTIN_COLON:
@@ -948,6 +972,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
                 command,
                 ASH_CONTROL_CONTINUE
             );
+        case ASH_BUILTIN_RETURN:
+            return ash_builtin_return(shell, command);
         case ASH_BUILTIN_INVALID:
             break;
     }
@@ -955,7 +981,130 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
     return 1;
 }
 
+static struct ash_command_resolution ash_resolve_shell_command(
+    const struct ash_shell* shell,
+    const char* name
+) {
+    struct ash_command_resolution builtin = ash_command_resolve_builtin(name);
+    if (builtin.kind == ASH_COMMAND_SPECIAL_BUILTIN) {
+        return builtin;
+    }
+    const struct ash_function* function = ash_function_find(shell, name);
+    if (function != NULL) {
+        return ash_command_resolution_function(name, function);
+    }
+    return builtin;
+}
+
+static void ash_restore_function_assignments(
+    struct ash_shell* shell,
+    struct ash_var_saved* saved,
+    size_t count
+) {
+    while (count != 0u) {
+        ash_var_restore(shell, &saved[--count]);
+    }
+    free(saved);
+}
+
+static int ash_execute_function(
+    struct ash_shell* shell,
+    const struct ash_function* function,
+    const struct ash_command* command
+) {
+    struct ash_ast* invocation_body = ash_ast_clone(function->body);
+    if (invocation_body == NULL) {
+        ash_diag_oom(shell);
+        return 2;
+    }
+
+    struct ash_var_saved* saved = ash_realloc_array(
+        shell,
+        NULL,
+        command->assignment_count,
+        sizeof(*saved)
+    );
+    if (command->assignment_count != 0u && saved == NULL) {
+        ash_ast_destroy(invocation_body);
+        return 2;
+    }
+    size_t saved_count = 0u;
+    for (size_t i = 0u; i < command->assignment_count; i++) {
+        size_t name_length = 0u;
+        const char* value = NULL;
+        if (!ash_parse_assignment(
+                command->assignments[i],
+                &name_length,
+                &value
+            ) ||
+            !ash_var_save(
+                shell,
+                command->assignments[i],
+                name_length,
+                &saved[saved_count]
+            )) {
+            ash_restore_function_assignments(shell, saved, saved_count);
+            ash_ast_destroy(invocation_body);
+            return 2;
+        }
+        saved_count++;
+        if (!ash_var_set_with_export(
+                shell,
+                command->assignments[i],
+                name_length,
+                value,
+                true
+            )) {
+            ash_restore_function_assignments(shell, saved, saved_count);
+            ash_ast_destroy(invocation_body);
+            return 2;
+        }
+    }
+
+    struct ash_saved_fds saved_fds;
+    ash_saved_fds_init(&saved_fds);
+    if (ash_apply_redirections(shell, command, &saved_fds) != 0) {
+        ash_saved_fds_restore(shell, &saved_fds);
+        ash_restore_function_assignments(shell, saved, saved_count);
+        ash_ast_destroy(invocation_body);
+        return 1;
+    }
+
+    struct ash_positional_frame previous = shell->positionals;
+    shell->positionals = (struct ash_positional_frame){
+        .argv0 = previous.argv0,
+        .values = command->word_count > 1u ? &command->words[1] : NULL,
+        .count = command->word_count > 1u ?
+            (int)(command->word_count - 1u) : 0,
+        .previous = &previous,
+    };
+    unsigned int caller_loop_depth = shell->control.loop_depth;
+    shell->control.loop_depth = 0u;
+    ash_control_enter_function(shell);
+    int status = ash_execute_ast(shell, invocation_body);
+    (void)ash_control_consume_return(shell, &status);
+    ash_control_leave_function(shell);
+    shell->control.loop_depth = caller_loop_depth;
+    shell->positionals = previous;
+
+    ash_saved_fds_restore(shell, &saved_fds);
+    ash_restore_function_assignments(shell, saved, saved_count);
+    ash_ast_destroy(invocation_body);
+    return status;
+}
+
 static int ash_execute_in_child(struct ash_shell* shell, const struct ash_command* command) {
+    if (command->word_count != 0u) {
+        struct ash_command_resolution resolution =
+            ash_resolve_shell_command(shell, command->words[0]);
+        if (resolution.kind == ASH_COMMAND_FUNCTION) {
+            return ash_execute_function(
+                shell,
+                resolution.target.function,
+                command
+            );
+        }
+    }
     if (ash_apply_redirections(shell, command, NULL) != 0) {
         return 1;
     }
@@ -967,7 +1116,8 @@ static int ash_execute_in_child(struct ash_shell* shell, const struct ash_comman
         return 0;
     }
 
-    struct ash_command_resolution resolution = ash_command_resolve_builtin(command->words[0]);
+    struct ash_command_resolution resolution =
+        ash_resolve_shell_command(shell, command->words[0]);
     if (ash_command_resolution_is_builtin(&resolution)) {
         if (ash_apply_command_assignments_shell(shell, command) != 0) {
             return 1;
@@ -1167,7 +1317,15 @@ static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeli
             return 0;
         }
 
-        struct ash_command_resolution resolution = ash_command_resolve_builtin(command->words[0]);
+        struct ash_command_resolution resolution =
+            ash_resolve_shell_command(shell, command->words[0]);
+        if (resolution.kind == ASH_COMMAND_FUNCTION) {
+            return ash_execute_function(
+                shell,
+                resolution.target.function,
+                command
+            );
+        }
         if (ash_command_resolution_is_builtin(&resolution)) {
             return ash_execute_single_command_parent(shell, command, resolution.target.builtin);
         }
@@ -1391,8 +1549,6 @@ static bool ash_ast_trailing_redirections_to_command(
     }
     return true;
 }
-
-static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
 
 static int ash_execute_ast_simple(
     struct ash_shell* shell,
@@ -1757,6 +1913,17 @@ static int ash_execute_ast_case(
     return status;
 }
 
+static int ash_execute_ast_function(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    return ash_function_define(
+        shell,
+        node->value.function.name,
+        node->value.function.body
+    ) ? 0 : 2;
+}
+
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     switch (node->kind) {
         case ASH_AST_SIMPLE:
@@ -1780,6 +1947,8 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
             return ash_execute_ast_for(shell, node);
         case ASH_AST_CASE:
             return ash_execute_ast_case(shell, node);
+        case ASH_AST_FUNCTION:
+            return ash_execute_ast_function(shell, node);
     }
     return 2;
 }

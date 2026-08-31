@@ -113,6 +113,10 @@ static struct ash_ast* ash_parse_list(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 );
+static struct ash_ast* ash_parse_command(
+    struct ash_parser* parser,
+    const struct ash_parse_stop* stop
+);
 
 static bool ash_parser_consume_word(
     struct ash_parser* parser,
@@ -265,6 +269,33 @@ static bool ash_parser_take_trailing_redirections(
     }
 }
 
+static char* ash_parser_word_name(const struct ash_word* word) {
+    size_t length = 0u;
+    for (size_t i = 0u; i < word->count; i++) {
+        const struct ash_word_part* part = &word->parts[i];
+        if (part->kind != ASH_WORD_TEXT || part->quote != ASH_QUOTE_NONE ||
+            part->length > SIZE_MAX - length) {
+            return NULL;
+        }
+        length += part->length;
+    }
+    char* name = malloc(length + 1u);
+    if (name == NULL) {
+        return NULL;
+    }
+    size_t offset = 0u;
+    for (size_t i = 0u; i < word->count; i++) {
+        memcpy(name + offset, word->parts[i].text, word->parts[i].length);
+        offset += word->parts[i].length;
+    }
+    name[offset] = '\0';
+    if (!ash_is_valid_name_span(name, length)) {
+        free(name);
+        return NULL;
+    }
+    return name;
+}
+
 static struct ash_ast* ash_parse_simple(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
@@ -330,6 +361,79 @@ static struct ash_ast* ash_parse_simple(
             return NULL;
         }
         ash_token_destroy(&word_token);
+
+        token = ash_parser_peek(parser);
+        if (node->value.simple.count == 1u && !assignment &&
+            token != NULL && token->kind == ASH_TOKEN_LPAREN) {
+            char* function_name = ash_parser_word_name(
+                &node->value.simple.items[0].value.word
+            );
+            if (function_name == NULL) {
+                continue;
+            }
+
+            struct ash_token opening;
+            (void)ash_parser_take(parser, &opening);
+            ash_token_destroy(&opening);
+            token = ash_parser_peek(parser);
+            if (token == NULL || token->kind != ASH_TOKEN_RPAREN) {
+                ash_parser_fail(
+                    parser,
+                    token != NULL && token->kind != ASH_TOKEN_EOF ?
+                        ASH_PARSER_ERROR : ASH_PARSER_INCOMPLETE,
+                    token != NULL ? token->location : node->location,
+                    "')' expected in function definition"
+                );
+                free(function_name);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            struct ash_token closing;
+            (void)ash_parser_take(parser, &closing);
+            ash_token_destroy(&closing);
+            ash_parser_skip_newlines(parser);
+
+            struct ash_ast* body = ash_parse_command(parser, stop);
+            if (body == NULL) {
+                free(function_name);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            if (body->kind == ASH_AST_SIMPLE ||
+                body->kind == ASH_AST_FUNCTION) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    body->location,
+                    "compound command expected after function name"
+                );
+                free(function_name);
+                ash_ast_destroy(body);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+
+            struct ash_ast* function = ash_ast_create(
+                ASH_AST_FUNCTION,
+                node->location
+            );
+            if (function == NULL) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    node->location,
+                    "out of memory"
+                );
+                free(function_name);
+                ash_ast_destroy(body);
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            function->value.function.name = function_name;
+            function->value.function.body = body;
+            ash_ast_destroy(node);
+            return function;
+        }
     }
 
     if (node->value.simple.count == 0u) {

@@ -50,6 +50,262 @@ struct ash_ast* ash_ast_create(
     return node;
 }
 
+static int ash_redirection_clone(
+    struct ash_redirection* destination,
+    const struct ash_redirection* source
+) {
+    *destination = (struct ash_redirection){
+        .operator = source->operator,
+        .location = source->location,
+    };
+    if (source->io_number != NULL) {
+        destination->io_number = strdup(source->io_number);
+        if (destination->io_number == NULL) {
+            return -1;
+        }
+    }
+    if (ash_word_clone(&destination->target, &source->target) != 0) {
+        free(destination->io_number);
+        *destination = (struct ash_redirection){0};
+        return -1;
+    }
+    return 0;
+}
+
+static bool ash_ast_clone_trailing(
+    struct ash_ast* destination,
+    const struct ash_ast* source
+) {
+    for (size_t i = 0u; i < source->trailing_redirection_count; i++) {
+        struct ash_redirection redirection;
+        if (ash_redirection_clone(
+                &redirection,
+                &source->trailing_redirections[i]
+            ) != 0 ||
+            ash_ast_add_trailing_redirection(
+                destination,
+                &redirection
+            ) != 0) {
+            ash_redirection_destroy(&redirection);
+            return false;
+        }
+    }
+    return true;
+}
+
+struct ash_ast* ash_ast_clone(const struct ash_ast* source) {
+    if (source == NULL) {
+        return NULL;
+    }
+    struct ash_ast* copy = ash_ast_create(source->kind, source->location);
+    if (copy == NULL || !ash_ast_clone_trailing(copy, source)) {
+        ash_ast_destroy(copy);
+        return NULL;
+    }
+
+#define CLONE_CHILD(destination, child) \
+    do { \
+        (destination) = ash_ast_clone(child); \
+        if ((child) != NULL && (destination) == NULL) goto fail; \
+    } while (0)
+
+    switch (source->kind) {
+        case ASH_AST_SIMPLE:
+            for (size_t i = 0u; i < source->value.simple.count; i++) {
+                const struct ash_simple_item* item =
+                    &source->value.simple.items[i];
+                if (item->kind == ASH_SIMPLE_REDIRECTION) {
+                    struct ash_redirection redirection;
+                    if (ash_redirection_clone(
+                            &redirection,
+                            &item->value.redirection
+                        ) != 0 ||
+                        ash_ast_simple_add_redirection(
+                            copy,
+                            &redirection
+                        ) != 0) {
+                        ash_redirection_destroy(&redirection);
+                        goto fail;
+                    }
+                }
+                else {
+                    struct ash_word word;
+                    if (ash_word_clone(&word, &item->value.word) != 0 ||
+                        ash_ast_simple_add_word(
+                            copy,
+                            &word,
+                            item->kind == ASH_SIMPLE_ASSIGNMENT
+                        ) != 0) {
+                        ash_word_destroy(&word);
+                        goto fail;
+                    }
+                }
+            }
+            break;
+        case ASH_AST_LIST:
+            for (size_t i = 0u; i < source->value.list.count; i++) {
+                struct ash_ast* child = ash_ast_clone(
+                    source->value.list.entries[i].command
+                );
+                if (child == NULL || ash_ast_list_add(copy, child) != 0) {
+                    ash_ast_destroy(child);
+                    goto fail;
+                }
+                copy->value.list.entries[i].asynchronous =
+                    source->value.list.entries[i].asynchronous;
+            }
+            break;
+        case ASH_AST_AND_OR:
+            for (size_t i = 0u; i < source->value.and_or.count; i++) {
+                struct ash_ast* child = ash_ast_clone(
+                    source->value.and_or.pipelines[i]
+                );
+                enum ash_and_or_operator operator_before = i == 0u ?
+                    ASH_AND_IF : source->value.and_or.operators[i - 1u];
+                if (child == NULL ||
+                    ash_ast_and_or_add(copy, child, operator_before) != 0) {
+                    ash_ast_destroy(child);
+                    goto fail;
+                }
+            }
+            break;
+        case ASH_AST_PIPELINE:
+            copy->value.pipeline.negated = source->value.pipeline.negated;
+            for (size_t i = 0u; i < source->value.pipeline.count; i++) {
+                struct ash_ast* child = ash_ast_clone(
+                    source->value.pipeline.commands[i]
+                );
+                enum ash_pipe_operator operator_before = i == 0u ?
+                    ASH_PIPE_STDOUT :
+                    source->value.pipeline.operators[i - 1u];
+                if (child == NULL ||
+                    ash_ast_pipeline_add(copy, child, operator_before) != 0) {
+                    ash_ast_destroy(child);
+                    goto fail;
+                }
+            }
+            break;
+        case ASH_AST_SUBSHELL:
+        case ASH_AST_BRACE_GROUP:
+            CLONE_CHILD(copy->value.group.body, source->value.group.body);
+            break;
+        case ASH_AST_IF:
+            CLONE_CHILD(
+                copy->value.conditional.condition,
+                source->value.conditional.condition
+            );
+            CLONE_CHILD(
+                copy->value.conditional.then_branch,
+                source->value.conditional.then_branch
+            );
+            CLONE_CHILD(
+                copy->value.conditional.else_branch,
+                source->value.conditional.else_branch
+            );
+            break;
+        case ASH_AST_WHILE:
+        case ASH_AST_UNTIL:
+            CLONE_CHILD(copy->value.loop.condition, source->value.loop.condition);
+            CLONE_CHILD(copy->value.loop.body, source->value.loop.body);
+            break;
+        case ASH_AST_FOR:
+            copy->value.for_loop.name = strdup(source->value.for_loop.name);
+            if (copy->value.for_loop.name == NULL) {
+                goto fail;
+            }
+            copy->value.for_loop.explicit_words =
+                source->value.for_loop.explicit_words;
+            for (size_t i = 0u; i < source->value.for_loop.word_count; i++) {
+                struct ash_word word;
+                if (ash_word_clone(
+                        &word,
+                        &source->value.for_loop.words[i]
+                    ) != 0) {
+                    goto fail;
+                }
+                if (copy->value.for_loop.word_count ==
+                    copy->value.for_loop.word_capacity) {
+                    size_t capacity =
+                        copy->value.for_loop.word_capacity == 0u ?
+                            4u : copy->value.for_loop.word_capacity * 2u;
+                    struct ash_word* words = realloc(
+                        copy->value.for_loop.words,
+                        capacity * sizeof(*words)
+                    );
+                    if (words == NULL) {
+                        ash_word_destroy(&word);
+                        goto fail;
+                    }
+                    copy->value.for_loop.words = words;
+                    copy->value.for_loop.word_capacity = capacity;
+                }
+                copy->value.for_loop.words[
+                    copy->value.for_loop.word_count++
+                ] = word;
+            }
+            CLONE_CHILD(
+                copy->value.for_loop.body,
+                source->value.for_loop.body
+            );
+            break;
+        case ASH_AST_CASE:
+            if (ash_word_clone(
+                    &copy->value.case_command.subject,
+                    &source->value.case_command.subject
+                ) != 0) {
+                goto fail;
+            }
+            for (size_t i = 0u;
+                 i < source->value.case_command.clause_count;
+                 i++) {
+                const struct ash_case_clause* source_clause =
+                    &source->value.case_command.clauses[i];
+                struct ash_case_clause clause = {0};
+                for (size_t j = 0u;
+                     j < source_clause->pattern_count;
+                     j++) {
+                    struct ash_word pattern;
+                    if (ash_word_clone(
+                            &pattern,
+                            &source_clause->patterns[j]
+                        ) != 0 ||
+                        ash_case_clause_add_pattern(
+                            &clause,
+                            &pattern
+                        ) != 0) {
+                        ash_word_destroy(&pattern);
+                        ash_case_clause_destroy(&clause);
+                        goto fail;
+                    }
+                }
+                clause.body = ash_ast_clone(source_clause->body);
+                if (clause.body == NULL ||
+                    ash_ast_case_add_clause(copy, &clause) != 0) {
+                    ash_case_clause_destroy(&clause);
+                    goto fail;
+                }
+            }
+            break;
+        case ASH_AST_FUNCTION:
+            copy->value.function.name = strdup(source->value.function.name);
+            if (copy->value.function.name == NULL) {
+                goto fail;
+            }
+            CLONE_CHILD(
+                copy->value.function.body,
+                source->value.function.body
+            );
+            break;
+    }
+#undef CLONE_CHILD
+    return copy;
+
+fail:
+#undef CLONE_CHILD
+    ash_ast_destroy(copy);
+    return NULL;
+}
+
 void ash_redirection_destroy(struct ash_redirection* redirection) {
     if (redirection == NULL) {
         return;
@@ -151,6 +407,10 @@ void ash_ast_destroy(struct ash_ast* node) {
                 );
             }
             free(node->value.case_command.clauses);
+            break;
+        case ASH_AST_FUNCTION:
+            free(node->value.function.name);
+            ash_ast_destroy(node->value.function.body);
             break;
     }
 
