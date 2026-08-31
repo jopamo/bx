@@ -358,6 +358,7 @@ bx_lib_sources = [
   'src/lib/sandbox_explain.c',
   'src/lib/signal_names.c',
   'src/lib/size_parse.c',
+  'src/lib/text_buffer.c',
   'src/lib/stat_ops.c',
   'src/lib/statx_compat.c',
   'src/lib/system/syslog_config.c',
@@ -576,6 +577,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/ash.c',
   'src/applets/shell/ash/ast.c',
   'src/applets/shell/ash/command_resolution.c',
+  'src/applets/shell/ash/expansion.c',
   'src/applets/shell/ash/input.c',
   'src/applets/shell/ash/lexer.c',
   'src/applets/shell/ash/parser.c',
@@ -1518,7 +1520,7 @@ bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/b
 stdbuf_preload = shared_module(
   'stdbuf',
   [
-    'src/lib/stdio_buffer_preload.c',
+  'src/lib/stdio_buffer_preload.c',
     'src/lib/size_parse.c',
   ],
   include_directories : bx_include_dirs,
