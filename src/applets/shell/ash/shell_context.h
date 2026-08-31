@@ -13,6 +13,14 @@ struct ash_input_source;
 struct ash_job;
 struct ash_trap_table;
 struct ash_var;
+struct ash_shell;
+
+typedef bool (*ash_command_substitution_fn)(
+    struct ash_shell* shell,
+    const char* command,
+    size_t length,
+    char** output
+);
 
 enum ash_shell_option {
     ASH_SHELL_OPTION_ALLEXPORT = 1u << 0,
@@ -67,6 +75,7 @@ struct ash_shell {
     bool login_shell;
     bool should_exit;
     int requested_exit_status;
+    ash_command_substitution_fn command_substitution;
 };
 
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size);

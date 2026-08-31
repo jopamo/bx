@@ -303,6 +303,38 @@ bool ash_expand_word(
         if (part->kind == ASH_WORD_PARAMETER) {
             expanded = ash_expand_parameter(shell, part->text, &output);
         }
+        else if (part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
+                 part->kind == ASH_WORD_BACKQUOTE) {
+            size_t prefix = part->kind == ASH_WORD_COMMAND_SUBSTITUTION ?
+                2u : 1u;
+            size_t suffix = 1u;
+            if (part->length < prefix + suffix ||
+                shell->command_substitution == NULL) {
+                fprintf(
+                    stderr,
+                    "%s: command substitution is unavailable\n",
+                    shell->progname
+                );
+                expanded = false;
+            }
+            else {
+                char* substitution = NULL;
+                expanded = shell->command_substitution(
+                    shell,
+                    part->text + prefix,
+                    part->length - prefix - suffix,
+                    &substitution
+                );
+                if (expanded) {
+                    expanded = ash_expansion_append_text(
+                        shell,
+                        &output,
+                        substitution
+                    );
+                }
+                free(substitution);
+            }
+        }
         else if (part->kind == ASH_WORD_TEXT &&
                  part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
             expanded = ash_append_dollar_single(
