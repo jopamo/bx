@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "applets/shell/ash/command.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
@@ -23,6 +24,7 @@
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
+#include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
 #include "lib/cli_common.h"
@@ -30,52 +32,6 @@
 #include "lib/text_buffer.h"
 
 extern char** environ;
-
-enum ash_redir_kind {
-    ASH_REDIR_IN = 0,
-    ASH_REDIR_OUT,
-    ASH_REDIR_CLOBBER,
-    ASH_REDIR_APPEND,
-    ASH_REDIR_READWRITE,
-    ASH_REDIR_DUP,
-};
-
-struct ash_redir {
-    int fd;
-    enum ash_redir_kind kind;
-    char* target;
-};
-
-struct ash_command {
-    char** words;
-    size_t word_count;
-    size_t word_cap;
-
-    char** assignments;
-    size_t assignment_count;
-    size_t assignment_cap;
-
-    struct ash_redir* redirs;
-    size_t redir_count;
-    size_t redir_cap;
-};
-
-struct ash_pipeline {
-    struct ash_command* commands;
-    size_t count;
-    size_t cap;
-};
-
-struct ash_saved_fd {
-    int target_fd;
-    int saved_fd;
-};
-
-struct ash_saved_fds {
-    struct ash_saved_fd* items;
-    size_t len;
-    size_t cap;
-};
 
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
 
@@ -284,224 +240,6 @@ static void ash_pipeline_destroy(struct ash_pipeline* pipeline) {
     pipeline->commands = NULL;
     pipeline->count = 0;
     pipeline->cap = 0;
-}
-
-static void ash_saved_fds_init(struct ash_saved_fds* saved) {
-    saved->items = NULL;
-    saved->len = 0;
-    saved->cap = 0;
-}
-
-static bool ash_saved_fds_has_target(const struct ash_saved_fds* saved, int fd) {
-    for (size_t i = 0; i < saved->len; i++) {
-        if (saved->items[i].target_fd == fd) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool ash_saved_fds_push(const struct ash_shell* shell, struct ash_saved_fds* saved, int target_fd, int saved_fd) {
-    if (saved->len == saved->cap) {
-        size_t new_cap = (saved->cap == 0) ? 4u : saved->cap * 2u;
-        if (saved->cap != 0u && saved->cap > SIZE_MAX / 2u) {
-            return ash_diag_oom(shell);
-        }
-        struct ash_saved_fd* grown = ash_realloc_array(shell, saved->items, new_cap, sizeof(*saved->items));
-        if (grown == NULL) {
-            return false;
-        }
-        saved->items = grown;
-        saved->cap = new_cap;
-    }
-
-    saved->items[saved->len].target_fd = target_fd;
-    saved->items[saved->len].saved_fd = saved_fd;
-    saved->len++;
-    return true;
-}
-
-static void ash_saved_fds_restore(const struct ash_shell* shell, struct ash_saved_fds* saved) {
-    for (size_t idx = saved->len; idx > 0; idx--) {
-        struct ash_saved_fd item = saved->items[idx - 1u];
-        if (item.saved_fd >= 0) {
-            if (bx_fd_dup2_exact(item.saved_fd, item.target_fd) < 0) {
-                ash_exec_error(shell, "dup2", errno);
-            }
-            close(item.saved_fd);
-        }
-        else {
-            close(item.target_fd);
-        }
-    }
-
-    free(saved->items);
-    saved->items = NULL;
-    saved->len = 0;
-    saved->cap = 0;
-}
-
-static void ash_saved_fds_destroy(struct ash_saved_fds* saved) {
-    for (size_t i = 0; i < saved->len; i++) {
-        if (saved->items[i].saved_fd >= 0) {
-            close(saved->items[i].saved_fd);
-        }
-    }
-    free(saved->items);
-    saved->items = NULL;
-    saved->len = 0;
-    saved->cap = 0;
-}
-
-static bool ash_parse_lexed_io_number(
-    const struct ash_shell* shell,
-    const char* text,
-    int* fd_out
-) {
-    char* end = NULL;
-    errno = 0;
-    long value = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value < 0 || value > INT_MAX) {
-        ash_diag(shell, "invalid redirection fd");
-        return false;
-    }
-    *fd_out = (int)value;
-    return true;
-}
-
-static int ash_open_redirection(
-    const struct ash_shell* shell,
-    const struct ash_redir* redir
-) {
-    if (redir->kind == ASH_REDIR_OUT &&
-        (shell->options & ASH_SHELL_OPTION_NOCLOBBER) != 0u) {
-        int fd = bx_fd_open_cloexec(
-            redir->target,
-            O_WRONLY | O_CREAT | O_EXCL,
-            0666
-        );
-        if (fd >= 0 || errno != EEXIST) {
-            return fd;
-        }
-
-        fd = bx_fd_open_cloexec(redir->target, O_WRONLY, 0);
-        if (fd < 0) {
-            return -1;
-        }
-        struct stat status;
-        if (fstat(fd, &status) != 0) {
-            int error = errno;
-            close(fd);
-            errno = error;
-            return -1;
-        }
-        if (S_ISREG(status.st_mode)) {
-            close(fd);
-            errno = EEXIST;
-            return -1;
-        }
-        return fd;
-    }
-
-    int flags;
-    switch (redir->kind) {
-        case ASH_REDIR_IN:
-            flags = O_RDONLY;
-            break;
-        case ASH_REDIR_OUT:
-        case ASH_REDIR_CLOBBER:
-            flags = O_WRONLY | O_CREAT | O_TRUNC;
-            break;
-        case ASH_REDIR_APPEND:
-            flags = O_WRONLY | O_CREAT | O_APPEND;
-            break;
-        case ASH_REDIR_READWRITE:
-            flags = O_RDWR | O_CREAT;
-            break;
-        case ASH_REDIR_DUP:
-            errno = EINVAL;
-            return -1;
-    }
-    return bx_fd_open_cloexec(redir->target, flags, 0666);
-}
-
-static int ash_apply_redirections(const struct ash_shell* shell, const struct ash_command* command, struct ash_saved_fds* saved) {
-    int minimum_saved_fd = 10;
-    for (size_t i = 0u; i < command->redir_count; i++) {
-        if (command->redirs[i].fd >= minimum_saved_fd &&
-            command->redirs[i].fd < INT_MAX) {
-            minimum_saved_fd = command->redirs[i].fd + 1;
-        }
-    }
-    for (size_t i = 0; i < command->redir_count; i++) {
-        const struct ash_redir* redir = &command->redirs[i];
-
-        if (saved != NULL && !ash_saved_fds_has_target(saved, redir->fd)) {
-            int dup_fd = bx_fd_dup_cloexec_min(
-                redir->fd,
-                minimum_saved_fd
-            );
-            if (dup_fd < 0 && errno != EBADF) {
-                ash_exec_error(shell, "dup", errno);
-                return 1;
-            }
-            if (!ash_saved_fds_push(shell, saved, redir->fd, dup_fd)) {
-                if (dup_fd >= 0) {
-                    close(dup_fd);
-                }
-                return 1;
-            }
-        }
-
-        if (redir->kind == ASH_REDIR_DUP) {
-            if (strcmp(redir->target, "-") == 0) {
-                if (close(redir->fd) != 0 && errno != EBADF) {
-                    ash_exec_error(shell, "close", errno);
-                    return 1;
-                }
-                continue;
-            }
-            int source_fd;
-            if (!ash_parse_lexed_io_number(
-                    shell,
-                    redir->target,
-                    &source_fd
-                )) {
-                return 1;
-            }
-            if (bx_fd_dup2_exact(source_fd, redir->fd) < 0) {
-                ash_exec_error(shell, redir->target, errno);
-                return 1;
-            }
-            continue;
-        }
-
-        int fd = ash_open_redirection(shell, redir);
-        if (fd < 0) {
-            ash_exec_error(shell, redir->target, errno);
-            return 1;
-        }
-
-        if (fd == redir->fd) {
-            if (bx_fd_set_cloexec(fd, false) != 0) {
-                int err = errno;
-                close(fd);
-                ash_exec_error(shell, "fcntl", err);
-                return 1;
-            }
-        }
-        else {
-            if (bx_fd_dup2_exact(fd, redir->fd) < 0) {
-                int err = errno;
-                close(fd);
-                ash_exec_error(shell, "dup2", err);
-                return 1;
-            }
-            close(fd);
-        }
-    }
-
-    return 0;
 }
 
 static int ash_wait_status_to_exit_status(int wait_status) {
@@ -1530,7 +1268,7 @@ static bool ash_ast_add_redirection(
 ) {
     int fd;
     if (redirection->io_number != NULL) {
-        if (!ash_parse_lexed_io_number(shell, redirection->io_number, &fd)) {
+        if (!ash_redirection_parse_fd(shell, redirection->io_number, &fd)) {
             return false;
         }
     }
