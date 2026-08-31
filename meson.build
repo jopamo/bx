@@ -370,6 +370,8 @@ bx_lib_sources = [
 ]
 
 bx_crypto_sources = [
+  'src/crypto/crc32b.c',
+  'src/crypto/crc32b_arm64.c',
   'src/crypto/digest_util.c',
   'src/crypto/digestsum.c',
   'src/crypto/md5.c',

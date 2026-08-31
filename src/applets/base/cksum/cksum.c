@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "crypto/crc32b.h"
 #include "crypto/digest_util.h"
 #include "crypto/md5.h"
 #include "crypto/sha1.h"
@@ -109,10 +110,6 @@ struct cksum_crc_state {
     uint32_t crc;
 };
 
-struct cksum_crc32b_state {
-    uint32_t crc;
-};
-
 struct cksum_sysv_state {
     uint32_t sum;
 };
@@ -149,9 +146,6 @@ static bool cksum_compute_result(FILE* stream, enum cksum_algorithm algorithm, s
 
 static uint32_t cksum_crc_table[256];
 static bool cksum_crc_table_ready;
-
-static uint32_t cksum_crc32b_table[256];
-static bool cksum_crc32b_table_ready;
 
 static const char cksum_base64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -409,27 +403,6 @@ static void cksum_crc_init_table(void) {
     cksum_crc_table_ready = true;
 }
 
-static void cksum_crc32b_init_table(void) {
-    if (cksum_crc32b_table_ready) {
-        return;
-    }
-
-    for (uint32_t i = 0; i < 256; i++) {
-        uint32_t crc = i;
-        for (int bit = 0; bit < 8; bit++) {
-            if ((crc & 1u) != 0u) {
-                crc = (crc >> 1) ^ 0xEDB88320u;
-            }
-            else {
-                crc >>= 1;
-            }
-        }
-        cksum_crc32b_table[i] = crc;
-    }
-
-    cksum_crc32b_table_ready = true;
-}
-
 static bool cksum_read_stream(FILE* stream, void* state, cksum_update_fn update_fn, uintmax_t* out_size) {
     uint8_t buffer[32768];
     uintmax_t total_size = 0;
@@ -482,18 +455,7 @@ static uint32_t cksum_crc_finalize(uint32_t crc, uintmax_t size) {
 }
 
 static void cksum_crc32b_update(void* opaque, const uint8_t* data, size_t len) {
-    struct cksum_crc32b_state* state = (struct cksum_crc32b_state*)opaque;
-    uint32_t crc = state->crc;
-
-    for (size_t i = 0; i < len; i++) {
-        crc = cksum_crc32b_table[(crc ^ data[i]) & 0xffu] ^ (crc >> 8);
-    }
-
-    state->crc = crc;
-}
-
-static uint32_t cksum_crc32b_finalize(uint32_t crc) {
-    return crc ^ UINT32_MAX;
+    bx_crc32b_update((struct bx_crc32b_ctx*)opaque, data, len);
 }
 
 static void cksum_sysv_update(void* opaque, const uint8_t* data, size_t len) {
@@ -1419,14 +1381,12 @@ static bool cksum_compute_result(FILE* stream, enum cksum_algorithm algorithm, s
             return true;
         }
         case CKSUM_ALGORITHM_CRC32B: {
-            cksum_crc32b_init_table();
-            struct cksum_crc32b_state state = {
-                .crc = UINT32_MAX,
-            };
+            struct bx_crc32b_ctx state;
+            bx_crc32b_init(&state);
             if (!cksum_read_stream(stream, &state, cksum_crc32b_update, &out_result->size)) {
                 return false;
             }
-            out_result->value = cksum_crc32b_finalize(state.crc);
+            out_result->value = bx_crc32b_final(&state);
             return true;
         }
         case CKSUM_ALGORITHM_SYSV: {
