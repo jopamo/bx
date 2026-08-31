@@ -16,6 +16,7 @@
 
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
+#include "applets/shell/ash/input.h"
 #include "applets/shell/ash/shell_context.h"
 #include "bx/diag.h"
 #include "lib/cli_common.h"
@@ -2200,7 +2201,7 @@ static void ash_print_prompt(struct ash_shell* shell) {
     fflush(stdout);
 }
 
-static int ash_execute_stream(struct ash_shell* shell, FILE* stream, bool prompt) {
+static int ash_execute_input(struct ash_shell* shell, bool prompt) {
     char* line = NULL;
     size_t cap = 0;
     int status = shell->last_status;
@@ -2211,10 +2212,22 @@ static int ash_execute_stream(struct ash_shell* shell, FILE* stream, bool prompt
         }
 
         errno = 0;
-        ssize_t nread = getline(&line, &cap, stream);
+        ssize_t nread = ash_input_read_line(shell, &line, &cap);
         if (nread < 0) {
-            if (ferror(stream)) {
-                ash_exec_error(shell, "getline", errno);
+            bool read_error = false;
+            if (shell->input_stack != NULL &&
+                shell->input_stack->kind == ASH_INPUT_FILE) {
+                read_error = ferror(shell->input_stack->source.file.stream);
+            }
+            else {
+                read_error = errno != 0;
+            }
+            if (read_error) {
+                ash_exec_error(
+                    shell,
+                    "getline",
+                    (errno != 0) ? errno : EIO
+                );
                 status = 1;
             }
             break;
@@ -2400,7 +2413,14 @@ int bx_ash_main(int argc, char** argv) {
 
     int status = 0;
     if (command_string != NULL) {
-        status = ash_execute_buffer(&shell, command_string, NULL);
+        if (!ash_input_push_string(&shell, "-c", command_string)) {
+            ash_diag_oom(&shell);
+            ash_vars_destroy(&shell);
+            ash_shell_context_release_owned(&shell);
+            return 1;
+        }
+        status = ash_execute_input(&shell, false);
+        ash_input_pop(&shell);
     }
     else if (script_path != NULL) {
         FILE* script = fopen(script_path, "r");
@@ -2411,11 +2431,28 @@ int bx_ash_main(int argc, char** argv) {
             return 1;
         }
 
-        status = ash_execute_stream(&shell, script, shell.interactive && isatty(fileno(script)));
-        fclose(script);
+        if (!ash_input_push_file(&shell, script_path, script, true)) {
+            ash_diag_oom(&shell);
+            fclose(script);
+            ash_vars_destroy(&shell);
+            ash_shell_context_release_owned(&shell);
+            return 1;
+        }
+        status = ash_execute_input(
+            &shell,
+            shell.interactive && ash_input_source_is_terminal(&shell)
+        );
+        ash_input_pop(&shell);
     }
     else {
-        status = ash_execute_stream(&shell, stdin, shell.interactive);
+        if (!ash_input_push_file(&shell, "<stdin>", stdin, false)) {
+            ash_diag_oom(&shell);
+            ash_vars_destroy(&shell);
+            ash_shell_context_release_owned(&shell);
+            return 1;
+        }
+        status = ash_execute_input(&shell, shell.interactive);
+        ash_input_pop(&shell);
     }
 
     if (shell.should_exit) {
