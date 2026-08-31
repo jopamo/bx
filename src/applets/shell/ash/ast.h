@@ -17,6 +17,7 @@ enum ash_ast_kind {
     ASH_AST_IF,
     ASH_AST_WHILE,
     ASH_AST_UNTIL,
+    ASH_AST_FOR,
 };
 
 enum ash_simple_item_kind {
@@ -101,6 +102,14 @@ struct ash_ast {
             struct ash_ast* condition;
             struct ash_ast* body;
         } loop;
+        struct {
+            char* name;
+            struct ash_word* words;
+            size_t word_count;
+            size_t word_capacity;
+            bool explicit_words;
+            struct ash_ast* body;
+        } for_loop;
     } value;
 };
 
