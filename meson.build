@@ -374,6 +374,7 @@ bx_crypto_sources = [
   'src/crypto/md5.c',
   'src/crypto/sha1.c',
   'src/crypto/sha256.c',
+  'src/crypto/sha256_x86.c',
   'src/crypto/sha512.c',
 ]
 
