@@ -35,6 +35,7 @@ extern char** environ;
 enum ash_redir_kind {
     ASH_REDIR_IN = 0,
     ASH_REDIR_OUT,
+    ASH_REDIR_CLOBBER,
     ASH_REDIR_APPEND,
     ASH_REDIR_READWRITE,
     ASH_REDIR_DUP,
@@ -391,6 +392,62 @@ static bool ash_parse_lexed_io_number(
     return true;
 }
 
+static int ash_open_redirection(
+    const struct ash_shell* shell,
+    const struct ash_redir* redir
+) {
+    if (redir->kind == ASH_REDIR_OUT &&
+        (shell->options & ASH_SHELL_OPTION_NOCLOBBER) != 0u) {
+        int fd = bx_fd_open_cloexec(
+            redir->target,
+            O_WRONLY | O_CREAT | O_EXCL,
+            0666
+        );
+        if (fd >= 0 || errno != EEXIST) {
+            return fd;
+        }
+
+        fd = bx_fd_open_cloexec(redir->target, O_WRONLY, 0);
+        if (fd < 0) {
+            return -1;
+        }
+        struct stat status;
+        if (fstat(fd, &status) != 0) {
+            int error = errno;
+            close(fd);
+            errno = error;
+            return -1;
+        }
+        if (S_ISREG(status.st_mode)) {
+            close(fd);
+            errno = EEXIST;
+            return -1;
+        }
+        return fd;
+    }
+
+    int flags;
+    switch (redir->kind) {
+        case ASH_REDIR_IN:
+            flags = O_RDONLY;
+            break;
+        case ASH_REDIR_OUT:
+        case ASH_REDIR_CLOBBER:
+            flags = O_WRONLY | O_CREAT | O_TRUNC;
+            break;
+        case ASH_REDIR_APPEND:
+            flags = O_WRONLY | O_CREAT | O_APPEND;
+            break;
+        case ASH_REDIR_READWRITE:
+            flags = O_RDWR | O_CREAT;
+            break;
+        case ASH_REDIR_DUP:
+            errno = EINVAL;
+            return -1;
+    }
+    return bx_fd_open_cloexec(redir->target, flags, 0666);
+}
+
 static int ash_apply_redirections(const struct ash_shell* shell, const struct ash_command* command, struct ash_saved_fds* saved) {
     int minimum_saved_fd = 10;
     for (size_t i = 0u; i < command->redir_count; i++) {
@@ -442,26 +499,7 @@ static int ash_apply_redirections(const struct ash_shell* shell, const struct as
             continue;
         }
 
-        int open_flags = 0;
-        mode_t mode = 0666;
-        switch (redir->kind) {
-            case ASH_REDIR_IN:
-                open_flags = O_RDONLY;
-                break;
-            case ASH_REDIR_OUT:
-                open_flags = O_WRONLY | O_CREAT | O_TRUNC;
-                break;
-            case ASH_REDIR_APPEND:
-                open_flags = O_WRONLY | O_CREAT | O_APPEND;
-                break;
-            case ASH_REDIR_READWRITE:
-                open_flags = O_RDWR | O_CREAT;
-                break;
-            case ASH_REDIR_DUP:
-                break;
-        }
-
-        int fd = bx_fd_open_cloexec(redir->target, open_flags, mode);
+        int fd = ash_open_redirection(shell, redir);
         if (fd < 0) {
             ash_exec_error(shell, redir->target, errno);
             return 1;
@@ -918,6 +956,15 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
     for (size_t i = 1; i < command->word_count; i++) {
         const char* arg = command->words[i];
         if (strcmp(arg, "--") == 0) {
+            continue;
+        }
+        if ((strcmp(arg, "-C") == 0 || strcmp(arg, "+C") == 0)) {
+            if (arg[0] == '-') {
+                shell->options |= ASH_SHELL_OPTION_NOCLOBBER;
+            }
+            else {
+                shell->options &= ~ASH_SHELL_OPTION_NOCLOBBER;
+            }
             continue;
         }
 
@@ -1522,8 +1569,10 @@ static bool ash_ast_add_redirection(
             kind = ASH_REDIR_IN;
             break;
         case ASH_TOKEN_GREAT:
-        case ASH_TOKEN_CLOBBER:
             kind = ASH_REDIR_OUT;
+            break;
+        case ASH_TOKEN_CLOBBER:
+            kind = ASH_REDIR_CLOBBER;
             break;
         case ASH_TOKEN_DGREAT:
             kind = ASH_REDIR_APPEND;
@@ -2323,11 +2372,12 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
 }
 
 static void ash_print_help(FILE* stream, const char* progname) {
-    fprintf(stream, "Usage: %s [-i] [-s] [-c command] [script [arg ...]]\n", progname);
+    fprintf(stream, "Usage: %s [-Cis] [-c command] [script [arg ...]]\n", progname);
     fprintf(stream, "\n");
     fprintf(stream, "Minimal rescue shell applet.\n");
     fprintf(stream, "\n");
     fprintf(stream, "  -c command   run command string\n");
+    fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     fprintf(stream, "  --help       display this help and exit\n");
@@ -2345,6 +2395,7 @@ int bx_ash_main(int argc, char** argv) {
 
     bool force_interactive = false;
     bool read_stdin = false;
+    uint32_t initial_options = 0u;
     const char* command_string = NULL;
 
     int index = 1;
@@ -2381,6 +2432,11 @@ int bx_ash_main(int argc, char** argv) {
 
             if (*opt == 's') {
                 read_stdin = true;
+                opt++;
+                continue;
+            }
+            if (*opt == 'C') {
+                initial_options |= ASH_SHELL_OPTION_NOCLOBBER;
                 opt++;
                 continue;
             }
@@ -2448,7 +2504,8 @@ int bx_ash_main(int argc, char** argv) {
             .previous = NULL,
         },
         .vars = NULL,
-        .options = read_stdin ? ASH_SHELL_OPTION_STDIN : 0u,
+        .options = initial_options |
+            (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
         .aliases = NULL,
         .functions = NULL,
         .traps = NULL,
