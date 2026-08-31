@@ -16,6 +16,7 @@
 
 #include "applets.h"
 #include "applets/shell/ash/command_resolution.h"
+#include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/parser.h"
@@ -24,6 +25,7 @@
 #include "bx/diag.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
+#include "lib/text_buffer.h"
 
 extern char** environ;
 
@@ -70,12 +72,6 @@ struct ash_saved_fds {
     size_t cap;
 };
 
-struct ash_string {
-    char* data;
-    size_t len;
-    size_t cap;
-};
-
 static const char* ash_basename(const char* path) {
     return bx_cli_progname(path, "ash");
 }
@@ -108,12 +104,6 @@ static void ash_exec_error(const struct ash_shell* shell, const char* path, int 
 
 static void ash_exec_not_found(const struct ash_shell* shell, const char* path) {
     fprintf(stderr, "%s: %s: not found\n", shell->progname, path);
-}
-
-static void ash_string_init(struct ash_string* string) {
-    string->data = NULL;
-    string->len = 0;
-    string->cap = 0;
 }
 
 static void* ash_malloc_bytes(const struct ash_shell* shell, size_t size) {
@@ -165,82 +155,6 @@ static char* ash_slice_dup(const struct ash_shell* shell, const char* text, size
 
 static char* ash_strdup_text(const struct ash_shell* shell, const char* text) {
     return ash_slice_dup(shell, text, strlen(text));
-}
-
-static bool ash_string_reserve(const struct ash_shell* shell, struct ash_string* string, size_t needed) {
-    if (string->cap >= needed) {
-        return true;
-    }
-
-    size_t new_cap = (string->cap == 0) ? 32u : string->cap;
-    while (new_cap < needed) {
-        if (new_cap > SIZE_MAX / 2u) {
-            new_cap = needed;
-            break;
-        }
-        new_cap *= 2u;
-    }
-
-    char* grown = ash_realloc_array(shell, string->data, new_cap, sizeof(*string->data));
-    if (grown == NULL) {
-        return false;
-    }
-
-    string->data = grown;
-    string->cap = new_cap;
-    return true;
-}
-
-static bool ash_string_append_char(const struct ash_shell* shell, struct ash_string* string, char ch) {
-    if (string->len > SIZE_MAX - 2u || !ash_string_reserve(shell, string, string->len + 2u)) {
-        return false;
-    }
-    string->data[string->len++] = ch;
-    string->data[string->len] = '\0';
-    return true;
-}
-
-static bool ash_string_append_text(const struct ash_shell* shell, struct ash_string* string, const char* text) {
-    size_t len = strlen(text);
-    if (string->len > SIZE_MAX - len - 1u || !ash_string_reserve(shell, string, string->len + len + 1u)) {
-        return false;
-    }
-    memcpy(string->data + string->len, text, len + 1u);
-    string->len += len;
-    return true;
-}
-
-static bool ash_string_append_span(const struct ash_shell* shell, struct ash_string* string, const char* text, size_t len) {
-    if (len > (size_t)PTRDIFF_MAX || string->len > SIZE_MAX - len - 1u) {
-        return ash_diag_oom(shell);
-    }
-
-    if (!ash_string_reserve(shell, string, string->len + len + 1u)) {
-        return false;
-    }
-    memcpy(string->data + string->len, text, len);
-    string->len += len;
-    string->data[string->len] = '\0';
-    return true;
-}
-
-static char* ash_string_take(const struct ash_shell* shell, struct ash_string* string) {
-    if (string->data == NULL) {
-        return ash_strdup_text(shell, "");
-    }
-
-    char* out = string->data;
-    string->data = NULL;
-    string->len = 0;
-    string->cap = 0;
-    return out;
-}
-
-static void ash_string_destroy(struct ash_string* string) {
-    free(string->data);
-    string->data = NULL;
-    string->len = 0;
-    string->cap = 0;
 }
 
 static void ash_command_init(struct ash_command* command) {
@@ -454,304 +368,6 @@ static void ash_saved_fds_destroy(struct ash_saved_fds* saved) {
     saved->cap = 0;
 }
 
-static const char* ash_parameter_positional(const struct ash_shell* shell, long index) {
-    if (index == 0) {
-        return shell->positionals.argv0;
-    }
-
-    if (index < 0 || index > shell->positionals.count) {
-        return "";
-    }
-
-    return shell->positionals.values[index - 1];
-}
-
-static const char* ash_parameter_named(const struct ash_shell* shell, const char* name, size_t len) {
-    const char* value = ash_var_get_len(shell, name, len);
-    return (value != NULL) ? value : "";
-}
-
-static bool ash_append_special_parameter(struct ash_shell* shell, char parameter, struct ash_string* out) {
-    char numbuf[32];
-
-    switch (parameter) {
-        case '?':
-            snprintf(numbuf, sizeof(numbuf), "%d", shell->last_status);
-            return ash_string_append_text(shell, out, numbuf);
-        case '$':
-            snprintf(numbuf, sizeof(numbuf), "%ld", (long)shell->shell_pid);
-            return ash_string_append_text(shell, out, numbuf);
-        case '#':
-            snprintf(numbuf, sizeof(numbuf), "%d", shell->positionals.count);
-            return ash_string_append_text(shell, out, numbuf);
-        case '-': {
-            char letters[16];
-            ash_shell_option_letters(shell, letters, sizeof(letters));
-            return ash_string_append_text(shell, out, letters);
-        }
-        case '!':
-            if (shell->last_async_pid <= 0) {
-                return true;
-            }
-            snprintf(numbuf, sizeof(numbuf), "%ld", (long)shell->last_async_pid);
-            return ash_string_append_text(shell, out, numbuf);
-        case '0':
-            return ash_string_append_text(shell, out, ash_parameter_positional(shell, 0));
-        default:
-            return false;
-    }
-}
-
-static void ash_expand_parameter(struct ash_shell* shell, const char* input, size_t* pos, struct ash_string* out, bool* error_out) {
-    size_t i = *pos;
-    i++;
-
-    char ch = input[i];
-    if (ch == '\0') {
-        if (!ash_string_append_char(shell, out, '$')) {
-            *error_out = true;
-        }
-        *pos = i;
-        return;
-    }
-
-    if (strchr("?$#-!", ch) != NULL) {
-        if (!ash_append_special_parameter(shell, ch, out)) {
-            *error_out = true;
-            return;
-        }
-        *pos = i + 1u;
-        return;
-    }
-
-    if (ch == '{') {
-        i++;
-
-        if (strchr("?$#-!0", input[i]) != NULL) {
-            char special = input[i];
-            i++;
-            if (input[i] != '}') {
-                ash_diag(shell, "bad substitution");
-                *error_out = true;
-                return;
-            }
-            if (!ash_append_special_parameter(shell, special, out)) {
-                *error_out = true;
-                return;
-            }
-            i++;
-            *pos = i;
-            return;
-        }
-
-        size_t start = i;
-        while (ash_is_name_char((unsigned char)input[i])) {
-            i++;
-        }
-
-        if (i == start || input[i] != '}') {
-            ash_diag(shell, "bad substitution");
-            *error_out = true;
-            return;
-        }
-
-        if (!ash_string_append_text(shell, out, ash_parameter_named(shell, input + start, i - start))) {
-            *error_out = true;
-            return;
-        }
-        i++;
-        *pos = i;
-        return;
-    }
-
-    if (isdigit((unsigned char)ch)) {
-        long value = 0;
-        while (isdigit((unsigned char)input[i])) {
-            value = value * 10 + (long)(input[i] - '0');
-            i++;
-        }
-
-        if (!ash_string_append_text(shell, out, ash_parameter_positional(shell, value))) {
-            *error_out = true;
-            return;
-        }
-        *pos = i;
-        return;
-    }
-
-    if (!ash_is_name_start((unsigned char)ch)) {
-        if (!ash_string_append_char(shell, out, '$')) {
-            *error_out = true;
-        }
-        *pos = i;
-        return;
-    }
-
-    size_t start = i;
-    while (ash_is_name_char((unsigned char)input[i])) {
-        i++;
-    }
-
-    if (!ash_string_append_text(shell, out, ash_parameter_named(shell, input + start, i - start))) {
-        *error_out = true;
-        return;
-    }
-    *pos = i;
-}
-
-static int ash_hex_value(unsigned char ch) {
-    if (ch >= '0' && ch <= '9') {
-        return (int)(ch - '0');
-    }
-    if (ch >= 'a' && ch <= 'f') {
-        return (int)(ch - 'a') + 10;
-    }
-    if (ch >= 'A' && ch <= 'F') {
-        return (int)(ch - 'A') + 10;
-    }
-    return -1;
-}
-
-static bool ash_append_dollar_single(
-    struct ash_shell* shell,
-    struct ash_string* output,
-    const char* text,
-    size_t length
-) {
-    for (size_t i = 0u; i < length; i++) {
-        unsigned char ch = (unsigned char)text[i];
-        if (ch != '\\' || i + 1u == length) {
-            if (!ash_string_append_char(shell, output, (char)ch)) {
-                return false;
-            }
-            continue;
-        }
-
-        unsigned char escaped = (unsigned char)text[++i];
-        char decoded = '\0';
-        switch (escaped) {
-            case 'a': decoded = '\a'; break;
-            case 'b': decoded = '\b'; break;
-            case 'e':
-            case 'E': decoded = 0x1b; break;
-            case 'f': decoded = '\f'; break;
-            case 'n': decoded = '\n'; break;
-            case 'r': decoded = '\r'; break;
-            case 't': decoded = '\t'; break;
-            case 'v': decoded = '\v'; break;
-            case '\\': decoded = '\\'; break;
-            case '\'': decoded = '\''; break;
-            case '"': decoded = '"'; break;
-            case '\n': continue;
-            case 'c':
-                if (i + 1u < length) {
-                    decoded = (char)((unsigned char)text[++i] & 0x1fu);
-                }
-                else {
-                    decoded = 'c';
-                }
-                break;
-            case 'x': {
-                int value = 0;
-                size_t digits = 0u;
-                while (digits < 2u && i + 1u < length) {
-                    int digit = ash_hex_value((unsigned char)text[i + 1u]);
-                    if (digit < 0) {
-                        break;
-                    }
-                    value = value * 16 + digit;
-                    i++;
-                    digits++;
-                }
-                if (digits == 0u) {
-                    if (!ash_string_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = 'x';
-                }
-                else {
-                    decoded = (char)(unsigned char)value;
-                }
-                break;
-            }
-            default:
-                if (escaped >= '0' && escaped <= '7') {
-                    unsigned int value = (unsigned int)(escaped - '0');
-                    size_t digits = 1u;
-                    while (digits < 3u && i + 1u < length &&
-                           text[i + 1u] >= '0' && text[i + 1u] <= '7') {
-                        value = value * 8u + (unsigned int)(text[++i] - '0');
-                        digits++;
-                    }
-                    decoded = (char)(unsigned char)value;
-                }
-                else {
-                    if (!ash_string_append_char(shell, output, '\\')) {
-                        return false;
-                    }
-                    decoded = (char)escaped;
-                }
-                break;
-        }
-
-        if (!ash_string_append_char(shell, output, decoded)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool ash_expand_lexed_word(
-    struct ash_shell* shell,
-    const struct ash_word* word,
-    char** output_word
-) {
-    struct ash_string output;
-    ash_string_init(&output);
-
-    for (size_t i = 0u; i < word->count; i++) {
-        const struct ash_word_part* part = &word->parts[i];
-        if (part->kind == ASH_WORD_PARAMETER) {
-            size_t position = 0u;
-            bool expansion_error = false;
-            ash_expand_parameter(
-                shell,
-                part->text,
-                &position,
-                &output,
-                &expansion_error
-            );
-            if (expansion_error) {
-                ash_string_destroy(&output);
-                return false;
-            }
-            continue;
-        }
-
-        if (part->kind == ASH_WORD_TEXT &&
-            part->quote == ASH_QUOTE_DOLLAR_SINGLE) {
-            if (!ash_append_dollar_single(
-                    shell,
-                    &output,
-                    part->text,
-                    part->length
-                )) {
-                ash_string_destroy(&output);
-                return false;
-            }
-            continue;
-        }
-
-        if (!ash_string_append_span(shell, &output, part->text, part->length)) {
-            ash_string_destroy(&output);
-            return false;
-        }
-    }
-
-    *output_word = ash_string_take(shell, &output);
-    return *output_word != NULL;
-}
-
 static bool ash_parse_lexed_io_number(
     struct ash_shell* shell,
     const char* text,
@@ -856,30 +472,34 @@ static int ash_exec_external(struct ash_shell* shell, char** argv) {
         size_t dir_len = strcspn(segment, ":");
         bool has_colon = (segment[dir_len] == ':');
 
-        struct ash_string candidate;
-        ash_string_init(&candidate);
+        struct bx_text_buffer candidate;
+        bx_text_buffer_init(&candidate);
 
         if (dir_len == 0u) {
-            if (!ash_string_append_text(shell, &candidate, "./")) {
-                ash_string_destroy(&candidate);
+            if (!bx_text_buffer_append_text(&candidate, "./")) {
+                ash_diag_oom(shell);
+                bx_text_buffer_destroy(&candidate);
                 return 126;
             }
         }
         else {
-            if (!ash_string_append_span(shell, &candidate, segment, dir_len) ||
-                !ash_string_append_char(shell, &candidate, '/')) {
-                ash_string_destroy(&candidate);
+            if (!bx_text_buffer_append_span(&candidate, segment, dir_len) ||
+                !bx_text_buffer_append_char(&candidate, '/')) {
+                ash_diag_oom(shell);
+                bx_text_buffer_destroy(&candidate);
                 return 126;
             }
         }
-        if (!ash_string_append_text(shell, &candidate, command)) {
-            ash_string_destroy(&candidate);
+        if (!bx_text_buffer_append_text(&candidate, command)) {
+            ash_diag_oom(shell);
+            bx_text_buffer_destroy(&candidate);
             return 126;
         }
 
-        char* candidate_path = ash_string_take(shell, &candidate);
+        char* candidate_path = bx_text_buffer_take(&candidate);
         if (candidate_path == NULL) {
-            ash_string_destroy(&candidate);
+            ash_diag_oom(shell);
+            bx_text_buffer_destroy(&candidate);
             return 126;
         }
         execve(candidate_path, argv, environ);
@@ -1550,7 +1170,7 @@ static bool ash_ast_add_redirection(
     }
 
     char* target = NULL;
-    if (!ash_expand_lexed_word(shell, &redirection->target, &target)) {
+    if (!ash_expand_word(shell, &redirection->target, &target)) {
         return false;
     }
     bool added = ash_command_push_redir(shell, command, fd, kind, target);
@@ -1579,7 +1199,7 @@ static bool ash_ast_simple_to_command(
         }
 
         char* text = NULL;
-        if (!ash_expand_lexed_word(shell, &item->value.word, &text)) {
+        if (!ash_expand_word(shell, &item->value.word, &text)) {
             ash_command_destroy(command);
             return false;
         }
@@ -1849,7 +1469,7 @@ static int ash_execute_ast_for(
     for (size_t i = 0u; i < count && !shell->should_exit; i++) {
         char* value = NULL;
         if (node->value.for_loop.explicit_words) {
-            if (!ash_expand_lexed_word(
+            if (!ash_expand_word(
                     shell,
                     &node->value.for_loop.words[i],
                     &value
@@ -1977,8 +1597,8 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
     char* line = NULL;
     size_t cap = 0;
     int status = shell->last_status;
-    struct ash_string pending;
-    ash_string_init(&pending);
+    struct bx_text_buffer pending;
+    bx_text_buffer_init(&pending);
     bool continuation = false;
 
     while (!shell->should_exit) {
@@ -2005,7 +1625,7 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
                 );
                 status = 1;
             }
-            else if (pending.len != 0u) {
+            else if (pending.length != 0u) {
                 bool incomplete = false;
                 bool parser_error = false;
                 status = ash_execute_buffer(
@@ -2020,7 +1640,8 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
             break;
         }
 
-        if (!ash_string_append_span(shell, &pending, line, (size_t)nread)) {
+        if (!bx_text_buffer_append_span(&pending, line, (size_t)nread)) {
+            ash_diag_oom(shell);
             status = 2;
             break;
         }
@@ -2039,17 +1660,14 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
             continue;
         }
 
-        pending.len = 0u;
-        if (pending.data != NULL) {
-            pending.data[0] = '\0';
-        }
+        bx_text_buffer_clear(&pending);
         continuation = false;
         if (parser_error && !shell->interactive) {
             break;
         }
     }
 
-    ash_string_destroy(&pending);
+    bx_text_buffer_destroy(&pending);
     free(line);
     return status;
 }
