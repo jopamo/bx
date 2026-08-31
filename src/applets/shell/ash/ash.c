@@ -2061,6 +2061,37 @@ static int ash_execute_ast_list(
     return status;
 }
 
+static int ash_execute_ast_if(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int condition = ash_execute_ast(shell, node->value.conditional.condition);
+    if (condition == 0) {
+        return ash_execute_ast(shell, node->value.conditional.then_branch);
+    }
+    if (node->value.conditional.else_branch != NULL) {
+        return ash_execute_ast(shell, node->value.conditional.else_branch);
+    }
+    return 0;
+}
+
+static int ash_execute_ast_loop(
+    struct ash_shell* shell,
+    const struct ash_ast* node
+) {
+    int status = 0;
+    while (!shell->should_exit) {
+        int condition = ash_execute_ast(shell, node->value.loop.condition);
+        bool run = (node->kind == ASH_AST_WHILE) ?
+            condition == 0 : condition != 0;
+        if (!run) {
+            break;
+        }
+        status = ash_execute_ast(shell, node->value.loop.body);
+    }
+    return status;
+}
+
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     switch (node->kind) {
         case ASH_AST_SIMPLE:
@@ -2075,6 +2106,11 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
             return ash_execute_ast_group(shell, node, true);
         case ASH_AST_BRACE_GROUP:
             return ash_execute_ast_group(shell, node, false);
+        case ASH_AST_IF:
+            return ash_execute_ast_if(shell, node);
+        case ASH_AST_WHILE:
+        case ASH_AST_UNTIL:
+            return ash_execute_ast_loop(shell, node);
     }
     return 2;
 }

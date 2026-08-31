@@ -111,6 +111,16 @@ void ash_ast_destroy(struct ash_ast* node) {
         case ASH_AST_BRACE_GROUP:
             ash_ast_destroy(node->value.group.body);
             break;
+        case ASH_AST_IF:
+            ash_ast_destroy(node->value.conditional.condition);
+            ash_ast_destroy(node->value.conditional.then_branch);
+            ash_ast_destroy(node->value.conditional.else_branch);
+            break;
+        case ASH_AST_WHILE:
+        case ASH_AST_UNTIL:
+            ash_ast_destroy(node->value.loop.condition);
+            ash_ast_destroy(node->value.loop.body);
+            break;
     }
 
     ash_ast_destroy_redirections(
