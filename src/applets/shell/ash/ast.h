@@ -14,6 +14,9 @@ enum ash_ast_kind {
     ASH_AST_PIPELINE,
     ASH_AST_SUBSHELL,
     ASH_AST_BRACE_GROUP,
+    ASH_AST_IF,
+    ASH_AST_WHILE,
+    ASH_AST_UNTIL,
 };
 
 enum ash_simple_item_kind {
@@ -89,6 +92,15 @@ struct ash_ast {
         struct {
             struct ash_ast* body;
         } group;
+        struct {
+            struct ash_ast* condition;
+            struct ash_ast* then_branch;
+            struct ash_ast* else_branch;
+        } conditional;
+        struct {
+            struct ash_ast* condition;
+            struct ash_ast* body;
+        } loop;
     } value;
 };
 
