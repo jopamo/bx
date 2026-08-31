@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "crypto/sha1.h"
+#include "crypto/sha1_internal.h"
 
 static uint32_t bx_sha1_rotl32(uint32_t value, unsigned shift) {
     return (value << shift) | (value >> (32u - shift));
@@ -102,10 +103,21 @@ void bx_sha1_update(struct bx_sha1_ctx* ctx, const void* data_, size_t len) {
         }
     }
 
-    while (len >= BX_SHA1_BLOCK_SIZE) {
-        bx_sha1_transform(ctx, data);
-        data += BX_SHA1_BLOCK_SIZE;
-        len -= BX_SHA1_BLOCK_SIZE;
+    size_t block_count = len / BX_SHA1_BLOCK_SIZE;
+    if (block_count > 0u) {
+        if (!bx_sha1_arm64_transform_blocks(ctx, data, block_count)) {
+            size_t generic_blocks = block_count;
+            const uint8_t* generic_data = data;
+            while (generic_blocks > 0u) {
+                bx_sha1_transform(ctx, generic_data);
+                generic_data += BX_SHA1_BLOCK_SIZE;
+                generic_blocks--;
+            }
+        }
+
+        size_t consumed = block_count * BX_SHA1_BLOCK_SIZE;
+        data += consumed;
+        len -= consumed;
     }
 
     if (len > 0u) {
