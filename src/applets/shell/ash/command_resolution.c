@@ -28,6 +28,7 @@ struct ash_command_resolution ash_command_resolve_builtin(const char* name) {
         {"exec", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXEC},
         {"exit", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXIT},
         {"export", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_EXPORT},
+        {"return", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_RETURN},
         {"set", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_SET},
         {"unset", ASH_COMMAND_SPECIAL_BUILTIN, ASH_BUILTIN_UNSET},
         {"cd", ASH_COMMAND_REGULAR_BUILTIN, ASH_BUILTIN_CD},

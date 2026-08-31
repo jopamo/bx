@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "applets/shell/ash/input.h"
+#include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/shell_context.h"
 
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size) {
@@ -38,6 +39,7 @@ void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_
 
 void ash_shell_context_release_owned(struct ash_shell* shell) {
     ash_input_release_all(shell);
+    ash_functions_destroy(shell);
     free(shell->cwd.physical);
     free(shell->cwd.logical);
     free(shell->cwd.old_logical);

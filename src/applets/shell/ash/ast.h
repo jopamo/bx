@@ -19,6 +19,7 @@ enum ash_ast_kind {
     ASH_AST_UNTIL,
     ASH_AST_FOR,
     ASH_AST_CASE,
+    ASH_AST_FUNCTION,
 };
 
 enum ash_simple_item_kind {
@@ -124,6 +125,10 @@ struct ash_ast {
             size_t clause_count;
             size_t clause_capacity;
         } case_command;
+        struct {
+            char* name;
+            struct ash_ast* body;
+        } function;
     } value;
 };
 
@@ -131,6 +136,7 @@ struct ash_ast* ash_ast_create(
     enum ash_ast_kind kind,
     struct ash_source_location location
 );
+struct ash_ast* ash_ast_clone(const struct ash_ast* node);
 void ash_ast_destroy(struct ash_ast* node);
 
 int ash_ast_simple_add_word(

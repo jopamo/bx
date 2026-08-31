@@ -46,3 +46,33 @@ enum ash_loop_control ash_control_consume_loop(struct ash_shell* shell) {
     return pending == ASH_CONTROL_BREAK ?
         ASH_LOOP_CONTROL_BREAK : ASH_LOOP_CONTROL_CONTINUE;
 }
+
+void ash_control_enter_function(struct ash_shell* shell) {
+    shell->control.function_depth++;
+}
+
+void ash_control_leave_function(struct ash_shell* shell) {
+    if (shell->control.function_depth != 0u) {
+        shell->control.function_depth--;
+    }
+}
+
+bool ash_control_request_return(struct ash_shell* shell, int status) {
+    if (shell->control.function_depth == 0u) {
+        return false;
+    }
+    shell->control.pending = ASH_CONTROL_RETURN;
+    shell->control.remaining_levels = 0u;
+    shell->control.status = status;
+    return true;
+}
+
+bool ash_control_consume_return(struct ash_shell* shell, int* status) {
+    if (shell->control.pending != ASH_CONTROL_RETURN) {
+        return false;
+    }
+    *status = shell->control.status;
+    shell->control.pending = ASH_CONTROL_NONE;
+    shell->control.status = 0;
+    return true;
+}

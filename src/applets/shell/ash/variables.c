@@ -216,6 +216,95 @@ bool ash_var_export(struct ash_shell* shell, const char* name) {
     return ash_var_publish_exported(shell, var);
 }
 
+bool ash_var_save(
+    struct ash_shell* shell,
+    const char* name,
+    size_t length,
+    struct ash_var_saved* saved
+) {
+    *saved = (struct ash_var_saved){0};
+    saved->name = ash_vars_duplicate(shell, name, length);
+    if (saved->name == NULL) {
+        return false;
+    }
+    const struct ash_var* var = ash_var_find_len_const(shell, name, length);
+    if (var == NULL) {
+        return true;
+    }
+    saved->original = calloc(1u, sizeof(*saved->original));
+    if (saved->original == NULL) {
+        ash_vars_oom(shell);
+        free(saved->name);
+        *saved = (struct ash_var_saved){0};
+        return false;
+    }
+    saved->original->name = ash_vars_duplicate(
+        shell,
+        var->name,
+        strlen(var->name)
+    );
+    saved->original->value = ash_vars_duplicate(
+        shell,
+        var->value,
+        strlen(var->value)
+    );
+    if (saved->original->name == NULL ||
+        saved->original->value == NULL) {
+        free(saved->original->name);
+        free(saved->original->value);
+        free(saved->original);
+        free(saved->name);
+        *saved = (struct ash_var_saved){0};
+        return false;
+    }
+    saved->original->exported = var->exported;
+    saved->existed = true;
+    return true;
+}
+
+void ash_var_restore(struct ash_shell* shell, struct ash_var_saved* saved) {
+    if (saved->name == NULL) {
+        return;
+    }
+    if (!saved->existed) {
+        ash_var_unset(shell, saved->name);
+    }
+    else {
+        struct ash_var** link = &shell->vars;
+        while (*link != NULL) {
+            struct ash_var* current = *link;
+            if (strcmp(current->name, saved->name) == 0) {
+                *link = current->next;
+                free(current->name);
+                free(current->value);
+                free(current);
+                break;
+            }
+            link = &current->next;
+        }
+        saved->original->next = shell->vars;
+        shell->vars = saved->original;
+        if (saved->original->exported) {
+            (void)setenv(
+                saved->original->name,
+                saved->original->value,
+                1
+            );
+        }
+        else {
+            (void)unsetenv(saved->original->name);
+        }
+        saved->original = NULL;
+    }
+    free(saved->name);
+    if (saved->original != NULL) {
+        free(saved->original->name);
+        free(saved->original->value);
+        free(saved->original);
+    }
+    *saved = (struct ash_var_saved){0};
+}
+
 void ash_var_unset(struct ash_shell* shell, const char* name) {
     struct ash_var** link = &shell->vars;
     while (*link != NULL) {
