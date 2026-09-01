@@ -314,7 +314,12 @@ static bool ash_append_dollar_single(
             case '\\': decoded = '\\'; break;
             case '\'': decoded = '\''; break;
             case '"': decoded = '"'; break;
-            case '\n': continue;
+            case '\n':
+                if (!ash_expansion_append_char(shell, output, '\\')) {
+                    return false;
+                }
+                decoded = '\n';
+                break;
             case 'c':
                 decoded = i + 1u < length ?
                     (char)((unsigned char)text[++i] & 0x1fu) : 'c';
