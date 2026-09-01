@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "applets/shell/ash/expansion.h"
+#include "applets/shell/ash/pathname_expansion.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/syntax.h"
 #include "applets/shell/ash/variables.h"
@@ -18,6 +19,29 @@ static bool ash_expansion_oom(const struct ash_shell* shell) {
 
 static bool ash_expansion_bad_substitution(const struct ash_shell* shell) {
     fprintf(stderr, "%s: bad substitution\n", shell->progname);
+    return false;
+}
+
+static bool ash_pathname_expansion_enabled(
+    const struct ash_shell* shell
+) {
+    return (shell->options & ASH_SHELL_OPTION_NOGLOB) == 0u;
+}
+
+static bool ash_word_may_expand_pathname(
+    const struct ash_word* word
+) {
+    for (size_t i = 0u; i < word->count; i++) {
+        const struct ash_word_part* part = &word->parts[i];
+        if (ash_word_part_is_quoted(part)) {
+            continue;
+        }
+        if (ash_word_part_is_expansion(part) ||
+            (part->text != NULL &&
+             strpbrk(part->text, "*?[") != NULL)) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -402,14 +426,15 @@ static bool ash_expand_part(
     );
 }
 
-static bool ash_append_pattern_component(
+static bool ash_append_pattern_span(
     struct ash_shell* shell,
     struct bx_text_buffer* output,
-    const struct bx_text_buffer* component,
+    const char* text,
+    size_t length,
     bool quoted
 ) {
-    for (size_t i = 0u; i < component->length; i++) {
-        char character = component->data[i];
+    for (size_t i = 0u; i < length; i++) {
+        char character = text[i];
         if (quoted &&
             (character == '\\' || character == '*' ||
              character == '?' || character == '[' ||
@@ -424,6 +449,21 @@ static bool ash_append_pattern_component(
         }
     }
     return true;
+}
+
+static bool ash_append_pattern_component(
+    struct ash_shell* shell,
+    struct bx_text_buffer* output,
+    const struct bx_text_buffer* component,
+    bool quoted
+) {
+    return ash_append_pattern_span(
+        shell,
+        output,
+        component->data,
+        component->length,
+        quoted
+    );
 }
 
 bool ash_expand(
@@ -659,6 +699,190 @@ static bool ash_expanded_fields_append(
     return true;
 }
 
+static bool ash_expanded_fields_add_component(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    struct ash_expanded_fields* patterns,
+    const char* value,
+    bool quoted,
+    bool new_field
+) {
+    bool added = new_field ?
+        ash_expanded_fields_push(shell, fields, value) :
+        ash_expanded_fields_append(shell, fields, value);
+    if (!added || patterns == NULL) {
+        return added;
+    }
+
+    struct bx_text_buffer encoded;
+    bx_text_buffer_init(&encoded);
+    if (!ash_append_pattern_span(
+            shell,
+            &encoded,
+            value,
+            strlen(value),
+            quoted
+        )) {
+        bx_text_buffer_destroy(&encoded);
+        return false;
+    }
+    const char* pattern = encoded.data != NULL ? encoded.data : "";
+    added = new_field ?
+        ash_expanded_fields_push(shell, patterns, pattern) :
+        ash_expanded_fields_append(shell, patterns, pattern);
+    bx_text_buffer_destroy(&encoded);
+    return added;
+}
+
+static bool ash_expansion_pathname_failure(
+    struct ash_shell* shell,
+    const char* subject,
+    int error
+) {
+    if (error == ENOMEM) {
+        return ash_expansion_oom(shell);
+    }
+    fprintf(
+        stderr,
+        "%s: %s: pathname expansion failed: %s\n",
+        shell->progname,
+        subject,
+        strerror(error)
+    );
+    return false;
+}
+
+static bool ash_expand_pathnames(
+    struct ash_shell* shell,
+    struct ash_expanded_fields* fields,
+    const struct ash_expanded_fields* patterns
+) {
+    if (fields->count != patterns->count) {
+        errno = EINVAL;
+        return false;
+    }
+
+    struct ash_expanded_fields expanded;
+    ash_expanded_fields_init(&expanded);
+    for (size_t i = 0u; i < fields->count; i++) {
+        if (!ash_pathname_pattern_may_expand(patterns->values[i])) {
+            if (!ash_expanded_fields_push(
+                    shell,
+                    &expanded,
+                    fields->values[i]
+                )) {
+                ash_expanded_fields_destroy(&expanded);
+                return false;
+            }
+            continue;
+        }
+
+        struct ash_pathname_matches matches;
+        enum ash_pathname_expansion_result result = ash_pathname_expand(
+            patterns->values[i],
+            &matches
+        );
+        if (result == ASH_PATHNAME_EXPANSION_ERROR) {
+            int error = errno;
+            ash_expanded_fields_destroy(&expanded);
+            return ash_expansion_pathname_failure(
+                shell,
+                fields->values[i],
+                error
+            );
+        }
+        if (result == ASH_PATHNAME_EXPANSION_NO_MATCH) {
+            if (!ash_expanded_fields_push(
+                    shell,
+                    &expanded,
+                    fields->values[i]
+                )) {
+                ash_expanded_fields_destroy(&expanded);
+                return false;
+            }
+            continue;
+        }
+
+        for (size_t j = 0u; j < matches.count; j++) {
+            if (!ash_expanded_fields_push(
+                    shell,
+                    &expanded,
+                    matches.values[j]
+                )) {
+                ash_pathname_matches_destroy(&matches);
+                ash_expanded_fields_destroy(&expanded);
+                return false;
+            }
+        }
+        ash_pathname_matches_destroy(&matches);
+    }
+
+    ash_expanded_fields_destroy(fields);
+    *fields = expanded;
+    return true;
+}
+
+enum ash_redirection_expansion_result ash_expand_redirection(
+    struct ash_shell* shell,
+    const struct ash_word* word,
+    char** output
+) {
+    *output = NULL;
+    char* value = NULL;
+    if (!ash_expand_word(shell, word, &value)) {
+        return ASH_REDIRECTION_EXPANSION_ERROR;
+    }
+    if (!ash_pathname_expansion_enabled(shell) ||
+        !ash_word_may_expand_pathname(word)) {
+        *output = value;
+        return ASH_REDIRECTION_EXPANSION_OK;
+    }
+
+    char* pattern = NULL;
+    if (!ash_expand(
+            shell,
+            word,
+            ASH_EXPANSION_PATTERN,
+            &pattern
+        )) {
+        free(value);
+        return ASH_REDIRECTION_EXPANSION_ERROR;
+    }
+    if (!ash_pathname_pattern_may_expand(pattern)) {
+        free(pattern);
+        *output = value;
+        return ASH_REDIRECTION_EXPANSION_OK;
+    }
+
+    struct ash_pathname_matches matches;
+    enum ash_pathname_expansion_result result = ash_pathname_expand(
+        pattern,
+        &matches
+    );
+    free(pattern);
+    if (result == ASH_PATHNAME_EXPANSION_ERROR) {
+        int error = errno;
+        (void)ash_expansion_pathname_failure(shell, value, error);
+        free(value);
+        return ASH_REDIRECTION_EXPANSION_ERROR;
+    }
+    if (result == ASH_PATHNAME_EXPANSION_NO_MATCH) {
+        *output = value;
+        return ASH_REDIRECTION_EXPANSION_OK;
+    }
+    if (matches.count != 1u) {
+        fprintf(stderr, "%s: ambiguous redirect\n", shell->progname);
+        ash_pathname_matches_destroy(&matches);
+        free(value);
+        return ASH_REDIRECTION_EXPANSION_AMBIGUOUS;
+    }
+
+    free(value);
+    *output = matches.values[0];
+    free(matches.values);
+    return ASH_REDIRECTION_EXPANSION_OK;
+}
+
 static bool ash_parameter_is(
     const struct ash_word_part* part,
     char parameter
@@ -682,6 +906,13 @@ bool ash_expand_argument(
     struct ash_expanded_fields* fields
 ) {
     ash_expanded_fields_init(fields);
+    bool pathname_expansion =
+        ash_pathname_expansion_enabled(shell) &&
+        ash_word_may_expand_pathname(word);
+    struct ash_expanded_fields patterns;
+    ash_expanded_fields_init(&patterns);
+    struct ash_expanded_fields* active_patterns =
+        pathname_expansion ? &patterns : NULL;
     bool field_present = false;
     const struct ash_positional_frame* positionals =
         ash_scope_positionals(shell);
@@ -701,8 +932,7 @@ bool ash_expand_argument(
                             positionals->values[j],
                             &split
                         )) {
-                        ash_expanded_fields_destroy(fields);
-                        return false;
+                        goto fail;
                     }
                 }
                 else {
@@ -712,26 +942,21 @@ bool ash_expand_argument(
                             &split,
                             positionals->values[j]
                         )) {
-                        ash_expanded_fields_destroy(fields);
-                        return false;
+                        goto fail;
                     }
                 }
                 for (size_t k = 0u; k < split.count; k++) {
-                    bool added = first ?
-                        ash_expanded_fields_append(
-                            shell,
-                            fields,
-                            split.values[k]
-                        ) :
-                        ash_expanded_fields_push(
-                            shell,
-                            fields,
-                            split.values[k]
-                        );
+                    bool added = ash_expanded_fields_add_component(
+                        shell,
+                        fields,
+                        active_patterns,
+                        split.values[k],
+                        ash_word_part_is_quoted(part),
+                        !first
+                    );
                     if (!added) {
                         ash_expanded_fields_destroy(&split);
-                        ash_expanded_fields_destroy(fields);
-                        return false;
+                        goto fail;
                     }
                     first = false;
                     field_present = true;
@@ -745,8 +970,7 @@ bool ash_expand_argument(
         bx_text_buffer_init(&component);
         if (!ash_expand_part(shell, part, &component)) {
             bx_text_buffer_destroy(&component);
-            ash_expanded_fields_destroy(fields);
-            return false;
+            goto fail;
         }
 
         const char* component_text =
@@ -755,30 +979,33 @@ bool ash_expand_argument(
             struct ash_expanded_fields split;
             if (!ash_split_expansion(shell, component_text, &split)) {
                 bx_text_buffer_destroy(&component);
-                ash_expanded_fields_destroy(fields);
-                return false;
+                goto fail;
             }
             if (split.count != 0u) {
-                if (!ash_expanded_fields_append(
+                if (!ash_expanded_fields_add_component(
                         shell,
                         fields,
-                        split.values[0]
+                        active_patterns,
+                        split.values[0],
+                        false,
+                        false
                     )) {
                     ash_expanded_fields_destroy(&split);
                     bx_text_buffer_destroy(&component);
-                    ash_expanded_fields_destroy(fields);
-                    return false;
+                    goto fail;
                 }
                 for (size_t j = 1u; j < split.count; j++) {
-                    if (!ash_expanded_fields_push(
+                    if (!ash_expanded_fields_add_component(
                             shell,
                             fields,
-                            split.values[j]
+                            active_patterns,
+                            split.values[j],
+                            false,
+                            true
                         )) {
                         ash_expanded_fields_destroy(&split);
                         bx_text_buffer_destroy(&component);
-                        ash_expanded_fields_destroy(fields);
-                        return false;
+                        goto fail;
                     }
                 }
                 field_present = true;
@@ -786,14 +1013,16 @@ bool ash_expand_argument(
             ash_expanded_fields_destroy(&split);
         }
         else {
-            if (!ash_expanded_fields_append(
+            if (!ash_expanded_fields_add_component(
                     shell,
                     fields,
-                    component_text
+                    active_patterns,
+                    component_text,
+                    ash_word_part_is_quoted(part),
+                    false
                 )) {
                 bx_text_buffer_destroy(&component);
-                ash_expanded_fields_destroy(fields);
-                return false;
+                goto fail;
             }
             if (component.length != 0u ||
                 ash_word_part_is_quoted(part)) {
@@ -806,5 +1035,15 @@ bool ash_expand_argument(
     if (!field_present) {
         ash_expanded_fields_destroy(fields);
     }
+    else if (pathname_expansion &&
+        !ash_expand_pathnames(shell, fields, &patterns)) {
+        goto fail;
+    }
+    ash_expanded_fields_destroy(&patterns);
     return true;
+
+fail:
+    ash_expanded_fields_destroy(&patterns);
+    ash_expanded_fields_destroy(fields);
+    return false;
 }
