@@ -10,10 +10,12 @@ struct ash_shell;
 /*
  * A plan is prepared in the shell process and copied across fork. The
  * originating PID is the witness that run_child is no longer executing in
- * the parent shell.
+ * the parent shell. invocation_process makes each child copy single-use, so
+ * applet-global mutations can never cross direct invocations.
  */
 struct ash_applet_child_plan {
     pid_t origin_process;
+    pid_t invocation_process;
 };
 
 /*
@@ -40,7 +42,7 @@ int ash_applet_command_run_child(
     size_t argc,
     char** argv,
     const struct ash_command_resolution* resolution,
-    const struct ash_applet_child_plan* plan
+    struct ash_applet_child_plan* plan
 );
 
 #endif /* BX_APPLETS_SHELL_ASH_APPLET_COMMAND_H */

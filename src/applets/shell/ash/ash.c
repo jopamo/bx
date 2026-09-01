@@ -893,7 +893,7 @@ static int ash_execute_in_child(
     struct ash_shell* shell,
     const struct ash_command* command,
     const struct ash_command_resolution* resolution,
-    const struct ash_applet_child_plan* applet_plan
+    struct ash_applet_child_plan* applet_plan
 ) {
     if (!ash_command_resolution_valid(resolution)) {
         ash_exec_error(
