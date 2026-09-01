@@ -27,6 +27,12 @@ void ash_parser_init(
     const char* input,
     size_t length
 );
+void ash_parser_init_at(
+    struct ash_parser* parser,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length
+);
 void ash_parser_destroy(struct ash_parser* parser);
 enum ash_parser_result ash_parser_parse_program(
     struct ash_parser* parser,

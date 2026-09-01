@@ -33,6 +33,7 @@ static const char* ash_input_parser_diagnostic(const char* diagnostic) {
 
 static int ash_input_execute_buffer(
     struct ash_shell* shell,
+    struct ash_source_location origin,
     const char* input,
     size_t length,
     bool final_input,
@@ -44,7 +45,7 @@ static int ash_input_execute_buffer(
 
     struct ash_parser* parser = ash_shell_context_begin_parse(
         shell,
-        ash_input_source_name(shell),
+        origin,
         input,
         length
     );
@@ -59,6 +60,20 @@ static int ash_input_execute_buffer(
         parser,
         &program
     );
+    struct ash_source_location parser_position =
+        ash_lexer_current_location(&parser->lexer);
+    if (!ash_input_note_parse(
+            shell,
+            origin,
+            parser_position.offset
+        )) {
+        ash_diag(shell, "invalid parser source position");
+        ash_shell_context_end_parse(shell);
+        ash_ast_destroy(program);
+        *parser_error_out = true;
+        shell->last_status = 2;
+        return 2;
+    }
     if (result == ASH_PARSER_INCOMPLETE && !final_input) {
         *incomplete_out = true;
         ash_shell_context_end_parse(shell);
@@ -111,6 +126,7 @@ static int ash_input_execute_current(
     int status = 0;
     struct bx_text_buffer pending;
     bx_text_buffer_init(&pending);
+    struct ash_source_location pending_origin = {0};
     bool continuation = false;
 
     while (!shell->should_exit) {
@@ -135,6 +151,8 @@ static int ash_input_execute_current(
         }
 
         errno = 0;
+        struct ash_source_location line_origin =
+            ash_input_next_location(shell);
         ssize_t read_length = ash_input_read_line(
             shell,
             &line,
@@ -156,6 +174,7 @@ static int ash_input_execute_current(
                 bool parser_error = false;
                 status = ash_input_execute_buffer(
                     shell,
+                    pending_origin,
                     pending.data,
                     pending.length,
                     true,
@@ -167,6 +186,14 @@ static int ash_input_execute_current(
             break;
         }
 
+        if (!ash_source_location_valid(&line_origin)) {
+            ash_diag(shell, "input source position overflow");
+            status = 2;
+            break;
+        }
+        if (pending.length == 0u) {
+            pending_origin = line_origin;
+        }
         if (!bx_text_buffer_append_span(
                 &pending,
                 line,
@@ -181,6 +208,7 @@ static int ash_input_execute_current(
         bool parser_error = false;
         status = ash_input_execute_buffer(
             shell,
+            pending_origin,
             pending.data,
             pending.length,
             false,
@@ -193,6 +221,7 @@ static int ash_input_execute_current(
         }
 
         bx_text_buffer_clear(&pending);
+        pending_origin = (struct ash_source_location){0};
         continuation = false;
         if (parser_error &&
             !ash_shell_policy_has(

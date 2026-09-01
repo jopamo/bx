@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -11,12 +12,36 @@ struct ash_operator {
     enum ash_token_kind kind;
 };
 
-static struct ash_source_location ash_lexer_location(const struct ash_lexer* lexer) {
+struct ash_source_location ash_lexer_current_location(
+    const struct ash_lexer* lexer
+) {
     return (struct ash_source_location){
         .source = lexer->source_name,
+        .identity = lexer->source_identity,
         .line = lexer->line,
         .column = lexer->column,
-        .offset = lexer->offset,
+        .offset = lexer->source_offset + lexer->offset,
+    };
+}
+
+void ash_lexer_init_at(
+    struct ash_lexer* lexer,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length
+) {
+    assert(lexer != NULL);
+    assert(ash_source_location_valid(&origin));
+    assert(input != NULL);
+    assert(origin.offset <= SIZE_MAX - length);
+    *lexer = (struct ash_lexer){
+        .source_name = origin.source,
+        .source_identity = origin.identity,
+        .input = input,
+        .length = length,
+        .source_offset = origin.offset,
+        .line = origin.line,
+        .column = origin.column,
     };
 }
 
@@ -26,13 +51,16 @@ void ash_lexer_init(
     const char* input,
     size_t length
 ) {
-    *lexer = (struct ash_lexer){
-        .source_name = (source_name != NULL) ? source_name : "<input>",
-        .input = input,
-        .length = length,
-        .line = 1u,
-        .column = 1u,
-    };
+    ash_lexer_init_at(
+        lexer,
+        (struct ash_source_location){
+            .source = source_name != NULL ? source_name : "<input>",
+            .line = 1u,
+            .column = 1u,
+        },
+        input,
+        length
+    );
 }
 
 void ash_token_destroy(struct ash_token* token) {
@@ -166,7 +194,8 @@ static enum ash_lexer_result ash_lexer_scan_parameter(
     struct ash_word* word,
     enum ash_quote_kind quote
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     size_t start = lexer->offset;
     ash_lexer_advance_count(lexer, 2u);
     size_t depth = 1u;
@@ -245,7 +274,8 @@ static enum ash_lexer_result ash_lexer_scan_parenthesized(
     enum ash_quote_kind quote,
     bool arithmetic
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     size_t start = lexer->offset;
     ash_lexer_advance_count(lexer, arithmetic ? 3u : 2u);
     size_t depth = 1u;
@@ -340,7 +370,8 @@ static enum ash_lexer_result ash_lexer_scan_backquote(
     struct ash_word* word,
     enum ash_quote_kind quote
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     size_t start = lexer->offset;
     (void)ash_lexer_advance(lexer);
     while (!ash_lexer_at_end(lexer)) {
@@ -388,7 +419,8 @@ static enum ash_lexer_result ash_lexer_scan_dollar(
         return ash_lexer_scan_parenthesized(lexer, word, quote, false);
     }
 
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     size_t start = lexer->offset;
     (void)ash_lexer_advance(lexer);
     char ch = ash_lexer_peek(lexer, 0u);
@@ -432,7 +464,8 @@ static enum ash_lexer_result ash_lexer_scan_single_quote(
     struct ash_lexer* lexer,
     struct ash_word* word
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     (void)ash_lexer_advance(lexer);
     size_t start = lexer->offset;
     while (!ash_lexer_at_end(lexer) && ash_lexer_peek(lexer, 0u) != '\'') {
@@ -466,7 +499,8 @@ static enum ash_lexer_result ash_lexer_scan_dollar_single_quote(
     struct ash_lexer* lexer,
     struct ash_word* word
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     ash_lexer_advance_count(lexer, 2u);
     size_t start = lexer->offset;
     while (!ash_lexer_at_end(lexer)) {
@@ -506,7 +540,8 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
     struct ash_lexer* lexer,
     struct ash_word* word
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     (void)ash_lexer_advance(lexer);
     bool produced_part = false;
 
@@ -527,7 +562,8 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             return ASH_LEXER_TOKEN;
         }
         if (ch == '\\') {
-            struct ash_source_location escaped_location = ash_lexer_location(lexer);
+            struct ash_source_location escaped_location =
+                ash_lexer_current_location(lexer);
             char next = ash_lexer_peek(lexer, 1u);
             if (next == '\n') {
                 ash_lexer_advance_count(lexer, 2u);
@@ -579,7 +615,8 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             continue;
         }
 
-        struct ash_source_location text_location = ash_lexer_location(lexer);
+        struct ash_source_location text_location =
+            ash_lexer_current_location(lexer);
         (void)ash_lexer_advance(lexer);
         if (ash_word_append_span(
                 word,
@@ -612,7 +649,8 @@ static enum ash_lexer_result ash_lexer_scan_word(
     struct ash_lexer* lexer,
     struct ash_token* token
 ) {
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     token->kind = ASH_TOKEN_WORD;
     token->location = location;
     ash_word_init(&token->word, location);
@@ -621,7 +659,8 @@ static enum ash_lexer_result ash_lexer_scan_word(
         char ch = ash_lexer_peek(lexer, 0u);
         enum ash_lexer_result result = ASH_LEXER_TOKEN;
         if (ch == '\\') {
-            struct ash_source_location escaped_location = ash_lexer_location(lexer);
+            struct ash_source_location escaped_location =
+                ash_lexer_current_location(lexer);
             (void)ash_lexer_advance(lexer);
             if (ash_lexer_at_end(lexer)) {
                 const char backslash = '\\';
@@ -678,7 +717,8 @@ static enum ash_lexer_result ash_lexer_scan_word(
             result = ash_lexer_scan_backquote(lexer, &token->word, ASH_QUOTE_NONE);
         }
         else {
-            struct ash_source_location text_location = ash_lexer_location(lexer);
+            struct ash_source_location text_location =
+                ash_lexer_current_location(lexer);
             (void)ash_lexer_advance(lexer);
             if (ash_word_append_span(
                     &token->word,
@@ -711,7 +751,8 @@ static enum ash_lexer_result ash_lexer_scan_io_number(
     struct ash_token* token
 ) {
     size_t start = lexer->offset;
-    struct ash_source_location location = ash_lexer_location(lexer);
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
     while (ash_lexer_peek(lexer, 0u) >= '0' && ash_lexer_peek(lexer, 0u) <= '9') {
         (void)ash_lexer_advance(lexer);
     }
@@ -752,7 +793,7 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
         break;
     }
 
-    token->location = ash_lexer_location(lexer);
+    token->location = ash_lexer_current_location(lexer);
     if (ash_lexer_at_end(lexer)) {
         token->kind = ASH_TOKEN_EOF;
         return ASH_LEXER_END;

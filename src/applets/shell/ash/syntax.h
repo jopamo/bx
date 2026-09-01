@@ -1,15 +1,25 @@
 #ifndef BX_APPLETS_SHELL_ASH_SYNTAX_H
 #define BX_APPLETS_SHELL_ASH_SYNTAX_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
+struct ash_source_identity;
+
 struct ash_source_location {
-    /* Borrowed context-lifetime source identity; never freed by a location. */
+    /*
+     * Borrowed source-invocation identity. Persistent location owners retain
+     * that identity; standalone lexer/parser locations may leave it NULL.
+     */
     const char* source;
+    struct ash_source_identity* identity;
     size_t line;
     size_t column;
     size_t offset;
 };
+
+bool ash_source_location_valid(const struct ash_source_location* location);
+bool ash_source_location_is_none(const struct ash_source_location* location);
 
 enum ash_quote_kind {
     ASH_QUOTE_NONE = 0,

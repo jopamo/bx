@@ -800,6 +800,12 @@ static int ash_execute_function(
     const struct ash_function* function,
     const struct ash_command* command
 ) {
+    struct ash_source_location caller =
+        ash_execution_current_location(shell);
+    if (!ash_source_location_valid(&caller)) {
+        ash_diag(shell, "function call has no source location");
+        return 2;
+    }
     struct ash_ast* invocation_body = ash_ast_clone(function->body);
     if (invocation_body == NULL) {
         ash_diag_oom(shell);
@@ -867,10 +873,38 @@ static int ash_execute_function(
     }
     unsigned int caller_loop_depth = shell->control.loop_depth;
     shell->control.loop_depth = 0u;
+    struct ash_execution_frame execution_frame = {0};
+    if (!ash_execution_push_function(
+            shell,
+            &execution_frame,
+            command->words[0],
+            function->definition_location,
+            caller
+        )) {
+        ash_diag(shell, "source nesting overflow");
+        shell->control.loop_depth = caller_loop_depth;
+        (void)ash_scope_pop(shell, ASH_SCOPE_FUNCTION);
+        (void)ash_redirection_transaction_rollback(
+            shell,
+            &saved_fds
+        );
+        if (temporary_scope) {
+            (void)ash_scope_pop(
+                shell,
+                ASH_SCOPE_TEMPORARY_ASSIGNMENT
+            );
+        }
+        ash_ast_destroy(invocation_body);
+        return 2;
+    }
     ash_control_enter_function(shell);
     int status = ash_execute_ast(shell, invocation_body);
     (void)ash_control_consume_return(shell, &status);
     ash_control_leave_function(shell);
+    bool execution_frame_pop = ash_execution_pop(
+        shell,
+        &execution_frame
+    );
     shell->control.loop_depth = caller_loop_depth;
     enum ash_scope_pop_result function_scope_pop = ash_scope_pop(
         shell,
@@ -889,7 +923,8 @@ static int ash_execute_function(
         );
     }
     ash_ast_destroy(invocation_body);
-    if (function_scope_pop != ASH_SCOPE_POP_OK ||
+    if (!execution_frame_pop ||
+        function_scope_pop != ASH_SCOPE_POP_OK ||
         temporary_scope_pop != ASH_SCOPE_POP_OK) {
         return 2;
     }
@@ -1988,12 +2023,19 @@ static int ash_execute_ast_function(
     return ash_function_define(
         shell,
         node->value.function.name,
-        node->value.function.body
+        node->value.function.body,
+        node->location
     ) ? 0 : 2;
 }
 
 int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
+    struct ash_execution_location_guard location_guard = {0};
+    ash_execution_location_enter(
+        shell,
+        node->location,
+        &location_guard
+    );
     int status = 2;
     switch (node->kind) {
         case ASH_AST_SIMPLE:
@@ -2040,6 +2082,7 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
             status = 2;
             break;
     }
+    ash_execution_location_leave(shell, &location_guard);
     ash_shell_context_assert_invariants(shell);
     return status;
 }

@@ -606,6 +606,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/scope.c',
   'src/applets/shell/ash/shell_context.c',
   'src/applets/shell/ash/shell_policy.c',
+  'src/applets/shell/ash/source_trace.c',
   'src/applets/shell/ash/syntax.c',
   'src/applets/shell/ash/variable_value.c',
   'src/applets/shell/ash/variables.c',

@@ -1451,16 +1451,34 @@ static struct ash_ast* ash_parse_list(
     return node;
 }
 
-void ash_parser_init(
+void ash_parser_init_at(
     struct ash_parser* parser,
-    const char* source_name,
+    struct ash_source_location origin,
     const char* input,
     size_t length
 ) {
     *parser = (struct ash_parser){
         .result = ASH_PARSER_COMPLETE,
     };
-    ash_lexer_init(&parser->lexer, source_name, input, length);
+    ash_lexer_init_at(&parser->lexer, origin, input, length);
+}
+
+void ash_parser_init(
+    struct ash_parser* parser,
+    const char* source_name,
+    const char* input,
+    size_t length
+) {
+    ash_parser_init_at(
+        parser,
+        (struct ash_source_location){
+            .source = source_name != NULL ? source_name : "<input>",
+            .line = 1u,
+            .column = 1u,
+        },
+        input,
+        length
+    );
 }
 
 void ash_parser_destroy(struct ash_parser* parser) {

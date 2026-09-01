@@ -10,6 +10,7 @@
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_policy.h"
+#include "applets/shell/ash/source_trace.h"
 #include "lib/fd_transaction.h"
 
 struct ash_alias;
@@ -87,8 +88,8 @@ struct ash_shell_context_config {
  * - clone APIs deep-copy owned data.
  * - take APIs transfer ownership only on success and clear the source.
  * - returned mutable strings and output collections belong to the caller.
- * - source identities referenced by tokens, words, ASTs, and functions live
- *   for the shell-context lifetime.
+ * - transient token/word/AST locations borrow their active source identity;
+ *   persistent owners such as functions retain it explicitly.
  * - descriptor transactions own only their saved backup descriptors; restore
  *   rolls back target descriptors and commit keeps target changes.
  *
@@ -120,6 +121,13 @@ struct ash_shell {
     struct ash_command_cache* command_cache;
     struct ash_input_source* input_stack;
     struct ash_source_name* source_names;
+    struct ash_source_identity* source_identities;
+    /*
+     * Interleaved source/function call truth. Source nodes are input-owned;
+     * function nodes borrow synchronous invocation frames.
+     */
+    struct ash_execution_frame* execution_frames;
+    struct ash_source_location execution_location;
     struct ash_parser_state parser_state;
     struct ash_history_state* history;
     struct ash_completion_state* completion;
@@ -147,7 +155,7 @@ bool ash_shell_context_invariants(const struct ash_shell* shell);
 void ash_shell_context_assert_invariants(const struct ash_shell* shell);
 struct ash_parser* ash_shell_context_begin_parse(
     struct ash_shell* shell,
-    const char* source_name,
+    struct ash_source_location origin,
     const char* input,
     size_t length
 );
