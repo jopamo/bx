@@ -66,31 +66,35 @@ bool ash_var_update_attributes(
     uint32_t set,
     uint32_t clear
 );
+/*
+ * force_export adds the export attribute independently of shell options.
+ * Every assignment setter also honors the canonical allexport option.
+ */
 bool ash_var_set_with_export(
     struct ash_shell* shell,
     const char* name,
     size_t name_length,
     const char* value,
-    bool mark_export
+    bool force_export
 );
 bool ash_var_set(
     struct ash_shell* shell,
     const char* name,
     const char* value,
-    bool mark_export
+    bool force_export
 );
 bool ash_var_set_local(
     struct ash_shell* shell,
     const char* name,
     const char* value,
-    bool mark_export
+    bool force_export
 );
 bool ash_var_set_temporary(
     struct ash_shell* shell,
     const char* name,
     size_t name_length,
     const char* value,
-    bool mark_export
+    bool force_export
 );
 bool ash_var_export(struct ash_shell* shell, const char* name);
 void ash_vars_visit_visible(

@@ -2122,7 +2122,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-Cisv] "
+            "Usage: %s [--standalone-applets] [-aCisv] "
             "[-c command] [script [arg ...]]\n",
             progname
         );
@@ -2142,7 +2142,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-Cisv or -c command or -o/+o option-name\n"
+            "\t-aCisv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2152,6 +2152,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "\n");
     fprintf(stream, "Minimal rescue shell applet.\n");
     fprintf(stream, "\n");
+    fprintf(stream, "  -a           export variables assigned after enabling this option\n");
     fprintf(stream, "  -c command   run command string\n");
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -i           force interactive mode\n");
@@ -2159,9 +2160,9 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  -o option-name\n");
-        fprintf(stream, "               set noclobber or verbose\n");
+        fprintf(stream, "               set allexport, noclobber, or verbose\n");
         fprintf(stream, "  +o option-name\n");
-        fprintf(stream, "               clear noclobber or verbose\n");
+        fprintf(stream, "               clear allexport, noclobber, or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");
@@ -2237,8 +2238,9 @@ static bool ash_initialize_personality_variables(struct ash_shell* shell) {
 
     /*
      * BASH_VERSION is shell-owned, not inherited process state. Recreate it
-     * as an unexported variable after environment import. The variable model
-     * will add readonly attributes in its dedicated compatibility phase.
+     * after environment import; the canonical assignment path applies
+     * allexport when requested. The variable model will add readonly
+     * attributes in its dedicated compatibility phase.
      */
     ash_var_unset(shell, "BASH_VERSION");
     return ash_var_set(shell, "BASH_VERSION", bash_version, false);

@@ -269,11 +269,21 @@ static bool ash_var_set_in_scope(
     const char* name,
     size_t name_length,
     const char* value,
-    uint32_t attributes
+    uint32_t attributes,
+    bool force_export
 ) {
     if (scope == NULL) {
         errno = EINVAL;
         return false;
+    }
+    /*
+     * This is the sole assignment-to-export policy point. Once allexport is
+     * active, every shell assignment acquires the persistent export
+     * attribute; clearing allexport affects later assignments only.
+     */
+    if (force_export ||
+        (shell->options & ASH_SHELL_OPTION_ALLEXPORT) != 0u) {
+        attributes |= ASH_VAR_ATTR_EXPORT;
     }
     struct ash_var* var = ash_var_find_in_scope(scope, name, name_length);
     if (var == NULL) {
@@ -312,7 +322,7 @@ bool ash_var_set_with_export(
     const char* name,
     size_t name_length,
     const char* value,
-    bool mark_export
+    bool force_export
 ) {
     struct ash_scope* owner = NULL;
     (void)ash_var_find_len(shell, name, name_length, &owner);
@@ -325,7 +335,8 @@ bool ash_var_set_with_export(
         name,
         name_length,
         value,
-        mark_export ? ASH_VAR_ATTR_EXPORT : 0u
+        0u,
+        force_export
     );
 }
 
@@ -333,14 +344,14 @@ bool ash_var_set(
     struct ash_shell* shell,
     const char* name,
     const char* value,
-    bool mark_export
+    bool force_export
 ) {
     return ash_var_set_with_export(
         shell,
         name,
         strlen(name),
         value,
-        mark_export
+        force_export
     );
 }
 
@@ -348,7 +359,7 @@ bool ash_var_set_local(
     struct ash_shell* shell,
     const char* name,
     const char* value,
-    bool mark_export
+    bool force_export
 ) {
     return ash_var_set_in_scope(
         shell,
@@ -356,8 +367,8 @@ bool ash_var_set_local(
         name,
         strlen(name),
         value,
-        ASH_VAR_ATTR_LOCAL |
-            (mark_export ? ASH_VAR_ATTR_EXPORT : 0u)
+        ASH_VAR_ATTR_LOCAL,
+        force_export
     );
 }
 
@@ -366,7 +377,7 @@ bool ash_var_set_temporary(
     const char* name,
     size_t name_length,
     const char* value,
-    bool mark_export
+    bool force_export
 ) {
     struct ash_scope* scope = ash_scope_current(shell);
     if (scope == NULL || scope->kind != ASH_SCOPE_TEMPORARY_ASSIGNMENT) {
@@ -379,7 +390,8 @@ bool ash_var_set_temporary(
         name,
         name_length,
         value,
-        mark_export ? ASH_VAR_ATTR_EXPORT : 0u
+        0u,
+        force_export
     );
 }
 
