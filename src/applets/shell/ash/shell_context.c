@@ -20,7 +20,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
             state->parser.lexer.input == NULL &&
             !state->parser.has_lookahead &&
             state->parser.lookahead.word.parts == NULL &&
-            state->parser.lookahead.io_number == NULL &&
+            state->parser.lookahead.io_redirect == NULL &&
             state->parser.error == NULL;
     }
 
@@ -32,8 +32,11 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
         state->parser.result < ASH_PARSER_COMPLETE ||
         state->parser.result > ASH_PARSER_ERROR ||
         (state->parser.has_lookahead &&
-         (state->parser.lookahead.kind < ASH_TOKEN_EOF ||
-          state->parser.lookahead.kind > ASH_TOKEN_CLOBBER))) {
+         (!ash_token_kind_valid(state->parser.lookahead.kind) ||
+          (ash_token_is_redirection_prefix(
+               state->parser.lookahead.kind
+           ) !=
+           (state->parser.lookahead.io_redirect != NULL))))) {
         return false;
     }
     return shell->input_stack == NULL ||

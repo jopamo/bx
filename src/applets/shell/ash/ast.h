@@ -58,10 +58,22 @@ struct ash_ast_word {
     size_t process_substitution_capacity;
 };
 
+enum ash_redirection_prefix_kind {
+    ASH_REDIRECTION_PREFIX_DEFAULT = 0,
+    ASH_REDIRECTION_PREFIX_NUMBER,
+    ASH_REDIRECTION_PREFIX_VARIABLE,
+};
+
+struct ash_redirection_prefix {
+    enum ash_redirection_prefix_kind kind;
+    /* Owned number text or variable name when kind is not DEFAULT. */
+    char* text;
+    struct ash_source_location location;
+};
+
 struct ash_redirection {
     enum ash_token_kind operator;
-    /* Owned when non-NULL. */
-    char* io_number;
+    struct ash_redirection_prefix prefix;
     /* Owned structured target. */
     struct ash_ast_word target;
     struct ash_source_location location;
