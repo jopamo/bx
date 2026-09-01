@@ -497,15 +497,15 @@ struct bx_walk_filter_opts bx_search_make_filter_opts(const struct search_opts *
         .hidden = opts->hidden,
         .type_filter = '\0',
         .glob_case_insensitive = opts->glob_case_insensitive,
-        .include_patterns = opts->include_patterns,
-        .include_pattern_casefold = opts->include_pattern_casefold,
-        .include_pattern_is_type = opts->include_pattern_is_type,
-        .num_include_patterns = opts->num_include,
-        .exclude_patterns = opts->exclude_patterns,
-        .exclude_pattern_is_type = opts->exclude_pattern_is_type,
-        .num_exclude_patterns = opts->num_exclude,
-        .exclude_dirs = opts->exclude_dir_patterns,
-        .num_exclude_dirs = opts->num_exclude_dir,
+        .include_patterns = opts->include_patterns.items,
+        .include_pattern_casefold = opts->include_patterns.casefold,
+        .include_pattern_is_type = opts->include_patterns.is_type,
+        .num_include_patterns = opts->include_patterns.len,
+        .exclude_patterns = opts->exclude_patterns.items,
+        .exclude_pattern_is_type = opts->exclude_patterns.is_type,
+        .num_exclude_patterns = opts->exclude_patterns.len,
+        .exclude_dirs = opts->exclude_dir_patterns.items,
+        .num_exclude_dirs = opts->exclude_dir_patterns.len,
     };
 }
 
@@ -538,14 +538,14 @@ bool bx_search_explicit_entry_selected(const struct search_opts *opts,
                                        const char *path) {
     const char *name = bx_path_basename_ptr(path);
 
-    if (opts->num_include > 0) {
+    if (opts->include_patterns.len > 0u) {
         struct bx_walk_filter_opts filter_opts = {
             .hidden = opts->hidden,
             .glob_case_insensitive = opts->glob_case_insensitive,
-            .include_patterns = opts->include_patterns,
-            .include_pattern_casefold = opts->include_pattern_casefold,
-            .include_pattern_is_type = opts->include_pattern_is_type,
-            .num_include_patterns = opts->num_include,
+            .include_patterns = opts->include_patterns.items,
+            .include_pattern_casefold = opts->include_patterns.casefold,
+            .include_pattern_is_type = opts->include_patterns.is_type,
+            .num_include_patterns = opts->include_patterns.len,
         };
         struct bx_walk_filter_state filter_state;
         bx_walk_filter_init(&filter_state, &filter_opts, path);
@@ -553,9 +553,9 @@ bool bx_search_explicit_entry_selected(const struct search_opts *opts,
             return false;
     }
 
-    for (int i = 0; i < opts->num_exclude; i++) {
+    for (size_t i = 0u; i < opts->exclude_patterns.len; i++) {
         int flags = opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
-        if (fnmatch(opts->exclude_patterns[i], name, flags) == 0)
+        if (fnmatch(opts->exclude_patterns.items[i], name, flags) == 0)
             return false;
     }
 

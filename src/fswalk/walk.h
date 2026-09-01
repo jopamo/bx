@@ -99,12 +99,12 @@ struct bx_walk_filter_opts {
     char *const *include_patterns;
     const bool *include_pattern_casefold;
     const bool *include_pattern_is_type;
-    int num_include_patterns;
+    size_t num_include_patterns;
     char *const *exclude_patterns;
     const bool *exclude_pattern_is_type;
-    int num_exclude_patterns;
+    size_t num_exclude_patterns;
     char *const *exclude_dirs;
-    int num_exclude_dirs;
+    size_t num_exclude_dirs;
 };
 
 struct bx_walk_ignore_opts {

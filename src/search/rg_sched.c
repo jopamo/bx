@@ -1543,8 +1543,8 @@ static bool bx_rg_sched_pattern_is_subtree_filter_exact(const char *pattern) {
 }
 
 static bool bx_rg_sched_patterns_are_subtree_filter_exact(char *const *patterns,
-                                                          int pattern_count) {
-    for (int i = 0; i < pattern_count; ++i) {
+                                                          size_t pattern_count) {
+    for (size_t i = 0u; i < pattern_count; ++i) {
         if (!bx_rg_sched_pattern_is_subtree_filter_exact(patterns[i]))
             return false;
     }
@@ -1561,10 +1561,10 @@ static bool bx_rg_sched_filter_state_exact_for_subtree(const struct search_opts 
      * would be rebased incorrectly. Basename-only globs and exclude-dir globs
      * are name-only checks and remain exact under subtree donation.
      */
-    return bx_rg_sched_patterns_are_subtree_filter_exact(opts->include_patterns,
-                                                         opts->num_include) &&
-           bx_rg_sched_patterns_are_subtree_filter_exact(opts->exclude_patterns,
-                                                         opts->num_exclude);
+    return bx_rg_sched_patterns_are_subtree_filter_exact(
+               opts->include_patterns.items, opts->include_patterns.len) &&
+           bx_rg_sched_patterns_are_subtree_filter_exact(
+               opts->exclude_patterns.items, opts->exclude_patterns.len);
 }
 
 bool bx_rg_sched_supported(enum bx_search_personality personality,

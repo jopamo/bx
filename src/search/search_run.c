@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,7 +160,7 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
 static char *bx_search_run_build_search_pattern(const char *pattern,
                                                 enum bx_search_personality personality,
                                                 const struct search_opts *opts) {
-    if (!pattern || !opts || opts->num_extra_patterns == 0)
+    if (!pattern || !opts || opts->extra_patterns.len == 0u)
         return pattern ? strdup(pattern) : NULL;
     if (opts->fixed_strings)
         return strdup(pattern);
@@ -173,8 +174,14 @@ static char *bx_search_run_build_search_pattern(const char *pattern,
     const char *group_sep = use_basic_grouping ? "\\|" : "|";
     size_t total = strlen(pattern) + strlen(group_open) + strlen(group_close) + 1u;
 
-    for (int k = 0; k < opts->num_extra_patterns; k++)
-        total += strlen(opts->extra_patterns[k]) + strlen(group_sep);
+    for (size_t k = 0u; k < opts->extra_patterns.len; k++) {
+        size_t extra = strlen(opts->extra_patterns.items[k]);
+        size_t sep = strlen(group_sep);
+
+        if (extra > SIZE_MAX - sep || total > SIZE_MAX - (extra + sep))
+            return NULL;
+        total += extra + sep;
+    }
 
     char *combined = malloc(total);
     if (!combined)
@@ -185,8 +192,8 @@ static char *bx_search_run_build_search_pattern(const char *pattern,
     p += strlen(group_open);
     memcpy(p, pattern, strlen(pattern));
     p += strlen(pattern);
-    for (int k = 0; k < opts->num_extra_patterns; k++) {
-        const char *extra_pattern = opts->extra_patterns[k];
+    for (size_t k = 0u; k < opts->extra_patterns.len; k++) {
+        const char *extra_pattern = opts->extra_patterns.items[k];
         size_t extra_len = strlen(extra_pattern);
 
         memcpy(p, group_sep, strlen(group_sep));

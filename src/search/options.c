@@ -744,10 +744,10 @@ static bool bx_clear_type(struct search_opts *opts, const char *name) {
 }
 
 void bx_search_free_options(struct search_opts *opts) {
-    for (int i = 0; i < opts->num_include; i++) free(opts->include_patterns[i]);
-    for (int i = 0; i < opts->num_exclude; i++) free(opts->exclude_patterns[i]);
-    for (int i = 0; i < opts->num_exclude_dir; i++) free(opts->exclude_dir_patterns[i]);
-    for (int i = 0; i < 16; i++) free(opts->extra_patterns[i]);
+    bx_search_pattern_vec_dispose(&opts->include_patterns);
+    bx_search_pattern_vec_dispose(&opts->exclude_patterns);
+    bx_search_pattern_vec_dispose(&opts->exclude_dir_patterns);
+    bx_search_pattern_vec_dispose(&opts->extra_patterns);
     for (int i = 0; i < opts->num_ignore_files; i++) free(opts->ignore_files[i]);
     for (int i = 0; i < opts->num_pre_globs; i++) free(opts->pre_globs[i]);
     for (int i = 0; i < opts->num_custom_types; i++) {
@@ -1518,19 +1518,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             break;
         case 'g':
             if (bx_search_personality_is_rg(personality) && optarg && optarg[0] == '!') {
-                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS) {
-                    opts->exclude_patterns[opts->num_exclude] = strdup(optarg + 1);
-                    opts->exclude_pattern_casefold[opts->num_exclude] =
-                        opts->glob_case_insensitive;
-                    opts->exclude_pattern_is_type[opts->num_exclude] = false;
-                    opts->num_exclude++;
+                if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
+                                                  optarg + 1,
+                                                  opts->glob_case_insensitive,
+                                                  false)) {
+                    return bx_search_parse_out_of_memory(progname);
                 }
-            } else if (opts->num_include < MAX_INCLUDE_PATTERNS) {
-                opts->include_patterns[opts->num_include] = strdup(optarg);
-                opts->include_pattern_casefold[opts->num_include] =
-                    opts->glob_case_insensitive;
-                opts->include_pattern_is_type[opts->num_include] = false;
-                opts->num_include++;
+            } else if (!bx_search_pattern_vec_append(&opts->include_patterns,
+                                                     optarg,
+                                                     opts->glob_case_insensitive,
+                                                     false)) {
+                return bx_search_parse_out_of_memory(progname);
             }
             break;
         case OPT_IGLOB:
@@ -1541,12 +1539,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 fprintf(stderr, "%s: unsupported option argument for --iglob: %s\n", progname, optarg);
                 return -1;
             }
-                if (opts->num_include < MAX_INCLUDE_PATTERNS) {
-                    opts->include_patterns[opts->num_include] = strdup(optarg);
-                    opts->include_pattern_casefold[opts->num_include] = true;
-                    opts->include_pattern_is_type[opts->num_include] = false;
-                    opts->num_include++;
-                }
+            if (!bx_search_pattern_vec_append(&opts->include_patterns,
+                                              optarg, true, false))
+                return bx_search_parse_out_of_memory(progname);
             break;
         case 'u':
             if (opts->unrestrict_level < 3) opts->unrestrict_level++;
@@ -1619,23 +1614,20 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 break;
             }
             char *copy = strdup(globs);
+            if (!copy)
+                return bx_search_parse_out_of_memory(progname);
             char *tok = strtok(copy, ",");
             while (tok) {
                 while (*tok == ' ') tok++;
                 char *end = tok + strlen(tok) - 1;
                 while (end > tok && *end == ' ') *end-- = '\0';
-                if (c == 't' && opts->num_include < MAX_INCLUDE_PATTERNS) {
-                    opts->include_patterns[opts->num_include] = strdup(tok);
-                    opts->include_pattern_casefold[opts->num_include] =
-                        opts->glob_case_insensitive;
-                    opts->include_pattern_is_type[opts->num_include] = true;
-                    opts->num_include++;
-                } else if (c == 'T' && opts->num_exclude < MAX_EXCLUDE_PATTERNS) {
-                    opts->exclude_patterns[opts->num_exclude] = strdup(tok);
-                    opts->exclude_pattern_casefold[opts->num_exclude] =
-                        opts->glob_case_insensitive;
-                    opts->exclude_pattern_is_type[opts->num_exclude] = true;
-                    opts->num_exclude++;
+                struct bx_search_pattern_vec *patterns =
+                    c == 't' ? &opts->include_patterns : &opts->exclude_patterns;
+                if (!bx_search_pattern_vec_append(patterns, tok,
+                                                  opts->glob_case_insensitive,
+                                                  true)) {
+                    free(copy);
+                    return bx_search_parse_out_of_memory(progname);
                 }
                 tok = strtok(NULL, ",");
             }
@@ -1661,12 +1653,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             }
             break;
         case 'e':
-            if (opts->num_extra_patterns < 16) {
-                char *copy = strdup(optarg);
-                if (!copy)
-                    return bx_search_parse_out_of_memory(progname);
-                opts->extra_patterns[opts->num_extra_patterns++] = copy;
-            }
+            if (!bx_search_pattern_vec_append(&opts->extra_patterns,
+                                              optarg, false, false))
+                return bx_search_parse_out_of_memory(progname);
             break;
         case 'f': {
             FILE *pf = NULL;
@@ -1697,13 +1686,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 size_t llen = strlen(line);
                 while (llen > 0 && line[llen-1] == '\n')
                     line[--llen] = '\0';
-                if (opts->num_extra_patterns < 16) {
-                    char *copy = strdup(line);
-                    if (!copy) {
-                        read_errno = ENOMEM;
-                        break;
-                    }
-                    opts->extra_patterns[opts->num_extra_patterns++] = copy;
+                if (!bx_search_pattern_vec_append(&opts->extra_patterns,
+                                                  line, false, false)) {
+                    read_errno = ENOMEM;
+                    break;
                 }
             }
             if (close_pf && fclose(pf) != 0 && read_errno == 0)
@@ -1732,14 +1718,16 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_INCLUDE:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--include");
-            if (opts->num_include < MAX_INCLUDE_PATTERNS)
-                opts->include_patterns[opts->num_include++] = strdup(optarg);
+            if (!bx_search_pattern_vec_append(&opts->include_patterns,
+                                              optarg, false, false))
+                return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_EXCLUDE:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude");
-            if (opts->num_exclude < MAX_EXCLUDE_PATTERNS)
-                opts->exclude_patterns[opts->num_exclude++] = strdup(optarg);
+            if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
+                                              optarg, false, false))
+                return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_EXCLUDE_FROM: {
             if (bx_search_personality_is_rg(personality))
@@ -1767,13 +1755,10 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     line[--len] = '\0';
                 if (len == 0)
                     continue;
-                if (opts->num_exclude < MAX_EXCLUDE_PATTERNS) {
-                    char *copy = strdup(line);
-                    if (!copy) {
-                        read_errno = ENOMEM;
-                        break;
-                    }
-                    opts->exclude_patterns[opts->num_exclude++] = copy;
+                if (!bx_search_pattern_vec_append(&opts->exclude_patterns,
+                                                  line, false, false)) {
+                    read_errno = ENOMEM;
+                    break;
                 }
             }
             if (fclose(ef) != 0 && read_errno == 0)
@@ -1786,8 +1771,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case OPT_EXCLUDE_DIR:
             if (bx_search_personality_is_rg(personality))
                 return bx_grep_unrecognized_option(progname, "--exclude-dir");
-            if (opts->num_exclude_dir < MAX_EXCLUDE_DIR_PATTERNS)
-                opts->exclude_dir_patterns[opts->num_exclude_dir++] = strdup(optarg);
+            if (!bx_search_pattern_vec_append(&opts->exclude_dir_patterns,
+                                              optarg, false, false))
+                return bx_search_parse_out_of_memory(progname);
             break;
         case OPT_FILES:
             opts->files_only = true;
@@ -2515,7 +2501,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
     }
 
         if (optind >= argc) {
-            if (!opts->files_only && opts->num_extra_patterns == 0) {
+            if (!opts->files_only && opts->extra_patterns.len == 0u) {
                 if (personality == BX_SEARCH_GREP) {
                     bx_grep_print_usage_try_help(progname);
                 } else {
@@ -2525,9 +2511,13 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 }
                 return -1;
             }
-        *pattern = opts->num_extra_patterns > 0 ? opts->extra_patterns[--opts->num_extra_patterns] : "";
-    } else if (opts->num_extra_patterns > 0) {
-        *pattern = opts->extra_patterns[--opts->num_extra_patterns];
+        *pattern = opts->extra_patterns.len > 0u
+            ? opts->extra_patterns.items[opts->extra_patterns.len - 1u]
+            : "";
+        bx_search_pattern_vec_drop_last(&opts->extra_patterns);
+    } else if (opts->extra_patterns.len > 0u) {
+        *pattern = opts->extra_patterns.items[opts->extra_patterns.len - 1u];
+        bx_search_pattern_vec_drop_last(&opts->extra_patterns);
     } else {
         *pattern = argv[optind++];
     }
