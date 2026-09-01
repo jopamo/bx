@@ -66,11 +66,26 @@ void ash_word_destroy(struct ash_word* word);
 int ash_word_clone(struct ash_word* destination, const struct ash_word* source);
 bool ash_word_part_is_quoted(const struct ash_word_part* part);
 bool ash_word_part_is_expansion(const struct ash_word_part* part);
-int ash_word_append(
+/*
+ * Add one semantic segment. Adjacent segments are never coalesced: expansion
+ * boundaries and quote provenance must survive parsing and cloning.
+ */
+int ash_word_add_part(
     struct ash_word* word,
     enum ash_word_part_kind kind,
     enum ash_quote_kind quote,
     struct ash_source_location location,
+    const char* text,
+    size_t length
+);
+/*
+ * Extend only the segment currently under construction. The expected kind
+ * and quote make accidental cross-segment extension fail closed.
+ */
+int ash_word_extend_last_part(
+    struct ash_word* word,
+    enum ash_word_part_kind expected_kind,
+    enum ash_quote_kind expected_quote,
     const char* text,
     size_t length
 );
