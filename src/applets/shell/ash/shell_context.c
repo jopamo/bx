@@ -101,7 +101,10 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         shell->shell_pid > 0 &&
         shell->last_async_pid >= -1 &&
         shell->command_substitution != NULL &&
-        ash_shell_options_valid(shell->options) &&
+        ash_shell_options_valid_for_personality(
+            shell->options,
+            shell->policy.personality
+        ) &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_interactive_state_valid(&shell->interactive) &&
         interactive ==
@@ -182,8 +185,11 @@ bool ash_shell_context_init(
         config->positional_count < 0 ||
         (config->positional_count > 0 &&
             config->positional_values == NULL) ||
-        !ash_shell_options_valid(config->options) ||
         !ash_shell_policy_valid(&config->policy) ||
+        !ash_shell_options_valid_for_personality(
+            config->options,
+            config->policy.personality
+        ) ||
         !ash_interactive_state_valid(&config->interactive) ||
         interactive !=
             ash_interactive_state_enabled(&config->interactive) ||

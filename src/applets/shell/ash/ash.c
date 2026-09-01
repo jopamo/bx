@@ -591,6 +591,7 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
                         &shell->options,
                         option_name,
                         enabled,
+                        shell->policy.personality,
                         ASH_SHELL_OPTION_USE_SET_NAME
                     );
                     if (result != ASH_SHELL_OPTION_APPLIED) {
@@ -607,6 +608,7 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
                     &shell->options,
                     *option,
                     enabled,
+                    shell->policy.personality,
                     ASH_SHELL_OPTION_USE_SET_SHORT
                 );
                 if (result != ASH_SHELL_OPTION_APPLIED) {
@@ -2184,7 +2186,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfisv or -c command or -o/+o option-name\n"
+            "\t-aCfistv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2200,12 +2202,15 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -f           disable pathname expansion\n");
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
+    if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "  -t           exit after one top-level input unit\n");
+    }
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  -o option-name\n");
-        fprintf(stream, "               set allexport, noclobber, noglob, or verbose\n");
+        fprintf(stream, "               set allexport, noclobber, noglob, onecmd, or verbose\n");
         fprintf(stream, "  +o option-name\n");
-        fprintf(stream, "               clear allexport, noclobber, noglob, or verbose\n");
+        fprintf(stream, "               clear allexport, noclobber, noglob, onecmd, or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");

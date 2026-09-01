@@ -141,6 +141,27 @@ static bool ash_input_print_verbose(
     return true;
 }
 
+static bool ash_input_onecmd_boundary(const struct ash_shell* shell) {
+    if ((shell->options & ASH_SHELL_OPTION_ONECMD) == 0u) {
+        return false;
+    }
+    switch (ash_input_source_kind(shell)) {
+        case ASH_INPUT_STDIN:
+        case ASH_INPUT_INTERACTIVE:
+        case ASH_INPUT_SCRIPT_FILE:
+            return true;
+        case ASH_INPUT_INVALID:
+        case ASH_INPUT_COMMAND_STRING:
+        case ASH_INPUT_SOURCED_FILE:
+        case ASH_INPUT_EVAL:
+        case ASH_INPUT_COMMAND_SUBSTITUTION:
+        case ASH_INPUT_PROMPT_COMMAND:
+        case ASH_INPUT_COMPLETION_HOOK:
+            return false;
+    }
+    return false;
+}
+
 static int ash_input_execute_current(
     struct ash_shell* shell,
     bool prompt
@@ -264,6 +285,7 @@ static int ash_input_execute_current(
             continue;
         }
 
+        bool onecmd_boundary = ash_input_onecmd_boundary(shell);
         bx_text_buffer_clear(&logical_input);
         pending_origin = (struct ash_source_location){0};
         continuation = false;
@@ -272,6 +294,9 @@ static int ash_input_execute_current(
                 &shell->policy,
                 ASH_SHELL_POLICY_INTERACTIVE
             )) {
+            break;
+        }
+        if (onecmd_boundary) {
             break;
         }
     }

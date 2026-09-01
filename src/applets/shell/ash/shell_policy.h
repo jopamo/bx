@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 enum ash_shell_personality {
+    ASH_SHELL_PERSONALITY_INVALID = -1,
     ASH_SHELL_PERSONALITY_POSIX_SH = 0,
     ASH_SHELL_PERSONALITY_BASH,
 };
