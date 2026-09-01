@@ -4,6 +4,13 @@
 
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/functions.h"
+#include "applets/shell/ash/shell_context.h"
+
+/*
+ * Keep the current Linux self-dispatch mechanism behind one exact path. The
+ * standalone policy never retries PATH after selecting a registry identity.
+ */
+static const char ash_standalone_applet_exec_path[] = "/proc/self/exe";
 
 struct ash_builtin_definition {
     const char* name;
@@ -97,10 +104,10 @@ struct ash_command_resolution ash_command_resolution_function(
 struct ash_command_resolution ash_command_resolution_bx_applet(
     const char* name,
     const struct bx_applet* applet,
-    const char* fallback_path
+    const char* exec_path
 ) {
-    if (name == NULL || applet == NULL || fallback_path == NULL ||
-        strchr(fallback_path, '/') == NULL) {
+    if (name == NULL || applet == NULL || exec_path == NULL ||
+        strchr(exec_path, '/') == NULL) {
         return ash_command_resolution_not_found(name, ENOENT);
     }
     return (struct ash_command_resolution){
@@ -109,7 +116,7 @@ struct ash_command_resolution ash_command_resolution_bx_applet(
         .target.bx_applet = {
             .applet = applet,
             .execution_class = bx_applet_execution_class_get(applet),
-            .fallback_path = fallback_path,
+            .exec_path = exec_path,
         },
     };
 }
@@ -202,6 +209,22 @@ struct ash_command_resolution ash_command_resolve(
     if (builtin != NULL) {
         return ash_builtin_resolution(name, builtin);
     }
+
+    if (shell != NULL &&
+        ash_shell_policy_valid(&shell->policy) &&
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_STANDALONE_APPLETS
+        )) {
+        const struct bx_applet* applet = bx_applet_find(name);
+        if (applet != NULL) {
+            return ash_command_resolution_bx_applet(
+                name,
+                applet,
+                ash_standalone_applet_exec_path
+            );
+        }
+    }
     return external;
 }
 
@@ -232,9 +255,9 @@ bool ash_command_resolution_valid(
                     bx_applet_execution_class_get(
                         resolution->target.bx_applet.applet
                     ) &&
-                resolution->target.bx_applet.fallback_path != NULL &&
+                resolution->target.bx_applet.exec_path != NULL &&
                 strchr(
-                    resolution->target.bx_applet.fallback_path,
+                    resolution->target.bx_applet.exec_path,
                     '/'
                 ) != NULL;
         case ASH_COMMAND_PATH_SEARCH:

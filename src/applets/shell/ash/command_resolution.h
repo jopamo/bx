@@ -53,11 +53,11 @@ struct ash_command_resolution {
             const struct bx_applet* applet;
             enum bx_applet_execution_class execution_class;
             /*
-             * Exact executable selected by ordinary command lookup. Unsafe
-             * or otherwise ineligible applets must exec this path without
-             * repeating PATH search.
+             * Exact multicall executable selected with the applet identity.
+             * Unsafe or otherwise ineligible applets must exec this path
+             * without repeating PATH search.
              */
-            const char* fallback_path;
+            const char* exec_path;
         } bx_applet;
         const char* path;
         int lookup_error;
@@ -65,8 +65,10 @@ struct ash_command_resolution {
 };
 
 /*
- * Ordinary shell precedence is special builtin, function, regular builtin,
- * then external lookup. Slash-containing names bypass shell namespaces.
+ * Shell precedence is special builtin, function, regular builtin, then
+ * external lookup. Slash-containing names bypass shell namespaces. The
+ * explicit standalone-applets policy may select a registered applet only at
+ * that final external stage; ordinary policy never consults the registry.
  */
 struct ash_command_resolution ash_command_resolve(
     const struct ash_shell* shell,
@@ -82,7 +84,7 @@ struct ash_command_resolution ash_command_resolution_function(
 struct ash_command_resolution ash_command_resolution_bx_applet(
     const char* name,
     const struct bx_applet* applet,
-    const char* fallback_path
+    const char* exec_path
 );
 struct ash_command_resolution ash_command_resolution_path_search(
     const char* name

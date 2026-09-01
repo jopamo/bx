@@ -15,6 +15,7 @@ enum ash_shell_policy_flag {
     ASH_SHELL_POLICY_LOGIN = 1u << 2,
     ASH_SHELL_POLICY_RESTRICTED = 1u << 3,
     ASH_SHELL_POLICY_PRIVILEGED = 1u << 4,
+    ASH_SHELL_POLICY_STANDALONE_APPLETS = 1u << 5,
 };
 
 enum ash_bash_compat_level {

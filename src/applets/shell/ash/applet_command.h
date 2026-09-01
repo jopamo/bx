@@ -34,7 +34,7 @@ int ash_applet_command_prepare_fork(
 /*
  * Run one bx applet target in an already forked child. Eligibility comes only
  * from immutable dispatch execution policy. Every ineligible target exact-
- * execs resolution->fallback_path; this function never performs PATH lookup
+ * execs resolution->exec_path; this function never performs PATH lookup
  * and rejects use in the plan's originating shell process.
  */
 int ash_applet_command_run_child(

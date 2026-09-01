@@ -2216,7 +2216,7 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
 }
 
 static void ash_print_help(FILE* stream, const char* progname) {
-    fprintf(stream, "Usage: %s [-Cis] [-c command] [script [arg ...]]\n", progname);
+    fprintf(stream, "Usage: %s [--standalone-applets] [-Cis] [-c command] [script [arg ...]]\n", progname);
     fprintf(stream, "\n");
     fprintf(stream, "Minimal rescue shell applet.\n");
     fprintf(stream, "\n");
@@ -2224,6 +2224,8 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
+    fprintf(stream, "  --standalone-applets\n");
+    fprintf(stream, "               prefer registered bx applets over PATH commands\n");
     fprintf(stream, "  --help       display this help and exit\n");
     fprintf(stream, "  --version    output version information and exit\n");
 }
@@ -2254,6 +2256,7 @@ int bx_ash_main(int argc, char** argv) {
 
     bool force_interactive = false;
     bool read_stdin = false;
+    bool standalone_applets = false;
     uint32_t initial_options = 0u;
     const char* command_string = NULL;
 
@@ -2278,6 +2281,12 @@ int bx_ash_main(int argc, char** argv) {
         if (strcmp(arg, "--version") == 0) {
             ash_print_version(progname);
             return 0;
+        }
+
+        if (strcmp(arg, "--standalone-applets") == 0) {
+            standalone_applets = true;
+            index++;
+            continue;
         }
 
         const char* opt = arg + 1;
@@ -2364,6 +2373,9 @@ int bx_ash_main(int argc, char** argv) {
     }
     if (login_shell) {
         policy_flags |= ASH_SHELL_POLICY_LOGIN;
+    }
+    if (standalone_applets) {
+        policy_flags |= ASH_SHELL_POLICY_STANDALONE_APPLETS;
     }
     struct ash_shell_policy policy;
     if (!ash_shell_policy_for_invocation(

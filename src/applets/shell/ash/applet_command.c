@@ -122,7 +122,7 @@ int ash_applet_command_run_child(
     return ash_external_command_exec_exact(
         shell,
         resolution->command_name,
-        resolution->target.bx_applet.fallback_path,
+        resolution->target.bx_applet.exec_path,
         argv
     );
 }
