@@ -23,6 +23,11 @@ FILE *bx_search_input_open_stream(const char *filename,
 ssize_t bx_search_input_read_record(FILE *f,
                                     struct bx_record_stream *stream,
                                     const struct search_opts *opts);
+ssize_t bx_search_input_read_record_until_binary(
+    FILE *f,
+    struct bx_record_stream *stream,
+    const struct search_opts *opts,
+    bool *binary_event_out);
 unsigned char *bx_search_input_read_stream_limited(FILE *f,
                                                    size_t *out_len,
                                                    size_t limit);

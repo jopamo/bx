@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "binary_scan.h"
 #include "dev_counters.h"
 #include "lib/color.h"
 #include "literal.h"
@@ -564,12 +565,12 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
     }
     bx_search_dev_counters_note_file_opened();
     {
-        struct stat st;
-
-        bx_search_dev_counters_note_content_fstat_call();
-        if (fstat(fd, &st) != 0)
-            goto out_error;
-        if (!S_ISREG(st.st_mode))
+        /*
+         * A deferred precheck may reopen only repeatable inputs. Probe
+         * seekability without consuming bytes; pipes and sockets fall back to
+         * the single opened-stream path.
+         */
+        if (lseek(fd, 0, SEEK_CUR) < 0)
             goto out;
     }
 
@@ -796,22 +797,6 @@ static void search_file_report_record_stream_error(const char *progname,
     bx_search_report_path_error(progname, path, errnum != 0 ? errnum : EIO, opts);
 }
 
-static int binary_segment_matches(const unsigned char *buf,
-                                  size_t len,
-                                  struct bx_matcher *m,
-                                  struct search_opts *opts) {
-    struct bx_match bm;
-    int match_rc = bx_search_matcher_find_with_opts(m, buf, len, 0, opts, &bm);
-    bool matched;
-
-    if (match_rc < 0)
-        return -1;
-    matched = match_rc == 0;
-    if (opts->invert_match)
-        matched = !matched;
-    return matched ? 1 : 0;
-}
-
 static int binary_presence_opened(FILE *f,
                                   bool use_stdin,
                                   const char *display_name,
@@ -821,97 +806,19 @@ static int binary_presence_opened(FILE *f,
                                   int *match_count,
                                   struct bx_record_stream *record_stream,
                                   struct bx_search_stats *stats) {
-    unsigned char chunk[8192];
-    unsigned char *segment = NULL;
-    size_t segment_len = 0u;
-    size_t segment_cap = 0u;
-    size_t segment_limit = bx_record_stream_record_limit(record_stream);
-    bool matched = false;
-
-    if (segment_limit == 0u)
-        segment_limit = bx_record_stream_default_record_limit();
+    int scan_result;
 
     if (stats)
         stats->files_searched++;
 
-    for (;;) {
-        size_t nread = bx_record_stream_read_chunk(f, record_stream, chunk, sizeof(chunk));
-        size_t start = 0u;
-
-        if (stats)
-            stats->bytes_searched += nread;
-        if (nread == 0u)
-            break;
-
-        while (start < nread) {
-            size_t span = start;
-
-            while (span < nread && chunk[span] != '\n' && chunk[span] != '\0')
-                span++;
-
-            if (span > start) {
-                size_t piece = span - start;
-                size_t needed = segment_len + piece;
-                if (needed > segment_limit) {
-                    if (record_stream)
-                        record_stream->errnum = EOVERFLOW;
-                    goto out_error;
-                }
-                if (needed > segment_cap) {
-                    size_t new_cap = segment_cap == 0u ? 256u : segment_cap;
-                    while (new_cap < needed) {
-                        if (new_cap > (SIZE_MAX / 2u)) {
-                            if (record_stream)
-                                record_stream->errnum = ENOMEM;
-                            goto out_error;
-                        }
-                        new_cap *= 2u;
-                    }
-                    unsigned char *tmp = realloc(segment, new_cap);
-                    if (!tmp) {
-                        if (record_stream)
-                            record_stream->errnum = ENOMEM;
-                        goto out_error;
-                    }
-                    segment = tmp;
-                    segment_cap = new_cap;
-                }
-                memcpy(segment + segment_len, chunk + start, piece);
-                segment_len += piece;
-            }
-
-            if (span < nread) {
-                int match_rc = binary_segment_matches(segment, segment_len, m, opts);
-                if (match_rc < 0)
-                    goto out_error;
-                if (match_rc > 0) {
-                    matched = true;
-                    goto out_done;
-                }
-                segment_len = 0u;
-            }
-
-            start = span + 1u;
-        }
-    }
-
-    if (bx_record_stream_had_error(record_stream))
+    scan_result = bx_search_binary_scan_remaining(
+        f, m, opts, record_stream, stats);
+    if (scan_result < 0)
         goto out_error;
-
-    if (segment_len > 0u) {
-        int match_rc = binary_segment_matches(segment, segment_len, m, opts);
-        if (match_rc < 0)
-            goto out_error;
-        if (match_rc > 0)
-            matched = true;
-    }
-
-out_done:
-    free(segment);
     if (!use_stdin)
         fclose(f);
 
-    if (matched) {
+    if (scan_result > 0) {
         if (stats) {
             stats->matches++;
             stats->matched_lines++;
@@ -938,7 +845,6 @@ out_done:
     return 1;
 
 out_error:
-    free(segment);
     if (bx_search_matcher_had_error(m)) {
         (void)bx_search_report_matcher_error(progname, display_name, m, opts);
         if (!use_stdin)
@@ -1202,6 +1108,24 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
 
     display_name = search_file_resolve_display_name(display_name_state, opts);
     {
+        enum bx_search_file_kernel_kind nonbinary_kernel =
+            exec_plan ? exec_plan->opened_nonbinary_kernel
+                      : BX_SEARCH_FILE_KERNEL_STREAMING;
+        enum bx_search_file_kernel_kind resolved_kernel =
+            search_file_resolve_opened_kernel(f, nonbinary_kernel);
+
+        /*
+         * The rolling record kernel owns monotonic binary discovery. A prefix
+         * probe here could observe a NUL from a later complete record before
+         * the kernel commits an earlier match, making behavior depend on probe
+         * size instead of record order.
+         */
+        if (resolved_kernel == BX_SEARCH_FILE_KERNEL_BUFFERED) {
+            return search_file_run_opened_kernel(
+                resolved_kernel, f, false, filename, display_name, progname,
+                m, opts, match_count, scanner, record_stream, stats);
+        }
+
         int binary_result = search_file_handle_binary_prefix(
             f, false, display_name, progname, m, opts, match_count, record_stream, stats
         );
@@ -1222,12 +1146,6 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
                                                  m, opts, match_count, scanner, record_stream,
                                                  stats);
         }
-
-        enum bx_search_file_kernel_kind nonbinary_kernel =
-            exec_plan ? exec_plan->opened_nonbinary_kernel
-                      : BX_SEARCH_FILE_KERNEL_STREAMING;
-        enum bx_search_file_kernel_kind resolved_kernel =
-            search_file_resolve_opened_kernel(f, nonbinary_kernel);
 
         if (candidate_triggered && resolved_kernel == BX_SEARCH_FILE_KERNEL_SCANNER) {
             /*

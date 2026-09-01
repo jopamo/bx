@@ -36,7 +36,8 @@ static enum bx_search_max_filesize_zero_policy bx_search_select_max_filesize_zer
 );
 
 bool bx_search_plan_needs_line_buffering(const struct search_opts *opts) {
-    return opts && (opts->after_context > 0 || opts->before_context > 0);
+    return opts && (opts->context_requested ||
+                    opts->after_context > 0 || opts->before_context > 0);
 }
 
 bool bx_search_plan_plain_output_needs_binary_sensitive_path(const struct search_opts *opts) {
@@ -213,6 +214,7 @@ void bx_search_plan_build(struct bx_search_plan *plan,
                                                          rg_searches_stdin);
 
     plan->rg_searches_stdin = rg_searches_stdin;
+    plan->grep_family = personality != BX_SEARCH_RG;
     plan->has_metadata_sort = metadata_sort;
     plan->has_context = bx_search_plan_needs_line_buffering(opts);
     plan->has_explicit_transform = bx_search_plan_has_explicit_transform(opts);
@@ -278,6 +280,7 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
     bool line_buffered_stdin;
     bool scanner_regular_supported;
     bool needs_line_buffering;
+    bool needs_rolling_record_output;
 
     if (!exec_plan)
         return;
@@ -296,18 +299,26 @@ void bx_search_exec_plan_build(struct bx_search_exec_plan *exec_plan,
     line_buffered_stdin = bx_search_streaming_uses_line_buffered_stdin(opts, true);
     scanner_regular_supported = bx_search_scanner_can_use(matcher, opts, false);
     needs_line_buffering = plan->has_context;
+    needs_rolling_record_output =
+        needs_line_buffering ||
+        (plain_binary_sensitive_path &&
+         plan->grep_family &&
+         plan->output_kind == BX_SEARCH_PLAN_OUTPUT_MATCH_LINES);
 
-    exec_plan->transformed_buffer_kernel = bx_search_exec_plan_transformed_kernel(plan);
+    exec_plan->transformed_buffer_kernel =
+        needs_rolling_record_output
+            ? BX_SEARCH_FILE_KERNEL_BUFFERED
+            : bx_search_exec_plan_transformed_kernel(plan);
     exec_plan->opened_special_kernel =
         (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
             ? BX_SEARCH_FILE_KERNEL_MULTILINE
-            : ((needs_line_buffering || plain_binary_sensitive_path)
+            : (needs_rolling_record_output
                    ? BX_SEARCH_FILE_KERNEL_BUFFERED
                    : BX_SEARCH_FILE_KERNEL_STREAMING);
     exec_plan->opened_nonbinary_kernel =
         (plan->kernel_kind == BX_SEARCH_PLAN_KERNEL_MULTILINE)
             ? BX_SEARCH_FILE_KERNEL_MULTILINE
-            : (needs_line_buffering
+            : (needs_rolling_record_output
                    ? BX_SEARCH_FILE_KERNEL_BUFFERED
                    : (scanner_regular_supported
                           ? BX_SEARCH_FILE_KERNEL_SCANNER

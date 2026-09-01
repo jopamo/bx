@@ -81,6 +81,7 @@ struct bx_search_plan {
     enum bx_search_plan_publication_kind publication_kind;
     enum bx_search_plan_order_relevance order_relevance;
     bool rg_searches_stdin;
+    bool grep_family;
     bool has_metadata_sort;
     bool has_context;
     bool has_explicit_transform;

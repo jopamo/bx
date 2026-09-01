@@ -331,12 +331,39 @@ size_t bx_record_stream_default_record_limit(void) {
     return BX_RECORD_STREAM_SPECIAL_RECORD_LIMIT;
 }
 
-ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char delimiter) {
+static const unsigned char *bx_record_stream_first_boundary(
+    const unsigned char *data,
+    size_t len,
+    unsigned char delimiter,
+    bool stop_enabled,
+    unsigned char stop_byte,
+    bool *stopped_out
+) {
+    const unsigned char *delimiter_hit = memchr(data, delimiter, len);
+    const unsigned char *stop_hit =
+        stop_enabled ? memchr(data, stop_byte, len) : NULL;
+
+    if (stop_hit && (!delimiter_hit || stop_hit < delimiter_hit)) {
+        if (stopped_out)
+            *stopped_out = true;
+        return stop_hit;
+    }
+    return delimiter_hit;
+}
+
+ssize_t bx_record_stream_read_until(FILE *f,
+                                    struct bx_record_stream *stream,
+                                    char delimiter,
+                                    bool stop_enabled,
+                                    unsigned char stop_byte,
+                                    bool *stopped_out) {
     size_t len = 0u;
 
     if (!f || !stream)
         return -1;
 
+    if (stopped_out)
+        *stopped_out = false;
     stream->errnum = 0;
     if (!bx_record_stream_reserve_record(stream, 0u)) {
         stream->errnum = ENOMEM;
@@ -348,7 +375,9 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
         size_t available = bx_record_stream_pending_available(stream);
         if (available > 0u) {
             const unsigned char *pending = stream->pending + stream->pending_off;
-            const unsigned char *hit = memchr(pending, (unsigned char)delimiter, available);
+            const unsigned char *hit = bx_record_stream_first_boundary(
+                pending, available, (unsigned char)delimiter,
+                stop_enabled, stop_byte, stopped_out);
             size_t take = hit ? (size_t)(hit - pending) + 1u : available;
 
             if (!bx_record_stream_append_record(stream, &len, pending, take))
@@ -376,7 +405,9 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
             }
 
             {
-                const unsigned char *hit = memchr(chunk, (unsigned char)delimiter, nread);
+                const unsigned char *hit = bx_record_stream_first_boundary(
+                    chunk, nread, (unsigned char)delimiter,
+                    stop_enabled, stop_byte, stopped_out);
                 size_t take = hit ? (size_t)(hit - chunk) + 1u : nread;
                 size_t remain = nread - take;
 
@@ -395,6 +426,11 @@ ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char del
 
     bx_search_dev_counters_note_record_materialized();
     return (ssize_t)len;
+}
+
+ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char delimiter) {
+    return bx_record_stream_read_until(
+        f, stream, delimiter, false, 0u, NULL);
 }
 
 ssize_t bx_record_stream_read_live(FILE *f, struct bx_record_stream *stream, char delimiter) {

@@ -90,6 +90,18 @@ ssize_t bx_search_input_read_record(FILE *f,
     return bx_record_stream_read(f, stream, opts->null_data ? '\0' : '\n');
 }
 
+ssize_t bx_search_input_read_record_until_binary(
+    FILE *f,
+    struct bx_record_stream *stream,
+    const struct search_opts *opts,
+    bool *binary_event_out) {
+    bool watch_binary = opts && !opts->null_data && !opts->binary_as_text;
+
+    return bx_record_stream_read_until(
+        f, stream, opts && opts->null_data ? '\0' : '\n',
+        watch_binary, '\0', binary_event_out);
+}
+
 char bx_search_record_delimiter(const struct search_opts *opts) {
     return opts->null_data ? '\0' : '\n';
 }

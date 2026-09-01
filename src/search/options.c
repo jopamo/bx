@@ -1702,10 +1702,14 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
         case 'A':
             if (!bx_parse_nonnegative_int(progname, "-A", optarg, &opts->after_context))
                 return -1;
+            if (bx_search_personality_is_grep_family(personality))
+                opts->context_requested = true;
             break;
         case 'B':
             if (!bx_parse_nonnegative_int(progname, "-B", optarg, &opts->before_context))
                 return -1;
+            if (bx_search_personality_is_grep_family(personality))
+                opts->context_requested = true;
             break;
         case 'C': {
             int n;
@@ -1713,6 +1717,8 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return -1;
             opts->after_context = n;
             opts->before_context = n;
+            if (bx_search_personality_is_grep_family(personality))
+                opts->context_requested = true;
             break;
         }
         case OPT_INCLUDE:
@@ -2434,6 +2440,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                             return -1;
                         opts->after_context = n;
                         opts->before_context = n;
+                        opts->context_requested = true;
                         break;
                     }
                 }
