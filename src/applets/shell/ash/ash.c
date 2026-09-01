@@ -18,6 +18,7 @@
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
+#include "applets/shell/ash/external_command.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/lexer.h"
@@ -30,8 +31,6 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
-
-extern char** environ;
 
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
 
@@ -226,97 +225,6 @@ static void ash_command_destroy(struct ash_command* command) {
     free(command->redirs);
 
     ash_command_init(command);
-}
-
-static int ash_exec_external(struct ash_shell* shell, char** argv) {
-    if (argv == NULL || argv[0] == NULL) {
-        return 0;
-    }
-
-    const char* command = argv[0];
-
-    if (strchr(command, '/') != NULL) {
-        execve(command, argv, environ);
-        int err = errno;
-        ash_exec_error(shell, command, err);
-        return (err == ENOENT) ? 127 : 126;
-    }
-
-    const char* path = ash_var_get(shell, "PATH");
-    if (path == NULL || path[0] == '\0') {
-        path = "/bin:/usr/bin";
-    }
-
-    int best_error = ENOENT;
-    bool saw_eacces = false;
-
-    const char* segment = path;
-    while (true) {
-        size_t dir_len = strcspn(segment, ":");
-        bool has_colon = (segment[dir_len] == ':');
-
-        struct bx_text_buffer candidate;
-        bx_text_buffer_init(&candidate);
-
-        if (dir_len == 0u) {
-            if (!bx_text_buffer_append_text(&candidate, "./")) {
-                ash_diag_oom(shell);
-                bx_text_buffer_destroy(&candidate);
-                return 126;
-            }
-        }
-        else {
-            if (!bx_text_buffer_append_span(&candidate, segment, dir_len) ||
-                !bx_text_buffer_append_char(&candidate, '/')) {
-                ash_diag_oom(shell);
-                bx_text_buffer_destroy(&candidate);
-                return 126;
-            }
-        }
-        if (!bx_text_buffer_append_text(&candidate, command)) {
-            ash_diag_oom(shell);
-            bx_text_buffer_destroy(&candidate);
-            return 126;
-        }
-
-        char* candidate_path = bx_text_buffer_take(&candidate);
-        if (candidate_path == NULL) {
-            ash_diag_oom(shell);
-            bx_text_buffer_destroy(&candidate);
-            return 126;
-        }
-        execve(candidate_path, argv, environ);
-
-        int err = errno;
-        if (err != ENOENT && err != ENOTDIR) {
-            if (err == EACCES) {
-                saw_eacces = true;
-            }
-            if (best_error == ENOENT || best_error == ENOTDIR) {
-                best_error = err;
-            }
-        }
-
-        free(candidate_path);
-
-        if (!has_colon) {
-            break;
-        }
-        segment += dir_len + 1u;
-    }
-
-    if (saw_eacces) {
-        ash_exec_error(shell, command, EACCES);
-        return 126;
-    }
-
-    if (best_error != ENOENT && best_error != ENOTDIR) {
-        ash_exec_error(shell, command, best_error);
-        return 126;
-    }
-
-    ash_exec_not_found(shell, command);
-    return 127;
 }
 
 static int ash_parse_status_code(const char* text, int* out_status) {
@@ -655,7 +563,13 @@ static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* c
     }
 
     char** argv = &command->words[1];
-    int status = ash_exec_external(shell, argv);
+    struct ash_command_resolution resolution =
+        ash_command_resolve_external(argv[0]);
+    int status = ash_external_command_exec(
+        shell,
+        argv,
+        &resolution
+    );
     return status;
 }
 
@@ -873,21 +787,6 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
     return 1;
 }
 
-static struct ash_command_resolution ash_resolve_shell_command(
-    const struct ash_shell* shell,
-    const char* name
-) {
-    struct ash_command_resolution builtin = ash_command_resolve_builtin(name);
-    if (builtin.kind == ASH_COMMAND_SPECIAL_BUILTIN) {
-        return builtin;
-    }
-    const struct ash_function* function = ash_function_find(shell, name);
-    if (function != NULL) {
-        return ash_command_resolution_function(name, function);
-    }
-    return builtin;
-}
-
 static int ash_execute_function(
     struct ash_shell* shell,
     const struct ash_function* function,
@@ -989,17 +888,25 @@ static int ash_execute_function(
     return status;
 }
 
-static int ash_execute_in_child(struct ash_shell* shell, const struct ash_command* command) {
-    if (command->word_count != 0u) {
-        struct ash_command_resolution resolution =
-            ash_resolve_shell_command(shell, command->words[0]);
-        if (resolution.kind == ASH_COMMAND_FUNCTION) {
-            return ash_execute_function(
-                shell,
-                resolution.target.function,
-                command
-            );
-        }
+static int ash_execute_in_child(
+    struct ash_shell* shell,
+    const struct ash_command* command,
+    const struct ash_command_resolution* resolution
+) {
+    if (!ash_command_resolution_valid(resolution)) {
+        ash_exec_error(
+            shell,
+            command->word_count != 0u ? command->words[0] : "",
+            EINVAL
+        );
+        return 126;
+    }
+    if (resolution->kind == ASH_COMMAND_FUNCTION) {
+        return ash_execute_function(
+            shell,
+            resolution->target.function,
+            command
+        );
     }
     if (ash_redirections_apply_permanently(shell, command) != 0) {
         return 1;
@@ -1012,20 +919,27 @@ static int ash_execute_in_child(struct ash_shell* shell, const struct ash_comman
         return 0;
     }
 
-    struct ash_command_resolution resolution =
-        ash_resolve_shell_command(shell, command->words[0]);
-    if (ash_command_resolution_is_builtin(&resolution)) {
+    if (ash_command_resolution_is_builtin(resolution)) {
         if (ash_apply_command_assignments_shell(shell, command) != 0) {
             return 1;
         }
-        return ash_run_builtin(shell, resolution.target.builtin, command, true);
+        return ash_run_builtin(
+            shell,
+            resolution->target.builtin,
+            command,
+            true
+        );
     }
 
     if (ash_apply_command_assignments_env(shell, command) != 0) {
         return 1;
     }
 
-    return ash_exec_external(shell, command->words);
+    return ash_external_command_exec(
+        shell,
+        command->words,
+        resolution
+    );
 }
 
 static int ash_execute_single_command_parent(struct ash_shell* shell, const struct ash_command* command, enum ash_builtin_kind builtin) {
@@ -1057,12 +971,17 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
 struct ash_command_child_context {
     struct ash_shell* shell;
     const struct ash_command* command;
+    struct ash_command_resolution resolution;
 };
 
 static int ash_command_child_main(void* user_data) {
     struct ash_command_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
-    return ash_execute_in_child(context->shell, context->command);
+    return ash_execute_in_child(
+        context->shell,
+        context->command,
+        &context->resolution
+    );
 }
 
 static int ash_run_foreground_child(
@@ -1109,11 +1028,13 @@ static int ash_run_foreground_child(
 
 static int ash_execute_single_command_forked(
     struct ash_shell* shell,
-    const struct ash_command* command
+    const struct ash_command* command,
+    const struct ash_command_resolution* resolution
 ) {
     struct ash_command_child_context context = {
         .shell = shell,
         .command = command,
+        .resolution = *resolution,
     };
     return ash_run_foreground_child(
         shell,
@@ -1145,22 +1066,40 @@ static int ash_execute_command(
     }
 
     struct ash_command_resolution resolution =
-        ash_resolve_shell_command(shell, command->words[0]);
-    if (resolution.kind == ASH_COMMAND_FUNCTION) {
-        return ash_execute_function(
-            shell,
-            resolution.target.function,
-            command
-        );
+        ash_command_resolve(shell, command->words[0]);
+    if (!ash_command_resolution_valid(&resolution)) {
+        ash_exec_error(shell, command->words[0], EINVAL);
+        return 126;
     }
-    if (ash_command_resolution_is_builtin(&resolution)) {
-        return ash_execute_single_command_parent(
-            shell,
-            command,
-            resolution.target.builtin
-        );
+    switch (resolution.kind) {
+        case ASH_COMMAND_SPECIAL_BUILTIN:
+        case ASH_COMMAND_REGULAR_BUILTIN:
+            return ash_execute_single_command_parent(
+                shell,
+                command,
+                resolution.target.builtin
+            );
+        case ASH_COMMAND_FUNCTION:
+            return ash_execute_function(
+                shell,
+                resolution.target.function,
+                command
+            );
+        case ASH_COMMAND_BX_APPLET:
+        case ASH_COMMAND_PATH_SEARCH:
+        case ASH_COMMAND_HASHED_EXTERNAL:
+        case ASH_COMMAND_EXPLICIT_PATH:
+        case ASH_COMMAND_NOT_FOUND:
+            return ash_execute_single_command_forked(
+                shell,
+                command,
+                &resolution
+            );
+        case ASH_COMMAND_INVALID:
+            break;
     }
-    return ash_execute_single_command_forked(shell, command);
+    ash_exec_error(shell, command->words[0], EINVAL);
+    return 126;
 }
 
 static int ash_execute_buffer(
