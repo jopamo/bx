@@ -70,7 +70,8 @@ bool ash_shell_policy_valid(const struct ash_shell_policy* policy) {
         ASH_SHELL_POLICY_INTERACTIVE |
         ASH_SHELL_POLICY_LOGIN |
         ASH_SHELL_POLICY_RESTRICTED |
-        ASH_SHELL_POLICY_PRIVILEGED;
+        ASH_SHELL_POLICY_PRIVILEGED |
+        ASH_SHELL_POLICY_STANDALONE_APPLETS;
 
     if (policy == NULL || (policy->flags & ~known_flags) != 0u) {
         return false;
