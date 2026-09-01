@@ -113,8 +113,8 @@ static void ash_input_print_prompt(
     if (prompt == NULL) {
         prompt = continuation ? "> " : ash_input_default_prompt();
     }
-    fputs(prompt, stdout);
-    fflush(stdout);
+    fputs(prompt, stderr);
+    fflush(stderr);
 }
 
 static int ash_input_execute_current(

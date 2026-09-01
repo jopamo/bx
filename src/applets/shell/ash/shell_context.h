@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include "applets/shell/ash/control.h"
+#include "applets/shell/ash/interactive.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_policy.h"
@@ -69,6 +70,7 @@ struct ash_shell_context_config {
     int positional_count;
     uint32_t options;
     struct ash_shell_policy policy;
+    struct ash_interactive_state interactive;
     /*
      * Standalone mode requires an already-open exact bx executable. Ownership
      * transfers to the context only when initialization succeeds.
@@ -111,6 +113,11 @@ struct ash_shell {
     uint32_t options;
     struct ash_shopt_state* shopt;
     struct ash_shell_policy policy;
+    /*
+     * Immutable startup source/interactivity and descriptor attachment truth.
+     * The policy interactive flag must agree with this state.
+     */
+    struct ash_interactive_state interactive;
 
     struct ash_alias* aliases;
     struct ash_function* functions;
