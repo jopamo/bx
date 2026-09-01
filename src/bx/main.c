@@ -4,7 +4,6 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <limits.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "bx/diag.h"
@@ -12,6 +11,7 @@
 #include "bx/applet_profile.h"
 #include "bx/libbx.h"
 #include "bx/runtime_snapshot.h"
+#include "bx/self_exec.h"
 #include "dispatch/dispatch.h"
 #include "lib/output_policy.h"
 #include "lib/path_ops.h"
@@ -326,6 +326,18 @@ static int check_applet_profile(
     return bx_status_error();
 }
 
+static void prepare_applet_self_exec(
+    const struct bx_applet* applet,
+    const char* argv0
+) {
+    if (bx_applet_self_dispatch_required(applet)) {
+        (void)bx_self_exec_initialize(argv0);
+    }
+    else {
+        bx_self_exec_discard_handoff();
+    }
+}
+
 static int run_checked_applet(
     const struct bx_applet* applet,
     const struct bx_applet_profile* profile,
@@ -337,6 +349,7 @@ static int run_checked_applet(
     if (profile_status != 0) {
         return profile_status;
     }
+    prepare_applet_self_exec(applet, argv[0]);
     return bx_status_run_applet(applet->main, argc, argv);
 }
 
@@ -351,6 +364,7 @@ static int run_shebang_applet(
     if (profile_status != 0) {
         return profile_status;
     }
+    prepare_applet_self_exec(applet, argv[0]);
 
     int applet_argc = argc - 2;
     char** applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
@@ -385,17 +399,6 @@ static bool path_is_directory(const char* path) {
         return false;
     }
     return S_ISDIR(st.st_mode);
-}
-
-static char* resolve_self_path(const char* argv0) {
-    char proc_path[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", proc_path, sizeof(proc_path) - 1);
-    if (len >= 0) {
-        proc_path[len] = '\0';
-        return xstrdup(proc_path);
-    }
-
-    return xstrdup(argv0 != NULL ? argv0 : "bx");
 }
 
 static int install_one_applet_shortcut(
@@ -500,7 +503,18 @@ static int run_install_mode(int argc, char** argv, int first_arg_index, struct b
         install_dir_set = true;
     }
 
-    char* bx_path = resolve_self_path(argv[0]);
+    char* bx_path = NULL;
+    if (bx_self_exec_initialize(argv[0])) {
+        bx_path = bx_self_exec_path_dup();
+    }
+    if (bx_path == NULL) {
+        bx_diag(
+            diag,
+            "cannot identify bx executable: %s",
+            strerror(errno != 0 ? errno : ENOENT)
+        );
+        return bx_status_error();
+    }
     int rc = install_missing_applets(bx_path, install_dir, symlink_mode, diag);
     free(bx_path);
     return bx_status_from_applet(rc);

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/functions.h"
@@ -67,8 +68,17 @@ static size_t ash_function_scope_count(const struct ash_shell* shell) {
 }
 
 bool ash_shell_context_invariants(const struct ash_shell* shell) {
+    bool standalone_applets = shell != NULL &&
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_STANDALONE_APPLETS
+        );
     return shell != NULL &&
         shell->progname != NULL &&
+        standalone_applets == shell->owns_self_executable_fd &&
+        (shell->owns_self_executable_fd ?
+            shell->self_executable_fd >= 0 :
+            shell->self_executable_fd == -1) &&
         shell->shell_pid > 0 &&
         shell->last_async_pid >= -1 &&
         shell->command_substitution != NULL &&
@@ -113,6 +123,7 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         shell->redirections.entries == NULL &&
         shell->redirections.entry_count == 0u &&
         shell->redirections.entry_capacity == 0u &&
+        !shell->owns_self_executable_fd &&
         shell->shell_pid == 0 &&
         shell->command_substitution == NULL;
 }
@@ -122,6 +133,11 @@ bool ash_shell_context_init(
     struct ash_shell* shell,
     const struct ash_shell_context_config* config
 ) {
+    bool standalone_applets = config != NULL &&
+        ash_shell_policy_has(
+            &config->policy,
+            ASH_SHELL_POLICY_STANDALONE_APPLETS
+        );
     if (shell == NULL || config == NULL ||
         config->progname == NULL || config->argv0 == NULL ||
         config->positional_count < 0 ||
@@ -129,6 +145,9 @@ bool ash_shell_context_init(
             config->positional_values == NULL) ||
         (config->options & ~ASH_SHELL_OPTION_ALL) != 0u ||
         !ash_shell_policy_valid(&config->policy) ||
+        standalone_applets != config->take_self_executable_fd ||
+        (config->take_self_executable_fd &&
+            config->self_executable_fd < 0) ||
         config->shell_pid <= 0 ||
         config->command_substitution == NULL) {
         return false;
@@ -138,6 +157,10 @@ bool ash_shell_context_init(
         .progname = config->progname,
         .options = config->options,
         .policy = config->policy,
+        .owns_self_executable_fd = config->take_self_executable_fd,
+        .self_executable_fd = config->take_self_executable_fd ?
+            config->self_executable_fd :
+            -1,
         .shell_pid = config->shell_pid,
         .next_job_id = 1u,
         .last_async_pid = -1,
@@ -255,6 +278,9 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     bx_fd_transaction_stack_discard(&shell->redirections);
     ash_input_source_names_destroy(shell);
     ash_scope_stack_destroy(shell);
+    if (shell->owns_self_executable_fd) {
+        close(shell->self_executable_fd);
+    }
     free(shell->cwd.physical);
     free(shell->cwd.logical);
     free(shell->cwd.old_logical);

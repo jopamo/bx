@@ -109,6 +109,10 @@ int bx_fd_dup_cloexec_min(int oldfd, int minimum) {
     return fcntl(oldfd, F_DUPFD_CLOEXEC, minimum);
 }
 
+int bx_fd_dup_inheritable_min(int oldfd, int minimum) {
+    return fcntl(oldfd, F_DUPFD, minimum);
+}
+
 int bx_fd_dup2_exact(int oldfd, int newfd) {
     return dup2(oldfd, newfd);
 }

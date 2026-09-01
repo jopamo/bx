@@ -59,6 +59,7 @@
         "filesystem-write",
         "child-execution"
       ],
+      "self_dispatch": true,
       "execution_class": "exec-only"
     },
     {
@@ -69,6 +70,7 @@
         "filesystem-write",
         "child-execution"
       ],
+      "self_dispatch": true,
       "execution_class": "exec-only"
     },
     {
@@ -79,6 +81,7 @@
         "filesystem-write",
         "child-execution"
       ],
+      "self_dispatch": true,
       "execution_class": "exec-only"
     },
     {

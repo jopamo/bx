@@ -119,10 +119,10 @@ int ash_applet_command_run_child(
      * Failure to reproduce exec signal semantics revokes direct eligibility;
      * the already resolved executable remains the semantic fallback.
      */
-    return ash_external_command_exec_exact(
+    return ash_external_command_exec_fd_exact(
         shell,
         resolution->command_name,
-        resolution->target.bx_applet.exec_path,
+        resolution->target.bx_applet.executable_fd,
         argv
     );
 }

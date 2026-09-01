@@ -135,6 +135,12 @@ int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
 int bx_child_exec_argv(char *const *argv);
 int bx_child_exec_file_argv_exact(const char *executable,
                                   char *const *argv);
+/*
+ * Execute the exact already-open native image without pathname or procfs
+ * rediscovery. The descriptor remains caller-owned when exec fails.
+ */
+int bx_child_exec_fd_argv_exact(int executable_fd,
+                               char *const *argv);
 int bx_child_exec_argv_exact_or_path(char *const *argv);
 int bx_child_exec_file_argv(const char *executable, char *const *argv);
 /*

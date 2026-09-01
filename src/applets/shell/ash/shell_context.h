@@ -68,6 +68,12 @@ struct ash_shell_context_config {
     int positional_count;
     uint32_t options;
     struct ash_shell_policy policy;
+    /*
+     * Standalone mode requires an already-open exact bx executable. Ownership
+     * transfers to the context only when initialization succeeds.
+     */
+    bool take_self_executable_fd;
+    int self_executable_fd;
     pid_t shell_pid;
     ash_command_substitution_fn command_substitution;
 };
@@ -121,6 +127,8 @@ struct ash_shell {
     /* Sole owner of current-shell redirection backup descriptors. */
     struct bx_fd_transaction_stack redirections;
 
+    bool owns_self_executable_fd;
+    int self_executable_fd;
     pid_t shell_pid;
     /* Cached from the latest committed published async job for `$!`. */
     pid_t last_async_pid;
