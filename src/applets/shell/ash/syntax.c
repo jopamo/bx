@@ -127,7 +127,7 @@ static bool ash_word_part_kind_valid(enum ash_word_part_kind kind) {
 }
 
 static bool ash_quote_kind_valid(enum ash_quote_kind quote) {
-    return quote >= ASH_QUOTE_NONE && quote <= ASH_QUOTE_DOLLAR_SINGLE;
+    return quote >= ASH_QUOTE_NONE && quote < ASH_QUOTE_COUNT;
 }
 
 static bool ash_word_part_spec_valid(

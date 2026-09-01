@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -284,6 +285,55 @@ static int ash_hex_value(unsigned char character) {
     return -1;
 }
 
+static bool ash_append_ansi_codepoint(
+    struct ash_shell* shell,
+    struct bx_text_buffer* output,
+    uint32_t value
+) {
+    size_t length;
+    unsigned char lead;
+    if (value <= 0x7fu) {
+        return ash_expansion_append_char(shell, output, (char)value);
+    }
+    if (value <= 0x7ffu) {
+        length = 2u;
+        lead = 0xc0u;
+    }
+    else if (value <= 0xffffu) {
+        length = 3u;
+        lead = 0xe0u;
+    }
+    else if (value <= 0x1fffffu) {
+        length = 4u;
+        lead = 0xf0u;
+    }
+    else if (value <= 0x3ffffffu) {
+        length = 5u;
+        lead = 0xf8u;
+    }
+    else if (value <= 0x7fffffffu) {
+        length = 6u;
+        lead = 0xfcu;
+    }
+    else {
+        return ash_expansion_append_char(shell, output, '\0');
+    }
+
+    char encoded[6];
+    uint32_t remaining = value;
+    for (size_t i = length - 1u; i != 0u; i--) {
+        encoded[i] = (char)(0x80u | (remaining & 0x3fu));
+        remaining >>= 6u;
+    }
+    encoded[0] = (char)(lead | remaining);
+    return ash_expansion_append_span(
+        shell,
+        output,
+        encoded,
+        length
+    );
+}
+
 static bool ash_append_dollar_single(
     struct ash_shell* shell,
     struct bx_text_buffer* output,
@@ -314,6 +364,7 @@ static bool ash_append_dollar_single(
             case '\\': decoded = '\\'; break;
             case '\'': decoded = '\''; break;
             case '"': decoded = '"'; break;
+            case '?': decoded = '?'; break;
             case '\n':
                 if (!ash_expansion_append_char(shell, output, '\\')) {
                     return false;
@@ -321,8 +372,19 @@ static bool ash_append_dollar_single(
                 decoded = '\n';
                 break;
             case 'c':
-                decoded = i + 1u < length ?
-                    (char)((unsigned char)text[++i] & 0x1fu) : 'c';
+                if (i + 1u == length) {
+                    if (!ash_expansion_append_char(shell, output, '\\')) {
+                        return false;
+                    }
+                    decoded = 'c';
+                }
+                else {
+                    unsigned char controlled =
+                        (unsigned char)text[++i];
+                    decoded = controlled == '?' ?
+                        0x7f :
+                        (char)(controlled & 0x1fu);
+                }
                 break;
             case 'x': {
                 int value = 0;
@@ -346,6 +408,34 @@ static bool ash_append_dollar_single(
                     decoded = (char)(unsigned char)value;
                 }
                 break;
+            }
+            case 'u':
+            case 'U': {
+                size_t maximum = escaped == 'u' ? 4u : 8u;
+                size_t digits = 0u;
+                uint32_t value = 0u;
+                while (digits < maximum && i + 1u < length) {
+                    int digit = ash_hex_value(
+                        (unsigned char)text[i + 1u]
+                    );
+                    if (digit < 0) {
+                        break;
+                    }
+                    value = value * 16u + (uint32_t)digit;
+                    i++;
+                    digits++;
+                }
+                if (digits == 0u) {
+                    if (!ash_expansion_append_char(shell, output, '\\')) {
+                        return false;
+                    }
+                    decoded = (char)escaped;
+                    break;
+                }
+                if (!ash_append_ansi_codepoint(shell, output, value)) {
+                    return false;
+                }
+                continue;
             }
             default:
                 if (escaped >= '0' && escaped <= '7') {

@@ -763,7 +763,8 @@ static enum ash_lexer_result ash_lexer_scan_dollar_single_quote(
 ) {
     struct ash_source_location location =
         ash_lexer_current_location(lexer);
-    ash_lexer_advance_count(lexer, 2u);
+    (void)ash_lexer_advance_logical(lexer);
+    (void)ash_lexer_advance_logical(lexer);
     size_t start = lexer->offset;
     while (!ash_lexer_at_end(lexer)) {
         char ch = ash_lexer_peek(lexer, 0u);
@@ -823,7 +824,7 @@ static bool ash_lexer_text_boundary(
             ch == '$' || ch == '`';
     }
 
-    assert(quote == ASH_QUOTE_DOUBLE);
+    assert(quote == ASH_QUOTE_DOUBLE || quote == ASH_QUOTE_LOCALE);
     if (ash_lexer_at_end(lexer) ||
         ch == '"' || ch == '$' || ch == '`') {
         return true;
@@ -888,11 +889,16 @@ static enum ash_lexer_result ash_lexer_scan_text(
 
 static enum ash_lexer_result ash_lexer_scan_double_quote(
     struct ash_lexer* lexer,
-    struct ash_word* word
+    struct ash_word* word,
+    enum ash_quote_kind quote
 ) {
+    assert(quote == ASH_QUOTE_DOUBLE || quote == ASH_QUOTE_LOCALE);
     struct ash_source_location location =
         ash_lexer_current_location(lexer);
-    (void)ash_lexer_advance(lexer);
+    if (quote == ASH_QUOTE_LOCALE) {
+        (void)ash_lexer_advance_logical(lexer);
+    }
+    (void)ash_lexer_advance_logical(lexer);
     bool produced_part = false;
 
     while (!ash_lexer_at_end(lexer)) {
@@ -905,7 +911,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             if (!produced_part && ash_word_append_span(
                     word,
                     ASH_WORD_TEXT,
-                    ASH_QUOTE_DOUBLE,
+                    quote,
                     location,
                     "",
                     0u
@@ -944,7 +950,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             enum ash_lexer_result result = ash_lexer_scan_dollar(
                 lexer,
                 word,
-                ASH_QUOTE_DOUBLE
+                quote
             );
             if (result != ASH_LEXER_TOKEN) {
                 return result;
@@ -956,7 +962,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             enum ash_lexer_result result = ash_lexer_scan_backquote(
                 lexer,
                 word,
-                ASH_QUOTE_DOUBLE
+                quote
             );
             if (result != ASH_LEXER_TOKEN) {
                 return result;
@@ -969,7 +975,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
             ash_lexer_scan_text(
                 lexer,
                 word,
-                ASH_QUOTE_DOUBLE
+                quote
             );
         if (result != ASH_LEXER_TOKEN) {
             return result;
@@ -1046,10 +1052,21 @@ static enum ash_lexer_result ash_lexer_scan_word(
             result = ash_lexer_scan_single_quote(lexer, &token->word);
         }
         else if (ch == '"' ) {
-            result = ash_lexer_scan_double_quote(lexer, &token->word);
+            result = ash_lexer_scan_double_quote(
+                lexer,
+                &token->word,
+                ASH_QUOTE_DOUBLE
+            );
         }
-        else if (ch == '$' && ash_lexer_peek(lexer, 1u) == '\'') {
+        else if (ch == '$' && ash_lexer_starts_with(lexer, "$'")) {
             result = ash_lexer_scan_dollar_single_quote(lexer, &token->word);
+        }
+        else if (ch == '$' && ash_lexer_starts_with(lexer, "$\"")) {
+            result = ash_lexer_scan_double_quote(
+                lexer,
+                &token->word,
+                ASH_QUOTE_LOCALE
+            );
         }
         else if (ch == '$') {
             result = ash_lexer_scan_dollar(lexer, &token->word, ASH_QUOTE_NONE);
