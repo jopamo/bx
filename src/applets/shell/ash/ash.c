@@ -33,6 +33,7 @@
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
+#include "applets/shell/ash/startup.h"
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
 #include "lib/fd_ops.h"
@@ -2180,6 +2181,9 @@ static void ash_print_option_summary(
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "GNU long options:\n");
         fprintf(stream, "\t--help\n");
+        fprintf(stream, "\t--init-file\n");
+        fprintf(stream, "\t--norc\n");
+        fprintf(stream, "\t--rcfile\n");
         fprintf(stream, "\t--standalone-applets\n");
         fprintf(stream, "\t--verbose\n");
         fprintf(stream, "\t--version\n");
@@ -2207,6 +2211,10 @@ static void ash_print_help(FILE* stream, const char* progname) {
     }
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "  --init-file file\n");
+        fprintf(stream, "  --rcfile file\n");
+        fprintf(stream, "               read file instead of ~/.bashrc\n");
+        fprintf(stream, "  --norc       do not read ~/.bashrc\n");
         fprintf(stream, "  -o option-name\n");
         fprintf(stream, "               set allexport, noclobber, noglob, onecmd, or verbose\n");
         fprintf(stream, "  +o option-name\n");
@@ -2271,6 +2279,14 @@ static int ash_report_invocation_error(
                 stderr,
                 "%s: -c: option requires an argument\n",
                 error->progname
+            );
+            return 2;
+        case ASH_INVOCATION_ERROR_MISSING_LONG_OPTION_ARGUMENT:
+            fprintf(
+                stderr,
+                "%s: %s: option requires an argument\n",
+                error->progname,
+                error->argument
             );
             return 2;
     }
@@ -2407,8 +2423,18 @@ int bx_ash_main(int argc, char** argv) {
         }
     }
 
+    enum ash_startup_outcome startup = ash_startup_execute(
+        &shell,
+        &invocation.startup
+    );
+    if (startup == ASH_STARTUP_FATAL) {
+        ash_shell_context_release_owned(&shell);
+        return 2;
+    }
+
     int status = 0;
-    if (invocation.input == ASH_STARTUP_COMMAND_STRING) {
+    if (startup == ASH_STARTUP_CONTINUE &&
+        invocation.input == ASH_STARTUP_COMMAND_STRING) {
         status = ash_input_execute_string(
             &shell,
             ASH_INPUT_COMMAND_STRING,
@@ -2417,7 +2443,8 @@ int bx_ash_main(int argc, char** argv) {
             strlen(invocation.command_string)
         );
     }
-    else if (invocation.input == ASH_STARTUP_SCRIPT_FILE) {
+    else if (startup == ASH_STARTUP_CONTINUE &&
+             invocation.input == ASH_STARTUP_SCRIPT_FILE) {
         FILE* script = fopen(invocation.script_path, "r");
         if (script == NULL) {
             ash_exec_error(&shell, invocation.script_path, errno);
@@ -2438,7 +2465,7 @@ int bx_ash_main(int argc, char** argv) {
             prompt
         );
     }
-    else {
+    else if (startup == ASH_STARTUP_CONTINUE) {
         bool prompt = ash_interactive_state_should_prompt(
             &shell.interactive,
             false
