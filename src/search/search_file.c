@@ -13,6 +13,7 @@
 #include "literal.h"
 #include "literal_scan.h"
 #include "pcre2_matcher.h"
+#include "rg_decode_reader.h"
 #include "rg_output.h"
 #include "rg_transform.h"
 #include "scanner.h"
@@ -562,6 +563,15 @@ static int search_file_deferred_literal_precheck_path(const char *filename,
         return BX_SEARCH_DEFERRED_PRECHECK_ERROR;
     }
     bx_search_dev_counters_note_file_opened();
+    {
+        struct stat st;
+
+        bx_search_dev_counters_note_content_fstat_call();
+        if (fstat(fd, &st) != 0)
+            goto out_error;
+        if (!S_ISREG(st.st_mode))
+            goto out;
+    }
 
     {
         size_t chunk_cap = opts->quiet ? BX_SEARCH_RAW_PRESENCE_CHUNK_CAP
@@ -1068,6 +1078,53 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
     return rc;
 }
 
+static int search_file_run_decoded_opened(
+    FILE *source,
+    bool use_stdin,
+    const char *filename,
+    struct bx_search_display_name_state *display_name_state,
+    const char *progname,
+    struct bx_matcher *m,
+    const struct bx_search_exec_plan *exec_plan,
+    struct search_opts *opts,
+    int *match_count,
+    struct bx_record_stream *record_stream,
+    struct bx_search_stats *stats
+) {
+    enum bx_search_file_kernel_kind kernel =
+        exec_plan
+            ? (use_stdin ? exec_plan->stdin_path_kernel
+                         : exec_plan->transformed_buffer_kernel)
+            : BX_SEARCH_FILE_KERNEL_STREAMING;
+    FILE *decoded = bx_rg_decode_reader_open(
+        source, !use_stdin, opts->encoding_mode, opts->encoding_name, 0u);
+    const char *display_name;
+    int rc;
+
+    if (!decoded) {
+        int decode_errno = errno != 0 ? errno : EIO;
+
+        bx_search_report_path_error(
+            progname,
+            filename && strcmp(filename, "-") != 0 ? filename : "(standard input)",
+            decode_errno,
+            opts);
+        return 2;
+    }
+    bx_record_stream_prepare_file(decoded, record_stream);
+    display_name = search_file_resolve_display_name(display_name_state, opts);
+    rc = search_file_run_opened_kernel(
+        kernel, decoded, use_stdin, filename, display_name, progname,
+        m, opts, match_count, NULL, record_stream, stats);
+    if (use_stdin && fclose(decoded) != 0 && rc != 2) {
+        bx_search_report_path_error(
+            progname, display_name ? display_name : "(standard input)",
+            errno != 0 ? errno : EIO, opts);
+        return 2;
+    }
+    return rc;
+}
+
 static int search_file_run_transformed_input(const char *filename,
                                              struct bx_search_display_name_state *display_name_state,
                                              const char *progname,
@@ -1080,6 +1137,22 @@ static int search_file_run_transformed_input(const char *filename,
     unsigned char *transformed = NULL;
     size_t transformed_len = 0u;
     const char *display_name;
+    enum bx_search_file_kernel_kind kernel =
+        exec_plan ? exec_plan->transformed_buffer_kernel : BX_SEARCH_FILE_KERNEL_STREAMING;
+
+    if (kernel != BX_SEARCH_FILE_KERNEL_MULTILINE &&
+        !bx_rg_transform_uses_external_source(opts, filename)) {
+        bool use_stdin = false;
+        FILE *source = bx_search_input_open_stream(
+            filename, progname, opts, NULL, &use_stdin);
+
+        if (!source)
+            return 2;
+        return search_file_run_decoded_opened(
+            source, use_stdin, filename, display_name_state, progname,
+            m, exec_plan, opts, match_count, record_stream, stats);
+    }
+
     enum bx_rg_transform_result transform_rc =
         bx_rg_load_transformed_input(filename, progname, opts,
                                      bx_search_error_output_stream(),
@@ -1113,11 +1186,18 @@ static int search_file_run_nonstdin_regular_path(const char *filename,
     if (!f)
         return 2;
 
-    if (bx_search_input_opened_needs_auto_transform(f, opts)) {
+    enum bx_rg_auto_encoding_probe auto_encoding_probe =
+        bx_rg_transform_auto_encoding_probe_fd(opts, fileno(f));
+    if (auto_encoding_probe == BX_RG_AUTO_ENCODING_DECODE) {
         fclose(f);
         return search_file_run_transformed_input(filename, display_name_state, progname,
                                                  m, exec_plan, opts, match_count,
                                                  record_stream, stats);
+    }
+    if (auto_encoding_probe == BX_RG_AUTO_ENCODING_STREAM) {
+        return search_file_run_decoded_opened(
+            f, false, filename, display_name_state, progname,
+            m, exec_plan, opts, match_count, record_stream, stats);
     }
 
     display_name = search_file_resolve_display_name(display_name_state, opts);
@@ -1318,6 +1398,12 @@ static int search_file(const char *filename,
             goto out_error;
 
         display_name = search_file_resolve_display_name(&display_name_state, opts);
+        if (!opts->multiline && opts->encoding_mode != BX_RG_ENCODING_NONE) {
+            result = search_file_run_decoded_opened(
+                f, false, filename, &display_name_state, progname,
+                m, exec_plan, opts, match_count, record_stream, stats);
+            goto out;
+        }
         binary_result = search_file_handle_binary_prefix(f, false, display_name, progname, m,
                                                          opts, match_count, record_stream, stats);
         if (binary_result >= 0) {

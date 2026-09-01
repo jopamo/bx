@@ -68,8 +68,13 @@ bx_search_plan_select_input_kind(enum bx_search_personality personality,
                                  bool rg_searches_stdin) {
     if (!opts || opts->files_only)
         return BX_SEARCH_PLAN_INPUT_NONE;
-    if (bx_search_plan_has_explicit_transform(opts))
+    if (opts->pre_command != NULL || opts->search_zip)
         return BX_SEARCH_PLAN_INPUT_TRANSFORMED_BUFFER;
+    if (opts->encoding_mode == BX_RG_ENCODING_EXPLICIT) {
+        return opts->multiline
+            ? BX_SEARCH_PLAN_INPUT_TRANSFORMED_BUFFER
+            : BX_SEARCH_PLAN_INPUT_DECODED_STREAM;
+    }
     if (opts->multiline)
         return BX_SEARCH_PLAN_INPUT_MULTILINE_BUFFER;
     if (bx_search_plan_fastpath_is_deferred_candidate(personality, opts, has_metadata_sort,
@@ -364,6 +369,8 @@ static const char *bx_search_plan_input_kind_name(enum bx_search_plan_input_kind
         return "raw_stream";
     case BX_SEARCH_PLAN_INPUT_RAW_BUFFER:
         return "raw_buffer";
+    case BX_SEARCH_PLAN_INPUT_DECODED_STREAM:
+        return "decoded_stream";
     case BX_SEARCH_PLAN_INPUT_TRANSFORMED_BUFFER:
         return "transformed_buffer";
     case BX_SEARCH_PLAN_INPUT_MULTILINE_BUFFER:

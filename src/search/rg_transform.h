@@ -13,11 +13,20 @@ enum bx_rg_transform_result {
     BX_RG_TRANSFORM_ERROR = 2,
 };
 
+enum bx_rg_auto_encoding_probe {
+    BX_RG_AUTO_ENCODING_PASSTHROUGH = 0,
+    BX_RG_AUTO_ENCODING_DECODE,
+    BX_RG_AUTO_ENCODING_STREAM,
+};
+
 bool bx_rg_trace_enabled(const struct search_opts *opts);
 void bx_rg_tracef(const struct search_opts *opts, const char *fmt, ...);
 
 bool bx_rg_transform_needs_file_preload(const struct search_opts *opts,
                                         const char *filename);
+
+bool bx_rg_transform_uses_external_source(const struct search_opts *opts,
+                                          const char *filename);
 
 bool bx_rg_transform_prefix_has_utf8_bom(const unsigned char *prefix,
                                          size_t nread);
@@ -29,8 +38,9 @@ bool bx_rg_transform_auto_encoding_needs_prefix(const struct search_opts *opts,
                                                 const unsigned char *prefix,
                                                 size_t nread);
 
-bool bx_rg_transform_auto_encoding_needs_fd(const struct search_opts *opts,
-                                            int fd_hint);
+enum bx_rg_auto_encoding_probe bx_rg_transform_auto_encoding_probe_fd(
+    const struct search_opts *opts,
+    int fd_hint);
 
 bool bx_rg_transform_maybe_needed(const struct search_opts *opts,
                                   const char *filename,
