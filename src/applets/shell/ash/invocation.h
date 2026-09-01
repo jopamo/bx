@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "applets/shell/ash/interactive.h"
+#include "applets/shell/ash/startup.h"
 
 enum ash_invocation_action {
     ASH_INVOCATION_RUN = 0,
@@ -19,6 +20,7 @@ enum ash_invocation_error_kind {
     ASH_INVOCATION_ERROR_INVALID_LONG_OPTION,
     ASH_INVOCATION_ERROR_INVALID_OPTION_NAME,
     ASH_INVOCATION_ERROR_MISSING_COMMAND,
+    ASH_INVOCATION_ERROR_MISSING_LONG_OPTION_ARGUMENT,
 };
 
 /*
@@ -37,6 +39,7 @@ struct ash_invocation {
     const char* command_string;
     const char* script_path;
     uint32_t options;
+    struct ash_startup_request startup;
     bool login_shell;
     bool force_interactive;
     bool standalone_applets;

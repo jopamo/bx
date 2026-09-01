@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pwd.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -8,6 +9,7 @@
 
 #include "lib/path_ops.h"
 #include "bx/libbx.h"
+#include "lib/checked_math.h"
 
 static char* bx_path_dup_range(const char* start, size_t len) {
     char* res = xmalloc(len + 1u);
@@ -462,6 +464,135 @@ char* bx_path_join_root_relative(const char* root, const char* path) {
     }
     res[pos] = '\0';
     return res;
+}
+
+static char* bx_path_try_dup(const char* text) {
+    size_t size = 0u;
+    if (!bx_checked_size_add(strlen(text), 1u, &size)) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    char* copy = malloc(size);
+    if (copy == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memcpy(copy, text, size);
+    return copy;
+}
+
+static const char* bx_path_current_user_home(bool* lookup_failed) {
+    errno = 0;
+    struct passwd* entry = getpwuid(getuid());
+    *lookup_failed = entry == NULL && errno != 0;
+    return entry != NULL ? entry->pw_dir : NULL;
+}
+
+static const char* bx_path_named_user_home(
+    const char* name,
+    size_t length,
+    char** name_out,
+    bool* lookup_failed
+) {
+    size_t size = 0u;
+    if (!bx_checked_size_add(length, 1u, &size)) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    char* copy = malloc(size);
+    if (copy == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memcpy(copy, name, length);
+    copy[length] = '\0';
+    *name_out = copy;
+
+    errno = 0;
+    struct passwd* entry = getpwnam(copy);
+    *lookup_failed = entry == NULL && errno != 0;
+    return entry != NULL ? entry->pw_dir : NULL;
+}
+
+char* bx_path_expand_tilde_dup(
+    const char* path,
+    const struct bx_path_tilde_context* context
+) {
+    if (path == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (path[0] != '~') {
+        return bx_path_try_dup(path);
+    }
+
+    const char* separator = strchr(path, '/');
+    size_t prefix_length = separator != NULL ?
+        (size_t)(separator - path) :
+        strlen(path);
+    const char* remainder = path + prefix_length;
+    const char* base = NULL;
+    char* user_name = NULL;
+    bool lookup_failed = false;
+    if (prefix_length == 1u) {
+        base = context != NULL && context->home != NULL ?
+            context->home :
+            bx_path_current_user_home(&lookup_failed);
+    }
+    else if (prefix_length == 2u && path[1] == '+') {
+        base = context != NULL ? context->current_directory : NULL;
+    }
+    else if (prefix_length == 2u && path[1] == '-') {
+        base = context != NULL ? context->previous_directory : NULL;
+    }
+    else {
+        base = bx_path_named_user_home(
+            path + 1u,
+            prefix_length - 1u,
+            &user_name,
+            &lookup_failed
+        );
+        if (base == NULL && user_name == NULL) {
+            return NULL;
+        }
+    }
+
+    if (lookup_failed) {
+        free(user_name);
+        return NULL;
+    }
+    if (base == NULL) {
+        free(user_name);
+        return bx_path_try_dup(path);
+    }
+
+    size_t length = 0u;
+    size_t size = 0u;
+    if (!bx_checked_size_add(
+            strlen(base),
+            strlen(remainder),
+            &length
+        ) ||
+        !bx_checked_size_add(length, 1u, &size)) {
+        free(user_name);
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    char* expanded = malloc(size);
+    if (expanded == NULL) {
+        free(user_name);
+        errno = ENOMEM;
+        return NULL;
+    }
+    size_t base_length = strlen(base);
+    memcpy(expanded, base, base_length);
+    memcpy(
+        expanded + base_length,
+        remainder,
+        strlen(remainder) + 1u
+    );
+    free(user_name);
+    return expanded;
 }
 
 char* bx_path_strip_trailing_slashes_dup(const char* path) {

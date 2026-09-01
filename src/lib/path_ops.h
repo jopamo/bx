@@ -10,6 +10,12 @@ struct bx_path_components {
     size_t cap;
 };
 
+struct bx_path_tilde_context {
+    const char* home;
+    const char* current_directory;
+    const char* previous_directory;
+};
+
 void bx_path_components_push_dup(struct bx_path_components* components, const char* part);
 void bx_path_components_pop(struct bx_path_components* components);
 void bx_path_components_free(struct bx_path_components* components);
@@ -31,6 +37,15 @@ char* bx_path_relative_path_between(const char* from_abs, const char* to_abs);
 
 char* bx_path_join(const char* left, const char* right);
 char* bx_path_join_root_relative(const char* root, const char* path);
+/*
+ * Expands one leading shell-style tilde prefix without normalizing the rest
+ * of the path. The returned path is owned by the caller. Unknown users and
+ * unavailable ~+ or ~- values leave the input unchanged.
+ */
+char* bx_path_expand_tilde_dup(
+    const char* path,
+    const struct bx_path_tilde_context* context
+);
 char* bx_path_strip_trailing_slashes_dup(const char* path);
 const char* bx_path_strip_dot_slash_prefix_ptr(const char* path);
 const char* bx_path_basename_ptr(const char* path);

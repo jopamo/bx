@@ -48,7 +48,11 @@ bool ash_invocation_valid(const struct ash_invocation* invocation) {
         !ash_shell_options_valid_for_personality(
             invocation->options,
             ash_invocation_personality(invocation)
-        )) {
+        ) ||
+        !ash_startup_request_valid(&invocation->startup) ||
+        (ash_invocation_personality(invocation) !=
+             ASH_SHELL_PERSONALITY_BASH &&
+         invocation->startup.bashrc != ASH_BASHRC_DEFAULT)) {
         return false;
     }
     for (int i = 0; i < invocation->positional_count; i++) {
@@ -100,6 +104,7 @@ bool ash_invocation_error_valid(
                 error->option != '\0';
         case ASH_INVOCATION_ERROR_INVALID_LONG_OPTION:
         case ASH_INVOCATION_ERROR_INVALID_OPTION_NAME:
+        case ASH_INVOCATION_ERROR_MISSING_LONG_OPTION_ARGUMENT:
             return error->progname != NULL &&
                 error->argument != NULL &&
                 error->sign == '\0' &&
@@ -163,8 +168,11 @@ static bool ash_invocation_apply_short(
 static bool ash_invocation_apply_long(
     struct ash_invocation* candidate,
     const char* argument,
+    const char* operand,
+    bool* consumed_operand,
     struct ash_invocation_error* error
 ) {
+    *consumed_operand = false;
     if (strcmp(argument, "--help") == 0) {
         candidate->action = ASH_INVOCATION_HELP;
         return true;
@@ -175,6 +183,36 @@ static bool ash_invocation_apply_long(
     }
     if (strcmp(argument, "--standalone-applets") == 0) {
         candidate->standalone_applets = true;
+        return true;
+    }
+    if (strcmp(candidate->progname, "bash") == 0 &&
+        strcmp(argument, "--norc") == 0) {
+        candidate->startup = (struct ash_startup_request){
+            .bashrc = ASH_BASHRC_SUPPRESSED,
+        };
+        return true;
+    }
+    if (strcmp(candidate->progname, "bash") == 0 &&
+        (strcmp(argument, "--rcfile") == 0 ||
+         strcmp(argument, "--init-file") == 0)) {
+        if (operand == NULL) {
+            return ash_invocation_fail(
+                error,
+                (struct ash_invocation_error){
+                    .kind =
+                        ASH_INVOCATION_ERROR_MISSING_LONG_OPTION_ARGUMENT,
+                    .progname = candidate->progname,
+                    .argument = argument + 2,
+                }
+            );
+        }
+        *consumed_operand = true;
+        if (candidate->startup.bashrc != ASH_BASHRC_SUPPRESSED) {
+            candidate->startup = (struct ash_startup_request){
+                .bashrc = ASH_BASHRC_EXPLICIT,
+                .bashrc_path = operand,
+            };
+        }
         return true;
     }
     if (strcmp(argument, "--verbose") == 0 &&
@@ -254,14 +292,17 @@ bool ash_invocation_parse(
 
         if (argument[0] == '-' && argument[1] == '-' &&
             long_options_allowed) {
+            bool consumed_operand = false;
             if (!ash_invocation_apply_long(
                     &candidate,
                     argument,
+                    index + 1 < argc ? argv[index + 1] : NULL,
+                    &consumed_operand,
                     &parse_error
                 )) {
                 return ash_invocation_fail(error, parse_error);
             }
-            index++;
+            index += consumed_operand ? 2 : 1;
             if (candidate.action != ASH_INVOCATION_RUN) {
                 candidate.positional_values = argv + index;
                 candidate.positional_count = argc - index;
