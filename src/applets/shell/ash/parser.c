@@ -7,11 +7,99 @@
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/variables.h"
 
+enum ash_reserved_word {
+    ASH_RESERVED_NONE = 0,
+    ASH_RESERVED_BANG,
+    ASH_RESERVED_LBRACE,
+    ASH_RESERVED_RBRACE,
+    ASH_RESERVED_CASE,
+    ASH_RESERVED_DO,
+    ASH_RESERVED_DONE,
+    ASH_RESERVED_ELIF,
+    ASH_RESERVED_ELSE,
+    ASH_RESERVED_ESAC,
+    ASH_RESERVED_FI,
+    ASH_RESERVED_FOR,
+    ASH_RESERVED_IF,
+    ASH_RESERVED_IN,
+    ASH_RESERVED_THEN,
+    ASH_RESERVED_UNTIL,
+    ASH_RESERVED_WHILE,
+};
+
+struct ash_reserved_word_entry {
+    enum ash_reserved_word word;
+    const char* spelling;
+    size_t length;
+};
+
+#define ASH_RESERVED_ENTRY(word, spelling) \
+    {word, spelling, sizeof(spelling) - 1u}
+static const struct ash_reserved_word_entry ash_reserved_words[] = {
+    ASH_RESERVED_ENTRY(ASH_RESERVED_BANG, "!"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_LBRACE, "{"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_RBRACE, "}"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_CASE, "case"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_DO, "do"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_DONE, "done"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_ELIF, "elif"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_ELSE, "else"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_ESAC, "esac"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_FI, "fi"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_FOR, "for"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_IF, "if"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_IN, "in"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_THEN, "then"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_UNTIL, "until"),
+    ASH_RESERVED_ENTRY(ASH_RESERVED_WHILE, "while"),
+};
+#undef ASH_RESERVED_ENTRY
+
 struct ash_parse_stop {
     enum ash_token_kind token;
-    const char* words[4];
+    enum ash_reserved_word words[4];
     bool require_separator;
 };
+
+/*
+ * The lexer deliberately emits every spelling as ASH_TOKEN_WORD. Classify a
+ * word only when the parser is at a grammar position that admits reserved
+ * words. The bounded copy scans structured word provenance once and allocates
+ * nothing on the parse hot path.
+ */
+static enum ash_reserved_word ash_parser_reserved_word(
+    const struct ash_token* token
+) {
+    if (token == NULL || token->kind != ASH_TOKEN_WORD) {
+        return ASH_RESERVED_NONE;
+    }
+
+    char spelling[sizeof("until")];
+    size_t length = 0u;
+    for (size_t i = 0u; i < token->word.count; i++) {
+        const struct ash_word_part* part = &token->word.parts[i];
+        if (part->kind != ASH_WORD_TEXT ||
+            ash_word_part_is_quoted(part) ||
+            part->length > sizeof(spelling) - 1u - length) {
+            return ASH_RESERVED_NONE;
+        }
+        memcpy(spelling + length, part->text, part->length);
+        length += part->length;
+    }
+
+    for (size_t i = 0u;
+         i < sizeof(ash_reserved_words) /
+             sizeof(ash_reserved_words[0]);
+         i++) {
+        const struct ash_reserved_word_entry* entry =
+            &ash_reserved_words[i];
+        if (entry->length == length &&
+            memcmp(entry->spelling, spelling, length) == 0) {
+            return entry->word;
+        }
+    }
+    return ASH_RESERVED_NONE;
+}
 
 static enum ash_parser_result ash_parser_fail(
     struct ash_parser* parser,
@@ -81,10 +169,12 @@ static bool ash_parser_at_stop(
     if (token == NULL) {
         return false;
     }
-    if (token->kind == ASH_TOKEN_WORD) {
-        for (size_t i = 0u; i < sizeof(stop->words) / sizeof(stop->words[0]); i++) {
-            if (stop->words[i] != NULL &&
-                ash_word_is_unquoted_literal(&token->word, stop->words[i])) {
+    enum ash_reserved_word word = ash_parser_reserved_word(token);
+    if (word != ASH_RESERVED_NONE) {
+        for (size_t i = 0u;
+             i < sizeof(stop->words) / sizeof(stop->words[0]);
+             i++) {
+            if (stop->words[i] == word) {
                 return true;
             }
         }
@@ -118,17 +208,16 @@ static struct ash_ast* ash_parse_command(
     const struct ash_parse_stop* stop
 );
 
-static bool ash_parser_consume_word(
+static bool ash_parser_consume_reserved(
     struct ash_parser* parser,
-    const char* expected,
+    enum ash_reserved_word expected,
     const char* error
 ) {
     struct ash_token* token = ash_parser_peek(parser);
     if (token == NULL) {
         return false;
     }
-    if (token->kind != ASH_TOKEN_WORD ||
-        !ash_word_is_unquoted_literal(&token->word, expected)) {
+    if (ash_parser_reserved_word(token) != expected) {
         ash_parser_fail(
             parser,
             ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
@@ -587,7 +676,11 @@ static struct ash_ast* ash_parse_case_after_keyword(
     ash_token_destroy(&subject);
 
     ash_parser_skip_newlines(parser);
-    if (!ash_parser_consume_word(parser, "in", "'in' expected")) {
+    if (!ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_IN,
+            "'in' expected"
+        )) {
         ash_ast_destroy(node);
         return NULL;
     }
@@ -599,8 +692,7 @@ static struct ash_ast* ash_parse_case_after_keyword(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (token->kind == ASH_TOKEN_WORD &&
-            ash_word_is_unquoted_literal(&token->word, "esac")) {
+        if (ash_parser_reserved_word(token) == ASH_RESERVED_ESAC) {
             struct ash_token keyword;
             (void)ash_parser_take(parser, &keyword);
             ash_token_destroy(&keyword);
@@ -673,15 +765,14 @@ static struct ash_ast* ash_parse_case_after_keyword(
             return NULL;
         }
         bool empty = token->kind == ASH_TOKEN_DSEMI ||
-            (token->kind == ASH_TOKEN_WORD &&
-             ash_word_is_unquoted_literal(&token->word, "esac"));
+            ash_parser_reserved_word(token) == ASH_RESERVED_ESAC;
         clause.body = empty ?
             ash_parser_empty_list(parser, body_location) :
             ash_parse_list(
                 parser,
                 &(struct ash_parse_stop){
                     .token = ASH_TOKEN_DSEMI,
-                    .words = {"esac"},
+                    .words = {ASH_RESERVED_ESAC},
                 }
             );
         if (clause.body == NULL) {
@@ -776,12 +867,16 @@ static struct ash_ast* ash_parse_if_after_keyword(
     struct ash_ast* condition = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
-            .words = {"then"},
+            .words = {ASH_RESERVED_THEN},
             .require_separator = true,
         }
     );
     if (condition == NULL ||
-        !ash_parser_consume_word(parser, "then", "'then' expected")) {
+        !ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_THEN,
+            "'then' expected"
+        )) {
         ash_ast_destroy(condition);
         return NULL;
     }
@@ -789,7 +884,11 @@ static struct ash_ast* ash_parse_if_after_keyword(
     struct ash_ast* then_branch = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
-            .words = {"elif", "else", "fi"},
+            .words = {
+                ASH_RESERVED_ELIF,
+                ASH_RESERVED_ELSE,
+                ASH_RESERVED_FI,
+            },
             .require_separator = true,
         }
     );
@@ -805,8 +904,9 @@ static struct ash_ast* ash_parse_if_after_keyword(
         ash_ast_destroy(then_branch);
         return NULL;
     }
-    if (ending->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&ending->word, "elif")) {
+    enum ash_reserved_word ending_word =
+        ash_parser_reserved_word(ending);
+    if (ending_word == ASH_RESERVED_ELIF) {
         struct ash_source_location elif_location = ending->location;
         struct ash_token keyword;
         (void)ash_parser_take(parser, &keyword);
@@ -819,15 +919,14 @@ static struct ash_ast* ash_parse_if_after_keyword(
         }
     }
     else {
-        if (ending->kind == ASH_TOKEN_WORD &&
-            ash_word_is_unquoted_literal(&ending->word, "else")) {
+        if (ending_word == ASH_RESERVED_ELSE) {
             struct ash_token keyword;
             (void)ash_parser_take(parser, &keyword);
             ash_token_destroy(&keyword);
             else_branch = ash_parse_list(
                 parser,
                 &(struct ash_parse_stop){
-                    .words = {"fi"},
+                    .words = {ASH_RESERVED_FI},
                     .require_separator = true,
                 }
             );
@@ -837,7 +936,11 @@ static struct ash_ast* ash_parse_if_after_keyword(
                 return NULL;
             }
         }
-        if (!ash_parser_consume_word(parser, "fi", "'fi' expected")) {
+        if (!ash_parser_consume_reserved(
+                parser,
+                ASH_RESERVED_FI,
+                "'fi' expected"
+            )) {
             ash_ast_destroy(condition);
             ash_ast_destroy(then_branch);
             ash_ast_destroy(else_branch);
@@ -867,24 +970,32 @@ static struct ash_ast* ash_parse_loop_after_keyword(
     struct ash_ast* condition = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
-            .words = {"do"},
+            .words = {ASH_RESERVED_DO},
             .require_separator = true,
         }
     );
     if (condition == NULL ||
-        !ash_parser_consume_word(parser, "do", "'do' expected")) {
+        !ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_DO,
+            "'do' expected"
+        )) {
         ash_ast_destroy(condition);
         return NULL;
     }
     struct ash_ast* body = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
-            .words = {"done"},
+            .words = {ASH_RESERVED_DONE},
             .require_separator = true,
         }
     );
     if (body == NULL ||
-        !ash_parser_consume_word(parser, "done", "'done' expected")) {
+        !ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_DONE,
+            "'done' expected"
+        )) {
         ash_ast_destroy(condition);
         ash_ast_destroy(body);
         return NULL;
@@ -990,8 +1101,7 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_ast_destroy(node);
         return NULL;
     }
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "in")) {
+    if (ash_parser_reserved_word(token) == ASH_RESERVED_IN) {
         struct ash_token keyword;
         (void)ash_parser_take(parser, &keyword);
         ash_token_destroy(&keyword);
@@ -1059,19 +1169,27 @@ static struct ash_ast* ash_parse_for_after_keyword(
              (token->kind == ASH_TOKEN_SEMI ||
               token->kind == ASH_TOKEN_NEWLINE));
 
-    if (!ash_parser_consume_word(parser, "do", "'do' expected")) {
+    if (!ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_DO,
+            "'do' expected"
+        )) {
         ash_ast_destroy(node);
         return NULL;
     }
     struct ash_ast* body = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
-            .words = {"done"},
+            .words = {ASH_RESERVED_DONE},
             .require_separator = true,
         }
     );
     if (body == NULL ||
-        !ash_parser_consume_word(parser, "done", "'done' expected")) {
+        !ash_parser_consume_reserved(
+            parser,
+            ASH_RESERVED_DONE,
+            "'done' expected"
+        )) {
         ash_ast_destroy(body);
         ash_ast_destroy(node);
         return NULL;
@@ -1117,66 +1235,88 @@ static struct ash_ast* ash_parse_command(
             }
         );
     }
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "{")) {
-        struct ash_source_location location = token->location;
-        struct ash_token opening;
-        (void)ash_parser_take(parser, &opening);
-        ash_token_destroy(&opening);
-        return ash_parse_group(
-            parser,
-            ASH_AST_BRACE_GROUP,
-            location,
-            (struct ash_parse_stop){
-                .token = ASH_TOKEN_EOF,
-                .words = {"}"},
-                .require_separator = true,
-            }
-        );
-    }
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "if")) {
-        struct ash_source_location location = token->location;
-        struct ash_token keyword;
-        (void)ash_parser_take(parser, &keyword);
-        ash_token_destroy(&keyword);
-        struct ash_ast* node = ash_parse_if_after_keyword(parser, location);
-        if (node != NULL &&
-            !ash_parser_take_trailing_redirections(parser, node)) {
-            ash_ast_destroy(node);
-            return NULL;
+    enum ash_reserved_word word = ash_parser_reserved_word(token);
+    switch (word) {
+        case ASH_RESERVED_LBRACE: {
+            struct ash_source_location location = token->location;
+            struct ash_token opening;
+            (void)ash_parser_take(parser, &opening);
+            ash_token_destroy(&opening);
+            return ash_parse_group(
+                parser,
+                ASH_AST_BRACE_GROUP,
+                location,
+                (struct ash_parse_stop){
+                    .token = ASH_TOKEN_EOF,
+                    .words = {ASH_RESERVED_RBRACE},
+                    .require_separator = true,
+                }
+            );
         }
-        return node;
+        case ASH_RESERVED_IF: {
+            struct ash_source_location location = token->location;
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            struct ash_ast* node =
+                ash_parse_if_after_keyword(parser, location);
+            if (node != NULL &&
+                !ash_parser_take_trailing_redirections(parser, node)) {
+                ash_ast_destroy(node);
+                return NULL;
+            }
+            return node;
+        }
+        case ASH_RESERVED_WHILE:
+        case ASH_RESERVED_UNTIL: {
+            enum ash_ast_kind kind =
+                word == ASH_RESERVED_WHILE ?
+                    ASH_AST_WHILE : ASH_AST_UNTIL;
+            struct ash_source_location location = token->location;
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            return ash_parse_loop_after_keyword(
+                parser,
+                location,
+                kind
+            );
+        }
+        case ASH_RESERVED_FOR: {
+            struct ash_source_location location = token->location;
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            return ash_parse_for_after_keyword(parser, location);
+        }
+        case ASH_RESERVED_CASE: {
+            struct ash_source_location location = token->location;
+            struct ash_token keyword;
+            (void)ash_parser_take(parser, &keyword);
+            ash_token_destroy(&keyword);
+            return ash_parse_case_after_keyword(parser, location);
+        }
+        case ASH_RESERVED_NONE:
+            return ash_parse_simple(parser, stop);
+        case ASH_RESERVED_BANG:
+        case ASH_RESERVED_RBRACE:
+        case ASH_RESERVED_DO:
+        case ASH_RESERVED_DONE:
+        case ASH_RESERVED_ELIF:
+        case ASH_RESERVED_ELSE:
+        case ASH_RESERVED_ESAC:
+        case ASH_RESERVED_FI:
+        case ASH_RESERVED_IN:
+        case ASH_RESERVED_THEN:
+            ash_parser_fail(
+                parser,
+                ASH_PARSER_ERROR,
+                token->location,
+                "syntax error near unexpected token"
+            );
+            return NULL;
     }
-    if (token->kind == ASH_TOKEN_WORD &&
-        (ash_word_is_unquoted_literal(&token->word, "while") ||
-         ash_word_is_unquoted_literal(&token->word, "until"))) {
-        enum ash_ast_kind kind =
-            ash_word_is_unquoted_literal(&token->word, "while") ?
-                ASH_AST_WHILE : ASH_AST_UNTIL;
-        struct ash_source_location location = token->location;
-        struct ash_token keyword;
-        (void)ash_parser_take(parser, &keyword);
-        ash_token_destroy(&keyword);
-        return ash_parse_loop_after_keyword(parser, location, kind);
-    }
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "for")) {
-        struct ash_source_location location = token->location;
-        struct ash_token keyword;
-        (void)ash_parser_take(parser, &keyword);
-        ash_token_destroy(&keyword);
-        return ash_parse_for_after_keyword(parser, location);
-    }
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "case")) {
-        struct ash_source_location location = token->location;
-        struct ash_token keyword;
-        (void)ash_parser_take(parser, &keyword);
-        ash_token_destroy(&keyword);
-        return ash_parse_case_after_keyword(parser, location);
-    }
-    return ash_parse_simple(parser, stop);
+    return NULL;
 }
 
 static struct ash_ast* ash_parse_pipeline(
@@ -1189,13 +1329,16 @@ static struct ash_ast* ash_parse_pipeline(
     }
     struct ash_source_location location = token->location;
     bool negated = false;
-    if (token->kind == ASH_TOKEN_WORD &&
-        ash_word_is_unquoted_literal(&token->word, "!")) {
+    while (ash_parser_reserved_word(token) == ASH_RESERVED_BANG) {
         struct ash_token bang;
         (void)ash_parser_take(parser, &bang);
         ash_token_destroy(&bang);
-        negated = true;
+        negated = !negated;
         ash_parser_skip_newlines(parser);
+        token = ash_parser_peek(parser);
+        if (token == NULL) {
+            return NULL;
+        }
     }
 
     struct ash_ast* node = ash_ast_create(ASH_AST_PIPELINE, location);
