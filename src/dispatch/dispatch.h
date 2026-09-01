@@ -39,6 +39,7 @@ struct bx_applet {
     bx_applet_main_t main;
     uint32_t capabilities;
     bool boot_critical;
+    bool self_dispatch;
     enum bx_applet_execution_class execution_class;
 };
 
@@ -56,6 +57,11 @@ bx_applet_execution_class_get(const struct bx_applet* applet) {
         }
     }
     return BX_APPLET_EXEC_ONLY;
+}
+static inline bool bx_applet_self_dispatch_required(
+    const struct bx_applet* applet
+) {
+    return applet != NULL && applet->self_dispatch;
 }
 
 #endif /* BX_DISPATCH_H */

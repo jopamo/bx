@@ -38,6 +38,11 @@ int bx_fd_eventfd_cloexec(unsigned int initval, int flags);
 int bx_fd_signalfd_cloexec(int fd, const sigset_t* mask, int flags);
 int bx_fd_dup_cloexec(int oldfd);
 int bx_fd_dup_cloexec_min(int oldfd, int minimum);
+/*
+ * Deliberate exec handoff only. Ordinary descriptor duplication must use the
+ * CLOEXEC constructors above.
+ */
+int bx_fd_dup_inheritable_min(int oldfd, int minimum);
 int bx_fd_dup2_exact(int oldfd, int newfd);
 int bx_fd_set_cloexec(int fd, bool enabled);
 

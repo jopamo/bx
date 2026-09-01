@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #ifdef __linux__
 #include <sys/prctl.h>
+#include <sys/syscall.h>
 #endif
 #include <unistd.h>
 #include "child_runner.h"
@@ -146,6 +147,36 @@ int bx_child_exec_file_argv_exact(const char *executable,
 
     execve(executable, argv, environ);
     return errno != 0 ? errno : EIO;
+}
+
+int bx_child_exec_fd_argv_exact(int executable_fd,
+                               char *const *argv) {
+    if (executable_fd < 0 || !argv || !argv[0])
+        return EINVAL;
+
+#if defined(__linux__) && defined(SYS_execveat) && defined(AT_EMPTY_PATH)
+    /*
+     * Keep one descriptor across exec so the new bx process can recover the
+     * same authority from kernel AT_EXECFN without a pathname namespace.
+     * The caller-owned CLOEXEC descriptor remains untouched on failure.
+     */
+    int handoff_fd = bx_fd_dup_inheritable_min(executable_fd, 3);
+    if (handoff_fd < 0)
+        return errno != 0 ? errno : EIO;
+    (void)syscall(
+        SYS_execveat,
+        handoff_fd,
+        "",
+        argv,
+        environ,
+        AT_EMPTY_PATH
+    );
+    int error = errno != 0 ? errno : EIO;
+    close(handoff_fd);
+    return error;
+#else
+    return ENOSYS;
+#endif
 }
 
 int bx_child_exec_argv_exact_or_path(char *const *argv) {

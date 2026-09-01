@@ -5,13 +5,21 @@ struct ash_command_resolution;
 struct ash_shell;
 
 /*
- * Execute one already resolved executable without PATH search. This is also
- * the canonical exact-exec fallback for an ineligible bx applet target.
+ * Execute one already resolved pathname without PATH search.
  */
 int ash_external_command_exec_exact(
     struct ash_shell* shell,
     const char* command_name,
     const char* executable,
+    char** argv
+);
+/*
+ * Execute one already-open native image without pathname rediscovery.
+ */
+int ash_external_command_exec_fd_exact(
+    struct ash_shell* shell,
+    const char* command_name,
+    int executable_fd,
     char** argv
 );
 

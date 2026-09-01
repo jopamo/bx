@@ -51,6 +51,7 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
         main = item.get("main")
         capabilities = item.get("capabilities")
         execution_class = item.get("execution_class")
+        self_dispatch = item.get("self_dispatch", False)
         if not isinstance(name, str) or not NAME_RE.match(name):
             raise SystemExit(f"{field}[{index}] has invalid applet name")
         if not isinstance(main, str) or not SYMBOL_RE.match(main):
@@ -63,6 +64,8 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
             raise SystemExit(
                 f"{field}[{index}].execution_class is not an allowed execution class"
             )
+        if not isinstance(self_dispatch, bool):
+            raise SystemExit(f"{field}[{index}].self_dispatch must be boolean")
         capability_names: list[str] = []
         for cap_index, capability in enumerate(capabilities):
             if not isinstance(capability, str) or capability not in CAPABILITY_TOKENS:
@@ -75,6 +78,7 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
             "main": main,
             "capabilities": capability_names,
             "execution_class": execution_class,
+            "self_dispatch": self_dispatch,
         })
     return entries
 
@@ -85,6 +89,7 @@ def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[
 
     seen: dict[str, str] = {}
     execution_classes_by_main: dict[str, str] = {}
+    self_dispatch_by_main: dict[str, bool] = {}
     for group, entries in (("boot_critical", boot_critical), ("applets", applets)):
         for entry in entries:
             name = str(entry["name"])
@@ -102,6 +107,13 @@ def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[
                     f"aliases sharing {main} must share one execution class"
                 )
             execution_classes_by_main[main] = execution_class
+            self_dispatch = bool(entry["self_dispatch"])
+            previous_self_dispatch = self_dispatch_by_main.get(main)
+            if previous_self_dispatch is not None and previous_self_dispatch != self_dispatch:
+                raise SystemExit(
+                    f"aliases sharing {main} must share one self_dispatch policy"
+                )
+            self_dispatch_by_main[main] = self_dispatch
 
 
 def dispatch_names(boot_critical: list[dict[str, object]], applets: list[dict[str, object]]) -> list[str]:
@@ -198,6 +210,7 @@ def write_dispatch_c(
             f".main = {entry['main']}, "
             f".capabilities = {c_capabilities(entry['capabilities'])}, "
             f".boot_critical = {'true' if boot else 'false'}, "
+            f".self_dispatch = {'true' if entry['self_dispatch'] else 'false'}, "
             f".execution_class = "
             f"{EXECUTION_CLASS_TOKENS[str(entry['execution_class'])]}"
             "},"

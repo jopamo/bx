@@ -6,12 +6,6 @@
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/shell_context.h"
 
-/*
- * Keep the current Linux self-dispatch mechanism behind one exact path. The
- * standalone policy never retries PATH after selecting a registry identity.
- */
-static const char ash_standalone_applet_exec_path[] = "/proc/self/exe";
-
 struct ash_builtin_definition {
     const char* name;
     enum ash_builtin_kind builtin;
@@ -104,10 +98,9 @@ struct ash_command_resolution ash_command_resolution_function(
 struct ash_command_resolution ash_command_resolution_bx_applet(
     const char* name,
     const struct bx_applet* applet,
-    const char* exec_path
+    int executable_fd
 ) {
-    if (name == NULL || applet == NULL || exec_path == NULL ||
-        strchr(exec_path, '/') == NULL) {
+    if (name == NULL || applet == NULL || executable_fd < 0) {
         return ash_command_resolution_not_found(name, ENOENT);
     }
     return (struct ash_command_resolution){
@@ -116,7 +109,7 @@ struct ash_command_resolution ash_command_resolution_bx_applet(
         .target.bx_applet = {
             .applet = applet,
             .execution_class = bx_applet_execution_class_get(applet),
-            .exec_path = exec_path,
+            .executable_fd = executable_fd,
         },
     };
 }
@@ -215,13 +208,15 @@ struct ash_command_resolution ash_command_resolve(
         ash_shell_policy_has(
             &shell->policy,
             ASH_SHELL_POLICY_STANDALONE_APPLETS
-        )) {
+        ) &&
+        shell->owns_self_executable_fd &&
+        shell->self_executable_fd >= 0) {
         const struct bx_applet* applet = bx_applet_find(name);
         if (applet != NULL) {
             return ash_command_resolution_bx_applet(
                 name,
                 applet,
-                ash_standalone_applet_exec_path
+                shell->self_executable_fd
             );
         }
     }
@@ -255,11 +250,7 @@ bool ash_command_resolution_valid(
                     bx_applet_execution_class_get(
                         resolution->target.bx_applet.applet
                     ) &&
-                resolution->target.bx_applet.exec_path != NULL &&
-                strchr(
-                    resolution->target.bx_applet.exec_path,
-                    '/'
-                ) != NULL;
+                resolution->target.bx_applet.executable_fd >= 0;
         case ASH_COMMAND_PATH_SEARCH:
             return resolution->command_name[0] != '\0' &&
                 strchr(resolution->command_name, '/') == NULL;

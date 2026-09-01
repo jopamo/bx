@@ -138,7 +138,16 @@ bx_static_link_args = []
 if use_static_binary
   bx_static_link_args = static_link_probe_args
 endif
-bx_link_args = bx_static_link_args
+bx_build_id_link_args = []
+if host_machine.system() == 'linux'
+  bx_build_id_link_args = cc.get_supported_link_arguments([
+    '-Wl,--build-id=sha1',
+  ])
+  if bx_build_id_link_args.length() == 0
+    error('Linux bx requires linker build-id support for exact self-exec identity')
+  endif
+endif
+bx_link_args = bx_static_link_args + bx_build_id_link_args
 
 mira_embed_opt = get_option('mira_embed')
 mira_embed_dep = declare_dependency()
@@ -284,6 +293,7 @@ bx_core_sources = [
   'src/bx/main.c',
   'src/bx/applet_profile.c',
   'src/bx/runtime_snapshot.c',
+  'src/bx/self_exec.c',
   'src/bx/libbx.c',
 ]
 

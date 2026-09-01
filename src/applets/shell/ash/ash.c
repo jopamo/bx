@@ -29,6 +29,7 @@
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
+#include "bx/self_exec.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
@@ -2387,6 +2388,20 @@ int bx_ash_main(int argc, char** argv) {
         return 2;
     }
 
+    int self_executable_fd = -1;
+    if (standalone_applets) {
+        self_executable_fd = bx_self_exec_fd_dup();
+        if (self_executable_fd < 0) {
+            fprintf(
+                stderr,
+                "%s: standalone applets unavailable: %s\n",
+                progname,
+                strerror(errno != 0 ? errno : ENOENT)
+            );
+            return 2;
+        }
+    }
+
     struct ash_shell shell;
     const struct ash_shell_context_config context_config = {
         .progname = progname,
@@ -2396,10 +2411,15 @@ int bx_ash_main(int argc, char** argv) {
         .options = initial_options |
             (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
         .policy = policy,
+        .take_self_executable_fd = standalone_applets,
+        .self_executable_fd = self_executable_fd,
         .shell_pid = getpid(),
         .command_substitution = ash_command_substitute,
     };
     if (!ash_shell_context_init(&shell, &context_config)) {
+        if (self_executable_fd >= 0) {
+            close(self_executable_fd);
+        }
         fprintf(stderr, "%s: invalid shell context configuration\n", progname);
         return 2;
     }
