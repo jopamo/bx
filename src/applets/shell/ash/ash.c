@@ -2182,6 +2182,8 @@ static void ash_print_option_summary(
         fprintf(stream, "GNU long options:\n");
         fprintf(stream, "\t--help\n");
         fprintf(stream, "\t--init-file\n");
+        fprintf(stream, "\t--login\n");
+        fprintf(stream, "\t--noprofile\n");
         fprintf(stream, "\t--norc\n");
         fprintf(stream, "\t--rcfile\n");
         fprintf(stream, "\t--standalone-applets\n");
@@ -2190,7 +2192,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfistv or -c command or -o/+o option-name\n"
+            "\t-aCfilstv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2207,11 +2209,14 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "  -l           make the shell a login shell\n");
         fprintf(stream, "  -t           exit after one top-level input unit\n");
     }
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  --init-file file\n");
+        fprintf(stream, "  --login      make the shell a login shell\n");
+        fprintf(stream, "  --noprofile  do not read login startup files\n");
         fprintf(stream, "  --rcfile file\n");
         fprintf(stream, "               read file instead of ~/.bashrc\n");
         fprintf(stream, "  --norc       do not read ~/.bashrc\n");
