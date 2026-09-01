@@ -207,6 +207,39 @@ static void ash_lexer_skip_line_continuations(struct ash_lexer* lexer) {
     }
 }
 
+static void ash_lexer_skip_comment(struct ash_lexer* lexer) {
+    assert(ash_lexer_peek(lexer, 0u) == '#');
+    while (!ash_lexer_at_end(lexer) &&
+           ash_lexer_peek(lexer, 0u) != '\n') {
+        (void)ash_lexer_advance(lexer);
+    }
+}
+
+/*
+ * Legacy backquotes close on an unescaped backquote even when that byte is in
+ * text the nested command will later discard as a comment. Stop there rather
+ * than skipping to newline; all other comment bytes are lexically inert.
+ */
+static void ash_lexer_skip_backquote_comment(
+    struct ash_lexer* lexer
+) {
+    assert(ash_lexer_peek(lexer, 0u) == '#');
+    while (!ash_lexer_at_end(lexer)) {
+        char ch = ash_lexer_peek(lexer, 0u);
+        if (ch == '\n' || ch == '`') {
+            return;
+        }
+        if (ch == '\\' &&
+            ash_lexer_peek(lexer, 1u) != '\0' &&
+            ash_lexer_peek(lexer, 1u) != '\n') {
+            ash_lexer_advance_count(lexer, 2u);
+        }
+        else {
+            (void)ash_lexer_advance(lexer);
+        }
+    }
+}
+
 static char ash_lexer_advance_logical(struct ash_lexer* lexer) {
     ash_lexer_skip_line_continuations(lexer);
     return ash_lexer_advance(lexer);
@@ -425,11 +458,18 @@ enum ash_matched_frame_kind {
 };
 
 #define ASH_MATCH_INLINE_FRAMES 8u
+struct ash_matched_frame {
+    enum ash_matched_frame_kind kind;
+    bool comments_enabled;
+    bool comment_eligible;
+    enum ash_quote_kind backquote_quote;
+};
+
 struct ash_matched_stack {
-    enum ash_matched_frame_kind* frames;
+    struct ash_matched_frame* frames;
     size_t count;
     size_t capacity;
-    enum ash_matched_frame_kind inline_frames[ASH_MATCH_INLINE_FRAMES];
+    struct ash_matched_frame inline_frames[ASH_MATCH_INLINE_FRAMES];
 };
 #undef ASH_MATCH_INLINE_FRAMES
 
@@ -450,9 +490,24 @@ static void ash_matched_stack_destroy(struct ash_matched_stack* stack) {
 
 static int ash_matched_stack_push(
     struct ash_matched_stack* stack,
-    enum ash_matched_frame_kind frame
+    enum ash_matched_frame_kind kind
 ) {
-    assert(frame >= ASH_MATCH_PARAMETER && frame < ASH_MATCH_COUNT);
+    assert(kind >= ASH_MATCH_PARAMETER && kind < ASH_MATCH_COUNT);
+    bool comments_enabled =
+        kind == ASH_MATCH_COMMAND ||
+        kind == ASH_MATCH_PROCESS ||
+        kind == ASH_MATCH_BACKQUOTE;
+    if (stack->count != 0u) {
+        struct ash_matched_frame* parent =
+            &stack->frames[stack->count - 1u];
+        if (kind == ASH_MATCH_PAREN) {
+            comments_enabled = parent->comments_enabled;
+            parent->comment_eligible = parent->comments_enabled;
+        }
+        else if (parent->comments_enabled) {
+            parent->comment_eligible = false;
+        }
+    }
     if (stack->count == stack->capacity) {
         if (stack->capacity > SIZE_MAX / 2u ||
             stack->capacity * 2u >
@@ -461,7 +516,7 @@ static int ash_matched_stack_push(
             return -1;
         }
         size_t capacity = stack->capacity * 2u;
-        enum ash_matched_frame_kind* replacement;
+        struct ash_matched_frame* replacement;
         if (stack->frames == stack->inline_frames) {
             replacement = malloc(capacity * sizeof(*replacement));
             if (replacement != NULL) {
@@ -485,7 +540,11 @@ static int ash_matched_stack_push(
         stack->frames = replacement;
         stack->capacity = capacity;
     }
-    stack->frames[stack->count++] = frame;
+    stack->frames[stack->count++] = (struct ash_matched_frame){
+        .kind = kind,
+        .comments_enabled = comments_enabled,
+        .comment_eligible = comments_enabled,
+    };
     return 0;
 }
 
@@ -682,6 +741,11 @@ static int ash_word_append_matched_span(
         ) != 0 ? -1 : 0;
 }
 
+static bool ash_matched_comment_separator(char ch) {
+    return ash_is_blank(ch) || ch == '\n' ||
+        strchr("&|;<>", ch) != NULL;
+}
+
 /*
  * Matched shell constructs share one iterative scanner. The explicit frame
  * stack makes nesting depth input-owned rather than C-stack-owned, while the
@@ -718,8 +782,9 @@ static enum ash_lexer_result ash_lexer_scan_matched(
     size_t body_end = body_start;
 
     while (stack.count != 0u) {
-        enum ash_matched_frame_kind frame =
-            stack.frames[stack.count - 1u];
+        struct ash_matched_frame* active =
+            &stack.frames[stack.count - 1u];
+        enum ash_matched_frame_kind frame = active->kind;
         if (ash_lexer_at_end(lexer)) {
             break;
         }
@@ -745,8 +810,17 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             continue;
         }
         if (frame == ASH_MATCH_BACKQUOTE) {
+            if (ash_is_line_continuation_at(
+                    lexer->input,
+                    lexer->length,
+                    lexer->offset
+                )) {
+                ash_lexer_advance_count(lexer, 2u);
+                continue;
+            }
             if (ch == '\\' && ash_lexer_peek(lexer, 1u) != '\0') {
                 ash_lexer_advance_count(lexer, 2u);
+                active->comment_eligible = false;
                 continue;
             }
             if (ch == '`') {
@@ -755,6 +829,51 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                 }
                 (void)ash_lexer_advance(lexer);
                 stack.count--;
+                continue;
+            }
+
+            if (active->backquote_quote == ASH_QUOTE_SINGLE) {
+                (void)ash_lexer_advance(lexer);
+                if (ch == '\'') {
+                    active->backquote_quote = ASH_QUOTE_NONE;
+                }
+                continue;
+            }
+            if (active->backquote_quote == ASH_QUOTE_DOUBLE) {
+                if (ch == '"') {
+                    active->backquote_quote = ASH_QUOTE_NONE;
+                    (void)ash_lexer_advance(lexer);
+                    continue;
+                }
+                enum ash_matched_frame_kind nested;
+                if (ch == '$' &&
+                    ash_lexer_dollar_frame(lexer, false, &nested)) {
+                    if (ash_lexer_push_matched_frame(
+                            lexer,
+                            &stack,
+                            nested
+                        ) != 0) {
+                        goto out_of_memory;
+                    }
+                    continue;
+                }
+                (void)ash_lexer_advance(lexer);
+                continue;
+            }
+            if (ch == '#' && active->comment_eligible) {
+                ash_lexer_skip_backquote_comment(lexer);
+                continue;
+            }
+            if (ch == '\'') {
+                active->backquote_quote = ASH_QUOTE_SINGLE;
+                active->comment_eligible = false;
+                (void)ash_lexer_advance(lexer);
+                continue;
+            }
+            if (ch == '"') {
+                active->backquote_quote = ASH_QUOTE_DOUBLE;
+                active->comment_eligible = false;
+                (void)ash_lexer_advance(lexer);
                 continue;
             }
 
@@ -780,6 +899,8 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                 }
                 continue;
             }
+            active->comment_eligible =
+                ash_matched_comment_separator(ch);
             (void)ash_lexer_advance(lexer);
             continue;
         }
@@ -839,6 +960,15 @@ static enum ash_lexer_result ash_lexer_scan_matched(
             if (!ash_lexer_at_end(lexer)) {
                 (void)ash_lexer_advance(lexer);
             }
+            if (active->comments_enabled) {
+                active->comment_eligible = false;
+            }
+            continue;
+        }
+        if (ch == '#' &&
+            active->comments_enabled &&
+            active->comment_eligible) {
+            ash_lexer_skip_comment(lexer);
             continue;
         }
 
@@ -938,6 +1068,10 @@ static enum ash_lexer_result ash_lexer_scan_matched(
                 goto out_of_memory;
             }
             continue;
+        }
+        if (active->comments_enabled) {
+            active->comment_eligible =
+                ash_matched_comment_separator(ch);
         }
         (void)ash_lexer_advance(lexer);
     }
@@ -1548,9 +1682,7 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
         }
         ash_lexer_skip_line_continuations(lexer);
         if (ash_lexer_peek(lexer, 0u) == '#') {
-            while (!ash_lexer_at_end(lexer) && ash_lexer_peek(lexer, 0u) != '\n') {
-                (void)ash_lexer_advance(lexer);
-            }
+            ash_lexer_skip_comment(lexer);
             continue;
         }
         break;
