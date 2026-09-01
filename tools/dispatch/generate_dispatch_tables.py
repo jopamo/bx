@@ -19,16 +19,23 @@ CAPABILITY_TOKENS = {
     "privilege-sensitive": "BX_APPLET_CAP_PRIVILEGE_SENSITIVITY",
     "raw-output": "BX_APPLET_CAP_RAW_OUTPUT",
 }
+EXECUTION_CLASS_TOKENS = {
+    "exec-only": "BX_APPLET_EXEC_ONLY",
+    "child-in-process-safe": "BX_APPLET_CHILD_IN_PROCESS_SAFE",
+    "parent-shell-safe": "BX_APPLET_PARENT_SHELL_SAFE",
+}
 
 
 def read_manifest(path: Path) -> dict[str, object]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise SystemExit(f"dispatch manifest is not an object: {path}")
-    if data.get("manifest_version") != 1:
-        raise SystemExit("dispatch manifest manifest_version must be 1")
+    if data.get("manifest_version") != 2:
+        raise SystemExit("dispatch manifest manifest_version must be 2")
     if data.get("capability_flags") != list(CAPABILITY_TOKENS):
         raise SystemExit("dispatch manifest capability_flags must match generator capability order")
+    if data.get("execution_classes") != list(EXECUTION_CLASS_TOKENS):
+        raise SystemExit("dispatch manifest execution_classes must match generator policy order")
     return data
 
 
@@ -43,12 +50,19 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
         name = item.get("name")
         main = item.get("main")
         capabilities = item.get("capabilities")
+        execution_class = item.get("execution_class")
         if not isinstance(name, str) or not NAME_RE.match(name):
             raise SystemExit(f"{field}[{index}] has invalid applet name")
         if not isinstance(main, str) or not SYMBOL_RE.match(main):
             raise SystemExit(f"{field}[{index}] has invalid main symbol")
         if not isinstance(capabilities, list):
             raise SystemExit(f"{field}[{index}] must include capabilities list")
+        if not isinstance(execution_class, str):
+            raise SystemExit(f"{field}[{index}] must include execution_class")
+        if execution_class not in EXECUTION_CLASS_TOKENS:
+            raise SystemExit(
+                f"{field}[{index}].execution_class is not an allowed execution class"
+            )
         capability_names: list[str] = []
         for cap_index, capability in enumerate(capabilities):
             if not isinstance(capability, str) or capability not in CAPABILITY_TOKENS:
@@ -56,7 +70,12 @@ def load_entries(manifest: dict[str, object], field: str) -> list[dict[str, obje
             if capability in capability_names:
                 raise SystemExit(f"{field}[{index}].capabilities duplicates {capability!r}")
             capability_names.append(capability)
-        entries.append({"name": name, "main": main, "capabilities": capability_names})
+        entries.append({
+            "name": name,
+            "main": main,
+            "capabilities": capability_names,
+            "execution_class": execution_class,
+        })
     return entries
 
 
@@ -65,15 +84,24 @@ def validate_entries(boot_critical: list[dict[str, object]], applets: list[dict[
         raise SystemExit("boot-critical dispatch order must begin with switch_root")
 
     seen: dict[str, str] = {}
+    execution_classes_by_main: dict[str, str] = {}
     for group, entries in (("boot_critical", boot_critical), ("applets", applets)):
         for entry in entries:
             name = str(entry["name"])
+            main = str(entry["main"])
             previous = seen.get(name)
             if previous is not None:
                 raise SystemExit(
                     f"duplicate dispatch applet name {name!r} in {group}; first seen in {previous}"
                 )
             seen[name] = group
+            execution_class = str(entry["execution_class"])
+            previous_class = execution_classes_by_main.get(main)
+            if previous_class is not None and previous_class != execution_class:
+                raise SystemExit(
+                    f"aliases sharing {main} must share one execution class"
+                )
+            execution_classes_by_main[main] = execution_class
 
 
 def dispatch_names(boot_critical: list[dict[str, object]], applets: list[dict[str, object]]) -> list[str]:
@@ -126,6 +154,7 @@ def metadata_record(
     return {
         "name": str(entry["name"]),
         "boot_critical": boot_critical,
+        "execution_class": str(entry["execution_class"]),
         "capabilities": [str(capability) for capability in entry["capabilities"]],
         "aliases": aliases,
     }
@@ -140,20 +169,15 @@ def write_dispatch_c(
 ) -> None:
     raw_entries = boot_critical + applets
     aliases = aliases_by_name(raw_entries)
-    entries = [
-        (str(entry["name"]), str(entry["main"]), entry["capabilities"], True, entry)
-        for entry in boot_critical
-    ] + [
-        (str(entry["name"]), str(entry["main"]), entry["capabilities"], False, entry)
-        for entry in applets
-    ]
+    entries = [(entry, True) for entry in boot_critical]
+    entries.extend((entry, False) for entry in applets)
     metadata_records = [
         metadata_record(
             entry=entry,
             boot_critical=bool(boot),
             aliases=aliases[str(entry["name"])],
         )
-        for _name, _main, _capabilities, boot, entry in entries
+        for entry, boot in entries
     ]
 
     lines: list[str] = []
@@ -167,13 +191,15 @@ def write_dispatch_c(
     lines.append('#include "dispatch/dispatch.h"')
     lines.append("")
     lines.append("static const struct bx_applet bx_applets[] = {")
-    for name, main, capabilities, boot, _entry in entries:
+    for entry, boot in entries:
         lines.append(
             "    {"
-            f".name = {c_string(name)}, "
-            f".main = {main}, "
-            f".capabilities = {c_capabilities(capabilities)}, "
-            f".boot_critical = {'true' if boot else 'false'}"
+            f".name = {c_string(str(entry['name']))}, "
+            f".main = {entry['main']}, "
+            f".capabilities = {c_capabilities(entry['capabilities'])}, "
+            f".boot_critical = {'true' if boot else 'false'}, "
+            f".execution_class = "
+            f"{EXECUTION_CLASS_TOKENS[str(entry['execution_class'])]}"
             "},"
         )
     lines.append("};")
@@ -202,6 +228,10 @@ def write_dispatch_c(
         lines.append("    {")
         lines.append(f"        .name = {c_string(str(record['name']))},")
         lines.append(f"        .boot_critical = {'true' if record['boot_critical'] else 'false'},")
+        lines.append(
+            f"        .execution_class = "
+            f"{c_string(str(record['execution_class']))},"
+        )
         lines.append(f"        .capabilities = {capabilities_var if capabilities else 'NULL'},")
         lines.append(f"        .capability_count = {len(capabilities)}u,")
         lines.append(f"        .aliases = {aliases_var if aliases_for_record else 'NULL'},")

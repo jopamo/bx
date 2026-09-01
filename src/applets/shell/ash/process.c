@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <signal.h>
@@ -66,6 +67,145 @@ static bool ash_job_role_valid(
 static bool ash_process_terminal(const struct ash_process* process) {
     return process->child.state == ASH_CHILD_EXITED ||
         process->child.state == ASH_CHILD_SIGNALED;
+}
+
+static bool ash_child_invariants(const struct ash_child* child) {
+    if (child == NULL || child->state < ASH_CHILD_PREPARED ||
+        child->state > ASH_CHILD_SIGNALED ||
+        child->process_group < 0) {
+        return false;
+    }
+    switch (child->state) {
+        case ASH_CHILD_PREPARED:
+            return child->pid == 0 && child->process_group == 0 &&
+                child->wait_status == 0;
+        case ASH_CHILD_RUNNING:
+            return child->pid > 0;
+        case ASH_CHILD_STOPPED:
+            return child->pid > 0 && WIFSTOPPED(child->wait_status);
+        case ASH_CHILD_EXITED:
+            return child->pid > 0 && WIFEXITED(child->wait_status);
+        case ASH_CHILD_SIGNALED:
+            return child->pid > 0 && WIFSIGNALED(child->wait_status);
+    }
+    return false;
+}
+
+static bool ash_job_processes_invariants(const struct ash_job* job) {
+    if (job->process_count > job->process_capacity ||
+        (job->process_capacity == 0u) != (job->processes == NULL) ||
+        (job->process_count == 0u && job->status_process != 0u) ||
+        (job->process_count != 0u &&
+         job->status_process >= job->process_count)) {
+        return false;
+    }
+
+    bool running = false;
+    bool stopped = false;
+    for (size_t i = 0u; i < job->process_count; i++) {
+        const struct ash_process* process = &job->processes[i];
+        if (!ash_process_role_valid(process->role) ||
+            !ash_job_role_valid(job->kind, process->role) ||
+            !ash_child_invariants(&process->child) ||
+            (job->process_group > 0 &&
+             process->child.process_group > 0 &&
+             process->child.process_group != job->process_group)) {
+            return false;
+        }
+        running |= process->child.state == ASH_CHILD_RUNNING;
+        stopped |= process->child.state == ASH_CHILD_STOPPED;
+    }
+
+    if (job->state == ASH_JOB_PREPARING) {
+        return true;
+    }
+    if (job->process_count == 0u) {
+        return false;
+    }
+    for (size_t i = 0u; i < job->process_count; i++) {
+        if (job->processes[i].child.state == ASH_CHILD_PREPARED) {
+            return false;
+        }
+    }
+    enum ash_job_state derived = running ?
+        ASH_JOB_RUNNING :
+        (stopped ? ASH_JOB_STOPPED : ASH_JOB_COMPLETED);
+    return job->state == derived;
+}
+
+static bool ash_job_list_acyclic(const struct ash_job* jobs) {
+    const struct ash_job* slow = jobs;
+    const struct ash_job* fast = jobs;
+    while (fast != NULL && fast->next != NULL) {
+        slow = slow->next;
+        fast = fast->next->next;
+        if (slow == fast) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ash_jobs_invariants(const struct ash_shell* shell) {
+    if (shell == NULL || !ash_job_list_acyclic(shell->jobs)) {
+        return false;
+    }
+
+    for (const struct ash_job* job = shell->jobs;
+         job != NULL;
+         job = job->next) {
+        if (job->owner != shell ||
+            !ash_job_kind_valid(job->kind) ||
+            !ash_job_foreground_valid(job->kind, job->foreground) ||
+            job->state < ASH_JOB_PREPARING ||
+            job->state > ASH_JOB_COMPLETED ||
+            (job->visibility != ASH_JOB_PRIVATE &&
+             job->visibility != ASH_JOB_PUBLISHED) ||
+            job->process_group < 0 ||
+            (job->visibility == ASH_JOB_PRIVATE && job->id != 0u) ||
+            (job->visibility == ASH_JOB_PUBLISHED &&
+             (job->id == 0u || job->foreground ||
+              job->state == ASH_JOB_PREPARING)) ||
+            (job->state == ASH_JOB_PREPARING &&
+             job->visibility != ASH_JOB_PRIVATE) ||
+            !ash_job_processes_invariants(job)) {
+            return false;
+        }
+
+        for (const struct ash_job* duplicate = job->next;
+             duplicate != NULL;
+             duplicate = duplicate->next) {
+            if (job->id != 0u && job->id == duplicate->id) {
+                return false;
+            }
+        }
+        for (size_t i = 0u; i < job->process_count; i++) {
+            const struct ash_child* child = &job->processes[i].child;
+            if (child->state != ASH_CHILD_RUNNING &&
+                child->state != ASH_CHILD_STOPPED) {
+                continue;
+            }
+            for (const struct ash_job* other_job = shell->jobs;
+                 other_job != NULL;
+                 other_job = other_job->next) {
+                for (size_t j = 0u;
+                     j < other_job->process_count;
+                     j++) {
+                    const struct ash_child* other =
+                        &other_job->processes[j].child;
+                    if (other == child ||
+                        (other->state != ASH_CHILD_RUNNING &&
+                         other->state != ASH_CHILD_STOPPED)) {
+                        continue;
+                    }
+                    if (other->pid == child->pid) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
 }
 
 static bool ash_job_owned(const struct ash_job* job) {
@@ -135,6 +275,7 @@ struct ash_job* ash_job_create(
         errno = EINVAL;
         return NULL;
     }
+    assert(ash_jobs_invariants(shell));
     struct ash_job* job = calloc(1u, sizeof(*job));
     if (job == NULL) {
         return NULL;
@@ -148,6 +289,7 @@ struct ash_job* ash_job_create(
         .foreground = foreground,
     };
     shell->jobs = job;
+    assert(ash_jobs_invariants(shell));
     return job;
 }
 
@@ -199,6 +341,7 @@ int ash_job_add_process(
         },
     };
     job->status_process = *process_index;
+    assert(ash_jobs_invariants(job->owner));
     return 0;
 }
 
@@ -210,7 +353,9 @@ int ash_job_register_process(
 ) {
     if (!ash_job_owned(job) || job->state != ASH_JOB_PREPARING ||
         process_index >= job->process_count || pid <= 0 ||
-        process_group < 0) {
+        process_group < 0 ||
+        (process_group > 0 && job->process_group > 0 &&
+         process_group != job->process_group)) {
         errno = EINVAL;
         return -1;
     }
@@ -226,7 +371,16 @@ int ash_job_register_process(
     if (job->process_group == 0 && process_group > 0) {
         job->process_group = process_group;
     }
+    assert(ash_jobs_invariants(job->owner));
     return 0;
+}
+
+static void ash_job_remove_last_process(struct ash_job* job) {
+    assert(job->process_count != 0u);
+    job->process_count--;
+    job->processes[job->process_count] = (struct ash_process){0};
+    job->status_process = job->process_count == 0u ?
+        0u : job->process_count - 1u;
 }
 
 int ash_job_start_process(
@@ -245,8 +399,8 @@ int ash_job_start_process(
     }
     pid_t pid = bx_child_fork_callback_start(callback, user_data);
     if (pid < 0) {
-        job->processes[--job->process_count] =
-            (struct ash_process){0};
+        ash_job_remove_last_process(job);
+        assert(ash_jobs_invariants(job->owner));
         return -1;
     }
     if (ash_job_register_process(
@@ -259,8 +413,8 @@ int ash_job_start_process(
         (void)kill(pid, SIGKILL);
         while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {
         }
-        job->processes[--job->process_count] =
-            (struct ash_process){0};
+        ash_job_remove_last_process(job);
+        assert(ash_jobs_invariants(job->owner));
         errno = error;
         return -1;
     }
@@ -293,6 +447,7 @@ bool ash_job_commit(
     job->id = id;
     job->visibility = visibility;
     job->state = ASH_JOB_RUNNING;
+    assert(ash_jobs_invariants(job->owner));
     return true;
 }
 
@@ -346,6 +501,7 @@ bool ash_child_record_wait_status(
     process->child.state = state;
     process->child.wait_status = wait_status;
     ash_job_refresh_state(job);
+    assert(ash_jobs_invariants(job->owner));
     return true;
 }
 
@@ -443,9 +599,12 @@ bool ash_job_release(struct ash_job* job) {
             return false;
         }
     }
+    struct ash_shell* owner = job->owner;
+    (void)owner;
     ash_job_unlink(job);
     free(job->processes);
     free(job);
+    assert(ash_jobs_invariants(owner));
     return true;
 }
 
@@ -453,6 +612,8 @@ void ash_job_abort(struct ash_job* job) {
     if (!ash_job_owned(job)) {
         return;
     }
+    struct ash_shell* owner = job->owner;
+    (void)owner;
     /*
      * Abort is failure cleanup, not user-visible job termination. Use an
      * uncatchable signal so a stopped or signal-handling child cannot keep
@@ -480,6 +641,7 @@ void ash_job_abort(struct ash_job* job) {
     ash_job_unlink(job);
     free(job->processes);
     free(job);
+    assert(ash_jobs_invariants(owner));
 }
 
 static struct ash_job* ash_jobs_find_pid(
@@ -561,6 +723,7 @@ void ash_jobs_destroy(struct ash_shell* shell) {
     if (shell == NULL) {
         return;
     }
+    assert(ash_jobs_invariants(shell));
     struct ash_job* job = shell->jobs;
     shell->jobs = NULL;
     while (job != NULL) {
@@ -576,6 +739,7 @@ void ash_jobs_destroy(struct ash_shell* shell) {
         free(job);
         job = next;
     }
+    assert(ash_jobs_invariants(shell));
 }
 
 pid_t ash_job_last_pid(const struct ash_job* job) {
@@ -589,8 +753,10 @@ void ash_jobs_detach_after_fork(struct ash_shell* shell) {
     if (shell == NULL) {
         return;
     }
+    assert(ash_jobs_invariants(shell));
     shell->jobs = NULL;
     shell->next_job_id = 1u;
     shell->last_async_pid = -1;
     shell->shell_pid = getpid();
+    assert(ash_jobs_invariants(shell));
 }

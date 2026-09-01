@@ -126,6 +126,7 @@ int ash_jobs_wait_pid(
     int* exit_status
 );
 int ash_jobs_wait_all(struct ash_shell* shell, int* exit_status);
+bool ash_jobs_invariants(const struct ash_shell* shell);
 void ash_jobs_destroy(struct ash_shell* shell);
 
 bool ash_child_record_wait_status(

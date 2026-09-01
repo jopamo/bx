@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,63 @@ static struct ash_scope* ash_scope_allocate(enum ash_scope_kind kind) {
         scope->kind = kind;
     }
     return scope;
+}
+
+static bool ash_scope_chain_acyclic(const struct ash_scope* scope) {
+    const struct ash_scope* slow = scope;
+    const struct ash_scope* fast = scope;
+    while (fast != NULL && fast->parent != NULL) {
+        slow = slow->parent;
+        fast = fast->parent->parent;
+        if (slow == fast) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ash_scope_stack_invariants(const struct ash_shell* shell) {
+    if (shell == NULL || shell->scopes == NULL ||
+        !ash_scope_chain_acyclic(shell->scopes)) {
+        return false;
+    }
+
+    size_t global_count = 0u;
+    for (const struct ash_scope* scope = shell->scopes;
+         scope != NULL;
+         scope = scope->parent) {
+        if (scope->kind < ASH_SCOPE_GLOBAL ||
+            scope->kind > ASH_SCOPE_FUNCTION ||
+            !ash_var_list_invariants(scope->variables)) {
+            return false;
+        }
+        if (scope->kind == ASH_SCOPE_GLOBAL) {
+            global_count++;
+            if (scope->parent != NULL) {
+                return false;
+            }
+        }
+
+        bool owns_positionals =
+            scope->kind == ASH_SCOPE_GLOBAL ||
+            scope->kind == ASH_SCOPE_FUNCTION;
+        if (scope->has_positionals != owns_positionals) {
+            return false;
+        }
+        if (scope->has_positionals) {
+            if (scope->positionals.argv0 == NULL ||
+                (scope->positionals.count != 0u &&
+                 scope->positionals.values == NULL)) {
+                return false;
+            }
+        }
+        else if (scope->positionals.argv0 != NULL ||
+            scope->positionals.values != NULL ||
+            scope->positionals.count != 0u) {
+            return false;
+        }
+    }
+    return global_count == 1u;
 }
 
 bool ash_scope_stack_init(
@@ -34,6 +92,7 @@ bool ash_scope_stack_init(
         .count = positional_count,
     };
     shell->scopes = global;
+    assert(ash_scope_stack_invariants(shell));
     return true;
 }
 
@@ -41,6 +100,7 @@ bool ash_scope_push_temporary(struct ash_shell* shell) {
     if (shell == NULL || shell->scopes == NULL) {
         return false;
     }
+    assert(ash_scope_stack_invariants(shell));
     struct ash_scope* scope = ash_scope_allocate(
         ASH_SCOPE_TEMPORARY_ASSIGNMENT
     );
@@ -49,6 +109,7 @@ bool ash_scope_push_temporary(struct ash_shell* shell) {
     }
     scope->parent = shell->scopes;
     shell->scopes = scope;
+    assert(ash_scope_stack_invariants(shell));
     return true;
 }
 
@@ -57,9 +118,13 @@ bool ash_scope_push_function(
     char** positional_values,
     size_t positional_count
 ) {
-    const struct ash_positional_frame* caller = ash_scope_positionals(shell);
-    if (caller == NULL ||
+    if (shell == NULL || shell->scopes == NULL ||
         (positional_count > 0 && positional_values == NULL)) {
+        return false;
+    }
+    assert(ash_scope_stack_invariants(shell));
+    const struct ash_positional_frame* caller = ash_scope_positionals(shell);
+    if (caller == NULL) {
         return false;
     }
     struct ash_scope* scope = ash_scope_allocate(ASH_SCOPE_FUNCTION);
@@ -74,6 +139,7 @@ bool ash_scope_push_function(
     };
     scope->parent = shell->scopes;
     shell->scopes = scope;
+    assert(ash_scope_stack_invariants(shell));
     return true;
 }
 
@@ -81,8 +147,11 @@ enum ash_scope_pop_result ash_scope_pop(
     struct ash_shell* shell,
     enum ash_scope_kind expected_kind
 ) {
-    if (shell == NULL || shell->scopes == NULL ||
-        shell->scopes->kind == ASH_SCOPE_GLOBAL ||
+    if (shell == NULL || shell->scopes == NULL) {
+        return ASH_SCOPE_POP_MISMATCH;
+    }
+    assert(ash_scope_stack_invariants(shell));
+    if (shell->scopes->kind == ASH_SCOPE_GLOBAL ||
         shell->scopes->kind != expected_kind) {
         return ASH_SCOPE_POP_MISMATCH;
     }
@@ -99,6 +168,7 @@ enum ash_scope_pop_result ash_scope_pop(
     }
     ash_var_list_destroy(&removed->variables);
     free(removed);
+    assert(ash_scope_stack_invariants(shell));
     return published ? ASH_SCOPE_POP_OK :
         ASH_SCOPE_POP_PUBLICATION_ERROR;
 }
@@ -107,12 +177,16 @@ void ash_scope_stack_destroy(struct ash_shell* shell) {
     if (shell == NULL) {
         return;
     }
+    if (shell->scopes != NULL) {
+        assert(ash_scope_stack_invariants(shell));
+    }
     while (shell->scopes != NULL) {
         struct ash_scope* scope = shell->scopes;
         shell->scopes = scope->parent;
         ash_var_list_destroy(&scope->variables);
         free(scope);
     }
+    assert(shell->scopes == NULL);
 }
 
 struct ash_scope* ash_scope_current(struct ash_shell* shell) {

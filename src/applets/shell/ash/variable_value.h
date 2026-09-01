@@ -45,6 +45,7 @@ struct ash_value {
     } data;
 };
 
+bool ash_value_invariants(const struct ash_value* value);
 bool ash_value_init_scalar(struct ash_value* value, const char* scalar);
 void ash_value_init_indexed(struct ash_value* value);
 void ash_value_init_associative(struct ash_value* value);

@@ -54,23 +54,13 @@ struct ash_command_resolution ash_command_resolution_function(const char* name, 
     };
 }
 
-enum ash_applet_execution_class ash_applet_execution_classify(const struct bx_applet* applet) {
-    (void)applet;
-    /*
-     * Fail closed. No current bx applet has yet passed the repeated-call,
-     * process-state restoration, and fatal-path audit required for an
-     * in-process shell execution class.
-     */
-    return ASH_APPLET_EXEC_ONLY;
-}
-
 struct ash_command_resolution ash_command_resolution_bx_applet(const char* name, const struct bx_applet* applet) {
     return (struct ash_command_resolution){
         .kind = ASH_COMMAND_BX_APPLET,
         .command_name = name,
         .target.bx_applet = {
             .applet = applet,
-            .execution_class = ash_applet_execution_classify(applet),
+            .execution_class = bx_applet_execution_class_get(applet),
         },
     };
 }

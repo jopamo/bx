@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -29,15 +30,20 @@ bool ash_value_init_scalar(struct ash_value* value, const char* scalar) {
     }
     *value = (struct ash_value){.kind = ASH_VALUE_SCALAR};
     value->data.scalar = ash_value_duplicate(scalar);
+    if (value->data.scalar != NULL) {
+        assert(ash_value_invariants(value));
+    }
     return value->data.scalar != NULL;
 }
 
 void ash_value_init_indexed(struct ash_value* value) {
     *value = (struct ash_value){.kind = ASH_VALUE_INDEXED_ARRAY};
+    assert(ash_value_invariants(value));
 }
 
 void ash_value_init_associative(struct ash_value* value) {
     *value = (struct ash_value){.kind = ASH_VALUE_ASSOCIATIVE_ARRAY};
+    assert(ash_value_invariants(value));
 }
 
 void ash_value_destroy(struct ash_value* value) {
@@ -84,6 +90,7 @@ bool ash_value_set_scalar(struct ash_value* value, const char* scalar) {
     }
     ash_value_destroy(value);
     *value = candidate;
+    assert(ash_value_invariants(value));
     return true;
 }
 
@@ -135,6 +142,7 @@ bool ash_value_indexed_set(
     if (position < array->count && array->elements[position].index == index) {
         free(array->elements[position].value);
         array->elements[position].value = copy;
+        assert(ash_value_invariants(value));
         return true;
     }
     if (array->count == array->capacity) {
@@ -166,6 +174,7 @@ bool ash_value_indexed_set(
         .value = copy,
     };
     array->count++;
+    assert(ash_value_invariants(value));
     return true;
 }
 
@@ -185,6 +194,7 @@ bool ash_value_indexed_unset(struct ash_value* value, size_t index) {
         &array->elements[position + 1u],
         (array->count - position) * sizeof(*array->elements)
     );
+    assert(ash_value_invariants(value));
     return true;
 }
 
@@ -198,6 +208,90 @@ static size_t ash_associative_hash(const char* key) {
         hash *= prime;
     }
     return hash;
+}
+
+static bool ash_associative_chain_acyclic(
+    const struct ash_associative_element* head
+) {
+    const struct ash_associative_element* slow = head;
+    const struct ash_associative_element* fast = head;
+    while (fast != NULL && fast->next != NULL) {
+        slow = slow->next;
+        fast = fast->next->next;
+        if (slow == fast) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ash_value_invariants(const struct ash_value* value) {
+    if (value == NULL) {
+        return false;
+    }
+    switch (value->kind) {
+        case ASH_VALUE_SCALAR:
+            return value->data.scalar != NULL;
+        case ASH_VALUE_INDEXED_ARRAY: {
+            const struct ash_indexed_array* array = &value->data.indexed;
+            if (array->count > array->capacity ||
+                (array->capacity == 0u) != (array->elements == NULL)) {
+                return false;
+            }
+            for (size_t i = 0u; i < array->count; i++) {
+                if (array->elements[i].value == NULL ||
+                    (i != 0u &&
+                     array->elements[i - 1u].index >=
+                        array->elements[i].index)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        case ASH_VALUE_ASSOCIATIVE_ARRAY: {
+            const struct ash_associative_array* array =
+                &value->data.associative;
+            if ((array->bucket_count == 0u) !=
+                (array->buckets == NULL)) {
+                return false;
+            }
+            size_t count = 0u;
+            for (size_t i = 0u; i < array->bucket_count; i++) {
+                if (!ash_associative_chain_acyclic(array->buckets[i])) {
+                    return false;
+                }
+                for (const struct ash_associative_element* item =
+                         array->buckets[i];
+                     item != NULL;
+                     item = item->next) {
+                    if (item->key == NULL || item->key[0] == '\0' ||
+                        item->value == NULL ||
+                        item->hash != ash_associative_hash(item->key) ||
+                        item->hash % array->bucket_count != i ||
+                        count == SIZE_MAX) {
+                        return false;
+                    }
+                    count++;
+                }
+                for (const struct ash_associative_element* item =
+                         array->buckets[i];
+                     item != NULL;
+                     item = item->next) {
+                    for (const struct ash_associative_element* duplicate =
+                             item->next;
+                         duplicate != NULL;
+                         duplicate = duplicate->next) {
+                        if (item->hash == duplicate->hash &&
+                            strcmp(item->key, duplicate->key) == 0) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return count == array->count;
+        }
+    }
+    return false;
 }
 
 static bool ash_associative_resize(struct ash_associative_array* array, size_t count) {
@@ -277,6 +371,7 @@ bool ash_value_associative_set(
     if (item != NULL) {
         free(item->value);
         item->value = copy;
+        assert(ash_value_invariants(value));
         return true;
     }
     if (array->bucket_count == 0u &&
@@ -308,6 +403,7 @@ bool ash_value_associative_set(
     item->next = array->buckets[bucket];
     array->buckets[bucket] = item;
     array->count++;
+    assert(ash_value_invariants(value));
     return true;
 }
 
@@ -328,6 +424,7 @@ bool ash_value_associative_unset(struct ash_value* value, const char* key) {
             free(item->value);
             free(item);
             array->count--;
+            assert(ash_value_invariants(value));
             return true;
         }
         link = &item->next;

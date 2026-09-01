@@ -1,6 +1,6 @@
 {
-  "manifest_version": 1,
-  "basis": "Central applet dispatch manifest. Generated C applet registry tables are built from this file; src/bx/main.c must not hand-maintain applet tables or capability flags.",
+  "manifest_version": 2,
+  "basis": "Central applet dispatch manifest. Generated C applet registry tables are built from this file; src/bx/main.c must not hand-maintain applet tables, capability flags, or execution policy.",
   "boot_critical": [
     {
       "name": "switch_root",
@@ -9,7 +9,8 @@
         "filesystem-read",
         "filesystem-write",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "init",
@@ -21,7 +22,8 @@
         "terminal-control",
         "privilege-sensitive",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "linuxrc",
@@ -33,7 +35,8 @@
         "terminal-control",
         "privilege-sensitive",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "syslogd",
@@ -43,7 +46,8 @@
         "filesystem-write",
         "privilege-sensitive",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "applets": [
@@ -54,7 +58,8 @@
         "filesystem-read",
         "filesystem-write",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sh",
@@ -63,7 +68,8 @@
         "filesystem-read",
         "filesystem-write",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "bash",
@@ -72,40 +78,46 @@
         "filesystem-read",
         "filesystem-write",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "bc",
       "main": "bx_bc_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "cat",
       "main": "bx_cat_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "cut",
       "main": "bx_cut_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "date",
       "main": "bx_date_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "which",
       "main": "bx_which_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "ln",
@@ -113,7 +125,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "link",
@@ -121,7 +134,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "unlink",
@@ -129,45 +143,52 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "readlink",
       "main": "bx_readlink_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "realpath",
       "main": "bx_realpath_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "basename",
       "main": "bx_basename_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "dirname",
       "main": "bx_dirname_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "dircolors",
       "main": "bx_dircolors_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "pathchk",
       "main": "bx_pathchk_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "ls",
@@ -177,35 +198,40 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "dir",
       "main": "bx_dir_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "vdir",
       "main": "bx_vdir_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "stat",
       "main": "bx_stat_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "df",
       "main": "bx_df_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "du",
@@ -213,7 +239,8 @@
       "capabilities": [
         "filesystem-read",
         "recursive-traversal"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sync",
@@ -221,7 +248,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "dd",
@@ -229,12 +257,14 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "printf",
       "main": "bx_printf_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "ed",
@@ -242,7 +272,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "vim",
@@ -252,14 +283,16 @@
         "filesystem-write",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "jq",
       "main": "bx_jq_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "xxd",
@@ -268,7 +301,8 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "env",
@@ -276,22 +310,26 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "printenv",
       "main": "bx_printenv_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "pwd",
       "main": "bx_pwd_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "tty",
       "main": "bx_tty_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "stty",
@@ -300,7 +338,8 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "screen",
@@ -310,7 +349,8 @@
         "filesystem-write",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "getty",
@@ -320,7 +360,8 @@
         "terminal-control",
         "privilege-sensitive",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "setsid",
@@ -328,21 +369,24 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "dhcp",
       "main": "bx_dhcp_main",
       "capabilities": [
         "network-access"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "udhcpc",
       "main": "bx_dhcp_main",
       "capabilities": [
         "network-access"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "nice",
@@ -350,7 +394,8 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "nohup",
@@ -358,7 +403,8 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "timeout",
@@ -366,7 +412,8 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "stdbuf",
@@ -374,7 +421,8 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "chroot",
@@ -383,7 +431,8 @@
         "filesystem-read",
         "child-execution",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mount",
@@ -392,7 +441,8 @@
         "filesystem-read",
         "filesystem-write",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "umount",
@@ -401,33 +451,38 @@
         "filesystem-read",
         "filesystem-write",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "fuser",
       "main": "bx_fuser_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "kill",
       "main": "bx_kill_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "killall",
       "main": "bx_killall_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "peekfd",
       "main": "bx_peekfd_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "ps",
@@ -436,14 +491,16 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "pslog",
       "main": "bx_pslog_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "pstree",
@@ -452,14 +509,16 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "prtstat",
       "main": "bx_prtstat_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "dmesg",
@@ -468,7 +527,8 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "reboot",
@@ -476,7 +536,8 @@
       "capabilities": [
         "filesystem-read",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "halt",
@@ -484,7 +545,8 @@
       "capabilities": [
         "filesystem-read",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "poweroff",
@@ -492,7 +554,8 @@
       "capabilities": [
         "filesystem-read",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "chmod",
@@ -502,7 +565,8 @@
         "filesystem-write",
         "recursive-traversal",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "chown",
@@ -512,7 +576,8 @@
         "filesystem-write",
         "recursive-traversal",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "chgrp",
@@ -522,7 +587,8 @@
         "filesystem-write",
         "recursive-traversal",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "rm",
@@ -531,7 +597,8 @@
         "filesystem-read",
         "filesystem-write",
         "recursive-traversal"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mkdir",
@@ -539,7 +606,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "rmdir",
@@ -547,7 +615,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mkfifo",
@@ -555,7 +624,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mknod",
@@ -564,7 +634,8 @@
         "filesystem-read",
         "filesystem-write",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mktemp",
@@ -572,7 +643,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "touch",
@@ -580,7 +652,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tree",
@@ -590,7 +663,8 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "truncate",
@@ -598,7 +672,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "shred",
@@ -606,7 +681,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "install",
@@ -615,7 +691,8 @@
         "filesystem-read",
         "filesystem-write",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "cp",
@@ -624,7 +701,8 @@
         "filesystem-read",
         "filesystem-write",
         "recursive-traversal"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mv",
@@ -632,14 +710,16 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "nl",
       "main": "bx_nl_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "od",
@@ -648,26 +728,30 @@
         "filesystem-read",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "paste",
       "main": "bx_paste_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "nproc",
       "main": "bx_nproc_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "numfmt",
       "main": "bx_numfmt_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "nc",
@@ -675,7 +759,8 @@
       "capabilities": [
         "filesystem-read",
         "network-access"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "socat",
@@ -687,7 +772,8 @@
         "privilege-sensitive",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "netcat",
@@ -695,7 +781,8 @@
       "capabilities": [
         "filesystem-read",
         "network-access"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "wget",
@@ -704,7 +791,8 @@
         "filesystem-read",
         "filesystem-write",
         "network-access"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "traceroute",
@@ -713,7 +801,8 @@
         "filesystem-read",
         "network-access",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "ping",
@@ -722,67 +811,78 @@
         "filesystem-read",
         "network-access",
         "privilege-sensitive"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "expr",
       "main": "bx_expr_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "fold",
       "main": "bx_fold_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "fmt",
       "main": "bx_fmt_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "head",
       "main": "bx_head_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "hostid",
       "main": "bx_hostid_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "hostname",
       "main": "bx_hostname_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "echo",
       "main": "bx_echo_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "expand",
       "main": "bx_expand_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "id",
       "main": "bx_id_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "logname",
       "main": "bx_logname_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "man",
@@ -790,132 +890,152 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "mandoc",
       "main": "bx_mandoc_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "join",
       "main": "bx_join_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "comm",
       "main": "bx_comm_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "cksum",
       "main": "bx_cksum_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "md5sum",
       "main": "bx_md5sum_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sha1sum",
       "main": "bx_sha1sum_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sha256sum",
       "main": "bx_sha256sum_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "base64",
       "main": "bx_base64_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "shuf",
       "main": "bx_shuf_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "yes",
       "main": "bx_yes_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "whoami",
       "main": "bx_whoami_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "sleep",
       "main": "bx_sleep_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "uname",
       "main": "bx_uname_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "wc",
       "main": "bx_wc_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "uniq",
       "main": "bx_uniq_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "unexpand",
       "main": "bx_unexpand_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sum",
       "main": "bx_sum_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tac",
       "main": "bx_tac_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tail",
       "main": "bx_tail_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tee",
@@ -923,33 +1043,38 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "test",
       "main": "bx_test_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "[",
       "main": "bx_test_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tr",
       "main": "bx_tr_main",
       "capabilities": [
         "filesystem-read"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "seq",
       "main": "bx_seq_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "split",
@@ -957,7 +1082,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "sort",
@@ -965,7 +1091,8 @@
       "capabilities": [
         "filesystem-read",
         "filesystem-write"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "tar",
@@ -974,7 +1101,8 @@
         "filesystem-read",
         "filesystem-write",
         "recursive-traversal"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "cpio",
@@ -983,7 +1111,8 @@
         "filesystem-read",
         "filesystem-write",
         "recursive-traversal"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "zip",
@@ -995,7 +1124,8 @@
         "child-execution",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "zipnote",
@@ -1007,7 +1137,8 @@
         "child-execution",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "unzip",
@@ -1017,7 +1148,8 @@
         "filesystem-write",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "zipinfo",
@@ -1027,17 +1159,20 @@
         "filesystem-write",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "true",
       "main": "bx_true_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "false",
       "main": "bx_false_main",
-      "capabilities": []
+      "capabilities": [],
+      "execution_class": "exec-only"
     },
     {
       "name": "grep",
@@ -1047,7 +1182,8 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "egrep",
@@ -1057,7 +1193,8 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "fgrep",
@@ -1067,7 +1204,8 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "rg",
@@ -1077,7 +1215,8 @@
         "recursive-traversal",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "fd",
@@ -1088,7 +1227,8 @@
         "child-execution",
         "terminal-control",
         "raw-output"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "find",
@@ -1097,7 +1237,8 @@
         "filesystem-read",
         "recursive-traversal",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     },
     {
       "name": "xargs",
@@ -1105,7 +1246,8 @@
       "capabilities": [
         "filesystem-read",
         "child-execution"
-      ]
+      ],
+      "execution_class": "exec-only"
     }
   ],
   "capability_flags": [
@@ -1117,5 +1259,10 @@
     "terminal-control",
     "privilege-sensitive",
     "raw-output"
+  ],
+  "execution_classes": [
+    "exec-only",
+    "child-in-process-safe",
+    "parent-shell-safe"
   ]
 }

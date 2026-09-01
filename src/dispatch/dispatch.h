@@ -7,6 +7,16 @@
 
 typedef int (*bx_applet_main_t)(int argc, char** argv);
 
+/*
+ * Zero is deliberately the strongest isolation boundary. Missing,
+ * uninitialized, or unknown policy must never grant in-process execution.
+ */
+enum bx_applet_execution_class {
+    BX_APPLET_EXEC_ONLY = 0,
+    BX_APPLET_CHILD_IN_PROCESS_SAFE,
+    BX_APPLET_PARENT_SHELL_SAFE,
+};
+
 enum bx_applet_capability {
     BX_APPLET_CAP_NONE = 0u,
     BX_APPLET_CAP_FILESYSTEM_READ = 1u << 0,
@@ -29,10 +39,23 @@ struct bx_applet {
     bx_applet_main_t main;
     uint32_t capabilities;
     bool boot_critical;
+    enum bx_applet_execution_class execution_class;
 };
 
 const struct bx_applet* bx_applet_find(const char* name);
 size_t bx_applet_count(void);
 const struct bx_applet* bx_applet_at(size_t index);
+static inline enum bx_applet_execution_class
+bx_applet_execution_class_get(const struct bx_applet* applet) {
+    if (applet != NULL) {
+        switch (applet->execution_class) {
+            case BX_APPLET_EXEC_ONLY:
+            case BX_APPLET_CHILD_IN_PROCESS_SAFE:
+            case BX_APPLET_PARENT_SHELL_SAFE:
+                return applet->execution_class;
+        }
+    }
+    return BX_APPLET_EXEC_ONLY;
+}
 
 #endif /* BX_DISPATCH_H */
