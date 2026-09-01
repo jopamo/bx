@@ -1,5 +1,6 @@
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include <pcre2.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,10 +9,18 @@
 struct bx_regex {
     pcre2_code *code;
     pcre2_match_data *md;
+    int errnum;
 };
 
 int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags, char **errmsg) {
     uint32_t pcre2_flags = 0;
+    struct bx_regex *rx;
+
+    if (!out || !pattern) {
+        errno = EINVAL;
+        return -1;
+    }
+    *out = NULL;
     if (flags & BX_REGEX_ICASE)
         pcre2_flags |= PCRE2_CASELESS;
     if (flags & BX_REGEX_MULTILINE)
@@ -40,9 +49,20 @@ int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags, char
         return -1;
     }
 
-    struct bx_regex *rx = malloc(sizeof(*rx));
+    rx = calloc(1u, sizeof(*rx));
+    if (!rx) {
+        pcre2_code_free(code);
+        errno = ENOMEM;
+        return -1;
+    }
     rx->code = code;
     rx->md = pcre2_match_data_create_from_pattern(code, NULL);
+    if (!rx->md) {
+        pcre2_code_free(code);
+        free(rx);
+        errno = ENOMEM;
+        return -1;
+    }
 
     pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
 
@@ -52,14 +72,47 @@ int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags, char
 
 int bx_regex_find(struct bx_regex *rx, const unsigned char *buf, size_t len,
                   size_t start, struct bx_match *match) {
-    int rc = pcre2_match(rx->code, (PCRE2_SPTR)buf, len, start, 0, rx->md, NULL);
-    if (rc < 0)
+    static const unsigned char empty[] = "";
+
+    if (!rx || !rx->code || !rx->md || (!buf && len != 0u) || !match || start > len) {
+        if (rx)
+            rx->errnum = EINVAL;
         return -1;
+    }
+    if (rx->errnum != 0)
+        return -1;
+    if (!buf)
+        buf = empty;
+
+    int rc = pcre2_match(rx->code, (PCRE2_SPTR)buf, len, start, 0, rx->md, NULL);
+    if (rc == PCRE2_ERROR_NOMATCH)
+        return 1;
+    if (rc < 0) {
+        switch (rc) {
+        case PCRE2_ERROR_NOMEMORY:
+            rx->errnum = ENOMEM;
+            break;
+        case PCRE2_ERROR_MATCHLIMIT:
+        case PCRE2_ERROR_DEPTHLIMIT:
+        case PCRE2_ERROR_HEAPLIMIT:
+        case PCRE2_ERROR_JIT_STACKLIMIT:
+            rx->errnum = EOVERFLOW;
+            break;
+        default:
+            rx->errnum = EIO;
+            break;
+        }
+        return -1;
+    }
 
     PCRE2_SIZE *ov = pcre2_get_ovector_pointer(rx->md);
     match->start = (size_t)ov[0];
     match->end   = (size_t)ov[1];
     return 0;
+}
+
+int bx_regex_error(const struct bx_regex *rx) {
+    return rx ? rx->errnum : EINVAL;
 }
 
 void bx_regex_free(struct bx_regex *rx) {

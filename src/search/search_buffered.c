@@ -48,6 +48,21 @@ static int bx_search_buffered_allocation_error(FILE *f,
     return 2;
 }
 
+static int bx_search_buffered_matcher_error(FILE *f,
+                                            bool use_stdin,
+                                            const char *display_name,
+                                            const char *progname,
+                                            struct bx_matcher *m,
+                                            struct search_opts *opts,
+                                            struct bx_search_buffered_line *lines,
+                                            int nlines) {
+    if (!use_stdin)
+        fclose(f);
+    bx_search_buffered_free_lines(lines, nlines);
+    (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+    return 2;
+}
+
 static int bx_search_buffered_emit_summary(const char *display_name,
                                            struct search_opts *opts,
                                            int *match_count,
@@ -130,9 +145,12 @@ int bx_search_buffered_opened(FILE *f,
 
         struct bx_match bm;
         size_t match_len = bx_search_record_match_len((unsigned char *)raw, (size_t)len, opts);
-        bool matched =
-            bx_search_matcher_find_with_opts(m, (unsigned char *)raw, match_len, 0, opts, &bm)
-            == 0;
+        int match_rc =
+            bx_search_matcher_find_with_opts(m, (unsigned char *)raw, match_len, 0, opts, &bm);
+        if (match_rc < 0)
+            return bx_search_buffered_matcher_error(f, use_stdin, display_name, progname,
+                                                    m, opts, lines, nlines + 1);
+        bool matched = match_rc == 0;
 
         file_offset += (size_t)len;
         if (opts->invert_match)
@@ -144,6 +162,10 @@ int bx_search_buffered_opened(FILE *f,
             record_match_count = opts->count_matches
                 ? bx_search_count_record_matches(m, (unsigned char *)raw, match_len, opts)
                 : 1;
+            if (bx_search_matcher_had_error(m))
+                return bx_search_buffered_matcher_error(f, use_stdin, display_name,
+                                                        progname, m, opts, lines,
+                                                        nlines + 1);
         }
         if (matched && opts->max_count > 0 && file_matches >= opts->max_count)
             selected = false;
@@ -297,6 +319,11 @@ int bx_search_buffered_opened(FILE *f,
             bx_search_matcher_find_with_opts(
                 m, (unsigned char *)lines[i].text, match_len, 0, opts, &bm
             );
+            if (bx_search_matcher_had_error(m)) {
+                bx_search_buffered_free_lines(lines, nlines);
+                (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+                return 2;
+            }
             if (opts->vimgrep && !opts->invert_match) {
                 bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
                 bx_search_print_vimgrep_matches(
@@ -371,6 +398,11 @@ int bx_search_buffered_opened(FILE *f,
         in_group = true;
         last_printed = i;
         printed_any_line = true;
+    }
+    if (bx_search_matcher_had_error(m)) {
+        bx_search_buffered_free_lines(lines, nlines);
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        return 2;
     }
     if (want_group_separator && printed_any_line)
         bx_search_note_context_output_started();

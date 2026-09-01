@@ -786,17 +786,20 @@ static void search_file_report_record_stream_error(const char *progname,
     bx_search_report_path_error(progname, path, errnum != 0 ? errnum : EIO, opts);
 }
 
-static bool binary_segment_matches(const unsigned char *buf,
-                                   size_t len,
-                                   struct bx_matcher *m,
-                                   struct search_opts *opts) {
+static int binary_segment_matches(const unsigned char *buf,
+                                  size_t len,
+                                  struct bx_matcher *m,
+                                  struct search_opts *opts) {
     struct bx_match bm;
-    bool matched =
-        bx_search_matcher_find_with_opts(m, buf, len, 0, opts, &bm) == 0;
+    int match_rc = bx_search_matcher_find_with_opts(m, buf, len, 0, opts, &bm);
+    bool matched;
 
+    if (match_rc < 0)
+        return -1;
+    matched = match_rc == 0;
     if (opts->invert_match)
         matched = !matched;
-    return matched;
+    return matched ? 1 : 0;
 }
 
 static int binary_presence_opened(FILE *f,
@@ -868,7 +871,10 @@ static int binary_presence_opened(FILE *f,
             }
 
             if (span < nread) {
-                if (binary_segment_matches(segment, segment_len, m, opts)) {
+                int match_rc = binary_segment_matches(segment, segment_len, m, opts);
+                if (match_rc < 0)
+                    goto out_error;
+                if (match_rc > 0) {
                     matched = true;
                     goto out_done;
                 }
@@ -882,8 +888,13 @@ static int binary_presence_opened(FILE *f,
     if (bx_record_stream_had_error(record_stream))
         goto out_error;
 
-    if (segment_len > 0u && binary_segment_matches(segment, segment_len, m, opts))
-        matched = true;
+    if (segment_len > 0u) {
+        int match_rc = binary_segment_matches(segment, segment_len, m, opts);
+        if (match_rc < 0)
+            goto out_error;
+        if (match_rc > 0)
+            matched = true;
+    }
 
 out_done:
     free(segment);
@@ -918,6 +929,12 @@ out_done:
 
 out_error:
     free(segment);
+    if (bx_search_matcher_had_error(m)) {
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        if (!use_stdin)
+            fclose(f);
+        return 2;
+    }
     search_file_report_record_stream_error(progname,
                                            display_name ? display_name : "(standard input)",
                                            record_stream,
@@ -954,9 +971,11 @@ static int binary_file_matches_opened(FILE *f,
                        line[chunk_start + chunk_len] != '\0') {
                     chunk_len++;
                 }
-                matched = bx_search_matcher_find_with_opts(
-                              m, (unsigned char *)line + chunk_start, chunk_len, 0,
-                              opts, &bm) == 0;
+                int match_rc = bx_search_matcher_find_with_opts(
+                    m, (unsigned char *)line + chunk_start, chunk_len, 0, opts, &bm);
+                if (match_rc < 0)
+                    break;
+                matched = match_rc == 0;
                 if (opts->invert_match)
                     matched = !matched;
                 if (matched)
@@ -966,8 +985,11 @@ static int binary_file_matches_opened(FILE *f,
                 chunk_start += chunk_len + 1;
             }
         } else {
-            matched = bx_search_matcher_find_with_opts(m, (unsigned char *)line, match_len,
-                                                       0, opts, &bm) == 0;
+            int match_rc = bx_search_matcher_find_with_opts(
+                m, (unsigned char *)line, match_len, 0, opts, &bm);
+            if (match_rc < 0)
+                break;
+            matched = match_rc == 0;
             if (opts->invert_match)
                 matched = !matched;
         }
@@ -975,6 +997,10 @@ static int binary_file_matches_opened(FILE *f,
             break;
     }
 
+    if (bx_search_matcher_had_error(m)) {
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        return 2;
+    }
     if (bx_record_stream_had_error(record_stream)) {
         search_file_report_record_stream_error(progname, display_name, record_stream, opts);
         return 2;
@@ -1021,7 +1047,8 @@ int bx_search_search_transformed_buffer(unsigned char *buf,
     if (kernel == BX_SEARCH_FILE_KERNEL_MULTILINE) {
         if (stats)
             stats->files_searched++;
-        return bx_search_multiline_buffer(buf, len, display_name, m, opts, match_count, stats);
+        return bx_search_multiline_buffer(buf, len, display_name, progname,
+                                          m, opts, match_count, stats);
     }
 
     FILE *mem = fmemopen(buf, len, "r");

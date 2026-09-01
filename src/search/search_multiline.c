@@ -81,6 +81,7 @@ static int bx_search_multiline_emit_summary(const char *display_name,
 int bx_search_multiline_buffer(unsigned char *buf,
                                size_t len,
                                const char *display_name,
+                               const char *progname,
                                struct bx_matcher *m,
                                struct search_opts *opts,
                                int *match_count,
@@ -180,6 +181,10 @@ int bx_search_multiline_buffer(unsigned char *buf,
         start = bm.end > bm.start ? bm.end : bm.start + 1u;
     }
 
+    if (bx_search_matcher_had_error(m)) {
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        status = 2;
+    }
     if (status != 2)
         status = bx_search_multiline_emit_summary(display_name, opts, match_count, stats,
                                                   file_matches);
@@ -222,7 +227,8 @@ int bx_search_multiline_path(const char *filename,
     }
     if (stats)
         stats->files_searched++;
-    return bx_search_multiline_buffer(buf, len, display_name, m, opts, match_count, stats);
+    return bx_search_multiline_buffer(buf, len, display_name, progname,
+                                      m, opts, match_count, stats);
 }
 
 int bx_search_multiline_opened(FILE *f,
@@ -248,5 +254,6 @@ int bx_search_multiline_opened(FILE *f,
     }
     if (stats)
         stats->files_searched++;
-    return bx_search_multiline_buffer(buf, len, display_name, m, opts, match_count, stats);
+    return bx_search_multiline_buffer(buf, len, display_name, progname,
+                                      m, opts, match_count, stats);
 }

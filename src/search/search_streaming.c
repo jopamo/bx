@@ -72,9 +72,11 @@ int bx_search_streaming_opened(FILE *f,
 
         struct bx_match bm;
         size_t match_len = bx_search_record_match_len((unsigned char *)line, record_len, opts);
-        bool matched =
-            bx_search_matcher_find_with_opts(m, (unsigned char *)line, match_len, 0, opts, &bm)
-            == 0;
+        int match_rc =
+            bx_search_matcher_find_with_opts(m, (unsigned char *)line, match_len, 0, opts, &bm);
+        if (match_rc < 0)
+            break;
+        bool matched = match_rc == 0;
         if (opts->invert_match)
             matched = !matched;
 
@@ -82,6 +84,8 @@ int bx_search_streaming_opened(FILE *f,
             int record_match_count = (!opts->invert_match && opts->count_matches)
                 ? bx_search_count_record_matches(m, (unsigned char *)line, match_len, opts)
                 : 1;
+            if (bx_search_matcher_had_error(m))
+                break;
 
             file_matches += record_match_count;
             if (stats) {
@@ -196,6 +200,12 @@ int bx_search_streaming_opened(FILE *f,
         }
     }
 
+    if (bx_search_matcher_had_error(m)) {
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        if (!use_stdin)
+            fclose(f);
+        return 2;
+    }
     if (bx_record_stream_had_error(record_stream)) {
         int errnum = bx_record_stream_error(record_stream);
         if (errnum == EOVERFLOW) {

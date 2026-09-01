@@ -396,6 +396,15 @@ int bx_search_scanner_opened(FILE *f,
         }
     }
 
+    if (bx_search_matcher_had_error(m)) {
+        if (!saw_literal_candidate)
+            bx_search_dev_counters_note_scanner_entry_without_candidate();
+        free(fast_plain_prefix);
+        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
+        if (!use_stdin)
+            fclose(f);
+        return 2;
+    }
     if (bx_search_scanner_had_error(scanner)) {
         int errnum = bx_search_scanner_error(scanner);
         if (!saw_literal_candidate)

@@ -20,6 +20,7 @@ enum bx_regex_flags {
 int bx_regex_compile(struct bx_regex **out, const char *pattern, int flags, char **errmsg);
 int bx_regex_find(struct bx_regex *rx, const unsigned char *buf, size_t len,
                   size_t start, struct bx_match *match);
+int bx_regex_error(const struct bx_regex *rx);
 void bx_regex_free(struct bx_regex *rx);
 void bx_regex_print_version(void);
 

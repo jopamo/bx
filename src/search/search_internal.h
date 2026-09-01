@@ -132,6 +132,12 @@ int bx_search_matcher_find_with_opts(struct bx_matcher *m,
                                      size_t start,
                                      struct search_opts *opts,
                                      struct bx_match *out);
+bool bx_search_matcher_had_error(const struct bx_matcher *m);
+int bx_search_matcher_error(const struct bx_matcher *m);
+bool bx_search_report_matcher_error(const char *progname,
+                                    const char *display_name,
+                                    const struct bx_matcher *m,
+                                    struct search_opts *opts);
 bool bx_search_matcher_verify_literal_candidate_with_opts(
     struct bx_matcher *m,
     const unsigned char *buf,

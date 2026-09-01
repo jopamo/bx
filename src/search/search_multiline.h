@@ -12,6 +12,7 @@ struct search_opts;
 int bx_search_multiline_buffer(unsigned char *buf,
                                size_t len,
                                const char *display_name,
+                               const char *progname,
                                struct bx_matcher *m,
                                struct search_opts *opts,
                                int *match_count,

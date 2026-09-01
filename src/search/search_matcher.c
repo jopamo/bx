@@ -1,5 +1,7 @@
 #include <regex.h>
+#include <errno.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,6 +27,7 @@ struct bx_literal_set {
 
 struct bx_matcher {
     enum matcher_kind kind;
+    int runtime_errnum;
     union {
         struct bx_regex *regex;
         struct bx_literal_matcher *literal;
@@ -830,13 +833,18 @@ static bool matcher_uses_posix(const char *pattern,
     }
 }
 
-static int matcher_find_posix_portable(regex_t *regex,
+static int matcher_find_posix_portable(struct bx_matcher *m,
                                        const unsigned char *buf,
                                        size_t len,
                                        size_t start,
                                        struct bx_match *out) {
-    if (!regex || !buf || !out || start > len)
+    regex_t *regex;
+
+    if (!m || m->kind != MATCHER_POSIX || !buf || !out || start > len)
         return -1;
+    if (m->runtime_errnum != 0)
+        return -1;
+    regex = &m->posix;
 
 #ifdef REG_STARTEND
     regmatch_t match = {
@@ -844,8 +852,12 @@ static int matcher_find_posix_portable(regex_t *regex,
         .rm_eo = (regoff_t)len,
     };
     int rc = regexec(regex, (const char *)buf, 1, &match, REG_STARTEND);
-    if (rc != 0)
+    if (rc == REG_NOMATCH)
+        return 1;
+    if (rc != 0) {
+        m->runtime_errnum = rc == REG_ESPACE ? ENOMEM : EIO;
         return -1;
+    }
     if (match.rm_so < 0 || match.rm_eo < 0)
         return -1;
     out->start = (size_t)match.rm_so;
@@ -859,8 +871,10 @@ static int matcher_find_posix_portable(regex_t *regex,
         size_t chunk_len = chunk_end ? (size_t)(chunk_end - (buf + chunk_start))
                                      : (len - chunk_start);
         char *chunk = malloc(chunk_len + 1u);
-        if (!chunk)
+        if (!chunk) {
+            m->runtime_errnum = ENOMEM;
             return -1;
+        }
         memcpy(chunk, buf + chunk_start, chunk_len);
         chunk[chunk_len] = '\0';
 
@@ -880,13 +894,17 @@ static int matcher_find_posix_portable(regex_t *regex,
             out->end = chunk_start + (size_t)match.rm_eo;
             return 0;
         }
+        if (rc != REG_NOMATCH) {
+            m->runtime_errnum = rc == REG_ESPACE ? ENOMEM : EIO;
+            return -1;
+        }
 
         if (!chunk_end)
             break;
         chunk_start += chunk_len + 1u;
     }
 
-    return -1;
+    return 1;
 #endif
 }
 
@@ -895,8 +913,10 @@ static int matcher_find(struct bx_matcher *m,
                         size_t len,
                         size_t start,
                         struct bx_match *out) {
+    if (m->runtime_errnum != 0)
+        return -1;
     if (m->kind == MATCHER_LITERAL)
-        return bx_literal_find(m->literal, buf, len, start, out);
+        return bx_literal_find(m->literal, buf, len, start, out) == 0 ? 0 : 1;
     if (m->kind == MATCHER_LITERAL_SET) {
         struct bx_match best = {0};
         bool found = false;
@@ -914,17 +934,23 @@ static int matcher_find(struct bx_matcher *m,
         }
 
         if (!found)
-            return -1;
+            return 1;
         *out = best;
         return 0;
     }
     if (m->kind == MATCHER_POSIX) {
         if (start > len)
-            return -1;
-        return matcher_find_posix_portable(&m->posix, buf, len, start, out);
+            return 1;
+        return matcher_find_posix_portable(m, buf, len, start, out);
     }
 
-    return bx_regex_find(m->regex, buf, len, start, out);
+    {
+        int rc = bx_regex_find(m->regex, buf, len, start, out);
+
+        if (rc < 0)
+            m->runtime_errnum = bx_regex_error(m->regex);
+        return rc;
+    }
 }
 
 static bool match_has_word_boundaries(const unsigned char *buf,
@@ -946,15 +972,24 @@ int bx_search_matcher_find_with_opts(struct bx_matcher *m,
                                      size_t start,
                                      struct search_opts *opts,
                                      struct bx_match *out) {
+    static const unsigned char empty[] = "";
+
+    if (!m || (!buf && len != 0u) || !opts || !out || start > len)
+        return -1;
+    if (m->runtime_errnum != 0)
+        return -1;
+    if (!buf)
+        buf = empty;
+
     bx_search_dev_counters_note_matcher_invocation();
     if (opts->line_regexp &&
         (m->kind == MATCHER_LITERAL || m->kind == MATCHER_LITERAL_SET)) {
         if (start != 0u)
-            return -1;
+            return 1;
         if (m->kind == MATCHER_LITERAL) {
             if (!bx_literal_verify_at(m->literal, buf, len, 0u, out))
-                return -1;
-            return out->start == 0u && out->end == len ? 0 : -1;
+                return 1;
+            return out->start == 0u && out->end == len ? 0 : 1;
         }
 
         for (size_t i = 0; i < m->literal_set.count; ++i) {
@@ -963,18 +998,51 @@ int bx_search_matcher_find_with_opts(struct bx_matcher *m,
             if (out->start == 0u && out->end == len)
                 return 0;
         }
-        return -1;
+        return 1;
     }
 
     size_t pos = start;
     while (pos <= len) {
-        if (matcher_find(m, buf, len, pos, out) != 0)
-            return -1;
+        int rc = matcher_find(m, buf, len, pos, out);
+
+        if (rc != 0)
+            return rc;
         if (!opts->word_regexp || match_has_word_boundaries(buf, len, out, opts))
             return 0;
         pos = out->end > out->start ? out->start + 1u : out->start + 1u;
     }
-    return -1;
+    return 1;
+}
+
+bool bx_search_matcher_had_error(const struct bx_matcher *m) {
+    return m && m->runtime_errnum != 0;
+}
+
+int bx_search_matcher_error(const struct bx_matcher *m) {
+    return m && m->runtime_errnum != 0 ? m->runtime_errnum : 0;
+}
+
+bool bx_search_report_matcher_error(const char *progname,
+                                    const char *display_name,
+                                    const struct bx_matcher *m,
+                                    struct search_opts *opts) {
+    int errnum = bx_search_matcher_error(m);
+    const char *path = display_name ? display_name : "(standard input)";
+
+    if (errnum == 0)
+        return false;
+    if (errnum == EOVERFLOW) {
+        FILE *stream = bx_search_error_output_stream();
+
+        fprintf(stream ? stream : stderr, "%s: %s: regex resource limit exceeded\n",
+                progname ? progname : "grep", path);
+        return true;
+    }
+    bx_search_report_path_error(progname,
+                                path,
+                                errnum,
+                                opts);
+    return true;
 }
 
 bool bx_search_matcher_verify_literal_candidate_with_opts(struct bx_matcher *m,
