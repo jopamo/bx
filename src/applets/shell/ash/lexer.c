@@ -97,7 +97,7 @@ void ash_token_destroy(struct ash_token* token) {
         return;
     }
     ash_word_destroy(&token->word);
-    free(token->io_number);
+    free(token->io_redirect);
     *token = (struct ash_token){0};
 }
 
@@ -124,6 +124,23 @@ static char ash_lexer_peek(const struct ash_lexer* lexer, size_t distance) {
     return (position < lexer->length) ? lexer->input[position] : '\0';
 }
 
+static char ash_lexer_peek_logical_at(
+    const struct ash_lexer* lexer,
+    size_t* position
+) {
+    while (*position < lexer->length &&
+           ash_is_line_continuation_at(
+               lexer->input,
+               lexer->length,
+               *position
+           )) {
+        *position += 2u;
+    }
+    return *position < lexer->length ?
+        lexer->input[*position] :
+        '\0';
+}
+
 /*
  * Outside quote modes that preserve backslashes, a backslash-newline pair is
  * not a shell character. Logical lookahead must therefore see through the
@@ -134,20 +151,13 @@ static char ash_lexer_peek_logical(
     size_t distance
 ) {
     size_t position = lexer->offset;
-    size_t logical_offset = 0u;
-    while (position < lexer->length) {
-        if (ash_is_line_continuation_at(
-                lexer->input,
-                lexer->length,
-                position
-            )) {
-            position += 2u;
-            continue;
+    for (size_t logical_offset = 0u;
+         logical_offset <= distance;
+         logical_offset++) {
+        char ch = ash_lexer_peek_logical_at(lexer, &position);
+        if (logical_offset == distance || ch == '\0') {
+            return ch;
         }
-        if (logical_offset == distance) {
-            return lexer->input[position];
-        }
-        logical_offset++;
         position++;
     }
     return '\0';
@@ -256,6 +266,15 @@ static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lex
 
 bool ash_token_is_redirection(enum ash_token_kind kind) {
     return kind >= ASH_TOKEN_LESS && kind <= ASH_TOKEN_AND_DGREAT;
+}
+
+bool ash_token_kind_valid(enum ash_token_kind kind) {
+    return kind >= ASH_TOKEN_EOF && kind < ASH_TOKEN_COUNT;
+}
+
+bool ash_token_is_redirection_prefix(enum ash_token_kind kind) {
+    return kind == ASH_TOKEN_IO_NUMBER ||
+        kind == ASH_TOKEN_IO_VARIABLE;
 }
 
 static int ash_word_append_span(
@@ -975,34 +994,84 @@ static enum ash_lexer_result ash_lexer_scan_word(
     return ASH_LEXER_TOKEN;
 }
 
-static enum ash_lexer_result ash_lexer_scan_io_number(
-    struct ash_lexer* lexer,
-    struct ash_token* token
+struct ash_io_redirect_match {
+    enum ash_token_kind kind;
+    size_t text_length;
+};
+
+static bool ash_lexer_match_io_redirect(
+    const struct ash_lexer* lexer,
+    struct ash_io_redirect_match* match
 ) {
-    size_t start = lexer->offset;
+    *match = (struct ash_io_redirect_match){0};
+    size_t position = lexer->offset;
+    char ch = ash_lexer_peek_logical_at(lexer, &position);
+    if (ch >= '0' && ch <= '9') {
+        do {
+            match->text_length++;
+            position++;
+            ch = ash_lexer_peek_logical_at(lexer, &position);
+        } while (ch >= '0' && ch <= '9');
+        if (ch == '<' || ch == '>') {
+            match->kind = ASH_TOKEN_IO_NUMBER;
+            return true;
+        }
+        *match = (struct ash_io_redirect_match){0};
+        return false;
+    }
+
+    if (ch != '{') {
+        return false;
+    }
+    position++;
+    ch = ash_lexer_peek_logical_at(lexer, &position);
+    if (!ash_is_name_start((unsigned char)ch)) {
+        return false;
+    }
+    do {
+        match->text_length++;
+        position++;
+        ch = ash_lexer_peek_logical_at(lexer, &position);
+    } while (ash_is_name_char((unsigned char)ch));
+    if (ch != '}') {
+        *match = (struct ash_io_redirect_match){0};
+        return false;
+    }
+    position++;
+    ch = ash_lexer_peek_logical_at(lexer, &position);
+    if (ch != '<' && ch != '>') {
+        *match = (struct ash_io_redirect_match){0};
+        return false;
+    }
+    match->kind = ASH_TOKEN_IO_VARIABLE;
+    return true;
+}
+
+static enum ash_lexer_result ash_lexer_scan_io_redirect(
+    struct ash_lexer* lexer,
+    struct ash_token* token,
+    const struct ash_io_redirect_match* match
+) {
     struct ash_source_location location =
         ash_lexer_current_location(lexer);
-    size_t length = 0u;
-    while (ash_lexer_peek_logical(lexer, 0u) >= '0' &&
-           ash_lexer_peek_logical(lexer, 0u) <= '9') {
-        (void)ash_lexer_advance_logical(lexer);
-        length++;
-    }
-
-    char* number = malloc(length + 1u);
-    if (number == NULL) {
+    char* text = malloc(match->text_length + 1u);
+    if (text == NULL) {
         return ash_lexer_fail(lexer, ASH_LEXER_ERROR, location, "out of memory");
     }
-    struct ash_lexer copy = *lexer;
-    copy.offset = start;
-    for (size_t i = 0u; i < length; i++) {
-        number[i] = ash_lexer_advance_logical(&copy);
+    if (match->kind == ASH_TOKEN_IO_VARIABLE) {
+        (void)ash_lexer_advance_logical(lexer);
     }
-    number[length] = '\0';
+    for (size_t i = 0u; i < match->text_length; i++) {
+        text[i] = ash_lexer_advance_logical(lexer);
+    }
+    if (match->kind == ASH_TOKEN_IO_VARIABLE) {
+        (void)ash_lexer_advance_logical(lexer);
+    }
+    text[match->text_length] = '\0';
 
-    token->kind = ASH_TOKEN_IO_NUMBER;
+    token->kind = match->kind;
     token->location = location;
-    token->io_number = number;
+    token->io_redirect = text;
     return ASH_LEXER_TOKEN;
 }
 
@@ -1032,29 +1101,13 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
         return ASH_LEXER_END;
     }
 
-    size_t digit_length = 0u;
-    size_t digit_position = lexer->offset;
-    while (digit_position < lexer->length) {
-        if (ash_is_line_continuation_at(
-                lexer->input,
-                lexer->length,
-                digit_position
-            )) {
-            digit_position += 2u;
-            continue;
-        }
-        char digit = lexer->input[digit_position];
-        if (digit < '0' || digit > '9') {
-            break;
-        }
-        digit_length++;
-        digit_position++;
-    }
-    char after_digits = digit_position < lexer->length ?
-        lexer->input[digit_position] :
-        '\0';
-    if (digit_length != 0u && (after_digits == '<' || after_digits == '>')) {
-        return ash_lexer_scan_io_number(lexer, token);
+    struct ash_io_redirect_match io_redirect;
+    if (ash_lexer_match_io_redirect(lexer, &io_redirect)) {
+        return ash_lexer_scan_io_redirect(
+            lexer,
+            token,
+            &io_redirect
+        );
     }
 
     const struct ash_operator* operator = ash_lexer_operator(lexer);
@@ -1077,6 +1130,8 @@ const char* ash_token_kind_name(enum ash_token_kind kind) {
             return "word";
         case ASH_TOKEN_IO_NUMBER:
             return "IO number";
+        case ASH_TOKEN_IO_VARIABLE:
+            return "IO variable";
         case ASH_TOKEN_NEWLINE:
             return "newline";
         default:

@@ -427,11 +427,13 @@ static int ash_redirection_clone(
 ) {
     *destination = (struct ash_redirection){
         .operator = source->operator,
+        .prefix.kind = source->prefix.kind,
+        .prefix.location = source->prefix.location,
         .location = source->location,
     };
-    if (source->io_number != NULL) {
-        destination->io_number = strdup(source->io_number);
-        if (destination->io_number == NULL) {
+    if (source->prefix.text != NULL) {
+        destination->prefix.text = strdup(source->prefix.text);
+        if (destination->prefix.text == NULL) {
             return -1;
         }
     }
@@ -439,7 +441,7 @@ static int ash_redirection_clone(
             &destination->target,
             &source->target
         ) != 0) {
-        free(destination->io_number);
+        free(destination->prefix.text);
         *destination = (struct ash_redirection){0};
         return -1;
     }
@@ -807,7 +809,7 @@ void ash_redirection_destroy(struct ash_redirection* redirection) {
     if (redirection == NULL) {
         return;
     }
-    free(redirection->io_number);
+    free(redirection->prefix.text);
     ash_ast_word_destroy(&redirection->target);
     *redirection = (struct ash_redirection){0};
 }

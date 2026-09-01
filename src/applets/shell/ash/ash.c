@@ -1348,15 +1348,31 @@ static enum ash_command_build_result ash_ast_add_redirection(
     const struct ash_redirection* redirection
 ) {
     int fd;
-    if (redirection->io_number != NULL) {
-        if (!ash_redirection_parse_fd(shell, redirection->io_number, &fd)) {
+    switch (redirection->prefix.kind) {
+        case ASH_REDIRECTION_PREFIX_DEFAULT:
+            fd = (redirection->operator == ASH_TOKEN_LESS ||
+                  redirection->operator == ASH_TOKEN_LESS_AND ||
+                  redirection->operator == ASH_TOKEN_LESS_GREAT) ? 0 : 1;
+            break;
+        case ASH_REDIRECTION_PREFIX_NUMBER:
+            if (!ash_redirection_parse_fd(
+                    shell,
+                    redirection->prefix.text,
+                    &fd
+                )) {
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
+            }
+            break;
+        case ASH_REDIRECTION_PREFIX_VARIABLE:
+            ash_diag(
+                shell,
+                "{%s}: IO-variable redirection is not implemented",
+                redirection->prefix.text
+            );
             return ASH_COMMAND_BUILD_SHELL_ERROR;
-        }
-    }
-    else {
-        fd = (redirection->operator == ASH_TOKEN_LESS ||
-              redirection->operator == ASH_TOKEN_LESS_AND ||
-              redirection->operator == ASH_TOKEN_LESS_GREAT) ? 0 : 1;
+        default:
+            ash_diag(shell, "invalid redirection prefix");
+            return ASH_COMMAND_BUILD_SHELL_ERROR;
     }
 
     enum ash_redir_kind kind;

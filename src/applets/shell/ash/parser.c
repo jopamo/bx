@@ -153,33 +153,48 @@ static bool ash_parser_take_redirection(
         return false;
     }
 
-    char* io_number = NULL;
-    if (token->kind == ASH_TOKEN_IO_NUMBER) {
+    if (ash_token_is_redirection_prefix(token->kind)) {
         struct ash_token io;
         (void)ash_parser_take(parser, &io);
         struct ash_source_location io_location = io.location;
-        io_number = io.io_number;
-        io.io_number = NULL;
+        redirection->prefix = (struct ash_redirection_prefix){
+            .kind = io.kind == ASH_TOKEN_IO_NUMBER ?
+                ASH_REDIRECTION_PREFIX_NUMBER :
+                ASH_REDIRECTION_PREFIX_VARIABLE,
+            .text = io.io_redirect,
+            .location = io_location,
+        };
+        io.io_redirect = NULL;
         ash_token_destroy(&io);
 
-        char* end = NULL;
-        errno = 0;
-        long parsed = strtol(io_number, &end, 10);
-        if (errno != 0 || end == io_number || *end != '\0' ||
-            parsed < 0 || parsed > INT_MAX) {
-            ash_parser_fail(
-                parser,
-                ASH_PARSER_ERROR,
-                io_location,
-                "invalid redirection fd"
+        if (redirection->prefix.kind ==
+            ASH_REDIRECTION_PREFIX_NUMBER) {
+            char* end = NULL;
+            errno = 0;
+            long parsed = strtol(
+                redirection->prefix.text,
+                &end,
+                10
             );
-            free(io_number);
-            return false;
+            if (errno != 0 ||
+                end == redirection->prefix.text ||
+                *end != '\0' ||
+                parsed < 0 ||
+                parsed > INT_MAX) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    io_location,
+                    "invalid redirection fd"
+                );
+                ash_redirection_destroy(redirection);
+                return false;
+            }
         }
 
         token = ash_parser_peek(parser);
         if (token == NULL) {
-            free(io_number);
+            ash_redirection_destroy(redirection);
             return false;
         }
         if (!ash_token_is_redirection(token->kind)) {
@@ -187,9 +202,9 @@ static bool ash_parser_take_redirection(
                 parser,
                 ASH_PARSER_ERROR,
                 token->location,
-                "redirection operator expected after IO number"
+                "redirection operator expected after IO prefix"
             );
-            free(io_number);
+            ash_redirection_destroy(redirection);
             return false;
         }
     }
@@ -200,7 +215,6 @@ static bool ash_parser_take_redirection(
     struct ash_token operator;
     (void)ash_parser_take(parser, &operator);
     redirection->operator = operator.kind;
-    redirection->io_number = io_number;
     redirection->location = operator.location;
     ash_token_destroy(&operator);
 
@@ -259,7 +273,7 @@ static bool ash_parser_take_trailing_redirections(
         if (token == NULL) {
             return false;
         }
-        if (token->kind != ASH_TOKEN_IO_NUMBER &&
+        if (!ash_token_is_redirection_prefix(token->kind) &&
             !ash_token_is_redirection(token->kind)) {
             return true;
         }
@@ -331,7 +345,7 @@ static struct ash_ast* ash_parse_simple(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (token->kind == ASH_TOKEN_IO_NUMBER ||
+        if (ash_token_is_redirection_prefix(token->kind) ||
             ash_token_is_redirection(token->kind)) {
             struct ash_redirection redirection;
             if (!ash_parser_take_redirection(parser, &redirection)) {
