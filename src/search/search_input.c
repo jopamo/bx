@@ -137,18 +137,16 @@ unsigned char *bx_search_input_read_stream_limited(FILE *f,
         if (len == cap) {
             size_t new_cap;
             unsigned char *tmp;
+            unsigned char extra;
+            size_t nread = fread(&extra, 1u, 1u, f);
 
-            if (cap == limit) {
-                unsigned char extra;
-                size_t nread = fread(&extra, 1u, 1u, f);
-
-                bx_search_dev_counters_note_content_read(nread);
-                if (nread != 0u) {
-                    free(buf);
-                    errno = EFBIG;
-                    return NULL;
-                }
+            bx_search_dev_counters_note_content_read(nread);
+            if (nread == 0u)
                 break;
+            if (cap == limit) {
+                free(buf);
+                errno = EFBIG;
+                return NULL;
             }
 
             new_cap = cap > limit / 2u ? limit : cap * 2u;
@@ -165,6 +163,8 @@ unsigned char *bx_search_input_read_stream_limited(FILE *f,
             }
             buf = tmp;
             cap = new_cap;
+            buf[len++] = extra;
+            continue;
         }
 
         size_t nread = fread(buf + len, 1u, cap - len, f);

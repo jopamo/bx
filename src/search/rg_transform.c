@@ -347,34 +347,74 @@ fail:
     return false;
 }
 
-static enum bx_rg_transform_result bx_rg_load_file_bytes(const char *filename,
-                                                         const char *progname,
-                                                         const struct search_opts *opts,
-                                                         FILE *err_stream,
-                                                         unsigned char **output,
-                                                         size_t *output_len) {
-    FILE *f;
-    f = fopen(filename, "r");
-    if (!f) {
-        if (!opts || !opts->suppress_errors) {
+static enum bx_rg_transform_result bx_rg_load_decoded_stream(
+    FILE *input,
+    const char *filename,
+    const char *progname,
+    const struct search_opts *opts,
+    FILE *err_stream,
+    bool close_input,
+    unsigned char **output,
+    size_t *output_len
+) {
+    struct stat st;
+    int fd = fileno(input);
+    bool preflight_ok = true;
+
+    if (fd >= 0) {
+        bx_search_dev_counters_note_content_fstat_call();
+        if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
+            (st.st_size < 0 ||
+             (uintmax_t)st.st_size > (uintmax_t)BX_SEARCH_MATERIALIZED_INPUT_LIMIT)) {
+            errno = EFBIG;
+            preflight_ok = false;
+        }
+    }
+    bool decoded = preflight_ok && bx_rg_decode_stream_limited(
+        input, opts->encoding_mode, opts->encoding_name,
+        BX_SEARCH_MATERIALIZED_INPUT_LIMIT,
+        BX_SEARCH_MATERIALIZED_INPUT_LIMIT,
+        output, output_len);
+    int decode_errno = errno != 0 ? errno : EIO;
+
+    if (close_input && fclose(input) != 0 && decoded) {
+        decoded = false;
+        decode_errno = errno != 0 ? errno : EIO;
+        free(*output);
+        *output = NULL;
+        *output_len = 0u;
+    }
+    if (decoded)
+        return BX_RG_TRANSFORM_OK;
+    if (!opts->suppress_errors) {
+        fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
+                progname, filename ? filename : "(standard input)",
+                strerror(decode_errno), decode_errno);
+    }
+    errno = decode_errno;
+    return BX_RG_TRANSFORM_ERROR;
+}
+
+static enum bx_rg_transform_result bx_rg_load_decoded_file(
+    const char *filename,
+    const char *progname,
+    const struct search_opts *opts,
+    FILE *err_stream,
+    unsigned char **output,
+    size_t *output_len
+) {
+    FILE *input = fopen(filename, "r");
+
+    if (!input) {
+        int open_errno = errno != 0 ? errno : EIO;
+        if (!opts->suppress_errors) {
             fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
-                    progname, filename, strerror(errno), errno);
+                    progname, filename, strerror(open_errno), open_errno);
         }
         return BX_RG_TRANSFORM_ERROR;
     }
-    *output = bx_search_input_read_stream_all(f, output_len);
-    if (!*output) {
-        int read_errno = errno != 0 ? errno : EIO;
-        fclose(f);
-        if (!opts || !opts->suppress_errors) {
-            fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
-                    progname, filename, strerror(read_errno), read_errno);
-        }
-        errno = read_errno;
-        return BX_RG_TRANSFORM_ERROR;
-    }
-    fclose(f);
-    return BX_RG_TRANSFORM_OK;
+    return bx_rg_load_decoded_stream(input, filename, progname, opts, err_stream,
+                                     true, output, output_len);
 }
 
 bool bx_rg_transform_maybe_needed(const struct search_opts *opts,
@@ -549,22 +589,31 @@ enum bx_rg_transform_result bx_rg_load_transformed_input(
             if (rc != BX_RG_TRANSFORM_OK)
                 return rc;
         } else {
-            rc = bx_rg_load_file_bytes(filename, progname, opts, err_stream, &raw, &raw_len);
+            return bx_rg_load_decoded_file(filename, progname, opts, err_stream,
+                                           output, output_len);
         }
     } else if (use_stdin) {
-        raw = bx_search_input_read_stream_all(stdin, &raw_len);
-        if (!raw)
-            return BX_RG_TRANSFORM_ERROR;
-        rc = BX_RG_TRANSFORM_OK;
+        return bx_rg_load_decoded_stream(stdin, NULL, progname, opts, err_stream,
+                                         false, output, output_len);
     } else {
-        rc = bx_rg_load_file_bytes(filename, progname, opts, err_stream, &raw, &raw_len);
+        return bx_rg_load_decoded_file(filename, progname, opts, err_stream,
+                                       output, output_len);
     }
 
     if (rc != BX_RG_TRANSFORM_OK)
         return rc;
-    if (!bx_rg_decode_buffer(opts->encoding_mode, opts->encoding_name, raw, raw_len,
-                             &decoded, &decoded_len)) {
+    if (!bx_rg_decode_buffer_limited(opts->encoding_mode, opts->encoding_name,
+                                     raw, raw_len,
+                                     BX_SEARCH_MATERIALIZED_INPUT_LIMIT,
+                                     &decoded, &decoded_len)) {
+        int decode_errno = errno != 0 ? errno : EIO;
         free(raw);
+        if (!opts->suppress_errors) {
+            fprintf(err_stream ? err_stream : stderr, "%s: %s: %s (os error %d)\n",
+                    progname, filename ? filename : "(standard input)",
+                    strerror(decode_errno), decode_errno);
+        }
+        errno = decode_errno;
         return BX_RG_TRANSFORM_ERROR;
     }
     free(raw);
