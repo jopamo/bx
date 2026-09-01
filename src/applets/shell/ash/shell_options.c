@@ -25,7 +25,13 @@ struct ash_shell_option_descriptor {
  * enabled through a user boundary.
  */
 static const struct ash_shell_option_descriptor ash_shell_options[] = {
-    {"allexport", ASH_SHELL_OPTION_ALLEXPORT, 0u, 'a', false},
+    {
+        "allexport",
+        ASH_SHELL_OPTION_ALLEXPORT,
+        ASH_OPTION_INVOCATION_AND_SET,
+        'a',
+        false,
+    },
     {"notify", ASH_SHELL_OPTION_NOTIFY, 0u, 'b', false},
     {
         "noclobber",
