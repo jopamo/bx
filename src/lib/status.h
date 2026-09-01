@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#include "lib/args_common.h"
 #include "lib/output_alloc_counter.h"
 
 enum bx_status_code {
@@ -46,10 +47,17 @@ static inline int bx_status_run_applet(bx_status_applet_main_fn applet_main, int
         return BX_STATUS_ERROR;
     }
 
+    /*
+     * Applet entry is the process-global getopt ownership boundary. Reset on
+     * both sides so an early parser return cannot contaminate this invocation
+     * or any later trusted caller in the same process.
+     */
+    bx_args_getopt_reset();
     bx_output_alloc_counter_begin_from_env(applet_name);
     status = bx_status_from_applet(applet_main(argc, argv));
     bx_output_alloc_counter_report_stderr();
     bx_output_alloc_counter_reset();
+    bx_args_getopt_reset();
     return status;
 }
 

@@ -13,8 +13,29 @@
 #include "bx/libbx.h"
 
 void bx_args_getopt_reset_at(int first_option_index) {
+    static char reset_program[] = "bx-getopt-reset";
+    static char* reset_argv[] = {reset_program, NULL};
+    static const struct option reset_options[] = {
+        {NULL, 0, NULL, 0},
+    };
+
+    /*
+     * optind = 1 does not clear libc's private position within a grouped
+     * option when the previous parse returned before reaching -1. Both glibc
+     * and musl use optind = 0 as the full-reinitialization request. Complete
+     * that reinitialization against an empty argv before selecting the
+     * caller's actual starting index.
+     */
+    opterr = 0;
+    optind = 0;
+    optopt = 0;
+    optarg = NULL;
+    (void)getopt_long(1, reset_argv, "", reset_options, NULL);
+
     opterr = 0;
     optind = first_option_index;
+    optopt = 0;
+    optarg = NULL;
 }
 
 void bx_args_getopt_reset(void) {

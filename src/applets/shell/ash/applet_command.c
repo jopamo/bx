@@ -78,15 +78,23 @@ int ash_applet_command_run_child(
     size_t argc,
     char** argv,
     const struct ash_command_resolution* resolution,
-    const struct ash_applet_child_plan* plan
+    struct ash_applet_child_plan* plan
 ) {
     if (!ash_command_resolution_valid(resolution) ||
         resolution->kind != ASH_COMMAND_BX_APPLET ||
         argv == NULL || argv[0] == NULL ||
         plan == NULL || plan->origin_process <= 0 ||
-        plan->origin_process == getpid()) {
+        plan->origin_process == getpid() ||
+        plan->invocation_process != 0) {
         return ash_applet_command_invalid(shell, argv, resolution);
     }
+
+    /*
+     * Claim the child copy before any callback or exec fallback. A returned
+     * applet cannot be followed by another direct invocation in this process;
+     * the shell's next command starts from a fresh fork of the parent baseline.
+     */
+    plan->invocation_process = getpid();
 
     if (ash_applet_command_direct_eligible(argc, argv, resolution)) {
         int signal_error = bx_child_reset_caught_signal_handlers();
