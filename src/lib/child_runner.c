@@ -114,7 +114,8 @@ int bx_child_exec_argv(char *const *argv) {
     return bx_child_exec_argv_exact_or_path(argv);
 }
 
-static int bx_child_exec_exact(const char *executable, char *const *argv) {
+int bx_child_exec_file_argv_exact(const char *executable,
+                                  char *const *argv) {
     if (!executable || !argv || !argv[0])
         return EINVAL;
 
@@ -128,22 +129,47 @@ int bx_child_exec_argv_exact_or_path(char *const *argv) {
     return bx_child_exec_file_argv(argv[0], argv);
 }
 
+static int bx_child_exec_file_argv_search(
+    const char *executable,
+    char *const *argv,
+    const char *path,
+    enum bx_child_path_search_mode mode,
+    bool explicit_current_directory);
+
 int bx_child_exec_file_argv(const char *executable, char *const *argv) {
     if (!executable || !argv || !argv[0])
         return EINVAL;
     if (strchr(executable, '/'))
-        return bx_child_exec_exact(executable, argv);
+        return bx_child_exec_file_argv_exact(executable, argv);
+
+    const char *path = getenv("PATH");
+    if (!path)
+        path = "/bin:/usr/bin";
+    return bx_child_exec_file_argv_search(
+        executable, argv, path,
+        BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);
+}
+
+static int bx_child_exec_file_argv_search(
+    const char *executable,
+    char *const *argv,
+    const char *path,
+    enum bx_child_path_search_mode mode,
+    bool explicit_current_directory) {
+    if (!executable || !argv || !argv[0] || !path ||
+        (mode != BX_CHILD_PATH_SEARCH_STOP_ON_ERROR &&
+         mode != BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR))
+        return EINVAL;
+    if (strchr(executable, '/'))
+        return bx_child_exec_file_argv_exact(executable, argv);
 
     const char *command = executable;
     size_t command_len = strlen(command);
     if (command_len == 0)
         return ENOENT;
 
-    const char *path = getenv("PATH");
-    if (!path)
-        path = "/bin:/usr/bin";
-
     bool saw_eacces = false;
+    int best_error = ENOENT;
     const char *segment = path;
     for (;;) {
         size_t dir_len = strcspn(segment, ":");
@@ -151,10 +177,18 @@ int bx_child_exec_file_argv(const char *executable, char *const *argv) {
         char *candidate_path = NULL;
 
         if (dir_len == 0) {
-            candidate_path = malloc(command_len + 1);
+            size_t prefix_len = explicit_current_directory ? 2u : 0u;
+            if (command_len > SIZE_MAX - prefix_len - 1u)
+                return ENAMETOOLONG;
+            candidate_path = malloc(prefix_len + command_len + 1u);
             if (!candidate_path)
                 return ENOMEM;
-            memcpy(candidate_path, command, command_len + 1);
+            if (explicit_current_directory)
+                memcpy(candidate_path, "./", prefix_len);
+            memcpy(
+                candidate_path + prefix_len,
+                command,
+                command_len + 1u);
         } else {
             if (dir_len > SIZE_MAX - 2 || command_len > SIZE_MAX - dir_len - 2)
                 return ENAMETOOLONG;
@@ -174,7 +208,10 @@ int bx_child_exec_file_argv(const char *executable, char *const *argv) {
         if (err == EACCES) {
             saw_eacces = true;
         } else if (err != ENOENT && err != ENOTDIR) {
-            return err;
+            if (mode == BX_CHILD_PATH_SEARCH_STOP_ON_ERROR)
+                return err;
+            if (best_error == ENOENT || best_error == ENOTDIR)
+                best_error = err;
         }
 
         if (!has_colon)
@@ -182,7 +219,16 @@ int bx_child_exec_file_argv(const char *executable, char *const *argv) {
         segment += dir_len + 1;
     }
 
-    return saw_eacces ? EACCES : ENOENT;
+    return saw_eacces ? EACCES : best_error;
+}
+
+int bx_child_exec_file_argv_in_path(
+    const char *executable,
+    char *const *argv,
+    const char *path,
+    enum bx_child_path_search_mode mode) {
+    return bx_child_exec_file_argv_search(
+        executable, argv, path, mode, true);
 }
 
 pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,

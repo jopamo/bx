@@ -24,6 +24,11 @@ enum bx_child_prompt_result {
     BX_CHILD_PROMPT_RUN = 1,
 };
 
+enum bx_child_path_search_mode {
+    BX_CHILD_PATH_SEARCH_STOP_ON_ERROR = 0,
+    BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR,
+};
+
 typedef int (*bx_child_prompt_hook)(const char *progname, char *const *argv, void *user);
 typedef void (*bx_child_verbose_hook)(const char *progname, char *const *argv, void *user);
 typedef int (*bx_child_parent_setup_hook)(pid_t pid, void *user);
@@ -121,8 +126,20 @@ int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   int *running,
                                   int signo);
 int bx_child_exec_argv(char *const *argv);
+int bx_child_exec_file_argv_exact(const char *executable,
+                                  char *const *argv);
 int bx_child_exec_argv_exact_or_path(char *const *argv);
 int bx_child_exec_file_argv(const char *executable, char *const *argv);
+/*
+ * Search the caller-supplied PATH without consulting process-global
+ * environment state. Empty components are executed as explicit ./name
+ * candidates so the caller-visible candidate identity remains stable.
+ */
+int bx_child_exec_file_argv_in_path(
+    const char *executable,
+    char *const *argv,
+    const char *path,
+    enum bx_child_path_search_mode mode);
 int bx_child_fork_callback_wait(bx_child_fork_callback callback,
                                 void *user,
                                 int *status_out);
