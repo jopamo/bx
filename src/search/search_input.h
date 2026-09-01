@@ -30,8 +30,6 @@ unsigned char *bx_search_input_read_stream_all(FILE *f, size_t *out_len);
 bool bx_search_input_needs_early_transform_load(const char *filename,
                                                 bool use_stdin,
                                                 const struct search_opts *opts);
-bool bx_search_input_opened_needs_auto_transform(FILE *f,
-                                                 const struct search_opts *opts);
 bool bx_search_input_is_binary_path(const char *path,
                                     const struct search_opts *opts);
 

@@ -151,11 +151,10 @@ static size_t bx_record_stream_configure_limit(FILE *f) {
         return 0u;
 
     fd = fileno(f);
-    if (fd < 0)
-        return 0u;
-    bx_search_dev_counters_note_content_fstat_call();
-    if (fstat(fd, &st) != 0)
-        return 0u;
+    if (fd >= 0) {
+        bx_search_dev_counters_note_content_fstat_call();
+        (void)fstat(fd, &st);
+    }
     return BX_RECORD_STREAM_SPECIAL_RECORD_LIMIT;
 }
 

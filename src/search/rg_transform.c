@@ -154,6 +154,20 @@ bool bx_rg_transform_needs_file_preload(const struct search_opts *opts,
     return opts->encoding_mode == BX_RG_ENCODING_EXPLICIT;
 }
 
+bool bx_rg_transform_uses_external_source(const struct search_opts *opts,
+                                          const char *filename) {
+    const char *const *argv = NULL;
+
+    if (!opts || !filename || strcmp(filename, "-") == 0)
+        return false;
+    if (opts->pre_command && *opts->pre_command &&
+        bx_rg_pre_glob_matches(opts, filename)) {
+        return true;
+    }
+    return opts->search_zip &&
+           bx_rg_search_zip_program(filename, &argv) != NULL;
+}
+
 bool bx_rg_transform_auto_encoding_needs_prefix(const struct search_opts *opts,
                                                 const unsigned char *prefix,
                                                 size_t nread) {
@@ -162,21 +176,24 @@ bool bx_rg_transform_auto_encoding_needs_prefix(const struct search_opts *opts,
     return bx_rg_transform_prefix_needs_decode(prefix, nread);
 }
 
-bool bx_rg_transform_auto_encoding_needs_fd(const struct search_opts *opts,
-                                            int fd_hint) {
+enum bx_rg_auto_encoding_probe bx_rg_transform_auto_encoding_probe_fd(
+    const struct search_opts *opts,
+    int fd_hint) {
     unsigned char prefix[3] = {0};
     ssize_t nread;
 
-    if (!opts || fd_hint < 0)
-        return false;
+    if (!opts || opts->encoding_mode != BX_RG_ENCODING_AUTO || fd_hint < 0)
+        return BX_RG_AUTO_ENCODING_PASSTHROUGH;
 
     nread = pread(fd_hint, prefix, sizeof(prefix), 0);
     if (nread < 0)
-        return false;
+        return BX_RG_AUTO_ENCODING_STREAM;
     bx_search_dev_counters_note_content_pread((size_t)nread);
     bx_search_dev_counters_note_prefix_pread((size_t)nread);
     bx_search_dev_counters_note_prefix_bytes_rescanned((size_t)nread);
-    return bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)nread);
+    return bx_rg_transform_auto_encoding_needs_prefix(opts, prefix, (size_t)nread)
+        ? BX_RG_AUTO_ENCODING_DECODE
+        : BX_RG_AUTO_ENCODING_PASSTHROUGH;
 }
 
 struct bx_rg_capture_reap {
@@ -428,9 +445,13 @@ bool bx_rg_transform_maybe_needed(const struct search_opts *opts,
     if (!opts)
         return false;
     if (use_stdin) {
-        if (opts->encoding_mode == BX_RG_ENCODING_EXPLICIT)
-            return true;
-        return bx_rg_transform_auto_encoding_needs_fd(opts, fd_hint);
+        /*
+         * Pipes cannot be pread without consuming bytes. Route auto-encoded
+         * stdin through the incremental reader as well; it passes through a
+         * non-BOM prefix without materializing the input.
+         */
+        (void)fd_hint;
+        return opts->encoding_mode != BX_RG_ENCODING_NONE;
     }
     if (bx_rg_transform_needs_file_preload(opts, filename))
         return true;

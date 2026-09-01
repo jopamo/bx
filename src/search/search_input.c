@@ -202,13 +202,6 @@ bool bx_search_input_needs_early_transform_load(const char *filename,
     return bx_rg_transform_needs_file_preload(opts, filename);
 }
 
-bool bx_search_input_opened_needs_auto_transform(FILE *f,
-                                                 const struct search_opts *opts) {
-    if (!f || !opts)
-        return false;
-    return bx_rg_transform_auto_encoding_needs_fd(opts, fileno(f));
-}
-
 bool bx_search_input_is_binary_path(const char *path,
                                     const struct search_opts *opts) {
     FILE *f = bx_search_input_fopen(path, opts);

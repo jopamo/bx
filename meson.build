@@ -682,6 +682,7 @@ bx_search_sources = [
   'src/search/rg_output.c',
   'src/search/rg_sched.c',
   'src/search/rg_decode.c',
+  'src/search/rg_decode_reader.c',
   'src/search/rg_text.c',
   'src/search/rg_transform.c',
   'src/search/runtime_snapshot.c',
