@@ -12,6 +12,35 @@ struct ash_operator {
     enum ash_token_kind kind;
 };
 
+#define ASH_OPERATOR(text, kind) {text, sizeof(text) - 1u, kind}
+static const struct ash_operator ash_operators[] = {
+    ASH_OPERATOR("\n", ASH_TOKEN_NEWLINE),
+    ASH_OPERATOR("&&", ASH_TOKEN_AND_IF),
+    ASH_OPERATOR("||", ASH_TOKEN_OR_IF),
+    ASH_OPERATOR("|", ASH_TOKEN_PIPE),
+    ASH_OPERATOR("|&", ASH_TOKEN_PIPE_AND),
+    ASH_OPERATOR("&", ASH_TOKEN_AMP),
+    ASH_OPERATOR("&>", ASH_TOKEN_AND_GREAT),
+    ASH_OPERATOR("&>>", ASH_TOKEN_AND_DGREAT),
+    ASH_OPERATOR(";", ASH_TOKEN_SEMI),
+    ASH_OPERATOR(";;", ASH_TOKEN_DSEMI),
+    ASH_OPERATOR(";&", ASH_TOKEN_SEMI_AND),
+    ASH_OPERATOR(";;&", ASH_TOKEN_DSEMI_AND),
+    ASH_OPERATOR("(", ASH_TOKEN_LPAREN),
+    ASH_OPERATOR(")", ASH_TOKEN_RPAREN),
+    ASH_OPERATOR("<", ASH_TOKEN_LESS),
+    ASH_OPERATOR("<<", ASH_TOKEN_DLESS),
+    ASH_OPERATOR("<<-", ASH_TOKEN_DLESS_DASH),
+    ASH_OPERATOR("<<<", ASH_TOKEN_TLESS),
+    ASH_OPERATOR("<&", ASH_TOKEN_LESS_AND),
+    ASH_OPERATOR("<>", ASH_TOKEN_LESS_GREAT),
+    ASH_OPERATOR(">", ASH_TOKEN_GREAT),
+    ASH_OPERATOR(">>", ASH_TOKEN_DGREAT),
+    ASH_OPERATOR(">&", ASH_TOKEN_GREAT_AND),
+    ASH_OPERATOR(">|", ASH_TOKEN_CLOBBER),
+};
+#undef ASH_OPERATOR
+
 struct ash_source_location ash_lexer_current_location(
     const struct ash_lexer* lexer
 ) {
@@ -199,36 +228,18 @@ static bool ash_is_name_char(unsigned char ch) {
 }
 
 static bool ash_is_blank(char ch) {
-    return ch == ' ' || ch == '\t' || ch == '\r';
+    return ch == ' ' || ch == '\t';
 }
 
 static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lexer) {
-    static const struct ash_operator operators[] = {
-        {";;&", 3u, ASH_TOKEN_DSEMI_AND},
-        {"<<-", 3u, ASH_TOKEN_DLESS_DASH},
-        {"<<<", 3u, ASH_TOKEN_TLESS},
-        {"&&", 2u, ASH_TOKEN_AND_IF},
-        {"||", 2u, ASH_TOKEN_OR_IF},
-        {";;", 2u, ASH_TOKEN_DSEMI},
-        {";&", 2u, ASH_TOKEN_SEMI_AND},
-        {"|&", 2u, ASH_TOKEN_PIPE_AND},
-        {"<<", 2u, ASH_TOKEN_DLESS},
-        {">>", 2u, ASH_TOKEN_DGREAT},
-        {"<&", 2u, ASH_TOKEN_LESS_AND},
-        {">&", 2u, ASH_TOKEN_GREAT_AND},
-        {"<>", 2u, ASH_TOKEN_LESS_GREAT},
-        {">|", 2u, ASH_TOKEN_CLOBBER},
-        {"|", 1u, ASH_TOKEN_PIPE},
-        {"&", 1u, ASH_TOKEN_AMP},
-        {";", 1u, ASH_TOKEN_SEMI},
-        {"(", 1u, ASH_TOKEN_LPAREN},
-        {")", 1u, ASH_TOKEN_RPAREN},
-        {"<", 1u, ASH_TOKEN_LESS},
-        {">", 1u, ASH_TOKEN_GREAT},
-    };
-
-    for (size_t i = 0u; i < sizeof(operators) / sizeof(operators[0]); i++) {
-        const struct ash_operator* candidate = &operators[i];
+    const struct ash_operator* longest = NULL;
+    for (size_t i = 0u;
+         i < sizeof(ash_operators) / sizeof(ash_operators[0]);
+         i++) {
+        const struct ash_operator* candidate = &ash_operators[i];
+        if (longest != NULL && candidate->length <= longest->length) {
+            continue;
+        }
         bool matches = true;
         for (size_t j = 0u; j < candidate->length; j++) {
             if (ash_lexer_peek_logical(lexer, j) != candidate->text[j]) {
@@ -237,14 +248,14 @@ static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lex
             }
         }
         if (matches) {
-            return candidate;
+            longest = candidate;
         }
     }
-    return NULL;
+    return longest;
 }
 
 bool ash_token_is_redirection(enum ash_token_kind kind) {
-    return kind >= ASH_TOKEN_LESS && kind <= ASH_TOKEN_CLOBBER;
+    return kind >= ASH_TOKEN_LESS && kind <= ASH_TOKEN_AND_DGREAT;
 }
 
 static int ash_word_append_span(
@@ -858,7 +869,7 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
 
 static bool ash_lexer_word_boundary(const struct ash_lexer* lexer) {
     char ch = ash_lexer_peek_logical(lexer, 0u);
-    return ch == '\0' || ch == '\n' || ash_is_blank(ch) ||
+    return ch == '\0' || ash_is_blank(ch) ||
         ash_lexer_operator(lexer) != NULL;
 }
 
@@ -1020,11 +1031,6 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
         token->kind = ASH_TOKEN_EOF;
         return ASH_LEXER_END;
     }
-    if (ash_lexer_peek(lexer, 0u) == '\n') {
-        token->kind = ASH_TOKEN_NEWLINE;
-        (void)ash_lexer_advance(lexer);
-        return ASH_LEXER_TOKEN;
-    }
 
     size_t digit_length = 0u;
     size_t digit_position = lexer->offset;
@@ -1064,35 +1070,24 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
 }
 
 const char* ash_token_kind_name(enum ash_token_kind kind) {
-    static const char* const names[] = {
-        [ASH_TOKEN_EOF] = "end of input",
-        [ASH_TOKEN_WORD] = "word",
-        [ASH_TOKEN_IO_NUMBER] = "IO number",
-        [ASH_TOKEN_NEWLINE] = "newline",
-        [ASH_TOKEN_AND_IF] = "&&",
-        [ASH_TOKEN_OR_IF] = "||",
-        [ASH_TOKEN_DSEMI] = ";;",
-        [ASH_TOKEN_SEMI_AND] = ";&",
-        [ASH_TOKEN_DSEMI_AND] = ";;&",
-        [ASH_TOKEN_PIPE] = "|",
-        [ASH_TOKEN_PIPE_AND] = "|&",
-        [ASH_TOKEN_AMP] = "&",
-        [ASH_TOKEN_SEMI] = ";",
-        [ASH_TOKEN_LPAREN] = "(",
-        [ASH_TOKEN_RPAREN] = ")",
-        [ASH_TOKEN_LESS] = "<",
-        [ASH_TOKEN_GREAT] = ">",
-        [ASH_TOKEN_DLESS] = "<<",
-        [ASH_TOKEN_DLESS_DASH] = "<<-",
-        [ASH_TOKEN_TLESS] = "<<<",
-        [ASH_TOKEN_DGREAT] = ">>",
-        [ASH_TOKEN_LESS_AND] = "<&",
-        [ASH_TOKEN_GREAT_AND] = ">&",
-        [ASH_TOKEN_LESS_GREAT] = "<>",
-        [ASH_TOKEN_CLOBBER] = ">|",
-    };
-    if ((size_t)kind >= sizeof(names) / sizeof(names[0]) || names[kind] == NULL) {
-        return "unknown token";
+    switch (kind) {
+        case ASH_TOKEN_EOF:
+            return "end of input";
+        case ASH_TOKEN_WORD:
+            return "word";
+        case ASH_TOKEN_IO_NUMBER:
+            return "IO number";
+        case ASH_TOKEN_NEWLINE:
+            return "newline";
+        default:
+            break;
     }
-    return names[kind];
+    for (size_t i = 0u;
+         i < sizeof(ash_operators) / sizeof(ash_operators[0]);
+         i++) {
+        if (ash_operators[i].kind == kind) {
+            return ash_operators[i].text;
+        }
+    }
+    return "unknown token";
 }
