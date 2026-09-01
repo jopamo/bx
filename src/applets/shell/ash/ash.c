@@ -25,6 +25,7 @@
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/input_builtins.h"
 #include "applets/shell/ash/input_execution.h"
+#include "applets/shell/ash/interactive.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
@@ -2235,12 +2236,25 @@ int bx_ash_main(int argc, char** argv) {
         positional_count = argc - index;
     }
 
-    bool interactive = force_interactive;
-    if (!interactive && command_string == NULL && script_path == NULL) {
-        interactive = isatty(STDIN_FILENO);
+    enum ash_startup_input startup_input =
+        command_string != NULL ?
+            ASH_STARTUP_COMMAND_STRING :
+            (script_path != NULL ?
+                ASH_STARTUP_SCRIPT_FILE :
+                ASH_STARTUP_STANDARD_INPUT);
+    struct ash_interactive_state interactive;
+    if (!ash_interactive_state_resolve(
+            startup_input,
+            force_interactive,
+            ash_terminal_fd_attached(STDIN_FILENO),
+            ash_terminal_fd_attached(STDERR_FILENO),
+            &interactive
+        )) {
+        fprintf(stderr, "%s: invalid interactive startup state\n", progname);
+        return 2;
     }
     uint32_t policy_flags = 0u;
-    if (interactive) {
+    if (ash_interactive_state_enabled(&interactive)) {
         policy_flags |= ASH_SHELL_POLICY_INTERACTIVE;
     }
     if (login_shell) {
@@ -2282,6 +2296,7 @@ int bx_ash_main(int argc, char** argv) {
         .options = initial_options |
             (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
         .policy = policy,
+        .interactive = interactive,
         .take_self_executable_fd = standalone_applets,
         .self_executable_fd = self_executable_fd,
         .shell_pid = getpid(),
@@ -2338,10 +2353,10 @@ int bx_ash_main(int argc, char** argv) {
             return 1;
         }
 
-        bool prompt = ash_shell_policy_has(
-            &shell.policy,
-            ASH_SHELL_POLICY_INTERACTIVE
-        ) && isatty(fileno(script));
+        bool prompt = ash_interactive_state_should_prompt(
+            &shell.interactive,
+            ash_terminal_fd_attached(fileno(script))
+        );
         status = ash_input_execute_stream(
             &shell,
             ASH_INPUT_SCRIPT_FILE,
@@ -2352,13 +2367,15 @@ int bx_ash_main(int argc, char** argv) {
         );
     }
     else {
-        bool prompt = ash_shell_policy_has(
-            &shell.policy,
-            ASH_SHELL_POLICY_INTERACTIVE
+        bool prompt = ash_interactive_state_should_prompt(
+            &shell.interactive,
+            false
         );
         status = ash_input_execute_stream(
             &shell,
-            prompt ? ASH_INPUT_INTERACTIVE : ASH_INPUT_STDIN,
+            ash_interactive_state_enabled(&shell.interactive) ?
+                ASH_INPUT_INTERACTIVE :
+                ASH_INPUT_STDIN,
             "<stdin>",
             stdin,
             ASH_INPUT_BORROW_STREAM,

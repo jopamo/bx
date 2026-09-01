@@ -87,6 +87,11 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
             &shell->policy,
             ASH_SHELL_POLICY_STANDALONE_APPLETS
         );
+    bool interactive = shell != NULL &&
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        );
     return shell != NULL &&
         shell->progname != NULL &&
         standalone_applets == shell->owns_self_executable_fd &&
@@ -98,6 +103,9 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         shell->command_substitution != NULL &&
         (shell->options & ~ASH_SHELL_OPTION_ALL) == 0u &&
         ash_shell_policy_valid(&shell->policy) &&
+        ash_interactive_state_valid(&shell->interactive) &&
+        interactive ==
+            ash_interactive_state_enabled(&shell->interactive) &&
         ash_scope_stack_invariants(shell) &&
         ash_functions_invariants(shell) &&
         ash_input_stack_invariants(shell) &&
@@ -121,6 +129,10 @@ void ash_shell_context_assert_invariants(const struct ash_shell* shell) {
 static bool ash_shell_context_empty(const struct ash_shell* shell) {
     return shell->progname == NULL &&
         shell->scopes == NULL &&
+        shell->interactive.input == ASH_STARTUP_COMMAND_STRING &&
+        shell->interactive.mode == ASH_INTERACTIVE_DISABLED &&
+        shell->interactive.terminal_attachments ==
+            ASH_TERMINAL_DETACHED &&
         shell->shopt == NULL &&
         shell->aliases == NULL &&
         shell->functions == NULL &&
@@ -160,6 +172,11 @@ bool ash_shell_context_init(
             &config->policy,
             ASH_SHELL_POLICY_STANDALONE_APPLETS
         );
+    bool interactive = config != NULL &&
+        ash_shell_policy_has(
+            &config->policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        );
     if (shell == NULL || config == NULL ||
         config->progname == NULL || config->argv0 == NULL ||
         config->positional_count < 0 ||
@@ -167,6 +184,9 @@ bool ash_shell_context_init(
             config->positional_values == NULL) ||
         (config->options & ~ASH_SHELL_OPTION_ALL) != 0u ||
         !ash_shell_policy_valid(&config->policy) ||
+        !ash_interactive_state_valid(&config->interactive) ||
+        interactive !=
+            ash_interactive_state_enabled(&config->interactive) ||
         standalone_applets != config->take_self_executable_fd ||
         (config->take_self_executable_fd &&
             config->self_executable_fd < 0) ||
@@ -179,6 +199,7 @@ bool ash_shell_context_init(
         .progname = config->progname,
         .options = config->options,
         .policy = config->policy,
+        .interactive = config->interactive,
         .owns_self_executable_fd = config->take_self_executable_fd,
         .self_executable_fd = config->take_self_executable_fd ?
             config->self_executable_fd :
