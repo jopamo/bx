@@ -211,13 +211,20 @@ void bx_record_stream_dispose(struct bx_record_stream *stream) {
     stream->errnum = 0;
 }
 
-void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream) {
+void bx_record_stream_begin(FILE *f, struct bx_record_stream *stream) {
     if (!f || !stream)
         return;
 
     stream->errnum = 0;
     bx_record_stream_reset_pending(stream);
     stream->record_limit = bx_record_stream_configure_limit(f);
+}
+
+void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream) {
+    if (!f || !stream)
+        return;
+
+    bx_record_stream_begin(f, stream);
 
     if (!stream->io_buf) {
         stream->io_cap = BX_RECORD_STREAM_IO_CAP;

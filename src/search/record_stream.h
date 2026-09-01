@@ -19,6 +19,7 @@ struct bx_record_stream {
 };
 
 void bx_record_stream_dispose(struct bx_record_stream *stream);
+void bx_record_stream_begin(FILE *f, struct bx_record_stream *stream);
 void bx_record_stream_prepare_file(FILE *f, struct bx_record_stream *stream);
 bool bx_record_stream_probe_binary_prefix(FILE *f,
                                           struct bx_record_stream *stream,

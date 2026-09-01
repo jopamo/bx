@@ -1,11 +1,11 @@
 #include <errno.h>
-#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "context_stage.h"
 #include "dev_counters.h"
 #include "lib/color.h"
 #include "pcre2_matcher.h"
@@ -15,50 +15,44 @@
 #include "search_internal.h"
 #include "search_plan.h"
 
-struct bx_search_buffered_line {
-    char *text;
-    size_t len;
-    size_t byte_offset;
-    bool match;
-    bool print;
-    int match_count;
-};
-
-static void bx_search_buffered_free_lines(struct bx_search_buffered_line *lines,
-                                          int count) {
-    for (int i = 0; i < count; i++)
-        free(lines[i].text);
-    free(lines);
-}
-
-static int bx_search_buffered_allocation_error(FILE *f,
-                                               bool use_stdin,
-                                               const char *display_name,
-                                               const char *progname,
-                                               struct search_opts *opts,
-                                               struct bx_search_buffered_line *lines,
-                                               int nlines) {
+static void bx_search_buffered_close_input(FILE *f, bool use_stdin) {
     if (!use_stdin)
         fclose(f);
-    bx_search_buffered_free_lines(lines, nlines);
+}
+
+static int bx_search_buffered_error(FILE *f,
+                                    bool use_stdin,
+                                    FILE *records,
+                                    FILE *intervals,
+                                    const char *display_name,
+                                    const char *progname,
+                                    struct search_opts *opts,
+                                    int errnum) {
+    bx_search_buffered_close_input(f, use_stdin);
+    if (records)
+        fclose(records);
+    if (intervals)
+        fclose(intervals);
     bx_search_report_path_error(progname,
                                 display_name ? display_name : "(standard input)",
-                                ENOMEM,
+                                errnum != 0 ? errnum : EIO,
                                 opts);
     return 2;
 }
 
 static int bx_search_buffered_matcher_error(FILE *f,
                                             bool use_stdin,
+                                            FILE *records,
+                                            FILE *intervals,
                                             const char *display_name,
                                             const char *progname,
                                             struct bx_matcher *m,
-                                            struct search_opts *opts,
-                                            struct bx_search_buffered_line *lines,
-                                            int nlines) {
-    if (!use_stdin)
-        fclose(f);
-    bx_search_buffered_free_lines(lines, nlines);
+                                            struct search_opts *opts) {
+    bx_search_buffered_close_input(f, use_stdin);
+    if (records)
+        fclose(records);
+    if (intervals)
+        fclose(intervals);
     (void)bx_search_report_matcher_error(progname, display_name, m, opts);
     return 2;
 }
@@ -85,6 +79,161 @@ static int bx_search_buffered_emit_summary(const char *display_name,
     return file_matches > 0 ? 0 : 1;
 }
 
+static bool bx_search_buffered_emit_record(
+    const struct bx_search_staged_record *record,
+    const unsigned char *text,
+    bool selected,
+    const char *display_name,
+    struct bx_matcher *m,
+    struct search_opts *opts,
+    bool *heading_printed_for_file
+) {
+    if (selected) {
+        struct bx_match bm = {0};
+        size_t match_len = bx_search_record_match_len(text, record->len, opts);
+
+        if (!opts->invert_match &&
+            bx_search_matcher_find_with_opts(m, text, match_len, 0, opts, &bm) < 0) {
+            return false;
+        }
+        if (opts->vimgrep && !opts->invert_match) {
+            bx_search_maybe_print_heading(display_name, opts, heading_printed_for_file);
+            bx_search_print_vimgrep_matches(
+                text, record->len,
+                *heading_printed_for_file ? NULL : display_name,
+                (int)record->line_number, record->byte_offset, m, opts);
+        } else if (opts->only_matching && !opts->invert_match) {
+            bx_search_maybe_print_heading(display_name, opts, heading_printed_for_file);
+            bx_search_print_only_matches_from_first(
+                text, record->len,
+                *heading_printed_for_file ? NULL : display_name,
+                (int)record->line_number, record->byte_offset, m, &bm, opts);
+        } else {
+            bool prefix_printed;
+
+            bx_search_maybe_print_heading(display_name, opts, heading_printed_for_file);
+            prefix_printed = bx_search_print_result_prefix(
+                *heading_printed_for_file ? NULL : display_name,
+                opts, (int)record->line_number, bm.start + 1u, true,
+                record->byte_offset, bx_search_match_field_separator(opts));
+            if (opts->only_matching && opts->invert_match)
+                return true;
+            bx_search_maybe_emit_initial_tab(opts, prefix_printed);
+            if (opts->invert_match) {
+                bx_search_print_plain_record_contents(text, record->len, opts);
+                if (record->len == 0u ||
+                    text[record->len - 1u] != (unsigned char)bx_search_record_delimiter(opts)) {
+                    bx_search_write_record_terminator(opts);
+                }
+                bx_search_dev_counters_note_output_line_emitted();
+                return true;
+            }
+            if (bx_search_should_omit_long_match_line(opts, record->len)) {
+                bx_search_print_omitted_long_line(opts);
+            } else if (opts->replace) {
+                bx_search_print_replaced_record(text, record->len, m, opts);
+            } else {
+                unsigned char delimiter =
+                    (unsigned char)bx_search_record_delimiter(opts);
+                bool has_delim = record->len > 0u &&
+                    text[record->len - 1u] == delimiter;
+
+                bx_search_print_match_colored_cached(text, record->len,
+                                                     bm.start, bm.end, has_delim,
+                                                     opts, bx_search_output_stream(),
+                                                     bx_color_enabled(), delimiter);
+            }
+        }
+        return !bx_search_matcher_had_error(m);
+    }
+
+    bx_search_maybe_print_heading(display_name, opts, heading_printed_for_file);
+    bool prefix_printed = bx_search_print_result_prefix(
+        *heading_printed_for_file ? NULL : display_name,
+        opts, (int)record->line_number, 0u, false, record->byte_offset,
+        bx_search_context_field_separator(opts));
+    bx_search_maybe_emit_initial_tab(opts, prefix_printed);
+    bx_search_print_plain_record_contents(text, record->len, opts);
+    if (record->len == 0u ||
+        text[record->len - 1u] != (unsigned char)bx_search_record_delimiter(opts)) {
+        bx_search_write_record_terminator(opts);
+    }
+    bx_search_dev_counters_note_output_line_emitted();
+    return true;
+}
+
+static bool bx_search_buffered_emit_staged(FILE *records,
+                                           FILE *intervals,
+                                           bool with_context,
+                                           const char *display_name,
+                                           struct bx_matcher *m,
+                                           struct search_opts *opts,
+                                           struct bx_record_stream *record_stream) {
+    struct bx_search_staged_record record;
+    struct bx_search_context_interval interval = {0};
+    bool have_interval = false;
+    bool heading_printed_for_file = false;
+    bool emitted_file_separator = false;
+    bool printed_any_line = false;
+    int interval_rc = 0;
+    int read_rc;
+
+    if (!bx_search_staged_rewind(records))
+        return false;
+    if (with_context) {
+        interval_rc = bx_search_context_interval_read(intervals, &interval);
+        if (interval_rc < 0)
+            return false;
+        have_interval = interval_rc > 0;
+    }
+
+    while ((read_rc = bx_search_staged_record_read(
+                records, &record, record_stream->record)) > 0) {
+        bool print_record = record.selected;
+
+        record_stream->record[record.len] = '\0';
+        if (with_context) {
+            while (have_interval && record.line_number > interval.last) {
+                interval_rc = bx_search_context_interval_read(intervals, &interval);
+                if (interval_rc < 0)
+                    return false;
+                have_interval = interval_rc > 0;
+            }
+            print_record = have_interval &&
+                record.line_number >= interval.first &&
+                record.line_number <= interval.last;
+            if (!print_record)
+                continue;
+            if (!emitted_file_separator) {
+                (void)bx_search_maybe_emit_context_file_separator(opts);
+                emitted_file_separator = true;
+            }
+            if (printed_any_line && record.line_number == interval.first &&
+                record.line_number > 1u && !opts->suppress_group_separator) {
+                bx_search_printf_out("%s\n",
+                                     opts->group_separator ? opts->group_separator : "--");
+                bx_search_dev_counters_note_output_line_emitted();
+            }
+        } else if (!print_record) {
+            continue;
+        }
+
+        if (!bx_search_buffered_emit_record(&record,
+                                            (unsigned char *)record_stream->record,
+                                            record.selected,
+                                            display_name, m, opts,
+                                            &heading_printed_for_file)) {
+            return false;
+        }
+        printed_any_line = true;
+    }
+    if (read_rc < 0)
+        return false;
+    if (with_context && printed_any_line)
+        bx_search_note_context_output_started();
+    return true;
+}
+
 int bx_search_buffered_opened(FILE *f,
                               bool use_stdin,
                               const char *display_name,
@@ -94,83 +243,63 @@ int bx_search_buffered_opened(FILE *f,
                               int *match_count,
                               struct bx_record_stream *record_stream,
                               struct bx_search_stats *stats) {
-    int cap = 256;
-    struct bx_search_buffered_line *lines = malloc((size_t)cap * sizeof(*lines));
-    int nlines = 0;
+    FILE *records = NULL;
+    FILE *intervals = NULL;
     ssize_t len;
     int file_matches = 0;
     int after_left = -1;
     size_t file_offset = 0u;
+    size_t record_count = 0u;
     bool saw_binary = false;
     bool saw_match_record = false;
-    bool heading_printed_for_file = false;
-    bool count_context_buffer_entries = bx_search_plan_needs_line_buffering(opts);
+    bool with_context = bx_search_plan_needs_line_buffering(opts);
+    bool needs_text_records = !opts->quiet && !opts->count_only &&
+        !opts->files_with_matches && !opts->files_without_match;
 
-    if (!lines)
-        return bx_search_buffered_allocation_error(f, use_stdin, display_name, progname,
-                                                   opts, NULL, 0);
+    if (needs_text_records) {
+        records = tmpfile();
+        if (!records)
+            return bx_search_buffered_error(f, use_stdin, NULL, NULL, display_name,
+                                            progname, opts, errno);
+    }
 
     while ((len = bx_search_input_read_record(f, record_stream, opts)) != -1) {
         char *raw = record_stream->record;
+        struct bx_match bm = {0};
+        size_t match_len;
+        int match_rc;
+        bool matched;
+        bool selected;
+        int record_match_count = 0;
 
         if (!opts->null_data && memchr(raw, '\0', (size_t)len) != NULL)
             saw_binary = true;
-        if (nlines >= cap) {
-            if (cap > INT_MAX / 2)
-                return bx_search_buffered_allocation_error(f, use_stdin, display_name,
-                                                           progname, opts, lines, nlines);
-            int new_cap = cap * 2;
-            struct bx_search_buffered_line *grown =
-                realloc(lines, (size_t)new_cap * sizeof(*lines));
-            if (!grown)
-                return bx_search_buffered_allocation_error(f, use_stdin, display_name,
-                                                           progname, opts, lines, nlines);
-            lines = grown;
-            cap = new_cap;
-        }
-        if ((size_t)len > SIZE_MAX - 1u)
-            return bx_search_buffered_allocation_error(f, use_stdin, display_name,
-                                                       progname, opts, lines, nlines);
-        char *line_text = malloc((size_t)len + 1u);
-        if (!line_text)
-            return bx_search_buffered_allocation_error(f, use_stdin, display_name,
-                                                       progname, opts, lines, nlines);
-        memcpy(line_text, raw, (size_t)len + 1u);
-        lines[nlines].text = line_text;
-        lines[nlines].len = (size_t)len;
-        lines[nlines].byte_offset = file_offset;
-        lines[nlines].print = false;
         if (stats)
             stats->bytes_searched += (size_t)len;
 
-        struct bx_match bm;
-        size_t match_len = bx_search_record_match_len((unsigned char *)raw, (size_t)len, opts);
-        int match_rc =
+        match_len = bx_search_record_match_len((unsigned char *)raw, (size_t)len, opts);
+        match_rc =
             bx_search_matcher_find_with_opts(m, (unsigned char *)raw, match_len, 0, opts, &bm);
         if (match_rc < 0)
-            return bx_search_buffered_matcher_error(f, use_stdin, display_name, progname,
-                                                    m, opts, lines, nlines + 1);
-        bool matched = match_rc == 0;
-
-        file_offset += (size_t)len;
+            return bx_search_buffered_matcher_error(f, use_stdin, records, NULL,
+                                                    display_name, progname, m, opts);
+        matched = match_rc == 0;
         if (opts->invert_match)
             matched = !matched;
+        selected = matched;
 
-        bool selected = matched;
-        int record_match_count = 0;
         if (matched && !opts->invert_match) {
             record_match_count = opts->count_matches
                 ? bx_search_count_record_matches(m, (unsigned char *)raw, match_len, opts)
                 : 1;
             if (bx_search_matcher_had_error(m))
-                return bx_search_buffered_matcher_error(f, use_stdin, display_name,
-                                                        progname, m, opts, lines,
-                                                        nlines + 1);
+                return bx_search_buffered_matcher_error(f, use_stdin, records, NULL,
+                                                        display_name, progname, m, opts);
         }
         if (matched && opts->max_count > 0 && file_matches >= opts->max_count)
             selected = false;
-        lines[nlines].match = selected;
-        lines[nlines].match_count = record_match_count;
+
+        record_count++;
         if (selected) {
             file_matches += opts->count_matches ? record_match_count : 1;
             if (stats) {
@@ -178,37 +307,47 @@ int bx_search_buffered_opened(FILE *f,
                 stats->matched_lines++;
             }
             saw_match_record = true;
-            if (opts->max_count > 0 && file_matches >= opts->max_count) {
-                after_left = opts->after_context;
-                if (count_context_buffer_entries)
-                    bx_search_dev_counters_note_context_buffer_entry();
-                nlines++;
-                if (after_left == 0)
-                    break;
-                continue;
-            }
-        } else if (opts->stop_on_nonmatch && saw_match_record) {
-            free(lines[nlines].text);
-            lines[nlines].text = NULL;
+        }
+
+        if (!selected && opts->stop_on_nonmatch && saw_match_record) {
+            record_count--;
             break;
-        } else if (after_left > 0) {
-            after_left--;
-            if (count_context_buffer_entries)
-                bx_search_dev_counters_note_context_buffer_entry();
-            nlines++;
+        }
+        if (needs_text_records && (with_context || selected)) {
+            const struct bx_search_staged_record staged = {
+                .len = (size_t)len,
+                .byte_offset = file_offset,
+                .line_number = record_count,
+                .selected = selected,
+            };
+            if (!bx_search_staged_record_write(records, &staged, raw))
+                return bx_search_buffered_error(f, use_stdin, records, NULL,
+                                                display_name, progname, opts,
+                                                errno != 0 ? errno : EIO);
+        }
+        if (with_context)
+            bx_search_dev_counters_note_context_buffer_entry();
+        file_offset += (size_t)len;
+
+        if (selected && opts->max_count > 0 && file_matches >= opts->max_count) {
+            after_left = opts->after_context;
             if (after_left == 0)
                 break;
             continue;
         }
-        if (count_context_buffer_entries)
-            bx_search_dev_counters_note_context_buffer_entry();
-        nlines++;
+        if (after_left > 0) {
+            after_left--;
+            if (after_left == 0)
+                break;
+        }
     }
-    if (!use_stdin)
-        fclose(f);
+    bx_search_buffered_close_input(f, use_stdin);
+    f = NULL;
+
     if (bx_record_stream_had_error(record_stream)) {
         int errnum = bx_record_stream_error(record_stream);
-        bx_search_buffered_free_lines(lines, nlines);
+        if (records)
+            fclose(records);
         if (errnum == EOVERFLOW) {
             bx_search_report_record_too_large(progname,
                                               display_name ? display_name : "(standard input)",
@@ -226,191 +365,90 @@ int bx_search_buffered_opened(FILE *f,
 
     if (saw_binary && !opts->binary_as_text) {
         bx_search_dev_counters_note_binary_policy_check();
-        if (opts->binary_without_match) {
-            bx_search_buffered_free_lines(lines, nlines);
+        if (records)
+            fclose(records);
+        if (opts->binary_without_match)
             return bx_search_binary_without_match(display_name, opts, match_count, stats);
-        }
-
         if (opts->quiet && file_matches > 0) {
-            if (stats && file_matches > 0)
+            if (stats)
                 stats->files_with_matches++;
-            bx_search_buffered_free_lines(lines, nlines);
             if (match_count)
                 *match_count += file_matches;
             return 0;
         }
-
-        if (opts->count_only || opts->files_with_matches || opts->files_without_match) {
-            int rc = bx_search_buffered_emit_summary(display_name, opts, match_count, stats,
-                                                     file_matches);
-            bx_search_buffered_free_lines(lines, nlines);
-            return rc;
-        }
-
+        if (opts->count_only || opts->files_with_matches || opts->files_without_match)
+            return bx_search_buffered_emit_summary(display_name, opts, match_count, stats,
+                                                   file_matches);
         if (file_matches > 0) {
             bx_search_report_binary_match(progname, display_name);
             if (stats)
                 stats->files_with_matches++;
             if (match_count)
                 *match_count += file_matches;
-            bx_search_buffered_free_lines(lines, nlines);
             return 0;
         }
-
-        bx_search_buffered_free_lines(lines, nlines);
         return 1;
     }
 
     if (opts->quiet && file_matches > 0) {
+        if (records)
+            fclose(records);
         if (stats)
             stats->files_with_matches++;
-        bx_search_buffered_free_lines(lines, nlines);
         if (match_count)
             *match_count += file_matches;
         return 0;
     }
-
     if (opts->count_only || opts->files_with_matches || opts->files_without_match) {
-        int rc = bx_search_buffered_emit_summary(display_name, opts, match_count, stats,
-                                                 file_matches);
-        bx_search_buffered_free_lines(lines, nlines);
-        return rc;
+        if (records)
+            fclose(records);
+        return bx_search_buffered_emit_summary(display_name, opts, match_count, stats,
+                                               file_matches);
     }
 
-    for (int i = 0; i < nlines; i++) {
-        if (!lines[i].match)
-            continue;
-        int start = i - opts->before_context;
-        if (start < 0)
-            start = 0;
-        int end = i + opts->after_context + 1;
-        if (end > nlines)
-            end = nlines;
-        for (int j = start; j < end; j++)
-            lines[j].print = true;
+    if (with_context && file_matches > 0) {
+        intervals = tmpfile();
+        if (!intervals ||
+            !bx_search_context_stage_build_intervals(records, intervals, record_count,
+                                                     opts->before_context,
+                                                     opts->after_context)) {
+            int errnum = errno != 0 ? errno : EIO;
+            if (records)
+                fclose(records);
+            if (intervals)
+                fclose(intervals);
+            bx_search_report_path_error(progname,
+                                        display_name ? display_name : "(standard input)",
+                                        errnum, opts);
+            return 2;
+        }
     }
 
-    bool want_group_separator = bx_search_plan_needs_line_buffering(opts);
-    bool in_group = false;
-    bool emitted_file_separator = false;
-    bool printed_any_line = false;
-    int last_printed = -1;
-    for (int i = 0; i < nlines; i++) {
-        if (!lines[i].print) {
-            in_group = false;
-            continue;
-        }
-        if (want_group_separator && !emitted_file_separator) {
-            (void)bx_search_maybe_emit_context_file_separator(opts);
-            emitted_file_separator = true;
-        }
-        if (!in_group && last_printed >= 0 && i > last_printed + 1) {
-            if (want_group_separator && !opts->suppress_group_separator) {
-                bx_search_printf_out("%s\n",
-                                     opts->group_separator ? opts->group_separator : "--");
-                bx_search_dev_counters_note_output_line_emitted();
-            }
-        }
-        if (lines[i].match) {
-            struct bx_match bm;
-            size_t match_len = bx_search_record_match_len((unsigned char *)lines[i].text,
-                                                          lines[i].len, opts);
-
-            bx_search_matcher_find_with_opts(
-                m, (unsigned char *)lines[i].text, match_len, 0, opts, &bm
-            );
-            if (bx_search_matcher_had_error(m)) {
-                bx_search_buffered_free_lines(lines, nlines);
-                (void)bx_search_report_matcher_error(progname, display_name, m, opts);
-                return 2;
-            }
-            if (opts->vimgrep && !opts->invert_match) {
-                bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                bx_search_print_vimgrep_matches(
-                    (unsigned char *)lines[i].text, lines[i].len,
-                    heading_printed_for_file ? NULL : display_name,
-                    i + 1, lines[i].byte_offset, m, opts);
-            } else if (opts->only_matching && !opts->invert_match) {
-                bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                bx_search_print_only_matches_from_first(
-                    (unsigned char *)lines[i].text, lines[i].len,
-                    heading_printed_for_file ? NULL : display_name,
-                    i + 1, lines[i].byte_offset, m, &bm, opts);
-            } else {
-                bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-                bool prefix_printed = bx_search_print_result_prefix(
-                    heading_printed_for_file ? NULL : display_name,
-                    opts, i + 1, bm.start + 1u, true, lines[i].byte_offset,
-                    bx_search_match_field_separator(opts));
-                if (opts->only_matching && opts->invert_match)
-                    continue;
-                bx_search_maybe_emit_initial_tab(opts, prefix_printed);
-                if (opts->invert_match) {
-                    bx_search_print_plain_record_contents((unsigned char *)lines[i].text,
-                                                          lines[i].len, opts);
-                    if (lines[i].len == 0
-                        || lines[i].text[lines[i].len - 1]
-                               != bx_search_record_delimiter(opts)) {
-                        bx_search_write_record_terminator(opts);
-                    }
-                    bx_search_dev_counters_note_output_line_emitted();
-                    continue;
-                }
-                if (bx_search_should_omit_long_match_line(opts, lines[i].len)) {
-                    bx_search_print_omitted_long_line(opts);
-                } else if (opts->replace) {
-                    bx_search_print_replaced_record((unsigned char *)lines[i].text,
-                                                    lines[i].len, m, opts);
-                } else {
-                    FILE *out = bx_search_output_stream();
-                    bool color = bx_color_enabled();
-                    unsigned char delimiter =
-                        (unsigned char)bx_search_record_delimiter(opts);
-                    bool has_delim = lines[i].len > 0u
-                        && ((unsigned char)lines[i].text[lines[i].len - 1u] == delimiter);
-
-                    bx_search_print_match_colored_cached((unsigned char *)lines[i].text,
-                                                         lines[i].len,
-                                                         bm.start,
-                                                         bm.end,
-                                                         has_delim,
-                                                         opts,
-                                                         out,
-                                                         color,
-                                                         delimiter);
-                }
-            }
+    if (file_matches > 0 &&
+        !bx_search_buffered_emit_staged(records, intervals, with_context,
+                                        display_name, m, opts, record_stream)) {
+        int errnum = errno != 0 ? errno : EIO;
+        bool matcher_error = bx_search_matcher_had_error(m);
+        fclose(records);
+        if (intervals)
+            fclose(intervals);
+        if (matcher_error) {
+            (void)bx_search_report_matcher_error(progname, display_name, m, opts);
         } else {
-            bx_search_maybe_print_heading(display_name, opts, &heading_printed_for_file);
-            bool prefix_printed = bx_search_print_result_prefix(
-                heading_printed_for_file ? NULL : display_name,
-                opts, i + 1, 0u, false, lines[i].byte_offset,
-                bx_search_context_field_separator(opts));
-            bx_search_maybe_emit_initial_tab(opts, prefix_printed);
-            bx_search_print_plain_record_contents((unsigned char *)lines[i].text,
-                                                  lines[i].len, opts);
-            if (lines[i].len == 0
-                || lines[i].text[lines[i].len - 1] != bx_search_record_delimiter(opts)) {
-                bx_search_write_record_terminator(opts);
-            }
-            bx_search_dev_counters_note_output_line_emitted();
+            bx_search_report_path_error(progname,
+                                        display_name ? display_name : "(standard input)",
+                                        errnum, opts);
         }
-        in_group = true;
-        last_printed = i;
-        printed_any_line = true;
-    }
-    if (bx_search_matcher_had_error(m)) {
-        bx_search_buffered_free_lines(lines, nlines);
-        (void)bx_search_report_matcher_error(progname, display_name, m, opts);
         return 2;
     }
-    if (want_group_separator && printed_any_line)
-        bx_search_note_context_output_started();
+    if (records)
+        fclose(records);
+    if (intervals)
+        fclose(intervals);
     if (stats && file_matches > 0)
         stats->files_with_matches++;
     if (match_count)
         *match_count += file_matches;
-    bx_search_buffered_free_lines(lines, nlines);
     return file_matches > 0 ? 0 : 1;
 }
 

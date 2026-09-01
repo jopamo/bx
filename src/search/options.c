@@ -15,6 +15,7 @@
 #include "lib/thread_count.h"
 #include "options.h"
 #include "pcre2_matcher.h"
+#include "record_stream.h"
 #include "rg_generate.h"
 #include "search.h"
 #include "lib/args_common.h"
@@ -174,6 +175,8 @@ static int bx_search_parse_out_of_memory(const char *progname) {
 static const char *bx_search_parse_error_text(int errnum) {
     if (errnum == ENOMEM)
         return "Out of memory";
+    if (errnum == EOVERFLOW)
+        return "input record too large";
     return strerror(errnum ? errnum : EIO);
 }
 
@@ -1669,6 +1672,7 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
             FILE *pf = NULL;
             bool close_pf = false;
             int read_errno = 0;
+            struct bx_record_stream pattern_stream = {0};
             if (strcmp(optarg, "-") == 0) {
                 pf = stdin;
             } else {
@@ -1679,19 +1683,17 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
                 return -1;
             }
-            char *line = NULL; size_t cap = 0;
+            bx_record_stream_begin(pf, &pattern_stream);
             for (;;) {
                 ssize_t line_len;
 
-                errno = 0;
-                line_len = getline(&line, &cap, pf);
+                line_len = bx_record_stream_read(pf, &pattern_stream, '\n');
                 if (line_len < 0) {
-                    if (errno != 0)
-                        read_errno = errno;
-                    else if (ferror(pf))
-                        read_errno = errno != 0 ? errno : EIO;
+                    if (bx_record_stream_had_error(&pattern_stream))
+                        read_errno = bx_record_stream_error(&pattern_stream);
                     break;
                 }
+                char *line = pattern_stream.record;
                 size_t llen = strlen(line);
                 while (llen > 0 && line[llen-1] == '\n')
                     line[--llen] = '\0';
@@ -1704,9 +1706,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     opts->extra_patterns[opts->num_extra_patterns++] = copy;
                 }
             }
-            free(line);
             if (close_pf && fclose(pf) != 0 && read_errno == 0)
                 read_errno = errno != 0 ? errno : EIO;
+            bx_record_stream_dispose(&pattern_stream);
             if (read_errno != 0)
                 return bx_search_parse_path_error(progname, optarg, read_errno);
             break;
@@ -1744,24 +1746,22 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                 return bx_grep_unrecognized_option(progname, "--exclude-from");
             FILE *ef = fopen(optarg, "r");
             int read_errno = 0;
+            struct bx_record_stream exclude_stream = {0};
             if (!ef) {
                 fprintf(stderr, "%s: %s: %s\n", progname, optarg, strerror(errno));
                 return -1;
             }
-            char *line = NULL;
-            size_t cap = 0;
+            bx_record_stream_begin(ef, &exclude_stream);
             for (;;) {
                 ssize_t line_len;
 
-                errno = 0;
-                line_len = getline(&line, &cap, ef);
+                line_len = bx_record_stream_read(ef, &exclude_stream, '\n');
                 if (line_len < 0) {
-                    if (errno != 0)
-                        read_errno = errno;
-                    else if (ferror(ef))
-                        read_errno = errno != 0 ? errno : EIO;
+                    if (bx_record_stream_had_error(&exclude_stream))
+                        read_errno = bx_record_stream_error(&exclude_stream);
                     break;
                 }
+                char *line = exclude_stream.record;
                 size_t len = strlen(line);
                 while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
                     line[--len] = '\0';
@@ -1776,9 +1776,9 @@ int bx_search_parse_options(int argc, char **argv, struct search_opts *opts,
                     opts->exclude_patterns[opts->num_exclude++] = copy;
                 }
             }
-            free(line);
             if (fclose(ef) != 0 && read_errno == 0)
                 read_errno = errno != 0 ? errno : EIO;
+            bx_record_stream_dispose(&exclude_stream);
             if (read_errno != 0)
                 return bx_search_parse_path_error(progname, optarg, read_errno);
             break;
