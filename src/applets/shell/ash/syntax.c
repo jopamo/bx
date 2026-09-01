@@ -75,7 +75,7 @@ int ash_word_clone(struct ash_word* destination, const struct ash_word* source) 
     ash_word_init(destination, source->location);
     for (size_t i = 0u; i < source->count; i++) {
         const struct ash_word_part* part = &source->parts[i];
-        if (ash_word_append(
+        if (ash_word_add_part(
                 destination,
                 part->kind,
                 part->quote,
@@ -130,59 +130,25 @@ static bool ash_quote_kind_valid(enum ash_quote_kind quote) {
     return quote >= ASH_QUOTE_NONE && quote <= ASH_QUOTE_DOLLAR_SINGLE;
 }
 
-int ash_word_append(
-    struct ash_word* word,
+static bool ash_word_part_spec_valid(
     enum ash_word_part_kind kind,
-    enum ash_quote_kind quote,
-    struct ash_source_location location,
+    enum ash_quote_kind quote
+) {
+    return ash_word_part_kind_valid(kind) &&
+        ash_quote_kind_valid(quote) &&
+        (kind == ASH_WORD_TEXT ||
+         (quote != ASH_QUOTE_BACKSLASH &&
+          quote != ASH_QUOTE_SINGLE &&
+          quote != ASH_QUOTE_DOLLAR_SINGLE));
+}
+
+static int ash_word_part_append(
+    struct ash_word_part* part,
     const char* text,
     size_t length
 ) {
-    if (word == NULL || !ash_word_part_kind_valid(kind) ||
-        !ash_quote_kind_valid(quote) ||
-        (text == NULL && length != 0u) ||
-        (kind != ASH_WORD_TEXT &&
-            (quote == ASH_QUOTE_BACKSLASH ||
-             quote == ASH_QUOTE_SINGLE ||
-             quote == ASH_QUOTE_DOLLAR_SINGLE))) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    struct ash_word_part* part = NULL;
-    bool new_part = false;
-    if (word->count != 0u) {
-        struct ash_word_part* last = &word->parts[word->count - 1u];
-        if (kind != ASH_WORD_PROCESS_SUBSTITUTION &&
-            last->kind == kind && last->quote == quote) {
-            part = last;
-        }
-    }
-
-    if (part == NULL) {
-        if (ash_syntax_grow_array(
-                (void**)&word->parts,
-                &word->capacity,
-                word->count + 1u,
-                sizeof(*word->parts)
-            ) != 0) {
-            return -1;
-        }
-        part = &word->parts[word->count++];
-        new_part = true;
-        *part = (struct ash_word_part){
-            .kind = kind,
-            .quote = quote,
-            .location = location,
-        };
-    }
-
     if (length > SIZE_MAX - part->length - 1u ||
         ash_word_part_reserve(part, part->length + length + 1u) != 0) {
-        if (new_part) {
-            *part = (struct ash_word_part){0};
-            word->count--;
-        }
         errno = ENOMEM;
         return -1;
     }
@@ -192,4 +158,66 @@ int ash_word_append(
     part->length += length;
     part->text[part->length] = '\0';
     return 0;
+}
+
+int ash_word_add_part(
+    struct ash_word* word,
+    enum ash_word_part_kind kind,
+    enum ash_quote_kind quote,
+    struct ash_source_location location,
+    const char* text,
+    size_t length
+) {
+    if (word == NULL || !ash_word_part_spec_valid(kind, quote) ||
+        !ash_source_location_valid(&location) ||
+        (text == NULL && length != 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (word->count == SIZE_MAX) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if (ash_syntax_grow_array(
+            (void**)&word->parts,
+            &word->capacity,
+            word->count + 1u,
+            sizeof(*word->parts)
+        ) != 0) {
+        return -1;
+    }
+    struct ash_word_part* part = &word->parts[word->count];
+    *part = (struct ash_word_part){
+        .kind = kind,
+        .quote = quote,
+        .location = location,
+    };
+    if (ash_word_part_append(part, text, length) != 0) {
+        *part = (struct ash_word_part){0};
+        return -1;
+    }
+    word->count++;
+    return 0;
+}
+
+int ash_word_extend_last_part(
+    struct ash_word* word,
+    enum ash_word_part_kind expected_kind,
+    enum ash_quote_kind expected_quote,
+    const char* text,
+    size_t length
+) {
+    if (word == NULL || word->count == 0u ||
+        !ash_word_part_spec_valid(expected_kind, expected_quote) ||
+        (text == NULL && length != 0u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    struct ash_word_part* part = &word->parts[word->count - 1u];
+    if (part->kind != expected_kind || part->quote != expected_quote) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ash_word_part_append(part, text, length);
 }
