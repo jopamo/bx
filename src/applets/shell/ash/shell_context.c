@@ -101,7 +101,7 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         shell->shell_pid > 0 &&
         shell->last_async_pid >= -1 &&
         shell->command_substitution != NULL &&
-        (shell->options & ~ASH_SHELL_OPTION_ALL) == 0u &&
+        ash_shell_options_valid(shell->options) &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_interactive_state_valid(&shell->interactive) &&
         interactive ==
@@ -182,7 +182,7 @@ bool ash_shell_context_init(
         config->positional_count < 0 ||
         (config->positional_count > 0 &&
             config->positional_values == NULL) ||
-        (config->options & ~ASH_SHELL_OPTION_ALL) != 0u ||
+        !ash_shell_options_valid(config->options) ||
         !ash_shell_policy_valid(&config->policy) ||
         !ash_interactive_state_valid(&config->interactive) ||
         interactive !=
@@ -270,41 +270,15 @@ void ash_shell_context_detach_after_fork(struct ash_shell* shell) {
 }
 
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size) {
-    static const struct {
-        uint32_t option;
-        uint32_t policy_flag;
-        char letter;
-    } options[] = {
-        {ASH_SHELL_OPTION_ALLEXPORT, 0u, 'a'},
-        {ASH_SHELL_OPTION_NOTIFY, 0u, 'b'},
-        {ASH_SHELL_OPTION_NOCLOBBER, 0u, 'C'},
-        {ASH_SHELL_OPTION_ERREXIT, 0u, 'e'},
-        {ASH_SHELL_OPTION_NOGLOB, 0u, 'f'},
-        {0u, ASH_SHELL_POLICY_INTERACTIVE, 'i'},
-        {ASH_SHELL_OPTION_MONITOR, 0u, 'm'},
-        {ASH_SHELL_OPTION_NOEXEC, 0u, 'n'},
-        {ASH_SHELL_OPTION_STDIN, 0u, 's'},
-        {ASH_SHELL_OPTION_NOUNSET, 0u, 'u'},
-        {ASH_SHELL_OPTION_VERBOSE, 0u, 'v'},
-        {ASH_SHELL_OPTION_XTRACE, 0u, 'x'},
-    };
-
-    if (output_size == 0u) {
-        return;
-    }
-    size_t length = 0u;
-    for (size_t i = 0u; i < sizeof(options) / sizeof(options[0]); i++) {
-        bool enabled = options[i].option != 0u ?
-            (shell->options & options[i].option) != 0u :
-            ash_shell_policy_has(
-                &shell->policy,
-                (enum ash_shell_policy_flag)options[i].policy_flag
-            );
-        if (enabled && length + 1u < output_size) {
-            output[length++] = options[i].letter;
-        }
-    }
-    output[length] = '\0';
+    ash_shell_options_format_letters(
+        shell->options,
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        ),
+        output,
+        output_size
+    );
 }
 
 void ash_shell_context_release_owned(struct ash_shell* shell) {

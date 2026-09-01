@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "applets/shell/ash/invocation.h"
-#include "applets/shell/ash/shell_context.h"
+#include "applets/shell/ash/shell_options.h"
 #include "lib/cli_common.h"
 
 static const char* ash_invocation_effective_name(const char* invoked) {
@@ -30,7 +30,7 @@ bool ash_invocation_valid(const struct ash_invocation* invocation) {
         (invocation->positional_count > 0 &&
          invocation->positional_values == NULL) ||
         !ash_invocation_action_valid(invocation->action) ||
-        (invocation->options & ~ASH_SHELL_OPTION_ALL) != 0u) {
+        !ash_shell_options_valid(invocation->options)) {
         return false;
     }
     for (int i = 0; i < invocation->positional_count; i++) {
@@ -81,6 +81,7 @@ bool ash_invocation_error_valid(
                 (error->sign == '-' || error->sign == '+') &&
                 error->option != '\0';
         case ASH_INVOCATION_ERROR_INVALID_LONG_OPTION:
+        case ASH_INVOCATION_ERROR_INVALID_OPTION_NAME:
             return error->progname != NULL &&
                 error->argument != NULL &&
                 error->sign == '\0' &&
@@ -119,30 +120,14 @@ static bool ash_invocation_apply_short(
         case 'i':
             candidate->force_interactive = enabled;
             return true;
-        case 's':
-            if (enabled) {
-                candidate->options |= ASH_SHELL_OPTION_STDIN;
-            }
-            else {
-                candidate->options &= ~ASH_SHELL_OPTION_STDIN;
-            }
-            return true;
-        case 'C':
-            if (enabled) {
-                candidate->options |= ASH_SHELL_OPTION_NOCLOBBER;
-            }
-            else {
-                candidate->options &= ~ASH_SHELL_OPTION_NOCLOBBER;
-            }
-            return true;
-        case 'v':
-            if (enabled) {
-                candidate->options |= ASH_SHELL_OPTION_VERBOSE;
-            }
-            else {
-                candidate->options &= ~ASH_SHELL_OPTION_VERBOSE;
-            }
-            return true;
+    }
+    if (ash_shell_option_apply_letter(
+            &candidate->options,
+            option,
+            enabled,
+            ASH_SHELL_OPTION_USE_INVOCATION_SHORT
+        ) == ASH_SHELL_OPTION_APPLIED) {
+        return true;
     }
 
     return ash_invocation_fail(
@@ -174,8 +159,13 @@ static bool ash_invocation_apply_long(
         return true;
     }
     if (strcmp(argument, "--verbose") == 0 &&
-        strcmp(candidate->progname, "bash") == 0) {
-        candidate->options |= ASH_SHELL_OPTION_VERBOSE;
+        strcmp(candidate->progname, "bash") == 0 &&
+        ash_shell_option_apply_name(
+            &candidate->options,
+            "verbose",
+            true,
+            ASH_SHELL_OPTION_USE_INVOCATION_NAME
+        ) == ASH_SHELL_OPTION_APPLIED) {
         return true;
     }
 
@@ -276,6 +266,28 @@ bool ash_invocation_parse(
         for (const char* option = argument + 1;
              *option != '\0';
              option++) {
+            if (*option == 'o' &&
+                strcmp(candidate.progname, "bash") == 0 &&
+                index + 1 < argc) {
+                const char* option_name = argv[++index];
+                if (ash_shell_option_apply_name(
+                        &candidate.options,
+                        option_name,
+                        sign == '-',
+                        ASH_SHELL_OPTION_USE_INVOCATION_NAME
+                    ) != ASH_SHELL_OPTION_APPLIED) {
+                    return ash_invocation_fail(
+                        error,
+                        (struct ash_invocation_error){
+                            .kind =
+                                ASH_INVOCATION_ERROR_INVALID_OPTION_NAME,
+                            .progname = candidate.progname,
+                            .argument = option_name,
+                        }
+                    );
+                }
+                continue;
+            }
             if (!ash_invocation_apply_short(
                     &candidate,
                     sign,

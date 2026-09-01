@@ -10,6 +10,7 @@
 #include "applets/shell/ash/interactive.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/scope.h"
+#include "applets/shell/ash/shell_options.h"
 #include "applets/shell/ash/shell_policy.h"
 #include "applets/shell/ash/source_trace.h"
 #include "lib/fd_transaction.h"
@@ -36,21 +37,6 @@ typedef bool (*ash_command_substitution_fn)(
  * The command span is borrowed. On success output receives one caller-owned
  * allocation; on failure output remains NULL.
  */
-
-enum ash_shell_option {
-    ASH_SHELL_OPTION_ALLEXPORT = 1u << 0,
-    ASH_SHELL_OPTION_NOTIFY = 1u << 1,
-    ASH_SHELL_OPTION_NOCLOBBER = 1u << 2,
-    ASH_SHELL_OPTION_ERREXIT = 1u << 3,
-    ASH_SHELL_OPTION_NOGLOB = 1u << 4,
-    ASH_SHELL_OPTION_MONITOR = 1u << 5,
-    ASH_SHELL_OPTION_NOEXEC = 1u << 6,
-    ASH_SHELL_OPTION_NOUNSET = 1u << 7,
-    ASH_SHELL_OPTION_VERBOSE = 1u << 8,
-    ASH_SHELL_OPTION_XTRACE = 1u << 9,
-    ASH_SHELL_OPTION_STDIN = 1u << 10,
-    ASH_SHELL_OPTION_ALL = (1u << 11) - 1u,
-};
 
 struct ash_cwd_state {
     char* physical;
