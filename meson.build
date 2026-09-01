@@ -1546,7 +1546,24 @@ bx_exe = executable('bx',
   sources,
   include_directories : bx_include_dirs,
   dependencies : bx_deps,
-  link_whole : [nc_lib, socat_lib, traceroute_lib, screen_lib, edit_wrapper_lib, edit_vim_lib, xxd_lib, jq_vendor_lib, jq_lib, manual_lib, bx_zip_lib],
+  # Dispatch entries and wrapper calls provide roots for these archives.
+  # Keep archive membership demand-driven instead of forcing unreachable
+  # implementation objects into the multicall binary.
+  link_with : [
+    nc_lib,
+    socat_lib,
+    screen_lib,
+    edit_wrapper_lib,
+    edit_vim_lib,
+    xxd_lib,
+    jq_vendor_lib,
+    jq_lib,
+    manual_lib,
+    bx_zip_lib,
+  ],
+  # Traceroute transport modules self-register from constructors and have no
+  # ordinary symbol edge from the frontend.
+  link_whole : [traceroute_lib],
   link_args : bx_link_args,
   install : true,
   install_dir : install_bx_bindir
