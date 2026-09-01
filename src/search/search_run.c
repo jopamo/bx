@@ -139,6 +139,11 @@ static enum bx_walk_action bx_search_grep_walk_cb(struct bx_walk_entry *entry, v
         *state->exit_status = 2;
         if (state->error_seen)
             *state->error_seen = true;
+        if (bx_search_matcher_had_error(state->matcher)) {
+            if (state->stop)
+                *state->stop = true;
+            return BX_WALK_STOP;
+        }
         return BX_WALK_CONTINUE;
     }
     if (bx_search_status_counts_as_selected(state->personality, state->opts, rc)) {
@@ -474,6 +479,8 @@ static void bx_search_run_metadata_sorted(const struct bx_search_run_args *args,
                                        args->stats);
         if (rc == 2) {
             *error_seen = true;
+            if (bx_search_matcher_had_error(matcher))
+                break;
         } else if (bx_search_status_counts_as_selected(args->personality, args->opts, rc)) {
             *match_seen = true;
             if (args->opts->quiet)
@@ -649,6 +656,8 @@ static void bx_search_run_single_threaded(const struct bx_search_run_args *args,
                                        record_stream, args->stats);
         if (rc == 2) {
             *error_seen = true;
+            if (bx_search_matcher_had_error(matcher))
+                break;
         } else if (bx_search_status_counts_as_selected(args->personality, args->opts, rc)) {
             *match_seen = true;
             if (args->opts->quiet)
