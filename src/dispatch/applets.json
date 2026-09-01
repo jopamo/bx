@@ -66,6 +66,15 @@
       ]
     },
     {
+      "name": "bash",
+      "main": "bx_ash_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "child-execution"
+      ]
+    },
+    {
       "name": "bc",
       "main": "bx_bc_main",
       "capabilities": [

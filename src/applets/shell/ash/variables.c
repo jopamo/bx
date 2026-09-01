@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
 #include "bx/diag.h"
@@ -92,15 +93,16 @@ bool ash_parse_assignment(
 static struct ash_var* ash_var_find_len(
     struct ash_shell* shell,
     const char* name,
-    size_t length
+    size_t length,
+    struct ash_scope** owner
 ) {
-    for (struct ash_var* var = shell->vars; var != NULL; var = var->next) {
-        if (strlen(var->name) == length &&
-            memcmp(var->name, name, length) == 0) {
-            return var;
-        }
-    }
-    return NULL;
+    return ash_scope_lookup_variable_mut(
+            shell,
+            name,
+            length,
+            ASH_SCOPE_LOOKUP_VISIBLE,
+            owner
+        );
 }
 
 static const struct ash_var* ash_var_find_len_const(
@@ -108,15 +110,18 @@ static const struct ash_var* ash_var_find_len_const(
     const char* name,
     size_t length
 ) {
-    for (const struct ash_var* var = shell->vars;
-         var != NULL;
-         var = var->next) {
-        if (strlen(var->name) == length &&
-            memcmp(var->name, name, length) == 0) {
-            return var;
-        }
+    struct ash_scope_binding binding;
+    if (ash_scope_lookup(
+            shell,
+            name,
+            length,
+            ASH_SCOPE_LOOKUP_VISIBLE,
+            false,
+            &binding
+        ) != ASH_SCOPE_LOOKUP_FOUND) {
+        return NULL;
     }
-    return NULL;
+    return binding.variable;
 }
 
 const char* ash_var_get_len(
@@ -124,8 +129,18 @@ const char* ash_var_get_len(
     const char* name,
     size_t length
 ) {
-    const struct ash_var* var = ash_var_find_len_const(shell, name, length);
-    return (var != NULL) ? var->value : NULL;
+    struct ash_scope_binding binding;
+    if (ash_scope_lookup(
+            shell,
+            name,
+            length,
+            ASH_SCOPE_LOOKUP_VISIBLE,
+            true,
+            &binding
+        ) != ASH_SCOPE_LOOKUP_FOUND) {
+        return NULL;
+    }
+    return ash_value_get_scalar(&binding.variable->value);
 }
 
 const char* ash_var_get(const struct ash_shell* shell, const char* name) {
@@ -133,17 +148,51 @@ const char* ash_var_get(const struct ash_shell* shell, const char* name) {
 }
 
 bool ash_var_exists(const struct ash_shell* shell, const char* name) {
-    return ash_var_get(shell, name) != NULL;
+    return ash_var_find_len_const(shell, name, strlen(name)) != NULL;
 }
 
-static bool ash_var_publish_exported(
-    struct ash_shell* shell,
-    struct ash_var* var
+bool ash_var_attributes_valid(uint32_t attributes) {
+    return (attributes & ~ASH_VAR_ATTR_ALL) == 0u &&
+        (attributes & (ASH_VAR_ATTR_UPPERCASE | ASH_VAR_ATTR_LOWERCASE)) !=
+            (ASH_VAR_ATTR_UPPERCASE | ASH_VAR_ATTR_LOWERCASE);
+}
+
+bool ash_var_has_attribute(
+    const struct ash_shell* shell,
+    const char* name,
+    enum ash_var_attribute attribute
 ) {
-    if (!var->exported) {
+    const struct ash_var* var = ash_var_find_len_const(
+        shell,
+        name,
+        strlen(name)
+    );
+    return var != NULL && ((var->attributes & (uint32_t)attribute) != 0u);
+}
+
+bool ash_var_publish_visible(
+    struct ash_shell* shell,
+    const char* name,
+    size_t name_length
+) {
+    const struct ash_var* var = ash_var_find_len_const(
+        shell,
+        name,
+        name_length
+    );
+    const char* scalar = var != NULL ?
+        ash_value_get_scalar(&var->value) : NULL;
+    if (var == NULL ||
+        (var->attributes & ASH_VAR_ATTR_EXPORT) == 0u ||
+        scalar == NULL) {
+        /*
+         * Setters may receive a name span from "name=value"; prefer the
+         * frame-owned NUL-terminated name whenever a binding remains.
+         */
+        (void)unsetenv(var != NULL ? var->name : name);
         return true;
     }
-    if (setenv(var->name, var->value, 1) != 0) {
+    if (setenv(var->name, scalar, 1) != 0) {
         if (errno == ENOMEM) {
             return ash_vars_oom(shell);
         }
@@ -153,14 +202,35 @@ static bool ash_var_publish_exported(
     return true;
 }
 
-bool ash_var_set_with_export(
+static struct ash_var* ash_var_find_in_scope(
+    struct ash_scope* scope,
+    const char* name,
+    size_t name_length
+) {
+    for (struct ash_var* var = scope != NULL ? scope->variables : NULL;
+         var != NULL;
+         var = var->next) {
+        if (var->name_length == name_length &&
+            memcmp(var->name, name, name_length) == 0) {
+            return var;
+        }
+    }
+    return NULL;
+}
+
+static bool ash_var_set_in_scope(
     struct ash_shell* shell,
+    struct ash_scope* scope,
     const char* name,
     size_t name_length,
     const char* value,
-    bool mark_export
+    uint32_t attributes
 ) {
-    struct ash_var* var = ash_var_find_len(shell, name, name_length);
+    if (scope == NULL) {
+        errno = EINVAL;
+        return false;
+    }
+    struct ash_var* var = ash_var_find_in_scope(scope, name, name_length);
     if (var == NULL) {
         var = malloc(sizeof(*var));
         if (var == NULL) {
@@ -168,27 +238,49 @@ bool ash_var_set_with_export(
         }
         *var = (struct ash_var){0};
         var->name = ash_vars_duplicate(shell, name, name_length);
-        var->value = ash_vars_duplicate(shell, value, strlen(value));
-        if (var->name == NULL || var->value == NULL) {
+        var->name_length = name_length;
+        if (var->name == NULL ||
+            !ash_value_init_scalar(&var->value, value)) {
             free(var->name);
-            free(var->value);
+            ash_value_destroy(&var->value);
             free(var);
+            ash_vars_oom(shell);
             return false;
         }
-        var->exported = mark_export;
-        var->next = shell->vars;
-        shell->vars = var;
+        var->attributes = attributes;
+        var->next = scope->variables;
+        scope->variables = var;
     }
     else {
-        char* replacement = ash_vars_duplicate(shell, value, strlen(value));
-        if (replacement == NULL) {
+        if (!ash_value_set_scalar(&var->value, value)) {
+            ash_vars_oom(shell);
             return false;
         }
-        free(var->value);
-        var->value = replacement;
-        var->exported = var->exported || mark_export;
+        var->attributes |= attributes;
     }
-    return ash_var_publish_exported(shell, var);
+    return ash_var_publish_visible(shell, name, name_length);
+}
+
+bool ash_var_set_with_export(
+    struct ash_shell* shell,
+    const char* name,
+    size_t name_length,
+    const char* value,
+    bool mark_export
+) {
+    struct ash_scope* owner = NULL;
+    (void)ash_var_find_len(shell, name, name_length, &owner);
+    if (owner == NULL) {
+        owner = ash_scope_global(shell);
+    }
+    return ash_var_set_in_scope(
+        shell,
+        owner,
+        name,
+        name_length,
+        value,
+        mark_export ? ASH_VAR_ATTR_EXPORT : 0u
+    );
 }
 
 bool ash_var_set(
@@ -206,114 +298,138 @@ bool ash_var_set(
     );
 }
 
+bool ash_var_set_local(
+    struct ash_shell* shell,
+    const char* name,
+    const char* value,
+    bool mark_export
+) {
+    return ash_var_set_in_scope(
+        shell,
+        ash_scope_current_function(shell),
+        name,
+        strlen(name),
+        value,
+        ASH_VAR_ATTR_LOCAL |
+            (mark_export ? ASH_VAR_ATTR_EXPORT : 0u)
+    );
+}
+
+bool ash_var_set_temporary(
+    struct ash_shell* shell,
+    const char* name,
+    size_t name_length,
+    const char* value,
+    bool mark_export
+) {
+    struct ash_scope* scope = ash_scope_current(shell);
+    if (scope == NULL || scope->kind != ASH_SCOPE_TEMPORARY_ASSIGNMENT) {
+        errno = EINVAL;
+        return false;
+    }
+    return ash_var_set_in_scope(
+        shell,
+        scope,
+        name,
+        name_length,
+        value,
+        mark_export ? ASH_VAR_ATTR_EXPORT : 0u
+    );
+}
+
 bool ash_var_export(struct ash_shell* shell, const char* name) {
     size_t length = strlen(name);
-    struct ash_var* var = ash_var_find_len(shell, name, length);
+    struct ash_var* var = ash_var_find_len(shell, name, length, NULL);
     if (var == NULL) {
         return ash_var_set_with_export(shell, name, length, "", true);
     }
-    var->exported = true;
-    return ash_var_publish_exported(shell, var);
+    return ash_var_update_attributes(
+        shell,
+        name,
+        ASH_VAR_ATTR_EXPORT,
+        0u
+    );
 }
 
-bool ash_var_save(
+bool ash_var_update_attributes(
     struct ash_shell* shell,
     const char* name,
-    size_t length,
-    struct ash_var_saved* saved
+    uint32_t set,
+    uint32_t clear
 ) {
-    *saved = (struct ash_var_saved){0};
-    saved->name = ash_vars_duplicate(shell, name, length);
-    if (saved->name == NULL) {
-        return false;
-    }
-    const struct ash_var* var = ash_var_find_len_const(shell, name, length);
-    if (var == NULL) {
-        return true;
-    }
-    saved->original = calloc(1u, sizeof(*saved->original));
-    if (saved->original == NULL) {
-        ash_vars_oom(shell);
-        free(saved->name);
-        *saved = (struct ash_var_saved){0};
-        return false;
-    }
-    saved->original->name = ash_vars_duplicate(
+    size_t name_length = strlen(name);
+    struct ash_var* var = ash_var_find_len(
         shell,
-        var->name,
-        strlen(var->name)
+        name,
+        name_length,
+        NULL
     );
-    saved->original->value = ash_vars_duplicate(
-        shell,
-        var->value,
-        strlen(var->value)
-    );
-    if (saved->original->name == NULL ||
-        saved->original->value == NULL) {
-        free(saved->original->name);
-        free(saved->original->value);
-        free(saved->original);
-        free(saved->name);
-        *saved = (struct ash_var_saved){0};
+    if (var == NULL || (set & clear) != 0u ||
+        ((set | clear) & ~ASH_VAR_ATTR_ALL) != 0u) {
+        errno = EINVAL;
         return false;
     }
-    saved->original->exported = var->exported;
-    saved->existed = true;
+    uint32_t candidate = (var->attributes | set) & ~clear;
+    if (!ash_var_attributes_valid(candidate)) {
+        errno = EINVAL;
+        return false;
+    }
+    uint32_t previous = var->attributes;
+    var->attributes = candidate;
+    if (!ash_var_publish_visible(shell, name, name_length)) {
+        var->attributes = previous;
+        (void)ash_var_publish_visible(shell, name, name_length);
+        return false;
+    }
     return true;
 }
 
-void ash_var_restore(struct ash_shell* shell, struct ash_var_saved* saved) {
-    if (saved->name == NULL) {
+void ash_vars_visit_visible(
+    const struct ash_shell* shell,
+    ash_var_visitor_fn visitor,
+    void* user_data
+) {
+    if (shell == NULL || visitor == NULL) {
         return;
     }
-    if (!saved->existed) {
-        ash_var_unset(shell, saved->name);
-    }
-    else {
-        struct ash_var** link = &shell->vars;
-        while (*link != NULL) {
-            struct ash_var* current = *link;
-            if (strcmp(current->name, saved->name) == 0) {
-                *link = current->next;
-                free(current->name);
-                free(current->value);
-                free(current);
-                break;
+    for (const struct ash_scope* scope = shell->scopes;
+         scope != NULL;
+         scope = scope->parent) {
+        for (const struct ash_var* var = scope->variables;
+             var != NULL;
+             var = var->next) {
+            struct ash_scope_binding binding;
+            if (ash_scope_lookup(
+                    shell,
+                    var->name,
+                    var->name_length,
+                    ASH_SCOPE_LOOKUP_VISIBLE,
+                    false,
+                    &binding
+                ) == ASH_SCOPE_LOOKUP_FOUND &&
+                binding.variable == var) {
+                visitor(var, user_data);
             }
-            link = &current->next;
         }
-        saved->original->next = shell->vars;
-        shell->vars = saved->original;
-        if (saved->original->exported) {
-            (void)setenv(
-                saved->original->name,
-                saved->original->value,
-                1
-            );
-        }
-        else {
-            (void)unsetenv(saved->original->name);
-        }
-        saved->original = NULL;
     }
-    free(saved->name);
-    if (saved->original != NULL) {
-        free(saved->original->name);
-        free(saved->original->value);
-        free(saved->original);
-    }
-    *saved = (struct ash_var_saved){0};
 }
 
 void ash_var_unset(struct ash_shell* shell, const char* name) {
-    struct ash_var** link = &shell->vars;
+    size_t name_length = strlen(name);
+    struct ash_scope* owner = NULL;
+    if (ash_var_find_len(shell, name, name_length, &owner) == NULL ||
+        owner == NULL) {
+        return;
+    }
+    struct ash_var** link = &owner->variables;
     while (*link != NULL) {
         struct ash_var* current = *link;
-        if (strcmp(current->name, name) == 0) {
+        if (current->name_length == name_length &&
+            memcmp(current->name, name, name_length) == 0) {
             *link = current->next;
-            (void)unsetenv(current->name);
+            (void)ash_var_publish_visible(shell, name, name_length);
             free(current->name);
-            free(current->value);
+            ash_value_destroy(&current->value);
             free(current);
             return;
         }
@@ -321,12 +437,15 @@ void ash_var_unset(struct ash_shell* shell, const char* name) {
     }
 }
 
-void ash_vars_destroy(struct ash_shell* shell) {
-    while (shell->vars != NULL) {
-        struct ash_var* var = shell->vars;
-        shell->vars = var->next;
+void ash_var_list_destroy(struct ash_var** variables) {
+    if (variables == NULL) {
+        return;
+    }
+    while (*variables != NULL) {
+        struct ash_var* var = *variables;
+        *variables = var->next;
         free(var->name);
-        free(var->value);
+        ash_value_destroy(&var->value);
         free(var);
     }
 }

@@ -38,6 +38,12 @@ option(
   description : 'Install sh multicall shortcut alongside ash (default false to avoid replacing the host /usr/bin/sh provider)'
 )
 option(
+  'install_bash_shortcut',
+  type : 'boolean',
+  value : false,
+  description : 'Install bash multicall shortcut alongside ash (default false to avoid replacing the host /usr/bin/bash provider)'
+)
+option(
   'install_system_conflict_shortcuts',
   type : 'boolean',
   value : false,

@@ -13,6 +13,7 @@ enum ash_expansion_context {
 };
 
 struct ash_expanded_fields {
+    /* Owns the values array and every NUL-terminated field. */
     char** values;
     size_t count;
     size_t capacity;

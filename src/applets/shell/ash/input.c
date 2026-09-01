@@ -7,6 +7,12 @@
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/shell_context.h"
 
+struct ash_source_name {
+    char* value;
+    struct ash_source_name* next;
+    bool published;
+};
+
 static char* ash_input_duplicate(const char* text) {
     size_t length = strlen(text);
     if (length == SIZE_MAX) {
@@ -27,20 +33,59 @@ static struct ash_input_source* ash_input_create(
     enum ash_input_kind kind,
     const char* name
 ) {
+    const char* effective_name = (name != NULL) ? name : "<input>";
     struct ash_input_source* input = calloc(1u, sizeof(*input));
     if (input == NULL) {
         return NULL;
     }
 
-    input->name = ash_input_duplicate((name != NULL) ? name : "<input>");
-    if (input->name == NULL) {
-        free(input);
-        return NULL;
+    struct ash_source_name* identity = shell->source_names;
+    while (identity != NULL &&
+           strcmp(identity->value, effective_name) != 0) {
+        identity = identity->next;
+    }
+    if (identity == NULL) {
+        identity = calloc(1u, sizeof(*identity));
+        if (identity == NULL) {
+            free(input);
+            return NULL;
+        }
+        identity->value = ash_input_duplicate(effective_name);
+        if (identity->value == NULL) {
+            free(identity);
+            free(input);
+            return NULL;
+        }
     }
 
     input->kind = kind;
-    input->previous = shell->input_stack;
+    input->name = identity->value;
+    input->identity = identity;
     return input;
+}
+
+static void ash_input_discard_candidate(struct ash_input_source* input) {
+    if (input == NULL) {
+        return;
+    }
+    if (!input->identity->published) {
+        free(input->identity->value);
+        free(input->identity);
+    }
+    free(input);
+}
+
+static void ash_input_publish(
+    struct ash_shell* shell,
+    struct ash_input_source* input
+) {
+    if (!input->identity->published) {
+        input->identity->next = shell->source_names;
+        input->identity->published = true;
+        shell->source_names = input->identity;
+    }
+    input->previous = shell->input_stack;
+    shell->input_stack = input;
 }
 
 bool ash_input_push_string(struct ash_shell* shell, const char* name, const char* text) {
@@ -49,19 +94,22 @@ bool ash_input_push_string(struct ash_shell* shell, const char* name, const char
         return false;
     }
 
-    struct ash_input_source* input = ash_input_create(shell, ASH_INPUT_STRING, name);
+    struct ash_input_source* input = ash_input_create(
+        shell,
+        ASH_INPUT_STRING,
+        name
+    );
     if (input == NULL) {
         return false;
     }
 
     input->source.string.text = ash_input_duplicate(text);
     if (input->source.string.text == NULL) {
-        free(input->name);
-        free(input);
+        ash_input_discard_candidate(input);
         return false;
     }
     input->source.string.length = strlen(text);
-    shell->input_stack = input;
+    ash_input_publish(shell, input);
     return true;
 }
 
@@ -69,21 +117,27 @@ bool ash_input_push_file(
     struct ash_shell* shell,
     const char* name,
     FILE* stream,
-    bool close_on_pop
+    enum ash_input_stream_ownership ownership
 ) {
-    if (shell == NULL || stream == NULL) {
+    if (shell == NULL || stream == NULL ||
+        (ownership != ASH_INPUT_BORROW_STREAM &&
+            ownership != ASH_INPUT_TAKE_STREAM)) {
         errno = EINVAL;
         return false;
     }
 
-    struct ash_input_source* input = ash_input_create(shell, ASH_INPUT_FILE, name);
+    struct ash_input_source* input = ash_input_create(
+        shell,
+        ASH_INPUT_FILE,
+        name
+    );
     if (input == NULL) {
         return false;
     }
 
     input->source.file.stream = stream;
-    input->source.file.close_on_pop = close_on_pop;
-    shell->input_stack = input;
+    input->source.file.ownership = ownership;
+    ash_input_publish(shell, input);
     return true;
 }
 
@@ -97,16 +151,24 @@ void ash_input_pop(struct ash_shell* shell) {
     if (input->kind == ASH_INPUT_STRING) {
         free(input->source.string.text);
     }
-    else if (input->source.file.close_on_pop) {
+    else if (input->source.file.ownership == ASH_INPUT_TAKE_STREAM) {
         fclose(input->source.file.stream);
     }
-    free(input->name);
     free(input);
 }
 
 void ash_input_release_all(struct ash_shell* shell) {
     while (shell != NULL && shell->input_stack != NULL) {
         ash_input_pop(shell);
+    }
+}
+
+void ash_input_source_names_destroy(struct ash_shell* shell) {
+    while (shell != NULL && shell->source_names != NULL) {
+        struct ash_source_name* identity = shell->source_names;
+        shell->source_names = identity->next;
+        free(identity->value);
+        free(identity);
     }
 }
 

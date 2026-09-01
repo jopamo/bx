@@ -354,7 +354,18 @@ static int run_shebang_applet(
 
     int applet_argc = argc - 2;
     char** applet_argv = xmalloc(((size_t)applet_argc + 1) * sizeof(*applet_argv));
-    char* applet_argv0 = xstrdup(bx_path_basename_ptr(argv[2]));
+    const char* wrapper_name = bx_path_basename_ptr(argv[2]);
+    const char* selected_name = applet->name;
+    /*
+     * The shebang selector is authoritative even if a wrapper is renamed.
+     * Preserve only the conventional -name spelling used to request login
+     * mode; arbitrary wrapper names must not silently select another policy.
+     */
+    if (wrapper_name[0] == '-' &&
+        strcmp(wrapper_name + 1, applet->name) == 0) {
+        selected_name = wrapper_name;
+    }
+    char* applet_argv0 = xstrdup(selected_name);
 
     applet_argv[0] = applet_argv0;
     for (int i = 1; i < applet_argc; i++) {

@@ -79,7 +79,7 @@ void ash_saved_fds_restore(
     *saved = (struct ash_saved_fds){0};
 }
 
-void ash_saved_fds_destroy(struct ash_saved_fds* saved) {
+void ash_saved_fds_commit(struct ash_saved_fds* saved) {
     for (size_t i = 0u; i < saved->length; i++) {
         if (saved->items[i].saved_fd >= 0) {
             close(saved->items[i].saved_fd);

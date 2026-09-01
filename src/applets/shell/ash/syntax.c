@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +97,23 @@ static int ash_word_part_reserve(struct ash_word_part* part, size_t needed) {
     return 0;
 }
 
+bool ash_word_part_is_quoted(const struct ash_word_part* part) {
+    return part != NULL && part->quote != ASH_QUOTE_NONE;
+}
+
+bool ash_word_part_is_expansion(const struct ash_word_part* part) {
+    return part != NULL && part->kind != ASH_WORD_TEXT;
+}
+
+static bool ash_word_part_kind_valid(enum ash_word_part_kind kind) {
+    return kind >= ASH_WORD_TEXT &&
+        kind <= ASH_WORD_PROCESS_SUBSTITUTION;
+}
+
+static bool ash_quote_kind_valid(enum ash_quote_kind quote) {
+    return quote >= ASH_QUOTE_NONE && quote <= ASH_QUOTE_DOLLAR_SINGLE;
+}
+
 int ash_word_append(
     struct ash_word* word,
     enum ash_word_part_kind kind,
@@ -104,10 +122,23 @@ int ash_word_append(
     const char* text,
     size_t length
 ) {
+    if (word == NULL || !ash_word_part_kind_valid(kind) ||
+        !ash_quote_kind_valid(quote) ||
+        (text == NULL && length != 0u) ||
+        (kind != ASH_WORD_TEXT &&
+            (quote == ASH_QUOTE_BACKSLASH ||
+             quote == ASH_QUOTE_SINGLE ||
+             quote == ASH_QUOTE_DOLLAR_SINGLE))) {
+        errno = EINVAL;
+        return -1;
+    }
+
     struct ash_word_part* part = NULL;
+    bool new_part = false;
     if (word->count != 0u) {
         struct ash_word_part* last = &word->parts[word->count - 1u];
-        if (last->kind == kind && last->quote == quote) {
+        if (kind != ASH_WORD_PROCESS_SUBSTITUTION &&
+            last->kind == kind && last->quote == quote) {
             part = last;
         }
     }
@@ -122,6 +153,7 @@ int ash_word_append(
             return -1;
         }
         part = &word->parts[word->count++];
+        new_part = true;
         *part = (struct ash_word_part){
             .kind = kind,
             .quote = quote,
@@ -131,6 +163,10 @@ int ash_word_append(
 
     if (length > SIZE_MAX - part->length - 1u ||
         ash_word_part_reserve(part, part->length + length + 1u) != 0) {
+        if (new_part) {
+            *part = (struct ash_word_part){0};
+            word->count--;
+        }
         errno = ENOMEM;
         return -1;
     }

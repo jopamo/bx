@@ -7,14 +7,20 @@
 #include <sys/types.h>
 
 #include "applets/shell/ash/control.h"
+#include "applets/shell/ash/parser.h"
+#include "applets/shell/ash/scope.h"
+#include "applets/shell/ash/shell_policy.h"
 
 struct ash_alias;
 struct ash_command_cache;
+struct ash_completion_state;
 struct ash_function;
+struct ash_history_state;
 struct ash_input_source;
 struct ash_job;
+struct ash_shopt_state;
+struct ash_source_name;
 struct ash_trap_table;
-struct ash_var;
 struct ash_shell;
 
 typedef bool (*ash_command_substitution_fn)(
@@ -23,6 +29,10 @@ typedef bool (*ash_command_substitution_fn)(
     size_t length,
     char** output
 );
+/*
+ * The command span is borrowed. On success output receives one caller-owned
+ * allocation; on failure output remains NULL.
+ */
 
 enum ash_shell_option {
     ASH_SHELL_OPTION_ALLEXPORT = 1u << 0,
@@ -35,15 +45,8 @@ enum ash_shell_option {
     ASH_SHELL_OPTION_NOUNSET = 1u << 7,
     ASH_SHELL_OPTION_VERBOSE = 1u << 8,
     ASH_SHELL_OPTION_XTRACE = 1u << 9,
-    ASH_SHELL_OPTION_INTERACTIVE = 1u << 10,
-    ASH_SHELL_OPTION_STDIN = 1u << 11,
-};
-
-struct ash_positional_frame {
-    const char* argv0;
-    char** values;
-    int count;
-    struct ash_positional_frame* previous;
+    ASH_SHELL_OPTION_STDIN = 1u << 10,
+    ASH_SHELL_OPTION_ALL = (1u << 11) - 1u,
 };
 
 struct ash_cwd_state {
@@ -52,35 +55,87 @@ struct ash_cwd_state {
     char* old_logical;
 };
 
+struct ash_parser_state {
+    struct ash_parser parser;
+    bool active;
+};
+
+struct ash_shell_context_config {
+    const char* progname;
+    const char* argv0;
+    char** positional_values;
+    int positional_count;
+    uint32_t options;
+    struct ash_shell_policy policy;
+    pid_t shell_pid;
+    ash_command_substitution_fn command_substitution;
+};
+
 /*
- * One invocation owns one context. These pointers are the sole roots for
+ * Shell ownership contract:
+ *
+ * - const pointer parameters are borrowed for the call unless an API states a
+ *   longer lifetime.
+ * - init/destroy pairs own all nested allocations between those calls.
+ * - clone APIs deep-copy owned data.
+ * - take APIs transfer ownership only on success and clear the source.
+ * - returned mutable strings and output collections belong to the caller.
+ * - source identities referenced by tokens, words, ASTs, and functions live
+ *   for the shell-context lifetime.
+ * - descriptor transactions own only their saved backup descriptors; restore
+ *   rolls back target descriptors and commit keeps target changes.
+ *
+ * One invocation owns one active context. These fields are the sole roots for
  * shell-language state; subsystems may not publish parallel global authority.
+ * Invocation strings and positional arrays are borrowed for the context
+ * lifetime. Subsystem root pointers are context-owned when non-NULL.
  */
 struct ash_shell {
     const char* progname;
-    struct ash_positional_frame positionals;
-    struct ash_var* vars;
+    /*
+     * The scope stack is the sole root for variables and positional
+     * parameters. Its bottom frame is always the global scope.
+     */
+    struct ash_scope* scopes;
     uint32_t options;
+    struct ash_shopt_state* shopt;
+    struct ash_shell_policy policy;
 
     struct ash_alias* aliases;
     struct ash_function* functions;
     struct ash_trap_table* traps;
+    /* The jobs root is authoritative for all child lifecycle records. */
     struct ash_job* jobs;
+    unsigned long next_job_id;
     struct ash_command_cache* command_cache;
     struct ash_input_source* input_stack;
+    struct ash_source_name* source_names;
+    struct ash_parser_state parser_state;
+    struct ash_history_state* history;
+    struct ash_completion_state* completion;
     struct ash_cwd_state cwd;
 
     pid_t shell_pid;
+    /* Cached from the latest committed published async job for `$!`. */
     pid_t last_async_pid;
     int last_status;
-    bool interactive;
-    bool login_shell;
     bool should_exit;
     int requested_exit_status;
     struct ash_control_state control;
     ash_command_substitution_fn command_substitution;
 };
 
+bool ash_shell_context_init(
+    struct ash_shell* shell,
+    const struct ash_shell_context_config* config
+);
+struct ash_parser* ash_shell_context_begin_parse(
+    struct ash_shell* shell,
+    const char* source_name,
+    const char* input,
+    size_t length
+);
+void ash_shell_context_end_parse(struct ash_shell* shell);
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size);
 void ash_shell_context_release_owned(struct ash_shell* shell);
 
