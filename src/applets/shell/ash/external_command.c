@@ -41,6 +41,23 @@ static int ash_external_path_search(
     return 126;
 }
 
+int ash_external_command_exec_exact(
+    struct ash_shell* shell,
+    const char* command_name,
+    const char* executable,
+    char** argv
+) {
+    int error = bx_child_exec_file_argv_exact(executable, argv);
+    struct ash_command_resolution failure =
+        ash_command_resolution_not_found(command_name, error);
+    ash_exec_error(
+        shell,
+        executable,
+        failure.target.lookup_error
+    );
+    return error == ENOENT ? 127 : 126;
+}
+
 int ash_external_command_exec(
     struct ash_shell* shell,
     char** argv,
@@ -62,23 +79,13 @@ int ash_external_command_exec(
                 resolution->command_name
             );
         case ASH_COMMAND_HASHED_EXTERNAL:
-        case ASH_COMMAND_EXPLICIT_PATH: {
-            int error = bx_child_exec_file_argv_exact(
+        case ASH_COMMAND_EXPLICIT_PATH:
+            return ash_external_command_exec_exact(
+                shell,
+                resolution->command_name,
                 resolution->target.path,
                 argv
             );
-            struct ash_command_resolution failure =
-                ash_command_resolution_not_found(
-                    resolution->command_name,
-                    error
-                );
-            ash_exec_error(
-                shell,
-                resolution->target.path,
-                failure.target.lookup_error
-            );
-            return error == ENOENT ? 127 : 126;
-        }
         case ASH_COMMAND_NOT_FOUND:
             if (resolution->target.lookup_error == ENOENT ||
                 resolution->target.lookup_error == ENOTDIR) {

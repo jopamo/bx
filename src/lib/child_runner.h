@@ -121,6 +121,13 @@ int bx_child_pick_slot(struct bx_child *children, int count, int max_procs);
 int bx_child_ensure_current_process_group(void);
 int bx_child_signal_current_process_group(int signo, bool ignore_self);
 void bx_child_signal_all(struct bx_child *children, int count, int signo);
+/*
+ * Match execve signal-disposition semantics for a child that will invoke an
+ * entry point directly: caught dispositions become default while default and
+ * ignored dispositions remain unchanged. The signal mask is intentionally
+ * preserved, as it is across execve.
+ */
+int bx_child_reset_caught_signal_handlers(void);
 int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   struct bx_child *children,
                                   int *running,

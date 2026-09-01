@@ -81,6 +81,31 @@ void bx_child_signal_all(struct bx_child *children, int count, int signo) {
     }
 }
 
+int bx_child_reset_caught_signal_handlers(void) {
+    struct sigaction default_action;
+
+    memset(&default_action, 0, sizeof(default_action));
+    default_action.sa_handler = SIG_DFL;
+    if (sigemptyset(&default_action.sa_mask) != 0)
+        return errno != 0 ? errno : EIO;
+
+    for (int signo = 1; signo < NSIG; signo++) {
+        struct sigaction current_action;
+
+        if (sigaction(signo, NULL, &current_action) != 0) {
+            if (errno == EINVAL)
+                continue;
+            return errno != 0 ? errno : EIO;
+        }
+        if (current_action.sa_handler == SIG_DFL ||
+            current_action.sa_handler == SIG_IGN)
+            continue;
+        if (sigaction(signo, &default_action, NULL) != 0)
+            return errno != 0 ? errno : EIO;
+    }
+    return 0;
+}
+
 int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   struct bx_child *children,
                                   int *running,

@@ -96,9 +96,11 @@ struct ash_command_resolution ash_command_resolution_function(
 
 struct ash_command_resolution ash_command_resolution_bx_applet(
     const char* name,
-    const struct bx_applet* applet
+    const struct bx_applet* applet,
+    const char* fallback_path
 ) {
-    if (name == NULL || applet == NULL) {
+    if (name == NULL || applet == NULL || fallback_path == NULL ||
+        strchr(fallback_path, '/') == NULL) {
         return ash_command_resolution_not_found(name, ENOENT);
     }
     return (struct ash_command_resolution){
@@ -107,6 +109,7 @@ struct ash_command_resolution ash_command_resolution_bx_applet(
         .target.bx_applet = {
             .applet = applet,
             .execution_class = bx_applet_execution_class_get(applet),
+            .fallback_path = fallback_path,
         },
     };
 }
@@ -228,7 +231,12 @@ bool ash_command_resolution_valid(
                 resolution->target.bx_applet.execution_class ==
                     bx_applet_execution_class_get(
                         resolution->target.bx_applet.applet
-                    );
+                    ) &&
+                resolution->target.bx_applet.fallback_path != NULL &&
+                strchr(
+                    resolution->target.bx_applet.fallback_path,
+                    '/'
+                ) != NULL;
         case ASH_COMMAND_PATH_SEARCH:
             return resolution->command_name[0] != '\0' &&
                 strchr(resolution->command_name, '/') == NULL;
