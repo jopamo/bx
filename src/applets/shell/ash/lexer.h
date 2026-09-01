@@ -32,6 +32,8 @@ enum ash_token_kind {
     ASH_TOKEN_GREAT_AND,
     ASH_TOKEN_LESS_GREAT,
     ASH_TOKEN_CLOBBER,
+    ASH_TOKEN_AND_GREAT,
+    ASH_TOKEN_AND_DGREAT,
 };
 
 struct ash_token {

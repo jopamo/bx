@@ -1360,6 +1360,7 @@ static enum ash_command_build_result ash_ast_add_redirection(
     }
 
     enum ash_redir_kind kind;
+    bool redirect_stderr = false;
     switch (redirection->operator) {
         case ASH_TOKEN_LESS:
             kind = ASH_REDIR_IN;
@@ -1372,6 +1373,14 @@ static enum ash_command_build_result ash_ast_add_redirection(
             break;
         case ASH_TOKEN_DGREAT:
             kind = ASH_REDIR_APPEND;
+            break;
+        case ASH_TOKEN_AND_GREAT:
+            kind = ASH_REDIR_OUT;
+            redirect_stderr = true;
+            break;
+        case ASH_TOKEN_AND_DGREAT:
+            kind = ASH_REDIR_APPEND;
+            redirect_stderr = true;
             break;
         case ASH_TOKEN_LESS_GREAT:
             kind = ASH_REDIR_READWRITE;
@@ -1402,7 +1411,27 @@ static enum ash_command_build_result ash_ast_add_redirection(
     if (expansion != ASH_REDIRECTION_EXPANSION_OK) {
         return ASH_COMMAND_BUILD_SHELL_ERROR;
     }
-    bool added = ash_command_push_redir(shell, command, fd, kind, target);
+    bool added = ash_command_push_redir(
+        shell,
+        command,
+        fd,
+        kind,
+        target
+    );
+    if (added && redirect_stderr) {
+        /*
+         * Bash defines &> and &>> as an ordered stdout redirection followed
+         * by 2>&1. Normalize to those existing mechanics so open, rollback,
+         * and noclobber behavior retain one implementation.
+         */
+        added = ash_command_push_redir(
+            shell,
+            command,
+            2,
+            ASH_REDIR_DUP,
+            "1"
+        );
+    }
     free(target);
     return added ?
         ASH_COMMAND_BUILD_OK : ASH_COMMAND_BUILD_SHELL_ERROR;
