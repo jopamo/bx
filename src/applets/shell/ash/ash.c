@@ -26,6 +26,7 @@
 #include "applets/shell/ash/input_builtins.h"
 #include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/interactive.h"
+#include "applets/shell/ash/invocation.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
@@ -34,7 +35,6 @@
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
-#include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
 
@@ -60,18 +60,6 @@ static void ash_print_scalar_variable(
     if (value != NULL) {
         printf("%s=%s\n", var->name, value);
     }
-}
-
-static const char* ash_basename(const char* path) {
-    return bx_cli_progname(path, "ash");
-}
-
-static const char* ash_effective_name(const char* argv0) {
-    const char* base = ash_basename(argv0);
-    while (*base == '-') {
-        base++;
-    }
-    return (*base != '\0') ? base : "ash";
 }
 
 static void* ash_malloc_bytes(const struct ash_shell* shell, size_t size) {
@@ -2088,8 +2076,46 @@ int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     return status;
 }
 
+static void ash_print_usage(FILE* stream, const char* progname) {
+    if (strcmp(progname, "bash") == 0) {
+        fprintf(
+            stream,
+            "Usage:\t%s [GNU long option] [option] ...\n",
+            progname
+        );
+        fprintf(
+            stream,
+            "\t%s [GNU long option] [option] script-file ...\n",
+            progname
+        );
+    }
+    else {
+        fprintf(
+            stream,
+            "Usage: %s [--standalone-applets] [-Cisv] "
+            "[-c command] [script [arg ...]]\n",
+            progname
+        );
+    }
+}
+
+static void ash_print_option_summary(
+    FILE* stream,
+    const char* progname
+) {
+    if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "GNU long options:\n");
+        fprintf(stream, "\t--help\n");
+        fprintf(stream, "\t--standalone-applets\n");
+        fprintf(stream, "\t--verbose\n");
+        fprintf(stream, "\t--version\n");
+        fprintf(stream, "Shell options:\n");
+        fprintf(stream, "\t-Cisv or -c command\n");
+    }
+}
+
 static void ash_print_help(FILE* stream, const char* progname) {
-    fprintf(stream, "Usage: %s [--standalone-applets] [-Cis] [-c command] [script [arg ...]]\n", progname);
+    ash_print_usage(stream, progname);
     fprintf(stream, "\n");
     fprintf(stream, "Minimal rescue shell applet.\n");
     fprintf(stream, "\n");
@@ -2097,6 +2123,10 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
+    fprintf(stream, "  -v           print shell input lines as read\n");
+    if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "  --verbose    equivalent to -v\n");
+    }
     fprintf(stream, "  --standalone-applets\n");
     fprintf(stream, "               prefer registered bx applets over PATH commands\n");
     fprintf(stream, "  --help       display this help and exit\n");
@@ -2105,6 +2135,52 @@ static void ash_print_help(FILE* stream, const char* progname) {
 
 static void ash_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static int ash_report_invocation_error(
+    const struct ash_invocation_error* error
+) {
+    if (!ash_invocation_error_valid(error)) {
+        fprintf(stderr, "ash: invalid invocation arguments\n");
+        return 2;
+    }
+    switch (error->kind) {
+        case ASH_INVOCATION_ERROR_NONE:
+            return 0;
+        case ASH_INVOCATION_ERROR_INVALID_ARGUMENT:
+            fprintf(stderr, "ash: invalid invocation arguments\n");
+            return 2;
+        case ASH_INVOCATION_ERROR_INVALID_SHORT_OPTION:
+            fprintf(
+                stderr,
+                "%s: %c%c: invalid option\n",
+                error->progname,
+                error->sign,
+                error->option
+            );
+            ash_print_usage(stderr, error->progname);
+            ash_print_option_summary(stderr, error->progname);
+            return 2;
+        case ASH_INVOCATION_ERROR_INVALID_LONG_OPTION:
+            fprintf(
+                stderr,
+                "%s: %s: invalid option\n",
+                error->progname,
+                error->argument
+            );
+            ash_print_usage(stderr, error->progname);
+            ash_print_option_summary(stderr, error->progname);
+            return 2;
+        case ASH_INVOCATION_ERROR_MISSING_COMMAND:
+            fprintf(
+                stderr,
+                "%s: -c: option requires an argument\n",
+                error->progname
+            );
+            return 2;
+    }
+    fprintf(stderr, "ash: invalid invocation arguments\n");
+    return 2;
 }
 
 static bool ash_initialize_personality_variables(struct ash_shell* shell) {
@@ -2123,129 +2199,30 @@ static bool ash_initialize_personality_variables(struct ash_shell* shell) {
 }
 
 int bx_ash_main(int argc, char** argv) {
-    const char* invoked = ash_basename((argc > 0) ? argv[0] : "ash");
-    const char* progname = ash_effective_name(invoked);
-    bool login_shell = invoked[0] == '-';
-
-    bool force_interactive = false;
-    bool read_stdin = false;
-    bool standalone_applets = false;
-    uint32_t initial_options = 0u;
-    const char* command_string = NULL;
-
-    int index = 1;
-    while (index < argc) {
-        const char* arg = argv[index];
-
-        if (arg[0] != '-' || arg[1] == '\0') {
-            break;
-        }
-
-        if (strcmp(arg, "--") == 0) {
-            index++;
-            break;
-        }
-
-        if (strcmp(arg, "--help") == 0) {
-            ash_print_help(stdout, progname);
-            return 0;
-        }
-
-        if (strcmp(arg, "--version") == 0) {
-            ash_print_version(progname);
-            return 0;
-        }
-
-        if (strcmp(arg, "--standalone-applets") == 0) {
-            standalone_applets = true;
-            index++;
-            continue;
-        }
-
-        const char* opt = arg + 1;
-        bool consumed_command = false;
-        while (*opt != '\0') {
-            if (*opt == 'i') {
-                force_interactive = true;
-                opt++;
-                continue;
-            }
-
-            if (*opt == 's') {
-                read_stdin = true;
-                opt++;
-                continue;
-            }
-            if (*opt == 'C') {
-                initial_options |= ASH_SHELL_OPTION_NOCLOBBER;
-                opt++;
-                continue;
-            }
-
-            if (*opt == 'c') {
-                opt++;
-                if (*opt != '\0') {
-                    command_string = opt;
-                }
-                else {
-                    if (index + 1 >= argc) {
-                        fprintf(stderr, "%s: option requires an argument -- 'c'\n", progname);
-                        return 2;
-                    }
-                    command_string = argv[index + 1];
-                    index++;
-                }
-                consumed_command = true;
-                break;
-            }
-
-            fprintf(stderr, "%s: unknown option -- '%c'\n", progname, *opt);
-            return 2;
-        }
-
-        index++;
-
-        if (consumed_command) {
-            break;
-        }
+    struct ash_invocation invocation;
+    struct ash_invocation_error invocation_error;
+    if (!ash_invocation_parse(
+            argc,
+            argv,
+            &invocation,
+            &invocation_error
+        )) {
+        return ash_report_invocation_error(&invocation_error);
+    }
+    const char* progname = invocation.progname;
+    if (invocation.action == ASH_INVOCATION_HELP) {
+        ash_print_help(stdout, progname);
+        return 0;
+    }
+    if (invocation.action == ASH_INVOCATION_VERSION) {
+        ash_print_version(progname);
+        return 0;
     }
 
-    const char* script_path = NULL;
-    if (command_string == NULL && !read_stdin && index < argc) {
-        script_path = argv[index++];
-    }
-
-    const char* argv0_param = invoked;
-    char** positional_args = NULL;
-    int positional_count = 0;
-
-    if (command_string != NULL) {
-        if (index < argc) {
-            argv0_param = argv[index++];
-        }
-        positional_args = argv + index;
-        positional_count = argc - index;
-    }
-    else if (script_path != NULL) {
-        argv0_param = script_path;
-        positional_args = argv + index;
-        positional_count = argc - index;
-    }
-    else {
-        positional_args = argv + index;
-        positional_count = argc - index;
-    }
-
-    enum ash_startup_input startup_input =
-        command_string != NULL ?
-            ASH_STARTUP_COMMAND_STRING :
-            (script_path != NULL ?
-                ASH_STARTUP_SCRIPT_FILE :
-                ASH_STARTUP_STANDARD_INPUT);
     struct ash_interactive_state interactive;
     if (!ash_interactive_state_resolve(
-            startup_input,
-            force_interactive,
+            invocation.input,
+            invocation.force_interactive,
             ash_terminal_fd_attached(STDIN_FILENO),
             ash_terminal_fd_attached(STDERR_FILENO),
             &interactive
@@ -2257,10 +2234,10 @@ int bx_ash_main(int argc, char** argv) {
     if (ash_interactive_state_enabled(&interactive)) {
         policy_flags |= ASH_SHELL_POLICY_INTERACTIVE;
     }
-    if (login_shell) {
+    if (invocation.login_shell) {
         policy_flags |= ASH_SHELL_POLICY_LOGIN;
     }
-    if (standalone_applets) {
+    if (invocation.standalone_applets) {
         policy_flags |= ASH_SHELL_POLICY_STANDALONE_APPLETS;
     }
     struct ash_shell_policy policy;
@@ -2274,7 +2251,7 @@ int bx_ash_main(int argc, char** argv) {
     }
 
     int self_executable_fd = -1;
-    if (standalone_applets) {
+    if (invocation.standalone_applets) {
         self_executable_fd = bx_self_exec_fd_dup();
         if (self_executable_fd < 0) {
             fprintf(
@@ -2290,14 +2267,13 @@ int bx_ash_main(int argc, char** argv) {
     struct ash_shell shell;
     const struct ash_shell_context_config context_config = {
         .progname = progname,
-        .argv0 = argv0_param,
-        .positional_values = positional_args,
-        .positional_count = positional_count,
-        .options = initial_options |
-            (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
+        .argv0 = invocation.argv0,
+        .positional_values = invocation.positional_values,
+        .positional_count = invocation.positional_count,
+        .options = invocation.options,
         .policy = policy,
         .interactive = interactive,
-        .take_self_executable_fd = standalone_applets,
+        .take_self_executable_fd = invocation.standalone_applets,
         .self_executable_fd = self_executable_fd,
         .shell_pid = getpid(),
         .command_substitution = ash_command_substitute,
@@ -2336,19 +2312,19 @@ int bx_ash_main(int argc, char** argv) {
     }
 
     int status = 0;
-    if (command_string != NULL) {
+    if (invocation.input == ASH_STARTUP_COMMAND_STRING) {
         status = ash_input_execute_string(
             &shell,
             ASH_INPUT_COMMAND_STRING,
             "-c",
-            command_string,
-            strlen(command_string)
+            invocation.command_string,
+            strlen(invocation.command_string)
         );
     }
-    else if (script_path != NULL) {
-        FILE* script = fopen(script_path, "r");
+    else if (invocation.input == ASH_STARTUP_SCRIPT_FILE) {
+        FILE* script = fopen(invocation.script_path, "r");
         if (script == NULL) {
-            ash_exec_error(&shell, script_path, errno);
+            ash_exec_error(&shell, invocation.script_path, errno);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
@@ -2360,7 +2336,7 @@ int bx_ash_main(int argc, char** argv) {
         status = ash_input_execute_stream(
             &shell,
             ASH_INPUT_SCRIPT_FILE,
-            script_path,
+            invocation.script_path,
             script,
             ASH_INPUT_TAKE_STREAM,
             prompt

@@ -117,6 +117,30 @@ static void ash_input_print_prompt(
     fflush(stderr);
 }
 
+static bool ash_input_print_verbose(
+    struct ash_shell* shell,
+    const struct bx_text_buffer* line
+) {
+    if ((shell->options & ASH_SHELL_OPTION_VERBOSE) == 0u) {
+        return true;
+    }
+    bool needs_newline =
+        line->length == 0u ||
+        line->data[line->length - 1u] != '\n';
+    if ((line->length != 0u &&
+         fwrite(line->data, 1u, line->length, stderr) != line->length) ||
+        (needs_newline && fputc('\n', stderr) == EOF) ||
+        fflush(stderr) == EOF) {
+        ash_exec_error(
+            shell,
+            "verbose input",
+            errno != 0 ? errno : EIO
+        );
+        return false;
+    }
+    return true;
+}
+
 static int ash_input_execute_current(
     struct ash_shell* shell,
     bool prompt
@@ -192,6 +216,10 @@ static int ash_input_execute_current(
         if (!ash_source_location_valid(&line_origin)) {
             ash_diag(shell, "input source position overflow");
             status = 2;
+            break;
+        }
+        if (!ash_input_print_verbose(shell, read_buffer)) {
+            status = 1;
             break;
         }
         if (!extending_logical_input) {
