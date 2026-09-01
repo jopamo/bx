@@ -2,6 +2,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "applets/shell/ash/applet_command.h"
 #include "applets/shell/ash/command_resolution.h"
@@ -50,33 +51,40 @@ int ash_applet_command_prepare_fork(
     struct ash_shell* shell,
     size_t argc,
     char** argv,
-    const struct ash_command_resolution* resolution
+    const struct ash_command_resolution* resolution,
+    struct ash_applet_child_plan* plan
 ) {
+    if (plan != NULL) {
+        *plan = (struct ash_applet_child_plan){0};
+    }
     if (!ash_command_resolution_valid(resolution) ||
-        resolution->kind != ASH_COMMAND_BX_APPLET) {
+        resolution->kind != ASH_COMMAND_BX_APPLET ||
+        plan == NULL) {
         return ash_applet_command_invalid(shell, argv, resolution);
     }
-    if (!ash_applet_command_direct_eligible(argc, argv, resolution)) {
-        return BX_STATUS_OK;
-    }
-    if (fflush(NULL) == 0) {
-        return BX_STATUS_OK;
+    if (ash_applet_command_direct_eligible(argc, argv, resolution) &&
+        fflush(NULL) != 0) {
+        int error = errno != 0 ? errno : EIO;
+        ash_exec_error(shell, "write", error);
+        return BX_STATUS_ERROR;
     }
 
-    int error = errno != 0 ? errno : EIO;
-    ash_exec_error(shell, "write", error);
-    return BX_STATUS_ERROR;
+    plan->origin_process = getpid();
+    return BX_STATUS_OK;
 }
 
 int ash_applet_command_run_child(
     struct ash_shell* shell,
     size_t argc,
     char** argv,
-    const struct ash_command_resolution* resolution
+    const struct ash_command_resolution* resolution,
+    const struct ash_applet_child_plan* plan
 ) {
     if (!ash_command_resolution_valid(resolution) ||
         resolution->kind != ASH_COMMAND_BX_APPLET ||
-        argv == NULL || argv[0] == NULL) {
+        argv == NULL || argv[0] == NULL ||
+        plan == NULL || plan->origin_process <= 0 ||
+        plan->origin_process == getpid()) {
         return ash_applet_command_invalid(shell, argv, resolution);
     }
 

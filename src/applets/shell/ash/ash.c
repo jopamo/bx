@@ -892,7 +892,8 @@ static int ash_execute_function(
 static int ash_execute_in_child(
     struct ash_shell* shell,
     const struct ash_command* command,
-    const struct ash_command_resolution* resolution
+    const struct ash_command_resolution* resolution,
+    const struct ash_applet_child_plan* applet_plan
 ) {
     if (!ash_command_resolution_valid(resolution)) {
         ash_exec_error(
@@ -941,7 +942,8 @@ static int ash_execute_in_child(
             shell,
             command->word_count,
             command->words,
-            resolution
+            resolution,
+            applet_plan
         );
     }
     return ash_external_command_exec(
@@ -981,6 +983,7 @@ struct ash_command_child_context {
     struct ash_shell* shell;
     const struct ash_command* command;
     struct ash_command_resolution resolution;
+    struct ash_applet_child_plan applet_plan;
 };
 
 static int ash_command_child_main(void* user_data) {
@@ -989,7 +992,8 @@ static int ash_command_child_main(void* user_data) {
     return ash_execute_in_child(
         context->shell,
         context->command,
-        &context->resolution
+        &context->resolution,
+        &context->applet_plan
     );
 }
 
@@ -1040,6 +1044,11 @@ static int ash_execute_single_command_forked(
     const struct ash_command* command,
     const struct ash_command_resolution* resolution
 ) {
+    struct ash_command_child_context context = {
+        .shell = shell,
+        .command = command,
+        .resolution = *resolution,
+    };
     enum ash_job_kind job_kind = ASH_JOB_FOREGROUND_COMMAND;
     enum ash_process_role process_role = ASH_PROCESS_EXTERNAL_COMMAND;
     if (resolution->kind == ASH_COMMAND_BX_APPLET) {
@@ -1047,7 +1056,8 @@ static int ash_execute_single_command_forked(
             shell,
             command->word_count,
             command->words,
-            resolution
+            resolution,
+            &context.applet_plan
         );
         if (prepare_status != 0) {
             return prepare_status;
@@ -1055,11 +1065,6 @@ static int ash_execute_single_command_forked(
         job_kind = ASH_JOB_APPLET_CHILD;
         process_role = ASH_PROCESS_APPLET_CHILD;
     }
-    struct ash_command_child_context context = {
-        .shell = shell,
-        .command = command,
-        .resolution = *resolution,
-    };
     return ash_run_foreground_child(
         shell,
         job_kind,
