@@ -12,12 +12,9 @@ struct bx_search_runtime_snapshot {
     struct bx_walk_opts walk_opts;
     struct bx_walk_filter_opts filter_opts;
     struct bx_walk_ignore_opts ignore_opts;
-    char *include_patterns[MAX_INCLUDE_PATTERNS];
-    bool include_pattern_casefold[MAX_INCLUDE_PATTERNS];
-    bool include_pattern_is_type[MAX_INCLUDE_PATTERNS];
-    char *exclude_patterns[MAX_EXCLUDE_PATTERNS];
-    bool exclude_pattern_is_type[MAX_EXCLUDE_PATTERNS];
-    char *exclude_dirs[MAX_EXCLUDE_DIR_PATTERNS];
+    struct bx_search_pattern_vec include_patterns;
+    struct bx_search_pattern_vec exclude_patterns;
+    struct bx_search_pattern_vec exclude_dirs;
     char *extra_ignore_files[MAX_RG_IGNORE_FILES];
 };
 
@@ -61,38 +58,24 @@ struct bx_search_runtime_snapshot *bx_search_runtime_snapshot_create(
     snapshot->filter_opts = bx_search_make_filter_opts(opts);
     snapshot->ignore_opts = bx_search_make_ignore_opts(snapshot->progname, opts);
 
-    bx_search_runtime_snapshot_copy_string_array(snapshot->include_patterns,
-                                                 opts->include_patterns,
-                                                 opts->num_include,
-                                                 MAX_INCLUDE_PATTERNS);
-    memcpy(snapshot->include_pattern_casefold,
-           opts->include_pattern_casefold,
-           sizeof(snapshot->include_pattern_casefold));
-    memcpy(snapshot->include_pattern_is_type,
-           opts->include_pattern_is_type,
-           sizeof(snapshot->include_pattern_is_type));
-    snapshot->filter_opts.include_patterns = snapshot->include_patterns;
+    if (!bx_search_pattern_vec_clone(&snapshot->include_patterns,
+                                     &opts->include_patterns) ||
+        !bx_search_pattern_vec_clone(&snapshot->exclude_patterns,
+                                     &opts->exclude_patterns) ||
+        !bx_search_pattern_vec_clone(&snapshot->exclude_dirs,
+                                     &opts->exclude_dir_patterns)) {
+        bx_search_runtime_snapshot_destroy(snapshot);
+        return NULL;
+    }
+    snapshot->filter_opts.include_patterns = snapshot->include_patterns.items;
     snapshot->filter_opts.include_pattern_casefold =
-        snapshot->include_pattern_casefold;
+        snapshot->include_patterns.casefold;
     snapshot->filter_opts.include_pattern_is_type =
-        snapshot->include_pattern_is_type;
-
-    bx_search_runtime_snapshot_copy_string_array(snapshot->exclude_patterns,
-                                                 opts->exclude_patterns,
-                                                 opts->num_exclude,
-                                                 MAX_EXCLUDE_PATTERNS);
-    memcpy(snapshot->exclude_pattern_is_type,
-           opts->exclude_pattern_is_type,
-           sizeof(snapshot->exclude_pattern_is_type));
-    snapshot->filter_opts.exclude_patterns = snapshot->exclude_patterns;
+        snapshot->include_patterns.is_type;
+    snapshot->filter_opts.exclude_patterns = snapshot->exclude_patterns.items;
     snapshot->filter_opts.exclude_pattern_is_type =
-        snapshot->exclude_pattern_is_type;
-
-    bx_search_runtime_snapshot_copy_string_array(snapshot->exclude_dirs,
-                                                 opts->exclude_dir_patterns,
-                                                 opts->num_exclude_dir,
-                                                 MAX_EXCLUDE_DIR_PATTERNS);
-    snapshot->filter_opts.exclude_dirs = snapshot->exclude_dirs;
+        snapshot->exclude_patterns.is_type;
+    snapshot->filter_opts.exclude_dirs = snapshot->exclude_dirs.items;
 
     bx_search_runtime_snapshot_copy_string_array(snapshot->extra_ignore_files,
                                                  opts->ignore_files,
@@ -106,15 +89,9 @@ void bx_search_runtime_snapshot_destroy(struct bx_search_runtime_snapshot *snaps
     if (!snapshot)
         return;
 
-    bx_search_runtime_snapshot_free_string_array(snapshot->include_patterns,
-                                                 snapshot->filter_opts.num_include_patterns,
-                                                 MAX_INCLUDE_PATTERNS);
-    bx_search_runtime_snapshot_free_string_array(snapshot->exclude_patterns,
-                                                 snapshot->filter_opts.num_exclude_patterns,
-                                                 MAX_EXCLUDE_PATTERNS);
-    bx_search_runtime_snapshot_free_string_array(snapshot->exclude_dirs,
-                                                 snapshot->filter_opts.num_exclude_dirs,
-                                                 MAX_EXCLUDE_DIR_PATTERNS);
+    bx_search_pattern_vec_dispose(&snapshot->include_patterns);
+    bx_search_pattern_vec_dispose(&snapshot->exclude_patterns);
+    bx_search_pattern_vec_dispose(&snapshot->exclude_dirs);
     bx_search_runtime_snapshot_free_string_array(snapshot->extra_ignore_files,
                                                  snapshot->ignore_opts.num_extra_ignore_files,
                                                  MAX_RG_IGNORE_FILES);

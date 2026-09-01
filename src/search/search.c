@@ -49,6 +49,11 @@ int bx_search_main(int argc, char **argv, enum bx_search_personality personality
     }
 
     runtime_snapshot = bx_search_runtime_snapshot_create(progname, personality, &opts);
+    if (!runtime_snapshot) {
+        fprintf(stderr, "%s: out of memory\n", progname);
+        bx_search_free_options(&opts);
+        return finish_search_main(2);
+    }
     if (personality == BX_SEARCH_RG)
         bx_ignore_validate_explicit_ignore_files(
             bx_search_runtime_snapshot_ignore_opts(runtime_snapshot));

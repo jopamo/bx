@@ -63,11 +63,11 @@ static bool bx_walk_filter_matches_include_relative(const struct bx_walk_filter_
                                                     const char *name,
                                                     const char *relative_path) {
     if (!state || !state->opts || !state->opts->include_patterns ||
-        state->opts->num_include_patterns <= 0) {
+        state->opts->num_include_patterns == 0u) {
         return false;
     }
 
-    for (int i = 0; i < state->opts->num_include_patterns; i++) {
+    for (size_t i = 0u; i < state->opts->num_include_patterns; i++) {
         const char *pattern = state->opts->include_patterns[i];
         int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
         bool type_pattern = state->opts->include_pattern_is_type &&
@@ -99,11 +99,11 @@ static void bx_walk_filter_note_include_reject(const struct bx_walk_filter_state
     bool noted_cli = false;
 
     if (!state || !state->opts || !state->opts->include_patterns ||
-        state->opts->num_include_patterns <= 0) {
+        state->opts->num_include_patterns == 0u) {
         return;
     }
 
-    for (int i = 0; i < state->opts->num_include_patterns; i++) {
+    for (size_t i = 0u; i < state->opts->num_include_patterns; i++) {
         bool type_pattern = state->opts->include_pattern_is_type &&
                             state->opts->include_pattern_is_type[i];
         if (type_pattern) {
@@ -122,11 +122,11 @@ static bool bx_walk_filter_matches_exclude(const struct bx_walk_filter_state *st
                                            const char *name,
                                            const char *relative_path) {
     if (!state || !state->opts || !state->opts->exclude_patterns ||
-        state->opts->num_exclude_patterns <= 0) {
+        state->opts->num_exclude_patterns == 0u) {
         return false;
     }
 
-    for (int i = 0; i < state->opts->num_exclude_patterns; i++) {
+    for (size_t i = 0u; i < state->opts->num_exclude_patterns; i++) {
         const char *pattern = state->opts->exclude_patterns[i];
         int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
         bool type_pattern = state->opts->exclude_pattern_is_type &&
@@ -163,11 +163,11 @@ static bool bx_walk_filter_matches_exclude_dir(const struct bx_walk_filter_state
                                                const char *name) {
     if (!state || !state->opts || !state->opts->exclude_dirs)
         return false;
-    if (state->opts->num_exclude_dirs <= 0)
+    if (state->opts->num_exclude_dirs == 0u)
         return false;
     bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FILTER_CLI_GLOB_CHECKS, 1u);
 
-    for (int i = 0; i < state->opts->num_exclude_dirs; i++) {
+    for (size_t i = 0u; i < state->opts->num_exclude_dirs; i++) {
         int flags = state->opts->glob_case_insensitive ? FNM_CASEFOLD : 0;
         if (fnmatch(state->opts->exclude_dirs[i], name, flags) == 0) {
             bx_search_dev_counters_note_walk(BX_SEARCH_WALK_FILTER_CLI_GLOB_REJECTS, 1u);

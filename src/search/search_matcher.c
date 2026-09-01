@@ -1,6 +1,7 @@
 #include <regex.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1126,7 +1127,7 @@ static struct bx_matcher *compile_matcher(const char *pattern,
 
     if (warningmsg)
         *warningmsg = NULL;
-    if (opts->num_extra_patterns > 0 && personality != BX_SEARCH_RG &&
+    if (opts->extra_patterns.len > 0u && personality != BX_SEARCH_RG &&
         opts->perl_regexp) {
         if (errmsg && !*errmsg)
             *errmsg = strdup("the -P option only supports a single pattern");
@@ -1207,7 +1208,9 @@ static struct bx_matcher *compile_matcher(const char *pattern,
     }
 
     if (opts->fixed_strings) {
-        literal_pattern_count = 1u + (size_t)opts->num_extra_patterns;
+        if (opts->extra_patterns.len == SIZE_MAX)
+            goto fail;
+        literal_pattern_count = 1u + opts->extra_patterns.len;
         if (literal_pattern_count > 1u) {
             m->literal_set.items = calloc(literal_pattern_count,
                                           sizeof(*m->literal_set.items));
@@ -1227,9 +1230,9 @@ static struct bx_matcher *compile_matcher(const char *pattern,
             }
             m->literal_set.count = 1u;
 
-            for (int k = 0; k < opts->num_extra_patterns; ++k) {
+            for (size_t k = 0u; k < opts->extra_patterns.len; ++k) {
                 if (bx_literal_compile(&m->literal_set.items[m->literal_set.count],
-                                       opts->extra_patterns[k],
+                                       opts->extra_patterns.items[k],
                                        (flags & BX_REGEX_ICASE) != 0,
                                        locale_utf8_icase) != 0) {
                     if (errmsg && !*errmsg)

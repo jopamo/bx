@@ -5,12 +5,10 @@
 #include <stddef.h>
 #include "search.h"
 #include "lib/color.h"
+#include "pattern_vec.h"
 #include "rg_output.h"
 #include "rg_text.h"
 
-#define MAX_INCLUDE_PATTERNS 32
-#define MAX_EXCLUDE_PATTERNS 32
-#define MAX_EXCLUDE_DIR_PATTERNS 32
 #define MAX_CUSTOM_TYPES 16
 #define MAX_CLEARED_TYPES 32
 #define MAX_RG_IGNORE_FILES 32
@@ -57,23 +55,15 @@ struct search_opts {
     int  max_count;
     int  max_columns;
     int  unrestrict_level;
-    char *extra_patterns[16];
-    int   num_extra_patterns;
+    struct bx_search_pattern_vec extra_patterns;
     enum  bx_color_mode color_mode;
     int  after_context;
     int  before_context;
     bool recursive;
     bool follow_symlinks;
-    int  num_include;
-    char *include_patterns[MAX_INCLUDE_PATTERNS];
-    bool include_pattern_casefold[MAX_INCLUDE_PATTERNS];
-    bool include_pattern_is_type[MAX_INCLUDE_PATTERNS];
-    int  num_exclude;
-    char *exclude_patterns[MAX_EXCLUDE_PATTERNS];
-    bool exclude_pattern_casefold[MAX_EXCLUDE_PATTERNS];
-    bool exclude_pattern_is_type[MAX_EXCLUDE_PATTERNS];
-    int  num_exclude_dir;
-    char *exclude_dir_patterns[MAX_EXCLUDE_DIR_PATTERNS];
+    struct bx_search_pattern_vec include_patterns;
+    struct bx_search_pattern_vec exclude_patterns;
+    struct bx_search_pattern_vec exclude_dir_patterns;
     char *custom_type_names[MAX_CUSTOM_TYPES];
     char *custom_type_globs[MAX_CUSTOM_TYPES];
     int   num_custom_types;
