@@ -10,6 +10,7 @@
 
 struct ash_shell;
 struct ash_source_name;
+struct bx_text_buffer;
 
 enum ash_input_transport {
     ASH_INPUT_TRANSPORT_STRING = 0,
@@ -71,7 +72,14 @@ void ash_input_release_all(struct ash_shell* shell);
 void ash_input_source_registry_destroy(struct ash_shell* shell);
 bool ash_input_stack_invariants(const struct ash_shell* shell);
 
-ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capacity);
+/*
+ * Replaces line with one complete physical input line. EOF and failure leave
+ * it empty; errno distinguishes EOF (zero), allocation, I/O, and overflow.
+ */
+ssize_t ash_input_read_line(
+    struct ash_shell* shell,
+    struct bx_text_buffer* line
+);
 enum ash_input_kind ash_input_source_kind(const struct ash_shell* shell);
 const char* ash_input_source_name(const struct ash_shell* shell);
 size_t ash_input_source_physical_line(const struct ash_shell* shell);

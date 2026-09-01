@@ -13,6 +13,11 @@ struct bx_text_buffer {
 void bx_text_buffer_init(struct bx_text_buffer* buffer);
 void bx_text_buffer_clear(struct bx_text_buffer* buffer);
 void bx_text_buffer_destroy(struct bx_text_buffer* buffer);
+/* Content and length remain unchanged if reserve fails. */
+bool bx_text_buffer_reserve(
+    struct bx_text_buffer* buffer,
+    size_t needed
+);
 bool bx_text_buffer_append_char(struct bx_text_buffer* buffer, char character);
 bool bx_text_buffer_append_span(
     struct bx_text_buffer* buffer,

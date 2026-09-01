@@ -21,7 +21,7 @@ void bx_text_buffer_destroy(struct bx_text_buffer* buffer) {
     *buffer = (struct bx_text_buffer){0};
 }
 
-static bool bx_text_buffer_reserve(
+bool bx_text_buffer_reserve(
     struct bx_text_buffer* buffer,
     size_t needed
 ) {
@@ -52,9 +52,11 @@ bool bx_text_buffer_append_char(
     struct bx_text_buffer* buffer,
     char character
 ) {
-    if (buffer->length > SIZE_MAX - 2u ||
-        !bx_text_buffer_reserve(buffer, buffer->length + 2u)) {
-        errno = ENOMEM;
+    if (buffer->length > SIZE_MAX - 2u) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    if (!bx_text_buffer_reserve(buffer, buffer->length + 2u)) {
         return false;
     }
     buffer->data[buffer->length++] = character;
@@ -67,9 +69,15 @@ bool bx_text_buffer_append_span(
     const char* text,
     size_t length
 ) {
-    if (length > SIZE_MAX - buffer->length - 1u ||
-        !bx_text_buffer_reserve(buffer, buffer->length + length + 1u)) {
-        errno = ENOMEM;
+    if (buffer->length == SIZE_MAX ||
+        length > SIZE_MAX - buffer->length - 1u) {
+        errno = EOVERFLOW;
+        return false;
+    }
+    if (!bx_text_buffer_reserve(
+            buffer,
+            buffer->length + length + 1u
+        )) {
         return false;
     }
     if (length != 0u) {
