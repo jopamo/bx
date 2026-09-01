@@ -6,6 +6,22 @@
 
 #include "applets/shell/ash/syntax.h"
 
+bool ash_source_location_valid(const struct ash_source_location* location) {
+    return location != NULL &&
+        location->source != NULL &&
+        location->line != 0u &&
+        location->column != 0u;
+}
+
+bool ash_source_location_is_none(const struct ash_source_location* location) {
+    return location != NULL &&
+        location->source == NULL &&
+        location->identity == NULL &&
+        location->line == 0u &&
+        location->column == 0u &&
+        location->offset == 0u;
+}
+
 static int ash_syntax_grow_array(
     void** items,
     size_t* capacity,

@@ -50,9 +50,11 @@ enum ash_lexer_result {
 
 struct ash_lexer {
     const char* source_name;
+    struct ash_source_identity* source_identity;
     const char* input;
     size_t length;
     size_t offset;
+    size_t source_offset;
     size_t line;
     size_t column;
     struct ash_source_location error_location;
@@ -64,6 +66,15 @@ void ash_lexer_init(
     const char* source_name,
     const char* input,
     size_t length
+);
+void ash_lexer_init_at(
+    struct ash_lexer* lexer,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length
+);
+struct ash_source_location ash_lexer_current_location(
+    const struct ash_lexer* lexer
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
 void ash_token_destroy(struct ash_token* token);

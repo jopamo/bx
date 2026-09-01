@@ -16,6 +16,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
     const struct ash_parser_state* state = &shell->parser_state;
     if (!state->active) {
         return state->parser.lexer.source_name == NULL &&
+            state->parser.lexer.source_identity == NULL &&
             state->parser.lexer.input == NULL &&
             !state->parser.has_lookahead &&
             state->parser.lookahead.word.parts == NULL &&
@@ -26,6 +27,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
     const struct ash_lexer* lexer = &state->parser.lexer;
     if (lexer->source_name == NULL || lexer->input == NULL ||
         lexer->offset > lexer->length ||
+        lexer->source_offset > SIZE_MAX - lexer->length ||
         lexer->line == 0u || lexer->column == 0u ||
         state->parser.result < ASH_PARSER_COMPLETE ||
         state->parser.result > ASH_PARSER_ERROR ||
@@ -35,7 +37,8 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
         return false;
     }
     return shell->input_stack == NULL ||
-        lexer->source_name == shell->input_stack->name;
+        (lexer->source_name == shell->input_stack->name &&
+         lexer->source_identity == shell->input_stack->identity);
 }
 
 static bool ash_control_invariants(const struct ash_control_state* control) {
@@ -67,6 +70,17 @@ static size_t ash_function_scope_count(const struct ash_shell* shell) {
     return count;
 }
 
+static size_t ash_execution_function_count(const struct ash_shell* shell) {
+    size_t count = 0u;
+    for (const struct ash_execution_frame* frame =
+             shell->execution_frames;
+         frame != NULL;
+         frame = frame->previous) {
+        count += frame->kind == ASH_EXECUTION_FUNCTION_FRAME;
+    }
+    return count;
+}
+
 bool ash_shell_context_invariants(const struct ash_shell* shell) {
     bool standalone_applets = shell != NULL &&
         ash_shell_policy_has(
@@ -85,12 +99,16 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
         (shell->options & ~ASH_SHELL_OPTION_ALL) == 0u &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_scope_stack_invariants(shell) &&
+        ash_functions_invariants(shell) &&
         ash_input_stack_invariants(shell) &&
+        ash_execution_trace_invariants(shell) &&
         ash_parser_state_invariants(shell) &&
         bx_fd_transaction_stack_invariants(&shell->redirections) &&
         ash_jobs_invariants(shell) &&
         ash_control_invariants(&shell->control) &&
         ash_function_scope_count(shell) ==
+            shell->control.function_depth &&
+        ash_execution_function_count(shell) ==
             shell->control.function_depth;
 }
 
@@ -111,8 +129,12 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         shell->command_cache == NULL &&
         shell->input_stack == NULL &&
         shell->source_names == NULL &&
+        shell->source_identities == NULL &&
+        shell->execution_frames == NULL &&
+        ash_source_location_is_none(&shell->execution_location) &&
         !shell->parser_state.active &&
         shell->parser_state.parser.lexer.source_name == NULL &&
+        shell->parser_state.parser.lexer.source_identity == NULL &&
         shell->parser_state.parser.lexer.input == NULL &&
         shell->history == NULL &&
         shell->completion == NULL &&
@@ -182,20 +204,22 @@ bool ash_shell_context_init(
 
 struct ash_parser* ash_shell_context_begin_parse(
     struct ash_shell* shell,
-    const char* source_name,
+    struct ash_source_location origin,
     const char* input,
     size_t length
 ) {
-    if (shell == NULL || source_name == NULL || input == NULL ||
+    if (shell == NULL || !ash_source_location_valid(&origin) ||
+        input == NULL || origin.offset > SIZE_MAX - length ||
         shell->parser_state.active ||
         (shell->input_stack != NULL &&
-         source_name != shell->input_stack->name)) {
+         (origin.source != shell->input_stack->name ||
+          origin.identity != shell->input_stack->identity))) {
         return NULL;
     }
     assert(ash_shell_context_invariants(shell));
-    ash_parser_init(
+    ash_parser_init_at(
         &shell->parser_state.parser,
-        source_name,
+        origin,
         input,
         length
     );
@@ -276,7 +300,7 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     ash_functions_destroy(shell);
     ash_jobs_destroy(shell);
     bx_fd_transaction_stack_discard(&shell->redirections);
-    ash_input_source_names_destroy(shell);
+    ash_input_source_registry_destroy(shell);
     ash_scope_stack_destroy(shell);
     if (shell->owns_self_executable_fd) {
         close(shell->self_executable_fd);

@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,14 +21,81 @@ const struct ash_function* ash_function_find(
     return NULL;
 }
 
+bool ash_functions_invariants(const struct ash_shell* shell) {
+    if (shell == NULL) {
+        return false;
+    }
+    const struct ash_function* slow = shell->functions;
+    const struct ash_function* fast = shell->functions;
+    while (fast != NULL && fast->next != NULL) {
+        slow = slow->next;
+        fast = fast->next->next;
+        if (slow == fast) {
+            return false;
+        }
+    }
+
+    for (const struct ash_function* function = shell->functions;
+         function != NULL;
+         function = function->next) {
+        if (function->name == NULL || function->name[0] == '\0' ||
+            function->body == NULL ||
+            !ash_source_location_valid(
+                &function->definition_location
+            ) ||
+            function->definition_location.identity == NULL ||
+            !ash_source_identity_is_owned(
+                shell,
+                function->definition_location.identity
+            ) ||
+            !function->definition_location.identity->published ||
+            function->definition_location.identity->reference_count == 0u ||
+            function->definition_location.source !=
+                function->definition_location.identity->name) {
+            return false;
+        }
+        for (const struct ash_function* duplicate = function->next;
+             duplicate != NULL;
+             duplicate = duplicate->next) {
+            if (strcmp(function->name, duplicate->name) == 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool ash_function_define(
     struct ash_shell* shell,
     const char* name,
-    const struct ash_ast* body
+    const struct ash_ast* body,
+    struct ash_source_location definition_location
 ) {
+    if (shell == NULL || name == NULL || name[0] == '\0' ||
+        body == NULL ||
+        !ash_source_location_valid(&definition_location) ||
+        definition_location.identity == NULL ||
+        !ash_source_identity_is_owned(
+            shell,
+            definition_location.identity
+        ) ||
+        !definition_location.identity->published ||
+        definition_location.source !=
+            definition_location.identity->name) {
+        return false;
+    }
+    assert(ash_functions_invariants(shell));
+    if (!ash_source_identity_retain(definition_location.identity)) {
+        fprintf(stderr, "%s: source nesting overflow\n", shell->progname);
+        return false;
+    }
     struct ash_ast* body_copy = ash_ast_clone(body);
     if (body_copy == NULL) {
         fprintf(stderr, "%s: out of memory\n", shell->progname);
+        ash_source_identity_release(
+            shell,
+            definition_location.identity
+        );
         return false;
     }
 
@@ -36,8 +104,13 @@ bool ash_function_define(
          function = function->next) {
         if (strcmp(function->name, name) == 0) {
             struct ash_ast* old_body = function->body;
+            struct ash_source_identity* old_identity =
+                function->definition_location.identity;
             function->body = body_copy;
+            function->definition_location = definition_location;
             ash_ast_destroy(old_body);
+            ash_source_identity_release(shell, old_identity);
+            assert(ash_functions_invariants(shell));
             return true;
         }
     }
@@ -49,12 +122,18 @@ bool ash_function_define(
         free(function);
         free(name_copy);
         ash_ast_destroy(body_copy);
+        ash_source_identity_release(
+            shell,
+            definition_location.identity
+        );
         return false;
     }
     function->name = name_copy;
     function->body = body_copy;
+    function->definition_location = definition_location;
     function->next = shell->functions;
     shell->functions = function;
+    assert(ash_functions_invariants(shell));
     return true;
 }
 
@@ -64,9 +143,13 @@ void ash_function_unset(struct ash_shell* shell, const char* name) {
         struct ash_function* function = *link;
         if (strcmp(function->name, name) == 0) {
             *link = function->next;
+            struct ash_source_identity* identity =
+                function->definition_location.identity;
             free(function->name);
             ash_ast_destroy(function->body);
             free(function);
+            ash_source_identity_release(shell, identity);
+            assert(ash_functions_invariants(shell));
             return;
         }
         link = &function->next;
@@ -77,8 +160,12 @@ void ash_functions_destroy(struct ash_shell* shell) {
     while (shell->functions != NULL) {
         struct ash_function* function = shell->functions;
         shell->functions = function->next;
+        struct ash_source_identity* identity =
+            function->definition_location.identity;
         free(function->name);
         ash_ast_destroy(function->body);
         free(function);
+        ash_source_identity_release(shell, identity);
     }
+    assert(ash_functions_invariants(shell));
 }
