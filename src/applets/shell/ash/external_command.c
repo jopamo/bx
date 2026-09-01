@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <stdlib.h>
 
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
@@ -11,17 +12,25 @@ static int ash_external_path_search(
     char** argv,
     const char* command
 ) {
-    const char* path = ash_var_get(shell, "PATH");
-    if (path == NULL || path[0] == '\0') {
-        path = "/bin:/usr/bin";
+    /*
+     * Command assignments have already been applied to the child environment,
+     * so that value is the effective PATH for this invocation. Fall back to
+     * shell state only for an unexported PATH. Initial defaulting belongs to
+     * environment import; an explicitly empty PATH remains an empty segment.
+     */
+    const char* path = getenv("PATH");
+    if (path == NULL) {
+        path = ash_var_get(shell, "PATH");
     }
 
-    int lookup_error = bx_child_exec_file_argv_in_path(
-        command,
-        argv,
-        path,
-        BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR
-    );
+    int lookup_error = path != NULL ?
+        bx_child_exec_file_argv_in_path(
+            command,
+            argv,
+            path,
+            BX_CHILD_PATH_SEARCH_CONTINUE_ON_ERROR
+        ) :
+        ENOENT;
     if (lookup_error == ENOMEM) {
         ash_diag_oom(shell);
         return 126;
