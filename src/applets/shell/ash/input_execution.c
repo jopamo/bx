@@ -62,6 +62,8 @@ static int ash_input_execute_buffer(
     );
     struct ash_source_location parser_position =
         ash_lexer_current_location(&parser->lexer);
+    bool line_continuation =
+        ash_lexer_ended_with_line_continuation(&parser->lexer);
     if (!ash_input_note_parse(
             shell,
             origin,
@@ -74,9 +76,12 @@ static int ash_input_execute_buffer(
         shell->last_status = 2;
         return 2;
     }
-    if (result == ASH_PARSER_INCOMPLETE && !final_input) {
+    if ((result == ASH_PARSER_INCOMPLETE ||
+         (result == ASH_PARSER_COMPLETE && line_continuation)) &&
+        !final_input) {
         *incomplete_out = true;
         ash_shell_context_end_parse(shell);
+        ash_ast_destroy(program);
         return shell->last_status;
     }
     if (result != ASH_PARSER_COMPLETE) {

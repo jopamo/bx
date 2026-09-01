@@ -57,6 +57,7 @@ struct ash_lexer {
     size_t source_offset;
     size_t line;
     size_t column;
+    bool ended_with_line_continuation;
     struct ash_source_location error_location;
     const char* error;
 };
@@ -74,6 +75,9 @@ void ash_lexer_init_at(
     size_t length
 );
 struct ash_source_location ash_lexer_current_location(
+    const struct ash_lexer* lexer
+);
+bool ash_lexer_ended_with_line_continuation(
     const struct ash_lexer* lexer
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
