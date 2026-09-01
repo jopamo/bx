@@ -1333,7 +1333,13 @@ static bool ash_command_substitute(
     return true;
 }
 
-static bool ash_ast_add_redirection(
+enum ash_command_build_result {
+    ASH_COMMAND_BUILD_OK = 0,
+    ASH_COMMAND_BUILD_COMMAND_ERROR,
+    ASH_COMMAND_BUILD_SHELL_ERROR,
+};
+
+static enum ash_command_build_result ash_ast_add_redirection(
     struct ash_shell* shell,
     struct ash_command* command,
     const struct ash_redirection* redirection
@@ -1341,7 +1347,7 @@ static bool ash_ast_add_redirection(
     int fd;
     if (redirection->io_number != NULL) {
         if (!ash_redirection_parse_fd(shell, redirection->io_number, &fd)) {
-            return false;
+            return ASH_COMMAND_BUILD_SHELL_ERROR;
         }
     }
     else {
@@ -1377,23 +1383,29 @@ static bool ash_ast_add_redirection(
                 "redirection not implemented: %s",
                 ash_token_kind_name(redirection->operator)
             );
-            return false;
+            return ASH_COMMAND_BUILD_SHELL_ERROR;
     }
 
     char* target = NULL;
-    if (!ash_expand_word(
+    enum ash_redirection_expansion_result expansion =
+        ash_expand_redirection(
             shell,
             &redirection->target.syntax,
             &target
-        )) {
-        return false;
+        );
+    if (expansion == ASH_REDIRECTION_EXPANSION_AMBIGUOUS) {
+        return ASH_COMMAND_BUILD_COMMAND_ERROR;
+    }
+    if (expansion != ASH_REDIRECTION_EXPANSION_OK) {
+        return ASH_COMMAND_BUILD_SHELL_ERROR;
     }
     bool added = ash_command_push_redir(shell, command, fd, kind, target);
     free(target);
-    return added;
+    return added ?
+        ASH_COMMAND_BUILD_OK : ASH_COMMAND_BUILD_SHELL_ERROR;
 }
 
-static bool ash_ast_simple_to_command(
+static enum ash_command_build_result ash_ast_simple_to_command(
     struct ash_shell* shell,
     const struct ash_ast* node,
     struct ash_command* command
@@ -1402,13 +1414,15 @@ static bool ash_ast_simple_to_command(
     for (size_t i = 0u; i < node->value.simple.count; i++) {
         const struct ash_simple_item* item = &node->value.simple.items[i];
         if (item->kind == ASH_SIMPLE_REDIRECTION) {
-            if (!ash_ast_add_redirection(
+            enum ash_command_build_result result =
+                ash_ast_add_redirection(
                     shell,
                     command,
                     &item->value.redirection
-                )) {
+                );
+            if (result != ASH_COMMAND_BUILD_OK) {
                 ash_command_destroy(command);
-                return false;
+                return result;
             }
             continue;
         }
@@ -1421,7 +1435,7 @@ static bool ash_ast_simple_to_command(
                     &text
                 )) {
                 ash_command_destroy(command);
-                return false;
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
             bool added = ash_command_push_assignment(
                 shell,
@@ -1431,7 +1445,7 @@ static bool ash_ast_simple_to_command(
             free(text);
             if (!added) {
                 ash_command_destroy(command);
-                return false;
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
         }
         else {
@@ -1442,7 +1456,7 @@ static bool ash_ast_simple_to_command(
                     &fields
                 )) {
                 ash_command_destroy(command);
-                return false;
+                return ASH_COMMAND_BUILD_SHELL_ERROR;
             }
             for (size_t j = 0u; j < fields.count; j++) {
                 if (!ash_command_push_word(
@@ -1452,32 +1466,41 @@ static bool ash_ast_simple_to_command(
                     )) {
                     ash_expanded_fields_destroy(&fields);
                     ash_command_destroy(command);
-                    return false;
+                    return ASH_COMMAND_BUILD_SHELL_ERROR;
                 }
             }
             ash_expanded_fields_destroy(&fields);
         }
     }
-    return true;
+    return ASH_COMMAND_BUILD_OK;
 }
 
-static bool ash_ast_trailing_redirections_to_command(
+static enum ash_command_build_result
+ash_ast_trailing_redirections_to_command(
     struct ash_shell* shell,
     const struct ash_ast* node,
     struct ash_command* command
 ) {
     ash_command_init(command);
     for (size_t i = 0u; i < node->trailing_redirection_count; i++) {
-        if (!ash_ast_add_redirection(
+        enum ash_command_build_result result =
+            ash_ast_add_redirection(
                 shell,
                 command,
                 &node->trailing_redirections[i]
-            )) {
+            );
+        if (result != ASH_COMMAND_BUILD_OK) {
             ash_command_destroy(command);
-            return false;
+            return result;
         }
     }
-    return true;
+    return ASH_COMMAND_BUILD_OK;
+}
+
+static int ash_command_build_status(
+    enum ash_command_build_result result
+) {
+    return result == ASH_COMMAND_BUILD_COMMAND_ERROR ? 1 : 2;
 }
 
 static int ash_execute_ast_simple(
@@ -1485,8 +1508,13 @@ static int ash_execute_ast_simple(
     const struct ash_ast* node
 ) {
     struct ash_command command;
-    if (!ash_ast_simple_to_command(shell, node, &command)) {
-        return 2;
+    enum ash_command_build_result build = ash_ast_simple_to_command(
+        shell,
+        node,
+        &command
+    );
+    if (build != ASH_COMMAND_BUILD_OK) {
+        return ash_command_build_status(build);
     }
     int status = ash_execute_command(shell, &command);
     ash_command_destroy(&command);
@@ -1502,12 +1530,14 @@ static int ash_subshell_child_main(void* user_data) {
     struct ash_subshell_child_context* context = user_data;
     ash_shell_context_detach_after_fork(context->shell);
     struct ash_command redirections;
-    if (!ash_ast_trailing_redirections_to_command(
+    enum ash_command_build_result build =
+        ash_ast_trailing_redirections_to_command(
             context->shell,
             context->node,
             &redirections
-        )) {
-        return 2;
+        );
+    if (build != ASH_COMMAND_BUILD_OK) {
+        return ash_command_build_status(build);
     }
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
@@ -1550,8 +1580,14 @@ static int ash_execute_ast_group(
     }
 
     struct ash_command redirections;
-    if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
-        return 2;
+    enum ash_command_build_result build =
+        ash_ast_trailing_redirections_to_command(
+            shell,
+            node,
+            &redirections
+        );
+    if (build != ASH_COMMAND_BUILD_OK) {
+        return ash_command_build_status(build);
     }
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
@@ -2016,8 +2052,14 @@ static int ash_execute_ast_case(
     const struct ash_ast* node
 ) {
     struct ash_command redirections;
-    if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
-        return 2;
+    enum ash_command_build_result build =
+        ash_ast_trailing_redirections_to_command(
+            shell,
+            node,
+            &redirections
+        );
+    if (build != ASH_COMMAND_BUILD_OK) {
+        return ash_command_build_status(build);
     }
     struct ash_redirection_transaction saved;
     ash_redirection_transaction_init(&saved);
@@ -2122,7 +2164,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCisv] "
+            "Usage: %s [--standalone-applets] [-aCfisv] "
             "[-c command] [script [arg ...]]\n",
             progname
         );
@@ -2142,7 +2184,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCisv or -c command or -o/+o option-name\n"
+            "\t-aCfisv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2155,14 +2197,15 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -a           export variables assigned after enabling this option\n");
     fprintf(stream, "  -c command   run command string\n");
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
+    fprintf(stream, "  -f           disable pathname expansion\n");
     fprintf(stream, "  -i           force interactive mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  -o option-name\n");
-        fprintf(stream, "               set allexport, noclobber, or verbose\n");
+        fprintf(stream, "               set allexport, noclobber, noglob, or verbose\n");
         fprintf(stream, "  +o option-name\n");
-        fprintf(stream, "               clear allexport, noclobber, or verbose\n");
+        fprintf(stream, "               clear allexport, noclobber, noglob, or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");
