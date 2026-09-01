@@ -52,6 +52,12 @@ struct ash_command_resolution {
         struct {
             const struct bx_applet* applet;
             enum bx_applet_execution_class execution_class;
+            /*
+             * Exact executable selected by ordinary command lookup. Unsafe
+             * or otherwise ineligible applets must exec this path without
+             * repeating PATH search.
+             */
+            const char* fallback_path;
         } bx_applet;
         const char* path;
         int lookup_error;
@@ -75,7 +81,8 @@ struct ash_command_resolution ash_command_resolution_function(
 );
 struct ash_command_resolution ash_command_resolution_bx_applet(
     const char* name,
-    const struct bx_applet* applet
+    const struct bx_applet* applet,
+    const char* fallback_path
 );
 struct ash_command_resolution ash_command_resolution_path_search(
     const char* name

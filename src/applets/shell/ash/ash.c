@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "applets.h"
+#include "applets/shell/ash/applet_command.h"
 #include "applets/shell/ash/command.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
@@ -935,6 +936,14 @@ static int ash_execute_in_child(
         return 1;
     }
 
+    if (resolution->kind == ASH_COMMAND_BX_APPLET) {
+        return ash_applet_command_run_child(
+            shell,
+            command->word_count,
+            command->words,
+            resolution
+        );
+    }
     return ash_external_command_exec(
         shell,
         command->words,
@@ -1031,6 +1040,21 @@ static int ash_execute_single_command_forked(
     const struct ash_command* command,
     const struct ash_command_resolution* resolution
 ) {
+    enum ash_job_kind job_kind = ASH_JOB_FOREGROUND_COMMAND;
+    enum ash_process_role process_role = ASH_PROCESS_EXTERNAL_COMMAND;
+    if (resolution->kind == ASH_COMMAND_BX_APPLET) {
+        int prepare_status = ash_applet_command_prepare_fork(
+            shell,
+            command->word_count,
+            command->words,
+            resolution
+        );
+        if (prepare_status != 0) {
+            return prepare_status;
+        }
+        job_kind = ASH_JOB_APPLET_CHILD;
+        process_role = ASH_PROCESS_APPLET_CHILD;
+    }
     struct ash_command_child_context context = {
         .shell = shell,
         .command = command,
@@ -1038,8 +1062,8 @@ static int ash_execute_single_command_forked(
     };
     return ash_run_foreground_child(
         shell,
-        ASH_JOB_FOREGROUND_COMMAND,
-        ASH_PROCESS_EXTERNAL_COMMAND,
+        job_kind,
+        process_role,
         ash_command_child_main,
         &context
     );
