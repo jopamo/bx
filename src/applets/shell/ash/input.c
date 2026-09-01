@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/shell_context.h"
@@ -56,6 +55,49 @@ static bool ash_source_name_is_owned(
     return false;
 }
 
+static bool ash_input_kind_valid(enum ash_input_kind kind) {
+    switch (kind) {
+        case ASH_INPUT_INVALID:
+            return false;
+        case ASH_INPUT_COMMAND_STRING:
+        case ASH_INPUT_STDIN:
+        case ASH_INPUT_SCRIPT_FILE:
+        case ASH_INPUT_SOURCED_FILE:
+        case ASH_INPUT_EVAL:
+        case ASH_INPUT_COMMAND_SUBSTITUTION:
+        case ASH_INPUT_PROMPT_COMMAND:
+        case ASH_INPUT_COMPLETION_HOOK:
+        case ASH_INPUT_INTERACTIVE:
+            return true;
+    }
+    return false;
+}
+
+static const char* ash_input_default_name(enum ash_input_kind kind) {
+    switch (kind) {
+        case ASH_INPUT_INVALID:
+            break;
+        case ASH_INPUT_COMMAND_STRING:
+            return "-c";
+        case ASH_INPUT_STDIN:
+        case ASH_INPUT_INTERACTIVE:
+            return "<stdin>";
+        case ASH_INPUT_SCRIPT_FILE:
+            return "<script>";
+        case ASH_INPUT_SOURCED_FILE:
+            return "<source>";
+        case ASH_INPUT_EVAL:
+            return "eval";
+        case ASH_INPUT_COMMAND_SUBSTITUTION:
+            return "<command substitution>";
+        case ASH_INPUT_PROMPT_COMMAND:
+            return "<PROMPT_COMMAND>";
+        case ASH_INPUT_COMPLETION_HOOK:
+            return "<completion>";
+    }
+    return "<input>";
+}
+
 bool ash_input_stack_invariants(const struct ash_shell* shell) {
     if (shell == NULL ||
         !ash_input_chain_acyclic(shell->input_stack) ||
@@ -85,8 +127,9 @@ bool ash_input_stack_invariants(const struct ash_shell* shell) {
     for (const struct ash_input_source* input = shell->input_stack;
          input != NULL;
          input = input->previous) {
-        if (input->kind < ASH_INPUT_STRING ||
-            input->kind > ASH_INPUT_FILE ||
+        if (!ash_input_kind_valid(input->kind) ||
+            (input->transport != ASH_INPUT_TRANSPORT_STRING &&
+             input->transport != ASH_INPUT_TRANSPORT_FILE) ||
             input->name == NULL || input->identity == NULL ||
             !ash_source_name_is_owned(shell, input->identity) ||
             !input->identity->published ||
@@ -94,7 +137,7 @@ bool ash_input_stack_invariants(const struct ash_shell* shell) {
             input->identity->value == NULL) {
             return false;
         }
-        if (input->kind == ASH_INPUT_STRING) {
+        if (input->transport == ASH_INPUT_TRANSPORT_STRING) {
             if (input->source.string.text == NULL ||
                 input->source.string.offset >
                     input->source.string.length) {
@@ -110,8 +153,7 @@ bool ash_input_stack_invariants(const struct ash_shell* shell) {
     return true;
 }
 
-static char* ash_input_duplicate(const char* text) {
-    size_t length = strlen(text);
+static char* ash_input_duplicate_span(const char* text, size_t length) {
     if (length == SIZE_MAX) {
         errno = ENOMEM;
         return NULL;
@@ -121,16 +163,22 @@ static char* ash_input_duplicate(const char* text) {
     if (copy == NULL) {
         return NULL;
     }
-    memcpy(copy, text, length + 1u);
+    if (length != 0u) {
+        memcpy(copy, text, length);
+    }
+    copy[length] = '\0';
     return copy;
 }
 
 static struct ash_input_source* ash_input_create(
     struct ash_shell* shell,
     enum ash_input_kind kind,
+    enum ash_input_transport transport,
     const char* name
 ) {
-    const char* effective_name = (name != NULL) ? name : "<input>";
+    const char* effective_name = name != NULL ?
+        name :
+        ash_input_default_name(kind);
     struct ash_input_source* input = calloc(1u, sizeof(*input));
     if (input == NULL) {
         return NULL;
@@ -147,7 +195,10 @@ static struct ash_input_source* ash_input_create(
             free(input);
             return NULL;
         }
-        identity->value = ash_input_duplicate(effective_name);
+        identity->value = ash_input_duplicate_span(
+            effective_name,
+            strlen(effective_name)
+        );
         if (identity->value == NULL) {
             free(identity);
             free(input);
@@ -156,6 +207,7 @@ static struct ash_input_source* ash_input_create(
     }
 
     input->kind = kind;
+    input->transport = transport;
     input->name = identity->value;
     input->identity = identity;
     return input;
@@ -185,8 +237,14 @@ static void ash_input_publish(
     shell->input_stack = input;
 }
 
-bool ash_input_push_string(struct ash_shell* shell, const char* name, const char* text) {
-    if (shell == NULL || text == NULL) {
+bool ash_input_push_string_span(
+    struct ash_shell* shell,
+    enum ash_input_kind kind,
+    const char* name,
+    const char* text,
+    size_t length
+) {
+    if (shell == NULL || text == NULL || !ash_input_kind_valid(kind)) {
         errno = EINVAL;
         return false;
     }
@@ -195,19 +253,20 @@ bool ash_input_push_string(struct ash_shell* shell, const char* name, const char
 
     struct ash_input_source* input = ash_input_create(
         shell,
-        ASH_INPUT_STRING,
+        kind,
+        ASH_INPUT_TRANSPORT_STRING,
         name
     );
     if (input == NULL) {
         return false;
     }
 
-    input->source.string.text = ash_input_duplicate(text);
+    input->source.string.text = ash_input_duplicate_span(text, length);
     if (input->source.string.text == NULL) {
         ash_input_discard_candidate(input);
         return false;
     }
-    input->source.string.length = strlen(text);
+    input->source.string.length = length;
     ash_input_publish(shell, input);
     assert(ash_input_stack_invariants(shell));
     return true;
@@ -215,11 +274,12 @@ bool ash_input_push_string(struct ash_shell* shell, const char* name, const char
 
 bool ash_input_push_file(
     struct ash_shell* shell,
+    enum ash_input_kind kind,
     const char* name,
     FILE* stream,
     enum ash_input_stream_ownership ownership
 ) {
-    if (shell == NULL || stream == NULL ||
+    if (shell == NULL || stream == NULL || !ash_input_kind_valid(kind) ||
         (ownership != ASH_INPUT_BORROW_STREAM &&
             ownership != ASH_INPUT_TAKE_STREAM)) {
         errno = EINVAL;
@@ -230,7 +290,8 @@ bool ash_input_push_file(
 
     struct ash_input_source* input = ash_input_create(
         shell,
-        ASH_INPUT_FILE,
+        kind,
+        ASH_INPUT_TRANSPORT_FILE,
         name
     );
     if (input == NULL) {
@@ -253,7 +314,7 @@ void ash_input_pop(struct ash_shell* shell) {
 
     struct ash_input_source* input = shell->input_stack;
     shell->input_stack = input->previous;
-    if (input->kind == ASH_INPUT_STRING) {
+    if (input->transport == ASH_INPUT_TRANSPORT_STRING) {
         free(input->source.string.text);
     }
     else if (input->source.file.ownership == ASH_INPUT_TAKE_STREAM) {
@@ -355,7 +416,7 @@ ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capaci
     struct ash_input_source* input = shell->input_stack;
     assert(ash_input_stack_invariants(shell));
     ssize_t result;
-    if (input->kind == ASH_INPUT_STRING) {
+    if (input->transport == ASH_INPUT_TRANSPORT_STRING) {
         result = ash_input_read_string(input, line, capacity);
     }
     else {
@@ -376,6 +437,13 @@ const char* ash_input_source_name(const struct ash_shell* shell) {
     return shell->input_stack->name;
 }
 
+enum ash_input_kind ash_input_source_kind(const struct ash_shell* shell) {
+    if (shell == NULL || shell->input_stack == NULL) {
+        return ASH_INPUT_INVALID;
+    }
+    return shell->input_stack->kind;
+}
+
 size_t ash_input_source_line(const struct ash_shell* shell) {
     if (shell == NULL || shell->input_stack == NULL) {
         return 0u;
@@ -383,12 +451,9 @@ size_t ash_input_source_line(const struct ash_shell* shell) {
     return shell->input_stack->line;
 }
 
-bool ash_input_source_is_terminal(const struct ash_shell* shell) {
-    if (shell == NULL || shell->input_stack == NULL ||
-        shell->input_stack->kind != ASH_INPUT_FILE) {
-        return false;
-    }
-
-    int fd = fileno(shell->input_stack->source.file.stream);
-    return fd >= 0 && isatty(fd);
+bool ash_input_source_has_error(const struct ash_shell* shell) {
+    return shell != NULL &&
+        shell->input_stack != NULL &&
+        shell->input_stack->transport == ASH_INPUT_TRANSPORT_FILE &&
+        ferror(shell->input_stack->source.file.stream);
 }
