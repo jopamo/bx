@@ -25,6 +25,12 @@ bool bx_record_stream_probe_binary_prefix(FILE *f,
                                           struct bx_record_stream *stream,
                                           bool *is_binary_out);
 ssize_t bx_record_stream_read(FILE *f, struct bx_record_stream *stream, char delimiter);
+ssize_t bx_record_stream_read_until(FILE *f,
+                                    struct bx_record_stream *stream,
+                                    char delimiter,
+                                    bool stop_enabled,
+                                    unsigned char stop_byte,
+                                    bool *stopped_out);
 ssize_t bx_record_stream_read_live(FILE *f, struct bx_record_stream *stream, char delimiter);
 size_t bx_record_stream_read_chunk(FILE *f,
                                    struct bx_record_stream *stream,

@@ -59,6 +59,7 @@ struct search_opts {
     enum  bx_color_mode color_mode;
     int  after_context;
     int  before_context;
+    bool context_requested;
     bool recursive;
     bool follow_symlinks;
     struct bx_search_pattern_vec include_patterns;
