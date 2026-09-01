@@ -27,6 +27,8 @@ enum ash_quote_kind {
     ASH_QUOTE_SINGLE,
     ASH_QUOTE_DOUBLE,
     ASH_QUOTE_DOLLAR_SINGLE,
+    ASH_QUOTE_LOCALE,
+    ASH_QUOTE_COUNT,
 };
 
 enum ash_word_part_kind {
