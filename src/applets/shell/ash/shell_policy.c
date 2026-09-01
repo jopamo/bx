@@ -77,6 +77,8 @@ bool ash_shell_policy_valid(const struct ash_shell_policy* policy) {
         return false;
     }
     switch (policy->personality) {
+        case ASH_SHELL_PERSONALITY_INVALID:
+            return false;
         case ASH_SHELL_PERSONALITY_POSIX_SH:
             return (policy->flags & ASH_SHELL_POLICY_POSIX) != 0u &&
                 policy->bash_compat == ASH_BASH_COMPAT_NONE;

@@ -11,6 +11,7 @@ struct ash_shell_option_descriptor {
     uint32_t uses;
     char letter;
     bool interactive;
+    uint32_t personalities;
 };
 
 #define ASH_OPTION_INVOCATION_AND_SET \
@@ -18,6 +19,11 @@ struct ash_shell_option_descriptor {
      ASH_SHELL_OPTION_USE_INVOCATION_NAME | \
      ASH_SHELL_OPTION_USE_SET_SHORT | \
      ASH_SHELL_OPTION_USE_SET_NAME)
+#define ASH_OPTION_PERSONALITY_BASH \
+    (1u << ASH_SHELL_PERSONALITY_BASH)
+#define ASH_OPTION_PERSONALITY_ALL \
+    ((1u << ASH_SHELL_PERSONALITY_POSIX_SH) | \
+     ASH_OPTION_PERSONALITY_BASH)
 
 /*
  * This is the sole spelling-to-state catalog. Options with no allowed uses
@@ -31,44 +37,101 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_OPTION_INVOCATION_AND_SET,
         'a',
         false,
+        ASH_OPTION_PERSONALITY_ALL,
     },
-    {"notify", ASH_SHELL_OPTION_NOTIFY, 0u, 'b', false},
+    {
+        "notify",
+        ASH_SHELL_OPTION_NOTIFY,
+        0u,
+        'b',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
     {
         "noclobber",
         ASH_SHELL_OPTION_NOCLOBBER,
         ASH_OPTION_INVOCATION_AND_SET,
         'C',
         false,
+        ASH_OPTION_PERSONALITY_ALL,
     },
-    {"errexit", ASH_SHELL_OPTION_ERREXIT, 0u, 'e', false},
+    {
+        "errexit",
+        ASH_SHELL_OPTION_ERREXIT,
+        0u,
+        'e',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
     {
         "noglob",
         ASH_SHELL_OPTION_NOGLOB,
         ASH_OPTION_INVOCATION_AND_SET,
         'f',
         false,
+        ASH_OPTION_PERSONALITY_ALL,
     },
-    {NULL, 0u, 0u, 'i', true},
-    {"monitor", ASH_SHELL_OPTION_MONITOR, 0u, 'm', false},
-    {"noexec", ASH_SHELL_OPTION_NOEXEC, 0u, 'n', false},
+    {NULL, 0u, 0u, 'i', true, ASH_OPTION_PERSONALITY_ALL},
+    {
+        "monitor",
+        ASH_SHELL_OPTION_MONITOR,
+        0u,
+        'm',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
+    {
+        "noexec",
+        ASH_SHELL_OPTION_NOEXEC,
+        0u,
+        'n',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
     {
         NULL,
         ASH_SHELL_OPTION_STDIN,
         ASH_SHELL_OPTION_USE_INVOCATION_SHORT,
         's',
         false,
+        ASH_OPTION_PERSONALITY_ALL,
     },
-    {"nounset", ASH_SHELL_OPTION_NOUNSET, 0u, 'u', false},
+    {
+        "onecmd",
+        ASH_SHELL_OPTION_ONECMD,
+        ASH_OPTION_INVOCATION_AND_SET,
+        't',
+        false,
+        ASH_OPTION_PERSONALITY_BASH,
+    },
+    {
+        "nounset",
+        ASH_SHELL_OPTION_NOUNSET,
+        0u,
+        'u',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
     {
         "verbose",
         ASH_SHELL_OPTION_VERBOSE,
         ASH_OPTION_INVOCATION_AND_SET,
         'v',
         false,
+        ASH_OPTION_PERSONALITY_ALL,
     },
-    {"xtrace", ASH_SHELL_OPTION_XTRACE, 0u, 'x', false},
+    {
+        "xtrace",
+        ASH_SHELL_OPTION_XTRACE,
+        0u,
+        'x',
+        false,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
 };
 
+#undef ASH_OPTION_PERSONALITY_ALL
+#undef ASH_OPTION_PERSONALITY_BASH
 #undef ASH_OPTION_INVOCATION_AND_SET
 
 static bool ash_shell_option_use_valid(
@@ -80,22 +143,64 @@ static bool ash_shell_option_use_valid(
         use == ASH_SHELL_OPTION_USE_SET_NAME;
 }
 
+static uint32_t ash_shell_option_personality_mask(
+    enum ash_shell_personality personality
+) {
+    switch (personality) {
+        case ASH_SHELL_PERSONALITY_INVALID:
+            return 0u;
+        case ASH_SHELL_PERSONALITY_POSIX_SH:
+        case ASH_SHELL_PERSONALITY_BASH:
+            return 1u << personality;
+    }
+    return 0u;
+}
+
 bool ash_shell_options_valid(uint32_t options) {
     return (options & ~ASH_SHELL_OPTION_ALL) == 0u;
+}
+
+bool ash_shell_options_valid_for_personality(
+    uint32_t options,
+    enum ash_shell_personality personality
+) {
+    uint32_t personality_mask =
+        ash_shell_option_personality_mask(personality);
+    if (!ash_shell_options_valid(options) ||
+        personality_mask == 0u) {
+        return false;
+    }
+    for (size_t i = 0u;
+         i < sizeof(ash_shell_options) /
+             sizeof(ash_shell_options[0]);
+         i++) {
+        if ((ash_shell_options[i].personalities &
+             personality_mask) == 0u &&
+            (options & ash_shell_options[i].option) != 0u) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static enum ash_shell_option_result ash_shell_option_apply(
     uint32_t* options,
     const struct ash_shell_option_descriptor* descriptor,
     bool enabled,
+    enum ash_shell_personality personality,
     enum ash_shell_option_use use
 ) {
     if (options == NULL || descriptor == NULL ||
-        !ash_shell_options_valid(*options) ||
+        !ash_shell_options_valid_for_personality(
+            *options,
+            personality
+        ) ||
         !ash_shell_option_use_valid(use)) {
         return ASH_SHELL_OPTION_UNKNOWN;
     }
-    if ((descriptor->uses & (uint32_t)use) == 0u) {
+    if ((descriptor->uses & (uint32_t)use) == 0u ||
+        (descriptor->personalities &
+         ash_shell_option_personality_mask(personality)) == 0u) {
         return ASH_SHELL_OPTION_UNAVAILABLE;
     }
     if (enabled) {
@@ -111,6 +216,7 @@ enum ash_shell_option_result ash_shell_option_apply_letter(
     uint32_t* options,
     char letter,
     bool enabled,
+    enum ash_shell_personality personality,
     enum ash_shell_option_use use
 ) {
     for (size_t i = 0u;
@@ -122,6 +228,7 @@ enum ash_shell_option_result ash_shell_option_apply_letter(
                 options,
                 &ash_shell_options[i],
                 enabled,
+                personality,
                 use
             );
         }
@@ -133,6 +240,7 @@ enum ash_shell_option_result ash_shell_option_apply_name(
     uint32_t* options,
     const char* name,
     bool enabled,
+    enum ash_shell_personality personality,
     enum ash_shell_option_use use
 ) {
     if (name == NULL) {
@@ -148,6 +256,7 @@ enum ash_shell_option_result ash_shell_option_apply_name(
                 options,
                 &ash_shell_options[i],
                 enabled,
+                personality,
                 use
             );
         }

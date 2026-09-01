@@ -14,6 +14,21 @@ static const char* ash_invocation_effective_name(const char* invoked) {
     return *name != '\0' ? name : "ash";
 }
 
+static enum ash_shell_personality ash_invocation_personality(
+    const struct ash_invocation* invocation
+) {
+    struct ash_shell_policy policy;
+    if (invocation == NULL ||
+        !ash_shell_policy_for_invocation(
+            invocation->progname,
+            0u,
+            &policy
+        )) {
+        return ASH_SHELL_PERSONALITY_INVALID;
+    }
+    return policy.personality;
+}
+
 static bool ash_invocation_action_valid(
     enum ash_invocation_action action
 ) {
@@ -30,7 +45,10 @@ bool ash_invocation_valid(const struct ash_invocation* invocation) {
         (invocation->positional_count > 0 &&
          invocation->positional_values == NULL) ||
         !ash_invocation_action_valid(invocation->action) ||
-        !ash_shell_options_valid(invocation->options)) {
+        !ash_shell_options_valid_for_personality(
+            invocation->options,
+            ash_invocation_personality(invocation)
+        )) {
         return false;
     }
     for (int i = 0; i < invocation->positional_count; i++) {
@@ -125,6 +143,7 @@ static bool ash_invocation_apply_short(
             &candidate->options,
             option,
             enabled,
+            ash_invocation_personality(candidate),
             ASH_SHELL_OPTION_USE_INVOCATION_SHORT
         ) == ASH_SHELL_OPTION_APPLIED) {
         return true;
@@ -164,6 +183,7 @@ static bool ash_invocation_apply_long(
             &candidate->options,
             "verbose",
             true,
+            ash_invocation_personality(candidate),
             ASH_SHELL_OPTION_USE_INVOCATION_NAME
         ) == ASH_SHELL_OPTION_APPLIED) {
         return true;
@@ -274,6 +294,7 @@ bool ash_invocation_parse(
                         &candidate.options,
                         option_name,
                         sign == '-',
+                        ash_invocation_personality(&candidate),
                         ASH_SHELL_OPTION_USE_INVOCATION_NAME
                     ) != ASH_SHELL_OPTION_APPLIED) {
                     return ash_invocation_fail(

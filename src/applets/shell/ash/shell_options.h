@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "applets/shell/ash/shell_policy.h"
+
 enum ash_shell_option {
     ASH_SHELL_OPTION_ALLEXPORT = 1u << 0,
     ASH_SHELL_OPTION_NOTIFY = 1u << 1,
@@ -17,7 +19,8 @@ enum ash_shell_option {
     ASH_SHELL_OPTION_VERBOSE = 1u << 8,
     ASH_SHELL_OPTION_XTRACE = 1u << 9,
     ASH_SHELL_OPTION_STDIN = 1u << 10,
-    ASH_SHELL_OPTION_ALL = (1u << 11) - 1u,
+    ASH_SHELL_OPTION_ONECMD = 1u << 11,
+    ASH_SHELL_OPTION_ALL = (1u << 12) - 1u,
 };
 
 enum ash_shell_option_use {
@@ -34,16 +37,22 @@ enum ash_shell_option_result {
 };
 
 bool ash_shell_options_valid(uint32_t options);
+bool ash_shell_options_valid_for_personality(
+    uint32_t options,
+    enum ash_shell_personality personality
+);
 enum ash_shell_option_result ash_shell_option_apply_letter(
     uint32_t* options,
     char letter,
     bool enabled,
+    enum ash_shell_personality personality,
     enum ash_shell_option_use use
 );
 enum ash_shell_option_result ash_shell_option_apply_name(
     uint32_t* options,
     const char* name,
     bool enabled,
+    enum ash_shell_personality personality,
     enum ash_shell_option_use use
 );
 void ash_shell_options_format_letters(
