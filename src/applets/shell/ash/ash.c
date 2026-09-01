@@ -18,10 +18,13 @@
 #include "applets/shell/ash/command.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
+#include "applets/shell/ash/executor.h"
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/external_command.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/input.h"
+#include "applets/shell/ash/input_builtins.h"
+#include "applets/shell/ash/input_execution.h"
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
@@ -33,8 +36,6 @@
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
 #include "lib/text_buffer.h"
-
-static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
 
 static void ash_print_exported_variable(
     const struct ash_var* var,
@@ -750,6 +751,11 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return 0;
         case ASH_BUILTIN_CD:
             return ash_builtin_cd(shell, command);
+        case ASH_BUILTIN_DOT:
+        case ASH_BUILTIN_SOURCE:
+            return ash_input_builtin_source(shell, command);
+        case ASH_BUILTIN_EVAL:
+            return ash_input_builtin_eval(shell, command);
         case ASH_BUILTIN_EXIT:
             return ash_builtin_exit(shell, command, in_child);
         case ASH_BUILTIN_EXPORT:
@@ -1132,14 +1138,6 @@ static int ash_execute_command(
     return 126;
 }
 
-static int ash_execute_buffer(
-    struct ash_shell* shell,
-    const char* input,
-    bool final_input,
-    bool* incomplete_out,
-    bool* parser_error_out
-);
-
 struct ash_substitution_child_context {
     struct ash_shell* shell;
     const char* command;
@@ -1157,29 +1155,17 @@ static int ash_substitution_child_main(void* user_data) {
     }
     close(context->write_fd);
 
-    char* input = ash_slice_dup(
-        context->shell,
-        context->command,
-        context->length
-    );
-    if (input == NULL) {
-        return 2;
-    }
     struct ash_shell* child = context->shell;
     ash_shell_context_detach_after_fork(child);
     child->should_exit = false;
     child->requested_exit_status = 0;
-    bool incomplete = false;
-    bool parser_error = false;
-    int status = ash_execute_buffer(
+    return ash_input_execute_string(
         child,
-        input,
-        true,
-        &incomplete,
-        &parser_error
+        ASH_INPUT_COMMAND_SUBSTITUTION,
+        NULL,
+        context->command,
+        context->length
     );
-    free(input);
-    return status;
 }
 
 static bool ash_command_substitute(
@@ -2006,7 +1992,7 @@ static int ash_execute_ast_function(
     ) ? 0 : 2;
 }
 
-static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
+int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
     ash_shell_context_assert_invariants(shell);
     int status = 2;
     switch (node->kind) {
@@ -2055,164 +2041,6 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
             break;
     }
     ash_shell_context_assert_invariants(shell);
-    return status;
-}
-
-static const char* ash_parser_diagnostic(const char* diagnostic) {
-    if (diagnostic == NULL) {
-        return "syntax error";
-    }
-    if (strcmp(diagnostic, "unterminated parameter expansion") == 0) {
-        return "bad substitution";
-    }
-    if (strcmp(diagnostic, "command expected after pipe") == 0) {
-        return "syntax error near unexpected token '|'";
-    }
-    if (strcmp(diagnostic, "redirection target expected") == 0 ||
-        strcmp(diagnostic, "redirection target must be a word") == 0) {
-        return "redirection requires a target";
-    }
-    return diagnostic;
-}
-
-static int ash_execute_buffer(
-    struct ash_shell* shell,
-    const char* input,
-    bool final_input,
-    bool* incomplete_out,
-    bool* parser_error_out
-) {
-    *incomplete_out = false;
-    *parser_error_out = false;
-
-    struct ash_parser* parser = ash_shell_context_begin_parse(
-        shell,
-        ash_input_source_name(shell),
-        input,
-        strlen(input)
-    );
-    if (parser == NULL) {
-        ash_diag(shell, "parser state is already active");
-        *parser_error_out = true;
-        shell->last_status = 2;
-        return 2;
-    }
-    struct ash_ast* program = NULL;
-    enum ash_parser_result result = ash_parser_parse_program(parser, &program);
-    if (result == ASH_PARSER_INCOMPLETE && !final_input) {
-        *incomplete_out = true;
-        ash_shell_context_end_parse(shell);
-        return shell->last_status;
-    }
-    if (result != ASH_PARSER_COMPLETE) {
-        ash_diag(shell, "%s", ash_parser_diagnostic(parser->error));
-        *parser_error_out = true;
-        ash_shell_context_end_parse(shell);
-        shell->last_status = 2;
-        return 2;
-    }
-
-    ash_shell_context_end_parse(shell);
-    int status = ash_execute_ast(shell, program);
-    shell->last_status = status;
-    ash_ast_destroy(program);
-    return status;
-}
-
-static const char* ash_default_prompt(void) {
-    return (geteuid() == 0) ? "# " : "$ ";
-}
-
-static void ash_print_prompt(struct ash_shell* shell, bool continuation) {
-    const char* prompt = ash_var_get(shell, continuation ? "PS2" : "PS1");
-    if (prompt == NULL) {
-        prompt = continuation ? "> " : ash_default_prompt();
-    }
-
-    fputs(prompt, stdout);
-    fflush(stdout);
-}
-
-static int ash_execute_input(struct ash_shell* shell, bool prompt) {
-    char* line = NULL;
-    size_t cap = 0;
-    int status = shell->last_status;
-    struct bx_text_buffer pending;
-    bx_text_buffer_init(&pending);
-    bool continuation = false;
-
-    while (!shell->should_exit) {
-        if (prompt) {
-            ash_print_prompt(shell, continuation);
-        }
-
-        errno = 0;
-        ssize_t nread = ash_input_read_line(shell, &line, &cap);
-        if (nread < 0) {
-            bool read_error = false;
-            if (shell->input_stack != NULL &&
-                shell->input_stack->kind == ASH_INPUT_FILE) {
-                read_error = ferror(shell->input_stack->source.file.stream);
-            }
-            else {
-                read_error = errno != 0;
-            }
-            if (read_error) {
-                ash_exec_error(
-                    shell,
-                    "getline",
-                    (errno != 0) ? errno : EIO
-                );
-                status = 1;
-            }
-            else if (pending.length != 0u) {
-                bool incomplete = false;
-                bool parser_error = false;
-                status = ash_execute_buffer(
-                    shell,
-                    pending.data,
-                    true,
-                    &incomplete,
-                    &parser_error
-                );
-                (void)incomplete;
-            }
-            break;
-        }
-
-        if (!bx_text_buffer_append_span(&pending, line, (size_t)nread)) {
-            ash_diag_oom(shell);
-            status = 2;
-            break;
-        }
-
-        bool incomplete = false;
-        bool parser_error = false;
-        status = ash_execute_buffer(
-            shell,
-            pending.data,
-            false,
-            &incomplete,
-            &parser_error
-        );
-        if (incomplete) {
-            continuation = true;
-            continue;
-        }
-
-        bx_text_buffer_clear(&pending);
-        continuation = false;
-        if (parser_error &&
-            !ash_shell_policy_has(
-                &shell->policy,
-                ASH_SHELL_POLICY_INTERACTIVE
-            )) {
-            break;
-        }
-    }
-
-    bx_text_buffer_destroy(&pending);
-    free(line);
     return status;
 }
 
@@ -2438,7 +2266,12 @@ int bx_ash_main(int argc, char** argv) {
             ASH_SHELL_POLICY_INTERACTIVE
         ) &&
         !ash_var_exists(&shell, "PS1")) {
-        if (!ash_var_set(&shell, "PS1", ash_default_prompt(), false)) {
+        if (!ash_var_set(
+                &shell,
+                "PS1",
+                ash_input_default_prompt(),
+                false
+            )) {
             ash_shell_context_release_owned(&shell);
             return 1;
         }
@@ -2446,13 +2279,13 @@ int bx_ash_main(int argc, char** argv) {
 
     int status = 0;
     if (command_string != NULL) {
-        if (!ash_input_push_string(&shell, "-c", command_string)) {
-            ash_diag_oom(&shell);
-            ash_shell_context_release_owned(&shell);
-            return 1;
-        }
-        status = ash_execute_input(&shell, false);
-        ash_input_pop(&shell);
+        status = ash_input_execute_string(
+            &shell,
+            ASH_INPUT_COMMAND_STRING,
+            "-c",
+            command_string,
+            strlen(command_string)
+        );
     }
     else if (script_path != NULL) {
         FILE* script = fopen(script_path, "r");
@@ -2462,45 +2295,32 @@ int bx_ash_main(int argc, char** argv) {
             return 1;
         }
 
-        if (!ash_input_push_file(
-                &shell,
-                script_path,
-                script,
-                ASH_INPUT_TAKE_STREAM
-            )) {
-            ash_diag_oom(&shell);
-            fclose(script);
-            ash_shell_context_release_owned(&shell);
-            return 1;
-        }
-        status = ash_execute_input(
+        bool prompt = ash_shell_policy_has(
+            &shell.policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        ) && isatty(fileno(script));
+        status = ash_input_execute_stream(
             &shell,
-            ash_shell_policy_has(
-                &shell.policy,
-                ASH_SHELL_POLICY_INTERACTIVE
-            ) && ash_input_source_is_terminal(&shell)
+            ASH_INPUT_SCRIPT_FILE,
+            script_path,
+            script,
+            ASH_INPUT_TAKE_STREAM,
+            prompt
         );
-        ash_input_pop(&shell);
     }
     else {
-        if (!ash_input_push_file(
-                &shell,
-                "<stdin>",
-                stdin,
-                ASH_INPUT_BORROW_STREAM
-            )) {
-            ash_diag_oom(&shell);
-            ash_shell_context_release_owned(&shell);
-            return 1;
-        }
-        status = ash_execute_input(
-            &shell,
-            ash_shell_policy_has(
-                &shell.policy,
-                ASH_SHELL_POLICY_INTERACTIVE
-            )
+        bool prompt = ash_shell_policy_has(
+            &shell.policy,
+            ASH_SHELL_POLICY_INTERACTIVE
         );
-        ash_input_pop(&shell);
+        status = ash_input_execute_stream(
+            &shell,
+            prompt ? ASH_INPUT_INTERACTIVE : ASH_INPUT_STDIN,
+            "<stdin>",
+            stdin,
+            ASH_INPUT_BORROW_STREAM,
+            prompt
+        );
     }
 
     if (shell.should_exit) {

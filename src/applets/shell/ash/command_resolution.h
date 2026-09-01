@@ -12,6 +12,8 @@ enum ash_builtin_kind {
     ASH_BUILTIN_INVALID = 0,
     ASH_BUILTIN_COLON,
     ASH_BUILTIN_CD,
+    ASH_BUILTIN_DOT,
+    ASH_BUILTIN_EVAL,
     ASH_BUILTIN_EXIT,
     ASH_BUILTIN_EXPORT,
     ASH_BUILTIN_UNSET,
@@ -24,6 +26,7 @@ enum ash_builtin_kind {
     ASH_BUILTIN_RETURN,
     ASH_BUILTIN_SHIFT,
     ASH_BUILTIN_WAIT,
+    ASH_BUILTIN_SOURCE,
 };
 
 enum ash_command_resolution_kind {
