@@ -52,7 +52,8 @@ bool ash_invocation_valid(const struct ash_invocation* invocation) {
         !ash_startup_request_valid(&invocation->startup) ||
         (ash_invocation_personality(invocation) !=
              ASH_SHELL_PERSONALITY_BASH &&
-         invocation->startup.bashrc != ASH_BASHRC_DEFAULT)) {
+         (invocation->startup.bashrc != ASH_BASHRC_DEFAULT ||
+          invocation->startup.profiles != ASH_PROFILES_DEFAULT))) {
         return false;
     }
     for (int i = 0; i < invocation->positional_count; i++) {
@@ -143,6 +144,12 @@ static bool ash_invocation_apply_short(
         case 'i':
             candidate->force_interactive = enabled;
             return true;
+        case 'l':
+            if (strcmp(candidate->progname, "bash") == 0) {
+                candidate->login_shell = true;
+                return true;
+            }
+            break;
     }
     if (ash_shell_option_apply_letter(
             &candidate->options,
@@ -190,6 +197,16 @@ static bool ash_invocation_apply_long(
         candidate->startup = (struct ash_startup_request){
             .bashrc = ASH_BASHRC_SUPPRESSED,
         };
+        return true;
+    }
+    if (strcmp(candidate->progname, "bash") == 0 &&
+        strcmp(argument, "--noprofile") == 0) {
+        candidate->startup.profiles = ASH_PROFILES_SUPPRESSED;
+        return true;
+    }
+    if (strcmp(candidate->progname, "bash") == 0 &&
+        strcmp(argument, "--login") == 0) {
+        candidate->login_shell = true;
         return true;
     }
     if (strcmp(candidate->progname, "bash") == 0 &&
