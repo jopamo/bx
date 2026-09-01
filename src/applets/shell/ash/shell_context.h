@@ -10,6 +10,7 @@
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_policy.h"
+#include "lib/fd_transaction.h"
 
 struct ash_alias;
 struct ash_command_cache;
@@ -88,7 +89,10 @@ struct ash_shell_context_config {
  * One invocation owns one active context. These fields are the sole roots for
  * shell-language state; subsystems may not publish parallel global authority.
  * Invocation strings and positional arrays are borrowed for the context
- * lifetime. Subsystem root pointers are context-owned when non-NULL.
+ * lifetime. Subsystem root pointers are context-owned when non-NULL. Every
+ * stable execution boundary satisfies ash_shell_context_invariants(); a
+ * subsystem may violate only its own invariant while a private transition is
+ * in progress and must restore it before returning.
  */
 struct ash_shell {
     const char* progname;
@@ -114,6 +118,8 @@ struct ash_shell {
     struct ash_history_state* history;
     struct ash_completion_state* completion;
     struct ash_cwd_state cwd;
+    /* Sole owner of current-shell redirection backup descriptors. */
+    struct bx_fd_transaction_stack redirections;
 
     pid_t shell_pid;
     /* Cached from the latest committed published async job for `$!`. */
@@ -129,6 +135,8 @@ bool ash_shell_context_init(
     struct ash_shell* shell,
     const struct ash_shell_context_config* config
 );
+bool ash_shell_context_invariants(const struct ash_shell* shell);
+void ash_shell_context_assert_invariants(const struct ash_shell* shell);
 struct ash_parser* ash_shell_context_begin_parse(
     struct ash_shell* shell,
     const char* source_name,
@@ -136,6 +144,11 @@ struct ash_parser* ash_shell_context_begin_parse(
     size_t length
 );
 void ash_shell_context_end_parse(struct ash_shell* shell);
+/*
+ * A fork child keeps language state but must withdraw inherited parent-only
+ * child records and redirection backups before executing shell semantics.
+ */
+void ash_shell_context_detach_after_fork(struct ash_shell* shell);
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size);
 void ash_shell_context_release_owned(struct ash_shell* shell);
 

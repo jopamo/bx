@@ -3,8 +3,9 @@
 
 #include <stdbool.h>
 
+#include "dispatch/dispatch.h"
+
 struct ash_function;
-struct bx_applet;
 
 enum ash_builtin_kind {
     ASH_BUILTIN_INVALID = 0,
@@ -34,12 +35,6 @@ enum ash_command_resolution_kind {
     ASH_COMMAND_NOT_FOUND,
 };
 
-enum ash_applet_execution_class {
-    ASH_APPLET_CURRENT_SHELL_SAFE = 0,
-    ASH_APPLET_CHILD_ONLY,
-    ASH_APPLET_EXEC_ONLY,
-};
-
 struct ash_command_resolution {
     enum ash_command_resolution_kind kind;
     const char* command_name;
@@ -48,7 +43,7 @@ struct ash_command_resolution {
         const struct ash_function* function;
         struct {
             const struct bx_applet* applet;
-            enum ash_applet_execution_class execution_class;
+            enum bx_applet_execution_class execution_class;
         } bx_applet;
         const char* path;
         int lookup_error;
@@ -63,6 +58,5 @@ struct ash_command_resolution ash_command_resolution_explicit_path(const char* n
 struct ash_command_resolution ash_command_resolution_not_found(const char* name, int lookup_error);
 
 bool ash_command_resolution_is_builtin(const struct ash_command_resolution* resolution);
-enum ash_applet_execution_class ash_applet_execution_classify(const struct bx_applet* applet);
 
 #endif /* BX_APPLETS_SHELL_ASH_COMMAND_RESOLUTION_H */

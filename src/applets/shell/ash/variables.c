@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -157,6 +158,50 @@ bool ash_var_attributes_valid(uint32_t attributes) {
             (ASH_VAR_ATTR_UPPERCASE | ASH_VAR_ATTR_LOWERCASE);
 }
 
+bool ash_var_list_invariants(const struct ash_var* variables) {
+    const struct ash_var* slow = variables;
+    const struct ash_var* fast = variables;
+    while (fast != NULL && fast->next != NULL) {
+        slow = slow->next;
+        fast = fast->next->next;
+        if (slow == fast) {
+            return false;
+        }
+    }
+
+    for (const struct ash_var* variable = variables;
+         variable != NULL;
+         variable = variable->next) {
+        if (variable->name == NULL ||
+            strlen(variable->name) != variable->name_length ||
+            !ash_is_valid_name_span(
+                variable->name,
+                variable->name_length
+            ) ||
+            !ash_var_attributes_valid(variable->attributes) ||
+            !ash_value_invariants(&variable->value)) {
+            return false;
+        }
+    }
+    for (const struct ash_var* variable = variables;
+         variable != NULL;
+         variable = variable->next) {
+        for (const struct ash_var* duplicate = variable->next;
+             duplicate != NULL;
+             duplicate = duplicate->next) {
+            if (variable->name_length == duplicate->name_length &&
+                memcmp(
+                    variable->name,
+                    duplicate->name,
+                    variable->name_length
+                ) == 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool ash_var_has_attribute(
     const struct ash_shell* shell,
     const char* name,
@@ -258,6 +303,7 @@ static bool ash_var_set_in_scope(
         }
         var->attributes |= attributes;
     }
+    assert(ash_var_list_invariants(scope->variables));
     return ash_var_publish_visible(shell, name, name_length);
 }
 
@@ -379,8 +425,10 @@ bool ash_var_update_attributes(
     if (!ash_var_publish_visible(shell, name, name_length)) {
         var->attributes = previous;
         (void)ash_var_publish_visible(shell, name, name_length);
+        assert(ash_scope_stack_invariants(shell));
         return false;
     }
+    assert(ash_scope_stack_invariants(shell));
     return true;
 }
 
@@ -431,6 +479,7 @@ void ash_var_unset(struct ash_shell* shell, const char* name) {
             free(current->name);
             ash_value_destroy(&current->value);
             free(current);
+            assert(ash_var_list_invariants(owner->variables));
             return;
         }
         link = &current->next;
@@ -448,6 +497,7 @@ void ash_var_list_destroy(struct ash_var** variables) {
         ash_value_destroy(&var->value);
         free(var);
     }
+    assert(ash_var_list_invariants(*variables));
 }
 
 bool ash_import_environment(struct ash_shell* shell) {

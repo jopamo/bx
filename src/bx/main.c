@@ -584,7 +584,7 @@ static int run_list_applets_mode(int argc, char** argv, int first_arg_index, str
         return status;
     }
 
-    fputs("{\"manifest_version\":1,\"generated_by\":\"tools/dispatch/generate_dispatch_tables.py\",\"applets\":[", stdout);
+    fputs("{\"manifest_version\":2,\"generated_by\":\"tools/dispatch/generate_dispatch_tables.py\",\"applets\":[", stdout);
     for (size_t i = 0; i < bx_runtime_snapshot_applet_metadata_count(runtime); i++) {
         const struct bx_applet_metadata* metadata =
             bx_runtime_snapshot_applet_metadata_at(runtime, i);
@@ -599,6 +599,8 @@ static int run_list_applets_mode(int argc, char** argv, int first_arg_index, str
         print_json_string(metadata->name);
         fputs(",\"boot_critical\":", stdout);
         fputs(metadata->boot_critical ? "true" : "false", stdout);
+        fputs(",\"execution_class\":", stdout);
+        print_json_string(metadata->execution_class);
         fputs(",\"capabilities\":", stdout);
         print_json_string_list(metadata->capabilities, metadata->capability_count);
         fputs(",\"aliases\":", stdout);

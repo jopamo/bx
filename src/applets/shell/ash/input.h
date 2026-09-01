@@ -55,6 +55,7 @@ bool ash_input_push_file(
 void ash_input_pop(struct ash_shell* shell);
 void ash_input_release_all(struct ash_shell* shell);
 void ash_input_source_names_destroy(struct ash_shell* shell);
+bool ash_input_stack_invariants(const struct ash_shell* shell);
 
 ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capacity);
 const char* ash_input_source_name(const struct ash_shell* shell);

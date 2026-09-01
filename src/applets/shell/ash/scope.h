@@ -79,6 +79,7 @@ enum ash_scope_pop_result ash_scope_pop(
     struct ash_shell* shell,
     enum ash_scope_kind expected_kind
 );
+bool ash_scope_stack_invariants(const struct ash_shell* shell);
 void ash_scope_stack_destroy(struct ash_shell* shell);
 
 struct ash_scope* ash_scope_current(struct ash_shell* shell);

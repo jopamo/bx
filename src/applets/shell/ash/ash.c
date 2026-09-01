@@ -929,10 +929,9 @@ static int ash_execute_function(
         }
     }
 
-    struct ash_saved_fds saved_fds;
-    ash_saved_fds_init(&saved_fds);
-    if (ash_apply_redirections(shell, command, &saved_fds) != 0) {
-        ash_saved_fds_restore(shell, &saved_fds);
+    struct ash_redirection_transaction saved_fds;
+    ash_redirection_transaction_init(&saved_fds);
+    if (ash_redirection_transaction_apply(shell, command, &saved_fds) != 0) {
         if (temporary_scope) {
             (void)ash_scope_pop(
                 shell,
@@ -949,7 +948,7 @@ static int ash_execute_function(
             command->word_count > 1u ? command->word_count - 1u : 0u
         )) {
         ash_diag_oom(shell);
-        ash_saved_fds_restore(shell, &saved_fds);
+        (void)ash_redirection_transaction_rollback(shell, &saved_fds);
         if (temporary_scope) {
             (void)ash_scope_pop(
                 shell,
@@ -971,7 +970,9 @@ static int ash_execute_function(
         ASH_SCOPE_FUNCTION
     );
 
-    ash_saved_fds_restore(shell, &saved_fds);
+    if (ash_redirection_transaction_rollback(shell, &saved_fds) != 0) {
+        status = 1;
+    }
     enum ash_scope_pop_result temporary_scope_pop =
         ASH_SCOPE_POP_OK;
     if (temporary_scope) {
@@ -1000,7 +1001,7 @@ static int ash_execute_in_child(struct ash_shell* shell, const struct ash_comman
             );
         }
     }
-    if (ash_apply_redirections(shell, command, NULL) != 0) {
+    if (ash_redirections_apply_permanently(shell, command) != 0) {
         return 1;
     }
 
@@ -1032,21 +1033,22 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
         return 1;
     }
 
-    struct ash_saved_fds saved;
-    ash_saved_fds_init(&saved);
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
 
-    if (ash_apply_redirections(shell, command, &saved) != 0) {
-        ash_saved_fds_restore(shell, &saved);
+    if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
         return 1;
     }
 
     int status = ash_run_builtin(shell, builtin, command, false);
 
     if (!shell->should_exit) {
-        ash_saved_fds_restore(shell, &saved);
+        if (ash_redirection_transaction_rollback(shell, &saved) != 0) {
+            return 1;
+        }
     }
-    else {
-        ash_saved_fds_commit(&saved);
+    else if (ash_redirection_transaction_commit(shell, &saved) != 0) {
+        return 1;
     }
 
     return status;
@@ -1059,7 +1061,7 @@ struct ash_command_child_context {
 
 static int ash_command_child_main(void* user_data) {
     struct ash_command_child_context* context = user_data;
-    ash_jobs_detach_after_fork(context->shell);
+    ash_shell_context_detach_after_fork(context->shell);
     return ash_execute_in_child(context->shell, context->command);
 }
 
@@ -1134,14 +1136,12 @@ static int ash_execute_command(
             return 0;
         }
 
-        struct ash_saved_fds saved;
-        ash_saved_fds_init(&saved);
-        if (ash_apply_redirections(shell, command, &saved) != 0) {
-            ash_saved_fds_restore(shell, &saved);
+        struct ash_redirection_transaction saved;
+        ash_redirection_transaction_init(&saved);
+        if (ash_redirection_transaction_apply(shell, command, &saved) != 0) {
             return 1;
         }
-        ash_saved_fds_restore(shell, &saved);
-        return 0;
+        return ash_redirection_transaction_rollback(shell, &saved);
     }
 
     struct ash_command_resolution resolution =
@@ -1196,14 +1196,14 @@ static int ash_substitution_child_main(void* user_data) {
     if (input == NULL) {
         return 2;
     }
-    struct ash_shell child = *context->shell;
-    ash_jobs_detach_after_fork(&child);
-    child.should_exit = false;
-    child.requested_exit_status = 0;
+    struct ash_shell* child = context->shell;
+    ash_shell_context_detach_after_fork(child);
+    child->should_exit = false;
+    child->requested_exit_status = 0;
     bool incomplete = false;
     bool parser_error = false;
     int status = ash_execute_buffer(
-        &child,
+        child,
         input,
         true,
         &incomplete,
@@ -1491,7 +1491,7 @@ struct ash_subshell_child_context {
 
 static int ash_subshell_child_main(void* user_data) {
     struct ash_subshell_child_context* context = user_data;
-    ash_jobs_detach_after_fork(context->shell);
+    ash_shell_context_detach_after_fork(context->shell);
     struct ash_command redirections;
     if (!ash_ast_trailing_redirections_to_command(
             context->shell,
@@ -1500,15 +1500,14 @@ static int ash_subshell_child_main(void* user_data) {
         )) {
         return 2;
     }
-    struct ash_saved_fds saved;
-    ash_saved_fds_init(&saved);
-    if (ash_apply_redirections(
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
+    if (ash_redirection_transaction_apply(
             context->shell,
             &redirections,
             &saved
         ) != 0) {
         ash_command_destroy(&redirections);
-        ash_saved_fds_commit(&saved);
         return 1;
     }
     ash_command_destroy(&redirections);
@@ -1516,8 +1515,10 @@ static int ash_subshell_child_main(void* user_data) {
         context->shell,
         context->node->value.group.body
     );
-    ash_saved_fds_commit(&saved);
-    return status;
+    return ash_redirection_transaction_commit(
+        context->shell,
+        &saved
+    ) == 0 ? status : 1;
 }
 
 static int ash_execute_ast_group(
@@ -1543,17 +1544,20 @@ static int ash_execute_ast_group(
     if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
         return 2;
     }
-    struct ash_saved_fds saved;
-    ash_saved_fds_init(&saved);
-    if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
+    if (ash_redirection_transaction_apply(
+            shell,
+            &redirections,
+            &saved
+        ) != 0) {
         ash_command_destroy(&redirections);
-        ash_saved_fds_restore(shell, &saved);
         return 1;
     }
     ash_command_destroy(&redirections);
     int status = ash_execute_ast(shell, node->value.group.body);
-    ash_saved_fds_restore(shell, &saved);
-    return status;
+    return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
+        status : 1;
 }
 
 struct ash_pipeline_child_context {
@@ -1567,7 +1571,7 @@ struct ash_pipeline_child_context {
 
 static int ash_pipeline_child_main(void* user_data) {
     struct ash_pipeline_child_context* context = user_data;
-    ash_jobs_detach_after_fork(context->shell);
+    ash_shell_context_detach_after_fork(context->shell);
     if (context->previous_read >= 0 &&
         bx_fd_dup2_exact(context->previous_read, STDIN_FILENO) < 0) {
         ash_exec_error(context->shell, "dup2", errno);
@@ -1727,7 +1731,7 @@ struct ash_async_child_context {
 
 static int ash_async_child_main(void* user_data) {
     struct ash_async_child_context* context = user_data;
-    ash_jobs_detach_after_fork(context->shell);
+    ash_shell_context_detach_after_fork(context->shell);
     if (!ash_shell_policy_has(
             &context->shell->policy,
             ASH_SHELL_POLICY_INTERACTIVE
@@ -2006,17 +2010,20 @@ static int ash_execute_ast_case(
     if (!ash_ast_trailing_redirections_to_command(shell, node, &redirections)) {
         return 2;
     }
-    struct ash_saved_fds saved;
-    ash_saved_fds_init(&saved);
-    if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
+    struct ash_redirection_transaction saved;
+    ash_redirection_transaction_init(&saved);
+    if (ash_redirection_transaction_apply(
+            shell,
+            &redirections,
+            &saved
+        ) != 0) {
         ash_command_destroy(&redirections);
-        ash_saved_fds_restore(shell, &saved);
         return 1;
     }
     ash_command_destroy(&redirections);
     int status = ash_execute_ast_case_body(shell, node);
-    ash_saved_fds_restore(shell, &saved);
-    return status;
+    return ash_redirection_transaction_rollback(shell, &saved) == 0 ?
+        status : 1;
 }
 
 static int ash_execute_ast_function(
@@ -2031,30 +2038,43 @@ static int ash_execute_ast_function(
 }
 
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) {
+    ash_shell_context_assert_invariants(shell);
+    int status = 2;
     switch (node->kind) {
         case ASH_AST_SIMPLE:
-            return ash_execute_ast_simple(shell, node);
+            status = ash_execute_ast_simple(shell, node);
+            break;
         case ASH_AST_LIST:
-            return ash_execute_ast_list(shell, node);
+            status = ash_execute_ast_list(shell, node);
+            break;
         case ASH_AST_AND_OR:
-            return ash_execute_ast_and_or(shell, node);
+            status = ash_execute_ast_and_or(shell, node);
+            break;
         case ASH_AST_PIPELINE:
-            return ash_execute_ast_pipeline(shell, node);
+            status = ash_execute_ast_pipeline(shell, node);
+            break;
         case ASH_AST_SUBSHELL:
-            return ash_execute_ast_group(shell, node, true);
+            status = ash_execute_ast_group(shell, node, true);
+            break;
         case ASH_AST_BRACE_GROUP:
-            return ash_execute_ast_group(shell, node, false);
+            status = ash_execute_ast_group(shell, node, false);
+            break;
         case ASH_AST_IF:
-            return ash_execute_ast_if(shell, node);
+            status = ash_execute_ast_if(shell, node);
+            break;
         case ASH_AST_WHILE:
         case ASH_AST_UNTIL:
-            return ash_execute_ast_loop(shell, node);
+            status = ash_execute_ast_loop(shell, node);
+            break;
         case ASH_AST_FOR:
-            return ash_execute_ast_for(shell, node);
+            status = ash_execute_ast_for(shell, node);
+            break;
         case ASH_AST_CASE:
-            return ash_execute_ast_case(shell, node);
+            status = ash_execute_ast_case(shell, node);
+            break;
         case ASH_AST_FUNCTION:
-            return ash_execute_ast_function(shell, node);
+            status = ash_execute_ast_function(shell, node);
+            break;
         case ASH_AST_ARITHMETIC_COMMAND:
         case ASH_AST_CONDITIONAL_COMMAND:
         case ASH_AST_C_STYLE_FOR:
@@ -2062,9 +2082,11 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
         case ASH_AST_TIME:
         case ASH_AST_COPROC:
             ash_diag(shell, "shell construct is not implemented");
-            return 2;
+            status = 2;
+            break;
     }
-    return 2;
+    ash_shell_context_assert_invariants(shell);
+    return status;
 }
 
 static const char* ash_parser_diagnostic(const char* diagnostic) {

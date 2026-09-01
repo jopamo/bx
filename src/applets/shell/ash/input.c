@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -12,6 +13,102 @@ struct ash_source_name {
     struct ash_source_name* next;
     bool published;
 };
+
+static bool ash_input_chain_acyclic(const struct ash_input_source* input) {
+    const struct ash_input_source* slow = input;
+    const struct ash_input_source* fast = input;
+    while (fast != NULL && fast->previous != NULL) {
+        slow = slow->previous;
+        fast = fast->previous->previous;
+        if (slow == fast) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ash_source_name_chain_acyclic(
+    const struct ash_source_name* identity
+) {
+    const struct ash_source_name* slow = identity;
+    const struct ash_source_name* fast = identity;
+    while (fast != NULL && fast->next != NULL) {
+        slow = slow->next;
+        fast = fast->next->next;
+        if (slow == fast) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool ash_source_name_is_owned(
+    const struct ash_shell* shell,
+    const struct ash_source_name* identity
+) {
+    for (const struct ash_source_name* current = shell->source_names;
+         current != NULL;
+         current = current->next) {
+        if (current == identity) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ash_input_stack_invariants(const struct ash_shell* shell) {
+    if (shell == NULL ||
+        !ash_input_chain_acyclic(shell->input_stack) ||
+        !ash_source_name_chain_acyclic(shell->source_names)) {
+        return false;
+    }
+
+    for (const struct ash_source_name* identity = shell->source_names;
+         identity != NULL;
+         identity = identity->next) {
+        if (!identity->published || identity->value == NULL) {
+            return false;
+        }
+    }
+    for (const struct ash_source_name* identity = shell->source_names;
+         identity != NULL;
+         identity = identity->next) {
+        for (const struct ash_source_name* duplicate = identity->next;
+             duplicate != NULL;
+             duplicate = duplicate->next) {
+            if (strcmp(identity->value, duplicate->value) == 0) {
+                return false;
+            }
+        }
+    }
+
+    for (const struct ash_input_source* input = shell->input_stack;
+         input != NULL;
+         input = input->previous) {
+        if (input->kind < ASH_INPUT_STRING ||
+            input->kind > ASH_INPUT_FILE ||
+            input->name == NULL || input->identity == NULL ||
+            !ash_source_name_is_owned(shell, input->identity) ||
+            !input->identity->published ||
+            input->name != input->identity->value ||
+            input->identity->value == NULL) {
+            return false;
+        }
+        if (input->kind == ASH_INPUT_STRING) {
+            if (input->source.string.text == NULL ||
+                input->source.string.offset >
+                    input->source.string.length) {
+                return false;
+            }
+        }
+        else if (input->source.file.stream == NULL ||
+            (input->source.file.ownership != ASH_INPUT_BORROW_STREAM &&
+             input->source.file.ownership != ASH_INPUT_TAKE_STREAM)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 static char* ash_input_duplicate(const char* text) {
     size_t length = strlen(text);
@@ -93,6 +190,8 @@ bool ash_input_push_string(struct ash_shell* shell, const char* name, const char
         errno = EINVAL;
         return false;
     }
+    assert(ash_input_stack_invariants(shell));
+    assert(!shell->parser_state.active);
 
     struct ash_input_source* input = ash_input_create(
         shell,
@@ -110,6 +209,7 @@ bool ash_input_push_string(struct ash_shell* shell, const char* name, const char
     }
     input->source.string.length = strlen(text);
     ash_input_publish(shell, input);
+    assert(ash_input_stack_invariants(shell));
     return true;
 }
 
@@ -125,6 +225,8 @@ bool ash_input_push_file(
         errno = EINVAL;
         return false;
     }
+    assert(ash_input_stack_invariants(shell));
+    assert(!shell->parser_state.active);
 
     struct ash_input_source* input = ash_input_create(
         shell,
@@ -138,6 +240,7 @@ bool ash_input_push_file(
     input->source.file.stream = stream;
     input->source.file.ownership = ownership;
     ash_input_publish(shell, input);
+    assert(ash_input_stack_invariants(shell));
     return true;
 }
 
@@ -145,6 +248,8 @@ void ash_input_pop(struct ash_shell* shell) {
     if (shell == NULL || shell->input_stack == NULL) {
         return;
     }
+    assert(ash_input_stack_invariants(shell));
+    assert(!shell->parser_state.active);
 
     struct ash_input_source* input = shell->input_stack;
     shell->input_stack = input->previous;
@@ -155,20 +260,33 @@ void ash_input_pop(struct ash_shell* shell) {
         fclose(input->source.file.stream);
     }
     free(input);
+    assert(ash_input_stack_invariants(shell));
 }
 
 void ash_input_release_all(struct ash_shell* shell) {
+    if (shell != NULL) {
+        assert(ash_input_stack_invariants(shell));
+        assert(!shell->parser_state.active);
+    }
     while (shell != NULL && shell->input_stack != NULL) {
         ash_input_pop(shell);
     }
 }
 
 void ash_input_source_names_destroy(struct ash_shell* shell) {
+    if (shell != NULL) {
+        assert(shell->input_stack == NULL);
+        assert(ash_input_stack_invariants(shell));
+        assert(!shell->parser_state.active);
+    }
     while (shell != NULL && shell->source_names != NULL) {
         struct ash_source_name* identity = shell->source_names;
         shell->source_names = identity->next;
         free(identity->value);
         free(identity);
+    }
+    if (shell != NULL) {
+        assert(ash_input_stack_invariants(shell));
     }
 }
 
@@ -235,6 +353,7 @@ ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capaci
     }
 
     struct ash_input_source* input = shell->input_stack;
+    assert(ash_input_stack_invariants(shell));
     ssize_t result;
     if (input->kind == ASH_INPUT_STRING) {
         result = ash_input_read_string(input, line, capacity);
@@ -246,6 +365,7 @@ ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capaci
     if (result >= 0) {
         input->line++;
     }
+    assert(ash_input_stack_invariants(shell));
     return result;
 }
 

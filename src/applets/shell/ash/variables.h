@@ -54,6 +54,7 @@ const char* ash_var_get_len(
 const char* ash_var_get(const struct ash_shell* shell, const char* name);
 bool ash_var_exists(const struct ash_shell* shell, const char* name);
 bool ash_var_attributes_valid(uint32_t attributes);
+bool ash_var_list_invariants(const struct ash_var* variables);
 bool ash_var_has_attribute(
     const struct ash_shell* shell,
     const char* name,

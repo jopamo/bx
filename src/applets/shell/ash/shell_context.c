@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -8,6 +9,114 @@
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
+#include "lib/fd_transaction.h"
+
+static bool ash_parser_state_invariants(const struct ash_shell* shell) {
+    const struct ash_parser_state* state = &shell->parser_state;
+    if (!state->active) {
+        return state->parser.lexer.source_name == NULL &&
+            state->parser.lexer.input == NULL &&
+            !state->parser.has_lookahead &&
+            state->parser.lookahead.word.parts == NULL &&
+            state->parser.lookahead.io_number == NULL &&
+            state->parser.error == NULL;
+    }
+
+    const struct ash_lexer* lexer = &state->parser.lexer;
+    if (lexer->source_name == NULL || lexer->input == NULL ||
+        lexer->offset > lexer->length ||
+        lexer->line == 0u || lexer->column == 0u ||
+        state->parser.result < ASH_PARSER_COMPLETE ||
+        state->parser.result > ASH_PARSER_ERROR ||
+        (state->parser.has_lookahead &&
+         (state->parser.lookahead.kind < ASH_TOKEN_EOF ||
+          state->parser.lookahead.kind > ASH_TOKEN_CLOBBER))) {
+        return false;
+    }
+    return shell->input_stack == NULL ||
+        lexer->source_name == shell->input_stack->name;
+}
+
+static bool ash_control_invariants(const struct ash_control_state* control) {
+    if (control->pending < ASH_CONTROL_NONE ||
+        control->pending > ASH_CONTROL_RETURN) {
+        return false;
+    }
+    switch (control->pending) {
+        case ASH_CONTROL_NONE:
+            return control->remaining_levels == 0u;
+        case ASH_CONTROL_BREAK:
+        case ASH_CONTROL_CONTINUE:
+            return control->remaining_levels != 0u &&
+                control->remaining_levels <= control->loop_depth;
+        case ASH_CONTROL_RETURN:
+            return control->remaining_levels == 0u &&
+                control->function_depth != 0u;
+    }
+    return false;
+}
+
+static size_t ash_function_scope_count(const struct ash_shell* shell) {
+    size_t count = 0u;
+    for (const struct ash_scope* scope = shell->scopes;
+         scope != NULL;
+         scope = scope->parent) {
+        count += scope->kind == ASH_SCOPE_FUNCTION;
+    }
+    return count;
+}
+
+bool ash_shell_context_invariants(const struct ash_shell* shell) {
+    return shell != NULL &&
+        shell->progname != NULL &&
+        shell->shell_pid > 0 &&
+        shell->last_async_pid >= -1 &&
+        shell->command_substitution != NULL &&
+        (shell->options & ~ASH_SHELL_OPTION_ALL) == 0u &&
+        ash_shell_policy_valid(&shell->policy) &&
+        ash_scope_stack_invariants(shell) &&
+        ash_input_stack_invariants(shell) &&
+        ash_parser_state_invariants(shell) &&
+        bx_fd_transaction_stack_invariants(&shell->redirections) &&
+        ash_jobs_invariants(shell) &&
+        ash_control_invariants(&shell->control) &&
+        ash_function_scope_count(shell) ==
+            shell->control.function_depth;
+}
+
+void ash_shell_context_assert_invariants(const struct ash_shell* shell) {
+    (void)shell;
+    assert(ash_shell_context_invariants(shell));
+}
+
+#ifndef NDEBUG
+static bool ash_shell_context_empty(const struct ash_shell* shell) {
+    return shell->progname == NULL &&
+        shell->scopes == NULL &&
+        shell->shopt == NULL &&
+        shell->aliases == NULL &&
+        shell->functions == NULL &&
+        shell->traps == NULL &&
+        shell->jobs == NULL &&
+        shell->command_cache == NULL &&
+        shell->input_stack == NULL &&
+        shell->source_names == NULL &&
+        !shell->parser_state.active &&
+        shell->parser_state.parser.lexer.source_name == NULL &&
+        shell->parser_state.parser.lexer.input == NULL &&
+        shell->history == NULL &&
+        shell->completion == NULL &&
+        shell->cwd.physical == NULL &&
+        shell->cwd.logical == NULL &&
+        shell->cwd.old_logical == NULL &&
+        shell->redirections.active == NULL &&
+        shell->redirections.entries == NULL &&
+        shell->redirections.entry_count == 0u &&
+        shell->redirections.entry_capacity == 0u &&
+        shell->shell_pid == 0 &&
+        shell->command_substitution == NULL;
+}
+#endif
 
 bool ash_shell_context_init(
     struct ash_shell* shell,
@@ -42,6 +151,8 @@ bool ash_shell_context_init(
         )) {
         return false;
     }
+    bx_fd_transaction_stack_init(&candidate.redirections);
+    assert(ash_shell_context_invariants(&candidate));
     *shell = candidate;
     return true;
 }
@@ -53,9 +164,12 @@ struct ash_parser* ash_shell_context_begin_parse(
     size_t length
 ) {
     if (shell == NULL || source_name == NULL || input == NULL ||
-        shell->parser_state.active) {
+        shell->parser_state.active ||
+        (shell->input_stack != NULL &&
+         source_name != shell->input_stack->name)) {
         return NULL;
     }
+    assert(ash_shell_context_invariants(shell));
     ash_parser_init(
         &shell->parser_state.parser,
         source_name,
@@ -63,6 +177,7 @@ struct ash_parser* ash_shell_context_begin_parse(
         length
     );
     shell->parser_state.active = true;
+    assert(ash_shell_context_invariants(shell));
     return &shell->parser_state.parser;
 }
 
@@ -70,8 +185,20 @@ void ash_shell_context_end_parse(struct ash_shell* shell) {
     if (shell == NULL || !shell->parser_state.active) {
         return;
     }
+    assert(ash_shell_context_invariants(shell));
     ash_parser_destroy(&shell->parser_state.parser);
     shell->parser_state = (struct ash_parser_state){0};
+    assert(ash_shell_context_invariants(shell));
+}
+
+void ash_shell_context_detach_after_fork(struct ash_shell* shell) {
+    if (shell == NULL) {
+        return;
+    }
+    assert(ash_shell_context_invariants(shell));
+    ash_jobs_detach_after_fork(shell);
+    bx_fd_transaction_stack_discard(&shell->redirections);
+    assert(ash_shell_context_invariants(shell));
 }
 
 void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_t output_size) {
@@ -116,14 +243,21 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     if (shell == NULL) {
         return;
     }
+    if (shell->progname == NULL) {
+        assert(ash_shell_context_empty(shell));
+        return;
+    }
+    assert(ash_shell_context_invariants(shell));
     ash_shell_context_end_parse(shell);
     ash_input_release_all(shell);
     ash_functions_destroy(shell);
     ash_jobs_destroy(shell);
+    bx_fd_transaction_stack_discard(&shell->redirections);
     ash_input_source_names_destroy(shell);
     ash_scope_stack_destroy(shell);
     free(shell->cwd.physical);
     free(shell->cwd.logical);
     free(shell->cwd.old_logical);
     memset(shell, 0, sizeof(*shell));
+    assert(ash_shell_context_empty(shell));
 }

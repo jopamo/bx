@@ -4,37 +4,43 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "lib/fd_transaction.h"
+
 struct ash_command;
 struct ash_shell;
 
-struct ash_saved_fd {
-    int target_fd;
-    /* Owned CLOEXEC backup, or -1 when the target was originally closed. */
-    int saved_fd;
+struct ash_redirection_transaction {
+    struct bx_fd_transaction descriptors;
 };
 
-struct ash_saved_fds {
-    /* Transaction-owned backup descriptors and their backing array. */
-    struct ash_saved_fd* items;
-    size_t length;
-    size_t capacity;
-};
-
-void ash_saved_fds_init(struct ash_saved_fds* saved);
-void ash_saved_fds_restore(
-    const struct ash_shell* shell,
-    struct ash_saved_fds* saved
+void ash_redirection_transaction_init(
+    struct ash_redirection_transaction* transaction
 );
-void ash_saved_fds_commit(struct ash_saved_fds* saved);
+bool ash_redirection_transaction_active(
+    const struct ash_redirection_transaction* transaction
+);
+int ash_redirection_transaction_apply(
+    struct ash_shell* shell,
+    const struct ash_command* command,
+    struct ash_redirection_transaction* transaction
+);
+int ash_redirection_transaction_rollback(
+    const struct ash_shell* shell,
+    struct ash_redirection_transaction* transaction
+);
+int ash_redirection_transaction_commit(
+    const struct ash_shell* shell,
+    struct ash_redirection_transaction* transaction
+);
+int ash_redirections_apply_permanently(
+    struct ash_shell* shell,
+    const struct ash_command* command
+);
+
 bool ash_redirection_parse_fd(
     const struct ash_shell* shell,
     const char* text,
     int* fd
-);
-int ash_apply_redirections(
-    const struct ash_shell* shell,
-    const struct ash_command* command,
-    struct ash_saved_fds* saved
 );
 
 #endif /* BX_APPLETS_SHELL_ASH_REDIRECTION_H */

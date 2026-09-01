@@ -13,80 +13,78 @@
 #include "applets/shell/ash/shell_context.h"
 #include "lib/fd_ops.h"
 
-void ash_saved_fds_init(struct ash_saved_fds* saved) {
-    *saved = (struct ash_saved_fds){0};
-}
-
-static bool ash_saved_fds_has_target(
-    const struct ash_saved_fds* saved,
-    int fd
+void ash_redirection_transaction_init(
+    struct ash_redirection_transaction* transaction
 ) {
-    for (size_t i = 0u; i < saved->length; i++) {
-        if (saved->items[i].target_fd == fd) {
-            return true;
-        }
+    if (transaction != NULL) {
+        bx_fd_transaction_init(&transaction->descriptors);
     }
-    return false;
 }
 
-static bool ash_saved_fds_push(
-    const struct ash_shell* shell,
-    struct ash_saved_fds* saved,
-    int target_fd,
-    int saved_fd
+bool ash_redirection_transaction_active(
+    const struct ash_redirection_transaction* transaction
 ) {
-    if (saved->length == saved->capacity) {
-        size_t capacity = saved->capacity == 0u ?
-            4u : saved->capacity * 2u;
-        if (capacity < saved->capacity ||
-            capacity > SIZE_MAX / sizeof(*saved->items)) {
-            return ash_diag_oom(shell);
-        }
-        struct ash_saved_fd* items = realloc(
-            saved->items,
-            capacity * sizeof(*items)
+    return transaction != NULL &&
+        bx_fd_transaction_active(&transaction->descriptors);
+}
+
+static int ash_redirection_transaction_error(
+    const struct ash_shell* shell,
+    const char* operation,
+    int error
+) {
+    if (shell == NULL) {
+        return 1;
+    }
+    if (error == ENOMEM) {
+        ash_diag_oom(shell);
+    }
+    else {
+        ash_exec_error(shell, operation, error);
+    }
+    return 1;
+}
+
+int ash_redirection_transaction_rollback(
+    const struct ash_shell* shell,
+    struct ash_redirection_transaction* transaction
+) {
+    if (transaction == NULL ||
+        bx_fd_transaction_rollback(&transaction->descriptors) != 0) {
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection rollback",
+            errno
         );
-        if (items == NULL) {
-            return ash_diag_oom(shell);
-        }
-        saved->items = items;
-        saved->capacity = capacity;
     }
-    saved->items[saved->length++] = (struct ash_saved_fd){
-        .target_fd = target_fd,
-        .saved_fd = saved_fd,
-    };
-    return true;
+    return 0;
 }
 
-void ash_saved_fds_restore(
+int ash_redirection_transaction_commit(
     const struct ash_shell* shell,
-    struct ash_saved_fds* saved
+    struct ash_redirection_transaction* transaction
 ) {
-    while (saved->length != 0u) {
-        struct ash_saved_fd item = saved->items[--saved->length];
-        if (item.saved_fd >= 0) {
-            if (bx_fd_dup2_exact(item.saved_fd, item.target_fd) < 0) {
-                ash_exec_error(shell, "dup2", errno);
-            }
-            close(item.saved_fd);
-        }
-        else {
-            close(item.target_fd);
-        }
+    if (transaction == NULL ||
+        bx_fd_transaction_commit(&transaction->descriptors) != 0) {
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection commit",
+            errno
+        );
     }
-    free(saved->items);
-    *saved = (struct ash_saved_fds){0};
+    return 0;
 }
 
-void ash_saved_fds_commit(struct ash_saved_fds* saved) {
-    for (size_t i = 0u; i < saved->length; i++) {
-        if (saved->items[i].saved_fd >= 0) {
-            close(saved->items[i].saved_fd);
-        }
+static bool ash_redirection_fd_value(const char* text, int* fd) {
+    char* end = NULL;
+    errno = 0;
+    long value = strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' ||
+        value < 0 || value > INT_MAX) {
+        return false;
     }
-    free(saved->items);
-    *saved = (struct ash_saved_fds){0};
+    *fd = (int)value;
+    return true;
 }
 
 bool ash_redirection_parse_fd(
@@ -94,15 +92,10 @@ bool ash_redirection_parse_fd(
     const char* text,
     int* fd
 ) {
-    char* end = NULL;
-    errno = 0;
-    long value = strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' ||
-        value < 0 || value > INT_MAX) {
+    if (!ash_redirection_fd_value(text, fd)) {
         ash_diag(shell, "invalid redirection fd");
         return false;
     }
-    *fd = (int)value;
     return true;
 }
 
@@ -156,49 +149,112 @@ static int ash_open_redirection(
     return bx_fd_open_cloexec(redirection->target, flags, 0666);
 }
 
-int ash_apply_redirections(
+static bool ash_redirection_collect_descriptor_references(
     const struct ash_shell* shell,
     const struct ash_command* command,
-    struct ash_saved_fds* saved
+    int** references_out,
+    size_t* reference_count_out
 ) {
-    int minimum_saved_fd = 10;
-    for (size_t i = 0u; i < command->redir_count; i++) {
-        if (command->redirs[i].fd >= minimum_saved_fd &&
-            command->redirs[i].fd < INT_MAX) {
-            minimum_saved_fd = command->redirs[i].fd + 1;
-        }
+    *references_out = NULL;
+    *reference_count_out = 0u;
+    if (command->redir_count == 0u) {
+        return true;
+    }
+    if (command->redir_count > SIZE_MAX / 2u ||
+        command->redir_count * 2u >
+            SIZE_MAX / sizeof(**references_out)) {
+        return ash_diag_oom(shell);
     }
 
+    int* references = malloc(
+        command->redir_count * 2u * sizeof(*references)
+    );
+    if (references == NULL) {
+        return ash_diag_oom(shell);
+    }
+
+    size_t reference_count = 0u;
     for (size_t i = 0u; i < command->redir_count; i++) {
         const struct ash_redir* redirection = &command->redirs[i];
-        if (saved != NULL &&
-            !ash_saved_fds_has_target(saved, redirection->fd)) {
-            int duplicate = bx_fd_dup_cloexec_min(
-                redirection->fd,
-                minimum_saved_fd
-            );
-            if (duplicate < 0 && errno != EBADF) {
-                ash_exec_error(shell, "dup", errno);
-                return 1;
-            }
-            if (!ash_saved_fds_push(
-                    shell,
-                    saved,
-                    redirection->fd,
-                    duplicate
+        references[reference_count++] = redirection->fd;
+        if (redirection->kind == ASH_REDIR_DUP &&
+            strcmp(redirection->target, "-") != 0) {
+            int source_fd;
+            if (ash_redirection_fd_value(
+                    redirection->target,
+                    &source_fd
                 )) {
-                if (duplicate >= 0) {
-                    close(duplicate);
-                }
-                return 1;
+                references[reference_count++] = source_fd;
             }
+        }
+    }
+    *references_out = references;
+    *reference_count_out = reference_count;
+    return true;
+}
+
+int ash_redirection_transaction_apply(
+    struct ash_shell* shell,
+    const struct ash_command* command,
+    struct ash_redirection_transaction* transaction
+) {
+    if (shell == NULL || command == NULL || transaction == NULL ||
+        ash_redirection_transaction_active(transaction)) {
+        errno = EINVAL;
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection transaction",
+            errno
+        );
+    }
+
+    int* references;
+    size_t reference_count;
+    if (!ash_redirection_collect_descriptor_references(
+            shell,
+            command,
+            &references,
+            &reference_count
+        )) {
+        return 1;
+    }
+    int begin_result = bx_fd_transaction_begin(
+        &shell->redirections,
+        &transaction->descriptors,
+        references,
+        reference_count
+    );
+    int begin_error = errno;
+    free(references);
+    if (begin_result != 0) {
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection transaction",
+            begin_error
+        );
+    }
+
+    int status = 0;
+    for (size_t i = 0u; i < command->redir_count; i++) {
+        const struct ash_redir* redirection = &command->redirs[i];
+        if (bx_fd_transaction_save(
+                &transaction->descriptors,
+                redirection->fd
+            ) != 0) {
+            status = ash_redirection_transaction_error(
+                shell,
+                "dup",
+                errno
+            );
+            break;
         }
 
         if (redirection->kind == ASH_REDIR_DUP) {
             if (strcmp(redirection->target, "-") == 0) {
                 if (close(redirection->fd) != 0 && errno != EBADF) {
                     ash_exec_error(shell, "close", errno);
-                    return 1;
+                    status = 1;
+                    break;
                 }
                 continue;
             }
@@ -212,7 +268,8 @@ int ash_apply_redirections(
                 if (errno != 0) {
                     ash_exec_error(shell, redirection->target, errno);
                 }
-                return 1;
+                status = 1;
+                break;
             }
             continue;
         }
@@ -220,14 +277,16 @@ int ash_apply_redirections(
         int fd = ash_open_redirection(shell, redirection);
         if (fd < 0) {
             ash_exec_error(shell, redirection->target, errno);
-            return 1;
+            status = 1;
+            break;
         }
         if (fd == redirection->fd) {
             if (bx_fd_set_cloexec(fd, false) != 0) {
                 int error = errno;
                 close(fd);
                 ash_exec_error(shell, "fcntl", error);
-                return 1;
+                status = 1;
+                break;
             }
         }
         else {
@@ -235,10 +294,30 @@ int ash_apply_redirections(
                 int error = errno;
                 close(fd);
                 ash_exec_error(shell, "dup2", error);
-                return 1;
+                status = 1;
+                break;
             }
             close(fd);
         }
     }
-    return 0;
+    if (status != 0) {
+        (void)ash_redirection_transaction_rollback(shell, transaction);
+    }
+    return status;
+}
+
+int ash_redirections_apply_permanently(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    struct ash_redirection_transaction transaction;
+    ash_redirection_transaction_init(&transaction);
+    if (ash_redirection_transaction_apply(
+            shell,
+            command,
+            &transaction
+        ) != 0) {
+        return 1;
+    }
+    return ash_redirection_transaction_commit(shell, &transaction);
 }

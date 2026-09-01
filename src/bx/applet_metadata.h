@@ -7,6 +7,7 @@
 struct bx_applet_metadata {
     const char* name;
     bool boot_critical;
+    const char* execution_class;
     const char* const* capabilities;
     size_t capability_count;
     const char* const* aliases;
