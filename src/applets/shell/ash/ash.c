@@ -578,12 +578,42 @@ static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* co
         if (strcmp(arg, "--") == 0) {
             continue;
         }
-        if ((strcmp(arg, "-C") == 0 || strcmp(arg, "+C") == 0)) {
-            if (arg[0] == '-') {
-                shell->options |= ASH_SHELL_OPTION_NOCLOBBER;
-            }
-            else {
-                shell->options &= ~ASH_SHELL_OPTION_NOCLOBBER;
+        if ((arg[0] == '-' || arg[0] == '+') &&
+            arg[1] != '\0') {
+            bool enabled = arg[0] == '-';
+            for (const char* option = arg + 1;
+                 *option != '\0';
+                 option++) {
+                enum ash_shell_option_result result;
+                if (*option == 'o' && i + 1u < command->word_count) {
+                    const char* option_name = command->words[++i];
+                    result = ash_shell_option_apply_name(
+                        &shell->options,
+                        option_name,
+                        enabled,
+                        ASH_SHELL_OPTION_USE_SET_NAME
+                    );
+                    if (result != ASH_SHELL_OPTION_APPLIED) {
+                        ash_diag(
+                            shell,
+                            "set: %s: invalid option name",
+                            option_name
+                        );
+                        status = 2;
+                    }
+                    continue;
+                }
+                result = ash_shell_option_apply_letter(
+                    &shell->options,
+                    *option,
+                    enabled,
+                    ASH_SHELL_OPTION_USE_SET_SHORT
+                );
+                if (result != ASH_SHELL_OPTION_APPLIED) {
+                    ash_diag(shell, "set: unsupported operand '%s'", arg);
+                    status = 1;
+                    break;
+                }
             }
             continue;
         }
@@ -2110,7 +2140,10 @@ static void ash_print_option_summary(
         fprintf(stream, "\t--verbose\n");
         fprintf(stream, "\t--version\n");
         fprintf(stream, "Shell options:\n");
-        fprintf(stream, "\t-Cisv or -c command\n");
+        fprintf(
+            stream,
+            "\t-Cisv or -c command or -o/+o option-name\n"
+        );
     }
 }
 
@@ -2125,6 +2158,10 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -s           read commands from stdin\n");
     fprintf(stream, "  -v           print shell input lines as read\n");
     if (strcmp(progname, "bash") == 0) {
+        fprintf(stream, "  -o option-name\n");
+        fprintf(stream, "               set noclobber or verbose\n");
+        fprintf(stream, "  +o option-name\n");
+        fprintf(stream, "               clear noclobber or verbose\n");
         fprintf(stream, "  --verbose    equivalent to -v\n");
     }
     fprintf(stream, "  --standalone-applets\n");
@@ -2170,6 +2207,15 @@ static int ash_report_invocation_error(
             );
             ash_print_usage(stderr, error->progname);
             ash_print_option_summary(stderr, error->progname);
+            return 2;
+        case ASH_INVOCATION_ERROR_INVALID_OPTION_NAME:
+            fprintf(
+                stderr,
+                "%s: line 0: %s: %s: invalid option name\n",
+                error->progname,
+                error->progname,
+                error->argument
+            );
             return 2;
         case ASH_INVOCATION_ERROR_MISSING_COMMAND:
             fprintf(
