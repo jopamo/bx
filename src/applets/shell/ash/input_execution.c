@@ -1,6 +1,6 @@
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -121,11 +121,11 @@ static int ash_input_execute_current(
     struct ash_shell* shell,
     bool prompt
 ) {
-    char* line = NULL;
-    size_t capacity = 0u;
     int status = 0;
-    struct bx_text_buffer pending;
-    bx_text_buffer_init(&pending);
+    struct bx_text_buffer logical_input;
+    struct bx_text_buffer physical_line;
+    bx_text_buffer_init(&logical_input);
+    bx_text_buffer_init(&physical_line);
     struct ash_source_location pending_origin = {0};
     bool continuation = false;
 
@@ -150,13 +150,16 @@ static int ash_input_execute_current(
             ash_input_print_prompt(shell, continuation);
         }
 
-        errno = 0;
         struct ash_source_location line_origin =
             ash_input_next_location(shell);
+        bool extending_logical_input = logical_input.length != 0u;
+        struct bx_text_buffer* read_buffer =
+            extending_logical_input ?
+                &physical_line :
+                &logical_input;
         ssize_t read_length = ash_input_read_line(
             shell,
-            &line,
-            &capacity
+            read_buffer
         );
         if (read_length < 0) {
             bool read_error = ash_input_source_has_error(shell) ||
@@ -169,14 +172,14 @@ static int ash_input_execute_current(
                 );
                 status = 1;
             }
-            else if (pending.length != 0u) {
+            else if (logical_input.length != 0u) {
                 bool incomplete = false;
                 bool parser_error = false;
                 status = ash_input_execute_buffer(
                     shell,
                     pending_origin,
-                    pending.data,
-                    pending.length,
+                    logical_input.data,
+                    logical_input.length,
                     true,
                     &incomplete,
                     &parser_error
@@ -191,17 +194,30 @@ static int ash_input_execute_current(
             status = 2;
             break;
         }
-        if (pending.length == 0u) {
+        if (!extending_logical_input) {
             pending_origin = line_origin;
         }
-        if (!bx_text_buffer_append_span(
-                &pending,
-                line,
-                (size_t)read_length
-            )) {
-            ash_diag_oom(shell);
-            status = 2;
-            break;
+        else {
+            assert((size_t)read_length == physical_line.length);
+            if (!bx_text_buffer_append_span(
+                    &logical_input,
+                    physical_line.data,
+                    physical_line.length
+                )) {
+                int error = errno;
+                if (error == EOVERFLOW) {
+                    ash_exec_error(
+                        shell,
+                        "logical input",
+                        error
+                    );
+                }
+                else {
+                    ash_diag_oom(shell);
+                }
+                status = 2;
+                break;
+            }
         }
 
         bool incomplete = false;
@@ -209,8 +225,8 @@ static int ash_input_execute_current(
         status = ash_input_execute_buffer(
             shell,
             pending_origin,
-            pending.data,
-            pending.length,
+            logical_input.data,
+            logical_input.length,
             false,
             &incomplete,
             &parser_error
@@ -220,7 +236,7 @@ static int ash_input_execute_current(
             continue;
         }
 
-        bx_text_buffer_clear(&pending);
+        bx_text_buffer_clear(&logical_input);
         pending_origin = (struct ash_source_location){0};
         continuation = false;
         if (parser_error &&
@@ -232,8 +248,8 @@ static int ash_input_execute_current(
         }
     }
 
-    bx_text_buffer_destroy(&pending);
-    free(line);
+    bx_text_buffer_destroy(&physical_line);
+    bx_text_buffer_destroy(&logical_input);
     return status;
 }
 

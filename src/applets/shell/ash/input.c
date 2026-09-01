@@ -1,11 +1,13 @@
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/shell_context.h"
+#include "lib/text_buffer.h"
 
 struct ash_source_name {
     char* value;
@@ -511,33 +513,9 @@ void ash_input_source_registry_destroy(struct ash_shell* shell) {
     }
 }
 
-static bool ash_input_reserve(char** line, size_t* capacity, size_t needed) {
-    if (*capacity >= needed) {
-        return true;
-    }
-
-    size_t grown = (*capacity == 0u) ? 128u : *capacity;
-    while (grown < needed) {
-        if (grown > SIZE_MAX / 2u) {
-            grown = needed;
-            break;
-        }
-        grown *= 2u;
-    }
-
-    char* replacement = realloc(*line, grown);
-    if (replacement == NULL) {
-        return false;
-    }
-    *line = replacement;
-    *capacity = grown;
-    return true;
-}
-
 static ssize_t ash_input_read_string(
     struct ash_input_source* input,
-    char** line,
-    size_t* capacity
+    struct bx_text_buffer* line
 ) {
     size_t offset = input->byte_offset;
     size_t length = input->source.string.length;
@@ -555,38 +533,59 @@ static ssize_t ash_input_read_string(
     }
 
     size_t line_length = end - offset;
-    if (line_length > (size_t)PTRDIFF_MAX || line_length == SIZE_MAX ||
-        !ash_input_reserve(line, capacity, line_length + 1u)) {
-        errno = ENOMEM;
+    if (line_length > (size_t)SSIZE_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if (!bx_text_buffer_reserve(line, line_length + 1u)) {
         return -1;
     }
 
-    memcpy(*line, text + offset, line_length);
-    (*line)[line_length] = '\0';
+    memcpy(line->data, text + offset, line_length);
+    line->data[line_length] = '\0';
+    line->length = line_length;
     return (ssize_t)line_length;
 }
 
-ssize_t ash_input_read_line(struct ash_shell* shell, char** line, size_t* capacity) {
-    if (shell == NULL || shell->input_stack == NULL || line == NULL || capacity == NULL) {
+ssize_t ash_input_read_line(
+    struct ash_shell* shell,
+    struct bx_text_buffer* line
+) {
+    if (shell == NULL || shell->input_stack == NULL || line == NULL) {
         errno = EINVAL;
         return -1;
     }
 
     struct ash_input_source* input = shell->input_stack;
     assert(ash_input_stack_invariants(shell));
+    bx_text_buffer_clear(line);
+    errno = 0;
     ssize_t result;
     if (input->transport == ASH_INPUT_TRANSPORT_STRING) {
-        result = ash_input_read_string(input, line, capacity);
+        result = ash_input_read_string(input, line);
     }
     else {
-        result = getline(line, capacity, input->source.file.stream);
+        result = getline(
+            &line->data,
+            &line->capacity,
+            input->source.file.stream
+        );
+        if (result >= 0) {
+            line->length = (size_t)result;
+        }
+        else {
+            bx_text_buffer_clear(line);
+        }
     }
 
     if (result >= 0) {
-        size_t length = (size_t)result;
+        size_t length = line->length;
+        assert((size_t)result == length);
         if (input->physical_line == SIZE_MAX ||
             length > SIZE_MAX - input->byte_offset) {
+            bx_text_buffer_clear(line);
             errno = EOVERFLOW;
+            assert(ash_input_stack_invariants(shell));
             return -1;
         }
         input->physical_line++;
