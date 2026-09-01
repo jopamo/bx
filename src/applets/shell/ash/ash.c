@@ -11,7 +11,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "applets.h"
@@ -24,6 +23,7 @@
 #include "applets/shell/ash/lexer.h"
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
+#include "applets/shell/ash/process.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
@@ -34,6 +34,30 @@
 extern char** environ;
 
 static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node);
+
+static void ash_print_exported_variable(
+    const struct ash_var* var,
+    void* user_data
+) {
+    (void)user_data;
+    if ((var->attributes & ASH_VAR_ATTR_EXPORT) != 0u) {
+        const char* value = ash_value_get_scalar(&var->value);
+        if (value != NULL) {
+            printf("%s=%s\n", var->name, value);
+        }
+    }
+}
+
+static void ash_print_scalar_variable(
+    const struct ash_var* var,
+    void* user_data
+) {
+    (void)user_data;
+    const char* value = ash_value_get_scalar(&var->value);
+    if (value != NULL) {
+        printf("%s=%s\n", var->name, value);
+    }
+}
 
 static const char* ash_basename(const char* path) {
     return bx_cli_progname(path, "ash");
@@ -185,10 +209,6 @@ static bool ash_command_push_redir(struct ash_shell* shell, struct ash_command* 
     return true;
 }
 
-static bool ash_command_is_empty(const struct ash_command* command) {
-    return command->word_count == 0u && command->assignment_count == 0u && command->redir_count == 0u;
-}
-
 static void ash_command_destroy(struct ash_command* command) {
     for (size_t i = 0; i < command->word_count; i++) {
         free(command->words[i]);
@@ -206,50 +226,6 @@ static void ash_command_destroy(struct ash_command* command) {
     free(command->redirs);
 
     ash_command_init(command);
-}
-
-static void ash_pipeline_init(struct ash_pipeline* pipeline) {
-    pipeline->commands = NULL;
-    pipeline->count = 0;
-    pipeline->cap = 0;
-}
-
-static bool ash_pipeline_push_command(const struct ash_shell* shell, struct ash_pipeline* pipeline, const struct ash_command* command) {
-    if (pipeline->count == pipeline->cap) {
-        size_t new_cap = (pipeline->cap == 0) ? 4u : pipeline->cap * 2u;
-        if (pipeline->cap != 0u && pipeline->cap > SIZE_MAX / 2u) {
-            return ash_diag_oom(shell);
-        }
-        struct ash_command* grown = ash_realloc_array(shell, pipeline->commands, new_cap, sizeof(*pipeline->commands));
-        if (grown == NULL) {
-            return false;
-        }
-        pipeline->commands = grown;
-        pipeline->cap = new_cap;
-    }
-
-    pipeline->commands[pipeline->count++] = *command;
-    return true;
-}
-
-static void ash_pipeline_destroy(struct ash_pipeline* pipeline) {
-    for (size_t i = 0; i < pipeline->count; i++) {
-        ash_command_destroy(&pipeline->commands[i]);
-    }
-    free(pipeline->commands);
-    pipeline->commands = NULL;
-    pipeline->count = 0;
-    pipeline->cap = 0;
-}
-
-static int ash_wait_status_to_exit_status(int wait_status) {
-    if (WIFEXITED(wait_status)) {
-        return WEXITSTATUS(wait_status);
-    }
-    if (WIFSIGNALED(wait_status)) {
-        return 128 + WTERMSIG(wait_status);
-    }
-    return 1;
 }
 
 static int ash_exec_external(struct ash_shell* shell, char** argv) {
@@ -554,11 +530,7 @@ static int ash_builtin_exit(struct ash_shell* shell, const struct ash_command* c
 
 static int ash_builtin_export(struct ash_shell* shell, const struct ash_command* command) {
     if (command->word_count == 1u) {
-        for (const struct ash_var* var = shell->vars; var != NULL; var = var->next) {
-            if (var->exported) {
-                printf("%s=%s\n", var->name, var->value);
-            }
-        }
+        ash_vars_visit_visible(shell, ash_print_exported_variable, NULL);
         return 0;
     }
 
@@ -689,9 +661,7 @@ static int ash_builtin_exec(struct ash_shell* shell, const struct ash_command* c
 
 static int ash_builtin_set(struct ash_shell* shell, const struct ash_command* command) {
     if (command->word_count == 1u) {
-        for (const struct ash_var* var = shell->vars; var != NULL; var = var->next) {
-            printf("%s=%s\n", var->name, var->value);
-        }
+        ash_vars_visit_visible(shell, ash_print_scalar_variable, NULL);
         return 0;
     }
 
@@ -804,14 +774,17 @@ static int ash_builtin_shift(
             return 2;
         }
     }
-    if (count > (unsigned long)shell->positionals.count) {
+    struct ash_positional_frame* positionals =
+        ash_scope_positionals_mut(shell);
+    if (positionals == NULL ||
+        count > (unsigned long)positionals->count) {
         ash_diag(shell, "shift: can't shift that many");
         return 1;
     }
     if (count != 0u) {
-        shell->positionals.values += count;
+        positionals->values += count;
     }
-    shell->positionals.count -= (int)count;
+    positionals->count -= (int)count;
     return 0;
 }
 
@@ -820,21 +793,12 @@ static int ash_builtin_wait(
     const struct ash_command* command
 ) {
     if (command->word_count == 1u) {
-        while (true) {
-            int wait_status;
-            pid_t waited = waitpid(-1, &wait_status, 0);
-            if (waited > 0) {
-                continue;
-            }
-            if (waited < 0 && errno == EINTR) {
-                continue;
-            }
-            if (waited < 0 && errno == ECHILD) {
-                return 0;
-            }
+        int status;
+        if (ash_jobs_wait_all(shell, &status) != 0) {
             ash_exec_error(shell, "wait", errno);
             return 1;
         }
+        return 0;
     }
 
     int status = 0;
@@ -849,19 +813,17 @@ static int ash_builtin_wait(
             continue;
         }
 
-        int wait_status;
-        while (waitpid((pid_t)parsed, &wait_status, 0) < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
+        int child_status;
+        if (ash_jobs_wait_pid(
+                shell,
+                (pid_t)parsed,
+                &child_status
+            ) != 0) {
             ash_exec_error(shell, command->words[i], errno);
             status = 127;
-            wait_status = -1;
-            break;
+            continue;
         }
-        if (wait_status != -1) {
-            status = ash_wait_status_to_exit_status(wait_status);
-        }
+        status = child_status;
     }
     return status;
 }
@@ -926,17 +888,6 @@ static struct ash_command_resolution ash_resolve_shell_command(
     return builtin;
 }
 
-static void ash_restore_function_assignments(
-    struct ash_shell* shell,
-    struct ash_var_saved* saved,
-    size_t count
-) {
-    while (count != 0u) {
-        ash_var_restore(shell, &saved[--count]);
-    }
-    free(saved);
-}
-
 static int ash_execute_function(
     struct ash_shell* shell,
     const struct ash_function* function,
@@ -948,17 +899,12 @@ static int ash_execute_function(
         return 2;
     }
 
-    struct ash_var_saved* saved = ash_realloc_array(
-        shell,
-        NULL,
-        command->assignment_count,
-        sizeof(*saved)
-    );
-    if (command->assignment_count != 0u && saved == NULL) {
+    bool temporary_scope = command->assignment_count != 0u;
+    if (temporary_scope && !ash_scope_push_temporary(shell)) {
+        ash_diag_oom(shell);
         ash_ast_destroy(invocation_body);
         return 2;
     }
-    size_t saved_count = 0u;
     for (size_t i = 0u; i < command->assignment_count; i++) {
         size_t name_length = 0u;
         const char* value = NULL;
@@ -967,25 +913,17 @@ static int ash_execute_function(
                 &name_length,
                 &value
             ) ||
-            !ash_var_save(
-                shell,
-                command->assignments[i],
-                name_length,
-                &saved[saved_count]
-            )) {
-            ash_restore_function_assignments(shell, saved, saved_count);
-            ash_ast_destroy(invocation_body);
-            return 2;
-        }
-        saved_count++;
-        if (!ash_var_set_with_export(
+            !ash_var_set_temporary(
                 shell,
                 command->assignments[i],
                 name_length,
                 value,
                 true
             )) {
-            ash_restore_function_assignments(shell, saved, saved_count);
+            (void)ash_scope_pop(
+                shell,
+                ASH_SCOPE_TEMPORARY_ASSIGNMENT
+            );
             ash_ast_destroy(invocation_body);
             return 2;
         }
@@ -995,19 +933,32 @@ static int ash_execute_function(
     ash_saved_fds_init(&saved_fds);
     if (ash_apply_redirections(shell, command, &saved_fds) != 0) {
         ash_saved_fds_restore(shell, &saved_fds);
-        ash_restore_function_assignments(shell, saved, saved_count);
+        if (temporary_scope) {
+            (void)ash_scope_pop(
+                shell,
+                ASH_SCOPE_TEMPORARY_ASSIGNMENT
+            );
+        }
         ash_ast_destroy(invocation_body);
         return 1;
     }
 
-    struct ash_positional_frame previous = shell->positionals;
-    shell->positionals = (struct ash_positional_frame){
-        .argv0 = previous.argv0,
-        .values = command->word_count > 1u ? &command->words[1] : NULL,
-        .count = command->word_count > 1u ?
-            (int)(command->word_count - 1u) : 0,
-        .previous = &previous,
-    };
+    if (!ash_scope_push_function(
+            shell,
+            command->word_count > 1u ? &command->words[1] : NULL,
+            command->word_count > 1u ? command->word_count - 1u : 0u
+        )) {
+        ash_diag_oom(shell);
+        ash_saved_fds_restore(shell, &saved_fds);
+        if (temporary_scope) {
+            (void)ash_scope_pop(
+                shell,
+                ASH_SCOPE_TEMPORARY_ASSIGNMENT
+            );
+        }
+        ash_ast_destroy(invocation_body);
+        return 2;
+    }
     unsigned int caller_loop_depth = shell->control.loop_depth;
     shell->control.loop_depth = 0u;
     ash_control_enter_function(shell);
@@ -1015,11 +966,25 @@ static int ash_execute_function(
     (void)ash_control_consume_return(shell, &status);
     ash_control_leave_function(shell);
     shell->control.loop_depth = caller_loop_depth;
-    shell->positionals = previous;
+    enum ash_scope_pop_result function_scope_pop = ash_scope_pop(
+        shell,
+        ASH_SCOPE_FUNCTION
+    );
 
     ash_saved_fds_restore(shell, &saved_fds);
-    ash_restore_function_assignments(shell, saved, saved_count);
+    enum ash_scope_pop_result temporary_scope_pop =
+        ASH_SCOPE_POP_OK;
+    if (temporary_scope) {
+        temporary_scope_pop = ash_scope_pop(
+            shell,
+            ASH_SCOPE_TEMPORARY_ASSIGNMENT
+        );
+    }
     ash_ast_destroy(invocation_body);
+    if (function_scope_pop != ASH_SCOPE_POP_OK ||
+        temporary_scope_pop != ASH_SCOPE_POP_OK) {
+        return 2;
+    }
     return status;
 }
 
@@ -1081,189 +1046,121 @@ static int ash_execute_single_command_parent(struct ash_shell* shell, const stru
         ash_saved_fds_restore(shell, &saved);
     }
     else {
-        ash_saved_fds_destroy(&saved);
+        ash_saved_fds_commit(&saved);
     }
 
     return status;
 }
 
-static int ash_execute_single_command_forked(struct ash_shell* shell, const struct ash_command* command) {
-    pid_t pid = fork();
-    if (pid < 0) {
-        ash_exec_error(shell, "fork", errno);
-        return 1;
-    }
+struct ash_command_child_context {
+    struct ash_shell* shell;
+    const struct ash_command* command;
+};
 
-    if (pid == 0) {
-        int status = ash_execute_in_child(shell, command);
-        _exit(status);
-    }
-
-    int wait_status = 0;
-    if (waitpid(pid, &wait_status, 0) < 0) {
-        ash_exec_error(shell, "waitpid", errno);
-        return 1;
-    }
-
-    return ash_wait_status_to_exit_status(wait_status);
+static int ash_command_child_main(void* user_data) {
+    struct ash_command_child_context* context = user_data;
+    ash_jobs_detach_after_fork(context->shell);
+    return ash_execute_in_child(context->shell, context->command);
 }
 
-static int ash_execute_pipeline_forked(struct ash_shell* shell, const struct ash_pipeline* pipeline) {
-    size_t command_count = pipeline->count;
-    pid_t* pids = ash_realloc_array(shell, NULL, command_count, sizeof(*pids));
-    if (pids == NULL) {
+static int ash_run_foreground_child(
+    struct ash_shell* shell,
+    enum ash_job_kind job_kind,
+    enum ash_process_role process_role,
+    ash_child_callback callback,
+    void* user_data
+) {
+    struct ash_job* job = ash_job_create(shell, job_kind, true);
+    if (job == NULL) {
+        ash_diag_oom(shell);
         return 1;
     }
-
-    size_t spawned = 0;
-    int prev_read = -1;
-
-    for (size_t i = 0; i < command_count; i++) {
-        int pipe_fds[2] = {-1, -1};
-
-        if (i + 1u < command_count) {
-            if (bx_fd_pipe_cloexec(pipe_fds) != 0) {
-                ash_exec_error(shell, "pipe", errno);
-                if (prev_read >= 0) {
-                    close(prev_read);
-                }
-                for (size_t j = 0; j < spawned; j++) {
-                    int ignored_status = 0;
-                    waitpid(pids[j], &ignored_status, 0);
-                }
-                free(pids);
-                return 1;
-            }
-        }
-
-        pid_t pid = fork();
-        if (pid < 0) {
-            ash_exec_error(shell, "fork", errno);
-            if (pipe_fds[0] >= 0) {
-                close(pipe_fds[0]);
-            }
-            if (pipe_fds[1] >= 0) {
-                close(pipe_fds[1]);
-            }
-            if (prev_read >= 0) {
-                close(prev_read);
-            }
-            for (size_t j = 0; j < spawned; j++) {
-                int ignored_status = 0;
-                waitpid(pids[j], &ignored_status, 0);
-            }
-            free(pids);
-            return 1;
-        }
-
-        if (pid == 0) {
-            if (prev_read >= 0) {
-                if (bx_fd_dup2_exact(prev_read, STDIN_FILENO) < 0) {
-                    ash_exec_error(shell, "dup2", errno);
-                    _exit(1);
-                }
-            }
-
-            if (pipe_fds[1] >= 0) {
-                if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
-                    ash_exec_error(shell, "dup2", errno);
-                    _exit(1);
-                }
-            }
-
-            if (pipe_fds[0] >= 0) {
-                close(pipe_fds[0]);
-            }
-            if (pipe_fds[1] >= 0) {
-                close(pipe_fds[1]);
-            }
-            if (prev_read >= 0) {
-                close(prev_read);
-            }
-
-            int status = ash_execute_in_child(shell, &pipeline->commands[i]);
-            _exit(status);
-        }
-
-        pids[spawned++] = pid;
-
-        if (prev_read >= 0) {
-            close(prev_read);
-        }
-        if (pipe_fds[1] >= 0) {
-            close(pipe_fds[1]);
-        }
-
-        prev_read = pipe_fds[0];
+    size_t process_index;
+    if (ash_job_start_process(
+            job,
+            process_role,
+            callback,
+            user_data,
+            &process_index
+        ) != 0) {
+        int error = errno;
+        ash_job_abort(job);
+        ash_exec_error(shell, "fork", error);
+        return 1;
     }
-
-    if (prev_read >= 0) {
-        close(prev_read);
+    (void)process_index;
+    if (!ash_job_commit(job, ASH_JOB_PRIVATE)) {
+        ash_job_abort(job);
+        ash_exec_error(shell, "child registration", EINVAL);
+        return 1;
     }
-
-    int last_status = 0;
-    pid_t last_pid = pids[command_count - 1u];
-
-    for (size_t i = 0; i < command_count; i++) {
-        int wait_status = 0;
-        if (waitpid(pids[i], &wait_status, 0) < 0) {
-            ash_exec_error(shell, "waitpid", errno);
-            free(pids);
-            return 1;
-        }
-
-        if (pids[i] == last_pid) {
-            last_status = ash_wait_status_to_exit_status(wait_status);
-        }
+    int status;
+    if (ash_job_wait(job, &status) != 0) {
+        int error = errno;
+        ash_job_abort(job);
+        ash_exec_error(shell, "waitpid", error);
+        return 1;
     }
-
-    free(pids);
-    return last_status;
+    (void)ash_job_release(job);
+    return status;
 }
 
-static int ash_execute_pipeline(struct ash_shell* shell, const struct ash_pipeline* pipeline) {
-    if (pipeline->count == 0u) {
-        return shell->last_status;
-    }
+static int ash_execute_single_command_forked(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    struct ash_command_child_context context = {
+        .shell = shell,
+        .command = command,
+    };
+    return ash_run_foreground_child(
+        shell,
+        ASH_JOB_FOREGROUND_COMMAND,
+        ASH_PROCESS_EXTERNAL_COMMAND,
+        ash_command_child_main,
+        &context
+    );
+}
 
-    if (pipeline->count == 1u) {
-        const struct ash_command* command = &pipeline->commands[0];
-
-        if (command->word_count == 0u) {
-            if (ash_apply_command_assignments_shell(shell, command) != 0) {
-                return 1;
-            }
-            if (command->redir_count == 0u) {
-                return 0;
-            }
-
-            struct ash_saved_fds saved;
-            ash_saved_fds_init(&saved);
-            if (ash_apply_redirections(shell, command, &saved) != 0) {
-                ash_saved_fds_restore(shell, &saved);
-                return 1;
-            }
-            ash_saved_fds_restore(shell, &saved);
+static int ash_execute_command(
+    struct ash_shell* shell,
+    const struct ash_command* command
+) {
+    if (command->word_count == 0u) {
+        if (ash_apply_command_assignments_shell(shell, command) != 0) {
+            return 1;
+        }
+        if (command->redir_count == 0u) {
             return 0;
         }
 
-        struct ash_command_resolution resolution =
-            ash_resolve_shell_command(shell, command->words[0]);
-        if (resolution.kind == ASH_COMMAND_FUNCTION) {
-            return ash_execute_function(
-                shell,
-                resolution.target.function,
-                command
-            );
+        struct ash_saved_fds saved;
+        ash_saved_fds_init(&saved);
+        if (ash_apply_redirections(shell, command, &saved) != 0) {
+            ash_saved_fds_restore(shell, &saved);
+            return 1;
         }
-        if (ash_command_resolution_is_builtin(&resolution)) {
-            return ash_execute_single_command_parent(shell, command, resolution.target.builtin);
-        }
-
-        return ash_execute_single_command_forked(shell, command);
+        ash_saved_fds_restore(shell, &saved);
+        return 0;
     }
 
-    return ash_execute_pipeline_forked(shell, pipeline);
+    struct ash_command_resolution resolution =
+        ash_resolve_shell_command(shell, command->words[0]);
+    if (resolution.kind == ASH_COMMAND_FUNCTION) {
+        return ash_execute_function(
+            shell,
+            resolution.target.function,
+            command
+        );
+    }
+    if (ash_command_resolution_is_builtin(&resolution)) {
+        return ash_execute_single_command_parent(
+            shell,
+            command,
+            resolution.target.builtin
+        );
+    }
+    return ash_execute_single_command_forked(shell, command);
 }
 
 static int ash_execute_buffer(
@@ -1274,52 +1171,100 @@ static int ash_execute_buffer(
     bool* parser_error_out
 );
 
+struct ash_substitution_child_context {
+    struct ash_shell* shell;
+    const char* command;
+    size_t length;
+    int read_fd;
+    int write_fd;
+};
+
+static int ash_substitution_child_main(void* user_data) {
+    struct ash_substitution_child_context* context = user_data;
+    close(context->read_fd);
+    if (bx_fd_dup2_exact(context->write_fd, STDOUT_FILENO) < 0) {
+        ash_exec_error(context->shell, "dup2", errno);
+        return 1;
+    }
+    close(context->write_fd);
+
+    char* input = ash_slice_dup(
+        context->shell,
+        context->command,
+        context->length
+    );
+    if (input == NULL) {
+        return 2;
+    }
+    struct ash_shell child = *context->shell;
+    ash_jobs_detach_after_fork(&child);
+    child.should_exit = false;
+    child.requested_exit_status = 0;
+    bool incomplete = false;
+    bool parser_error = false;
+    int status = ash_execute_buffer(
+        &child,
+        input,
+        true,
+        &incomplete,
+        &parser_error
+    );
+    free(input);
+    return status;
+}
+
 static bool ash_command_substitute(
     struct ash_shell* shell,
     const char* command,
     size_t length,
     char** output
 ) {
+    *output = NULL;
     int pipe_fds[2];
     if (bx_fd_pipe_cloexec(pipe_fds) != 0) {
         ash_exec_error(shell, "pipe", errno);
         return false;
     }
 
-    pid_t pid = fork();
-    if (pid < 0) {
+    struct ash_job* job = ash_job_create(
+        shell,
+        ASH_JOB_COMMAND_SUBSTITUTION,
+        true
+    );
+    if (job == NULL) {
+        close(pipe_fds[0]);
+        close(pipe_fds[1]);
+        return ash_diag_oom(shell);
+    }
+    struct ash_substitution_child_context context = {
+        .shell = shell,
+        .command = command,
+        .length = length,
+        .read_fd = pipe_fds[0],
+        .write_fd = pipe_fds[1],
+    };
+    size_t process_index;
+    if (ash_job_start_process(
+            job,
+            ASH_PROCESS_COMMAND_SUBSTITUTION,
+            ash_substitution_child_main,
+            &context,
+            &process_index
+        ) != 0) {
         int error = errno;
         close(pipe_fds[0]);
         close(pipe_fds[1]);
+        ash_job_abort(job);
         ash_exec_error(shell, "fork", error);
         return false;
     }
-    if (pid == 0) {
+    (void)process_index;
+    if (!ash_job_commit(job, ASH_JOB_PRIVATE)) {
         close(pipe_fds[0]);
-        if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
-            ash_exec_error(shell, "dup2", errno);
-            _exit(1);
-        }
         close(pipe_fds[1]);
-
-        char* input = ash_slice_dup(shell, command, length);
-        if (input == NULL) {
-            _exit(2);
-        }
-        struct ash_shell child = *shell;
-        child.should_exit = false;
-        child.requested_exit_status = 0;
-        bool incomplete = false;
-        bool parser_error = false;
-        int status = ash_execute_buffer(
-            &child,
-            input,
-            true,
-            &incomplete,
-            &parser_error
-        );
-        free(input);
-        _exit(status);
+        ash_job_abort(job);
+        ash_exec_error(shell, "child registration", EINVAL);
+        return false;
     }
 
     close(pipe_fds[1]);
@@ -1352,16 +1297,16 @@ static bool ash_command_substitute(
     }
     close(pipe_fds[0]);
 
-    int wait_status;
-    while (waitpid(pid, &wait_status, 0) < 0) {
-        if (errno == EINTR) {
-            continue;
-        }
-        ash_exec_error(shell, "waitpid", errno);
+    int status;
+    if (ash_job_wait(job, &status) != 0) {
+        int error = errno;
+        ash_job_abort(job);
+        ash_exec_error(shell, "waitpid", error);
         bx_text_buffer_destroy(&captured);
         return false;
     }
-    shell->last_status = ash_wait_status_to_exit_status(wait_status);
+    (void)ash_job_release(job);
+    shell->last_status = status;
     if (!read_ok) {
         bx_text_buffer_destroy(&captured);
         return false;
@@ -1427,7 +1372,11 @@ static bool ash_ast_add_redirection(
     }
 
     char* target = NULL;
-    if (!ash_expand_word(shell, &redirection->target, &target)) {
+    if (!ash_expand_word(
+            shell,
+            &redirection->target.syntax,
+            &target
+        )) {
         return false;
     }
     bool added = ash_command_push_redir(shell, command, fd, kind, target);
@@ -1457,7 +1406,11 @@ static bool ash_ast_simple_to_command(
 
         if (item->kind == ASH_SIMPLE_ASSIGNMENT) {
             char* text = NULL;
-            if (!ash_expand_word(shell, &item->value.word, &text)) {
+            if (!ash_expand_word(
+                    shell,
+                    &item->value.word.syntax,
+                    &text
+                )) {
                 ash_command_destroy(command);
                 return false;
             }
@@ -1476,7 +1429,7 @@ static bool ash_ast_simple_to_command(
             struct ash_expanded_fields fields;
             if (!ash_expand_argument(
                     shell,
-                    &item->value.word,
+                    &item->value.word.syntax,
                     &fields
                 )) {
                 ash_command_destroy(command);
@@ -1526,17 +1479,44 @@ static int ash_execute_ast_simple(
     if (!ash_ast_simple_to_command(shell, node, &command)) {
         return 2;
     }
+    int status = ash_execute_command(shell, &command);
+    ash_command_destroy(&command);
+    return status;
+}
 
-    struct ash_pipeline pipeline;
-    ash_pipeline_init(&pipeline);
-    if (!ash_pipeline_push_command(shell, &pipeline, &command)) {
-        ash_command_destroy(&command);
-        ash_pipeline_destroy(&pipeline);
+struct ash_subshell_child_context {
+    struct ash_shell* shell;
+    const struct ash_ast* node;
+};
+
+static int ash_subshell_child_main(void* user_data) {
+    struct ash_subshell_child_context* context = user_data;
+    ash_jobs_detach_after_fork(context->shell);
+    struct ash_command redirections;
+    if (!ash_ast_trailing_redirections_to_command(
+            context->shell,
+            context->node,
+            &redirections
+        )) {
         return 2;
     }
-
-    int status = ash_execute_pipeline(shell, &pipeline);
-    ash_pipeline_destroy(&pipeline);
+    struct ash_saved_fds saved;
+    ash_saved_fds_init(&saved);
+    if (ash_apply_redirections(
+            context->shell,
+            &redirections,
+            &saved
+        ) != 0) {
+        ash_command_destroy(&redirections);
+        ash_saved_fds_commit(&saved);
+        return 1;
+    }
+    ash_command_destroy(&redirections);
+    int status = ash_execute_ast(
+        context->shell,
+        context->node->value.group.body
+    );
+    ash_saved_fds_commit(&saved);
     return status;
 }
 
@@ -1546,42 +1526,17 @@ static int ash_execute_ast_group(
     bool subshell
 ) {
     if (subshell) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            ash_exec_error(shell, "fork", errno);
-            return 1;
-        }
-        if (pid == 0) {
-            struct ash_command redirections;
-            if (!ash_ast_trailing_redirections_to_command(
-                    shell,
-                    node,
-                    &redirections
-                )) {
-                _exit(2);
-            }
-            struct ash_saved_fds saved;
-            ash_saved_fds_init(&saved);
-            if (ash_apply_redirections(shell, &redirections, &saved) != 0) {
-                ash_command_destroy(&redirections);
-                ash_saved_fds_destroy(&saved);
-                _exit(1);
-            }
-            ash_command_destroy(&redirections);
-            int status = ash_execute_ast(shell, node->value.group.body);
-            ash_saved_fds_destroy(&saved);
-            _exit(status);
-        }
-
-        int wait_status;
-        while (waitpid(pid, &wait_status, 0) < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            ash_exec_error(shell, "waitpid", errno);
-            return 1;
-        }
-        return ash_wait_status_to_exit_status(wait_status);
+        struct ash_subshell_child_context context = {
+            .shell = shell,
+            .node = node,
+        };
+        return ash_run_foreground_child(
+            shell,
+            ASH_JOB_FOREGROUND_COMMAND,
+            ASH_PROCESS_SUBSHELL,
+            ash_subshell_child_main,
+            &context
+        );
     }
 
     struct ash_command redirections;
@@ -1601,21 +1556,46 @@ static int ash_execute_ast_group(
     return status;
 }
 
-static void ash_reap_spawned_pipeline(
-    const pid_t* pids,
-    size_t count,
-    bool terminate
-) {
-    if (terminate) {
-        for (size_t i = 0u; i < count; i++) {
-            (void)kill(pids[i], SIGTERM);
+struct ash_pipeline_child_context {
+    struct ash_shell* shell;
+    const struct ash_ast* command;
+    int previous_read;
+    int pipe_read;
+    int pipe_write;
+    bool pipe_stderr;
+};
+
+static int ash_pipeline_child_main(void* user_data) {
+    struct ash_pipeline_child_context* context = user_data;
+    ash_jobs_detach_after_fork(context->shell);
+    if (context->previous_read >= 0 &&
+        bx_fd_dup2_exact(context->previous_read, STDIN_FILENO) < 0) {
+        ash_exec_error(context->shell, "dup2", errno);
+        return 1;
+    }
+    if (context->pipe_write >= 0) {
+        if (bx_fd_dup2_exact(context->pipe_write, STDOUT_FILENO) < 0) {
+            ash_exec_error(context->shell, "dup2", errno);
+            return 1;
+        }
+        if (context->pipe_stderr &&
+            bx_fd_dup2_exact(context->pipe_write, STDERR_FILENO) < 0) {
+            ash_exec_error(context->shell, "dup2", errno);
+            return 1;
         }
     }
-    for (size_t i = 0u; i < count; i++) {
-        int ignored;
-        while (waitpid(pids[i], &ignored, 0) < 0 && errno == EINTR) {
-        }
+    if (context->previous_read >= 0) {
+        close(context->previous_read);
     }
+    if (context->pipe_read >= 0) {
+        close(context->pipe_read);
+    }
+    if (context->pipe_write >= 0) {
+        close(context->pipe_write);
+    }
+    context->shell->should_exit = false;
+    context->shell->control = (struct ash_control_state){0};
+    return ash_execute_ast(context->shell, context->command);
 }
 
 static int ash_execute_ast_pipeline_forked(
@@ -1623,34 +1603,45 @@ static int ash_execute_ast_pipeline_forked(
     const struct ash_ast* node
 ) {
     size_t command_count = node->value.pipeline.count;
-    pid_t* pids = ash_realloc_array(
-        shell,
-        NULL,
-        command_count,
-        sizeof(*pids)
-    );
-    if (pids == NULL) {
+    struct ash_job* job = ash_job_create(shell, ASH_JOB_PIPELINE, true);
+    if (job == NULL) {
+        ash_diag_oom(shell);
         return 1;
     }
 
-    size_t spawned = 0u;
     int previous_read = -1;
     for (size_t i = 0u; i < command_count; i++) {
         int pipe_fds[2] = {-1, -1};
         if (i + 1u < command_count &&
             bx_fd_pipe_cloexec(pipe_fds) != 0) {
-            ash_exec_error(shell, "pipe", errno);
+            int error = errno;
             if (previous_read >= 0) {
                 close(previous_read);
             }
-            ash_reap_spawned_pipeline(pids, spawned, true);
-            free(pids);
+            ash_job_abort(job);
+            ash_exec_error(shell, "pipe", error);
             return 1;
         }
 
-        pid_t pid = fork();
-        if (pid < 0) {
-            ash_exec_error(shell, "fork", errno);
+        struct ash_pipeline_child_context context = {
+            .shell = shell,
+            .command = node->value.pipeline.commands[i],
+            .previous_read = previous_read,
+            .pipe_read = pipe_fds[0],
+            .pipe_write = pipe_fds[1],
+            .pipe_stderr = i + 1u < command_count &&
+                node->value.pipeline.operators[i] ==
+                    ASH_PIPE_STDOUT_STDERR,
+        };
+        size_t process_index;
+        if (ash_job_start_process(
+                job,
+                ASH_PROCESS_PIPELINE_MEMBER,
+                ash_pipeline_child_main,
+                &context,
+                &process_index
+            ) != 0) {
+            int error = errno;
             if (previous_read >= 0) {
                 close(previous_read);
             }
@@ -1658,44 +1649,11 @@ static int ash_execute_ast_pipeline_forked(
                 close(pipe_fds[0]);
                 close(pipe_fds[1]);
             }
-            ash_reap_spawned_pipeline(pids, spawned, true);
-            free(pids);
+            ash_job_abort(job);
+            ash_exec_error(shell, "fork", error);
             return 1;
         }
-        if (pid == 0) {
-            if (previous_read >= 0 &&
-                bx_fd_dup2_exact(previous_read, STDIN_FILENO) < 0) {
-                ash_exec_error(shell, "dup2", errno);
-                _exit(1);
-            }
-            if (pipe_fds[1] >= 0) {
-                if (bx_fd_dup2_exact(pipe_fds[1], STDOUT_FILENO) < 0) {
-                    ash_exec_error(shell, "dup2", errno);
-                    _exit(1);
-                }
-                if (node->value.pipeline.operators[i] ==
-                        ASH_PIPE_STDOUT_STDERR &&
-                    bx_fd_dup2_exact(pipe_fds[1], STDERR_FILENO) < 0) {
-                    ash_exec_error(shell, "dup2", errno);
-                    _exit(1);
-                }
-            }
-            if (previous_read >= 0) {
-                close(previous_read);
-            }
-            if (pipe_fds[0] >= 0) {
-                close(pipe_fds[0]);
-                close(pipe_fds[1]);
-            }
-            shell->should_exit = false;
-            shell->control = (struct ash_control_state){0};
-            _exit(ash_execute_ast(
-                shell,
-                node->value.pipeline.commands[i]
-            ));
-        }
-
-        pids[spawned++] = pid;
+        (void)process_index;
         if (previous_read >= 0) {
             close(previous_read);
         }
@@ -1708,28 +1666,20 @@ static int ash_execute_ast_pipeline_forked(
         close(previous_read);
     }
 
-    int last_status = 1;
-    for (size_t i = 0u; i < command_count; i++) {
-        int wait_status;
-        while (waitpid(pids[i], &wait_status, 0) < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            ash_exec_error(shell, "waitpid", errno);
-            ash_reap_spawned_pipeline(
-                pids + i + 1u,
-                command_count - i - 1u,
-                true
-            );
-            free(pids);
-            return 1;
-        }
-        if (i + 1u == command_count) {
-            last_status = ash_wait_status_to_exit_status(wait_status);
-        }
+    if (!ash_job_commit(job, ASH_JOB_PRIVATE)) {
+        ash_job_abort(job);
+        ash_exec_error(shell, "child registration", EINVAL);
+        return 1;
     }
-    free(pids);
-    return last_status;
+    int status;
+    if (ash_job_wait(job, &status) != 0) {
+        int error = errno;
+        ash_job_abort(job);
+        ash_exec_error(shell, "waitpid", error);
+        return 1;
+    }
+    (void)ash_job_release(job);
+    return status;
 }
 
 static int ash_execute_ast_pipeline(
@@ -1770,31 +1720,65 @@ static int ash_execute_ast_and_or(
     return status;
 }
 
+struct ash_async_child_context {
+    struct ash_shell* shell;
+    const struct ash_ast* command;
+};
+
+static int ash_async_child_main(void* user_data) {
+    struct ash_async_child_context* context = user_data;
+    ash_jobs_detach_after_fork(context->shell);
+    if (!ash_shell_policy_has(
+            &context->shell->policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        )) {
+        int null_fd = bx_fd_open_cloexec(
+            "/dev/null",
+            O_RDONLY,
+            0
+        );
+        if (null_fd >= 0) {
+            (void)bx_fd_dup2_exact(null_fd, STDIN_FILENO);
+            close(null_fd);
+        }
+    }
+    context->shell->should_exit = false;
+    return ash_execute_ast(context->shell, context->command);
+}
+
 static int ash_execute_ast_async(
     struct ash_shell* shell,
     const struct ash_ast* command
 ) {
-    pid_t pid = fork();
-    if (pid < 0) {
-        ash_exec_error(shell, "fork", errno);
+    struct ash_job* job = ash_job_create(shell, ASH_JOB_ASYNC, false);
+    if (job == NULL) {
+        ash_diag_oom(shell);
         return 1;
     }
-    if (pid == 0) {
-        if (!shell->interactive) {
-            int null_fd = bx_fd_open_cloexec(
-                "/dev/null",
-                O_RDONLY,
-                0
-            );
-            if (null_fd >= 0) {
-                (void)bx_fd_dup2_exact(null_fd, STDIN_FILENO);
-                close(null_fd);
-            }
-        }
-        shell->should_exit = false;
-        _exit(ash_execute_ast(shell, command));
+    struct ash_async_child_context context = {
+        .shell = shell,
+        .command = command,
+    };
+    size_t process_index;
+    if (ash_job_start_process(
+            job,
+            ASH_PROCESS_ASYNC_COMMAND,
+            ash_async_child_main,
+            &context,
+            &process_index
+        ) != 0) {
+        int error = errno;
+        ash_job_abort(job);
+        ash_exec_error(shell, "fork", error);
+        return 1;
     }
-    shell->last_async_pid = pid;
+    (void)process_index;
+    if (!ash_job_commit(job, ASH_JOB_PUBLISHED)) {
+        ash_job_abort(job);
+        ash_exec_error(shell, "child registration", EINVAL);
+        return 1;
+    }
+    shell->last_async_pid = ash_job_last_pid(job);
     return 0;
 }
 
@@ -1882,7 +1866,7 @@ static int ash_execute_ast_for(
             struct ash_expanded_fields fields;
             if (!ash_expand_argument(
                     shell,
-                    &node->value.for_loop.words[i],
+                    &node->value.for_loop.words[i].syntax,
                     &fields
                 )) {
                 status = 2;
@@ -1922,13 +1906,17 @@ static int ash_execute_ast_for(
         }
     }
     else {
-        for (int i = 0;
-             i < shell->positionals.count && !shell->should_exit;
+        const struct ash_positional_frame* positionals =
+            ash_scope_positionals(shell);
+        size_t positional_count = positionals != NULL ?
+            positionals->count : 0u;
+        for (size_t i = 0u;
+             i < positional_count && !shell->should_exit;
              i++) {
             if (!ash_var_set(
                     shell,
                     node->value.for_loop.name,
-                    shell->positionals.values[i],
+                    positionals->values[i],
                     false
                 )) {
                 status = 2;
@@ -1955,7 +1943,7 @@ static int ash_execute_ast_case_body(
     char* subject = NULL;
     if (!ash_expand_word(
             shell,
-            &node->value.case_command.subject,
+            &node->value.case_command.subject.syntax,
             &subject
         )) {
         return 2;
@@ -1969,15 +1957,31 @@ static int ash_execute_ast_case_body(
             &node->value.case_command.clauses[i];
         bool clause_matched = false;
         for (size_t j = 0u; j < clause->pattern_count; j++) {
-            if (!ash_pattern_matches(
+            struct ash_pattern pattern = {0};
+            const struct ash_pattern_options pattern_options = {
+                .purpose = ASH_PATTERN_CASE,
+                .domain = ASH_PATTERN_STRING,
+            };
+            enum ash_pattern_compile_result compile_result =
+                ash_pattern_compile_word(
                     shell,
-                    &clause->patterns[j],
-                    subject,
-                    &clause_matched
-                )) {
+                    &clause->patterns[j].syntax,
+                    &pattern_options,
+                    &pattern
+                );
+            if (compile_result != ASH_PATTERN_COMPILE_OK) {
                 free(subject);
                 return 2;
             }
+            enum ash_pattern_match_result match_result =
+                ash_pattern_match(&pattern, subject);
+            ash_pattern_destroy(&pattern);
+            if (match_result == ASH_PATTERN_MATCH_ERROR ||
+                match_result == ASH_PATTERN_MATCH_UNSUPPORTED) {
+                free(subject);
+                return 2;
+            }
+            clause_matched = match_result == ASH_PATTERN_MATCH;
             if (clause_matched) {
                 break;
             }
@@ -2051,6 +2055,14 @@ static int ash_execute_ast(struct ash_shell* shell, const struct ash_ast* node) 
             return ash_execute_ast_case(shell, node);
         case ASH_AST_FUNCTION:
             return ash_execute_ast_function(shell, node);
+        case ASH_AST_ARITHMETIC_COMMAND:
+        case ASH_AST_CONDITIONAL_COMMAND:
+        case ASH_AST_C_STYLE_FOR:
+        case ASH_AST_SELECT:
+        case ASH_AST_TIME:
+        case ASH_AST_COPROC:
+            ash_diag(shell, "shell construct is not implemented");
+            return 2;
     }
     return 2;
 }
@@ -2082,32 +2094,37 @@ static int ash_execute_buffer(
     *incomplete_out = false;
     *parser_error_out = false;
 
-    struct ash_parser parser;
-    ash_parser_init(
-        &parser,
+    struct ash_parser* parser = ash_shell_context_begin_parse(
+        shell,
         ash_input_source_name(shell),
         input,
         strlen(input)
     );
+    if (parser == NULL) {
+        ash_diag(shell, "parser state is already active");
+        *parser_error_out = true;
+        shell->last_status = 2;
+        return 2;
+    }
     struct ash_ast* program = NULL;
-    enum ash_parser_result result = ash_parser_parse_program(&parser, &program);
+    enum ash_parser_result result = ash_parser_parse_program(parser, &program);
     if (result == ASH_PARSER_INCOMPLETE && !final_input) {
         *incomplete_out = true;
-        ash_parser_destroy(&parser);
+        ash_shell_context_end_parse(shell);
         return shell->last_status;
     }
     if (result != ASH_PARSER_COMPLETE) {
-        ash_diag(shell, "%s", ash_parser_diagnostic(parser.error));
+        ash_diag(shell, "%s", ash_parser_diagnostic(parser->error));
         *parser_error_out = true;
-        ash_parser_destroy(&parser);
+        ash_shell_context_end_parse(shell);
         shell->last_status = 2;
         return 2;
     }
 
+    ash_shell_context_end_parse(shell);
     int status = ash_execute_ast(shell, program);
     shell->last_status = status;
     ash_ast_destroy(program);
-    ash_parser_destroy(&parser);
     return status;
 }
 
@@ -2194,7 +2211,11 @@ static int ash_execute_input(struct ash_shell* shell, bool prompt) {
 
         bx_text_buffer_clear(&pending);
         continuation = false;
-        if (parser_error && !shell->interactive) {
+        if (parser_error &&
+            !ash_shell_policy_has(
+                &shell->policy,
+                ASH_SHELL_POLICY_INTERACTIVE
+            )) {
             break;
         }
     }
@@ -2219,6 +2240,21 @@ static void ash_print_help(FILE* stream, const char* progname) {
 
 static void ash_print_version(const char* progname) {
     printf("%s (bx) %s\n", progname, BX_VERSION);
+}
+
+static bool ash_initialize_personality_variables(struct ash_shell* shell) {
+    const char* bash_version = ash_shell_policy_bash_version(&shell->policy);
+    if (bash_version == NULL) {
+        return true;
+    }
+
+    /*
+     * BASH_VERSION is shell-owned, not inherited process state. Recreate it
+     * as an unexported variable after environment import. The variable model
+     * will add readonly attributes in its dedicated compatibility phase.
+     */
+    ash_var_unset(shell, "BASH_VERSION");
+    return ash_var_set(shell, "BASH_VERSION", bash_version, false);
 }
 
 int bx_ash_main(int argc, char** argv) {
@@ -2307,7 +2343,7 @@ int bx_ash_main(int argc, char** argv) {
         script_path = argv[index++];
     }
 
-    const char* argv0_param = progname;
+    const char* argv0_param = invoked;
     char** positional_args = NULL;
     int positional_count = 0;
 
@@ -2328,53 +2364,59 @@ int bx_ash_main(int argc, char** argv) {
         positional_count = argc - index;
     }
 
-    struct ash_shell shell = {
-        .progname = progname,
-        .positionals = {
-            .argv0 = argv0_param,
-            .values = positional_args,
-            .count = positional_count,
-            .previous = NULL,
-        },
-        .vars = NULL,
-        .options = initial_options |
-            (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
-        .aliases = NULL,
-        .functions = NULL,
-        .traps = NULL,
-        .jobs = NULL,
-        .command_cache = NULL,
-        .input_stack = NULL,
-        .cwd = {0},
-        .shell_pid = getpid(),
-        .last_async_pid = -1,
-        .last_status = 0,
-        .interactive = false,
-        .login_shell = login_shell,
-        .should_exit = false,
-        .requested_exit_status = 0,
-        .command_substitution = ash_command_substitute,
-    };
-
-    if (!ash_import_environment(&shell)) {
-        ash_vars_destroy(&shell);
-        ash_shell_context_release_owned(&shell);
-        return 1;
-    }
-
     bool interactive = force_interactive;
     if (!interactive && command_string == NULL && script_path == NULL) {
         interactive = isatty(STDIN_FILENO);
     }
-
-    shell.interactive = interactive;
+    uint32_t policy_flags = 0u;
     if (interactive) {
-        shell.options |= ASH_SHELL_OPTION_INTERACTIVE;
+        policy_flags |= ASH_SHELL_POLICY_INTERACTIVE;
+    }
+    if (login_shell) {
+        policy_flags |= ASH_SHELL_POLICY_LOGIN;
+    }
+    struct ash_shell_policy policy;
+    if (!ash_shell_policy_for_invocation(
+            progname,
+            policy_flags,
+            &policy
+        )) {
+        fprintf(stderr, "%s: unsupported shell invocation\n", progname);
+        return 2;
     }
 
-    if (shell.interactive && !ash_var_exists(&shell, "PS1")) {
+    struct ash_shell shell;
+    const struct ash_shell_context_config context_config = {
+        .progname = progname,
+        .argv0 = argv0_param,
+        .positional_values = positional_args,
+        .positional_count = positional_count,
+        .options = initial_options |
+            (read_stdin ? ASH_SHELL_OPTION_STDIN : 0u),
+        .policy = policy,
+        .shell_pid = getpid(),
+        .command_substitution = ash_command_substitute,
+    };
+    if (!ash_shell_context_init(&shell, &context_config)) {
+        fprintf(stderr, "%s: invalid shell context configuration\n", progname);
+        return 2;
+    }
+
+    if (!ash_import_environment(&shell)) {
+        ash_shell_context_release_owned(&shell);
+        return 1;
+    }
+    if (!ash_initialize_personality_variables(&shell)) {
+        ash_shell_context_release_owned(&shell);
+        return 1;
+    }
+
+    if (ash_shell_policy_has(
+            &shell.policy,
+            ASH_SHELL_POLICY_INTERACTIVE
+        ) &&
+        !ash_var_exists(&shell, "PS1")) {
         if (!ash_var_set(&shell, "PS1", ash_default_prompt(), false)) {
-            ash_vars_destroy(&shell);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
@@ -2384,7 +2426,6 @@ int bx_ash_main(int argc, char** argv) {
     if (command_string != NULL) {
         if (!ash_input_push_string(&shell, "-c", command_string)) {
             ash_diag_oom(&shell);
-            ash_vars_destroy(&shell);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
@@ -2395,32 +2436,48 @@ int bx_ash_main(int argc, char** argv) {
         FILE* script = fopen(script_path, "r");
         if (script == NULL) {
             ash_exec_error(&shell, script_path, errno);
-            ash_vars_destroy(&shell);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
 
-        if (!ash_input_push_file(&shell, script_path, script, true)) {
+        if (!ash_input_push_file(
+                &shell,
+                script_path,
+                script,
+                ASH_INPUT_TAKE_STREAM
+            )) {
             ash_diag_oom(&shell);
             fclose(script);
-            ash_vars_destroy(&shell);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
         status = ash_execute_input(
             &shell,
-            shell.interactive && ash_input_source_is_terminal(&shell)
+            ash_shell_policy_has(
+                &shell.policy,
+                ASH_SHELL_POLICY_INTERACTIVE
+            ) && ash_input_source_is_terminal(&shell)
         );
         ash_input_pop(&shell);
     }
     else {
-        if (!ash_input_push_file(&shell, "<stdin>", stdin, false)) {
+        if (!ash_input_push_file(
+                &shell,
+                "<stdin>",
+                stdin,
+                ASH_INPUT_BORROW_STREAM
+            )) {
             ash_diag_oom(&shell);
-            ash_vars_destroy(&shell);
             ash_shell_context_release_owned(&shell);
             return 1;
         }
-        status = ash_execute_input(&shell, shell.interactive);
+        status = ash_execute_input(
+            &shell,
+            ash_shell_policy_has(
+                &shell.policy,
+                ASH_SHELL_POLICY_INTERACTIVE
+            )
+        );
         ash_input_pop(&shell);
     }
 
@@ -2428,7 +2485,6 @@ int bx_ash_main(int argc, char** argv) {
         status = shell.requested_exit_status;
     }
 
-    ash_vars_destroy(&shell);
     ash_shell_context_release_owned(&shell);
     return status;
 }

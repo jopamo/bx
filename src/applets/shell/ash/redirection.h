@@ -9,10 +9,12 @@ struct ash_shell;
 
 struct ash_saved_fd {
     int target_fd;
+    /* Owned CLOEXEC backup, or -1 when the target was originally closed. */
     int saved_fd;
 };
 
 struct ash_saved_fds {
+    /* Transaction-owned backup descriptors and their backing array. */
     struct ash_saved_fd* items;
     size_t length;
     size_t capacity;
@@ -23,7 +25,7 @@ void ash_saved_fds_restore(
     const struct ash_shell* shell,
     struct ash_saved_fds* saved
 );
-void ash_saved_fds_destroy(struct ash_saved_fds* saved);
+void ash_saved_fds_commit(struct ash_saved_fds* saved);
 bool ash_redirection_parse_fd(
     const struct ash_shell* shell,
     const char* text,

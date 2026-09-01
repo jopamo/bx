@@ -232,8 +232,20 @@ static bool ash_parser_take_redirection(
 
     struct ash_token target;
     (void)ash_parser_take(parser, &target);
-    redirection->target = target.word;
-    target.word = (struct ash_word){0};
+    if (ash_ast_word_take_syntax(
+            &redirection->target,
+            &target.word
+        ) != 0) {
+        ash_parser_fail(
+            parser,
+            ASH_PARSER_ERROR,
+            target.location,
+            "out of memory"
+        );
+        ash_token_destroy(&target);
+        ash_redirection_destroy(redirection);
+        return false;
+    }
     ash_token_destroy(&target);
     return true;
 }
@@ -256,7 +268,7 @@ static bool ash_parser_take_trailing_redirections(
         if (!ash_parser_take_redirection(parser, &redirection)) {
             return false;
         }
-        if (ash_ast_add_trailing_redirection(node, &redirection) != 0) {
+        if (ash_ast_take_trailing_redirection(node, &redirection) != 0) {
             ash_redirection_destroy(&redirection);
             ash_parser_fail(
                 parser,
@@ -273,7 +285,8 @@ static char* ash_parser_word_name(const struct ash_word* word) {
     size_t length = 0u;
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
-        if (part->kind != ASH_WORD_TEXT || part->quote != ASH_QUOTE_NONE ||
+        if (part->kind != ASH_WORD_TEXT ||
+            ash_word_part_is_quoted(part) ||
             part->length > SIZE_MAX - length) {
             return NULL;
         }
@@ -325,7 +338,7 @@ static struct ash_ast* ash_parse_simple(
                 ash_ast_destroy(node);
                 return NULL;
             }
-            if (ash_ast_simple_add_redirection(node, &redirection) != 0) {
+            if (ash_ast_simple_take_redirection(node, &redirection) != 0) {
                 ash_redirection_destroy(&redirection);
                 ash_parser_fail(
                     parser,
@@ -349,7 +362,11 @@ static struct ash_ast* ash_parse_simple(
         if (!assignment) {
             command_word_seen = true;
         }
-        if (ash_ast_simple_add_word(node, &word_token.word, assignment) != 0) {
+        if (ash_ast_simple_take_word(
+                node,
+                &word_token.word,
+                assignment
+            ) != 0) {
             ash_token_destroy(&word_token);
             ash_parser_fail(
                 parser,
@@ -366,7 +383,7 @@ static struct ash_ast* ash_parse_simple(
         if (node->value.simple.count == 1u && !assignment &&
             token != NULL && token->kind == ASH_TOKEN_LPAREN) {
             char* function_name = ash_parser_word_name(
-                &node->value.simple.items[0].value.word
+                &node->value.simple.items[0].value.word.syntax
             );
             if (function_name == NULL) {
                 continue;
@@ -429,8 +446,24 @@ static struct ash_ast* ash_parse_simple(
                 ash_ast_destroy(node);
                 return NULL;
             }
-            function->value.function.name = function_name;
-            function->value.function.body = body;
+            if (ash_ast_function_take(
+                    function,
+                    &function_name,
+                    ASH_FUNCTION_POSIX,
+                    &body
+                ) != 0) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    node->location,
+                    "out of memory"
+                );
+                free(function_name);
+                ash_ast_destroy(body);
+                ash_ast_destroy(function);
+                ash_ast_destroy(node);
+                return NULL;
+            }
             ash_ast_destroy(node);
             return function;
         }
@@ -474,7 +507,7 @@ static bool ash_parser_take_case_pattern(
 
     struct ash_token pattern;
     (void)ash_parser_take(parser, &pattern);
-    if (ash_case_clause_add_pattern(clause, &pattern.word) != 0) {
+    if (ash_case_clause_take_pattern(clause, &pattern.word) != 0) {
         ash_parser_fail(
             parser,
             ASH_PARSER_ERROR,
@@ -526,8 +559,17 @@ static struct ash_ast* ash_parse_case_after_keyword(
     }
     struct ash_token subject;
     (void)ash_parser_take(parser, &subject);
-    node->value.case_command.subject = subject.word;
-    subject.word = (struct ash_word){0};
+    if (ash_ast_case_take_subject(node, &subject.word) != 0) {
+        ash_parser_fail(
+            parser,
+            ASH_PARSER_ERROR,
+            subject.location,
+            "out of memory"
+        );
+        ash_token_destroy(&subject);
+        ash_ast_destroy(node);
+        return NULL;
+    }
     ash_token_destroy(&subject);
 
     ash_parser_skip_newlines(parser);
@@ -646,7 +688,7 @@ static struct ash_ast* ash_parse_case_after_keyword(
             ash_token_destroy(&terminator);
             ash_parser_skip_newlines(parser);
         }
-        if (ash_ast_case_add_clause(node, &clause) != 0) {
+        if (ash_ast_case_take_clause(node, &clause) != 0) {
             ash_parser_fail(
                 parser,
                 ASH_PARSER_ERROR,
@@ -871,7 +913,8 @@ static char* ash_parser_take_name(
     size_t length = 0u;
     for (size_t i = 0u; i < token->word.count; i++) {
         const struct ash_word_part* part = &token->word.parts[i];
-        if (part->kind != ASH_WORD_TEXT || part->quote != ASH_QUOTE_NONE ||
+        if (part->kind != ASH_WORD_TEXT ||
+            ash_word_part_is_quoted(part) ||
             part->length > SIZE_MAX - length) {
             ash_parser_fail(parser, ASH_PARSER_ERROR, token->location, error);
             return NULL;
@@ -907,46 +950,6 @@ static char* ash_parser_take_name(
     return name;
 }
 
-static bool ash_parser_for_add_word(
-    struct ash_parser* parser,
-    struct ash_ast* node,
-    struct ash_word* word
-) {
-    if (node->value.for_loop.word_count ==
-        node->value.for_loop.word_capacity) {
-        size_t capacity = node->value.for_loop.word_capacity == 0u ?
-            4u : node->value.for_loop.word_capacity * 2u;
-        if (capacity < node->value.for_loop.word_capacity ||
-            capacity > SIZE_MAX / sizeof(*node->value.for_loop.words)) {
-            ash_parser_fail(
-                parser,
-                ASH_PARSER_ERROR,
-                word->location,
-                "out of memory"
-            );
-            return false;
-        }
-        struct ash_word* replacement = realloc(
-            node->value.for_loop.words,
-            capacity * sizeof(*replacement)
-        );
-        if (replacement == NULL) {
-            ash_parser_fail(
-                parser,
-                ASH_PARSER_ERROR,
-                word->location,
-                "out of memory"
-            );
-            return false;
-        }
-        node->value.for_loop.words = replacement;
-        node->value.for_loop.word_capacity = capacity;
-    }
-    node->value.for_loop.words[node->value.for_loop.word_count++] = *word;
-    *word = (struct ash_word){0};
-    return true;
-}
-
 static struct ash_ast* ash_parse_for_after_keyword(
     struct ash_parser* parser,
     struct ash_source_location location
@@ -956,15 +959,18 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
         return NULL;
     }
-    node->value.for_loop.name = ash_parser_take_name(
+    char* name = ash_parser_take_name(
         parser,
         "valid name expected after 'for'"
     );
-    if (node->value.for_loop.name == NULL) {
+    if (name == NULL ||
+        ash_ast_for_take_name(node, &name) != 0) {
+        free(name);
         ash_ast_destroy(node);
         return NULL;
     }
 
+    bool explicit_words = false;
     struct ash_token* token = ash_parser_peek(parser);
     if (token == NULL) {
         ash_ast_destroy(node);
@@ -975,7 +981,7 @@ static struct ash_ast* ash_parse_for_after_keyword(
         struct ash_token keyword;
         (void)ash_parser_take(parser, &keyword);
         ash_token_destroy(&keyword);
-        node->value.for_loop.explicit_words = true;
+        explicit_words = true;
 
         while (true) {
             token = ash_parser_peek(parser);
@@ -999,7 +1005,13 @@ static struct ash_ast* ash_parse_for_after_keyword(
             }
             struct ash_token word;
             (void)ash_parser_take(parser, &word);
-            if (!ash_parser_for_add_word(parser, node, &word.word)) {
+            if (ash_ast_for_take_word(node, &word.word) != 0) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    word.location,
+                    "out of memory"
+                );
                 ash_token_destroy(&word);
                 ash_ast_destroy(node);
                 return NULL;
@@ -1037,15 +1049,27 @@ static struct ash_ast* ash_parse_for_after_keyword(
         ash_ast_destroy(node);
         return NULL;
     }
-    node->value.for_loop.body = ash_parse_list(
+    struct ash_ast* body = ash_parse_list(
         parser,
         &(struct ash_parse_stop){
             .words = {"done"},
             .require_separator = true,
         }
     );
-    if (node->value.for_loop.body == NULL ||
+    if (body == NULL ||
         !ash_parser_consume_word(parser, "done", "'done' expected")) {
+        ash_ast_destroy(body);
+        ash_ast_destroy(node);
+        return NULL;
+    }
+    if (ash_ast_for_take_body(node, &body, explicit_words) != 0) {
+        ash_parser_fail(
+            parser,
+            ASH_PARSER_ERROR,
+            location,
+            "out of memory"
+        );
+        ash_ast_destroy(body);
         ash_ast_destroy(node);
         return NULL;
     }
@@ -1169,7 +1193,7 @@ static struct ash_ast* ash_parse_pipeline(
 
     struct ash_ast* command = ash_parse_command(parser, stop);
     if (command == NULL ||
-        ash_ast_pipeline_add(node, command, ASH_PIPE_STDOUT) != 0) {
+        ash_ast_pipeline_take(node, &command, ASH_PIPE_STDOUT) != 0) {
         ash_ast_destroy(command);
         if (parser->result == ASH_PARSER_COMPLETE) {
             ash_parser_fail(parser, ASH_PARSER_ERROR, location, "out of memory");
@@ -1223,7 +1247,11 @@ static struct ash_ast* ash_parse_pipeline(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (ash_ast_pipeline_add(node, command, operator_before) != 0) {
+        if (ash_ast_pipeline_take(
+                node,
+                &command,
+                operator_before
+            ) != 0) {
             ash_ast_destroy(command);
             ash_parser_fail(
                 parser,
@@ -1254,7 +1282,7 @@ static struct ash_ast* ash_parse_and_or(
 
     struct ash_ast* pipeline = ash_parse_pipeline(parser, stop);
     if (pipeline == NULL ||
-        ash_ast_and_or_add(node, pipeline, ASH_AND_IF) != 0) {
+        ash_ast_and_or_take(node, &pipeline, ASH_AND_IF) != 0) {
         ash_ast_destroy(pipeline);
         if (parser->result == ASH_PARSER_COMPLETE) {
             ash_parser_fail(
@@ -1304,7 +1332,11 @@ static struct ash_ast* ash_parse_and_or(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (ash_ast_and_or_add(node, pipeline, operator_before) != 0) {
+        if (ash_ast_and_or_take(
+                node,
+                &pipeline,
+                operator_before
+            ) != 0) {
             ash_ast_destroy(pipeline);
             ash_parser_fail(
                 parser,
@@ -1340,7 +1372,7 @@ static struct ash_ast* ash_parse_list(
             ash_ast_destroy(node);
             return NULL;
         }
-        if (ash_ast_list_add(node, command) != 0) {
+        if (ash_ast_list_take(node, &command) != 0) {
             ash_ast_destroy(command);
             ash_parser_fail(
                 parser,

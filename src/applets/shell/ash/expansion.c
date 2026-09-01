@@ -53,13 +53,18 @@ static const char* ash_positional(
     const struct ash_shell* shell,
     long index
 ) {
-    if (index == 0) {
-        return shell->positionals.argv0;
-    }
-    if (index < 0 || index > shell->positionals.count) {
+    const struct ash_positional_frame* positionals =
+        ash_scope_positionals(shell);
+    if (positionals == NULL) {
         return "";
     }
-    return shell->positionals.values[index - 1];
+    if (index == 0) {
+        return positionals->argv0;
+    }
+    if (index < 0 || (size_t)index > positionals->count) {
+        return "";
+    }
+    return positionals->values[index - 1];
 }
 
 static const char* ash_ifs_joiner(const struct ash_shell* shell) {
@@ -74,9 +79,14 @@ static bool ash_append_positionals_joined(
     struct ash_shell* shell,
     struct bx_text_buffer* output
 ) {
+    const struct ash_positional_frame* positionals =
+        ash_scope_positionals(shell);
+    if (positionals == NULL) {
+        return true;
+    }
     const char* ifs = ash_ifs_joiner(shell);
     size_t separator_length = ifs[0] == '\0' ? 0u : 1u;
-    for (int i = 0; i < shell->positionals.count; i++) {
+    for (size_t i = 0u; i < positionals->count; i++) {
         if (i != 0 &&
             !ash_expansion_append_span(
                 shell,
@@ -89,7 +99,7 @@ static bool ash_append_positionals_joined(
         if (!ash_expansion_append_text(
                 shell,
                 output,
-                shell->positionals.values[i]
+                positionals->values[i]
             )) {
             return false;
         }
@@ -110,9 +120,17 @@ static bool ash_append_special(
         case '$':
             snprintf(number, sizeof(number), "%ld", (long)shell->shell_pid);
             return ash_expansion_append_text(shell, output, number);
-        case '#':
-            snprintf(number, sizeof(number), "%d", shell->positionals.count);
+        case '#': {
+            const struct ash_positional_frame* positionals =
+                ash_scope_positionals(shell);
+            snprintf(
+                number,
+                sizeof(number),
+                "%zu",
+                positionals != NULL ? positionals->count : 0u
+            );
             return ash_expansion_append_text(shell, output, number);
+        }
         case '-': {
             char letters[16];
             ash_shell_option_letters(shell, letters, sizeof(letters));
@@ -414,6 +432,7 @@ bool ash_expand(
     enum ash_expansion_context context,
     char** output_word
 ) {
+    *output_word = NULL;
     struct bx_text_buffer output;
     bx_text_buffer_init(&output);
 
@@ -432,7 +451,7 @@ bool ash_expand(
                 shell,
                 &output,
                 &component,
-                part->quote != ASH_QUOTE_NONE
+                ash_word_part_is_quoted(part)
             ) :
             ash_expansion_append_span(
                 shell,
@@ -653,11 +672,8 @@ static bool ash_parameter_is(
 }
 
 static bool ash_part_requires_splitting(const struct ash_word_part* part) {
-    return part->quote == ASH_QUOTE_NONE &&
-        (part->kind == ASH_WORD_PARAMETER ||
-         part->kind == ASH_WORD_COMMAND_SUBSTITUTION ||
-         part->kind == ASH_WORD_BACKQUOTE ||
-         part->kind == ASH_WORD_ARITHMETIC);
+    return !ash_word_part_is_quoted(part) &&
+        ash_word_part_is_expansion(part);
 }
 
 bool ash_expand_argument(
@@ -667,20 +683,22 @@ bool ash_expand_argument(
 ) {
     ash_expanded_fields_init(fields);
     bool field_present = false;
+    const struct ash_positional_frame* positionals =
+        ash_scope_positionals(shell);
 
     for (size_t i = 0u; i < word->count; i++) {
         const struct ash_word_part* part = &word->parts[i];
         if (ash_parameter_is(part, '@')) {
-            if (shell->positionals.count == 0) {
+            if (positionals == NULL || positionals->count == 0u) {
                 continue;
             }
             bool first = true;
-            for (int j = 0; j < shell->positionals.count; j++) {
+            for (size_t j = 0u; j < positionals->count; j++) {
                 struct ash_expanded_fields split;
-                if (part->quote == ASH_QUOTE_NONE) {
+                if (!ash_word_part_is_quoted(part)) {
                     if (!ash_split_expansion(
                             shell,
-                            shell->positionals.values[j],
+                            positionals->values[j],
                             &split
                         )) {
                         ash_expanded_fields_destroy(fields);
@@ -692,7 +710,7 @@ bool ash_expand_argument(
                     if (!ash_expanded_fields_push(
                             shell,
                             &split,
-                            shell->positionals.values[j]
+                            positionals->values[j]
                         )) {
                         ash_expanded_fields_destroy(fields);
                         return false;
@@ -778,7 +796,7 @@ bool ash_expand_argument(
                 return false;
             }
             if (component.length != 0u ||
-                part->quote != ASH_QUOTE_NONE) {
+                ash_word_part_is_quoted(part)) {
                 field_present = true;
             }
         }

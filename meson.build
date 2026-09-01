@@ -585,9 +585,14 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/input.c',
   'src/applets/shell/ash/lexer.c',
   'src/applets/shell/ash/pattern.c',
+  'src/applets/shell/ash/pattern_expand.c',
   'src/applets/shell/ash/parser.c',
+  'src/applets/shell/ash/process.c',
+  'src/applets/shell/ash/scope.c',
   'src/applets/shell/ash/shell_context.c',
+  'src/applets/shell/ash/shell_policy.c',
   'src/applets/shell/ash/syntax.c',
+  'src/applets/shell/ash/variable_value.c',
   'src/applets/shell/ash/variables.c',
 ]
 
@@ -1512,8 +1517,16 @@ applet_names = run_command(
 
 multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
+install_bash_shortcut = get_option('install_bash_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
 install_wget_shortcut = mira_embed_enabled
+disabled_shell_shortcut_names = []
+if not install_sh_shortcut
+  disabled_shell_shortcut_names += ['sh']
+endif
+if not install_bash_shortcut
+  disabled_shell_shortcut_names += ['bash']
+endif
 system_conflict_applet_names = ['ps', 'halt', 'poweroff', 'reboot', 'init', 'linuxrc', 'syslogd', 'ping', 'dmesg', 'kill', 'mount', 'screen', 'setsid', 'umount']
 systemwide_disabled_applet_names = ['ps', 'tar', 'cpio', 'find', 'xargs']
 install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
@@ -1580,7 +1593,7 @@ install_subdir('src/applets/text/edit/runtime',
 
 if multicall_install_mode == 'symlink'
   foreach applet : applet_names
-    if applet == 'sh' and not install_sh_shortcut
+    if disabled_shell_shortcut_names.contains(applet)
       continue
     endif
     if applet == 'wget' and not install_wget_shortcut
@@ -1599,7 +1612,7 @@ if multicall_install_mode == 'symlink'
   endforeach
 else
   foreach applet : applet_names
-    if applet == 'sh' and not install_sh_shortcut
+    if disabled_shell_shortcut_names.contains(applet)
       continue
     endif
     if applet == 'wget' and not install_wget_shortcut

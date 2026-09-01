@@ -7,6 +7,7 @@ struct ash_ast;
 struct ash_shell;
 
 struct ash_function {
+    /* Context-owned node containing an owned name and deep-cloned AST body. */
     char* name;
     struct ash_ast* body;
     struct ash_function* next;

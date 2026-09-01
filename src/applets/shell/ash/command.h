@@ -15,10 +15,12 @@ enum ash_redir_kind {
 struct ash_redir {
     int fd;
     enum ash_redir_kind kind;
+    /* Owned, NUL-terminated target. */
     char* target;
 };
 
 struct ash_command {
+    /* Owns every string and redirection target in these backing arrays. */
     char** words;
     size_t word_count;
     size_t word_cap;
@@ -28,12 +30,6 @@ struct ash_command {
     struct ash_redir* redirs;
     size_t redir_count;
     size_t redir_cap;
-};
-
-struct ash_pipeline {
-    struct ash_command* commands;
-    size_t count;
-    size_t cap;
 };
 
 #endif /* BX_APPLETS_SHELL_ASH_COMMAND_H */
