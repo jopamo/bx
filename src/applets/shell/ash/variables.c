@@ -1,23 +1,21 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/variables.h"
-#include "bx/diag.h"
 
 extern char** environ;
 
 static bool ash_vars_oom(const struct ash_shell* shell) {
-    fprintf(stderr, "%s: out of memory\n", shell->progname);
-    return false;
+    return ash_diag_oom(shell);
 }
 
 static void ash_vars_error(
@@ -25,13 +23,7 @@ static void ash_vars_error(
     const char* subject,
     int error
 ) {
-    fprintf(
-        stderr,
-        "%s: %s: %s\n",
-        shell->progname,
-        subject,
-        bx_strerror(error)
-    );
+    ash_exec_error(shell, subject, error);
 }
 
 static char* ash_vars_duplicate(

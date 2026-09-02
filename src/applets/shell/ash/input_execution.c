@@ -85,8 +85,9 @@ static int ash_input_execute_buffer(
         return shell->last_status;
     }
     if (result != ASH_PARSER_COMPLETE) {
-        ash_diag(
+        ash_diag_parse(
             shell,
+            parser->error_location,
             "%s",
             ash_input_parser_diagnostic(parser->error)
         );
