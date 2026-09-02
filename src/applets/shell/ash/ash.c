@@ -32,6 +32,7 @@
 #include "applets/shell/ash/pattern.h"
 #include "applets/shell/ash/parser.h"
 #include "applets/shell/ash/process.h"
+#include "applets/shell/ash/privilege.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
 #include "applets/shell/ash/shopt_builtin.h"
@@ -2220,7 +2221,7 @@ static void ash_print_usage(FILE* stream, const char* progname) {
     else {
         fprintf(
             stream,
-            "Usage: %s [--standalone-applets] [-aCfisv] "
+            "Usage: %s [--standalone-applets] [-aCfipsv] "
             "[-c command] [script [arg ...]]\n",
             progname
         );
@@ -2245,7 +2246,7 @@ static void ash_print_option_summary(
         fprintf(stream, "Shell options:\n");
         fprintf(
             stream,
-            "\t-aCfilstv or -c command or -o/+o option-name\n"
+            "\t-aCfilpstv or -c command or -o/+o option-name\n"
         );
     }
 }
@@ -2260,6 +2261,7 @@ static void ash_print_help(FILE* stream, const char* progname) {
     fprintf(stream, "  -C           prevent output redirection from replacing files\n");
     fprintf(stream, "  -f           disable pathname expansion\n");
     fprintf(stream, "  -i           force interactive mode\n");
+    fprintf(stream, "  -p           enable privileged mode\n");
     fprintf(stream, "  -s           read commands from stdin\n");
     if (strcmp(progname, "bash") == 0) {
         fprintf(stream, "  -l           make the shell a login shell\n");
@@ -2388,6 +2390,23 @@ int bx_ash_main(int argc, char** argv) {
         return ash_report_invocation_error(&invocation_error);
     }
     const char* progname = invocation.progname;
+    struct ash_privilege_plan privilege;
+    struct ash_credential_snapshot credentials =
+        ash_credential_snapshot_current();
+    if (!ash_privilege_plan_build(
+            &credentials,
+            invocation.privileged,
+            &privilege
+        ) ||
+        !ash_privilege_plan_apply(&privilege)) {
+        fprintf(
+            stderr,
+            "%s: cannot drop privileges: %s\n",
+            progname,
+            strerror(errno != 0 ? errno : EPERM)
+        );
+        return 2;
+    }
     if (invocation.action == ASH_INVOCATION_HELP) {
         ash_print_help(stdout, progname);
         return 0;
@@ -2417,6 +2436,12 @@ int bx_ash_main(int argc, char** argv) {
     }
     if (invocation.standalone_applets) {
         policy_flags |= ASH_SHELL_POLICY_STANDALONE_APPLETS;
+    }
+    if (privilege.privileged) {
+        policy_flags |= ASH_SHELL_POLICY_PRIVILEGED;
+    }
+    if (privilege.suppress_startup) {
+        policy_flags |= ASH_SHELL_POLICY_STARTUP_SUPPRESSED;
     }
     struct ash_shell_policy policy;
     if (!ash_shell_policy_for_invocation(

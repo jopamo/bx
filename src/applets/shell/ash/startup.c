@@ -27,17 +27,12 @@ enum ash_startup_file_result {
     ASH_STARTUP_FILE_FATAL,
 };
 
-static bool ash_startup_ids_match(void) {
-    return getuid() == geteuid() &&
-        getgid() == getegid();
-}
-
 static bool ash_startup_should_read_bashrc(
     const struct ash_shell* shell,
     const struct ash_startup_request* request
 ) {
     return ash_shell_policy_is_bash(&shell->policy) &&
-        ash_startup_ids_match() &&
+        ash_shell_policy_allows_startup(&shell->policy) &&
         ash_shell_policy_has(
             &shell->policy,
             ASH_SHELL_POLICY_INTERACTIVE
@@ -54,7 +49,7 @@ static bool ash_startup_should_read_profiles(
     const struct ash_startup_request* request
 ) {
     return ash_shell_policy_is_bash(&shell->policy) &&
-        ash_startup_ids_match() &&
+        ash_shell_policy_allows_startup(&shell->policy) &&
         ash_shell_policy_has(
             &shell->policy,
             ASH_SHELL_POLICY_LOGIN

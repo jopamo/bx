@@ -5,12 +5,18 @@
 
 #include "applets/shell/ash/shell_options.h"
 
+enum ash_shell_option_state_source {
+    ASH_OPTION_STATE_STORED = 0,
+    ASH_OPTION_STATE_INTERACTIVE,
+    ASH_OPTION_STATE_PRIVILEGED,
+};
+
 struct ash_shell_option_descriptor {
     const char* name;
     uint32_t option;
     uint32_t uses;
     char letter;
-    bool interactive;
+    enum ash_shell_option_state_source state;
     uint32_t personalities;
 };
 
@@ -36,7 +42,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_ALLEXPORT,
         ASH_OPTION_INVOCATION_AND_SET,
         'a',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -44,7 +50,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_NOTIFY,
         0u,
         'b',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -52,7 +58,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_NOCLOBBER,
         ASH_OPTION_INVOCATION_AND_SET,
         'C',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -60,7 +66,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_ERREXIT,
         0u,
         'e',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -68,16 +74,23 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_NOGLOB,
         ASH_OPTION_INVOCATION_AND_SET,
         'f',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
-    {NULL, 0u, 0u, 'i', true, ASH_OPTION_PERSONALITY_ALL},
+    {
+        NULL,
+        0u,
+        0u,
+        'i',
+        ASH_OPTION_STATE_INTERACTIVE,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
     {
         "monitor",
         ASH_SHELL_OPTION_MONITOR,
         0u,
         'm',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -85,7 +98,15 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_NOEXEC,
         0u,
         'n',
-        false,
+        ASH_OPTION_STATE_STORED,
+        ASH_OPTION_PERSONALITY_ALL,
+    },
+    {
+        "privileged",
+        0u,
+        0u,
+        'p',
+        ASH_OPTION_STATE_PRIVILEGED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -93,7 +114,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_STDIN,
         ASH_SHELL_OPTION_USE_INVOCATION_SHORT,
         's',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -101,7 +122,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_ONECMD,
         ASH_OPTION_INVOCATION_AND_SET,
         't',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_BASH,
     },
     {
@@ -109,7 +130,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_NOUNSET,
         0u,
         'u',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -117,7 +138,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_VERBOSE,
         ASH_OPTION_INVOCATION_AND_SET,
         'v',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
     {
@@ -125,7 +146,7 @@ static const struct ash_shell_option_descriptor ash_shell_options[] = {
         ASH_SHELL_OPTION_XTRACE,
         0u,
         'x',
-        false,
+        ASH_OPTION_STATE_STORED,
         ASH_OPTION_PERSONALITY_ALL,
     },
 };
@@ -267,6 +288,7 @@ enum ash_shell_option_result ash_shell_option_apply_name(
 void ash_shell_options_format_letters(
     uint32_t options,
     bool interactive,
+    bool privileged,
     char* output,
     size_t output_size
 ) {
@@ -279,9 +301,19 @@ void ash_shell_options_format_letters(
          i < sizeof(ash_shell_options) /
              sizeof(ash_shell_options[0]);
          i++) {
-        bool enabled = ash_shell_options[i].interactive ?
-            interactive :
-            (options & ash_shell_options[i].option) != 0u;
+        bool enabled = false;
+        switch (ash_shell_options[i].state) {
+            case ASH_OPTION_STATE_STORED:
+                enabled =
+                    (options & ash_shell_options[i].option) != 0u;
+                break;
+            case ASH_OPTION_STATE_INTERACTIVE:
+                enabled = interactive;
+                break;
+            case ASH_OPTION_STATE_PRIVILEGED:
+                enabled = privileged;
+                break;
+        }
         if (enabled && length + 1u < output_size) {
             output[length++] = ash_shell_options[i].letter;
         }

@@ -71,7 +71,8 @@ bool ash_shell_policy_valid(const struct ash_shell_policy* policy) {
         ASH_SHELL_POLICY_LOGIN |
         ASH_SHELL_POLICY_RESTRICTED |
         ASH_SHELL_POLICY_PRIVILEGED |
-        ASH_SHELL_POLICY_STANDALONE_APPLETS;
+        ASH_SHELL_POLICY_STANDALONE_APPLETS |
+        ASH_SHELL_POLICY_STARTUP_SUPPRESSED;
 
     if (policy == NULL || (policy->flags & ~known_flags) != 0u) {
         return false;
@@ -106,6 +107,16 @@ bool ash_shell_policy_expands_aliases(
     return ash_shell_policy_valid(policy) &&
         (ash_shell_policy_has(policy, ASH_SHELL_POLICY_POSIX) ||
          ash_shell_policy_has(policy, ASH_SHELL_POLICY_INTERACTIVE));
+}
+
+bool ash_shell_policy_allows_startup(
+    const struct ash_shell_policy* policy
+) {
+    return ash_shell_policy_valid(policy) &&
+        !ash_shell_policy_has(
+            policy,
+            ASH_SHELL_POLICY_STARTUP_SUPPRESSED
+        );
 }
 
 const char* ash_shell_policy_bash_version(
