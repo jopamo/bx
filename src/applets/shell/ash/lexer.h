@@ -53,6 +53,12 @@ enum ash_lexer_result {
     ASH_LEXER_ERROR,
 };
 
+enum ash_lexer_fragment_result {
+    ASH_LEXER_FRAGMENT_SELF_CONTAINED = 0,
+    ASH_LEXER_FRAGMENT_NEEDS_TAIL,
+    ASH_LEXER_FRAGMENT_ERROR,
+};
+
 struct ash_lexer {
     const char* source_name;
     struct ash_source_identity* source_identity;
@@ -63,6 +69,8 @@ struct ash_lexer {
     size_t line;
     size_t column;
     bool ended_with_line_continuation;
+    bool discarded_comment;
+    bool ended_in_comment;
     struct ash_source_location error_location;
     const char* error;
 };
@@ -84,6 +92,14 @@ struct ash_source_location ash_lexer_current_location(
 );
 bool ash_lexer_ended_with_line_continuation(
     const struct ash_lexer* lexer
+);
+bool ash_lexer_ended_in_comment(const struct ash_lexer* lexer);
+bool ash_lexer_discarded_comment(const struct ash_lexer* lexer);
+bool ash_lexer_discard_comment_tail(struct ash_lexer* lexer);
+void ash_lexer_discard_remaining(struct ash_lexer* lexer);
+enum ash_lexer_fragment_result ash_lexer_classify_fragment(
+    const char* input,
+    size_t length
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
 void ash_token_destroy(struct ash_token* token);

@@ -15,6 +15,7 @@
 
 #include "applets.h"
 #include "applets/shell/ash/applet_command.h"
+#include "applets/shell/ash/alias_builtins.h"
 #include "applets/shell/ash/command.h"
 #include "applets/shell/ash/command_resolution.h"
 #include "applets/shell/ash/diagnostic.h"
@@ -769,6 +770,8 @@ static int ash_builtin_wait(
 
 static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builtin, const struct ash_command* command, bool in_child) {
     switch (builtin) {
+        case ASH_BUILTIN_ALIAS:
+            return ash_alias_builtin(shell, command);
         case ASH_BUILTIN_COLON:
             return 0;
         case ASH_BUILTIN_CD:
@@ -784,6 +787,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_export(shell, command);
         case ASH_BUILTIN_UNSET:
             return ash_builtin_unset(shell, command);
+        case ASH_BUILTIN_UNALIAS:
+            return ash_unalias_builtin(shell, command);
         case ASH_BUILTIN_UMASK:
             return ash_builtin_umask(shell, command);
         case ASH_BUILTIN_PWD:

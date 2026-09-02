@@ -15,7 +15,7 @@
 #include "applets/shell/ash/source_trace.h"
 #include "lib/fd_transaction.h"
 
-struct ash_alias;
+struct ash_alias_table;
 struct ash_command_cache;
 struct ash_completion_state;
 struct ash_function;
@@ -105,7 +105,7 @@ struct ash_shell {
      */
     struct ash_interactive_state interactive;
 
-    struct ash_alias* aliases;
+    struct ash_alias_table* aliases;
     struct ash_function* functions;
     struct ash_trap_table* traps;
     /* The jobs root is authoritative for all child lifecycle records. */

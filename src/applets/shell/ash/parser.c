@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "applets/shell/ash/parser.h"
+#include "applets/shell/ash/parser_internal.h"
 #include "applets/shell/ash/variables.h"
 
 enum ash_reserved_word {
@@ -101,7 +102,7 @@ static enum ash_reserved_word ash_parser_reserved_word(
     return ASH_RESERVED_NONE;
 }
 
-static enum ash_parser_result ash_parser_fail(
+enum ash_parser_result ash_parser_fail(
     struct ash_parser* parser,
     enum ash_parser_result result,
     struct ash_source_location location,
@@ -115,56 +116,22 @@ static enum ash_parser_result ash_parser_fail(
     return parser->result;
 }
 
-static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
-    if (parser->result != ASH_PARSER_COMPLETE) {
-        return parser->result;
-    }
-    if (parser->has_lookahead) {
-        return ASH_PARSER_COMPLETE;
-    }
-
-    enum ash_lexer_result result = ash_lexer_next(&parser->lexer, &parser->lookahead);
-    if (result == ASH_LEXER_INCOMPLETE) {
-        return ash_parser_fail(
-            parser,
-            ASH_PARSER_INCOMPLETE,
-            parser->lexer.error_location,
-            parser->lexer.error
-        );
-    }
-    if (result == ASH_LEXER_ERROR) {
-        return ash_parser_fail(
-            parser,
-            ASH_PARSER_ERROR,
-            parser->lexer.error_location,
-            parser->lexer.error
-        );
-    }
-    parser->has_lookahead = true;
-    return ASH_PARSER_COMPLETE;
-}
-
-static struct ash_token* ash_parser_peek(struct ash_parser* parser) {
-    if (ash_parser_fill(parser) != ASH_PARSER_COMPLETE) {
-        return NULL;
-    }
-    return &parser->lookahead;
-}
-
-static bool ash_parser_take(struct ash_parser* parser, struct ash_token* token) {
-    if (ash_parser_fill(parser) != ASH_PARSER_COMPLETE) {
-        return false;
-    }
-    *token = parser->lookahead;
-    parser->lookahead = (struct ash_token){0};
-    parser->has_lookahead = false;
-    return true;
+static bool ash_parser_token_is_reserved(
+    const struct ash_token* token
+) {
+    return ash_parser_reserved_word(token) != ASH_RESERVED_NONE;
 }
 
 static bool ash_parser_at_stop(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 ) {
+    if (!ash_parser_prepare_command_alias(
+            parser,
+            ash_parser_token_is_reserved
+        )) {
+        return false;
+    }
     struct ash_token* token = ash_parser_peek(parser);
     if (token == NULL) {
         return false;
@@ -429,6 +396,15 @@ static struct ash_ast* ash_parse_simple(
 
     bool command_word_seen = false;
     while (true) {
+        if (!ash_parser_prepare_alias(
+                parser,
+                !command_word_seen,
+                false,
+                NULL
+            )) {
+            ash_ast_destroy(node);
+            return NULL;
+        }
         struct ash_token* token = ash_parser_peek(parser);
         if (token == NULL) {
             ash_ast_destroy(node);
@@ -1216,6 +1192,12 @@ static struct ash_ast* ash_parse_command(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 ) {
+    if (!ash_parser_prepare_command_alias(
+            parser,
+            ash_parser_token_is_reserved
+        )) {
+        return NULL;
+    }
     struct ash_token* token = ash_parser_peek(parser);
     if (token == NULL) {
         return NULL;
@@ -1323,6 +1305,12 @@ static struct ash_ast* ash_parse_pipeline(
     struct ash_parser* parser,
     const struct ash_parse_stop* stop
 ) {
+    if (!ash_parser_prepare_command_alias(
+            parser,
+            ash_parser_token_is_reserved
+        )) {
+        return NULL;
+    }
     struct ash_token* token = ash_parser_peek(parser);
     if (token == NULL) {
         return NULL;
@@ -1335,6 +1323,12 @@ static struct ash_ast* ash_parse_pipeline(
         ash_token_destroy(&bang);
         negated = !negated;
         ash_parser_skip_newlines(parser);
+        if (!ash_parser_prepare_command_alias(
+                parser,
+                ash_parser_token_is_reserved
+            )) {
+            return NULL;
+        }
         token = ash_parser_peek(parser);
         if (token == NULL) {
             return NULL;
@@ -1608,16 +1602,33 @@ static struct ash_ast* ash_parse_list(
     return node;
 }
 
+void ash_parser_init_at_with_aliases(
+    struct ash_parser* parser,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length,
+    const struct ash_alias_table* aliases
+) {
+    *parser = (struct ash_parser){
+        .result = ASH_PARSER_COMPLETE,
+    };
+    ash_parser_alias_state_init(parser, aliases);
+    ash_lexer_init_at(&parser->lexer, origin, input, length);
+}
+
 void ash_parser_init_at(
     struct ash_parser* parser,
     struct ash_source_location origin,
     const char* input,
     size_t length
 ) {
-    *parser = (struct ash_parser){
-        .result = ASH_PARSER_COMPLETE,
-    };
-    ash_lexer_init_at(&parser->lexer, origin, input, length);
+    ash_parser_init_at_with_aliases(
+        parser,
+        origin,
+        input,
+        length,
+        NULL
+    );
 }
 
 void ash_parser_init(
@@ -1639,10 +1650,7 @@ void ash_parser_init(
 }
 
 void ash_parser_destroy(struct ash_parser* parser) {
-    if (parser->has_lookahead) {
-        ash_token_destroy(&parser->lookahead);
-    }
-    parser->has_lookahead = false;
+    ash_parser_alias_state_destroy(parser);
 }
 
 enum ash_parser_result ash_parser_parse_program(
@@ -1651,6 +1659,12 @@ enum ash_parser_result ash_parser_parse_program(
 ) {
     *program = NULL;
     ash_parser_skip_newlines(parser);
+    if (!ash_parser_prepare_command_alias(
+            parser,
+            ash_parser_token_is_reserved
+        )) {
+        return parser->result;
+    }
     struct ash_token* first = ash_parser_peek(parser);
     if (first == NULL) {
         return parser->result;
