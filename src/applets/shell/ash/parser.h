@@ -33,6 +33,8 @@ struct ash_parser_alias_frame {
     size_t release_count;
 };
 
+struct ash_here_document;
+
 struct ash_parser_config {
     const struct ash_alias_table* aliases;
     struct ash_lexer_options lexer;
@@ -54,6 +56,13 @@ struct ash_parser {
         inline_alias_frames[ASH_PARSER_INLINE_ALIAS_FRAMES];
     bool continue_alias;
     bool alias_comment_elided;
+    /*
+     * Borrowed AST-owned documents awaiting the next newline boundary.
+     * Completed documents leave this queue before an AST is published.
+     */
+    struct ash_here_document** pending_here_documents;
+    size_t pending_here_document_count;
+    size_t pending_here_document_capacity;
 };
 
 void ash_parser_init(

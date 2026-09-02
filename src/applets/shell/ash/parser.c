@@ -113,6 +113,7 @@ enum ash_parser_result ash_parser_fail(
         parser->result = result;
         parser->error_location = location;
         parser->error = error;
+        ash_parser_discard_pending_here_documents(parser);
     }
     return parser->result;
 }
@@ -318,6 +319,10 @@ static bool ash_parser_take_redirection(
         return false;
     }
     ash_token_destroy(&target);
+    if (!ash_parser_register_here_document(parser, redirection)) {
+        ash_redirection_destroy(redirection);
+        return false;
+    }
     return true;
 }
 
@@ -1659,6 +1664,7 @@ void ash_parser_init(
 }
 
 void ash_parser_destroy(struct ash_parser* parser) {
+    ash_parser_here_document_state_destroy(parser);
     ash_parser_alias_state_destroy(parser);
 }
 
@@ -1696,6 +1702,18 @@ enum ash_parser_result ash_parser_parse_program(
     };
     struct ash_ast* node = ash_parse_list(parser, &stop);
     if (node == NULL) {
+        return parser->result;
+    }
+    if (ash_parser_has_pending_here_documents(parser)) {
+        struct ash_here_document* document =
+            parser->pending_here_documents[0];
+        ash_parser_fail(
+            parser,
+            ASH_PARSER_INCOMPLETE,
+            document->operator_location,
+            "here-document delimited by end-of-file"
+        );
+        ash_ast_destroy(node);
         return parser->result;
     }
 
