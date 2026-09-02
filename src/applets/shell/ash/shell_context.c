@@ -29,6 +29,9 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
             state->parser.alias_frame_capacity == 0u &&
             !state->parser.continue_alias &&
             !state->parser.alias_comment_elided &&
+            state->parser.pending_here_documents == NULL &&
+            state->parser.pending_here_document_count == 0u &&
+            state->parser.pending_here_document_capacity == 0u &&
             state->parser.error == NULL;
     }
 
@@ -50,6 +53,10 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
             state->parser.alias_frame_capacity ||
         state->parser.alias_frame_capacity <
             ASH_PARSER_INLINE_ALIAS_FRAMES ||
+        state->parser.pending_here_document_count >
+            state->parser.pending_here_document_capacity ||
+        ((state->parser.pending_here_documents == NULL) !=
+         (state->parser.pending_here_document_capacity == 0u)) ||
         (state->parser.alias_frames ==
             state->parser.inline_alias_frames) !=
             (state->parser.alias_frame_capacity ==

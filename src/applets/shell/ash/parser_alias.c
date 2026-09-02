@@ -4,6 +4,7 @@
 
 #include "applets/shell/ash/aliases.h"
 #include "applets/shell/ash/parser_internal.h"
+#include "lib/text_buffer.h"
 
 static struct ash_lexer* ash_parser_active_lexer(
     struct ash_parser* parser
@@ -31,6 +32,31 @@ static void ash_parser_pop_alias(
     parser->alias_frame_count--;
 }
 
+static void ash_parser_note_alias_progress(
+    struct ash_parser* parser,
+    struct ash_parser_alias_frame* frame
+) {
+    if (frame->owned_input != NULL &&
+        frame->alias_active &&
+        frame->lexer.offset >= frame->alias_length) {
+        frame->alias_active = false;
+    }
+    for (size_t i = 0u; i < frame->release_count; i++) {
+        if (frame->releases[i].offset >
+            frame->lexer.offset) {
+            continue;
+        }
+        for (size_t j = 0u;
+             j + 1u < parser->alias_frame_count;
+             j++) {
+            if (parser->alias_frames[j].alias ==
+                frame->releases[i].alias) {
+                parser->alias_frames[j].alias_active = false;
+            }
+        }
+    }
+}
+
 static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
     if (parser->result != ASH_PARSER_COMPLETE) {
         return parser->result;
@@ -46,25 +72,7 @@ static enum ash_parser_result ash_parser_fill(struct ash_parser* parser) {
                 &parser->alias_frames[
                     parser->alias_frame_count - 1u
                 ];
-            if (frame->owned_input != NULL &&
-                frame->alias_active &&
-                frame->lexer.offset >= frame->alias_length) {
-                frame->alias_active = false;
-            }
-            for (size_t i = 0u; i < frame->release_count; i++) {
-                if (frame->releases[i].offset >
-                    frame->lexer.offset) {
-                    continue;
-                }
-                for (size_t j = 0u;
-                     j + 1u < parser->alias_frame_count;
-                     j++) {
-                    if (parser->alias_frames[j].alias ==
-                        frame->releases[i].alias) {
-                        parser->alias_frames[j].alias_active = false;
-                    }
-                }
-            }
+            ash_parser_note_alias_progress(parser, frame);
         }
         enum ash_lexer_result result = ash_lexer_next(
             lexer,
@@ -136,8 +144,93 @@ bool ash_parser_take(struct ash_parser* parser, struct ash_token* token) {
     parser->lookahead_alias_checked = false;
     if (token->kind == ASH_TOKEN_NEWLINE) {
         parser->alias_comment_elided = false;
+        if (!ash_parser_consume_here_documents(parser)) {
+            return false;
+        }
     }
     return true;
+}
+
+enum ash_parser_raw_line_result ash_parser_take_raw_line(
+    struct ash_parser* parser,
+    struct bx_text_buffer* line,
+    struct ash_source_location* location
+) {
+    /*
+     * Alias replacement and its suspended caller form one lexical stream.
+     * Assemble a physical line across exhausted replacement frames so the
+     * here-document layer never needs a parallel alias/source stack.
+     */
+    bx_text_buffer_clear(line);
+    bool location_set = false;
+    while (true) {
+        struct ash_lexer* lexer = ash_parser_active_lexer(parser);
+        if (lexer->offset == lexer->length) {
+            if (parser->alias_frame_count != 0u) {
+                ash_parser_pop_alias(parser, true);
+                continue;
+            }
+            return line->length != 0u ?
+                ASH_PARSER_RAW_LINE : ASH_PARSER_RAW_END;
+        }
+        if (!location_set) {
+            *location = ash_lexer_current_location(lexer);
+            location_set = true;
+        }
+
+        const char* start = lexer->input + lexer->offset;
+        size_t remaining = lexer->length - lexer->offset;
+        const char* newline = memchr(start, '\n', remaining);
+        size_t length = newline != NULL ?
+            (size_t)(newline - start) + 1u :
+            remaining;
+        if (!bx_text_buffer_append_span(line, start, length)) {
+            ash_parser_fail(
+                parser,
+                ASH_PARSER_ERROR,
+                *location,
+                "out of memory"
+            );
+            return ASH_PARSER_RAW_ERROR;
+        }
+        lexer->offset += length;
+        if (newline != NULL) {
+            if (lexer->line == SIZE_MAX) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    *location,
+                    "source line overflow"
+                );
+                return ASH_PARSER_RAW_ERROR;
+            }
+            lexer->line++;
+            lexer->column = 1u;
+        }
+        else {
+            if (length > SIZE_MAX - lexer->column) {
+                ash_parser_fail(
+                    parser,
+                    ASH_PARSER_ERROR,
+                    *location,
+                    "source column overflow"
+                );
+                return ASH_PARSER_RAW_ERROR;
+            }
+            lexer->column += length;
+        }
+        if (parser->alias_frame_count != 0u) {
+            ash_parser_note_alias_progress(
+                parser,
+                &parser->alias_frames[
+                    parser->alias_frame_count - 1u
+                ]
+            );
+        }
+        if (newline != NULL) {
+            return ASH_PARSER_RAW_LINE;
+        }
+    }
 }
 
 static bool ash_parser_alias_is_active(

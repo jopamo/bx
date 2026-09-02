@@ -3,6 +3,8 @@
 
 #include "applets/shell/ash/parser.h"
 
+struct bx_text_buffer;
+
 typedef bool (*ash_parser_reserved_word_fn)(
     const struct ash_token* token
 );
@@ -17,6 +19,16 @@ struct ash_token* ash_parser_peek(struct ash_parser* parser);
 bool ash_parser_take(
     struct ash_parser* parser,
     struct ash_token* token
+);
+enum ash_parser_raw_line_result {
+    ASH_PARSER_RAW_LINE = 0,
+    ASH_PARSER_RAW_END,
+    ASH_PARSER_RAW_ERROR,
+};
+enum ash_parser_raw_line_result ash_parser_take_raw_line(
+    struct ash_parser* parser,
+    struct bx_text_buffer* line,
+    struct ash_source_location* location
 );
 bool ash_parser_prepare_alias(
     struct ash_parser* parser,
@@ -33,5 +45,19 @@ void ash_parser_alias_state_init(
     const struct ash_alias_table* aliases
 );
 void ash_parser_alias_state_destroy(struct ash_parser* parser);
+bool ash_parser_register_here_document(
+    struct ash_parser* parser,
+    struct ash_redirection* redirection
+);
+bool ash_parser_consume_here_documents(struct ash_parser* parser);
+bool ash_parser_has_pending_here_documents(
+    const struct ash_parser* parser
+);
+void ash_parser_discard_pending_here_documents(
+    struct ash_parser* parser
+);
+void ash_parser_here_document_state_destroy(
+    struct ash_parser* parser
+);
 
 #endif /* BX_APPLETS_SHELL_ASH_PARSER_INTERNAL_H */

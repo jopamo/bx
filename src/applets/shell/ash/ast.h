@@ -71,11 +71,35 @@ struct ash_redirection_prefix {
     struct ash_source_location location;
 };
 
+enum ash_here_document_state {
+    ASH_HERE_DOCUMENT_PENDING = 0,
+    ASH_HERE_DOCUMENT_COMPLETE,
+};
+
+struct ash_here_document {
+    enum ash_here_document_state state;
+    /* Owned quote-removed delimiter and exact unexpanded body bytes. */
+    char* delimiter;
+    size_t delimiter_length;
+    char* body;
+    size_t body_length;
+    struct ash_source_location operator_location;
+    struct ash_source_location body_location;
+    struct ash_source_location end_location;
+    bool delimiter_quoted;
+    bool strip_tabs;
+};
+
 struct ash_redirection {
     enum ash_token_kind operator;
     struct ash_redirection_prefix prefix;
     /* Owned structured target. */
     struct ash_ast_word target;
+    /*
+     * Owned and non-NULL only for << and <<-. The parser keeps only borrowed
+     * references while pending bodies are consumed at a newline boundary.
+     */
+    struct ash_here_document* here_document;
     struct ash_source_location location;
 };
 

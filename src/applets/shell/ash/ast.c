@@ -421,10 +421,82 @@ int ash_condition_take_branches(
     return 0;
 }
 
+static void ash_here_document_destroy(
+    struct ash_here_document* document
+) {
+    if (document == NULL) {
+        return;
+    }
+    free(document->delimiter);
+    free(document->body);
+    free(document);
+}
+
+static char* ash_here_document_copy_bytes(
+    const char* source,
+    size_t length
+) {
+    if (source == NULL || length == SIZE_MAX) {
+        errno = source == NULL ? EINVAL : ENOMEM;
+        return NULL;
+    }
+    char* copy = malloc(length + 1u);
+    if (copy != NULL) {
+        memcpy(copy, source, length + 1u);
+    }
+    return copy;
+}
+
+static struct ash_here_document* ash_here_document_clone(
+    const struct ash_here_document* source
+) {
+    bool state_valid = source != NULL &&
+        ((source->state == ASH_HERE_DOCUMENT_PENDING &&
+          source->body == NULL &&
+          source->body_length == 0u) ||
+         (source->state == ASH_HERE_DOCUMENT_COMPLETE &&
+          source->body != NULL));
+    if (!state_valid || source->delimiter == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct ash_here_document* document = malloc(sizeof(*document));
+    if (document == NULL) {
+        return NULL;
+    }
+    *document = *source;
+    document->delimiter = ash_here_document_copy_bytes(
+        source->delimiter,
+        source->delimiter_length
+    );
+    document->body = source->body != NULL ?
+        ash_here_document_copy_bytes(
+            source->body,
+            source->body_length
+        ) :
+        NULL;
+    if (document->delimiter == NULL ||
+        (source->body != NULL && document->body == NULL)) {
+        ash_here_document_destroy(document);
+        return NULL;
+    }
+    return document;
+}
+
 static int ash_redirection_clone(
     struct ash_redirection* destination,
     const struct ash_redirection* source
 ) {
+    *destination = (struct ash_redirection){0};
+    bool here_document_operator =
+        source->operator == ASH_TOKEN_DLESS ||
+        source->operator == ASH_TOKEN_DLESS_DASH;
+    if (here_document_operator !=
+        (source->here_document != NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
     *destination = (struct ash_redirection){
         .operator = source->operator,
         .prefix.kind = source->prefix.kind,
@@ -444,6 +516,15 @@ static int ash_redirection_clone(
         free(destination->prefix.text);
         *destination = (struct ash_redirection){0};
         return -1;
+    }
+    if (source->here_document != NULL) {
+        destination->here_document = ash_here_document_clone(
+            source->here_document
+        );
+        if (destination->here_document == NULL) {
+            ash_redirection_destroy(destination);
+            return -1;
+        }
     }
     return 0;
 }
@@ -811,6 +892,7 @@ void ash_redirection_destroy(struct ash_redirection* redirection) {
     }
     free(redirection->prefix.text);
     ash_ast_word_destroy(&redirection->target);
+    ash_here_document_destroy(redirection->here_document);
     *redirection = (struct ash_redirection){0};
 }
 
