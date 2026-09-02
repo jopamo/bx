@@ -1,9 +1,9 @@
 #include <assert.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "applets/shell/ash/ast.h"
+#include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/shell_context.h"
 
@@ -86,12 +86,12 @@ bool ash_function_define(
     }
     assert(ash_functions_invariants(shell));
     if (!ash_source_identity_retain(definition_location.identity)) {
-        fprintf(stderr, "%s: source nesting overflow\n", shell->progname);
+        ash_diag(shell, "source nesting overflow");
         return false;
     }
     struct ash_ast* body_copy = ash_ast_clone(body);
     if (body_copy == NULL) {
-        fprintf(stderr, "%s: out of memory\n", shell->progname);
+        ash_diag_oom(shell);
         ash_source_identity_release(
             shell,
             definition_location.identity
@@ -118,7 +118,7 @@ bool ash_function_define(
     struct ash_function* function = calloc(1u, sizeof(*function));
     char* name_copy = strdup(name);
     if (function == NULL || name_copy == NULL) {
-        fprintf(stderr, "%s: out of memory\n", shell->progname);
+        ash_diag_oom(shell);
         free(function);
         free(name_copy);
         ash_ast_destroy(body_copy);

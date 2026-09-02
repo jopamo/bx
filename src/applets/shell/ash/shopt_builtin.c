@@ -16,12 +16,6 @@ enum ash_shopt_output {
     ASH_SHOPT_OUTPUT_QUIET,
 };
 
-static size_t ash_shopt_line(const struct ash_shell* shell) {
-    return shell->execution_location.line != 0u ?
-        shell->execution_location.line :
-        1u;
-}
-
 static int ash_shopt_usage(struct ash_shell* shell) {
     ash_diag(
         shell,
@@ -68,8 +62,7 @@ static int ash_shopt_flush(struct ash_shell* shell) {
         clearerr(stdout);
         ash_diag(
             shell,
-            "line %zu: shopt: write error: %s",
-            ash_shopt_line(shell),
+            "shopt: write error: %s",
             bx_strerror(output_error != 0 ? output_error : EIO)
         );
         return 1;
@@ -116,9 +109,8 @@ int ash_shopt_builtin(
     if (set && unset) {
         ash_diag(
             shell,
-            "line %zu: shopt: cannot set and unset shell options "
-            "simultaneously",
-            ash_shopt_line(shell)
+            "shopt: cannot set and unset shell options "
+            "simultaneously"
         );
         return 1;
     }
@@ -153,8 +145,7 @@ int ash_shopt_builtin(
         if (option == 0u) {
             ash_diag(
                 shell,
-                "line %zu: shopt: %s: invalid shell option name",
-                ash_shopt_line(shell),
+                "shopt: %s: invalid shell option name",
                 name
             );
             status = 1;
@@ -171,8 +162,7 @@ int ash_shopt_builtin(
             if (result != ASH_SHOPT_APPLIED) {
                 ash_diag(
                     shell,
-                    "line %zu: shopt: %s: invalid shell option name",
-                    ash_shopt_line(shell),
+                    "shopt: %s: invalid shell option name",
                     name
                 );
                 status = 1;

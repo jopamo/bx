@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "applets/shell/ash/diagnostic.h"
 #include "applets/shell/ash/expansion.h"
 #include "applets/shell/ash/pathname_expansion.h"
 #include "applets/shell/ash/shell_context.h"
@@ -14,12 +15,11 @@
 #include "lib/text_buffer.h"
 
 static bool ash_expansion_oom(const struct ash_shell* shell) {
-    fprintf(stderr, "%s: out of memory\n", shell->progname);
-    return false;
+    return ash_diag_oom(shell);
 }
 
 static bool ash_expansion_bad_substitution(const struct ash_shell* shell) {
-    fprintf(stderr, "%s: bad substitution\n", shell->progname);
+    ash_diag(shell, "bad substitution");
     return false;
 }
 
@@ -479,11 +479,7 @@ static bool ash_expand_part(
         size_t suffix = 1u;
         if (part->length < prefix + suffix ||
             shell->command_substitution == NULL) {
-            fprintf(
-                stderr,
-                "%s: command substitution is unavailable\n",
-                shell->progname
-            );
+            ash_diag(shell, "command substitution is unavailable");
             return false;
         }
 
@@ -837,10 +833,9 @@ static bool ash_expansion_pathname_failure(
     if (error == ENOMEM) {
         return ash_expansion_oom(shell);
     }
-    fprintf(
-        stderr,
-        "%s: %s: pathname expansion failed: %s\n",
-        shell->progname,
+    ash_diag(
+        shell,
+        "%s: pathname expansion failed: %s",
         subject,
         strerror(error)
     );
@@ -966,7 +961,7 @@ enum ash_redirection_expansion_result ash_expand_redirection(
         return ASH_REDIRECTION_EXPANSION_OK;
     }
     if (matches.count != 1u) {
-        fprintf(stderr, "%s: ambiguous redirect\n", shell->progname);
+        ash_diag(shell, "ambiguous redirect");
         ash_pathname_matches_destroy(&matches);
         free(value);
         return ASH_REDIRECTION_EXPANSION_AMBIGUOUS;
