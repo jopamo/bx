@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -1602,18 +1603,26 @@ static struct ash_ast* ash_parse_list(
     return node;
 }
 
-void ash_parser_init_at_with_aliases(
+void ash_parser_init_at_with_config(
     struct ash_parser* parser,
     struct ash_source_location origin,
     const char* input,
     size_t length,
-    const struct ash_alias_table* aliases
+    const struct ash_parser_config* config
 ) {
+    assert(config != NULL);
+    assert(ash_lexer_options_valid(&config->lexer));
     *parser = (struct ash_parser){
         .result = ASH_PARSER_COMPLETE,
     };
-    ash_parser_alias_state_init(parser, aliases);
-    ash_lexer_init_at(&parser->lexer, origin, input, length);
+    ash_parser_alias_state_init(parser, config->aliases);
+    ash_lexer_init_at_with_options(
+        &parser->lexer,
+        origin,
+        input,
+        length,
+        &config->lexer
+    );
 }
 
 void ash_parser_init_at(
@@ -1622,12 +1631,12 @@ void ash_parser_init_at(
     const char* input,
     size_t length
 ) {
-    ash_parser_init_at_with_aliases(
+    ash_parser_init_at_with_config(
         parser,
         origin,
         input,
         length,
-        NULL
+        &(const struct ash_parser_config){0}
     );
 }
 

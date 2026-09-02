@@ -17,6 +17,7 @@ struct ash_alias {
     uint64_t hash;
     bool value_ends_blank;
     bool requires_tail;
+    bool requires_extglob_tail;
     struct ash_alias* next;
 };
 
@@ -289,7 +290,8 @@ static bool ash_alias_value_metadata(
     const char* value,
     size_t* length,
     bool* ends_blank,
-    bool* requires_tail
+    bool* requires_tail,
+    bool* requires_extglob_tail
 ) {
     *length = strlen(value);
     enum ash_lexer_fragment_result fragment =
@@ -299,6 +301,18 @@ static bool ash_alias_value_metadata(
     }
     *ends_blank = ash_alias_value_ends_blank_bytes(value, *length);
     *requires_tail =
+        fragment == ASH_LEXER_FRAGMENT_NEEDS_TAIL;
+    fragment = ash_lexer_classify_fragment_with_options(
+        value,
+        *length,
+        &(const struct ash_lexer_options){
+            .flags = ASH_LEXER_EXTGLOB,
+        }
+    );
+    if (fragment == ASH_LEXER_FRAGMENT_ERROR) {
+        return false;
+    }
+    *requires_extglob_tail =
         fragment == ASH_LEXER_FRAGMENT_NEEDS_TAIL;
     return true;
 }
@@ -310,11 +324,13 @@ static struct ash_alias* ash_alias_create(
     size_t value_length;
     bool value_ends_blank;
     bool requires_tail;
+    bool requires_extglob_tail;
     if (!ash_alias_value_metadata(
             value,
             &value_length,
             &value_ends_blank,
-            &requires_tail
+            &requires_tail,
+            &requires_extglob_tail
         )) {
         return NULL;
     }
@@ -337,6 +353,7 @@ static struct ash_alias* ash_alias_create(
         .hash = ash_alias_hash(name, name_length),
         .value_ends_blank = value_ends_blank,
         .requires_tail = requires_tail,
+        .requires_extglob_tail = requires_extglob_tail,
     };
     return alias;
 }
@@ -358,11 +375,13 @@ bool ash_alias_define(
         size_t value_length;
         bool value_ends_blank;
         bool requires_tail;
+        bool requires_extglob_tail;
         if (!ash_alias_value_metadata(
                 value,
                 &value_length,
                 &value_ends_blank,
-                &requires_tail
+                &requires_tail,
+                &requires_extglob_tail
             )) {
             return false;
         }
@@ -375,6 +394,7 @@ bool ash_alias_define(
         existing->value_length = value_length;
         existing->value_ends_blank = value_ends_blank;
         existing->requires_tail = requires_tail;
+        existing->requires_extglob_tail = requires_extglob_tail;
         free(old_value);
         return true;
     }
@@ -490,8 +510,16 @@ bool ash_alias_value_ends_blank(const struct ash_alias* alias) {
     return alias != NULL && alias->value_ends_blank;
 }
 
-bool ash_alias_requires_tail(const struct ash_alias* alias) {
-    return alias != NULL && alias->requires_tail;
+bool ash_alias_requires_tail(
+    const struct ash_alias* alias,
+    const struct ash_lexer_options* options
+) {
+    if (alias == NULL || !ash_lexer_options_valid(options)) {
+        return false;
+    }
+    return (options->flags & ASH_LEXER_EXTGLOB) != 0u ?
+        alias->requires_extglob_tail :
+        alias->requires_tail;
 }
 
 static int ash_alias_compare(const void* left, const void* right) {

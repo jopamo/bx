@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "applets/shell/ash/syntax.h"
 
@@ -59,6 +60,15 @@ enum ash_lexer_fragment_result {
     ASH_LEXER_FRAGMENT_ERROR,
 };
 
+enum ash_lexer_flag {
+    ASH_LEXER_EXTGLOB = 1u << 0,
+    ASH_LEXER_FLAG_ALL = ASH_LEXER_EXTGLOB,
+};
+
+struct ash_lexer_options {
+    uint32_t flags;
+};
+
 struct ash_lexer {
     const char* source_name;
     struct ash_source_identity* source_identity;
@@ -68,6 +78,7 @@ struct ash_lexer {
     size_t source_offset;
     size_t line;
     size_t column;
+    struct ash_lexer_options options;
     bool ended_with_line_continuation;
     bool discarded_comment;
     bool ended_in_comment;
@@ -87,6 +98,16 @@ void ash_lexer_init_at(
     const char* input,
     size_t length
 );
+void ash_lexer_init_at_with_options(
+    struct ash_lexer* lexer,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length,
+    const struct ash_lexer_options* options
+);
+bool ash_lexer_options_valid(
+    const struct ash_lexer_options* options
+);
 struct ash_source_location ash_lexer_current_location(
     const struct ash_lexer* lexer
 );
@@ -100,6 +121,11 @@ void ash_lexer_discard_remaining(struct ash_lexer* lexer);
 enum ash_lexer_fragment_result ash_lexer_classify_fragment(
     const char* input,
     size_t length
+);
+enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
+    const char* input,
+    size_t length,
+    const struct ash_lexer_options* options
 );
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token);
 void ash_token_destroy(struct ash_token* token);
