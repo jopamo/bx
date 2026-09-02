@@ -209,10 +209,12 @@ static void ash_lexer_skip_line_continuations(struct ash_lexer* lexer) {
 
 static void ash_lexer_skip_comment(struct ash_lexer* lexer) {
     assert(ash_lexer_peek(lexer, 0u) == '#');
+    lexer->discarded_comment = true;
     while (!ash_lexer_at_end(lexer) &&
            ash_lexer_peek(lexer, 0u) != '\n') {
         (void)ash_lexer_advance(lexer);
     }
+    lexer->ended_in_comment = ash_lexer_at_end(lexer);
 }
 
 /*
@@ -249,6 +251,34 @@ bool ash_lexer_ended_with_line_continuation(
     const struct ash_lexer* lexer
 ) {
     return lexer != NULL && lexer->ended_with_line_continuation;
+}
+
+bool ash_lexer_ended_in_comment(const struct ash_lexer* lexer) {
+    return lexer != NULL && lexer->ended_in_comment;
+}
+
+bool ash_lexer_discarded_comment(const struct ash_lexer* lexer) {
+    return lexer != NULL && lexer->discarded_comment;
+}
+
+bool ash_lexer_discard_comment_tail(struct ash_lexer* lexer) {
+    if (lexer == NULL) {
+        return false;
+    }
+    while (!ash_lexer_at_end(lexer) &&
+           ash_lexer_peek(lexer, 0u) != '\n') {
+        (void)ash_lexer_advance(lexer);
+    }
+    return ash_lexer_at_end(lexer);
+}
+
+void ash_lexer_discard_remaining(struct ash_lexer* lexer) {
+    if (lexer == NULL) {
+        return;
+    }
+    while (!ash_lexer_at_end(lexer)) {
+        (void)ash_lexer_advance(lexer);
+    }
 }
 
 static enum ash_lexer_result ash_lexer_fail(
@@ -295,6 +325,35 @@ static const struct ash_operator* ash_lexer_operator(const struct ash_lexer* lex
         }
     }
     return longest;
+}
+
+static bool ash_operator_kind_can_extend(enum ash_token_kind kind) {
+    const struct ash_operator* token_operator = NULL;
+    for (size_t i = 0u;
+         i < sizeof(ash_operators) / sizeof(ash_operators[0]);
+         i++) {
+        if (ash_operators[i].kind == kind) {
+            token_operator = &ash_operators[i];
+            break;
+        }
+    }
+    if (token_operator == NULL) {
+        return false;
+    }
+    for (size_t i = 0u;
+         i < sizeof(ash_operators) / sizeof(ash_operators[0]);
+         i++) {
+        const struct ash_operator* candidate = &ash_operators[i];
+        if (candidate->length > token_operator->length &&
+            memcmp(
+                candidate->text,
+                token_operator->text,
+                token_operator->length
+            ) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ash_token_is_redirection(enum ash_token_kind kind) {
@@ -1673,6 +1732,8 @@ static enum ash_lexer_result ash_lexer_scan_io_redirect(
 enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* token) {
     *token = (struct ash_token){0};
     lexer->error = NULL;
+    lexer->discarded_comment = false;
+    lexer->ended_in_comment = false;
 
     while (true) {
         ash_lexer_skip_line_continuations(lexer);
@@ -1716,6 +1777,47 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
     }
 
     return ash_lexer_scan_word(lexer, token);
+}
+
+enum ash_lexer_fragment_result ash_lexer_classify_fragment(
+    const char* input,
+    size_t length
+) {
+    if (input == NULL) {
+        errno = EINVAL;
+        return ASH_LEXER_FRAGMENT_ERROR;
+    }
+    struct ash_lexer lexer;
+    ash_lexer_init(&lexer, "<fragment>", input, length);
+    bool terminal_operator_can_extend = false;
+    while (true) {
+        struct ash_token token;
+        enum ash_lexer_result result = ash_lexer_next(
+            &lexer,
+            &token
+        );
+        if (result == ASH_LEXER_TOKEN) {
+            terminal_operator_can_extend =
+                lexer.offset == lexer.length &&
+                ash_operator_kind_can_extend(token.kind);
+        }
+        ash_token_destroy(&token);
+        if (result == ASH_LEXER_ERROR) {
+            errno = ENOMEM;
+            return ASH_LEXER_FRAGMENT_ERROR;
+        }
+        if (result == ASH_LEXER_INCOMPLETE ||
+            (result == ASH_LEXER_END &&
+             (ash_lexer_ended_in_comment(&lexer) ||
+              ash_lexer_ended_with_line_continuation(&lexer) ||
+              terminal_operator_can_extend ||
+              (length != 0u && input[length - 1u] == '\\')))) {
+            return ASH_LEXER_FRAGMENT_NEEDS_TAIL;
+        }
+        if (result == ASH_LEXER_END) {
+            return ASH_LEXER_FRAGMENT_SELF_CONTAINED;
+        }
+    }
 }
 
 const char* ash_token_kind_name(enum ash_token_kind kind) {

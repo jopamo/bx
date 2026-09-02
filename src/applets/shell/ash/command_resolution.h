@@ -10,6 +10,7 @@ struct ash_shell;
 
 enum ash_builtin_kind {
     ASH_BUILTIN_INVALID = 0,
+    ASH_BUILTIN_ALIAS,
     ASH_BUILTIN_COLON,
     ASH_BUILTIN_CD,
     ASH_BUILTIN_DOT,
@@ -17,6 +18,7 @@ enum ash_builtin_kind {
     ASH_BUILTIN_EXIT,
     ASH_BUILTIN_EXPORT,
     ASH_BUILTIN_UNSET,
+    ASH_BUILTIN_UNALIAS,
     ASH_BUILTIN_UMASK,
     ASH_BUILTIN_PWD,
     ASH_BUILTIN_EXEC,

@@ -585,6 +585,8 @@ bx_base_applet_sources = [
 ]
 
 bx_shell_applet_sources = [
+  'src/applets/shell/ash/alias_builtins.c',
+  'src/applets/shell/ash/aliases.c',
   'src/applets/shell/ash/ash.c',
   'src/applets/shell/ash/applet_command.c',
   'src/applets/shell/ash/ast.c',
@@ -605,6 +607,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/pattern_expand.c',
   'src/applets/shell/ash/pathname_expansion.c',
   'src/applets/shell/ash/parser.c',
+  'src/applets/shell/ash/parser_alias.c',
   'src/applets/shell/ash/process.c',
   'src/applets/shell/ash/scope.c',
   'src/applets/shell/ash/shell_context.c',

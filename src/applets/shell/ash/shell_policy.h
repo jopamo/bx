@@ -56,6 +56,9 @@ bool ash_shell_policy_has(
     enum ash_shell_policy_flag flag
 );
 bool ash_shell_policy_is_bash(const struct ash_shell_policy* policy);
+bool ash_shell_policy_expands_aliases(
+    const struct ash_shell_policy* policy
+);
 const char* ash_shell_policy_bash_version(
     const struct ash_shell_policy* policy
 );

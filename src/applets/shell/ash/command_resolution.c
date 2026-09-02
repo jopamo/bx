@@ -14,6 +14,7 @@ struct ash_builtin_definition {
 static const struct ash_builtin_definition ash_builtins[] = {
     {":", ASH_BUILTIN_COLON},
     {".", ASH_BUILTIN_DOT},
+    {"alias", ASH_BUILTIN_ALIAS},
     {"break", ASH_BUILTIN_BREAK},
     {"continue", ASH_BUILTIN_CONTINUE},
     {"eval", ASH_BUILTIN_EVAL},
@@ -25,6 +26,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"shift", ASH_BUILTIN_SHIFT},
     {"source", ASH_BUILTIN_SOURCE},
     {"unset", ASH_BUILTIN_UNSET},
+    {"unalias", ASH_BUILTIN_UNALIAS},
     {"cd", ASH_BUILTIN_CD},
     {"pwd", ASH_BUILTIN_PWD},
     {"umask", ASH_BUILTIN_UMASK},
@@ -49,7 +51,9 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
         case ASH_BUILTIN_SHIFT:
         case ASH_BUILTIN_SOURCE:
             return ASH_COMMAND_SPECIAL_BUILTIN;
+        case ASH_BUILTIN_ALIAS:
         case ASH_BUILTIN_CD:
+        case ASH_BUILTIN_UNALIAS:
         case ASH_BUILTIN_UMASK:
         case ASH_BUILTIN_PWD:
         case ASH_BUILTIN_WAIT:

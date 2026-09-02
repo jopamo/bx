@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "applets/shell/ash/aliases.h"
 #include "applets/shell/ash/input.h"
 #include "applets/shell/ash/functions.h"
 #include "applets/shell/ash/process.h"
@@ -19,18 +20,42 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
             state->parser.lexer.source_identity == NULL &&
             state->parser.lexer.input == NULL &&
             !state->parser.has_lookahead &&
+            !state->parser.lookahead_alias_checked &&
             state->parser.lookahead.word.parts == NULL &&
             state->parser.lookahead.io_redirect == NULL &&
+            state->parser.aliases == NULL &&
+            state->parser.alias_frames == NULL &&
+            state->parser.alias_frame_count == 0u &&
+            state->parser.alias_frame_capacity == 0u &&
+            !state->parser.continue_alias &&
+            !state->parser.alias_comment_elided &&
             state->parser.error == NULL;
     }
 
     const struct ash_lexer* lexer = &state->parser.lexer;
+    const struct ash_alias_table* expected_aliases =
+        ash_shell_policy_expands_aliases(&shell->policy) ?
+            shell->aliases :
+            NULL;
     if (lexer->source_name == NULL || lexer->input == NULL ||
         lexer->offset > lexer->length ||
         lexer->source_offset > SIZE_MAX - lexer->length ||
         lexer->line == 0u || lexer->column == 0u ||
         state->parser.result < ASH_PARSER_COMPLETE ||
         state->parser.result > ASH_PARSER_ERROR ||
+        state->parser.aliases != expected_aliases ||
+        state->parser.alias_frames == NULL ||
+        state->parser.alias_frame_count >
+            state->parser.alias_frame_capacity ||
+        state->parser.alias_frame_capacity <
+            ASH_PARSER_INLINE_ALIAS_FRAMES ||
+        (state->parser.alias_frames ==
+            state->parser.inline_alias_frames) !=
+            (state->parser.alias_frame_capacity ==
+             ASH_PARSER_INLINE_ALIAS_FRAMES) ||
+        (state->parser.lookahead_alias_checked &&
+         (!state->parser.has_lookahead ||
+          state->parser.lookahead.kind != ASH_TOKEN_WORD)) ||
         (state->parser.has_lookahead &&
          (!ash_token_kind_valid(state->parser.lookahead.kind) ||
           (ash_token_is_redirection_prefix(
@@ -38,6 +63,48 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
            ) !=
            (state->parser.lookahead.io_redirect != NULL))))) {
         return false;
+    }
+    for (size_t i = 0u;
+         i < state->parser.alias_frame_count;
+         i++) {
+        const struct ash_parser_alias_frame* frame =
+            &state->parser.alias_frames[i];
+        if (frame->alias == NULL ||
+            !ash_alias_table_contains(shell->aliases, frame->alias) ||
+            frame->alias_length !=
+                ash_alias_value_length(frame->alias) ||
+            frame->lexer.offset > frame->lexer.length ||
+            frame->lexer.source_offset >
+                SIZE_MAX - frame->lexer.length ||
+            (frame->releases == NULL) !=
+                (frame->release_count == 0u) ||
+            (frame->owned_input == NULL &&
+             frame->release_count != 0u) ||
+            (frame->owned_input == NULL ?
+                (frame->lexer.input != ash_alias_value(frame->alias) ||
+                 frame->lexer.length != frame->alias_length) :
+                (frame->lexer.input != frame->owned_input ||
+                 frame->lexer.length < frame->alias_length))) {
+            return false;
+        }
+        for (size_t j = 0u; j < frame->release_count; j++) {
+            if (frame->releases[j].alias == NULL ||
+                frame->releases[j].offset > frame->lexer.length ||
+                !ash_alias_table_contains(
+                    shell->aliases,
+                    frame->releases[j].alias
+                )) {
+                return false;
+            }
+            for (size_t k = j + 1u;
+                 k < frame->release_count;
+                 k++) {
+                if (frame->releases[j].alias ==
+                    frame->releases[k].alias) {
+                    return false;
+                }
+            }
+        }
     }
     return shell->input_stack == NULL ||
         (lexer->source_name == shell->input_stack->name &&
@@ -109,6 +176,7 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
             shell->policy.personality
         ) &&
         ash_shell_policy_valid(&shell->policy) &&
+        ash_aliases_invariants(shell->aliases) &&
         ash_interactive_state_valid(&shell->interactive) &&
         interactive ==
             ash_interactive_state_enabled(&shell->interactive) &&
@@ -247,11 +315,14 @@ struct ash_parser* ash_shell_context_begin_parse(
         return NULL;
     }
     assert(ash_shell_context_invariants(shell));
-    ash_parser_init_at(
+    ash_parser_init_at_with_aliases(
         &shell->parser_state.parser,
         origin,
         input,
-        length
+        length,
+        ash_shell_policy_expands_aliases(&shell->policy) ?
+            shell->aliases :
+            NULL
     );
     shell->parser_state.active = true;
     assert(ash_shell_context_invariants(shell));
@@ -301,6 +372,7 @@ void ash_shell_context_release_owned(struct ash_shell* shell) {
     assert(ash_shell_context_invariants(shell));
     ash_shell_context_end_parse(shell);
     ash_input_release_all(shell);
+    ash_aliases_destroy(&shell->aliases);
     ash_functions_destroy(shell);
     ash_jobs_destroy(shell);
     bx_fd_transaction_stack_discard(&shell->redirections);

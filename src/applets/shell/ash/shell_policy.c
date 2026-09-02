@@ -100,6 +100,14 @@ bool ash_shell_policy_is_bash(const struct ash_shell_policy* policy) {
         policy->personality == ASH_SHELL_PERSONALITY_BASH;
 }
 
+bool ash_shell_policy_expands_aliases(
+    const struct ash_shell_policy* policy
+) {
+    return ash_shell_policy_valid(policy) &&
+        (ash_shell_policy_has(policy, ASH_SHELL_POLICY_POSIX) ||
+         ash_shell_policy_has(policy, ASH_SHELL_POLICY_INTERACTIVE));
+}
+
 const char* ash_shell_policy_bash_version(
     const struct ash_shell_policy* policy
 ) {
