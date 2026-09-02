@@ -155,6 +155,9 @@ static bool ash_invocation_apply_short(
                 return true;
             }
             break;
+        case 'p':
+            candidate->privileged = enabled;
+            return true;
     }
     if (ash_shell_option_apply_letter(
             &candidate->options,

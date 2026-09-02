@@ -58,6 +58,7 @@ enum ash_shell_option_result ash_shell_option_apply_name(
 void ash_shell_options_format_letters(
     uint32_t options,
     bool interactive,
+    bool privileged,
     char* output,
     size_t output_size
 );

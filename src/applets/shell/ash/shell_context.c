@@ -377,6 +377,10 @@ void ash_shell_option_letters(const struct ash_shell* shell, char* output, size_
             &shell->policy,
             ASH_SHELL_POLICY_INTERACTIVE
         ),
+        ash_shell_policy_has(
+            &shell->policy,
+            ASH_SHELL_POLICY_PRIVILEGED
+        ),
         output,
         output_size
     );

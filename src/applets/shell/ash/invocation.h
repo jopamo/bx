@@ -45,6 +45,7 @@ struct ash_invocation {
     struct ash_startup_request startup;
     bool login_shell;
     bool force_interactive;
+    bool privileged;
     bool standalone_applets;
 };
 

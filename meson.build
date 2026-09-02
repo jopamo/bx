@@ -609,6 +609,7 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/parser.c',
   'src/applets/shell/ash/parser_alias.c',
   'src/applets/shell/ash/process.c',
+  'src/applets/shell/ash/privilege.c',
   'src/applets/shell/ash/scope.c',
   'src/applets/shell/ash/shell_context.c',
   'src/applets/shell/ash/shell_options.c',

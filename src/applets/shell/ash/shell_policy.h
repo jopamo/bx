@@ -17,6 +17,7 @@ enum ash_shell_policy_flag {
     ASH_SHELL_POLICY_RESTRICTED = 1u << 3,
     ASH_SHELL_POLICY_PRIVILEGED = 1u << 4,
     ASH_SHELL_POLICY_STANDALONE_APPLETS = 1u << 5,
+    ASH_SHELL_POLICY_STARTUP_SUPPRESSED = 1u << 6,
 };
 
 enum ash_bash_compat_level {
@@ -57,6 +58,9 @@ bool ash_shell_policy_has(
 );
 bool ash_shell_policy_is_bash(const struct ash_shell_policy* policy);
 bool ash_shell_policy_expands_aliases(
+    const struct ash_shell_policy* policy
+);
+bool ash_shell_policy_allows_startup(
     const struct ash_shell_policy* policy
 );
 const char* ash_shell_policy_bash_version(
