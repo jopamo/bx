@@ -156,6 +156,22 @@ static bool ash_parser_at_end(struct ash_parser* parser) {
     return token != NULL && token->kind == ASH_TOKEN_EOF;
 }
 
+/*
+ * A token required before an unescaped newline is normally a fatal omission.
+ * A terminal backslash-newline has already been removed by the lexer, so its
+ * apparent EOF is only a physical-line boundary and may still supply the
+ * required token.
+ */
+static enum ash_parser_result ash_parser_required_token_result(
+    const struct ash_parser* parser,
+    const struct ash_token* token
+) {
+    return token != NULL &&
+        token->kind == ASH_TOKEN_EOF &&
+        ash_lexer_ended_with_line_continuation(&parser->lexer) ?
+            ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR;
+}
+
 static void ash_parser_skip_newlines(struct ash_parser* parser) {
     while (true) {
         struct ash_token* token = ash_parser_peek(parser);
@@ -284,7 +300,7 @@ static bool ash_parser_take_redirection(
     if (token->kind == ASH_TOKEN_EOF || token->kind == ASH_TOKEN_NEWLINE) {
         ash_parser_fail(
             parser,
-            ASH_PARSER_INCOMPLETE,
+            ash_parser_required_token_result(parser, token),
             redirection->location,
             "redirection target expected"
         );
@@ -481,8 +497,7 @@ static struct ash_ast* ash_parse_simple(
             if (token == NULL || token->kind != ASH_TOKEN_RPAREN) {
                 ash_parser_fail(
                     parser,
-                    token != NULL && token->kind != ASH_TOKEN_EOF ?
-                        ASH_PARSER_ERROR : ASH_PARSER_INCOMPLETE,
+                    ash_parser_required_token_result(parser, token),
                     token != NULL ? token->location : node->location,
                     "')' expected in function definition"
                 );
@@ -583,7 +598,7 @@ static bool ash_parser_take_case_pattern(
     if (token->kind != ASH_TOKEN_WORD) {
         ash_parser_fail(
             parser,
-            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            ash_parser_required_token_result(parser, token),
             token->location,
             "case pattern expected"
         );
@@ -635,7 +650,7 @@ static struct ash_ast* ash_parse_case_after_keyword(
     if (token->kind != ASH_TOKEN_WORD) {
         ash_parser_fail(
             parser,
-            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            ash_parser_required_token_result(parser, token),
             token->location,
             "word expected after 'case'"
         );
@@ -725,8 +740,7 @@ static struct ash_ast* ash_parse_case_after_keyword(
         if (token == NULL || token->kind != ASH_TOKEN_RPAREN) {
             ash_parser_fail(
                 parser,
-                token != NULL && token->kind != ASH_TOKEN_EOF ?
-                    ASH_PARSER_ERROR : ASH_PARSER_INCOMPLETE,
+                ash_parser_required_token_result(parser, token),
                 token != NULL ? token->location : location,
                 "')' expected after case pattern"
             );
@@ -1010,7 +1024,7 @@ static char* ash_parser_take_name(
     if (token->kind != ASH_TOKEN_WORD) {
         ash_parser_fail(
             parser,
-            ash_parser_at_end(parser) ? ASH_PARSER_INCOMPLETE : ASH_PARSER_ERROR,
+            ash_parser_required_token_result(parser, token),
             token->location,
             error
         );
