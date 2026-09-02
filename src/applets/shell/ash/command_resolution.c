@@ -23,6 +23,7 @@ static const struct ash_builtin_definition ash_builtins[] = {
     {"export", ASH_BUILTIN_EXPORT},
     {"return", ASH_BUILTIN_RETURN},
     {"set", ASH_BUILTIN_SET},
+    {"shopt", ASH_BUILTIN_SHOPT},
     {"shift", ASH_BUILTIN_SHIFT},
     {"source", ASH_BUILTIN_SOURCE},
     {"unset", ASH_BUILTIN_UNSET},
@@ -56,6 +57,7 @@ static enum ash_command_resolution_kind ash_builtin_resolution_kind(
         case ASH_BUILTIN_UNALIAS:
         case ASH_BUILTIN_UMASK:
         case ASH_BUILTIN_PWD:
+        case ASH_BUILTIN_SHOPT:
         case ASH_BUILTIN_WAIT:
             return ASH_COMMAND_REGULAR_BUILTIN;
         case ASH_BUILTIN_INVALID:

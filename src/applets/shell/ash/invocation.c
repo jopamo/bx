@@ -49,6 +49,10 @@ bool ash_invocation_valid(const struct ash_invocation* invocation) {
             invocation->options,
             ash_invocation_personality(invocation)
         ) ||
+        !ash_shopt_state_valid_for_personality(
+            &invocation->shopt,
+            ash_invocation_personality(invocation)
+        ) ||
         !ash_startup_request_valid(&invocation->startup) ||
         (ash_invocation_personality(invocation) !=
              ASH_SHELL_PERSONALITY_BASH &&
@@ -105,6 +109,7 @@ bool ash_invocation_error_valid(
                 error->option != '\0';
         case ASH_INVOCATION_ERROR_INVALID_LONG_OPTION:
         case ASH_INVOCATION_ERROR_INVALID_OPTION_NAME:
+        case ASH_INVOCATION_ERROR_INVALID_SHOPT_NAME:
         case ASH_INVOCATION_ERROR_MISSING_LONG_OPTION_ARGUMENT:
             return error->progname != NULL &&
                 error->argument != NULL &&
@@ -344,6 +349,31 @@ bool ash_invocation_parse(
         for (const char* option = argument + 1;
              *option != '\0';
              option++) {
+            if (*option == 'O' &&
+                strcmp(candidate.progname, "bash") == 0 &&
+                index + 1 < argc) {
+                const char* option_name = argv[++index];
+                enum ash_shopt_option shopt =
+                    ash_shopt_resolve(option_name);
+                if (shopt == 0u ||
+                    ash_shopt_apply(
+                        &candidate.shopt,
+                        shopt,
+                        sign == '-',
+                        ash_invocation_personality(&candidate)
+                    ) != ASH_SHOPT_APPLIED) {
+                    return ash_invocation_fail(
+                        error,
+                        (struct ash_invocation_error){
+                            .kind =
+                                ASH_INVOCATION_ERROR_INVALID_SHOPT_NAME,
+                            .progname = candidate.progname,
+                            .argument = option_name,
+                        }
+                    );
+                }
+                continue;
+            }
             if (*option == 'o' &&
                 strcmp(candidate.progname, "bash") == 0 &&
                 index + 1 < argc) {

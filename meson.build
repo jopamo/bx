@@ -613,6 +613,8 @@ bx_shell_applet_sources = [
   'src/applets/shell/ash/shell_context.c',
   'src/applets/shell/ash/shell_options.c',
   'src/applets/shell/ash/shell_policy.c',
+  'src/applets/shell/ash/shopt.c',
+  'src/applets/shell/ash/shopt_builtin.c',
   'src/applets/shell/ash/source_trace.c',
   'src/applets/shell/ash/startup.c',
   'src/applets/shell/ash/syntax.c',

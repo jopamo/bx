@@ -12,6 +12,7 @@
 #include "applets/shell/ash/scope.h"
 #include "applets/shell/ash/shell_options.h"
 #include "applets/shell/ash/shell_policy.h"
+#include "applets/shell/ash/shopt.h"
 #include "applets/shell/ash/source_trace.h"
 #include "lib/fd_transaction.h"
 
@@ -22,7 +23,6 @@ struct ash_function;
 struct ash_history_state;
 struct ash_input_source;
 struct ash_job;
-struct ash_shopt_state;
 struct ash_source_name;
 struct ash_trap_table;
 struct ash_shell;
@@ -55,6 +55,7 @@ struct ash_shell_context_config {
     char** positional_values;
     int positional_count;
     uint32_t options;
+    struct ash_shopt_state shopt;
     struct ash_shell_policy policy;
     struct ash_interactive_state interactive;
     /*
@@ -97,7 +98,7 @@ struct ash_shell {
      */
     struct ash_scope* scopes;
     uint32_t options;
-    struct ash_shopt_state* shopt;
+    struct ash_shopt_state shopt;
     struct ash_shell_policy policy;
     /*
      * Immutable startup source/interactivity and descriptor attachment truth.

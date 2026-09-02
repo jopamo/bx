@@ -53,16 +53,25 @@ struct ash_source_location ash_lexer_current_location(
     };
 }
 
-void ash_lexer_init_at(
+bool ash_lexer_options_valid(
+    const struct ash_lexer_options* options
+) {
+    return options != NULL &&
+        (options->flags & ~(uint32_t)ASH_LEXER_FLAG_ALL) == 0u;
+}
+
+void ash_lexer_init_at_with_options(
     struct ash_lexer* lexer,
     struct ash_source_location origin,
     const char* input,
-    size_t length
+    size_t length,
+    const struct ash_lexer_options* options
 ) {
     assert(lexer != NULL);
     assert(ash_source_location_valid(&origin));
     assert(input != NULL);
     assert(origin.offset <= SIZE_MAX - length);
+    assert(ash_lexer_options_valid(options));
     *lexer = (struct ash_lexer){
         .source_name = origin.source,
         .source_identity = origin.identity,
@@ -71,7 +80,23 @@ void ash_lexer_init_at(
         .source_offset = origin.offset,
         .line = origin.line,
         .column = origin.column,
+        .options = *options,
     };
+}
+
+void ash_lexer_init_at(
+    struct ash_lexer* lexer,
+    struct ash_source_location origin,
+    const char* input,
+    size_t length
+) {
+    ash_lexer_init_at_with_options(
+        lexer,
+        origin,
+        input,
+        length,
+        &(const struct ash_lexer_options){0}
+    );
 }
 
 void ash_lexer_init(
@@ -688,6 +713,18 @@ static bool ash_lexer_starts_process_substitution(
     const struct ash_lexer* lexer
 ) {
     return ash_lexer_process_substitution_at(lexer, lexer->offset);
+}
+
+static bool ash_lexer_starts_extglob(
+    const struct ash_lexer* lexer
+) {
+    if ((lexer->options.flags & ASH_LEXER_EXTGLOB) == 0u) {
+        return false;
+    }
+    char operator = ash_lexer_peek_logical(lexer, 0u);
+    return operator != '\0' &&
+        strchr("?*+@!", operator) != NULL &&
+        ash_lexer_peek_logical(lexer, 1u) == '(';
 }
 
 static const char* ash_matched_error(
@@ -1350,7 +1387,8 @@ static bool ash_lexer_text_boundary(
 
     char ch = ash_lexer_peek(lexer, 0u);
     if (quote == ASH_QUOTE_NONE) {
-        return ash_lexer_starts_process_substitution(lexer) ||
+        return ash_lexer_starts_extglob(lexer) ||
+            ash_lexer_starts_process_substitution(lexer) ||
             ash_lexer_word_boundary(lexer) ||
             ch == '\\' || ch == '\'' || ch == '"' ||
             ch == '$' || ch == '`';
@@ -1524,6 +1562,196 @@ static enum ash_lexer_result ash_lexer_scan_double_quote(
     );
 }
 
+static enum ash_lexer_result ash_lexer_scan_backslash(
+    struct ash_lexer* lexer,
+    struct ash_word* word
+) {
+    struct ash_source_location location =
+        ash_lexer_current_location(lexer);
+    (void)ash_lexer_advance(lexer);
+    if (ash_lexer_at_end(lexer)) {
+        const char backslash = '\\';
+        return ash_word_append_span(
+            word,
+            ASH_WORD_TEXT,
+            ASH_QUOTE_NONE,
+            location,
+            &backslash,
+            1u
+        ) == 0 ? ASH_LEXER_TOKEN :
+            ash_lexer_fail(
+                lexer,
+                ASH_LEXER_ERROR,
+                location,
+                "out of memory"
+            );
+    }
+
+    char escaped = ash_lexer_advance(lexer);
+    return ash_word_append_span(
+        word,
+        ASH_WORD_TEXT,
+        ASH_QUOTE_BACKSLASH,
+        location,
+        &escaped,
+        1u
+    ) == 0 ? ASH_LEXER_TOKEN :
+        ash_lexer_fail(
+            lexer,
+            ASH_LEXER_ERROR,
+            location,
+            "out of memory"
+        );
+}
+
+/*
+ * Extglob parentheses suppress ordinary shell token boundaries, but the
+ * contents remain part of the surrounding structured word. Scan the balanced
+ * region iteratively so nested groups do not consume the C stack, while the
+ * existing quote/substitution scanners continue to preserve semantic parts.
+ */
+static enum ash_lexer_result ash_lexer_scan_extglob(
+    struct ash_lexer* lexer,
+    struct ash_word* word
+) {
+    assert(ash_lexer_starts_extglob(lexer));
+    struct ash_source_location opening =
+        ash_lexer_current_location(lexer);
+    char prefix[] = {
+        ash_lexer_advance_logical(lexer),
+        ash_lexer_advance_logical(lexer),
+    };
+    if (ash_word_append_span(
+            word,
+            ASH_WORD_TEXT,
+            ASH_QUOTE_NONE,
+            opening,
+            prefix,
+            sizeof(prefix)
+        ) != 0) {
+        return ash_lexer_fail(
+            lexer,
+            ASH_LEXER_ERROR,
+            opening,
+            "out of memory"
+        );
+    }
+    size_t depth = 1u;
+
+    while (true) {
+        ash_lexer_skip_line_continuations(lexer);
+        if (ash_lexer_at_end(lexer)) {
+            return ash_lexer_fail(
+                lexer,
+                ASH_LEXER_INCOMPLETE,
+                opening,
+                "unterminated extended glob"
+            );
+        }
+
+        char ch = ash_lexer_peek(lexer, 0u);
+        enum ash_lexer_result result = ASH_LEXER_TOKEN;
+        if (ch == '\\') {
+            result = ash_lexer_scan_backslash(lexer, word);
+        }
+        else if (ch == '\'') {
+            result = ash_lexer_scan_single_quote(lexer, word);
+        }
+        else if (ch == '"') {
+            result = ash_lexer_scan_double_quote(
+                lexer,
+                word,
+                ASH_QUOTE_DOUBLE
+            );
+        }
+        else if (ch == '$' && ash_lexer_starts_with(lexer, "$'")) {
+            result = ash_lexer_scan_dollar_single_quote(lexer, word);
+        }
+        else if (ch == '$' && ash_lexer_starts_with(lexer, "$\"")) {
+            result = ash_lexer_scan_double_quote(
+                lexer,
+                word,
+                ASH_QUOTE_LOCALE
+            );
+        }
+        else if (ch == '$') {
+            result = ash_lexer_scan_dollar(
+                lexer,
+                word,
+                ASH_QUOTE_NONE
+            );
+        }
+        else if (ch == '`') {
+            result = ash_lexer_scan_matched(
+                lexer,
+                word,
+                ASH_QUOTE_NONE,
+                ASH_MATCH_BACKQUOTE
+            );
+        }
+        else if (ash_lexer_starts_process_substitution(lexer)) {
+            result = ash_lexer_scan_matched(
+                lexer,
+                word,
+                ASH_QUOTE_NONE,
+                ASH_MATCH_PROCESS
+            );
+        }
+        else {
+            struct ash_source_location location =
+                ash_lexer_current_location(lexer);
+            size_t start = lexer->offset;
+            bool complete = false;
+            while (!ash_lexer_at_end(lexer) &&
+                   !ash_is_line_continuation_at(
+                       lexer->input,
+                       lexer->length,
+                       lexer->offset
+                   )) {
+                ch = ash_lexer_peek(lexer, 0u);
+                if (ch == '\\' || ch == '\'' || ch == '"' ||
+                    ch == '$' || ch == '`' ||
+                    ash_lexer_starts_process_substitution(lexer)) {
+                    break;
+                }
+                if (ch == '(') {
+                    depth++;
+                }
+                else if (ch == ')') {
+                    assert(depth != 0u);
+                    depth--;
+                }
+                (void)ash_lexer_advance(lexer);
+                if (depth == 0u) {
+                    complete = true;
+                    break;
+                }
+            }
+            if (ash_word_append_span(
+                    word,
+                    ASH_WORD_TEXT,
+                    ASH_QUOTE_NONE,
+                    location,
+                    lexer->input + start,
+                    lexer->offset - start
+                ) != 0) {
+                result = ash_lexer_fail(
+                    lexer,
+                    ASH_LEXER_ERROR,
+                    location,
+                    "out of memory"
+                );
+            }
+            else if (complete) {
+                return ASH_LEXER_TOKEN;
+            }
+        }
+        if (result != ASH_LEXER_TOKEN) {
+            return result;
+        }
+    }
+}
+
 static enum ash_lexer_result ash_lexer_scan_word(
     struct ash_lexer* lexer,
     struct ash_token* token
@@ -1542,44 +1770,7 @@ static enum ash_lexer_result ash_lexer_scan_word(
         char ch = ash_lexer_peek(lexer, 0u);
         enum ash_lexer_result result = ASH_LEXER_TOKEN;
         if (ch == '\\') {
-            struct ash_source_location escaped_location =
-                ash_lexer_current_location(lexer);
-            (void)ash_lexer_advance(lexer);
-            if (ash_lexer_at_end(lexer)) {
-                const char backslash = '\\';
-                if (ash_word_append_span(
-                        &token->word,
-                        ASH_WORD_TEXT,
-                        ASH_QUOTE_NONE,
-                        escaped_location,
-                        &backslash,
-                        1u
-                    ) != 0) {
-                    return ash_lexer_fail(
-                        lexer,
-                        ASH_LEXER_ERROR,
-                        escaped_location,
-                        "out of memory"
-                    );
-                }
-                continue;
-            }
-            char escaped = ash_lexer_advance(lexer);
-            if (ash_word_append_span(
-                    &token->word,
-                    ASH_WORD_TEXT,
-                    ASH_QUOTE_BACKSLASH,
-                    escaped_location,
-                    &escaped,
-                    1u
-                ) != 0) {
-                result = ash_lexer_fail(
-                    lexer,
-                    ASH_LEXER_ERROR,
-                    escaped_location,
-                    "out of memory"
-                );
-            }
+            result = ash_lexer_scan_backslash(lexer, &token->word);
         }
         else if (ch == '\'') {
             result = ash_lexer_scan_single_quote(lexer, &token->word);
@@ -1618,6 +1809,12 @@ static enum ash_lexer_result ash_lexer_scan_word(
                 &token->word,
                 ASH_QUOTE_NONE,
                 ASH_MATCH_PROCESS
+            );
+        }
+        else if (ash_lexer_starts_extglob(lexer)) {
+            result = ash_lexer_scan_extglob(
+                lexer,
+                &token->word
             );
         }
         else {
@@ -1779,16 +1976,27 @@ enum ash_lexer_result ash_lexer_next(struct ash_lexer* lexer, struct ash_token* 
     return ash_lexer_scan_word(lexer, token);
 }
 
-enum ash_lexer_fragment_result ash_lexer_classify_fragment(
+enum ash_lexer_fragment_result ash_lexer_classify_fragment_with_options(
     const char* input,
-    size_t length
+    size_t length,
+    const struct ash_lexer_options* options
 ) {
-    if (input == NULL) {
+    if (input == NULL || !ash_lexer_options_valid(options)) {
         errno = EINVAL;
         return ASH_LEXER_FRAGMENT_ERROR;
     }
     struct ash_lexer lexer;
-    ash_lexer_init(&lexer, "<fragment>", input, length);
+    ash_lexer_init_at_with_options(
+        &lexer,
+        (struct ash_source_location){
+            .source = "<fragment>",
+            .line = 1u,
+            .column = 1u,
+        },
+        input,
+        length,
+        options
+    );
     bool terminal_operator_can_extend = false;
     while (true) {
         struct ash_token token;
@@ -1818,6 +2026,17 @@ enum ash_lexer_fragment_result ash_lexer_classify_fragment(
             return ASH_LEXER_FRAGMENT_SELF_CONTAINED;
         }
     }
+}
+
+enum ash_lexer_fragment_result ash_lexer_classify_fragment(
+    const char* input,
+    size_t length
+) {
+    return ash_lexer_classify_fragment_with_options(
+        input,
+        length,
+        &(const struct ash_lexer_options){0}
+    );
 }
 
 const char* ash_token_kind_name(enum ash_token_kind kind) {

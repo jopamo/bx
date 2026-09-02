@@ -43,6 +43,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
         lexer->line == 0u || lexer->column == 0u ||
         state->parser.result < ASH_PARSER_COMPLETE ||
         state->parser.result > ASH_PARSER_ERROR ||
+        !ash_lexer_options_valid(&lexer->options) ||
         state->parser.aliases != expected_aliases ||
         state->parser.alias_frames == NULL ||
         state->parser.alias_frame_count >
@@ -74,6 +75,7 @@ static bool ash_parser_state_invariants(const struct ash_shell* shell) {
             frame->alias_length !=
                 ash_alias_value_length(frame->alias) ||
             frame->lexer.offset > frame->lexer.length ||
+            frame->lexer.options.flags != lexer->options.flags ||
             frame->lexer.source_offset >
                 SIZE_MAX - frame->lexer.length ||
             (frame->releases == NULL) !=
@@ -175,6 +177,10 @@ bool ash_shell_context_invariants(const struct ash_shell* shell) {
             shell->options,
             shell->policy.personality
         ) &&
+        ash_shopt_state_valid_for_personality(
+            &shell->shopt,
+            shell->policy.personality
+        ) &&
         ash_shell_policy_valid(&shell->policy) &&
         ash_aliases_invariants(shell->aliases) &&
         ash_interactive_state_valid(&shell->interactive) &&
@@ -207,7 +213,7 @@ static bool ash_shell_context_empty(const struct ash_shell* shell) {
         shell->interactive.mode == ASH_INTERACTIVE_DISABLED &&
         shell->interactive.terminal_attachments ==
             ASH_TERMINAL_DETACHED &&
-        shell->shopt == NULL &&
+        shell->shopt.enabled == 0u &&
         shell->aliases == NULL &&
         shell->functions == NULL &&
         shell->traps == NULL &&
@@ -261,6 +267,10 @@ bool ash_shell_context_init(
             config->options,
             config->policy.personality
         ) ||
+        !ash_shopt_state_valid_for_personality(
+            &config->shopt,
+            config->policy.personality
+        ) ||
         !ash_interactive_state_valid(&config->interactive) ||
         interactive !=
             ash_interactive_state_enabled(&config->interactive) ||
@@ -275,6 +285,7 @@ bool ash_shell_context_init(
     struct ash_shell candidate = {
         .progname = config->progname,
         .options = config->options,
+        .shopt = config->shopt,
         .policy = config->policy,
         .interactive = config->interactive,
         .owns_self_executable_fd = config->take_self_executable_fd,
@@ -315,14 +326,24 @@ struct ash_parser* ash_shell_context_begin_parse(
         return NULL;
     }
     assert(ash_shell_context_invariants(shell));
-    ash_parser_init_at_with_aliases(
+    const struct ash_parser_config parser_config = {
+        .aliases =
+            ash_shell_policy_expands_aliases(&shell->policy) ?
+                shell->aliases :
+                NULL,
+        .lexer = {
+            .flags = ash_shopt_enabled(
+                &shell->shopt,
+                ASH_SHOPT_EXTGLOB
+            ) ? ASH_LEXER_EXTGLOB : 0u,
+        },
+    };
+    ash_parser_init_at_with_config(
         &shell->parser_state.parser,
         origin,
         input,
         length,
-        ash_shell_policy_expands_aliases(&shell->policy) ?
-            shell->aliases :
-            NULL
+        &parser_config
     );
     shell->parser_state.active = true;
     assert(ash_shell_context_invariants(shell));

@@ -198,7 +198,10 @@ static bool ash_parser_push_alias(
 ) {
     size_t alias_length = ash_alias_value_length(alias);
     size_t tail_length = 0u;
-    bool bridge_tail = ash_alias_requires_tail(alias);
+    bool bridge_tail = ash_alias_requires_tail(
+        alias,
+        &parser->lexer.options
+    );
     if (bridge_tail) {
         for (size_t i = parser->alias_frame_count; i != 0u; i--) {
             const struct ash_lexer* lexer =
@@ -414,11 +417,12 @@ static bool ash_parser_push_alias(
         }
         ash_lexer_discard_remaining(&parser->lexer);
     }
-    ash_lexer_init_at(
+    ash_lexer_init_at_with_options(
         &frame->lexer,
         location,
         input,
-        length
+        length,
+        &parser->lexer.options
     );
     return true;
 }

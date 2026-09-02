@@ -34,6 +34,7 @@
 #include "applets/shell/ash/process.h"
 #include "applets/shell/ash/redirection.h"
 #include "applets/shell/ash/shell_context.h"
+#include "applets/shell/ash/shopt_builtin.h"
 #include "applets/shell/ash/startup.h"
 #include "applets/shell/ash/variables.h"
 #include "bx/self_exec.h"
@@ -797,6 +798,8 @@ static int ash_run_builtin(struct ash_shell* shell, enum ash_builtin_kind builti
             return ash_builtin_exec(shell, command);
         case ASH_BUILTIN_SET:
             return ash_builtin_set(shell, command);
+        case ASH_BUILTIN_SHOPT:
+            return ash_shopt_builtin(shell, command);
         case ASH_BUILTIN_BREAK:
             return ash_builtin_loop_control(
                 shell,
@@ -2329,6 +2332,14 @@ static int ash_report_invocation_error(
                 error->argument
             );
             return 2;
+        case ASH_INVOCATION_ERROR_INVALID_SHOPT_NAME:
+            fprintf(
+                stderr,
+                "%s: line 0: %s: invalid shell option name\n",
+                error->progname,
+                error->argument
+            );
+            return 2;
         case ASH_INVOCATION_ERROR_MISSING_COMMAND:
             fprintf(
                 stderr,
@@ -2438,6 +2449,7 @@ int bx_ash_main(int argc, char** argv) {
         .positional_values = invocation.positional_values,
         .positional_count = invocation.positional_count,
         .options = invocation.options,
+        .shopt = invocation.shopt,
         .policy = policy,
         .interactive = interactive,
         .take_self_executable_fd = invocation.standalone_applets,
