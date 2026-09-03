@@ -12,28 +12,22 @@
 #include "update_policy.h"
 #include "bx/libbx.h"
 
-void bx_args_getopt_reset_at(int first_option_index) {
-    static char reset_program[] = "bx-getopt-reset";
-    static char* reset_argv[] = {reset_program, NULL};
-    static const struct option reset_options[] = {
-        {NULL, 0, NULL, 0},
-    };
+static int bx_args_pending_first_option_index = -1;
+static char bx_args_reset_program[] = "bx-getopt-reset";
+static char* bx_args_reset_argv[] = {bx_args_reset_program, NULL};
 
+void bx_args_getopt_reset_at(int first_option_index) {
     /*
-     * optind = 1 does not clear libc's private position within a grouped
-     * option when the previous parse returned before reaching -1. Both glibc
-     * and musl use optind = 0 as the full-reinitialization request. Complete
-     * that reinitialization against an empty argv before selecting the
-     * caller's actual starting index.
+     * A full getopt reset must be initialized with the next parser's actual
+     * optstring. glibc chooses permutation/POSIX ordering while initializing,
+     * so priming it here with an empty optstring would lose a leading '+' and
+     * let command operands such as "cmd -d" be permuted back into an applet's
+     * option scan. Defer initialization until bx_args_getopt_long() has the
+     * real optstring, then restore the caller's requested starting index.
      */
+    bx_args_pending_first_option_index = first_option_index;
     opterr = 0;
     optind = 0;
-    optopt = 0;
-    optarg = NULL;
-    (void)getopt_long(1, reset_argv, "", reset_options, NULL);
-
-    opterr = 0;
-    optind = first_option_index;
     optopt = 0;
     optarg = NULL;
 }
@@ -49,6 +43,34 @@ int bx_args_getopt_long(
     const struct option* long_options,
     int* long_index
 ) {
+    if (bx_args_pending_first_option_index >= 0) {
+        int first_option_index = bx_args_pending_first_option_index;
+        bx_args_pending_first_option_index = -1;
+
+        /*
+         * Force libc to discard any private grouped-option position and choose
+         * its ordering mode from this parser's real optstring. The empty argv
+         * prevents consuming caller arguments during initialization. Once the
+         * libc state is fresh, select the caller's requested starting index.
+         */
+        opterr = 0;
+        optind = 0;
+        optopt = 0;
+        optarg = NULL;
+        (void)getopt_long(
+            1,
+            bx_args_reset_argv,
+            short_options,
+            long_options,
+            NULL
+        );
+
+        opterr = 0;
+        optind = first_option_index;
+        optopt = 0;
+        optarg = NULL;
+    }
+
     return getopt_long(argc, argv, short_options, long_options, long_index);
 }
 
