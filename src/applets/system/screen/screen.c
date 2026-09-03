@@ -153,6 +153,8 @@ int       rflag;
 int       dflag;
 int       queryflag = -1;
 bool      hastruecolor = false;
+bool      defosc52 = true;	/* clipboard writes allowed by default */
+bool      defosc52read = false;	/* clipboard reads blocked by default */
 
 char     *multi;
 int       multiattach;
@@ -1133,7 +1135,10 @@ int main(int argc, char **argv)
 		MakeWindow(&nwin);
 	}
 
-	if (display && default_startup)
+	/* The startup license banner is disabled for this fork. It blocks
+	 * interactive startup and is not desired in the bx multicall context.
+	 * (Upstream: if (display && default_startup) display_license();) */
+	if (0 && display && default_startup)
 		display_license();
 	xsignal(SIGINT, SigInt);
 	if (rflag && (rflag & 1) == 0 && !quietflag) {

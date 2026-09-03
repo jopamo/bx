@@ -357,7 +357,7 @@ void  MakeStatus (char *);
 void  RemoveStatus (void);
 int   ResizeDisplay (int, int);
 void  AddStr (char *);
-void  AddStrn (char *, int);
+void  AddStrn (const char *, int);
 void  Flush (int);
 void  freetty (void);
 void  Resize_obuf (void);
@@ -369,6 +369,7 @@ void  RunBlanker (char **);
 void  KillBlanker (void);
 void  DisplaySleep1000 (int, int);
 void  ClearScrollbackBuffer (void);
+void  DisplayOSC52(Display *, const char *, size_t, const char *, size_t);
 
 /* global variables */
 
