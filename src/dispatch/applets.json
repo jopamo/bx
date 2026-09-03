@@ -314,7 +314,7 @@
         "filesystem-read",
         "child-execution"
       ],
-      "execution_class": "exec-only"
+      "execution_class": "child-in-process-safe"
     },
     {
       "name": "printenv",
