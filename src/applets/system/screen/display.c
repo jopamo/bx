@@ -2187,6 +2187,33 @@ void ClearAllXtermOSC(void)
 #undef WT_FLAG
 
 /*
+ *  OSC 52 clipboard relay.
+ *
+ *  Screen acts as a transparent relay for OSC 52 sequences.
+ *  The raw sequence is forwarded to the outer terminal without
+ *  decoding the base64 payload. This preserves the data exactly
+ *  and works through SSH, nested sessions, etc.
+ */
+void  DisplayOSC52(Display *d, const char *pc, size_t pc_len,
+                  const char *pd, size_t pd_len)
+{
+	Display *save = display;
+
+	display = d;
+	if (!D_CXT) {
+		display = save;
+		return;
+	}
+	AddStr("\033]52;");
+	AddStrn(pc, pc_len);
+	AddChar(';');
+	AddStrn(pd, pd_len);
+	AddStr("\033\\");
+	Flush(3);
+	display = save;
+}
+
+/*
  *  Output buffering routines
  */
 
@@ -2203,7 +2230,7 @@ void AddStr(char *str)
 		AddChar(c);
 }
 
-void AddStrn(char *str, int n)
+void AddStrn(const char *str, int n)
 {
 	char c;
 

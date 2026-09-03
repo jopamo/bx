@@ -47,6 +47,11 @@
 #define MSGMINWAIT 	1
 #define SILENCEWAIT	30
 
+/* Bounded dynamic control string limits */
+#define CTRLSTR_INLINE_SIZE	768	/* matches MAXSTR for zero-alloc path */
+#define OSC52_MAX_WIRE_SIZE	(1024 * 1024)	/* 1 MiB max OSC 52 payload */
+#define DCS_MAX_WIRE_SIZE	(1024 * 1024)	/* 1 MiB max DCS payload */
+
 /*
  * if a nasty user really wants to try a history of 3000 lines on all 10
  * windows, he will allocate 8 MegaBytes of memory, which is quite enough.
@@ -265,6 +270,8 @@ extern bool cjkwidth;
 extern bool default_startup;
 extern bool do_auth;
 extern bool hastruecolor;
+extern bool defosc52;		/* child apps may write clipboard via OSC 52 */
+extern bool defosc52read;	/* child apps may read clipboard via OSC 52 */
 extern bool iflag;
 extern bool logtstamp_on;
 extern bool lsflag;

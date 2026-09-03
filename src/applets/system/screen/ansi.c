@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <string.h>
@@ -1596,19 +1597,104 @@ static void DoCSI(Window *win, int c, int intermediate)
 	}
 }
 
+static void CStrInit(struct control_string *s)
+{
+	s->data = s->inline_buf;
+	s->len = 0;
+	s->cap = CTRLSTR_INLINE_SIZE;
+	s->limit = CTRLSTR_INLINE_SIZE;
+	s->heap = false;
+	s->overflow = false;
+	s->osc_cmd = 0;
+	s->osc_cmd_valid = false;
+	s->osc_cmd_complete = false;
+}
+
+static void CStrFree(struct control_string *s)
+{
+	if (s->heap) {
+		free(s->data);
+		s->data = s->inline_buf;
+		s->heap = false;
+	}
+}
+
+static void CStrAppend(struct control_string *s, int c)
+{
+	if (s->overflow)
+		return;
+	if (s->len >= s->limit) {
+		s->overflow = true;
+		return;
+	}
+	if (s->len >= s->cap) {
+		size_t newcap = s->cap * 2;
+		char *newbuf;
+		if (newcap < s->cap)	/* overflow check */
+			newcap = s->limit;
+		if (newcap > s->limit)
+			newcap = s->limit;
+		newbuf = realloc(s->heap ? s->data : NULL, newcap);
+		if (newbuf == NULL) {
+			s->overflow = true;
+			return;
+		}
+		if (!s->heap)
+			memcpy(newbuf, s->inline_buf, s->len);
+		s->data = newbuf;
+		s->cap = newcap;
+		s->heap = true;
+	}
+	s->data[s->len++] = c;
+}
+
 static void StringStart(Window *win, enum string_t type)
 {
 	win->w_StringType = type;
-	win->w_stringp = win->w_string;
+	CStrInit(&win->w_cstr);
 	win->w_state = ASTR;
+}
+
+/*
+ * Incrementally parse the OSC command number. This lets us detect
+ * OSC 52 early and raise its buffer limit before the payload exceeds
+ * the inline size, avoiding midpoint overflow for large clipboard data.
+ * Returns 1 if the command number has been fully consumed (terminated by ';').
+ */
+static int StringCharOscNumber(Window *win, int c)
+{
+	struct control_string *s = &win->w_cstr;
+
+	if (s->osc_cmd_complete)
+		return 1;
+	if (c >= '0' && c <= '9') {
+		if (s->osc_cmd > (UINT_MAX - (c - '0')) / 10)
+			s->osc_cmd_valid = false;	/* numeric overflow */
+		else {
+			s->osc_cmd = s->osc_cmd * 10 + (c - '0');
+			s->osc_cmd_valid = true;
+		}
+		return 0;
+	}
+	if (c == ';') {
+		s->osc_cmd_complete = true;
+		if (s->osc_cmd_valid && s->osc_cmd == 52)
+			s->limit = OSC52_MAX_WIRE_SIZE;
+		return 1;
+	}
+	/* Not a digit or ';' -- not a well-formed numeric OSC command. */
+	s->osc_cmd_valid = false;
+	s->osc_cmd_complete = true;
+	return 1;
 }
 
 static void StringChar(Window *win, int c)
 {
-	if (win->w_stringp >= win->w_string + MAXSTR - 1)
-		win->w_state = LIT;
-	else
-		*(win->w_stringp)++ = c;
+	/* Parse the OSC command number incrementally, before buffering,
+	 * so we can raise the limit for OSC 52 in time. */
+	if (win->w_StringType == OSC)
+		StringCharOscNumber(win, c);
+	CStrAppend(&win->w_cstr, c);
 }
 
 /*
@@ -1621,18 +1707,28 @@ static int StringEnd(Window *win)
 	char *p;
 	int typ;
 	char *t;
+	struct control_string *cs = &win->w_cstr;
 
 	/* There's two ways to terminate an OSC. If we've seen an ESC
 	 * then it's been ST otherwise it's BEL. */
 	t = win->w_state == STRESC ? "\033\\" : "\a";
 
 	win->w_state = LIT;
-	*win->w_stringp = '\0';
+	cs->data[cs->len] = '\0';
+
+	/* If the control string overflowed its limit, silently reject it.
+	 * The overflow flag means bytes were consumed but not stored,
+	 * so the terminator was reached and we can safely discard. */
+	if (cs->overflow) {
+		CStrFree(cs);
+		return 0;
+	}
+
 	switch (win->w_StringType) {
 	case OSC:		/* special xterm compatibility hack */
-		if (win->w_string[0] == ';' || (p = strchr(win->w_string, ';')) == NULL)
+		if (cs->data[0] == ';' || (p = strchr(cs->data, ';')) == NULL)
 			break;
-		typ = atoi(win->w_string);
+		typ = atoi(cs->data);
 		p++;
 		if (typ == 83) {	/* 83 = 'S' */
 			/* special execute commands sequence */
@@ -1641,7 +1737,7 @@ static int StringEnd(Window *win)
 			struct acluser *windowuser;
 
 			windowuser = *FindUserPtr(":window:");
-			if (windowuser && Parse(p, ARRAY_SIZE(win->w_string) - (p - win->w_string), args, argl)) {
+			if (windowuser && Parse(p, cs->cap - (p - cs->data), args, argl)) {
 				for (display = displays; display; display = display->d_next)
 					if (D_forecv->c_layer->l_bottom == &win->w_layer)
 						break;	/* found it */
@@ -1657,6 +1753,51 @@ static int StringEnd(Window *win)
 				fore = NULL;
 				flayer = NULL;
 			}
+			break;
+		}
+		if (typ == 52) {
+			/* OSC 52: Clipboard operation.
+			 * Format: 52 ; Pc ; Pd
+			 * Pc = selection (e.g. "c" for clipboard)
+			 * Pd = base64-encoded data, or "?" for read request.
+			 * Screen acts as a relay: forward to the outer terminal.
+			 * Note: p already points past "52;" here. */
+			char *semicolon;
+			char *pc, *pd;
+			size_t pc_len, pd_len;
+
+			pc = p;
+			semicolon = strchr(pc, ';');
+			if (semicolon == NULL)
+				break;
+			pc_len = semicolon - pc;
+			pd = semicolon + 1;
+			pd_len = strlen(pd);
+
+			/* Block clipboard reads by default.
+			 * Reads require correlating a response back to the
+			 * originating child, which is complex and security-sensitive. */
+			if (pd_len == 1 && pd[0] == '?') {
+				if (!defosc52read)
+					break;
+			}
+
+			/* Policy check: are child OSC52 writes allowed? */
+			if (!defosc52)
+				break;
+
+			/* Find an eligible display showing this window. */
+			for (display = displays; display; display = display->d_next) {
+				if (!D_CXT)
+					continue;
+				if (D_forecv->c_layer->l_bottom == &win->w_layer)
+					break;
+			}
+			if (display == NULL)
+				break;	/* no display showing this window */
+
+			/* Relay raw OSC 52 to the outer terminal. */
+			DisplayOSC52(display, pc, pc_len, pd, pd_len);
 			break;
 		}
 		if (typ == 0 || typ == 1 || typ == 2 || typ == 11 || typ == 20 || typ == 39 || typ == 49) {
@@ -1683,20 +1824,24 @@ static int StringEnd(Window *win)
 		if (typ != 0 && typ != 2)
 			break;
 
-		win->w_stringp -= p - win->w_string;
-		if (win->w_stringp > win->w_string)
-			memmove(win->w_string, p, win->w_stringp - win->w_string);
-		*win->w_stringp = '\0';
+		/* For title OSCs, strip the "N;" prefix and fall through to APC/hstatus. */
+		{
+			size_t prefix_len = p - cs->data;
+			cs->len -= prefix_len;
+			if (cs->len > 0)
+				memmove(cs->data, p, cs->len);
+			cs->data[cs->len] = '\0';
+		}
 		/* FALLTHROUGH */
 	case APC:
 		if (win->w_hstatus) {
-			if (strcmp(win->w_hstatus, win->w_string) == 0)
+			if (strcmp(win->w_hstatus, cs->data) == 0)
 				break;	/* not changed */
 			free(win->w_hstatus);
 			win->w_hstatus = NULL;
 		}
-		if (win->w_string != win->w_stringp)
-			win->w_hstatus = SaveStr(win->w_string);
+		if (cs->len > 0)
+			win->w_hstatus = SaveStr(cs->data);
 		WindowChanged(win, WINESC_HSTATUS);
 		break;
 	case PM:
@@ -1706,23 +1851,25 @@ static int StringEnd(Window *win)
 				if (status_cv->c_layer->l_bottom == &win->w_layer)
 					break;
 			if (status_cv || win->w_StringType == GM)
-				MakeStatus(win->w_string);
+				MakeStatus(cs->data);
 		}
+		CStrFree(cs);
 		return -1;
 	case DCS:
-		LAY_DISPLAYS(&win->w_layer, AddStr(win->w_string));
+		LAY_DISPLAYS(&win->w_layer, AddStr(cs->data));
 		break;
 	case AKA:
-		if (win->w_title == win->w_akabuf && !*win->w_string)
+		if (win->w_title == win->w_akabuf && cs->len == 0)
 			break;
 		if (win->w_dynamicaka)
-			ChangeAKA(win, win->w_string, strlen(win->w_string));
-		if (!*win->w_string)
+			ChangeAKA(win, cs->data, cs->len);
+		if (cs->len == 0)
 			win->w_autoaka = win->w_y + 1;
 		break;
 	default:
 		break;
 	}
+	CStrFree(cs);
 	return 0;
 }
 

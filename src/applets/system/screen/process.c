@@ -4591,6 +4591,16 @@ static void DoCommandTruecolor(struct action *act)
 		Activate(-1);
 }
 
+static void DoCommandOsc52(struct action *act)
+{
+	ParseOnOff(act, &defosc52);
+}
+
+static void DoCommandOsc52read(struct action *act)
+{
+	ParseOnOff(act, &defosc52read);
+}
+
 void DoAction(struct action *act)
 {
 	int nr = act->nr;
@@ -5179,6 +5189,12 @@ void DoAction(struct action *act)
 		break;
 	case RC_TRUECOLOR:
 		DoCommandTruecolor(act);
+		break;
+	case RC_OSC52:
+		DoCommandOsc52(act);
+		break;
+	case RC_OSC52READ:
+		DoCommandOsc52read(act);
 		break;
 	default:
 		break;

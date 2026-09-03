@@ -210,8 +210,31 @@ struct Window {
 	bool     w_c1;			/* enable C1 flag */
 	int	 w_decodestate;		/* state of our input decoder */
 	int	 w_mbcs;		/* saved char for multibytes charset */
-	char	 w_string[MAXSTR];
+	char	 w_string[MAXSTR];		/* printer buffer (shared name, not for control strings) */
 	char	*w_stringp;
+
+	/* Bounded dynamic control string buffer for escape sequence parsing.
+	 * Replaces the old w_string usage for OSC/DCS/APC/PM control strings.
+	 * Uses inline storage for short strings; heap-allocates for large payloads
+	 * (e.g. OSC 52 clipboard data). Overflow is tracked but never falls back
+	 * into LIT state -- bytes are consumed and discarded until the terminator. */
+	struct control_string {
+		char   inline_buf[CTRLSTR_INLINE_SIZE];
+		char  *data;
+		size_t len;
+		size_t cap;
+		size_t limit;
+		bool   heap;
+		bool   overflow;
+
+		/* Incremental OSC command number parsing.
+		 * We must know whether this is an OSC 52 before its payload
+		 * exceeds the inline buffer, so the command number is parsed
+		 * as characters arrive. */
+		unsigned int osc_cmd;
+		bool   osc_cmd_valid;
+		bool   osc_cmd_complete;
+	} w_cstr;
 	char	*w_tabs;		/* line with tabs */
 	int	 w_bell;		/* bell status of this window */
 	int	 w_flow;		/* flow flags */
