@@ -1,20 +1,18 @@
 #ifndef BX_FETCH_NET_TRANSFER_H
 #define BX_FETCH_NET_TRANSFER_H
 
-#include "lib/fetch/request.h"
-#include "lib/fetch/response.h"
-#include "lib/fetch/writer.h"
+#include "lib/fetch/net.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <curl/curl.h>
 
-typedef struct NetEngine NetEngine;
+typedef struct BxFetchEngine BxFetchEngine;
 
 typedef enum {
-    TRANSFER_STATE_INIT,
-    TRANSFER_STATE_ONGOING,
-    TRANSFER_STATE_COMPLETED,
-    TRANSFER_STATE_FAILED,
+    BX_FETCH_TRANSFER_STATE_INIT,
+    BX_FETCH_TRANSFER_STATE_ONGOING,
+    BX_FETCH_TRANSFER_STATE_COMPLETED,
+    BX_FETCH_TRANSFER_STATE_FAILED,
 } BxFetchTransferState;
 
 typedef struct BxFetchTransfer {
@@ -22,7 +20,7 @@ typedef struct BxFetchTransfer {
     BxFetchRequest* req;
     BxFetchResponse* resp;
     BxFetchWriter* writer;
-    NetEngine* engine;
+    BxFetchEngine* engine;
     struct BxFetchTransfer* next_active;
     struct curl_slist* headers;
     BxFetchTransferState state;
@@ -48,19 +46,13 @@ typedef struct BxFetchTransfer {
     size_t save_headers_cap;
 
     bool progress_started;
-    bool progress_line_active;
     double progress_start_s;
     double progress_last_update_s;
     double progress_last_sample_s;
     double progress_last_speed_bps;
     curl_off_t progress_last_bytes;
-    size_t progress_last_line_len;
     curl_off_t progress_resume_offset;
 
-    bool wget_basic_output;
-    bool wget_connection_reported;
-    bool wget_headers_reported;
-    bool wget_progress_emitted;
     bool response_headers_finalized;
     bool writer_closed;
     bool writer_aborted;
@@ -72,15 +64,17 @@ typedef struct BxFetchTransfer {
     bool url_canonicalization_failed;
     bool redirect_protocol_unsupported;
 
-    // Callback for when transfer is complete
-    void (*on_complete)(void* userdata, int result);
-    void* userdata;
+    BxFetchTransferHeadersCallback headers_cb;
+    BxFetchTransferCallback callback;
+    void* callback_userdata;
+    BxFetchRedirectPolicyCallback redirect_cb;
+    void* redirect_userdata;
 } BxFetchTransfer;
 
 /*
- * On success the transfer owns req until bx_fetch_transfer_free(). The writer
- * remains transaction-owned by the caller and is only borrowed. On failure
- * ownership of both arguments remains with the caller.
+ * Internal constructor. It borrows both arguments until engine submission
+ * succeeds. The engine then owns request and writer; every terminal path must
+ * consume the writer through close/abort before bx_fetch_transfer_free().
  */
 BxFetchTransfer* bx_fetch_transfer_new(BxFetchRequest* req, BxFetchWriter* writer);
 void bx_fetch_transfer_free(BxFetchTransfer* t);
