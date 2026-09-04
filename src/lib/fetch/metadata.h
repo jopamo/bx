@@ -18,7 +18,12 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
+
+#define BX_FETCH_METADATA_LINE_MAX_BYTES ((size_t)8 * 1024u)
+#define BX_FETCH_METADATA_FILE_MAX_BYTES ((size_t)256 * 1024u)
+#define BX_FETCH_METADATA_MAX_FIELDS ((size_t)1024u)
 
 typedef struct {
     char* etag;
@@ -30,6 +35,8 @@ typedef struct {
 
 bool bx_fetch_metadata_is_empty(const BxFetchMetadata* meta);
 int bx_fetch_metadata_write_stream(FILE* f, const BxFetchMetadata* meta);
+/* Reads bounded metadata from an already-authorized borrowed stream. */
+int bx_fetch_metadata_read_stream(FILE* f, BxFetchMetadata* meta);
 int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta);
 int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta);
 void bx_fetch_metadata_clear(BxFetchMetadata* meta);

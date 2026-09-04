@@ -60,6 +60,9 @@ const char* bx_fetch_request_url_for_display(const BxFetchRequest* req);
  */
 int bx_fetch_request_add_header(BxFetchRequest* req, const char* name, const char* value);
 
+/* Replaces any existing body with a copied in-memory body. */
+BxFetchRequestBodyResult bx_fetch_request_set_body(BxFetchRequest* req, const void* data, size_t length);
+
 /*
  * Configure a fixed-length streaming request body from `path`.
  *

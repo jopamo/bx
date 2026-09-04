@@ -18,6 +18,16 @@ static bool ascii_is_tchar(unsigned char c) {
            c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
 }
 
+bool bx_fetch_http_method_is_valid(const char* method) {
+    if (!method || method[0] == '\0')
+        return false;
+    for (const unsigned char* p = (const unsigned char*)method; *p; p++) {
+        if (!ascii_is_tchar(*p))
+            return false;
+    }
+    return true;
+}
+
 static unsigned char ascii_lower(unsigned char c) {
     if (c >= 'A' && c <= 'Z') {
         return (unsigned char)(c + ('a' - 'A'));

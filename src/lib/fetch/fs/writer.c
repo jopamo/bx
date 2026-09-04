@@ -34,11 +34,14 @@ struct BxFetchWriter {
     dev_t initial_dest_dev;
     ino_t initial_dest_ino;
     mode_t initial_dest_mode;
+    time_t initial_dest_mtime;
     BxFetchMetadata pending_metadata;
     bool has_pending_metadata;
     bool has_pending_mtime;
     time_t pending_mtime;
 };
+
+static bool same_destination_identity(const BxFetchWriter* w, const struct stat* st);
 
 static mode_t process_umask(void) {
     mode_t mask = umask(0);
@@ -207,9 +210,9 @@ static int seed_temp_file_from_existing_destination(BxFetchWriter* w) {
     if (fstat(src_fd, &st) != 0) {
         return writer_fail_after_close(errno, src_fd);
     }
-    if (!S_ISREG(st.st_mode)) {
+    if (!S_ISREG(st.st_mode) || !same_destination_identity(w, &st)) {
         close(src_fd);
-        errno = EINVAL;
+        errno = S_ISREG(st.st_mode) ? EBUSY : EINVAL;
         return -1;
     }
 
@@ -261,6 +264,7 @@ static int capture_destination_state_for_basename(BxFetchWriter* w, const char* 
             w->initial_dest_dev = 0;
             w->initial_dest_ino = 0;
             w->initial_dest_mode = 0;
+            w->initial_dest_mtime = 0;
             return 0;
         }
         return -1;
@@ -270,6 +274,7 @@ static int capture_destination_state_for_basename(BxFetchWriter* w, const char* 
     w->initial_dest_dev = st.st_dev;
     w->initial_dest_ino = st.st_ino;
     w->initial_dest_mode = st.st_mode;
+    w->initial_dest_mtime = st.st_mtime;
     return 0;
 }
 
@@ -1263,12 +1268,65 @@ void bx_fetch_writer_abort(BxFetchWriter* w) {
     writer_free(w);
 }
 
-BxFetchI64 bx_fetch_writer_get_size(const char* path) {
-    struct stat st;
-    if (lstat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-        return (BxFetchI64)st.st_size;
+uint64_t bx_fetch_writer_candidate_size(const BxFetchWriter* w) {
+    return w ? (uint64_t)w->written : 0;
+}
+
+bool bx_fetch_writer_original_mtime(const BxFetchWriter* w, time_t* mtime_out) {
+    if (!w || !mtime_out || !w->initial_dest_existed || !S_ISREG(w->initial_dest_mode)) {
+        return false;
     }
-    return (BxFetchI64)-1;
+    *mtime_out = w->initial_dest_mtime;
+    return true;
+}
+
+int bx_fetch_writer_load_original_metadata(const BxFetchWriter* w, BxFetchMetadata* metadata) {
+    if (!w || !metadata || w->to_stdout || w->parent_fd == -1 || !w->basename) {
+        errno = EINVAL;
+        return -1;
+    }
+    bx_fetch_metadata_clear(metadata);
+
+    char* sidecar_name = sidecar_name_for_basename(w->basename);
+    if (!sidecar_name)
+        return -1;
+    int fd = openat(w->parent_fd, sidecar_name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    int open_error = errno;
+    free(sidecar_name);
+    if (fd == -1) {
+        errno = open_error;
+        return open_error == ENOENT ? 0 : -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int error_number = errno;
+        close(fd);
+        errno = error_number;
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+
+    FILE* stream = fdopen(fd, "r");
+    if (!stream) {
+        int error_number = errno;
+        close(fd);
+        errno = error_number;
+        return -1;
+    }
+    int result = bx_fetch_metadata_read_stream(stream, metadata);
+    int error_number = errno;
+    if (fclose(stream) != 0 && result == 0) {
+        result = -1;
+        error_number = errno;
+    }
+    if (result != 0)
+        errno = error_number;
+    return result;
 }
 
 const char* bx_fetch_writer_get_path(const BxFetchWriter* w) {
