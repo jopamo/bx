@@ -622,10 +622,14 @@
 #define HAVE_TYPE_SOCKLEN 1
 
 /* Define if you have the struct stat64 type */
-#define HAVE_TYPE_STAT64 1
+/* #undef HAVE_TYPE_STAT64 */
 
-/* Define if you have the struct off64_t type */
-#define HAVE_TYPE_OFF64 1
+/* Define if you have the off64_t type */
+/*
+ * bx uses off_t with _FILE_OFFSET_BITS=64.  Do not claim the optional
+ * libc-specific off64_t name: musl intentionally does not expose it.
+ */
+/* #undef HAVE_TYPE_OFF64 */
 
 /* is sighandler_t already typedef'd? */
 #define HAVE_TYPE_SIGHANDLER 1
