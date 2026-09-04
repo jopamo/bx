@@ -2204,7 +2204,10 @@ void  DisplayOSC52(Display *d, const char *pc, size_t pc_len,
 	AddChar(';');
 	AddStrn(pd, pd_len);
 	AddStr("\033\\");
-	Flush(3);
+	/* A partial OSC is not meaningful and must not be discarded when the
+	 * tty's nonblocking buffer fills. Backpressure here until the complete
+	 * clipboard sequence has reached the outer terminal. */
+	Flush(0);
 	display = save;
 }
 

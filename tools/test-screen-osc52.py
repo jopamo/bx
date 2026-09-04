@@ -92,6 +92,7 @@ def static_checks(root):
     screen = root / "src" / "applets" / "system" / "screen"
     ansi = (screen / "ansi.c").read_text()
     display = (screen / "display.c").read_text()
+    window_c = (screen / "window.c").read_text()
     window_h = (screen / "window.h").read_text()
     screen_h = (screen / "screen.h").read_text()
     comm_c = (screen / "comm.c").read_text()
@@ -104,6 +105,7 @@ def static_checks(root):
     require("D_CXT" not in relay, "OSC 52 relay must not depend on the unrelated xterm D_CXT heuristic")
     require('AddStr("\\033]52;");' in relay, "OSC 52 relay prefix missing")
     require('AddStr("\\033\\\\");' in relay, "OSC 52 relay ST terminator missing")
+    require("Flush(0);" in relay, "OSC 52 relay must backpressure instead of discarding a partial sequence")
 
     osc52_start = ansi.find("if (typ == 52)")
     osc52_end = ansi.find("if (typ == 0 || typ == 1", osc52_start)
@@ -124,6 +126,10 @@ def static_checks(root):
     require(0 <= overflow_pos < nul_pos, "overflow must be checked before writing the terminator")
     string_start = extract_function(ansi, "StringStart")
     require("DCS_MAX_WIRE_SIZE" in string_start, "DCS passthrough must use the expanded bounded limit")
+    free_window = extract_function(window_c, "FreeWindow")
+    reset_window = extract_function(window_c, "ResetWindow")
+    require("CStrRelease(&window->w_cstr);" in free_window, "window destruction must release control strings")
+    require("CStrRelease(&win->w_cstr);" in reset_window, "window reset must release control strings")
 
     command_count = len(re.findall(r'^\s*\{\s*"[^"]+"\s*,', comm_c, re.MULTILINE))
     last = parse_define(comm_h, "RC_LAST")
