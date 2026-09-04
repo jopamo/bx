@@ -1610,6 +1610,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/core/transfer_completion.c',
   'src/lib/fetch/core/transfer_prepare.c',
   'src/lib/fetch/crawl/crawler.c',
+  'src/lib/fetch/crawl/document.c',
   'src/lib/fetch/fs/metadata.c',
   'src/lib/fetch/fs/metadata_recovery.c',
   'src/lib/fetch/fs/pathmap.c',
