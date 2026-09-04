@@ -56,8 +56,8 @@ typedef struct BxFetchTransfer {
     bool writer_aborted;
     bool terminal_callback_invoked;
 
-    char* current_url;
-    char* pending_redirect_url;
+    BxFetchPreparedUrl* current_target;
+    BxFetchPreparedUrl* pending_redirect_target;
     bool redirect_policy_rejected;
     bool url_canonicalization_failed;
     bool redirect_protocol_unsupported;

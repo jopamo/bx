@@ -93,28 +93,27 @@ static bool status_is_redirect(int status) {
     return status >= 300 && status < 400 && status != 304;
 }
 
-static char* resolve_redirect_target(BxFetchTransfer* t, const char* location) {
+static BxFetchPreparedUrl* resolve_redirect_target(BxFetchTransfer* t, const char* location) {
     if (!t || !location || location[0] == '\0')
         return NULL;
 
-    const char* base = t->current_url;
-    if ((!base || base[0] == '\0') && t->req) {
-        base = t->req->url;
-    }
-    if (!base || base[0] == '\0')
+    const BxFetchPreparedUrl* base = t->current_target;
+    if (!base && t->req)
+        base = bx_fetch_request_target(t->req);
+    if (!base)
         return NULL;
 
-    char* canonical = bx_fetch_url_resolve_canonical(base, location);
-    if (!canonical)
+    BxFetchPreparedUrl* target = bx_fetch_prepared_url_resolve(base, location);
+    if (!target)
         return NULL;
 
-    if (bx_fetch_protocol_policy_evaluate_url(canonical, t->engine && t->engine->cfg ? t->engine->cfg->https.https_only : false) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+    if (bx_fetch_prepared_url_policy(target, t->engine && t->engine->cfg ? t->engine->cfg->https.https_only : false) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         t->redirect_protocol_unsupported = true;
-        free(canonical);
+        bx_fetch_prepared_url_free(target);
         errno = EPROTONOSUPPORT;
         return NULL;
     }
-    return canonical;
+    return target;
 }
 
 static bool bx_fetch_transfer_refresh_effective_url(BxFetchTransfer* t) {
@@ -123,27 +122,27 @@ static bool bx_fetch_transfer_refresh_effective_url(BxFetchTransfer* t) {
 
     char* effective_url = NULL;
     if (curl_easy_getinfo(t->easy, CURLINFO_EFFECTIVE_URL, &effective_url) == CURLE_OK && effective_url && effective_url[0] != '\0') {
-        char* canonical = NULL;
-        if (t->current_url && strcmp(effective_url, t->current_url) == 0) {
-            canonical = strdup(t->current_url);
+        BxFetchPreparedUrl* prepared = NULL;
+        if (t->current_target && strcmp(effective_url, bx_fetch_prepared_url_transport(t->current_target)) == 0) {
+            prepared = bx_fetch_prepared_url_clone(t->current_target);
         }
         else {
-            canonical = bx_fetch_url_canonicalize(effective_url);
+            prepared = bx_fetch_url_prepare(effective_url);
         }
-        if (!canonical) {
+        if (!prepared) {
             t->url_canonicalization_failed = true;
             return false;
         }
-        free(t->resp->effective_url);
-        t->resp->effective_url = canonical;
+        bx_fetch_prepared_url_free(t->resp->effective_target);
+        t->resp->effective_target = prepared;
         return true;
     }
 
-    if (t->current_url) {
-        char* canonical = strdup(t->current_url);
-        if (canonical) {
-            free(t->resp->effective_url);
-            t->resp->effective_url = canonical;
+    if (t->current_target) {
+        BxFetchPreparedUrl* prepared = bx_fetch_prepared_url_clone(t->current_target);
+        if (prepared) {
+            bx_fetch_prepared_url_free(t->resp->effective_target);
+            t->resp->effective_target = prepared;
             return true;
         }
     }
@@ -228,10 +227,10 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     if (starts_response) {
-        if (t->pending_redirect_url) {
-            free(t->current_url);
-            t->current_url = t->pending_redirect_url;
-            t->pending_redirect_url = NULL;
+        if (t->pending_redirect_target) {
+            bx_fetch_prepared_url_free(t->current_target);
+            t->current_target = t->pending_redirect_target;
+            t->pending_redirect_target = NULL;
         }
 
         int status = parsed_status;
@@ -313,7 +312,7 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     if (t->engine && t->engine->cfg->http.max_redirect > 0 && status_is_redirect(t->resp->status_code) && strcasecmp(name, "Location") == 0) {
-        char* redirect_target = resolve_redirect_target(t, value);
+        BxFetchPreparedUrl* redirect_target = resolve_redirect_target(t, value);
         if (!redirect_target) {
             t->url_canonicalization_failed = true;
             free(line);
@@ -326,18 +325,18 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
          * following URL credentials when paranoid mode is used without that
          * callback.
          */
-        if (redirect_allowed && t->engine->cfg->http.paranoid && bx_fetch_url_has_userinfo(redirect_target)) {
+        if (redirect_allowed && t->engine->cfg->http.paranoid && bx_fetch_prepared_url_has_userinfo(redirect_target)) {
             redirect_allowed = false;
         }
         if (!redirect_allowed) {
             t->redirect_policy_rejected = true;
-            free(redirect_target);
+            bx_fetch_prepared_url_free(redirect_target);
             free(line);
             return 0;
         }
 
-        free(t->pending_redirect_url);
-        t->pending_redirect_url = redirect_target;
+        bx_fetch_prepared_url_free(t->pending_redirect_target);
+        t->pending_redirect_target = redirect_target;
     }
 
     if (t->resume_needs_content_range && strcasecmp(name, "Content-Range") == 0) {
@@ -695,7 +694,7 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
     }
     int status = response_code >= 0 && response_code <= INT_MAX ? (int)response_code : 0;
     transfer->resp->status_code = status;
-    if (!transfer->resp->effective_url && !bx_fetch_transfer_refresh_effective_url(transfer)) {
+    if (!transfer->resp->effective_target && !bx_fetch_transfer_refresh_effective_url(transfer)) {
         transfer->url_canonicalization_failed = true;
     }
 

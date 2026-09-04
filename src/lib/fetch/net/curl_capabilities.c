@@ -69,10 +69,10 @@ static bool environment_requests_https_proxy(const struct bx_fetch_config* cfg, 
     }
 
     bool unknown_request_protocol = cfg->input.input_file && cfg->input.input_file[0] != '\0';
-    return ((requests_http || unknown_request_protocol) && value_uses_https_proxy(bx_fetch_net_proxy_environment_url("http://capability.test/"))) ||
-           ((requests_https || unknown_request_protocol) && value_uses_https_proxy(bx_fetch_net_proxy_environment_url("https://capability.test/"))) ||
+    return ((requests_http || unknown_request_protocol) && value_uses_https_proxy(bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_HTTP))) ||
+           ((requests_https || unknown_request_protocol) && value_uses_https_proxy(bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_HTTPS))) ||
            ((requests_ftp || unknown_request_protocol) &&
-            (value_uses_https_proxy(bx_fetch_net_proxy_environment_url("ftp://capability.test/")) || value_uses_https_proxy(bx_fetch_net_proxy_environment_url("ftps://capability.test/"))));
+            (value_uses_https_proxy(bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_FTP)) || value_uses_https_proxy(bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_FTPS))));
 }
 
 static int require_protocol(BxFetchNetSetupError* setup_error, const curl_version_info_data* version, bool required, const char* protocol, const char* capability, const char* setting) {

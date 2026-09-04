@@ -15,15 +15,16 @@ static void select_configured_pair(BxFetchCredentialSelection* selection, BxFetc
     selection->password = password ? password : "";
 }
 
-void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, BxFetchCredentialSelection* selection) {
+void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const BxFetchPreparedUrl* target, BxFetchCredentialSelection* selection) {
     if (!selection)
         return;
     *selection = (BxFetchCredentialSelection){0};
-    if (!cfg || !url)
+    if (!cfg || !target)
         return;
 
-    bool is_http = bx_fetch_url_has_scheme(url, "http") || bx_fetch_url_has_scheme(url, "https");
-    bool is_ftp = bx_fetch_url_has_scheme(url, "ftp") || bx_fetch_url_has_scheme(url, "ftps");
+    BxFetchProtocol protocol = bx_fetch_prepared_url_protocol(target);
+    bool is_http = protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS;
+    bool is_ftp = protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS;
 
     if (is_http && pair_is_configured(cfg->http.http_user, cfg->http.http_password)) {
         select_configured_pair(selection, BX_FETCH_CREDENTIAL_SOURCE_HTTP, cfg->http.http_user, cfg->http.http_password);
@@ -37,7 +38,7 @@ void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, c
         select_configured_pair(selection, BX_FETCH_CREDENTIAL_SOURCE_GENERIC, cfg->download.user, cfg->download.password);
         return;
     }
-    if (bx_fetch_url_has_userinfo(url)) {
+    if (bx_fetch_prepared_url_has_userinfo(target)) {
         selection->source = BX_FETCH_CREDENTIAL_SOURCE_URL;
     }
 }
@@ -64,20 +65,20 @@ static const char* first_environment_value(const char* lower_name, const char* u
     return value && value[0] != '\0' ? value : NULL;
 }
 
-const char* bx_fetch_net_proxy_environment_url(const char* request_url) {
+const char* bx_fetch_net_proxy_environment_url(BxFetchProtocol protocol) {
     const char* proxy_url = NULL;
 
-    if (bx_fetch_url_has_scheme(request_url, "http")) {
+    if (protocol == BX_FETCH_PROTOCOL_HTTP) {
         /* Uppercase HTTP_PROXY is intentionally ignored by libcurl. */
         proxy_url = first_environment_value("http_proxy", NULL);
     }
-    else if (bx_fetch_url_has_scheme(request_url, "https")) {
+    else if (protocol == BX_FETCH_PROTOCOL_HTTPS) {
         proxy_url = first_environment_value("https_proxy", "HTTPS_PROXY");
     }
-    else if (bx_fetch_url_has_scheme(request_url, "ftp")) {
+    else if (protocol == BX_FETCH_PROTOCOL_FTP) {
         proxy_url = first_environment_value("ftp_proxy", "FTP_PROXY");
     }
-    else if (bx_fetch_url_has_scheme(request_url, "ftps")) {
+    else if (protocol == BX_FETCH_PROTOCOL_FTPS) {
         proxy_url = first_environment_value("ftps_proxy", "FTPS_PROXY");
     }
 

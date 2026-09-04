@@ -25,9 +25,9 @@ BxFetchTransfer* bx_fetch_transfer_new(BxFetchRequest* req, BxFetchWriter* write
         return NULL;
     }
 
-    if (req && req->url) {
-        t->current_url = strdup(req->url);
-        if (!t->current_url) {
+    if (req && req->target) {
+        t->current_target = bx_fetch_prepared_url_clone(req->target);
+        if (!t->current_target) {
             curl_easy_cleanup(t->easy);
             bx_fetch_response_free(t->resp);
             free(t);
@@ -59,8 +59,8 @@ void bx_fetch_transfer_free(BxFetchTransfer* t) {
     }
 
     free(t->save_headers_buf);
-    free(t->current_url);
-    free(t->pending_redirect_url);
+    bx_fetch_prepared_url_free(t->current_target);
+    bx_fetch_prepared_url_free(t->pending_redirect_target);
 
     free(t);
 }
