@@ -35,91 +35,82 @@ void bx_fetch_frontier_free(BxFetchFrontier* f) {
     free(f);
 }
 
-int bx_fetch_frontier_add(BxFetchFrontier* f, BxFetchCrawlItem* item) {
-    if (!f || !item || !item->url) {
-        bx_fetch_crawl_item_free(item);
-        return -1;
-    }
-
-    size_t ignored = 0;
-    if (!bx_fetch_resource_bounded_strlen(item->url, BX_FETCH_URL_MAX_BYTES, &ignored) || (item->referrer && !bx_fetch_resource_bounded_strlen(item->referrer, BX_FETCH_URL_MAX_BYTES, &ignored))) {
+static bool add_bounded_length(size_t* total, const char* value) {
+    size_t length = 0;
+    if (!total || !bx_fetch_resource_bounded_strlen(value, BX_FETCH_URL_MAX_BYTES, &length) || length > SIZE_MAX - *total) {
         errno = EFBIG;
-        bx_fetch_crawl_item_free(item);
-        return -1;
+        return false;
     }
-
-    char* canonical = bx_fetch_url_canonicalize(item->url);
-    if (!canonical) {
-        bx_fetch_crawl_item_free(item);
-        return -1;
-    }
-    free(item->url);
-    item->url = canonical;
-    return bx_fetch_frontier_add_canonical(f, item);
+    *total += length;
+    return true;
 }
 
-int bx_fetch_frontier_add_canonical(BxFetchFrontier* f, BxFetchCrawlItem* item) {
-    if (!f || !item || !item->url) {
+static bool prepared_retained_bytes(const BxFetchPreparedUrl* target, size_t* bytes_out) {
+    if (!target || !bytes_out) {
+        errno = EINVAL;
+        return false;
+    }
+    size_t bytes = 0;
+    if (!add_bounded_length(&bytes, bx_fetch_prepared_url_transport(target)) || !add_bounded_length(&bytes, bx_fetch_prepared_url_display(target)) ||
+        !add_bounded_length(&bytes, bx_fetch_prepared_url_scheme(target)) || !add_bounded_length(&bytes, bx_fetch_prepared_url_host(target))) {
+        return false;
+    }
+    *bytes_out = bytes;
+    return true;
+}
+
+int bx_fetch_frontier_add(BxFetchFrontier* f, BxFetchCrawlItem* item) {
+    if (!f || !item || !item->target || item->depth < 0) {
         bx_fetch_crawl_item_free(item);
+        errno = EINVAL;
         return -1;
     }
 
-    size_t url_len = 0;
-    size_t referrer_len = 0;
-    if (!bx_fetch_resource_bounded_strlen(item->url, BX_FETCH_URL_MAX_BYTES, &url_len) ||
-        (item->referrer && !bx_fetch_resource_bounded_strlen(item->referrer, BX_FETCH_URL_MAX_BYTES, &referrer_len))) {
+    const char* canonical_url = bx_fetch_prepared_url_transport(item->target);
+    size_t url_length = 0;
+    size_t item_bytes = 0;
+    if (!bx_fetch_resource_bounded_strlen(canonical_url, BX_FETCH_URL_MAX_BYTES, &url_length) || !prepared_retained_bytes(item->target, &item_bytes))
+        goto fail;
+
+    if (bx_fetch_hashset_contains(f->seen_urls, canonical_url)) {
+        bx_fetch_crawl_item_free(item);
+        return 0;
+    }
+
+    if (url_length > SIZE_MAX - item_bytes) {
         errno = EFBIG;
-        bx_fetch_crawl_item_free(item);
-        return -1;
+        goto fail;
     }
-
-    if (bx_fetch_hashset_contains(f->seen_urls, item->url)) {
-        bx_fetch_crawl_item_free(item);
-        return 0;  // Already seen, not an error
-    }
-
-    /*
-     * A newly seen URL is copied into the permanent dedupe set and retained
-     * once more while queued. The optional referrer is queue-owned only.
-     */
-    if (url_len > SIZE_MAX - url_len || referrer_len > SIZE_MAX - (url_len * 2u)) {
-        errno = EFBIG;
-        bx_fetch_crawl_item_free(item);
-        return -1;
-    }
-    size_t reservation_bytes = url_len * 2u + referrer_len;
+    size_t reservation_bytes = url_length + item_bytes;
     if (!bx_fetch_resource_can_reserve(f->seen_count, f->retained_url_bytes, 1u, reservation_bytes, BX_FETCH_URL_STATE_MAX_ENTRIES, BX_FETCH_URL_STATE_MAX_BYTES)) {
         errno = EFBIG;
-        bx_fetch_crawl_item_free(item);
-        return -1;
+        goto fail;
     }
 
-    BxFetchFrontierNode* n = calloc(1, sizeof(BxFetchFrontierNode));
-    if (!n) {
-        bx_fetch_crawl_item_free(item);
-        return -1;
-    }
-
-    if (!bx_fetch_hashset_add(f->seen_urls, item->url)) {
-        free(n);
-        bx_fetch_crawl_item_free(item);
+    BxFetchFrontierNode* node = calloc(1, sizeof(*node));
+    if (!node)
+        goto fail;
+    if (!bx_fetch_hashset_add(f->seen_urls, canonical_url)) {
+        free(node);
         errno = ENOMEM;
-        return -1;
+        goto fail;
     }
 
-    n->item = item;
-    n->accounted_bytes = url_len + referrer_len;
-    if (f->tail) {
-        f->tail->next = n;
-    }
-    else {
-        f->head = n;
-    }
-    f->tail = n;
+    node->item = item;
+    node->accounted_bytes = item_bytes;
+    if (f->tail)
+        f->tail->next = node;
+    else
+        f->head = node;
+    f->tail = node;
     f->count++;
     f->seen_count++;
     f->retained_url_bytes += reservation_bytes;
     return 0;
+
+fail:
+    bx_fetch_crawl_item_free(item);
+    return -1;
 }
 
 bool bx_fetch_frontier_is_seen(BxFetchFrontier* f, const char* url) {
@@ -132,66 +123,79 @@ bool bx_fetch_frontier_is_seen(BxFetchFrontier* f, const char* url) {
         errno = EFBIG;
         return false;
     }
-    char* canonical = bx_fetch_url_canonicalize(url);
-    bool seen = canonical ? bx_fetch_frontier_is_seen_canonical(f, canonical) : false;
-    free(canonical);
+    BxFetchPreparedUrl* prepared = bx_fetch_url_prepare(url);
+    bool seen = prepared ? bx_fetch_frontier_is_seen_prepared(f, prepared) : false;
+    bx_fetch_prepared_url_free(prepared);
     return seen;
 }
 
-bool bx_fetch_frontier_is_seen_canonical(BxFetchFrontier* f, const char* canonical_url) {
-    if (!f || !canonical_url)
+bool bx_fetch_frontier_is_seen_prepared(BxFetchFrontier* f, const BxFetchPreparedUrl* target) {
+    if (!f || !target)
         return false;
-    return bx_fetch_hashset_contains(f->seen_urls, canonical_url);
+    return bx_fetch_hashset_contains(f->seen_urls, bx_fetch_prepared_url_transport(target));
 }
 
 BxFetchCrawlItem* bx_fetch_frontier_next(BxFetchFrontier* f) {
     if (!f || !f->head)
         return NULL;
-    BxFetchFrontierNode* n = f->head;
-    BxFetchCrawlItem* item = n->item;
-    f->head = n->next;
+    BxFetchFrontierNode* node = f->head;
+    BxFetchCrawlItem* item = node->item;
+    f->head = node->next;
     if (!f->head)
         f->tail = NULL;
-    if (f->retained_url_bytes >= n->accounted_bytes) {
-        f->retained_url_bytes -= n->accounted_bytes;
-    }
-    else {
+    if (f->retained_url_bytes >= node->accounted_bytes)
+        f->retained_url_bytes -= node->accounted_bytes;
+    else
         f->retained_url_bytes = 0;
-    }
-    free(n);
+    free(node);
     f->count--;
     return item;
 }
 
-BxFetchCrawlItem* bx_fetch_crawl_item_new(const char* url, int depth, const char* referrer) {
+static BxFetchCrawlItem* crawl_item_from_owned_target(BxFetchPreparedUrl* target, int depth) {
+    if (!target)
+        return NULL;
+    if (depth < 0) {
+        bx_fetch_prepared_url_free(target);
+        errno = EINVAL;
+        return NULL;
+    }
+    BxFetchCrawlItem* item = calloc(1, sizeof(*item));
+    if (!item) {
+        bx_fetch_prepared_url_free(target);
+        return NULL;
+    }
+    item->target = target;
+    item->depth = depth;
+    return item;
+}
+
+BxFetchCrawlItem* bx_fetch_crawl_item_new(const char* url, int depth) {
+    if (!url || depth < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
     size_t ignored = 0;
-    if ((url && !bx_fetch_resource_bounded_strlen(url, BX_FETCH_URL_MAX_BYTES, &ignored)) || (referrer && !bx_fetch_resource_bounded_strlen(referrer, BX_FETCH_URL_MAX_BYTES, &ignored))) {
+    if (!bx_fetch_resource_bounded_strlen(url, BX_FETCH_URL_MAX_BYTES, &ignored)) {
         errno = EFBIG;
         return NULL;
     }
+    BxFetchPreparedUrl* target = bx_fetch_url_prepare(url);
+    return target ? crawl_item_from_owned_target(target, depth) : NULL;
+}
 
-    BxFetchCrawlItem* item = calloc(1, sizeof(BxFetchCrawlItem));
-    if (!item)
-        return NULL;
-
-    if (url)
-        item->url = strdup(url);
-    item->depth = depth;
-    if (referrer)
-        item->referrer = strdup(referrer);
-
-    if ((url && !item->url) || (referrer && !item->referrer)) {
-        bx_fetch_crawl_item_free(item);
+BxFetchCrawlItem* bx_fetch_crawl_item_new_prepared(const BxFetchPreparedUrl* target, int depth) {
+    if (!target || depth < 0) {
+        errno = EINVAL;
         return NULL;
     }
-
-    return item;
+    BxFetchPreparedUrl* clone = bx_fetch_prepared_url_clone(target);
+    return clone ? crawl_item_from_owned_target(clone, depth) : NULL;
 }
 
 void bx_fetch_crawl_item_free(BxFetchCrawlItem* item) {
     if (!item)
         return;
-    free(item->url);
-    free(item->referrer);
+    bx_fetch_prepared_url_free(item->target);
     free(item);
 }
