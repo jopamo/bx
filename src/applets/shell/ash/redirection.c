@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -49,12 +50,30 @@ int ash_redirection_transaction_rollback(
     const struct ash_shell* shell,
     struct ash_redirection_transaction* transaction
 ) {
-    if (transaction == NULL ||
-        bx_fd_transaction_rollback(&transaction->descriptors) != 0) {
+    if (transaction == NULL) {
         return ash_redirection_transaction_error(
             shell,
             "redirection rollback",
-            errno
+            EINVAL
+        );
+    }
+    int flush_result = fflush(NULL);
+    int flush_error = errno;
+    int rollback_result =
+        bx_fd_transaction_rollback(&transaction->descriptors);
+    int rollback_error = errno;
+    if (rollback_result != 0) {
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection rollback",
+            rollback_error
+        );
+    }
+    if (flush_result != 0) {
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection flush",
+            flush_error != 0 ? flush_error : EIO
         );
     }
     return 0;
@@ -205,6 +224,14 @@ int ash_redirection_transaction_apply(
             shell,
             "redirection transaction",
             errno
+        );
+    }
+    if (fflush(NULL) != 0) {
+        int error = errno;
+        return ash_redirection_transaction_error(
+            shell,
+            "redirection flush",
+            error != 0 ? error : EIO
         );
     }
 
