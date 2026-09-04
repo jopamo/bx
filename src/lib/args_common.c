@@ -27,7 +27,7 @@ void bx_args_getopt_reset_at(int first_option_index) {
      */
     bx_args_pending_first_option_index = first_option_index;
     opterr = 0;
-    optind = 0;
+    optind = first_option_index;
     optopt = 0;
     optarg = NULL;
 }
