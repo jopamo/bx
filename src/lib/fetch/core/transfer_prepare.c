@@ -20,6 +20,7 @@ typedef struct {
     BxFetchTransferHeadersCallback headers_callback;
     BxFetchTransferCompletionCallback completion_callback;
     void* userdata;
+    char* output_path;
 } CandidateCallbacks;
 
 static BxFetchTransferCandidate* prepare_failure(BxFetchTransferCandidate* candidate,
@@ -209,6 +210,12 @@ static int candidate_headers_callback(void* userdata, const BxFetchRequest* requ
         return bx_fetch_transfer_stage_not_modified(callbacks->cfg, request, response, writer);
     if (callbacks->headers_callback && callbacks->headers_callback(callbacks->userdata, request, response, writer) != 0)
         return -1;
+    const char* final_path = bx_fetch_writer_get_path(writer);
+    char* final_path_copy = final_path ? strdup(final_path) : NULL;
+    if (!final_path_copy)
+        return -1;
+    free(callbacks->output_path);
+    callbacks->output_path = final_path_copy;
     return bx_fetch_transfer_stage_response(callbacks->cfg, request, response, writer);
 }
 
@@ -220,11 +227,13 @@ static void candidate_completion_callback(void* userdata, const BxFetchRequest* 
     BxFetchTransferCompletion completion = {
         .request = request,
         .response = response,
+        .output_path = callbacks->output_path,
         .result = result,
         .retryable_hint = bx_fetch_transfer_retryable_hint(callbacks->cfg, response, result),
     };
     if (callbacks->completion_callback)
         callbacks->completion_callback(callbacks->userdata, &completion);
+    free(callbacks->output_path);
     free(callbacks);
 }
 
@@ -252,6 +261,13 @@ int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
     callbacks->headers_callback = headers_cb;
     callbacks->completion_callback = callback;
     callbacks->userdata = userdata;
+    const char* output_path = bx_fetch_writer_get_path(candidate->writer);
+    callbacks->output_path = output_path ? strdup(output_path) : NULL;
+    if (!callbacks->output_path) {
+        free(callbacks);
+        bx_fetch_transfer_candidate_abort(candidate);
+        return -1;
+    }
 
     int result = bx_fetch_engine_submit_with_setup_error(engine, candidate->request, candidate->writer, candidate_headers_callback, candidate_completion_callback, callbacks, redirect_cb,
                                                          redirect_userdata, setup_error);
@@ -260,6 +276,7 @@ int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
         candidate->writer = NULL;
     }
     else {
+        free(callbacks->output_path);
         free(callbacks);
     }
     bx_fetch_transfer_candidate_abort(candidate);

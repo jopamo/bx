@@ -19,6 +19,7 @@
 typedef struct {
     const BxFetchRequest* request;
     const BxFetchResponse* response;
+    const char* output_path;
     BxFetchError result;
     bool retryable_hint;
 } BxFetchTransferCompletion;
