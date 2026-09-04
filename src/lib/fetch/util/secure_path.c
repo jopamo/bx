@@ -57,6 +57,14 @@ int bx_fetch_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, 
     return (int)syscall(SYS_renameat2, dirfd, old_name, dirfd, new_name, RENAME_NOREPLACE);
 }
 
+int bx_fetch_secure_path_exchange_leaves(int dirfd, const char* first_name, const char* second_name) {
+    if (dirfd == -1 || !secure_path_is_simple_leaf(first_name) || !secure_path_is_simple_leaf(second_name)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return (int)syscall(SYS_renameat2, dirfd, first_name, dirfd, second_name, RENAME_EXCHANGE);
+}
+
 int bx_fetch_secure_path_check_resolution(void) {
     int fd = secure_path_openat(AT_FDCWD, "/", O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV);
     if (fd == -1)
