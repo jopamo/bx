@@ -16,6 +16,8 @@
  * All successful string-producing functions return heap-owned output.
  */
 
+#include <stdbool.h>
+
 typedef enum {
     BX_FETCH_HTTP_HEADER_OK = 0,
     BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT,
@@ -34,6 +36,9 @@ typedef enum {
 } BxFetchContentDispositionResult;
 
 const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error);
+
+/* HTTP methods use the same non-empty RFC token grammar as field names. */
+bool bx_fetch_http_method_is_valid(const char* method);
 
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out);
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out);

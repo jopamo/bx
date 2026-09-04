@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <time.h>
 #include "metadata.h"
 #include "types.h"
@@ -68,7 +69,18 @@ int bx_fetch_writer_stage_xattrs(BxFetchWriter* w, const char* url, const char* 
 int bx_fetch_writer_close(BxFetchWriter* w);
 /* Terminal failure path: drops staged artifacts and frees `w`. */
 void bx_fetch_writer_abort(BxFetchWriter* w);
-BxFetchI64 bx_fetch_writer_get_size(const char* path);
+/* Size already staged in this private candidate (nonzero for true resume). */
+uint64_t bx_fetch_writer_candidate_size(const BxFetchWriter* w);
+/*
+ * Returns the mtime captured from the original regular destination through
+ * the writer's retained parent authority. False means no regular destination.
+ */
+bool bx_fetch_writer_original_mtime(const BxFetchWriter* w, time_t* mtime_out);
+/*
+ * Loads the sidecar adjacent to the original destination through the retained
+ * parent descriptor. Missing metadata succeeds with an empty result.
+ */
+int bx_fetch_writer_load_original_metadata(const BxFetchWriter* w, BxFetchMetadata* metadata);
 /* Borrowed pointer owned by BxFetchWriter; invalid after bx_fetch_writer_close()/bx_fetch_writer_abort(). */
 const char* bx_fetch_writer_get_path(const BxFetchWriter* w);
 

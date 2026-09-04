@@ -27,18 +27,20 @@ static void request_body_file_free(BxFetchRequestBodyFile* body_file) {
 }
 
 static BxFetchRequest* request_new_with_target(const char* method, BxFetchPreparedUrl* target) {
+    const char* effective_method = method ? method : "GET";
+    if (!bx_fetch_http_method_is_valid(effective_method)) {
+        bx_fetch_prepared_url_free(target);
+        errno = EINVAL;
+        return NULL;
+    }
+
     BxFetchRequest* req = calloc(1, sizeof(BxFetchRequest));
     if (!req) {
         bx_fetch_prepared_url_free(target);
         return NULL;
     }
 
-    if (method) {
-        req->method = strdup(method);
-    }
-    else {
-        req->method = strdup("GET");
-    }
+    req->method = strdup(effective_method);
 
     req->target = target;
     if (!req->method || !req->target) {
@@ -136,6 +138,30 @@ int bx_fetch_request_add_header(BxFetchRequest* req, const char* name, const cha
     req->headers[req->header_count].value = normalized_value;
     req->header_count++;
     return 0;
+}
+
+BxFetchRequestBodyResult bx_fetch_request_set_body(BxFetchRequest* req, const void* data, size_t length) {
+    if (!req || (!data && length > 0)) {
+        errno = EINVAL;
+        return BX_FETCH_REQUEST_BODY_POLICY;
+    }
+
+    void* copy = NULL;
+    if (length > 0) {
+        copy = malloc(length);
+        if (!copy) {
+            errno = ENOMEM;
+            return BX_FETCH_REQUEST_BODY_MEMORY;
+        }
+        memcpy(copy, data, length);
+    }
+
+    free(req->body);
+    req->body = copy;
+    req->body_len = length;
+    request_body_file_free(req->body_file);
+    req->body_file = NULL;
+    return BX_FETCH_REQUEST_BODY_OK;
 }
 
 BxFetchRequestBodyResult bx_fetch_request_set_body_file(BxFetchRequest* req, const char* path) {

@@ -98,6 +98,92 @@ void bx_fetch_metadata_clear(BxFetchMetadata* meta) {
     meta->local_path = NULL;
 }
 
+static int apply_metadata_line(BxFetchMetadata* meta, const char* line) {
+    if (strncmp(line, "etag=", 5) == 0)
+        return set_string(&meta->etag, line + 5);
+    if (strncmp(line, "last_modified=", 14) == 0)
+        return set_string(&meta->last_modified, line + 14);
+    if (strncmp(line, "origin_url=", 11) == 0)
+        return set_string(&meta->origin_url, line + 11);
+    if (strncmp(line, "redirect_target=", 16) == 0)
+        return set_string(&meta->redirect_target, line + 16);
+    if (strncmp(line, "local_path=", 11) == 0)
+        return set_string(&meta->local_path, line + 11);
+    return 0;
+}
+
+int bx_fetch_metadata_read_stream(FILE* f, BxFetchMetadata* meta) {
+    if (!f || !meta) {
+        errno = EINVAL;
+        return -1;
+    }
+    bx_fetch_metadata_clear(meta);
+
+    size_t total_bytes = 0;
+    size_t field_count = 0;
+    for (;;) {
+        char line[BX_FETCH_METADATA_LINE_MAX_BYTES + 1u];
+        size_t length = 0;
+        bool saw_byte = false;
+        bool reached_eof = false;
+
+        for (;;) {
+            int byte = fgetc(f);
+            if (byte == EOF) {
+                if (ferror(f)) {
+                    if (errno == 0)
+                        errno = EIO;
+                    goto fail;
+                }
+                reached_eof = true;
+                break;
+            }
+            saw_byte = true;
+            if (total_bytes >= BX_FETCH_METADATA_FILE_MAX_BYTES) {
+                errno = EFBIG;
+                goto fail;
+            }
+            total_bytes++;
+            if (byte == '\n')
+                break;
+            if (byte == '\0') {
+                errno = EINVAL;
+                goto fail;
+            }
+            if (length >= BX_FETCH_METADATA_LINE_MAX_BYTES) {
+                errno = EFBIG;
+                goto fail;
+            }
+            line[length++] = (char)byte;
+        }
+
+        if (!saw_byte && reached_eof)
+            break;
+        if (length > 0 && line[length - 1] == '\r')
+            length--;
+        if (memchr(line, '\r', length)) {
+            errno = EINVAL;
+            goto fail;
+        }
+        line[length] = '\0';
+
+        if (field_count >= BX_FETCH_METADATA_MAX_FIELDS) {
+            errno = EFBIG;
+            goto fail;
+        }
+        field_count++;
+        if (apply_metadata_line(meta, line) != 0)
+            goto fail;
+        if (reached_eof)
+            break;
+    }
+    return 0;
+
+fail:
+    bx_fetch_metadata_clear(meta);
+    return -1;
+}
+
 int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
     if (!output_path || !meta)
         return -1;
@@ -125,55 +211,16 @@ int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
         return -1;
     }
 
-    char line[8192];
-    while (fgets(line, sizeof(line), f)) {
-        line[strcspn(line, "\r\n")] = '\0';
-
-        if (strncmp(line, "etag=", 5) == 0) {
-            if (set_string(&meta->etag, line + 5) != 0) {
-                fclose(f);
-                bx_fetch_metadata_clear(meta);
-                return -1;
-            }
-        }
-        else if (strncmp(line, "last_modified=", 14) == 0) {
-            if (set_string(&meta->last_modified, line + 14) != 0) {
-                fclose(f);
-                bx_fetch_metadata_clear(meta);
-                return -1;
-            }
-        }
-        else if (strncmp(line, "origin_url=", 11) == 0) {
-            if (set_string(&meta->origin_url, line + 11) != 0) {
-                fclose(f);
-                bx_fetch_metadata_clear(meta);
-                return -1;
-            }
-        }
-        else if (strncmp(line, "redirect_target=", 16) == 0) {
-            if (set_string(&meta->redirect_target, line + 16) != 0) {
-                fclose(f);
-                bx_fetch_metadata_clear(meta);
-                return -1;
-            }
-        }
-        else if (strncmp(line, "local_path=", 11) == 0) {
-            if (set_string(&meta->local_path, line + 11) != 0) {
-                fclose(f);
-                bx_fetch_metadata_clear(meta);
-                return -1;
-            }
-        }
-    }
-
-    if (ferror(f)) {
-        fclose(f);
+    int result = bx_fetch_metadata_read_stream(f, meta);
+    int error_number = errno;
+    if (fclose(f) != 0 && result == 0) {
+        result = -1;
+        error_number = errno;
         bx_fetch_metadata_clear(meta);
-        return -1;
     }
-
-    fclose(f);
-    return 0;
+    if (result != 0)
+        errno = error_number;
+    return result;
 }
 
 int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta) {
