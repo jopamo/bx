@@ -415,6 +415,7 @@ bx_lib_sources = [
   'src/lib/sandbox_explain.c',
   'src/lib/signal_names.c',
   'src/lib/size_parse.c',
+  'src/lib/sockaddr_format.c',
   'src/lib/text_buffer.c',
   'src/lib/stat_ops.c',
   'src/lib/statx_compat.c',

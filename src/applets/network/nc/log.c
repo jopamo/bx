@@ -1,4 +1,6 @@
 #include "netcat.h"
+
+#include "lib/sockaddr_format.h"
 #ifdef __linux__
 #include <linux/vm_sockets.h>
 #endif
@@ -158,7 +160,7 @@ static int format_sockaddr_endpoint(const struct sockaddr* sa,
         return 0;
     }
 
-    if (getnameinfo(sa, salen, addr, addrsz, port, portsz, NI_NUMERICHOST | NI_NUMERICSERV) != 0)
+    if (bx_sockaddr_format_numeric(sa, salen, addr, addrsz, port, portsz) != 0)
         return -1;
 
     return 0;

@@ -11,6 +11,7 @@
 #endif
 
 #include "lib/fd_ops.h"
+#include "lib/sockaddr_format.h"
 
 #ifndef IPTOS_DSCP_CS0
 #define IPTOS_DSCP_CS0 0x00
@@ -1012,7 +1013,8 @@ static int format_subflow_tuple(const struct sockaddr* sa, socklen_t salen, char
     char host[NI_MAXHOST];
     char serv[NI_MAXSERV];
 
-    if (getnameinfo(sa, salen, host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) != 0)
+    if (bx_sockaddr_format_numeric(
+            sa, salen, host, sizeof(host), serv, sizeof(serv)) != 0)
         return -1;
 
     if (sa->sa_family == AF_INET6)
