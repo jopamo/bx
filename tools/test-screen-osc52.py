@@ -92,6 +92,7 @@ def static_checks(root):
     screen = root / "src" / "applets" / "system" / "screen"
     ansi = (screen / "ansi.c").read_text()
     display = (screen / "display.c").read_text()
+    policy = (screen / "screen_osc52_policy.c").read_text()
     window_c = (screen / "window.c").read_text()
     window_h = (screen / "window.h").read_text()
     screen_h = (screen / "screen.h").read_text()
@@ -107,12 +108,17 @@ def static_checks(root):
     require('AddStr("\\033\\\\");' in relay, "OSC 52 relay ST terminator missing")
     require("Flush(0);" in relay, "OSC 52 relay must backpressure instead of discarding a partial sequence")
 
-    osc52_start = ansi.find("if (typ == 52)")
-    osc52_end = ansi.find("if (typ == 0 || typ == 1", osc52_start)
-    require(osc52_start >= 0 and osc52_end > osc52_start, "OSC 52 parser block not found")
-    osc52 = ansi[osc52_start:osc52_end]
+    osc52 = extract_function(policy, "ScreenOsc52Relay")
+    require(
+        "ScreenOsc52Relay(win, p);" in ansi,
+        "ANSI parser must delegate OSC 52 policy",
+    )
+    require(
+        "defosc52" not in ansi and "DisplayOSC52(" not in ansi,
+        "ANSI parser must not own OSC 52 authorization or relay policy",
+    )
     require("D_CXT" not in osc52, "OSC 52 display selection must not depend on D_CXT")
-    read_guard = osc52.find("pd_len == 1 && pd[0] == '?'")
+    read_guard = osc52.find("data_length == 1 && data[0] == '?'")
     policy_guard = osc52.find("if (!defosc52)")
     relay_call = osc52.find("DisplayOSC52(")
     require(0 <= read_guard < policy_guard < relay_call, "OSC 52 reads must be rejected before write policy and relay")
