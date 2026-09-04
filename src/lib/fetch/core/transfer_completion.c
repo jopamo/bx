@@ -108,6 +108,12 @@ int bx_fetch_transfer_stage_not_modified(const struct bx_fetch_config* cfg, cons
     if (cfg->download.spider)
         return 0;
     if (cfg->download.xattr) {
+        /*
+         * Sidecars can be exchanged and rolled back through the retained
+         * directory descriptor. Xattrs mutate the existing payload inode and
+         * cannot join that transaction. Replacing the inode would violate 304
+         * payload identity, so reject the combination before either changes.
+         */
         errno = ENOTSUP;
         return -1;
     }
