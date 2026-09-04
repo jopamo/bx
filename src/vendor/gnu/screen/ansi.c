@@ -26,9 +26,9 @@
  ****************************************************************
  */
 
-#include "config.h"
+#include "applets/system/screen/config.h"
 
-#include "ansi.h"
+#include "vendor/gnu/screen/ansi.h"
 
 #include <sys/types.h>
 #include <ctype.h>
@@ -38,18 +38,18 @@
 #include <sys/ioctl.h>
 #include <string.h>
 
-#include "screen.h"
+#include "applets/system/screen/screen.h"
 
-#include "encoding.h"
-#include "fileio.h"
-#include "help.h"
-#include "logfile.h"
-#include "mark.h"
-#include "misc.h"
-#include "process.h"
-#include "resize.h"
-#include "screen_osc52_policy.h"
-#include "winmsg.h"
+#include "applets/system/screen/encoding.h"
+#include "applets/system/screen/fileio.h"
+#include "applets/system/screen/help.h"
+#include "applets/system/screen/logfile.h"
+#include "applets/system/screen/mark.h"
+#include "applets/system/screen/misc.h"
+#include "applets/system/screen/process.h"
+#include "applets/system/screen/resize.h"
+#include "applets/system/screen/screen_osc52_policy.h"
+#include "applets/system/screen/winmsg.h"
 
 /* widths for Z0/Z1 switching */
 const int Z0width = 132;

@@ -90,7 +90,8 @@ def parse_define(source, name):
 
 def static_checks(root):
     screen = root / "src" / "applets" / "system" / "screen"
-    ansi = (screen / "ansi.c").read_text()
+    vendor = root / "src" / "vendor" / "gnu" / "screen"
+    ansi = (vendor / "ansi.c").read_text()
     display = (screen / "display.c").read_text()
     policy = (screen / "screen_osc52_policy.c").read_text()
     window_c = (screen / "window.c").read_text()
