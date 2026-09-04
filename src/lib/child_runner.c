@@ -304,6 +304,15 @@ pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
     return pid;
 }
 
+pid_t bx_child_fork_session_leader(void) {
+    pid_t pid = fork();
+    if (pid != 0)
+        return pid;
+    if (setsid() < 0)
+        return -1;
+    return 0;
+}
+
 int bx_child_fork_callback_wait(bx_child_fork_callback callback,
                                 void *user,
                                 int *status_out) {
