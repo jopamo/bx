@@ -49,7 +49,7 @@
 #include "screen.h"
 #include "fileio.h"
 #include "misc.h"
-#include "pty.h"
+#include "vendor/gnu/screen/pty.h"
 #include "tty.h"
 #include "lib/time_parse.h"
 #include "lib/tty_speed.h"

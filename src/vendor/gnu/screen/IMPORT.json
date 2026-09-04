@@ -5,6 +5,8 @@
   "origin_commit": "f01b07f8f98ab07773de3fc69f8f9ddfabf94bed",
   "license": "GPL-3.0-or-later",
   "migrated_mechanics": [
+    "pty.c",
+    "pty.h",
     "sched.c",
     "sched.h"
   ]

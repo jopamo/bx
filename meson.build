@@ -766,7 +766,7 @@ screen_native_sources = files(
   'src/applets/system/screen/process_action_store.c',
   'src/applets/system/screen/process_prompts.c',
   'src/applets/system/screen/process_resize_prompt.c',
-  'src/applets/system/screen/pty.c',
+  'src/vendor/gnu/screen/pty.c',
   'src/applets/system/screen/resize.c',
   'src/vendor/gnu/screen/sched.c',
   'src/applets/system/screen/screen.c',
