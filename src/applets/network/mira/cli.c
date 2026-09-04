@@ -179,6 +179,11 @@ static bool mira_configured_method_is_get(const struct bx_fetch_config* config) 
 }
 
 static int mira_validate_config(struct bx_fetch_config* config) {
+    if (config->logging.debug_trace && !config->download.dry_run && !config->startup.show_help && !config->startup.show_version) {
+        bx_mira_emit_parse_error(config, "--debug currently requires --dry-run");
+        errno = EINVAL;
+        return -1;
+    }
     if (config->http.post_data && config->http.post_file) {
         bx_mira_emit_parse_error(config, "conflicting option tokens: --post-data and --post-file");
         errno = EINVAL;
@@ -292,6 +297,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case 'a':
                 MIRA_SET_STRING(config->logging.log_file);
                 config->logging.log_file_mode = BX_FETCH_LOG_FILE_APPEND;
+                break;
+            case MIRA_OPT_DEBUG:
+                config->logging.debug_trace = true;
                 break;
             case 'n': {
                 const char* token = mira_current_token(argc, argv);

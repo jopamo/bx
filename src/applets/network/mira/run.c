@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "debug_trace.h"
 #include "logging.h"
 #include "mira.h"
 #include "lib/fetch/error.h"
@@ -30,43 +31,8 @@ typedef struct {
     size_t next_plan_index;
     int deferred_error;
     FILE* diagnostics;
+    MiraDebugTrace debug_trace;
 } MiraRunFrontend;
-
-static void mira_json_string(FILE* stream, const char* value) {
-    fputc('"', stream);
-    for (const unsigned char* cursor = (const unsigned char*)value; *cursor; cursor++) {
-        switch (*cursor) {
-            case '"':
-                fputs("\\\"", stream);
-                break;
-            case '\\':
-                fputs("\\\\", stream);
-                break;
-            case '\b':
-                fputs("\\b", stream);
-                break;
-            case '\f':
-                fputs("\\f", stream);
-                break;
-            case '\n':
-                fputs("\\n", stream);
-                break;
-            case '\r':
-                fputs("\\r", stream);
-                break;
-            case '\t':
-                fputs("\\t", stream);
-                break;
-            default:
-                if (*cursor < 0x20)
-                    fprintf(stream, "\\u%04x", *cursor);
-                else
-                    fputc(*cursor, stream);
-                break;
-        }
-    }
-    fputc('"', stream);
-}
 
 static void mira_run_record_error_url(MiraRunFrontend* frontend, BxFetchErrorClass error_class, const char* summary, const char* display_url, const char* path, int error_number) {
     if (!frontend)
@@ -124,6 +90,8 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
             errno = ENOMEM;
             return -1;
         }
+        bx_mira_debug_trace_dry_run_enqueued(&frontend->debug_trace, record->display_url, record->output_path, depth);
+        bx_mira_debug_trace_dry_run_decision(&frontend->debug_trace, record->display_url, record->output_path);
     }
     return 0;
 }
@@ -269,19 +237,19 @@ static void mira_dry_run_records_emit(const MiraRunFrontend* frontend) {
                 "{\"schema_version\":1,\"event\":\"dry-run-plan\","
                 "\"sequence\":%lu,\"url\":",
                 sequence++);
-        mira_json_string(stdout, record->display_url);
+        bx_mira_json_write_string(stdout, record->display_url);
         fputs(",\"normalized_url\":", stdout);
         if (record->normalized_url)
-            mira_json_string(stdout, record->normalized_url);
+            bx_mira_json_write_string(stdout, record->normalized_url);
         else
             fputs("null", stdout);
         if (record->status == BX_FETCH_CRAWL_ENQUEUED) {
             fputs(",\"decision\":\"fetch\",\"reason\":null,\"output_path\":", stdout);
-            mira_json_string(stdout, record->output_path);
+            bx_mira_json_write_string(stdout, record->output_path);
         }
         else {
             fputs(",\"decision\":\"reject\",\"reason\":", stdout);
-            mira_json_string(stdout, record->reason);
+            bx_mira_json_write_string(stdout, record->reason);
             fputs(",\"output_path\":null", stdout);
         }
         fputs("}\n", stdout);
@@ -405,6 +373,8 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .last_progress_percent = -1,
         .diagnostics = diagnostics,
     };
+    bx_mira_debug_trace_init(&frontend_state.debug_trace, diagnostics, config);
+    bx_mira_debug_trace_parse_complete(&frontend_state.debug_trace, config);
     if (config->download.dry_run) {
         frontend_state.dry_run_record_count = (size_t)config->input.url_count;
         frontend_state.dry_run_records = calloc(frontend_state.dry_run_record_count, sizeof(*frontend_state.dry_run_records));
