@@ -522,21 +522,31 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
 
     for (int index = 0; index < cfg->input.url_count; index++) {
         errno = 0;
-        BxFetchCrawlEnqueueResult enqueue = bx_fetch_run_add_seed(run, cfg->input.urls[index]);
+        BxFetchPreparedUrl* target = NULL;
+        BxFetchCrawlEnqueueResult enqueue = bx_fetch_crawl_coordinator_add_seed_observed(run->coordinator, cfg->input.urls[index], &target);
         BxFetchRunSeedObservation observation = {
             .index = index,
             .result = enqueue,
             .error_number = errno,
+            .target = target,
         };
         bool accepted = enqueue.status == BX_FETCH_CRAWL_ENQUEUED || enqueue.status == BX_FETCH_CRAWL_SKIPPED_DUPLICATE;
         if (!accepted && observation.error_number <= 0)
             observation.error_number = enqueue.status == BX_FETCH_CRAWL_REJECTED ? EPERM : EIO;
         bool frontend_continue = frontend->on_seed_result && frontend->on_seed_result(frontend->userdata, &observation);
-        if (accepted || (enqueue.status == BX_FETCH_CRAWL_REJECTED && frontend_continue))
+        if (accepted || (enqueue.status == BX_FETCH_CRAWL_REJECTED && frontend_continue)) {
+            bx_fetch_prepared_url_free(target);
             continue;
+        }
         failure_stage = BX_FETCH_RUN_FAILURE_ADD_SEED;
         error_number = observation.error_number;
         failed_seed = observation;
+        /*
+         * failure_out cannot retain a borrowed target. Typed status, index,
+         * and errno remain sufficient after the observer has rendered it.
+         */
+        failed_seed.target = NULL;
+        bx_fetch_prepared_url_free(target);
         goto cleanup;
     }
     if (bx_fetch_run_execute(run) != 0) {

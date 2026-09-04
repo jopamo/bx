@@ -66,6 +66,8 @@ typedef struct {
     int index;
     BxFetchCrawlEnqueueResult result;
     int error_number;
+    /* Borrowed normalized target; NULL only when URL preparation failed. */
+    const BxFetchPreparedUrl* target;
 } BxFetchRunSeedObservation;
 
 /*

@@ -18,6 +18,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -110,6 +111,8 @@ typedef struct {
     bool adjust_extension;
     char** headers;
     int header_count;
+    int header_capacity;
+    size_t header_bytes;
     int max_redirect;
     char* redirect_method;
     bool paranoid;
@@ -183,6 +186,11 @@ struct bx_fetch_config {
 
 /* Allocates a config with default values; caller owns and must free. */
 struct bx_fetch_config* bx_fetch_config_new(void);
+/*
+ * Replaces the URL operand list with bounded copies. Existing URLs remain
+ * untouched on failure.
+ */
+int bx_fetch_config_copy_urls(struct bx_fetch_config* config, int count, char* const* urls);
 /* Frees all nested allocations and the config object itself; NULL-safe. */
 void bx_fetch_config_free(struct bx_fetch_config* config);
 
