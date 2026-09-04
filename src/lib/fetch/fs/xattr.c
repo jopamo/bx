@@ -12,36 +12,36 @@
 
 static int xattr_set_string(int fd, const char* name, const char* value) {
     if (!value || value[0] == '\0')
-        return MIRA_XATTR_OK;
+        return BX_FETCH_XATTR_OK;
 
 #if defined(__linux__)
     int rc = fsetxattr(fd, name, value, strlen(value), 0);
     if (rc == 0) {
-        return MIRA_XATTR_OK;
+        return BX_FETCH_XATTR_OK;
     }
 
     if (errno == ENOTSUP || errno == EOPNOTSUPP || errno == ENOSYS) {
-        return MIRA_XATTR_UNSUPPORTED;
+        return BX_FETCH_XATTR_UNSUPPORTED;
     }
 
-    return MIRA_XATTR_ERROR;
+    return BX_FETCH_XATTR_ERROR;
 #else
     (void)path;
     (void)name;
-    return MIRA_XATTR_UNSUPPORTED;
+    return BX_FETCH_XATTR_UNSUPPORTED;
 #endif
 }
 
 static int xattr_apply(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified) {
     if (fd < 0 || !url || url[0] == '\0') {
-        return MIRA_XATTR_ERROR;
+        return BX_FETCH_XATTR_ERROR;
     }
 
-    char* display_url = mira_url_display_safe(url);
+    char* display_url = bx_fetch_url_display_safe(url);
     if (!display_url)
-        return MIRA_XATTR_ERROR;
+        return BX_FETCH_XATTR_ERROR;
 
-    int rc = MIRA_XATTR_OK;
+    int rc = BX_FETCH_XATTR_OK;
     const struct {
         const char* name;
         const char* value;
@@ -53,19 +53,19 @@ static int xattr_apply(int fd, const char* url, const char* content_type, const 
     };
     for (size_t i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
         int one_rc = xattr_set_string(fd, attrs[i].name, attrs[i].value);
-        if (one_rc == MIRA_XATTR_ERROR) {
+        if (one_rc == BX_FETCH_XATTR_ERROR) {
             free(display_url);
-            return MIRA_XATTR_ERROR;
+            return BX_FETCH_XATTR_ERROR;
         }
-        if (one_rc == MIRA_XATTR_UNSUPPORTED)
-            rc = MIRA_XATTR_UNSUPPORTED;
+        if (one_rc == BX_FETCH_XATTR_UNSUPPORTED)
+            rc = BX_FETCH_XATTR_UNSUPPORTED;
     }
     free(display_url);
     return rc;
 }
 
-int mira_xattr_apply_fd(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified) {
+int bx_fetch_xattr_apply_fd(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified) {
     if (fd < 0)
-        return MIRA_XATTR_ERROR;
+        return BX_FETCH_XATTR_ERROR;
     return xattr_apply(fd, url, content_type, etag, last_modified);
 }

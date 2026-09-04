@@ -84,7 +84,7 @@ static bool parse_http_date(const char* value, time_t* out) {
     return false;
 }
 
-bool mira_timestamp_should_use_server_time(bool no_use_server_timestamps, int status, const char* output_path, const char* last_modified_header, time_t* server_mtime_out) {
+bool bx_fetch_timestamp_should_use_server_time(bool no_use_server_timestamps, int status, const char* output_path, const char* last_modified_header, time_t* server_mtime_out) {
     if (!output_path)
         return false;
     if (no_use_server_timestamps)

@@ -1,8 +1,8 @@
-#ifndef MIRA_XATTR_H
-#define MIRA_XATTR_H
+#ifndef BX_FETCH_XATTR_H
+#define BX_FETCH_XATTR_H
 
-/* MIRA_HEADER_OWNER: fs */
-/* MIRA_HEADER_CONSUMERS: fs, core */
+/* BX_FETCH_HEADER_OWNER: fs */
+/* BX_FETCH_HEADER_CONSUMERS: fs, core */
 
 /*
  * Layering contract:
@@ -15,10 +15,10 @@
  * - Return codes are value semantics: OK / UNSUPPORTED / ERROR.
  */
 
-#define MIRA_XATTR_OK 0
-#define MIRA_XATTR_UNSUPPORTED 1
-#define MIRA_XATTR_ERROR -1
+#define BX_FETCH_XATTR_OK 0
+#define BX_FETCH_XATTR_UNSUPPORTED 1
+#define BX_FETCH_XATTR_ERROR -1
 
-int mira_xattr_apply_fd(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified);
+int bx_fetch_xattr_apply_fd(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified);
 
-#endif  // MIRA_XATTR_H
+#endif  // BX_FETCH_XATTR_H

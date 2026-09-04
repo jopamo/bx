@@ -41,7 +41,7 @@ static bool secure_path_is_simple_leaf(const char* path) {
     return path && path[0] != '\0' && strcmp(path, ".") != 0 && strcmp(path, "..") != 0 && strchr(path, '/') == NULL;
 }
 
-int mira_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mode) {
+int bx_fetch_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mode) {
     if (!secure_path_is_simple_leaf(path)) {
         errno = EINVAL;
         return -1;
@@ -49,7 +49,7 @@ int mira_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mo
     return secure_path_openat(dirfd, path, flags, mode, RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV);
 }
 
-int mira_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, const char* new_name) {
+int bx_fetch_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, const char* new_name) {
     if (dirfd == -1 || !secure_path_is_simple_leaf(old_name) || !secure_path_is_simple_leaf(new_name)) {
         errno = EINVAL;
         return -1;
@@ -57,7 +57,7 @@ int mira_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, cons
     return (int)syscall(SYS_renameat2, dirfd, old_name, dirfd, new_name, RENAME_NOREPLACE);
 }
 
-int mira_secure_path_check_resolution(void) {
+int bx_fetch_secure_path_check_resolution(void) {
     int fd = secure_path_openat(AT_FDCWD, "/", O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV);
     if (fd == -1)
         return -1;
@@ -77,18 +77,18 @@ int mira_secure_path_check_resolution(void) {
     return -1;
 }
 
-int mira_secure_path_open_existing_file(const char* path) {
+int bx_fetch_secure_path_open_existing_file(const char* path) {
     if (!path) {
         errno = EINVAL;
         return -1;
     }
 
     char* basename = NULL;
-    int parent_fd = mira_secure_path_open_parent_directory(path, false, &basename);
+    int parent_fd = bx_fetch_secure_path_open_parent_directory(path, false, &basename);
     if (parent_fd == -1)
         return -1;
 
-    int fd = mira_secure_path_open_leaf(parent_fd, basename, O_RDONLY | O_CLOEXEC, 0);
+    int fd = bx_fetch_secure_path_open_leaf(parent_fd, basename, O_RDONLY | O_CLOEXEC, 0);
     int open_error_number = errno;
     close(parent_fd);
     free(basename);
@@ -112,7 +112,7 @@ int mira_secure_path_open_existing_file(const char* path) {
     return fd;
 }
 
-int mira_secure_path_split(const char* path, char** parent_out, char** basename_out) {
+int bx_fetch_secure_path_split(const char* path, char** parent_out, char** basename_out) {
     if (!path || !basename_out) {
         errno = EINVAL;
         return -1;
@@ -177,7 +177,7 @@ int mira_secure_path_split(const char* path, char** parent_out, char** basename_
     return 0;
 }
 
-int mira_secure_path_open_parent_directory(const char* path, bool create_missing, char** basename_out) {
+int bx_fetch_secure_path_open_parent_directory(const char* path, bool create_missing, char** basename_out) {
     if (!path || !basename_out) {
         errno = EINVAL;
         return -1;
@@ -186,7 +186,7 @@ int mira_secure_path_open_parent_directory(const char* path, bool create_missing
 
     char* parent = NULL;
     char* basename = NULL;
-    if (mira_secure_path_split(path, &parent, &basename) != 0) {
+    if (bx_fetch_secure_path_split(path, &parent, &basename) != 0) {
         return -1;
     }
 
@@ -248,14 +248,14 @@ int mira_secure_path_open_parent_directory(const char* path, bool create_missing
     return dirfd;
 }
 
-int mira_secure_path_unlink_file(const char* path) {
+int bx_fetch_secure_path_unlink_file(const char* path) {
     if (!path) {
         errno = EINVAL;
         return -1;
     }
 
     char* basename = NULL;
-    int parent_fd = mira_secure_path_open_parent_directory(path, false, &basename);
+    int parent_fd = bx_fetch_secure_path_open_parent_directory(path, false, &basename);
     if (parent_fd == -1)
         return -1;
 

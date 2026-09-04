@@ -7,14 +7,14 @@
 #include <string.h>
 #include <strings.h>
 
-MiraResumeAction mira_resume_action_for_status(int status_code) {
+MiraResumeAction bx_fetch_resume_action_for_status(int status_code) {
     if (status_code < 200)
-        return MIRA_RESUME_ACTION_APPEND;
+        return BX_FETCH_RESUME_ACTION_APPEND;
     if (status_code == 206)
-        return MIRA_RESUME_ACTION_APPEND;
+        return BX_FETCH_RESUME_ACTION_APPEND;
     if (status_code == 200)
-        return MIRA_RESUME_ACTION_RESTART;
-    return MIRA_RESUME_ACTION_DISCARD;
+        return BX_FETCH_RESUME_ACTION_RESTART;
+    return BX_FETCH_RESUME_ACTION_DISCARD;
 }
 
 static int parse_nonnegative_long_long(const char** cursor, long long* value_out) {
@@ -36,7 +36,7 @@ static int parse_nonnegative_long_long(const char** cursor, long long* value_out
     return 0;
 }
 
-int mira_parse_content_range(const char* content_range, MiraContentRange* range_out) {
+int bx_fetch_parse_content_range(const char* content_range, MiraContentRange* range_out) {
     if (!content_range || !range_out)
         return -1;
 
@@ -87,24 +87,24 @@ int mira_parse_content_range(const char* content_range, MiraContentRange* range_
     return 0;
 }
 
-int mira_parse_content_range_start(const char* content_range, long long* start_out) {
+int bx_fetch_parse_content_range_start(const char* content_range, long long* start_out) {
     if (!content_range || !start_out)
         return -1;
 
     MiraContentRange parsed = {0};
-    if (mira_parse_content_range(content_range, &parsed) != 0)
+    if (bx_fetch_parse_content_range(content_range, &parsed) != 0)
         return -1;
 
     *start_out = parsed.start;
     return 0;
 }
 
-bool mira_resume_content_range_matches(const char* content_range, long long expected_start) {
+bool bx_fetch_resume_content_range_matches(const char* content_range, long long expected_start) {
     MiraContentRange parsed = {0};
-    return mira_parse_content_range(content_range, &parsed) == 0 && parsed.start == expected_start;
+    return bx_fetch_parse_content_range(content_range, &parsed) == 0 && parsed.start == expected_start;
 }
 
-bool mira_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes, long long replacement_body_bytes) {
+bool bx_fetch_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes, long long replacement_body_bytes) {
     if (verified_prefix_bytes < 0 || replacement_body_bytes < 0)
         return false;
     return replacement_body_bytes >= verified_prefix_bytes;

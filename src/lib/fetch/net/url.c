@@ -15,15 +15,15 @@ typedef struct {
 } MiraProtocolDefinition;
 
 static const MiraProtocolDefinition k_supported_protocols[] = {
-    {"http", MIRA_PROTOCOL_HTTP},
-    {"https", MIRA_PROTOCOL_HTTPS},
-    {"ftp", MIRA_PROTOCOL_FTP},
-    {"ftps", MIRA_PROTOCOL_FTPS},
+    {"http", BX_FETCH_PROTOCOL_HTTP},
+    {"https", BX_FETCH_PROTOCOL_HTTPS},
+    {"ftp", BX_FETCH_PROTOCOL_FTP},
+    {"ftps", BX_FETCH_PROTOCOL_FTPS},
 };
 
 static MiraProtocol protocol_from_scheme_span(const char* scheme, size_t scheme_len) {
     if (!scheme || scheme_len == 0)
-        return MIRA_PROTOCOL_NONE;
+        return BX_FETCH_PROTOCOL_NONE;
 
     for (size_t i = 0; i < sizeof(k_supported_protocols) / sizeof(k_supported_protocols[0]); i++) {
         if (strlen(k_supported_protocols[i].scheme) == scheme_len && strncasecmp(scheme, k_supported_protocols[i].scheme, scheme_len) == 0) {
@@ -31,7 +31,7 @@ static MiraProtocol protocol_from_scheme_span(const char* scheme, size_t scheme_
         }
     }
 
-    return MIRA_PROTOCOL_NONE;
+    return BX_FETCH_PROTOCOL_NONE;
 }
 
 static bool url_scheme_span(const char* url, const char** scheme, size_t* scheme_len) {
@@ -51,7 +51,7 @@ static bool url_scheme_span(const char* url, const char** scheme, size_t* scheme
     return true;
 }
 
-bool mira_url_has_scheme(const char* url, const char* expected_scheme) {
+bool bx_fetch_url_has_scheme(const char* url, const char* expected_scheme) {
     if (!url || !expected_scheme)
         return false;
 
@@ -65,7 +65,7 @@ bool mira_url_has_scheme(const char* url, const char* expected_scheme) {
     return authority[0] == '/' && authority[1] == '/';
 }
 
-bool mira_url_has_userinfo(const char* url) {
+bool bx_fetch_url_has_userinfo(const char* url) {
     const char* scheme = NULL;
     size_t scheme_len = 0;
     if (!url_scheme_span(url, &scheme, &scheme_len))
@@ -231,74 +231,74 @@ static bool string_is_ascii(const char* value) {
     return true;
 }
 
-MiraProtocol mira_protocol_from_scheme(const char* scheme) {
+MiraProtocol bx_fetch_protocol_from_scheme(const char* scheme) {
     if (!scheme || scheme[0] == '\0')
-        return MIRA_PROTOCOL_NONE;
+        return BX_FETCH_PROTOCOL_NONE;
     return protocol_from_scheme_span(scheme, strlen(scheme));
 }
 
-unsigned int mira_protocol_policy_mask(bool https_only) {
+unsigned int bx_fetch_protocol_policy_mask(bool https_only) {
     if (https_only)
-        return MIRA_PROTOCOL_HTTPS;
+        return BX_FETCH_PROTOCOL_HTTPS;
 
-    unsigned int mask = MIRA_PROTOCOL_NONE;
+    unsigned int mask = BX_FETCH_PROTOCOL_NONE;
     for (size_t i = 0; i < sizeof(k_supported_protocols) / sizeof(k_supported_protocols[0]); i++) {
         mask |= (unsigned int)k_supported_protocols[i].protocol;
     }
     return mask;
 }
 
-MiraProtocolDecision mira_protocol_policy_evaluate_scheme(const char* scheme, bool https_only) {
-    MiraProtocol protocol = mira_protocol_from_scheme(scheme);
-    if (protocol == MIRA_PROTOCOL_NONE) {
-        return MIRA_PROTOCOL_DECISION_UNSUPPORTED;
+MiraProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme, bool https_only) {
+    MiraProtocol protocol = bx_fetch_protocol_from_scheme(scheme);
+    if (protocol == BX_FETCH_PROTOCOL_NONE) {
+        return BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED;
     }
-    if (((unsigned int)protocol & mira_protocol_policy_mask(https_only)) == 0) {
-        return MIRA_PROTOCOL_DECISION_HTTPS_ONLY;
+    if (((unsigned int)protocol & bx_fetch_protocol_policy_mask(https_only)) == 0) {
+        return BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY;
     }
-    return MIRA_PROTOCOL_DECISION_ALLOW;
+    return BX_FETCH_PROTOCOL_DECISION_ALLOW;
 }
 
-MiraProtocolDecision mira_protocol_policy_evaluate_url(const char* url, bool https_only) {
+MiraProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only) {
     const char* scheme = NULL;
     size_t scheme_len = 0;
     if (!url_scheme_span(url, &scheme, &scheme_len)) {
-        return MIRA_PROTOCOL_DECISION_INVALID_URL;
+        return BX_FETCH_PROTOCOL_DECISION_INVALID_URL;
     }
     MiraProtocol protocol = protocol_from_scheme_span(scheme, scheme_len);
-    if (protocol == MIRA_PROTOCOL_NONE) {
-        return MIRA_PROTOCOL_DECISION_UNSUPPORTED;
+    if (protocol == BX_FETCH_PROTOCOL_NONE) {
+        return BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED;
     }
 
-    MiraURL* parsed = mira_url_parse(url);
+    MiraURL* parsed = bx_fetch_url_parse(url);
     if (!parsed)
-        return MIRA_PROTOCOL_DECISION_INVALID_URL;
+        return BX_FETCH_PROTOCOL_DECISION_INVALID_URL;
 
-    MiraProtocolDecision decision = mira_protocol_policy_evaluate_scheme(parsed->scheme, https_only);
-    mira_url_free(parsed);
+    MiraProtocolDecision decision = bx_fetch_protocol_policy_evaluate_scheme(parsed->scheme, https_only);
+    bx_fetch_url_free(parsed);
     return decision;
 }
 
-const char* mira_protocol_decision_reason(MiraProtocolDecision decision) {
+const char* bx_fetch_protocol_decision_reason(MiraProtocolDecision decision) {
     switch (decision) {
-        case MIRA_PROTOCOL_DECISION_ALLOW:
+        case BX_FETCH_PROTOCOL_DECISION_ALLOW:
             return NULL;
-        case MIRA_PROTOCOL_DECISION_INVALID_URL:
+        case BX_FETCH_PROTOCOL_DECISION_INVALID_URL:
             return "invalid-url";
-        case MIRA_PROTOCOL_DECISION_UNSUPPORTED:
+        case BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED:
             return "unsupported-protocol";
-        case MIRA_PROTOCOL_DECISION_HTTPS_ONLY:
+        case BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY:
             return "https-only";
     }
 
     return "unsupported-protocol";
 }
 
-bool mira_protocol_policy_format(bool https_only, char* out, size_t out_size) {
+bool bx_fetch_protocol_policy_format(bool https_only, char* out, size_t out_size) {
     if (!out || out_size == 0)
         return false;
 
-    unsigned int allowed = mira_protocol_policy_mask(https_only);
+    unsigned int allowed = bx_fetch_protocol_policy_mask(https_only);
     size_t written = 0;
     out[0] = '\0';
 
@@ -338,7 +338,7 @@ static bool is_default_port(const char* scheme, const char* port) {
     return false;
 }
 
-MiraURL* mira_url_parse(const char* url) {
+MiraURL* bx_fetch_url_parse(const char* url) {
     CURLU* h = curl_url();
     if (!h)
         return NULL;
@@ -407,7 +407,7 @@ MiraURL* mira_url_parse(const char* url) {
     return mu;
 }
 
-void mira_url_free(MiraURL* mu) {
+void bx_fetch_url_free(MiraURL* mu) {
     if (!mu)
         return;
     free(mu->scheme);
@@ -420,7 +420,7 @@ void mira_url_free(MiraURL* mu) {
     free(mu);
 }
 
-char* mira_url_resolve(const char* base_url, const char* relative_url) {
+char* bx_fetch_url_resolve(const char* base_url, const char* relative_url) {
     CURLU* h = curl_url();
     if (!h)
         return NULL;
@@ -447,17 +447,17 @@ char* mira_url_resolve(const char* base_url, const char* relative_url) {
     return NULL;
 }
 
-char* mira_url_resolve_canonical(const char* base_url, const char* relative_url) {
-    char* resolved = mira_url_resolve(base_url, relative_url);
+char* bx_fetch_url_resolve_canonical(const char* base_url, const char* relative_url) {
+    char* resolved = bx_fetch_url_resolve(base_url, relative_url);
     if (!resolved)
         return NULL;
 
-    char* canonical = mira_url_canonicalize(resolved);
+    char* canonical = bx_fetch_url_canonicalize(resolved);
     free(resolved);
     return canonical;
 }
 
-char* mira_url_to_string(MiraURL* mu) {
+char* bx_fetch_url_to_string(MiraURL* mu) {
     CURLU* h = curl_url();
     if (!h)
         return NULL;
@@ -635,16 +635,16 @@ cleanup:
     return ret;
 }
 
-char* mira_url_canonicalize(const char* url) {
+char* bx_fetch_url_canonicalize(const char* url) {
     return canonicalize_url(url, true);
 }
 
-char* mira_url_display_safe(const char* url) {
+char* bx_fetch_url_display_safe(const char* url) {
     char* canonical = canonicalize_url(url, false);
     if (!canonical) {
         const char* scheme = NULL;
         size_t scheme_len = 0;
-        if (!url_scheme_span(url, &scheme, &scheme_len) || protocol_from_scheme_span(scheme, scheme_len) != MIRA_PROTOCOL_NONE || !url_has_explicit_authority(url) ||
+        if (!url_scheme_span(url, &scheme, &scheme_len) || protocol_from_scheme_span(scheme, scheme_len) != BX_FETCH_PROTOCOL_NONE || !url_has_explicit_authority(url) ||
             !url_has_valid_percent_escapes(url)) {
             return NULL;
         }

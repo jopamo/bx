@@ -1,8 +1,8 @@
-#ifndef MIRA_RATE_LIMITER_H
-#define MIRA_RATE_LIMITER_H
+#ifndef BX_FETCH_RATE_LIMITER_H
+#define BX_FETCH_RATE_LIMITER_H
 
-/* MIRA_HEADER_OWNER: runtime */
-/* MIRA_HEADER_CONSUMERS: runtime, net */
+/* BX_FETCH_HEADER_OWNER: runtime */
+/* BX_FETCH_HEADER_CONSUMERS: runtime, net */
 
 /*
  * Layering contract:
@@ -28,7 +28,7 @@ typedef struct {
     bool initialized;
 } MiraTokenBucket;
 
-void mira_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now);
-double mira_token_bucket_consume(MiraTokenBucket* bucket, size_t bytes, const struct timespec* now);
+void bx_fetch_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now);
+double bx_fetch_token_bucket_consume(MiraTokenBucket* bucket, size_t bytes, const struct timespec* now);
 
-#endif  // MIRA_RATE_LIMITER_H
+#endif  // BX_FETCH_RATE_LIMITER_H

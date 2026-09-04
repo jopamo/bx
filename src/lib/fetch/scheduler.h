@@ -1,8 +1,8 @@
-#ifndef MIRA_SCHEDULER_H
-#define MIRA_SCHEDULER_H
+#ifndef BX_FETCH_SCHEDULER_H
+#define BX_FETCH_SCHEDULER_H
 
-/* MIRA_HEADER_OWNER: core */
-/* MIRA_HEADER_CONSUMERS: core */
+/* BX_FETCH_HEADER_OWNER: core */
+/* BX_FETCH_HEADER_CONSUMERS: core */
 
 /*
  * Layering contract:
@@ -11,9 +11,9 @@
  *   not mutate scheduler internals.
  *
  * Ownership and lifetime:
- * - scheduler_new() borrows `cfg`; EffectiveConfig must outlive Scheduler.
- * - scheduler_add_url() canonicalizes an untrusted URL before copying it.
- * - scheduler_add_canonical_url() is the internal fast path for canonical URLs.
+ * - bx_fetch_scheduler_new() borrows `cfg`; EffectiveConfig must outlive Scheduler.
+ * - bx_fetch_scheduler_add_url() canonicalizes an untrusted URL before copying it.
+ * - bx_fetch_scheduler_add_canonical_url() is the internal fast path for canonical URLs.
  * - Output path strings are copied into scheduler-owned queue storage.
  */
 
@@ -45,16 +45,16 @@ typedef int (*SchedulerDispatchFn)(void* userdata, const char* url, const char* 
 /* Called by scheduler while transfers are active to drive completion progress. */
 typedef int (*SchedulerPollFn)(void* userdata);
 
-Scheduler* scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata);
-void scheduler_free(Scheduler* s);
+Scheduler* bx_fetch_scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata);
+void bx_fetch_scheduler_free(Scheduler* s);
 
 /* Enqueues one transfer attempt candidate; URL/path are copied on success. */
-int scheduler_add_url(Scheduler* s, const char* url, const char* output_path);
-int scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path);
+int bx_fetch_scheduler_add_url(Scheduler* s, const char* url, const char* output_path);
+int bx_fetch_scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path);
 /*
  * Runs dispatch/poll loop until queue and active set are drained.
  * Returns 0 only when no dispatch, transfer, or scheduler invariant failures occurred.
  */
-int scheduler_run(Scheduler* s);
+int bx_fetch_scheduler_run(Scheduler* s);
 
-#endif  // MIRA_SCHEDULER_H
+#endif  // BX_FETCH_SCHEDULER_H

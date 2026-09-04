@@ -1,8 +1,8 @@
-#ifndef MIRA_METADATA_H
-#define MIRA_METADATA_H
+#ifndef BX_FETCH_METADATA_H
+#define BX_FETCH_METADATA_H
 
-/* MIRA_HEADER_OWNER: fs */
-/* MIRA_HEADER_CONSUMERS: fs, core, net */
+/* BX_FETCH_HEADER_OWNER: fs */
+/* BX_FETCH_HEADER_CONSUMERS: fs, core, net */
 
 /*
  * Layering contract:
@@ -12,9 +12,9 @@
  *
  * Ownership and lifetime:
  * - MiraMetadata string fields are heap-owned by the struct instance.
- * - metadata_load() clears and repopulates the struct; caller releases fields
- *   with metadata_clear().
- * - metadata_save()/metadata_write_stream() borrow input pointers only.
+ * - bx_fetch_metadata_load() clears and repopulates the struct; caller releases fields
+ *   with bx_fetch_metadata_clear().
+ * - bx_fetch_metadata_save()/bx_fetch_metadata_write_stream() borrow input pointers only.
  */
 
 #include <stdbool.h>
@@ -28,10 +28,10 @@ typedef struct {
     char* local_path;
 } MiraMetadata;
 
-bool metadata_is_empty(const MiraMetadata* meta);
-int metadata_write_stream(FILE* f, const MiraMetadata* meta);
-int metadata_load(const char* output_path, MiraMetadata* meta);
-int metadata_save(const char* output_path, const MiraMetadata* meta);
-void metadata_clear(MiraMetadata* meta);
+bool bx_fetch_metadata_is_empty(const MiraMetadata* meta);
+int bx_fetch_metadata_write_stream(FILE* f, const MiraMetadata* meta);
+int bx_fetch_metadata_load(const char* output_path, MiraMetadata* meta);
+int bx_fetch_metadata_save(const char* output_path, const MiraMetadata* meta);
+void bx_fetch_metadata_clear(MiraMetadata* meta);
 
-#endif  // MIRA_METADATA_H
+#endif  // BX_FETCH_METADATA_H

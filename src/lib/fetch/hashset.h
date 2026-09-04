@@ -1,8 +1,8 @@
-#ifndef MIRA_HASHSET_H
-#define MIRA_HASHSET_H
+#ifndef BX_FETCH_HASHSET_H
+#define BX_FETCH_HASHSET_H
 
-/* MIRA_HEADER_OWNER: util */
-/* MIRA_HEADER_CONSUMERS: util, core, crawl */
+/* BX_FETCH_HEADER_OWNER: util */
+/* BX_FETCH_HEADER_CONSUMERS: util, core, crawl */
 
 /*
  * Layering contract:
@@ -10,10 +10,10 @@
  *   policy or network state.
  *
  * Ownership and lifetime:
- * - hashset_add() copies keys internally; callers retain input ownership.
- * - hashset_contains() borrows key pointers.
- * - hashset_remove() releases a matching copied key.
- * - hashset_free() releases all copied keys and internal storage.
+ * - bx_fetch_hashset_add() copies keys internally; callers retain input ownership.
+ * - bx_fetch_hashset_contains() borrows key pointers.
+ * - bx_fetch_hashset_remove() releases a matching copied key.
+ * - bx_fetch_hashset_free() releases all copied keys and internal storage.
  */
 
 #include <stdbool.h>
@@ -21,10 +21,10 @@
 
 typedef struct HashSet HashSet;
 
-HashSet* hashset_new(size_t size);
-void hashset_free(HashSet* hs);
-bool hashset_add(HashSet* hs, const char* key);
-bool hashset_contains(HashSet* hs, const char* key);
-bool hashset_remove(HashSet* hs, const char* key);
+HashSet* bx_fetch_hashset_new(size_t size);
+void bx_fetch_hashset_free(HashSet* hs);
+bool bx_fetch_hashset_add(HashSet* hs, const char* key);
+bool bx_fetch_hashset_contains(HashSet* hs, const char* key);
+bool bx_fetch_hashset_remove(HashSet* hs, const char* key);
 
-#endif  // MIRA_HASHSET_H
+#endif  // BX_FETCH_HASHSET_H

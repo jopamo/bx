@@ -1,8 +1,8 @@
-#ifndef MIRA_REGEX_H
-#define MIRA_REGEX_H
+#ifndef BX_FETCH_REGEX_H
+#define BX_FETCH_REGEX_H
 
-/* MIRA_HEADER_OWNER: util */
-/* MIRA_HEADER_CONSUMERS: util, cli, policy */
+/* BX_FETCH_HEADER_OWNER: util */
+/* BX_FETCH_HEADER_CONSUMERS: util, cli, policy */
 
 /*
  * Layering contract:
@@ -14,6 +14,6 @@
  * - `flags_out` is caller-owned output storage.
  */
 
-int mira_regex_compile_flags_for_type(const char* regex_type, int* flags_out);
+int bx_fetch_regex_compile_flags_for_type(const char* regex_type, int* flags_out);
 
-#endif  // MIRA_REGEX_H
+#endif  // BX_FETCH_REGEX_H
