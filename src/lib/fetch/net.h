@@ -45,7 +45,7 @@ typedef struct {
 /*
  * All values passed to observation callbacks are borrowed and valid only for
  * the callback. raw_header is bounded by BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES
- * and includes the original line ending.
+ * and includes the original line ending. Observers must not mutate the engine.
  */
 typedef struct {
     void (*on_response_header)(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, const char* raw_header, size_t raw_header_len);
@@ -71,7 +71,8 @@ typedef int (*BxFetchTransferHeadersCallback)(void* userdata, const BxFetchReque
 /*
  * Called exactly once for every successful submission, including explicit
  * cancellation and engine teardown. All pointers are borrowed and become
- * invalid after the callback returns.
+ * invalid after the callback returns. Callbacks must not recursively run,
+ * cancel, or destroy the engine.
  */
 typedef void (*BxFetchTransferCallback)(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchError result);
 

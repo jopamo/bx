@@ -72,8 +72,8 @@ void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* tr
 
     /*
      * Remove active ownership before invoking frontend code. A callback may
-     * inspect or drive the engine, but must never observe this transfer as
-     * active after its terminal result is visible.
+     * inspect engine state, but must never observe this transfer as active
+     * after its terminal result is visible.
      */
     if (engine->multi && transfer->easy) {
         CURLMcode remove_result = curl_multi_remove_handle(engine->multi, transfer->easy);

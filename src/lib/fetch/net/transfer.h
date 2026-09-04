@@ -24,7 +24,6 @@ typedef struct BxFetchTransfer {
     struct BxFetchTransfer* next_active;
     struct curl_slist* headers;
     BxFetchTransferState state;
-    int retry_count;
 
     bool resume_requested;
     long long resume_from;
@@ -36,7 +35,6 @@ typedef struct BxFetchTransfer {
     bool io_failed;
     bool request_body_io_failed;
     int io_error_number;
-    int resume_status_code;
     curl_off_t response_body_bytes;
     size_t response_header_bytes;
 

@@ -236,7 +236,6 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
 
         int status = parsed_status;
         if (status > 0) {
-            t->resume_status_code = status;
             t->resp->status_code = status;
             bx_fetch_response_reset_headers(t->resp);
             if (capture_headers) {
@@ -531,7 +530,7 @@ static int socket_callback(CURL* easy, curl_socket_t socket_fd, int action, void
         return -1;
 
     if (action == CURL_POLL_REMOVE) {
-        if (epoll_ctl(engine->epoll_fd, EPOLL_CTL_DEL, socket_fd, NULL) != 0 && errno != ENOENT) {
+        if (epoll_ctl(engine->epoll_fd, EPOLL_CTL_DEL, socket_fd, NULL) != 0 && errno != ENOENT && errno != EBADF) {
             engine->invariant_failed = true;
             return -1;
         }
