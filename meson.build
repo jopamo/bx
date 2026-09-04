@@ -336,6 +336,7 @@ bx_lib_sources = [
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
   'src/lib/daemon_ops.c',
+  'src/lib/env_ops.c',
   'src/lib/fd_ops.c',
   'src/lib/fd_transaction.c',
   'src/lib/fault_injection.c',
