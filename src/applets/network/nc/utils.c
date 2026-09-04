@@ -8,6 +8,7 @@
 #endif
 
 #include "lib/fd_ops.h"
+#include "lib/poll_deadline.h"
 #include "lib/time_parse.h"
 
 uint32_t (*nc_random)(void) = nc_random_u32;
@@ -36,52 +37,6 @@ static int nc_seconds_to_timespec(double seconds, struct timespec* ts) {
     }
 
     return bx_time_seconds_to_timespec(seconds, ts);
-}
-
-static int nc_poll_retry(struct pollfd* pfd, nfds_t nfds, int timeout_ms) {
-    int ret;
-
-    for (;;) {
-        ret = poll(pfd, nfds, timeout_ms);
-        if (ret == -1 && errno == EINTR)
-            continue;
-        return ret;
-    }
-}
-
-static int nc_poll_monotonic_deadline(struct pollfd* pfd, nfds_t nfds, int timeout_ms) {
-    struct timespec start;
-
-    if (timeout_ms < 0)
-        return nc_poll_retry(pfd, nfds, -1);
-    if (timeout_ms == 0)
-        return nc_poll_retry(pfd, nfds, 0);
-
-    if (clock_gettime(CLOCK_MONOTONIC, &start) == -1)
-        return nc_poll_retry(pfd, nfds, timeout_ms);
-
-    for (;;) {
-        struct timespec now;
-        int64_t elapsed_ms;
-        int remaining_ms;
-        int ret;
-
-        if (clock_gettime(CLOCK_MONOTONIC, &now) == -1)
-            return nc_poll_retry(pfd, nfds, timeout_ms);
-
-        if (!bx_time_timespec_elapsed_milliseconds_int64(&start, &now, &elapsed_ms))
-            return nc_poll_retry(pfd, nfds, timeout_ms);
-        if (elapsed_ms >= timeout_ms)
-            return 0;
-        remaining_ms = timeout_ms - (int)elapsed_ms;
-        if (remaining_ms <= 0)
-            return 0;
-
-        ret = poll(pfd, nfds, remaining_ms);
-        if (ret == -1 && errno == EINTR)
-            continue;
-        return ret;
-    }
 }
 
 int nc_sleep_monotonic(double seconds) {
@@ -154,7 +109,7 @@ int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms) {
     pfd[0].revents = 0;
 
     if (timeout_ms == 0) {
-        int ret = nc_poll_retry(pfd, 1, 0);
+        int ret = bx_poll_retry_eintr(pfd, 1, 0);
         if (ret <= 0)
             return ret;
         return 1;
@@ -190,9 +145,9 @@ int nc_wait_fd_events_monotonic(int fd, short events, int timeout_ms) {
             pfd[1].revents = 0;
 
         if (nfds == 2)
-            ret = nc_poll_retry(pfd, nfds, -1);
+            ret = bx_poll_retry_eintr(pfd, nfds, -1);
         else
-            ret = nc_poll_monotonic_deadline(pfd, 1, timeout_ms);
+            ret = bx_poll_for_milliseconds(pfd, 1, timeout_ms);
 
         if (ret <= 0) {
             if (timerfd != -1)

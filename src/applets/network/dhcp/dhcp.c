@@ -23,6 +23,7 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/poll_deadline.h"
 #include "lib/time_parse.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
@@ -548,36 +549,11 @@ static bool bx_dhcp_parse_packet(const unsigned char* packet, size_t packet_len,
     return message_out->message_type != 0u;
 }
 
-static uint64_t bx_dhcp_now_ms(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0u;
-    }
-
-    uintmax_t milliseconds = 0;
-    if (!bx_time_timespec_to_milliseconds_uint(&ts, &milliseconds) ||
-        milliseconds > (uintmax_t)UINT64_MAX) {
-        return 0u;
-    }
-    return (uint64_t)milliseconds;
-}
-
-static int bx_dhcp_poll_timeout_ms(uint64_t deadline_ms) {
-    uint64_t now = bx_dhcp_now_ms();
-    if (deadline_ms <= now) {
-        return 0;
-    }
-
-    uint64_t remaining = deadline_ms - now;
-    if (remaining > (uint64_t)INT_MAX) {
-        return INT_MAX;
-    }
-
-    return (int)remaining;
-}
-
 static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, unsigned int timeout_ms, struct bx_dhcp_message* message_out, struct bx_diag_ctx* diag) {
-    uint64_t deadline = bx_dhcp_now_ms() + (uint64_t)timeout_ms;
+    struct bx_poll_deadline deadline;
+    int poll_timeout =
+        timeout_ms > (unsigned int)INT_MAX ? INT_MAX : (int)timeout_ms;
+    bx_poll_deadline_init(&deadline, poll_timeout);
 
     while (true) {
         struct pollfd pfd;
@@ -585,11 +561,7 @@ static enum bx_dhcp_wait_result bx_dhcp_wait_for_message(int fd, uint32_t xid, u
         pfd.events = POLLIN;
         pfd.revents = 0;
 
-        int timeout = bx_dhcp_poll_timeout_ms(deadline);
-        int poll_rc;
-        do {
-            poll_rc = poll(&pfd, 1, timeout);
-        } while (poll_rc < 0 && errno == EINTR);
+        int poll_rc = bx_poll_deadline_wait(&deadline, &pfd, 1);
 
         if (poll_rc < 0) {
             bx_diag(diag, "failed while waiting for DHCP response: %s", strerror(errno));
