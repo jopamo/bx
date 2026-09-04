@@ -57,6 +57,7 @@
 #include "list_generic.h"
 #include "mark.h"
 #include "winmsg.h"
+#include "dispatch/applets.h"
 #include "lib/time_parse.h"
 
 extern char **environ;
@@ -88,7 +89,6 @@ static int    ParseEscape(char *);
 static char  *MakeDefaultShellProg(const char *);
 static void   InitDefaultWaitMilliseconds(void);
 static void   SetTtyname(bool fatal, struct stat *st);
-int           main(int argc, char **argv);
 
 int nversion;			/* numerical version, used for secondary DA */
 
@@ -329,7 +329,7 @@ static void exit_with_usage(char *myname, char *message, char *arg)
 	exit(0);
 }
 
-int main(int argc, char **argv)
+int bx_screen_main(int argc, char **argv)
 {
 	int       n;
 	char     *ap;
