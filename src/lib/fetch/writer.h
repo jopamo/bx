@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
 #include <time.h>
 #include "metadata.h"
 #include "types.h"
@@ -65,6 +66,12 @@ int bx_fetch_writer_stage_metadata(BxFetchWriter* w, const BxFetchMetadata* meta
  * metadata.
  */
 int bx_fetch_writer_preserve_destination_metadata(BxFetchWriter* w);
+/*
+ * Pins replacement to the regular destination snapshot observed by an
+ * earlier authorized read. The snapshot is checked immediately and again
+ * after the destination name is privately captured during commit.
+ */
+int bx_fetch_writer_require_original_identity(BxFetchWriter* w, const struct stat* expected);
 /* Resets write stream for full replacement semantics before additional writes. */
 int bx_fetch_writer_begin_replace(BxFetchWriter* w);
 int bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len);

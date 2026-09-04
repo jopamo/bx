@@ -38,6 +38,7 @@ typedef struct {
 } BxFetchDownloadedFileView;
 
 typedef int (*BxFetchPublicationMappingVisitor)(void* userdata, const char* public_url, const char* local_path, BxFetchMappingPriority priority);
+typedef int (*BxFetchPublicationDownloadVisitor)(void* userdata, const BxFetchDownloadedFileView* download);
 
 BxFetchPublicationState* bx_fetch_publication_state_new(const struct bx_fetch_config* cfg);
 void bx_fetch_publication_state_free(BxFetchPublicationState* state);
@@ -56,10 +57,13 @@ BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicati
 
 /* Boundary lookup removes URL userinfo before consulting the public map. */
 const char* bx_fetch_publication_lookup(const BxFetchPublicationState* state, const char* url, BxFetchMappingPriority* priority_out);
+/* Fast path for a target already normalized at a trust boundary. */
+const char* bx_fetch_publication_lookup_prepared(const BxFetchPublicationState* state, const BxFetchPreparedUrl* target, BxFetchMappingPriority* priority_out);
 
 size_t bx_fetch_publication_mapping_count(const BxFetchPublicationState* state);
 size_t bx_fetch_publication_download_count(const BxFetchPublicationState* state);
 bool bx_fetch_publication_latest_download(const BxFetchPublicationState* state, BxFetchDownloadedFileView* view_out);
 int bx_fetch_publication_visit_mappings(const BxFetchPublicationState* state, BxFetchPublicationMappingVisitor visitor, void* userdata);
+int bx_fetch_publication_visit_downloads(const BxFetchPublicationState* state, BxFetchPublicationDownloadVisitor visitor, void* userdata);
 
 #endif  // BX_FETCH_PUBLICATION_H

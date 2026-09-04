@@ -35,6 +35,8 @@ struct BxFetchWriter {
     ino_t initial_dest_ino;
     mode_t initial_dest_mode;
     time_t initial_dest_mtime;
+    bool original_snapshot_required;
+    struct stat required_original_snapshot;
     BxFetchMetadata pending_metadata;
     bool has_pending_metadata;
     bool has_pending_mtime;
@@ -42,6 +44,18 @@ struct BxFetchWriter {
 };
 
 static bool same_destination_identity(const BxFetchWriter* w, const struct stat* st);
+
+static bool same_file_snapshot(const struct stat* left, const struct stat* right) {
+    return left && right && left->st_dev == right->st_dev && left->st_ino == right->st_ino && (left->st_mode & S_IFMT) == (right->st_mode & S_IFMT) && left->st_size == right->st_size &&
+           left->st_mtim.tv_sec == right->st_mtim.tv_sec && left->st_mtim.tv_nsec == right->st_mtim.tv_nsec && left->st_ctim.tv_sec == right->st_ctim.tv_sec &&
+           left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
+}
+
+static bool same_captured_file_after_rename(const struct stat* captured, const struct stat* held) {
+    return captured && held && captured->st_dev == held->st_dev && captured->st_ino == held->st_ino && (captured->st_mode & S_IFMT) == (held->st_mode & S_IFMT) &&
+           (captured->st_mode & 07777) == (held->st_mode & 07777) && captured->st_size == held->st_size && captured->st_mtim.tv_sec == held->st_mtim.tv_sec &&
+           captured->st_mtim.tv_nsec == held->st_mtim.tv_nsec;
+}
 
 static mode_t process_umask(void) {
     mode_t mask = umask(0);
@@ -954,6 +968,22 @@ int bx_fetch_writer_preserve_destination_metadata(BxFetchWriter* w) {
     return rc;
 }
 
+int bx_fetch_writer_require_original_identity(BxFetchWriter* w, const struct stat* expected) {
+    if (!w || !expected || !S_ISREG(expected->st_mode) || !w->initial_dest_existed || !S_ISREG(w->initial_dest_mode) || !same_destination_identity(w, expected)) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    struct stat current;
+    if (fstatat(w->parent_fd, w->basename, &current, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(current.st_mode) || !same_file_snapshot(&current, expected)) {
+        errno = EBUSY;
+        return -1;
+    }
+    w->required_original_snapshot = *expected;
+    w->original_snapshot_required = true;
+    return 0;
+}
+
 int bx_fetch_writer_begin_replace(BxFetchWriter* w) {
     if (!w)
         return -1;
@@ -1107,6 +1137,15 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
         writer_free(w);
         return -1;
     }
+    if (w->original_snapshot_required) {
+        struct stat current;
+        if (fstatat(w->parent_fd, w->basename, &current, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(current.st_mode) || !same_file_snapshot(&current, &w->required_original_snapshot)) {
+            cleanup_temp_entry(w->parent_fd, &w->temp_name);
+            writer_free(w);
+            errno = EBUSY;
+            return -1;
+        }
+    }
 
     int rc = 0;
     char* sidecar_name = NULL;
@@ -1156,6 +1195,20 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             cleanup_temp_entry(w->parent_fd, &w->temp_name);
             writer_free(w);
             return -1;
+        }
+        if (w->original_snapshot_required) {
+            struct stat held;
+            if (!payload_hold_name || fstatat(w->parent_fd, payload_hold_name, &held, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISREG(held.st_mode) ||
+                !same_captured_file_after_rename(&w->required_original_snapshot, &held)) {
+                int error_number = EBUSY;
+                restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+                free(sidecar_name);
+                cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+                cleanup_temp_entry(w->parent_fd, &w->temp_name);
+                writer_free(w);
+                errno = error_number;
+                return -1;
+            }
         }
 
         if (!w->exclusive_final_path && sidecar_name && rename_existing_entry_to_hold(w->parent_fd, sidecar_name, &sidecar_hold_name) != 0) {

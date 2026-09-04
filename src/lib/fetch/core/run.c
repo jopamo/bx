@@ -421,3 +421,26 @@ int bx_fetch_run_save_publication(const BxFetchRun* run) {
 const BxFetchPublicationState* bx_fetch_run_publication(const BxFetchRun* run) {
     return run ? run->publication : NULL;
 }
+
+static int run_convert_download(void* userdata, const BxFetchDownloadedFileView* download) {
+    BxFetchRun* run = userdata;
+    BxFetchLinkConversionOutcome outcome = {0};
+    int result = bx_fetch_document_convert_download(run->cfg, run->publication, download, &outcome);
+    int error_number = errno;
+    bool continue_after_failure = run->frontend.on_link_conversion && run->frontend.on_link_conversion(run->frontend.userdata, download, &outcome);
+    if (result != 0 && !continue_after_failure) {
+        errno = error_number ? error_number : EIO;
+        return -1;
+    }
+    return 0;
+}
+
+int bx_fetch_run_convert_links(BxFetchRun* run) {
+    if (!run || bx_fetch_run_phase(run) != BX_FETCH_CRAWL_PHASE_FINISHED) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!run->cfg->recursive.convert_links)
+        return 0;
+    return bx_fetch_publication_visit_downloads(run->publication, run_convert_download, run);
+}
