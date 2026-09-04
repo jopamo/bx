@@ -264,6 +264,11 @@ static bool framing_name_is_forbidden(const char* name, size_t name_len) {
     return span_equals_case(name, name_len, "Content-Length") || span_equals_case(name, name_len, "Transfer-Encoding") || span_equals_case(name, name_len, "Trailer");
 }
 
+static bool authority_name_is_forbidden(const char* name, size_t name_len) {
+    return span_equals_case(name, name_len, "Host") || span_equals_case(name, name_len, "Authorization") || span_equals_case(name, name_len, "Proxy-Authorization") ||
+           span_equals_case(name, name_len, "Cookie");
+}
+
 static BxFetchHttpHeaderError validate_name(const char* name, size_t name_len) {
     if (!name || name_len == 0)
         return BX_FETCH_HTTP_HEADER_INVALID_NAME;
@@ -274,6 +279,9 @@ static BxFetchHttpHeaderError validate_name(const char* name, size_t name_len) {
     }
     if (framing_name_is_forbidden(name, name_len)) {
         return BX_FETCH_HTTP_HEADER_FORBIDDEN_FRAMING;
+    }
+    if (authority_name_is_forbidden(name, name_len)) {
+        return BX_FETCH_HTTP_HEADER_FORBIDDEN_AUTHORITY;
     }
     return BX_FETCH_HTTP_HEADER_OK;
 }
@@ -401,7 +409,9 @@ const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error) {
         case BX_FETCH_HTTP_HEADER_INVALID_VALUE:
             return "HTTP field value contains a forbidden control character";
         case BX_FETCH_HTTP_HEADER_FORBIDDEN_FRAMING:
-            return "Content-Length, Transfer-Encoding, and Trailer are managed by Mira";
+            return "Content-Length, Transfer-Encoding, and Trailer are managed by the fetch core";
+        case BX_FETCH_HTTP_HEADER_FORBIDDEN_AUTHORITY:
+            return "authority-bearing HTTP headers require typed credential or cookie policy";
         case BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY:
             return "out of memory while preparing HTTP headers";
     }

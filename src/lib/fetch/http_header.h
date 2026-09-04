@@ -9,8 +9,10 @@
  * - Field names use the RFC HTTP token grammar.
  * - Values may contain HTAB, SP, visible ASCII, and obs-text, but no other
  *   control characters.
- * - Content-Length, Transfer-Encoding, and Trailer remain owned by
- *   Mira/libcurl so caller input cannot contradict request framing.
+ * - Content-Length, Transfer-Encoding, and Trailer remain owned by the core
+ *   so caller input cannot contradict request framing.
+ * - Host, Authorization, Proxy-Authorization, and Cookie remain typed policy
+ *   fields so generic headers cannot bypass origin/redirect authority.
  * - Normalization trims leading/trailing optional whitespace from values.
  *
  * All successful string-producing functions return heap-owned output.
@@ -25,6 +27,7 @@ typedef enum {
     BX_FETCH_HTTP_HEADER_INVALID_NAME,
     BX_FETCH_HTTP_HEADER_INVALID_VALUE,
     BX_FETCH_HTTP_HEADER_FORBIDDEN_FRAMING,
+    BX_FETCH_HTTP_HEADER_FORBIDDEN_AUTHORITY,
     BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY,
 } BxFetchHttpHeaderError;
 

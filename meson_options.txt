@@ -19,13 +19,6 @@ option(
   description : 'Install multicall applets as shebang wrappers or symlinks'
 )
 option(
-  'mira_embed',
-  type : 'combo',
-  choices : ['auto', 'enabled', 'disabled'],
-  value : 'auto',
-  description : 'Enable mira-embed backend for the wget applet'
-)
-option(
   'install_ls_colors',
   type : 'boolean',
   value : true,

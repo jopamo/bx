@@ -439,16 +439,6 @@ static int install_one_applet_shortcut(
     return bx_status_success();
 }
 
-static bool applet_shortcut_install_supported(const char* applet_name) {
-    (void)applet_name;
-#if !BX_HAVE_MIRA_EMBED
-    if (strcmp(applet_name, "wget") == 0) {
-        return false;
-    }
-#endif
-    return true;
-}
-
 static int install_missing_applets(const char* bx_path, const char* install_dir, bool symlink_mode, struct bx_diag_ctx* diag) {
     if (!path_is_directory(install_dir)) {
         bx_diag(diag, "install target is not a directory: '%s'", install_dir);
@@ -460,9 +450,6 @@ static int install_missing_applets(const char* bx_path, const char* install_dir,
     for (size_t i = 0; i < bx_runtime_snapshot_applet_count(runtime); i++) {
         const struct bx_applet* applet = bx_runtime_snapshot_applet_at(runtime, i);
         if (applet == NULL) {
-            continue;
-        }
-        if (!applet_shortcut_install_supported(applet->name)) {
             continue;
         }
         if (install_one_applet_shortcut(bx_path, install_dir, applet->name, symlink_mode, diag) != 0) {

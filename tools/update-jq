@@ -561,16 +561,7 @@ def validate_build(
 ) -> None:
     temp_root.mkdir(parents=True)
     build = temp_root / "build"
-    run(
-        [
-            "meson",
-            "setup",
-            os.fspath(build),
-            os.fspath(bx_root),
-            "-Dmira_embed=disabled",
-        ],
-        capture=True,
-    )
+    run(["meson", "setup", os.fspath(build), os.fspath(bx_root)], capture=True)
     run(["ninja", "-C", os.fspath(build), "bx"], capture=True)
     if tests_root is None:
         run_corpus(build / "bx", corpus, temp_root)

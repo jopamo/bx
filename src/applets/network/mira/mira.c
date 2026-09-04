@@ -93,7 +93,7 @@ static struct bx_fetch_config* mira_parse_cli(int argc, char** argv) {
         int option = getopt_long(argc, argv, "VhqO:P:", mira_options, &option_index);
         if (option == -1)
             break;
-        config->startup.cli_options_provided = true;
+        config->download.metadata_sidecars = true;
         switch (option) {
             case 'V':
                 config->startup.show_version = true;

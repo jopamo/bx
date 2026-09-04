@@ -650,7 +650,7 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
     bool transport_succeeded = curl_result == CURLE_OK && !transfer->url_canonicalization_failed;
     bool commit = false;
 
-    if (transport_succeeded && status != 304) {
+    if (transport_succeeded && (status == 200 || status == 206)) {
         if (transfer->resume_restart_validation_pending && !bx_fetch_resume_restart_preserves_verified_prefix(transfer->resume_from, (long long)transfer->response_body_bytes)) {
             transfer->resume_validation_failed = true;
         }
