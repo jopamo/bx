@@ -1280,13 +1280,13 @@ static bool metadata_candidate_is_published(const BxFetchWriter* w, const char* 
     return current.st_dev == candidate_stat->st_dev && current.st_ino == candidate_stat->st_ino && S_ISREG(current.st_mode);
 }
 
-static void rollback_metadata_exchange(BxFetchWriter* w, const char* sidecar_name, char* sidecar_temp_name, bool sidecar_existed, const struct stat* candidate_stat) {
-    if (!w || !sidecar_name || !sidecar_temp_name || !candidate_stat)
+static void rollback_metadata_exchange(BxFetchWriter* w, const char* sidecar_name, char** sidecar_temp_name, bool sidecar_existed, const struct stat* candidate_stat) {
+    if (!w || !sidecar_name || !sidecar_temp_name || !*sidecar_temp_name || !candidate_stat)
         return;
 
     if (sidecar_existed) {
-        if (metadata_candidate_is_published(w, sidecar_name, candidate_stat) && bx_fetch_secure_path_exchange_leaves(w->parent_fd, sidecar_name, sidecar_temp_name) == 0) {
-            cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        if (metadata_candidate_is_published(w, sidecar_name, candidate_stat) && bx_fetch_secure_path_exchange_leaves(w->parent_fd, sidecar_name, *sidecar_temp_name) == 0) {
+            cleanup_temp_entry(w->parent_fd, sidecar_temp_name);
         }
     }
     else {
@@ -1434,7 +1434,7 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
 
     if (!metadata_candidate_is_published(w, sidecar_name, &candidate_stat) || !current_destination_matches(w) || fsync(w->parent_fd) != 0) {
         int error_number = errno ? errno : EIO;
-        rollback_metadata_exchange(w, sidecar_name, sidecar_temp_name, sidecar_existed, &candidate_stat);
+        rollback_metadata_exchange(w, sidecar_name, &sidecar_temp_name, sidecar_existed, &candidate_stat);
         free(sidecar_temp_name);
         free(sidecar_name);
         close(original_fd);
