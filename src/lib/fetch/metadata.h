@@ -21,17 +21,17 @@
 #include <stdio.h>
 
 typedef struct {
-    char *etag;
-    char *last_modified;
-    char *origin_url;
-    char *redirect_target;
-    char *local_path;
+    char* etag;
+    char* last_modified;
+    char* origin_url;
+    char* redirect_target;
+    char* local_path;
 } MiraMetadata;
 
-bool metadata_is_empty(const MiraMetadata *meta);
-int metadata_write_stream(FILE *f, const MiraMetadata *meta);
-int metadata_load(const char *output_path, MiraMetadata *meta);
-int metadata_save(const char *output_path, const MiraMetadata *meta);
-void metadata_clear(MiraMetadata *meta);
+bool metadata_is_empty(const MiraMetadata* meta);
+int metadata_write_stream(FILE* f, const MiraMetadata* meta);
+int metadata_load(const char* output_path, MiraMetadata* meta);
+int metadata_save(const char* output_path, const MiraMetadata* meta);
+void metadata_clear(MiraMetadata* meta);
 
-#endif // MIRA_METADATA_H
+#endif  // MIRA_METADATA_H

@@ -28,7 +28,7 @@
 #define MIRA_DOCUMENT_PARSE_MAX_BYTES ((size_t)16 * 1024u * 1024u)
 
 /* `url` is transient; copy it if it must outlive the callback. */
-typedef void (*MiraLinkCallback)(void *userdata, const char *url);
+typedef void (*MiraLinkCallback)(void* userdata, const char* url);
 
 typedef enum {
     MIRA_HTML_LINK_NAVIGATION = 0,
@@ -36,22 +36,21 @@ typedef enum {
 } MiraHtmlLinkKind;
 
 /* `url` is transient; copy it if it must outlive the callback. */
-typedef void (*MiraHtmlLinkCallback)(void *userdata, const char *url, MiraHtmlLinkKind kind);
+typedef void (*MiraHtmlLinkCallback)(void* userdata, const char* url, MiraHtmlLinkKind kind);
 
 /*
  * `url` is transient input.
  * Return NULL to keep the original URL, or a heap-allocated replacement string.
  */
-typedef char *(*MiraLinkRewriteCallback)(void *userdata, const char *url);
+typedef char* (*MiraLinkRewriteCallback)(void* userdata, const char* url);
 
 /* `base_url` is reserved for API compatibility; current extraction is lexical. */
-int html_extract_links(const char *base_url, const char *html_data, size_t len, MiraLinkCallback cb, void *userdata);
+int html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata);
 /* Typed extraction distinguishes navigation links from embedded requisites. */
-int html_extract_links_typed(const char *base_url, const char *html_data, size_t len,
-                             MiraHtmlLinkCallback cb, void *userdata);
+int html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata);
 /* Returned document is heap-allocated and must be freed by the caller. */
-char *html_convert_links(const char *base_url, const char *html_data, size_t len, MiraLinkRewriteCallback cb, void *userdata);
+char* html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata);
 /* `base_url` is reserved for API compatibility; current extraction is lexical. */
-int css_extract_links(const char *base_url, const char *css_data, size_t len, MiraLinkCallback cb, void *userdata);
+int css_extract_links(const char* base_url, const char* css_data, size_t len, MiraLinkCallback cb, void* userdata);
 
-#endif // MIRA_HTML_H
+#endif  // MIRA_HTML_H

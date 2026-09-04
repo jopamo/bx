@@ -28,8 +28,7 @@ typedef struct {
     bool initialized;
 } MiraTokenBucket;
 
-void mira_token_bucket_init(MiraTokenBucket *bucket, int64_t rate_bytes_per_sec,
-                            const struct timespec *now);
-double mira_token_bucket_consume(MiraTokenBucket *bucket, size_t bytes, const struct timespec *now);
+void mira_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now);
+double mira_token_bucket_consume(MiraTokenBucket* bucket, size_t bytes, const struct timespec* now);
 
-#endif // MIRA_RATE_LIMITER_H
+#endif  // MIRA_RATE_LIMITER_H

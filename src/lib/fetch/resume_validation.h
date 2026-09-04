@@ -30,10 +30,9 @@ typedef struct {
 } MiraContentRange;
 
 MiraResumeAction mira_resume_action_for_status(int status_code);
-int mira_parse_content_range(const char *content_range, MiraContentRange *range_out);
-int mira_parse_content_range_start(const char *content_range, long long *start_out);
-bool mira_resume_content_range_matches(const char *content_range, long long expected_start);
-bool mira_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes,
-                                                   long long replacement_body_bytes);
+int mira_parse_content_range(const char* content_range, MiraContentRange* range_out);
+int mira_parse_content_range_start(const char* content_range, long long* start_out);
+bool mira_resume_content_range_matches(const char* content_range, long long expected_start);
+bool mira_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes, long long replacement_body_bytes);
 
-#endif // MIRA_RESUME_VALIDATION_H
+#endif  // MIRA_RESUME_VALIDATION_H

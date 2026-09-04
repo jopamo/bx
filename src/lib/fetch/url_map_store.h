@@ -21,8 +21,8 @@
 #include <stddef.h>
 
 typedef struct {
-    const char *url;
-    const char *local_path;
+    const char* url;
+    const char* local_path;
 } MiraUrlMapEntry;
 
 /*
@@ -30,9 +30,9 @@ typedef struct {
  * - `url` and `local_path` are borrowed and valid only during callback execution.
  * - Return 0 to continue loading; non-zero aborts load with failure.
  */
-typedef int (*MiraUrlMapLoadFn)(void *userdata, const char *url, const char *local_path);
+typedef int (*MiraUrlMapLoadFn)(void* userdata, const char* url, const char* local_path);
 
-int url_map_store_load(const EffectiveConfig *cfg, MiraUrlMapLoadFn cb, void *userdata);
-int url_map_store_save(const EffectiveConfig *cfg, const MiraUrlMapEntry *entries, size_t entry_count);
+int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* userdata);
+int url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entries, size_t entry_count);
 
-#endif // MIRA_URL_MAP_STORE_H
+#endif  // MIRA_URL_MAP_STORE_H

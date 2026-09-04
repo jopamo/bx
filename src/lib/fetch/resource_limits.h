@@ -55,8 +55,7 @@
 #endif
 
 #ifndef MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES
-#define MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES \
-    (MIRA_URL_MAP_MAX_FIELD_BYTES * 4u + 3u)
+#define MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES (MIRA_URL_MAP_MAX_FIELD_BYTES * 4u + 3u)
 #endif
 
 #define MIRA_URL_STATE_ENTRY_LIMIT_TEXT "65536"
@@ -70,24 +69,19 @@
  * mutate their counters only after all allocations needed by the reservation
  * have succeeded.
  */
-static inline bool mira_resource_can_reserve(
-    size_t current_entries, size_t current_bytes,
-    size_t add_entries, size_t add_bytes,
-    size_t max_entries, size_t max_bytes) {
-    return current_entries <= max_entries &&
-           current_bytes <= max_bytes &&
-           add_entries <= max_entries - current_entries &&
-           add_bytes <= max_bytes - current_bytes;
+static inline bool mira_resource_can_reserve(size_t current_entries, size_t current_bytes, size_t add_entries, size_t add_bytes, size_t max_entries, size_t max_bytes) {
+    return current_entries <= max_entries && current_bytes <= max_bytes && add_entries <= max_entries - current_entries && add_bytes <= max_bytes - current_bytes;
 }
 
-static inline bool mira_resource_bounded_strlen(
-    const char *value, size_t max_bytes, size_t *length_out) {
-    if (!value || !length_out || max_bytes == SIZE_MAX) return false;
+static inline bool mira_resource_bounded_strlen(const char* value, size_t max_bytes, size_t* length_out) {
+    if (!value || !length_out || max_bytes == SIZE_MAX)
+        return false;
 
     size_t length = strnlen(value, max_bytes + 1u);
-    if (length > max_bytes) return false;
+    if (length > max_bytes)
+        return false;
     *length_out = length;
     return true;
 }
 
-#endif // MIRA_RESOURCE_LIMITS_H
+#endif  // MIRA_RESOURCE_LIMITS_H

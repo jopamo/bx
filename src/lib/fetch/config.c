@@ -3,9 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-EffectiveConfig *config_new(void) {
-    EffectiveConfig *cfg = calloc(1, sizeof(EffectiveConfig));
-    if (!cfg) return NULL;
+EffectiveConfig* config_new(void) {
+    EffectiveConfig* cfg = calloc(1, sizeof(EffectiveConfig));
+    if (!cfg)
+        return NULL;
 
     // Set defaults
     cfg->download.tries = 20;
@@ -17,15 +18,14 @@ EffectiveConfig *config_new(void) {
     cfg->download.wait = 0;
     cfg->download.waitretry = 10;
     cfg->download.max_threads = 5;
-    cfg->download.quota = -1;       // unlimited unless explicitly configured
+    cfg->download.quota = -1;  // unlimited unless explicitly configured
     cfg->download.show_progress = true;
-    cfg->recursive.level = 5;       // default recursion depth
+    cfg->recursive.level = 5;  // default recursion depth
     cfg->http.max_redirect = 20;
     cfg->http.redirect_method = strdup("legacy");
     cfg->http.user_agent = strdup("lib/fetch/0.1.0");
     cfg->download.prefer_family = strdup("none");
-    if (!cfg->http.redirect_method || !cfg->http.user_agent ||
-        !cfg->download.prefer_family) {
+    if (!cfg->http.redirect_method || !cfg->http.user_agent || !cfg->download.prefer_family) {
         config_free(cfg);
         return NULL;
     }
@@ -33,8 +33,9 @@ EffectiveConfig *config_new(void) {
     return cfg;
 }
 
-void config_free(EffectiveConfig *cfg) {
-    if (!cfg) return;
+void config_free(EffectiveConfig* cfg) {
+    if (!cfg)
+        return;
 
     free(cfg->logging.log_file);
     free(cfg->logging.rejected_log);

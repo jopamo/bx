@@ -4,16 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-Response *response_new(void) {
-    Response *resp = calloc(1, sizeof(Response));
-    if (!resp) return NULL;
+Response* response_new(void) {
+    Response* resp = calloc(1, sizeof(Response));
+    if (!resp)
+        return NULL;
 
     resp->error_number = -1;
     return resp;
 }
 
-void response_free(Response *resp) {
-    if (!resp) return;
+void response_free(Response* resp) {
+    if (!resp)
+        return;
 
     free(resp->effective_url);
     free(resp->content_type);
@@ -30,7 +32,7 @@ void response_free(Response *resp) {
     free(resp);
 }
 
-int response_add_header(Response *resp, const char *name, const char *value) {
+int response_add_header(Response* resp, const char* name, const char* value) {
     if (!resp || !name || !value) {
         errno = EINVAL;
         return -1;
@@ -38,22 +40,18 @@ int response_add_header(Response *resp, const char *name, const char *value) {
 
     size_t name_len = strlen(name);
     size_t value_len = strlen(value);
-    if (name_len > MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 ||
-        value_len >
-            MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 - name_len) {
+    if (name_len > MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 || value_len > MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 - name_len) {
         errno = EFBIG;
         return -1;
     }
     size_t wire_bytes = name_len + value_len + 4;
-    if (resp->header_count >= MIRA_RESPONSE_HEADER_MAX_FIELDS ||
-        resp->header_bytes >
-            MIRA_RESPONSE_HEADER_BLOCK_MAX_BYTES - wire_bytes) {
+    if (resp->header_count >= MIRA_RESPONSE_HEADER_MAX_FIELDS || resp->header_bytes > MIRA_RESPONSE_HEADER_BLOCK_MAX_BYTES - wire_bytes) {
         errno = EFBIG;
         return -1;
     }
 
-    char *name_copy = strdup(name);
-    char *value_copy = strdup(value);
+    char* name_copy = strdup(name);
+    char* value_copy = strdup(value);
     if (!name_copy || !value_copy) {
         free(name_copy);
         free(value_copy);
@@ -72,14 +70,13 @@ int response_add_header(Response *resp, const char *name, const char *value) {
         if (new_cap > MIRA_RESPONSE_HEADER_MAX_FIELDS) {
             new_cap = MIRA_RESPONSE_HEADER_MAX_FIELDS;
         }
-        if (new_cap <= resp->header_count ||
-            new_cap > SIZE_MAX / sizeof(MiraHeader)) {
+        if (new_cap <= resp->header_count || new_cap > SIZE_MAX / sizeof(MiraHeader)) {
             free(name_copy);
             free(value_copy);
             errno = ENOMEM;
             return -1;
         }
-        MiraHeader *new_headers = realloc(resp->headers, new_cap * sizeof(MiraHeader));
+        MiraHeader* new_headers = realloc(resp->headers, new_cap * sizeof(MiraHeader));
         if (!new_headers) {
             free(name_copy);
             free(value_copy);
@@ -97,21 +94,14 @@ int response_add_header(Response *resp, const char *name, const char *value) {
     return 0;
 }
 
-const char *mira_response_header_policy_failure_summary(
-    MiraResponseHeaderPolicyFailure failure) {
+const char* mira_response_header_policy_failure_summary(MiraResponseHeaderPolicyFailure failure) {
     switch (failure) {
         case MIRA_RESPONSE_HEADER_POLICY_LINE_TOO_LARGE:
-            return "response header line exceeds "
-                   MIRA_RESPONSE_HEADER_LINE_LIMIT_TEXT
-                   " limit";
+            return "response header line exceeds " MIRA_RESPONSE_HEADER_LINE_LIMIT_TEXT " limit";
         case MIRA_RESPONSE_HEADER_POLICY_BLOCK_TOO_LARGE:
-            return "response header block exceeds "
-                   MIRA_RESPONSE_HEADER_BLOCK_LIMIT_TEXT
-                   " limit";
+            return "response header block exceeds " MIRA_RESPONSE_HEADER_BLOCK_LIMIT_TEXT " limit";
         case MIRA_RESPONSE_HEADER_POLICY_TOO_MANY_FIELDS:
-            return "response header block exceeds "
-                   MIRA_RESPONSE_HEADER_FIELD_LIMIT_TEXT
-                   " field limit";
+            return "response header block exceeds " MIRA_RESPONSE_HEADER_FIELD_LIMIT_TEXT " field limit";
         case MIRA_RESPONSE_HEADER_POLICY_OK:
         default:
             return NULL;

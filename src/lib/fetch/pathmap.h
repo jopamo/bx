@@ -21,9 +21,8 @@
 
 #include "config.h"
 
-char *pathmap_sanitize_component(const char *component, const EffectiveConfig *cfg);
-char *pathmap_url_to_local(const char *url, const EffectiveConfig *cfg);
-char *pathmap_canonical_url_to_local(const char *canonical_url,
-                                     const EffectiveConfig *cfg);
+char* pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg);
+char* pathmap_url_to_local(const char* url, const EffectiveConfig* cfg);
+char* pathmap_canonical_url_to_local(const char* canonical_url, const EffectiveConfig* cfg);
 
-#endif // MIRA_PATHMAP_H
+#endif  // MIRA_PATHMAP_H

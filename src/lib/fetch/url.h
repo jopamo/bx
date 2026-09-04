@@ -42,33 +42,31 @@ typedef enum {
 } MiraProtocolDecision;
 
 typedef struct {
-    char *scheme;
-    char *user;
-    char *password;
-    char *host;
+    char* scheme;
+    char* user;
+    char* password;
+    char* host;
     int port;
-    char *path;
-    char *query;
-    char *fragment;
+    char* path;
+    char* query;
+    char* fragment;
 } MiraURL;
 
-MiraURL *mira_url_parse(const char *url);
-void mira_url_free(MiraURL *mu);
-char *mira_url_resolve(const char *base_url, const char *relative_url);
-char *mira_url_resolve_canonical(const char *base_url, const char *relative_url);
-char *mira_url_to_string(MiraURL *mu);
-char *mira_url_canonicalize(const char *url);
-char *mira_url_display_safe(const char *url);
-bool mira_url_has_scheme(const char *url, const char *scheme);
-bool mira_url_has_userinfo(const char *url);
+MiraURL* mira_url_parse(const char* url);
+void mira_url_free(MiraURL* mu);
+char* mira_url_resolve(const char* base_url, const char* relative_url);
+char* mira_url_resolve_canonical(const char* base_url, const char* relative_url);
+char* mira_url_to_string(MiraURL* mu);
+char* mira_url_canonicalize(const char* url);
+char* mira_url_display_safe(const char* url);
+bool mira_url_has_scheme(const char* url, const char* scheme);
+bool mira_url_has_userinfo(const char* url);
 
-MiraProtocol mira_protocol_from_scheme(const char *scheme);
+MiraProtocol mira_protocol_from_scheme(const char* scheme);
 unsigned int mira_protocol_policy_mask(bool https_only);
-MiraProtocolDecision mira_protocol_policy_evaluate_scheme(const char *scheme,
-                                                           bool https_only);
-MiraProtocolDecision mira_protocol_policy_evaluate_url(const char *url,
-                                                        bool https_only);
-const char *mira_protocol_decision_reason(MiraProtocolDecision decision);
-bool mira_protocol_policy_format(bool https_only, char *out, size_t out_size);
+MiraProtocolDecision mira_protocol_policy_evaluate_scheme(const char* scheme, bool https_only);
+MiraProtocolDecision mira_protocol_policy_evaluate_url(const char* url, bool https_only);
+const char* mira_protocol_decision_reason(MiraProtocolDecision decision);
+bool mira_protocol_policy_format(bool https_only, char* out, size_t out_size);
 
-#endif // MIRA_URL_H
+#endif  // MIRA_URL_H

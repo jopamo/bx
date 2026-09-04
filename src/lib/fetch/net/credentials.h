@@ -15,8 +15,8 @@ typedef enum {
 
 typedef struct {
     MiraCredentialSource source;
-    const char *username;
-    const char *password;
+    const char* username;
+    const char* password;
 } MiraCredentialSelection;
 
 /*
@@ -24,19 +24,15 @@ typedef struct {
  * configured source is atomic: an omitted component becomes empty and is
  * never inherited from a lower-priority source.
  */
-void net_select_origin_credentials(const EffectiveConfig *cfg,
-                                   const char *url,
-                                   MiraCredentialSelection *selection);
-void net_select_proxy_credentials(const EffectiveConfig *cfg,
-                                  MiraCredentialSelection *selection);
+void net_select_origin_credentials(const EffectiveConfig* cfg, const char* url, MiraCredentialSelection* selection);
+void net_select_proxy_credentials(const EffectiveConfig* cfg, MiraCredentialSelection* selection);
 /* Returns the borrowed proxy environment value selected for request_url. */
-const char *net_proxy_environment_url(const char *request_url);
+const char* net_proxy_environment_url(const char* request_url);
 /*
  * If proxy_url contains authority userinfo, returns an owned equivalent with
  * userinfo removed in `sanitized_out`; otherwise leaves it NULL. Returns -1
  * when userinfo is present but the proxy URL cannot be represented safely.
  */
-int net_sanitize_proxy_url_for_explicit_credentials(
-    const char *proxy_url, char **sanitized_out);
+int net_sanitize_proxy_url_for_explicit_credentials(const char* proxy_url, char** sanitized_out);
 
 #endif

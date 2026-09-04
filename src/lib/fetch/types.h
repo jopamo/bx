@@ -27,8 +27,8 @@ typedef uint64_t u64;
 typedef size_t usize;
 
 typedef struct {
-    char *name;
-    char *value;
+    char* name;
+    char* value;
 } MiraHeader;
 
 typedef struct {
@@ -36,4 +36,4 @@ typedef struct {
     MiraError error;
 } MiraResult;
 
-#endif // MIRA_TYPES_H
+#endif  // MIRA_TYPES_H

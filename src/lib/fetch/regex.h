@@ -14,6 +14,6 @@
  * - `flags_out` is caller-owned output storage.
  */
 
-int mira_regex_compile_flags_for_type(const char *regex_type, int *flags_out);
+int mira_regex_compile_flags_for_type(const char* regex_type, int* flags_out);
 
-#endif // MIRA_REGEX_H
+#endif  // MIRA_REGEX_H

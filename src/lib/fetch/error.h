@@ -35,7 +35,7 @@ typedef enum {
     MIRA_ERROR_RESOURCE_LIMIT,
 } MiraError;
 
-const char *mira_error_string(MiraError err);
+const char* mira_error_string(MiraError err);
 
 typedef enum {
     MIRA_ERROR_CLASS_PARSE = 0,
@@ -58,9 +58,9 @@ typedef enum {
 
 typedef struct {
     MiraErrorClass class_id;
-    const char *summary;
-    const char *url;
-    const char *path;
+    const char* summary;
+    const char* url;
+    const char* path;
     int http_status;
     int curl_code;
     int error_number;
@@ -69,13 +69,9 @@ typedef struct {
     int max_attempts;
 } MiraStructuredError;
 
-const char *mira_error_class_string(MiraErrorClass class_id);
-MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char *summary,
-                                           const char *url, const char *path,
-                                           int curl_code, int error_number);
-void mira_error_emit_simple(FILE *stream, MiraErrorClass class_id, const char *summary,
-                            const char *url, const char *path, int curl_code,
-                            int error_number);
-void mira_error_emit_structured(FILE *stream, const MiraStructuredError *error);
+const char* mira_error_class_string(MiraErrorClass class_id);
+MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
+void mira_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
+void mira_error_emit_structured(FILE* stream, const MiraStructuredError* error);
 
-#endif // MIRA_ERROR_H
+#endif  // MIRA_ERROR_H

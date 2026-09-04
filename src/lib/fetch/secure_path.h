@@ -18,18 +18,13 @@ int mira_secure_path_check_resolution(void);
  * Opens one leaf relative to dirfd, rejecting symlinks and mount crossings.
  * `path` must be a simple name, not a multi-component path.
  */
-int mira_secure_path_open_leaf(int dirfd, const char *path, int flags,
-                               mode_t mode);
-int mira_secure_path_rename_leaf_noreplace(int dirfd, const char *old_name,
-                                           const char *new_name);
-int mira_secure_path_open_existing_file(const char *path);
-int mira_secure_path_open_parent_directory(const char *path,
-                                           bool create_missing,
-                                           char **basename_out);
-int mira_secure_path_unlink_file(const char *path);
+int mira_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mode);
+int mira_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, const char* new_name);
+int mira_secure_path_open_existing_file(const char* path);
+int mira_secure_path_open_parent_directory(const char* path, bool create_missing, char** basename_out);
+int mira_secure_path_unlink_file(const char* path);
 
 /* Splits path into an optional parent and a required non-empty leaf. */
-int mira_secure_path_split(const char *path, char **parent_out,
-                           char **basename_out);
+int mira_secure_path_split(const char* path, char** parent_out, char** basename_out);
 
 #endif

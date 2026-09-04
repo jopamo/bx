@@ -40,16 +40,15 @@ typedef enum {
     FILTER_DECISION_SUFFIX_ALLOWLIST,
 } FilterDecision;
 
-Filter *filter_new(const EffectiveConfig *cfg);
-void filter_free(Filter *f);
+Filter* filter_new(const EffectiveConfig* cfg);
+void filter_free(Filter* f);
 
-int filter_add_seed_url(Filter *f, const char *url);
-int filter_add_canonical_seed_url(Filter *f, const char *canonical_url);
-FilterDecision filter_evaluate_url(Filter *f, const char *url);
-FilterDecision filter_evaluate_transport_canonical_url(
-    Filter *f, const char *canonical_url);
-FilterDecision filter_evaluate_canonical_url(Filter *f, const char *canonical_url);
-const char *filter_decision_reason(FilterDecision decision);
-bool filter_url_accepted(Filter *f, const char *url);
+int filter_add_seed_url(Filter* f, const char* url);
+int filter_add_canonical_seed_url(Filter* f, const char* canonical_url);
+FilterDecision filter_evaluate_url(Filter* f, const char* url);
+FilterDecision filter_evaluate_transport_canonical_url(Filter* f, const char* canonical_url);
+FilterDecision filter_evaluate_canonical_url(Filter* f, const char* canonical_url);
+const char* filter_decision_reason(FilterDecision decision);
+bool filter_url_accepted(Filter* f, const char* url);
 
-#endif // MIRA_FILTER_H
+#endif  // MIRA_FILTER_H

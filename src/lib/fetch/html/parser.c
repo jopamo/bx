@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool document_parser_input_valid(const char *data, size_t len) {
+static bool document_parser_input_valid(const char* data, size_t len) {
     if (!data) {
         errno = EINVAL;
         return false;
@@ -22,7 +22,7 @@ static bool is_css_identifier_char(unsigned char c) {
     return isalnum(c) || c == '-' || c == '_';
 }
 
-static bool has_ascii_case_prefix(const char *text, size_t len, size_t i, const char *prefix) {
+static bool has_ascii_case_prefix(const char* text, size_t len, size_t i, const char* prefix) {
     size_t plen = strlen(prefix);
     if (!text || !prefix || (i + plen) > len) {
         return false;
@@ -36,7 +36,7 @@ static bool has_ascii_case_prefix(const char *text, size_t len, size_t i, const 
     return true;
 }
 
-static size_t skip_css_comment(const char *css, size_t len, size_t i) {
+static size_t skip_css_comment(const char* css, size_t len, size_t i) {
     if ((i + 1) >= len || css[i] != '/' || css[i + 1] != '*') {
         return i;
     }
@@ -51,7 +51,7 @@ static size_t skip_css_comment(const char *css, size_t len, size_t i) {
     return len;
 }
 
-static size_t skip_css_quoted_string(const char *css, size_t len, size_t i) {
+static size_t skip_css_quoted_string(const char* css, size_t len, size_t i) {
     if (i >= len || (css[i] != '\'' && css[i] != '"')) {
         return i;
     }
@@ -79,7 +79,7 @@ static size_t skip_css_quoted_string(const char *css, size_t len, size_t i) {
     return i;
 }
 
-static size_t skip_css_whitespace_and_comments(const char *css, size_t len, size_t i) {
+static size_t skip_css_whitespace_and_comments(const char* css, size_t len, size_t i) {
     while (i < len) {
         if (isspace((unsigned char)css[i])) {
             i++;
@@ -94,13 +94,15 @@ static size_t skip_css_whitespace_and_comments(const char *css, size_t len, size
     return i;
 }
 
-static bool append_decoded_byte(char **buf, size_t *used, size_t *cap, unsigned char byte) {
-    if (!buf || !used || !cap) return false;
+static bool append_decoded_byte(char** buf, size_t* used, size_t* cap, unsigned char byte) {
+    if (!buf || !used || !cap)
+        return false;
 
     if ((*used + 1) >= *cap) {
         size_t next_cap = (*cap == 0) ? 32 : (*cap * 2);
-        char *grown = realloc(*buf, next_cap);
-        if (!grown) return false;
+        char* grown = realloc(*buf, next_cap);
+        if (!grown)
+            return false;
         *buf = grown;
         *cap = next_cap;
     }
@@ -109,39 +111,38 @@ static bool append_decoded_byte(char **buf, size_t *used, size_t *cap, unsigned 
     return true;
 }
 
-static bool append_decoded_codepoint(char **buf, size_t *used, size_t *cap, unsigned int cp) {
+static bool append_decoded_codepoint(char** buf, size_t* used, size_t* cap, unsigned int cp) {
     if (cp <= 0x7F) {
         return append_decoded_byte(buf, used, cap, (unsigned char)cp);
     }
     if (cp <= 0x7FF) {
-        return append_decoded_byte(buf, used, cap, (unsigned char)(0xC0 | (cp >> 6))) &&
-               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | (cp & 0x3F)));
+        return append_decoded_byte(buf, used, cap, (unsigned char)(0xC0 | (cp >> 6))) && append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | (cp & 0x3F)));
     }
     if (cp <= 0xFFFF) {
-        return append_decoded_byte(buf, used, cap, (unsigned char)(0xE0 | (cp >> 12))) &&
-               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 6) & 0x3F))) &&
+        return append_decoded_byte(buf, used, cap, (unsigned char)(0xE0 | (cp >> 12))) && append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 6) & 0x3F))) &&
                append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | (cp & 0x3F)));
     }
     if (cp <= 0x10FFFF) {
-        return append_decoded_byte(buf, used, cap, (unsigned char)(0xF0 | (cp >> 18))) &&
-               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 12) & 0x3F))) &&
-               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 6) & 0x3F))) &&
-               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | (cp & 0x3F)));
+        return append_decoded_byte(buf, used, cap, (unsigned char)(0xF0 | (cp >> 18))) && append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 12) & 0x3F))) &&
+               append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | ((cp >> 6) & 0x3F))) && append_decoded_byte(buf, used, cap, (unsigned char)(0x80 | (cp & 0x3F)));
     }
 
     return append_decoded_codepoint(buf, used, cap, 0xFFFD);
 }
 
 static int hex_value(unsigned char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+        return 10 + (c - 'A');
     return -1;
 }
 
-static bool append_css_decoded_range(const char *start, size_t len,
-                                     char **buf, size_t *used, size_t *cap) {
-    if (!start) return false;
+static bool append_css_decoded_range(const char* start, size_t len, char** buf, size_t* used, size_t* cap) {
+    if (!start)
+        return false;
 
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)start[i];
@@ -174,7 +175,8 @@ static bool append_css_decoded_range(const char *start, size_t len,
             int digits = 1;
             while ((i + 1) < len && digits < 6) {
                 int extra = hex_value((unsigned char)start[i + 1]);
-                if (extra < 0) break;
+                if (extra < 0)
+                    break;
                 codepoint = (codepoint * 16u) + (unsigned int)extra;
                 i++;
                 digits++;
@@ -204,8 +206,9 @@ static bool append_css_decoded_range(const char *start, size_t len,
     return true;
 }
 
-static void emit_css_url(const char *start, size_t len, MiraLinkCallback cb, void *userdata) {
-    if (!start || !cb) return;
+static void emit_css_url(const char* start, size_t len, MiraLinkCallback cb, void* userdata) {
+    if (!start || !cb)
+        return;
 
     while (len > 0 && isspace((unsigned char)*start)) {
         start++;
@@ -214,9 +217,10 @@ static void emit_css_url(const char *start, size_t len, MiraLinkCallback cb, voi
     while (len > 0 && isspace((unsigned char)start[len - 1])) {
         len--;
     }
-    if (len == 0) return;
+    if (len == 0)
+        return;
 
-    char *url = NULL;
+    char* url = NULL;
     size_t used = 0;
     size_t cap = 0;
     if (!append_css_decoded_range(start, len, &url, &used, &cap)) {
@@ -227,13 +231,13 @@ static void emit_css_url(const char *start, size_t len, MiraLinkCallback cb, voi
         free(url);
         return;
     }
-    if (!url) return;
+    if (!url)
+        return;
     cb(userdata, url);
     free(url);
 }
 
-static size_t scan_css_value_until(const char *css, size_t len, size_t i, char terminator,
-                                   bool *found_terminator) {
+static size_t scan_css_value_until(const char* css, size_t len, size_t i, char terminator, bool* found_terminator) {
     bool escaped = false;
     while (i < len) {
         char c = css[i];
@@ -259,8 +263,7 @@ static size_t scan_css_value_until(const char *css, size_t len, size_t i, char t
     return i;
 }
 
-static size_t parse_css_quoted_value(const char *css, size_t len, size_t i, char quote,
-                                     MiraLinkCallback cb, void *userdata) {
+static size_t parse_css_quoted_value(const char* css, size_t len, size_t i, char quote, MiraLinkCallback cb, void* userdata) {
     size_t value_start = i;
     bool closed_quote = false;
     i = scan_css_value_until(css, len, i, quote, &closed_quote);
@@ -283,8 +286,7 @@ static size_t parse_css_quoted_value(const char *css, size_t len, size_t i, char
     return i;
 }
 
-static size_t parse_css_unquoted_value(const char *css, size_t len, size_t i,
-                                       MiraLinkCallback cb, void *userdata) {
+static size_t parse_css_unquoted_value(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
     size_t value_start = i;
     bool found_closing_paren = false;
     i = scan_css_value_until(css, len, i, ')', &found_closing_paren);
@@ -297,12 +299,12 @@ static size_t parse_css_unquoted_value(const char *css, size_t len, size_t i,
     return i;
 }
 
-static size_t parse_css_url_function(const char *css, size_t len, size_t i,
-                                     MiraLinkCallback cb, void *userdata) {
+static size_t parse_css_url_function(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
     while (i < len && isspace((unsigned char)css[i])) {
         i++;
     }
-    if (i >= len) return i;
+    if (i >= len)
+        return i;
 
     if (css[i] == '\'' || css[i] == '"') {
         char quote = css[i];
@@ -312,8 +314,7 @@ static size_t parse_css_url_function(const char *css, size_t len, size_t i,
     return parse_css_unquoted_value(css, len, i, cb, userdata);
 }
 
-static size_t parse_css_import_rule(const char *css, size_t len, size_t i,
-                                    MiraLinkCallback cb, void *userdata) {
+static size_t parse_css_import_rule(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
     if (i >= len || css[i] != '@') {
         return i;
     }
@@ -334,7 +335,8 @@ static size_t parse_css_import_rule(const char *css, size_t len, size_t i,
         if (j > value_start && j <= len && css[j - 1] == quote) {
             emit_css_url(css + value_start, j - value_start - 1, cb, userdata);
         }
-    } else if (has_ascii_case_prefix(css, len, j, "url")) {
+    }
+    else if (has_ascii_case_prefix(css, len, j, "url")) {
         size_t k = j + 3;
         while (k < len && isspace((unsigned char)css[k])) {
             k++;
@@ -362,11 +364,12 @@ static size_t parse_css_import_rule(const char *css, size_t len, size_t i,
     return j;
 }
 
-int css_extract_links(const char *base_url, const char *css_data, size_t len,
-                      MiraLinkCallback cb, void *userdata) {
+int css_extract_links(const char* base_url, const char* css_data, size_t len, MiraLinkCallback cb, void* userdata) {
     (void)base_url;
-    if (!cb) errno = EINVAL;
-    if (!cb || !document_parser_input_valid(css_data, len)) return -1;
+    if (!cb)
+        errno = EINVAL;
+    if (!cb || !document_parser_input_valid(css_data, len))
+        return -1;
 
     size_t i = 0;
     while (i < len) {
@@ -385,10 +388,7 @@ int css_extract_links(const char *base_url, const char *css_data, size_t len,
             continue;
         }
 
-        bool maybe_url = (i + 2) < len &&
-                         (css_data[i] == 'u' || css_data[i] == 'U') &&
-                         (css_data[i + 1] == 'r' || css_data[i + 1] == 'R') &&
-                         (css_data[i + 2] == 'l' || css_data[i + 2] == 'L');
+        bool maybe_url = (i + 2) < len && (css_data[i] == 'u' || css_data[i] == 'U') && (css_data[i + 1] == 'r' || css_data[i + 1] == 'R') && (css_data[i + 2] == 'l' || css_data[i + 2] == 'L');
         if (!maybe_url) {
             i++;
             continue;
@@ -421,40 +421,38 @@ int css_extract_links(const char *base_url, const char *css_data, size_t len,
 
 typedef struct {
     MiraHtmlLinkCallback cb;
-    void *userdata;
+    void* userdata;
 } LexborExtractContext;
 
 typedef struct {
     MiraLinkRewriteCallback cb;
-    void *userdata;
+    void* userdata;
 } LexborRewriteContext;
 
-typedef void (*LexborAttrVisitor)(lxb_dom_element_t *element,
-                                  const char *attr_name,
-                                  size_t attr_name_len,
-                                  const char *url,
-                                  void *userdata);
+typedef void (*LexborAttrVisitor)(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata);
 
 typedef struct {
-    const char *name;
+    const char* name;
     size_t len;
 } LexborAttrSpec;
 
 typedef struct {
     MiraLinkCallback cb;
-    void *userdata;
+    void* userdata;
 } HtmlExtractCompatContext;
 
-static void extract_html_link_compat(void *userdata, const char *url, MiraHtmlLinkKind kind) {
+static void extract_html_link_compat(void* userdata, const char* url, MiraHtmlLinkKind kind) {
     (void)kind;
 
-    const HtmlExtractCompatContext *ctx = userdata;
-    if (!ctx || !ctx->cb) return;
+    const HtmlExtractCompatContext* ctx = userdata;
+    if (!ctx || !ctx->cb)
+        return;
     ctx->cb(ctx->userdata, url);
 }
 
-static bool span_ascii_case_equals_bytes(const char *value, size_t len, const char *expected) {
-    if (!value || !expected || len != strlen(expected)) return false;
+static bool span_ascii_case_equals_bytes(const char* value, size_t len, const char* expected) {
+    if (!value || !expected || len != strlen(expected))
+        return false;
 
     for (size_t i = 0; i < len; i++) {
         if (tolower((unsigned char)value[i]) != tolower((unsigned char)expected[i])) {
@@ -465,26 +463,23 @@ static bool span_ascii_case_equals_bytes(const char *value, size_t len, const ch
     return true;
 }
 
-static MiraHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t *element,
-                                              const char *attr_name,
-                                              size_t attr_name_len) {
+static MiraHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len) {
     if (!span_ascii_case_equals_bytes(attr_name, attr_name_len, "href")) {
         return MIRA_HTML_LINK_REQUISITE;
     }
 
     size_t tag_name_len = 0;
-    const lxb_char_t *tag_name = lxb_dom_element_tag_name(element, &tag_name_len);
-    if (tag_name && span_ascii_case_equals_bytes((const char *)tag_name, tag_name_len, "a")) {
+    const lxb_char_t* tag_name = lxb_dom_element_tag_name(element, &tag_name_len);
+    if (tag_name && span_ascii_case_equals_bytes((const char*)tag_name, tag_name_len, "a")) {
         return MIRA_HTML_LINK_NAVIGATION;
     }
 
     return MIRA_HTML_LINK_REQUISITE;
 }
 
-static void visit_lexbor_link_attributes(lxb_dom_element_t *element,
-                                         LexborAttrVisitor visitor,
-                                         void *visitor_userdata) {
-    if (!element || !visitor) return;
+static void visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrVisitor visitor, void* visitor_userdata) {
+    if (!element || !visitor)
+        return;
 
     static const LexborAttrSpec attrs[] = {
         {"href", 4},
@@ -494,82 +489,74 @@ static void visit_lexbor_link_attributes(lxb_dom_element_t *element,
 
     for (size_t i = 0; attrs[i].name; i++) {
         size_t value_len = 0;
-        const lxb_char_t *value = lxb_dom_element_get_attribute(element,
-                                                                 (const lxb_char_t *)attrs[i].name,
-                                                                 attrs[i].len,
-                                                                 &value_len);
-        if (!value) continue;
+        const lxb_char_t* value = lxb_dom_element_get_attribute(element, (const lxb_char_t*)attrs[i].name, attrs[i].len, &value_len);
+        if (!value)
+            continue;
 
-        char *url = strndup((const char *)value, value_len);
-        if (!url) continue;
+        char* url = strndup((const char*)value, value_len);
+        if (!url)
+            continue;
 
         visitor(element, attrs[i].name, attrs[i].len, url, visitor_userdata);
         free(url);
     }
 }
 
-static void extract_lexbor_attribute_link(lxb_dom_element_t *element,
-                                          const char *attr_name,
-                                          size_t attr_name_len,
-                                          const char *url,
-                                          void *userdata) {
+static void extract_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
     (void)element;
 
-    const LexborExtractContext *extract_ctx = userdata;
-    if (!extract_ctx || !extract_ctx->cb) return;
-    extract_ctx->cb(extract_ctx->userdata,
-                    url,
-                    lexbor_html_link_kind(element, attr_name, attr_name_len));
+    const LexborExtractContext* extract_ctx = userdata;
+    if (!extract_ctx || !extract_ctx->cb)
+        return;
+    extract_ctx->cb(extract_ctx->userdata, url, lexbor_html_link_kind(element, attr_name, attr_name_len));
 }
 
-static void rewrite_lexbor_attribute_link(lxb_dom_element_t *element,
-                                          const char *attr_name,
-                                          size_t attr_name_len,
-                                          const char *url,
-                                          void *userdata) {
-    const LexborRewriteContext *rewrite_ctx = userdata;
-    if (!rewrite_ctx || !rewrite_ctx->cb || !element) return;
+static void rewrite_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
+    const LexborRewriteContext* rewrite_ctx = userdata;
+    if (!rewrite_ctx || !rewrite_ctx->cb || !element)
+        return;
 
-    char *replacement = rewrite_ctx->cb(rewrite_ctx->userdata, url);
-    if (!replacement) return;
+    char* replacement = rewrite_ctx->cb(rewrite_ctx->userdata, url);
+    if (!replacement)
+        return;
 
-    lxb_dom_element_set_attribute(element,
-                                  (const lxb_char_t *)attr_name,
-                                  attr_name_len,
-                                  (const lxb_char_t *)replacement,
-                                  strlen(replacement));
+    lxb_dom_element_set_attribute(element, (const lxb_char_t*)attr_name, attr_name_len, (const lxb_char_t*)replacement, strlen(replacement));
     free(replacement);
 }
 
-static lxb_dom_report_spec_t callback(lxb_dom_node_t *node, void *ctx) {
-    LexborExtractContext *extract_ctx = ctx;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_DOM_REPORT_OK;
+static lxb_dom_report_spec_t callback(lxb_dom_node_t* node, void* ctx) {
+    LexborExtractContext* extract_ctx = ctx;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return LXB_DOM_REPORT_OK;
 
-    lxb_dom_element_t *element = lxb_dom_interface_element(node);
+    lxb_dom_element_t* element = lxb_dom_interface_element(node);
     visit_lexbor_link_attributes(element, extract_lexbor_attribute_link, extract_ctx);
 
     return LXB_DOM_REPORT_OK;
 }
 
-static lxb_dom_report_spec_t rewrite_callback(lxb_dom_node_t *node, void *ctx) {
-    LexborRewriteContext *rewrite_ctx = ctx;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT) return LXB_DOM_REPORT_OK;
+static lxb_dom_report_spec_t rewrite_callback(lxb_dom_node_t* node, void* ctx) {
+    LexborRewriteContext* rewrite_ctx = ctx;
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return LXB_DOM_REPORT_OK;
 
-    lxb_dom_element_t *element = lxb_dom_interface_element(node);
+    lxb_dom_element_t* element = lxb_dom_interface_element(node);
     visit_lexbor_link_attributes(element, rewrite_lexbor_attribute_link, rewrite_ctx);
 
     return LXB_DOM_REPORT_OK;
 }
 
-int html_extract_links_typed(const char *base_url, const char *html_data, size_t len,
-                             MiraHtmlLinkCallback cb, void *userdata) {
+int html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
-    if (!cb) errno = EINVAL;
-    if (!cb || !document_parser_input_valid(html_data, len)) return -1;
-    lxb_html_document_t *document = lxb_html_document_create();
-    if (!document) return -1;
+    if (!cb)
+        errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return -1;
+    lxb_html_document_t* document = lxb_html_document_create();
+    if (!document)
+        return -1;
 
-    if (lxb_html_document_parse(document, (const lxb_char_t *)html_data, len) != LXB_STATUS_OK) {
+    if (lxb_html_document_parse(document, (const lxb_char_t*)html_data, len) != LXB_STATUS_OK) {
         lxb_html_document_destroy(document);
         return -1;
     }
@@ -584,8 +571,7 @@ int html_extract_links_typed(const char *base_url, const char *html_data, size_t
     return 0;
 }
 
-int html_extract_links(const char *base_url, const char *html_data, size_t len,
-                       MiraLinkCallback cb, void *userdata) {
+int html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
@@ -593,15 +579,17 @@ int html_extract_links(const char *base_url, const char *html_data, size_t len,
     return html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
-char *html_convert_links(const char *base_url, const char *html_data, size_t len,
-                         MiraLinkRewriteCallback cb, void *userdata) {
+char* html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
-    if (!cb) errno = EINVAL;
-    if (!cb || !document_parser_input_valid(html_data, len)) return NULL;
-    lxb_html_document_t *document = lxb_html_document_create();
-    if (!document) return NULL;
+    if (!cb)
+        errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return NULL;
+    lxb_html_document_t* document = lxb_html_document_create();
+    if (!document)
+        return NULL;
 
-    if (lxb_html_document_parse(document, (const lxb_char_t *)html_data, len) != LXB_STATUS_OK) {
+    if (lxb_html_document_parse(document, (const lxb_char_t*)html_data, len) != LXB_STATUS_OK) {
         lxb_html_document_destroy(document);
         return NULL;
     }
@@ -615,9 +603,9 @@ char *html_convert_links(const char *base_url, const char *html_data, size_t len
     lexbor_str_t str = {0};
     lxb_html_serialize_tree_str(lxb_dom_interface_node(document), &str);
 
-    char *ret = NULL;
+    char* ret = NULL;
     if (str.data) {
-        ret = strdup((const char *)str.data);
+        ret = strdup((const char*)str.data);
         lexbor_str_destroy(&str, lxb_html_document_mraw(document), false);
     }
 
@@ -626,32 +614,28 @@ char *html_convert_links(const char *base_url, const char *html_data, size_t len
 }
 
 #else
-typedef int (*HtmlAttrVisitorFn)(void *userdata,
-                                 const char *html_data,
-                                 size_t tag_name_start, size_t tag_name_end,
-                                 size_t attr_name_start, size_t attr_name_end,
-                                 size_t value_start, size_t value_end);
+typedef int (*HtmlAttrVisitorFn)(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end);
 
 typedef struct {
     MiraHtmlLinkCallback cb;
-    void *userdata;
+    void* userdata;
 } HtmlExtractContext;
 
 typedef struct {
     MiraLinkCallback cb;
-    void *userdata;
+    void* userdata;
 } HtmlExtractCompatContext;
 
 typedef struct {
     size_t start;
     size_t end;
-    char *replacement;
+    char* replacement;
 } HtmlReplacement;
 
 typedef struct {
     MiraLinkRewriteCallback cb;
-    void *userdata;
-    HtmlReplacement *items;
+    void* userdata;
+    HtmlReplacement* items;
     size_t count;
     size_t capacity;
 } HtmlRewriteContext;
@@ -660,10 +644,12 @@ static bool is_html_name_char(unsigned char c) {
     return isalnum(c) || c == '-' || c == '_' || c == ':';
 }
 
-static bool span_case_equals(const char *data, size_t start, size_t end, const char *value) {
-    if (!data || !value || end < start) return false;
+static bool span_case_equals(const char* data, size_t start, size_t end, const char* value) {
+    if (!data || !value || end < start)
+        return false;
     size_t len = end - start;
-    if (len != strlen(value)) return false;
+    if (len != strlen(value))
+        return false;
 
     for (size_t i = 0; i < len; i++) {
         if (tolower((unsigned char)data[start + i]) != tolower((unsigned char)value[i])) {
@@ -673,45 +659,39 @@ static bool span_case_equals(const char *data, size_t start, size_t end, const c
     return true;
 }
 
-static bool span_case_equals_span(const char *data,
-                                  size_t left_start, size_t left_end,
-                                  size_t right_start, size_t right_end) {
-    if (!data || left_end < left_start || right_end < right_start) return false;
+static bool span_case_equals_span(const char* data, size_t left_start, size_t left_end, size_t right_start, size_t right_end) {
+    if (!data || left_end < left_start || right_end < right_start)
+        return false;
     size_t left_len = left_end - left_start;
     size_t right_len = right_end - right_start;
-    if (left_len != right_len) return false;
+    if (left_len != right_len)
+        return false;
 
     for (size_t i = 0; i < left_len; i++) {
-        if (tolower((unsigned char)data[left_start + i]) !=
-            tolower((unsigned char)data[right_start + i])) {
+        if (tolower((unsigned char)data[left_start + i]) != tolower((unsigned char)data[right_start + i])) {
             return false;
         }
     }
     return true;
 }
 
-static bool is_html_link_attr(const char *html_data, size_t name_start, size_t name_end) {
-    return span_case_equals(html_data, name_start, name_end, "href") ||
-           span_case_equals(html_data, name_start, name_end, "src");
+static bool is_html_link_attr(const char* html_data, size_t name_start, size_t name_end) {
+    return span_case_equals(html_data, name_start, name_end, "href") || span_case_equals(html_data, name_start, name_end, "src");
 }
 
-static MiraHtmlLinkKind html_link_kind_for_attr(const char *html_data,
-                                                size_t tag_name_start, size_t tag_name_end,
-                                                size_t attr_name_start, size_t attr_name_end) {
-    if (span_case_equals(html_data, attr_name_start, attr_name_end, "href") &&
-        span_case_equals(html_data, tag_name_start, tag_name_end, "a")) {
+static MiraHtmlLinkKind html_link_kind_for_attr(const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end) {
+    if (span_case_equals(html_data, attr_name_start, attr_name_end, "href") && span_case_equals(html_data, tag_name_start, tag_name_end, "a")) {
         return MIRA_HTML_LINK_NAVIGATION;
     }
 
     return MIRA_HTML_LINK_REQUISITE;
 }
 
-static bool is_html_rawtext_tag(const char *html_data, size_t name_start, size_t name_end) {
-    return span_case_equals(html_data, name_start, name_end, "script") ||
-           span_case_equals(html_data, name_start, name_end, "style");
+static bool is_html_rawtext_tag(const char* html_data, size_t name_start, size_t name_end) {
+    return span_case_equals(html_data, name_start, name_end, "script") || span_case_equals(html_data, name_start, name_end, "style");
 }
 
-static size_t skip_html_comment(const char *html_data, size_t len, size_t i) {
+static size_t skip_html_comment(const char* html_data, size_t len, size_t i) {
     if ((i + 2) >= len || html_data[i] != '!' || html_data[i + 1] != '-' || html_data[i + 2] != '-') {
         return i;
     }
@@ -726,7 +706,7 @@ static size_t skip_html_comment(const char *html_data, size_t len, size_t i) {
     return len;
 }
 
-static size_t skip_html_tag_to_gt(const char *html_data, size_t len, size_t i) {
+static size_t skip_html_tag_to_gt(const char* html_data, size_t len, size_t i) {
     while (i < len) {
         if (html_data[i] == '>') {
             return i + 1;
@@ -736,8 +716,7 @@ static size_t skip_html_tag_to_gt(const char *html_data, size_t len, size_t i) {
     return len;
 }
 
-static size_t skip_html_rawtext_element_body(const char *html_data, size_t len, size_t i,
-                                             size_t tag_name_start, size_t tag_name_end) {
+static size_t skip_html_rawtext_element_body(const char* html_data, size_t len, size_t i, size_t tag_name_start, size_t tag_name_end) {
     while (i < len) {
         if (html_data[i] != '<') {
             i++;
@@ -760,9 +739,7 @@ static size_t skip_html_rawtext_element_body(const char *html_data, size_t len, 
             j++;
         }
         size_t close_name_end = j;
-        if (!span_case_equals_span(html_data,
-                                   tag_name_start, tag_name_end,
-                                   close_name_start, close_name_end)) {
+        if (!span_case_equals_span(html_data, tag_name_start, tag_name_end, close_name_start, close_name_end)) {
             i++;
             continue;
         }
@@ -778,8 +755,9 @@ static size_t skip_html_rawtext_element_body(const char *html_data, size_t len, 
     return len;
 }
 
-static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisitorFn visitor, void *userdata) {
-    if (!html_data || !visitor) return -1;
+static int scan_html_link_attrs(const char* html_data, size_t len, HtmlAttrVisitorFn visitor, void* userdata) {
+    if (!html_data || !visitor)
+        return -1;
 
     size_t i = 0;
     while (i < len) {
@@ -788,7 +766,8 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
             continue;
         }
         i++;
-        if (i >= len) break;
+        if (i >= len)
+            break;
 
         if (html_data[i] == '!') {
             size_t next = skip_html_comment(html_data, len, i);
@@ -834,7 +813,8 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
             while (i < len && isspace((unsigned char)html_data[i])) {
                 i++;
             }
-            if (i >= len) break;
+            if (i >= len)
+                break;
             if (html_data[i] == '>') {
                 i++;
                 break;
@@ -868,7 +848,8 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
             while (i < len && isspace((unsigned char)html_data[i])) {
                 i++;
             }
-            if (i >= len) break;
+            if (i >= len)
+                break;
 
             size_t value_start = i;
             size_t value_end = i;
@@ -887,18 +868,15 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
                 value_end = i;
                 if (i < len && html_data[i] == quote && !malformed_value) {
                     i++;
-                } else {
+                }
+                else {
                     emit_value = false;
                     malformed_value = true;
                 }
-            } else {
+            }
+            else {
                 value_start = i;
-                while (i < len &&
-                       !isspace((unsigned char)html_data[i]) &&
-                       html_data[i] != '>' &&
-                       html_data[i] != '<' &&
-                       html_data[i] != '\'' &&
-                       html_data[i] != '"') {
+                while (i < len && !isspace((unsigned char)html_data[i]) && html_data[i] != '>' && html_data[i] != '<' && html_data[i] != '\'' && html_data[i] != '"') {
                     i++;
                 }
                 value_end = i;
@@ -911,14 +889,7 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
             }
 
             if (emit_value && is_html_link_attr(html_data, name_start, name_end)) {
-                if (visitor(userdata,
-                            html_data,
-                            tag_name_start,
-                            tag_name_end,
-                            name_start,
-                            name_end,
-                            value_start,
-                            value_end) != 0) {
+                if (visitor(userdata, html_data, tag_name_start, tag_name_end, name_start, name_end, value_start, value_end) != 0) {
                     return -1;
                 }
             }
@@ -940,47 +911,40 @@ static int scan_html_link_attrs(const char *html_data, size_t len, HtmlAttrVisit
     return 0;
 }
 
-static void extract_html_link_compat(void *userdata, const char *url, MiraHtmlLinkKind kind) {
+static void extract_html_link_compat(void* userdata, const char* url, MiraHtmlLinkKind kind) {
     (void)kind;
 
-    const HtmlExtractCompatContext *ctx = userdata;
-    if (!ctx || !ctx->cb) return;
+    const HtmlExtractCompatContext* ctx = userdata;
+    if (!ctx || !ctx->cb)
+        return;
     ctx->cb(ctx->userdata, url);
 }
 
-static int html_extract_visit(void *userdata,
-                              const char *html_data,
-                              size_t tag_name_start, size_t tag_name_end,
-                              size_t attr_name_start, size_t attr_name_end,
-                              size_t value_start, size_t value_end) {
-    HtmlExtractContext *ctx = userdata;
-    if (!ctx || value_end < value_start) return -1;
+static int html_extract_visit(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end) {
+    HtmlExtractContext* ctx = userdata;
+    if (!ctx || value_end < value_start)
+        return -1;
 
-    char *url = strndup(html_data + value_start, value_end - value_start);
-    if (!url) return -1;
-    ctx->cb(ctx->userdata,
-            url,
-            html_link_kind_for_attr(html_data,
-                                    tag_name_start,
-                                    tag_name_end,
-                                    attr_name_start,
-                                    attr_name_end));
+    char* url = strndup(html_data + value_start, value_end - value_start);
+    if (!url)
+        return -1;
+    ctx->cb(ctx->userdata, url, html_link_kind_for_attr(html_data, tag_name_start, tag_name_end, attr_name_start, attr_name_end));
     free(url);
     return 0;
 }
 
-int html_extract_links_typed(const char *base_url, const char *html_data, size_t len,
-                             MiraHtmlLinkCallback cb, void *userdata) {
+int html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
-    if (!cb) errno = EINVAL;
-    if (!cb || !document_parser_input_valid(html_data, len)) return -1;
+    if (!cb)
+        errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return -1;
 
     HtmlExtractContext ctx = {cb, userdata};
     return scan_html_link_attrs(html_data, len, html_extract_visit, &ctx);
 }
 
-int html_extract_links(const char *base_url, const char *html_data, size_t len,
-                       MiraLinkCallback cb, void *userdata) {
+int html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
@@ -988,12 +952,14 @@ int html_extract_links(const char *base_url, const char *html_data, size_t len,
     return html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
-static int html_rewrite_add(HtmlRewriteContext *ctx, size_t start, size_t end, char *replacement) {
-    if (!ctx || !replacement || end < start) return -1;
+static int html_rewrite_add(HtmlRewriteContext* ctx, size_t start, size_t end, char* replacement) {
+    if (!ctx || !replacement || end < start)
+        return -1;
     if (ctx->count == ctx->capacity) {
         size_t new_capacity = (ctx->capacity == 0) ? 8 : ctx->capacity * 2;
-        HtmlReplacement *new_items = realloc(ctx->items, new_capacity * sizeof(HtmlReplacement));
-        if (!new_items) return -1;
+        HtmlReplacement* new_items = realloc(ctx->items, new_capacity * sizeof(HtmlReplacement));
+        if (!new_items)
+            return -1;
         ctx->items = new_items;
         ctx->capacity = new_capacity;
     }
@@ -1005,8 +971,9 @@ static int html_rewrite_add(HtmlRewriteContext *ctx, size_t start, size_t end, c
     return 0;
 }
 
-static void html_rewrite_clear(HtmlRewriteContext *ctx) {
-    if (!ctx) return;
+static void html_rewrite_clear(HtmlRewriteContext* ctx) {
+    if (!ctx)
+        return;
     for (size_t i = 0; i < ctx->count; i++) {
         free(ctx->items[i].replacement);
     }
@@ -1016,25 +983,24 @@ static void html_rewrite_clear(HtmlRewriteContext *ctx) {
     ctx->capacity = 0;
 }
 
-static int html_rewrite_visit(void *userdata,
-                              const char *html_data,
-                              size_t tag_name_start, size_t tag_name_end,
-                              size_t attr_name_start, size_t attr_name_end,
-                              size_t value_start, size_t value_end) {
+static int html_rewrite_visit(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end) {
     (void)tag_name_start;
     (void)tag_name_end;
     (void)attr_name_start;
     (void)attr_name_end;
 
-    HtmlRewriteContext *ctx = userdata;
-    if (!ctx || value_end < value_start) return -1;
+    HtmlRewriteContext* ctx = userdata;
+    if (!ctx || value_end < value_start)
+        return -1;
 
-    char *original = strndup(html_data + value_start, value_end - value_start);
-    if (!original) return -1;
+    char* original = strndup(html_data + value_start, value_end - value_start);
+    if (!original)
+        return -1;
 
-    char *rewritten = ctx->cb(ctx->userdata, original);
+    char* rewritten = ctx->cb(ctx->userdata, original);
     free(original);
-    if (!rewritten) return 0;
+    if (!rewritten)
+        return 0;
 
     if (html_rewrite_add(ctx, value_start, value_end, rewritten) != 0) {
         free(rewritten);
@@ -1044,9 +1010,11 @@ static int html_rewrite_visit(void *userdata,
     return 0;
 }
 
-static int append_buffer(char **buffer, size_t *length, size_t *capacity, const char *data, size_t data_len) {
-    if (!buffer || !length || !capacity || (!data && data_len > 0)) return -1;
-    if (data_len == 0) return 0;
+static int append_buffer(char** buffer, size_t* length, size_t* capacity, const char* data, size_t data_len) {
+    if (!buffer || !length || !capacity || (!data && data_len > 0))
+        return -1;
+    if (data_len == 0)
+        return 0;
 
     size_t needed = *length + data_len + 1;
     if (*capacity < needed) {
@@ -1055,8 +1023,9 @@ static int append_buffer(char **buffer, size_t *length, size_t *capacity, const 
             new_capacity *= 2;
         }
 
-        char *resized = realloc(*buffer, new_capacity);
-        if (!resized) return -1;
+        char* resized = realloc(*buffer, new_capacity);
+        if (!resized)
+            return -1;
         *buffer = resized;
         *capacity = new_capacity;
     }
@@ -1067,11 +1036,12 @@ static int append_buffer(char **buffer, size_t *length, size_t *capacity, const 
     return 0;
 }
 
-char *html_convert_links(const char *base_url, const char *html_data, size_t len,
-                         MiraLinkRewriteCallback cb, void *userdata) {
+char* html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
-    if (!cb) errno = EINVAL;
-    if (!cb || !document_parser_input_valid(html_data, len)) return NULL;
+    if (!cb)
+        errno = EINVAL;
+    if (!cb || !document_parser_input_valid(html_data, len))
+        return NULL;
 
     HtmlRewriteContext rewrite_ctx = {cb, userdata, NULL, 0, 0};
     if (scan_html_link_attrs(html_data, len, html_rewrite_visit, &rewrite_ctx) != 0) {
@@ -1084,14 +1054,14 @@ char *html_convert_links(const char *base_url, const char *html_data, size_t len
         return strndup(html_data, len);
     }
 
-    char *out = NULL;
+    char* out = NULL;
     size_t out_len = 0;
     size_t out_cap = 0;
     size_t cursor = 0;
     bool ok = true;
 
     for (size_t i = 0; i < rewrite_ctx.count; i++) {
-        HtmlReplacement *rep = &rewrite_ctx.items[i];
+        HtmlReplacement* rep = &rewrite_ctx.items[i];
         if (rep->start < cursor || rep->end < rep->start || rep->end > len) {
             ok = false;
             break;

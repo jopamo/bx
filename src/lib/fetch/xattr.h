@@ -19,7 +19,6 @@
 #define MIRA_XATTR_UNSUPPORTED 1
 #define MIRA_XATTR_ERROR -1
 
-int mira_xattr_apply_fd(int fd, const char *url, const char *content_type,
-                        const char *etag, const char *last_modified);
+int mira_xattr_apply_fd(int fd, const char* url, const char* content_type, const char* etag, const char* last_modified);
 
-#endif // MIRA_XATTR_H
+#endif  // MIRA_XATTR_H
