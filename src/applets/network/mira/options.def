@@ -9,7 +9,7 @@ MIRA_OPTION("verbose", no_argument, 'v', "v", NULL, NULL, "enable verbose status
 MIRA_OPTION("no-verbose", no_argument, MIRA_OPT_NO_VERBOSE, "", "-nv", NULL, "disable verbose status output", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("output-file", required_argument, 'o', "o:", NULL, "FILE", "log execution diagnostics to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("append-output", required_argument, 'a', "a:", NULL, "FILE", "append execution diagnostics to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
-MIRA_OPTION("debug", no_argument, MIRA_OPT_DEBUG, "", NULL, NULL, "emit structured trace events", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("debug", no_argument, MIRA_OPT_DEBUG, "", NULL, NULL, "emit structured dry-run trace events", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("input-file", required_argument, MIRA_OPT_INPUT_FILE, "", NULL, "FILE", "read URL input from FILE", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
 MIRA_OPTION("force-html", no_argument, MIRA_OPT_FORCE_HTML, "", NULL, NULL, "treat input file as HTML", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
 MIRA_OPTION("base", required_argument, MIRA_OPT_BASE, "", NULL, "URL", "set the input-file base URL", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
