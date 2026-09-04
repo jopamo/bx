@@ -68,6 +68,7 @@ char* bx_fetch_url_to_string(BxFetchUrl* mu);
 char* bx_fetch_url_canonicalize(const char* url);
 char* bx_fetch_url_display_safe(const char* url);
 bool bx_fetch_url_has_scheme(const char* url, const char* scheme);
+bool bx_fetch_url_has_explicit_scheme(const char* url);
 bool bx_fetch_url_has_userinfo(const char* url);
 
 /* Normalizes untrusted input and validates the shared protocol allowlist. */
