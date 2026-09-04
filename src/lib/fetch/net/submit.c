@@ -221,6 +221,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_WRITEDATA, t);
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HEADERFUNCTION, bx_fetch_header_callback);
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HEADERDATA, t);
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOSIGNAL, 1L);
 
     if (req->method && strcasecmp(req->method, "GET") != 0) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_CUSTOMREQUEST, req->method);
@@ -241,8 +242,13 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDSIZE_LARGE, curl_file_size);
     }
     else if (req->body && req->body_len > 0) {
+        curl_off_t body_length = (curl_off_t)req->body_len;
+        if (body_length < 0 || (size_t)body_length != req->body_len) {
+            errno = EFBIG;
+            return -1;
+        }
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDS, req->body);
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)req->body_len);
+        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDSIZE_LARGE, body_length);
     }
 
     if (engine->observer.on_progress) {
