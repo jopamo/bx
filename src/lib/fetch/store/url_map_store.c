@@ -192,8 +192,8 @@ static int hex_decode(const char* encoded, char** decoded_out) {
     }
 
     size_t len = strlen(encoded);
-    if ((len % 2U) != 0U || len / 2u > MIRA_URL_MAP_MAX_FIELD_BYTES) {
-        errno = len / 2u > MIRA_URL_MAP_MAX_FIELD_BYTES ? EFBIG : EINVAL;
+    if ((len % 2U) != 0U || len / 2u > BX_FETCH_URL_MAP_MAX_FIELD_BYTES) {
+        errno = len / 2u > BX_FETCH_URL_MAP_MAX_FIELD_BYTES ? EFBIG : EINVAL;
         return -1;
     }
 
@@ -240,7 +240,7 @@ static int open_store_dir(const char* path, int* dirfd_out, char** basename_out)
     }
 
     char* basename = NULL;
-    int dirfd = mira_secure_path_open_parent_directory(path, true, &basename);
+    int dirfd = bx_fetch_secure_path_open_parent_directory(path, true, &basename);
     if (dirfd == -1)
         return -1;
 
@@ -388,7 +388,7 @@ typedef enum {
  * allocate beyond the store contract.
  */
 static StoreLineResult read_store_line(FILE* f, char* line, size_t capacity, size_t* store_bytes) {
-    if (!f || !line || !store_bytes || capacity < MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u) {
+    if (!f || !line || !store_bytes || capacity < BX_FETCH_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u) {
         errno = EINVAL;
         return STORE_LINE_ERROR;
     }
@@ -407,7 +407,7 @@ static StoreLineResult read_store_line(FILE* f, char* line, size_t capacity, siz
             break;
         }
 
-        if (*store_bytes >= MIRA_URL_MAP_STORE_MAX_BYTES || length >= MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES) {
+        if (*store_bytes >= BX_FETCH_URL_MAP_STORE_MAX_BYTES || length >= BX_FETCH_URL_MAP_ENCODED_LINE_MAX_BYTES) {
             errno = EFBIG;
             return STORE_LINE_ERROR;
         }
@@ -426,7 +426,7 @@ static StoreLineResult read_store_line(FILE* f, char* line, size_t capacity, siz
     return STORE_LINE_OK;
 }
 
-int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* userdata) {
+int bx_fetch_url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* userdata) {
     if (!cfg || !cb) {
         errno = EINVAL;
         return -1;
@@ -457,7 +457,7 @@ int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* us
         return -1;
     }
 
-    int store_fd = mira_secure_path_open_leaf(dirfd, basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    int store_fd = bx_fetch_secure_path_open_leaf(dirfd, basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
     int open_error_number = errno;
     close(dirfd);
     free(basename);
@@ -493,7 +493,7 @@ int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* us
 
     int rc = 0;
     int failure_errno = 0;
-    char* line = malloc(MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u);
+    char* line = malloc(BX_FETCH_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u);
     if (!line) {
         failure_errno = errno ? errno : ENOMEM;
         rc = -1;
@@ -504,7 +504,7 @@ int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* us
     while (true) {
         if (rc != 0)
             break;
-        StoreLineResult line_result = read_store_line(f, line, MIRA_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u, &store_bytes);
+        StoreLineResult line_result = read_store_line(f, line, BX_FETCH_URL_MAP_ENCODED_LINE_MAX_BYTES + 1u, &store_bytes);
         if (line_result == STORE_LINE_EOF)
             break;
         if (line_result == STORE_LINE_ERROR) {
@@ -543,7 +543,7 @@ int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* us
 
         size_t url_len = strlen(url);
         size_t path_len = strlen(local_path);
-        if (url_len > SIZE_MAX - path_len || !mira_resource_can_reserve(entry_count, decoded_bytes, 1u, url_len + path_len, MIRA_URL_MAP_MAX_ENTRIES, MIRA_URL_MAP_MAX_DECODED_BYTES)) {
+        if (url_len > SIZE_MAX - path_len || !bx_fetch_resource_can_reserve(entry_count, decoded_bytes, 1u, url_len + path_len, BX_FETCH_URL_MAP_MAX_ENTRIES, BX_FETCH_URL_MAP_MAX_DECODED_BYTES)) {
             free(url);
             free(local_path);
             failure_errno = EFBIG;
@@ -575,12 +575,12 @@ int url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* us
     return rc;
 }
 
-int url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entries, size_t entry_count) {
+int bx_fetch_url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entries, size_t entry_count) {
     if (!cfg) {
         errno = EINVAL;
         return -1;
     }
-    if (entry_count > MIRA_URL_MAP_MAX_ENTRIES) {
+    if (entry_count > BX_FETCH_URL_MAP_MAX_ENTRIES) {
         errno = EFBIG;
         return -1;
     }
@@ -605,14 +605,14 @@ int url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entrie
             errno = EINVAL;
             return -1;
         }
-        if (!mira_resource_bounded_strlen(entries[i].url, MIRA_URL_MAP_MAX_FIELD_BYTES, &source_url_len) ||
-            !mira_resource_bounded_strlen(entries[i].local_path, MIRA_URL_MAP_MAX_FIELD_BYTES, &path_len)) {
+        if (!bx_fetch_resource_bounded_strlen(entries[i].url, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &source_url_len) ||
+            !bx_fetch_resource_bounded_strlen(entries[i].local_path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_len)) {
             entry_refs_free(sorted, entry_count);
             errno = EFBIG;
             return -1;
         }
 
-        sorted[i].url = mira_url_display_safe(entries[i].url);
+        sorted[i].url = bx_fetch_url_display_safe(entries[i].url);
         if (!sorted[i].url) {
             entry_refs_free(sorted, entry_count);
             if (!errno)
@@ -620,8 +620,8 @@ int url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entrie
             return -1;
         }
         size_t public_url_len = 0;
-        if (!mira_resource_bounded_strlen(sorted[i].url, MIRA_URL_MAP_MAX_FIELD_BYTES, &public_url_len) || public_url_len > SIZE_MAX - path_len ||
-            !mira_resource_can_reserve(i, decoded_bytes, 1u, public_url_len + path_len, MIRA_URL_MAP_MAX_ENTRIES, MIRA_URL_MAP_MAX_DECODED_BYTES)) {
+        if (!bx_fetch_resource_bounded_strlen(sorted[i].url, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &public_url_len) || public_url_len > SIZE_MAX - path_len ||
+            !bx_fetch_resource_can_reserve(i, decoded_bytes, 1u, public_url_len + path_len, BX_FETCH_URL_MAP_MAX_ENTRIES, BX_FETCH_URL_MAP_MAX_DECODED_BYTES)) {
             entry_refs_free(sorted, entry_count);
             errno = EFBIG;
             return -1;

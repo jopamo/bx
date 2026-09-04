@@ -46,18 +46,18 @@ static mode_t process_umask(void) {
     return mask;
 }
 
-int writer_check_secure_path_resolution(void) {
-    return mira_secure_path_check_resolution();
+int bx_fetch_writer_check_secure_path_resolution(void) {
+    return bx_fetch_secure_path_check_resolution();
 }
 
-int writer_open_existing_file(const char* path) {
-    return mira_secure_path_open_existing_file(path);
+int bx_fetch_writer_open_existing_file(const char* path) {
+    return bx_fetch_secure_path_open_existing_file(path);
 }
 
 static char* parent_path_for_output_path(const char* path) {
     char* parent = NULL;
     char* basename = NULL;
-    if (mira_secure_path_split(path, &parent, &basename) != 0) {
+    if (bx_fetch_secure_path_split(path, &parent, &basename) != 0) {
         return NULL;
     }
 
@@ -122,7 +122,7 @@ static int validate_parent_directory_identity(const Writer* w) {
      * renamed parent replaced by a symlink or different directory fails
      * closed; cleanup still targets only the retained directory object.
      */
-    current_parent_fd = mira_secure_path_open_parent_directory(w->path, false, &current_basename);
+    current_parent_fd = bx_fetch_secure_path_open_parent_directory(w->path, false, &current_basename);
     if (current_parent_fd == -1) {
         return -1;
     }
@@ -145,8 +145,8 @@ static int validate_parent_directory_identity(const Writer* w) {
     return rc;
 }
 
-int writer_unlink_file(const char* path) {
-    return mira_secure_path_unlink_file(path);
+int bx_fetch_writer_unlink_file(const char* path) {
+    return bx_fetch_secure_path_unlink_file(path);
 }
 
 static int open_unique_temp_file_at(int parent_fd, const char* basename, char** temp_name_out) {
@@ -167,7 +167,7 @@ static int open_unique_temp_file_at(int parent_fd, const char* basename, char** 
         if (!temp_name)
             return -1;
 
-        int fd = mira_secure_path_open_leaf(parent_fd, temp_name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, mode);
+        int fd = bx_fetch_secure_path_open_leaf(parent_fd, temp_name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, mode);
         if (fd != -1) {
             if (fchmod(fd, mode) == -1) {
                 return writer_fail_temp_entry(errno, parent_fd, fd, &temp_name);
@@ -194,7 +194,7 @@ static int seed_temp_file_from_existing_destination(Writer* w) {
         return -1;
     }
 
-    int src_fd = mira_secure_path_open_leaf(w->parent_fd, w->basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    int src_fd = bx_fetch_secure_path_open_leaf(w->parent_fd, w->basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
     if (src_fd == -1) {
         if (errno == ENOENT) {
             w->written = 0;
@@ -435,11 +435,11 @@ static int copy_metadata(MiraMetadata* dest, const MiraMetadata* src) {
     MiraMetadata copy = {0};
     if (set_metadata_string(&copy.etag, src->etag) != 0 || set_metadata_string(&copy.last_modified, src->last_modified) != 0 || set_metadata_string(&copy.origin_url, src->origin_url) != 0 ||
         set_metadata_string(&copy.redirect_target, src->redirect_target) != 0 || set_metadata_string(&copy.local_path, src->local_path) != 0) {
-        metadata_clear(&copy);
+        bx_fetch_metadata_clear(&copy);
         return -1;
     }
 
-    metadata_clear(dest);
+    bx_fetch_metadata_clear(dest);
     *dest = copy;
     return 0;
 }
@@ -487,7 +487,7 @@ static int write_metadata_temp_file_at(int parent_fd, const char* basename, cons
     }
 
     int rc = 0;
-    if (metadata_write_stream(f, meta) != 0) {
+    if (bx_fetch_metadata_write_stream(f, meta) != 0) {
         rc = -1;
     }
     else if (stream_flush_and_sync(f) != 0) {
@@ -578,7 +578,7 @@ static void writer_free(Writer* w) {
     free(w->basename);
     free(w->parent_path);
     free(w->path);
-    metadata_clear(&w->pending_metadata);
+    bx_fetch_metadata_clear(&w->pending_metadata);
     free(w);
 }
 
@@ -706,7 +706,7 @@ static int finalize_payload_hold(int parent_fd, const char* basename, int backup
     return rc;
 }
 
-Writer* writer_open_with_options(const char* path, WriterMode mode, int backups, bool unlink_existing) {
+Writer* bx_fetch_writer_open_with_options(const char* path, WriterMode mode, int backups, bool unlink_existing) {
     if (!path)
         return NULL;
 
@@ -742,7 +742,7 @@ Writer* writer_open_with_options(const char* path, WriterMode mode, int backups,
         return w;
     }
 
-    w->parent_fd = mira_secure_path_open_parent_directory(path, true, &w->basename);
+    w->parent_fd = bx_fetch_secure_path_open_parent_directory(path, true, &w->basename);
     if (w->parent_fd == -1) {
         writer_free(w);
         return NULL;
@@ -766,7 +766,7 @@ Writer* writer_open_with_options(const char* path, WriterMode mode, int backups,
 
     if (mode == WRITER_RESUME) {
         if (seed_temp_file_from_existing_destination(w) != 0) {
-            writer_abort(w);
+            bx_fetch_writer_abort(w);
             return NULL;
         }
     }
@@ -774,8 +774,8 @@ Writer* writer_open_with_options(const char* path, WriterMode mode, int backups,
     return w;
 }
 
-Writer* writer_open(const char* path, WriterMode mode) {
-    return writer_open_with_options(path, mode, 0, false);
+Writer* bx_fetch_writer_open(const char* path, WriterMode mode) {
+    return bx_fetch_writer_open_with_options(path, mode, 0, false);
 }
 
 static int ensure_leaf_absent(int parent_fd, const char* name);
@@ -788,7 +788,7 @@ static int writer_set_final_path_with_policy(Writer* w, const char* path, bool e
 
     char* new_parent = NULL;
     char* new_basename = NULL;
-    if (mira_secure_path_split(path, &new_parent, &new_basename) != 0) {
+    if (bx_fetch_secure_path_split(path, &new_parent, &new_basename) != 0) {
         return -1;
     }
 
@@ -883,21 +883,21 @@ static int writer_set_final_path_with_policy(Writer* w, const char* path, bool e
     return 0;
 }
 
-int writer_set_final_path(Writer* w, const char* path) {
+int bx_fetch_writer_set_final_path(Writer* w, const char* path) {
     return writer_set_final_path_with_policy(w, path, false);
 }
 
-int writer_set_final_path_exclusive(Writer* w, const char* path) {
+int bx_fetch_writer_set_final_path_exclusive(Writer* w, const char* path) {
     return writer_set_final_path_with_policy(w, path, true);
 }
 
-int writer_stage_metadata(Writer* w, const MiraMetadata* meta) {
+int bx_fetch_writer_stage_metadata(Writer* w, const MiraMetadata* meta) {
     if (!w || w->to_stdout) {
         errno = EINVAL;
         return -1;
     }
 
-    metadata_clear(&w->pending_metadata);
+    bx_fetch_metadata_clear(&w->pending_metadata);
     w->has_pending_metadata = false;
     if (!meta) {
         return 0;
@@ -911,7 +911,7 @@ int writer_stage_metadata(Writer* w, const MiraMetadata* meta) {
     return 0;
 }
 
-int writer_preserve_destination_metadata(Writer* w) {
+int bx_fetch_writer_preserve_destination_metadata(Writer* w) {
     if (!w || w->to_stdout || w->fd == -1 || w->parent_fd == -1) {
         errno = EINVAL;
         return -1;
@@ -920,7 +920,7 @@ int writer_preserve_destination_metadata(Writer* w) {
         return 0;
     }
 
-    int source_fd = mira_secure_path_open_leaf(w->parent_fd, w->basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    int source_fd = bx_fetch_secure_path_open_leaf(w->parent_fd, w->basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
     if (source_fd == -1)
         return -1;
 
@@ -949,7 +949,7 @@ int writer_preserve_destination_metadata(Writer* w) {
     return rc;
 }
 
-int writer_begin_replace(Writer* w) {
+int bx_fetch_writer_begin_replace(Writer* w) {
     if (!w)
         return -1;
     if (w->to_stdout)
@@ -985,7 +985,7 @@ int writer_begin_replace(Writer* w) {
     return 0;
 }
 
-int writer_write(Writer* w, const void* data, size_t len) {
+int bx_fetch_writer_write(Writer* w, const void* data, size_t len) {
     if (!w || w->fd == -1 || (!data && len > 0))
         return -1;
 
@@ -1004,7 +1004,7 @@ int writer_write(Writer* w, const void* data, size_t len) {
     return 0;
 }
 
-int writer_set_mtime(Writer* w, time_t mtime) {
+int bx_fetch_writer_set_mtime(Writer* w, time_t mtime) {
     if (!w || w->to_stdout || w->fd == -1) {
         errno = EINVAL;
         return -1;
@@ -1015,12 +1015,12 @@ int writer_set_mtime(Writer* w, time_t mtime) {
     return 0;
 }
 
-int writer_stage_xattrs(Writer* w, const char* url, const char* content_type, const char* etag, const char* last_modified) {
+int bx_fetch_writer_stage_xattrs(Writer* w, const char* url, const char* content_type, const char* etag, const char* last_modified) {
     if (!w || w->to_stdout || w->fd == -1) {
         errno = EINVAL;
-        return MIRA_XATTR_ERROR;
+        return BX_FETCH_XATTR_ERROR;
     }
-    return mira_xattr_apply_fd(w->fd, url, content_type, etag, last_modified);
+    return bx_fetch_xattr_apply_fd(w->fd, url, content_type, etag, last_modified);
 }
 
 static int ensure_leaf_absent(int parent_fd, const char* name) {
@@ -1045,7 +1045,7 @@ static void unlink_leaf_if_same_identity(int parent_fd, const char* name, const 
     }
 }
 
-int writer_close(Writer* w) {
+int bx_fetch_writer_close(Writer* w) {
     if (!w)
         return -1;
 
@@ -1129,7 +1129,7 @@ int writer_close(Writer* w) {
                 return -1;
             }
 
-            if (!metadata_is_empty(&w->pending_metadata) && write_metadata_temp_file_at(w->parent_fd, sidecar_name, &w->pending_metadata, &sidecar_temp_name) != 0) {
+            if (!bx_fetch_metadata_is_empty(&w->pending_metadata) && write_metadata_temp_file_at(w->parent_fd, sidecar_name, &w->pending_metadata, &sidecar_temp_name) != 0) {
                 free(sidecar_name);
                 cleanup_temp_entry(w->parent_fd, &w->temp_name);
                 writer_free(w);
@@ -1183,8 +1183,8 @@ int writer_close(Writer* w) {
                 return -1;
             }
 
-            int sidecar_rename_rc =
-                w->exclusive_final_path ? mira_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name) : renameat(w->parent_fd, sidecar_temp_name, w->parent_fd, sidecar_name);
+            int sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
+                                                            : renameat(w->parent_fd, sidecar_temp_name, w->parent_fd, sidecar_name);
             if (sidecar_rename_rc != 0) {
                 restore_hold_entry(w->parent_fd, &sidecar_hold_name, sidecar_name);
                 restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
@@ -1201,7 +1201,7 @@ int writer_close(Writer* w) {
         }
 
         int payload_rename_rc =
-            w->exclusive_final_path ? mira_secure_path_rename_leaf_noreplace(w->parent_fd, w->temp_name, w->basename) : renameat(w->parent_fd, w->temp_name, w->parent_fd, w->basename);
+            w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, w->temp_name, w->basename) : renameat(w->parent_fd, w->temp_name, w->parent_fd, w->basename);
         if (payload_rename_rc != 0) {
             int error_number = errno;
             if (sidecar_committed && sidecar_name && have_sidecar_candidate_stat) {
@@ -1251,7 +1251,7 @@ int writer_close(Writer* w) {
     return rc;
 }
 
-void writer_abort(Writer* w) {
+void bx_fetch_writer_abort(Writer* w) {
     if (!w)
         return;
 
@@ -1263,7 +1263,7 @@ void writer_abort(Writer* w) {
     writer_free(w);
 }
 
-i64 writer_get_size(const char* path) {
+i64 bx_fetch_writer_get_size(const char* path) {
     struct stat st;
     if (lstat(path, &st) == 0 && S_ISREG(st.st_mode)) {
         return (i64)st.st_size;
@@ -1271,7 +1271,7 @@ i64 writer_get_size(const char* path) {
     return (i64)-1;
 }
 
-const char* writer_get_path(const Writer* w) {
+const char* bx_fetch_writer_get_path(const Writer* w) {
     if (!w)
         return NULL;
     return w->path;

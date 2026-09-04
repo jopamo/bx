@@ -3,14 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-EffectiveConfig* config_new(void) {
+EffectiveConfig* bx_fetch_config_new(void) {
     EffectiveConfig* cfg = calloc(1, sizeof(EffectiveConfig));
     if (!cfg)
         return NULL;
 
     // Set defaults
     cfg->download.tries = 20;
-    cfg->logging.verbosity = MIRA_VERBOSITY_VERBOSE;
+    cfg->logging.verbosity = BX_FETCH_VERBOSITY_VERBOSE;
     cfg->logging.structured_errors = true;
     cfg->download.dns_timeout = 60;
     cfg->download.connect_timeout = 60;
@@ -26,14 +26,14 @@ EffectiveConfig* config_new(void) {
     cfg->http.user_agent = strdup("mira/0.1.0");
     cfg->download.prefer_family = strdup("none");
     if (!cfg->http.redirect_method || !cfg->http.user_agent || !cfg->download.prefer_family) {
-        config_free(cfg);
+        bx_fetch_config_free(cfg);
         return NULL;
     }
 
     return cfg;
 }
 
-void config_free(EffectiveConfig* cfg) {
+void bx_fetch_config_free(EffectiveConfig* cfg) {
     if (!cfg)
         return;
 

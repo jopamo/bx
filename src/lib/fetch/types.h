@@ -1,8 +1,8 @@
-#ifndef MIRA_TYPES_H
-#define MIRA_TYPES_H
+#ifndef BX_FETCH_TYPES_H
+#define BX_FETCH_TYPES_H
 
-/* MIRA_HEADER_OWNER: util */
-/* MIRA_HEADER_CONSUMERS: util, runtime, fs, net */
+/* BX_FETCH_HEADER_OWNER: util */
+/* BX_FETCH_HEADER_CONSUMERS: util, runtime, fs, net */
 
 /*
  * Layering contract:
@@ -36,4 +36,4 @@ typedef struct {
     MiraError error;
 } MiraResult;
 
-#endif  // MIRA_TYPES_H
+#endif  // BX_FETCH_TYPES_H

@@ -43,23 +43,23 @@ static void json_write_escaped_string(FILE* stream, const char* value) {
     fputc('"', stream);
 }
 
-const char* mira_error_class_string(MiraErrorClass class_id) {
+const char* bx_fetch_error_class_string(MiraErrorClass class_id) {
     switch (class_id) {
-        case MIRA_ERROR_CLASS_PARSE:
+        case BX_FETCH_ERROR_CLASS_PARSE:
             return "parse";
-        case MIRA_ERROR_CLASS_POLICY:
+        case BX_FETCH_ERROR_CLASS_POLICY:
             return "policy";
-        case MIRA_ERROR_CLASS_HTTP:
+        case BX_FETCH_ERROR_CLASS_HTTP:
             return "http";
-        case MIRA_ERROR_CLASS_TLS:
+        case BX_FETCH_ERROR_CLASS_TLS:
             return "tls";
-        case MIRA_ERROR_CLASS_CURL_TRANSPORT:
+        case BX_FETCH_ERROR_CLASS_CURL_TRANSPORT:
             return "curl-transport";
-        case MIRA_ERROR_CLASS_FILESYSTEM:
+        case BX_FETCH_ERROR_CLASS_FILESYSTEM:
             return "filesystem";
-        case MIRA_ERROR_CLASS_STATE_STORE:
+        case BX_FETCH_ERROR_CLASS_STATE_STORE:
             return "state-store";
-        case MIRA_ERROR_CLASS_INTERNAL:
+        case BX_FETCH_ERROR_CLASS_INTERNAL:
             return "internal";
         default:
             return "internal";
@@ -84,38 +84,38 @@ static void json_write_optional_int(FILE* stream, int value) {
     }
 }
 
-const char* mira_error_string(MiraError err) {
+const char* bx_fetch_error_string(MiraError err) {
     switch (err) {
-        case MIRA_OK:
+        case BX_FETCH_OK:
             return "Success";
-        case MIRA_ERROR_INVALID_ARGUMENT:
+        case BX_FETCH_ERROR_INVALID_ARGUMENT:
             return "Invalid argument";
-        case MIRA_ERROR_MEMORY:
+        case BX_FETCH_ERROR_MEMORY:
             return "Out of memory";
-        case MIRA_ERROR_IO:
+        case BX_FETCH_ERROR_IO:
             return "I/O error";
-        case MIRA_ERROR_NETWORK:
+        case BX_FETCH_ERROR_NETWORK:
             return "Network error";
-        case MIRA_ERROR_HTTP:
+        case BX_FETCH_ERROR_HTTP:
             return "HTTP error";
-        case MIRA_ERROR_SSL:
+        case BX_FETCH_ERROR_SSL:
             return "SSL/TLS error";
-        case MIRA_ERROR_TIMEOUT:
+        case BX_FETCH_ERROR_TIMEOUT:
             return "Timeout";
-        case MIRA_ERROR_CANCELLED:
+        case BX_FETCH_ERROR_CANCELLED:
             return "Operation cancelled";
-        case MIRA_ERROR_UNSUPPORTED:
+        case BX_FETCH_ERROR_UNSUPPORTED:
             return "Unsupported operation";
-        case MIRA_ERROR_RESOURCE_LIMIT:
+        case BX_FETCH_ERROR_RESOURCE_LIMIT:
             return "Resource limit exceeded";
-        case MIRA_ERROR_INTERNAL:
+        case BX_FETCH_ERROR_INTERNAL:
             return "Internal error";
         default:
             return "Unknown error";
     }
 }
 
-MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
+MiraStructuredError bx_fetch_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
     MiraStructuredError error = {
         .class_id = class_id,
         .summary = summary,
@@ -131,19 +131,19 @@ MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char* 
     return error;
 }
 
-void mira_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
-    MiraStructuredError error = mira_error_make_simple(class_id, summary, url, path, curl_code, error_number);
-    mira_error_emit_structured(stream, &error);
+void bx_fetch_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
+    MiraStructuredError error = bx_fetch_error_make_simple(class_id, summary, url, path, curl_code, error_number);
+    bx_fetch_error_emit_structured(stream, &error);
 }
 
-void mira_error_emit_structured(FILE* stream, const MiraStructuredError* error) {
+void bx_fetch_error_emit_structured(FILE* stream, const MiraStructuredError* error) {
     if (!error)
         return;
     if (!stream)
         stream = stderr;
 
     fputs("{\"schema_version\":1,\"class\":", stream);
-    json_write_escaped_string(stream, mira_error_class_string(error->class_id));
+    json_write_escaped_string(stream, bx_fetch_error_class_string(error->class_id));
     fputs(",\"summary\":", stream);
     json_write_optional_string(stream, error->summary);
     fputs(",\"url\":", stream);

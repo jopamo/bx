@@ -195,7 +195,7 @@ static char* encode_component(const char* component) {
     return encoded;
 }
 
-char* pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg) {
     if (!component)
         return NULL;
     if (component[0] == '\0') {
@@ -258,7 +258,7 @@ static char* sanitize_directory_segment(const char* segment, const EffectiveConf
         sanitized = strdup(pathmap_empty_segment_token());
     }
     else {
-        sanitized = pathmap_sanitize_component(segment, cfg);
+        sanitized = bx_fetch_pathmap_sanitize_component(segment, cfg);
     }
 
     return sanitized;
@@ -354,7 +354,7 @@ static char* build_directory_part(const char* path, int cut_dirs, const Effectiv
 }
 
 static char* extract_filename_from_url(const char* url, const EffectiveConfig* cfg) {
-    MiraURL* mu = mira_url_parse(url);
+    MiraURL* mu = bx_fetch_url_parse(url);
     if (!mu)
         return NULL;
 
@@ -369,7 +369,7 @@ static char* extract_filename_from_url(const char* url, const EffectiveConfig* c
         else {
             char* path_copy = strdup(mu->path);
             if (!path_copy) {
-                mira_url_free(mu);
+                bx_fetch_url_free(mu);
                 return NULL;
             }
             const char* p = strrchr(path_copy, '/');
@@ -388,42 +388,42 @@ static char* extract_filename_from_url(const char* url, const EffectiveConfig* c
         filename = strdup(default_page);
     }
     if (!filename) {
-        mira_url_free(mu);
+        bx_fetch_url_free(mu);
         return NULL;
     }
 
-    char* sanitized = pathmap_sanitize_component(filename, cfg);
+    char* sanitized = bx_fetch_pathmap_sanitize_component(filename, cfg);
     free(filename);
     if (!sanitized) {
-        mira_url_free(mu);
+        bx_fetch_url_free(mu);
         return NULL;
     }
     if (sanitized[0] == '\0') {
         free(sanitized);
-        sanitized = pathmap_sanitize_component(default_page, cfg);
+        sanitized = bx_fetch_pathmap_sanitize_component(default_page, cfg);
     }
 
-    mira_url_free(mu);
+    bx_fetch_url_free(mu);
     return sanitized;
 }
 
-char* pathmap_url_to_local(const char* url, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_url_to_local(const char* url, const EffectiveConfig* cfg) {
     if (!url || !cfg)
         return NULL;
 
-    char* canonical = mira_url_canonicalize(url);
+    char* canonical = bx_fetch_url_canonicalize(url);
     if (!canonical)
         return NULL;
-    char* local_path = pathmap_canonical_url_to_local(canonical, cfg);
+    char* local_path = bx_fetch_pathmap_canonical_url_to_local(canonical, cfg);
     free(canonical);
     return local_path;
 }
 
-char* pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg) {
     if (!url || !cfg)
         return NULL;
 
-    MiraURL* mu = mira_url_parse(url);
+    MiraURL* mu = bx_fetch_url_parse(url);
     if (!mu)
         return NULL;
 
@@ -440,16 +440,16 @@ char* pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg
         char* dir_part = NULL;
         char* file_part = extract_filename_from_url(url, cfg);
         if (!file_part) {
-            mira_url_free(mu);
+            bx_fetch_url_free(mu);
             return NULL;
         }
 
         if (cfg->dirs.protocol_directories && mu->scheme) {
-            proto_part = pathmap_sanitize_component(mu->scheme, cfg);
+            proto_part = bx_fetch_pathmap_sanitize_component(mu->scheme, cfg);
         }
 
         if (!cfg->dirs.no_host_directories && mu->host) {
-            host_part = pathmap_sanitize_component(mu->host, cfg);
+            host_part = bx_fetch_pathmap_sanitize_component(mu->host, cfg);
         }
 
         if (mu->path) {
@@ -465,7 +465,7 @@ char* pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg
             free(host_part);
             free(dir_part);
             free(file_part);
-            mira_url_free(mu);
+            bx_fetch_url_free(mu);
             return NULL;
         }
         local_path[0] = '\0';
@@ -490,7 +490,7 @@ char* pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg
         free(file_part);
     }
 
-    mira_url_free(mu);
+    bx_fetch_url_free(mu);
 
     if (!local_path) {
         return NULL;

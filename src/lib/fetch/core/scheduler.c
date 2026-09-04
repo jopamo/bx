@@ -98,17 +98,17 @@ static bool scheduler_require(Scheduler* s, bool condition, const char* message)
 static bool should_retry_http_status(const Scheduler* s, int status) {
     if (!s || !s->cfg->download.retry_on_http_error)
         return false;
-    return mira_http_status_list_contains(s->cfg->download.retry_on_http_error, status);
+    return bx_fetch_http_status_list_contains(s->cfg->download.retry_on_http_error, status);
 }
 
 static bool should_retry_result(const Scheduler* s, int status, int result) {
     switch ((MiraError)result) {
-        case MIRA_OK:
-        case MIRA_ERROR_CANCELLED:
-        case MIRA_ERROR_UNSUPPORTED:
-        case MIRA_ERROR_RESOURCE_LIMIT:
+        case BX_FETCH_OK:
+        case BX_FETCH_ERROR_CANCELLED:
+        case BX_FETCH_ERROR_UNSUPPORTED:
+        case BX_FETCH_ERROR_RESOURCE_LIMIT:
             return false;
-        case MIRA_ERROR_HTTP:
+        case BX_FETCH_ERROR_HTTP:
             return should_retry_http_status(s, status);
         default:
             return result != 0;
@@ -117,11 +117,11 @@ static bool should_retry_result(const Scheduler* s, int status, int result) {
 
 static bool result_counts_as_scheduler_failure(int result) {
     switch ((MiraError)result) {
-        case MIRA_OK:
-        case MIRA_ERROR_HTTP:
-        case MIRA_ERROR_CANCELLED:
-        case MIRA_ERROR_UNSUPPORTED:
-        case MIRA_ERROR_RESOURCE_LIMIT:
+        case BX_FETCH_OK:
+        case BX_FETCH_ERROR_HTTP:
+        case BX_FETCH_ERROR_CANCELLED:
+        case BX_FETCH_ERROR_UNSUPPORTED:
+        case BX_FETCH_ERROR_RESOURCE_LIMIT:
             return false;
         default:
             return result != 0;
@@ -348,15 +348,15 @@ static int scheduler_add_url_with_tries(Scheduler* s, const char* url, const cha
         q->has_retry_ready_time = true;
     }
 
-    MiraURL* mu = mira_url_parse(url);
+    MiraURL* mu = bx_fetch_url_parse(url);
     if (!mu || !mu->host || mu->host[0] == '\0') {
-        mira_url_free(mu);
+        bx_fetch_url_free(mu);
         free_queued_url(q);
         errno = EINVAL;
         return -1;
     }
     q->host = strdup(mu->host);
-    mira_url_free(mu);
+    bx_fetch_url_free(mu);
     if (!q->host) {
         free_queued_url(q);
         return -1;
@@ -499,9 +499,9 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
         if (!scheduler_require(s, ti->tries_done > 0, "retry candidate has invalid tries_done counter")) {
             s->had_transfer_error = true;
         }
-        if (mira_output_is_verbose(s->cfg)) {
-            char* display_url = mira_url_display_safe(url);
-            fprintf(stderr, "  Retrying %s (try %d/%d)\n", display_url ? display_url : MIRA_URL_DISPLAY_REDACTED, ti->tries_done + 1, s->cfg->download.tries);
+        if (bx_fetch_output_is_verbose(s->cfg)) {
+            char* display_url = bx_fetch_url_display_safe(url);
+            fprintf(stderr, "  Retrying %s (try %d/%d)\n", display_url ? display_url : BX_FETCH_URL_DISPLAY_REDACTED, ti->tries_done + 1, s->cfg->download.tries);
             free(display_url);
         }
         struct timespec retry_ready_time = {0};
@@ -537,7 +537,7 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
     return retried;
 }
 
-Scheduler* scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata) {
+Scheduler* bx_fetch_scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata) {
     if (!cfg || !dispatch)
         return NULL;
 
@@ -557,7 +557,7 @@ Scheduler* scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatc
     return s;
 }
 
-void scheduler_free(Scheduler* s) {
+void bx_fetch_scheduler_free(Scheduler* s) {
     if (!s)
         return;
 
@@ -579,24 +579,24 @@ void scheduler_free(Scheduler* s) {
     free(s);
 }
 
-int scheduler_add_url(Scheduler* s, const char* url, const char* output_path) {
+int bx_fetch_scheduler_add_url(Scheduler* s, const char* url, const char* output_path) {
     if (!s || !url || !output_path)
         return -1;
-    char* canonical = mira_url_canonicalize(url);
+    char* canonical = bx_fetch_url_canonicalize(url);
     if (!canonical)
         return -1;
-    int rc = scheduler_add_canonical_url(s, canonical, output_path);
+    int rc = bx_fetch_scheduler_add_canonical_url(s, canonical, output_path);
     free(canonical);
     return rc;
 }
 
-int scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path) {
+int bx_fetch_scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path) {
     if (!s || !canonical_url || !output_path)
         return -1;
     return scheduler_add_url_with_tries(s, canonical_url, output_path, 0, NULL);
 }
 
-int scheduler_run(Scheduler* s) {
+int bx_fetch_scheduler_run(Scheduler* s) {
     if (!s)
         return -1;
     bool had_dispatch_error = false;

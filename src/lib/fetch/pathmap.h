@@ -1,8 +1,8 @@
-#ifndef MIRA_PATHMAP_H
-#define MIRA_PATHMAP_H
+#ifndef BX_FETCH_PATHMAP_H
+#define BX_FETCH_PATHMAP_H
 
-/* MIRA_HEADER_OWNER: fs */
-/* MIRA_HEADER_CONSUMERS: fs, core */
+/* BX_FETCH_HEADER_OWNER: fs */
+/* BX_FETCH_HEADER_CONSUMERS: fs, core */
 
 /*
  * Layering contract:
@@ -14,15 +14,15 @@
  * - Input pointers are borrowed and never retained.
  * - Distinct components never collide solely because sanitization replaces
  *   forbidden bytes; transformed inputs use a reserved whole-input encoding.
- * - pathmap_url_to_local() canonicalizes an untrusted URL and fails on errors.
- * - pathmap_canonical_url_to_local() is the internal fast path for a URL
+ * - bx_fetch_pathmap_url_to_local() canonicalizes an untrusted URL and fails on errors.
+ * - bx_fetch_pathmap_canonical_url_to_local() is the internal fast path for a URL
  *   already canonicalized at a trust boundary.
  */
 
 #include "config.h"
 
-char* pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg);
-char* pathmap_url_to_local(const char* url, const EffectiveConfig* cfg);
-char* pathmap_canonical_url_to_local(const char* canonical_url, const EffectiveConfig* cfg);
+char* bx_fetch_pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg);
+char* bx_fetch_pathmap_url_to_local(const char* url, const EffectiveConfig* cfg);
+char* bx_fetch_pathmap_canonical_url_to_local(const char* canonical_url, const EffectiveConfig* cfg);
 
-#endif  // MIRA_PATHMAP_H
+#endif  // BX_FETCH_PATHMAP_H

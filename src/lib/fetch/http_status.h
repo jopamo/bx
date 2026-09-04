@@ -1,14 +1,14 @@
-#ifndef MIRA_HTTP_STATUS_H
-#define MIRA_HTTP_STATUS_H
+#ifndef BX_FETCH_HTTP_STATUS_H
+#define BX_FETCH_HTTP_STATUS_H
 
-/* MIRA_HEADER_OWNER: util */
-/* MIRA_HEADER_CONSUMERS: cli, core */
+/* BX_FETCH_HEADER_OWNER: util */
+/* BX_FETCH_HEADER_CONSUMERS: cli, core */
 
 #include <ctype.h>
 #include <stdbool.h>
 #include <stddef.h>
 
-static inline bool mira_http_status_parse_token(const char* token, size_t len, int* status) {
+static inline bool bx_fetch_http_status_parse_token(const char* token, size_t len, int* status) {
     if (!token || !status)
         return false;
 
@@ -37,7 +37,7 @@ static inline bool mira_http_status_parse_token(const char* token, size_t len, i
     return true;
 }
 
-static inline bool mira_http_status_list_contains(const char* list, int status) {
+static inline bool bx_fetch_http_status_list_contains(const char* list, int status) {
     if (!list)
         return false;
 
@@ -48,7 +48,7 @@ static inline bool mira_http_status_list_contains(const char* list, int status) 
             cursor++;
 
         int configured = 0;
-        if (mira_http_status_parse_token(token, (size_t)(cursor - token), &configured) && configured == status) {
+        if (bx_fetch_http_status_parse_token(token, (size_t)(cursor - token), &configured) && configured == status) {
             return true;
         }
 

@@ -176,7 +176,7 @@ static int compile_accept_regex(Filter* f) {
         return 0;
 
     int flags = 0;
-    if (mira_regex_compile_flags_for_type(f->cfg->recursive.regex_type, &flags) != 0) {
+    if (bx_fetch_regex_compile_flags_for_type(f->cfg->recursive.regex_type, &flags) != 0) {
         return -1;
     }
 
@@ -194,7 +194,7 @@ static bool url_matches_accept_regex(Filter* f, const char* url) {
     return regexec(&f->accept_regex, url, 0, NULL, 0) == 0;
 }
 
-Filter* filter_new(const EffectiveConfig* cfg) {
+Filter* bx_fetch_filter_new(const EffectiveConfig* cfg) {
     Filter* f = calloc(1, sizeof(Filter));
     if (!f)
         return NULL;
@@ -207,19 +207,19 @@ Filter* filter_new(const EffectiveConfig* cfg) {
     f->include_dirs = split_list(cfg->recursive.include_directories, &f->include_dir_count);
     f->exclude_dirs = split_list(cfg->recursive.exclude_directories, &f->exclude_dir_count);
     if (f->accept_count < 0 || f->reject_count < 0 || f->accept_domain_count < 0 || f->reject_domain_count < 0 || f->include_dir_count < 0 || f->exclude_dir_count < 0) {
-        filter_free(f);
+        bx_fetch_filter_free(f);
         return NULL;
     }
 
     if (compile_accept_regex(f) != 0) {
-        filter_free(f);
+        bx_fetch_filter_free(f);
         return NULL;
     }
 
     return f;
 }
 
-void filter_free(Filter* f) {
+void bx_fetch_filter_free(Filter* f) {
     if (!f)
         return;
     for (int i = 0; i < f->accept_count; i++)
@@ -249,23 +249,23 @@ void filter_free(Filter* f) {
     free(f);
 }
 
-int filter_add_seed_url(Filter* f, const char* url) {
+int bx_fetch_filter_add_seed_url(Filter* f, const char* url) {
     if (!f || !url)
         return -1;
 
-    char* canonical = mira_url_canonicalize(url);
+    char* canonical = bx_fetch_url_canonicalize(url);
     if (!canonical)
         return -1;
-    int rc = filter_add_canonical_seed_url(f, canonical);
+    int rc = bx_fetch_filter_add_canonical_seed_url(f, canonical);
     free(canonical);
     return rc;
 }
 
-int filter_add_canonical_seed_url(Filter* f, const char* canonical_url) {
+int bx_fetch_filter_add_canonical_seed_url(Filter* f, const char* canonical_url) {
     if (!f || !canonical_url)
         return -1;
 
-    MiraURL* mu = mira_url_parse(canonical_url);
+    MiraURL* mu = bx_fetch_url_parse(canonical_url);
     if (!mu)
         return -1;
 
@@ -274,7 +274,7 @@ int filter_add_canonical_seed_url(Filter* f, const char* canonical_url) {
         rc = append_seed_host(f, mu->host);
     }
 
-    mira_url_free(mu);
+    bx_fetch_url_free(mu);
     return rc;
 }
 
@@ -310,22 +310,22 @@ static bool has_extension(const char* url, const char* ext) {
     return strncasecmp(ext_start, ext, ext_len) == 0;
 }
 
-FilterDecision filter_evaluate_url(Filter* f, const char* url) {
+FilterDecision bx_fetch_filter_evaluate_url(Filter* f, const char* url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraProtocolDecision protocol_decision = mira_protocol_policy_evaluate_url(url, f->cfg->https.https_only);
-    if (protocol_decision == MIRA_PROTOCOL_DECISION_UNSUPPORTED) {
+    MiraProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_url(url, f->cfg->https.https_only);
+    if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }
-    if (protocol_decision == MIRA_PROTOCOL_DECISION_HTTPS_ONLY) {
+    if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY) {
         return FILTER_DECISION_HTTPS_ONLY;
     }
 
-    char* canonical = mira_url_canonicalize(url);
+    char* canonical = bx_fetch_url_canonicalize(url);
     if (!canonical)
         return FILTER_DECISION_INVALID_URL;
-    FilterDecision decision = filter_evaluate_canonical_url(f, canonical);
+    FilterDecision decision = bx_fetch_filter_evaluate_canonical_url(f, canonical);
     free(canonical);
     return decision;
 }
@@ -334,36 +334,36 @@ static FilterDecision evaluate_transport_policy(const Filter* f, const MiraURL* 
     if (!f || !url)
         return FILTER_DECISION_ACCEPT;
 
-    MiraProtocolDecision protocol_decision = mira_protocol_policy_evaluate_scheme(url->scheme, f->cfg->https.https_only);
-    if (protocol_decision == MIRA_PROTOCOL_DECISION_UNSUPPORTED || protocol_decision == MIRA_PROTOCOL_DECISION_INVALID_URL) {
+    MiraProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_scheme(url->scheme, f->cfg->https.https_only);
+    if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED || protocol_decision == BX_FETCH_PROTOCOL_DECISION_INVALID_URL) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }
-    if (protocol_decision == MIRA_PROTOCOL_DECISION_HTTPS_ONLY) {
+    if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY) {
         return FILTER_DECISION_HTTPS_ONLY;
     }
-    if (f->cfg->http.paranoid && mira_url_has_userinfo(canonical_url)) {
+    if (f->cfg->http.paranoid && bx_fetch_url_has_userinfo(canonical_url)) {
         return FILTER_DECISION_URL_CREDENTIALS;
     }
     return FILTER_DECISION_ACCEPT;
 }
 
-FilterDecision filter_evaluate_transport_canonical_url(Filter* f, const char* canonical_url) {
+FilterDecision bx_fetch_filter_evaluate_transport_canonical_url(Filter* f, const char* canonical_url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraURL* url = mira_url_parse(canonical_url);
+    MiraURL* url = bx_fetch_url_parse(canonical_url);
     if (!url)
         return FILTER_DECISION_INVALID_URL;
     FilterDecision decision = evaluate_transport_policy(f, url, canonical_url);
-    mira_url_free(url);
+    bx_fetch_url_free(url);
     return decision;
 }
 
-FilterDecision filter_evaluate_canonical_url(Filter* f, const char* canonical_url) {
+FilterDecision bx_fetch_filter_evaluate_canonical_url(Filter* f, const char* canonical_url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraURL* mu = mira_url_parse(canonical_url);
+    MiraURL* mu = bx_fetch_url_parse(canonical_url);
     if (!mu)
         return FILTER_DECISION_INVALID_URL;
 
@@ -428,11 +428,11 @@ FilterDecision filter_evaluate_canonical_url(Filter* f, const char* canonical_ur
         }
     }
 
-    mira_url_free(mu);
+    bx_fetch_url_free(mu);
     return decision;
 }
 
-const char* filter_decision_reason(FilterDecision decision) {
+const char* bx_fetch_filter_decision_reason(FilterDecision decision) {
     switch (decision) {
         case FILTER_DECISION_ACCEPT:
             return NULL;
@@ -463,6 +463,6 @@ const char* filter_decision_reason(FilterDecision decision) {
     return "unspecified";
 }
 
-bool filter_url_accepted(Filter* f, const char* url) {
-    return filter_evaluate_url(f, url) == FILTER_DECISION_ACCEPT;
+bool bx_fetch_filter_url_accepted(Filter* f, const char* url) {
+    return bx_fetch_filter_evaluate_url(f, url) == FILTER_DECISION_ACCEPT;
 }

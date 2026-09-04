@@ -1,8 +1,8 @@
-#ifndef MIRA_TIMESTAMP_POLICY_H
-#define MIRA_TIMESTAMP_POLICY_H
+#ifndef BX_FETCH_TIMESTAMP_POLICY_H
+#define BX_FETCH_TIMESTAMP_POLICY_H
 
-/* MIRA_HEADER_OWNER: util */
-/* MIRA_HEADER_CONSUMERS: util, core */
+/* BX_FETCH_HEADER_OWNER: util */
+/* BX_FETCH_HEADER_CONSUMERS: util, core */
 
 /*
  * Layering contract:
@@ -18,6 +18,6 @@
 #include <stdbool.h>
 #include <time.h>
 
-bool mira_timestamp_should_use_server_time(bool no_use_server_timestamps, int status, const char* output_path, const char* last_modified_header, time_t* server_mtime_out);
+bool bx_fetch_timestamp_should_use_server_time(bool no_use_server_timestamps, int status, const char* output_path, const char* last_modified_header, time_t* server_mtime_out);
 
-#endif  // MIRA_TIMESTAMP_POLICY_H
+#endif  // BX_FETCH_TIMESTAMP_POLICY_H

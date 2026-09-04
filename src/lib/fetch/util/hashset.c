@@ -23,7 +23,7 @@ static uint32_t hash_string(const char* s) {
     return hash;
 }
 
-HashSet* hashset_new(size_t size) {
+HashSet* bx_fetch_hashset_new(size_t size) {
     if (size == 0)
         return NULL;
 
@@ -40,7 +40,7 @@ HashSet* hashset_new(size_t size) {
     return hs;
 }
 
-void hashset_free(HashSet* hs) {
+void bx_fetch_hashset_free(HashSet* hs) {
     if (!hs)
         return;
     for (size_t i = 0; i < hs->size; i++) {
@@ -56,7 +56,7 @@ void hashset_free(HashSet* hs) {
     free(hs);
 }
 
-bool hashset_contains(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_contains(HashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 
@@ -70,7 +70,7 @@ bool hashset_contains(HashSet* hs, const char* key) {
     return false;
 }
 
-bool hashset_add(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_add(HashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 
@@ -97,7 +97,7 @@ bool hashset_add(HashSet* hs, const char* key) {
     return true;
 }
 
-bool hashset_remove(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_remove(HashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 

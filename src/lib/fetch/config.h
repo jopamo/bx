@@ -1,8 +1,8 @@
-#ifndef MIRA_CONFIG_H
-#define MIRA_CONFIG_H
+#ifndef BX_FETCH_CONFIG_H
+#define BX_FETCH_CONFIG_H
 
-/* MIRA_HEADER_OWNER: runtime */
-/* MIRA_HEADER_CONSUMERS: runtime, entry, cli, core, policy, net, fs, store */
+/* BX_FETCH_HEADER_OWNER: runtime */
+/* BX_FETCH_HEADER_CONSUMERS: runtime, entry, cli, core, policy, net, fs, store */
 
 /*
  * Layering contract:
@@ -13,8 +13,8 @@
  * Ownership and lifetime:
  * - EffectiveConfig and nested string/list fields are heap-owned by the config
  *   object itself.
- * - Callers allocate via config_new() and release via config_free().
- * - No field pointer remains valid after config_free().
+ * - Callers allocate via bx_fetch_config_new() and release via bx_fetch_config_free().
+ * - No field pointer remains valid after bx_fetch_config_free().
  */
 
 #include <stdbool.h>
@@ -27,15 +27,15 @@ typedef struct {
 } StartupConfig;
 
 typedef enum {
-    MIRA_VERBOSITY_QUIET = 0,
-    MIRA_VERBOSITY_NORMAL,
-    MIRA_VERBOSITY_VERBOSE,
+    BX_FETCH_VERBOSITY_QUIET = 0,
+    BX_FETCH_VERBOSITY_NORMAL,
+    BX_FETCH_VERBOSITY_VERBOSE,
 } MiraVerbosity;
 
 typedef enum {
-    MIRA_LOG_FILE_NONE = 0,
-    MIRA_LOG_FILE_TRUNCATE,
-    MIRA_LOG_FILE_APPEND,
+    BX_FETCH_LOG_FILE_NONE = 0,
+    BX_FETCH_LOG_FILE_TRUNCATE,
+    BX_FETCH_LOG_FILE_APPEND,
 } MiraLogFileMode;
 
 typedef struct {
@@ -184,8 +184,8 @@ typedef struct {
 } EffectiveConfig;
 
 /* Allocates a config with default values; caller owns and must free. */
-EffectiveConfig* config_new(void);
+EffectiveConfig* bx_fetch_config_new(void);
 /* Frees all nested allocations and the config object itself; NULL-safe. */
-void config_free(EffectiveConfig* config);
+void bx_fetch_config_free(EffectiveConfig* config);
 
-#endif  // MIRA_CONFIG_H
+#endif  // BX_FETCH_CONFIG_H

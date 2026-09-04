@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-Response* response_new(void) {
+Response* bx_fetch_response_new(void) {
     Response* resp = calloc(1, sizeof(Response));
     if (!resp)
         return NULL;
@@ -13,7 +13,7 @@ Response* response_new(void) {
     return resp;
 }
 
-void response_free(Response* resp) {
+void bx_fetch_response_free(Response* resp) {
     if (!resp)
         return;
 
@@ -32,7 +32,7 @@ void response_free(Response* resp) {
     free(resp);
 }
 
-int response_add_header(Response* resp, const char* name, const char* value) {
+int bx_fetch_response_add_header(Response* resp, const char* name, const char* value) {
     if (!resp || !name || !value) {
         errno = EINVAL;
         return -1;
@@ -40,12 +40,12 @@ int response_add_header(Response* resp, const char* name, const char* value) {
 
     size_t name_len = strlen(name);
     size_t value_len = strlen(value);
-    if (name_len > MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 || value_len > MIRA_RESPONSE_HEADER_LINE_MAX_BYTES - 4 - name_len) {
+    if (name_len > BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES - 4 || value_len > BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES - 4 - name_len) {
         errno = EFBIG;
         return -1;
     }
     size_t wire_bytes = name_len + value_len + 4;
-    if (resp->header_count >= MIRA_RESPONSE_HEADER_MAX_FIELDS || resp->header_bytes > MIRA_RESPONSE_HEADER_BLOCK_MAX_BYTES - wire_bytes) {
+    if (resp->header_count >= BX_FETCH_RESPONSE_HEADER_MAX_FIELDS || resp->header_bytes > BX_FETCH_RESPONSE_HEADER_BLOCK_MAX_BYTES - wire_bytes) {
         errno = EFBIG;
         return -1;
     }
@@ -67,8 +67,8 @@ int response_add_header(Response* resp, const char* name, const char* value) {
             return -1;
         }
         size_t new_cap = resp->header_capacity == 0 ? 8 : resp->header_capacity * 2;
-        if (new_cap > MIRA_RESPONSE_HEADER_MAX_FIELDS) {
-            new_cap = MIRA_RESPONSE_HEADER_MAX_FIELDS;
+        if (new_cap > BX_FETCH_RESPONSE_HEADER_MAX_FIELDS) {
+            new_cap = BX_FETCH_RESPONSE_HEADER_MAX_FIELDS;
         }
         if (new_cap <= resp->header_count || new_cap > SIZE_MAX / sizeof(MiraHeader)) {
             free(name_copy);
@@ -94,15 +94,15 @@ int response_add_header(Response* resp, const char* name, const char* value) {
     return 0;
 }
 
-const char* mira_response_header_policy_failure_summary(MiraResponseHeaderPolicyFailure failure) {
+const char* bx_fetch_response_header_policy_failure_summary(MiraResponseHeaderPolicyFailure failure) {
     switch (failure) {
-        case MIRA_RESPONSE_HEADER_POLICY_LINE_TOO_LARGE:
-            return "response header line exceeds " MIRA_RESPONSE_HEADER_LINE_LIMIT_TEXT " limit";
-        case MIRA_RESPONSE_HEADER_POLICY_BLOCK_TOO_LARGE:
-            return "response header block exceeds " MIRA_RESPONSE_HEADER_BLOCK_LIMIT_TEXT " limit";
-        case MIRA_RESPONSE_HEADER_POLICY_TOO_MANY_FIELDS:
-            return "response header block exceeds " MIRA_RESPONSE_HEADER_FIELD_LIMIT_TEXT " field limit";
-        case MIRA_RESPONSE_HEADER_POLICY_OK:
+        case BX_FETCH_RESPONSE_HEADER_POLICY_LINE_TOO_LARGE:
+            return "response header line exceeds " BX_FETCH_RESPONSE_HEADER_LINE_LIMIT_TEXT " limit";
+        case BX_FETCH_RESPONSE_HEADER_POLICY_BLOCK_TOO_LARGE:
+            return "response header block exceeds " BX_FETCH_RESPONSE_HEADER_BLOCK_LIMIT_TEXT " limit";
+        case BX_FETCH_RESPONSE_HEADER_POLICY_TOO_MANY_FIELDS:
+            return "response header block exceeds " BX_FETCH_RESPONSE_HEADER_FIELD_LIMIT_TEXT " field limit";
+        case BX_FETCH_RESPONSE_HEADER_POLICY_OK:
         default:
             return NULL;
     }

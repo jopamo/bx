@@ -2,7 +2,7 @@
 #include <regex.h>
 #include <strings.h>
 
-int mira_regex_compile_flags_for_type(const char* regex_type, int* flags_out) {
+int bx_fetch_regex_compile_flags_for_type(const char* regex_type, int* flags_out) {
     if (!flags_out)
         return -1;
 

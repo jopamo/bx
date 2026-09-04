@@ -44,22 +44,22 @@ static Request* request_new_with_url_state(const char* method, const char* url, 
     }
 
     if (!req->method || (url && !req->url)) {
-        request_free(req);
+        bx_fetch_request_free(req);
         return NULL;
     }
 
     return req;
 }
 
-Request* request_new(const char* method, const char* url) {
+Request* bx_fetch_request_new(const char* method, const char* url) {
     return request_new_with_url_state(method, url, false);
 }
 
-Request* request_new_canonical(const char* method, const char* canonical_url) {
+Request* bx_fetch_request_new_canonical(const char* method, const char* canonical_url) {
     return request_new_with_url_state(method, canonical_url, true);
 }
 
-void request_free(Request* req) {
+void bx_fetch_request_free(Request* req) {
     if (!req)
         return;
 
@@ -80,13 +80,13 @@ void request_free(Request* req) {
     free(req);
 }
 
-const char* request_url_for_display(const Request* req) {
+const char* bx_fetch_request_url_for_display(const Request* req) {
     if (!req || !req->url)
         return NULL;
-    return req->display_url ? req->display_url : MIRA_URL_DISPLAY_REDACTED;
+    return req->display_url ? req->display_url : BX_FETCH_URL_DISPLAY_REDACTED;
 }
 
-int request_add_header(Request* req, const char* name, const char* value) {
+int bx_fetch_request_add_header(Request* req, const char* name, const char* value) {
     if (!req || !name || !value) {
         errno = EINVAL;
         return -1;
@@ -94,9 +94,9 @@ int request_add_header(Request* req, const char* name, const char* value) {
 
     char* normalized_name = NULL;
     char* normalized_value = NULL;
-    MiraHttpHeaderError header_error = mira_http_header_normalize_pair(name, value, &normalized_name, &normalized_value);
-    if (header_error != MIRA_HTTP_HEADER_OK) {
-        errno = header_error == MIRA_HTTP_HEADER_OUT_OF_MEMORY ? ENOMEM : EINVAL;
+    MiraHttpHeaderError header_error = bx_fetch_http_header_normalize_pair(name, value, &normalized_name, &normalized_value);
+    if (header_error != BX_FETCH_HTTP_HEADER_OK) {
+        errno = header_error == BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY ? ENOMEM : EINVAL;
         return -1;
     }
 
@@ -131,10 +131,10 @@ int request_add_header(Request* req, const char* name, const char* value) {
     return 0;
 }
 
-MiraRequestBodyResult request_set_body_file(Request* req, const char* path) {
+MiraRequestBodyResult bx_fetch_request_set_body_file(Request* req, const char* path) {
     if (!req || !path || path[0] == '\0') {
         errno = EINVAL;
-        return MIRA_REQUEST_BODY_POLICY;
+        return BX_FETCH_REQUEST_BODY_POLICY;
     }
 
     /*
@@ -143,31 +143,31 @@ MiraRequestBodyResult request_set_body_file(Request* req, const char* path) {
      */
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0)
-        return MIRA_REQUEST_BODY_IO;
+        return BX_FETCH_REQUEST_BODY_IO;
 
     struct stat st;
     if (fstat(fd, &st) != 0) {
         int error_number = errno ? errno : EIO;
         close(fd);
         errno = error_number;
-        return MIRA_REQUEST_BODY_IO;
+        return BX_FETCH_REQUEST_BODY_IO;
     }
     if (!S_ISREG(st.st_mode)) {
         close(fd);
         errno = EINVAL;
-        return MIRA_REQUEST_BODY_POLICY;
+        return BX_FETCH_REQUEST_BODY_POLICY;
     }
     if (st.st_size < 0 || (uintmax_t)st.st_size > (uintmax_t)INT64_MAX) {
         close(fd);
         errno = EFBIG;
-        return MIRA_REQUEST_BODY_POLICY;
+        return BX_FETCH_REQUEST_BODY_POLICY;
     }
 
     MiraRequestBodyFile* candidate = calloc(1, sizeof(*candidate));
     if (!candidate) {
         close(fd);
         errno = ENOMEM;
-        return MIRA_REQUEST_BODY_MEMORY;
+        return BX_FETCH_REQUEST_BODY_MEMORY;
     }
     candidate->fd = fd;
     candidate->size = (uint64_t)st.st_size;
@@ -177,18 +177,18 @@ MiraRequestBodyResult request_set_body_file(Request* req, const char* path) {
     req->body_len = 0;
     request_body_file_free(req->body_file);
     req->body_file = candidate;
-    return MIRA_REQUEST_BODY_OK;
+    return BX_FETCH_REQUEST_BODY_OK;
 }
 
-bool request_has_body_file(const Request* req) {
+bool bx_fetch_request_has_body_file(const Request* req) {
     return req && req->body_file;
 }
 
-uint64_t request_body_file_size(const Request* req) {
-    return request_has_body_file(req) ? req->body_file->size : 0;
+uint64_t bx_fetch_request_body_file_size(const Request* req) {
+    return bx_fetch_request_has_body_file(req) ? req->body_file->size : 0;
 }
 
-int request_body_file_read(Request* req, void* buffer, size_t capacity, size_t* read_out) {
+int bx_fetch_request_body_file_read(Request* req, void* buffer, size_t capacity, size_t* read_out) {
     if (!req || !req->body_file || (!buffer && capacity > 0) || !read_out) {
         errno = EINVAL;
         return -1;
@@ -219,7 +219,7 @@ int request_body_file_read(Request* req, void* buffer, size_t capacity, size_t* 
     return 0;
 }
 
-int request_body_file_seek(Request* req, int64_t offset, int origin) {
+int bx_fetch_request_body_file_seek(Request* req, int64_t offset, int origin) {
     if (!req || !req->body_file) {
         errno = EINVAL;
         return -1;

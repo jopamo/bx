@@ -11,7 +11,7 @@ static bool document_parser_input_valid(const char* data, size_t len) {
         errno = EINVAL;
         return false;
     }
-    if (len > MIRA_DOCUMENT_PARSE_MAX_BYTES) {
+    if (len > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES) {
         errno = EFBIG;
         return false;
     }
@@ -364,7 +364,7 @@ static size_t parse_css_import_rule(const char* css, size_t len, size_t i, MiraL
     return j;
 }
 
-int css_extract_links(const char* base_url, const char* css_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_t len, MiraLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -465,16 +465,16 @@ static bool span_ascii_case_equals_bytes(const char* value, size_t len, const ch
 
 static MiraHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len) {
     if (!span_ascii_case_equals_bytes(attr_name, attr_name_len, "href")) {
-        return MIRA_HTML_LINK_REQUISITE;
+        return BX_FETCH_HTML_LINK_REQUISITE;
     }
 
     size_t tag_name_len = 0;
     const lxb_char_t* tag_name = lxb_dom_element_tag_name(element, &tag_name_len);
     if (tag_name && span_ascii_case_equals_bytes((const char*)tag_name, tag_name_len, "a")) {
-        return MIRA_HTML_LINK_NAVIGATION;
+        return BX_FETCH_HTML_LINK_NAVIGATION;
     }
 
-    return MIRA_HTML_LINK_REQUISITE;
+    return BX_FETCH_HTML_LINK_REQUISITE;
 }
 
 static void visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrVisitor visitor, void* visitor_userdata) {
@@ -546,7 +546,7 @@ static lxb_dom_report_spec_t rewrite_callback(lxb_dom_node_t* node, void* ctx) {
     return LXB_DOM_REPORT_OK;
 }
 
-int html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -571,15 +571,15 @@ int html_extract_links_typed(const char* base_url, const char* html_data, size_t
     return 0;
 }
 
-int html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
     };
-    return html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
+    return bx_fetch_html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
-char* html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -681,10 +681,10 @@ static bool is_html_link_attr(const char* html_data, size_t name_start, size_t n
 
 static MiraHtmlLinkKind html_link_kind_for_attr(const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end) {
     if (span_case_equals(html_data, attr_name_start, attr_name_end, "href") && span_case_equals(html_data, tag_name_start, tag_name_end, "a")) {
-        return MIRA_HTML_LINK_NAVIGATION;
+        return BX_FETCH_HTML_LINK_NAVIGATION;
     }
 
-    return MIRA_HTML_LINK_REQUISITE;
+    return BX_FETCH_HTML_LINK_REQUISITE;
 }
 
 static bool is_html_rawtext_tag(const char* html_data, size_t name_start, size_t name_end) {
@@ -933,7 +933,7 @@ static int html_extract_visit(void* userdata, const char* html_data, size_t tag_
     return 0;
 }
 
-int html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -944,12 +944,12 @@ int html_extract_links_typed(const char* base_url, const char* html_data, size_t
     return scan_html_link_attrs(html_data, len, html_extract_visit, &ctx);
 }
 
-int html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
     };
-    return html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
+    return bx_fetch_html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
 static int html_rewrite_add(HtmlRewriteContext* ctx, size_t start, size_t end, char* replacement) {
@@ -1036,7 +1036,7 @@ static int append_buffer(char** buffer, size_t* length, size_t* capacity, const 
     return 0;
 }
 
-char* html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
