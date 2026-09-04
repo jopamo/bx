@@ -505,6 +505,8 @@ bx_base_applet_sources = [
   'src/applets/base/du/du.c',
   'src/applets/base/echo/echo.c',
   'src/applets/base/env/env.c',
+  'src/applets/base/env/env_signal.c',
+  'src/applets/base/env/env_split.c',
   'src/applets/base/expand/expand.c',
   'src/applets/base/expr/expr.c',
   'src/applets/base/find/find.c',
