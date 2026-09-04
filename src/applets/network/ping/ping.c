@@ -23,6 +23,7 @@
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
+#include "lib/sockaddr_format.h"
 #include "lib/time_parse.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
@@ -194,8 +195,13 @@ static bool bx_ping_resolve_destination(const char* host, struct sockaddr_in* de
         }
 
         memcpy(destination, it->ai_addr, sizeof(*destination));
-        const char* text = inet_ntop(AF_INET, &destination->sin_addr, address_text, address_text_len);
-        if (text == NULL) {
+        if (bx_sockaddr_format_numeric(
+                (const struct sockaddr*)destination,
+                sizeof(*destination),
+                address_text,
+                address_text_len,
+                NULL,
+                0) != 0) {
             break;
         }
 

@@ -38,6 +38,7 @@
 
 #include <clif.h>
 #include "lib/fd_ops.h"
+#include "lib/sockaddr_format.h"
 #include "lib/time_parse.h"
 #include "version.h"
 #include "traceroute.h"
@@ -329,7 +330,13 @@ static void make_fd_used(int fd) {
 static char addr2str_buf[INET6_ADDRSTRLEN];
 
 const char* addr2str(const sockaddr_any* addr) {
-    getnameinfo(&addr->sa, sizeof(*addr), addr2str_buf, sizeof(addr2str_buf), 0, 0, NI_NUMERICHOST);
+    (void)bx_sockaddr_format_numeric(
+        &addr->sa,
+        sizeof(*addr),
+        addr2str_buf,
+        sizeof(addr2str_buf),
+        NULL,
+        0);
 
     return addr2str_buf;
 }
