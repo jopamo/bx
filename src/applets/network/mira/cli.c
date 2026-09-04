@@ -178,7 +178,7 @@ static bool mira_configured_method_is_get(const struct bx_fetch_config* config) 
     return strcasecmp(method, "GET") == 0;
 }
 
-static int mira_validate_config(struct bx_fetch_config* config) {
+static int mira_validate_config(struct bx_fetch_config* config, const char* output_document_token, const char* input_file_token) {
     if (config->logging.debug_trace && !config->download.dry_run && !config->startup.show_help && !config->startup.show_version) {
         bx_mira_emit_parse_error(config, "--debug currently requires --dry-run");
         errno = EINVAL;
@@ -193,6 +193,14 @@ static int mira_validate_config(struct bx_fetch_config* config) {
         if (errno == ENOMEM)
             return -1;
         mira_parse_errorf(config, "invalid value for --accept-regex: %s", config->recursive.accept_regex);
+        return -1;
+    }
+    if (config->download.output_document && config->input.input_file) {
+        mira_parse_errorf(config,
+                          "conflicting option tokens: %s and %s",
+                          output_document_token ? output_document_token : "--output-document",
+                          input_file_token ? input_file_token : "--input-file");
+        errno = EINVAL;
         return -1;
     }
     if (config->download.output_document && (config->input.url_count != 1 || config->recursive.recursive || config->recursive.page_requisites)) {
@@ -259,6 +267,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     config->download.metadata_sidecars = true;
 
     MiraTimeoutPresence timeout_presence = {0};
+    const char* output_document_token = NULL;
+    const char* input_file_token = NULL;
     int timeout_value = 0;
     opterr = 0;
     optind = 0;
@@ -301,6 +311,14 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_DEBUG:
                 config->logging.debug_trace = true;
                 break;
+            case 'i':
+                if (!optarg || optarg[0] == '\0') {
+                    bx_mira_emit_parse_error(config, "--input-file requires a non-empty path");
+                    goto parse_failure;
+                }
+                MIRA_SET_STRING(config->input.input_file);
+                input_file_token = mira_current_token(argc, argv);
+                break;
             case 'n': {
                 const char* token = mira_current_token(argc, argv);
                 if (token && strcmp(token, "-nd") == 0)
@@ -338,6 +356,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case 'O':
                 MIRA_SET_STRING(config->download.output_document);
+                output_document_token = mira_current_token(argc, argv);
                 break;
             case 'c':
                 config->download.continue_download = true;
@@ -688,7 +707,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         goto parse_failure;
     }
     errno = 0;
-    if (mira_validate_config(config) != 0) {
+    if (mira_validate_config(config, output_document_token, input_file_token) != 0) {
         if (errno == ENOMEM)
             goto allocation_failure;
         goto parse_failure;

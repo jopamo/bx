@@ -10,7 +10,7 @@ MIRA_OPTION("no-verbose", no_argument, MIRA_OPT_NO_VERBOSE, "", "-nv", NULL, "di
 MIRA_OPTION("output-file", required_argument, 'o', "o:", NULL, "FILE", "log execution diagnostics to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("append-output", required_argument, 'a', "a:", NULL, "FILE", "append execution diagnostics to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("debug", no_argument, MIRA_OPT_DEBUG, "", NULL, NULL, "emit structured dry-run trace events", MIRA_OPTION_CATEGORY_STARTUP, true)
-MIRA_OPTION("input-file", required_argument, MIRA_OPT_INPUT_FILE, "", NULL, "FILE", "read URL input from FILE", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("input-file", required_argument, 'i', "i:", NULL, "FILE", "read bounded URL lines from FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("force-html", no_argument, MIRA_OPT_FORCE_HTML, "", NULL, NULL, "treat input file as HTML", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
 MIRA_OPTION("base", required_argument, MIRA_OPT_BASE, "", NULL, "URL", "set the input-file base URL", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
 MIRA_OPTION("rejected-log", required_argument, MIRA_OPT_REJECTED_LOG, "", NULL, "FILE", "log rejected URLs to FILE", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)

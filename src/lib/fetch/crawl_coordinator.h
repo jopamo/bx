@@ -56,8 +56,9 @@ void bx_fetch_crawl_coordinator_free(BxFetchCrawlCoordinator* coordinator);
 BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed(BxFetchCrawlCoordinator* coordinator, const char* url);
 /*
  * As above, but returns the single prepared target used for admission.
- * target_out receives owned state even for policy rejection; it remains NULL
- * when URL preparation itself fails.
+ * target_out receives owned state when preparation succeeds, including filter
+ * rejection. Invalid and unsupported input is a typed policy rejection with a
+ * NULL target; allocation/internal preparation failure is a typed error.
  */
 BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed_observed(BxFetchCrawlCoordinator* coordinator, const char* url, BxFetchPreparedUrl** target_out);
 BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawlCoordinator* coordinator,

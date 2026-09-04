@@ -457,7 +457,12 @@ static void run_failure_reset(BxFetchRunFailure* failure) {
     failure->setup_error.error_number = -1;
 }
 
-static int run_session_fail(BxFetchRunFailure* failure, BxFetchRunFailureStage stage, int error_number, const BxFetchRunSeedObservation* seed, const BxFetchNetSetupError* setup_error) {
+static int run_session_fail(BxFetchRunFailure* failure,
+                            BxFetchRunFailureStage stage,
+                            int error_number,
+                            const BxFetchRunSeedObservation* seed,
+                            const BxFetchInputOutcome* input,
+                            const BxFetchNetSetupError* setup_error) {
     if (error_number <= 0)
         error_number = EIO;
     if (failure) {
@@ -465,6 +470,8 @@ static int run_session_fail(BxFetchRunFailure* failure, BxFetchRunFailureStage s
         failure->error_number = error_number;
         if (seed)
             failure->seed = *seed;
+        if (input)
+            failure->input = *input;
         if (setup_error)
             failure->setup_error = *setup_error;
     }
@@ -472,18 +479,62 @@ static int run_session_fail(BxFetchRunFailure* failure, BxFetchRunFailureStage s
     return -1;
 }
 
+static int run_session_add_seed(BxFetchRun* run, int index, const char* url, const char* source_path, BxFetchRunSeedObservation* failed_seed) {
+    errno = 0;
+    BxFetchPreparedUrl* target = NULL;
+    BxFetchCrawlEnqueueResult enqueue = bx_fetch_crawl_coordinator_add_seed_observed(run->coordinator, url, &target);
+    BxFetchRunSeedObservation observation = {
+        .index = index,
+        .result = enqueue,
+        .error_number = errno,
+        .source_path = source_path,
+        .target = target,
+    };
+    bool accepted = enqueue.status == BX_FETCH_CRAWL_ENQUEUED || enqueue.status == BX_FETCH_CRAWL_SKIPPED_DUPLICATE;
+    if (!accepted && observation.error_number <= 0)
+        observation.error_number = enqueue.status == BX_FETCH_CRAWL_REJECTED ? EPERM : EIO;
+    bool frontend_continue = run->frontend.on_seed_result && run->frontend.on_seed_result(run->frontend.userdata, &observation);
+    if (accepted || (enqueue.status == BX_FETCH_CRAWL_REJECTED && frontend_continue)) {
+        bx_fetch_prepared_url_free(target);
+        return 0;
+    }
+    *failed_seed = observation;
+    /*
+     * failure_out cannot retain a borrowed target. Typed status, index,
+     * source path, and errno remain sufficient after the observer rendered it.
+     */
+    failed_seed->target = NULL;
+    bx_fetch_prepared_url_free(target);
+    errno = observation.error_number;
+    return -1;
+}
+
 int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend, BxFetchRunFailure* failure_out) {
     run_failure_reset(failure_out);
-    if (!cfg || !frontend || !frontend->plan_output || cfg->input.url_count <= 0 || !cfg->input.urls) {
-        return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL);
+    bool has_input_file = cfg && cfg->input.input_file && cfg->input.input_file[0] != '\0';
+    if (!cfg || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
+        (cfg->input.url_count > 0 && !cfg->input.urls) || cfg->input.force_html || cfg->input.base_url) {
+        return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL, NULL);
     }
+    size_t direct_url_bytes = 0;
     for (int index = 0; index < cfg->input.url_count; index++) {
-        if (!cfg->input.urls[index]) {
+        size_t length = 0;
+        if (!cfg->input.urls[index] || !bx_fetch_resource_bounded_strlen(cfg->input.urls[index], BX_FETCH_URL_MAX_BYTES, &length) ||
+            !bx_fetch_resource_can_reserve((size_t)index, direct_url_bytes, 1u, length, BX_FETCH_URL_STATE_MAX_ENTRIES, BX_FETCH_URL_STATE_MAX_BYTES)) {
             BxFetchRunSeedObservation seed = {
                 .index = index,
                 .error_number = EINVAL,
             };
-            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, &seed, NULL);
+            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, &seed, NULL, NULL);
+        }
+        direct_url_bytes += length;
+    }
+
+    BxFetchInputUrls input_urls = {0};
+    if (has_input_file) {
+        BxFetchInputOutcome input_outcome;
+        if (bx_fetch_input_urls_load_plain(cfg->input.input_file, (size_t)cfg->input.url_count, direct_url_bytes, &input_urls, &input_outcome) != 0) {
+            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_LOAD_INPUT, input_outcome.error_number, NULL, &input_outcome, NULL);
         }
     }
 
@@ -500,11 +551,39 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
     };
 
     if (!cfg->download.dry_run) {
-        errno = 0;
-        if (bx_fetch_global_init(cfg, &setup_error) != 0) {
-            error_number = setup_error.error_number > 0 ? setup_error.error_number : (errno > 0 ? errno : EIO);
-            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_GLOBAL_INIT, error_number, NULL, &setup_error);
+        struct bx_fetch_config capability_config = *cfg;
+        char** capability_urls = NULL;
+        if (input_urls.count > 0) {
+            /*
+             * Capability policy must see file-derived protocols before any
+             * transfer starts. This cold, shallow snapshot borrows every
+             * config field and replaces only the temporary URL pointer view.
+             */
+            size_t total_urls = (size_t)cfg->input.url_count + input_urls.count;
+            capability_urls = malloc(total_urls * sizeof(*capability_urls));
+            if (!capability_urls) {
+                BxFetchInputOutcome input_outcome = {
+                    .kind = BX_FETCH_INPUT_FAILURE_MEMORY,
+                    .error_number = ENOMEM,
+                };
+                bx_fetch_input_urls_free(&input_urls);
+                return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_LOAD_INPUT, ENOMEM, NULL, &input_outcome, NULL);
+            }
+            for (int index = 0; index < cfg->input.url_count; index++)
+                capability_urls[index] = cfg->input.urls[index];
+            for (size_t index = 0; index < input_urls.count; index++)
+                capability_urls[(size_t)cfg->input.url_count + index] = input_urls.urls[index];
+            capability_config.input.urls = capability_urls;
+            capability_config.input.url_count = (int)total_urls;
         }
+        errno = 0;
+        if (bx_fetch_global_init(&capability_config, &setup_error) != 0) {
+            error_number = setup_error.error_number > 0 ? setup_error.error_number : (errno > 0 ? errno : EIO);
+            free(capability_urls);
+            bx_fetch_input_urls_free(&input_urls);
+            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_GLOBAL_INIT, error_number, NULL, NULL, &setup_error);
+        }
+        free(capability_urls);
         global_initialized = true;
     }
 
@@ -521,33 +600,13 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
     }
 
     for (int index = 0; index < cfg->input.url_count; index++) {
-        errno = 0;
-        BxFetchPreparedUrl* target = NULL;
-        BxFetchCrawlEnqueueResult enqueue = bx_fetch_crawl_coordinator_add_seed_observed(run->coordinator, cfg->input.urls[index], &target);
-        BxFetchRunSeedObservation observation = {
-            .index = index,
-            .result = enqueue,
-            .error_number = errno,
-            .target = target,
-        };
-        bool accepted = enqueue.status == BX_FETCH_CRAWL_ENQUEUED || enqueue.status == BX_FETCH_CRAWL_SKIPPED_DUPLICATE;
-        if (!accepted && observation.error_number <= 0)
-            observation.error_number = enqueue.status == BX_FETCH_CRAWL_REJECTED ? EPERM : EIO;
-        bool frontend_continue = frontend->on_seed_result && frontend->on_seed_result(frontend->userdata, &observation);
-        if (accepted || (enqueue.status == BX_FETCH_CRAWL_REJECTED && frontend_continue)) {
-            bx_fetch_prepared_url_free(target);
-            continue;
-        }
-        failure_stage = BX_FETCH_RUN_FAILURE_ADD_SEED;
-        error_number = observation.error_number;
-        failed_seed = observation;
-        /*
-         * failure_out cannot retain a borrowed target. Typed status, index,
-         * and errno remain sufficient after the observer has rendered it.
-         */
-        failed_seed.target = NULL;
-        bx_fetch_prepared_url_free(target);
-        goto cleanup;
+        if (run_session_add_seed(run, index, cfg->input.urls[index], NULL, &failed_seed) != 0)
+            goto seed_failure;
+    }
+    for (size_t input_index = 0; input_index < input_urls.count; input_index++) {
+        int index = cfg->input.url_count + (int)input_index;
+        if (run_session_add_seed(run, index, input_urls.urls[input_index], cfg->input.input_file, &failed_seed) != 0)
+            goto seed_failure;
     }
     if (bx_fetch_run_execute(run) != 0) {
         failure_stage = BX_FETCH_RUN_FAILURE_EXECUTE;
@@ -567,9 +626,15 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
 
 cleanup:
     bx_fetch_run_free(run);
+    bx_fetch_input_urls_free(&input_urls);
     if (global_initialized)
         bx_fetch_global_cleanup();
     if (failure_stage != BX_FETCH_RUN_FAILURE_NONE)
-        return run_session_fail(failure_out, failure_stage, error_number, failed_seed.index >= 0 ? &failed_seed : NULL, NULL);
+        return run_session_fail(failure_out, failure_stage, error_number, failed_seed.index >= 0 ? &failed_seed : NULL, NULL, NULL);
     return 0;
+
+seed_failure:
+    failure_stage = BX_FETCH_RUN_FAILURE_ADD_SEED;
+    error_number = failed_seed.error_number;
+    goto cleanup;
 }

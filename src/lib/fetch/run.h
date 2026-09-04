@@ -18,6 +18,7 @@
 
 #include "crawl_coordinator.h"
 #include "document.h"
+#include "input.h"
 #include "link_conversion.h"
 #include "net.h"
 #include "publication.h"
@@ -66,6 +67,8 @@ typedef struct {
     int index;
     BxFetchCrawlEnqueueResult result;
     int error_number;
+    /* Borrowed source path for input-file seeds; NULL for direct operands. */
+    const char* source_path;
     /* Borrowed normalized target; NULL only when URL preparation failed. */
     const BxFetchPreparedUrl* target;
 } BxFetchRunSeedObservation;
@@ -101,6 +104,7 @@ typedef enum {
     BX_FETCH_RUN_FAILURE_GLOBAL_INIT,
     BX_FETCH_RUN_FAILURE_CREATE,
     BX_FETCH_RUN_FAILURE_LOAD_PUBLICATION,
+    BX_FETCH_RUN_FAILURE_LOAD_INPUT,
     BX_FETCH_RUN_FAILURE_ADD_SEED,
     BX_FETCH_RUN_FAILURE_EXECUTE,
     BX_FETCH_RUN_FAILURE_CONVERT_LINKS,
@@ -111,6 +115,7 @@ typedef struct {
     BxFetchRunFailureStage stage;
     int error_number;
     BxFetchRunSeedObservation seed;
+    BxFetchInputOutcome input;
     BxFetchNetSetupError setup_error;
 } BxFetchRunFailure;
 

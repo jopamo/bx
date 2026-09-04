@@ -149,8 +149,13 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed_observed(BxFetchCr
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
     }
     BxFetchPreparedUrl* target = bx_fetch_url_prepare(url);
-    if (!target)
+    if (!target) {
+        if (errno == EINVAL)
+            return enqueue_result(BX_FETCH_CRAWL_REJECTED, FILTER_DECISION_INVALID_URL);
+        if (errno == EPROTONOSUPPORT)
+            return enqueue_result(BX_FETCH_CRAWL_REJECTED, FILTER_DECISION_UNSUPPORTED_PROTOCOL);
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
+    }
     BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target, 0, true);
     if (target_out)
         *target_out = target;

@@ -6,7 +6,9 @@
 #include "lib/fetch/exit_code.h"
 #include "lib/fetch/filter.h"
 #include "lib/fetch/pathmap.h"
+#include "lib/fetch/resource_limits.h"
 #include "lib/fetch/run.h"
+#include "lib/path_quote.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,11 +30,43 @@ typedef struct {
     bool progress_line_active;
     MiraDryRunRecord* dry_run_records;
     size_t dry_run_record_count;
+    size_t dry_run_record_capacity;
     size_t next_plan_index;
     int deferred_error;
     FILE* diagnostics;
     MiraDebugTrace debug_trace;
 } MiraRunFrontend;
+
+static MiraDryRunRecord* mira_dry_run_record(MiraRunFrontend* frontend, int index) {
+    if (!frontend || index < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    size_t required = (size_t)index + 1u;
+    if (required > BX_FETCH_URL_STATE_MAX_ENTRIES) {
+        errno = EFBIG;
+        return NULL;
+    }
+    if (required > frontend->dry_run_record_capacity) {
+        size_t next_capacity = frontend->dry_run_record_capacity ? frontend->dry_run_record_capacity : 16u;
+        while (next_capacity < required) {
+            if (next_capacity > BX_FETCH_URL_STATE_MAX_ENTRIES / 2u) {
+                next_capacity = BX_FETCH_URL_STATE_MAX_ENTRIES;
+                break;
+            }
+            next_capacity *= 2u;
+        }
+        MiraDryRunRecord* grown = realloc(frontend->dry_run_records, next_capacity * sizeof(*grown));
+        if (!grown)
+            return NULL;
+        memset(grown + frontend->dry_run_record_capacity, 0, (next_capacity - frontend->dry_run_record_capacity) * sizeof(*grown));
+        frontend->dry_run_records = grown;
+        frontend->dry_run_record_capacity = next_capacity;
+    }
+    if (frontend->dry_run_record_count < required)
+        frontend->dry_run_record_count = required;
+    return &frontend->dry_run_records[index];
+}
 
 static void mira_run_record_error_url(MiraRunFrontend* frontend, BxFetchErrorClass error_class, const char* summary, const char* display_url, const char* path, int error_number) {
     if (!frontend)
@@ -156,16 +190,22 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
     MiraRunFrontend* frontend = userdata;
     if (!frontend || !observation)
         return false;
-    if (frontend->config->download.dry_run && observation->index >= 0 && (size_t)observation->index < frontend->dry_run_record_count) {
-        MiraDryRunRecord* record = &frontend->dry_run_records[observation->index];
+    if (frontend->config->download.dry_run && observation->index >= 0) {
+        MiraDryRunRecord* record = mira_dry_run_record(frontend, observation->index);
+        if (!record) {
+            frontend->deferred_error = errno ? errno : ENOMEM;
+            mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_INTERNAL, "failed to allocate dry-run plan", NULL, NULL, frontend->deferred_error);
+            return false;
+        }
         record->observed = true;
         record->status = observation->result.status;
-        if (observation->result.status == BX_FETCH_CRAWL_REJECTED && observation->target) {
-            record->display_url = strdup(bx_fetch_prepared_url_display(observation->target));
-            record->normalized_url = strdup(bx_fetch_prepared_url_display(observation->target));
+        if (observation->result.status == BX_FETCH_CRAWL_REJECTED) {
+            const char* display_url = observation->target ? bx_fetch_prepared_url_display(observation->target) : BX_FETCH_URL_DISPLAY_REDACTED;
+            record->display_url = strdup(display_url);
+            record->normalized_url = observation->target ? strdup(display_url) : NULL;
             const char* reason = bx_fetch_filter_decision_reason(observation->result.filter_decision);
             record->reason = strdup(reason ? reason : "unspecified");
-            if (!record->display_url || !record->normalized_url || !record->reason) {
+            if (!record->display_url || (observation->target && !record->normalized_url) || !record->reason) {
                 frontend->deferred_error = ENOMEM;
                 mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_INTERNAL, "failed to allocate dry-run plan", NULL, NULL, ENOMEM);
                 return false;
@@ -189,14 +229,21 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
         }
         const char* summary = observation->error_number == EPROTONOSUPPORT ? "initial URL uses an unsupported protocol" : "invalid initial URL";
         BxFetchErrorClass error_class = observation->error_number == EPROTONOSUPPORT ? BX_FETCH_ERROR_CLASS_CURL_TRANSPORT : BX_FETCH_ERROR_CLASS_POLICY;
-        mira_run_record_error_url(frontend, error_class, summary, "[URL redacted]", NULL, -1);
+        mira_run_record_error_url(frontend, error_class, summary, "[URL redacted]", observation->source_path, -1);
         return false;
     }
     if (observation->result.status != BX_FETCH_CRAWL_REJECTED)
         return false;
+    if (!observation->target) {
+        bool unsupported = observation->result.filter_decision == FILTER_DECISION_UNSUPPORTED_PROTOCOL;
+        const char* summary = unsupported ? "initial URL uses an unsupported protocol" : "invalid initial URL";
+        BxFetchErrorClass error_class = unsupported ? BX_FETCH_ERROR_CLASS_CURL_TRANSPORT : BX_FETCH_ERROR_CLASS_POLICY;
+        mira_run_record_error_url(frontend, error_class, summary, BX_FETCH_URL_DISPLAY_REDACTED, observation->source_path, -1);
+        return true;
+    }
     const char* reason = bx_fetch_filter_decision_reason(observation->result.filter_decision);
     if (observation->result.filter_decision == FILTER_DECISION_URL_CREDENTIALS) {
-        mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "URL credentials are disabled by --paranoid", observation->target, NULL, -1);
+        mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "URL credentials are disabled by --paranoid", observation->target, observation->source_path, -1);
         return false;
     }
     if (observation->result.filter_decision == FILTER_DECISION_HTTPS_ONLY) {
@@ -224,6 +271,68 @@ static void mira_dry_run_records_free(MiraRunFrontend* frontend) {
     free(frontend->dry_run_records);
     frontend->dry_run_records = NULL;
     frontend->dry_run_record_count = 0;
+    frontend->dry_run_record_capacity = 0;
+}
+
+static void mira_record_input_failure(MiraRunFrontend* frontend, const BxFetchInputOutcome* outcome) {
+    if (!frontend || !outcome)
+        return;
+
+    char summary[192];
+    BxFetchErrorClass error_class = BX_FETCH_ERROR_CLASS_FILESYSTEM;
+    bool emit_text = true;
+    switch (outcome->kind) {
+        case BX_FETCH_INPUT_FAILURE_OPEN:
+            snprintf(summary, sizeof(summary), "failed to open input file");
+            break;
+        case BX_FETCH_INPUT_FAILURE_READ:
+            snprintf(summary, sizeof(summary), "failed to read input file at line %zu", outcome->line_number);
+            break;
+        case BX_FETCH_INPUT_FAILURE_LINE_TOO_LONG:
+            snprintf(summary, sizeof(summary), "input file line %zu exceeds " BX_FETCH_URL_LIMIT_TEXT " byte limit", outcome->line_number);
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            emit_text = false;
+            break;
+        case BX_FETCH_INPUT_FAILURE_INVALID_CONTROL:
+            snprintf(summary, sizeof(summary), "input file line %zu contains an invalid control byte", outcome->line_number);
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            break;
+        case BX_FETCH_INPUT_FAILURE_FILE_TOO_LARGE:
+            snprintf(summary, sizeof(summary), "input file exceeds " BX_FETCH_INPUT_FILE_LIMIT_TEXT " byte limit");
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            emit_text = false;
+            break;
+        case BX_FETCH_INPUT_FAILURE_URL_STATE_LIMIT:
+            snprintf(summary, sizeof(summary), "input file URL state exceeds the bounded URL-state contract");
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            emit_text = false;
+            break;
+        case BX_FETCH_INPUT_FAILURE_MEMORY:
+            snprintf(summary, sizeof(summary), "failed to allocate bounded input-file state");
+            error_class = BX_FETCH_ERROR_CLASS_INTERNAL;
+            break;
+        case BX_FETCH_INPUT_FAILURE_NONE:
+        default:
+            snprintf(summary, sizeof(summary), "failed to read input file");
+            error_class = BX_FETCH_ERROR_CLASS_INTERNAL;
+            break;
+    }
+
+    frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, bx_fetch_exit_code_for_error_class(error_class, -1));
+    if (emit_text) {
+        char* quoted = bx_path_quote_dup(frontend->config->input.input_file, BX_PATH_QUOTE_ESCAPE);
+        fprintf(frontend->diagnostics, "mira: %s%s%s\n", summary, quoted ? ": " : "", quoted ? quoted : "");
+        free(quoted);
+    }
+    if (frontend->config->logging.structured_errors) {
+        bx_fetch_error_emit_simple(frontend->diagnostics,
+                                   error_class,
+                                   summary,
+                                   NULL,
+                                   frontend->config->input.input_file,
+                                   -1,
+                                   outcome->error_number);
+    }
 }
 
 static void mira_dry_run_records_emit(const MiraRunFrontend* frontend) {
@@ -331,6 +440,9 @@ static void mira_record_session_failure(MiraRunFrontend* frontend, const BxFetch
             error_class = BX_FETCH_ERROR_CLASS_STATE_STORE;
             summary = "failed to load URL mappings";
             break;
+        case BX_FETCH_RUN_FAILURE_LOAD_INPUT:
+            mira_record_input_failure(frontend, &failure->input);
+            return;
         case BX_FETCH_RUN_FAILURE_ADD_SEED:
             error_class = failure->seed.result.status == BX_FETCH_CRAWL_ERROR ? BX_FETCH_ERROR_CLASS_INTERNAL : BX_FETCH_ERROR_CLASS_POLICY;
             summary = "URL rejected by fetch policy";
@@ -359,7 +471,7 @@ static void mira_record_session_failure(MiraRunFrontend* frontend, const BxFetch
 }
 
 int bx_mira_run_config(const struct bx_fetch_config* config) {
-    if (!config || config->input.url_count <= 0 || !config->input.urls) {
+    if (!config || (config->input.url_count <= 0 && !config->input.input_file) || (config->input.url_count > 0 && !config->input.urls)) {
         errno = EINVAL;
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
     }
@@ -375,8 +487,9 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
     };
     bx_mira_debug_trace_init(&frontend_state.debug_trace, diagnostics, config);
     bx_mira_debug_trace_parse_complete(&frontend_state.debug_trace, config);
-    if (config->download.dry_run) {
+    if (config->download.dry_run && config->input.url_count > 0) {
         frontend_state.dry_run_record_count = (size_t)config->input.url_count;
+        frontend_state.dry_run_record_capacity = frontend_state.dry_run_record_count;
         frontend_state.dry_run_records = calloc(frontend_state.dry_run_record_count, sizeof(*frontend_state.dry_run_records));
         if (!frontend_state.dry_run_records) {
             mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_INTERNAL, "failed to allocate dry-run plan", NULL, NULL, ENOMEM);
