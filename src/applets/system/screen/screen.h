@@ -69,10 +69,10 @@ struct mode {
 };
 
 
-#include "vendor/gnu/screen/ansi.h"
+#include "ansi.h"
 #include "image.h"
 #include "layer.h"
-#include "vendor/gnu/screen/sched.h"
+#include "sched.h"
 #include "term.h"
 #include "window.h"
 

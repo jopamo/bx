@@ -26,13 +26,13 @@
  ****************************************************************
  */
 
-#include "applets/system/screen/config.h"
+#include "config.h"
 
-#include "vendor/gnu/screen/pty.h"
+#include "pty.h"
 
 #include <sys/ioctl.h>
 
-#include "applets/system/screen/screen.h"
+#include "screen.h"
 
 #if defined(HAVE_PTY_H)
 # include <pty.h>

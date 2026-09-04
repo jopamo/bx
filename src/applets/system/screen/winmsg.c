@@ -44,7 +44,7 @@
 #include "logfile.h"
 #include "mark.h"
 #include "process.h"
-#include "vendor/gnu/screen/sched.h"
+#include "sched.h"
 #include "lib/time_parse.h"
 
 /* TODO: rid global variable (has been renamed to point this out; see commit
