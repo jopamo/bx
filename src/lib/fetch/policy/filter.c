@@ -8,7 +8,7 @@
 #include <string.h>
 
 struct Filter {
-    const EffectiveConfig* cfg;
+    const struct bx_fetch_config* cfg;
     char** accept_exts;
     int accept_count;
     char** reject_exts;
@@ -194,7 +194,7 @@ static bool url_matches_accept_regex(Filter* f, const char* url) {
     return regexec(&f->accept_regex, url, 0, NULL, 0) == 0;
 }
 
-Filter* bx_fetch_filter_new(const EffectiveConfig* cfg) {
+Filter* bx_fetch_filter_new(const struct bx_fetch_config* cfg) {
     Filter* f = calloc(1, sizeof(Filter));
     if (!f)
         return NULL;

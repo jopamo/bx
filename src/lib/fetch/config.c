@@ -3,8 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-EffectiveConfig* bx_fetch_config_new(void) {
-    EffectiveConfig* cfg = calloc(1, sizeof(EffectiveConfig));
+struct bx_fetch_config* bx_fetch_config_new(void) {
+    struct bx_fetch_config* cfg = calloc(1, sizeof(struct bx_fetch_config));
     if (!cfg)
         return NULL;
 
@@ -33,7 +33,7 @@ EffectiveConfig* bx_fetch_config_new(void) {
     return cfg;
 }
 
-void bx_fetch_config_free(EffectiveConfig* cfg) {
+void bx_fetch_config_free(struct bx_fetch_config* cfg) {
     if (!cfg)
         return;
 

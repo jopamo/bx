@@ -48,7 +48,7 @@ static int url_map_store_fail_tmp_file(int error_number, int dirfd, int fd, char
     return url_map_store_fail_errno(error_number);
 }
 
-static char* output_document_dir(const EffectiveConfig* cfg) {
+static char* output_document_dir(const struct bx_fetch_config* cfg) {
     if (!cfg || !cfg->download.output_document || cfg->download.output_document[0] == '\0') {
         return NULL;
     }
@@ -63,7 +63,7 @@ static char* output_document_dir(const EffectiveConfig* cfg) {
     return strndup(output_document, (size_t)(last_slash - output_document));
 }
 
-static char* store_scope_for(const EffectiveConfig* cfg) {
+static char* store_scope_for(const struct bx_fetch_config* cfg) {
     if (!cfg)
         return NULL;
 
@@ -121,7 +121,7 @@ static char* state_dir_for_store(void) {
     return path;
 }
 
-static char* store_path_for(const EffectiveConfig* cfg) {
+static char* store_path_for(const struct bx_fetch_config* cfg) {
     if (!cfg)
         return NULL;
 
@@ -426,7 +426,7 @@ static StoreLineResult read_store_line(FILE* f, char* line, size_t capacity, siz
     return STORE_LINE_OK;
 }
 
-int bx_fetch_url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* userdata) {
+int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, MiraUrlMapLoadFn cb, void* userdata) {
     if (!cfg || !cb) {
         errno = EINVAL;
         return -1;
@@ -575,7 +575,7 @@ int bx_fetch_url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb,
     return rc;
 }
 
-int bx_fetch_url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entries, size_t entry_count) {
+int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const MiraUrlMapEntry* entries, size_t entry_count) {
     if (!cfg) {
         errno = EINVAL;
         return -1;

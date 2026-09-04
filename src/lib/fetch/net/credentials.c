@@ -15,7 +15,7 @@ static void select_configured_pair(MiraCredentialSelection* selection, MiraCrede
     selection->password = password ? password : "";
 }
 
-void bx_fetch_net_select_origin_credentials(const EffectiveConfig* cfg, const char* url, MiraCredentialSelection* selection) {
+void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, MiraCredentialSelection* selection) {
     if (!selection)
         return;
     *selection = (MiraCredentialSelection){0};
@@ -42,7 +42,7 @@ void bx_fetch_net_select_origin_credentials(const EffectiveConfig* cfg, const ch
     }
 }
 
-void bx_fetch_net_select_proxy_credentials(const EffectiveConfig* cfg, MiraCredentialSelection* selection) {
+void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, MiraCredentialSelection* selection) {
     if (!selection)
         return;
     *selection = (MiraCredentialSelection){
