@@ -132,6 +132,52 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     return 0;
 }
 
+static void mira_record_session_failure(MiraRunFrontend* frontend, const BxFetchRunFailure* failure) {
+    if (!frontend || !failure)
+        return;
+
+    BxFetchErrorClass error_class = BX_FETCH_ERROR_CLASS_INTERNAL;
+    const char* summary = "fetch run failed";
+    int error_number = failure->error_number;
+    switch (failure->stage) {
+        case BX_FETCH_RUN_FAILURE_CONFIG:
+            error_class = BX_FETCH_ERROR_CLASS_PARSE;
+            summary = "invalid fetch configuration";
+            break;
+        case BX_FETCH_RUN_FAILURE_GLOBAL_INIT:
+            error_class = BX_FETCH_ERROR_CLASS_CURL_TRANSPORT;
+            summary = "failed to initialize network transport";
+            if (failure->setup_error.error_number > 0)
+                error_number = failure->setup_error.error_number;
+            break;
+        case BX_FETCH_RUN_FAILURE_CREATE:
+            summary = "failed to initialize fetch run";
+            break;
+        case BX_FETCH_RUN_FAILURE_LOAD_PUBLICATION:
+            error_class = BX_FETCH_ERROR_CLASS_STATE_STORE;
+            summary = "failed to load URL mappings";
+            break;
+        case BX_FETCH_RUN_FAILURE_ADD_SEED:
+            error_class = failure->seed.result.status == BX_FETCH_CRAWL_ERROR ? BX_FETCH_ERROR_CLASS_INTERNAL : BX_FETCH_ERROR_CLASS_POLICY;
+            summary = "URL rejected by fetch policy";
+            break;
+        case BX_FETCH_RUN_FAILURE_EXECUTE:
+            error_class = BX_FETCH_ERROR_CLASS_CURL_TRANSPORT;
+            break;
+        case BX_FETCH_RUN_FAILURE_CONVERT_LINKS:
+            error_class = BX_FETCH_ERROR_CLASS_FILESYSTEM;
+            summary = "link conversion failed";
+            break;
+        case BX_FETCH_RUN_FAILURE_SAVE_PUBLICATION:
+            error_class = BX_FETCH_ERROR_CLASS_STATE_STORE;
+            summary = "failed to save URL mappings";
+            break;
+        case BX_FETCH_RUN_FAILURE_NONE:
+            return;
+    }
+    mira_run_record_error(frontend, error_class, summary, NULL, NULL, error_number);
+}
+
 int bx_mira_run_config(const struct bx_fetch_config* config) {
     if (!config || config->input.url_count != 1 || !config->input.urls || !config->input.urls[0]) {
         errno = EINVAL;
@@ -149,50 +195,14 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .userdata = &frontend_state,
     };
 
-    bool global_initialized = false;
-    BxFetchNetSetupError setup_error = {0};
-    if (!config->download.dry_run) {
-        if (config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET)
-            fputs("mira: starting downloads\n", stderr);
-        if (bx_fetch_global_init(config, &setup_error) != 0) {
-            mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_CURL_TRANSPORT, "failed to initialize network transport", NULL, NULL,
-                                  setup_error.error_number ? setup_error.error_number : errno);
-            return frontend_state.exit_code ? frontend_state.exit_code : BX_FETCH_EXIT_NETWORK;
-        }
-        global_initialized = true;
-    }
+    if (!config->download.dry_run && config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET)
+        fputs("mira: starting downloads\n", stderr);
 
-    BxFetchRun* run = bx_fetch_run_new(config, &frontend);
-    if (!run) {
-        mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_INTERNAL, "failed to initialize fetch run", NULL, NULL, errno);
-        goto cleanup;
+    BxFetchRunFailure failure;
+    if (bx_fetch_run_execute_config(config, &frontend, &failure) != 0) {
+        bool callback_already_reported_execute_failure = failure.stage == BX_FETCH_RUN_FAILURE_EXECUTE && frontend_state.exit_code != BX_FETCH_EXIT_SUCCESS;
+        if (!callback_already_reported_execute_failure)
+            mira_record_session_failure(&frontend_state, &failure);
     }
-    if (bx_fetch_run_load_publication(run) != 0) {
-        mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_STATE_STORE, "failed to load URL mappings", NULL, NULL, errno);
-        goto cleanup;
-    }
-
-    BxFetchCrawlEnqueueResult enqueue = bx_fetch_run_add_seed(run, config->input.urls[0]);
-    if (enqueue.status != BX_FETCH_CRAWL_ENQUEUED) {
-        BxFetchErrorClass error_class = enqueue.status == BX_FETCH_CRAWL_ERROR ? BX_FETCH_ERROR_CLASS_INTERNAL : BX_FETCH_ERROR_CLASS_POLICY;
-        mira_run_record_error(&frontend_state, error_class, "URL rejected by fetch policy", NULL, NULL, errno);
-        goto cleanup;
-    }
-    if (bx_fetch_run_execute(run) != 0) {
-        if (!frontend_state.exit_code)
-            mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_CURL_TRANSPORT, "fetch run failed", NULL, NULL, errno);
-        goto cleanup;
-    }
-    if (bx_fetch_run_convert_links(run) != 0) {
-        mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_FILESYSTEM, "link conversion failed", NULL, NULL, errno);
-        goto cleanup;
-    }
-    if (bx_fetch_run_save_publication(run) != 0)
-        mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_STATE_STORE, "failed to save URL mappings", NULL, NULL, errno);
-
-cleanup:
-    bx_fetch_run_free(run);
-    if (global_initialized)
-        bx_fetch_global_cleanup();
     return frontend_state.exit_code;
 }

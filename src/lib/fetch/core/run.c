@@ -444,3 +444,122 @@ int bx_fetch_run_convert_links(BxFetchRun* run) {
         return 0;
     return bx_fetch_publication_visit_downloads(run->publication, run_convert_download, run);
 }
+
+static void run_failure_reset(BxFetchRunFailure* failure) {
+    if (!failure)
+        return;
+    *failure = (BxFetchRunFailure){
+        .stage = BX_FETCH_RUN_FAILURE_NONE,
+        .error_number = 0,
+        .seed.index = -1,
+    };
+    failure->setup_error.curl_code = -1;
+    failure->setup_error.error_number = -1;
+}
+
+static int run_session_fail(BxFetchRunFailure* failure, BxFetchRunFailureStage stage, int error_number, const BxFetchRunSeedObservation* seed, const BxFetchNetSetupError* setup_error) {
+    if (error_number <= 0)
+        error_number = EIO;
+    if (failure) {
+        failure->stage = stage;
+        failure->error_number = error_number;
+        if (seed)
+            failure->seed = *seed;
+        if (setup_error)
+            failure->setup_error = *setup_error;
+    }
+    errno = error_number;
+    return -1;
+}
+
+int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend, BxFetchRunFailure* failure_out) {
+    run_failure_reset(failure_out);
+    if (!cfg || !frontend || !frontend->plan_output || cfg->input.url_count <= 0 || !cfg->input.urls) {
+        return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL);
+    }
+    for (int index = 0; index < cfg->input.url_count; index++) {
+        if (!cfg->input.urls[index]) {
+            BxFetchRunSeedObservation seed = {
+                .index = index,
+                .error_number = EINVAL,
+            };
+            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, &seed, NULL);
+        }
+    }
+
+    bool global_initialized = false;
+    BxFetchRun* run = NULL;
+    BxFetchRunFailureStage failure_stage = BX_FETCH_RUN_FAILURE_NONE;
+    int error_number = 0;
+    BxFetchRunSeedObservation failed_seed = {
+        .index = -1,
+    };
+    BxFetchNetSetupError setup_error = {
+        .curl_code = -1,
+        .error_number = -1,
+    };
+
+    if (!cfg->download.dry_run) {
+        errno = 0;
+        if (bx_fetch_global_init(cfg, &setup_error) != 0) {
+            error_number = setup_error.error_number > 0 ? setup_error.error_number : (errno > 0 ? errno : EIO);
+            return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_GLOBAL_INIT, error_number, NULL, &setup_error);
+        }
+        global_initialized = true;
+    }
+
+    run = bx_fetch_run_new(cfg, frontend);
+    if (!run) {
+        failure_stage = BX_FETCH_RUN_FAILURE_CREATE;
+        error_number = errno;
+        goto cleanup;
+    }
+    if (bx_fetch_run_load_publication(run) != 0) {
+        failure_stage = BX_FETCH_RUN_FAILURE_LOAD_PUBLICATION;
+        error_number = errno;
+        goto cleanup;
+    }
+
+    for (int index = 0; index < cfg->input.url_count; index++) {
+        errno = 0;
+        BxFetchCrawlEnqueueResult enqueue = bx_fetch_run_add_seed(run, cfg->input.urls[index]);
+        BxFetchRunSeedObservation observation = {
+            .index = index,
+            .result = enqueue,
+            .error_number = errno,
+        };
+        bool accepted = enqueue.status == BX_FETCH_CRAWL_ENQUEUED || enqueue.status == BX_FETCH_CRAWL_SKIPPED_DUPLICATE;
+        if (!accepted && observation.error_number <= 0)
+            observation.error_number = enqueue.status == BX_FETCH_CRAWL_REJECTED ? EPERM : EIO;
+        bool frontend_continue = frontend->on_seed_result && frontend->on_seed_result(frontend->userdata, &observation);
+        if (accepted || (enqueue.status == BX_FETCH_CRAWL_REJECTED && frontend_continue))
+            continue;
+        failure_stage = BX_FETCH_RUN_FAILURE_ADD_SEED;
+        error_number = observation.error_number;
+        failed_seed = observation;
+        goto cleanup;
+    }
+    if (bx_fetch_run_execute(run) != 0) {
+        failure_stage = BX_FETCH_RUN_FAILURE_EXECUTE;
+        error_number = errno;
+        goto cleanup;
+    }
+    if (bx_fetch_run_convert_links(run) != 0) {
+        failure_stage = BX_FETCH_RUN_FAILURE_CONVERT_LINKS;
+        error_number = errno;
+        goto cleanup;
+    }
+    if (bx_fetch_run_save_publication(run) != 0) {
+        failure_stage = BX_FETCH_RUN_FAILURE_SAVE_PUBLICATION;
+        error_number = errno;
+        goto cleanup;
+    }
+
+cleanup:
+    bx_fetch_run_free(run);
+    if (global_initialized)
+        bx_fetch_global_cleanup();
+    if (failure_stage != BX_FETCH_RUN_FAILURE_NONE)
+        return run_session_fail(failure_out, failure_stage, error_number, failed_seed.index >= 0 ? &failed_seed : NULL, NULL);
+    return 0;
+}
