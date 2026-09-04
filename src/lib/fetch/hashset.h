@@ -21,10 +21,10 @@
 
 typedef struct HashSet HashSet;
 
-HashSet *hashset_new(size_t size);
-void hashset_free(HashSet *hs);
-bool hashset_add(HashSet *hs, const char *key);
-bool hashset_contains(HashSet *hs, const char *key);
-bool hashset_remove(HashSet *hs, const char *key);
+HashSet* hashset_new(size_t size);
+void hashset_free(HashSet* hs);
+bool hashset_add(HashSet* hs, const char* key);
+bool hashset_contains(HashSet* hs, const char* key);
+bool hashset_remove(HashSet* hs, const char* key);
 
-#endif // MIRA_HASHSET_H
+#endif  // MIRA_HASHSET_H

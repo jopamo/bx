@@ -48,16 +48,16 @@ static const MiraExitCodeInfo k_exit_code_table[] = {
     },
 };
 
-const MiraExitCodeInfo *mira_exit_code_table(size_t *count) {
+const MiraExitCodeInfo* mira_exit_code_table(size_t* count) {
     if (count) {
         *count = sizeof(k_exit_code_table) / sizeof(k_exit_code_table[0]);
     }
     return k_exit_code_table;
 }
 
-const MiraExitCodeInfo *mira_exit_code_info(int code) {
+const MiraExitCodeInfo* mira_exit_code_info(int code) {
     size_t count = 0;
-    const MiraExitCodeInfo *table = mira_exit_code_table(&count);
+    const MiraExitCodeInfo* table = mira_exit_code_table(&count);
     for (size_t i = 0; i < count; i++) {
         if ((int)table[i].code == code) {
             return &table[i];
@@ -94,9 +94,7 @@ int mira_exit_code_for_error_class(MiraErrorClass class_id, int http_status) {
     }
 }
 
-int mira_exit_code_for_transfer_failure(int http_status,
-                                        MiraTransportErrorKind transport_kind,
-                                        MiraError result) {
+int mira_exit_code_for_transfer_failure(int http_status, MiraTransportErrorKind transport_kind, MiraError result) {
     if (http_status == 401 || http_status == 407) {
         return MIRA_EXIT_AUTH;
     }

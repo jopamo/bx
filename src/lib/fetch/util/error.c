@@ -2,10 +2,10 @@
 #include <ctype.h>
 #include <stdio.h>
 
-static void json_write_escaped_string(FILE *stream, const char *value) {
+static void json_write_escaped_string(FILE* stream, const char* value) {
     fputc('"', stream);
     if (value) {
-        for (const unsigned char *p = (const unsigned char *)value; *p != '\0'; p++) {
+        for (const unsigned char* p = (const unsigned char*)value; *p != '\0'; p++) {
             unsigned char ch = *p;
             switch (ch) {
                 case '"':
@@ -32,7 +32,8 @@ static void json_write_escaped_string(FILE *stream, const char *value) {
                 default:
                     if (!isprint(ch)) {
                         fprintf(stream, "\\u%04x", (unsigned int)ch);
-                    } else {
+                    }
+                    else {
                         fputc((int)ch, stream);
                     }
                     break;
@@ -42,7 +43,7 @@ static void json_write_escaped_string(FILE *stream, const char *value) {
     fputc('"', stream);
 }
 
-const char *mira_error_class_string(MiraErrorClass class_id) {
+const char* mira_error_class_string(MiraErrorClass class_id) {
     switch (class_id) {
         case MIRA_ERROR_CLASS_PARSE:
             return "parse";
@@ -65,23 +66,25 @@ const char *mira_error_class_string(MiraErrorClass class_id) {
     }
 }
 
-static void json_write_optional_string(FILE *stream, const char *value) {
+static void json_write_optional_string(FILE* stream, const char* value) {
     if (value && value[0] != '\0') {
         json_write_escaped_string(stream, value);
-    } else {
+    }
+    else {
         fputs("null", stream);
     }
 }
 
-static void json_write_optional_int(FILE *stream, int value) {
+static void json_write_optional_int(FILE* stream, int value) {
     if (value >= 0) {
         fprintf(stream, "%d", value);
-    } else {
+    }
+    else {
         fputs("null", stream);
     }
 }
 
-const char *mira_error_string(MiraError err) {
+const char* mira_error_string(MiraError err) {
     switch (err) {
         case MIRA_OK:
             return "Success";
@@ -112,9 +115,7 @@ const char *mira_error_string(MiraError err) {
     }
 }
 
-MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char *summary,
-                                           const char *url, const char *path,
-                                           int curl_code, int error_number) {
+MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
     MiraStructuredError error = {
         .class_id = class_id,
         .summary = summary,
@@ -130,17 +131,16 @@ MiraStructuredError mira_error_make_simple(MiraErrorClass class_id, const char *
     return error;
 }
 
-void mira_error_emit_simple(FILE *stream, MiraErrorClass class_id, const char *summary,
-                            const char *url, const char *path, int curl_code,
-                            int error_number) {
-    MiraStructuredError error =
-        mira_error_make_simple(class_id, summary, url, path, curl_code, error_number);
+void mira_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
+    MiraStructuredError error = mira_error_make_simple(class_id, summary, url, path, curl_code, error_number);
     mira_error_emit_structured(stream, &error);
 }
 
-void mira_error_emit_structured(FILE *stream, const MiraStructuredError *error) {
-    if (!error) return;
-    if (!stream) stream = stderr;
+void mira_error_emit_structured(FILE* stream, const MiraStructuredError* error) {
+    if (!error)
+        return;
+    if (!stream)
+        stream = stderr;
 
     fputs("{\"schema_version\":1,\"class\":", stream);
     json_write_escaped_string(stream, mira_error_class_string(error->class_id));

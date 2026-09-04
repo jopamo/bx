@@ -29,8 +29,7 @@ typedef struct Scheduler Scheduler;
  * - `url` is borrowed from done_userdata-owned transfer info and valid only for
  *   the duration of the callback.
  */
-typedef bool (*SchedulerTransferDoneFn)(void *userdata, const char *url, int status, int result,
-                                        bool retryable_hint);
+typedef bool (*SchedulerTransferDoneFn)(void* userdata, const char* url, int status, int result, bool retryable_hint);
 /*
  * Return codes:
  *  0: transfer submitted, scheduler tracks it as active
@@ -42,23 +41,20 @@ typedef bool (*SchedulerTransferDoneFn)(void *userdata, const char *url, int sta
  * - If return is 0, dispatch implementation must eventually invoke `on_done()`
  *   exactly once with `done_userdata`.
  */
-typedef int (*SchedulerDispatchFn)(void *userdata, const char *url, const char *output_path,
-                                   SchedulerTransferDoneFn on_done, void *done_userdata);
+typedef int (*SchedulerDispatchFn)(void* userdata, const char* url, const char* output_path, SchedulerTransferDoneFn on_done, void* done_userdata);
 /* Called by scheduler while transfers are active to drive completion progress. */
-typedef int (*SchedulerPollFn)(void *userdata);
+typedef int (*SchedulerPollFn)(void* userdata);
 
-Scheduler *scheduler_new(const EffectiveConfig *cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll,
-                         void *userdata);
-void scheduler_free(Scheduler *s);
+Scheduler* scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata);
+void scheduler_free(Scheduler* s);
 
 /* Enqueues one transfer attempt candidate; URL/path are copied on success. */
-int scheduler_add_url(Scheduler *s, const char *url, const char *output_path);
-int scheduler_add_canonical_url(Scheduler *s, const char *canonical_url,
-                                const char *output_path);
+int scheduler_add_url(Scheduler* s, const char* url, const char* output_path);
+int scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path);
 /*
  * Runs dispatch/poll loop until queue and active set are drained.
  * Returns 0 only when no dispatch, transfer, or scheduler invariant failures occurred.
  */
-int scheduler_run(Scheduler *s);
+int scheduler_run(Scheduler* s);
 
-#endif // MIRA_SCHEDULER_H
+#endif  // MIRA_SCHEDULER_H

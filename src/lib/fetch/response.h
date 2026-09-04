@@ -35,36 +35,35 @@ typedef enum {
 
 typedef struct {
     int status_code;
-    char *effective_url;
+    char* effective_url;
 
-    MiraHeader *headers;
+    MiraHeader* headers;
     size_t header_count;
     size_t header_capacity;
 
     // Total size of body if known (Content-Length)
     int64_t content_length;
 
-    char *content_type;
+    char* content_type;
 
     // Error code if transfer failed
     int error_code;
     int error_number;
     MiraTransportErrorKind transport_error_kind;
-    char *transport_error_detail;
+    char* transport_error_detail;
     bool request_body_io_failed;
     size_t header_bytes;
     MiraResponseHeaderPolicyFailure header_policy_failure;
 } Response;
 
-Response *response_new(void);
-void response_free(Response *resp);
+Response* response_new(void);
+void response_free(Response* resp);
 /*
  * Copies `name`/`value` into bounded response-owned storage.
  * Returns -1 with errno EFBIG for line/block/field limits, ENOMEM for
  * allocation failure, or EINVAL for invalid arguments.
  */
-int response_add_header(Response *resp, const char *name, const char *value);
-const char *mira_response_header_policy_failure_summary(
-    MiraResponseHeaderPolicyFailure failure);
+int response_add_header(Response* resp, const char* name, const char* value);
+const char* mira_response_header_policy_failure_summary(MiraResponseHeaderPolicyFailure failure);
 
-#endif // MIRA_RESPONSE_H
+#endif  // MIRA_RESPONSE_H

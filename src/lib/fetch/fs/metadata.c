@@ -9,44 +9,45 @@
 #include <string.h>
 #include <unistd.h>
 
-static int set_string(char **dest, const char *src) {
-    char *copy = src ? strdup(src) : NULL;
-    if (src && !copy) return -1;
+static int set_string(char** dest, const char* src) {
+    char* copy = src ? strdup(src) : NULL;
+    if (src && !copy)
+        return -1;
 
     free(*dest);
     *dest = copy;
     return 0;
 }
 
-static char *metadata_path_for(const char *output_path) {
+static char* metadata_path_for(const char* output_path) {
     size_t len = strlen(output_path) + strlen(".mira.meta") + 1;
-    char *path = malloc(len);
-    if (!path) return NULL;
+    char* path = malloc(len);
+    if (!path)
+        return NULL;
     snprintf(path, len, "%s.mira.meta", output_path);
     return path;
 }
 
-bool metadata_is_empty(const MiraMetadata *meta) {
-    if (!meta) return true;
+bool metadata_is_empty(const MiraMetadata* meta) {
+    if (!meta)
+        return true;
 
-    return (!meta->etag || meta->etag[0] == '\0') &&
-           (!meta->last_modified || meta->last_modified[0] == '\0') &&
-           (!meta->origin_url || meta->origin_url[0] == '\0') &&
-           (!meta->redirect_target || meta->redirect_target[0] == '\0') &&
-           (!meta->local_path || meta->local_path[0] == '\0');
+    return (!meta->etag || meta->etag[0] == '\0') && (!meta->last_modified || meta->last_modified[0] == '\0') && (!meta->origin_url || meta->origin_url[0] == '\0') &&
+           (!meta->redirect_target || meta->redirect_target[0] == '\0') && (!meta->local_path || meta->local_path[0] == '\0');
 }
 
-int metadata_write_stream(FILE *f, const MiraMetadata *meta) {
+int metadata_write_stream(FILE* f, const MiraMetadata* meta) {
     if (!f || !meta) {
         errno = EINVAL;
         return -1;
     }
 
-    char *origin_url = NULL;
-    char *redirect_target = NULL;
+    char* origin_url = NULL;
+    char* redirect_target = NULL;
     if (meta->origin_url && meta->origin_url[0] != '\0') {
         origin_url = mira_url_display_safe(meta->origin_url);
-        if (!origin_url) return -1;
+        if (!origin_url)
+            return -1;
     }
     if (meta->redirect_target && meta->redirect_target[0] != '\0') {
         redirect_target = mira_url_display_safe(meta->redirect_target);
@@ -56,23 +57,19 @@ int metadata_write_stream(FILE *f, const MiraMetadata *meta) {
         }
     }
 
-    if (meta->etag && meta->etag[0] != '\0' &&
-        fprintf(f, "etag=%s\n", meta->etag) < 0) {
+    if (meta->etag && meta->etag[0] != '\0' && fprintf(f, "etag=%s\n", meta->etag) < 0) {
         goto fail;
     }
-    if (meta->last_modified && meta->last_modified[0] != '\0' &&
-        fprintf(f, "last_modified=%s\n", meta->last_modified) < 0) {
+    if (meta->last_modified && meta->last_modified[0] != '\0' && fprintf(f, "last_modified=%s\n", meta->last_modified) < 0) {
         goto fail;
     }
     if (origin_url && fprintf(f, "origin_url=%s\n", origin_url) < 0) {
         goto fail;
     }
-    if (redirect_target &&
-        fprintf(f, "redirect_target=%s\n", redirect_target) < 0) {
+    if (redirect_target && fprintf(f, "redirect_target=%s\n", redirect_target) < 0) {
         goto fail;
     }
-    if (meta->local_path && meta->local_path[0] != '\0' &&
-        fprintf(f, "local_path=%s\n", meta->local_path) < 0) {
+    if (meta->local_path && meta->local_path[0] != '\0' && fprintf(f, "local_path=%s\n", meta->local_path) < 0) {
         goto fail;
     }
 
@@ -86,8 +83,9 @@ fail:
     return -1;
 }
 
-void metadata_clear(MiraMetadata *meta) {
-    if (!meta) return;
+void metadata_clear(MiraMetadata* meta) {
+    if (!meta)
+        return;
     free(meta->etag);
     free(meta->last_modified);
     free(meta->origin_url);
@@ -100,13 +98,15 @@ void metadata_clear(MiraMetadata *meta) {
     meta->local_path = NULL;
 }
 
-int metadata_load(const char *output_path, MiraMetadata *meta) {
-    if (!output_path || !meta) return -1;
+int metadata_load(const char* output_path, MiraMetadata* meta) {
+    if (!output_path || !meta)
+        return -1;
 
     metadata_clear(meta);
 
-    char *path = metadata_path_for(output_path);
-    if (!path) return -1;
+    char* path = metadata_path_for(output_path);
+    if (!path)
+        return -1;
 
     int fd = writer_open_existing_file(path);
     if (fd == -1) {
@@ -117,7 +117,7 @@ int metadata_load(const char *output_path, MiraMetadata *meta) {
     }
     free(path);
 
-    FILE *f = fdopen(fd, "r");
+    FILE* f = fdopen(fd, "r");
     if (!f) {
         int open_error_number = errno;
         close(fd);
@@ -135,25 +135,29 @@ int metadata_load(const char *output_path, MiraMetadata *meta) {
                 metadata_clear(meta);
                 return -1;
             }
-        } else if (strncmp(line, "last_modified=", 14) == 0) {
+        }
+        else if (strncmp(line, "last_modified=", 14) == 0) {
             if (set_string(&meta->last_modified, line + 14) != 0) {
                 fclose(f);
                 metadata_clear(meta);
                 return -1;
             }
-        } else if (strncmp(line, "origin_url=", 11) == 0) {
+        }
+        else if (strncmp(line, "origin_url=", 11) == 0) {
             if (set_string(&meta->origin_url, line + 11) != 0) {
                 fclose(f);
                 metadata_clear(meta);
                 return -1;
             }
-        } else if (strncmp(line, "redirect_target=", 16) == 0) {
+        }
+        else if (strncmp(line, "redirect_target=", 16) == 0) {
             if (set_string(&meta->redirect_target, line + 16) != 0) {
                 fclose(f);
                 metadata_clear(meta);
                 return -1;
             }
-        } else if (strncmp(line, "local_path=", 11) == 0) {
+        }
+        else if (strncmp(line, "local_path=", 11) == 0) {
             if (set_string(&meta->local_path, line + 11) != 0) {
                 fclose(f);
                 metadata_clear(meta);
@@ -172,11 +176,13 @@ int metadata_load(const char *output_path, MiraMetadata *meta) {
     return 0;
 }
 
-int metadata_save(const char *output_path, const MiraMetadata *meta) {
-    if (!output_path || !meta) return -1;
+int metadata_save(const char* output_path, const MiraMetadata* meta) {
+    if (!output_path || !meta)
+        return -1;
 
-    char *path = metadata_path_for(output_path);
-    if (!path) return -1;
+    char* path = metadata_path_for(output_path);
+    if (!path)
+        return -1;
 
     if (metadata_is_empty(meta)) {
         int rc = writer_unlink_file(path);
@@ -186,15 +192,16 @@ int metadata_save(const char *output_path, const MiraMetadata *meta) {
         return (rc == 0 || unlink_error_number == ENOENT) ? 0 : -1;
     }
 
-    char *serialized = NULL;
+    char* serialized = NULL;
     size_t serialized_len = 0;
-    FILE *stream = open_memstream(&serialized, &serialized_len);
+    FILE* stream = open_memstream(&serialized, &serialized_len);
     if (!stream) {
         free(path);
         return -1;
     }
     int serialize_rc = metadata_write_stream(stream, meta);
-    if (fclose(stream) != 0) serialize_rc = -1;
+    if (fclose(stream) != 0)
+        serialize_rc = -1;
     if (serialize_rc != 0) {
         int serialize_error_number = errno ? errno : EIO;
         free(serialized);
@@ -203,8 +210,7 @@ int metadata_save(const char *output_path, const MiraMetadata *meta) {
         return -1;
     }
 
-    Writer *writer = writer_open_with_options(
-        path, WRITER_CREATE, 0, false);
+    Writer* writer = writer_open_with_options(path, WRITER_CREATE, 0, false);
     if (!writer) {
         free(serialized);
         free(path);

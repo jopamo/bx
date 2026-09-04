@@ -34,30 +34,30 @@ typedef enum {
 } MiraRequestBodyResult;
 
 typedef struct {
-    char *method;
-    char *url;
-    char *display_url;
+    char* method;
+    char* url;
+    char* display_url;
     bool url_is_canonical;
-    MiraHeader *headers;
+    MiraHeader* headers;
     size_t header_count;
     size_t header_capacity;
 
-    void *body;
+    void* body;
     size_t body_len;
-    MiraRequestBodyFile *body_file;
+    MiraRequestBodyFile* body_file;
 } Request;
 
-Request *request_new(const char *method, const char *url);
-Request *request_new_canonical(const char *method, const char *canonical_url);
-void request_free(Request *req);
+Request* request_new(const char* method, const char* url);
+Request* request_new_canonical(const char* method, const char* canonical_url);
+void request_free(Request* req);
 /* Returns userinfo-free text or a fail-closed placeholder, never `req->url`. */
-const char *request_url_for_display(const Request *req);
+const char* request_url_for_display(const Request* req);
 /*
  * Validates and copies `name`/`value` into request-owned storage.
  * Returns -1 with errno EINVAL for policy/grammar errors or ENOMEM for
  * allocation failure.
  */
-int request_add_header(Request *req, const char *name, const char *value);
+int request_add_header(Request* req, const char* name, const char* value);
 
 /*
  * Configure a fixed-length streaming request body from `path`.
@@ -66,19 +66,18 @@ int request_add_header(Request *req, const char *name, const char *value);
  * reopened for redirects; reads and rewinds operate on the same descriptor.
  * A successful call replaces any existing memory or file body.
  */
-MiraRequestBodyResult request_set_body_file(Request *req, const char *path);
-bool request_has_body_file(const Request *req);
-uint64_t request_body_file_size(const Request *req);
+MiraRequestBodyResult request_set_body_file(Request* req, const char* path);
+bool request_has_body_file(const Request* req);
+uint64_t request_body_file_size(const Request* req);
 /*
  * Reads at most `capacity` bytes from the fixed-length opened source.
  * Premature EOF is an I/O failure rather than a successful short body.
  */
-int request_body_file_read(Request *req, void *buffer, size_t capacity,
-                           size_t *read_out);
+int request_body_file_read(Request* req, void* buffer, size_t capacity, size_t* read_out);
 /*
  * Repositions the body stream for libcurl redirect/retry handling.
  * The resulting offset must remain within the opened file's original length.
  */
-int request_body_file_seek(Request *req, int64_t offset, int origin);
+int request_body_file_seek(Request* req, int64_t offset, int origin);
 
-#endif // MIRA_REQUEST_H
+#endif  // MIRA_REQUEST_H

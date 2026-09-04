@@ -18,10 +18,6 @@
 #include <stdbool.h>
 #include <time.h>
 
-bool mira_timestamp_should_use_server_time(bool no_use_server_timestamps,
-                                           int status,
-                                           const char *output_path,
-                                           const char *last_modified_header,
-                                           time_t *server_mtime_out);
+bool mira_timestamp_should_use_server_time(bool no_use_server_timestamps, int status, const char* output_path, const char* last_modified_header, time_t* server_mtime_out);
 
-#endif // MIRA_TIMESTAMP_POLICY_H
+#endif  // MIRA_TIMESTAMP_POLICY_H

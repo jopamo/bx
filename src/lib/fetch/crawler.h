@@ -24,41 +24,41 @@
 #include "resource_limits.h"
 
 typedef struct {
-    char *url;
+    char* url;
     int depth;
-    char *referrer;
+    char* referrer;
 } CrawlItem;
 
-CrawlItem *crawl_item_new(const char *url, int depth, const char *referrer);
-void crawl_item_free(CrawlItem *item);
+CrawlItem* crawl_item_new(const char* url, int depth, const char* referrer);
+void crawl_item_free(CrawlItem* item);
 
 typedef struct FrontierNode {
-    CrawlItem *item;
+    CrawlItem* item;
     size_t accounted_bytes;
-    struct FrontierNode *next;
+    struct FrontierNode* next;
 } FrontierNode;
 
 typedef struct Frontier {
-    FrontierNode *head;
-    FrontierNode *tail;
+    FrontierNode* head;
+    FrontierNode* tail;
     int count;
     size_t seen_count;
     size_t retained_url_bytes;
-    HashSet *seen_urls;
+    HashSet* seen_urls;
 } Frontier;
 
-Frontier *frontier_new(void);
-void frontier_free(Frontier *f);
+Frontier* frontier_new(void);
+void frontier_free(Frontier* f);
 /*
  * Consumes `item` in all return paths; returns 0 for inserted or duplicate URL.
  * Returns -1 with errno EFBIG when the shared URL-state contract is exhausted.
  */
-int frontier_add(Frontier *f, CrawlItem *item);
+int frontier_add(Frontier* f, CrawlItem* item);
 /* Internal fast path: `item->url` must already be a canonical request URL. */
-int frontier_add_canonical(Frontier *f, CrawlItem *item);
-bool frontier_is_seen(Frontier *f, const char *url);
-bool frontier_is_seen_canonical(Frontier *f, const char *canonical_url);
+int frontier_add_canonical(Frontier* f, CrawlItem* item);
+bool frontier_is_seen(Frontier* f, const char* url);
+bool frontier_is_seen_canonical(Frontier* f, const char* canonical_url);
 /* Returns next owned item, or NULL if frontier is empty. */
-CrawlItem *frontier_next(Frontier *f);
+CrawlItem* frontier_next(Frontier* f);
 
-#endif // MIRA_CRAWLER_H
+#endif  // MIRA_CRAWLER_H
