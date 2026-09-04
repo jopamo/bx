@@ -154,7 +154,6 @@ int       dflag;
 int       queryflag = -1;
 bool      hastruecolor = false;
 bool      defosc52 = true;	/* clipboard writes allowed by default */
-bool      defosc52read = false;	/* clipboard reads blocked by default */
 
 char     *multi;
 int       multiattach;

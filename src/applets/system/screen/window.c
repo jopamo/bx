@@ -867,6 +867,7 @@ void FreeWindow(Window *window)
 	evdeq(&window->w_zombieev);
 	evdeq(&window->w_destroyev);
 	FreePaster(&window->w_paster);
+	CStrRelease(&window->w_cstr);
 	free((char *)window);
 }
 
@@ -1925,6 +1926,7 @@ void ResetWindow(Window *win)
 	win->w_x = win->w_y = 0;
 	win->w_state = LIT;
 	win->w_StringType = NONE;
+	CStrRelease(&win->w_cstr);
 	memset(win->w_tabs, 0, win->w_width);
 	for (int i = 8; i < win->w_width; i += 8)
 		win->w_tabs[i] = 1;
