@@ -25,7 +25,7 @@
 /* Search dir recursively for matching device file.
    Returns 0 on success;
    returns -1 when it failed to find the device file. */
-int find_devpath(
+static int find_devpath(
 	char *dirname,
 	unsigned int major,
 	unsigned int minor,
@@ -239,44 +239,44 @@ int procan(FILE *outfile) {
 	 Warn2("getrlimit(RLIMIT_CPU, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "cpu time (seconds)      %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "cpu time (seconds)      %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
       if (getrlimit(RLIMIT_FSIZE, &rlim) < 0) {
 	 Warn2("getrlimit(RLIMIT_FSIZE, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "file size (blocks)      %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "file size (blocks)      %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
       if (getrlimit(RLIMIT_DATA, &rlim) < 0) {
 	 Warn2("getrlimit(RLIMIT_DATA, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "data seg size (kbytes)  %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "data seg size (kbytes)  %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
       if (getrlimit(RLIMIT_STACK, &rlim) < 0) {
 	 Warn2("getrlimit(RLIMIT_STACK, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "stack size (blocks)     %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "stack size (blocks)     %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
       if (getrlimit(RLIMIT_CORE, &rlim) < 0) {
 	 Warn2("getrlimit(RLIMIT_CORE, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "core file size (blocks) %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "core file size (blocks) %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #ifdef RLIMIT_RSS	/* Linux, AIX; not Cygwin */
       if (getrlimit(RLIMIT_RSS, &rlim) < 0) {
 	 Warn2("getrlimit(RLIMIT_RSS, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "max resident set size   %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "max resident set size   %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #endif
 #ifdef RLIMIT_NPROC	/* Linux, not AIX, Cygwin */
@@ -284,8 +284,8 @@ int procan(FILE *outfile) {
 	 Warn2("getrlimit(RLIMIT_NPROC, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "max user processes      %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "max user processes      %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #endif
 #ifdef RLIMIT_NOFILE	/* not AIX 4.1 */
@@ -293,8 +293,8 @@ int procan(FILE *outfile) {
 	 Warn2("getrlimit(RLIMIT_NOFILE, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "open files              %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "open files              %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #endif
 #ifdef RLIMIT_MEMLOCK	/* Linux, not AIX, Cygwin */
@@ -302,8 +302,8 @@ int procan(FILE *outfile) {
 	 Warn2("getrlimit(RLIMIT_MEMLOCK, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "max locked-in-memory\n  address space         %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "max locked-in-memory\n  address space         %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #endif
 #ifdef RLIMIT_AS
@@ -311,8 +311,8 @@ int procan(FILE *outfile) {
 	 Warn2("getrlimit(RLIMIT_AS, %p): %s", &rlim, strerror(errno));
       } else {
 	 fprintf(outfile,
-		 "virtual memory (kbytes) %24"F_rlim_max"%24"F_rlim_max"\n",
-		 rlim.rlim_cur, rlim.rlim_max);
+		 "virtual memory (kbytes) %24"PRIuMAX"%24"PRIuMAX"\n",
+		 (uintmax_t)rlim.rlim_cur, (uintmax_t)rlim.rlim_max);
       }
 #endif
       fputc('\n', outfile);

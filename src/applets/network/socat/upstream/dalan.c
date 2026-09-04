@@ -31,15 +31,18 @@ static struct {
 static union {
   char a[2];
   short b;
-} byteorder = { "01" };
+} byteorder = { .a = { '0', '1' } };
 
 struct dalan_opts_s dalan_opts = {
-  sizeof(int),
-  sizeof(short),
-  sizeof(long),
-  sizeof(char),
-  sizeof(float),
-  sizeof(double)
+  .c_int = sizeof(int),
+  .c_short = sizeof(short),
+  .c_long = sizeof(long),
+  .c_char = sizeof(char),
+  .c_float = sizeof(float),
+  .c_double = sizeof(double),
+  .maxalign = 0,
+  .minalign = 0,
+  .byteorder = 0
 } ;
 
 /* fill the dalan_opts structure with machine dependent defaults values. */

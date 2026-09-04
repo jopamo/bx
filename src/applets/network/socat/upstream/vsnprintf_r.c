@@ -367,7 +367,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
    int full = 0;		/* indicate if output buffer full */
 
    --size;	/* without trailing \0 */
-   while (c = *format++) {
+   while ((c = *format++)) {
       if (c == '\\') {
 
       } else if (c == '%') {
@@ -442,7 +442,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 
 	 case 's': st = va_arg(ap, const char *);
 	    /* no modifier handled! */
-	    while (c = *st++) {
+	    while ((c = *st++)) {
 	       *str++ = c;
 	       if (++i == size) { full = 1; break; }
 	    }
@@ -452,7 +452,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	    if (lengthmod == 'L') {
 	       ll = va_arg(ap, long long);
 	       np = diag_longlong_to_dec(field, num_buff_len, ll, leading0, fsize);
-	       while (c = *np++)  {
+	       while ((c = *np++))  {
 		  *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
@@ -465,7 +465,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	       default: lo = va_arg(ap, int); break;
 	       }
 	       np = diag_long_to_dec(field, num_buff_len, lo, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    }
@@ -475,7 +475,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	    if (lengthmod == 'L') {
 	       ull = va_arg(ap, unsigned long long);
 	       np = diag_ulonglong_to_dec(field, num_buff_len, ull, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    } else
@@ -487,7 +487,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	       default: ulo = va_arg(ap, unsigned int); break;
 	       }
 	       np = diag_ulong_to_dec(field, num_buff_len, ulo, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    }
@@ -497,7 +497,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	    np = diag_ulong_to_hex(field, num_buff_len, ulo, leading0, fsize);
 	    *str++ = '0'; if (++i == size) { full = 1; break; }
 	    *str++ = 'x'; if (++i == size) { full = 1; break; }
-	    while (c = *np++)  { *str++ = c;
+	    while ((c = *np++))  { *str++ = c;
 	       if (++i == size) { full = 1; break; }
 	    }
 	    break;
@@ -506,7 +506,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	    if (lengthmod == 'L') {
 	       ull = va_arg(ap, unsigned long long);
 	       np = diag_ulonglong_to_hex(field, num_buff_len, ull, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    } else
@@ -518,7 +518,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	       default: ulo = va_arg(ap, unsigned int); break;
 	       }
 	       np = diag_ulong_to_hex(field, num_buff_len, ulo, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    }
@@ -528,7 +528,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	    if (lengthmod == 'L') {
 	       ull = va_arg(ap, unsigned long long);
 	       np = diag_ulonglong_to_oct(field, num_buff_len, ull, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) break;
 	       }
 	    } else
@@ -540,7 +540,7 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	       default: ulo = va_arg(ap, unsigned int); break;
 	       }
 	       np = diag_ulong_to_oct(field, num_buff_len, ulo, leading0, fsize);
-	       while (c = *np++)  { *str++ = c;
+	       while ((c = *np++))  { *str++ = c;
 		  if (++i == size) { full = 1; break; }
 	       }
 	    }
@@ -566,4 +566,3 @@ int snprintf_r(char *str, size_t size, const char *format, ...) {
    va_end(ap);
    return result;
 }
-

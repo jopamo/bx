@@ -257,7 +257,7 @@ socklen_t socket_init(int af, union sockaddr_union *sa) {
    writes at most blen bytes to buff including the terminating \0 byte
  */
 char *sockaddr_info(const struct sockaddr *sa, socklen_t salen, char *buff, size_t blen) {
-   union sockaddr_union *sau = (union sockaddr_union *)sa;
+   const union sockaddr_union *sau = (const union sockaddr_union *)sa;
    char *lbuff = buff;
    char *cp = lbuff;
    int n;
@@ -314,20 +314,20 @@ char *sockaddr_info(const struct sockaddr *sa, socklen_t salen, char *buff, size
       cp += n,  blen -= n;
       n = xio_snprintf(cp, blen,
 		    "0x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-		    ((unsigned char *)sau->soa.sa_data)[0],
-		    ((unsigned char *)sau->soa.sa_data)[1],
-		    ((unsigned char *)sau->soa.sa_data)[2],
-		    ((unsigned char *)sau->soa.sa_data)[3],
-		    ((unsigned char *)sau->soa.sa_data)[4],
-		    ((unsigned char *)sau->soa.sa_data)[5],
-		    ((unsigned char *)sau->soa.sa_data)[6],
-		    ((unsigned char *)sau->soa.sa_data)[7],
-		    ((unsigned char *)sau->soa.sa_data)[8],
-		    ((unsigned char *)sau->soa.sa_data)[9],
-		    ((unsigned char *)sau->soa.sa_data)[10],
-		    ((unsigned char *)sau->soa.sa_data)[11],
-		    ((unsigned char *)sau->soa.sa_data)[12],
-		   ((unsigned char *)sau->soa.sa_data)[13]);
+		    ((const unsigned char *)sau->soa.sa_data)[0],
+		    ((const unsigned char *)sau->soa.sa_data)[1],
+		    ((const unsigned char *)sau->soa.sa_data)[2],
+		    ((const unsigned char *)sau->soa.sa_data)[3],
+		    ((const unsigned char *)sau->soa.sa_data)[4],
+		    ((const unsigned char *)sau->soa.sa_data)[5],
+		    ((const unsigned char *)sau->soa.sa_data)[6],
+		    ((const unsigned char *)sau->soa.sa_data)[7],
+		    ((const unsigned char *)sau->soa.sa_data)[8],
+		    ((const unsigned char *)sau->soa.sa_data)[9],
+		    ((const unsigned char *)sau->soa.sa_data)[10],
+		    ((const unsigned char *)sau->soa.sa_data)[11],
+		    ((const unsigned char *)sau->soa.sa_data)[12],
+		   ((const unsigned char *)sau->soa.sa_data)[13]);
       if (n < 0 || n >= blen) {
 	 Warn("sockaddr_info(): buffer too short");
 	 *buff = '\0';
@@ -383,11 +383,10 @@ char *inet4addr_info(uint32_t addr, char *buff, size_t blen) {
 
 #if WITH_IP4
 char *sockaddr_inet4_info(const struct sockaddr_in *sa, char *buff, size_t blen) {
+   const unsigned char *addr = (const unsigned char *)&sa->sin_addr.s_addr;
+
    if (xio_snprintf(buff, blen, "%u.%u.%u.%u:%hu",
-		((unsigned char *)&sa->sin_addr.s_addr)[0],
-		((unsigned char *)&sa->sin_addr.s_addr)[1],
-		((unsigned char *)&sa->sin_addr.s_addr)[2],
-		((unsigned char *)&sa->sin_addr.s_addr)[3],
+		addr[0], addr[1], addr[2], addr[3],
 		htons(sa->sin_port)) >= blen) {
       Warn("sockaddr_inet4_info(): buffer too short");
       buff[blen-1] = '\0';
@@ -874,17 +873,19 @@ int ifindex(const char *ifname, unsigned int *ifindex, int anysock) {
 #endif /* WITH_IP4 || WITH_IP6 || _WITH_INTERFACE */
 
 
-int _xiosetenv(const char *envname, const char *value, int overwrite, const char *sep) {
+static int _xiosetenv(const char *envname, const char *value, int overwrite, const char *sep) {
    char *oldval;
-   char *newval;
+   char *allocated = NULL;
+   const char *newval;
    if (overwrite >= 2 && (oldval = getenv(envname)) != NULL) {
       size_t newlen = strlen(oldval)+strlen(sep)+strlen(value)+1;
-      if ((newval = Malloc(newlen+1)) == NULL) {
+      if ((allocated = Malloc(newlen+1)) == NULL) {
 	 return -1;
       }
-      snprintf(newval, newlen+1, "%s%s%s", oldval, sep, value);
+      snprintf(allocated, newlen+1, "%s%s%s", oldval, sep, value);
+      newval = allocated;
    } else {
-      newval = (char *)value;
+      newval = value;
    }
    if (Setenv(envname, newval, overwrite) < 0) {
       Warn3("setenv(\"%s\", \"%s\", 1): %s",
@@ -892,8 +893,10 @@ int _xiosetenv(const char *envname, const char *value, int overwrite, const char
 #if HAVE_UNSETENV
       Unsetenv(envname);      /* dont want to have a wrong value */
 #endif
+      free(allocated);
       return -1;
    }
+   free(allocated);
    return 0;
 }
 
@@ -1052,7 +1055,7 @@ double Strtod(const char *nptr, char **endptr, const char *txt) {
    returns -1 when the output buffer was too short (overflow);
    returns 1 on syntax error.
 */
-int expandenv(
+static int expandenv(
 	char *dst, 		/* prealloc'd output buff, will be \0 termd */
 	const char *src, 	/* input string to generate expansion from */
 	size_t n, 		/* length of dst */
@@ -1068,7 +1071,7 @@ int expandenv(
 	bool ofl = false;	/* dst overflow, output truncated */
 	char tmp[18];		/* buffer for timestamp, micros */
 
-	while (c = src[s++]) {
+	while ((c = src[s++])) {
 		if (esc) {
 			if (c == '\0') {
 				if (d+2 > n)  { ofl = true; break; }
@@ -1137,7 +1140,7 @@ int expandenv(
 				return -1;
 			}
 		}
-		while (c = src[s]) {
+		while ((c = src[s])) {
 			if (!isalnum(c) && c != '_') {
 				break;
 			}
