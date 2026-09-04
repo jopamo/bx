@@ -48,6 +48,7 @@
 #include "misc.h"
 #include "process.h"
 #include "resize.h"
+#include "screen_osc52_policy.h"
 #include "winmsg.h"
 
 /* widths for Z0/Z1 switching */
@@ -1768,45 +1769,7 @@ static int StringEnd(Window *win)
 			break;
 		}
 		if (typ == 52) {
-			/* OSC 52: Clipboard operation.
-			 * Format: 52 ; Pc ; Pd
-			 * Pc = selection (e.g. "c" for clipboard)
-			 * Pd = base64-encoded data, or "?" for read request.
-			 * Screen acts as a relay: forward to the outer terminal.
-			 * Note: p already points past "52;" here. */
-			char *semicolon;
-			char *pc, *pd;
-			size_t pc_len, pd_len;
-
-			pc = p;
-			semicolon = strchr(pc, ';');
-			if (semicolon == NULL)
-				break;
-			pc_len = semicolon - pc;
-			pd = semicolon + 1;
-			pd_len = strlen(pd);
-
-			/* Clipboard reads are hard-blocked. A read requires
-			 * correlating a response back to the originating child
-			 * ({display, window, request}), which is complex and
-			 * security-sensitive, so Pd == "?" is never served. */
-			if (pd_len == 1 && pd[0] == '?')
-				break;
-
-			/* Policy check: are child OSC52 writes allowed? */
-			if (!defosc52)
-				break;
-
-			/* Find a display showing this window. */
-			for (display = displays; display; display = display->d_next) {
-				if (D_forecv->c_layer->l_bottom == &win->w_layer)
-					break;
-			}
-			if (display == NULL)
-				break;	/* no display showing this window */
-
-			/* Relay raw OSC 52 to the outer terminal. */
-			DisplayOSC52(display, pc, pc_len, pd, pd_len);
+			ScreenOsc52Relay(win, p);
 			break;
 		}
 		if (typ == 0 || typ == 1 || typ == 2 || typ == 11 || typ == 20 || typ == 39 || typ == 49) {

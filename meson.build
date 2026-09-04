@@ -770,6 +770,7 @@ screen_native_sources = files(
   'src/applets/system/screen/resize.c',
   'src/vendor/gnu/screen/sched.c',
   'src/applets/system/screen/screen.c',
+  'src/applets/system/screen/screen_osc52_policy.c',
   'src/applets/system/screen/search.c',
   'src/applets/system/screen/socket.c',
   'src/applets/system/screen/term.c',
