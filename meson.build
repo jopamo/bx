@@ -1630,6 +1630,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/html/parser.c',
   'src/lib/fetch/net/credentials.c',
   'src/lib/fetch/net/resume_validation.c',
+  'src/lib/fetch/net/transfer.c',
   'src/lib/fetch/net/url.c',
   'src/lib/fetch/policy/filter.c',
   'src/lib/fetch/store/url_map_store.c',
