@@ -33,6 +33,7 @@ void bx_fd_cleanup(int* p_fd);
 int bx_fd_open_cloexec(const char* path, int flags, mode_t mode);
 int bx_fd_openat_cloexec(int dirfd, const char* path, int flags, mode_t mode);
 int bx_fd_socket_cloexec(int domain, int type, int protocol);
+int bx_fd_socketpair_cloexec(int domain, int type, int protocol, int socketfd[2]);
 int bx_fd_pipe_cloexec(int pipefd[2]);
 int bx_fd_eventfd_cloexec(unsigned int initval, int flags);
 int bx_fd_signalfd_cloexec(int fd, const sigset_t* mask, int flags);
