@@ -739,7 +739,7 @@ bx_search_sources = [
 
 screen_native_sources = files(
   'src/applets/system/screen/acls.c',
-  'src/vendor/gnu/screen/ansi.c',
+  'src/applets/system/screen/ansi.c',
   'src/applets/system/screen/attacher.c',
   'src/applets/system/screen/backtick.c',
   'src/applets/system/screen/canvas.c',
@@ -766,9 +766,9 @@ screen_native_sources = files(
   'src/applets/system/screen/process_action_store.c',
   'src/applets/system/screen/process_prompts.c',
   'src/applets/system/screen/process_resize_prompt.c',
-  'src/vendor/gnu/screen/pty.c',
+  'src/applets/system/screen/pty.c',
   'src/applets/system/screen/resize.c',
-  'src/vendor/gnu/screen/sched.c',
+  'src/applets/system/screen/sched.c',
   'src/applets/system/screen/screen.c',
   'src/applets/system/screen/screen_osc52_policy.c',
   'src/applets/system/screen/search.c',

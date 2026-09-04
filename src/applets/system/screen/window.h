@@ -35,7 +35,7 @@
 
 #include "config.h"
 
-#include "vendor/gnu/screen/sched.h"
+#include "sched.h"
 #include "logfile.h"
 #include "screen.h"
 #include "layer.h"
