@@ -921,12 +921,12 @@ socat_sources = files(
   'src/applets/network/socat/upstream/xio-text.c',
   'src/applets/network/socat/upstream/error.c',
   'src/applets/network/socat/upstream/dalan.c',
-  'src/applets/network/socat/upstream/sysutils.c',
-  'src/applets/network/socat/upstream/utils.c',
-  'src/applets/network/socat/upstream/nestlex.c',
-  'src/applets/network/socat/upstream/vsnprintf_r.c',
-  'src/applets/network/socat/upstream/snprinterr.c',
-  'src/applets/network/socat/upstream/sycls.c',
+  'src/lib/socat/compat/sysutils.c',
+  'src/lib/socat/compat/utils.c',
+  'src/lib/socat/compat/nestlex.c',
+  'src/lib/socat/compat/vsnprintf_r.c',
+  'src/lib/socat/compat/snprinterr.c',
+  'src/lib/socat/compat/sycls.c',
 )
 
 socat_c_args = cc.get_supported_arguments([
@@ -952,6 +952,7 @@ socat_lib = static_library('bx_socat',
     'src/applets/network/socat',
     'src/applets/network/socat/upstream',
     'src/lib/socat/relay',
+    'src/lib/socat/compat',
   ),
   c_args : socat_c_args,
 )
