@@ -271,10 +271,10 @@ int hostan(FILE *outfile) {
    fprintf(outfile, "\n");
    fprintf(outfile, "/* Socat types */\n");
    fprintf(outfile, "sizeof(struct diag_dgram)      = %u\n", (unsigned int)sizeof(struct diag_dgram));
-   fprintf(outfile, "((struct diag_dgram *)0)->op-((struct diag_dgram *)0)     = %u\n", (unsigned int)((char *)(&((struct diag_dgram *)0)->op)-(char *)((struct diag_dgram *)0)));
-   fprintf(outfile, "((struct diag_dgram *)0)->now-((struct diag_dgram *)0)     = %u\n", (unsigned int)((char *)(&((struct diag_dgram *)0)->now)-(char *)((struct diag_dgram *)0)));
-   fprintf(outfile, "((struct diag_dgram *)0)->exitcode-((struct diag_dgram *)0)     = %u\n", (unsigned int)((char *)(&((struct diag_dgram *)0)->exitcode)-(char *)((struct diag_dgram *)0)));
-   fprintf(outfile, "((struct diag_dgram *)0)->text-((struct diag_dgram *)0)     = %u\n", (unsigned int)((((struct diag_dgram *)0)->text)-(char *)((struct diag_dgram *)0)));
+   fprintf(outfile, "((struct diag_dgram *)0)->op-((struct diag_dgram *)0)     = %u\n", (unsigned int)offsetof(struct diag_dgram, op));
+   fprintf(outfile, "((struct diag_dgram *)0)->now-((struct diag_dgram *)0)     = %u\n", (unsigned int)offsetof(struct diag_dgram, now));
+   fprintf(outfile, "((struct diag_dgram *)0)->exitcode-((struct diag_dgram *)0)     = %u\n", (unsigned int)offsetof(struct diag_dgram, exitcode));
+   fprintf(outfile, "((struct diag_dgram *)0)->text-((struct diag_dgram *)0)     = %u\n", (unsigned int)offsetof(struct diag_dgram, text));
 #if _WITH_SOCKET && (_WITH_IP4 || _WITH_IP6)
    fprintf(outfile, "\nIP INTERFACES\n");
    iffan(outfile);
