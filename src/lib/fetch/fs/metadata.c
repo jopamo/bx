@@ -28,7 +28,7 @@ static char* metadata_path_for(const char* output_path) {
     return path;
 }
 
-bool bx_fetch_metadata_is_empty(const MiraMetadata* meta) {
+bool bx_fetch_metadata_is_empty(const BxFetchMetadata* meta) {
     if (!meta)
         return true;
 
@@ -36,7 +36,7 @@ bool bx_fetch_metadata_is_empty(const MiraMetadata* meta) {
            (!meta->redirect_target || meta->redirect_target[0] == '\0') && (!meta->local_path || meta->local_path[0] == '\0');
 }
 
-int bx_fetch_metadata_write_stream(FILE* f, const MiraMetadata* meta) {
+int bx_fetch_metadata_write_stream(FILE* f, const BxFetchMetadata* meta) {
     if (!f || !meta) {
         errno = EINVAL;
         return -1;
@@ -83,7 +83,7 @@ fail:
     return -1;
 }
 
-void bx_fetch_metadata_clear(MiraMetadata* meta) {
+void bx_fetch_metadata_clear(BxFetchMetadata* meta) {
     if (!meta)
         return;
     free(meta->etag);
@@ -98,7 +98,7 @@ void bx_fetch_metadata_clear(MiraMetadata* meta) {
     meta->local_path = NULL;
 }
 
-int bx_fetch_metadata_load(const char* output_path, MiraMetadata* meta) {
+int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
     if (!output_path || !meta)
         return -1;
 
@@ -176,7 +176,7 @@ int bx_fetch_metadata_load(const char* output_path, MiraMetadata* meta) {
     return 0;
 }
 
-int bx_fetch_metadata_save(const char* output_path, const MiraMetadata* meta) {
+int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta) {
     if (!output_path || !meta)
         return -1;
 
@@ -210,7 +210,7 @@ int bx_fetch_metadata_save(const char* output_path, const MiraMetadata* meta) {
         return -1;
     }
 
-    Writer* writer = bx_fetch_writer_open_with_options(path, WRITER_CREATE, 0, false);
+    BxFetchWriter* writer = bx_fetch_writer_open_with_options(path, WRITER_CREATE, 0, false);
     if (!writer) {
         free(serialized);
         free(path);

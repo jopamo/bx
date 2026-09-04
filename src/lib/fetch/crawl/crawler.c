@@ -9,8 +9,8 @@
 #include <string.h>
 #include <stdbool.h>
 
-Frontier* bx_fetch_frontier_new(void) {
-    Frontier* f = calloc(1, sizeof(Frontier));
+BxFetchFrontier* bx_fetch_frontier_new(void) {
+    BxFetchFrontier* f = calloc(1, sizeof(BxFetchFrontier));
     if (f) {
         f->seen_urls = bx_fetch_hashset_new(1024);  // Initial size
         if (!f->seen_urls) {
@@ -21,12 +21,12 @@ Frontier* bx_fetch_frontier_new(void) {
     return f;
 }
 
-void bx_fetch_frontier_free(Frontier* f) {
+void bx_fetch_frontier_free(BxFetchFrontier* f) {
     if (!f)
         return;
-    FrontierNode* n = f->head;
+    BxFetchFrontierNode* n = f->head;
     while (n) {
-        FrontierNode* next = n->next;
+        BxFetchFrontierNode* next = n->next;
         bx_fetch_crawl_item_free(n->item);
         free(n);
         n = next;
@@ -35,7 +35,7 @@ void bx_fetch_frontier_free(Frontier* f) {
     free(f);
 }
 
-int bx_fetch_frontier_add(Frontier* f, CrawlItem* item) {
+int bx_fetch_frontier_add(BxFetchFrontier* f, BxFetchCrawlItem* item) {
     if (!f || !item || !item->url) {
         bx_fetch_crawl_item_free(item);
         return -1;
@@ -58,7 +58,7 @@ int bx_fetch_frontier_add(Frontier* f, CrawlItem* item) {
     return bx_fetch_frontier_add_canonical(f, item);
 }
 
-int bx_fetch_frontier_add_canonical(Frontier* f, CrawlItem* item) {
+int bx_fetch_frontier_add_canonical(BxFetchFrontier* f, BxFetchCrawlItem* item) {
     if (!f || !item || !item->url) {
         bx_fetch_crawl_item_free(item);
         return -1;
@@ -94,7 +94,7 @@ int bx_fetch_frontier_add_canonical(Frontier* f, CrawlItem* item) {
         return -1;
     }
 
-    FrontierNode* n = calloc(1, sizeof(FrontierNode));
+    BxFetchFrontierNode* n = calloc(1, sizeof(BxFetchFrontierNode));
     if (!n) {
         bx_fetch_crawl_item_free(item);
         return -1;
@@ -122,7 +122,7 @@ int bx_fetch_frontier_add_canonical(Frontier* f, CrawlItem* item) {
     return 0;
 }
 
-bool bx_fetch_frontier_is_seen(Frontier* f, const char* url) {
+bool bx_fetch_frontier_is_seen(BxFetchFrontier* f, const char* url) {
     if (!f || !url) {
         errno = EINVAL;
         return false;
@@ -138,17 +138,17 @@ bool bx_fetch_frontier_is_seen(Frontier* f, const char* url) {
     return seen;
 }
 
-bool bx_fetch_frontier_is_seen_canonical(Frontier* f, const char* canonical_url) {
+bool bx_fetch_frontier_is_seen_canonical(BxFetchFrontier* f, const char* canonical_url) {
     if (!f || !canonical_url)
         return false;
     return bx_fetch_hashset_contains(f->seen_urls, canonical_url);
 }
 
-CrawlItem* bx_fetch_frontier_next(Frontier* f) {
+BxFetchCrawlItem* bx_fetch_frontier_next(BxFetchFrontier* f) {
     if (!f || !f->head)
         return NULL;
-    FrontierNode* n = f->head;
-    CrawlItem* item = n->item;
+    BxFetchFrontierNode* n = f->head;
+    BxFetchCrawlItem* item = n->item;
     f->head = n->next;
     if (!f->head)
         f->tail = NULL;
@@ -163,14 +163,14 @@ CrawlItem* bx_fetch_frontier_next(Frontier* f) {
     return item;
 }
 
-CrawlItem* bx_fetch_crawl_item_new(const char* url, int depth, const char* referrer) {
+BxFetchCrawlItem* bx_fetch_crawl_item_new(const char* url, int depth, const char* referrer) {
     size_t ignored = 0;
     if ((url && !bx_fetch_resource_bounded_strlen(url, BX_FETCH_URL_MAX_BYTES, &ignored)) || (referrer && !bx_fetch_resource_bounded_strlen(referrer, BX_FETCH_URL_MAX_BYTES, &ignored))) {
         errno = EFBIG;
         return NULL;
     }
 
-    CrawlItem* item = calloc(1, sizeof(CrawlItem));
+    BxFetchCrawlItem* item = calloc(1, sizeof(BxFetchCrawlItem));
     if (!item)
         return NULL;
 
@@ -188,7 +188,7 @@ CrawlItem* bx_fetch_crawl_item_new(const char* url, int depth, const char* refer
     return item;
 }
 
-void bx_fetch_crawl_item_free(CrawlItem* item) {
+void bx_fetch_crawl_item_free(BxFetchCrawlItem* item) {
     if (!item)
         return;
     free(item->url);

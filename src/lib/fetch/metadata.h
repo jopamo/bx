@@ -11,7 +11,7 @@
  * - Serialized URL fields are canonicalized without authority userinfo.
  *
  * Ownership and lifetime:
- * - MiraMetadata string fields are heap-owned by the struct instance.
+ * - BxFetchMetadata string fields are heap-owned by the struct instance.
  * - bx_fetch_metadata_load() clears and repopulates the struct; caller releases fields
  *   with bx_fetch_metadata_clear().
  * - bx_fetch_metadata_save()/bx_fetch_metadata_write_stream() borrow input pointers only.
@@ -26,12 +26,12 @@ typedef struct {
     char* origin_url;
     char* redirect_target;
     char* local_path;
-} MiraMetadata;
+} BxFetchMetadata;
 
-bool bx_fetch_metadata_is_empty(const MiraMetadata* meta);
-int bx_fetch_metadata_write_stream(FILE* f, const MiraMetadata* meta);
-int bx_fetch_metadata_load(const char* output_path, MiraMetadata* meta);
-int bx_fetch_metadata_save(const char* output_path, const MiraMetadata* meta);
-void bx_fetch_metadata_clear(MiraMetadata* meta);
+bool bx_fetch_metadata_is_empty(const BxFetchMetadata* meta);
+int bx_fetch_metadata_write_stream(FILE* f, const BxFetchMetadata* meta);
+int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta);
+int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta);
+void bx_fetch_metadata_clear(BxFetchMetadata* meta);
 
 #endif  // BX_FETCH_METADATA_H

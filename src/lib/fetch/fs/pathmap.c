@@ -354,7 +354,7 @@ static char* build_directory_part(const char* path, int cut_dirs, const struct b
 }
 
 static char* extract_filename_from_url(const char* url, const struct bx_fetch_config* cfg) {
-    MiraURL* mu = bx_fetch_url_parse(url);
+    BxFetchUrl* mu = bx_fetch_url_parse(url);
     if (!mu)
         return NULL;
 
@@ -423,7 +423,7 @@ char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const struct bx_f
     if (!url || !cfg)
         return NULL;
 
-    MiraURL* mu = bx_fetch_url_parse(url);
+    BxFetchUrl* mu = bx_fetch_url_parse(url);
     if (!mu)
         return NULL;
 

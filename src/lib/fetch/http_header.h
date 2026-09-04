@@ -24,33 +24,33 @@ typedef enum {
     BX_FETCH_HTTP_HEADER_INVALID_VALUE,
     BX_FETCH_HTTP_HEADER_FORBIDDEN_FRAMING,
     BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY,
-} MiraHttpHeaderError;
+} BxFetchHttpHeaderError;
 
 typedef enum {
     BX_FETCH_CONTENT_DISPOSITION_NONE = 0,
     BX_FETCH_CONTENT_DISPOSITION_FILENAME,
     BX_FETCH_CONTENT_DISPOSITION_INVALID,
     BX_FETCH_CONTENT_DISPOSITION_OUT_OF_MEMORY,
-} MiraContentDispositionResult;
+} BxFetchContentDispositionResult;
 
-const char* bx_fetch_http_header_error_string(MiraHttpHeaderError error);
+const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error);
 
-MiraHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out);
-MiraHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out);
+BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out);
+BxFetchHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out);
 
 /*
  * Produce one CURLOPT_HTTPHEADER list entry. Empty values use libcurl's
  * explicit `name;` form so they are sent rather than interpreted as a request
  * to remove an internally generated header.
  */
-MiraHttpHeaderError bx_fetch_http_header_format_line_for_curl(const char* line, char** formatted_out);
-MiraHttpHeaderError bx_fetch_http_header_format_pair_for_curl(const char* name, const char* value, char** formatted_out);
+BxFetchHttpHeaderError bx_fetch_http_header_format_line_for_curl(const char* line, char** formatted_out);
+BxFetchHttpHeaderError bx_fetch_http_header_format_pair_for_curl(const char* name, const char* value, char** formatted_out);
 
 /*
  * Parses one Content-Disposition field using strict token/quoted-string and
  * RFC 5987 UTF-8 filename* rules. Duplicate, malformed, control-bearing, or
  * unsupported extended filename parameters invalidate the field.
  */
-MiraContentDispositionResult bx_fetch_http_content_disposition_filename(const char* value, char** filename_out);
+BxFetchContentDispositionResult bx_fetch_http_content_disposition_filename(const char* value, char** filename_out);
 
 #endif  // BX_FETCH_HTTP_HEADER_H

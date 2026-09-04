@@ -29,20 +29,20 @@ typedef enum {
     BX_FETCH_EXIT_PROTOCOL = 7,
     BX_FETCH_EXIT_SERVER = 8,
     BX_FETCH_EXIT_POLICY = 9,
-} MiraExitCode;
+} BxFetchExitCode;
 
 typedef struct {
-    MiraExitCode code;
+    BxFetchExitCode code;
     const char* label;
     const char* description;
-} MiraExitCodeInfo;
+} BxFetchExitCodeInfo;
 
-const MiraExitCodeInfo* bx_fetch_exit_code_table(size_t* count);
-const MiraExitCodeInfo* bx_fetch_exit_code_info(int code);
+const BxFetchExitCodeInfo* bx_fetch_exit_code_table(size_t* count);
+const BxFetchExitCodeInfo* bx_fetch_exit_code_info(int code);
 bool bx_fetch_exit_code_is_assigned(int code);
-int bx_fetch_exit_code_for_error_class(MiraErrorClass class_id, int http_status);
-int bx_fetch_exit_code_for_transfer_failure(int http_status, MiraTransportErrorKind transport_kind, MiraError result);
-MiraErrorClass bx_fetch_error_class_for_exit_code(int exit_code);
+int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_status);
+int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErrorKind transport_kind, BxFetchError result);
+BxFetchErrorClass bx_fetch_error_class_for_exit_code(int exit_code);
 
 static inline int bx_fetch_exit_combine(int best, int code) {
     if (code <= 0)

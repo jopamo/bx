@@ -426,7 +426,7 @@ static StoreLineResult read_store_line(FILE* f, char* line, size_t capacity, siz
     return STORE_LINE_OK;
 }
 
-int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, MiraUrlMapLoadFn cb, void* userdata) {
+int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, BxFetchUrlMapLoadFn cb, void* userdata) {
     if (!cfg || !cb) {
         errno = EINVAL;
         return -1;
@@ -575,7 +575,7 @@ int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, MiraUrlMapLoa
     return rc;
 }
 
-int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const MiraUrlMapEntry* entries, size_t entry_count) {
+int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetchUrlMapEntry* entries, size_t entry_count) {
     if (!cfg) {
         errno = EINVAL;
         return -1;

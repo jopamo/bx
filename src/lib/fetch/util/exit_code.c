@@ -1,6 +1,6 @@
 #include "lib/fetch/exit_code.h"
 
-static const MiraExitCodeInfo k_exit_code_table[] = {
+static const BxFetchExitCodeInfo k_exit_code_table[] = {
     {
         .code = BX_FETCH_EXIT_SUCCESS,
         .label = "success",
@@ -48,16 +48,16 @@ static const MiraExitCodeInfo k_exit_code_table[] = {
     },
 };
 
-const MiraExitCodeInfo* bx_fetch_exit_code_table(size_t* count) {
+const BxFetchExitCodeInfo* bx_fetch_exit_code_table(size_t* count) {
     if (count) {
         *count = sizeof(k_exit_code_table) / sizeof(k_exit_code_table[0]);
     }
     return k_exit_code_table;
 }
 
-const MiraExitCodeInfo* bx_fetch_exit_code_info(int code) {
+const BxFetchExitCodeInfo* bx_fetch_exit_code_info(int code) {
     size_t count = 0;
-    const MiraExitCodeInfo* table = bx_fetch_exit_code_table(&count);
+    const BxFetchExitCodeInfo* table = bx_fetch_exit_code_table(&count);
     for (size_t i = 0; i < count; i++) {
         if ((int)table[i].code == code) {
             return &table[i];
@@ -70,7 +70,7 @@ bool bx_fetch_exit_code_is_assigned(int code) {
     return bx_fetch_exit_code_info(code) != NULL;
 }
 
-int bx_fetch_exit_code_for_error_class(MiraErrorClass class_id, int http_status) {
+int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_status) {
     switch (class_id) {
         case BX_FETCH_ERROR_CLASS_PARSE:
             return BX_FETCH_EXIT_PARSE_OR_CONFIG;
@@ -94,7 +94,7 @@ int bx_fetch_exit_code_for_error_class(MiraErrorClass class_id, int http_status)
     }
 }
 
-int bx_fetch_exit_code_for_transfer_failure(int http_status, MiraTransportErrorKind transport_kind, MiraError result) {
+int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErrorKind transport_kind, BxFetchError result) {
     if (http_status == 401 || http_status == 407) {
         return BX_FETCH_EXIT_AUTH;
     }
@@ -135,7 +135,7 @@ int bx_fetch_exit_code_for_transfer_failure(int http_status, MiraTransportErrorK
     }
 }
 
-MiraErrorClass bx_fetch_error_class_for_exit_code(int exit_code) {
+BxFetchErrorClass bx_fetch_error_class_for_exit_code(int exit_code) {
     switch (exit_code) {
         case BX_FETCH_EXIT_PARSE_OR_CONFIG:
             return BX_FETCH_ERROR_CLASS_PARSE;

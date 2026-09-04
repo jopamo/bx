@@ -12,7 +12,7 @@
  *   transport restrictions. `https_only` may narrow, but never widen, it.
  *
  * Ownership and lifetime:
- * - bx_fetch_url_parse() returns an owned MiraURL released by bx_fetch_url_free().
+ * - bx_fetch_url_parse() returns an owned BxFetchUrl released by bx_fetch_url_free().
  * - String-returning helpers return heap strings owned by the caller.
  * - Input URL pointers are borrowed and never retained.
  * - bx_fetch_url_canonicalize() returns a fragment-free request identity.
@@ -32,14 +32,14 @@ typedef enum {
     BX_FETCH_PROTOCOL_HTTPS = 1u << 1,
     BX_FETCH_PROTOCOL_FTP = 1u << 2,
     BX_FETCH_PROTOCOL_FTPS = 1u << 3,
-} MiraProtocol;
+} BxFetchProtocol;
 
 typedef enum {
     BX_FETCH_PROTOCOL_DECISION_ALLOW = 0,
     BX_FETCH_PROTOCOL_DECISION_INVALID_URL,
     BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED,
     BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY,
-} MiraProtocolDecision;
+} BxFetchProtocolDecision;
 
 typedef struct {
     char* scheme;
@@ -50,23 +50,23 @@ typedef struct {
     char* path;
     char* query;
     char* fragment;
-} MiraURL;
+} BxFetchUrl;
 
-MiraURL* bx_fetch_url_parse(const char* url);
-void bx_fetch_url_free(MiraURL* mu);
+BxFetchUrl* bx_fetch_url_parse(const char* url);
+void bx_fetch_url_free(BxFetchUrl* mu);
 char* bx_fetch_url_resolve(const char* base_url, const char* relative_url);
 char* bx_fetch_url_resolve_canonical(const char* base_url, const char* relative_url);
-char* bx_fetch_url_to_string(MiraURL* mu);
+char* bx_fetch_url_to_string(BxFetchUrl* mu);
 char* bx_fetch_url_canonicalize(const char* url);
 char* bx_fetch_url_display_safe(const char* url);
 bool bx_fetch_url_has_scheme(const char* url, const char* scheme);
 bool bx_fetch_url_has_userinfo(const char* url);
 
-MiraProtocol bx_fetch_protocol_from_scheme(const char* scheme);
+BxFetchProtocol bx_fetch_protocol_from_scheme(const char* scheme);
 unsigned int bx_fetch_protocol_policy_mask(bool https_only);
-MiraProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme, bool https_only);
-MiraProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only);
-const char* bx_fetch_protocol_decision_reason(MiraProtocolDecision decision);
+BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme, bool https_only);
+BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only);
+const char* bx_fetch_protocol_decision_reason(BxFetchProtocolDecision decision);
 bool bx_fetch_protocol_policy_format(bool https_only, char* out, size_t out_size);
 
 #endif  // BX_FETCH_URL_H

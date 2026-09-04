@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-Response* bx_fetch_response_new(void) {
-    Response* resp = calloc(1, sizeof(Response));
+BxFetchResponse* bx_fetch_response_new(void) {
+    BxFetchResponse* resp = calloc(1, sizeof(BxFetchResponse));
     if (!resp)
         return NULL;
 
@@ -13,7 +13,7 @@ Response* bx_fetch_response_new(void) {
     return resp;
 }
 
-void bx_fetch_response_free(Response* resp) {
+void bx_fetch_response_free(BxFetchResponse* resp) {
     if (!resp)
         return;
 
@@ -32,7 +32,7 @@ void bx_fetch_response_free(Response* resp) {
     free(resp);
 }
 
-int bx_fetch_response_add_header(Response* resp, const char* name, const char* value) {
+int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const char* value) {
     if (!resp || !name || !value) {
         errno = EINVAL;
         return -1;
@@ -70,13 +70,13 @@ int bx_fetch_response_add_header(Response* resp, const char* name, const char* v
         if (new_cap > BX_FETCH_RESPONSE_HEADER_MAX_FIELDS) {
             new_cap = BX_FETCH_RESPONSE_HEADER_MAX_FIELDS;
         }
-        if (new_cap <= resp->header_count || new_cap > SIZE_MAX / sizeof(MiraHeader)) {
+        if (new_cap <= resp->header_count || new_cap > SIZE_MAX / sizeof(BxFetchHeader)) {
             free(name_copy);
             free(value_copy);
             errno = ENOMEM;
             return -1;
         }
-        MiraHeader* new_headers = realloc(resp->headers, new_cap * sizeof(MiraHeader));
+        BxFetchHeader* new_headers = realloc(resp->headers, new_cap * sizeof(BxFetchHeader));
         if (!new_headers) {
             free(name_copy);
             free(value_copy);
@@ -94,7 +94,7 @@ int bx_fetch_response_add_header(Response* resp, const char* name, const char* v
     return 0;
 }
 
-const char* bx_fetch_response_header_policy_failure_summary(MiraResponseHeaderPolicyFailure failure) {
+const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure) {
     switch (failure) {
         case BX_FETCH_RESPONSE_HEADER_POLICY_LINE_TOO_LARGE:
             return "response header line exceeds " BX_FETCH_RESPONSE_HEADER_LINE_LIMIT_TEXT " limit";

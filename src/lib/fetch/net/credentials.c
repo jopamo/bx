@@ -9,16 +9,16 @@ static bool pair_is_configured(const char* username, const char* password) {
     return username != NULL || password != NULL;
 }
 
-static void select_configured_pair(MiraCredentialSelection* selection, MiraCredentialSource source, const char* username, const char* password) {
+static void select_configured_pair(BxFetchCredentialSelection* selection, BxFetchCredentialSource source, const char* username, const char* password) {
     selection->source = source;
     selection->username = username ? username : "";
     selection->password = password ? password : "";
 }
 
-void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, MiraCredentialSelection* selection) {
+void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, BxFetchCredentialSelection* selection) {
     if (!selection)
         return;
-    *selection = (MiraCredentialSelection){0};
+    *selection = (BxFetchCredentialSelection){0};
     if (!cfg || !url)
         return;
 
@@ -42,10 +42,10 @@ void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, c
     }
 }
 
-void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, MiraCredentialSelection* selection) {
+void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, BxFetchCredentialSelection* selection) {
     if (!selection)
         return;
-    *selection = (MiraCredentialSelection){
+    *selection = (BxFetchCredentialSelection){
         .source = BX_FETCH_CREDENTIAL_SOURCE_PROXY_INHERITED,
     };
     if (!cfg)

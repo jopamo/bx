@@ -11,17 +11,17 @@
 
 typedef struct {
     const char* scheme;
-    MiraProtocol protocol;
-} MiraProtocolDefinition;
+    BxFetchProtocol protocol;
+} BxFetchProtocolDefinition;
 
-static const MiraProtocolDefinition k_supported_protocols[] = {
+static const BxFetchProtocolDefinition k_supported_protocols[] = {
     {"http", BX_FETCH_PROTOCOL_HTTP},
     {"https", BX_FETCH_PROTOCOL_HTTPS},
     {"ftp", BX_FETCH_PROTOCOL_FTP},
     {"ftps", BX_FETCH_PROTOCOL_FTPS},
 };
 
-static MiraProtocol protocol_from_scheme_span(const char* scheme, size_t scheme_len) {
+static BxFetchProtocol protocol_from_scheme_span(const char* scheme, size_t scheme_len) {
     if (!scheme || scheme_len == 0)
         return BX_FETCH_PROTOCOL_NONE;
 
@@ -231,7 +231,7 @@ static bool string_is_ascii(const char* value) {
     return true;
 }
 
-MiraProtocol bx_fetch_protocol_from_scheme(const char* scheme) {
+BxFetchProtocol bx_fetch_protocol_from_scheme(const char* scheme) {
     if (!scheme || scheme[0] == '\0')
         return BX_FETCH_PROTOCOL_NONE;
     return protocol_from_scheme_span(scheme, strlen(scheme));
@@ -248,8 +248,8 @@ unsigned int bx_fetch_protocol_policy_mask(bool https_only) {
     return mask;
 }
 
-MiraProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme, bool https_only) {
-    MiraProtocol protocol = bx_fetch_protocol_from_scheme(scheme);
+BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme, bool https_only) {
+    BxFetchProtocol protocol = bx_fetch_protocol_from_scheme(scheme);
     if (protocol == BX_FETCH_PROTOCOL_NONE) {
         return BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED;
     }
@@ -259,27 +259,27 @@ MiraProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* scheme
     return BX_FETCH_PROTOCOL_DECISION_ALLOW;
 }
 
-MiraProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only) {
+BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only) {
     const char* scheme = NULL;
     size_t scheme_len = 0;
     if (!url_scheme_span(url, &scheme, &scheme_len)) {
         return BX_FETCH_PROTOCOL_DECISION_INVALID_URL;
     }
-    MiraProtocol protocol = protocol_from_scheme_span(scheme, scheme_len);
+    BxFetchProtocol protocol = protocol_from_scheme_span(scheme, scheme_len);
     if (protocol == BX_FETCH_PROTOCOL_NONE) {
         return BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED;
     }
 
-    MiraURL* parsed = bx_fetch_url_parse(url);
+    BxFetchUrl* parsed = bx_fetch_url_parse(url);
     if (!parsed)
         return BX_FETCH_PROTOCOL_DECISION_INVALID_URL;
 
-    MiraProtocolDecision decision = bx_fetch_protocol_policy_evaluate_scheme(parsed->scheme, https_only);
+    BxFetchProtocolDecision decision = bx_fetch_protocol_policy_evaluate_scheme(parsed->scheme, https_only);
     bx_fetch_url_free(parsed);
     return decision;
 }
 
-const char* bx_fetch_protocol_decision_reason(MiraProtocolDecision decision) {
+const char* bx_fetch_protocol_decision_reason(BxFetchProtocolDecision decision) {
     switch (decision) {
         case BX_FETCH_PROTOCOL_DECISION_ALLOW:
             return NULL;
@@ -338,7 +338,7 @@ static bool is_default_port(const char* scheme, const char* port) {
     return false;
 }
 
-MiraURL* bx_fetch_url_parse(const char* url) {
+BxFetchUrl* bx_fetch_url_parse(const char* url) {
     CURLU* h = curl_url();
     if (!h)
         return NULL;
@@ -348,7 +348,7 @@ MiraURL* bx_fetch_url_parse(const char* url) {
         return NULL;
     }
 
-    MiraURL* mu = calloc(1, sizeof(MiraURL));
+    BxFetchUrl* mu = calloc(1, sizeof(BxFetchUrl));
     if (!mu) {
         curl_url_cleanup(h);
         return NULL;
@@ -407,7 +407,7 @@ MiraURL* bx_fetch_url_parse(const char* url) {
     return mu;
 }
 
-void bx_fetch_url_free(MiraURL* mu) {
+void bx_fetch_url_free(BxFetchUrl* mu) {
     if (!mu)
         return;
     free(mu->scheme);
@@ -457,7 +457,7 @@ char* bx_fetch_url_resolve_canonical(const char* base_url, const char* relative_
     return canonical;
 }
 
-char* bx_fetch_url_to_string(MiraURL* mu) {
+char* bx_fetch_url_to_string(BxFetchUrl* mu) {
     CURLU* h = curl_url();
     if (!h)
         return NULL;

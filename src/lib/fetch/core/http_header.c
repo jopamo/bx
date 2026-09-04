@@ -11,7 +11,7 @@ typedef struct {
     size_t name_len;
     const char* value;
     size_t value_len;
-} MiraHttpHeaderView;
+} BxFetchHttpHeaderView;
 
 static bool ascii_is_tchar(unsigned char c) {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' ||
@@ -254,7 +254,7 @@ static bool framing_name_is_forbidden(const char* name, size_t name_len) {
     return span_equals_case(name, name_len, "Content-Length") || span_equals_case(name, name_len, "Transfer-Encoding") || span_equals_case(name, name_len, "Trailer");
 }
 
-static MiraHttpHeaderError validate_name(const char* name, size_t name_len) {
+static BxFetchHttpHeaderError validate_name(const char* name, size_t name_len) {
     if (!name || name_len == 0)
         return BX_FETCH_HTTP_HEADER_INVALID_NAME;
     for (size_t i = 0; i < name_len; i++) {
@@ -268,7 +268,7 @@ static MiraHttpHeaderError validate_name(const char* name, size_t name_len) {
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-static MiraHttpHeaderError normalize_value_span(const char* value, size_t value_len, const char** trimmed_out, size_t* trimmed_len_out) {
+static BxFetchHttpHeaderError normalize_value_span(const char* value, size_t value_len, const char** trimmed_out, size_t* trimmed_len_out) {
     if (!value || !trimmed_out || !trimmed_len_out) {
         return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
     }
@@ -292,7 +292,7 @@ static MiraHttpHeaderError normalize_value_span(const char* value, size_t value_
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-static MiraHttpHeaderError parse_line(const char* line, MiraHttpHeaderView* view) {
+static BxFetchHttpHeaderError parse_line(const char* line, BxFetchHttpHeaderView* view) {
     if (!line || !view)
         return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
 
@@ -301,7 +301,7 @@ static MiraHttpHeaderError parse_line(const char* line, MiraHttpHeaderView* view
         return BX_FETCH_HTTP_HEADER_MALFORMED_LINE;
 
     size_t name_len = (size_t)(colon - line);
-    MiraHttpHeaderError error = validate_name(line, name_len);
+    BxFetchHttpHeaderError error = validate_name(line, name_len);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
 
@@ -312,7 +312,7 @@ static MiraHttpHeaderError parse_line(const char* line, MiraHttpHeaderView* view
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
 
-    *view = (MiraHttpHeaderView){
+    *view = (BxFetchHttpHeaderView){
         .name = line,
         .name_len = name_len,
         .value = trimmed,
@@ -321,13 +321,13 @@ static MiraHttpHeaderError parse_line(const char* line, MiraHttpHeaderView* view
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-static MiraHttpHeaderError view_pair(const char* name, const char* value, MiraHttpHeaderView* view) {
+static BxFetchHttpHeaderError view_pair(const char* name, const char* value, BxFetchHttpHeaderView* view) {
     if (!name || !value || !view) {
         return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
     }
 
     size_t name_len = strlen(name);
-    MiraHttpHeaderError error = validate_name(name, name_len);
+    BxFetchHttpHeaderError error = validate_name(name, name_len);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
 
@@ -337,7 +337,7 @@ static MiraHttpHeaderError view_pair(const char* name, const char* value, MiraHt
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
 
-    *view = (MiraHttpHeaderView){
+    *view = (BxFetchHttpHeaderView){
         .name = name,
         .name_len = name_len,
         .value = trimmed,
@@ -346,7 +346,7 @@ static MiraHttpHeaderError view_pair(const char* name, const char* value, MiraHt
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-static MiraHttpHeaderError format_view(const MiraHttpHeaderView* view, bool curl_format, char** formatted_out) {
+static BxFetchHttpHeaderError format_view(const BxFetchHttpHeaderView* view, bool curl_format, char** formatted_out) {
     if (!view || !formatted_out) {
         return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
     }
@@ -378,7 +378,7 @@ static MiraHttpHeaderError format_view(const MiraHttpHeaderView* view, bool curl
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-const char* bx_fetch_http_header_error_string(MiraHttpHeaderError error) {
+const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error) {
     switch (error) {
         case BX_FETCH_HTTP_HEADER_OK:
             return NULL;
@@ -398,17 +398,17 @@ const char* bx_fetch_http_header_error_string(MiraHttpHeaderError error) {
     return "invalid HTTP header";
 }
 
-MiraHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out) {
+BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out) {
     if (normalized_out)
         *normalized_out = NULL;
-    MiraHttpHeaderView view;
-    MiraHttpHeaderError error = parse_line(line, &view);
+    BxFetchHttpHeaderView view;
+    BxFetchHttpHeaderError error = parse_line(line, &view);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
     return format_view(&view, false, normalized_out);
 }
 
-MiraHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out) {
+BxFetchHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out) {
     if (normalized_name_out)
         *normalized_name_out = NULL;
     if (normalized_value_out)
@@ -417,8 +417,8 @@ MiraHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const 
         return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
     }
 
-    MiraHttpHeaderView view;
-    MiraHttpHeaderError error = view_pair(name, value, &view);
+    BxFetchHttpHeaderView view;
+    BxFetchHttpHeaderError error = view_pair(name, value, &view);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
 
@@ -436,27 +436,27 @@ MiraHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const 
     return BX_FETCH_HTTP_HEADER_OK;
 }
 
-MiraHttpHeaderError bx_fetch_http_header_format_line_for_curl(const char* line, char** formatted_out) {
+BxFetchHttpHeaderError bx_fetch_http_header_format_line_for_curl(const char* line, char** formatted_out) {
     if (formatted_out)
         *formatted_out = NULL;
-    MiraHttpHeaderView view;
-    MiraHttpHeaderError error = parse_line(line, &view);
+    BxFetchHttpHeaderView view;
+    BxFetchHttpHeaderError error = parse_line(line, &view);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
     return format_view(&view, true, formatted_out);
 }
 
-MiraHttpHeaderError bx_fetch_http_header_format_pair_for_curl(const char* name, const char* value, char** formatted_out) {
+BxFetchHttpHeaderError bx_fetch_http_header_format_pair_for_curl(const char* name, const char* value, char** formatted_out) {
     if (formatted_out)
         *formatted_out = NULL;
-    MiraHttpHeaderView view;
-    MiraHttpHeaderError error = view_pair(name, value, &view);
+    BxFetchHttpHeaderView view;
+    BxFetchHttpHeaderError error = view_pair(name, value, &view);
     if (error != BX_FETCH_HTTP_HEADER_OK)
         return error;
     return format_view(&view, true, formatted_out);
 }
 
-MiraContentDispositionResult bx_fetch_http_content_disposition_filename(const char* value, char** filename_out) {
+BxFetchContentDispositionResult bx_fetch_http_content_disposition_filename(const char* value, char** filename_out) {
     if (filename_out)
         *filename_out = NULL;
     if (!value || !filename_out) {

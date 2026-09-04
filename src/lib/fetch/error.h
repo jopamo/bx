@@ -11,7 +11,7 @@
  *
  * Ownership and lifetime:
  * - Error enums are value types.
- * - MiraStructuredError string fields are borrowed pointers; emitters do not
+ * - BxFetchStructuredError string fields are borrowed pointers; emitters do not
  *   copy or free them.
  * - Pointers supplied to bx_fetch_error_emit_structured() must remain valid for the
  *   duration of the call.
@@ -33,9 +33,9 @@ typedef enum {
     BX_FETCH_ERROR_UNSUPPORTED,
     BX_FETCH_ERROR_INTERNAL,
     BX_FETCH_ERROR_RESOURCE_LIMIT,
-} MiraError;
+} BxFetchError;
 
-const char* bx_fetch_error_string(MiraError err);
+const char* bx_fetch_error_string(BxFetchError err);
 
 typedef enum {
     BX_FETCH_ERROR_CLASS_PARSE = 0,
@@ -46,7 +46,7 @@ typedef enum {
     BX_FETCH_ERROR_CLASS_FILESYSTEM,
     BX_FETCH_ERROR_CLASS_STATE_STORE,
     BX_FETCH_ERROR_CLASS_INTERNAL,
-} MiraErrorClass;
+} BxFetchErrorClass;
 
 typedef enum {
     BX_FETCH_TRANSPORT_ERROR_NONE = 0,
@@ -54,10 +54,10 @@ typedef enum {
     BX_FETCH_TRANSPORT_ERROR_PROTOCOL,
     BX_FETCH_TRANSPORT_ERROR_TLS_RETRYABLE,
     BX_FETCH_TRANSPORT_ERROR_TLS_FATAL,
-} MiraTransportErrorKind;
+} BxFetchTransportErrorKind;
 
 typedef struct {
-    MiraErrorClass class_id;
+    BxFetchErrorClass class_id;
     const char* summary;
     const char* url;
     const char* path;
@@ -67,11 +67,11 @@ typedef struct {
     bool retryable;
     int attempt;
     int max_attempts;
-} MiraStructuredError;
+} BxFetchStructuredError;
 
-const char* bx_fetch_error_class_string(MiraErrorClass class_id);
-MiraStructuredError bx_fetch_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
-void bx_fetch_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
-void bx_fetch_error_emit_structured(FILE* stream, const MiraStructuredError* error);
+const char* bx_fetch_error_class_string(BxFetchErrorClass class_id);
+BxFetchStructuredError bx_fetch_error_make_simple(BxFetchErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
+void bx_fetch_error_emit_simple(FILE* stream, BxFetchErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number);
+void bx_fetch_error_emit_structured(FILE* stream, const BxFetchStructuredError* error);
 
 #endif  // BX_FETCH_ERROR_H
