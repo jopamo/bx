@@ -1,14 +1,13 @@
 #include "netcat.h"
 #include <errno.h>
-#include <fcntl.h>
 #include <arpa/inet.h>
-#include <sys/random.h>
 #ifdef __linux__
 #include <sys/timerfd.h>
 #endif
 
 #include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
+#include "lib/random_bytes.h"
 #include "lib/time_parse.h"
 
 uint32_t (*nc_random)(void) = nc_random_u32;
@@ -222,48 +221,8 @@ size_t nc_strlcpy(char* dst, const char* src, size_t dsize) {
     return srclen;
 }
 
-static int fill_random(void* buf, size_t len) {
-    unsigned char* p = buf;
-#ifdef __linux__
-    while (len > 0) {
-        ssize_t n = getrandom(p, len, 0);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            if (errno == ENOSYS)
-                break;
-            return -1;
-        }
-        p += (size_t)n;
-        len -= (size_t)n;
-    }
-    if (len == 0)
-        return 0;
-#endif
-    int fd = bx_fd_open_cloexec("/dev/urandom", O_RDONLY, 0);
-    if (fd == -1)
-        return -1;
-    while (len > 0) {
-        ssize_t n = read(fd, p, len);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            close(fd);
-            return -1;
-        }
-        if (n == 0) {
-            close(fd);
-            return -1;
-        }
-        p += (size_t)n;
-        len -= (size_t)n;
-    }
-    close(fd);
-    return 0;
-}
-
 void nc_random_buf(void* buf, size_t len) {
-    if (fill_random(buf, len) == 0)
+    if (bx_random_bytes(buf, len))
         return;
     static int seeded = 0;
     if (!seeded) {
