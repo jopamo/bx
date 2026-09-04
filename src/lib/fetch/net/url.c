@@ -75,6 +75,12 @@ bool bx_fetch_url_has_scheme(const char* url, const char* expected_scheme) {
     return authority[0] == '/' && authority[1] == '/';
 }
 
+bool bx_fetch_url_has_explicit_scheme(const char* url) {
+    const char* scheme = NULL;
+    size_t scheme_length = 0;
+    return url_scheme_span(url, &scheme, &scheme_length);
+}
+
 bool bx_fetch_url_has_userinfo(const char* url) {
     const char* scheme = NULL;
     size_t scheme_len = 0;
