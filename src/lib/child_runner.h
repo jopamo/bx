@@ -158,6 +158,12 @@ int bx_child_fork_callback_wait(bx_child_fork_callback callback,
                                 int *status_out);
 pid_t bx_child_fork_callback_start(bx_child_fork_callback callback,
                                    void *user);
+/*
+ * Fork a daemon/session child without imposing callback or wait policy.
+ * Returns the child pid in the parent, zero in the new session leader, and
+ * -1 on fork or child-side setsid failure.
+ */
+pid_t bx_child_fork_session_leader(void);
 int bx_child_spawn_argv(const char *progname, char *const *argv,
                         const struct bx_child_runner_opts *opts,
                         int slot,

@@ -5,19 +5,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <sys/types.h>
 #include <unistd.h>
 
+#include "lib/child_runner.h"
 #include "lib/fd_ops.h"
 
 int bx_daemonize(bool chdir_root, bool preserve_stdout) {
-    pid_t pid = fork();
+    pid_t pid = bx_child_fork_session_leader();
     if (pid < 0)
         return -1;
     if (pid > 0)
         return 1;
-    if (setsid() < 0)
-        return -1;
     if (chdir_root && chdir("/") != 0)
         return -1;
 
