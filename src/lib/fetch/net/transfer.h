@@ -77,6 +77,11 @@ typedef struct BxFetchTransfer {
     void* userdata;
 } BxFetchTransfer;
 
+/*
+ * On success the transfer owns req until bx_fetch_transfer_free(). The writer
+ * remains transaction-owned by the caller and is only borrowed. On failure
+ * ownership of both arguments remains with the caller.
+ */
 BxFetchTransfer* bx_fetch_transfer_new(BxFetchRequest* req, BxFetchWriter* writer);
 void bx_fetch_transfer_free(BxFetchTransfer* t);
 
