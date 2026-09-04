@@ -14,6 +14,16 @@ typedef struct {
     BxFetchProtocol protocol;
 } BxFetchProtocolDefinition;
 
+struct BxFetchPreparedUrl {
+    char* transport;
+    char* display;
+    char* scheme;
+    char* host;
+    int port;
+    BxFetchProtocol protocol;
+    bool has_userinfo;
+};
+
 static const BxFetchProtocolDefinition k_supported_protocols[] = {
     {"http", BX_FETCH_PROTOCOL_HTTP},
     {"https", BX_FETCH_PROTOCOL_HTTPS},
@@ -678,4 +688,198 @@ char* bx_fetch_url_display_safe(const char* url) {
 #endif
     }
     return canonical;
+}
+
+static int protocol_default_port(BxFetchProtocol protocol) {
+    switch (protocol) {
+        case BX_FETCH_PROTOCOL_HTTP:
+            return 80;
+        case BX_FETCH_PROTOCOL_HTTPS:
+            return 443;
+        case BX_FETCH_PROTOCOL_FTP:
+            return 21;
+        case BX_FETCH_PROTOCOL_FTPS:
+            return 990;
+        case BX_FETCH_PROTOCOL_NONE:
+            return 0;
+    }
+    return 0;
+}
+
+static BxFetchPreparedUrl* prepared_url_from_owned_canonical(char* canonical_url) {
+    if (!canonical_url || strchr(canonical_url, '#')) {
+        free(canonical_url);
+        errno = EINVAL;
+        return NULL;
+    }
+
+    const char* scheme_span = NULL;
+    size_t scheme_length = 0;
+    BxFetchProtocol protocol = BX_FETCH_PROTOCOL_NONE;
+    if (url_scheme_span(canonical_url, &scheme_span, &scheme_length))
+        protocol = protocol_from_scheme_span(scheme_span, scheme_length);
+    if (protocol == BX_FETCH_PROTOCOL_NONE) {
+        free(canonical_url);
+        errno = EPROTONOSUPPORT;
+        return NULL;
+    }
+
+    BxFetchUrl* parsed = bx_fetch_url_parse(canonical_url);
+    if (!parsed || !parsed->scheme || !parsed->host || parsed->host[0] == '\0') {
+        bx_fetch_url_free(parsed);
+        free(canonical_url);
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int port = parsed->port > 0 ? parsed->port : protocol_default_port(protocol);
+    if (port <= 0) {
+        bx_fetch_url_free(parsed);
+        free(canonical_url);
+        errno = EPROTONOSUPPORT;
+        return NULL;
+    }
+
+    BxFetchPreparedUrl* prepared = calloc(1, sizeof(*prepared));
+    if (!prepared) {
+        bx_fetch_url_free(parsed);
+        free(canonical_url);
+        return NULL;
+    }
+
+    prepared->has_userinfo = parsed->user || parsed->password;
+    free(parsed->user);
+    parsed->user = NULL;
+    free(parsed->password);
+    parsed->password = NULL;
+    prepared->display = bx_fetch_url_to_string(parsed);
+    if (!prepared->display) {
+        bx_fetch_url_free(parsed);
+        free(canonical_url);
+        free(prepared);
+        return NULL;
+    }
+
+    prepared->scheme = parsed->scheme;
+    parsed->scheme = NULL;
+    prepared->host = parsed->host;
+    parsed->host = NULL;
+    prepared->transport = canonical_url;
+    prepared->port = port;
+    prepared->protocol = protocol;
+    bx_fetch_url_free(parsed);
+    return prepared;
+}
+
+BxFetchPreparedUrl* bx_fetch_url_prepare(const char* url) {
+    const char* scheme = NULL;
+    size_t scheme_length = 0;
+    if (url_scheme_span(url, &scheme, &scheme_length) && protocol_from_scheme_span(scheme, scheme_length) == BX_FETCH_PROTOCOL_NONE) {
+        errno = EPROTONOSUPPORT;
+        return NULL;
+    }
+    char* canonical = bx_fetch_url_canonicalize(url);
+    if (!canonical)
+        return NULL;
+    return prepared_url_from_owned_canonical(canonical);
+}
+
+BxFetchPreparedUrl* bx_fetch_url_prepare_canonical(const char* canonical_url) {
+    if (!canonical_url) {
+        errno = EINVAL;
+        return NULL;
+    }
+    char* copy = strdup(canonical_url);
+    if (!copy)
+        return NULL;
+    return prepared_url_from_owned_canonical(copy);
+}
+
+BxFetchPreparedUrl* bx_fetch_prepared_url_clone(const BxFetchPreparedUrl* url) {
+    if (!url) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    BxFetchPreparedUrl* clone = calloc(1, sizeof(*clone));
+    if (!clone)
+        return NULL;
+    clone->transport = strdup(url->transport);
+    clone->display = strdup(url->display);
+    clone->scheme = strdup(url->scheme);
+    clone->host = strdup(url->host);
+    if (!clone->transport || !clone->display || !clone->scheme || !clone->host) {
+        bx_fetch_prepared_url_free(clone);
+        return NULL;
+    }
+    clone->port = url->port;
+    clone->protocol = url->protocol;
+    clone->has_userinfo = url->has_userinfo;
+    return clone;
+}
+
+void bx_fetch_prepared_url_free(BxFetchPreparedUrl* url) {
+    if (!url)
+        return;
+    free(url->transport);
+    free(url->display);
+    free(url->scheme);
+    free(url->host);
+    free(url);
+}
+
+BxFetchPreparedUrl* bx_fetch_prepared_url_resolve(const BxFetchPreparedUrl* base, const char* reference) {
+    if (!base || !reference) {
+        errno = EINVAL;
+        return NULL;
+    }
+    char* resolved = bx_fetch_url_resolve(base->transport, reference);
+    if (!resolved)
+        return NULL;
+    BxFetchPreparedUrl* prepared = bx_fetch_url_prepare(resolved);
+    free(resolved);
+    return prepared;
+}
+
+const char* bx_fetch_prepared_url_transport(const BxFetchPreparedUrl* url) {
+    return url ? url->transport : NULL;
+}
+
+const char* bx_fetch_prepared_url_display(const BxFetchPreparedUrl* url) {
+    return url ? url->display : NULL;
+}
+
+const char* bx_fetch_prepared_url_scheme(const BxFetchPreparedUrl* url) {
+    return url ? url->scheme : NULL;
+}
+
+const char* bx_fetch_prepared_url_host(const BxFetchPreparedUrl* url) {
+    return url ? url->host : NULL;
+}
+
+int bx_fetch_prepared_url_port(const BxFetchPreparedUrl* url) {
+    return url ? url->port : 0;
+}
+
+BxFetchProtocol bx_fetch_prepared_url_protocol(const BxFetchPreparedUrl* url) {
+    return url ? url->protocol : BX_FETCH_PROTOCOL_NONE;
+}
+
+bool bx_fetch_prepared_url_has_userinfo(const BxFetchPreparedUrl* url) {
+    return url && url->has_userinfo;
+}
+
+bool bx_fetch_prepared_url_same_origin(const BxFetchPreparedUrl* left, const BxFetchPreparedUrl* right) {
+    return left && right && left->protocol == right->protocol && left->port == right->port && strcmp(left->host, right->host) == 0;
+}
+
+BxFetchProtocolDecision bx_fetch_prepared_url_policy(const BxFetchPreparedUrl* url, bool https_only) {
+    if (!url)
+        return BX_FETCH_PROTOCOL_DECISION_INVALID_URL;
+    if (url->protocol == BX_FETCH_PROTOCOL_NONE)
+        return BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED;
+    if (((unsigned int)url->protocol & bx_fetch_protocol_policy_mask(https_only)) == 0) {
+        return BX_FETCH_PROTOCOL_DECISION_HTTPS_ONLY;
+    }
+    return BX_FETCH_PROTOCOL_DECISION_ALLOW;
 }
