@@ -654,6 +654,7 @@ bx_network_applet_sources = [
   'src/applets/network/dhcp/dhcp.c',
   'src/applets/network/mira/cli.c',
   'src/applets/network/mira/help.c',
+  'src/applets/network/mira/logging.c',
   'src/applets/network/mira/mira.c',
   'src/applets/network/mira/options.c',
   'src/applets/network/mira/run.c',
