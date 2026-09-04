@@ -63,6 +63,21 @@ typedef bool (*BxFetchRunDocumentErrorFn)(void* userdata, const BxFetchPreparedU
 typedef bool (*BxFetchRunLinkConversionFn)(void* userdata, const BxFetchDownloadedFileView* download, const BxFetchLinkConversionOutcome* outcome);
 
 typedef struct {
+    int index;
+    BxFetchCrawlEnqueueResult result;
+    int error_number;
+} BxFetchRunSeedObservation;
+
+/*
+ * Observes every configured input URL after shared preparation, filtering, and
+ * deduplication. Returning true after a policy-rejected result continues with
+ * later inputs and leaves aggregate exit policy to the frontend. Internal
+ * errors always stop the session; the return value is ignored for enqueued,
+ * duplicate, and error results.
+ */
+typedef bool (*BxFetchRunSeedResultFn)(void* userdata, const BxFetchRunSeedObservation* observation);
+
+typedef struct {
     BxFetchCrawlPlanOutputFn plan_output;
     BxFetchTransferHeadersCallback on_response_headers;
     BxFetchRunPrepareErrorFn on_prepare_error;
@@ -72,10 +87,30 @@ typedef struct {
     BxFetchRunDiscoveredLinkFn on_discovered_link;
     BxFetchRunDocumentErrorFn on_document_error;
     BxFetchRunLinkConversionFn on_link_conversion;
+    BxFetchRunSeedResultFn on_seed_result;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
     void* userdata;
 } BxFetchRunFrontend;
+
+typedef enum {
+    BX_FETCH_RUN_FAILURE_NONE = 0,
+    BX_FETCH_RUN_FAILURE_CONFIG,
+    BX_FETCH_RUN_FAILURE_GLOBAL_INIT,
+    BX_FETCH_RUN_FAILURE_CREATE,
+    BX_FETCH_RUN_FAILURE_LOAD_PUBLICATION,
+    BX_FETCH_RUN_FAILURE_ADD_SEED,
+    BX_FETCH_RUN_FAILURE_EXECUTE,
+    BX_FETCH_RUN_FAILURE_CONVERT_LINKS,
+    BX_FETCH_RUN_FAILURE_SAVE_PUBLICATION,
+} BxFetchRunFailureStage;
+
+typedef struct {
+    BxFetchRunFailureStage stage;
+    int error_number;
+    BxFetchRunSeedObservation seed;
+    BxFetchNetSetupError setup_error;
+} BxFetchRunFailure;
 
 /*
  * libcurl global state must already be initialized unless dry-run is enabled.
@@ -104,5 +139,18 @@ int bx_fetch_run_save_publication(const BxFetchRun* run);
 const BxFetchPublicationState* bx_fetch_run_publication(const BxFetchRun* run);
 /* Requires a successfully finished transfer run; config-gated no-op. */
 int bx_fetch_run_convert_links(BxFetchRun* run);
+
+/*
+ * Executes the canonical one-shot applet lifecycle:
+ *
+ *   global init -> construct -> load -> seed -> execute -> convert -> save
+ *
+ * The run is always freed before process-global transport cleanup. Candidate
+ * state is cancelled/drained by bx_fetch_run_free() on every unfinished path.
+ * cfg, frontend, and callback userdata are borrowed for the duration of this
+ * call. On failure, failure_out identifies the exact stage and retains setup
+ * or seed detail without formatting frontend diagnostics.
+ */
+int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend, BxFetchRunFailure* failure_out);
 
 #endif  // BX_FETCH_RUN_H
