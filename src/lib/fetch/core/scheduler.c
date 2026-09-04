@@ -2,21 +2,18 @@
 #include "lib/fetch/error.h"
 #include "lib/fetch/http_status.h"
 #include "lib/fetch/scheduler.h"
-#include "lib/fetch/output_policy.h"
 #include "lib/fetch/url.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
 typedef struct QueuedURL {
-    char* url;
+    BxFetchPreparedUrl* target;
     char* output_path;
-    char* host;
     int tries_done;
     bool has_retry_ready_time;
     struct timespec retry_ready_time;
@@ -28,7 +25,7 @@ typedef struct HostState {
     int count;
     bool has_next_request_time;
     struct timespec next_request_time;
-    struct HostState* next;
+    struct HostState* next_bucket;
 } HostState;
 
 struct BxFetchScheduler {
@@ -36,11 +33,14 @@ struct BxFetchScheduler {
     BxFetchSchedulerDispatchFn dispatch;
     BxFetchSchedulerPollFn poll;
     void* userdata;
+    BxFetchSchedulerObserver observer;
 
     QueuedURL* queue_head;
     QueuedURL* queue_tail;
 
-    HostState* host_states;
+    HostState** host_buckets;
+    size_t host_bucket_count;
+    size_t host_state_count;
     int active_total;
     int active_host_total;
     int active_hostless_total;
@@ -49,14 +49,14 @@ struct BxFetchScheduler {
     int max_concurrent_per_host;
     bool had_transfer_error;
     bool invariant_failed;
+    bool cancelled;
     uint64_t random_state;
 };
 
 typedef struct {
     BxFetchScheduler* sched;
-    char* url;
+    BxFetchPreparedUrl* target;
     char* output_path;
-    char* host;
     int tries_done;
 } TransferInfo;
 
@@ -78,21 +78,19 @@ static bool scheduler_counts_invariant_holds(const BxFetchScheduler* s) {
     return true;
 }
 
-static bool scheduler_record_invariant_failure(BxFetchScheduler* s, const char* message) {
+static bool scheduler_record_invariant_failure(BxFetchScheduler* s) {
     if (!s)
         return false;
     s->had_transfer_error = true;
-    if (!s->invariant_failed) {
-        s->invariant_failed = true;
-        fprintf(stderr, "mira: scheduler invariant failed: %s\n", message ? message : "unknown");
-    }
+    s->invariant_failed = true;
+    errno = EPROTO;
     return false;
 }
 
-static bool scheduler_require(BxFetchScheduler* s, bool condition, const char* message) {
+static bool scheduler_require(BxFetchScheduler* s, bool condition) {
     if (condition)
         return true;
-    return scheduler_record_invariant_failure(s, message);
+    return scheduler_record_invariant_failure(s);
 }
 
 static bool should_retry_http_status(const BxFetchScheduler* s, int status) {
@@ -258,7 +256,7 @@ static bool queue_wait_remaining(const BxFetchScheduler* s, const QueuedURL* q, 
     struct timespec host_remaining = {0};
     struct timespec retry_remaining = {0};
 
-    HostState* hs = get_host_state(s, q ? q->host : NULL);
+    HostState* hs = get_host_state(s, q ? bx_fetch_prepared_url_host(q->target) : NULL);
     bool host_wait = wait_remaining_for_host(hs, now, &host_remaining);
     bool retry_wait = wait_remaining_for_retry(q, now, &retry_remaining);
     if (!host_wait && !retry_wait)
@@ -283,7 +281,7 @@ static bool scheduler_next_wait_duration(BxFetchScheduler* s, const struct times
     bool found = false;
 
     for (QueuedURL* q = s->queue_head; q; q = q->next) {
-        HostState* hs = get_host_state(s, q->host);
+        HostState* hs = get_host_state(s, bx_fetch_prepared_url_host(q->target));
         if (hs && hs->count >= s->max_concurrent_per_host)
             continue;
 
@@ -312,33 +310,48 @@ static int scheduler_sleep(const struct timespec* duration) {
 }
 
 static void free_queued_url(QueuedURL* q) {
-    free(q->url);
+    bx_fetch_prepared_url_free(q->target);
     free(q->output_path);
-    free(q->host);
     free(q);
 }
 
-static int scheduler_add_url_with_tries(BxFetchScheduler* s, const char* url, const char* output_path, int tries_done, const struct timespec* retry_ready_time) {
-    if (!s || !url || !output_path || tries_done < 0) {
+static int scheduler_add_owned_target_with_tries(BxFetchScheduler* s, BxFetchPreparedUrl* target, const char* output_path, int tries_done, const struct timespec* retry_ready_time) {
+    if (!s || !target || !output_path || tries_done < 0) {
+        bx_fetch_prepared_url_free(target);
         errno = EINVAL;
         return -1;
     }
+    if (s->cancelled) {
+        bx_fetch_prepared_url_free(target);
+        errno = ECANCELED;
+        return -1;
+    }
     if (retry_ready_time && tries_done == 0) {
+        bx_fetch_prepared_url_free(target);
         errno = EINVAL;
         return -1;
     }
     if (s->cfg && s->cfg->download.tries > 0 && tries_done > s->cfg->download.tries) {
+        bx_fetch_prepared_url_free(target);
+        errno = EINVAL;
+        return -1;
+    }
+    const char* host = bx_fetch_prepared_url_host(target);
+    if (!host || host[0] == '\0') {
+        bx_fetch_prepared_url_free(target);
         errno = EINVAL;
         return -1;
     }
 
     QueuedURL* q = calloc(1, sizeof(QueuedURL));
-    if (!q)
+    if (!q) {
+        bx_fetch_prepared_url_free(target);
         return -1;
+    }
 
-    q->url = strdup(url);
+    q->target = target;
     q->output_path = strdup(output_path);
-    if (!q->url || !q->output_path) {
+    if (!q->output_path) {
         free_queued_url(q);
         return -1;
     }
@@ -346,20 +359,6 @@ static int scheduler_add_url_with_tries(BxFetchScheduler* s, const char* url, co
     if (retry_ready_time) {
         q->retry_ready_time = *retry_ready_time;
         q->has_retry_ready_time = true;
-    }
-
-    BxFetchUrl* mu = bx_fetch_url_parse(url);
-    if (!mu || !mu->host || mu->host[0] == '\0') {
-        bx_fetch_url_free(mu);
-        free_queued_url(q);
-        errno = EINVAL;
-        return -1;
-    }
-    q->host = strdup(mu->host);
-    bx_fetch_url_free(mu);
-    if (!q->host) {
-        free_queued_url(q);
-        return -1;
     }
 
     if (s->queue_tail) {
@@ -373,18 +372,75 @@ static int scheduler_add_url_with_tries(BxFetchScheduler* s, const char* url, co
     return 0;
 }
 
+static uint64_t host_hash(const char* host) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (const unsigned char* p = (const unsigned char*)host; p && *p; p++) {
+        hash ^= *p;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
 static HostState* get_host_state(const BxFetchScheduler* s, const char* host) {
-    if (!host)
+    if (!s || !host || s->host_bucket_count == 0)
         return NULL;
 
-    HostState* hs = s->host_states;
+    size_t bucket = (size_t)(host_hash(host) % s->host_bucket_count);
+    HostState* hs = s->host_buckets[bucket];
     while (hs) {
         if (strcmp(hs->host, host) == 0)
             return hs;
-        hs = hs->next;
+        hs = hs->next_bucket;
     }
 
     return NULL;
+}
+
+static bool host_table_reserve(BxFetchScheduler* s, size_t minimum_states) {
+    if (!s)
+        return false;
+    if (s->host_bucket_count > 0 && minimum_states <= s->host_bucket_count - s->host_bucket_count / 4) {
+        return true;
+    }
+
+    size_t new_count = 16;
+    if (s->host_bucket_count) {
+        if (s->host_bucket_count > SIZE_MAX / 2) {
+            errno = ENOMEM;
+            return false;
+        }
+        new_count = s->host_bucket_count * 2;
+    }
+    while (minimum_states > new_count - new_count / 4) {
+        if (new_count > SIZE_MAX / 2) {
+            errno = ENOMEM;
+            return false;
+        }
+        new_count *= 2;
+    }
+    if (new_count > SIZE_MAX / sizeof(*s->host_buckets)) {
+        errno = ENOMEM;
+        return false;
+    }
+
+    HostState** buckets = calloc(new_count, sizeof(*buckets));
+    if (!buckets)
+        return false;
+
+    for (size_t i = 0; i < s->host_bucket_count; i++) {
+        HostState* hs = s->host_buckets[i];
+        while (hs) {
+            HostState* next = hs->next_bucket;
+            size_t bucket = (size_t)(host_hash(hs->host) % new_count);
+            hs->next_bucket = buckets[bucket];
+            buckets[bucket] = hs;
+            hs = next;
+        }
+    }
+    free(s->host_buckets);
+    s->host_buckets = buckets;
+    s->host_bucket_count = new_count;
+    return true;
 }
 
 static bool host_state_note_dispatch(BxFetchScheduler* s, HostState* hs, const struct timespec* dispatched_at) {
@@ -431,6 +487,9 @@ static bool inc_host_active_count(BxFetchScheduler* s, const char* host, const s
         return true;
     }
 
+    if (!host_table_reserve(s, s->host_state_count + 1))
+        return false;
+
     hs = calloc(1, sizeof(HostState));
     if (!hs)
         return false;
@@ -447,8 +506,10 @@ static bool inc_host_active_count(BxFetchScheduler* s, const char* host, const s
         free(hs);
         return false;
     }
-    hs->next = s->host_states;
-    s->host_states = hs;
+    size_t bucket = (size_t)(host_hash(host) % s->host_bucket_count);
+    hs->next_bucket = s->host_buckets[bucket];
+    s->host_buckets[bucket] = hs;
+    s->host_state_count++;
     s->active_host_total++;
     return true;
 }
@@ -475,34 +536,30 @@ static bool dec_host_active_count(BxFetchScheduler* s, const char* host) {
     return true;
 }
 
-static bool on_transfer_complete(void* userdata, const char* url, int status, int result, bool retryable_hint) {
+static bool on_transfer_complete(void* userdata, int status, BxFetchError result, bool retryable_hint) {
     TransferInfo* ti = userdata;
     BxFetchScheduler* s = ti ? ti->sched : NULL;
     if (!ti || !s)
         return false;
 
+    const char* host = bx_fetch_prepared_url_host(ti->target);
     bool retried = false;
-    bool completion_ok = scheduler_require(s, s->active_total > 0, "transfer completion observed with no active transfer");
+    bool completion_ok = scheduler_require(s, s->active_total > 0);
     if (completion_ok) {
         s->active_total--;
-        completion_ok = scheduler_require(s, dec_host_active_count(s, ti->host), "host active-count underflow on transfer completion");
+        completion_ok = scheduler_require(s, dec_host_active_count(s, host));
     }
     if (completion_ok) {
-        completion_ok = scheduler_require(s, scheduler_counts_invariant_holds(s), "active counters diverged after transfer completion");
+        completion_ok = scheduler_require(s, scheduler_counts_invariant_holds(s));
     }
 
     if (!completion_ok) {
         s->had_transfer_error = true;
     }
 
-    if (completion_ok && retryable_hint && should_retry_result(s, status, result) && ti->tries_done < s->cfg->download.tries) {
-        if (!scheduler_require(s, ti->tries_done > 0, "retry candidate has invalid tries_done counter")) {
+    if (completion_ok && !s->cancelled && retryable_hint && should_retry_result(s, status, result) && ti->tries_done < s->cfg->download.tries) {
+        if (!scheduler_require(s, ti->tries_done > 0)) {
             s->had_transfer_error = true;
-        }
-        if (bx_fetch_output_is_verbose(s->cfg)) {
-            char* display_url = bx_fetch_url_display_safe(url);
-            fprintf(stderr, "  Retrying %s (try %d/%d)\n", display_url ? display_url : BX_FETCH_URL_DISPLAY_REDACTED, ti->tries_done + 1, s->cfg->download.tries);
-            free(display_url);
         }
         struct timespec retry_ready_time = {0};
         const struct timespec* retry_ready_time_ptr = NULL;
@@ -511,7 +568,7 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
             retry_delay = s->cfg->download.waitretry;
         }
         if (retry_delay > 0) {
-            if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &retry_ready_time) == 0, "clock_gettime failed while scheduling retry delay")) {
+            if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &retry_ready_time) == 0)) {
                 s->had_transfer_error = true;
             }
             else {
@@ -519,8 +576,18 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
                 retry_ready_time_ptr = &retry_ready_time;
             }
         }
-        if (!s->invariant_failed && scheduler_add_url_with_tries(s, ti->url, ti->output_path, ti->tries_done, retry_ready_time_ptr) == 0) {
-            retried = true;
+        if (!s->invariant_failed) {
+            BxFetchPreparedUrl* retry_target = ti->target;
+            ti->target = NULL;
+            if (scheduler_add_owned_target_with_tries(s, retry_target, ti->output_path, ti->tries_done, retry_ready_time_ptr) == 0) {
+                retried = true;
+                if (s->observer.on_retry) {
+                    s->observer.on_retry(s->observer.userdata, retry_target, ti->tries_done + 1, s->cfg->download.tries, retry_delay);
+                }
+            }
+            else {
+                s->had_transfer_error = true;
+            }
         }
         else {
             s->had_transfer_error = true;
@@ -530,16 +597,21 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
         s->had_transfer_error = true;
     }
 
-    free(ti->url);
+    bx_fetch_prepared_url_free(ti->target);
     free(ti->output_path);
-    free(ti->host);
     free(ti);
     return retried;
 }
 
-BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, BxFetchSchedulerDispatchFn dispatch, BxFetchSchedulerPollFn poll, void* userdata) {
-    if (!cfg || !dispatch)
+BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg,
+                                         BxFetchSchedulerDispatchFn dispatch,
+                                         BxFetchSchedulerPollFn poll,
+                                         void* userdata,
+                                         const BxFetchSchedulerObserver* observer) {
+    if (!cfg || !dispatch) {
+        errno = EINVAL;
         return NULL;
+    }
 
     BxFetchScheduler* s = calloc(1, sizeof(BxFetchScheduler));
     if (!s)
@@ -549,6 +621,8 @@ BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, BxFe
     s->dispatch = dispatch;
     s->poll = poll;
     s->userdata = userdata;
+    if (observer)
+        s->observer = *observer;
 
     s->max_concurrent_global = cfg->download.max_threads > 0 ? cfg->download.max_threads : 1;
     s->max_concurrent_per_host = 2;
@@ -568,43 +642,95 @@ void bx_fetch_scheduler_free(BxFetchScheduler* s) {
         q = next;
     }
 
-    HostState* hs = s->host_states;
-    while (hs) {
-        HostState* next = hs->next;
-        free(hs->host);
-        free(hs);
-        hs = next;
+    for (size_t i = 0; i < s->host_bucket_count; i++) {
+        HostState* hs = s->host_buckets[i];
+        while (hs) {
+            HostState* next = hs->next_bucket;
+            free(hs->host);
+            free(hs);
+            hs = next;
+        }
     }
+    free(s->host_buckets);
 
     free(s);
 }
 
 int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path) {
-    if (!s || !url || !output_path)
+    if (!s || !url || !output_path) {
+        errno = EINVAL;
         return -1;
-    char* canonical = bx_fetch_url_canonicalize(url);
-    if (!canonical)
+    }
+    if (s->cancelled) {
+        errno = ECANCELED;
         return -1;
-    int rc = bx_fetch_scheduler_add_canonical_url(s, canonical, output_path);
-    free(canonical);
-    return rc;
+    }
+    BxFetchPreparedUrl* target = bx_fetch_url_prepare(url);
+    if (!target)
+        return -1;
+    return scheduler_add_owned_target_with_tries(s, target, output_path, 0, NULL);
 }
 
 int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path) {
-    if (!s || !canonical_url || !output_path)
+    if (!s || !canonical_url || !output_path) {
+        errno = EINVAL;
         return -1;
-    return scheduler_add_url_with_tries(s, canonical_url, output_path, 0, NULL);
+    }
+    if (s->cancelled) {
+        errno = ECANCELED;
+        return -1;
+    }
+    BxFetchPreparedUrl* target = bx_fetch_url_prepare_canonical(canonical_url);
+    if (!target)
+        return -1;
+    return scheduler_add_owned_target_with_tries(s, target, output_path, 0, NULL);
+}
+
+int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPreparedUrl* target, const char* output_path) {
+    if (!s || !target || !output_path) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (s->cancelled) {
+        errno = ECANCELED;
+        return -1;
+    }
+    BxFetchPreparedUrl* clone = bx_fetch_prepared_url_clone(target);
+    if (!clone)
+        return -1;
+    return scheduler_add_owned_target_with_tries(s, clone, output_path, 0, NULL);
+}
+
+void bx_fetch_scheduler_cancel(BxFetchScheduler* s) {
+    if (!s || s->cancelled)
+        return;
+    s->cancelled = true;
+
+    QueuedURL* q = s->queue_head;
+    s->queue_head = NULL;
+    s->queue_tail = NULL;
+    while (q) {
+        QueuedURL* next = q->next;
+        free_queued_url(q);
+        q = next;
+    }
+}
+
+bool bx_fetch_scheduler_was_cancelled(const BxFetchScheduler* s) {
+    return s && s->cancelled;
 }
 
 int bx_fetch_scheduler_run(BxFetchScheduler* s) {
-    if (!s)
+    if (!s) {
+        errno = EINVAL;
         return -1;
+    }
     bool had_dispatch_error = false;
     s->had_transfer_error = false;
     s->invariant_failed = false;
 
     while (s->queue_head || s->active_total > 0) {
-        if (!scheduler_require(s, scheduler_counts_invariant_holds(s), "active counters diverged at scheduler loop entry")) {
+        if (!scheduler_require(s, scheduler_counts_invariant_holds(s))) {
             return -1;
         }
 
@@ -613,96 +739,55 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
         bool started_any = false;
 
         struct timespec now;
-        if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &now) == 0, "clock_gettime failed while evaluating scheduler timing")) {
+        if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &now) == 0)) {
             return -1;
         }
 
         while (q && s->active_total < s->max_concurrent_global) {
-            HostState* hs = get_host_state(s, q->host);
+            const char* host = bx_fetch_prepared_url_host(q->target);
+            HostState* hs = get_host_state(s, host);
             int host_active = hs ? hs->count : 0;
             bool wait_ok = !queue_wait_remaining(s, q, &now, NULL);
 
             if (host_active < s->max_concurrent_per_host && wait_ok) {
-                if (!scheduler_require(s, q->tries_done >= 0, "queued transfer has negative tries_done")) {
+                if (!scheduler_require(s, q->tries_done >= 0)) {
                     return -1;
                 }
-                if (s->cfg->download.tries > 0 && !scheduler_require(s, q->tries_done < s->cfg->download.tries, "queued transfer exceeded retry budget before dispatch")) {
+                if (s->cfg->download.tries > 0 && !scheduler_require(s, q->tries_done < s->cfg->download.tries)) {
                     return -1;
                 }
-                if (q->has_retry_ready_time && !scheduler_require(s, !wait_remaining_for_retry(q, &now, NULL), "retry dispatched before retry-ready time elapsed")) {
+                if (q->has_retry_ready_time && !scheduler_require(s, !wait_remaining_for_retry(q, &now, NULL))) {
                     return -1;
                 }
 
-                TransferInfo* ti = malloc(sizeof(TransferInfo));
+                TransferInfo* ti = calloc(1, sizeof(TransferInfo));
                 if (!ti)
                     return -1;
 
                 ti->sched = s;
-                ti->url = strdup(q->url);
+                ti->target = bx_fetch_prepared_url_clone(q->target);
                 ti->output_path = strdup(q->output_path);
-                ti->host = q->host ? strdup(q->host) : NULL;
                 ti->tries_done = q->tries_done + 1;
 
-                if (!ti->url || !ti->output_path || (q->host && !ti->host)) {
-                    free(ti->url);
+                if (!ti->target || !ti->output_path) {
+                    bx_fetch_prepared_url_free(ti->target);
                     free(ti->output_path);
-                    free(ti->host);
                     free(ti);
                     return -1;
                 }
 
-                int dispatch_rc = s->dispatch(s->userdata, q->url, q->output_path, on_transfer_complete, ti);
-                if (dispatch_rc == 0) {
-                    s->active_total++;
-                    bool host_count_ok = inc_host_active_count(s, q->host, &now);
-
-                    QueuedURL* next = q->next;
-                    if (prev) {
-                        prev->next = next;
-                    }
-                    else {
-                        s->queue_head = next;
-                    }
-                    if (!next) {
-                        s->queue_tail = prev;
-                    }
-
-                    free_queued_url(q);
-                    q = next;
-                    started_any = true;
-                    if (!host_count_ok) {
-                        scheduler_record_invariant_failure(s, "failed to update per-host active counters after dispatch");
-                        return -1;
-                    }
-                    if (!scheduler_require(s, scheduler_counts_invariant_holds(s), "active counters diverged after dispatch")) {
-                        return -1;
-                    }
-                    continue;
+                const char* active_host = bx_fetch_prepared_url_host(ti->target);
+                if (!inc_host_active_count(s, active_host, &now)) {
+                    bx_fetch_prepared_url_free(ti->target);
+                    free(ti->output_path);
+                    free(ti);
+                    scheduler_record_invariant_failure(s);
+                    return -1;
                 }
+                s->active_total++;
 
-                free(ti->url);
-                free(ti->output_path);
-                free(ti->host);
-                free(ti);
+                int dispatch_rc = s->dispatch(s->userdata, q->target, q->output_path, on_transfer_complete, ti);
 
-                if (dispatch_rc > 0) {
-                    QueuedURL* next = q->next;
-                    if (prev) {
-                        prev->next = next;
-                    }
-                    else {
-                        s->queue_head = next;
-                    }
-                    if (!next) {
-                        s->queue_tail = prev;
-                    }
-                    free_queued_url(q);
-                    q = next;
-                    started_any = true;
-                    continue;
-                }
-
-                had_dispatch_error = true;
                 QueuedURL* next = q->next;
                 if (prev) {
                     prev->next = next;
@@ -716,6 +801,21 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
                 free_queued_url(q);
                 q = next;
                 started_any = true;
+
+                if (dispatch_rc != 0) {
+                    s->active_total--;
+                    if (!scheduler_require(s, dec_host_active_count(s, active_host))) {
+                        return -1;
+                    }
+                    bx_fetch_prepared_url_free(ti->target);
+                    free(ti->output_path);
+                    free(ti);
+                    if (dispatch_rc < 0)
+                        had_dispatch_error = true;
+                }
+                if (!scheduler_require(s, scheduler_counts_invariant_holds(s))) {
+                    return -1;
+                }
                 continue;
             }
 
@@ -724,7 +824,7 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
         }
 
         if (s->active_total > 0) {
-            if (!scheduler_require(s, scheduler_counts_invariant_holds(s), "active counters diverged before scheduler poll")) {
+            if (!scheduler_require(s, scheduler_counts_invariant_holds(s))) {
                 return -1;
             }
             if (!s->poll || s->poll(s->userdata) != 0)
@@ -741,7 +841,7 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
         }
     }
 
-    if (!scheduler_require(s, scheduler_counts_invariant_holds(s), "active counters diverged at scheduler loop exit")) {
+    if (!scheduler_require(s, scheduler_counts_invariant_holds(s))) {
         return -1;
     }
 
