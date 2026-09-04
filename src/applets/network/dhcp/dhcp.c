@@ -24,6 +24,7 @@
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
 #include "lib/poll_deadline.h"
+#include "lib/random_bytes.h"
 #include "lib/time_parse.h"
 
 #define BX_DHCP_BOOTP_FIXED_LEN 236u
@@ -333,12 +334,17 @@ static int bx_dhcp_open_socket(const struct bx_dhcp_options* options, struct bx_
 }
 
 static uint32_t bx_dhcp_generate_xid(void) {
+    uint32_t xid = 0;
+    if (bx_random_bytes(&xid, sizeof(xid)) && xid != 0u) {
+        return xid;
+    }
+
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return (uint32_t)getpid() ^ 0x4b584448u;
     }
 
-    uint32_t xid = (uint32_t)ts.tv_nsec ^ (uint32_t)ts.tv_sec ^ ((uint32_t)getpid() << 16);
+    xid = (uint32_t)ts.tv_nsec ^ (uint32_t)ts.tv_sec ^ ((uint32_t)getpid() << 16);
     if (xid == 0u) {
         xid = 0x4b584448u;
     }

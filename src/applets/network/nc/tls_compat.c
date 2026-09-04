@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -8,7 +7,6 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "mbedtls/error.h"
 #include "mbedtls/md.h"
@@ -22,7 +20,7 @@
 #include "mbedtls/private/entropy.h"
 #include "psa/crypto.h"
 
-#include "lib/fd_ops.h"
+#include "lib/random_bytes.h"
 #include "tls.h"
 
 extern int vflag;
@@ -77,28 +75,10 @@ static int psa_initialized;
 static int entropy_urandom(void* data, unsigned char* output, size_t len, size_t* olen) {
     (void)data;
 
-    int fd = bx_fd_open_cloexec("/dev/urandom", O_RDONLY, 0);
-    if (fd < 0) {
+    if (!bx_random_bytes(output, len)) {
         return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
     }
 
-    size_t done = 0;
-    while (done < len) {
-        ssize_t n = read(fd, output + done, len - done);
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
-            close(fd);
-            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
-        }
-        if (n == 0) {
-            close(fd);
-            return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
-        }
-        done += (size_t)n;
-    }
-
-    close(fd);
     *olen = len;
     return 0;
 }
