@@ -9,18 +9,18 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/times.h>
-#include <sys/random.h>  // For better randomness if supported
 
+#include "lib/random_bytes.h"
 #include "traceroute.h"
 
 static void __init_random_seq(void) __attribute__((constructor));
 static void __init_random_seq(void) {
-    // For better randomness, using getrandom() if available
+    // Prefer shared nonblocking system entropy.
     unsigned int seed = 0;
 
-    // Try using getrandom() for a better random seed on Linux
-    if (getrandom(&seed, sizeof(seed), GRND_NONBLOCK) == -1) {
-        // Fallback to time and PID if getrandom() is unavailable
+    // Do not let startup wait for entropy; this seed has a local fallback.
+    if (!bx_random_bytes_nonblocking(&seed, sizeof(seed))) {
+        // Fall back to time and PID when system entropy is unavailable.
         seed = times(NULL) + getpid();
     }
 

@@ -40,7 +40,7 @@ static bool bx_random_bytes_from_urandom(void* buffer, size_t length) {
     return bx_fd_close(&fd, NULL, NULL);
 }
 
-bool bx_random_bytes(void* buffer, size_t length) {
+static bool bx_random_bytes_impl(void* buffer, size_t length, bool nonblocking) {
     if (buffer == NULL && length > 0) {
         errno = EINVAL;
         return false;
@@ -54,7 +54,10 @@ bool bx_random_bytes(void* buffer, size_t length) {
     unsigned char* out = buffer;
     size_t offset = 0;
     while (offset < length) {
-        ssize_t n = getrandom(out + offset, length - offset, 0);
+        ssize_t n = getrandom(
+            out + offset,
+            length - offset,
+            nonblocking ? GRND_NONBLOCK : 0);
         if (n > 0) {
             offset += (size_t)n;
             continue;
@@ -72,4 +75,12 @@ bool bx_random_bytes(void* buffer, size_t length) {
 #else
     return bx_random_bytes_from_urandom(buffer, length);
 #endif
+}
+
+bool bx_random_bytes(void* buffer, size_t length) {
+    return bx_random_bytes_impl(buffer, length, false);
+}
+
+bool bx_random_bytes_nonblocking(void* buffer, size_t length) {
+    return bx_random_bytes_impl(buffer, length, true);
 }
