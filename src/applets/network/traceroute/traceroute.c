@@ -1478,6 +1478,26 @@ void probe_done(probe* pb) {
     pb->done = 1;
 }
 
+static struct cmsghdr* next_cmsg(struct msghdr* msg, struct cmsghdr* current) {
+    unsigned char* control = msg->msg_control;
+    unsigned char* cursor = (unsigned char*)current;
+    size_t offset = (size_t)(cursor - control);
+    size_t cmsg_header_len = CMSG_LEN(0);
+    size_t remaining;
+    size_t step;
+
+    if (offset > msg->msg_controllen)
+        return NULL;
+    remaining = msg->msg_controllen - offset;
+    if (current->cmsg_len < cmsg_header_len || current->cmsg_len > remaining)
+        return NULL;
+
+    step = CMSG_SPACE(current->cmsg_len - cmsg_header_len);
+    if (step > remaining || remaining - step < sizeof(struct cmsghdr))
+        return NULL;
+    return (struct cmsghdr*)(cursor + step);
+}
+
 void recv_reply(int sk, int err, check_reply_t check_reply) {
     struct msghdr msg;
     sockaddr_any from;
@@ -1486,7 +1506,10 @@ void recv_reply(int sk, int err, check_reply_t check_reply) {
     probe* pb;
     char buf[1280]; /*  min mtu for ipv6 ( >= 576 for ipv4)  */
     char* bufp = buf;
-    char control[1024];
+    union {
+        struct cmsghdr align;
+        unsigned char data[1024];
+    } control;
     struct cmsghdr* cm;
     double recv_time = 0;
     int recv_ttl = 0;
@@ -1497,7 +1520,7 @@ void recv_reply(int sk, int err, check_reply_t check_reply) {
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = &from;
     msg.msg_namelen = sizeof(from);
-    msg.msg_control = control;
+    msg.msg_control = control.data;
     msg.msg_controllen = sizeof(control);
     iov.iov_base = buf;
     iov.iov_len = sizeof(buf);
@@ -1547,7 +1570,7 @@ void recv_reply(int sk, int err, check_reply_t check_reply) {
 
     /*  Parse CMSG stuff   */
 
-    for (cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
+    for (cm = CMSG_FIRSTHDR(&msg); cm; cm = next_cmsg(&msg, cm)) {
         void* ptr = CMSG_DATA(cm);
 
         if (cm->cmsg_level == SOL_SOCKET) {
