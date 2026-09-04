@@ -31,7 +31,7 @@
 #define SCREEN_CANVAS_H
 
 #include "layer.h"
-#include "sched.h"
+#include "vendor/gnu/screen/sched.h"
 
 #define SLICE_UNKN 0
 #define SLICE_VERT (1 << 0)

@@ -28,7 +28,7 @@
 
 #include "applets/system/screen/config.h"
 
-#include "sched.h"
+#include "vendor/gnu/screen/sched.h"
 
 #include <limits.h>
 #include <poll.h>

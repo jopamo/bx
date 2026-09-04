@@ -1050,10 +1050,7 @@ endif
 
 screen_lib = static_library('bx_screen',
   screen_native_sources,
-  include_directories : include_directories(
-    'src',
-    'src/vendor/gnu/screen',
-  ),
+  include_directories : include_directories('src'),
   dependencies : screen_deps,
   c_args : screen_c_args,
 )
