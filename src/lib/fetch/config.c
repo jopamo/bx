@@ -23,7 +23,7 @@ EffectiveConfig* config_new(void) {
     cfg->recursive.level = 5;  // default recursion depth
     cfg->http.max_redirect = 20;
     cfg->http.redirect_method = strdup("legacy");
-    cfg->http.user_agent = strdup("lib/fetch/0.1.0");
+    cfg->http.user_agent = strdup("mira/0.1.0");
     cfg->download.prefer_family = strdup("none");
     if (!cfg->http.redirect_method || !cfg->http.user_agent || !cfg->download.prefer_family) {
         config_free(cfg);
