@@ -7,6 +7,8 @@
 #include "config.h"
 #include "sysincludes.h"
 
+#include "lib/fd_ops.h"
+
 #include "mytypes.h"
 #include "compat.h"
 #include "utils.h"
@@ -115,13 +117,11 @@ static volatile sig_atomic_t diag_msg_avail = 0;	/* !=0: messages from within si
 static int diag_sock_pair(void) {
    int handlersocks[2];
 
-   if (socketpair(AF_UNIX, SOCK_DGRAM, 0, handlersocks) < 0) {
+   if (bx_fd_socketpair_cloexec(AF_UNIX, SOCK_DGRAM, 0, handlersocks) < 0) {
       diag_sock_send = -1;
       diag_sock_recv = -1;
       return -1;
    }
-   fcntl(handlersocks[0], F_SETFD, FD_CLOEXEC);
-   fcntl(handlersocks[1], F_SETFD, FD_CLOEXEC);
    diag_sock_send = handlersocks[1];
    diag_sock_recv = handlersocks[0];
 #if !defined(MSG_DONTWAIT)
@@ -495,8 +495,7 @@ int diag_dup(void) {
    if (diagopts.logfile == NULL) {
       return -1;
    }
-   newfd = dup(fileno(diagopts.logfile));
-   Fcntl_l(newfd, F_SETFD, FD_CLOEXEC);
+   newfd = bx_fd_dup_cloexec(fileno(diagopts.logfile));
    if (diagopts.logfile != stderr) {
       fclose(diagopts.logfile);
    }
@@ -562,4 +561,3 @@ int diag_select(int nfds, fd_set *readfds, fd_set *writefds,
    }
    return result;
 }
-

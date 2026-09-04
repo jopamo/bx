@@ -89,6 +89,10 @@ int bx_fd_socket_cloexec(int domain, int type, int protocol) {
     return socket(domain, type | SOCK_CLOEXEC, protocol);
 }
 
+int bx_fd_socketpair_cloexec(int domain, int type, int protocol, int socketfd[2]) {
+    return socketpair(domain, type | SOCK_CLOEXEC, protocol, socketfd);
+}
+
 int bx_fd_pipe_cloexec(int pipefd[2]) {
     return pipe2(pipefd, O_CLOEXEC);
 }
