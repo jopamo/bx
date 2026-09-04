@@ -46,9 +46,10 @@ static BxFetchCrawlEnqueueResult add_prepared(BxFetchCrawlCoordinator* coordinat
     return enqueue_result(BX_FETCH_CRAWL_ENQUEUED, FILTER_DECISION_ACCEPT);
 }
 
-static int coordinator_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, int depth, BxFetchSchedulerTransferDoneFn on_done, void* done_userdata) {
+static int
+coordinator_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, int depth, int attempt, int max_attempts, BxFetchSchedulerTransferDoneFn on_done, void* done_userdata) {
     BxFetchCrawlCoordinator* coordinator = userdata;
-    return coordinator->dispatch(coordinator->userdata, target, output_path, depth, on_done, done_userdata);
+    return coordinator->dispatch(coordinator->userdata, target, output_path, depth, attempt, max_attempts, on_done, done_userdata);
 }
 
 static int drain_frontier(BxFetchCrawlCoordinator* coordinator) {
@@ -184,6 +185,16 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawl
     BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target, parent_depth + 1, false);
     bx_fetch_prepared_url_free(target);
     return result;
+}
+
+int bx_fetch_crawl_coordinator_evaluate_target(const BxFetchCrawlCoordinator* coordinator, const BxFetchPreparedUrl* target, BxFetchFilterDecision* decision_out) {
+    if (!coordinator || !target || !decision_out || (coordinator->phase != BX_FETCH_CRAWL_PHASE_COLLECTING && coordinator->phase != BX_FETCH_CRAWL_PHASE_RUNNING)) {
+        errno = coordinator && coordinator->phase == BX_FETCH_CRAWL_PHASE_CANCELLED ? ECANCELED : EINVAL;
+        return -1;
+    }
+
+    *decision_out = bx_fetch_filter_evaluate_canonical_url(coordinator->filter, bx_fetch_prepared_url_transport(target));
+    return 0;
 }
 
 int bx_fetch_crawl_coordinator_run(BxFetchCrawlCoordinator* coordinator) {

@@ -41,11 +41,19 @@ typedef bool (*BxFetchSchedulerTransferDoneFn)(void* userdata, int status, BxFet
  *
  * Callback contract:
  * - `target` and `output_path` are borrowed and transient for the call.
+ * - `attempt` is one-based and `max_attempts` is the configured bound.
  * - If return is 0, dispatch implementation must eventually invoke `on_done()`
  *   exactly once with `done_userdata`.
  * - A nonzero return must not invoke `on_done()`.
  */
-typedef int (*BxFetchSchedulerDispatchFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, int depth, BxFetchSchedulerTransferDoneFn on_done, void* done_userdata);
+typedef int (*BxFetchSchedulerDispatchFn)(void* userdata,
+                                          const BxFetchPreparedUrl* target,
+                                          const char* output_path,
+                                          int depth,
+                                          int attempt,
+                                          int max_attempts,
+                                          BxFetchSchedulerTransferDoneFn on_done,
+                                          void* done_userdata);
 /* Called by scheduler while transfers are active to drive completion progress. */
 typedef int (*BxFetchSchedulerPollFn)(void* userdata);
 
