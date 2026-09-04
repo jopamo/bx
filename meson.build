@@ -229,6 +229,12 @@ endif
 
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
+libcurl_dep = dependency('libcurl', static : use_static_binary)
+fetch_lexbor_dep = dependency(
+  'lexbor',
+  required : false,
+  static : use_static_binary,
+)
 zlib_dep = dependency('zlib', required : false, static: use_static_binary)
 if not zlib_dep.found()
   zlib_dep = cc.find_library('z', required : true)
@@ -1570,6 +1576,56 @@ if install_bx_bindir != install_bindir
 endif
 
 bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/bc/include')
+
+bx_fetch_core_sources = files(
+  'src/lib/fetch/config.c',
+  'src/lib/fetch/core/http_header.c',
+  'src/lib/fetch/core/rate_limiter.c',
+  'src/lib/fetch/core/request.c',
+  'src/lib/fetch/core/response.c',
+  'src/lib/fetch/core/scheduler.c',
+  'src/lib/fetch/crawl/crawler.c',
+  'src/lib/fetch/fs/metadata.c',
+  'src/lib/fetch/fs/pathmap.c',
+  'src/lib/fetch/fs/writer.c',
+  'src/lib/fetch/fs/xattr.c',
+  'src/lib/fetch/html/parser.c',
+  'src/lib/fetch/net/credentials.c',
+  'src/lib/fetch/net/resume_validation.c',
+  'src/lib/fetch/net/url.c',
+  'src/lib/fetch/policy/filter.c',
+  'src/lib/fetch/store/url_map_store.c',
+  'src/lib/fetch/util/error.c',
+  'src/lib/fetch/util/exit_code.c',
+  'src/lib/fetch/util/hashset.c',
+  'src/lib/fetch/util/regex.c',
+  'src/lib/fetch/util/secure_path.c',
+  'src/lib/fetch/util/timestamp_policy.c',
+)
+
+bx_fetch_core_deps = [libcurl_dep]
+bx_fetch_core_c_args = ['-DHAVE_LEXBOR=0']
+if fetch_lexbor_dep.found()
+  bx_fetch_core_deps += [fetch_lexbor_dep]
+  bx_fetch_core_c_args = ['-DHAVE_LEXBOR=1']
+endif
+
+# This library is the policy-light fetch foundation shared by the future wget
+# compatibility and native mira frontends.  It is intentionally private: the
+# standalone embedding ABI is not carried into bx.
+bx_fetch_core_lib = static_library(
+  'bx_fetch_core',
+  bx_fetch_core_sources,
+  include_directories : bx_include_dirs,
+  dependencies : bx_fetch_core_deps,
+  c_args : bx_fetch_core_c_args,
+)
+
+bx_fetch_core_dep = declare_dependency(
+  link_with : bx_fetch_core_lib,
+  include_directories : bx_include_dirs,
+  dependencies : bx_fetch_core_deps,
+)
 
 stdbuf_preload = shared_module(
   'stdbuf',

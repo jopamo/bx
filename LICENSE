@@ -25,6 +25,8 @@ areas include:
   their own upstream notices
 - src/applets/text/jq/upstream/ — jq and bundled upstream components under the
   terms collected in src/applets/text/jq/COPYING.jq
+- src/lib/fetch/ — Mira-derived code under the MIT terms in
+  src/lib/fetch/COPYING.Mira
 - src/lib/manual/ — mandoc/OpenBSD-derived code under the terms collected in
   src/lib/manual/COPYING.mandoc
 
