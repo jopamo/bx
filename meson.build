@@ -406,6 +406,7 @@ bx_lib_sources = [
   'src/lib/path_ops.c',
   'src/lib/path_quote.c',
   'src/lib/pidfile_ops.c',
+  'src/lib/poll_deadline.c',
   'src/lib/preload_ops.c',
   'src/lib/prompt_ops.c',
   'src/lib/random_bytes.c',

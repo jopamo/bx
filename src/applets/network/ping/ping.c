@@ -22,6 +22,7 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/poll_deadline.h"
 #include "lib/time_parse.h"
 
 #define BX_PING_DEFAULT_COUNT 1u
@@ -333,32 +334,23 @@ static bool bx_ping_wait_for_reply(const struct bx_ping_socket* socket_state,
     reply->received = false;
     reply->rtt_ms = 0.0;
 
+    struct bx_poll_deadline deadline;
+    int poll_timeout =
+        timeout_ms > (unsigned int)INT_MAX ? INT_MAX : (int)timeout_ms;
+    bx_poll_deadline_init(&deadline, poll_timeout);
     double started_ms = bx_ping_now_ms();
 
     while (true) {
-        double elapsed_ms = bx_ping_now_ms() - started_ms;
-        if (elapsed_ms < 0.0) {
-            elapsed_ms = 0.0;
-        }
-
-        int remaining_ms = (elapsed_ms >= (double)timeout_ms) ? 0 : (int)((double)timeout_ms - elapsed_ms);
-        if (remaining_ms <= 0) {
-            return true;
-        }
-
         struct pollfd pfd;
         memset(&pfd, 0, sizeof(pfd));
         pfd.fd = socket_state->fd;
         pfd.events = POLLIN;
 
-        int poll_rc = poll(&pfd, 1, remaining_ms);
+        int poll_rc = bx_poll_deadline_wait(&deadline, &pfd, 1);
         if (poll_rc == 0) {
             return true;
         }
         if (poll_rc < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
             bx_diag(diag, "poll failed: %s", strerror(errno));
             return false;
         }
