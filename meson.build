@@ -388,6 +388,7 @@ bx_lib_sources = [
   'src/lib/fopen_dash.c',
   'src/lib/fmt_engine.c',
   'src/lib/id_parse.c',
+  'src/lib/internet_checksum.c',
   'src/lib/line_writer.c',
   'src/lib/line_writer_file.c',
   'src/lib/mode_parse.c',

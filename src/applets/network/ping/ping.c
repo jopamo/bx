@@ -22,6 +22,7 @@
 #include "lib/cli_common.h"
 #include "lib/args_common.h"
 #include "lib/fd_ops.h"
+#include "lib/internet_checksum.h"
 #include "lib/poll_deadline.h"
 #include "lib/sockaddr_format.h"
 #include "lib/time_parse.h"
@@ -238,25 +239,6 @@ static bool bx_ping_open_socket(struct bx_ping_socket* socket_state, struct bx_d
     return false;
 }
 
-static uint16_t bx_ping_checksum(const unsigned char* data, size_t len) {
-    uint32_t sum = 0;
-
-    for (size_t i = 0; i + 1 < len; i += 2) {
-        uint16_t word = ((uint16_t)data[i] << 8) | (uint16_t)data[i + 1];
-        sum += (uint32_t)word;
-    }
-
-    if ((len & 1u) != 0u) {
-        sum += (uint32_t)((uint16_t)data[len - 1] << 8);
-    }
-
-    while ((sum >> 16) != 0u) {
-        sum = (sum & 0xffffu) + (sum >> 16);
-    }
-
-    return (uint16_t)(~sum);
-}
-
 static double bx_ping_now_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
@@ -291,7 +273,7 @@ static bool bx_ping_send_probe(const struct bx_ping_socket* socket_state,
         packet[sizeof(struct icmphdr) + i] = (unsigned char)(0x20u + (unsigned char)(i & 0x5fu));
     }
 
-    header->checksum = bx_ping_checksum(packet, packet_len);
+    header->checksum = bx_internet_checksum_host(packet, packet_len);
 
     ssize_t sent = sendto(socket_state->fd, packet, packet_len, 0, (const struct sockaddr*)destination, sizeof(*destination));
     if (sent < 0) {
