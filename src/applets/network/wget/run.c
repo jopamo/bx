@@ -90,7 +90,9 @@ static bool wget_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
     if (!frontend || !observation)
         return false;
     if (observation->result.status == BX_FETCH_CRAWL_REJECTED) {
-        wget_record_error(frontend, BX_FETCH_EXIT_PROTOCOL, "URL rejected by protocol policy");
+        wget_record_error(frontend,
+                          BX_FETCH_EXIT_PROTOCOL,
+                          observation->result.filter_decision == FILTER_DECISION_INVALID_URL ? "invalid URL" : "URL rejected by protocol policy");
         return true;
     }
     if (observation->result.status == BX_FETCH_CRAWL_ERROR)
@@ -130,6 +132,9 @@ static void wget_record_session_failure(WgetRunFrontend* frontend, const BxFetch
         case BX_FETCH_RUN_FAILURE_LOAD_PUBLICATION:
         case BX_FETCH_RUN_FAILURE_SAVE_PUBLICATION:
             wget_record_error(frontend, BX_FETCH_EXIT_FILE_IO, "failed to access persistent fetch state");
+            break;
+        case BX_FETCH_RUN_FAILURE_LOAD_INPUT:
+            wget_record_error(frontend, BX_FETCH_EXIT_FILE_IO, "failed to read URL input");
             break;
         case BX_FETCH_RUN_FAILURE_ADD_SEED:
             wget_record_error(frontend, BX_FETCH_EXIT_PROTOCOL, "invalid or unsupported URL");

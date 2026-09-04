@@ -15,7 +15,7 @@ int bx_mira_main(int argc, char** argv) {
         printf("mira %s\n", BX_MIRA_VERSION);
     else if (config->startup.show_help)
         bx_mira_print_help();
-    else if (config->input.url_count == 0) {
+    else if (config->input.url_count == 0 && !config->input.input_file) {
         bx_mira_emit_parse_error(config, "no URLs specified");
         result = BX_FETCH_EXIT_PARSE_OR_CONFIG;
     }
