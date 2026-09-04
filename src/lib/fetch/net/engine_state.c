@@ -51,6 +51,8 @@ bool bx_fetch_transfer_abort_writer(BxFetchTransfer* transfer) {
     bx_fetch_writer_abort(transfer->writer);
     transfer->writer = NULL;
     transfer->writer_aborted = true;
+    if (transfer->resp && transfer->resp->output_state == BX_FETCH_OUTPUT_STATE_NONE)
+        transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_ABORTED;
     return true;
 }
 
@@ -63,6 +65,8 @@ int bx_fetch_transfer_close_writer(BxFetchTransfer* transfer) {
     int result = bx_fetch_writer_close(transfer->writer);
     transfer->writer = NULL;
     transfer->writer_closed = true;
+    if (transfer->resp)
+        transfer->resp->output_state = result == 0 ? BX_FETCH_OUTPUT_STATE_COMMITTED : BX_FETCH_OUTPUT_STATE_COMMIT_FAILED;
     return result;
 }
 

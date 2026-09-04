@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 BxFetchResponse* bx_fetch_response_new(void) {
     BxFetchResponse* resp = calloc(1, sizeof(BxFetchResponse));
@@ -100,6 +101,18 @@ int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const 
     resp->header_count++;
     resp->header_bytes += wire_bytes;
     return 0;
+}
+
+const char* bx_fetch_response_header_value(const BxFetchResponse* response, const char* name) {
+    if (!response || !name)
+        return NULL;
+
+    for (size_t i = response->header_count; i > 0; i--) {
+        const BxFetchHeader* header = &response->headers[i - 1];
+        if (header->name && header->value && strcasecmp(header->name, name) == 0)
+            return header->value;
+    }
+    return NULL;
 }
 
 const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure) {

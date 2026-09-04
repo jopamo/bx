@@ -10,9 +10,17 @@
 #include <time.h>
 
 struct BxFetchTransferCandidate {
+    const struct bx_fetch_config* cfg;
     BxFetchRequest* request;
     BxFetchWriter* writer;
 };
+
+typedef struct {
+    const struct bx_fetch_config* cfg;
+    BxFetchTransferHeadersCallback headers_callback;
+    BxFetchTransferCompletionCallback completion_callback;
+    void* userdata;
+} CandidateCallbacks;
 
 static BxFetchTransferCandidate* prepare_failure(BxFetchTransferCandidate* candidate,
                                                  BxFetchPrepareError* error,
@@ -139,6 +147,7 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
     if (!candidate) {
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_REQUEST, ENOMEM, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }
+    candidate->cfg = cfg;
 
     const char* method = configured_method(cfg);
     candidate->request = bx_fetch_request_new_prepared(method, target);
@@ -190,10 +199,37 @@ void bx_fetch_transfer_candidate_abort(BxFetchTransferCandidate* candidate) {
     free(candidate);
 }
 
+static int candidate_headers_callback(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
+    CandidateCallbacks* callbacks = userdata;
+    if (!callbacks || !callbacks->cfg) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (callbacks->headers_callback && callbacks->headers_callback(callbacks->userdata, request, response, writer) != 0)
+        return -1;
+    return bx_fetch_transfer_stage_response(callbacks->cfg, request, response, writer);
+}
+
+static void candidate_completion_callback(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchError result) {
+    CandidateCallbacks* callbacks = userdata;
+    if (!callbacks)
+        return;
+
+    BxFetchTransferCompletion completion = {
+        .request = request,
+        .response = response,
+        .result = result,
+        .retryable_hint = bx_fetch_transfer_retryable_hint(callbacks->cfg, response, result),
+    };
+    if (callbacks->completion_callback)
+        callbacks->completion_callback(callbacks->userdata, &completion);
+    free(callbacks);
+}
+
 int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
                                        BxFetchEngine* engine,
                                        BxFetchTransferHeadersCallback headers_cb,
-                                       BxFetchTransferCallback callback,
+                                       BxFetchTransferCompletionCallback callback,
                                        void* userdata,
                                        BxFetchRedirectPolicyCallback redirect_cb,
                                        void* redirect_userdata,
@@ -205,10 +241,24 @@ int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
         return -1;
     }
 
-    int result = bx_fetch_engine_submit_with_setup_error(engine, candidate->request, candidate->writer, headers_cb, callback, userdata, redirect_cb, redirect_userdata, setup_error);
+    CandidateCallbacks* callbacks = calloc(1, sizeof(*callbacks));
+    if (!callbacks) {
+        bx_fetch_transfer_candidate_abort(candidate);
+        return -1;
+    }
+    callbacks->cfg = candidate->cfg;
+    callbacks->headers_callback = headers_cb;
+    callbacks->completion_callback = callback;
+    callbacks->userdata = userdata;
+
+    int result = bx_fetch_engine_submit_with_setup_error(engine, candidate->request, candidate->writer, candidate_headers_callback, candidate_completion_callback, callbacks, redirect_cb,
+                                                         redirect_userdata, setup_error);
     if (result == 0) {
         candidate->request = NULL;
         candidate->writer = NULL;
+    }
+    else {
+        free(callbacks);
     }
     bx_fetch_transfer_candidate_abort(candidate);
     return result;

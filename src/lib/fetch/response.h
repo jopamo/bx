@@ -34,6 +34,23 @@ typedef enum {
     BX_FETCH_RESPONSE_HEADER_POLICY_TOO_MANY_FIELDS,
 } BxFetchResponseHeaderPolicyFailure;
 
+typedef enum {
+    /* No terminal writer decision has been made. */
+    BX_FETCH_OUTPUT_STATE_NONE = 0,
+    /* Candidate-owned state was removed without changing the destination. */
+    BX_FETCH_OUTPUT_STATE_ABORTED,
+    /* A not-modified response left the destination unchanged. */
+    BX_FETCH_OUTPUT_STATE_UNCHANGED,
+    /* Writer close and its durability checks completed successfully. */
+    BX_FETCH_OUTPUT_STATE_COMMITTED,
+    /*
+     * Writer close failed. Dependent state must not be published; the payload
+     * may already have crossed a rename boundary and must not be inferred from
+     * the transfer result.
+     */
+    BX_FETCH_OUTPUT_STATE_COMMIT_FAILED,
+} BxFetchOutputState;
+
 typedef struct {
     int status_code;
     BxFetchPreparedUrl* effective_target;
@@ -55,6 +72,7 @@ typedef struct {
     bool request_body_io_failed;
     size_t header_bytes;
     BxFetchResponseHeaderPolicyFailure header_policy_failure;
+    BxFetchOutputState output_state;
 } BxFetchResponse;
 
 BxFetchResponse* bx_fetch_response_new(void);
@@ -65,6 +83,8 @@ void bx_fetch_response_free(BxFetchResponse* resp);
  * allocation failure, or EINVAL for invalid arguments.
  */
 int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const char* value);
+/* Returns the last matching response field, or NULL. */
+const char* bx_fetch_response_header_value(const BxFetchResponse* response, const char* name);
 const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure);
 const BxFetchPreparedUrl* bx_fetch_response_effective_target(const BxFetchResponse* response);
 const char* bx_fetch_response_effective_url(const BxFetchResponse* response);

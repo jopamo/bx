@@ -9,11 +9,13 @@
  * Preparation normalizes no URLs: callers supply an existing prepared target.
  * Submission is the single ownership commit point. It consumes the candidate;
  * failure aborts only candidate-owned state, while success transfers request
- * and writer ownership to the transport.
+ * and writer ownership to the transport. The configuration is borrowed and
+ * must outlive the candidate and every successfully submitted transfer.
  */
 
 #include "config.h"
 #include "net.h"
+#include "transfer_completion.h"
 
 typedef struct BxFetchTransferCandidate BxFetchTransferCandidate;
 
@@ -50,7 +52,7 @@ void bx_fetch_transfer_candidate_abort(BxFetchTransferCandidate* candidate);
 int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
                                        BxFetchEngine* engine,
                                        BxFetchTransferHeadersCallback headers_cb,
-                                       BxFetchTransferCallback callback,
+                                       BxFetchTransferCompletionCallback callback,
                                        void* userdata,
                                        BxFetchRedirectPolicyCallback redirect_cb,
                                        void* redirect_userdata,

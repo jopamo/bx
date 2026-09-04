@@ -670,6 +670,9 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
     else if (!bx_fetch_transfer_abort_writer(transfer)) {
         engine->invariant_failed = true;
     }
+    else if (status == 304 && transport_succeeded) {
+        transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_UNCHANGED;
+    }
 
     bool finalized = transfer->writer == NULL && (transfer->writer_closed || transfer->writer_aborted);
     if (!finalized)
