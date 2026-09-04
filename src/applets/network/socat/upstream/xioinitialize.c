@@ -9,7 +9,6 @@
 #include "xioopen.h"
 #include "xiolockfile.h"
 
-#include "xio-openssl.h"	/* xio_reset_fips_mode() */
 
 static int xioinitialized;
 xiofile_t *sock[XIO_MAXSOCK];

@@ -8,9 +8,6 @@
 #include "xiosysincludes.h"
 #include "xioopen.h"
 
-#include "xio-posixmq.h"
-#include "xio-readline.h"
-#include "xio-openssl.h"
 
 
 /* ...

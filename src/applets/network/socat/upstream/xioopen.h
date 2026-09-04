@@ -12,9 +12,7 @@
 #include "sysutils.h"
 
 #include "sycls.h"
-#include "sslcls.h"
 #include "dalan.h"
-#include "filan.h"
 #include "xio.h"
 #include "xioopts.h"
 

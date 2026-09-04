@@ -14,7 +14,6 @@
 #include "xio-ip6.h"
 #include "xio-ip.h"
 #include "xio-ipapp.h"
-#include "xio-tcpwrap.h"
 
 #include "xio-udp.h"
 

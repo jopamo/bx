@@ -9,9 +9,6 @@
 #include "xioopen.h"
 #include "xiolockfile.h"
 
-#include "xio-termios.h"
-#include "xio-interface.h"
-#include "xio-posixmq.h"
 
 
 /* close the xio fd; must be valid and "simple" (not dual) */
@@ -153,4 +150,3 @@ int xioclose(xiofile_t *file) {
    }
    return result;
 }
-
