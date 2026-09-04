@@ -12,9 +12,12 @@
  * path selection, diagnostics, link extraction decisions, and exit mapping.
  * The immutable config and all callback userdata must outlive the run.
  * Callbacks must not recursively execute, cancel, or free the run.
+ * Committed documents are snapshotted into a bounded queue during terminal
+ * callbacks and parsed only after the libcurl event-loop call returns.
  */
 
 #include "crawl_coordinator.h"
+#include "document.h"
 #include "net.h"
 #include "publication.h"
 #include "transfer_prepare.h"
@@ -27,6 +30,7 @@ typedef struct {
     int attempt;
     int max_attempts;
     BxFetchPublicationResult publication;
+    bool document_queued;
     bool retry_scheduled;
 } BxFetchRunCompletion;
 
@@ -43,6 +47,13 @@ typedef int (*BxFetchRunCompletionFn)(void* userdata, BxFetchRun* run, const BxF
  * may further restrict accepted targets, but cannot override a shared reject.
  */
 typedef bool (*BxFetchRunRedirectFn)(void* userdata, const BxFetchPreparedUrl* target, BxFetchFilterDecision shared_decision);
+typedef void (*BxFetchRunDiscoveredLinkFn)(void* userdata, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind, int parent_depth, BxFetchCrawlEnqueueResult result);
+/*
+ * Returns true to continue after a document failure; the frontend then owns
+ * any nonzero exit policy. Returning false (or omitting the callback)
+ * cancels/drains the run after the current poll.
+ */
+typedef bool (*BxFetchRunDocumentErrorFn)(void* userdata, const BxFetchPreparedUrl* base, const char* path, int depth, const BxFetchDocumentOutcome* outcome);
 
 typedef struct {
     BxFetchCrawlPlanOutputFn plan_output;
@@ -51,6 +62,8 @@ typedef struct {
     BxFetchRunSubmitErrorFn on_submit_error;
     BxFetchRunCompletionFn on_completion;
     BxFetchRunRedirectFn allow_redirect;
+    BxFetchRunDiscoveredLinkFn on_discovered_link;
+    BxFetchRunDocumentErrorFn on_document_error;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
     void* userdata;

@@ -1,7 +1,11 @@
 #define _GNU_SOURCE
 #include "lib/fetch/run.h"
+#include "lib/fetch/resource_limits.h"
+#include "lib/fetch/response.h"
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct BxFetchRun {
     const struct bx_fetch_config* cfg;
@@ -9,9 +13,22 @@ struct BxFetchRun {
     BxFetchEngine* engine;
     BxFetchCrawlCoordinator* coordinator;
     BxFetchPublicationState* publication;
+    struct RunDocumentTask* document_head;
+    struct RunDocumentTask* document_tail;
+    size_t document_count;
+    size_t document_bytes;
     int deferred_error;
     bool publication_loaded;
 };
+
+typedef struct RunDocumentTask {
+    BxFetchPreparedUrl* base;
+    char* path;
+    char* content_type;
+    size_t accounted_bytes;
+    int depth;
+    struct RunDocumentTask* next;
+} RunDocumentTask;
 
 typedef struct {
     BxFetchRun* run;
@@ -25,6 +42,127 @@ typedef struct {
 static void run_defer_failure(BxFetchRun* run, int error_number) {
     if (run && !run->deferred_error)
         run->deferred_error = error_number > 0 ? error_number : EIO;
+}
+
+static void run_document_task_free(RunDocumentTask* task) {
+    if (!task)
+        return;
+    bx_fetch_prepared_url_free(task->base);
+    free(task->path);
+    free(task->content_type);
+    free(task);
+}
+
+static void run_clear_documents(BxFetchRun* run) {
+    if (!run)
+        return;
+    RunDocumentTask* task = run->document_head;
+    while (task) {
+        RunDocumentTask* next = task->next;
+        run_document_task_free(task);
+        task = next;
+    }
+    run->document_head = NULL;
+    run->document_tail = NULL;
+    run->document_count = 0;
+    run->document_bytes = 0;
+}
+
+static bool run_should_process_document(const BxFetchRun* run, const BxFetchTransferCompletion* completion, BxFetchPublicationResult publication) {
+    return run && completion && publication == BX_FETCH_PUBLICATION_RECORDED && completion->result == BX_FETCH_OK && (run->cfg->recursive.recursive || run->cfg->recursive.page_requisites);
+}
+
+static int run_enqueue_document(BxFetchRun* run, const BxFetchTransferCompletion* completion, int depth) {
+    const BxFetchPreparedUrl* base = bx_fetch_response_effective_target(completion->response);
+    if (!base)
+        base = bx_fetch_request_target(completion->request);
+    if (!base || !completion->output_path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const char* content_type = completion->response->content_type;
+    size_t base_length = 0;
+    size_t path_length = 0;
+    size_t content_type_length = 0;
+    if (!bx_fetch_resource_bounded_strlen(bx_fetch_prepared_url_transport(base), BX_FETCH_URL_MAX_BYTES, &base_length) ||
+        !bx_fetch_resource_bounded_strlen(completion->output_path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_length) ||
+        (content_type && !bx_fetch_resource_bounded_strlen(content_type, BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES, &content_type_length)) || base_length > SIZE_MAX - path_length ||
+        base_length + path_length > SIZE_MAX - content_type_length) {
+        errno = EFBIG;
+        return -1;
+    }
+    size_t accounted_bytes = base_length + path_length + content_type_length;
+    if (!bx_fetch_resource_can_reserve(run->document_count, run->document_bytes, 1u, accounted_bytes, BX_FETCH_URL_STATE_MAX_ENTRIES, BX_FETCH_URL_STATE_MAX_BYTES)) {
+        errno = EFBIG;
+        return -1;
+    }
+
+    RunDocumentTask* task = calloc(1, sizeof(*task));
+    if (!task)
+        return -1;
+    task->base = bx_fetch_prepared_url_clone(base);
+    task->path = strdup(completion->output_path);
+    task->content_type = content_type ? strdup(content_type) : NULL;
+    task->accounted_bytes = accounted_bytes;
+    task->depth = depth;
+    if (!task->base || !task->path || (content_type && !task->content_type)) {
+        run_document_task_free(task);
+        return -1;
+    }
+
+    if (run->document_tail)
+        run->document_tail->next = task;
+    else
+        run->document_head = task;
+    run->document_tail = task;
+    run->document_count++;
+    run->document_bytes += accounted_bytes;
+    return 0;
+}
+
+typedef struct {
+    BxFetchRun* run;
+    const RunDocumentTask* task;
+} RunDocumentLinks;
+
+static int run_add_document_link(void* userdata, const char* reference, BxFetchHtmlLinkKind kind) {
+    RunDocumentLinks* links = userdata;
+    BxFetchCrawlEnqueueResult result = bx_fetch_run_add_discovered(links->run, links->task->base, reference, kind, links->task->depth);
+    if (links->run->frontend.on_discovered_link) {
+        links->run->frontend.on_discovered_link(links->run->frontend.userdata, links->task->base, reference, kind, links->task->depth, result);
+    }
+    if (result.status == BX_FETCH_CRAWL_ERROR)
+        return -1;
+    return 0;
+}
+
+static int run_drain_documents(BxFetchRun* run) {
+    while (run && run->document_head) {
+        RunDocumentTask* task = run->document_head;
+        run->document_head = task->next;
+        if (!run->document_head)
+            run->document_tail = NULL;
+        run->document_count--;
+        run->document_bytes -= task->accounted_bytes;
+        task->next = NULL;
+
+        RunDocumentLinks links = {
+            .run = run,
+            .task = task,
+        };
+        BxFetchDocumentOutcome outcome = {0};
+        int result = bx_fetch_document_extract_links(task->path, task->content_type, task->base, run_add_document_link, &links, &outcome);
+        int error_number = errno;
+        bool keep_running = result == 0 || (run->frontend.on_document_error && run->frontend.on_document_error(run->frontend.userdata, task->base, task->path, task->depth, &outcome));
+        run_document_task_free(task);
+        if (!keep_running) {
+            run_defer_failure(run, error_number);
+            run_clear_documents(run);
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int run_plan_output(void* userdata, const BxFetchPreparedUrl* target, int depth, char** output_path_out) {
@@ -59,11 +197,23 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
     BxFetchPublicationResult publication = bx_fetch_publication_record_completion(run->publication, completion);
     BxFetchError scheduler_result = completion->result;
     bool retryable_hint = completion->retryable_hint;
+    bool document_queued = false;
     if (publication == BX_FETCH_PUBLICATION_ERROR) {
         int error_number = errno ? errno : EIO;
         run_defer_failure(run, error_number);
         scheduler_result = error_number == EFBIG ? BX_FETCH_ERROR_RESOURCE_LIMIT : BX_FETCH_ERROR_INTERNAL;
         retryable_hint = false;
+    }
+    else if (run_should_process_document(run, completion, publication)) {
+        if (run_enqueue_document(run, completion, transfer->depth) != 0) {
+            int error_number = errno ? errno : EIO;
+            run_defer_failure(run, error_number);
+            scheduler_result = error_number == EFBIG ? BX_FETCH_ERROR_RESOURCE_LIMIT : BX_FETCH_ERROR_INTERNAL;
+            retryable_hint = false;
+        }
+        else {
+            document_queued = true;
+        }
     }
 
     int status = completion->response ? completion->response->status_code : 0;
@@ -75,6 +225,7 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         .attempt = transfer->attempt,
         .max_attempts = transfer->max_attempts,
         .publication = publication,
+        .document_queued = document_queued,
         .retry_scheduled = retry_scheduled,
     };
     if (run->frontend.on_completion && run->frontend.on_completion(run->frontend.userdata, run, &observation) != 0) {
@@ -151,6 +302,8 @@ static int run_transport_poll(void* userdata) {
 
     if (bx_fetch_engine_run(run->engine) != 0)
         run_defer_failure(run, errno);
+    if (!run->deferred_error)
+        (void)run_drain_documents(run);
     if (run->deferred_error) {
         bx_fetch_crawl_coordinator_cancel(run->coordinator);
         bx_fetch_engine_cancel(run->engine);
@@ -200,6 +353,7 @@ void bx_fetch_run_free(BxFetchRun* run) {
         bx_fetch_crawl_coordinator_cancel(run->coordinator);
     if (run->engine)
         bx_fetch_engine_cancel(run->engine);
+    run_clear_documents(run);
     bx_fetch_crawl_coordinator_free(run->coordinator);
     bx_fetch_engine_free(run->engine);
     bx_fetch_publication_state_free(run->publication);
@@ -238,6 +392,7 @@ void bx_fetch_run_cancel(BxFetchRun* run) {
         return;
     bx_fetch_crawl_coordinator_cancel(run->coordinator);
     bx_fetch_engine_cancel(run->engine);
+    run_clear_documents(run);
 }
 
 BxFetchCrawlPhase bx_fetch_run_phase(const BxFetchRun* run) {
