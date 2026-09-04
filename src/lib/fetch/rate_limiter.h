@@ -9,7 +9,7 @@
  * - Shared runtime token-bucket logic used by net dispatch.
  *
  * Ownership and lifetime:
- * - APIs operate on caller-owned MiraTokenBucket structs.
+ * - APIs operate on caller-owned BxFetchTokenBucket structs.
  * - No heap ownership is transferred by this interface.
  *
  * Preconditions:
@@ -26,9 +26,9 @@ typedef struct {
     double tokens;
     struct timespec last_refill;
     bool initialized;
-} MiraTokenBucket;
+} BxFetchTokenBucket;
 
-void bx_fetch_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now);
-double bx_fetch_token_bucket_consume(MiraTokenBucket* bucket, size_t bytes, const struct timespec* now);
+void bx_fetch_token_bucket_init(BxFetchTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now);
+double bx_fetch_token_bucket_consume(BxFetchTokenBucket* bucket, size_t bytes, const struct timespec* now);
 
 #endif  // BX_FETCH_RATE_LIMITER_H

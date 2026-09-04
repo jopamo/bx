@@ -23,16 +23,16 @@
 typedef struct {
     const char* url;
     const char* local_path;
-} MiraUrlMapEntry;
+} BxFetchUrlMapEntry;
 
 /*
  * Callback contract:
  * - `url` and `local_path` are borrowed and valid only during callback execution.
  * - Return 0 to continue loading; non-zero aborts load with failure.
  */
-typedef int (*MiraUrlMapLoadFn)(void* userdata, const char* url, const char* local_path);
+typedef int (*BxFetchUrlMapLoadFn)(void* userdata, const char* url, const char* local_path);
 
-int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, MiraUrlMapLoadFn cb, void* userdata);
-int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const MiraUrlMapEntry* entries, size_t entry_count);
+int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, BxFetchUrlMapLoadFn cb, void* userdata);
+int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetchUrlMapEntry* entries, size_t entry_count);
 
 #endif  // BX_FETCH_URL_MAP_STORE_H

@@ -7,7 +7,7 @@ static double timespec_diff_seconds(const struct timespec* a, const struct times
     return (double)sec + ((double)nsec / 1000000000.0);
 }
 
-void bx_fetch_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now) {
+void bx_fetch_token_bucket_init(BxFetchTokenBucket* bucket, int64_t rate_bytes_per_sec, const struct timespec* now) {
     if (!bucket)
         return;
 
@@ -22,7 +22,7 @@ void bx_fetch_token_bucket_init(MiraTokenBucket* bucket, int64_t rate_bytes_per_
     bucket->initialized = true;
 }
 
-double bx_fetch_token_bucket_consume(MiraTokenBucket* bucket, size_t bytes, const struct timespec* now) {
+double bx_fetch_token_bucket_consume(BxFetchTokenBucket* bucket, size_t bytes, const struct timespec* now) {
     if (!bucket || bucket->rate_bytes_per_sec <= 0 || bytes == 0 || !now)
         return 0.0;
 

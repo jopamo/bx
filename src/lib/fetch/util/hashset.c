@@ -9,7 +9,7 @@ typedef struct HashSetNode {
     struct HashSetNode* next;
 } HashSetNode;
 
-struct HashSet {
+struct BxFetchHashSet {
     HashSetNode** buckets;
     size_t size;
     size_t count;
@@ -23,11 +23,11 @@ static uint32_t hash_string(const char* s) {
     return hash;
 }
 
-HashSet* bx_fetch_hashset_new(size_t size) {
+BxFetchHashSet* bx_fetch_hashset_new(size_t size) {
     if (size == 0)
         return NULL;
 
-    HashSet* hs = calloc(1, sizeof(HashSet));
+    BxFetchHashSet* hs = calloc(1, sizeof(BxFetchHashSet));
     if (!hs)
         return NULL;
 
@@ -40,7 +40,7 @@ HashSet* bx_fetch_hashset_new(size_t size) {
     return hs;
 }
 
-void bx_fetch_hashset_free(HashSet* hs) {
+void bx_fetch_hashset_free(BxFetchHashSet* hs) {
     if (!hs)
         return;
     for (size_t i = 0; i < hs->size; i++) {
@@ -56,7 +56,7 @@ void bx_fetch_hashset_free(HashSet* hs) {
     free(hs);
 }
 
-bool bx_fetch_hashset_contains(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_contains(BxFetchHashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 
@@ -70,7 +70,7 @@ bool bx_fetch_hashset_contains(HashSet* hs, const char* key) {
     return false;
 }
 
-bool bx_fetch_hashset_add(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_add(BxFetchHashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 
@@ -97,7 +97,7 @@ bool bx_fetch_hashset_add(HashSet* hs, const char* key) {
     return true;
 }
 
-bool bx_fetch_hashset_remove(HashSet* hs, const char* key) {
+bool bx_fetch_hashset_remove(BxFetchHashSet* hs, const char* key) {
     if (!hs || !key || hs->size == 0)
         return false;
 

@@ -19,12 +19,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef struct HashSet HashSet;
+typedef struct BxFetchHashSet BxFetchHashSet;
 
-HashSet* bx_fetch_hashset_new(size_t size);
-void bx_fetch_hashset_free(HashSet* hs);
-bool bx_fetch_hashset_add(HashSet* hs, const char* key);
-bool bx_fetch_hashset_contains(HashSet* hs, const char* key);
-bool bx_fetch_hashset_remove(HashSet* hs, const char* key);
+BxFetchHashSet* bx_fetch_hashset_new(size_t size);
+void bx_fetch_hashset_free(BxFetchHashSet* hs);
+bool bx_fetch_hashset_add(BxFetchHashSet* hs, const char* key);
+bool bx_fetch_hashset_contains(BxFetchHashSet* hs, const char* key);
+bool bx_fetch_hashset_remove(BxFetchHashSet* hs, const char* key);
 
 #endif  // BX_FETCH_HASHSET_H

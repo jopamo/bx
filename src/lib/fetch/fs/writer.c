@@ -13,7 +13,7 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
-struct Writer {
+struct BxFetchWriter {
     char* path;
     char* parent_path;
     char* basename;
@@ -34,7 +34,7 @@ struct Writer {
     dev_t initial_dest_dev;
     ino_t initial_dest_ino;
     mode_t initial_dest_mode;
-    MiraMetadata pending_metadata;
+    BxFetchMetadata pending_metadata;
     bool has_pending_metadata;
     bool has_pending_mtime;
     time_t pending_mtime;
@@ -89,7 +89,7 @@ static int writer_fail_temp_entry(int error_number, int parent_fd, int fd, char*
     return writer_fail_errno(error_number);
 }
 
-static int capture_parent_directory_identity(Writer* w) {
+static int capture_parent_directory_identity(BxFetchWriter* w) {
     if (!w || w->parent_fd == -1) {
         errno = EINVAL;
         return -1;
@@ -108,7 +108,7 @@ static int capture_parent_directory_identity(Writer* w) {
     return 0;
 }
 
-static int validate_parent_directory_identity(const Writer* w) {
+static int validate_parent_directory_identity(const BxFetchWriter* w) {
     if (!w || w->to_stdout || !w->path || !w->basename) {
         errno = EINVAL;
         return -1;
@@ -188,7 +188,7 @@ static int open_unique_temp_file_at(int parent_fd, const char* basename, char** 
     return -1;
 }
 
-static int seed_temp_file_from_existing_destination(Writer* w) {
+static int seed_temp_file_from_existing_destination(BxFetchWriter* w) {
     if (!w || w->fd == -1 || w->parent_fd == -1 || !w->basename) {
         errno = EINVAL;
         return -1;
@@ -248,7 +248,7 @@ static int seed_temp_file_from_existing_destination(Writer* w) {
     return 0;
 }
 
-static int capture_destination_state_for_basename(Writer* w, const char* basename) {
+static int capture_destination_state_for_basename(BxFetchWriter* w, const char* basename) {
     if (!w || w->to_stdout || w->parent_fd == -1 || !basename) {
         errno = EINVAL;
         return -1;
@@ -273,7 +273,7 @@ static int capture_destination_state_for_basename(Writer* w, const char* basenam
     return 0;
 }
 
-static int capture_destination_state(Writer* w) {
+static int capture_destination_state(BxFetchWriter* w) {
     if (!w) {
         errno = EINVAL;
         return -1;
@@ -281,7 +281,7 @@ static int capture_destination_state(Writer* w) {
     return capture_destination_state_for_basename(w, w->basename);
 }
 
-static bool same_destination_identity(const Writer* w, const struct stat* st) {
+static bool same_destination_identity(const BxFetchWriter* w, const struct stat* st) {
     if (!w || !st || !w->initial_dest_existed)
         return false;
     return w->initial_dest_dev == st->st_dev && w->initial_dest_ino == st->st_ino && ((w->initial_dest_mode & S_IFMT) == (st->st_mode & S_IFMT));
@@ -371,7 +371,7 @@ static bool destination_requires_explicit_unlink(mode_t mode) {
     return S_ISREG(mode);
 }
 
-static int validate_unlink_replacement_target(const Writer* w, bool* should_unlink) {
+static int validate_unlink_replacement_target(const BxFetchWriter* w, bool* should_unlink) {
     if (!w || !should_unlink) {
         errno = EINVAL;
         return -1;
@@ -426,13 +426,13 @@ static int set_metadata_string(char** dest, const char* value) {
     return 0;
 }
 
-static int copy_metadata(MiraMetadata* dest, const MiraMetadata* src) {
+static int copy_metadata(BxFetchMetadata* dest, const BxFetchMetadata* src) {
     if (!dest || !src) {
         errno = EINVAL;
         return -1;
     }
 
-    MiraMetadata copy = {0};
+    BxFetchMetadata copy = {0};
     if (set_metadata_string(&copy.etag, src->etag) != 0 || set_metadata_string(&copy.last_modified, src->last_modified) != 0 || set_metadata_string(&copy.origin_url, src->origin_url) != 0 ||
         set_metadata_string(&copy.redirect_target, src->redirect_target) != 0 || set_metadata_string(&copy.local_path, src->local_path) != 0) {
         bx_fetch_metadata_clear(&copy);
@@ -471,7 +471,7 @@ static int stream_flush_and_sync(FILE* f) {
     return fsync(fd);
 }
 
-static int write_metadata_temp_file_at(int parent_fd, const char* basename, const MiraMetadata* meta, char** temp_name_out) {
+static int write_metadata_temp_file_at(int parent_fd, const char* basename, const BxFetchMetadata* meta, char** temp_name_out) {
     if (parent_fd == -1 || !basename || !meta || !temp_name_out) {
         errno = EINVAL;
         return -1;
@@ -568,7 +568,7 @@ static void restore_hold_entry(int parent_fd, char** hold_name, const char* fina
     *hold_name = NULL;
 }
 
-static void writer_free(Writer* w) {
+static void writer_free(BxFetchWriter* w) {
     if (!w)
         return;
     if (w->parent_fd != -1)
@@ -706,11 +706,11 @@ static int finalize_payload_hold(int parent_fd, const char* basename, int backup
     return rc;
 }
 
-Writer* bx_fetch_writer_open_with_options(const char* path, WriterMode mode, int backups, bool unlink_existing) {
+BxFetchWriter* bx_fetch_writer_open_with_options(const char* path, BxFetchWriterMode mode, int backups, bool unlink_existing) {
     if (!path)
         return NULL;
 
-    Writer* w = calloc(1, sizeof(Writer));
+    BxFetchWriter* w = calloc(1, sizeof(BxFetchWriter));
     if (!w)
         return NULL;
 
@@ -774,13 +774,13 @@ Writer* bx_fetch_writer_open_with_options(const char* path, WriterMode mode, int
     return w;
 }
 
-Writer* bx_fetch_writer_open(const char* path, WriterMode mode) {
+BxFetchWriter* bx_fetch_writer_open(const char* path, BxFetchWriterMode mode) {
     return bx_fetch_writer_open_with_options(path, mode, 0, false);
 }
 
 static int ensure_leaf_absent(int parent_fd, const char* name);
 
-static int writer_set_final_path_with_policy(Writer* w, const char* path, bool exclusive) {
+static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path, bool exclusive) {
     if (!w || !path || w->to_stdout) {
         errno = EINVAL;
         return -1;
@@ -883,15 +883,15 @@ static int writer_set_final_path_with_policy(Writer* w, const char* path, bool e
     return 0;
 }
 
-int bx_fetch_writer_set_final_path(Writer* w, const char* path) {
+int bx_fetch_writer_set_final_path(BxFetchWriter* w, const char* path) {
     return writer_set_final_path_with_policy(w, path, false);
 }
 
-int bx_fetch_writer_set_final_path_exclusive(Writer* w, const char* path) {
+int bx_fetch_writer_set_final_path_exclusive(BxFetchWriter* w, const char* path) {
     return writer_set_final_path_with_policy(w, path, true);
 }
 
-int bx_fetch_writer_stage_metadata(Writer* w, const MiraMetadata* meta) {
+int bx_fetch_writer_stage_metadata(BxFetchWriter* w, const BxFetchMetadata* meta) {
     if (!w || w->to_stdout) {
         errno = EINVAL;
         return -1;
@@ -911,7 +911,7 @@ int bx_fetch_writer_stage_metadata(Writer* w, const MiraMetadata* meta) {
     return 0;
 }
 
-int bx_fetch_writer_preserve_destination_metadata(Writer* w) {
+int bx_fetch_writer_preserve_destination_metadata(BxFetchWriter* w) {
     if (!w || w->to_stdout || w->fd == -1 || w->parent_fd == -1) {
         errno = EINVAL;
         return -1;
@@ -949,7 +949,7 @@ int bx_fetch_writer_preserve_destination_metadata(Writer* w) {
     return rc;
 }
 
-int bx_fetch_writer_begin_replace(Writer* w) {
+int bx_fetch_writer_begin_replace(BxFetchWriter* w) {
     if (!w)
         return -1;
     if (w->to_stdout)
@@ -985,7 +985,7 @@ int bx_fetch_writer_begin_replace(Writer* w) {
     return 0;
 }
 
-int bx_fetch_writer_write(Writer* w, const void* data, size_t len) {
+int bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len) {
     if (!w || w->fd == -1 || (!data && len > 0))
         return -1;
 
@@ -1004,7 +1004,7 @@ int bx_fetch_writer_write(Writer* w, const void* data, size_t len) {
     return 0;
 }
 
-int bx_fetch_writer_set_mtime(Writer* w, time_t mtime) {
+int bx_fetch_writer_set_mtime(BxFetchWriter* w, time_t mtime) {
     if (!w || w->to_stdout || w->fd == -1) {
         errno = EINVAL;
         return -1;
@@ -1015,7 +1015,7 @@ int bx_fetch_writer_set_mtime(Writer* w, time_t mtime) {
     return 0;
 }
 
-int bx_fetch_writer_stage_xattrs(Writer* w, const char* url, const char* content_type, const char* etag, const char* last_modified) {
+int bx_fetch_writer_stage_xattrs(BxFetchWriter* w, const char* url, const char* content_type, const char* etag, const char* last_modified) {
     if (!w || w->to_stdout || w->fd == -1) {
         errno = EINVAL;
         return BX_FETCH_XATTR_ERROR;
@@ -1045,7 +1045,7 @@ static void unlink_leaf_if_same_identity(int parent_fd, const char* name, const 
     }
 }
 
-int bx_fetch_writer_close(Writer* w) {
+int bx_fetch_writer_close(BxFetchWriter* w) {
     if (!w)
         return -1;
 
@@ -1251,7 +1251,7 @@ int bx_fetch_writer_close(Writer* w) {
     return rc;
 }
 
-void bx_fetch_writer_abort(Writer* w) {
+void bx_fetch_writer_abort(BxFetchWriter* w) {
     if (!w)
         return;
 
@@ -1263,15 +1263,15 @@ void bx_fetch_writer_abort(Writer* w) {
     writer_free(w);
 }
 
-i64 bx_fetch_writer_get_size(const char* path) {
+BxFetchI64 bx_fetch_writer_get_size(const char* path) {
     struct stat st;
     if (lstat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-        return (i64)st.st_size;
+        return (BxFetchI64)st.st_size;
     }
-    return (i64)-1;
+    return (BxFetchI64)-1;
 }
 
-const char* bx_fetch_writer_get_path(const Writer* w) {
+const char* bx_fetch_writer_get_path(const BxFetchWriter* w) {
     if (!w)
         return NULL;
     return w->path;

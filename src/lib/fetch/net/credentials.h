@@ -11,21 +11,21 @@ typedef enum {
     BX_FETCH_CREDENTIAL_SOURCE_FTP,
     BX_FETCH_CREDENTIAL_SOURCE_PROXY_CONFIG,
     BX_FETCH_CREDENTIAL_SOURCE_PROXY_INHERITED,
-} MiraCredentialSource;
+} BxFetchCredentialSource;
 
 typedef struct {
-    MiraCredentialSource source;
+    BxFetchCredentialSource source;
     const char* username;
     const char* password;
-} MiraCredentialSelection;
+} BxFetchCredentialSelection;
 
 /*
  * Selection strings are borrowed from cfg or static empty strings. A selected
  * configured source is atomic: an omitted component becomes empty and is
  * never inherited from a lower-priority source.
  */
-void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, MiraCredentialSelection* selection);
-void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, MiraCredentialSelection* selection);
+void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, BxFetchCredentialSelection* selection);
+void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, BxFetchCredentialSelection* selection);
 /* Returns the borrowed proxy environment value selected for request_url. */
 const char* bx_fetch_net_proxy_environment_url(const char* request_url);
 /*

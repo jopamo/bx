@@ -7,7 +7,7 @@
 #include <string.h>
 #include <strings.h>
 
-MiraResumeAction bx_fetch_resume_action_for_status(int status_code) {
+BxFetchResumeAction bx_fetch_resume_action_for_status(int status_code) {
     if (status_code < 200)
         return BX_FETCH_RESUME_ACTION_APPEND;
     if (status_code == 206)
@@ -36,11 +36,11 @@ static int parse_nonnegative_long_long(const char** cursor, long long* value_out
     return 0;
 }
 
-int bx_fetch_parse_content_range(const char* content_range, MiraContentRange* range_out) {
+int bx_fetch_parse_content_range(const char* content_range, BxFetchContentRange* range_out) {
     if (!content_range || !range_out)
         return -1;
 
-    MiraContentRange parsed = {0};
+    BxFetchContentRange parsed = {0};
     const char* p = content_range;
     while (*p && isspace((unsigned char)*p))
         p++;
@@ -91,7 +91,7 @@ int bx_fetch_parse_content_range_start(const char* content_range, long long* sta
     if (!content_range || !start_out)
         return -1;
 
-    MiraContentRange parsed = {0};
+    BxFetchContentRange parsed = {0};
     if (bx_fetch_parse_content_range(content_range, &parsed) != 0)
         return -1;
 
@@ -100,7 +100,7 @@ int bx_fetch_parse_content_range_start(const char* content_range, long long* sta
 }
 
 bool bx_fetch_resume_content_range_matches(const char* content_range, long long expected_start) {
-    MiraContentRange parsed = {0};
+    BxFetchContentRange parsed = {0};
     return bx_fetch_parse_content_range(content_range, &parsed) == 0 && parsed.start == expected_start;
 }
 

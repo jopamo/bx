@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct Filter {
+struct BxFetchFilter {
     const struct bx_fetch_config* cfg;
     char** accept_exts;
     int accept_count;
@@ -149,7 +149,7 @@ static bool path_matches_any_directory(const char* path, char** rules, int count
     return false;
 }
 
-static int append_seed_host(Filter* f, const char* host) {
+static int append_seed_host(BxFetchFilter* f, const char* host) {
     if (!f || !host || host[0] == '\0')
         return -1;
     if (host_matches_any(host, f->seed_hosts, f->seed_host_count, false))
@@ -171,7 +171,7 @@ static int append_seed_host(Filter* f, const char* host) {
     return 0;
 }
 
-static int compile_accept_regex(Filter* f) {
+static int compile_accept_regex(BxFetchFilter* f) {
     if (!f || !f->cfg || !f->cfg->recursive.accept_regex)
         return 0;
 
@@ -188,14 +188,14 @@ static int compile_accept_regex(Filter* f) {
     return 0;
 }
 
-static bool url_matches_accept_regex(Filter* f, const char* url) {
+static bool url_matches_accept_regex(BxFetchFilter* f, const char* url) {
     if (!f || !f->accept_regex_compiled || !url)
         return true;
     return regexec(&f->accept_regex, url, 0, NULL, 0) == 0;
 }
 
-Filter* bx_fetch_filter_new(const struct bx_fetch_config* cfg) {
-    Filter* f = calloc(1, sizeof(Filter));
+BxFetchFilter* bx_fetch_filter_new(const struct bx_fetch_config* cfg) {
+    BxFetchFilter* f = calloc(1, sizeof(BxFetchFilter));
     if (!f)
         return NULL;
 
@@ -219,7 +219,7 @@ Filter* bx_fetch_filter_new(const struct bx_fetch_config* cfg) {
     return f;
 }
 
-void bx_fetch_filter_free(Filter* f) {
+void bx_fetch_filter_free(BxFetchFilter* f) {
     if (!f)
         return;
     for (int i = 0; i < f->accept_count; i++)
@@ -249,7 +249,7 @@ void bx_fetch_filter_free(Filter* f) {
     free(f);
 }
 
-int bx_fetch_filter_add_seed_url(Filter* f, const char* url) {
+int bx_fetch_filter_add_seed_url(BxFetchFilter* f, const char* url) {
     if (!f || !url)
         return -1;
 
@@ -261,11 +261,11 @@ int bx_fetch_filter_add_seed_url(Filter* f, const char* url) {
     return rc;
 }
 
-int bx_fetch_filter_add_canonical_seed_url(Filter* f, const char* canonical_url) {
+int bx_fetch_filter_add_canonical_seed_url(BxFetchFilter* f, const char* canonical_url) {
     if (!f || !canonical_url)
         return -1;
 
-    MiraURL* mu = bx_fetch_url_parse(canonical_url);
+    BxFetchUrl* mu = bx_fetch_url_parse(canonical_url);
     if (!mu)
         return -1;
 
@@ -310,11 +310,11 @@ static bool has_extension(const char* url, const char* ext) {
     return strncasecmp(ext_start, ext, ext_len) == 0;
 }
 
-FilterDecision bx_fetch_filter_evaluate_url(Filter* f, const char* url) {
+BxFetchFilterDecision bx_fetch_filter_evaluate_url(BxFetchFilter* f, const char* url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_url(url, f->cfg->https.https_only);
+    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_url(url, f->cfg->https.https_only);
     if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }
@@ -325,16 +325,16 @@ FilterDecision bx_fetch_filter_evaluate_url(Filter* f, const char* url) {
     char* canonical = bx_fetch_url_canonicalize(url);
     if (!canonical)
         return FILTER_DECISION_INVALID_URL;
-    FilterDecision decision = bx_fetch_filter_evaluate_canonical_url(f, canonical);
+    BxFetchFilterDecision decision = bx_fetch_filter_evaluate_canonical_url(f, canonical);
     free(canonical);
     return decision;
 }
 
-static FilterDecision evaluate_transport_policy(const Filter* f, const MiraURL* url, const char* canonical_url) {
+static BxFetchFilterDecision evaluate_transport_policy(const BxFetchFilter* f, const BxFetchUrl* url, const char* canonical_url) {
     if (!f || !url)
         return FILTER_DECISION_ACCEPT;
 
-    MiraProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_scheme(url->scheme, f->cfg->https.https_only);
+    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_scheme(url->scheme, f->cfg->https.https_only);
     if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED || protocol_decision == BX_FETCH_PROTOCOL_DECISION_INVALID_URL) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }
@@ -347,27 +347,27 @@ static FilterDecision evaluate_transport_policy(const Filter* f, const MiraURL* 
     return FILTER_DECISION_ACCEPT;
 }
 
-FilterDecision bx_fetch_filter_evaluate_transport_canonical_url(Filter* f, const char* canonical_url) {
+BxFetchFilterDecision bx_fetch_filter_evaluate_transport_canonical_url(BxFetchFilter* f, const char* canonical_url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraURL* url = bx_fetch_url_parse(canonical_url);
+    BxFetchUrl* url = bx_fetch_url_parse(canonical_url);
     if (!url)
         return FILTER_DECISION_INVALID_URL;
-    FilterDecision decision = evaluate_transport_policy(f, url, canonical_url);
+    BxFetchFilterDecision decision = evaluate_transport_policy(f, url, canonical_url);
     bx_fetch_url_free(url);
     return decision;
 }
 
-FilterDecision bx_fetch_filter_evaluate_canonical_url(Filter* f, const char* canonical_url) {
+BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, const char* canonical_url) {
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    MiraURL* mu = bx_fetch_url_parse(canonical_url);
+    BxFetchUrl* mu = bx_fetch_url_parse(canonical_url);
     if (!mu)
         return FILTER_DECISION_INVALID_URL;
 
-    FilterDecision decision = evaluate_transport_policy(f, mu, canonical_url);
+    BxFetchFilterDecision decision = evaluate_transport_policy(f, mu, canonical_url);
 
     if (decision == FILTER_DECISION_ACCEPT) {
         const bool exact_seed_match = mu->host && host_matches_any(mu->host, f->seed_hosts, f->seed_host_count, false);
@@ -432,7 +432,7 @@ FilterDecision bx_fetch_filter_evaluate_canonical_url(Filter* f, const char* can
     return decision;
 }
 
-const char* bx_fetch_filter_decision_reason(FilterDecision decision) {
+const char* bx_fetch_filter_decision_reason(BxFetchFilterDecision decision) {
     switch (decision) {
         case FILTER_DECISION_ACCEPT:
             return NULL;
@@ -463,6 +463,6 @@ const char* bx_fetch_filter_decision_reason(FilterDecision decision) {
     return "unspecified";
 }
 
-bool bx_fetch_filter_url_accepted(Filter* f, const char* url) {
+bool bx_fetch_filter_url_accepted(BxFetchFilter* f, const char* url) {
     return bx_fetch_filter_evaluate_url(f, url) == FILTER_DECISION_ACCEPT;
 }

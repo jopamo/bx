@@ -13,7 +13,7 @@
  *   credential-boundary policy; it does not apply crawl scope/content rules.
  *
  * Ownership and lifetime:
- * - bx_fetch_filter_new() borrows `cfg`; the struct bx_fetch_config must outlive Filter.
+ * - bx_fetch_filter_new() borrows `cfg`; the struct bx_fetch_config must outlive BxFetchFilter.
  * - bx_fetch_filter_free() releases all filter-owned allocations.
  * - Input URL pointers are borrowed; no input pointer ownership transfer.
  * - `*_canonical_*` entry points are internal fast paths whose URL argument
@@ -23,7 +23,7 @@
 #include "config.h"
 #include <stdbool.h>
 
-typedef struct Filter Filter;
+typedef struct BxFetchFilter BxFetchFilter;
 
 typedef enum {
     FILTER_DECISION_ACCEPT = 0,
@@ -38,17 +38,17 @@ typedef enum {
     FILTER_DECISION_SUFFIX_DENYLIST,
     FILTER_DECISION_REGEX_ALLOWLIST,
     FILTER_DECISION_SUFFIX_ALLOWLIST,
-} FilterDecision;
+} BxFetchFilterDecision;
 
-Filter* bx_fetch_filter_new(const struct bx_fetch_config* cfg);
-void bx_fetch_filter_free(Filter* f);
+BxFetchFilter* bx_fetch_filter_new(const struct bx_fetch_config* cfg);
+void bx_fetch_filter_free(BxFetchFilter* f);
 
-int bx_fetch_filter_add_seed_url(Filter* f, const char* url);
-int bx_fetch_filter_add_canonical_seed_url(Filter* f, const char* canonical_url);
-FilterDecision bx_fetch_filter_evaluate_url(Filter* f, const char* url);
-FilterDecision bx_fetch_filter_evaluate_transport_canonical_url(Filter* f, const char* canonical_url);
-FilterDecision bx_fetch_filter_evaluate_canonical_url(Filter* f, const char* canonical_url);
-const char* bx_fetch_filter_decision_reason(FilterDecision decision);
-bool bx_fetch_filter_url_accepted(Filter* f, const char* url);
+int bx_fetch_filter_add_seed_url(BxFetchFilter* f, const char* url);
+int bx_fetch_filter_add_canonical_seed_url(BxFetchFilter* f, const char* canonical_url);
+BxFetchFilterDecision bx_fetch_filter_evaluate_url(BxFetchFilter* f, const char* url);
+BxFetchFilterDecision bx_fetch_filter_evaluate_transport_canonical_url(BxFetchFilter* f, const char* canonical_url);
+BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, const char* canonical_url);
+const char* bx_fetch_filter_decision_reason(BxFetchFilterDecision decision);
+bool bx_fetch_filter_url_accepted(BxFetchFilter* f, const char* url);
 
 #endif  // BX_FETCH_FILTER_H

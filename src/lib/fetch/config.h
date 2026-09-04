@@ -24,28 +24,28 @@ typedef struct {
     bool show_version;
     bool show_help;
     bool cli_options_provided;
-} StartupConfig;
+} BxFetchStartupConfig;
 
 typedef enum {
     BX_FETCH_VERBOSITY_QUIET = 0,
     BX_FETCH_VERBOSITY_NORMAL,
     BX_FETCH_VERBOSITY_VERBOSE,
-} MiraVerbosity;
+} BxFetchVerbosity;
 
 typedef enum {
     BX_FETCH_LOG_FILE_NONE = 0,
     BX_FETCH_LOG_FILE_TRUNCATE,
     BX_FETCH_LOG_FILE_APPEND,
-} MiraLogFileMode;
+} BxFetchLogFileMode;
 
 typedef struct {
     char* log_file;
-    MiraLogFileMode log_file_mode;
-    MiraVerbosity verbosity;
+    BxFetchLogFileMode log_file_mode;
+    BxFetchVerbosity verbosity;
     bool debug_trace;
     bool structured_errors;
     char* rejected_log;
-} LoggingConfig;
+} BxFetchLoggingConfig;
 
 typedef struct {
     char* input_file;
@@ -53,7 +53,7 @@ typedef struct {
     char* base_url;
     char** urls;
     int url_count;
-} UrlInputConfig;
+} BxFetchUrlInputConfig;
 
 typedef struct {
     int tries;
@@ -93,7 +93,7 @@ typedef struct {
     char* password;
     bool unlink;
     bool xattr;
-} DownloadConfig;
+} BxFetchDownloadConfig;
 
 typedef struct {
     bool no_directories;
@@ -103,7 +103,7 @@ typedef struct {
     char* directory_prefix;
     int cut_dirs;
     bool trust_server_names;
-} DirectoryConfig;
+} BxFetchDirectoryConfig;
 
 typedef struct {
     char* http_user;
@@ -130,7 +130,7 @@ typedef struct {
     char* method;
     bool content_disposition;
     bool auth_no_challenge;
-} HttpConfig;
+} BxFetchHttpConfig;
 
 typedef struct {
     bool https_only;
@@ -142,7 +142,7 @@ typedef struct {
     char* pinnedpubkey;
     bool no_hsts;
     char* hsts_file;
-} HttpsConfig;
+} BxFetchHttpsConfig;
 
 typedef struct {
     bool recursive;
@@ -163,24 +163,24 @@ typedef struct {
     char* include_directories;
     char* exclude_directories;
     bool no_parent;
-} RecursiveConfig;
+} BxFetchRecursiveConfig;
 
 typedef struct {
     char* ftp_user;
     char* ftp_password;
     bool no_passive_ftp;
-} FtpConfig;
+} BxFetchFtpConfig;
 
 struct bx_fetch_config {
-    StartupConfig startup;
-    LoggingConfig logging;
-    DownloadConfig download;
-    DirectoryConfig dirs;
-    HttpConfig http;
-    HttpsConfig https;
-    RecursiveConfig recursive;
-    FtpConfig ftp;
-    UrlInputConfig input;
+    BxFetchStartupConfig startup;
+    BxFetchLoggingConfig logging;
+    BxFetchDownloadConfig download;
+    BxFetchDirectoryConfig dirs;
+    BxFetchHttpConfig http;
+    BxFetchHttpsConfig https;
+    BxFetchRecursiveConfig recursive;
+    BxFetchFtpConfig ftp;
+    BxFetchUrlInputConfig input;
 };
 
 /* Allocates a config with default values; caller owns and must free. */

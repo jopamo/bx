@@ -206,7 +206,7 @@ static bool append_css_decoded_range(const char* start, size_t len, char** buf, 
     return true;
 }
 
-static void emit_css_url(const char* start, size_t len, MiraLinkCallback cb, void* userdata) {
+static void emit_css_url(const char* start, size_t len, BxFetchLinkCallback cb, void* userdata) {
     if (!start || !cb)
         return;
 
@@ -263,7 +263,7 @@ static size_t scan_css_value_until(const char* css, size_t len, size_t i, char t
     return i;
 }
 
-static size_t parse_css_quoted_value(const char* css, size_t len, size_t i, char quote, MiraLinkCallback cb, void* userdata) {
+static size_t parse_css_quoted_value(const char* css, size_t len, size_t i, char quote, BxFetchLinkCallback cb, void* userdata) {
     size_t value_start = i;
     bool closed_quote = false;
     i = scan_css_value_until(css, len, i, quote, &closed_quote);
@@ -286,7 +286,7 @@ static size_t parse_css_quoted_value(const char* css, size_t len, size_t i, char
     return i;
 }
 
-static size_t parse_css_unquoted_value(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
+static size_t parse_css_unquoted_value(const char* css, size_t len, size_t i, BxFetchLinkCallback cb, void* userdata) {
     size_t value_start = i;
     bool found_closing_paren = false;
     i = scan_css_value_until(css, len, i, ')', &found_closing_paren);
@@ -299,7 +299,7 @@ static size_t parse_css_unquoted_value(const char* css, size_t len, size_t i, Mi
     return i;
 }
 
-static size_t parse_css_url_function(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
+static size_t parse_css_url_function(const char* css, size_t len, size_t i, BxFetchLinkCallback cb, void* userdata) {
     while (i < len && isspace((unsigned char)css[i])) {
         i++;
     }
@@ -314,7 +314,7 @@ static size_t parse_css_url_function(const char* css, size_t len, size_t i, Mira
     return parse_css_unquoted_value(css, len, i, cb, userdata);
 }
 
-static size_t parse_css_import_rule(const char* css, size_t len, size_t i, MiraLinkCallback cb, void* userdata) {
+static size_t parse_css_import_rule(const char* css, size_t len, size_t i, BxFetchLinkCallback cb, void* userdata) {
     if (i >= len || css[i] != '@') {
         return i;
     }
@@ -364,7 +364,7 @@ static size_t parse_css_import_rule(const char* css, size_t len, size_t i, MiraL
     return j;
 }
 
-int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -420,12 +420,12 @@ int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_
 #include <lexbor/html/serialize.h>
 
 typedef struct {
-    MiraHtmlLinkCallback cb;
+    BxFetchHtmlLinkCallback cb;
     void* userdata;
 } LexborExtractContext;
 
 typedef struct {
-    MiraLinkRewriteCallback cb;
+    BxFetchLinkRewriteCallback cb;
     void* userdata;
 } LexborRewriteContext;
 
@@ -437,11 +437,11 @@ typedef struct {
 } LexborAttrSpec;
 
 typedef struct {
-    MiraLinkCallback cb;
+    BxFetchLinkCallback cb;
     void* userdata;
 } HtmlExtractCompatContext;
 
-static void extract_html_link_compat(void* userdata, const char* url, MiraHtmlLinkKind kind) {
+static void extract_html_link_compat(void* userdata, const char* url, BxFetchHtmlLinkKind kind) {
     (void)kind;
 
     const HtmlExtractCompatContext* ctx = userdata;
@@ -463,7 +463,7 @@ static bool span_ascii_case_equals_bytes(const char* value, size_t len, const ch
     return true;
 }
 
-static MiraHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len) {
+static BxFetchHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len) {
     if (!span_ascii_case_equals_bytes(attr_name, attr_name_len, "href")) {
         return BX_FETCH_HTML_LINK_REQUISITE;
     }
@@ -546,7 +546,7 @@ static lxb_dom_report_spec_t rewrite_callback(lxb_dom_node_t* node, void* ctx) {
     return LXB_DOM_REPORT_OK;
 }
 
-int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -571,7 +571,7 @@ int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_dat
     return 0;
 }
 
-int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
@@ -579,7 +579,7 @@ int bx_fetch_html_extract_links(const char* base_url, const char* html_data, siz
     return bx_fetch_html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
-char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -617,12 +617,12 @@ char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, s
 typedef int (*HtmlAttrVisitorFn)(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end);
 
 typedef struct {
-    MiraHtmlLinkCallback cb;
+    BxFetchHtmlLinkCallback cb;
     void* userdata;
 } HtmlExtractContext;
 
 typedef struct {
-    MiraLinkCallback cb;
+    BxFetchLinkCallback cb;
     void* userdata;
 } HtmlExtractCompatContext;
 
@@ -633,7 +633,7 @@ typedef struct {
 } HtmlReplacement;
 
 typedef struct {
-    MiraLinkRewriteCallback cb;
+    BxFetchLinkRewriteCallback cb;
     void* userdata;
     HtmlReplacement* items;
     size_t count;
@@ -679,7 +679,7 @@ static bool is_html_link_attr(const char* html_data, size_t name_start, size_t n
     return span_case_equals(html_data, name_start, name_end, "href") || span_case_equals(html_data, name_start, name_end, "src");
 }
 
-static MiraHtmlLinkKind html_link_kind_for_attr(const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end) {
+static BxFetchHtmlLinkKind html_link_kind_for_attr(const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end) {
     if (span_case_equals(html_data, attr_name_start, attr_name_end, "href") && span_case_equals(html_data, tag_name_start, tag_name_end, "a")) {
         return BX_FETCH_HTML_LINK_NAVIGATION;
     }
@@ -911,7 +911,7 @@ static int scan_html_link_attrs(const char* html_data, size_t len, HtmlAttrVisit
     return 0;
 }
 
-static void extract_html_link_compat(void* userdata, const char* url, MiraHtmlLinkKind kind) {
+static void extract_html_link_compat(void* userdata, const char* url, BxFetchHtmlLinkKind kind) {
     (void)kind;
 
     const HtmlExtractCompatContext* ctx = userdata;
@@ -933,7 +933,7 @@ static int html_extract_visit(void* userdata, const char* html_data, size_t tag_
     return 0;
 }
 
-int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, MiraHtmlLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;
@@ -944,7 +944,7 @@ int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_dat
     return scan_html_link_attrs(html_data, len, html_extract_visit, &ctx);
 }
 
-int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, MiraLinkCallback cb, void* userdata) {
+int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
     HtmlExtractCompatContext ctx = {
         .cb = cb,
         .userdata = userdata,
@@ -1036,7 +1036,7 @@ static int append_buffer(char** buffer, size_t* length, size_t* capacity, const 
     return 0;
 }
 
-char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, MiraLinkRewriteCallback cb, void* userdata) {
+char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
     (void)base_url;
     if (!cb)
         errno = EINVAL;

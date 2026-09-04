@@ -10,9 +10,9 @@
  *   and util/fs/net components.
  *
  * Ownership and lifetime:
- * - MiraHeader name/value fields are heap strings owned by the containing
+ * - BxFetchHeader name/value fields are heap strings owned by the containing
  *   request/response object.
- * - MiraResult is a value type with no dynamic ownership.
+ * - BxFetchResult is a value type with no dynamic ownership.
  */
 
 #include <stdbool.h>
@@ -20,20 +20,20 @@
 #include <stdint.h>
 #include "error.h"
 
-typedef int32_t i32;
-typedef uint32_t u32;
-typedef int64_t i64;
-typedef uint64_t u64;
-typedef size_t usize;
+typedef int32_t BxFetchI32;
+typedef uint32_t BxFetchU32;
+typedef int64_t BxFetchI64;
+typedef uint64_t BxFetchU64;
+typedef size_t BxFetchUsize;
 
 typedef struct {
     char* name;
     char* value;
-} MiraHeader;
+} BxFetchHeader;
 
 typedef struct {
     bool ok;
-    MiraError error;
-} MiraResult;
+    BxFetchError error;
+} BxFetchResult;
 
 #endif  // BX_FETCH_TYPES_H

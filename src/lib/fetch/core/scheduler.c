@@ -31,10 +31,10 @@ typedef struct HostState {
     struct HostState* next;
 } HostState;
 
-struct Scheduler {
+struct BxFetchScheduler {
     const struct bx_fetch_config* cfg;
-    SchedulerDispatchFn dispatch;
-    SchedulerPollFn poll;
+    BxFetchSchedulerDispatchFn dispatch;
+    BxFetchSchedulerPollFn poll;
     void* userdata;
 
     QueuedURL* queue_head;
@@ -53,17 +53,17 @@ struct Scheduler {
 };
 
 typedef struct {
-    Scheduler* sched;
+    BxFetchScheduler* sched;
     char* url;
     char* output_path;
     char* host;
     int tries_done;
 } TransferInfo;
 
-static HostState* get_host_state(const Scheduler* s, const char* host);
-static bool host_state_note_dispatch(Scheduler* s, HostState* hs, const struct timespec* dispatched_at);
+static HostState* get_host_state(const BxFetchScheduler* s, const char* host);
+static bool host_state_note_dispatch(BxFetchScheduler* s, HostState* hs, const struct timespec* dispatched_at);
 
-static bool scheduler_counts_invariant_holds(const Scheduler* s) {
+static bool scheduler_counts_invariant_holds(const BxFetchScheduler* s) {
     if (!s)
         return false;
     if (s->active_total < 0 || s->active_host_total < 0 || s->active_hostless_total < 0) {
@@ -78,7 +78,7 @@ static bool scheduler_counts_invariant_holds(const Scheduler* s) {
     return true;
 }
 
-static bool scheduler_record_invariant_failure(Scheduler* s, const char* message) {
+static bool scheduler_record_invariant_failure(BxFetchScheduler* s, const char* message) {
     if (!s)
         return false;
     s->had_transfer_error = true;
@@ -89,20 +89,20 @@ static bool scheduler_record_invariant_failure(Scheduler* s, const char* message
     return false;
 }
 
-static bool scheduler_require(Scheduler* s, bool condition, const char* message) {
+static bool scheduler_require(BxFetchScheduler* s, bool condition, const char* message) {
     if (condition)
         return true;
     return scheduler_record_invariant_failure(s, message);
 }
 
-static bool should_retry_http_status(const Scheduler* s, int status) {
+static bool should_retry_http_status(const BxFetchScheduler* s, int status) {
     if (!s || !s->cfg->download.retry_on_http_error)
         return false;
     return bx_fetch_http_status_list_contains(s->cfg->download.retry_on_http_error, status);
 }
 
-static bool should_retry_result(const Scheduler* s, int status, int result) {
-    switch ((MiraError)result) {
+static bool should_retry_result(const BxFetchScheduler* s, int status, int result) {
+    switch ((BxFetchError)result) {
         case BX_FETCH_OK:
         case BX_FETCH_ERROR_CANCELLED:
         case BX_FETCH_ERROR_UNSUPPORTED:
@@ -116,7 +116,7 @@ static bool should_retry_result(const Scheduler* s, int status, int result) {
 }
 
 static bool result_counts_as_scheduler_failure(int result) {
-    switch ((MiraError)result) {
+    switch ((BxFetchError)result) {
         case BX_FETCH_OK:
         case BX_FETCH_ERROR_HTTP:
         case BX_FETCH_ERROR_CANCELLED:
@@ -166,7 +166,7 @@ static uint64_t scheduler_random_mix(uint64_t value) {
     return value;
 }
 
-static uint64_t scheduler_random_next(Scheduler* s) {
+static uint64_t scheduler_random_next(BxFetchScheduler* s) {
     uint64_t state = s ? s->random_state : 0;
     if (state == 0) {
         state = 0x9e3779b97f4a7c15ULL;
@@ -182,7 +182,7 @@ static uint64_t scheduler_random_next(Scheduler* s) {
     return state * 2685821657736338717ULL;
 }
 
-static uint64_t scheduler_random_bounded(Scheduler* s, uint64_t upper_bound) {
+static uint64_t scheduler_random_bounded(BxFetchScheduler* s, uint64_t upper_bound) {
     if (upper_bound <= 1)
         return 0;
 
@@ -209,7 +209,7 @@ static uint64_t scheduler_initial_random_state(const struct bx_fetch_config* cfg
     return seed != 0 ? seed : 0x9e3779b97f4a7c15ULL;
 }
 
-static long long scheduler_sample_host_wait_ns(Scheduler* s) {
+static long long scheduler_sample_host_wait_ns(BxFetchScheduler* s) {
     if (!s || s->cfg->download.wait <= 0)
         return 0;
 
@@ -254,7 +254,7 @@ static bool wait_remaining_for_retry(const QueuedURL* q, const struct timespec* 
     return true;
 }
 
-static bool queue_wait_remaining(const Scheduler* s, const QueuedURL* q, const struct timespec* now, struct timespec* remaining) {
+static bool queue_wait_remaining(const BxFetchScheduler* s, const QueuedURL* q, const struct timespec* now, struct timespec* remaining) {
     struct timespec host_remaining = {0};
     struct timespec retry_remaining = {0};
 
@@ -279,7 +279,7 @@ static bool queue_wait_remaining(const Scheduler* s, const QueuedURL* q, const s
     return true;
 }
 
-static bool scheduler_next_wait_duration(Scheduler* s, const struct timespec* now, struct timespec* min_wait) {
+static bool scheduler_next_wait_duration(BxFetchScheduler* s, const struct timespec* now, struct timespec* min_wait) {
     bool found = false;
 
     for (QueuedURL* q = s->queue_head; q; q = q->next) {
@@ -318,7 +318,7 @@ static void free_queued_url(QueuedURL* q) {
     free(q);
 }
 
-static int scheduler_add_url_with_tries(Scheduler* s, const char* url, const char* output_path, int tries_done, const struct timespec* retry_ready_time) {
+static int scheduler_add_url_with_tries(BxFetchScheduler* s, const char* url, const char* output_path, int tries_done, const struct timespec* retry_ready_time) {
     if (!s || !url || !output_path || tries_done < 0) {
         errno = EINVAL;
         return -1;
@@ -348,7 +348,7 @@ static int scheduler_add_url_with_tries(Scheduler* s, const char* url, const cha
         q->has_retry_ready_time = true;
     }
 
-    MiraURL* mu = bx_fetch_url_parse(url);
+    BxFetchUrl* mu = bx_fetch_url_parse(url);
     if (!mu || !mu->host || mu->host[0] == '\0') {
         bx_fetch_url_free(mu);
         free_queued_url(q);
@@ -373,7 +373,7 @@ static int scheduler_add_url_with_tries(Scheduler* s, const char* url, const cha
     return 0;
 }
 
-static HostState* get_host_state(const Scheduler* s, const char* host) {
+static HostState* get_host_state(const BxFetchScheduler* s, const char* host) {
     if (!host)
         return NULL;
 
@@ -387,7 +387,7 @@ static HostState* get_host_state(const Scheduler* s, const char* host) {
     return NULL;
 }
 
-static bool host_state_note_dispatch(Scheduler* s, HostState* hs, const struct timespec* dispatched_at) {
+static bool host_state_note_dispatch(BxFetchScheduler* s, HostState* hs, const struct timespec* dispatched_at) {
     if (!s || !hs)
         return false;
 
@@ -411,7 +411,7 @@ static bool host_state_note_dispatch(Scheduler* s, HostState* hs, const struct t
     return true;
 }
 
-static bool inc_host_active_count(Scheduler* s, const char* host, const struct timespec* dispatched_at) {
+static bool inc_host_active_count(BxFetchScheduler* s, const char* host, const struct timespec* dispatched_at) {
     if (!s)
         return false;
 
@@ -453,7 +453,7 @@ static bool inc_host_active_count(Scheduler* s, const char* host, const struct t
     return true;
 }
 
-static bool dec_host_active_count(Scheduler* s, const char* host) {
+static bool dec_host_active_count(BxFetchScheduler* s, const char* host) {
     if (!s)
         return false;
 
@@ -477,7 +477,7 @@ static bool dec_host_active_count(Scheduler* s, const char* host) {
 
 static bool on_transfer_complete(void* userdata, const char* url, int status, int result, bool retryable_hint) {
     TransferInfo* ti = userdata;
-    Scheduler* s = ti ? ti->sched : NULL;
+    BxFetchScheduler* s = ti ? ti->sched : NULL;
     if (!ti || !s)
         return false;
 
@@ -537,11 +537,11 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
     return retried;
 }
 
-Scheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata) {
+BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, BxFetchSchedulerDispatchFn dispatch, BxFetchSchedulerPollFn poll, void* userdata) {
     if (!cfg || !dispatch)
         return NULL;
 
-    Scheduler* s = calloc(1, sizeof(Scheduler));
+    BxFetchScheduler* s = calloc(1, sizeof(BxFetchScheduler));
     if (!s)
         return NULL;
 
@@ -557,7 +557,7 @@ Scheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, SchedulerDi
     return s;
 }
 
-void bx_fetch_scheduler_free(Scheduler* s) {
+void bx_fetch_scheduler_free(BxFetchScheduler* s) {
     if (!s)
         return;
 
@@ -579,7 +579,7 @@ void bx_fetch_scheduler_free(Scheduler* s) {
     free(s);
 }
 
-int bx_fetch_scheduler_add_url(Scheduler* s, const char* url, const char* output_path) {
+int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path) {
     if (!s || !url || !output_path)
         return -1;
     char* canonical = bx_fetch_url_canonicalize(url);
@@ -590,13 +590,13 @@ int bx_fetch_scheduler_add_url(Scheduler* s, const char* url, const char* output
     return rc;
 }
 
-int bx_fetch_scheduler_add_canonical_url(Scheduler* s, const char* canonical_url, const char* output_path) {
+int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path) {
     if (!s || !canonical_url || !output_path)
         return -1;
     return scheduler_add_url_with_tries(s, canonical_url, output_path, 0, NULL);
 }
 
-int bx_fetch_scheduler_run(Scheduler* s) {
+int bx_fetch_scheduler_run(BxFetchScheduler* s) {
     if (!s)
         return -1;
     bool had_dispatch_error = false;

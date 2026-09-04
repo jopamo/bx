@@ -43,7 +43,7 @@ static void json_write_escaped_string(FILE* stream, const char* value) {
     fputc('"', stream);
 }
 
-const char* bx_fetch_error_class_string(MiraErrorClass class_id) {
+const char* bx_fetch_error_class_string(BxFetchErrorClass class_id) {
     switch (class_id) {
         case BX_FETCH_ERROR_CLASS_PARSE:
             return "parse";
@@ -84,7 +84,7 @@ static void json_write_optional_int(FILE* stream, int value) {
     }
 }
 
-const char* bx_fetch_error_string(MiraError err) {
+const char* bx_fetch_error_string(BxFetchError err) {
     switch (err) {
         case BX_FETCH_OK:
             return "Success";
@@ -115,8 +115,8 @@ const char* bx_fetch_error_string(MiraError err) {
     }
 }
 
-MiraStructuredError bx_fetch_error_make_simple(MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
-    MiraStructuredError error = {
+BxFetchStructuredError bx_fetch_error_make_simple(BxFetchErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
+    BxFetchStructuredError error = {
         .class_id = class_id,
         .summary = summary,
         .url = url,
@@ -131,12 +131,12 @@ MiraStructuredError bx_fetch_error_make_simple(MiraErrorClass class_id, const ch
     return error;
 }
 
-void bx_fetch_error_emit_simple(FILE* stream, MiraErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
-    MiraStructuredError error = bx_fetch_error_make_simple(class_id, summary, url, path, curl_code, error_number);
+void bx_fetch_error_emit_simple(FILE* stream, BxFetchErrorClass class_id, const char* summary, const char* url, const char* path, int curl_code, int error_number) {
+    BxFetchStructuredError error = bx_fetch_error_make_simple(class_id, summary, url, path, curl_code, error_number);
     bx_fetch_error_emit_structured(stream, &error);
 }
 
-void bx_fetch_error_emit_structured(FILE* stream, const MiraStructuredError* error) {
+void bx_fetch_error_emit_structured(FILE* stream, const BxFetchStructuredError* error) {
     if (!error)
         return;
     if (!stream)
