@@ -1546,7 +1546,6 @@ void RemoveStatus(void)
 		return;
 	if (!(where = D_status))
 		return;
-
 	if (D_status_obuffree >= 0) {
 		D_obuflen = D_status_obuflen;
 		D_obuffree = D_status_obuffree;
@@ -1758,7 +1757,7 @@ void RefreshLine(int y, int from, int to, int isblank)
 	if (D_status == STATUS_ON_WIN && y == STATLINE()) {
 		if (to >= D_status_len)
 			D_status_len = to + 1;
-		return;		/* can't refresh status */
+		return;	/* can't refresh status */
 	}
 
 	if (isblank == 0 && D_CE && to == D_width - 1 && from < to && D_status != STATUS_ON_HS) {
@@ -2200,10 +2199,6 @@ void  DisplayOSC52(Display *d, const char *pc, size_t pc_len,
 	Display *save = display;
 
 	display = d;
-	if (!D_CXT) {
-		display = save;
-		return;
-	}
 	AddStr("\033]52;");
 	AddStrn(pc, pc_len);
 	AddChar(';');

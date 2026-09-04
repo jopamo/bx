@@ -546,6 +546,7 @@ static void WChangeSize(Window *, int, int);
 
 void ResetAnsiState(Window *win)
 {
+	CStrRelease(&win->w_cstr);
 	win->w_state = LIT;
 	win->w_StringType = NONE;
 }
@@ -1550,7 +1551,7 @@ static void DoCSI(Window *win, int c, int intermediate)
 						if (win->w_alt.on) {
 							RestoreCursor(win, &win->w_alt.cursor);
 							LeaveAltScreen(win);
-						}
+					}
 					}
 					if (a1 == 47 && !i)
 						win->w_saved.on = 0;
@@ -1796,10 +1797,8 @@ static int StringEnd(Window *win)
 			if (!defosc52)
 				break;
 
-			/* Find an eligible display showing this window. */
+			/* Find a display showing this window. */
 			for (display = displays; display; display = display->d_next) {
-				if (!D_CXT)
-					continue;
 				if (D_forecv->c_layer->l_bottom == &win->w_layer)
 					break;
 			}
