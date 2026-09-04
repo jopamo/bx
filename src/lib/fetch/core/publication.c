@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/publication.h"
+#include "lib/fetch/metadata.h"
 #include "lib/fetch/resource_limits.h"
 #include "lib/fetch/secure_path.h"
 #include "lib/fetch/timestamp_policy.h"
@@ -290,8 +291,7 @@ void bx_fetch_publication_state_free(BxFetchPublicationState* state) {
     free(state);
 }
 
-static int load_persisted_mapping(void* userdata, const char* url, const char* local_path) {
-    BxFetchPublicationState* candidate = userdata;
+static int load_recovered_mapping(BxFetchPublicationState* candidate, const char* url, const char* local_path, BxFetchMappingPriority priority) {
     if (!candidate || !url || !local_path) {
         errno = EINVAL;
         return -1;
@@ -326,9 +326,17 @@ static int load_persisted_mapping(void* userdata, const char* url, const char* l
     }
 
     const char* public_url = bx_fetch_prepared_url_display(prepared);
-    int rc = add_public_mapping(candidate, public_url, local_path, BX_FETCH_MAPPING_PRIORITY_PERSISTED);
+    int rc = add_public_mapping(candidate, public_url, local_path, priority);
     bx_fetch_prepared_url_free(prepared);
     return rc;
+}
+
+static int load_persisted_mapping(void* userdata, const char* url, const char* local_path) {
+    return load_recovered_mapping(userdata, url, local_path, BX_FETCH_MAPPING_PRIORITY_PERSISTED);
+}
+
+static int load_sidecar_mapping(void* userdata, const char* url, const char* local_path) {
+    return load_recovered_mapping(userdata, url, local_path, BX_FETCH_MAPPING_PRIORITY_SIDECAR);
 }
 
 int bx_fetch_publication_load_persisted_mappings(BxFetchPublicationState* state) {
@@ -347,6 +355,12 @@ int bx_fetch_publication_load_persisted_mappings(BxFetchPublicationState* state)
     if (!candidate)
         return -1;
     if (bx_fetch_url_map_store_load(state->cfg, load_persisted_mapping, candidate) != 0) {
+        int error_number = errno;
+        bx_fetch_publication_state_free(candidate);
+        errno = error_number;
+        return -1;
+    }
+    if (bx_fetch_metadata_visit_recovery_mappings(state->cfg, load_sidecar_mapping, candidate) != 0) {
         int error_number = errno;
         bx_fetch_publication_state_free(candidate);
         errno = error_number;

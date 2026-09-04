@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int set_string(char** dest, const char* src) {
@@ -202,6 +203,19 @@ int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
         return (open_error_number == ENOENT) ? 0 : -1;
     }
     free(path);
+
+    struct stat sidecar_stat;
+    if (fstat(fd, &sidecar_stat) != 0) {
+        int validation_error_number = errno;
+        close(fd);
+        errno = validation_error_number;
+        return -1;
+    }
+    if (!S_ISREG(sidecar_stat.st_mode) || sidecar_stat.st_nlink > 1) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
 
     FILE* f = fdopen(fd, "r");
     if (!f) {

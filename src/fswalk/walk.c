@@ -330,7 +330,9 @@ static int bx_walk_open_directory_child(int parent_dirfd,
     }
 
     bx_walk_ctx_note_counter(ctx, BX_WALK_COUNTER_OPENAT_CALLS, 1u);
-    int fd = bx_fd_openat_child(parent_dirfd, name, O_RDONLY | O_DIRECTORY, 0);
+    int fd = ctx->opts->follow_symlinks
+                 ? bx_fd_openat_child(parent_dirfd, name, O_RDONLY | O_DIRECTORY, 0)
+                 : bx_fd_openat_child_nofollow(parent_dirfd, name, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         int join_err = 0;
         char *full = bx_walk_entry_path_ensure(path_state, ctx, &join_err);
