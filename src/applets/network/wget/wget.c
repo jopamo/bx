@@ -204,53 +204,6 @@ static bool wget_retry_statuses_valid(const char* list) {
     return true;
 }
 
-static int wget_add_header(struct bx_fetch_config* config, size_t* capacity, const char* value) {
-    char* normalized = NULL;
-    BxFetchHttpHeaderError result = bx_fetch_http_header_normalize_line(value, &normalized);
-    if (result != BX_FETCH_HTTP_HEADER_OK) {
-        errno = result == BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY ? ENOMEM : EINVAL;
-        return -1;
-    }
-    if (config->http.header_count >= 128) {
-        free(normalized);
-        errno = E2BIG;
-        return -1;
-    }
-    if ((size_t)config->http.header_count == *capacity) {
-        size_t next_capacity = *capacity ? *capacity * 2u : 4u;
-        char** grown = realloc(config->http.headers, next_capacity * sizeof(*grown));
-        if (!grown) {
-            free(normalized);
-            return -1;
-        }
-        config->http.headers = grown;
-        *capacity = next_capacity;
-    }
-    config->http.headers[config->http.header_count++] = normalized;
-    return 0;
-}
-
-static int wget_copy_urls(struct bx_fetch_config* config, int argc, char** argv) {
-    int count = argc - optind;
-    if (count <= 0)
-        return 0;
-    char** urls = calloc((size_t)count, sizeof(*urls));
-    if (!urls)
-        return -1;
-    for (int index = 0; index < count; index++) {
-        urls[index] = strdup(argv[optind + index]);
-        if (!urls[index]) {
-            for (int prior = 0; prior < index; prior++)
-                free(urls[prior]);
-            free(urls);
-            return -1;
-        }
-    }
-    config->input.urls = urls;
-    config->input.url_count = count;
-    return 0;
-}
-
 #define WGET_SET_STRING(field)                     \
     do {                                           \
         if (wget_replace_string(&(field), optarg)) \
@@ -278,7 +231,6 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
     if (wget_replace_string(&config->http.user_agent, "Wget/1.25.0") != 0)
         goto allocation_failure;
 
-    size_t header_capacity = 0;
     opterr = 0;
     optind = 0;
     for (;;) {
@@ -455,7 +407,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
                 WGET_SET_STRING(config->http.http_password);
                 break;
             case WGET_OPT_HEADER:
-                if (wget_add_header(config, &header_capacity, optarg) != 0) {
+                if (bx_fetch_config_add_http_header(config, optarg) != BX_FETCH_HTTP_HEADER_OK) {
                     fputs("wget: --header: invalid or forbidden HTTP header\n", stderr);
                     goto parse_failure;
                 }
@@ -548,7 +500,7 @@ static struct bx_fetch_config* wget_parse_cli(int argc, char** argv, int* exit_c
         }
     }
 
-    if (wget_copy_urls(config, argc, argv) != 0)
+    if (bx_fetch_config_copy_urls(config, argc - optind, &argv[optind]) != 0)
         goto allocation_failure;
     if (config->download.inet4_only && config->download.inet6_only) {
         fputs("Cannot specify both --inet4-only and --inet6-only.\n", stderr);

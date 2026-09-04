@@ -141,7 +141,9 @@ void bx_fetch_crawl_coordinator_free(BxFetchCrawlCoordinator* coordinator) {
     free(coordinator);
 }
 
-BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed(BxFetchCrawlCoordinator* coordinator, const char* url) {
+BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed_observed(BxFetchCrawlCoordinator* coordinator, const char* url, BxFetchPreparedUrl** target_out) {
+    if (target_out)
+        *target_out = NULL;
     if (!coordinator || !url || coordinator->phase != BX_FETCH_CRAWL_PHASE_COLLECTING) {
         errno = coordinator && coordinator->phase == BX_FETCH_CRAWL_PHASE_CANCELLED ? ECANCELED : EINVAL;
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
@@ -150,8 +152,15 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed(BxFetchCrawlCoordi
     if (!target)
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
     BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target, 0, true);
-    bx_fetch_prepared_url_free(target);
+    if (target_out)
+        *target_out = target;
+    else
+        bx_fetch_prepared_url_free(target);
     return result;
+}
+
+BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed(BxFetchCrawlCoordinator* coordinator, const char* url) {
+    return bx_fetch_crawl_coordinator_add_seed_observed(coordinator, url, NULL);
 }
 
 BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawlCoordinator* coordinator,

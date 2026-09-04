@@ -19,6 +19,13 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
+
+#define BX_FETCH_REQUEST_HEADER_LINE_MAX_BYTES ((size_t)64 * 1024u)
+#define BX_FETCH_REQUEST_HEADER_BLOCK_MAX_BYTES ((size_t)256 * 1024u)
+#define BX_FETCH_REQUEST_HEADER_MAX_FIELDS ((size_t)1024)
+
+struct bx_fetch_config;
 
 typedef enum {
     BX_FETCH_HTTP_HEADER_OK = 0,
@@ -28,6 +35,7 @@ typedef enum {
     BX_FETCH_HTTP_HEADER_INVALID_VALUE,
     BX_FETCH_HTTP_HEADER_FORBIDDEN_FRAMING,
     BX_FETCH_HTTP_HEADER_FORBIDDEN_AUTHORITY,
+    BX_FETCH_HTTP_HEADER_RESOURCE_LIMIT,
     BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY,
 } BxFetchHttpHeaderError;
 
@@ -45,6 +53,8 @@ bool bx_fetch_http_method_is_valid(const char* method);
 
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out);
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out);
+/* Validates and appends one bounded, config-owned custom request header. */
+BxFetchHttpHeaderError bx_fetch_config_add_http_header(struct bx_fetch_config* config, const char* line);
 
 /*
  * Produce one CURLOPT_HTTPHEADER list entry. Empty values use libcurl's

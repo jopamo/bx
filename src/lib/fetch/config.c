@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 #include "lib/fetch/config.h"
+#include "lib/fetch/resource_limits.h"
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +33,57 @@ struct bx_fetch_config* bx_fetch_config_new(void) {
     }
 
     return cfg;
+}
+
+int bx_fetch_config_copy_urls(struct bx_fetch_config* cfg, int count, char* const* urls) {
+    if (!cfg || count < 0 || (count > 0 && !urls)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if ((size_t)count > BX_FETCH_URL_STATE_MAX_ENTRIES) {
+        errno = EFBIG;
+        return -1;
+    }
+
+    char** copies = count > 0 ? calloc((size_t)count, sizeof(*copies)) : NULL;
+    if (count > 0 && !copies)
+        return -1;
+
+    size_t retained_bytes = 0;
+    for (int index = 0; index < count; index++) {
+        if (!urls[index]) {
+            errno = EINVAL;
+            goto fail;
+        }
+        size_t length = 0;
+        if (!bx_fetch_resource_bounded_strlen(urls[index], BX_FETCH_URL_MAX_BYTES, &length) ||
+            !bx_fetch_resource_can_reserve((size_t)index, retained_bytes, 1u, length, BX_FETCH_URL_STATE_MAX_ENTRIES, BX_FETCH_URL_STATE_MAX_BYTES)) {
+            errno = EFBIG;
+            goto fail;
+        }
+        copies[index] = strdup(urls[index]);
+        if (!copies[index])
+            goto fail;
+        retained_bytes += length;
+    }
+
+    if (cfg->input.urls) {
+        for (int index = 0; index < cfg->input.url_count; index++)
+            free(cfg->input.urls[index]);
+    }
+    free(cfg->input.urls);
+    cfg->input.urls = copies;
+    cfg->input.url_count = count;
+    return 0;
+
+fail: {
+    int error_number = errno ? errno : ENOMEM;
+    for (int index = 0; index < count; index++)
+        free(copies[index]);
+    free(copies);
+    errno = error_number;
+    return -1;
+}
 }
 
 void bx_fetch_config_free(struct bx_fetch_config* cfg) {

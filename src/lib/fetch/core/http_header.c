@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "lib/fetch/config.h"
 #include "lib/fetch/http_header.h"
 #include <errno.h>
 #include <stdbool.h>
@@ -412,10 +413,51 @@ const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error) {
             return "Content-Length, Transfer-Encoding, and Trailer are managed by the fetch core";
         case BX_FETCH_HTTP_HEADER_FORBIDDEN_AUTHORITY:
             return "authority-bearing HTTP headers require typed credential or cookie policy";
+        case BX_FETCH_HTTP_HEADER_RESOURCE_LIMIT:
+            return "request header limits exceeded";
         case BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY:
             return "out of memory while preparing HTTP headers";
     }
     return "invalid HTTP header";
+}
+
+BxFetchHttpHeaderError bx_fetch_config_add_http_header(struct bx_fetch_config* config, const char* line) {
+    if (!config || !line || config->http.header_count < 0 || config->http.header_capacity < config->http.header_count)
+        return BX_FETCH_HTTP_HEADER_INVALID_ARGUMENT;
+    if ((size_t)config->http.header_count >= BX_FETCH_REQUEST_HEADER_MAX_FIELDS || config->http.header_bytes > BX_FETCH_REQUEST_HEADER_BLOCK_MAX_BYTES)
+        return BX_FETCH_HTTP_HEADER_RESOURCE_LIMIT;
+
+    size_t line_length = strnlen(line, BX_FETCH_REQUEST_HEADER_LINE_MAX_BYTES + 1u);
+    if (line_length > BX_FETCH_REQUEST_HEADER_LINE_MAX_BYTES)
+        return BX_FETCH_HTTP_HEADER_RESOURCE_LIMIT;
+
+    char* normalized = NULL;
+    BxFetchHttpHeaderError error = bx_fetch_http_header_normalize_line(line, &normalized);
+    if (error != BX_FETCH_HTTP_HEADER_OK)
+        return error;
+    size_t normalized_length = strlen(normalized);
+    if (normalized_length > BX_FETCH_REQUEST_HEADER_BLOCK_MAX_BYTES - config->http.header_bytes) {
+        free(normalized);
+        return BX_FETCH_HTTP_HEADER_RESOURCE_LIMIT;
+    }
+
+    size_t count = (size_t)config->http.header_count;
+    if (config->http.header_count == config->http.header_capacity) {
+        size_t capacity = config->http.header_capacity > 0 ? (size_t)config->http.header_capacity * 2u : 4u;
+        if (capacity > BX_FETCH_REQUEST_HEADER_MAX_FIELDS)
+            capacity = BX_FETCH_REQUEST_HEADER_MAX_FIELDS;
+        char** grown = realloc(config->http.headers, capacity * sizeof(*grown));
+        if (!grown) {
+            free(normalized);
+            return BX_FETCH_HTTP_HEADER_OUT_OF_MEMORY;
+        }
+        config->http.headers = grown;
+        config->http.header_capacity = (int)capacity;
+    }
+    config->http.headers[count] = normalized;
+    config->http.header_count++;
+    config->http.header_bytes += normalized_length;
+    return BX_FETCH_HTTP_HEADER_OK;
 }
 
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out) {
