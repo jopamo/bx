@@ -788,6 +788,16 @@
       "execution_class": "exec-only"
     },
     {
+      "name": "mira",
+      "main": "bx_mira_main",
+      "capabilities": [
+        "filesystem-read",
+        "filesystem-write",
+        "network-access"
+      ],
+      "execution_class": "exec-only"
+    },
+    {
       "name": "wget",
       "main": "bx_wget_main",
       "capabilities": [

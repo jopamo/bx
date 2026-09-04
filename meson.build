@@ -734,6 +734,8 @@ bx_system_applet_sources = [
 
 bx_network_applet_sources = [
   'src/applets/network/dhcp/dhcp.c',
+  'src/applets/network/mira/mira.c',
+  'src/applets/network/mira/run.c',
   'src/applets/network/ping/ping.c',
   'src/applets/network/wget/wget.c',
 ]
@@ -1662,6 +1664,8 @@ bx_fetch_core_dep = declare_dependency(
   include_directories : bx_include_dirs,
   dependencies : bx_fetch_core_deps,
 )
+
+bx_deps += [bx_fetch_core_dep]
 
 stdbuf_preload = shared_module(
   'stdbuf',
