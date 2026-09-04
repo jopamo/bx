@@ -513,7 +513,8 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
     run_failure_reset(failure_out);
     bool has_input_file = cfg && cfg->input.input_file && cfg->input.input_file[0] != '\0';
     if (!cfg || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
-        (cfg->input.url_count > 0 && !cfg->input.urls) || cfg->input.force_html || cfg->input.base_url) {
+        (cfg->input.url_count > 0 && !cfg->input.urls) || (cfg->input.force_html && !has_input_file) ||
+        (cfg->input.base_url && (!has_input_file || !cfg->input.force_html))) {
         return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL, NULL);
     }
     size_t direct_url_bytes = 0;
@@ -533,7 +534,16 @@ int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetch
     BxFetchInputUrls input_urls = {0};
     if (has_input_file) {
         BxFetchInputOutcome input_outcome;
-        if (bx_fetch_input_urls_load_plain(cfg->input.input_file, (size_t)cfg->input.url_count, direct_url_bytes, &input_urls, &input_outcome) != 0) {
+        int input_result = cfg->input.force_html
+                               ? bx_fetch_input_urls_load_html(cfg->input.input_file,
+                                                               cfg->input.base_url,
+                                                               (size_t)cfg->input.url_count,
+                                                               direct_url_bytes,
+                                                               &input_urls,
+                                                               &input_outcome)
+                               : bx_fetch_input_urls_load_plain(
+                                     cfg->input.input_file, (size_t)cfg->input.url_count, direct_url_bytes, &input_urls, &input_outcome);
+        if (input_result != 0) {
             return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_LOAD_INPUT, input_outcome.error_number, NULL, &input_outcome, NULL);
         }
     }

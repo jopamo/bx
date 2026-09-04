@@ -302,6 +302,20 @@ static void mira_record_input_failure(MiraRunFrontend* frontend, const BxFetchIn
             error_class = BX_FETCH_ERROR_CLASS_POLICY;
             emit_text = false;
             break;
+        case BX_FETCH_INPUT_FAILURE_HTML_TOO_LARGE:
+            snprintf(summary, sizeof(summary), "HTML input file exceeds " BX_FETCH_DOCUMENT_PARSE_LIMIT_TEXT " parser limit");
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            emit_text = false;
+            break;
+        case BX_FETCH_INPUT_FAILURE_HTML_PARSE:
+            snprintf(summary, sizeof(summary), "failed to parse HTML input file");
+            error_class = BX_FETCH_ERROR_CLASS_PARSE;
+            emit_text = false;
+            break;
+        case BX_FETCH_INPUT_FAILURE_BASE_URL:
+            snprintf(summary, sizeof(summary), "invalid --base URL");
+            error_class = BX_FETCH_ERROR_CLASS_POLICY;
+            break;
         case BX_FETCH_INPUT_FAILURE_URL_STATE_LIMIT:
             snprintf(summary, sizeof(summary), "input file URL state exceeds the bounded URL-state contract");
             error_class = BX_FETCH_ERROR_CLASS_POLICY;

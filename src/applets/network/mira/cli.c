@@ -178,7 +178,11 @@ static bool mira_configured_method_is_get(const struct bx_fetch_config* config) 
     return strcasecmp(method, "GET") == 0;
 }
 
-static int mira_validate_config(struct bx_fetch_config* config, const char* output_document_token, const char* input_file_token) {
+static int mira_validate_config(struct bx_fetch_config* config,
+                                const char* output_document_token,
+                                const char* input_file_token,
+                                const char* force_html_token,
+                                const char* base_token) {
     if (config->logging.debug_trace && !config->download.dry_run && !config->startup.show_help && !config->startup.show_version) {
         bx_mira_emit_parse_error(config, "--debug currently requires --dry-run");
         errno = EINVAL;
@@ -193,6 +197,21 @@ static int mira_validate_config(struct bx_fetch_config* config, const char* outp
         if (errno == ENOMEM)
             return -1;
         mira_parse_errorf(config, "invalid value for --accept-regex: %s", config->recursive.accept_regex);
+        return -1;
+    }
+    if (config->input.force_html && !config->input.input_file) {
+        mira_parse_errorf(config, "option token requires --input-file: %s", force_html_token ? force_html_token : "--force-html");
+        errno = EINVAL;
+        return -1;
+    }
+    if (config->input.base_url && !config->input.input_file) {
+        mira_parse_errorf(config, "option token requires --input-file: %s", base_token ? base_token : "--base");
+        errno = EINVAL;
+        return -1;
+    }
+    if (config->input.base_url && !config->input.force_html) {
+        mira_parse_errorf(config, "option token requires --force-html: %s", base_token ? base_token : "--base");
+        errno = EINVAL;
         return -1;
     }
     if (config->download.output_document && config->input.input_file) {
@@ -269,6 +288,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     MiraTimeoutPresence timeout_presence = {0};
     const char* output_document_token = NULL;
     const char* input_file_token = NULL;
+    const char* force_html_token = NULL;
+    const char* base_token = NULL;
     int timeout_value = 0;
     opterr = 0;
     optind = 0;
@@ -318,6 +339,14 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 }
                 MIRA_SET_STRING(config->input.input_file);
                 input_file_token = mira_current_token(argc, argv);
+                break;
+            case 'F':
+                config->input.force_html = true;
+                force_html_token = mira_current_token(argc, argv);
+                break;
+            case 'B':
+                MIRA_SET_STRING(config->input.base_url);
+                base_token = mira_current_token(argc, argv);
                 break;
             case 'n': {
                 const char* token = mira_current_token(argc, argv);
@@ -707,7 +736,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         goto parse_failure;
     }
     errno = 0;
-    if (mira_validate_config(config, output_document_token, input_file_token) != 0) {
+    if (mira_validate_config(config, output_document_token, input_file_token, force_html_token, base_token) != 0) {
         if (errno == ENOMEM)
             goto allocation_failure;
         goto parse_failure;
