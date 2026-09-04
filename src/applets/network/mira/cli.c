@@ -285,6 +285,14 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 config->logging.verbosity = BX_FETCH_VERBOSITY_NORMAL;
                 config->download.show_progress = false;
                 break;
+            case 'o':
+                MIRA_SET_STRING(config->logging.log_file);
+                config->logging.log_file_mode = BX_FETCH_LOG_FILE_TRUNCATE;
+                break;
+            case 'a':
+                MIRA_SET_STRING(config->logging.log_file);
+                config->logging.log_file_mode = BX_FETCH_LOG_FILE_APPEND;
+                break;
             case 'n': {
                 const char* token = mira_current_token(argc, argv);
                 if (token && strcmp(token, "-nd") == 0)
