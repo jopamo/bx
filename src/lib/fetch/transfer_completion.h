@@ -33,8 +33,10 @@ typedef void (*BxFetchTransferCompletionCallback)(void* userdata, const BxFetchT
  */
 int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer);
 /*
- * Stages a metadata-only 304 refresh. Extended-attribute refresh is rejected
- * before mutation because it cannot share the sidecar transaction.
+ * Stages a metadata-only 304 refresh while preserving payload identity.
+ * The authoritative xattr policy is fail-closed: requesting xattrs returns
+ * ENOTSUP before mutation because inode xattrs cannot commit atomically with
+ * the sidecar exchange, and replacing the payload inode is incompatible.
  */
 int bx_fetch_transfer_stage_not_modified(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer);
 
