@@ -214,7 +214,8 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
             }
 
             int status = t->resp ? t->resp->status_code : 0;
-            if (t->headers_cb && (status == 200 || status == 206) && !t->discard_body && t->headers_cb(t->callback_userdata, t->req, t->resp, t->writer) != 0) {
+            bool callback_eligible = status == 304 || ((status == 200 || status == 206) && !t->discard_body);
+            if (t->headers_cb && callback_eligible && t->headers_cb(t->callback_userdata, t->req, t->resp, t->writer) != 0) {
                 bx_fetch_transfer_mark_io_failure(t, EIO);
                 free(line);
                 return 0;
@@ -663,15 +664,16 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
         commit = false;
     }
 
-    if (commit) {
+    if (transport_succeeded && status == 304) {
+        if (bx_fetch_transfer_close_writer_metadata_only(transfer) != 0)
+            bx_fetch_transfer_mark_io_failure(transfer, EIO);
+    }
+    else if (commit) {
         if (bx_fetch_transfer_close_writer(transfer) != 0)
             bx_fetch_transfer_mark_io_failure(transfer, EIO);
     }
     else if (!bx_fetch_transfer_abort_writer(transfer)) {
         engine->invariant_failed = true;
-    }
-    else if (status == 304 && transport_succeeded) {
-        transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_UNCHANGED;
     }
 
     bool finalized = transfer->writer == NULL && (transfer->writer_closed || transfer->writer_aborted);
@@ -709,9 +711,9 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         bx_fetch_progress_emit(transfer, total, downloaded);
     }
 
-    populate_terminal_response(transfer, message->data.result);
     if (!finish_writer(engine, transfer, message->data.result, status))
         invariant_ok = false;
+    populate_terminal_response(transfer, message->data.result);
 
     BxFetchError result = classify_terminal_result(transfer, message->data.result, status, invariant_ok && !engine->invariant_failed);
     bx_fetch_engine_dispose_transfer(engine, transfer, result);

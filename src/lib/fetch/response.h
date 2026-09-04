@@ -41,6 +41,8 @@ typedef enum {
     BX_FETCH_OUTPUT_STATE_ABORTED,
     /* A not-modified response left the destination unchanged. */
     BX_FETCH_OUTPUT_STATE_UNCHANGED,
+    /* Payload was unchanged and refreshed metadata committed durably. */
+    BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED,
     /* Writer close and its durability checks completed successfully. */
     BX_FETCH_OUTPUT_STATE_COMMITTED,
     /*

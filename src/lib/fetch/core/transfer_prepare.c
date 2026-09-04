@@ -205,6 +205,8 @@ static int candidate_headers_callback(void* userdata, const BxFetchRequest* requ
         errno = EINVAL;
         return -1;
     }
+    if (response->status_code == 304)
+        return bx_fetch_transfer_stage_not_modified(callbacks->cfg, request, response, writer);
     if (callbacks->headers_callback && callbacks->headers_callback(callbacks->userdata, request, response, writer) != 0)
         return -1;
     return bx_fetch_transfer_stage_response(callbacks->cfg, request, response, writer);

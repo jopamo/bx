@@ -70,6 +70,26 @@ int bx_fetch_transfer_close_writer(BxFetchTransfer* transfer) {
     return result;
 }
 
+int bx_fetch_transfer_close_writer_metadata_only(BxFetchTransfer* transfer) {
+    if (!transfer || transfer->writer_closed || transfer->writer_aborted || !transfer->writer) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    BxFetchWriterMetadataCommitResult result = bx_fetch_writer_close_metadata_only(transfer->writer);
+    transfer->writer = NULL;
+    transfer->writer_closed = true;
+    if (transfer->resp) {
+        if (result == BX_FETCH_WRITER_METADATA_COMMITTED)
+            transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED;
+        else if (result == BX_FETCH_WRITER_METADATA_UNCHANGED)
+            transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_UNCHANGED;
+        else
+            transfer->resp->output_state = BX_FETCH_OUTPUT_STATE_COMMIT_FAILED;
+    }
+    return result == BX_FETCH_WRITER_METADATA_COMMIT_ERROR ? -1 : 0;
+}
+
 void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* transfer, BxFetchError result) {
     if (!engine || !transfer)
         return;

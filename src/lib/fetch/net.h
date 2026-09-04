@@ -63,8 +63,9 @@ int bx_fetch_global_init(const struct bx_fetch_config* cfg, BxFetchNetSetupError
 void bx_fetch_global_cleanup(void);
 
 /*
- * Called at most once for commit-eligible HTTP 200/206 headers. writer is
- * borrowed and must not be consumed by the callback.
+ * Called at most once for commit-eligible HTTP 200/206 headers or a
+ * metadata-only HTTP 304 response. writer is borrowed and must not be consumed
+ * by the callback.
  */
 typedef int (*BxFetchTransferHeadersCallback)(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer);
 
