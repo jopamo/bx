@@ -23,7 +23,6 @@
 typedef struct {
     bool show_version;
     bool show_help;
-    bool cli_options_provided;
 } BxFetchStartupConfig;
 
 typedef enum {
@@ -91,6 +90,7 @@ typedef struct {
     char* password;
     bool unlink;
     bool xattr;
+    bool metadata_sidecars;
 } BxFetchDownloadConfig;
 
 typedef struct {

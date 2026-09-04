@@ -149,84 +149,6 @@ if host_machine.system() == 'linux'
 endif
 bx_link_args = bx_static_link_args + bx_build_id_link_args
 
-mira_embed_opt = get_option('mira_embed')
-mira_embed_dep = declare_dependency()
-mira_embed_enabled = false
-if mira_embed_opt != 'disabled'
-  # mira-embed ships as a static library, so consumers always need the
-  # full transitive link set from pkg-config --static, even when bx itself is
-  # built as a dynamically linked executable.
-  pkgconf = find_program('pkg-config', required : true)
-  mira_embed_exists = run_command(pkgconf, '--exists', 'mira-embed', check : false).returncode() == 0
-  if mira_embed_exists
-    mira_embed_cflags_str = run_command(pkgconf, '--cflags', 'mira-embed', check : true).stdout().strip()
-    mira_embed_libs_str = run_command(pkgconf, '--libs', '--static', 'mira-embed', check : true).stdout().strip()
-
-    mira_embed_cflags = []
-    if mira_embed_cflags_str != ''
-      mira_embed_cflags = mira_embed_cflags_str.split()
-    endif
-
-    mira_embed_libs = []
-    if mira_embed_libs_str != ''
-      mira_embed_libs = mira_embed_libs_str.split()
-    endif
-
-    mira_embed_dep = declare_dependency(
-      compile_args : mira_embed_cflags,
-      link_args : mira_embed_libs,
-    )
-    mira_embed_enabled = true
-  elif mira_embed_opt == 'enabled'
-    error('mira-embed was not found via pkg-config')
-  endif
-endif
-
-if mira_embed_enabled
-  mira_embed_has_run_argv = cc.has_function(
-    'mira_embed_run_argv',
-    prefix : '#include <mira/embed.h>',
-    dependencies : [mira_embed_dep],
-  )
-  if not mira_embed_has_run_argv
-    if mira_embed_opt == 'enabled'
-      error('mira-embed found but missing mira_embed_run_argv; reinstall a newer mira-embed static library')
-    endif
-    warning('mira-embed found but missing mira_embed_run_argv; disabling wget mira-embed backend')
-    mira_embed_enabled = false
-    mira_embed_dep = declare_dependency()
-  endif
-endif
-
-if mira_embed_enabled and use_static_binary
-  mira_embed_static_link_ok = cc.links(
-    '''
-    #include <mira/embed.h>
-    int main(void) {
-      char *argv[] = {"bx", 0};
-      return mira_embed_run_argv(1, argv);
-    }
-    ''',
-    dependencies : [mira_embed_dep],
-    args : bx_static_link_args,
-    name : 'mira-embed static linkability probe',
-  )
-  if not mira_embed_static_link_ok
-    if mira_embed_opt == 'enabled'
-      error('mira-embed found but is not fully static-linkable with this toolchain/dependency set; provide static libcurl transitive dependencies or reconfigure with -Dstatic_binary=disabled')
-    endif
-    warning('mira-embed found but is not fully static-linkable with the current libcurl dependency set; disabling wget mira-embed backend (reconfigure with -Dstatic_binary=disabled or provide static libcurl transitive dependencies)')
-    mira_embed_enabled = false
-    mira_embed_dep = declare_dependency()
-  endif
-endif
-
-if mira_embed_enabled
-  add_project_arguments('-DBX_HAVE_MIRA_EMBED=1', language : 'c')
-else
-  add_project_arguments('-DBX_HAVE_MIRA_EMBED=0', language : 'c')
-endif
-
 threads_dep = dependency('threads')
 pcre2_dep = dependency('libpcre2-8', static: use_static_binary)
 libcurl_dep = dependency('libcurl', static : use_static_binary)
@@ -328,10 +250,6 @@ endif
 if libzstd_dep.found()
   bx_deps += [libzstd_dep]
 endif
-if mira_embed_enabled
-  bx_deps += [mira_embed_dep]
-endif
-
 # shared bx runtime and helpers
 bx_core_sources = [
   bx_version_source,
@@ -738,6 +656,7 @@ bx_network_applet_sources = [
   'src/applets/network/mira/run.c',
   'src/applets/network/ping/ping.c',
   'src/applets/network/wget/wget.c',
+  'src/applets/network/wget/run.c',
 ]
 
 bx_search_sources = [
@@ -1580,7 +1499,6 @@ multicall_install_mode = get_option('multicall_install_mode')
 install_sh_shortcut = get_option('install_sh_shortcut')
 install_bash_shortcut = get_option('install_bash_shortcut')
 install_system_conflict_shortcuts = get_option('install_system_conflict_shortcuts')
-install_wget_shortcut = mira_embed_enabled
 disabled_shell_shortcut_names = []
 if not install_sh_shortcut
   disabled_shell_shortcut_names += ['sh']
@@ -1724,9 +1642,6 @@ if multicall_install_mode == 'symlink'
     if disabled_shell_shortcut_names.contains(applet)
       continue
     endif
-    if applet == 'wget' and not install_wget_shortcut
-      continue
-    endif
     if systemwide_disabled_applet_names.contains(applet)
       continue
     endif
@@ -1741,9 +1656,6 @@ if multicall_install_mode == 'symlink'
 else
   foreach applet : applet_names
     if disabled_shell_shortcut_names.contains(applet)
-      continue
-    endif
-    if applet == 'wget' and not install_wget_shortcut
       continue
     endif
     if systemwide_disabled_applet_names.contains(applet)

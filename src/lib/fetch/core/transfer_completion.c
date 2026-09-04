@@ -25,7 +25,7 @@ static bool replace_metadata_string(char** destination, const char* value) {
 }
 
 static int stage_response_metadata(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
-    if (!cfg->startup.cli_options_provided)
+    if (!cfg->download.metadata_sidecars)
         return 0;
 
     const char* output_path = bx_fetch_writer_get_path(writer);
