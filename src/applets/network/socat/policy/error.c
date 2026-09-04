@@ -125,11 +125,9 @@ static int diag_sock_pair(void) {
    diag_sock_send = handlersocks[1];
    diag_sock_recv = handlersocks[0];
 #if !defined(MSG_DONTWAIT)
-   fcntl(diag_sock_send, F_SETFL, O_NONBLOCK);
-   fcntl(diag_sock_recv, F_SETFL, O_NONBLOCK);
+   bx_fd_set_nonblocking(diag_sock_send, true);
+   bx_fd_set_nonblocking(diag_sock_recv, true);
 #endif
-   fcntl(diag_sock_send, F_SETFD, FD_CLOEXEC);
-   fcntl(diag_sock_recv, F_SETFD, FD_CLOEXEC);
    return 0;
 }
 

@@ -115,17 +115,6 @@ static void pcap_reset_state(void) {
     atomic_store(&pcap_writer_stop, 0);
 }
 
-static int pcap_set_nonblocking(int fd) {
-    int flags;
-
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1)
-        return -1;
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
-        return -1;
-    return 0;
-}
-
 static int pcap_write_all_fd(int fd, const void* data, size_t len, int stop_sensitive) {
     const unsigned char* p = data;
     size_t off = 0;
@@ -195,7 +184,7 @@ static int pcap_open_default_file(void) {
         unlink(tmpl);
         return -1;
     }
-    if (pcap_set_nonblocking(fd) == -1) {
+    if (bx_fd_set_nonblocking(fd, true) == -1) {
         close(fd);
         unlink(pcap_base_path);
         return -1;

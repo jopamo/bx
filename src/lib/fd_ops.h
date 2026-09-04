@@ -46,6 +46,7 @@ int bx_fd_dup_cloexec_min(int oldfd, int minimum);
 int bx_fd_dup_inheritable_min(int oldfd, int minimum);
 int bx_fd_dup2_exact(int oldfd, int newfd);
 int bx_fd_set_cloexec(int fd, bool enabled);
+int bx_fd_set_nonblocking(int fd, bool enabled);
 
 /* Non-follow constructors/checks. These force the non-follow bit at the
  * syscall boundary so callers cannot silently downgrade symlink policy. */
