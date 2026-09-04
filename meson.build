@@ -235,6 +235,44 @@ fetch_lexbor_dep = dependency(
   required : false,
   static : use_static_binary,
 )
+
+if host_machine.system() != 'linux'
+  error('bx fetch requires Linux kernel 5.6 or newer and has no insecure path-resolution fallback')
+endif
+
+fetch_secure_fs_contract_source = '''
+#define _GNU_SOURCE
+#include <linux/fs.h>
+#include <linux/openat2.h>
+#include <sys/syscall.h>
+#ifndef SYS_openat2
+#error "SYS_openat2 is unavailable"
+#endif
+#ifndef RESOLVE_NO_SYMLINKS
+#error "RESOLVE_NO_SYMLINKS is unavailable"
+#endif
+#ifndef RESOLVE_NO_XDEV
+#error "RESOLVE_NO_XDEV is unavailable"
+#endif
+#ifndef SYS_renameat2
+#error "SYS_renameat2 is unavailable"
+#endif
+#ifndef RENAME_NOREPLACE
+#error "RENAME_NOREPLACE is unavailable"
+#endif
+int main(void) {
+  struct open_how how = {0};
+  return (int)(sizeof(how) + RESOLVE_NO_SYMLINKS + RESOLVE_NO_XDEV +
+               SYS_openat2 + SYS_renameat2 + RENAME_NOREPLACE);
+}
+'''
+if not cc.compiles(
+  fetch_secure_fs_contract_source,
+  name : 'fetch secure filesystem contract',
+)
+  error('bx fetch requires Linux UAPI headers exposing openat2, renameat2, RESOLVE_NO_SYMLINKS, RESOLVE_NO_XDEV, and RENAME_NOREPLACE')
+endif
+
 zlib_dep = dependency('zlib', required : false, static: use_static_binary)
 if not zlib_dep.found()
   zlib_dep = cc.find_library('z', required : true)
