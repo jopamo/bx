@@ -16,7 +16,8 @@
  * - bx_fetch_scheduler_add_url() normalizes an untrusted URL once.
  * - Prepared/canonical entry points clone or prepare without reparsing in the
  *   retry path.
- * - Output path strings are copied into scheduler-owned queue storage.
+ * - Output path strings and crawl depth are copied into scheduler-owned queue
+ *   storage and remain attached through retries.
  */
 
 #include "config.h"
@@ -44,7 +45,7 @@ typedef bool (*BxFetchSchedulerTransferDoneFn)(void* userdata, int status, BxFet
  *   exactly once with `done_userdata`.
  * - A nonzero return must not invoke `on_done()`.
  */
-typedef int (*BxFetchSchedulerDispatchFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, BxFetchSchedulerTransferDoneFn on_done, void* done_userdata);
+typedef int (*BxFetchSchedulerDispatchFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, int depth, BxFetchSchedulerTransferDoneFn on_done, void* done_userdata);
 /* Called by scheduler while transfers are active to drive completion progress. */
 typedef int (*BxFetchSchedulerPollFn)(void* userdata);
 
@@ -62,9 +63,9 @@ BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, BxFe
 void bx_fetch_scheduler_free(BxFetchScheduler* s);
 
 /* Enqueues one transfer attempt candidate; URL/path are copied on success. */
-int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path);
-int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path);
-int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPreparedUrl* target, const char* output_path);
+int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path, int depth);
+int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path, int depth);
+int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPreparedUrl* target, const char* output_path, int depth);
 /*
  * Permanently stops new dispatch/retry work and drops queued candidates.
  * In-flight work remains owned by the dispatch implementation and must still

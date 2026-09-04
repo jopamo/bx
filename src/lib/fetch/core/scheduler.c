@@ -14,6 +14,7 @@
 typedef struct QueuedURL {
     BxFetchPreparedUrl* target;
     char* output_path;
+    int depth;
     int tries_done;
     bool has_retry_ready_time;
     struct timespec retry_ready_time;
@@ -57,6 +58,7 @@ typedef struct {
     BxFetchScheduler* sched;
     BxFetchPreparedUrl* target;
     char* output_path;
+    int depth;
     int tries_done;
 } TransferInfo;
 
@@ -315,8 +317,8 @@ static void free_queued_url(QueuedURL* q) {
     free(q);
 }
 
-static int scheduler_add_owned_target_with_tries(BxFetchScheduler* s, BxFetchPreparedUrl* target, const char* output_path, int tries_done, const struct timespec* retry_ready_time) {
-    if (!s || !target || !output_path || tries_done < 0) {
+static int scheduler_add_owned_target_with_tries(BxFetchScheduler* s, BxFetchPreparedUrl* target, const char* output_path, int depth, int tries_done, const struct timespec* retry_ready_time) {
+    if (!s || !target || !output_path || depth < 0 || tries_done < 0) {
         bx_fetch_prepared_url_free(target);
         errno = EINVAL;
         return -1;
@@ -350,6 +352,7 @@ static int scheduler_add_owned_target_with_tries(BxFetchScheduler* s, BxFetchPre
     }
 
     q->target = target;
+    q->depth = depth;
     q->output_path = strdup(output_path);
     if (!q->output_path) {
         free_queued_url(q);
@@ -579,7 +582,7 @@ static bool on_transfer_complete(void* userdata, int status, BxFetchError result
         if (!s->invariant_failed) {
             BxFetchPreparedUrl* retry_target = ti->target;
             ti->target = NULL;
-            if (scheduler_add_owned_target_with_tries(s, retry_target, ti->output_path, ti->tries_done, retry_ready_time_ptr) == 0) {
+            if (scheduler_add_owned_target_with_tries(s, retry_target, ti->output_path, ti->depth, ti->tries_done, retry_ready_time_ptr) == 0) {
                 retried = true;
                 if (s->observer.on_retry) {
                     s->observer.on_retry(s->observer.userdata, retry_target, ti->tries_done + 1, s->cfg->download.tries, retry_delay);
@@ -656,8 +659,8 @@ void bx_fetch_scheduler_free(BxFetchScheduler* s) {
     free(s);
 }
 
-int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path) {
-    if (!s || !url || !output_path) {
+int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char* output_path, int depth) {
+    if (!s || !url || !output_path || depth < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -668,11 +671,11 @@ int bx_fetch_scheduler_add_url(BxFetchScheduler* s, const char* url, const char*
     BxFetchPreparedUrl* target = bx_fetch_url_prepare(url);
     if (!target)
         return -1;
-    return scheduler_add_owned_target_with_tries(s, target, output_path, 0, NULL);
+    return scheduler_add_owned_target_with_tries(s, target, output_path, depth, 0, NULL);
 }
 
-int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path) {
-    if (!s || !canonical_url || !output_path) {
+int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canonical_url, const char* output_path, int depth) {
+    if (!s || !canonical_url || !output_path || depth < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -683,11 +686,11 @@ int bx_fetch_scheduler_add_canonical_url(BxFetchScheduler* s, const char* canoni
     BxFetchPreparedUrl* target = bx_fetch_url_prepare_canonical(canonical_url);
     if (!target)
         return -1;
-    return scheduler_add_owned_target_with_tries(s, target, output_path, 0, NULL);
+    return scheduler_add_owned_target_with_tries(s, target, output_path, depth, 0, NULL);
 }
 
-int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPreparedUrl* target, const char* output_path) {
-    if (!s || !target || !output_path) {
+int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPreparedUrl* target, const char* output_path, int depth) {
+    if (!s || !target || !output_path || depth < 0) {
         errno = EINVAL;
         return -1;
     }
@@ -698,7 +701,7 @@ int bx_fetch_scheduler_add_prepared_url(BxFetchScheduler* s, const BxFetchPrepar
     BxFetchPreparedUrl* clone = bx_fetch_prepared_url_clone(target);
     if (!clone)
         return -1;
-    return scheduler_add_owned_target_with_tries(s, clone, output_path, 0, NULL);
+    return scheduler_add_owned_target_with_tries(s, clone, output_path, depth, 0, NULL);
 }
 
 void bx_fetch_scheduler_cancel(BxFetchScheduler* s) {
@@ -767,6 +770,7 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
                 ti->sched = s;
                 ti->target = bx_fetch_prepared_url_clone(q->target);
                 ti->output_path = strdup(q->output_path);
+                ti->depth = q->depth;
                 ti->tries_done = q->tries_done + 1;
 
                 if (!ti->target || !ti->output_path) {
@@ -786,7 +790,7 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
                 }
                 s->active_total++;
 
-                int dispatch_rc = s->dispatch(s->userdata, q->target, q->output_path, on_transfer_complete, ti);
+                int dispatch_rc = s->dispatch(s->userdata, q->target, q->output_path, q->depth, on_transfer_complete, ti);
 
                 QueuedURL* next = q->next;
                 if (prev) {
