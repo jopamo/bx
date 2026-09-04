@@ -43,9 +43,10 @@ BxFetchPublicationState* bx_fetch_publication_state_new(const struct bx_fetch_co
 void bx_fetch_publication_state_free(BxFetchPublicationState* state);
 
 /*
- * Persistent mappings are used only for link conversion. Loading is a
- * startup transition: `state` must be pristine, and remains pristine if any
- * stored entry is invalid or cannot be validated. Saving serializes one
+ * Persistent mappings are used only for link conversion. Loading combines
+ * the URL-map store and committed metadata sidecars as one startup
+ * transaction: `state` must be pristine, and remains pristine if any
+ * recovered entry is invalid or cannot be validated. Saving serializes one
  * immutable snapshot through the transactional URL-map store.
  */
 int bx_fetch_publication_load_persisted_mappings(BxFetchPublicationState* state);

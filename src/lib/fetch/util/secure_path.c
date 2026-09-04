@@ -120,6 +120,28 @@ int bx_fetch_secure_path_open_existing_file(const char* path) {
     return fd;
 }
 
+int bx_fetch_secure_path_open_existing_directory(const char* path) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (strcmp(path, ".") == 0 || strcmp(path, "/") == 0)
+        return secure_path_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV);
+
+    char* basename = NULL;
+    int parent_fd = bx_fetch_secure_path_open_parent_directory(path, false, &basename);
+    if (parent_fd == -1)
+        return -1;
+
+    int fd = bx_fetch_secure_path_open_leaf(parent_fd, basename, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    int open_error_number = errno;
+    close(parent_fd);
+    free(basename);
+    if (fd == -1)
+        errno = open_error_number;
+    return fd;
+}
+
 int bx_fetch_secure_path_split(const char* path, char** parent_out, char** basename_out) {
     if (!path || !basename_out) {
         errno = EINVAL;
