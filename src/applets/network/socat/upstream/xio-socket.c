@@ -12,9 +12,6 @@
 #include "xio-socket.h"
 #include "xio-named.h"
 #include "xio-unix.h"
-#if WITH_VSOCK
-#include "xio-vsock.h"
-#endif
 #if WITH_IP4
 #include "xio-ip4.h"
 #endif /* WITH_IP4 */
@@ -23,9 +20,7 @@
 #endif /* WITH_IP6 */
 #include "xio-ip.h"
 #include "xio-listen.h"
-#include "xio-interface.h"
 #include "xio-ipapp.h"	/*! not clean */
-#include "xio-tcpwrap.h"
 
 
 #if _WITH_SOCKET
@@ -2375,4 +2370,3 @@ int xiosock_reuseaddr(int fd, int ipproto, struct opt *opts)
 }
 
 #endif /* _WITH_SOCKET */
-

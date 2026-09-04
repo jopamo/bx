@@ -7,11 +7,7 @@
 #include "xiosysincludes.h"
 #include "xioopen.h"
 
-#include "xio-termios.h"
 #include "xio-socket.h"
-#include "xio-posixmq.h"
-#include "xio-readline.h"
-#include "xio-openssl.h"
 
 
 /* xioread() performs read() or recvfrom()
@@ -590,4 +586,3 @@ ssize_t xiopending(xiofile_t *file) {
       return 0;
    }
 }
-

@@ -17,7 +17,6 @@
 #include "sycls.h"
 #include "sysutils.h"
 #include "dalan.h"
-#include "filan.h"
 #include "xio.h"
 #include "xioopts.h"
 #include "xiolockfile.h"

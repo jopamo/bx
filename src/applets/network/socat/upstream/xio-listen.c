@@ -14,7 +14,6 @@
 #include "xio-ip.h"
 #include "xio-ip4.h"
 #include "xio-listen.h"
-#include "xio-tcpwrap.h"
 
 /***** LISTEN options *****/
 const struct optdesc opt_backlog = { "backlog",   NULL, OPT_BACKLOG,     GROUP_LISTEN, PH_LISTEN, TYPE_INT,    OFUNC_SPEC };

@@ -8,7 +8,6 @@
 #include "xiosysincludes.h"
 #include "xioopen.h"
 
-#include "xio-openssl.h"
 
 
 static pid_t socat_kill_pid;	/* here we pass the pid to be killed in sighandler */

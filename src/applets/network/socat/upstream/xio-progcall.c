@@ -12,7 +12,6 @@
 #include "xio-progcall.h"
 
 #include "xio-socket.h"
-#include "xio-socketpair.h"
 
 
 /* these options are used by address pty too */
