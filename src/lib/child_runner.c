@@ -219,13 +219,21 @@ int bx_child_exec_argv_envp(char *const *argv,
                             const char *path) {
     if (!argv || !argv[0] || !envp)
         return EINVAL;
-    if (strchr(argv[0], '/'))
-        return bx_child_exec_file_argv_envp_exact(argv[0], argv, envp);
+    return bx_child_exec_file_argv_envp(argv[0], argv, envp, path);
+}
 
+int bx_child_exec_file_argv_envp(const char *executable,
+                                 char *const *argv,
+                                 char *const *envp,
+                                 const char *path) {
+    if (!executable || !argv || !argv[0] || !envp)
+        return EINVAL;
+    if (strchr(executable, '/'))
+        return bx_child_exec_file_argv_envp_exact(executable, argv, envp);
     if (!path)
         path = "/bin:/usr/bin";
     return bx_child_exec_file_argv_search(
-        argv[0], argv, envp, path,
+        executable, argv, envp, path,
         BX_CHILD_PATH_SEARCH_STOP_ON_ERROR, false);
 }
 

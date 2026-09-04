@@ -141,6 +141,11 @@ int bx_child_exec_argv_envp(
     char *const *argv,
     char *const *envp,
     const char *path);
+int bx_child_exec_file_argv_envp(
+    const char *executable,
+    char *const *argv,
+    char *const *envp,
+    const char *path);
 int bx_child_exec_file_argv_exact(const char *executable,
                                   char *const *argv);
 /*

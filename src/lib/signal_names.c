@@ -209,6 +209,58 @@ bool bx_signal_name_lookup(const char* name, int* number_out) {
     return false;
 }
 
+bool bx_signal_name_format(int number, char* buffer, size_t buffer_size) {
+    if (buffer == NULL || buffer_size == 0u)
+        return false;
+
+#if defined(SIGRTMIN) && defined(SIGRTMAX)
+    int rtmin = SIGRTMIN;
+    int rtmax = SIGRTMAX;
+    if (number >= rtmin && number <= rtmax) {
+        int written;
+        if (number == rtmin)
+            written = snprintf(buffer, buffer_size, "RTMIN");
+        else if (number == rtmax)
+            written = snprintf(buffer, buffer_size, "RTMAX");
+        else if (number - rtmin <= rtmax - number)
+            written = snprintf(
+                buffer, buffer_size, "RTMIN+%d", number - rtmin);
+        else
+            written = snprintf(
+                buffer, buffer_size, "RTMAX-%d", rtmax - number);
+        return written >= 0 && (size_t)written < buffer_size;
+    }
+#endif
+
+    for (size_t i = 0;
+         i < (sizeof(bx_signal_names) / sizeof(bx_signal_names[0]));
+         i++) {
+        if (bx_signal_names[i].number != number)
+            continue;
+
+        const char* name = bx_signal_names[i].name;
+#if defined(SIGIOT) && defined(SIGABRT)
+        if (number == SIGABRT && strcmp(name, "IOT") == 0)
+            continue;
+#endif
+#if defined(SIGCLD) && defined(SIGCHLD)
+        if (number == SIGCHLD && strcmp(name, "CLD") == 0)
+            continue;
+#endif
+#if defined(SIGIO) && defined(SIGPOLL)
+        if (number == SIGPOLL && strcmp(name, "IO") == 0)
+            continue;
+#endif
+#if defined(SIGUNUSED) && defined(SIGSYS)
+        if (number == SIGSYS && strcmp(name, "UNUSED") == 0)
+            continue;
+#endif
+        int written = snprintf(buffer, buffer_size, "%s", name);
+        return written >= 0 && (size_t)written < buffer_size;
+    }
+    return false;
+}
+
 void bx_signal_name_list(FILE* stream) {
     int col = 0;
 
