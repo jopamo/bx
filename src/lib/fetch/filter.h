@@ -13,7 +13,7 @@
  *   credential-boundary policy; it does not apply crawl scope/content rules.
  *
  * Ownership and lifetime:
- * - bx_fetch_filter_new() borrows `cfg`; the EffectiveConfig must outlive Filter.
+ * - bx_fetch_filter_new() borrows `cfg`; the struct bx_fetch_config must outlive Filter.
  * - bx_fetch_filter_free() releases all filter-owned allocations.
  * - Input URL pointers are borrowed; no input pointer ownership transfer.
  * - `*_canonical_*` entry points are internal fast paths whose URL argument
@@ -40,7 +40,7 @@ typedef enum {
     FILTER_DECISION_SUFFIX_ALLOWLIST,
 } FilterDecision;
 
-Filter* bx_fetch_filter_new(const EffectiveConfig* cfg);
+Filter* bx_fetch_filter_new(const struct bx_fetch_config* cfg);
 void bx_fetch_filter_free(Filter* f);
 
 int bx_fetch_filter_add_seed_url(Filter* f, const char* url);

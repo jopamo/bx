@@ -82,14 +82,14 @@ static bool is_windows_device_name(const char* text) {
     return false;
 }
 
-static const char* default_page_name(const EffectiveConfig* cfg) {
+static const char* default_page_name(const struct bx_fetch_config* cfg) {
     if (!cfg || !cfg->http.default_page || cfg->http.default_page[0] == '\0') {
         return "index.html";
     }
     return cfg->http.default_page;
 }
 
-static bool parse_restrict_modes(const EffectiveConfig* cfg, RestrictFileNameModes* modes_out) {
+static bool parse_restrict_modes(const struct bx_fetch_config* cfg, RestrictFileNameModes* modes_out) {
     if (!modes_out) {
         errno = EINVAL;
         return false;
@@ -195,7 +195,7 @@ static char* encode_component(const char* component) {
     return encoded;
 }
 
-char* bx_fetch_pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_sanitize_component(const char* component, const struct bx_fetch_config* cfg) {
     if (!component)
         return NULL;
     if (component[0] == '\0') {
@@ -251,7 +251,7 @@ char* bx_fetch_pathmap_sanitize_component(const char* component, const Effective
     return sanitized;
 }
 
-static char* sanitize_directory_segment(const char* segment, const EffectiveConfig* cfg) {
+static char* sanitize_directory_segment(const char* segment, const struct bx_fetch_config* cfg) {
     char* sanitized = NULL;
 
     if (!segment || segment[0] == '\0') {
@@ -273,7 +273,7 @@ static void free_segments(char** segments, size_t count) {
     free(segments);
 }
 
-static char* build_directory_part(const char* path, int cut_dirs, const EffectiveConfig* cfg) {
+static char* build_directory_part(const char* path, int cut_dirs, const struct bx_fetch_config* cfg) {
     if (!path)
         return NULL;
 
@@ -353,7 +353,7 @@ static char* build_directory_part(const char* path, int cut_dirs, const Effectiv
     return joined;
 }
 
-static char* extract_filename_from_url(const char* url, const EffectiveConfig* cfg) {
+static char* extract_filename_from_url(const char* url, const struct bx_fetch_config* cfg) {
     MiraURL* mu = bx_fetch_url_parse(url);
     if (!mu)
         return NULL;
@@ -407,7 +407,7 @@ static char* extract_filename_from_url(const char* url, const EffectiveConfig* c
     return sanitized;
 }
 
-char* bx_fetch_pathmap_url_to_local(const char* url, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_config* cfg) {
     if (!url || !cfg)
         return NULL;
 
@@ -419,7 +419,7 @@ char* bx_fetch_pathmap_url_to_local(const char* url, const EffectiveConfig* cfg)
     return local_path;
 }
 
-char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const EffectiveConfig* cfg) {
+char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const struct bx_fetch_config* cfg) {
     if (!url || !cfg)
         return NULL;
 

@@ -11,7 +11,7 @@
  *   not mutate scheduler internals.
  *
  * Ownership and lifetime:
- * - bx_fetch_scheduler_new() borrows `cfg`; EffectiveConfig must outlive Scheduler.
+ * - bx_fetch_scheduler_new() borrows `cfg`; struct bx_fetch_config must outlive Scheduler.
  * - bx_fetch_scheduler_add_url() canonicalizes an untrusted URL before copying it.
  * - bx_fetch_scheduler_add_canonical_url() is the internal fast path for canonical URLs.
  * - Output path strings are copied into scheduler-owned queue storage.
@@ -45,7 +45,7 @@ typedef int (*SchedulerDispatchFn)(void* userdata, const char* url, const char* 
 /* Called by scheduler while transfers are active to drive completion progress. */
 typedef int (*SchedulerPollFn)(void* userdata);
 
-Scheduler* bx_fetch_scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata);
+Scheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata);
 void bx_fetch_scheduler_free(Scheduler* s);
 
 /* Enqueues one transfer attempt candidate; URL/path are copied on success. */

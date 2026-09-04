@@ -21,8 +21,8 @@
 
 #include "config.h"
 
-char* bx_fetch_pathmap_sanitize_component(const char* component, const EffectiveConfig* cfg);
-char* bx_fetch_pathmap_url_to_local(const char* url, const EffectiveConfig* cfg);
-char* bx_fetch_pathmap_canonical_url_to_local(const char* canonical_url, const EffectiveConfig* cfg);
+char* bx_fetch_pathmap_sanitize_component(const char* component, const struct bx_fetch_config* cfg);
+char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_config* cfg);
+char* bx_fetch_pathmap_canonical_url_to_local(const char* canonical_url, const struct bx_fetch_config* cfg);
 
 #endif  // BX_FETCH_PATHMAP_H

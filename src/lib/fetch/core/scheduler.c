@@ -32,7 +32,7 @@ typedef struct HostState {
 } HostState;
 
 struct Scheduler {
-    const EffectiveConfig* cfg;
+    const struct bx_fetch_config* cfg;
     SchedulerDispatchFn dispatch;
     SchedulerPollFn poll;
     void* userdata;
@@ -195,7 +195,7 @@ static uint64_t scheduler_random_bounded(Scheduler* s, uint64_t upper_bound) {
     }
 }
 
-static uint64_t scheduler_initial_random_state(const EffectiveConfig* cfg) {
+static uint64_t scheduler_initial_random_state(const struct bx_fetch_config* cfg) {
     uint64_t seed = 0x4d495241ULL;
     if (cfg && cfg->download.random_wait) {
         struct timespec now = {0};
@@ -537,7 +537,7 @@ static bool on_transfer_complete(void* userdata, const char* url, int status, in
     return retried;
 }
 
-Scheduler* bx_fetch_scheduler_new(const EffectiveConfig* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata) {
+Scheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg, SchedulerDispatchFn dispatch, SchedulerPollFn poll, void* userdata) {
     if (!cfg || !dispatch)
         return NULL;
 

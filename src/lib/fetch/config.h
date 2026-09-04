@@ -11,7 +11,7 @@
  *   CLI layer.
  *
  * Ownership and lifetime:
- * - EffectiveConfig and nested string/list fields are heap-owned by the config
+ * - struct bx_fetch_config and nested string/list fields are heap-owned by the config
  *   object itself.
  * - Callers allocate via bx_fetch_config_new() and release via bx_fetch_config_free().
  * - No field pointer remains valid after bx_fetch_config_free().
@@ -171,7 +171,7 @@ typedef struct {
     bool no_passive_ftp;
 } FtpConfig;
 
-typedef struct {
+struct bx_fetch_config {
     StartupConfig startup;
     LoggingConfig logging;
     DownloadConfig download;
@@ -181,11 +181,11 @@ typedef struct {
     RecursiveConfig recursive;
     FtpConfig ftp;
     UrlInputConfig input;
-} EffectiveConfig;
+};
 
 /* Allocates a config with default values; caller owns and must free. */
-EffectiveConfig* bx_fetch_config_new(void);
+struct bx_fetch_config* bx_fetch_config_new(void);
 /* Frees all nested allocations and the config object itself; NULL-safe. */
-void bx_fetch_config_free(EffectiveConfig* config);
+void bx_fetch_config_free(struct bx_fetch_config* config);
 
 #endif  // BX_FETCH_CONFIG_H

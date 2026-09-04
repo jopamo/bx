@@ -32,7 +32,7 @@ typedef struct {
  */
 typedef int (*MiraUrlMapLoadFn)(void* userdata, const char* url, const char* local_path);
 
-int bx_fetch_url_map_store_load(const EffectiveConfig* cfg, MiraUrlMapLoadFn cb, void* userdata);
-int bx_fetch_url_map_store_save(const EffectiveConfig* cfg, const MiraUrlMapEntry* entries, size_t entry_count);
+int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, MiraUrlMapLoadFn cb, void* userdata);
+int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const MiraUrlMapEntry* entries, size_t entry_count);
 
 #endif  // BX_FETCH_URL_MAP_STORE_H

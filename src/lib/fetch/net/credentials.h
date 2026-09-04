@@ -24,8 +24,8 @@ typedef struct {
  * configured source is atomic: an omitted component becomes empty and is
  * never inherited from a lower-priority source.
  */
-void bx_fetch_net_select_origin_credentials(const EffectiveConfig* cfg, const char* url, MiraCredentialSelection* selection);
-void bx_fetch_net_select_proxy_credentials(const EffectiveConfig* cfg, MiraCredentialSelection* selection);
+void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, const char* url, MiraCredentialSelection* selection);
+void bx_fetch_net_select_proxy_credentials(const struct bx_fetch_config* cfg, MiraCredentialSelection* selection);
 /* Returns the borrowed proxy environment value selected for request_url. */
 const char* bx_fetch_net_proxy_environment_url(const char* request_url);
 /*
