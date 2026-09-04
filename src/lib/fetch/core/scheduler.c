@@ -790,7 +790,7 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
                 }
                 s->active_total++;
 
-                int dispatch_rc = s->dispatch(s->userdata, q->target, q->output_path, q->depth, on_transfer_complete, ti);
+                int dispatch_rc = s->dispatch(s->userdata, q->target, q->output_path, q->depth, ti->tries_done, s->cfg->download.tries, on_transfer_complete, ti);
 
                 QueuedURL* next = q->next;
                 if (prev) {

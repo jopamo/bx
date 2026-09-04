@@ -1605,6 +1605,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/core/rate_limiter.c',
   'src/lib/fetch/core/request.c',
   'src/lib/fetch/core/response.c',
+  'src/lib/fetch/core/run.c',
   'src/lib/fetch/core/scheduler.c',
   'src/lib/fetch/core/transfer_completion.c',
   'src/lib/fetch/core/transfer_prepare.c',

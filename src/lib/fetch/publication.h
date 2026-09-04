@@ -2,7 +2,7 @@
 #define BX_FETCH_PUBLICATION_H
 
 /* BX_FETCH_HEADER_OWNER: core */
-/* BX_FETCH_HEADER_CONSUMERS: core */
+/* BX_FETCH_HEADER_CONSUMERS: core, applet */
 
 /*
  * Owns committed in-memory download and URL-map state. A completion is

@@ -59,6 +59,11 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawl
                                                                     const char* reference,
                                                                     BxFetchHtmlLinkKind kind,
                                                                     int parent_depth);
+/*
+ * Evaluates an already prepared redirect/target against the same filter and
+ * seed policy that owns crawl admission. Returns 0 with a typed decision.
+ */
+int bx_fetch_crawl_coordinator_evaluate_target(const BxFetchCrawlCoordinator* coordinator, const BxFetchPreparedUrl* target, BxFetchFilterDecision* decision_out);
 
 int bx_fetch_crawl_coordinator_run(BxFetchCrawlCoordinator* coordinator);
 void bx_fetch_crawl_coordinator_cancel(BxFetchCrawlCoordinator* coordinator);
