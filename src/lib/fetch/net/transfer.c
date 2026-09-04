@@ -10,7 +10,7 @@ BxFetchTransfer* bx_fetch_transfer_new(BxFetchRequest* req, BxFetchWriter* write
 
     t->req = req;
     t->writer = writer;
-    t->state = TRANSFER_STATE_INIT;
+    t->state = BX_FETCH_TRANSFER_STATE_INIT;
     t->resp = bx_fetch_response_new();
 
     if (!t->resp) {

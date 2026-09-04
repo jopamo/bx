@@ -85,9 +85,7 @@ typedef struct {
     bool no_dns_cache;
     char* restrict_file_names;
     bool inet4_only;
-#if HAVE_IPV6
     bool inet6_only;
-#endif
     char* prefer_family;
     char* user;
     char* password;
