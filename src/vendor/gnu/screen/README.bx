@@ -1,0 +1,19 @@
+# GNU Screen mechanics
+
+This directory owns the imported GNU Screen 5.0.1 runtime mechanics used by
+the native `screen` multicall module.
+
+Boundary:
+
+- `src/vendor/gnu/screen/` owns the terminal engine, ANSI parser, scheduler,
+  layers, PTY, display, and related imported runtime mechanics.
+- `src/applets/system/screen/` owns bx CLI parsing, defaults, diagnostics,
+  session paths, OSC 52 policy, and exit-status policy.
+
+Migration is intentionally incremental. A mechanics file moves here only when
+its build and audit references move in the same change. Files must not be
+copied back into the applet tree or wrapped by a duplicate implementation.
+
+The snapshot entered bx in commit
+`f01b07f8f98ab07773de3fc69f8f9ddfabf94bed`. Local compatibility and hardening
+changes remain visible in normal repository history.

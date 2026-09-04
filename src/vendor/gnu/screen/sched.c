@@ -26,7 +26,7 @@
  ****************************************************************
  */
 
-#include "config.h"
+#include "applets/system/screen/config.h"
 
 #include "sched.h"
 
@@ -38,7 +38,7 @@
 #include <sys/time.h>
 
 #include "lib/time_parse.h"
-#include "screen.h"
+#include "applets/system/screen/screen.h"
 
 static Event *evs;
 static Event *tevs;

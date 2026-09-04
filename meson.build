@@ -768,7 +768,7 @@ screen_native_sources = files(
   'src/applets/system/screen/process_resize_prompt.c',
   'src/applets/system/screen/pty.c',
   'src/applets/system/screen/resize.c',
-  'src/applets/system/screen/sched.c',
+  'src/vendor/gnu/screen/sched.c',
   'src/applets/system/screen/screen.c',
   'src/applets/system/screen/search.c',
   'src/applets/system/screen/socket.c',
@@ -1050,7 +1050,10 @@ endif
 
 screen_lib = static_library('bx_screen',
   screen_native_sources,
-  include_directories : include_directories('src'),
+  include_directories : include_directories(
+    'src',
+    'src/vendor/gnu/screen',
+  ),
   dependencies : screen_deps,
   c_args : screen_c_args,
 )
