@@ -1,12 +1,15 @@
 #define _GNU_SOURCE
 #include "lib/fetch/publication.h"
 #include "lib/fetch/resource_limits.h"
+#include "lib/fetch/secure_path.h"
 #include "lib/fetch/timestamp_policy.h"
 #include "lib/fetch/url.h"
+#include "lib/fetch/url_map_store.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef struct MappingNode {
     char* public_url;
@@ -221,6 +224,24 @@ static void commit_staged_mapping(BxFetchPublicationState* state, StagedMapping*
     }
 }
 
+static int add_public_mapping(BxFetchPublicationState* state, const char* public_url, const char* local_path, BxFetchMappingPriority priority) {
+    StagedMapping staged = {0};
+    if (stage_mapping(state, public_url, local_path, priority, &staged) != 0)
+        return -1;
+
+    size_t final_count = 0;
+    size_t final_bytes = 0;
+    if (mapping_reservation(state, &staged, NULL, &final_count, &final_bytes) != 0 || ensure_mapping_capacity(state, final_count) != 0) {
+        staged_mapping_clear(&staged);
+        return -1;
+    }
+
+    commit_staged_mapping(state, &staged);
+    state->mapping_count = final_count;
+    state->mapping_bytes = final_bytes;
+    return 0;
+}
+
 static bool completion_can_publish(const BxFetchPublicationState* state, const BxFetchTransferCompletion* completion) {
     if (!state || !completion || !completion->request || !completion->response || !completion->output_path)
         return false;
@@ -267,6 +288,123 @@ void bx_fetch_publication_state_free(BxFetchPublicationState* state) {
     }
     free(state->mapping_buckets);
     free(state);
+}
+
+static int load_persisted_mapping(void* userdata, const char* url, const char* local_path) {
+    BxFetchPublicationState* candidate = userdata;
+    if (!candidate || !url || !local_path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    BxFetchPreparedUrl* prepared = bx_fetch_url_prepare(url);
+    if (!prepared) {
+        if (!errno)
+            errno = EINVAL;
+        return -1;
+    }
+    if (bx_fetch_prepared_url_policy(prepared, candidate->cfg->https.https_only) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+        bx_fetch_prepared_url_free(prepared);
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = bx_fetch_secure_path_open_existing_file(local_path);
+    if (fd == -1) {
+        int error_number = errno;
+        bx_fetch_prepared_url_free(prepared);
+        if (error_number == ENOENT)
+            return 0;
+        errno = error_number;
+        return -1;
+    }
+    if (close(fd) != 0) {
+        int error_number = errno;
+        bx_fetch_prepared_url_free(prepared);
+        errno = error_number;
+        return -1;
+    }
+
+    const char* public_url = bx_fetch_prepared_url_display(prepared);
+    int rc = add_public_mapping(candidate, public_url, local_path, BX_FETCH_MAPPING_PRIORITY_PERSISTED);
+    bx_fetch_prepared_url_free(prepared);
+    return rc;
+}
+
+int bx_fetch_publication_load_persisted_mappings(BxFetchPublicationState* state) {
+    if (!state) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!state->cfg->recursive.convert_links)
+        return 0;
+    if (state->mapping_count != 0 || state->download_count != 0) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    BxFetchPublicationState* candidate = bx_fetch_publication_state_new(state->cfg);
+    if (!candidate)
+        return -1;
+    if (bx_fetch_url_map_store_load(state->cfg, load_persisted_mapping, candidate) != 0) {
+        int error_number = errno;
+        bx_fetch_publication_state_free(candidate);
+        errno = error_number;
+        return -1;
+    }
+
+    state->mapping_buckets = candidate->mapping_buckets;
+    state->mapping_bucket_count = candidate->mapping_bucket_count;
+    state->mapping_count = candidate->mapping_count;
+    state->mapping_bytes = candidate->mapping_bytes;
+    candidate->mapping_buckets = NULL;
+    candidate->mapping_bucket_count = 0;
+    candidate->mapping_count = 0;
+    candidate->mapping_bytes = 0;
+    bx_fetch_publication_state_free(candidate);
+    return 0;
+}
+
+int bx_fetch_publication_save_persisted_mappings(const BxFetchPublicationState* state) {
+    if (!state) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!state->cfg->recursive.convert_links)
+        return 0;
+
+    BxFetchUrlMapEntry* entries = NULL;
+    if (state->mapping_count > 0) {
+        entries = calloc(state->mapping_count, sizeof(*entries));
+        if (!entries)
+            return -1;
+    }
+
+    size_t index = 0;
+    for (size_t i = 0; i < state->mapping_bucket_count; i++) {
+        for (MappingNode* node = state->mapping_buckets[i]; node; node = node->next) {
+            if (index >= state->mapping_count) {
+                free(entries);
+                errno = EINVAL;
+                return -1;
+            }
+            entries[index++] = (BxFetchUrlMapEntry){
+                .url = node->public_url,
+                .local_path = node->local_path,
+            };
+        }
+    }
+    if (index != state->mapping_count) {
+        free(entries);
+        errno = EINVAL;
+        return -1;
+    }
+
+    int rc = bx_fetch_url_map_store_save(state->cfg, entries, state->mapping_count);
+    int error_number = errno;
+    free(entries);
+    errno = error_number;
+    return rc;
 }
 
 BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicationState* state, const BxFetchTransferCompletion* completion) {

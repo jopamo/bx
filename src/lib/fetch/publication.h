@@ -42,6 +42,15 @@ typedef int (*BxFetchPublicationMappingVisitor)(void* userdata, const char* publ
 BxFetchPublicationState* bx_fetch_publication_state_new(const struct bx_fetch_config* cfg);
 void bx_fetch_publication_state_free(BxFetchPublicationState* state);
 
+/*
+ * Persistent mappings are used only for link conversion. Loading is a
+ * startup transition: `state` must be pristine, and remains pristine if any
+ * stored entry is invalid or cannot be validated. Saving serializes one
+ * immutable snapshot through the transactional URL-map store.
+ */
+int bx_fetch_publication_load_persisted_mappings(BxFetchPublicationState* state);
+int bx_fetch_publication_save_persisted_mappings(const BxFetchPublicationState* state);
+
 BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicationState* state, const BxFetchTransferCompletion* completion);
 
 /* Boundary lookup removes URL userinfo before consulting the public map. */
