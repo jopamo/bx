@@ -234,6 +234,7 @@ fetch_lexbor_dep = dependency(
   'lexbor',
   required : false,
   static : use_static_binary,
+  include_type : 'system',
 )
 
 if host_machine.system() != 'linux'
@@ -1601,6 +1602,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/config.c',
   'src/lib/fetch/core/crawl_coordinator.c',
   'src/lib/fetch/core/http_header.c',
+  'src/lib/fetch/core/link_conversion.c',
   'src/lib/fetch/core/publication.c',
   'src/lib/fetch/core/rate_limiter.c',
   'src/lib/fetch/core/request.c',

@@ -422,14 +422,22 @@ int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_
 typedef struct {
     BxFetchHtmlLinkCallback cb;
     void* userdata;
+    bool failed;
 } LexborExtractContext;
 
 typedef struct {
     BxFetchLinkRewriteCallback cb;
     void* userdata;
+    bool failed;
 } LexborRewriteContext;
 
-typedef void (*LexborAttrVisitor)(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata);
+typedef struct {
+    char* data;
+    size_t length;
+    size_t capacity;
+} LexborSerializeBuffer;
+
+typedef bool (*LexborAttrVisitor)(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata);
 
 typedef struct {
     const char* name;
@@ -477,9 +485,9 @@ static BxFetchHtmlLinkKind lexbor_html_link_kind(lxb_dom_element_t* element, con
     return BX_FETCH_HTML_LINK_REQUISITE;
 }
 
-static void visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrVisitor visitor, void* visitor_userdata) {
+static bool visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrVisitor visitor, void* visitor_userdata) {
     if (!element || !visitor)
-        return;
+        return false;
 
     static const LexborAttrSpec attrs[] = {
         {"href", 4},
@@ -495,55 +503,93 @@ static void visit_lexbor_link_attributes(lxb_dom_element_t* element, LexborAttrV
 
         char* url = strndup((const char*)value, value_len);
         if (!url)
-            continue;
+            return false;
 
-        visitor(element, attrs[i].name, attrs[i].len, url, visitor_userdata);
+        bool ok = visitor(element, attrs[i].name, attrs[i].len, url, visitor_userdata);
         free(url);
+        if (!ok)
+            return false;
     }
+    return true;
 }
 
-static void extract_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
+static bool extract_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
     (void)element;
 
     const LexborExtractContext* extract_ctx = userdata;
     if (!extract_ctx || !extract_ctx->cb)
-        return;
+        return false;
     extract_ctx->cb(extract_ctx->userdata, url, lexbor_html_link_kind(element, attr_name, attr_name_len));
+    return true;
 }
 
-static void rewrite_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
+static bool rewrite_lexbor_attribute_link(lxb_dom_element_t* element, const char* attr_name, size_t attr_name_len, const char* url, void* userdata) {
     const LexborRewriteContext* rewrite_ctx = userdata;
     if (!rewrite_ctx || !rewrite_ctx->cb || !element)
-        return;
+        return false;
 
     char* replacement = rewrite_ctx->cb(rewrite_ctx->userdata, url);
     if (!replacement)
-        return;
+        return true;
 
-    lxb_dom_element_set_attribute(element, (const lxb_char_t*)attr_name, attr_name_len, (const lxb_char_t*)replacement, strlen(replacement));
+    bool ok = lxb_dom_element_set_attribute(element, (const lxb_char_t*)attr_name, attr_name_len, (const lxb_char_t*)replacement, strlen(replacement)) != NULL;
     free(replacement);
+    return ok;
 }
 
-static lxb_dom_report_spec_t callback(lxb_dom_node_t* node, void* ctx) {
-    LexborExtractContext* extract_ctx = ctx;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
-        return LXB_DOM_REPORT_OK;
+static bool walk_lexbor_link_attributes(lxb_dom_node_t* root, LexborAttrVisitor visitor, void* userdata) {
+    if (!root || !visitor)
+        return false;
 
-    lxb_dom_element_t* element = lxb_dom_interface_element(node);
-    visit_lexbor_link_attributes(element, extract_lexbor_attribute_link, extract_ctx);
-
-    return LXB_DOM_REPORT_OK;
+    lxb_dom_node_t* node = root;
+    for (;;) {
+        if (node->type == LXB_DOM_NODE_TYPE_ELEMENT && !visit_lexbor_link_attributes(lxb_dom_interface_element(node), visitor, userdata)) {
+            return false;
+        }
+        if (node->first_child) {
+            node = node->first_child;
+            continue;
+        }
+        while (node != root && !node->next)
+            node = node->parent;
+        if (node == root)
+            return true;
+        node = node->next;
+    }
 }
 
-static lxb_dom_report_spec_t rewrite_callback(lxb_dom_node_t* node, void* ctx) {
-    LexborRewriteContext* rewrite_ctx = ctx;
-    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
-        return LXB_DOM_REPORT_OK;
+static lxb_status_t serialize_bounded(const lxb_char_t* data, size_t length, void* userdata) {
+    LexborSerializeBuffer* output = userdata;
+    if (!output || (!data && length > 0u)) {
+        errno = EINVAL;
+        return LXB_STATUS_ERROR_WRONG_ARGS;
+    }
+    if (output->length > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES || length > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES - output->length) {
+        errno = EFBIG;
+        return LXB_STATUS_ERROR_OVERFLOW;
+    }
 
-    lxb_dom_element_t* element = lxb_dom_interface_element(node);
-    visit_lexbor_link_attributes(element, rewrite_lexbor_attribute_link, rewrite_ctx);
+    size_t required = output->length + length + 1u;
+    if (required > output->capacity) {
+        size_t maximum_capacity = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES < SIZE_MAX ? BX_FETCH_DOCUMENT_PARSE_MAX_BYTES + 1u : SIZE_MAX;
+        size_t capacity = output->capacity ? output->capacity : (maximum_capacity < 4096u ? maximum_capacity : 4096u);
+        while (capacity < required) {
+            capacity = capacity > maximum_capacity / 2u ? maximum_capacity : capacity * 2u;
+        }
+        char* grown = realloc(output->data, capacity);
+        if (!grown) {
+            errno = ENOMEM;
+            return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+        }
+        output->data = grown;
+        output->capacity = capacity;
+    }
 
-    return LXB_DOM_REPORT_OK;
+    if (length > 0u)
+        memcpy(output->data + output->length, data, length);
+    output->length += length;
+    output->data[output->length] = '\0';
+    return LXB_STATUS_OK;
 }
 
 int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
@@ -565,9 +611,13 @@ int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_dat
         .cb = cb,
         .userdata = userdata,
     };
-    lxb_dom_node_walk_all_report(lxb_dom_interface_node(document), callback, &ctx);
+    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), extract_lexbor_attribute_link, &ctx);
 
     lxb_html_document_destroy(document);
+    if (ctx.failed) {
+        errno = ENOMEM;
+        return -1;
+    }
     return 0;
 }
 
@@ -598,19 +648,27 @@ char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, s
         .cb = cb,
         .userdata = userdata,
     };
-    lxb_dom_node_walk_all_report(lxb_dom_interface_node(document), rewrite_callback, &ctx);
-
-    lexbor_str_t str = {0};
-    lxb_html_serialize_tree_str(lxb_dom_interface_node(document), &str);
-
-    char* ret = NULL;
-    if (str.data) {
-        ret = strdup((const char*)str.data);
-        lexbor_str_destroy(&str, lxb_html_document_mraw(document), false);
+    ctx.failed = !walk_lexbor_link_attributes(lxb_dom_interface_node(document), rewrite_lexbor_attribute_link, &ctx);
+    if (ctx.failed) {
+        lxb_html_document_destroy(document);
+        errno = ENOMEM;
+        return NULL;
     }
 
+    LexborSerializeBuffer output = {0};
+    errno = 0;
+    lxb_status_t serialize_status = lxb_html_serialize_tree_cb(lxb_dom_interface_node(document), serialize_bounded, &output);
+    int serialize_error = errno;
+
     lxb_html_document_destroy(document);
-    return ret;
+    if (serialize_status != LXB_STATUS_OK) {
+        free(output.data);
+        errno = serialize_error ? serialize_error : EINVAL;
+        return NULL;
+    }
+    if (!output.data)
+        output.data = strdup("");
+    return output.data;
 }
 
 #else
@@ -1015,6 +1073,10 @@ static int append_buffer(char** buffer, size_t* length, size_t* capacity, const 
         return -1;
     if (data_len == 0)
         return 0;
+    if (*length > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES || data_len > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES - *length) {
+        errno = EFBIG;
+        return -1;
+    }
 
     size_t needed = *length + data_len + 1;
     if (*capacity < needed) {

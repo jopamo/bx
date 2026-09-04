@@ -24,8 +24,12 @@
  * Callers must reject larger inputs before allocating a parser buffer; parser
  * entry points enforce the same boundary for direct API use.
  */
+#ifndef BX_FETCH_DOCUMENT_PARSE_LIMIT_TEXT
 #define BX_FETCH_DOCUMENT_PARSE_LIMIT_TEXT "16 MiB"
+#endif
+#ifndef BX_FETCH_DOCUMENT_PARSE_MAX_BYTES
 #define BX_FETCH_DOCUMENT_PARSE_MAX_BYTES ((size_t)16 * 1024u * 1024u)
+#endif
 
 /* `url` is transient; copy it if it must outlive the callback. */
 typedef void (*BxFetchLinkCallback)(void* userdata, const char* url);

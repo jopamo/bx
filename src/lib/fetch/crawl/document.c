@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/document.h"
+#include "lib/fetch/crawl/document_internal.h"
 #include "lib/fetch/response.h"
 #include "lib/fetch/writer.h"
 #include "lib/path_ops.h"
@@ -169,7 +170,7 @@ static BxFetchDocumentKind classify_document(const char* path, const char* conte
     return BX_FETCH_DOCUMENT_NONE;
 }
 
-static int read_document(const char* path, unsigned char** data_out, size_t* length_out, BxFetchDocumentOutcome* outcome) {
+int bx_fetch_document_read(const char* path, unsigned char** data_out, size_t* length_out, struct stat* status_out, BxFetchDocumentOutcome* outcome) {
     int fd = bx_fetch_writer_open_existing_file(path);
     if (fd == -1) {
         return document_fail(outcome, BX_FETCH_DOCUMENT_NONE, BX_FETCH_DOCUMENT_FAILURE_OPEN, errno ? errno : EIO);
@@ -237,6 +238,17 @@ static int read_document(const char* path, unsigned char** data_out, size_t* len
         length += (size_t)read_size;
     }
 
+    struct stat final_status;
+    int final_status_result = fstat(fd, &final_status);
+    bool changed = final_status_result == 0 && (final_status.st_dev != file_status.st_dev || final_status.st_ino != file_status.st_ino || final_status.st_size != (off_t)length ||
+                                                final_status.st_mtim.tv_sec != file_status.st_mtim.tv_sec || final_status.st_mtim.tv_nsec != file_status.st_mtim.tv_nsec ||
+                                                final_status.st_ctim.tv_sec != file_status.st_ctim.tv_sec || final_status.st_ctim.tv_nsec != file_status.st_ctim.tv_nsec);
+    if (final_status_result != 0 || changed) {
+        int error_number = final_status_result != 0 ? (errno ? errno : EIO) : EBUSY;
+        free(data);
+        close(fd);
+        return document_fail(outcome, BX_FETCH_DOCUMENT_NONE, BX_FETCH_DOCUMENT_FAILURE_READ, error_number);
+    }
     if (close(fd) != 0) {
         int error_number = errno ? errno : EIO;
         free(data);
@@ -245,6 +257,8 @@ static int read_document(const char* path, unsigned char** data_out, size_t* len
     data[length] = '\0';
     *data_out = data;
     *length_out = length;
+    if (status_out)
+        *status_out = final_status;
     return 0;
 }
 
@@ -271,7 +285,7 @@ int bx_fetch_document_extract_links(const char* path, const char* content_type, 
 
     unsigned char* data = NULL;
     size_t length = 0;
-    if (read_document(path, &data, &length, outcome) != 0)
+    if (bx_fetch_document_read(path, &data, &length, NULL, outcome) != 0)
         return -1;
 
     BxFetchDocumentKind kind = classify_document(path, content_type, data, length);

@@ -515,6 +515,19 @@ const char* bx_fetch_publication_lookup(const BxFetchPublicationState* state, co
     return mapping->local_path;
 }
 
+const char* bx_fetch_publication_lookup_prepared(const BxFetchPublicationState* state, const BxFetchPreparedUrl* target, BxFetchMappingPriority* priority_out) {
+    if (!state || !target) {
+        errno = EINVAL;
+        return NULL;
+    }
+    MappingNode* mapping = find_public_mapping(state, bx_fetch_prepared_url_display(target));
+    if (!mapping)
+        return NULL;
+    if (priority_out)
+        *priority_out = mapping->priority;
+    return mapping->local_path;
+}
+
 size_t bx_fetch_publication_mapping_count(const BxFetchPublicationState* state) {
     return state ? state->mapping_count : 0;
 }
@@ -545,6 +558,24 @@ int bx_fetch_publication_visit_mappings(const BxFetchPublicationState* state, Bx
             if (visitor(userdata, node->public_url, node->local_path, node->priority) != 0)
                 return -1;
         }
+    }
+    return 0;
+}
+
+int bx_fetch_publication_visit_downloads(const BxFetchPublicationState* state, BxFetchPublicationDownloadVisitor visitor, void* userdata) {
+    if (!state || !visitor) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (DownloadNode* node = state->downloads; node; node = node->next) {
+        BxFetchDownloadedFileView view = {
+            .url = node->url,
+            .local_path = node->local_path,
+            .has_server_mtime = node->has_server_mtime,
+            .server_mtime = node->server_mtime,
+        };
+        if (visitor(userdata, &view) != 0)
+            return -1;
     }
     return 0;
 }

@@ -18,6 +18,7 @@
 
 #include "crawl_coordinator.h"
 #include "document.h"
+#include "link_conversion.h"
 #include "net.h"
 #include "publication.h"
 #include "transfer_prepare.h"
@@ -54,6 +55,12 @@ typedef void (*BxFetchRunDiscoveredLinkFn)(void* userdata, const BxFetchPrepared
  * cancels/drains the run after the current poll.
  */
 typedef bool (*BxFetchRunDocumentErrorFn)(void* userdata, const BxFetchPreparedUrl* base, const char* path, int depth, const BxFetchDocumentOutcome* outcome);
+/*
+ * Observes every eligible downloaded file. On failure, true continues with
+ * later files and leaves exit policy to the frontend; false stops conversion.
+ * The return value is ignored for successful/unchanged/skipped outcomes.
+ */
+typedef bool (*BxFetchRunLinkConversionFn)(void* userdata, const BxFetchDownloadedFileView* download, const BxFetchLinkConversionOutcome* outcome);
 
 typedef struct {
     BxFetchCrawlPlanOutputFn plan_output;
@@ -64,6 +71,7 @@ typedef struct {
     BxFetchRunRedirectFn allow_redirect;
     BxFetchRunDiscoveredLinkFn on_discovered_link;
     BxFetchRunDocumentErrorFn on_document_error;
+    BxFetchRunLinkConversionFn on_link_conversion;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
     void* userdata;
@@ -94,5 +102,7 @@ BxFetchCrawlPhase bx_fetch_run_phase(const BxFetchRun* run);
 int bx_fetch_run_load_publication(BxFetchRun* run);
 int bx_fetch_run_save_publication(const BxFetchRun* run);
 const BxFetchPublicationState* bx_fetch_run_publication(const BxFetchRun* run);
+/* Requires a successfully finished transfer run; config-gated no-op. */
+int bx_fetch_run_convert_links(BxFetchRun* run);
 
 #endif  // BX_FETCH_RUN_H
