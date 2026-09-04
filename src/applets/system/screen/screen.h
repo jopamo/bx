@@ -271,7 +271,6 @@ extern bool default_startup;
 extern bool do_auth;
 extern bool hastruecolor;
 extern bool defosc52;		/* child apps may write clipboard via OSC 52 */
-extern bool defosc52read;	/* child apps may read clipboard via OSC 52 */
 extern bool iflag;
 extern bool logtstamp_on;
 extern bool lsflag;

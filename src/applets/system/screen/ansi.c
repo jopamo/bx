@@ -1599,23 +1599,27 @@ static void DoCSI(Window *win, int c, int intermediate)
 
 static void CStrInit(struct control_string *s)
 {
+	CStrRelease(s);	/* drop any heap left from an incomplete previous string */
 	s->data = s->inline_buf;
 	s->len = 0;
 	s->cap = CTRLSTR_INLINE_SIZE;
 	s->limit = CTRLSTR_INLINE_SIZE;
-	s->heap = false;
 	s->overflow = false;
 	s->osc_cmd = 0;
 	s->osc_cmd_valid = false;
 	s->osc_cmd_complete = false;
 }
 
-static void CStrFree(struct control_string *s)
+/* free any heap-backed control-string payload. Safe to call at any time,
+ * including window destruction/reset paths when an incomplete control
+ * string (e.g. an unterminated large OSC 52) was buffered. */
+void CStrRelease(struct control_string *s)
 {
 	if (s->heap) {
 		free(s->data);
 		s->data = s->inline_buf;
 		s->heap = false;
+		s->cap = CTRLSTR_INLINE_SIZE;
 	}
 }
 
@@ -1634,7 +1638,9 @@ static void CStrAppend(struct control_string *s, int c)
 			newcap = s->limit;
 		if (newcap > s->limit)
 			newcap = s->limit;
-		newbuf = realloc(s->heap ? s->data : NULL, newcap);
+		/* Always allocate one byte beyond the payload capacity so the
+		 * NUL terminator written by StringEnd() stays in bounds. */
+		newbuf = realloc(s->heap ? s->data : NULL, newcap + 1);
 		if (newbuf == NULL) {
 			s->overflow = true;
 			return;
@@ -1652,6 +1658,8 @@ static void StringStart(Window *win, enum string_t type)
 {
 	win->w_StringType = type;
 	CStrInit(&win->w_cstr);
+	if (type == DCS)
+		win->w_cstr.limit = DCS_MAX_WIRE_SIZE;
 	win->w_state = ASTR;
 }
 
@@ -1714,15 +1722,18 @@ static int StringEnd(Window *win)
 	t = win->w_state == STRESC ? "\033\\" : "\a";
 
 	win->w_state = LIT;
-	cs->data[cs->len] = '\0';
 
 	/* If the control string overflowed its limit, silently reject it.
 	 * The overflow flag means bytes were consumed but not stored,
-	 * so the terminator was reached and we can safely discard. */
+	 * so the terminator was reached and we can safely discard.
+	 * Checked before touching data so an allocation-failure overflow
+	 * can never write the terminator past the buffer. */
 	if (cs->overflow) {
-		CStrFree(cs);
+		CStrRelease(cs);
 		return 0;
 	}
+
+	cs->data[cs->len] = '\0';
 
 	switch (win->w_StringType) {
 	case OSC:		/* special xterm compatibility hack */
@@ -1774,13 +1785,12 @@ static int StringEnd(Window *win)
 			pd = semicolon + 1;
 			pd_len = strlen(pd);
 
-			/* Block clipboard reads by default.
-			 * Reads require correlating a response back to the
-			 * originating child, which is complex and security-sensitive. */
-			if (pd_len == 1 && pd[0] == '?') {
-				if (!defosc52read)
-					break;
-			}
+			/* Clipboard reads are hard-blocked. A read requires
+			 * correlating a response back to the originating child
+			 * ({display, window, request}), which is complex and
+			 * security-sensitive, so Pd == "?" is never served. */
+			if (pd_len == 1 && pd[0] == '?')
+				break;
 
 			/* Policy check: are child OSC52 writes allowed? */
 			if (!defosc52)
@@ -1853,7 +1863,7 @@ static int StringEnd(Window *win)
 			if (status_cv || win->w_StringType == GM)
 				MakeStatus(cs->data);
 		}
-		CStrFree(cs);
+		CStrRelease(cs);
 		return -1;
 	case DCS:
 		LAY_DISPLAYS(&win->w_layer, AddStr(cs->data));
@@ -1869,7 +1879,7 @@ static int StringEnd(Window *win)
 	default:
 		break;
 	}
-	CStrFree(cs);
+	CStrRelease(cs);
 	return 0;
 }
 

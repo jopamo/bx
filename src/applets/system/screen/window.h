@@ -219,11 +219,11 @@ struct Window {
 	 * (e.g. OSC 52 clipboard data). Overflow is tracked but never falls back
 	 * into LIT state -- bytes are consumed and discarded until the terminator. */
 	struct control_string {
-		char   inline_buf[CTRLSTR_INLINE_SIZE];
+		char   inline_buf[CTRLSTR_INLINE_SIZE + 1];	/* +1 reserves room for NUL */
 		char  *data;
 		size_t len;
-		size_t cap;
-		size_t limit;
+		size_t cap;	/* payload capacity of current allocation */
+		size_t limit;	/* max payload bytes allowed before overflow */
 		bool   heap;
 		bool   overflow;
 
@@ -352,6 +352,7 @@ void  CloseDevice (Window *);
 void  zmodem_abort(Window *, Display *);
 void  WindowDied (Window *, int, int);
 void  ResetWindow (Window *);
+void  CStrRelease (struct control_string *);
 Window *GetWindowByNumber(uint16_t);
 #ifndef HAVE_EXECVPE
 #include <unistd.h>

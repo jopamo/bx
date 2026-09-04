@@ -155,7 +155,6 @@ struct comm comms[RC_LAST + 1] =
   { "obuflimit",	NEED_DISPLAY|ARGS_01,		{NULL} },
   { "only",		NEED_DISPLAY|ARGS_0,		{NULL} },
   { "osc52",		ARGS_01,			{NULL} },
-  { "osc52read",	ARGS_01,			{NULL} },
   { "other",		ARGS_0,				{NULL} },
   { "parent",		ARGS_0,				{NULL} },
   { "partial",		NEED_FORE|ARGS_01,		{NULL} },
