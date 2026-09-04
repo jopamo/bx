@@ -84,8 +84,6 @@ static void   serv_read_fn(Event *, void *);
 static void   serv_select_fn(Event *, void *);
 static void   logflush_fn(Event *, void *);
 static int    IsSymbol(char *, char *);
-static char  *ParseChar(char *, char *);
-static int    ParseEscape(char *);
 static char  *MakeDefaultShellProg(const char *);
 static void   InitDefaultWaitMilliseconds(void);
 static void   SetTtyname(bool fatal, struct stat *st);
@@ -199,6 +197,7 @@ int       af;
 #include "socket.h"
 #include "termcap.h"
 #include "tty.h"
+#include "screen_cli.h"
 
 char strnomem[] = "Out of memory.";
 
@@ -278,55 +277,6 @@ static char *locale_name(void)
 	if (s == NULL)
 		s = "C";
 	return s;
-}
-
-static void exit_with_usage(char *myname, char *message, char *arg)
-{
-	printf("Use: %s [-opts] [cmd [args]]\n", myname);
-	printf(" or: %s -r [host.tty]\n\nOptions:\n", myname);
-#ifdef ENABLE_TELNET
-	printf("-4            Resolve hostnames only to IPv4 addresses.\n");
-	printf("-6            Resolve hostnames only to IPv6 addresses.\n");
-#endif
-	printf("-a            Force all capabilities into each window's termcap.\n");
-	printf("-A -[r|R]     Adapt all windows to the new display width & height.\n");
-	printf("-c file       Read configuration file instead of '.screenrc'.\n");
-	printf("-d (-r)       Detach the elsewhere running screen (and reattach here).\n");
-	printf("-dmS name     Start as daemon: Screen session in detached mode.\n");
-	printf("-D (-r)       Detach and logout remote (and reattach here).\n");
-	printf("-D -RR        Do whatever is needed to get a screen session.\n");
-	printf("-e xy         Change command characters.\n");
-	printf("-f            Flow control on, -fn = off, -fa = auto.\n");
-	printf("-h lines      Set the size of the scrollback history buffer.\n");
-	printf("-i            Interrupt output sooner when flow control is on.\n");
-	printf("-ls [match]   or\n");
-	printf("-list         Do nothing, just list our SocketDir [on possible matches].\n");
-	printf("-L            Turn on output logging.\n");
-	printf("-Logfile file Set logfile name.\n");
-	printf("-m            ignore $STY variable, do create a new screen session.\n");
-	printf("-O            Choose optimal output rather than exact vt100 emulation.\n");
-	printf("-p window     Preselect the named window if it exists.\n");
-	printf("-P            Tell screen to enable authentication.\n");
-	printf("-q            Quiet startup. Exits with non-zero return code if unsuccessful.\n");
-	printf("-Q            Commands will send the response to the stdout of the querying process.\n");
-	printf("-r [session]  Reattach to a detached screen process.\n");
-	printf("-R            Reattach if possible, otherwise start a new session.\n");
-	printf("-s shell      Shell to execute rather than $SHELL.\n");
-	printf("-S sockname   Name this session <pid>.sockname instead of <pid>.<tty>.<host>.\n");
-	printf("-t title      Set title. (window's name).\n");
-	printf("-T term       Use term as $TERM for windows, rather than \"screen\".\n");
-	printf("-U            Tell screen to use UTF-8 encoding.\n");
-	printf("-v            Print \"screen (bx) %s\".\n", version);
-	printf("-wipe [match] Do nothing, just clean up SocketDir [on possible matches].\n");
-	printf("-x            Attach to a not detached screen. (Multi display mode).\n");
-	printf("-X            Execute <cmd> as a screen command in the specified session.\n");
-	if (message && *message) {
-		printf("\nError: ");
-		printf(message, arg);
-		printf("\n");
-		exit(1);
-	}
-	exit(0);
 }
 
 int bx_screen_main(int argc, char **argv)
@@ -416,7 +366,7 @@ int bx_screen_main(int argc, char **argv)
 				exit(0);
 			}
 			if (ap[1] == '-' && !strncmp(ap, "--help", 6))
-				exit_with_usage(myname, NULL, NULL);
+				ScreenCliExitWithUsage(myname, NULL, NULL);
 			while (ap && *ap && *++ap) {
 				switch (*ap) {
 #ifdef ENABLE_TELNET
@@ -438,7 +388,7 @@ int bx_screen_main(int argc, char **argv)
 						preselect = ap;
 					else {
 						if (!--argc)
-							exit_with_usage(myname, "Specify a window to preselect with -p",
+							ScreenCliExitWithUsage(myname, "Specify a window to preselect with -p",
 									NULL);
 						preselect = *++argv;
 					}
@@ -452,7 +402,7 @@ int bx_screen_main(int argc, char **argv)
 						RcFileName = ap;
 					else {
 						if (--argc == 0)
-							exit_with_usage(myname,
+							ScreenCliExitWithUsage(myname,
 									"Specify an alternate rc-filename with -c",
 									NULL);
 						RcFileName = *++argv;
@@ -462,11 +412,11 @@ int bx_screen_main(int argc, char **argv)
 				case 'e':
 					if (!*++ap) {
 						if (--argc == 0)
-							exit_with_usage(myname, "Specify command characters with -e",
+							ScreenCliExitWithUsage(myname, "Specify command characters with -e",
 									NULL);
 						ap = *++argv;
 					}
-					if (ParseEscape(ap))
+					if (ScreenCliParseEscape(ap))
 						Panic(0, "Two characters are required with -e option, not '%s'.", ap);
 					ap = NULL;
 					break;
@@ -488,22 +438,22 @@ int bx_screen_main(int argc, char **argv)
 						nwin_options.flowflag = FLOW_AUTOFLAG;
 						break;
 					default:
-						exit_with_usage(myname, "Unknown flow option -%s", --ap);
+						ScreenCliExitWithUsage(myname, "Unknown flow option -%s", --ap);
 					}
 					break;
 				case 'h':
 					if (--argc == 0)
-						exit_with_usage(myname, NULL, NULL);
+						ScreenCliExitWithUsage(myname, NULL, NULL);
 					nwin_options.histheight = atoi(*++argv);
 					if (nwin_options.histheight < 0)
-						exit_with_usage(myname, "-h: %s: negative scrollback size?", *argv);
+						ScreenCliExitWithUsage(myname, "-h: %s: negative scrollback size?", *argv);
 					break;
 				case 'i':
 					iflag = true;
 					break;
 				case 't':	/* title, the former AkA == -k */
 					if (--argc == 0)
-						exit_with_usage(myname, "Specify a new window-name with -t", NULL);
+						ScreenCliExitWithUsage(myname, "Specify a new window-name with -t", NULL);
 					nwin_options.aka = *++argv;
 					break;
 				case 'l':
@@ -524,7 +474,7 @@ int bx_screen_main(int argc, char **argv)
 					break;
 				case 'w':
 					if (strcmp(ap + 1, "ipe"))
-						exit_with_usage(myname, "Unknown option %s", --ap);
+						ScreenCliExitWithUsage(myname, "Unknown option %s", --ap);
 					lsflag = true;
 					wipeflag = true;
 					if (argc > 1 && !SocketMatch) {
@@ -535,7 +485,7 @@ int bx_screen_main(int argc, char **argv)
 				case 'L':
 					if (!strcmp(ap + 1, "ogfile")) {
 						if (--argc == 0)
-							exit_with_usage(myname, "Specify logfile path with -Logfile", NULL);
+							ScreenCliExitWithUsage(myname, "Specify logfile path with -Logfile", NULL);
 
 						if (strlen(*++argv) > PATH_MAX)
 							Panic(1, "-Logfile name too long. (max. %d char)", PATH_MAX);
@@ -556,7 +506,7 @@ int bx_screen_main(int argc, char **argv)
 					break;
 				case 'T':
 					if (--argc == 0)
-						exit_with_usage(myname, "Specify terminal-type with -T", NULL);
+						ScreenCliExitWithUsage(myname, "Specify terminal-type with -T", NULL);
 					if (strlen(*++argv) < MAXTERMLEN) {
 						strncpy(screenterm, *argv, MAXTERMLEN);
 						screenterm[MAXTERMLEN] = '\0';
@@ -599,7 +549,7 @@ int bx_screen_main(int argc, char **argv)
 					break;
 				case 's':
 					if (--argc == 0)
-						exit_with_usage(myname, "Specify shell with -s", NULL);
+						ScreenCliExitWithUsage(myname, "Specify shell with -s", NULL);
 					if (ShellProg)
 						free(ShellProg);
 					ShellProg = SaveStr(*++argv);
@@ -607,13 +557,13 @@ int bx_screen_main(int argc, char **argv)
 				case 'S':
 					if (!SocketMatch) {
 						if (--argc == 0)
-							exit_with_usage(myname, "Specify session-name with -S", NULL);
+							ScreenCliExitWithUsage(myname, "Specify session-name with -S", NULL);
 						SocketMatch = *++argv;
 					}
 					if (!*SocketMatch)
-						exit_with_usage(myname, "Empty session-name?", NULL);
+						ScreenCliExitWithUsage(myname, "Empty session-name?", NULL);
 					if (strlen(SocketMatch) > 80)
-						exit_with_usage(myname, "Session-name is too long (max length is 80 symbols)", NULL);
+						ScreenCliExitWithUsage(myname, "Session-name is too long (max length is 80 symbols)", NULL);
 					break;
 				case 'X':
 					cmdflag = true;
@@ -625,7 +575,7 @@ int bx_screen_main(int argc, char **argv)
 					nwin_options.encoding = UTF8;
 					break;
 				default:
-					exit_with_usage(myname, "Unknown option %s", --ap);
+					ScreenCliExitWithUsage(myname, "Unknown option %s", --ap);
 				}
 			}
 		} else
@@ -1877,49 +1827,6 @@ static void logflush_fn(Event *event, void *data)
 		buf = MakeWinMsg(logtstamp_string, p, '%');
 		logfwrite(p->w_log, buf, strlen(buf));
 	}
-}
-
-/*
- * Interprets ^?, ^@ and other ^-control-char notation.
- * Interprets \ddd octal notation
- *
- * The result is placed in *cp, p is advanced behind the parsed expression and
- * returned.
- */
-static char *ParseChar(char *p, char *cp)
-{
-	if (*p == 0)
-		return NULL;
-	if (*p == '^' && p[1]) {
-		if (*++p == '?')
-			*cp = '\177';
-		else if (*p >= '@')
-			*cp = Ctrl(*p);
-		else
-			return NULL;
-		++p;
-	} else if (*p == '\\' && *++p <= '7' && *p >= '0') {
-		*cp = 0;
-		do
-			*cp = *cp * 8 + *p - '0';
-		while (*++p <= '7' && *p >= '0');
-	} else
-		*cp = *p++;
-	return p;
-}
-
-static int ParseEscape(char *p)
-{
-	unsigned char buf[2];
-
-	if (*p == 0)
-		SetEscape(NULL, -1, -1);
-	else {
-		if ((p = ParseChar(p, (char *)buf)) == NULL || (p = ParseChar(p, (char *)buf + 1)) == NULL || *p)
-			return -1;
-		SetEscape(NULL, buf[0], buf[1]);
-	}
-	return 0;
 }
 
 static void SetTtyname(bool fatal, struct stat *st)
