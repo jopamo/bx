@@ -206,8 +206,9 @@ static int set_proxy_credentials(CURL* curl, BxFetchNetSetupError* setup_error, 
 static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchNetSetupError* setup_error) {
     CURL* curl = t->easy;
     const BxFetchRequest* req = t->req;
+    const char* request_url = bx_fetch_request_url_for_transport(req);
 
-    if (!req || !req->url)
+    if (!req || !request_url)
         return -1;
     if (prepare_bx_fetch_request_headers(engine, t, setup_error) != 0) {
         return -1;
@@ -216,7 +217,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
         return -1;
     }
 
-    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_URL, req->url);
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_URL, request_url);
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_WRITEFUNCTION, bx_fetch_write_callback);
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_WRITEDATA, t);
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HEADERFUNCTION, bx_fetch_header_callback);
@@ -413,9 +414,9 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
 #endif
 
     // Auth and Proxy options
-    bool allow_plaintext_credentials = !engine->cfg->http.paranoid || bx_fetch_url_has_scheme(req->url, "https");
+    bool allow_plaintext_credentials = !engine->cfg->http.paranoid || bx_fetch_prepared_url_protocol(req->target) == BX_FETCH_PROTOCOL_HTTPS;
     BxFetchCredentialSelection origin_credentials;
-    bx_fetch_net_select_origin_credentials(engine->cfg, req->url, &origin_credentials);
+    bx_fetch_net_select_origin_credentials(engine->cfg, req->target, &origin_credentials);
     if (allow_plaintext_credentials && origin_credentials.username && set_credentials(curl, setup_error, origin_credentials.username, origin_credentials.password) != 0) {
         return -1;
     }
@@ -433,7 +434,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     bx_fetch_net_select_proxy_credentials(engine->cfg, &proxy_credentials);
     if (proxy_credentials.source == BX_FETCH_CREDENTIAL_SOURCE_PROXY_CONFIG) {
         char* sanitized_proxy_url = NULL;
-        const char* environment_proxy_url = bx_fetch_net_proxy_environment_url(req->url);
+        const char* environment_proxy_url = bx_fetch_net_proxy_environment_url(bx_fetch_prepared_url_protocol(req->target));
         errno = 0;
         if (bx_fetch_net_sanitize_proxy_url_for_explicit_credentials(environment_proxy_url, &sanitized_proxy_url) != 0) {
             CURLcode code = errno == ENOMEM ? CURLE_OUT_OF_MEMORY : CURLE_URL_MALFORMAT;
@@ -446,7 +447,8 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     }
 
     // FTP options
-    if (bx_fetch_url_has_scheme(req->url, "ftp") || bx_fetch_url_has_scheme(req->url, "ftps")) {
+    BxFetchProtocol request_protocol = bx_fetch_prepared_url_protocol(req->target);
+    if (request_protocol == BX_FETCH_PROTOCOL_FTP || request_protocol == BX_FETCH_PROTOCOL_FTPS) {
         if (engine->cfg->ftp.no_passive_ftp) {
             SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTPPORT, "-");  // Default behavior for active
         }
@@ -545,7 +547,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
                                             BxFetchNetSetupError* setup_error) {
     if (setup_error)
         *setup_error = (BxFetchNetSetupError){.curl_code = -1, .error_number = -1};
-    if (!engine || !req || !req->url || !writer)
+    if (!engine || !req || !req->target || !writer)
         return -1;
     if (engine->cancelled) {
         errno = ECANCELED;
@@ -553,30 +555,16 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
     }
     if (engine->quota_limit_bytes >= 0 && engine->quota_exhausted)
         return -1;
-    if (!req->url_is_canonical) {
-        char* canonical_url = bx_fetch_url_canonicalize(req->url);
-        if (!canonical_url)
-            return -1;
-        free(req->url);
-        req->url = canonical_url;
-        req->url_is_canonical = true;
-    }
     /*
      * Core policy rejects this earlier with an actionable error. Keep the
      * network boundary fail-closed for direct net API callers as well.
      */
-    if (engine->cfg->http.paranoid && bx_fetch_url_has_userinfo(req->url)) {
+    if (engine->cfg->http.paranoid && bx_fetch_prepared_url_has_userinfo(req->target)) {
         return -1;
     }
-    if (bx_fetch_protocol_policy_evaluate_url(req->url, engine->cfg->https.https_only) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+    if (bx_fetch_prepared_url_policy(req->target, engine->cfg->https.https_only) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         return -1;
     }
-
-    char* display_url = bx_fetch_url_display_safe(req->url);
-    if (!display_url)
-        return -1;
-    free(req->display_url);
-    req->display_url = display_url;
 
     BxFetchTransfer* t = bx_fetch_transfer_new(req, writer);
     if (!t) {

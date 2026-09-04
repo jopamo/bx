@@ -11,11 +11,10 @@
  *
  * Ownership and lifetime:
  * - bx_fetch_request_new() returns a heap-owned BxFetchRequest released by bx_fetch_request_free().
- * - bx_fetch_request_new_canonical() is the internal fast path for URLs already
- *   canonicalized at a trust boundary.
- * - `url` is the canonical transport identity after net submission and may
- *   contain authority userinfo. `display_url` is the separately owned,
- *   userinfo-free text for all observable output.
+ * - Every request owns immutable prepared URL state. Raw URL construction
+ *   normalizes once; prepared construction clones without reparsing.
+ * - The transport identity may contain authority userinfo. Observable code
+ *   must use bx_fetch_request_url_for_display().
  * - bx_fetch_request_add_header() validates and copies normalized name/value strings.
  * - `body` is owned by BxFetchRequest and freed by bx_fetch_request_free().
  * - bx_fetch_request_set_body_file() opens and validates one regular-file upload source;
@@ -23,6 +22,7 @@
  */
 
 #include "types.h"
+#include "url.h"
 
 typedef struct BxFetchRequestBodyFile BxFetchRequestBodyFile;
 
@@ -35,9 +35,7 @@ typedef enum {
 
 typedef struct {
     char* method;
-    char* url;
-    char* display_url;
-    bool url_is_canonical;
+    BxFetchPreparedUrl* target;
     BxFetchHeader* headers;
     size_t header_count;
     size_t header_capacity;
@@ -49,8 +47,11 @@ typedef struct {
 
 BxFetchRequest* bx_fetch_request_new(const char* method, const char* url);
 BxFetchRequest* bx_fetch_request_new_canonical(const char* method, const char* canonical_url);
+BxFetchRequest* bx_fetch_request_new_prepared(const char* method, const BxFetchPreparedUrl* target);
 void bx_fetch_request_free(BxFetchRequest* req);
-/* Returns userinfo-free text or a fail-closed placeholder, never `req->url`. */
+const BxFetchPreparedUrl* bx_fetch_request_target(const BxFetchRequest* req);
+const char* bx_fetch_request_url_for_transport(const BxFetchRequest* req);
+/* Returns userinfo-free text, never the credential-bearing transport URL. */
 const char* bx_fetch_request_url_for_display(const BxFetchRequest* req);
 /*
  * Validates and copies `name`/`value` into request-owned storage.

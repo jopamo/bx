@@ -17,7 +17,7 @@ void bx_fetch_response_free(BxFetchResponse* resp) {
     if (!resp)
         return;
 
-    free(resp->effective_url);
+    bx_fetch_prepared_url_free(resp->effective_target);
     free(resp->content_type);
     free(resp->transport_error_detail);
 
@@ -30,6 +30,14 @@ void bx_fetch_response_free(BxFetchResponse* resp) {
     }
 
     free(resp);
+}
+
+const BxFetchPreparedUrl* bx_fetch_response_effective_target(const BxFetchResponse* response) {
+    return response ? response->effective_target : NULL;
+}
+
+const char* bx_fetch_response_effective_url(const BxFetchResponse* response) {
+    return response ? bx_fetch_prepared_url_transport(response->effective_target) : NULL;
 }
 
 int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const char* value) {

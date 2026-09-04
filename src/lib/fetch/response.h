@@ -18,6 +18,7 @@
 
 #include "error.h"
 #include "types.h"
+#include "url.h"
 
 #define BX_FETCH_RESPONSE_HEADER_LINE_LIMIT_TEXT "64 KiB"
 #define BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES ((size_t)64 * 1024u)
@@ -35,7 +36,7 @@ typedef enum {
 
 typedef struct {
     int status_code;
-    char* effective_url;
+    BxFetchPreparedUrl* effective_target;
 
     BxFetchHeader* headers;
     size_t header_count;
@@ -65,5 +66,7 @@ void bx_fetch_response_free(BxFetchResponse* resp);
  */
 int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const char* value);
 const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure);
+const BxFetchPreparedUrl* bx_fetch_response_effective_target(const BxFetchResponse* response);
+const char* bx_fetch_response_effective_url(const BxFetchResponse* response);
 
 #endif  // BX_FETCH_RESPONSE_H

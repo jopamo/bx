@@ -26,10 +26,12 @@ static void request_body_file_free(BxFetchRequestBodyFile* body_file) {
     free(body_file);
 }
 
-static BxFetchRequest* request_new_with_url_state(const char* method, const char* url, bool url_is_canonical) {
+static BxFetchRequest* request_new_with_target(const char* method, BxFetchPreparedUrl* target) {
     BxFetchRequest* req = calloc(1, sizeof(BxFetchRequest));
-    if (!req)
+    if (!req) {
+        bx_fetch_prepared_url_free(target);
         return NULL;
+    }
 
     if (method) {
         req->method = strdup(method);
@@ -38,12 +40,8 @@ static BxFetchRequest* request_new_with_url_state(const char* method, const char
         req->method = strdup("GET");
     }
 
-    if (url) {
-        req->url = strdup(url);
-        req->url_is_canonical = url_is_canonical;
-    }
-
-    if (!req->method || (url && !req->url)) {
+    req->target = target;
+    if (!req->method || !req->target) {
         bx_fetch_request_free(req);
         return NULL;
     }
@@ -52,11 +50,15 @@ static BxFetchRequest* request_new_with_url_state(const char* method, const char
 }
 
 BxFetchRequest* bx_fetch_request_new(const char* method, const char* url) {
-    return request_new_with_url_state(method, url, false);
+    return request_new_with_target(method, bx_fetch_url_prepare(url));
 }
 
 BxFetchRequest* bx_fetch_request_new_canonical(const char* method, const char* canonical_url) {
-    return request_new_with_url_state(method, canonical_url, true);
+    return request_new_with_target(method, bx_fetch_url_prepare_canonical(canonical_url));
+}
+
+BxFetchRequest* bx_fetch_request_new_prepared(const char* method, const BxFetchPreparedUrl* target) {
+    return request_new_with_target(method, bx_fetch_prepared_url_clone(target));
 }
 
 void bx_fetch_request_free(BxFetchRequest* req) {
@@ -64,8 +66,7 @@ void bx_fetch_request_free(BxFetchRequest* req) {
         return;
 
     free(req->method);
-    free(req->url);
-    free(req->display_url);
+    bx_fetch_prepared_url_free(req->target);
 
     if (req->headers) {
         for (size_t i = 0; i < req->header_count; i++) {
@@ -80,10 +81,16 @@ void bx_fetch_request_free(BxFetchRequest* req) {
     free(req);
 }
 
+const BxFetchPreparedUrl* bx_fetch_request_target(const BxFetchRequest* req) {
+    return req ? req->target : NULL;
+}
+
+const char* bx_fetch_request_url_for_transport(const BxFetchRequest* req) {
+    return req ? bx_fetch_prepared_url_transport(req->target) : NULL;
+}
+
 const char* bx_fetch_request_url_for_display(const BxFetchRequest* req) {
-    if (!req || !req->url)
-        return NULL;
-    return req->display_url ? req->display_url : BX_FETCH_URL_DISPLAY_REDACTED;
+    return req ? bx_fetch_prepared_url_display(req->target) : NULL;
 }
 
 int bx_fetch_request_add_header(BxFetchRequest* req, const char* name, const char* value) {

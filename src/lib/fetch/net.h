@@ -77,11 +77,11 @@ typedef int (*BxFetchTransferHeadersCallback)(void* userdata, const BxFetchReque
 typedef void (*BxFetchTransferCallback)(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchError result);
 
 /*
- * Receives an already resolved and canonical redirect target. Return false to
- * reject it. The callback is the authoritative frontend/core redirect policy;
- * the transport independently preserves protocol and credential constraints.
+ * Receives already resolved, normalized redirect state. Return false to reject
+ * it. The callback is the authoritative frontend/core redirect policy; the
+ * transport independently preserves protocol and credential constraints.
  */
-typedef bool (*BxFetchRedirectPolicyCallback)(void* userdata, const char* redirect_url);
+typedef bool (*BxFetchRedirectPolicyCallback)(void* userdata, const BxFetchPreparedUrl* redirect_target);
 
 /*
  * cfg and observer->userdata are borrowed and must outlive the engine. The
