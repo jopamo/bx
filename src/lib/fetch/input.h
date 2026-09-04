@@ -19,6 +19,9 @@ typedef enum {
     BX_FETCH_INPUT_FAILURE_LINE_TOO_LONG,
     BX_FETCH_INPUT_FAILURE_INVALID_CONTROL,
     BX_FETCH_INPUT_FAILURE_FILE_TOO_LARGE,
+    BX_FETCH_INPUT_FAILURE_HTML_TOO_LARGE,
+    BX_FETCH_INPUT_FAILURE_HTML_PARSE,
+    BX_FETCH_INPUT_FAILURE_BASE_URL,
     BX_FETCH_INPUT_FAILURE_URL_STATE_LIMIT,
     BX_FETCH_INPUT_FAILURE_MEMORY,
 } BxFetchInputFailureKind;
@@ -43,6 +46,7 @@ typedef struct {
  * global URL-state budget.
  */
 int bx_fetch_input_urls_load_plain(const char* path, size_t reserved_entries, size_t reserved_bytes, BxFetchInputUrls* urls_out, BxFetchInputOutcome* outcome_out);
+int bx_fetch_input_urls_load_html(const char* path, const char* base_url, size_t reserved_entries, size_t reserved_bytes, BxFetchInputUrls* urls_out, BxFetchInputOutcome* outcome_out);
 void bx_fetch_input_urls_free(BxFetchInputUrls* urls);
 
 #endif
