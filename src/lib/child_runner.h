@@ -133,6 +133,14 @@ int bx_child_finish_cancelled_run(struct bx_cancel_state *cancel,
                                   int *running,
                                   int signo);
 int bx_child_exec_argv(char *const *argv);
+/*
+ * Execute argv with an explicit environment vector and PATH. A null PATH
+ * selects /bin:/usr/bin; an empty PATH searches only the current directory.
+ */
+int bx_child_exec_argv_envp(
+    char *const *argv,
+    char *const *envp,
+    const char *path);
 int bx_child_exec_file_argv_exact(const char *executable,
                                   char *const *argv);
 /*
