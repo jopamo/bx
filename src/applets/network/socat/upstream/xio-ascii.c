@@ -12,7 +12,7 @@
 #include "xio-ascii.h"
 
 /* For each 6 bit pattern we have an ASCII character in the array */
-const static int base64chars[] = {
+static const int base64chars[] = {
   'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
   'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
   'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
@@ -69,7 +69,7 @@ char *xiosanitize(const char *data,	/* input data */
    int c;
 
    while (bytes > 0) {
-      c = *(unsigned char *)data++;
+      c = (unsigned char)*data++;
       switch (c) {
       case '\0' : *coded++ = '\\'; *coded++ = '0'; break;
       case '\a' : *coded++ = '\\'; *coded++ = 'a'; break;

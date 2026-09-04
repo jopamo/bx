@@ -37,7 +37,7 @@ int snprinterr(char *str, size_t size, const char *format) {
    int count = 0;
    if (size == 0)  return 0;
    if (count >= size)  full = 1;
-   while (c = *format++) {
+   while ((c = *format++)) {
       if (c == '%') {
 	 c = *format++;
 	 switch (c) {
@@ -82,4 +82,3 @@ int snprinterr(char *str, size_t size, const char *format) {
    return count;
 #undef BUFLEN
 }
-

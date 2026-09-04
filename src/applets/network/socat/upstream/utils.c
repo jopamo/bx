@@ -157,7 +157,7 @@ char *sanitize_string(const char *data,	/* input data */
    int c;
 
    while (bytes > 0) {
-      c = *(unsigned char *)data++;
+      c = (unsigned char)*data++;
       coded += sanitize_char(c, coded, style);
       --bytes;
    }
