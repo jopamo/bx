@@ -29,6 +29,7 @@ void bx_fetch_engine_detach_transfer(BxFetchEngine* engine, BxFetchTransfer* tar
 bool bx_fetch_net_require(BxFetchEngine* engine, bool condition);
 bool bx_fetch_transfer_abort_writer(BxFetchTransfer* transfer);
 int bx_fetch_transfer_close_writer(BxFetchTransfer* transfer);
+int bx_fetch_transfer_close_writer_metadata_only(BxFetchTransfer* transfer);
 void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* transfer, BxFetchError result);
 double bx_fetch_monotonic_seconds(void);
 int bx_fetch_sleep_for_seconds(double seconds);

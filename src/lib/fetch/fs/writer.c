@@ -557,6 +557,47 @@ static int rename_existing_entry_to_hold(int parent_fd, const char* name, char**
     return -1;
 }
 
+static int rename_existing_entry_to_hold_noreplace(int parent_fd, const char* name, char** hold_name_out) {
+    if (parent_fd == -1 || !name || !hold_name_out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *hold_name_out = NULL;
+    struct stat st;
+    if (fstatat(parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0)
+        return errno == ENOENT ? 0 : -1;
+    if (S_ISDIR(st.st_mode)) {
+        errno = EISDIR;
+        return -1;
+    }
+
+    static unsigned long long hold_counter = 0;
+    for (unsigned long long attempt = 0; attempt < 128; attempt++) {
+        char* hold_name = NULL;
+        unsigned long long serial = (((unsigned long long)getpid()) << 32) | (hold_counter++);
+        if (asprintf(&hold_name, "%s.mira.hold.%016llx%02llx", name, serial, attempt) == -1)
+            hold_name = NULL;
+        if (!hold_name)
+            return -1;
+
+        if (bx_fetch_secure_path_rename_leaf_noreplace(parent_fd, name, hold_name) == 0) {
+            *hold_name_out = hold_name;
+            return 0;
+        }
+
+        int error_number = errno;
+        free(hold_name);
+        if (error_number == ENOENT)
+            return 0;
+        if (error_number != EEXIST)
+            return writer_fail_errno(error_number);
+    }
+
+    errno = EEXIST;
+    return -1;
+}
+
 static void cleanup_temp_entry(int parent_fd, char** name) {
     if (parent_fd == -1 || !name || !*name)
         return;
@@ -1254,6 +1295,176 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
     free(sidecar_name);
     writer_free(w);
     return rc;
+}
+
+static bool current_destination_matches(const BxFetchWriter* w) {
+    if (!w || w->parent_fd == -1 || !w->basename || !w->initial_dest_existed)
+        return false;
+
+    struct stat st;
+    if (fstatat(w->parent_fd, w->basename, &st, AT_SYMLINK_NOFOLLOW) != 0)
+        return false;
+    if (!S_ISREG(st.st_mode) || !same_destination_identity(w, &st)) {
+        errno = EBUSY;
+        return false;
+    }
+    return true;
+}
+
+static void rollback_metadata_promotion(BxFetchWriter* w, const char* sidecar_name, char** sidecar_hold_name, const struct stat* candidate_stat) {
+    if (!w || !sidecar_name)
+        return;
+
+    if (candidate_stat)
+        unlink_leaf_if_same_identity(w->parent_fd, sidecar_name, candidate_stat);
+    if (sidecar_hold_name && *sidecar_hold_name) {
+        if (bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, *sidecar_hold_name, sidecar_name) == 0) {
+            free(*sidecar_hold_name);
+            *sidecar_hold_name = NULL;
+        }
+    }
+    (void)fsync(w->parent_fd);
+}
+
+BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWriter* w) {
+    if (!w) {
+        errno = EINVAL;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    if (w->to_stdout || w->fd == -1 || w->parent_fd == -1 || !w->temp_name || w->has_pending_mtime || w->superseded_sidecar_name || w->exclusive_final_path) {
+        bx_fetch_writer_abort(w);
+        errno = EINVAL;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    if (!w->has_pending_metadata) {
+        bx_fetch_writer_abort(w);
+        return BX_FETCH_WRITER_METADATA_UNCHANGED;
+    }
+    if (!w->initial_dest_existed || !S_ISREG(w->initial_dest_mode)) {
+        bx_fetch_writer_abort(w);
+        errno = ENOENT;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+
+    int original_fd = bx_fetch_secure_path_open_leaf(w->parent_fd, w->basename, O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+    if (original_fd == -1) {
+        int error_number = errno;
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    struct stat original_stat;
+    if (fstat(original_fd, &original_stat) != 0) {
+        int error_number = errno;
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    if (!S_ISREG(original_stat.st_mode) || !same_destination_identity(w, &original_stat)) {
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = EBUSY;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    if (validate_parent_directory_identity(w) != 0) {
+        int error_number = errno;
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+
+    char* sidecar_name = sidecar_name_for_basename(w->basename);
+    char* sidecar_temp_name = NULL;
+    char* sidecar_hold_name = NULL;
+    if (!sidecar_name || bx_fetch_metadata_is_empty(&w->pending_metadata) || write_metadata_temp_file_at(w->parent_fd, sidecar_name, &w->pending_metadata, &sidecar_temp_name) != 0) {
+        int error_number = errno ? errno : EINVAL;
+        free(sidecar_name);
+        cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+
+    struct stat candidate_stat;
+    if (fstatat(w->parent_fd, sidecar_temp_name, &candidate_stat, AT_SYMLINK_NOFOLLOW) != 0 || !current_destination_matches(w)) {
+        int error_number = errno ? errno : EBUSY;
+        free(sidecar_name);
+        cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+
+    if (close(w->fd) != 0) {
+        int error_number = errno;
+        w->fd = -1;
+        free(sidecar_name);
+        cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    w->fd = -1;
+    if (unlinkat(w->parent_fd, w->temp_name, 0) != 0) {
+        int error_number = errno;
+        free(sidecar_name);
+        cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        close(original_fd);
+        writer_free(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    free(w->temp_name);
+    w->temp_name = NULL;
+
+    if (rename_existing_entry_to_hold_noreplace(w->parent_fd, sidecar_name, &sidecar_hold_name) != 0 || !current_destination_matches(w) ||
+        bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name) != 0) {
+        int error_number = errno ? errno : EIO;
+        if (sidecar_hold_name)
+            rollback_metadata_promotion(w, sidecar_name, &sidecar_hold_name, NULL);
+        cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+        free(sidecar_hold_name);
+        free(sidecar_name);
+        close(original_fd);
+        writer_free(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    free(sidecar_temp_name);
+    sidecar_temp_name = NULL;
+
+    if (!current_destination_matches(w) || fsync(w->parent_fd) != 0) {
+        int error_number = errno ? errno : EIO;
+        rollback_metadata_promotion(w, sidecar_name, &sidecar_hold_name, &candidate_stat);
+        free(sidecar_hold_name);
+        free(sidecar_name);
+        close(original_fd);
+        writer_free(w);
+        errno = error_number;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+
+    int rc = 0;
+    if (sidecar_hold_name && unlinkat(w->parent_fd, sidecar_hold_name, 0) != 0 && errno != ENOENT)
+        rc = -1;
+    free(sidecar_hold_name);
+    if (fsync(w->parent_fd) != 0)
+        rc = -1;
+
+    int error_number = errno;
+    free(sidecar_name);
+    close(original_fd);
+    writer_free(w);
+    if (rc != 0) {
+        errno = error_number ? error_number : EIO;
+        return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    return BX_FETCH_WRITER_METADATA_COMMITTED;
 }
 
 void bx_fetch_writer_abort(BxFetchWriter* w) {

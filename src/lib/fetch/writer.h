@@ -32,6 +32,12 @@ typedef enum {
     WRITER_RESUME,
 } BxFetchWriterMode;
 
+typedef enum {
+    BX_FETCH_WRITER_METADATA_COMMIT_ERROR = -1,
+    BX_FETCH_WRITER_METADATA_UNCHANGED = 0,
+    BX_FETCH_WRITER_METADATA_COMMITTED = 1,
+} BxFetchWriterMetadataCommitResult;
+
 /*
  * Verifies the Linux openat2(2) path-resolution primitive required by every
  * filesystem-backed BxFetchWriter. Returns 0 when available, or -1 with errno set.
@@ -67,6 +73,12 @@ int bx_fetch_writer_set_mtime(BxFetchWriter* w, time_t mtime);
 int bx_fetch_writer_stage_xattrs(BxFetchWriter* w, const char* url, const char* content_type, const char* etag, const char* last_modified);
 /* Terminal success path: commits payload/metadata and frees `w`. */
 int bx_fetch_writer_close(BxFetchWriter* w);
+/*
+ * Terminal 304 path: discards the payload candidate and, when metadata was
+ * staged, transactionally replaces only the sidecar after revalidating the
+ * original payload and retained parent. Consumes `w` on every return path.
+ */
+BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWriter* w);
 /* Terminal failure path: drops staged artifacts and frees `w`. */
 void bx_fetch_writer_abort(BxFetchWriter* w);
 /* Size already staged in this private candidate (nonzero for true resume). */

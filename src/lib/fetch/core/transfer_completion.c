@@ -86,7 +86,8 @@ int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const Bx
 
     if (cfg->download.xattr) {
         const char* request_url = bx_fetch_request_url_for_display(request);
-        int xattr_result = bx_fetch_writer_stage_xattrs(writer, request_url, response->content_type, bx_fetch_response_header_value(response, "ETag"), last_modified);
+        const char* content_type = response->content_type ? response->content_type : bx_fetch_response_header_value(response, "Content-Type");
+        int xattr_result = bx_fetch_writer_stage_xattrs(writer, request_url, content_type, bx_fetch_response_header_value(response, "ETag"), last_modified);
         if (xattr_result != BX_FETCH_XATTR_OK) {
             if (xattr_result == BX_FETCH_XATTR_UNSUPPORTED)
                 errno = ENOTSUP;
@@ -97,6 +98,20 @@ int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const Bx
     }
 
     return 0;
+}
+
+int bx_fetch_transfer_stage_not_modified(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
+    if (!cfg || !request || !response || !writer || response->status_code != 304) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (cfg->download.spider)
+        return 0;
+    if (cfg->download.xattr) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return stage_response_metadata(cfg, request, response, writer);
 }
 
 static bool retryable_io_error_number(int error_number) {
