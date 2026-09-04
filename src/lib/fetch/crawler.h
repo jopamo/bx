@@ -13,8 +13,8 @@
  * - BxFetchCrawlItem instances are heap-owned and freed with bx_fetch_crawl_item_free().
  * - bx_fetch_frontier_add() always consumes the passed BxFetchCrawlItem (on success, duplicate,
  *   or error); callers must not reuse it after the call.
- * - `*_canonical` entry points avoid reparsing URLs already canonicalized by
- *   core at a trust boundary.
+ * - Items own immutable prepared targets so dequeue/scheduling does not
+ *   reparse canonical URL strings.
  * - bx_fetch_frontier_next() transfers ownership of the returned BxFetchCrawlItem to the caller.
  */
 
@@ -22,14 +22,15 @@
 #include <stddef.h>
 #include "hashset.h"
 #include "resource_limits.h"
+#include "url.h"
 
 typedef struct {
-    char* url;
+    BxFetchPreparedUrl* target;
     int depth;
-    char* referrer;
 } BxFetchCrawlItem;
 
-BxFetchCrawlItem* bx_fetch_crawl_item_new(const char* url, int depth, const char* referrer);
+BxFetchCrawlItem* bx_fetch_crawl_item_new(const char* url, int depth);
+BxFetchCrawlItem* bx_fetch_crawl_item_new_prepared(const BxFetchPreparedUrl* target, int depth);
 void bx_fetch_crawl_item_free(BxFetchCrawlItem* item);
 
 typedef struct BxFetchFrontierNode {
@@ -54,10 +55,8 @@ void bx_fetch_frontier_free(BxFetchFrontier* f);
  * Returns -1 with errno EFBIG when the shared URL-state contract is exhausted.
  */
 int bx_fetch_frontier_add(BxFetchFrontier* f, BxFetchCrawlItem* item);
-/* Internal fast path: `item->url` must already be a canonical request URL. */
-int bx_fetch_frontier_add_canonical(BxFetchFrontier* f, BxFetchCrawlItem* item);
 bool bx_fetch_frontier_is_seen(BxFetchFrontier* f, const char* url);
-bool bx_fetch_frontier_is_seen_canonical(BxFetchFrontier* f, const char* canonical_url);
+bool bx_fetch_frontier_is_seen_prepared(BxFetchFrontier* f, const BxFetchPreparedUrl* target);
 /* Returns next owned item, or NULL if frontier is empty. */
 BxFetchCrawlItem* bx_fetch_frontier_next(BxFetchFrontier* f);
 
