@@ -1346,7 +1346,7 @@ void tune_socket(int sk, probe* pb) {
 
     use_recv_ttl(sk);
 
-    fcntl(sk, F_SETFL, O_NONBLOCK);
+    (void)bx_fd_set_nonblocking(sk, true);
 
     return;
 }

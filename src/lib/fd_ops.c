@@ -133,6 +133,19 @@ int bx_fd_set_cloexec(int fd, bool enabled) {
     );
 }
 
+int bx_fd_set_nonblocking(int fd, bool enabled) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) {
+        return -1;
+    }
+
+    int updated = enabled ? flags | O_NONBLOCK : flags & ~O_NONBLOCK;
+    if (updated == flags) {
+        return 0;
+    }
+    return fcntl(fd, F_SETFL, updated);
+}
+
 int bx_fd_open_nofollow_cloexec(const char* path, int flags, mode_t mode) {
     return bx_fd_open_cloexec(path, flags | O_NOFOLLOW, mode);
 }

@@ -820,7 +820,6 @@ static int mptcp_pm_resolve_family(int fd, uint16_t* family_id, uint32_t* group_
 
 static int mptcp_pm_ensure(void) {
     struct sockaddr_nl addr;
-    int flags;
     int fd;
 
     if (!mptcp_netlink)
@@ -856,9 +855,7 @@ static int mptcp_pm_ensure(void) {
         return -1;
     }
 
-    flags = fcntl(fd, F_GETFL, 0);
-    if (flags != -1)
-        (void)fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    (void)bx_fd_set_nonblocking(fd, true);
 
     mptcp_pm.fd = fd;
     mptcp_pm.initialized = 1;
