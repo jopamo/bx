@@ -1300,14 +1300,14 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
         errno = EINVAL;
         return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
     }
+    if (w->to_stdout && !w->has_pending_metadata) {
+        bx_fetch_writer_abort(w);
+        return BX_FETCH_WRITER_METADATA_UNCHANGED;
+    }
     if (w->to_stdout || w->fd == -1 || w->parent_fd == -1 || !w->temp_name || w->has_pending_mtime || w->superseded_sidecar_name || w->exclusive_final_path) {
         bx_fetch_writer_abort(w);
         errno = EINVAL;
         return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
-    }
-    if (!w->has_pending_metadata) {
-        bx_fetch_writer_abort(w);
-        return BX_FETCH_WRITER_METADATA_UNCHANGED;
     }
     if (!w->initial_dest_existed || !S_ISREG(w->initial_dest_mode)) {
         bx_fetch_writer_abort(w);
@@ -1342,6 +1342,11 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
         bx_fetch_writer_abort(w);
         errno = error_number;
         return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
+    }
+    if (!w->has_pending_metadata) {
+        close(original_fd);
+        bx_fetch_writer_abort(w);
+        return BX_FETCH_WRITER_METADATA_UNCHANGED;
     }
 
     char* sidecar_name = sidecar_name_for_basename(w->basename);

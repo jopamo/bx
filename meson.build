@@ -1600,6 +1600,7 @@ bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/b
 bx_fetch_core_sources = files(
   'src/lib/fetch/config.c',
   'src/lib/fetch/core/http_header.c',
+  'src/lib/fetch/core/publication.c',
   'src/lib/fetch/core/rate_limiter.c',
   'src/lib/fetch/core/request.c',
   'src/lib/fetch/core/response.c',
