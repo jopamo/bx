@@ -34,7 +34,6 @@ static int xioopen_exec(
    int numleft;
    char **pargv = NULL;
    char *executable = NULL;
-   char *argv0 = NULL;
 
    if (argc != 2) {
       xio_syntax(argv[0], 1, argc-1, addrdesc->syntax);
@@ -48,25 +47,25 @@ static int xioopen_exec(
       return STAT_NORETRY;
    }
    executable = strdup(pargv[0]);
-   const char *basename = strrchr(pargv[0], '/');
-   basename = basename == NULL ? pargv[0] : basename + 1;
-   size_t basename_len = strlen(basename);
-   argv0 = malloc(basename_len + (dash ? 2u : 1u));
-   if (executable == NULL || argv0 == NULL) {
+   if (executable == NULL) {
       Error("out of memory while preparing EXEC command");
-      free(executable);
-      free(argv0);
       bx_argv_free(pargv);
       return STAT_RETRYLATER;
    }
    if (dash) {
+      size_t argv0_len = strlen(pargv[0]);
+      char *argv0 = malloc(argv0_len + 2u);
+      if (argv0 == NULL) {
+	 Error("out of memory while preparing EXEC login command");
+	 free(executable);
+	 bx_argv_free(pargv);
+	 return STAT_RETRYLATER;
+      }
       argv0[0] = '-';
-      memcpy(argv0 + 1, basename, basename_len + 1u);
-   } else {
-      memcpy(argv0, basename, basename_len + 1u);
+      memcpy(argv0 + 1, pargv[0], argv0_len + 1u);
+      free(pargv[0]);
+      pargv[0] = argv0;
    }
-   free(pargv[0]);
-   pargv[0] = argv0;
    if (xio_progcall_check_argv(pargv) < 0) {
       free(executable);
       bx_argv_free(pargv);
