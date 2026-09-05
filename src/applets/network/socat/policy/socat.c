@@ -99,7 +99,7 @@ int main(int argc, const char *argv[]) {
    struct utsname ubuf;
    int lockrc;
 
-   if (mainwaitstring = getenv("SOCAT_MAIN_WAIT")) {
+   if ((mainwaitstring = getenv("SOCAT_MAIN_WAIT")) != NULL) {
        sleep(atoi(mainwaitstring));
    }
    diag_set('p', strchr(argv[0], '/') ? strrchr(argv[0], '/')+1 : argv[0]);
@@ -423,7 +423,7 @@ int main(int argc, const char *argv[]) {
    /* set xio hooks */
    xiohook_newchild = &socat_newchild;
 
-   if (lockrc = socat_lock()) {
+   if ((lockrc = socat_lock()) != 0) {
       /* =0: goon; >0: locked; <0: error, printed in sub */
       if (lockrc > 0)
 	 Error1("could not obtain lock \"%s\"", socat_opts.lock.lockfile);
@@ -1008,7 +1008,7 @@ int _socat(void) {
    }
    total_timeout = socat_opts.total_timeout;
 
-   if (transferwaitstring = getenv("SOCAT_TRANSFER_WAIT")) {
+   if ((transferwaitstring = getenv("SOCAT_TRANSFER_WAIT")) != NULL) {
       Info1("before starting data transfer loop: sleeping %ds (env:SOCAT_TRANSFER_WAIT)", atoi(transferwaitstring));
       sleep(atoi(transferwaitstring));
    }
@@ -1035,7 +1035,7 @@ int _socat(void) {
 	       total_timeout.tv_sec  -= socat_opts.pollintv.tv_sec;
 	       total_timeout.tv_usec -= socat_opts.pollintv.tv_usec;
 	       if (total_timeout.tv_sec < 0 ||
-		   total_timeout.tv_sec == 0 && total_timeout.tv_usec < 0) {
+	       (total_timeout.tv_sec == 0 && total_timeout.tv_usec < 0)) {
 		  Notice("inactivity timeout triggered");
 		  free(buff);
 		  return 0;

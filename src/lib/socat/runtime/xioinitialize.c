@@ -244,7 +244,7 @@ pid_t xio_fork(bool subchild,
 	 }
       }
       /* gdb recommends to have env controlled sleep after fork */
-      if (forkwaitstring = getenv("SOCAT_FORK_WAIT")) {
+      if ((forkwaitstring = getenv("SOCAT_FORK_WAIT")) != NULL) {
 	 forkwaitsecs = atoi(forkwaitstring);
 	 Sleep(forkwaitsecs);
       }
@@ -264,7 +264,7 @@ pid_t xio_fork(bool subchild,
    Info1("number of children is now %d", num_child);
    Notice1("forked off child process "F_pid, pid);
    /* gdb recommends to have env controlled sleep after fork */
-   if (forkwaitstring = getenv("SOCAT_FORK_WAIT")) {
+   if ((forkwaitstring = getenv("SOCAT_FORK_WAIT")) != NULL) {
       forkwaitsecs = atoi(forkwaitstring);
       Sleep(forkwaitsecs);
    }

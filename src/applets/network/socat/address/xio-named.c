@@ -31,7 +31,7 @@ int applyopts_named(const char *filename, struct opt *opts, unsigned int phase) 
 
    opt = opts; while (opt->desc != ODESC_END) {
       if (opt->desc == ODESC_DONE ||
-	  opt->desc->phase != phase && phase != PH_ALL ||
+	  (opt->desc->phase != phase && phase != PH_ALL) ||
 	  !(opt->desc->group & GROUP_NAMED)) {
 	 ++opt; continue; }
       switch (opt->desc->optcode) {

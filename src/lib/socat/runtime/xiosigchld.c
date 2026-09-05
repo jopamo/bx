@@ -54,7 +54,7 @@ static int xio_checkchild(xiofile_t *socket, int socknum, pid_t deadchild) {
 	    return 1;
 	 }
       } else {
-	 if (retval = xio_checkchild((xiofile_t *)socket->dual.stream[0], socknum, deadchild))
+	 if ((retval = xio_checkchild((xiofile_t *)socket->dual.stream[0], socknum, deadchild)) != 0)
 	    return retval;
 	 else
 	    return xio_checkchild((xiofile_t *)socket->dual.stream[1], socknum, deadchild);
