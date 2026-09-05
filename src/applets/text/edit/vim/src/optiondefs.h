@@ -490,13 +490,10 @@ static struct vimoption options[] =
 #endif
 			    SCTX_INIT},
     {"browsedir",   "bsdir",P_STRING|P_VI_DEF,
-#ifdef FEAT_BROWSE
-			    (char_u *)&p_bsdir, PV_NONE, did_set_browsedir, expand_set_browsedir,
-			    {(char_u *)"last", (char_u *)0L}
-#else
+#line 497
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L}
-#endif
+#line 500
 			    SCTX_INIT},
     {"bufhidden",   "bh",   P_STRING|P_ALLOCED|P_VI_DEF|P_NOGLOB,
 			    (char_u *)&p_bh, PV_BH, did_set_bufhidden, expand_set_bufhidden,
@@ -1625,14 +1622,10 @@ static struct vimoption options[] =
 #line 1843
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"mouseshape",  "mouses",  P_STRING|P_VI_DEF|P_ONECOMMA|P_NODUP,
-#ifdef FEAT_MOUSESHAPE
-			    (char_u *)&p_mouseshape, PV_NONE,
-			    did_set_mouseshape, NULL,
-			    {(char_u *)"i-r:beam,s:updown,sd:udsizing,vs:leftright,vd:lrsizing,m:no,ml:up-arrow,v:rightup-arrow", (char_u *)0L}
-#else
+#line 1633
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)NULL, (char_u *)0L}
-#endif
+#line 1636
 			    SCTX_INIT},
     {"mousetime",   "mouset",	P_NUM|P_VI_DEF,
 			    (char_u *)&p_mouset, PV_NONE, NULL, NULL,
@@ -2684,26 +2677,20 @@ static struct vimoption options[] =
 			    (char_u *)&p_wiw, PV_NONE, did_set_winwidth, NULL,
 			    {(char_u *)20L, (char_u *)0L} SCTX_INIT},
     {"wlseat",	    "wse",  P_STRING|P_VI_DEF,
-#ifdef FEAT_WAYLAND
-			    (char_u *)&p_wse, PV_NONE, did_set_wlseat, NULL,
-			    {(char_u *)"", (char_u *)0L}
-#else
+#line 2691
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)NULL, (char_u *)0L}
-#endif
+#line 2694
 			    SCTX_INIT},
     {"wlsteal",	    "wst",  P_BOOL|P_VI_DEF, // Deprecated
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)NULL, (char_u *)0L}
 			    SCTX_INIT},
     {"wltimeoutlen", "wtm", P_NUM|P_VI_DEF,
-#ifdef FEAT_WAYLAND
-			    (char_u *)&p_wtm, PV_NONE, did_set_wltimeoutlen, NULL,
-			    {(char_u *)500L, (char_u *)0L}
-#else
+#line 2704
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)NULL, (char_u *)0L}
-#endif
+#line 2707
 			    SCTX_INIT},
     {"wrap",	    NULL,   P_BOOL|P_VI_DEF|P_RWIN,
 			    (char_u *)VAR_WIN, PV_WRAP, did_set_wrap, NULL,

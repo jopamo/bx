@@ -1196,9 +1196,7 @@ format_lines(
 #ifdef CURSOR_SHAPE
 		ui_cursor_shape();
 #endif
-#ifdef FEAT_MOUSESHAPE
-		update_mouseshape(-1);
-#endif
+#line 1202
 
 		second_indent = -1;
 		// at end of par.: need to set indent of next par.

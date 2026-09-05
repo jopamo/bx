@@ -298,20 +298,7 @@ do_mouse(
 	return FALSE;
     }
 
-#ifdef FEAT_MOUSESHAPE
-    // May have stopped dragging the status or separator line.  The pointer is
-    // most likely still on the status or separator line.
-    if (!is_drag && drag_status_line)
-    {
-	drag_status_line = FALSE;
-	update_mouseshape(SHAPE_IDX_STATUS);
-    }
-    if (!is_drag && drag_sep_line)
-    {
-	drag_sep_line = FALSE;
-	update_mouseshape(SHAPE_IDX_VSEP);
-    }
-#endif
+#line 315
 
     // Ignore drag and release events if we didn't get a click.
     if (is_click)
@@ -701,13 +688,7 @@ do_mouse(
 	    && stl_click_handler(dragwin, mouse_row, mouse_col,
 						which_button, mod_mask))
     {
-#ifdef FEAT_MOUSESHAPE
-	if (!drag_status_line)
-	{
-	    drag_status_line = TRUE;
-	    update_mouseshape(-1);
-	}
-#endif
+#line 711
 	return FALSE;
     }
 
@@ -882,23 +863,11 @@ do_mouse(
     // Handle double clicks, unless on status line
     else if (in_status_line)
     {
-#ifdef FEAT_MOUSESHAPE
-	if ((is_drag || is_click) && !drag_status_line)
-	{
-	    drag_status_line = TRUE;
-	    update_mouseshape(-1);
-	}
-#endif
+#line 892
     }
     else if (in_sep_line)
     {
-#ifdef FEAT_MOUSESHAPE
-	if ((is_drag || is_click) && !drag_sep_line)
-	{
-	    drag_sep_line = TRUE;
-	    update_mouseshape(-1);
-	}
-#endif
+#line 902
     }
     else if ((mod_mask & MOD_MASK_MULTI_CLICK)
 				       && (State & (MODE_NORMAL | MODE_INSERT))
@@ -1420,9 +1389,7 @@ setmouse(void)
 {
     int	    checkfor;
 
-#ifdef FEAT_MOUSESHAPE
-    update_mouseshape(-1);
-#endif
+#line 1426
 
     // Should be outside proc, but may break MOUSESHAPE
 #line 1649

@@ -577,22 +577,6 @@ vim_main2(void)
     if (!exmode_active)
 	msg_scroll = FALSE;
 
-#line 689
-# ifdef FEAT_WAYLAND
-#line 693
-    {
-	if (wayland_init_connection(wayland_display_name) == OK)
-	{
-	    TIME_MSG("connected to Wayland display");
-
-#  ifdef FEAT_WAYLAND_CLIPBOARD
-	    if (clip_init_wayland() == OK)
-		TIME_MSG("setup Wayland clipboard");
-#  endif
-	}
-    }
-# endif
-
 #line 710
     /*
      * If "-" argument given: Read file from stdin.
@@ -2061,14 +2045,10 @@ command_line_scan(mparm_T *parmp)
 
 #line 2527
 	    case 'X':		// "-X"  don't connect to X server
-# if (defined(UNIX) || defined(VMS)) && defined(FEAT_X11)
-		x_no_connect = TRUE;
-# endif
+#line 2067
 		break;
 	    case 'Y':		// "-Y" don't connect to Wayland compositor
-# if defined(FEAT_WAYLAND)
-		wayland_no_connect = TRUE;
-# endif
+#line 2072
 		break;
 
 	    case 'Z':		// "-Z"  restricted mode
@@ -3232,16 +3212,6 @@ usage(void)
     main_msg(_("-s <scriptin>\tRead Normal mode commands from file <scriptin>"));
     main_msg(_("-w <scriptout>\tAppend all typed commands to file <scriptout>"));
     main_msg(_("-W <scriptout>\tWrite all typed commands to file <scriptout>"));
-#line 3742
-# if (defined(UNIX) || defined(VMS)) && defined(FEAT_X11)
-#  if defined(FEAT_GUI_X11) && !defined(FEAT_GUI_GTK)
-    main_msg(_("-display <display>\tConnect Vim to this particular X-server"));
-#  endif
-    main_msg(_("-X\t\t\tDo not connect to X server"));
-# endif
-# if defined(FEAT_WAYLAND)
-    main_msg(_("-Y\t\t\tDo not connect to Wayland compositor"));
-# endif
 #line 3765
 # ifdef STARTUPTIME
     main_msg(_("--startuptime <file>\tWrite startup timing messages to <file>"));

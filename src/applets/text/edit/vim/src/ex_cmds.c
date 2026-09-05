@@ -2117,9 +2117,7 @@ do_write(exarg_T *eap)
     char_u	*ffname;
     int		retval = FAIL;
     char_u	*free_fname = NULL;
-#ifdef FEAT_BROWSE
-    char_u	*browse_file = NULL;
-#endif
+#line 2123
     buf_T	*alt_buf = NULL;
     int		name_was_missing;
 
@@ -2127,16 +2125,7 @@ do_write(exarg_T *eap)
 	return FAIL;
 
     ffname = eap->arg;
-#ifdef FEAT_BROWSE
-    if ((cmdmod.cmod_flags & CMOD_BROWSE) && !exiting)
-    {
-	browse_file = do_browse(BROWSE_SAVE, (char_u *)_("Save As"), ffname,
-						    NULL, NULL, NULL, curbuf);
-	if (browse_file == NULL)
-	    goto theend;
-	ffname = browse_file;
-    }
-#endif
+#line 2140
     if (*ffname == NUL)
     {
 	if (eap->cmdidx == CMD_saveas)
@@ -2309,9 +2298,7 @@ do_write(exarg_T *eap)
     }
 
 theend:
-#ifdef FEAT_BROWSE
-    vim_free(browse_file);
-#endif
+#line 2315
     vim_free(free_fname);
     return retval;
 }
@@ -2492,11 +2479,7 @@ do_wqall(exarg_T *eap)
 		++error;
 		break;
 	    }
-#ifdef FEAT_BROWSE
-	    // ":browse wall": ask for file name if there isn't one
-	    if (buf->b_ffname == NULL && (cmdmod.cmod_flags & CMOD_BROWSE))
-		browse_save_fname(buf);
-#endif
+#line 2500
 	    if (buf->b_ffname == NULL)
 	    {
 		semsg(_(e_no_file_name_for_buffer_nr), (long)buf->b_fnum);
@@ -2733,10 +2716,7 @@ do_ecmd(
     bufref_T	bufref;
     bufref_T	old_curbuf;
     char_u	*free_fname = NULL;
-#ifdef FEAT_BROWSE
-    char_u	dot_path[] = ".";
-    char_u	*browse_file = NULL;
-#endif
+#line 2740
     int		retval = FAIL;
     long	n;
     pos_T	orig_pos;
@@ -2763,28 +2743,7 @@ do_ecmd(
     }
     else
     {
-#ifdef FEAT_BROWSE
-	if ((cmdmod.cmod_flags & CMOD_BROWSE) && !exiting)
-	{
-	    if (
-#line 2826
-		    au_has_group((char_u *)"FileExplorer"))
-	    {
-		// No browsing supported but we do have the file explorer:
-		// Edit the directory.
-		if (ffname == NULL || !mch_isdir(ffname))
-		    ffname = dot_path;
-	    }
-	    else
-	    {
-		browse_file = do_browse(0, (char_u *)_("Edit File"), ffname,
-						    NULL, NULL, NULL, curbuf);
-		if (browse_file == NULL)
-		    goto theend;
-		ffname = browse_file;
-	    }
-	}
-#endif
+#line 2788
 	// if no short name given, use ffname for short name
 	if (sfname == NULL)
 	    sfname = ffname;
@@ -3438,9 +3397,7 @@ theend:
     if (did_set_swapcommand)
 	set_vim_var_string(VV_SWAPCOMMAND, NULL, -1);
 #endif
-#ifdef FEAT_BROWSE
-    vim_free(browse_file);
-#endif
+#line 3444
     vim_free(free_fname);
     return retval;
 }

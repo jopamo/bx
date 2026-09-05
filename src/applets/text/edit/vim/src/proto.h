@@ -20,17 +20,14 @@
  * Machine-dependent routines.
  */
 // avoid errors in function prototypes
-# if !defined(FEAT_X11) && !defined(FEAT_GUI_GTK)
 #  define Display int
 #  define Widget int
-# endif
 #line 28
 #  define GdkEvent int
 #  define GdkEventKey int
-#line 31
-# ifndef FEAT_X11
+#line 32
 #  define XImage int
-# endif
+#line 34
 
 # ifdef AMIGA
 #  include "os_amiga.pro"
@@ -160,9 +157,7 @@ void mbyte_im_set_active(int active_arg);
 #  include "profiler.pro"
 # endif
 # include "quickfix.pro"
-# ifdef FEAT_WAYLAND
-#  include "wayland.pro"
-# endif
+#line 166
 # include "regexp.pro"
 # include "register.pro"
 # include "scriptfile.pro"
@@ -239,8 +234,6 @@ void mbyte_im_set_active(int active_arg);
 // .pro files.
 #line 245
 #  define BalloonEval int
-#line 247
-
 #line 275
 # ifdef FEAT_EVAL
 // Not generated automatically so that we can add an extra attribute.

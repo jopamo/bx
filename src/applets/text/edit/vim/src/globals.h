@@ -253,10 +253,7 @@ EXTERN int	quit_more INIT(= FALSE);    // 'q' hit at "--more--" msg
 EXTERN int	newline_on_exit INIT(= FALSE);	// did msg in altern. screen
 EXTERN int	intr_char INIT(= 0);	    // extra interrupt character
 #endif
-#if (defined(UNIX) || defined(VMS)) && defined(FEAT_X11)
-EXTERN int	x_no_connect INIT(= FALSE); // don't connect to X server
-#line 292
-#endif
+#line 260
 EXTERN int	ex_keep_indent INIT(= FALSE); // getexmodeline(): keep indent
 EXTERN int	vgetc_busy INIT(= 0);	      // when inside vgetc() then > 0
 
@@ -845,14 +842,7 @@ EXTERN int	mouse_dragging INIT(= 0);	// extending Visual area with
 EXTERN int	WantQueryMouse INIT(= FALSE);
 #endif
 
-#line 906
-#ifdef FEAT_MOUSESHAPE
-EXTERN int	drag_status_line INIT(= FALSE);	// dragging the status line
-EXTERN int	postponed_mouseshape INIT(= FALSE); // postponed updating the
-						    // mouse pointer shape
-EXTERN int	drag_sep_line INIT(= FALSE);	// dragging vert separator
-#endif
-
+#line 855
 
 #ifdef FEAT_DIFF
 // Value set from 'diffopt'.
@@ -1784,17 +1774,6 @@ EXTERN int	p_tgc_set INIT(= FALSE);
 
 // If we've already warned about missing/unavailable clipboard
 EXTERN bool did_warn_clipboard INIT(= FALSE);
-
-#line 2115
-#ifdef FEAT_WAYLAND
-
-// Wayland display name for global connection (ex. wayland-0). Can be NULL
-EXTERN char *wayland_display_name INIT(= NULL);
-
-// Don't connect to Wayland compositor if TRUE
-EXTERN int wayland_no_connect INIT(= FALSE);
-
-#endif
 
 #line 2157
 // If the <xOSC> key should be propagated from vgetc()

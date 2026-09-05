@@ -112,10 +112,7 @@ static void	nv_join(cmdarg_T *cap);
 static void	nv_put(cmdarg_T *cap);
 static void	nv_put_opt(cmdarg_T *cap, int fix_indent);
 static void	nv_open(cmdarg_T *cap);
-#line 121
-#ifdef FEAT_DND
-static void	nv_drop(cmdarg_T *cap);
-#endif
+#line 119
 static void	nv_cursorhold(cmdarg_T *cap);
 
 // Declare nv_cmds[].
@@ -413,9 +410,7 @@ normal_cmd_get_more_chars(
 #ifdef CURSOR_SHAPE
 	    ui_cursor_shape();	// show different cursor shape
 #endif
-#ifdef FEAT_MOUSESHAPE
-	    update_mouseshape(-1);
-#endif
+#line 419
 	}
 	if (lang && curbuf->b_p_iminsert == B_IMODE_LMAP)
 	{
@@ -709,9 +704,7 @@ normal_cmd(
     if (finish_op != c)
     {
 	ui_cursor_shape();		// may show different cursor shape
-# ifdef FEAT_MOUSESHAPE
-	update_mouseshape(-1);
-# endif
+#line 715
     }
 #endif
     may_trigger_modechanged();
@@ -984,9 +977,7 @@ normal_end:
 				     || (ca.cmdchar == 'g' && ca.nchar == 'r'))
     {
 	ui_cursor_shape();		// may show different cursor shape
-# ifdef FEAT_MOUSESHAPE
-	update_mouseshape(-1);
-# endif
+#line 990
     }
 #endif
 
@@ -6830,14 +6821,7 @@ nv_open(cmdarg_T *cap)
 	n_opencmd(cap);
 }
 
-#line 7568
-#ifdef FEAT_DND
-    static void
-nv_drop(cmdarg_T *cap UNUSED)
-{
-    do_put('~', NULL, BACKWARD, 1L, PUT_CURSEND);
-}
-#endif
+#line 6841
 
 /*
  * Trigger CursorHold event.

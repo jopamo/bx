@@ -46,7 +46,6 @@ int vim_chdirfile(char_u *fname, char *trigger_autocmd);
 int vim_stat(const char *name, stat_T *stp);
 char *parse_shape_opt(int what);
 int get_shape_idx(int mouse);
-void update_mouseshape(int shape_idx);
 void f_getmouseshape(typval_T *argvars, typval_T *rettv);
 int vim_chdir(char_u *new_dir);
 int get_user_name(char_u *buf, int len);

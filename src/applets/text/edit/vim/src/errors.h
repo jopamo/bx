@@ -534,8 +534,7 @@ EXTERN char e_makemap_illegal_mode[]
 EXTERN char e_invalid_sign_text_str[]
 	INIT(= N_("E239: Invalid sign text: %s"));
 #endif
-#if defined(FEAT_CLIENTSERVER) && defined(FEAT_X11)
-#endif
+#line 539
 #ifdef FEAT_CLIENTSERVER
 #endif
 EXTERN char e_cant_split_window_while_closing_another[]
@@ -550,8 +549,7 @@ EXTERN char e_filechangedshell_autocommand_deleted_buffer[]
 #endif
 EXTERN char e_window_layout_changed_unexpectedly[]
 	INIT(= N_("E249: Window layout changed unexpectedly"));
-#ifdef FEAT_XFONTSET
-#endif
+#line 555
 #ifdef FEAT_CLIENTSERVER
 #endif
 #ifdef FEAT_GUI_X11
@@ -704,10 +702,7 @@ EXTERN char_u e_part_of_menu_item_path_is_not_sub_menu[]
 EXTERN char_u e_no_menu_str[]
 	INIT(= N_("E329: No menu \"%s\""));
 #endif
-#ifdef FEAT_BROWSE
-EXTERN char e_sorry_no_file_browser_in_console_mode[]
-	INIT(= N_("E338: Sorry, no file browser in console mode"));
-#endif
+#line 711
 EXTERN char e_pattern_too_long[]
 	INIT(= N_("E339: Pattern too long"));
 EXTERN char e_internal_error_please_report_a_bug[]
@@ -1180,10 +1175,7 @@ EXTERN char e_missing_colon_2[]
 EXTERN char e_illegal_mode[]
 	INIT(= N_("E546: Illegal mode"));
 #endif
-#ifdef FEAT_MOUSESHAPE
-EXTERN char e_illegal_mouseshape[]
-	INIT(= N_("E547: Illegal mouseshape"));
-#endif
+#line 1187
 #ifdef CURSOR_SHAPE
 EXTERN char e_digit_expected[]
 	INIT(= N_("E548: Digit expected"));
@@ -1274,8 +1266,7 @@ EXTERN char e_showbreak_contains_unprintable_or_wide_character[]
 	INIT(= N_("E595: 'showbreak' contains unprintable or wide character"));
 #endif
 #ifdef FEAT_GUI
-# ifdef FEAT_XFONTSET
-# endif
+#line 1279
 #endif
 #if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
 #endif
@@ -3128,8 +3119,7 @@ EXTERN char e_cannot_switch_to_a_closing_buffer[]
 	INIT(= N_("E1546: Cannot switch to a closing buffer"));
 EXTERN char e_cannot_not_support_redrawtabpanel[]
 	INIT(= N_("E1547: This version of Vim does not support :redrawtabpanel"));
-#ifdef FEAT_WAYLAND
-#endif
+#line 3133
 #if defined(FEAT_DIFF)
 EXTERN char e_cannot_have_more_than_nr_diff_anchors[]
 	INIT(= N_("E1549: Cannot have more than %d diff anchors"));

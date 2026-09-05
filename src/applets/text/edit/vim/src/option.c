@@ -985,9 +985,6 @@ set_init_2(void)
 #ifdef CURSOR_SHAPE
     parse_shape_opt(SHAPE_CURSOR);	// set cursor shapes from 'guicursor'
 #endif
-#ifdef FEAT_MOUSESHAPE
-    parse_shape_opt(SHAPE_MOUSE);	// set mouse shapes from 'mouseshape'
-#endif
 #line 1083
 }
 
@@ -1270,11 +1267,7 @@ ex_set(exarg_T *eap)
 	flags = OPT_LOCAL;
     else if (eap->cmdidx == CMD_setglobal)
 	flags = OPT_GLOBAL;
-#if defined(FEAT_EVAL) && defined(FEAT_BROWSE)
-    if ((cmdmod.cmod_flags & CMOD_BROWSE) && flags == 0)
-	ex_options(eap);
-    else
-#endif
+#line 1278
     {
 	if (eap->forceit)
 	    flags |= OPT_ONECOLUMN;
@@ -4588,35 +4581,7 @@ did_set_winwidth(optset_T *args UNUSED)
     return errmsg;
 }
 
-#if defined(FEAT_WAYLAND_CLIPBOARD)
-/*
- * Process the new 'wlsteal' option value.
- */
-    char *
-did_set_wlsteal(optset_T *args UNUSED)
-{
-    clip_reset_wayland();
-
-    return NULL;
-}
-#endif
-
-#if defined(FEAT_WAYLAND)
-/*
- * Process the new 'wltimeoutlen' option value.
- */
-    char *
-did_set_wltimeoutlen(optset_T *args)
-{
-    if (p_wtm < 0)
-    {
-	p_wtm = args->os_oldval.number;
-	return e_argument_must_be_positive;
-    }
-
-    return NULL;
-}
-#endif
+#line 4620
 
 /*
  * Process the updated 'wrap' option value.

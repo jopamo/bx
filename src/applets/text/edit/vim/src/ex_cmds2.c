@@ -95,9 +95,7 @@ check_changed(buf_T *buf, int flags)
 		FOR_ALL_BUFFERS(buf2)
 		    if (bufIsChanged(buf2)
 				     && (buf2->b_ffname != NULL
-# ifdef FEAT_BROWSE
-					 || (cmdmod.cmod_flags & CMOD_BROWSE)
-# endif
+#line 101
 					))
 			++count;
 	    if (!bufref_valid(&bufref))
@@ -123,28 +121,7 @@ check_changed(buf_T *buf, int flags)
 
 #if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
 
-# if defined(FEAT_BROWSE)
-/*
- * When wanting to write a file without a file name, ask the user for a name.
- */
-    void
-browse_save_fname(buf_T *buf)
-{
-    if (buf->b_fname != NULL)
-	return;
-
-    char_u *fname;
-
-    fname = do_browse(BROWSE_SAVE, (char_u *)_("Save As"),
-	    (char_u *)"Untitled", NULL, NULL, NULL, buf);
-    if (fname == NULL)
-	return;
-
-    if (setfname(buf, fname, NULL, TRUE) == OK)
-	buf->b_flags |= BF_NOTEDITED;
-    vim_free(fname);
-}
-# endif
+#line 148
 
 /*
  * Ask the user what to do when abandoning a changed buffer.
@@ -174,14 +151,7 @@ dialog_changed(
     {
 	int	empty_bufname;
 
-# ifdef FEAT_BROWSE
-	// May get file name, when there is none
-	browse_save_fname(buf);
-
-	// User cancelled the file dialog; keep the buffer modified.
-	if (buf->b_fname == NULL)
-	    return;
-# endif
+#line 185
 	empty_bufname = buf->b_fname == NULL ? TRUE : FALSE;
 	if (empty_bufname)
 	    buf_set_name(buf->b_fnum, (char_u *)"Untitled");
@@ -216,9 +186,7 @@ dialog_changed(
 	{
 	    if (bufIsChanged(buf2)
 		    && (buf2->b_ffname != NULL
-# ifdef FEAT_BROWSE
-			|| (cmdmod.cmod_flags & CMOD_BROWSE)
-# endif
+#line 222
 			)
 		    && !bt_dontwrite(buf2)
 		    && !buf2->b_p_ro)
@@ -226,10 +194,7 @@ dialog_changed(
 		bufref_T bufref;
 
 		set_bufref(&bufref, buf2);
-# ifdef FEAT_BROWSE
-		// May get file name, when there is none
-		browse_save_fname(buf2);
-# endif
+#line 233
 		if (buf2->b_fname != NULL && check_overwrite(&ea, buf2,
 				  buf2->b_fname, buf2->b_ffname, FALSE) == OK)
 		    // didn't hit Cancel

@@ -112,21 +112,15 @@ static char *(features[]) =
 #else
        "-autochdir",
 #endif
-#ifdef FEAT_AUTOSERVERNAME
-	"+autoservername",
-#else
+#line 118
 	"-autoservername",
-#endif
 #line 125
 	"-balloon_eval",
 #line 130
 	"-balloon_eval_term",
-#line 132
-#ifdef FEAT_BROWSE
-	"+browse",
-#else
+#line 128
 	"-browse",
-#endif
+#line 130
 	"++builtin_terms",
 #ifdef FEAT_BYTEOFF
 	"+byte_offset",
@@ -184,12 +178,9 @@ static char *(features[]) =
 #else
 	"-digraphs",
 #endif
-#line 219
-#ifdef FEAT_DND
-	"+dnd",
-#else
+#line 191
 	"-dnd",
-#endif
+#line 193
 	"-ebcdic",
 #ifdef FEAT_EMACS_TAGS
 	"+emacs_tags",
@@ -289,11 +280,9 @@ static char *(features[]) =
 #line 337
 	"+modify_fname",
 	"+mouse",
-#ifdef FEAT_MOUSESHAPE
-	"+mouseshape",
-#else
+#line 295
 	"-mouseshape",
-#endif
+#line 297
 
 #if defined(UNIX) || defined(VMS)
 # ifdef FEAT_MOUSE_DEC
@@ -555,16 +544,11 @@ static char *(features[]) =
 	"-vtp",
 # endif
 #endif
-#ifdef FEAT_WAYLAND
-	"+wayland",
-#else
+#line 561
 	"-wayland",
-#endif
-#ifdef FEAT_WAYLAND_CLIPBOARD
-	"+wayland_clipboard",
-#else
+#line 566
 	"-wayland_clipboard",
-#endif
+#line 568
 	"+wildignore",
 	"+wildmenu",
 	"+windows",
@@ -574,22 +558,18 @@ static char *(features[]) =
 	"-writebackup",
 #endif
 #if defined(UNIX) || defined(VMS)
-# ifdef FEAT_X11
-	"+X11",
-# else
+#line 580
 	"-X11",
-# endif
+#line 582
 #endif
 #ifdef FEAT_XATTR
 	"+xattr",
 #else
 	"-xattr",
 #endif
-#ifdef FEAT_XFONTSET
-	"+xfontset",
-#else
+#line 591
 	"-xfontset",
-#endif
+#line 593
 #ifdef FEAT_XIM
 	"+xim",
 #else

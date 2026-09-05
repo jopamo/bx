@@ -196,28 +196,16 @@
 #line 203
 #endif
 
-// +x11 is only enabled when it's both available and wanted.
-#if defined(HAVE_X11) && defined(WANT_X11)
-# define FEAT_X11
-#endif
-
-#if defined(HAVE_WAYLAND) && defined(WANT_WAYLAND)
-# define FEAT_WAYLAND
-#endif
+#line 207
 
 #ifdef NO_X11_INCLUDES
     // In os_mac_conv.c and os_macosx.m NO_X11_INCLUDES is defined to avoid
     // X11 headers.  Disable all X11 related things to avoid conflicts.
-# ifdef FEAT_X11
-#  undef FEAT_X11
-# endif
+#line 214
 # ifdef FEAT_GUI_X11
 #  undef FEAT_GUI_X11
 # endif
-#line 232
-# ifdef FEAT_BEVAL_TIP
-#  undef FEAT_BEVAL_TIP
-# endif
+#line 221
 # ifdef FEAT_XIM
 #  undef FEAT_XIM
 # endif
@@ -2473,23 +2461,7 @@ typedef int (*opt_expand_cb_T)(optexpand_T *args, int *numMatches, char_u ***mat
  * NOTE: Motif only uses the very first pattern.  Therefore
  * BROWSE_FILTER_DEFAULT should start with a "*" pattern.
  */
-#ifdef FEAT_BROWSE
-# ifdef BACKSLASH_IN_FILENAME
-#  define BROWSE_FILTER_MACROS \
-	(char_u *)N_("Vim macro files (*.vim)\t*.vim\nAll Files (*.*)\t*.*\n")
-#  define BROWSE_FILTER_ALL_FILES (char_u *)N_("All Files (*.*)\t*.*\n")
-#  define BROWSE_FILTER_DEFAULT \
-	(char_u *)N_("All Files (*.*)\t*.*\nC source (*.c, *.h)\t*.c;*.h\nC++ source (*.cpp, *.hpp)\t*.cpp;*.hpp\nVB code (*.bas, *.frm)\t*.bas;*.frm\nVim files (*.vim, _vimrc, _gvimrc)\t*.vim;_vimrc;_gvimrc\n")
-# else
-#  define BROWSE_FILTER_MACROS \
-	(char_u *)N_("Vim macro files (*.vim)\t*.vim\nAll Files (*)\t*\n")
-#  define BROWSE_FILTER_ALL_FILES (char_u *)N_("All Files (*)\t*\n")
-#  define BROWSE_FILTER_DEFAULT \
-	(char_u *)N_("All Files (*)\t*\nC source (*.c, *.h)\t*.c;*.h\nC++ source (*.cpp, *.hpp)\t*.cpp;*.hpp\nVim files (*.vim, _vimrc, _gvimrc)\t*.vim;_vimrc;_gvimrc\n")
-# endif
-# define BROWSE_SAVE 1	    // flag for do_browse()
-# define BROWSE_DIR 2	    // flag for do_browse()
-#endif
+#line 2493
 
 #ifdef _MSC_VER
 // Avoid useless warning "conversion from X to Y of greater size".

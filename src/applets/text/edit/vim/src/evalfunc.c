@@ -6694,11 +6694,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"autoservername",
-#ifdef FEAT_AUTOSERVERNAME
-		1
-#else
+#line 6700
 		0
-#endif
+#line 6702
 		},
 	{"socketserver",
 #line 6873
@@ -6722,15 +6720,7 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"builtin_terms", 1},
 	{"all_builtin_terms", 1},
-	{"browsefilter",
-#if defined(FEAT_BROWSE) && (defined(FEAT_GUI_GTK) \
-	|| defined(FEAT_GUI_MSWIN) \
-	|| defined(FEAT_GUI_MOTIF))
-		1
-#else
-		0
-#endif
-		},
+	{"browsefilter", 0},
 	{"byte_offset",
 #ifdef FEAT_BYTEOFF
 		1
@@ -6846,11 +6836,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"dnd",
-#ifdef FEAT_DND
-		1
-#else
+#line 6852
 		0
-#endif
+#line 6854
 		},
 	{"drop_file",
 #ifdef HAVE_DROP_FILE
@@ -7030,11 +7018,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 	{"modify_fname", 1},
 	{"mouse", 1},
 	{"mouseshape",
-#ifdef FEAT_MOUSESHAPE
-		1
-#else
+#line 7036
 		0
-#endif
+#line 7038
 		},
 	{"mouse_dec",
 #if (defined(UNIX) || defined(VMS)) && defined(FEAT_MOUSE_DEC)
@@ -7427,18 +7413,14 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"wayland",
-#ifdef FEAT_WAYLAND
-		1
-#else
+#line 7433
 		0
-#endif
+#line 7435
 		},
 	{"wayland_clipboard",
-#ifdef FEAT_WAYLAND_CLIPBOARD
-		1
-#else
+#line 7440
 		0
-#endif
+#line 7442
 		},
 	{"wildignore", 1},
 	{"wildmenu", 1},
@@ -7472,11 +7454,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"xfontset",
-#ifdef FEAT_XFONTSET
-		1
-#else
+#line 7478
 		0
-#endif
+#line 7480
 		},
 	{"xpm",
 #if defined(FEAT_XPM_W32) || defined(HAVE_XPM)
@@ -7519,11 +7499,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"X11",
-#if defined(UNIX) && defined(FEAT_X11)
-		1
-#else
+#line 7525
 		0
-#endif
+#line 7527
 		},
 	{":tearoff",
 // same #ifdef as used for ex_tearoff().

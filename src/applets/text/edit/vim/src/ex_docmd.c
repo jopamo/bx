@@ -358,10 +358,8 @@ static void	ex_nohlsearch(exarg_T *eap);
 # define ex_terminal		ex_ni
 #line 379
 # define ex_xrestore		ex_ni
-#line 381
-#if !defined(FEAT_WAYLAND)
+#line 363
 # define ex_wlrestore		ex_ni
-#endif
 #line 385
 # define ex_clipreset		ex_ni
 #line 388
@@ -7104,10 +7102,7 @@ ex_splitview(exarg_T *eap)
 {
     win_T	*old_curwin = curwin;
     char_u	*fname = NULL;
-#ifdef FEAT_BROWSE
-    char_u	dot_path[] = ".";
-    int		save_cmod_flags = cmdmod.cmod_flags;
-#endif
+#line 7111
     int		use_tab = eap->cmdidx == CMD_tabedit
 		       || eap->cmdidx == CMD_tabfind
 		       || eap->cmdidx == CMD_tabnew;
@@ -7152,33 +7147,7 @@ ex_splitview(exarg_T *eap)
 	    goto theend;
 	eap->arg = fname;
     }
-#ifdef FEAT_BROWSE
-    else if ((cmdmod.cmod_flags & CMOD_BROWSE)
-	    && eap->cmdidx != CMD_vnew
-	    && eap->cmdidx != CMD_new)
-    {
-	if (
-#line 7285
-		au_has_group((char_u *)"FileExplorer"))
-	{
-	    // No browsing supported but we do have the file explorer:
-	    // Edit the directory.
-	    if (*eap->arg == NUL || !mch_isdir(eap->arg))
-		eap->arg = dot_path;
-	}
-	else
-	{
-	    fname = do_browse(0, (char_u *)(use_tab
-			? _("Edit File in new tab page")
-			: _("Edit File in new window")),
-					  eap->arg, NULL, NULL, NULL, curbuf);
-	    if (fname == NULL)
-		goto theend;
-	    eap->arg = fname;
-	}
-    }
-    cmdmod.cmod_flags &= ~CMOD_BROWSE;	// Don't browse again in do_ecmd().
-#endif
+#line 7182
 
     /*
      * Either open new tab page or split the window.
@@ -7211,9 +7180,7 @@ ex_splitview(exarg_T *eap)
 	do_exedit(eap, old_curwin);
     }
 
-#ifdef FEAT_BROWSE
-    cmdmod.cmod_flags = save_cmod_flags;
-#endif
+#line 7217
 
 theend:
     vim_free(fname);
@@ -7585,9 +7552,7 @@ do_exedit(
     }
     else if ((eap->cmdidx != CMD_split && eap->cmdidx != CMD_vsplit)
 	    || *eap->arg != NUL
-#ifdef FEAT_BROWSE
-	    || (cmdmod.cmod_flags & CMOD_BROWSE)
-#endif
+#line 7591
 	    )
     {
 	// Can't edit another file when "textlock" or "curbuf_lock" is set.
@@ -7800,24 +7765,7 @@ ex_read(exarg_T *eap)
     if (u_save(eap->line2, (linenr_T)(eap->line2 + 1)) == FAIL)
 	return;
 
-#ifdef FEAT_BROWSE
-    if (cmdmod.cmod_flags & CMOD_BROWSE)
-    {
-	char_u *browseFile;
-
-	browseFile = do_browse(0, (char_u *)_("Append File"), eap->arg,
-		NULL, NULL, NULL, curbuf);
-	if (browseFile != NULL)
-	{
-	    i = readfile(browseFile, NULL,
-		    eap->line2, (linenr_T)0, (linenr_T)MAXLNUM, eap, 0);
-	    vim_free(browseFile);
-	}
-	else
-	    i = OK;
-    }
-    else
-#endif
+#line 7821
 	if (*eap->arg == NUL)
 	{
 	    if (check_fname() == FAIL)	// check for no file name
@@ -8672,22 +8620,7 @@ ex_redir(exarg_T *eap)
 	    fname = expand_env_save(arg);
 	    if (fname == NULL)
 		return;
-#ifdef FEAT_BROWSE
-	    if (cmdmod.cmod_flags & CMOD_BROWSE)
-	    {
-		char_u	*browseFile;
-
-		browseFile = do_browse(BROWSE_SAVE,
-			(char_u *)_("Save Redirection"),
-			fname, NULL, NULL,
-			(char_u *)_(BROWSE_FILTER_ALL_FILES), curbuf);
-		if (browseFile == NULL)
-		    return;		// operation cancelled
-		vim_free(fname);
-		fname = browseFile;
-		eap->forceit = TRUE;	// since dialog already asked
-	    }
-#endif
+#line 8691
 
 	    redir_fd = open_exfile(fname, eap->forceit, mode);
 	    vim_free(fname);

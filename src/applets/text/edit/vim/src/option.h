@@ -470,10 +470,7 @@ EXTERN unsigned	bo_flags;
 #define BO_WILD		0x80000
 
 EXTERN char_u	*p_bsk;		// 'backupskip'
-#line 488
-#ifdef FEAT_BROWSE
-EXTERN char_u	*p_bsdir;	// 'browsedir'
-#endif
+#line 477
 #ifdef FEAT_LINEBREAK
 EXTERN char_u	*p_breakat;	// 'breakat'
 #endif
@@ -615,9 +612,6 @@ EXTERN long	p_ghr;		// 'guiheadroom'
 #endif
 #ifdef CURSOR_SHAPE
 EXTERN char_u	*p_guicursor;	// 'guicursor'
-#endif
-#ifdef FEAT_MOUSESHAPE
-EXTERN char_u	*p_mouseshape;	// 'mouseshape'
 #endif
 #line 701
 #if defined(FEAT_GUI_TABLINE)
@@ -971,10 +965,6 @@ EXTERN long	p_wh;		// 'winheight'
 EXTERN long	p_wmh;		// 'winminheight'
 EXTERN long	p_wmw;		// 'winminwidth'
 EXTERN long	p_wiw;		// 'winwidth'
-#ifdef FEAT_WAYLAND
-EXTERN char_u	*p_wse;		// 'wlseat'
-EXTERN long     p_wtm;		// 'wltimeoutlen'
-#endif
 #line 1164
 EXTERN long	p_wm;		// 'wrapmargin'
 EXTERN int	p_ws;		// 'wrapscan'

@@ -131,14 +131,7 @@ static void sig_sysmouse SIGPROTOARG;
 # define SIGWINCH SIGWINDOW
 #endif
 
-#ifdef FEAT_X11
-# include <X11/Xlib.h>
-# include <X11/Xutil.h>
-# include <X11/Xatom.h>
-
-Window	    x11_window = 0;
-Display	    *x11_display = NULL;
-#endif
+#line 142
 
 static int ignore_sigtstp = FALSE;
 
@@ -181,12 +174,7 @@ static void catch_sigusr1 SIGPROTOARG;
 #if defined(SIGPWR)
 static void catch_sigpwr SIGPROTOARG;
 #endif
-#if defined(SIGALRM) && defined(FEAT_X11) && !defined(FEAT_GUI_GTK)
-# define SET_SIG_ALARM
-static void sig_alarm SIGPROTOARG;
-// volatile because it is used in signal handler sig_alarm().
-static volatile sig_atomic_t sig_alarm_called;
-#endif
+#line 190
 static void deathtrap SIGPROTOARG;
 
 static void catch_int_signal(void);
@@ -982,9 +970,7 @@ sig_alarm SIGDEFARG(sigarg)
 }
 #endif
 
-#if defined(HAVE_SETJMP_H) \
-	&& ((defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)) \
-	    || defined(FEAT_LIBCALL))
+#if defined(HAVE_SETJMP_H) && defined(FEAT_LIBCALL)
 # define USING_SETJMP 1
 
 // argument to SETJMP()
@@ -1291,10 +1277,6 @@ mch_suspend(void)
     settmode(TMODE_COOK);
     out_flush();	    // needed to disable mouse on some systems
 
-# if defined(FEAT_CLIPBOARD) && (defined(FEAT_X11) \
-	|| defined(FEAT_WAYLAND_CLIPBOARD))
-    loose_clipboard();
-# endif
 # if defined(SIGCONT)
     sigcont_received = FALSE;
 # endif
@@ -1586,461 +1568,7 @@ mch_input_isatty(void)
     return FALSE;
 }
 
-#ifdef FEAT_X11
-
-# if defined(ELAPSED_TIMEVAL)
-
-/*
- * Give a message about the elapsed time for opening the X window.
- */
-    static void
-xopen_message(long elapsed_msec)
-{
-    smsg(_("Opening the X display took %ld msec"), elapsed_msec);
-}
-# endif
-#endif
-
-#if defined(FEAT_X11)
-/*
- * A few functions shared by X11 title and clipboard code.
- */
-
-static int	got_x_error = FALSE;
-
-/*
- * X Error handler, otherwise X just exits!  (very rude) -- webb
- */
-    static int
-x_error_handler(Display *dpy, XErrorEvent *error_event)
-{
-    XGetErrorText(dpy, error_event->error_code, (char *)IObuff, IOSIZE);
-    STRCAT(IObuff, _("\nVim: Got X error\n"));
-
-    // In the GUI we cannot print a message and continue, because no X calls
-    // are allowed here (causes my system to hang).  Silently continuing seems
-    // like the best alternative.  Do preserve files, in case we crash.
-    ml_sync_all(FALSE, FALSE);
-
-	msg((char *)IObuff);
-
-    return 0;		// NOTREACHED
-}
-
-/*
- * Another X Error handler, just used to check for errors.
- */
-    static int
-x_error_check(Display *dpy UNUSED, XErrorEvent *error_event UNUSED)
-{
-    got_x_error = TRUE;
-    return 0;
-}
-
-/*
- * Return TRUE when connection to the X server is desired.
- */
-    static int
-x_connect_to_server(void)
-{
-    // No point in connecting if we are exiting or dying.
-    if (exiting || v_dying)
-	return FALSE;
-
-    if (x_no_connect)
-	return FALSE;
-
-    // Check for a match with "exclude:" from 'clipboard'.
-    if (clip_exclude_prog != NULL)
-    {
-	// Just in case we get called recursively, return FALSE.  This could
-	// happen if vpeekc() is used while executing the prog and it causes a
-	// related callback to be invoked.
-	if (regprog_in_use(clip_exclude_prog))
-	    return FALSE;
-
-	if (vim_regexec_prog(&clip_exclude_prog, FALSE, T_NAME, (colnr_T)0))
-	    return FALSE;
-    }
-    return TRUE;
-}
-
-/*
- * Test if "dpy" and x11_window are valid by getting the window title.
- * I don't actually want it yet, so there may be a simpler call to use, but
- * this will cause the error handler x_error_check() to be called if anything
- * is wrong, such as the window pointer being invalid (as can happen when the
- * user changes his DISPLAY, but not his WINDOWID) -- webb
- */
-    static int
-test_x11_window(Display *dpy)
-{
-    int			(*old_handler)(Display*, XErrorEvent*);
-    XTextProperty	text_prop;
-
-    old_handler = XSetErrorHandler(x_error_check);
-    got_x_error = FALSE;
-    if (XGetWMName(dpy, x11_window, &text_prop))
-	XFree((void *)text_prop.value);
-    XSync(dpy, False);
-    (void)XSetErrorHandler(old_handler);
-
-    if (p_verbose > 0 && got_x_error)
-	verb_msg(_("Testing the X display failed"));
-
-    return (got_x_error ? FAIL : OK);
-}
-#endif
-
-
-#ifdef FEAT_X11
-
-static int get_x11_thing(int get_title, int test_only);
-
-/*
- * try to get x11 window and display
- *
- * return FAIL for failure, OK otherwise
- */
-    static int
-get_x11_windis(void)
-{
-    char	    *winid;
-    static int	    result = -1;
-# define XD_NONE	 0	// x11_display not set here
-# define XD_HERE	 1	// x11_display opened here
-# define XD_GUI	 2	// x11_display used from gui.dpy
-# define XD_XTERM 3	// x11_display used from xterm_dpy
-    static int	    x11_display_from = XD_NONE;
-    static int	    did_set_error_handler = FALSE;
-
-    if (!did_set_error_handler)
-    {
-	// X just exits if it finds an error otherwise!
-	(void)XSetErrorHandler(x_error_handler);
-	did_set_error_handler = TRUE;
-    }
-
-# if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)
-    if (gui.in_use)
-    {
-	/*
-	 * If the X11 display was opened here before, for the window where Vim
-	 * was started, close that one now to avoid a memory leak.
-	 */
-	if (x11_display_from == XD_HERE && x11_display != NULL)
-	{
-	    XCloseDisplay(x11_display);
-	    x11_display_from = XD_NONE;
-	}
-	if (gui_get_x11_windis(&x11_window, &x11_display) == OK)
-	{
-	    x11_display_from = XD_GUI;
-	    return OK;
-	}
-	x11_display = NULL;
-	return FAIL;
-    }
-    else if (x11_display_from == XD_GUI)
-    {
-	// GUI must have stopped somehow, clear x11_display
-	x11_window = 0;
-	x11_display = NULL;
-	x11_display_from = XD_NONE;
-    }
-# endif
-
-    // When started with the "-X" argument, don't try connecting.
-    if (!x_connect_to_server())
-	return FAIL;
-
-    /*
-     * If WINDOWID not set, should try another method to find out
-     * what the current window number is. The only code I know for
-     * this is very complicated.
-     * We assume that zero is invalid for WINDOWID.
-     */
-    if (x11_window == 0 && (winid = getenv("WINDOWID")) != NULL)
-	x11_window = (Window)atol(winid);
-
-    if (x11_window == 0 || x11_display == NULL)
-	result = -1;
-
-    if (result != -1)	    // Have already been here and set this
-	return result;	    // Don't do all these X calls again
-
-    if (x11_window != 0 && x11_display == NULL)
-    {
-# ifdef SET_SIG_ALARM
-	sighandler_T sig_save;
-# endif
-# ifdef ELAPSED_FUNC
-	elapsed_T start_tv;
-
-	if (p_verbose > 0)
-	    ELAPSED_INIT(start_tv);
-# endif
-
-# ifdef SET_SIG_ALARM
-	/*
-	 * Opening the Display may hang if the DISPLAY setting is wrong, or
-	 * the network connection is bad.  Set an alarm timer to get out.
-	 */
-	sig_alarm_called = FALSE;
-	sig_save = mch_signal(SIGALRM, sig_alarm);
-	alarm(2);
-# endif
-	x11_display = XOpenDisplay(NULL);
-
-# ifdef SET_SIG_ALARM
-	alarm(0);
-	mch_signal(SIGALRM, sig_save);
-	if (p_verbose > 0 && sig_alarm_called)
-	    verb_msg(_("Opening the X display timed out"));
-# endif
-	if (x11_display != NULL)
-	{
-# ifdef ELAPSED_FUNC
-	    if (p_verbose > 0)
-	    {
-		verbose_enter();
-		xopen_message(ELAPSED_FUNC(start_tv));
-		verbose_leave();
-	    }
-# endif
-	    if (test_x11_window(x11_display) == FAIL)
-	    {
-		// Maybe window id is bad
-		x11_window = 0;
-		XCloseDisplay(x11_display);
-		x11_display = NULL;
-	    }
-	    else
-		x11_display_from = XD_HERE;
-	}
-    }
-    if (x11_window == 0 || x11_display == NULL)
-	return (result = FAIL);
-
-# ifdef FEAT_EVAL
-    set_vim_var_nr(VV_WINDOWID, (long)x11_window);
-# endif
-
-    return (result = OK);
-}
-
-/*
- * Determine original x11 Window Title
- */
-    static int
-get_x11_title(int test_only)
-{
-    return get_x11_thing(TRUE, test_only);
-}
-
-/*
- * Determine original x11 Window icon
- */
-    static int
-get_x11_icon(int test_only)
-{
-    int		retval = FALSE;
-
-    retval = get_x11_thing(FALSE, test_only);
-
-    // could not get old icon, use terminal name
-    if (oldicon == NULL && !test_only)
-    {
-	if (STRNCMP(T_NAME, "builtin_", 8) == 0)
-	    oldicon = vim_strsave(T_NAME + 8);
-	else
-	    oldicon = vim_strsave(T_NAME);
-    }
-
-    return retval;
-}
-
-    static int
-get_x11_thing(
-    int		get_title,	// get title string
-    int		test_only)
-{
-    XTextProperty	text_prop;
-    int			retval = FALSE;
-    Status		status;
-
-    if (get_x11_windis() != OK)
-	return FALSE;
-
-    // Get window/icon name if any
-    if (get_title)
-	status = XGetWMName(x11_display, x11_window, &text_prop);
-    else
-	status = XGetWMIconName(x11_display, x11_window, &text_prop);
-
-    /*
-     * If terminal is xterm, then x11_window may be a child window of the
-     * outer xterm window that actually contains the window/icon name, so
-     * keep traversing up the tree until a window with a title/icon is
-     * found.
-     */
-    // Previously this was only done for xterm and alike.  I don't see a
-    // reason why it would fail for other terminal emulators.
-    // if (term_is_xterm)
-    Window	    root;
-    Window	    parent;
-    Window	    win = x11_window;
-    Window	   *children;
-    unsigned int    num_children;
-
-    while (!status || text_prop.value == NULL)
-    {
-	if (!XQueryTree(x11_display, win, &root, &parent, &children,
-		    &num_children))
-	    break;
-	if (children)
-	    XFree((void *)children);
-	if (parent == root || parent == 0)
-	    break;
-
-	win = parent;
-	if (get_title)
-	    status = XGetWMName(x11_display, win, &text_prop);
-	else
-	    status = XGetWMIconName(x11_display, win, &text_prop);
-    }
-
-    if (status && text_prop.value != NULL)
-    {
-	retval = TRUE;
-	if (!test_only)
-	{
-	    if (get_title)
-		vim_free(oldtitle);
-	    else
-		vim_free(oldicon);
-	    if (text_prop.encoding == XA_STRING && !has_mbyte)
-	    {
-		if (get_title)
-		    oldtitle = vim_strsave((char_u *)text_prop.value);
-		else
-		    oldicon = vim_strsave((char_u *)text_prop.value);
-	    }
-	    else
-	    {
-		char    **cl;
-		Status  transform_status;
-		int	    n = 0;
-
-		transform_status = XmbTextPropertyToTextList(x11_display,
-			&text_prop,
-			&cl, &n);
-		if (transform_status >= Success && n > 0 && cl[0])
-		{
-		    if (get_title)
-			oldtitle = vim_strsave((char_u *) cl[0]);
-		    else
-			oldicon = vim_strsave((char_u *) cl[0]);
-		    XFreeStringList(cl);
-		}
-		else
-		{
-		    if (get_title)
-			oldtitle = vim_strsave((char_u *)text_prop.value);
-		    else
-			oldicon = vim_strsave((char_u *)text_prop.value);
-		}
-	    }
-	}
-	XFree((void *)text_prop.value);
-    }
-    return retval;
-}
-
-// Xutf8 functions are not available on older systems. Note that on some
-// systems X_HAVE_UTF8_STRING may be defined in a header file but
-// Xutf8SetWMProperties() is not in the X11 library.  Configure checks for
-// that and defines HAVE_XUTF8SETWMPROPERTIES.
-# if defined(X_HAVE_UTF8_STRING)
-#  if X_HAVE_UTF8_STRING && HAVE_XUTF8SETWMPROPERTIES
-#   define USE_UTF8_STRING
-#  endif
-# endif
-
-/*
- * Set x11 Window Title
- *
- * get_x11_windis() must be called before this and have returned OK
- */
-    static void
-set_x11_title(char_u *title)
-{
-	// XmbSetWMProperties() and Xutf8SetWMProperties() should use a STRING
-	// when possible, COMPOUND_TEXT otherwise.  COMPOUND_TEXT isn't
-	// supported everywhere and STRING doesn't work for multi-byte titles.
-# ifdef USE_UTF8_STRING
-    if (enc_utf8)
-	Xutf8SetWMProperties(x11_display, x11_window, (const char *)title,
-					     NULL, NULL, 0, NULL, NULL, NULL);
-    else
-# endif
-    {
-# if XtSpecificationRelease >= 4
-#  ifdef FEAT_XFONTSET
-	XmbSetWMProperties(x11_display, x11_window, (const char *)title,
-					     NULL, NULL, 0, NULL, NULL, NULL);
-#  else
-	XTextProperty	text_prop;
-	char		*c_title = (char *)title;
-
-	// directly from example 3-18 "basicwin" of Xlib Programming Manual
-	(void)XStringListToTextProperty(&c_title, 1, &text_prop);
-	XSetWMProperties(x11_display, x11_window, &text_prop,
-					     NULL, NULL, 0, NULL, NULL, NULL);
-#  endif
-# else
-	XStoreName(x11_display, x11_window, (char *)title);
-# endif
-    }
-    XFlush(x11_display);
-}
-
-/*
- * Set x11 Window icon
- *
- * get_x11_windis() must be called before this and have returned OK
- */
-    static void
-set_x11_icon(char_u *icon)
-{
-    // See above for comments about using X*SetWMProperties().
-# ifdef USE_UTF8_STRING
-    if (enc_utf8)
-	Xutf8SetWMProperties(x11_display, x11_window, NULL, (const char *)icon,
-						   NULL, 0, NULL, NULL, NULL);
-    else
-# endif
-    {
-# if XtSpecificationRelease >= 4
-#  ifdef FEAT_XFONTSET
-	XmbSetWMProperties(x11_display, x11_window, NULL, (const char *)icon,
-						   NULL, 0, NULL, NULL, NULL);
-#  else
-	XTextProperty	text_prop;
-	char		*c_icon = (char *)icon;
-
-	(void)XStringListToTextProperty(&c_icon, 1, &text_prop);
-	XSetWMProperties(x11_display, x11_window, NULL, &text_prop,
-						   NULL, 0, NULL, NULL, NULL);
-#  endif
-# else
-	XSetIconName(x11_display, x11_window, (char *)icon);
-# endif
-    }
-    XFlush(x11_display);
-}
-
-#else  // FEAT_X11
+#line 2044
 
     static int
 get_x11_title(int test_only UNUSED)
@@ -2061,7 +1589,7 @@ get_x11_icon(int test_only)
     return FALSE;
 }
 
-#endif // FEAT_X11
+#line 2065
 
     int
 mch_can_restore_title(void)
@@ -2098,10 +1626,7 @@ mch_settitle(char_u *title, char_u *icon)
     /*
      * if the window ID and the display is known, we may use X11 calls
      */
-#ifdef FEAT_X11
-    if (get_x11_windis() == OK)
-	type = 1;
-#endif
+#line 2105
 #if defined(FEAT_GUI_PHOTON) \
     || defined(FEAT_GUI_GTK) || defined(FEAT_GUI_HAIKU)
     if (gui.in_use)
@@ -2125,10 +1650,7 @@ mch_settitle(char_u *title, char_u *icon)
 
 	if (*T_TS != NUL)		// it's OK if t_fs is empty
 	    term_settitle(title);
-#ifdef FEAT_X11
-	else
-	    set_x11_title(title);		// x11
-#endif
+#line 2132
 #if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_HAIKU) \
 	|| defined(FEAT_GUI_PHOTON)
 	else
@@ -2150,10 +1672,7 @@ mch_settitle(char_u *title, char_u *icon)
 	    out_str(T_CIE);			// set icon end
 	    out_flush();
 	}
-#ifdef FEAT_X11
-	else
-	    set_x11_icon(icon);			// x11
-#endif
+#line 2157
 	did_set_icon = TRUE;
     }
     --recursive;
@@ -3326,11 +2845,7 @@ mch_early_init(void)
     void
 mch_free_mem(void)
 {
-# if defined(FEAT_X11)
-    if (x11_display != NULL
-	    )
-	XCloseDisplay(x11_display);
-# endif
+#line 3334
 # if defined(HAVE_SIGALTSTACK) || defined(HAVE_SIGSTACK)
     VIM_CLEAR(signal_stack);
 # endif
@@ -4316,14 +3831,6 @@ mch_call_shell_system(
     if (options & SHELL_COOKED)
 	settmode(TMODE_COOK);	    // set to normal mode
 
-# if defined(FEAT_CLIPBOARD) && (defined(FEAT_X11) \
-	|| defined(FEAT_WAYLAND_CLIPBOARD))
-#  if defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD)
-    save_clipboard();
-#  endif
-    loose_clipboard();
-# endif
-
     if (cmd == NULL)
 	x = system((char *)p_sh);
     else
@@ -4382,10 +3889,6 @@ mch_call_shell_system(
 	settmode(TMODE_RAW);	// set to raw mode
     }
     resettitle();
-# if defined(FEAT_CLIPBOARD) && (defined(FEAT_X11) \
-	|| defined(FEAT_WAYLAND_CLIPBOARD))
-    restore_clipboard();
-# endif
     return x;
 }
 
@@ -4967,11 +4470,7 @@ mch_call_shell_fork(
 		    else
 			wait_pid = 0;
 
-# ifdef FEAT_WAYLAND
-		    // Handle Wayland events such as sending data as the source
-		    // client.
-		    wayland_update();
-# endif
+#line 4975
 		}
 finished:
 		p_more = p_more_save;
@@ -4998,60 +4497,7 @@ finished:
 		    close(toshell_fd);
 		close(fromshell_fd);
 	    }
-# if (defined(FEAT_XCLIPBOARD) && defined(FEAT_X11)) || defined(FEAT_WAYLAND)
-	    else
-	    {
-		long delay_msec = 1;
-
-		if (tmode == TMODE_RAW)
-		    // Possibly disables modifyOtherKeys, so that the system
-		    // can recognize CTRL-C.
-		    out_str_t_TE();
-
-		/*
-		 * Similar to the loop above, but only handle X and Wayland
-		 * events, no I/O.
-		 */
-		for (;;)
-		{
-		    if (got_int)
-		    {
-			// CTRL-C sends a signal to the child, we ignore it
-			// ourselves
-#  ifdef HAVE_SETSID
-			kill(-pid, SIGINT);
-#  else
-			kill(0, SIGINT);
-#  endif
-			got_int = FALSE;
-		    }
-		    wait_pid = waitpid(pid, &status, WNOHANG);
-		    if ((wait_pid == (pid_t)-1 && errno == ECHILD)
-			    || (wait_pid == pid && WIFEXITED(status)))
-		    {
-			wait_pid = pid;
-			break;
-		    }
-
-#  ifdef FEAT_WAYLAND
-		    // Handle Wayland events such as sending data as the source
-		    // client.
-		    wayland_update();
-#  endif
-
-		    // Wait for 1 to 10 msec. 1 is faster but gives the child
-		    // less time, gradually wait longer.
-		    mch_delay(delay_msec,
-				   MCH_DELAY_IGNOREINPUT | MCH_DELAY_SETTMODE);
-		    if (++delay_msec > 10)
-			delay_msec = 10;
-		}
-
-		if (tmode == TMODE_RAW)
-		    // possibly enables modifyOtherKeys again
-		    out_str_t_TI();
-	    }
-# endif
+#line 5055
 
 	    /*
 	     * Wait until our child has exited.
@@ -5428,16 +4874,12 @@ RealWaitForChar(int fd, long msec, int *check_for_gpm UNUSED, int *interrupted)
 	int		mzquantum_used = FALSE;
 #  endif
 # endif
-# ifdef FEAT_WAYLAND
-	int		wayland_fd = -1;
-# endif
+#line 5434
 # ifndef HAVE_SELECT
 			// each channel may use in, out and err
 	struct pollfd   fds[7 + 3 * MAX_OPEN_CHANNELS];
 	int		nfd;
-#  ifdef FEAT_WAYLAND_CLIPBOARD
-	int             wayland_idx = -1;
-#  endif
+#line 5441
 #  ifdef FEAT_MOUSE_GPM
 	int		gpm_idx = -1;
 #  endif
@@ -5458,15 +4900,7 @@ RealWaitForChar(int fd, long msec, int *check_for_gpm UNUSED, int *interrupted)
 	fds[0].events = POLLIN;
 	nfd = 1;
 
-#  ifdef FEAT_WAYLAND
-	if ((wayland_fd = wayland_prepare_read()) >= 0)
-	{
-	    wayland_idx = nfd;
-	    fds[nfd].fd = wayland_fd;
-	    fds[nfd].events = POLLIN;
-	    nfd++;
-	}
-#  endif
+#line 5470
 #  ifdef FEAT_MOUSE_GPM
 	if (check_for_gpm != NULL && gpm_flag && gpm_fd >= 0)
 	{
@@ -5500,10 +4934,7 @@ RealWaitForChar(int fd, long msec, int *check_for_gpm UNUSED, int *interrupted)
 	    finished = FALSE;
 #  endif
 
-#  ifdef FEAT_WAYLAND
-	if (wayland_idx >= 0)
-	    wayland_poll_check(fds[wayland_idx].revents);
-#  endif
+#line 5507
 
 #  ifdef FEAT_MOUSE_GPM
 	if (gpm_idx >= 0 && (fds[gpm_idx].revents & POLLIN))
@@ -5571,15 +5002,7 @@ select_eintr:
 #  endif
 	maxfd = fd;
 
-#  ifdef FEAT_WAYLAND
-	if ((wayland_fd = wayland_prepare_read()) >= 0)
-	{
-	    FD_SET(wayland_fd, &rfds);
-
-	    if (maxfd < wayland_fd)
-		maxfd = wayland_fd;
-	}
-#  endif
+#line 5583
 
 #  ifdef FEAT_MOUSE_GPM
 	if (check_for_gpm != NULL && gpm_flag && gpm_fd >= 0)
@@ -5654,10 +5077,7 @@ select_eintr:
 	    finished = FALSE;
 #  endif
 
-#  ifdef FEAT_WAYLAND
-	if (wayland_fd != -1)
-	    wayland_select_check(ret > 0 && FD_ISSET(wayland_fd, &rfds));
-#  endif
+#line 5661
 
 #  ifdef FEAT_MOUSE_GPM
 	if (ret > 0 && check_for_gpm != NULL && gpm_flag && gpm_fd >= 0)
