@@ -162,6 +162,7 @@ static int ash_open_redirection(
             flags = O_RDWR | O_CREAT;
             break;
         case ASH_REDIR_DUP:
+        default:
             errno = EINVAL;
             return -1;
     }
