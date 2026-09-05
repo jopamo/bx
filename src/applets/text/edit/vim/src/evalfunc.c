@@ -168,9 +168,7 @@ static void f_setfperm(typval_T *argvars, typval_T *rettv);
 static void f_setpos(typval_T *argvars, typval_T *rettv);
 static void f_setreg(typval_T *argvars, typval_T *rettv);
 static void f_settagstack(typval_T *argvars, typval_T *rettv);
-#ifdef FEAT_CRYPT
-static void f_sha256(typval_T *argvars, typval_T *rettv);
-#endif
+#line 174
 static void f_shellescape(typval_T *argvars, typval_T *rettv);
 static void f_shiftwidth(typval_T *argvars, typval_T *rettv);
 static void f_soundfold(typval_T *argvars, typval_T *rettv);
@@ -1904,36 +1902,23 @@ typedef struct
 #else
 # define MATH_FUNC(name) NULL
 #endif
-#ifdef FEAT_TIMERS
-# define TIMER_FUNC(name) name
-#else
+#line 1910
 # define TIMER_FUNC(name) NULL
-#endif
-#ifdef FEAT_JOB_CHANNEL
-# define JOB_FUNC(name) name
-#else
+#line 1915
 # define JOB_FUNC(name) NULL
-#endif
-#ifdef FEAT_PROP_POPUP
-# define PROP_FUNC(name) name
-#else
+#line 1920
 # define PROP_FUNC(name) NULL
-#endif
+#line 1922
 #ifdef FEAT_SIGNS
 # define SIGN_FUNC(name) name
 #else
 # define SIGN_FUNC(name) NULL
 #endif
-#ifdef FEAT_SOUND
-# define SOUND_FUNC(name) name
-#else
+#line 1930
 # define SOUND_FUNC(name) NULL
-#endif
-#ifdef FEAT_TERMINAL
-# define TERM_FUNC(name) name
-#else
+#line 1935
 # define TERM_FUNC(name) NULL
-#endif
+#line 1937
 #ifdef FEAT_TABPANEL
 # define TABPANEL_FUNC(name) name
 #else
@@ -2574,11 +2559,9 @@ static const funcentry_T global_functions[] =
 			ret_max_min,	    f_max},
     {"menu_info",	1, 2, FEARG_1,	    arg2_string,
 			ret_dict_any,
-#ifdef FEAT_MENU
-	    f_menu_info
-#else
+#line 2580
 	    NULL
-#endif
+#line 2582
 			},
     {"min",		1, 1, FEARG_1,	    arg1_list_or_tuple_or_dict,
 			ret_max_min,	    f_min},
@@ -2856,11 +2839,9 @@ static const funcentry_T global_functions[] =
 			ret_void,	    f_setwinvar},
     {"sha256",		1, 1, FEARG_1,	    arg1_string_or_blob,
 			ret_string,
-#ifdef FEAT_CRYPT
-	    f_sha256
-#else
+#line 2862
 	    NULL
-#endif
+#line 2864
 			},
     {"shellescape",	1, 2, FEARG_1,	    arg2_string_bool,
 			ret_string,	    f_shellescape},
@@ -3020,11 +3001,9 @@ static const funcentry_T global_functions[] =
 			ret_number,	    TERM_FUNC(f_term_getaltscreen)},
     {"term_getansicolors", 1, 1, FEARG_1,   arg1_buffer,
 			ret_list_string,
-#if defined(FEAT_TERMINAL) && (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS))
-	    f_term_getansicolors
-#else
+#line 3026
 	    NULL
-#endif
+#line 3028
 			},
     {"term_getattr",	2, 2, FEARG_1,	    arg2_number_string,
 			ret_number,	    TERM_FUNC(f_term_getattr)},
@@ -3052,11 +3031,9 @@ static const funcentry_T global_functions[] =
 			ret_void,	    TERM_FUNC(f_term_sendkeys)},
     {"term_setansicolors", 2, 2, FEARG_1,   arg2_buffer_list_any,
 			ret_void,
-#if defined(FEAT_TERMINAL) && (defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS))
-	    f_term_setansicolors
-#else
+#line 3058
 	    NULL
-#endif
+#line 3060
 			},
     {"term_setapi",	2, 2, FEARG_1,	    arg2_buffer_string,
 			ret_void,	    TERM_FUNC(f_term_setapi)},
@@ -3660,9 +3637,7 @@ f_balloon_show(typval_T *argvars, typval_T *rettv UNUSED)
 	return;
 
     if (argvars[0].v_type == VAR_LIST
-# ifdef FEAT_GUI
-	    && !gui.in_use
-# endif
+#line 3666
        )
     {
 	list_T *l = argvars[0].vval.v_list;
@@ -4466,17 +4441,9 @@ f_empty(typval_T *argvars, typval_T *rettv)
 	    break;
 
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    n = argvars[0].vval.v_job == NULL
-			   || argvars[0].vval.v_job->jv_status != JOB_STARTED;
-	    break;
-#endif
+#line 4474
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    n = argvars[0].vval.v_channel == NULL
-			       || !channel_is_open(argvars[0].vval.v_channel);
-	    break;
-#endif
+#line 4480
 	case VAR_TYPEALIAS:
 	    n = argvars[0].vval.v_typealias == NULL
 		|| argvars[0].vval.v_typealias->ta_name == NULL
@@ -5139,9 +5106,7 @@ f_feedkeys(typval_T *argvars, typval_T *rettv UNUSED)
 	    ins_typebuf(keys_esc, (remap ? REMAP_YES : REMAP_NONE),
 				   insert ? 0 : typebuf.tb_len, !typed, FALSE);
 	    if (vgetc_busy
-#ifdef FEAT_TIMERS
-		    || timer_busy
-#endif
+#line 5145
 		    || input_busy)
 		typebuf_was_filled = TRUE;
 
@@ -5207,13 +5172,7 @@ f_fnameescape(typval_T *argvars, typval_T *rettv)
     static void
 f_foreground(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_mch_set_foreground();
-	return;
-    }
-#endif
+#line 5217
 #if defined(MSWIN) && (!defined(FEAT_GUI) || defined(VIMDLL))
     win32_set_foreground();
 #endif
@@ -5680,15 +5639,7 @@ f_getcellpixels(typval_T *argvars UNUSED, typval_T *rettv)
     if (rettv_list_alloc(rettv) == FAIL)
 	return;
 
-#if defined(FEAT_GUI)
-    if (gui.in_use)
-    {
-	// success pixel size and no gui.
-	list_append_number(rettv->vval.v_list, (varnumber_T)gui.char_width);
-	list_append_number(rettv->vval.v_list, (varnumber_T)gui.char_height);
-    }
-    else
-#endif
+#line 5692
     {
 	struct cellsize cs;
 #if defined(UNIX)
@@ -5917,33 +5868,7 @@ f_getfontname(typval_T *argvars UNUSED, typval_T *rettv)
     if (in_vim9script() && check_for_opt_string_arg(argvars, 0) == FAIL)
 	return;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	GuiFont font;
-	char_u	*name = NULL;
-
-	if (argvars[0].v_type == VAR_UNKNOWN)
-	{
-	    // Get the "Normal" font.  Either the name saved by
-	    // hl_set_font_name() or from the font ID.
-	    font = gui.norm_font;
-	    name = hl_get_font_name();
-	}
-	else
-	{
-	    name = tv_get_string(&argvars[0]);
-	    if (STRCMP(name, "*") == 0)	    // don't use font dialog
-		return;
-	    font = gui_mch_get_font(name, FALSE);
-	    if (font == NOFONT)
-		return;	    // Invalid font name, return empty string.
-	}
-	rettv->vval.v_string = gui_mch_get_fontname(font, name);
-	if (argvars[0].v_type != VAR_UNKNOWN)
-	    gui_mch_free_font(font);
-    }
-#endif
+#line 5947
 }
 
 /*
@@ -6867,11 +6792,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"socketserver",
-#ifdef FEAT_SOCKETSERVER
-		1
-#else
+#line 6873
 		0
-#endif
+#line 6875
 		},
 	{"balloon_eval",
 #ifdef FEAT_BEVAL_GUI
@@ -6913,72 +6836,54 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"channel",
-#ifdef FEAT_JOB_CHANNEL
-		1
-#else
+#line 6919
 		0
-#endif
+#line 6921
 		},
 	{"cindent", 1},
 	{"clientserver",
-#ifdef FEAT_CLIENTSERVER
-		1
-#else
+#line 6927
 		0
-#endif
+#line 6929
 		},
 	{"clipboard",
-#ifdef FEAT_CLIPBOARD
-		1
-#else
+#line 6934
 		0
-#endif
+#line 6936
 		},
 	{"clipboard_provider",
-#ifdef FEAT_CLIPBOARD_PROVIDER
-		1
-#else
+#line 6941
 		0
-#endif
+#line 6943
 		},
 	{"cmdline_compl", 1},
 	{"cmdline_hist", 1},
 	{"cmdwin", 1},
 	{"comments", 1},
 	{"conceal",
-#ifdef FEAT_CONCEAL
-		1
-#else
+#line 6952
 		0
-#endif
+#line 6954
 		},
 	{"cryptv",
-#ifdef FEAT_CRYPT
-		1
-#else
+#line 6959
 		0
-#endif
+#line 6961
 		},
 	{"crypt-blowfish",
-#ifdef FEAT_CRYPT
-		1
-#else
+#line 6966
 		0
-#endif
+#line 6968
 		},
 	{"crypt-blowfish2",
-#ifdef FEAT_CRYPT
-		1
-#else
+#line 6973
 		0
-#endif
+#line 6975
 		},
 	{"cscope",
-#ifdef FEAT_CSCOPE
-		1
-#else
+#line 6980
 		0
-#endif
+#line 6982
 		},
 	{"cursorbind", 1},
 	{"cursorshape",
@@ -7084,11 +6989,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"float", 1},
 	{"folding",
-#ifdef FEAT_FOLDING
-		1
-#else
+#line 7090
 		0
-#endif
+#line 7092
 		},
 	{"footer", 0},
 	{"fork",
@@ -7106,34 +7009,26 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"gui",
-#ifdef FEAT_GUI
-		1
-#else
+#line 7112
 		0
-#endif
+#line 7114
 		},
 	{"gui_neXtaw", 0 },
 	{"gui_athena", 0 },
 	{"gui_gtk",
-#ifdef FEAT_GUI_GTK
-		1
-#else
+#line 7121
 		0
-#endif
+#line 7123
 		},
 	{"gui_gtk2",
-#if defined(FEAT_GUI_GTK) && !defined(USE_GTK3)
-		1
-#else
+#line 7128
 		0
-#endif
+#line 7130
 		},
 	{"gui_gtk3",
-#if defined(FEAT_GUI_GTK) && defined(USE_GTK3)
-		1
-#else
+#line 7135
 		0
-#endif
+#line 7137
 		},
 	{"gui_gnome",
 #ifdef FEAT_GUI_GNOME
@@ -7151,25 +7046,19 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"gui_mac", 0},
 	{"gui_motif",
-#ifdef FEAT_GUI_MOTIF
-		1
-#else
+#line 7157
 		0
-#endif
+#line 7159
 		},
 	{"gui_photon",
-#ifdef FEAT_GUI_PHOTON
-		1
-#else
+#line 7164
 		0
-#endif
+#line 7166
 		},
 	{"gui_win32",
-#ifdef FEAT_GUI_MSWIN
-		1
-#else
+#line 7171
 		0
-#endif
+#line 7173
 		},
 	{"iconv",
 #if defined(HAVE_ICONV_H) && defined(USE_ICONV)
@@ -7187,34 +7076,26 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 	},
 	{"job",
-#ifdef FEAT_JOB_CHANNEL
-		1
-#else
+#line 7193
 		0
-#endif
+#line 7195
 		},
 	{"jumplist", 1},
 	{"keymap",
-#ifdef FEAT_KEYMAP
-		1
-#else
+#line 7201
 		0
-#endif
+#line 7203
 		},
 	{"lambda", 1}, // always with FEAT_EVAL, since 7.4.2120 with closure
 	{"langmap",
-#ifdef FEAT_LANGMAP
-		1
-#else
+#line 7209
 		0
-#endif
+#line 7211
 		},
 	{"libcall",
-#ifdef FEAT_LIBCALL
-		1
-#else
+#line 7216
 		0
-#endif
+#line 7218
 		},
 	{"linebreak",
 #ifdef FEAT_LINEBREAK
@@ -7234,18 +7115,14 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"menu",
-#ifdef FEAT_MENU
-		1
-#else
+#line 7240
 		0
-#endif
+#line 7242
 		},
 	{"mksession",
-#ifdef FEAT_SESSION
-		1
-#else
+#line 7247
 		0
-#endif
+#line 7249
 		},
 	{"modify_fname", 1},
 	{"mouse", 1},
@@ -7328,11 +7205,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"multi_lang",
-#ifdef FEAT_MULTI_LANG
-		1
-#else
+#line 7334
 		0
-#endif
+#line 7336
 		},
 	{"mzscheme",
 #if defined(FEAT_MZSCHEME) && !defined(DYNAMIC_MZSCHEME)
@@ -7436,32 +7311,24 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"popupwin",
-#ifdef FEAT_PROP_POPUP
-		1
-#else
+#line 7442
 		0
-#endif
+#line 7444
 		},
 	{"postscript",
-#ifdef FEAT_POSTSCRIPT
-		1
-#else
+#line 7449
 		0
-#endif
+#line 7451
 		},
 	{"printer",
-#ifdef FEAT_PRINTER
-		1
-#else
+#line 7456
 		0
-#endif
+#line 7458
 		},
 	{"profile",
-#ifdef FEAT_PROFILE
-		1
-#else
+#line 7463
 		0
-#endif
+#line 7465
 		},
 	{"prof_nsec",
 #ifdef PROF_NSEC
@@ -7531,32 +7398,24 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"netbeans_intg",
-#ifdef FEAT_NETBEANS_INTG
-		1
-#else
+#line 7537
 		0
-#endif
+#line 7539
 		},
 	{"sodium",
-#if defined(FEAT_SODIUM) && !defined(DYNAMIC_SODIUM)
-		1
-#else
+#line 7544
 		0
-#endif
+#line 7546
 		},
 	{"sound",
-#ifdef FEAT_SOUND
-		1
-#else
+#line 7551
 		0
-#endif
+#line 7553
 		},
 	{"spell",
-#ifdef FEAT_SPELL
-		1
-#else
+#line 7558
 		0
-#endif
+#line 7560
 		},
 	{"syntax",
 #ifdef FEAT_SYN_HL
@@ -7595,11 +7454,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"terminal",
-#if defined(FEAT_TERMINAL) && !defined(MSWIN)
-		1
-#else
+#line 7601
 		0
-#endif
+#line 7603
 		},
 	{"terminfo",
 #ifdef TERMINFO
@@ -7617,11 +7474,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"textobjects", 1},
 	{"textprop",
-#ifdef FEAT_PROP_POPUP
-		1
-#else
+#line 7623
 		0
-#endif
+#line 7625
 		},
 	{"tgetent",
 #ifdef HAVE_TGETENT
@@ -7631,19 +7486,15 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"timers",
-#ifdef FEAT_TIMERS
-		1
-#else
+#line 7637
 		0
-#endif
+#line 7639
 		},
 	{"title", 1},
 	{"toolbar",
-#ifdef FEAT_TOOLBAR
-		1
-#else
+#line 7645
 		0
-#endif
+#line 7647
 		},
 	{"user-commands", 1},    // was accidentally included in 5.4
 	{"user_commands", 1},
@@ -7656,11 +7507,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{"vertsplit", 1},
 	{"viminfo",
-#ifdef FEAT_VIMINFO
-		1
-#else
+#line 7662
 		0
-#endif
+#line 7664
 		},
 	{"vim9script", 1},
 	{"vimscript-1", 1},
@@ -7759,11 +7608,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"xterm_clipboard",
-#ifdef FEAT_XCLIPBOARD
-		1
-#else
+#line 7765
 		0
-#endif
+#line 7767
 		},
 	{"xterm_save",
 #ifdef FEAT_XTERM_SAVE
@@ -7781,11 +7628,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 		},
 	{":tearoff",
 // same #ifdef as used for ex_tearoff().
-#if defined(FEAT_GUI_MSWIN) && defined(FEAT_MENU) && defined(FEAT_TEAROFF)
-		1
-#else
+#line 7787
 		0
-#endif
+#line 7789
 		},
 	{NULL, 0}
     };
@@ -7851,16 +7696,12 @@ f_has(typval_T *argvars, typval_T *rettv)
     else if (STRICMP(name, "gui_running") == 0)
     {
 	x = TRUE;
-#ifdef FEAT_GUI
-	n = (gui.in_use || gui.starting);
-#endif
+#line 7857
     }
     else if (STRICMP(name, "browse") == 0)
     {
 	x = TRUE;
-#if defined(FEAT_GUI) && defined(FEAT_BROWSE)
-	n = gui.in_use;	// gui_mch_browse() works when GUI is running
-#endif
+#line 7864
     }
     else if (STRICMP(name, "syntax_items") == 0)
     {
@@ -7879,9 +7720,7 @@ f_has(typval_T *argvars, typval_T *rettv)
     else if (STRICMP(name, "netbeans_enabled") == 0)
     {
 	x = TRUE;
-#ifdef FEAT_NETBEANS_INTG
-	n = netbeans_active();
-#endif
+#line 7885
     }
     else if (STRICMP(name, "mouse_gpm_enabled") == 0)
     {
@@ -7893,36 +7732,17 @@ f_has(typval_T *argvars, typval_T *rettv)
     else if (STRICMP(name, "conpty") == 0)
     {
 	x = TRUE;
-#if defined(FEAT_TERMINAL) && defined(MSWIN)
-	n = use_conpty();
-#endif
+#line 7899
     }
     else if (STRICMP(name, "clipboard_working") == 0)
     {
 	x = TRUE;
-#ifdef FEAT_CLIPBOARD
-	n = clipmethod == CLIPMETHOD_PROVIDER ? TRUE : clip_star.available;
-#endif
+#line 7906
     }
     else if (STRICMP(name, "unnamedplus") == 0)
     {
 	x = TRUE;
-#ifdef FEAT_CLIPBOARD
-	// The + register is available when clipmethod is set to a provider,
-	// but becomes unavailable if on a platform that doesn't support it
-	// and clipmethod is "none".
-	// (Windows, MacOS).
-# if defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD)
-	n = TRUE;
-# elif defined(FEAT_EVAL)
-	if (clipmethod == CLIPMETHOD_PROVIDER)
-	    n = TRUE;
-	else
-	    n = FALSE;
-# else
-	n = FALSE;
-# endif
-#endif
+#line 7926
     }
 
     // Look up in has_list[] only if not already handled above.
@@ -8000,10 +7820,7 @@ f_has(typval_T *argvars, typval_T *rettv)
 	    else if (STRICMP(name, "sodium") == 0)
 		n = sodium_enabled(FALSE);
 #endif
-#if defined(FEAT_TERMINAL) && defined(MSWIN)
-	    else if (STRICMP(name, "terminal") == 0)
-		n = terminal_enabled();
-#endif
+#line 8007
 #ifdef DYNAMIC_GPM
 	    else if (STRICMP(name, "mouse_gpm") == 0)
 		n = gpm_available();
@@ -8027,17 +7844,11 @@ f_has(typval_T *argvars, typval_T *rettv)
 dynamic_feature(char_u *feature)
 {
     return (feature == NULL
-#if defined(FEAT_GUI) && defined(FEAT_BROWSE)
-	    || (STRICMP(feature, "browse") == 0 && !gui.in_use)
-#endif
+#line 8033
 #ifdef VIMDLL
 	    || STRICMP(feature, "filterpipe") == 0
 #endif
-#if defined(FEAT_GUI) && !defined(ALWAYS_USE_GUI) && !defined(VIMDLL)
-	    // this can only change on Unix where the ":gui" command could be
-	    // used.
-	    || (STRICMP(feature, "gui_running") == 0 && !gui.in_use)
-#endif
+#line 8041
 #if defined(USE_ICONV) && defined(DYNAMIC_ICONV)
 	    || STRICMP(feature, "iconv") == 0
 #endif
@@ -8050,9 +7861,7 @@ dynamic_feature(char_u *feature)
 #ifdef DYNAMIC_MZSCHEME
 	    || STRICMP(feature, "mzscheme") == 0
 #endif
-#ifdef FEAT_NETBEANS_INTG
-	    || STRICMP(feature, "netbeans_enabled") == 0
-#endif
+#line 8056
 #ifdef DYNAMIC_PERL
 	    || STRICMP(feature, "perl") == 0
 #endif
@@ -8077,9 +7886,7 @@ dynamic_feature(char_u *feature)
 	    // once "starting" is zero it will stay that way
 	    || (STRICMP(feature, "vim_starting") == 0 && starting != 0)
 	    || STRICMP(feature, "multi_byte_encoding") == 0
-#if defined(FEAT_TERMINAL) && defined(MSWIN)
-	    || STRICMP(feature, "conpty") == 0
-#endif
+#line 8083
 	    );
 }
 
@@ -8947,11 +8754,7 @@ f_len(typval_T *argvars, typval_T *rettv)
     static void
 libcall_common(typval_T *argvars UNUSED, typval_T *rettv, int type)
 {
-#ifdef FEAT_LIBCALL
-    char_u		*string_in;
-    char_u		**string_result;
-    int			nr_result;
-#endif
+#line 8955
 
     rettv->v_type = type;
     if (type != VAR_NUMBER)
@@ -8966,32 +8769,7 @@ libcall_common(typval_T *argvars UNUSED, typval_T *rettv, int type)
 		|| check_for_string_or_number_arg(argvars, 2) == FAIL))
 	return;
 
-#ifdef FEAT_LIBCALL
-    // The first two args must be strings, otherwise it's meaningless
-    if (argvars[0].v_type == VAR_STRING && argvars[1].v_type == VAR_STRING)
-    {
-	string_in = NULL;
-	if (argvars[2].v_type == VAR_STRING)
-	    string_in = argvars[2].vval.v_string;
-	if (type == VAR_NUMBER)
-	{
-	    string_result = NULL;
-	}
-	else
-	{
-	    rettv->vval.v_string = NULL;
-	    string_result = &rettv->vval.v_string;
-	}
-	if (mch_libcall(argvars[0].vval.v_string,
-			     argvars[1].vval.v_string,
-			     string_in,
-			     argvars[2].vval.v_number,
-			     string_result,
-			     &nr_result) == OK
-		&& type == VAR_NUMBER)
-	    rettv->vval.v_number = nr_result;
-    }
-#endif
+#line 8995
 }
 
 /*
@@ -10185,11 +9963,7 @@ init_srand(UINT32_T *x)
     // - randombytes_random()
     // - reltime() or time()
     // - XOR with process ID
-#if defined(FEAT_SODIUM)
-    if (crypt_sodium_init() >= 0)
-	*x = crypt_sodium_randombytes_random();
-    else
-#endif
+#line 10193
     {
 #if defined(FEAT_RELTIME)
 	proftime_T res;
@@ -11873,38 +11647,7 @@ f_settagstack(typval_T *argvars, typval_T *rettv)
 	rettv->vval.v_number = 0;
 }
 
-#ifdef FEAT_CRYPT
-/*
- * "sha256({expr})" function
- */
-    static void
-f_sha256(typval_T *argvars, typval_T *rettv)
-{
-    char_u	*p;
-    int		len;
-
-    if (in_vim9script() && check_for_string_or_blob_arg(argvars, 0) == FAIL)
-	return;
-
-    rettv->v_type = VAR_STRING;
-    rettv->vval.v_string = NULL;
-
-    if (argvars[0].v_type == VAR_BLOB)
-    {
-	blob_T *blob = argvars[0].vval.v_blob;
-	p = blob != NULL ? (char_u *)blob->bv_ga.ga_data : (char_u *)"";
-	len = blob != NULL ? blob->bv_ga.ga_len : 0;
-	rettv->vval.v_string = vim_strsave(sha256_bytes(p, len, NULL, 0));
-    }
-    else
-    {
-	p = tv_get_string(&argvars[0]);
-	rettv->vval.v_string = vim_strsave(
-				    sha256_bytes(p, (int)STRLEN(p), NULL, 0));
-    }
-}
-#endif // FEAT_CRYPT
-
+#line 11908
 /*
  * "shellescape({string})" function
  */
@@ -11964,11 +11707,9 @@ f_soundfold(typval_T *argvars, typval_T *rettv)
 
     rettv->v_type = VAR_STRING;
     s = tv_get_string(&argvars[0]);
-#ifdef FEAT_SPELL
-    rettv->vval.v_string = eval_soundfold(s);
-#else
+#line 11970
     rettv->vval.v_string = vim_strsave(s);
-#endif
+#line 11972
 }
 
 /*
@@ -11980,70 +11721,15 @@ f_spellbadword(typval_T *argvars UNUSED, typval_T *rettv)
     char_u	*word = (char_u *)"";
     hlf_T	attr = HLF_COUNT;
     int		len = 0;
-#ifdef FEAT_SPELL
-    int		wo_spell_save = curwin->w_p_spell;
-
-    if (in_vim9script() && check_for_opt_string_arg(argvars, 0) == FAIL)
-	return;
-
-    if (!curwin->w_p_spell)
-    {
-	parse_spelllang(curwin);
-	curwin->w_p_spell = TRUE;
-    }
-
-    if (*curwin->w_s->b_p_spl == NUL)
-    {
-	emsg(_(e_spell_checking_is_not_possible));
-	curwin->w_p_spell = wo_spell_save;
-	return;
-    }
-#endif
+#line 12002
 
     if (rettv_list_alloc(rettv) == FAIL)
     {
-#ifdef FEAT_SPELL
-	curwin->w_p_spell = wo_spell_save;
-#endif
+#line 12008
 	return;
     }
 
-#ifdef FEAT_SPELL
-    if (argvars[0].v_type == VAR_UNKNOWN)
-    {
-	// Find the start and length of the badly spelled word.
-	len = spell_move_to(curwin, FORWARD, SMT_ALL, TRUE, &attr);
-	if (len != 0)
-	{
-	    word = ml_get_cursor();
-	    curwin->w_set_curswant = true;
-	}
-    }
-    else if (*curbuf->b_s.b_p_spl != NUL)
-    {
-	char_u	*str = tv_get_string_chk(&argvars[0]);
-	int	capcol = -1;
-
-	if (str != NULL)
-	{
-	    // Check the argument for spelling.
-	    while (*str != NUL)
-	    {
-		len = spell_check(curwin, str, &attr, &capcol, FALSE);
-		if (attr != HLF_COUNT)
-		{
-		    word = str;
-		    break;
-		}
-		str += len;
-		capcol -= len;
-		len = 0;
-	    }
-	}
-    }
-    curwin->w_p_spell = wo_spell_save;
-#endif
-
+#line 12047
     list_append_string(rettv->vval.v_list, word, len);
     switch (attr)
     {
@@ -12075,82 +11761,15 @@ f_spellbadword(typval_T *argvars UNUSED, typval_T *rettv)
     static void
 f_spellsuggest(typval_T *argvars UNUSED, typval_T *rettv)
 {
-#ifdef FEAT_SPELL
-    char_u	*str;
-    int		typeerr = FALSE;
-    int		maxcount;
-    garray_T	ga;
-    int		i;
-    listitem_T	*li;
-    int		need_capital = FALSE;
-    int		wo_spell_save = curwin->w_p_spell;
-
-    if (in_vim9script()
-	    && (check_for_string_arg(argvars, 0) == FAIL
-		|| check_for_opt_number_arg(argvars, 1) == FAIL
-		|| (argvars[1].v_type != VAR_UNKNOWN
-		    && check_for_opt_bool_arg(argvars, 2) == FAIL)))
-	return;
-
-    if (!curwin->w_p_spell)
-    {
-	parse_spelllang(curwin);
-	curwin->w_p_spell = TRUE;
-    }
-
-    if (*curwin->w_s->b_p_spl == NUL)
-    {
-	emsg(_(e_spell_checking_is_not_possible));
-	curwin->w_p_spell = wo_spell_save;
-	return;
-    }
-#endif
+#line 12108
 
     if (rettv_list_alloc(rettv) == FAIL)
     {
-#ifdef FEAT_SPELL
-	curwin->w_p_spell = wo_spell_save;
-#endif
+#line 12114
 	return;
     }
 
-#ifdef FEAT_SPELL
-    str = tv_get_string(&argvars[0]);
-    if (argvars[1].v_type != VAR_UNKNOWN)
-    {
-	maxcount = (int)tv_get_number_chk(&argvars[1], &typeerr);
-	if (maxcount <= 0)
-	    return;
-	if (argvars[2].v_type != VAR_UNKNOWN)
-	{
-	    need_capital = (int)tv_get_bool_chk(&argvars[2], &typeerr);
-	    if (typeerr)
-		return;
-	}
-    }
-    else
-	maxcount = 25;
-
-    spell_suggest_list(&ga, str, maxcount, need_capital, FALSE);
-
-    for (i = 0; i < ga.ga_len; ++i)
-    {
-	str = ((char_u **)ga.ga_data)[i];
-
-	li = listitem_alloc();
-	if (li == NULL)
-	    vim_free(str);
-	else
-	{
-	    li->li_tv.v_type = VAR_STRING;
-	    li->li_tv.v_lock = 0;
-	    li->li_tv.vval.v_string = str;
-	    list_append(rettv->vval.v_list, li);
-	}
-    }
-    ga_clear(&ga);
-    curwin->w_p_spell = wo_spell_save;
-#endif
+#line 12154
 }
 
     static void
@@ -12537,14 +12156,7 @@ f_synIDtrans(typval_T *argvars UNUSED, typval_T *rettv)
     static void
 f_synconcealed(typval_T *argvars UNUSED, typval_T *rettv)
 {
-#if defined(FEAT_SYN_HL) && defined(FEAT_CONCEAL)
-    linenr_T	lnum;
-    colnr_T	col;
-    int		syntax_flags = 0;
-    int		cchar;
-    int		matchid = 0;
-    char_u	str[NUMBUFLEN];
-#endif
+#line 12548
 
     rettv_list_set(rettv, NULL);
 
@@ -12553,45 +12165,7 @@ f_synconcealed(typval_T *argvars UNUSED, typval_T *rettv)
 		|| check_for_number_arg(argvars, 1) == FAIL))
 	return;
 
-#if defined(FEAT_SYN_HL) && defined(FEAT_CONCEAL)
-    lnum = tv_get_lnum(argvars);		// -1 on type error
-    col = (colnr_T)tv_get_number(&argvars[1]) - 1;	// -1 on type error
-
-    CLEAR_FIELD(str);
-
-    if (rettv_list_alloc(rettv) == OK)
-    {
-	if (lnum >= 1 && lnum <= curbuf->b_ml.ml_line_count
-	    && col >= 0 && col <= (long)ml_get_len(lnum)
-	    && curwin->w_p_cole > 0)
-	{
-	    (void)syn_get_id(curwin, lnum, col, FALSE, NULL, FALSE);
-	    syntax_flags = get_syntax_info(&matchid);
-
-	    // get the conceal character
-	    if ((syntax_flags & HL_CONCEAL) && curwin->w_p_cole < 3)
-	    {
-		cchar = syn_get_sub_char();
-		if (cchar == NUL && curwin->w_p_cole == 1)
-		    cchar = (curwin->w_lcs_chars.conceal == NUL) ? ' '
-					: curwin->w_lcs_chars.conceal;
-		if (cchar != NUL)
-		{
-		    if (has_mbyte)
-			(*mb_char2bytes)(cchar, str);
-		    else
-			str[0] = cchar;
-		}
-	    }
-	}
-
-	list_append_number(rettv->vval.v_list,
-					    (syntax_flags & HL_CONCEAL) != 0);
-	// -1 to auto-determine strlen
-	list_append_string(rettv->vval.v_list, str, -1);
-	list_append_number(rettv->vval.v_list, matchid);
-    }
-#endif
+#line 12595
 }
 
 /*
