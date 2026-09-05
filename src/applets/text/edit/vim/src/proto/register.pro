@@ -1,8 +1,5 @@
 /* register.c */
 yankreg_T *get_y_current(void);
-yankreg_T *get_y_previous(void);
-void set_y_current(yankreg_T *yreg);
-void set_y_previous(yankreg_T *yreg);
 void reset_y_append(void);
 int get_expr_register(void);
 void set_expr_line(char_u *new_line, exarg_T *eap);

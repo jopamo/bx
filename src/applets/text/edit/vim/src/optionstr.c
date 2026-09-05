@@ -3096,20 +3096,6 @@ expand_set_scrollopt(optexpand_T *args, int *numMatches, char_u ***matches)
 	    matches);
 }
 
-/*
- * The 'wlseat' option is changed
- */
-    char *
-did_set_wlseat(optset_T *args UNUSED)
-{
-#ifdef FEAT_WAYLAND_CLIPBOARD
-    // If there isn't any seat named 'wlseat', then let the Wayland clipboard be
-    // unavailable. Ignore errors returned.
-    clip_reset_wayland();
-#endif
-
-    return NULL;
-}
 
 /*
  * The 'selection' option is changed.

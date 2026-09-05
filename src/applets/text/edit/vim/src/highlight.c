@@ -2134,15 +2134,6 @@ gui_get_color_cmn(char_u *name)
 # endif
 }
 
-    guicolor_T
-gui_get_rgb_color_cmn(int r, int g, int b)
-{
-    guicolor_T  color = RGB(r, g, b);
-
-    if (color > 0xffffff)
-	return INVALCOLOR;
-    return gui_adjust_rgb(color);
-}
 #endif
 
 /*
@@ -3610,24 +3601,6 @@ syn_id2attr(int hl_id)
 }
 
 #if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
-/*
- * Get the GUI colors and attributes for a group ID.
- * NOTE: the colors will be INVALCOLOR when not set, the color otherwise.
- */
-    int
-syn_id2colors(int hl_id, guicolor_T *fgp, guicolor_T *bgp)
-{
-    hl_group_T	*sgp;
-
-    hl_id = syn_get_final_id(hl_id);
-    // shouldn't happen
-    assert(hl_id > 0);
-    sgp = &HL_TABLE()[hl_id - 1];	    // index is ID minus one
-
-    *fgp = sgp->sg_gui_fg;
-    *bgp = sgp->sg_gui_bg;
-    return sgp->sg_gui;
-}
 #endif
 
 #if (defined(MSWIN) \

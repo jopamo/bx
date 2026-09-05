@@ -27,17 +27,7 @@ static int stl_click_handler_regions(stl_click_region_T *regions,
 				    char_u *area_name, int mrow, int mcol,
 				    int which_button, int mods);
 
-    void
-mouse_set_vert_scroll_step(long step)
-{
-    mouse_vert_step = step;
-}
 
-    void
-mouse_set_hor_scroll_step(long step)
-{
-    mouse_hor_step = step;
-}
 
 #ifdef CHECK_DOUBLE_CLICK
 /*

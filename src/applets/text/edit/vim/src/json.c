@@ -1410,29 +1410,6 @@ json_decode_all(js_read_T *reader, typval_T *res, int options)
 }
 
 #line 1494
-/*
- * Decode the JSON from "reader" to find the end of the message.
- * "options" can be JSON_JS or zero.
- * This is only used for testing.
- * Return FAIL if the message has a decoding error.
- * Return MAYBE if the message is truncated, need to read more.
- * This only works reliable if the message contains an object, array or
- * string.  A number might be truncated without knowing.
- * Does not advance the reader.
- */
-    int
-json_find_end(js_read_T *reader, int options)
-{
-    int used_save = reader->js_used;
-    int ret;
-
-    // We find the end once, to avoid calling strlen() many times.
-    reader->js_end = reader->js_buf + STRLEN(reader->js_buf);
-    json_skip_white(reader);
-    ret = json_decode_item(reader, NULL, options);
-    reader->js_used = used_save;
-    return ret;
-}
 
 /*
  * "js_decode()" function

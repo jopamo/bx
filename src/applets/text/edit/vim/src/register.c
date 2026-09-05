@@ -43,23 +43,8 @@ get_y_current(void)
     return y_current;
 }
 
-    yankreg_T *
-get_y_previous(void)
-{
-    return y_previous;
-}
 
-    void
-set_y_current(yankreg_T *yreg)
-{
-    y_current = yreg;
-}
 
-    void
-set_y_previous(yankreg_T *yreg)
-{
-    y_previous = yreg;
-}
 
     void
 reset_y_append(void)

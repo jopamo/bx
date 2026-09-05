@@ -8265,11 +8265,6 @@ skip:
 }
 #endif
 
-    int
-get_last_winid(void)
-{
-    return last_win_id;
-}
 
 /*
  * Don't let autocommands close the given window

@@ -514,26 +514,6 @@ dict_add_tv(dict_T *d, char *key, typval_T *tv)
     return OK;
 }
 
-/*
- * Add a callback to dictionary "d".
- * Returns FAIL when out of memory and when key already exists.
- */
-    int
-dict_add_callback(dict_T *d, char *key, callback_T *cb)
-{
-    dictitem_T	*item;
-
-    item = dictitem_alloc((char_u *)key);
-    if (item == NULL)
-	return FAIL;
-    put_callback(cb, &item->di_tv);
-    if (dict_add(d, item) == FAIL)
-    {
-	dictitem_free(item);
-	return FAIL;
-    }
-    return OK;
-}
 
 /*
  * Add a function entry to dictionary "d".
@@ -751,26 +731,6 @@ dict_get_number_def(dict_T *d, char *key, int def)
     return tv_get_number(&di->di_tv);
 }
 
-/*
- * Get a number item from a dictionary.
- * Returns 0 if the entry doesn't exist.
- * Give an error if the entry is not a number.
- */
-    varnumber_T
-dict_get_number_check(dict_T *d, char_u *key)
-{
-    dictitem_T	*di;
-
-    di = dict_find(d, key, -1);
-    if (di == NULL)
-	return 0;
-    if (di->di_tv.v_type != VAR_NUMBER)
-    {
-	semsg(_(e_invalid_argument_str), tv_get_string(&di->di_tv));
-	return 0;
-    }
-    return tv_get_number(&di->di_tv);
-}
 
 /*
  * Get a bool item (number or true/false) from a dictionary.

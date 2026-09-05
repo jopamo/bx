@@ -7,7 +7,6 @@ int buf_findsign_id(buf_T *buf, linenr_T lnum, char_u *groupname);
 void buf_delete_signs(buf_T *buf, char_u *group);
 void sign_mark_adjust(linenr_T line1, linenr_T line2, long amount, long amount_after);
 int sign_define_by_name(char_u *name, char_u *icon, char_u *linehl, char_u *text, char_u *texthl, char_u *culhl, char_u *numhl, int prio);
-int sign_exists_by_name(char_u *name);
 int sign_undefine_by_name(char_u *name, int give_error);
 int sign_place(int *sign_id, char_u *sign_group, char_u *sign_name, buf_T *buf, linenr_T lnum, int prio);
 void ex_sign(exarg_T *eap);

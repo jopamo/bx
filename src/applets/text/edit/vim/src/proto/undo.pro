@@ -26,6 +26,5 @@ int anyBufIsChanged(void);
 int bufIsChangedNotTerm(buf_T *buf);
 int curbufIsChanged(void);
 void f_undofile(typval_T *argvars, typval_T *rettv);
-void u_undofile_reset_and_delete(buf_T *buf);
 void f_undotree(typval_T *argvars, typval_T *rettv);
 /* vim: set ft=c : */

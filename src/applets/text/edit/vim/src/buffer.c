@@ -4114,29 +4114,6 @@ build_stl_str_hl_mline(
 	    NULL, carry_hl);
 }
 
-# ifdef ENABLE_STL_MODE_MULTI_NL
-    int
-build_stl_str_hl_mline_nl(
-    win_T	*wp,
-    char_u	*out,		// buffer to write into != NameBuff
-    size_t	outlen,		// length of out[]
-    char_u	**fmt,		// (in/out)
-    char_u	*opt_name,      // option name corresponding to "fmt"
-    int		opt_scope,	// scope for "opt_name"
-    int		fillchar,
-    int		maxwidth,
-    stl_hlrec_T **hltab,	// return: HL attributes (can be NULL)
-    stl_hlrec_T **tabtab,	// return: tab page nrs (can be NULL)
-    stl_clickrec_T **clicktab,	// return: click func regions (can be NULL)
-    int		*carry_hl)	// (in/out) %# / %* highlight carried across
-				// line breaks (can be NULL)
-{
-    return build_stl_str_hl_local(STL_MODE_MULTI_NL, wp, out, outlen, fmt,
-	    opt_name, opt_scope, fillchar, maxwidth, hltab, tabtab, clicktab,
-	    NULL, carry_hl);
-}
-# endif
-
     int
 get_stl_rendered_height(
     win_T	*wp,

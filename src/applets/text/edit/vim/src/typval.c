@@ -750,19 +750,6 @@ check_for_opt_lnum_arg(typval_T *args, int idx)
 	    || check_for_lnum_arg(args, idx) != FAIL) ? OK : FAIL;
 }
 
-/*
- * Give an error and return FAIL unless "args[idx]" is a string or a blob.
- */
-    int
-check_for_string_or_blob_arg(typval_T *args, int idx)
-{
-    if (args[idx].v_type != VAR_STRING && args[idx].v_type != VAR_BLOB)
-    {
-	semsg(_(e_string_or_blob_required_for_argument_nr), idx + 1);
-	return FAIL;
-    }
-    return OK;
-}
 
 /*
  * Give an error and return FAIL unless "args[idx]" is a string or a list.
