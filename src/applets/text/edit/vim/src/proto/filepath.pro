@@ -32,7 +32,6 @@ void f_readfile(typval_T *argvars, typval_T *rettv);
 void f_resolve(typval_T *argvars, typval_T *rettv);
 void f_tempname(typval_T *argvars, typval_T *rettv);
 void f_writefile(typval_T *argvars, typval_T *rettv);
-char_u *do_browse(int flags, char_u *title, char_u *dflt, char_u *ext, char_u *initdir, char_u *filter, buf_T *buf);
 void f_browse(typval_T *argvars, typval_T *rettv);
 void f_browsedir(typval_T *argvars, typval_T *rettv);
 void f_filecopy(typval_T *argvars, typval_T *rettv);

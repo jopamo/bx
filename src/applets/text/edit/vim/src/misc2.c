@@ -2077,34 +2077,7 @@ cursorentry_T shape_table[SHAPE_IDX_COUNT] =
     {0,	0, 0, 100L, 100L, 100L, 0, 0, "sm", SHAPE_CURSOR},
 };
 
-# ifdef FEAT_MOUSESHAPE
-/*
- * Table with names for mouse shapes.  Keep in sync with all the tables for
- * mch_set_mouse_shape()!.
- */
-static string_T mshape_names[] =
-{
-    STR_LITERAL_INIT("arrow"),	// default, must be the first one
-    STR_LITERAL_INIT("blank"),	// hidden
-    STR_LITERAL_INIT("beam"),
-    STR_LITERAL_INIT("updown"),
-    STR_LITERAL_INIT("udsizing"),
-    STR_LITERAL_INIT("leftright"),
-    STR_LITERAL_INIT("lrsizing"),
-    STR_LITERAL_INIT("busy"),
-    STR_LITERAL_INIT("no"),
-    STR_LITERAL_INIT("crosshair"),
-    STR_LITERAL_INIT("hand1"),
-    STR_LITERAL_INIT("hand2"),
-    STR_LITERAL_INIT("pencil"),
-    STR_LITERAL_INIT("question"),
-    STR_LITERAL_INIT("rightup-arrow"),
-    STR_LITERAL_INIT("up-arrow"),
-    {NULL, 0}
-};
-
-#  define MSHAPE_NAMES_COUNT  (ARRAY_LENGTH(mshape_names) - 1)
-# endif
+#line 2108
 
 /*
  * Parse the 'guicursor' option ("what" is SHAPE_CURSOR) or 'mouseshape'
@@ -2135,11 +2108,7 @@ parse_shape_opt(int what)
 	/*
 	 * Repeat for all comma separated parts.
 	 */
-# ifdef FEAT_MOUSESHAPE
-	if (what == SHAPE_MOUSE)
-	    modep = p_mouseshape;
-	else
-# endif
+#line 2143
 	    modep = p_guicursor;
 	while (*modep != NUL)
 	{
@@ -2186,14 +2155,7 @@ parse_shape_opt(int what)
 		    idx = all_idx--;
 		else if (round == 2)
 		{
-# ifdef FEAT_MOUSESHAPE
-		    if (what == SHAPE_MOUSE)
-		    {
-			// Set the default, for the missing parts
-			shape_table[idx].mshape = 0;
-		    }
-		    else
-# endif
+#line 2197
 		    {
 			// Set the defaults, for the missing parts
 			shape_table[idx].shape = SHAPE_BLOCK;
@@ -2206,33 +2168,7 @@ parse_shape_opt(int what)
 		// Parse the part after the colon
 		for (p = colonp + 1; *p && *p != ','; )
 		{
-# ifdef FEAT_MOUSESHAPE
-		    if (what == SHAPE_MOUSE)
-		    {
-			for (i = 0; ; ++i)
-			{
-			    if (mshape_names[i].string == NULL)
-			    {
-				if (!VIM_ISDIGIT(*p))
-				    return e_illegal_mouseshape;
-				if (round == 2)
-				    shape_table[idx].mshape =
-					      getdigits(&p) + MSHAPE_NUMBERED;
-				else
-				    (void)getdigits(&p);
-				break;
-			    }
-			    if (STRNICMP(p, mshape_names[i].string, mshape_names[i].length) == 0)
-			    {
-				if (round == 2)
-				    shape_table[idx].mshape = i;
-				p += mshape_names[i].length;
-				break;
-			    }
-			}
-		    }
-		    else // if (what == SHAPE_MOUSE)
-# endif
+#line 2236
 		    {
 			/*
 			 * First handle the ones with a number argument.
@@ -2326,13 +2262,7 @@ parse_shape_opt(int what)
     // If the 's' flag is not given, use the 'v' cursor for 's'
     if (!found_ve)
     {
-# ifdef FEAT_MOUSESHAPE
-	if (what == SHAPE_MOUSE)
-	{
-	    shape_table[SHAPE_IDX_VE].mshape = shape_table[SHAPE_IDX_V].mshape;
-	}
-	else
-# endif
+#line 2336
 	{
 	    shape_table[SHAPE_IDX_VE].shape = shape_table[SHAPE_IDX_V].shape;
 	    shape_table[SHAPE_IDX_VE].percentage =
@@ -2351,8 +2281,7 @@ parse_shape_opt(int what)
     return NULL;
 }
 
-# if defined(MCH_CURSOR_SHAPE) || defined(FEAT_GUI) \
-	|| defined(FEAT_MOUSESHAPE)
+# if defined(MCH_CURSOR_SHAPE) || defined(FEAT_GUI)
 /*
  * Return the index into shape_table[] for the current mode.
  * When "mouse" is TRUE, consider indexes valid for the mouse pointer.
@@ -2360,17 +2289,7 @@ parse_shape_opt(int what)
     int
 get_shape_idx(int mouse)
 {
-#  ifdef FEAT_MOUSESHAPE
-    if (mouse && (State == MODE_HITRETURN || State == MODE_ASKMORE))
-    {
-#line 2437
-	return SHAPE_IDX_MORE;
-    }
-    if (mouse && drag_status_line)
-	return SHAPE_IDX_SDRAG;
-    if (mouse && drag_sep_line)
-	return SHAPE_IDX_VDRAG;
-#  endif
+#line 2374
     if (!mouse && State == MODE_SHOWMATCH)
 	return SHAPE_IDX_SM;
     if (State & VREPLACE_FLAG)
@@ -2400,57 +2319,7 @@ get_shape_idx(int mouse)
 }
 # endif
 
-# if defined(FEAT_MOUSESHAPE)
-static int current_mouse_shape = 0;
-
-/*
- * Set the mouse shape:
- * If "shape" is -1, use shape depending on the current mode,
- * depending on the current state.
- * If "shape" is -2, only update the shape when it's CLINE or STATUS (used
- * when the mouse moves off the status or command line).
- */
-    void
-update_mouseshape(int shape_idx)
-{
-    int new_mouse_shape;
-
-    // Only works in GUI mode.
-    if (!gui.in_use || gui.starting)
-	return;
-
-    // Postpone the updating when more is to come.  Speeds up executing of
-    // mappings.
-    if (shape_idx == -1 && char_avail())
-    {
-	postponed_mouseshape = TRUE;
-	return;
-    }
-
-    // When ignoring the mouse don't change shape on the statusline.
-    if (*p_mouse == NUL
-	    && (shape_idx == SHAPE_IDX_CLINE
-		|| shape_idx == SHAPE_IDX_STATUS
-		|| shape_idx == SHAPE_IDX_VSEP))
-	shape_idx = -2;
-
-    if (shape_idx == -2
-	    && current_mouse_shape != shape_table[SHAPE_IDX_CLINE].mshape
-	    && current_mouse_shape != shape_table[SHAPE_IDX_STATUS].mshape
-	    && current_mouse_shape != shape_table[SHAPE_IDX_VSEP].mshape)
-	return;
-    if (shape_idx < 0)
-	new_mouse_shape = shape_table[get_shape_idx(TRUE)].mshape;
-    else
-	new_mouse_shape = shape_table[shape_idx].mshape;
-    if (new_mouse_shape != current_mouse_shape)
-    {
-	mch_set_mouse_shape(new_mouse_shape);
-	current_mouse_shape = new_mouse_shape;
-    }
-    postponed_mouseshape = FALSE;
-}
-# endif
+#line 2454
 
 #endif // CURSOR_SHAPE
 
@@ -2463,13 +2332,7 @@ f_getmouseshape(typval_T *argvars UNUSED, typval_T *rettv)
 {
     rettv->v_type = VAR_STRING;
     rettv->vval.v_string = NULL;
-# if defined(FEAT_MOUSESHAPE)
-    if (current_mouse_shape >= 0
-			      && current_mouse_shape < (int)MSHAPE_NAMES_COUNT)
-	rettv->vval.v_string = vim_strnsave(
-				  mshape_names[current_mouse_shape].string,
-				  mshape_names[current_mouse_shape].length);
-# endif
+#line 2473
 }
 #endif
 

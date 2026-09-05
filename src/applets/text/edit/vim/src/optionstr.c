@@ -73,9 +73,7 @@ static char *(p_mousem_values[]) = {"extend", "popup", "popup_setpos", "mac", NU
 static char *(p_sel_values[]) = {"inclusive", "exclusive", "old", NULL};
 static char *(p_slm_values[]) = {"mouse", "key", "cmd", NULL};
 static char *(p_km_values[]) = {"startsel", "stopsel", NULL};
-#ifdef FEAT_BROWSE
-static char *(p_bsdir_values[]) = {"current", "last", "buffer", NULL};
-#endif
+#line 79
 static char *(p_scbopt_values[]) = {"ver", "hor", "jump", NULL};
 static char *(p_debug_values[]) = {"msg", "throw", "beep", NULL};
 static char *(p_ead_values[]) = {"both", "ver", "hor", NULL};
@@ -1153,31 +1151,7 @@ expand_set_breakindentopt(
 }
 #endif
 
-#if defined(FEAT_BROWSE)
-/*
- * The 'browsedir' option is changed.
- */
-    char *
-did_set_browsedir(optset_T *args UNUSED)
-{
-    if (check_opt_strings(p_bsdir, p_bsdir_values, FALSE) != OK
-	    && !mch_isdir(p_bsdir))
-	return e_invalid_argument;
-
-    return NULL;
-}
-
-    int
-expand_set_browsedir(optexpand_T *args, int *numMatches, char_u ***matches)
-{
-    return expand_set_opt_string(
-	    args,
-	    p_bsdir_values,
-	    ARRAY_LENGTH(p_bsdir_values) - 1,
-	    numMatches,
-	    matches);
-}
-#endif
+#line 1181
 
 /*
  * The 'bufhidden' option is changed.
@@ -2572,18 +2546,7 @@ expand_set_mousemodel(optexpand_T *args, int *numMatches, char_u ***matches)
 	    matches);
 }
 
-#if defined(FEAT_MOUSESHAPE)
-    char *
-did_set_mouseshape(optset_T *args UNUSED)
-{
-    char *errmsg = NULL;
-
-    errmsg = parse_shape_opt(SHAPE_MOUSE);
-    update_mouseshape(-1);
-
-    return errmsg;
-}
-#endif
+#line 2587
 
 /*
  * The 'nrformats' option is changed.

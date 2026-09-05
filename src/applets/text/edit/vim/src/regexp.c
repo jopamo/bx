@@ -3050,16 +3050,7 @@ report_re_switch(char_u *pat)
 }
 #endif
 
-#if defined(FEAT_X11)
-/*
- * Return whether "prog" is currently being executed.
- */
-    int
-regprog_in_use(regprog_T *prog)
-{
-    return prog->re_in_use;
-}
-#endif
+#line 3063
 
 /*
  * Match a regexp against a string.
@@ -3137,7 +3128,7 @@ vim_regexec_string(
     return result > 0;
 }
 
-#if defined(FEAT_SPELL) || defined(FEAT_EVAL) || defined(FEAT_X11)
+#if defined(FEAT_SPELL) || defined(FEAT_EVAL)
 /*
  * Note: "*prog" may be freed and changed.
  * Return TRUE if there is a match, FALSE if not.

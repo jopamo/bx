@@ -4453,11 +4453,6 @@ typedef enum {
 
 // Symbolic names for some registers.
 #define DELETION_REGISTER	36
-#line 5060
-#ifdef FEAT_DND
-# define TILDE_REGISTER		(PLUS_REGISTER + 1)
-#endif
-
 #line 5074
 #  define NUM_REGISTERS		37
 #line 5077
@@ -4779,31 +4774,7 @@ struct cellsize {
 };
 #endif
 
-#ifdef FEAT_WAYLAND
-
-typedef struct vwl_connection_S vwl_connection_T;
-typedef struct vwl_seat_S vwl_seat_T;
-
-# ifdef FEAT_WAYLAND_CLIPBOARD
-
-typedef struct vwl_data_offer_S vwl_data_offer_T;
-typedef struct vwl_data_source_S vwl_data_source_T;
-typedef struct vwl_data_device_S vwl_data_device_T;
-typedef struct vwl_data_device_manager_S vwl_data_device_manager_T;
-
-typedef struct vwl_data_device_listener_S vwl_data_device_listener_T;
-typedef struct vwl_data_source_listener_S vwl_data_source_listener_T;
-typedef struct vwl_data_offer_listener_S vwl_data_offer_listener_T;
-
-// Wayland selections
-typedef enum {
-    WAYLAND_SELECTION_NONE	= 0,
-    WAYLAND_SELECTION_REGULAR	= 1 << 0,
-    WAYLAND_SELECTION_PRIMARY	= 1 << 1,
-} wayland_selection_T;
-
-# endif
-#endif
+#line 4807
 
 // Used in term_set_sync_output()
 typedef enum

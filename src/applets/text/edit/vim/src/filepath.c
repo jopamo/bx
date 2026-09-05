@@ -2459,122 +2459,7 @@ f_writefile(typval_T *argvars, typval_T *rettv)
 
 #endif // FEAT_EVAL
 
-#if defined(FEAT_BROWSE)
-/*
- * Generic browse function.  Calls gui_mch_browse() when possible.
- * Later this may pop-up a non-GUI file selector (external command?).
- */
-    char_u *
-do_browse(
-    int		flags,		// BROWSE_SAVE and BROWSE_DIR
-    char_u	*title,		// title for the window
-    char_u	*dflt,		// default file name (may include directory)
-    char_u	*ext,		// extension added
-    char_u	*initdir,	// initial directory, NULL for current dir or
-				// when using path from "dflt"
-    char_u	*filter,	// file name filter
-    buf_T	*buf)		// buffer to read/write for
-{
-    char_u		*fname;
-    static char_u	*last_dir = NULL;    // last used directory
-    char_u		*tofree = NULL;
-    int			save_cmod_flags = cmdmod.cmod_flags;
-
-    // Must turn off browse to avoid that autocommands will get the
-    // flag too!
-    cmdmod.cmod_flags &= ~CMOD_BROWSE;
-
-    if (title == NULL || *title == NUL)
-    {
-	if (flags & BROWSE_DIR)
-	    title = (char_u *)_("Select Directory dialog");
-	else if (flags & BROWSE_SAVE)
-	    title = (char_u *)_("Save File dialog");
-	else
-	    title = (char_u *)_("Open File dialog");
-    }
-
-    // When no directory specified, use default file name, default dir, buffer
-    // dir, last dir or current dir
-    if ((initdir == NULL || *initdir == NUL) && dflt != NULL && *dflt != NUL)
-    {
-	if (mch_isdir(dflt))		// default file name is a directory
-	{
-	    initdir = dflt;
-	    dflt = NULL;
-	}
-	else if (gettail(dflt) != dflt)	// default file name includes a path
-	{
-	    tofree = vim_strsave(dflt);
-	    if (tofree != NULL)
-	    {
-		initdir = tofree;
-		*gettail(initdir) = NUL;
-		dflt = gettail(dflt);
-	    }
-	}
-    }
-
-    if (initdir == NULL || *initdir == NUL)
-    {
-	// When 'browsedir' is a directory, use it
-	if (STRCMP(p_bsdir, "last") != 0
-		&& STRCMP(p_bsdir, "buffer") != 0
-		&& STRCMP(p_bsdir, "current") != 0
-		&& mch_isdir(p_bsdir))
-	    initdir = p_bsdir;
-	// When saving or 'browsedir' is "buffer", use buffer fname
-	else if (((flags & BROWSE_SAVE) || *p_bsdir == 'b')
-		&& buf != NULL && buf->b_ffname != NULL)
-	{
-	    if (dflt == NULL || *dflt == NUL)
-		dflt = gettail(curbuf->b_ffname);
-	    tofree = vim_strsave(curbuf->b_ffname);
-	    if (tofree != NULL)
-	    {
-		initdir = tofree;
-		*gettail(initdir) = NUL;
-	    }
-	}
-	// When 'browsedir' is "last", use dir from last browse
-	else if (*p_bsdir == 'l')
-	    initdir = last_dir;
-	// When 'browsedir is "current", use current directory.  This is the
-	// default already, leave initdir empty.
-    }
-
-#line 2592
-    {
-	// TODO: non-GUI file selector here
-	emsg(_(e_sorry_no_file_browser_in_console_mode));
-	fname = NULL;
-    }
-
-    // keep the directory for next time
-    if (fname != NULL)
-    {
-	vim_free(last_dir);
-	last_dir = vim_strsave(fname);
-	if (last_dir != NULL && !(flags & BROWSE_DIR))
-	{
-	    *gettail(last_dir) = NUL;
-	    if (*last_dir == NUL)
-	    {
-		// filename only returned, must be in current dir
-		vim_free(last_dir);
-		last_dir = alloc(MAXPATHL);
-		if (last_dir != NULL)
-		    mch_dirname(last_dir, MAXPATHL);
-	    }
-	}
-    }
-
-    vim_free(tofree);
-    cmdmod.cmod_flags = save_cmod_flags;
-
-    return fname;
-}
-#endif
+#line 2578
 
 #if defined(FEAT_EVAL)
 
@@ -2584,36 +2469,9 @@ do_browse(
     void
 f_browse(typval_T *argvars UNUSED, typval_T *rettv)
 {
-# ifdef FEAT_BROWSE
-    int		save;
-    char_u	*title;
-    char_u	*initdir;
-    char_u	*defname;
-    char_u	buf[NUMBUFLEN];
-    char_u	buf2[NUMBUFLEN];
-    int		error = FALSE;
-
-    if (in_vim9script()
-	    && (check_for_bool_arg(argvars, 0) == FAIL
-		|| check_for_string_arg(argvars, 1) == FAIL
-		|| check_for_string_arg(argvars, 2) == FAIL
-		|| check_for_string_arg(argvars, 3) == FAIL))
-	return;
-
-    save = (int)tv_get_bool_chk(&argvars[0], &error);
-    title = tv_get_string_chk(&argvars[1]);
-    initdir = tv_get_string_buf_chk(&argvars[2], buf);
-    defname = tv_get_string_buf_chk(&argvars[3], buf2);
-
-    if (error || title == NULL || initdir == NULL || defname == NULL)
-	rettv->vval.v_string = NULL;
-    else
-	rettv->vval.v_string =
-		 do_browse(save ? BROWSE_SAVE : 0,
-				 title, defname, NULL, initdir, NULL, curbuf);
-# else
+#line 2615
     rettv->vval.v_string = NULL;
-# endif
+#line 2617
     rettv->v_type = VAR_STRING;
 }
 
@@ -2623,27 +2481,9 @@ f_browse(typval_T *argvars UNUSED, typval_T *rettv)
     void
 f_browsedir(typval_T *argvars UNUSED, typval_T *rettv)
 {
-# ifdef FEAT_BROWSE
-    char_u	*title;
-    char_u	*initdir;
-    char_u	buf[NUMBUFLEN];
-
-    if (in_vim9script()
-	    && (check_for_string_arg(argvars, 0) == FAIL
-		|| check_for_string_arg(argvars, 1) == FAIL))
-	return;
-
-    title = tv_get_string_chk(&argvars[0]);
-    initdir = tv_get_string_buf_chk(&argvars[1], buf);
-
-    if (title == NULL || initdir == NULL)
-	rettv->vval.v_string = NULL;
-    else
-	rettv->vval.v_string = do_browse(BROWSE_DIR,
-				    title, NULL, NULL, initdir, NULL, curbuf);
-# else
+#line 2645
     rettv->vval.v_string = NULL;
-# endif
+#line 2647
     rettv->v_type = VAR_STRING;
 }
 

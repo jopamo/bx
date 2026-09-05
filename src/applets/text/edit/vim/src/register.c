@@ -20,8 +20,7 @@
  * 10..35 = registers 'a' to 'z' ('A' to 'Z' for appending)
  *     36 = delete register '-'
  *     37 = Selection register '*'. Only if FEAT_CLIPBOARD defined
- *     38 = Clipboard register '+'. Only if FEAT_CLIPBOARD and FEAT_X11
- *                                  or FEAT_WAYLAND_CLIPBOARD defined
+ *     38 = Clipboard register '+'. Only with external clipboard support.
  */
 static yankreg_T	y_regs[NUM_REGISTERS];
 
@@ -158,10 +157,7 @@ valid_yank_reg(
 	    || regname == '"'
 	    || regname == '-'
 	    || regname == '_'
-#line 205
-#ifdef FEAT_DND
-	    || (!writing && regname == '~')
-#endif
+#line 165
 							)
 	return TRUE;
 #line 211
@@ -211,11 +207,7 @@ get_yank_register(int regname, int writing)
     }
     else if (regname == '-')
 	i = DELETION_REGISTER;
-#line 289
-#ifdef FEAT_DND
-    else if (!writing && regname == '~')
-	i = TILDE_REGISTER;
-#endif
+#line 219
     else		// not 0-9, a-z, A-Z or '-': use register 0
 	i = 0;
     y_current = &(y_regs[i]);
@@ -2498,23 +2490,7 @@ dis_msg(
     ui_breakcheck();
 }
 
-#if defined(FEAT_DND)
-/*
- * Replace the contents of the '~' register with str.
- */
-    void
-dnd_yank_drag_data(char_u *str, long len)
-{
-    yankreg_T *curr;
-
-    curr = y_current;
-    y_current = &y_regs[TILDE_REGISTER];
-    free_yank_all();
-    str_to_reg(y_current, MCHAR, str, len, 0L, FALSE);
-    y_current = curr;
-}
-#endif
-
+#line 2517
 
 /*
  * Return the type of a register.

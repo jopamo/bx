@@ -43,6 +43,33 @@
 #ifdef FEAT_BEVAL_TERM
 # undef FEAT_BEVAL_TERM
 #endif
+#ifdef FEAT_BEVAL_TIP
+# undef FEAT_BEVAL_TIP
+#endif
+#ifdef FEAT_AUTOSERVERNAME
+# undef FEAT_AUTOSERVERNAME
+#endif
+#ifdef FEAT_BROWSE
+# undef FEAT_BROWSE
+#endif
+#ifdef FEAT_DND
+# undef FEAT_DND
+#endif
+#ifdef FEAT_MOUSESHAPE
+# undef FEAT_MOUSESHAPE
+#endif
+#ifdef FEAT_WAYLAND
+# undef FEAT_WAYLAND
+#endif
+#ifdef FEAT_WAYLAND_CLIPBOARD
+# undef FEAT_WAYLAND_CLIPBOARD
+#endif
+#ifdef FEAT_X11
+# undef FEAT_X11
+#endif
+#ifdef FEAT_XFONTSET
+# undef FEAT_XFONTSET
+#endif
 #ifdef FEAT_CLIPBOARD
 # undef FEAT_CLIPBOARD
 #endif

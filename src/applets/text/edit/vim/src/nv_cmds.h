@@ -43,13 +43,9 @@
 
 #line 50
 #  define NV_NBCMD	nv_error
-#line 52
-
-# ifdef FEAT_DND
-#  define NV_DROP		nv_drop
-# else
+#line 51
 #  define NV_DROP		nv_error
-# endif
+#line 53
 
 /*
  * Function to be called for a Normal or Visual mode command.
