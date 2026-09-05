@@ -717,6 +717,22 @@ static int CreateTempDisplay(Message *m, int recvfd, Window *win)
 	return 0;
 }
 
+/* Walk ancillary data with size_t bounds; some libc CMSG_NXTHDR macros
+ * compare an unsigned length with a signed pointer difference. */
+static struct cmsghdr *NextControlMessage(const struct msghdr *msg, struct cmsghdr *cmsg)
+{
+	size_t offset = (unsigned char *)cmsg - (unsigned char *)msg->msg_control;
+	size_t remaining = msg->msg_controllen - offset;
+	size_t step;
+
+	if (cmsg->cmsg_len < CMSG_LEN(0) || cmsg->cmsg_len > remaining)
+		return NULL;
+	step = CMSG_SPACE(cmsg->cmsg_len - CMSG_LEN(0));
+	if (step < cmsg->cmsg_len || step > remaining || remaining - step < sizeof(*cmsg))
+		return NULL;
+	return (struct cmsghdr *)((unsigned char *)cmsg + step);
+}
+
 void ReceiveMsg(void)
 {
 	int left, len;
@@ -757,7 +773,7 @@ void ReceiveMsg(void)
 		}
 		if (msg.msg_controllen) {
 			struct cmsghdr *cmsg;
-			for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+			for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = NextControlMessage(&msg, cmsg)) {
 				size_t cl;
 				char *cp;
 				if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
