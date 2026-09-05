@@ -50,7 +50,7 @@ struct socat_opts {
    's',		/* logopt */
    false,	/* lefttoright */
    false,	/* righttoleft */
-   { NULL, 0 },	/* lock */
+   { NULL, false, {0, 0} },	/* lock */
    1<<SIGHUP | 1<<SIGINT | 1<<SIGQUIT | 1<<SIGILL | 1<<SIGABRT | 1<<SIGBUS | 1<<SIGFPE | 1<<SIGSEGV | 1<<SIGTERM, 	/* log_sigs */
    false	/* statistics */
 };

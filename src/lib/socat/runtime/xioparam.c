@@ -24,7 +24,8 @@ xioparms_t xioparms = {
    false, 	/* experimental */
    NULL, 	/* sniffleft_name */
    NULL, 	/* sniffright_name */
-   8192 	/* bufsiz */
+   8192,	/* bufsiz */
+   {0, 0}	/* total_timeout */
 } ;
 
 

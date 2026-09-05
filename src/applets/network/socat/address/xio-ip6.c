@@ -482,7 +482,7 @@ int xioapply_ipv6_join_group(
 	struct single *sfd,
 	struct opt *opt)
 {
-	struct ipv6_mreq ip6_mreq = {{{{0}}}};
+	struct ipv6_mreq ip6_mreq = {0};
 	union sockaddr_union sockaddr1;
 	socklen_t socklen1 = sizeof(sockaddr1.ip6);
 	int res;
