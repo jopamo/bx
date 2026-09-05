@@ -1,0 +1,105 @@
+diff --git a/src/builtin.c b/src/builtin.c
+index 7fe848aa..6c6f26af 100644
+--- a/src/builtin.c
++++ b/src/builtin.c
+@@ -1781,7 +1781,7 @@ static int jv2tm(jv a, struct tm *tm, int localtime) {
+     double d = jv_number_value(n);
+     if (i == 0) /* year */
+       d -= 1900;
+-    *(int *)((void *)tm + offsets[i]) = d < INT_MIN ? INT_MIN :
++    *(int *)((char *)tm + offsets[i]) = d < INT_MIN ? INT_MIN :
+                                         d > INT_MAX ? INT_MAX : (int)d;
+     jv_free(n);
+   }
+diff --git a/src/execute.c b/src/execute.c
+index 1ce1b09a..8ec5a469 100644
+--- a/src/execute.c
++++ b/src/execute.c
+@@ -356,13 +356,13 @@ jv jq_next(jq_state *jq) {
+         printf("\t<halted>\n");
+       return jv_invalid();
+     }
+-    uint16_t opcode = *pc;
++    uint16_t op = *pc;
+     raising = 0;
+ 
+     if (jq->debug_trace_enabled) {
+       dump_operation(frame_current(jq)->bc, pc);
+       printf("\t");
+-      const struct opcode_description* opdesc = opcode_describe(opcode);
++      const struct opcode_description* opdesc = opcode_describe(op);
+       stack_ptr param = 0;
+       if (!backtracking) {
+         int stack_in = opdesc->stack_in;
+@@ -393,13 +393,13 @@ jv jq_next(jq_state *jq) {
+     }
+ 
+     if (backtracking) {
+-      opcode = ON_BACKTRACK(opcode);
++      op = ON_BACKTRACK(op);
+       backtracking = 0;
+       raising = !jv_is_valid(jq->error);
+     }
+     pc++;
+ 
+-    switch (opcode) {
++    switch (op) {
+     default: assert(0 && "invalid instruction");
+ 
+     case TOP: break;
+@@ -700,7 +700,7 @@ jv jq_next(jq_state *jq) {
+         stack_push(jq, v);
+       } else {
+         jv_free(k);
+-        if (opcode == INDEX)
++        if (op == INDEX)
+           set_error(jq, v);
+         else
+           jv_free(v);
+@@ -751,7 +751,7 @@ jv jq_next(jq_state *jq) {
+       int keep_going, is_last = 0;
+       jv key, value;
+       if (jv_get_kind(container) == JV_KIND_ARRAY) {
+-        if (opcode == EACH || opcode == EACH_OPT) idx = 0;
++        if (op == EACH || op == EACH_OPT) idx = 0;
+         else idx = idx + 1;
+         int len = jv_array_length(jv_copy(container));
+         keep_going = idx < len;
+@@ -761,7 +761,7 @@ jv jq_next(jq_state *jq) {
+           value = jv_array_get(jv_copy(container), idx);
+         }
+       } else if (jv_get_kind(container) == JV_KIND_OBJECT) {
+-        if (opcode == EACH || opcode == EACH_OPT) idx = jv_object_iter(container);
++        if (op == EACH || op == EACH_OPT) idx = jv_object_iter(container);
+         else idx = jv_object_iter_next(container, idx);
+         keep_going = jv_object_iter_valid(container, idx);
+         if (keep_going) {
+@@ -769,8 +769,8 @@ jv jq_next(jq_state *jq) {
+           value = jv_object_iter_value(container, idx);
+         }
+       } else {
+-        assert(opcode == EACH || opcode == EACH_OPT);
+-        if (opcode == EACH) {
++        assert(op == EACH || op == EACH_OPT);
++        if (op == EACH) {
+           char errbuf[30];
+           set_error(jq, jv_invalid_with_msg(jv_string_fmt(
+                   "Cannot iterate over %s (%s)",
+@@ -887,7 +887,7 @@ jv jq_next(jq_state *jq) {
+       // `try EXP ...` exception caught in EXP
+       // DESTRUCTURE_ALT doesn't want the error message on the stack,
+       // as we would just want to throw it away anyway.
+-      if (opcode != ON_BACKTRACK(DESTRUCTURE_ALT)) {
++      if (op != ON_BACKTRACK(DESTRUCTURE_ALT)) {
+         jv_free(stack_pop(jq)); // free the input
+         stack_push(jq, jv_invalid_get_msg(jq->error));  // push the error's message
+       } else {
+@@ -965,7 +965,7 @@ jv jq_next(jq_state *jq) {
+       stack_ptr retdata = jq->stk_top;
+       struct frame* new_frame;
+       struct closure cl = make_closure(jq, pc);
+-      if (opcode == TAIL_CALL_JQ) {
++      if (op == TAIL_CALL_JQ) {
+         retaddr = frame_current(jq)->retaddr;
+         retdata = frame_current(jq)->retdata;
+         frame_pop(jq);

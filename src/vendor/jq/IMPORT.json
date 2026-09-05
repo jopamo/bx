@@ -58,7 +58,8 @@
     "decNumberLocal.h"
   ],
   "patches": {
-    "src/vendor/jq/patches/0001-bx-integration-and-limits.patch": "901c4f247314ea89434cd168f4e7a3f424b4914b8eab3eb7ef42dc595049d736"
+    "src/vendor/jq/patches/0001-bx-integration-and-limits.patch": "901c4f247314ea89434cd168f4e7a3f424b4914b8eab3eb7ef42dc595049d736",
+    "src/vendor/jq/patches/0002-clean-compiler-diagnostics.patch": "e2ecfadbafb916efb3dd6d92a34c926a1389c2ff35a0314ee039bff09dd96ee3"
   },
   "test_file_count": 49
 }
