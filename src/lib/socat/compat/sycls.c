@@ -1034,51 +1034,7 @@ int Link(const char *oldpath, const char *newpath) {
    return retval;
 }
 
-int Execvp(const char *file, char *const argv[]) {
-   int result, _errno;
-   if (argv[1] == NULL)
-      Debug2("execvp(\"%s\", \"%s\")", file, argv[0]);
-   else if (argv[2] == NULL)
-      Debug3("execvp(\"%s\", \"%s\" \"%s\")", file, argv[0], argv[1]);
-   else if (argv[3] == NULL)
-      Debug4("execvp(\"%s\", \"%s\" \"%s\" \"%s\")", file, argv[0], argv[1], argv[2]);
-   else if (argv[4] == NULL)
-      Debug5("execvp(\"%s\", \"%s\" \"%s\" \"%s\" \"%s\")", file, argv[0], argv[1], argv[2], argv[3]);
-   else if (argv[5] == NULL)
-      Debug6("execvp(\"%s\", \"%s\" \"%s\" \"%s\" \"%s\" \"%s\")", file, argv[0], argv[1], argv[2], argv[3], argv[4]);
-   else
-      Debug6("execvp(\"%s\", \"%s\" \"%s\" \"%s\" \"%s\" \"%s\" ...)", file, argv[0], argv[1], argv[2], argv[3], argv[4]);
-
-   result = execvp(file, argv);
-   _errno = errno;
-   Debug1("execvp() -> %d", result);
-   errno = _errno;
-   return result;
-}
-
 #endif /* WITH_SYCLS */
-
-int System(const char *string) {
-#if WITH_SYSTEM
-   int result, _errno;
-#  if WITH_SYCLS
-   Debug1("system(\"%s\")", string);
-#  endif /* WITH_SYCLS */
-   diag_immediate_exit = 1;
-   result = system(string);
-   diag_immediate_exit = 0;
-#  if WITH_SYCLS
-   _errno = errno;
-   Debug1("system() -> %d", result);
-   errno = _errno;
-#  endif /* WITH_SYCLS */
-   return result;
-#else
-   (void)string;
-   errno = ENOSYS;
-   return -1;
-#endif /* WITH_SYSTEM */
-}
 
 #if WITH_SYCLS
 
