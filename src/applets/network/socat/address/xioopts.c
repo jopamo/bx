@@ -2046,7 +2046,7 @@ const struct optname optionnames[] = {
 #if defined(TABDLY) && defined(XTABS)
 	IF_TERMIOS("xtabs",	&opt_xtabs)
 #endif
-	{ NULL }
+	{ NULL, NULL }
 } ;
 
 

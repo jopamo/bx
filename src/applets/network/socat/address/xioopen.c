@@ -428,7 +428,7 @@ const struct addrname addressnames[] = {
 #    include "xioaddrtab.c"
 #  endif
 #endif /* !0 */
-   { NULL }	/* end marker */
+   { NULL, NULL }	/* end marker */
 } ;
 
 

@@ -1235,7 +1235,7 @@ int xioapply_ip_add_membership(
 		struct ip_mreqn mreqn;
 #endif
 		struct ip_mreq  mreq;
-	} ip4_mreqn = {{{0}}};
+	} ip4_mreqn = {0};
 	/* IPv6 not supported - seems to have different handling */
 /*
 mc:addr:ifname|ifind
@@ -1429,7 +1429,7 @@ int xiotype_ip_add_source_membership(char *token, const struct optname *ent, str
 }
 
 int xioapply_ip_add_source_membership(struct single *sfd, struct opt *opt) {
-   struct ip_mreq_source ip4_mreq_src = {{0}};
+   struct ip_mreq_source ip4_mreq_src = {0};
    /* IPv6 not supported - seems to have different handling */
    union sockaddr_union sockaddr1;
    socklen_t socklen1 = sizeof(sockaddr1.ip4);
