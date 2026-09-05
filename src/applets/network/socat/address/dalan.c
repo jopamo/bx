@@ -119,7 +119,7 @@ static int dalan_item(int c, const char **line0, uint8_t *data, size_t *p, size_
 #endif
 	    case '0': c = '\0'; break;
 	    }
-	    /* PASSTHROUGH */
+	    /* fall through */
 	 default:
 	    if (p1 >= n) {
 	       *p = p1;
@@ -160,7 +160,7 @@ static int dalan_item(int c, const char **line0, uint8_t *data, size_t *p, size_
 	 case 'e': c = '\033'; break;
 #endif
 	 }
-	 /* PASSTHROUGH */
+	 /* fall through */
       default:
 	 if (p1 >= n) { *p = p1; return -1; }
 	 data[p1++] = c;
@@ -268,6 +268,7 @@ static int dalan_item(int c, const char **line0, uint8_t *data, size_t *p, size_
 	 p1 += sizeof(uint8_t);
 	 line = endptr;
       }
+      /* fall through */
    case 'B':
       /* expecting decimal number, with target type byte (uint8_t) */
       {

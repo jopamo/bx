@@ -163,7 +163,7 @@ int Gethostname(char *name, size_t len);
 int Uname(struct utsname *buf);
 int Atexit(void (*func)(void));
 #endif /* WITH_SYCLS */
-void Exit(int status);
+_Noreturn void Exit(int status);
 #if WITH_SYCLS
 void Abort(void);
 int Mkstemp(char *template);
