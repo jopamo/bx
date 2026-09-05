@@ -14,7 +14,6 @@ static int xioinitialized;
 xiofile_t *sock[XIO_MAXSOCK];
 int (*xiohook_newchild)(void);	/* xio calls this function from a new child
 				   process */
-int num_child = 0; 		/* actual number of "general" child processes */
 bool first_child = true; 	/* only first child shall print general warnings */
 
 /* returns 0 on success or != if an error occurred */
@@ -182,7 +181,6 @@ int xio_forked_inchild(void) {
 
    diag_fork();
    xio_child_reset();
-   num_child = 0;
    xiodroplocks();
 #if WITH_FIPS
    if (xio_reset_fips_mode() != 0) {
@@ -255,8 +253,6 @@ pid_t xio_fork(bool subchild,
 
    /* parent process */
    if (!subchild) {
-      ++num_child;
-      Info1("number of children increased to %d", num_child);
       first_child = false;
    }
    Info1("number of children is now %d", num_child);
