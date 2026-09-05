@@ -219,7 +219,7 @@ pid_t xio_fork(bool subchild,
    int forkwaitsecs = 0;
 
    xio_child_reap();
-   if ((pid = Fork()) < 0) {
+   if ((pid = xio_child_fork(!subchild)) < 0) {
       Msg1(level, "fork(): %s", strerror(errno));
       return pid;
    }
