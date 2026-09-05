@@ -33,8 +33,6 @@ void ex_substitute(exarg_T *eap);
 int do_sub_msg(int count_only);
 void ex_global(exarg_T *eap);
 void global_exe(char_u *cmd);
-char_u *get_old_sub(void);
-void set_old_sub(char_u *val);
 void free_old_sub(void);
 int prepare_tagpreview(int undo_sync, int use_previewpopup, use_popup_T use_popup);
 void ex_smile(exarg_T *eap);

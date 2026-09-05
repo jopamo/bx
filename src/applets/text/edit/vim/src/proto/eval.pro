@@ -24,7 +24,6 @@ typval_T *eval_expr_ext(char_u *arg, exarg_T *eap, int use_simple_function);
 int call_vim_function(char_u *func, int argc, typval_T *argv, typval_T *rettv);
 void *call_func_retstr(char_u *func, int argc, typval_T *argv);
 void *call_func_retlist(char_u *func, int argc, typval_T *argv);
-int eval_foldexpr(win_T *wp, int *cp);
 char_u *get_lval(char_u *name, typval_T *rettv, lval_T *lp, int unlet, int skip, int flags, int fne_flags);
 void clear_lval(lval_T *lp);
 void set_var_lval(lval_T *lp, char_u *endp, typval_T *rettv, int copy, int flags, char_u *op, int var_idx);

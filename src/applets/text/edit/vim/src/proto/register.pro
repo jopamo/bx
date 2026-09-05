@@ -1,6 +1,4 @@
 /* register.c */
-yankreg_T *get_y_regs(void);
-yankreg_T *get_y_register(int reg);
 yankreg_T *get_y_current(void);
 yankreg_T *get_y_previous(void);
 void set_y_current(yankreg_T *yreg);
@@ -13,11 +11,8 @@ int valid_yank_reg(int regname, int writing);
 int get_yank_register(int regname, int writing);
 void *get_register(int name, int copy);
 void put_register(int name, void *reg);
-void free_register(void *reg);
 int yank_register_mline(int regname);
 int do_record(int c);
-int get_execreg_lastc(void);
-void set_execreg_lastc(int lastc);
 int do_execreg(int regname, int colon, int addcr, int silent);
 int insert_reg(int regname, int literally_arg);
 int get_spec_reg(int regname, char_u **argp, int *allocated, int errmsg);

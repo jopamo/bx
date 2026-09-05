@@ -43,7 +43,6 @@ int match_user(char_u *name);
 void preserve_exit(void);
 void line_breakcheck(void);
 void fast_breakcheck(void);
-void veryfast_breakcheck(void);
 char_u *get_cmd_output(char_u *cmd, char_u *infile, int flags, int *ret_len);
 void f_system(typval_T *argvars, typval_T *rettv);
 void f_systemlist(typval_T *argvars, typval_T *rettv);
