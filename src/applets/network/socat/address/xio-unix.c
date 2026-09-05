@@ -53,8 +53,8 @@ const struct addrdesc xioaddr_abstract_recv    = { "ABSTRACT-RECV",     1+XIO_RD
 const struct addrdesc xioaddr_abstract_client  = { "ABSTRACT-CLIENT",   1+XIO_RDWR,   xioopen_unix_client,   GROUP_FD|GROUP_SOCKET|GROUP_SOCK_UNIX|GROUP_RETRY,                          1, 0, 0 HELP(":<filename>") };
 #endif /* WITH_ABSTRACT_UNIXSOCKET */
 
-const struct optdesc xioopt_unix_bind_tempname = { "unix-bind-tempname",  "bind-tempname", OPT_UNIX_BIND_TEMPNAME,	GROUP_SOCK_UNIX, PH_PREOPEN, TYPE_STRING_NULL, OFUNC_SPEC };
-const struct optdesc xioopt_unix_tightsocklen = { "unix-tightsocklen",    "tightsocklen",  OPT_UNIX_TIGHTSOCKLEN,  GROUP_SOCK_UNIX, PH_PREBIND, TYPE_BOOL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.un.tight), XIO_SIZEOF(para.socket.un.tight) };
+const struct optdesc xioopt_unix_bind_tempname = { "unix-bind-tempname",  "bind-tempname", OPT_UNIX_BIND_TEMPNAME,	GROUP_SOCK_UNIX, PH_PREOPEN, TYPE_STRING_NULL, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc xioopt_unix_tightsocklen = { "unix-tightsocklen",    "tightsocklen",  OPT_UNIX_TIGHTSOCKLEN,  GROUP_SOCK_UNIX, PH_PREBIND, TYPE_BOOL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.un.tight), XIO_SIZEOF(para.socket.un.tight), 0 };
 
 
 /* fills the socket address struct and returns its effective length.

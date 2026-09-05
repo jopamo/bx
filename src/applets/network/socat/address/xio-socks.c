@@ -33,10 +33,10 @@ static int xioopen_socks4_connect(int argc, const char *argv[], struct opt *opts
 
 #endif /* WITH_SOCKS4 || WITH_SOCKS4A */
 
-const struct optdesc opt_socksport = { "socksport", NULL, OPT_SOCKSPORT, GROUP_IP_SOCKS, PH_LATE, TYPE_STRING, OFUNC_SPEC };
-const struct optdesc opt_socksuser = { "socksuser", NULL, OPT_SOCKSUSER, GROUP_IP_SOCKS, PH_LATE, TYPE_NAME, OFUNC_SPEC };
+const struct optdesc opt_socksport = { "socksport", NULL, OPT_SOCKSPORT, GROUP_IP_SOCKS, PH_LATE, TYPE_STRING, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_socksuser = { "socksuser", NULL, OPT_SOCKSUSER, GROUP_IP_SOCKS, PH_LATE, TYPE_NAME, OFUNC_SPEC, 0, 0, 0 };
 #if WITH_SOCKS5
-const struct optdesc opt_sockspass = { "sockspass", NULL, OPT_SOCKSPASS, GROUP_IP_SOCKS, PH_LATE, TYPE_NAME, OFUNC_SPEC };
+const struct optdesc opt_sockspass = { "sockspass", NULL, OPT_SOCKSPASS, GROUP_IP_SOCKS, PH_LATE, TYPE_NAME, OFUNC_SPEC, 0, 0, 0 };
 #endif /* WITH_SOCKS5 */
 
 #if WITH_SOCKS4 || WITH_SOCKS4A

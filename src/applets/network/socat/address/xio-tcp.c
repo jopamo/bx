@@ -40,14 +40,14 @@ const struct addrdesc xioaddr_tcp6_listen  = { "TCP6-LISTEN", 1+XIO_RDWR, xioope
 /****** TCP address options ******/
 
 #ifdef TCP_NODELAY
-const struct optdesc opt_tcp_nodelay = { "tcp-nodelay",   "nodelay", OPT_TCP_NODELAY, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT,	OFUNC_SOCKOPT, SOL_TCP, TCP_NODELAY };
+const struct optdesc opt_tcp_nodelay = { "tcp-nodelay",   "nodelay", OPT_TCP_NODELAY, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT,	OFUNC_SOCKOPT, SOL_TCP, TCP_NODELAY, 0 };
 #endif
 #ifdef TCP_MAXSEG
-const struct optdesc opt_tcp_maxseg  = { "tcp-maxseg",    "mss",  OPT_TCP_MAXSEG,  GROUP_IP_TCP, PH_PASTSOCKET,TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_MAXSEG };
-const struct optdesc opt_tcp_maxseg_late={"tcp-maxseg-late","mss-late",OPT_TCP_MAXSEG_LATE,GROUP_IP_TCP,PH_CONNECTED,TYPE_INT,OFUNC_SOCKOPT, SOL_TCP, TCP_MAXSEG};
+const struct optdesc opt_tcp_maxseg  = { "tcp-maxseg",    "mss",  OPT_TCP_MAXSEG,  GROUP_IP_TCP, PH_PASTSOCKET,TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_MAXSEG, 0 };
+const struct optdesc opt_tcp_maxseg_late={"tcp-maxseg-late","mss-late",OPT_TCP_MAXSEG_LATE,GROUP_IP_TCP,PH_CONNECTED,TYPE_INT,OFUNC_SOCKOPT, SOL_TCP, TCP_MAXSEG, 0 };
 #endif
 #ifdef TCP_CORK
-const struct optdesc opt_tcp_cork   = { "tcp-cork",     "cork", OPT_TCP_CORK,    GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_CORK };
+const struct optdesc opt_tcp_cork   = { "tcp-cork",     "cork", OPT_TCP_CORK,    GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_CORK, 0 };
 #endif
 #ifdef TCP_STDURG
 const struct optdesc opt_tcp_stdurg = { "tcp-stdurg",   "stdurg", OPT_TCP_STDURG,  GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_STDURG };
@@ -56,31 +56,31 @@ const struct optdesc opt_tcp_stdurg = { "tcp-stdurg",   "stdurg", OPT_TCP_STDURG
 const struct optdesc opt_tcp_rfc1323= { "tcp-rfc1323",  "rfc1323", OPT_TCP_RFC1323, GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_RFC1323};
 #endif
 #ifdef TCP_KEEPIDLE
-const struct optdesc opt_tcp_keepidle={ "tcp-keepidle", "keepidle",OPT_TCP_KEEPIDLE,GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP,TCP_KEEPIDLE};
+const struct optdesc opt_tcp_keepidle={ "tcp-keepidle", "keepidle",OPT_TCP_KEEPIDLE,GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP,TCP_KEEPIDLE, 0 };
 #endif
 #ifdef TCP_KEEPINTVL
-const struct optdesc opt_tcp_keepintvl={"tcp-keepintvl","keepintvl",OPT_TCP_KEEPINTVL,GROUP_IP_TCP,PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP,TCP_KEEPINTVL};
+const struct optdesc opt_tcp_keepintvl={"tcp-keepintvl","keepintvl",OPT_TCP_KEEPINTVL,GROUP_IP_TCP,PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP,TCP_KEEPINTVL, 0 };
 #endif
 #ifdef TCP_KEEPCNT
-const struct optdesc opt_tcp_keepcnt= { "tcp-keepcnt",  "keepcnt",  OPT_TCP_KEEPCNT, GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_KEEPCNT };
+const struct optdesc opt_tcp_keepcnt= { "tcp-keepcnt",  "keepcnt",  OPT_TCP_KEEPCNT, GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_KEEPCNT, 0 };
 #endif
 #ifdef TCP_SYNCNT
-const struct optdesc opt_tcp_syncnt = { "tcp-syncnt",   "syncnt",   OPT_TCP_SYNCNT,  GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_SYNCNT };
+const struct optdesc opt_tcp_syncnt = { "tcp-syncnt",   "syncnt",   OPT_TCP_SYNCNT,  GROUP_IP_TCP, PH_PASTSOCKET,    TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_SYNCNT, 0 };
 #endif
 #ifdef TCP_LINGER2
-const struct optdesc opt_tcp_linger2= { "tcp-linger2",  "linger2",  OPT_TCP_LINGER2, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_LINGER2 };
+const struct optdesc opt_tcp_linger2= { "tcp-linger2",  "linger2",  OPT_TCP_LINGER2, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_LINGER2, 0 };
 #endif
 #ifdef TCP_DEFER_ACCEPT
-const struct optdesc opt_tcp_defer_accept={"tcp-defer-accept","defer-accept",OPT_TCP_DEFER_ACCEPT,GROUP_IP_TCP,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_TCP,TCP_DEFER_ACCEPT };
+const struct optdesc opt_tcp_defer_accept={"tcp-defer-accept","defer-accept",OPT_TCP_DEFER_ACCEPT,GROUP_IP_TCP,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_TCP,TCP_DEFER_ACCEPT, 0 };
 #endif
 #ifdef TCP_WINDOW_CLAMP
-const struct optdesc opt_tcp_window_clamp={"tcp-window-clamp","window-clamp",OPT_TCP_WINDOW_CLAMP,GROUP_IP_TCP,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_TCP,TCP_WINDOW_CLAMP };
+const struct optdesc opt_tcp_window_clamp={"tcp-window-clamp","window-clamp",OPT_TCP_WINDOW_CLAMP,GROUP_IP_TCP,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_TCP,TCP_WINDOW_CLAMP, 0 };
 #endif
 #ifdef TCP_INFO
-const struct optdesc opt_tcp_info   = { "tcp-info",     "info", OPT_TCP_INFO,    GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_INFO };
+const struct optdesc opt_tcp_info   = { "tcp-info",     "info", OPT_TCP_INFO,    GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_INFO, 0 };
 #endif
 #ifdef TCP_QUICKACK
-const struct optdesc opt_tcp_quickack = { "tcp-quickack", "quickack", OPT_TCP_QUICKACK, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_QUICKACK };
+const struct optdesc opt_tcp_quickack = { "tcp-quickack", "quickack", OPT_TCP_QUICKACK, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_QUICKACK, 0 };
 #endif
 #ifdef TCP_NOOPT
 const struct optdesc opt_tcp_noopt  = { "tcp-noopt",   "noopt",  OPT_TCP_NOOPT,  GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT,	OFUNC_SOCKOPT, SOL_TCP, TCP_NOOPT };
@@ -89,7 +89,7 @@ const struct optdesc opt_tcp_noopt  = { "tcp-noopt",   "noopt",  OPT_TCP_NOOPT, 
 const struct optdesc opt_tcp_nopush = { "tcp-nopush",  "nopush", OPT_TCP_NOPUSH, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT,	OFUNC_SOCKOPT, SOL_TCP, TCP_NOPUSH };
 #endif
 #ifdef TCP_MD5SIG
-const struct optdesc opt_tcp_md5sig = { "tcp-md5sig",   "md5sig", OPT_TCP_MD5SIG, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_MD5SIG };
+const struct optdesc opt_tcp_md5sig = { "tcp-md5sig",   "md5sig", OPT_TCP_MD5SIG, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_MD5SIG, 0 };
 #endif
 #ifdef TCP_SACK_DISABLE
 const struct optdesc opt_tcp_sack_disable = { "tcp-sack-disable", "sack-disable", OPT_TCP_SACK_DISABLE, GROUP_IP_TCP, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_TCP, TCP_SACK_DISABLE };
