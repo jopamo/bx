@@ -87,6 +87,12 @@ void bx_fetch_response_free(BxFetchResponse* resp);
 int bx_fetch_response_add_header(BxFetchResponse* resp, const char* name, const char* value);
 /* Returns the last matching response field, or NULL. */
 const char* bx_fetch_response_header_value(const BxFetchResponse* response, const char* name);
+/*
+ * Compares a bounded Content-Type value case-insensitively after trimming
+ * optional whitespace and parameters. Malformed or overlong values do not
+ * match.
+ */
+bool bx_fetch_content_type_equals(const char* content_type, const char* expected);
 const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure);
 const BxFetchPreparedUrl* bx_fetch_response_effective_target(const BxFetchResponse* response);
 const char* bx_fetch_response_effective_url(const BxFetchResponse* response);

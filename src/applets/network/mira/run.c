@@ -183,6 +183,44 @@ static int mira_output_observation(void* userdata, const BxFetchRunOutputObserva
     return 0;
 }
 
+static void mira_response_name(void* userdata, const BxFetchRunResponseNameObservation* observation) {
+    MiraRunFrontend* frontend = userdata;
+    if (!frontend || !observation ||
+        observation->decision == BX_FETCH_RUN_RESPONSE_NAME_ADJUSTED ||
+        frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET) {
+        return;
+    }
+
+    char* original = observation->original_path ? bx_path_quote_dup(observation->original_path, BX_PATH_QUOTE_ESCAPE) : NULL;
+    char* candidate = observation->candidate_path ? bx_path_quote_dup(observation->candidate_path, BX_PATH_QUOTE_ESCAPE) : NULL;
+    const char* original_text = original ? original : "(path unavailable)";
+    const char* candidate_text = candidate ? candidate : "(path unavailable)";
+    switch (observation->decision) {
+        case BX_FETCH_RUN_RESPONSE_NAME_KEEP_NO_CLOBBER:
+            fprintf(frontend->diagnostics,
+                    "mira: keeping %s due to --no-clobber (target exists: %s)\n",
+                    original_text,
+                    candidate_text);
+            break;
+        case BX_FETCH_RUN_RESPONSE_NAME_KEEP_EXISTING:
+            fprintf(frontend->diagnostics,
+                    "mira: keeping %s because server-selected output path already exists: %s\n",
+                    original_text,
+                    candidate_text);
+            break;
+        case BX_FETCH_RUN_RESPONSE_NAME_FAILED:
+            fprintf(frontend->diagnostics,
+                    "mira: failed to stage final output path %s: %s\n",
+                    candidate_text,
+                    strerror(observation->error_number > 0 ? observation->error_number : EIO));
+            break;
+        case BX_FETCH_RUN_RESPONSE_NAME_ADJUSTED:
+            break;
+    }
+    free(candidate);
+    free(original);
+}
+
 static void mira_prepare_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchPrepareError* error) {
     MiraRunFrontend* frontend = userdata;
     BxFetchErrorClass error_class = error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY ? BX_FETCH_ERROR_CLASS_POLICY : BX_FETCH_ERROR_CLASS_FILESYSTEM;
@@ -630,6 +668,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_link_conversion = mira_link_conversion,
         .on_seed_result = mira_seed_result,
         .on_output_observation = (config->download.dry_run || config->download.no_clobber) ? mira_output_observation : NULL,
+        .on_response_name = config->http.adjust_extension ? mira_response_name : NULL,
         .on_transfer_observation = config->logging.debug_trace ? mira_transfer_observation : NULL,
         .transport_observer =
             {

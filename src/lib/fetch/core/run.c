@@ -3,6 +3,7 @@
 #include "lib/fetch/resource_limits.h"
 #include "lib/fetch/response.h"
 #include "lib/fetch/writer.h"
+#include "lib/path_ops.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -244,6 +245,136 @@ static int run_plan_output(void* userdata, const BxFetchPreparedUrl* target, int
     return observation.decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER ? 1 : 0;
 }
 
+static bool run_path_has_html_extension(const char* path) {
+    const char* extension = path ? bx_path_extension_ptr(path) : NULL;
+    return extension &&
+           (strcasecmp(extension, ".html") == 0 ||
+            strcasecmp(extension, ".htm") == 0 ||
+            strcasecmp(extension, ".xhtml") == 0 ||
+            strcasecmp(extension, ".xht") == 0);
+}
+
+static char* run_adjusted_response_path(const BxFetchRun* run,
+                                        const BxFetchResponse* response,
+                                        const char* output_path) {
+    if (!run || !response || !output_path ||
+        !run->cfg->http.adjust_extension ||
+        run->cfg->download.spider ||
+        (response->status_code != 200 && response->status_code != 206) ||
+        (run->cfg->download.output_document && run->cfg->download.output_document[0] != '\0') ||
+        run_path_has_html_extension(output_path)) {
+        return NULL;
+    }
+
+    const char* content_type = response->content_type;
+    if (!content_type || content_type[0] == '\0')
+        content_type = bx_fetch_response_header_value(response, "Content-Type");
+    if (!bx_fetch_content_type_equals(content_type, "text/html"))
+        return NULL;
+
+    size_t path_length = 0;
+    static const char suffix[] = ".html";
+    if (!bx_fetch_resource_bounded_strlen(output_path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_length) ||
+        path_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - (sizeof(suffix) - 1u)) {
+        errno = EFBIG;
+        return NULL;
+    }
+
+    char* adjusted = malloc(path_length + sizeof(suffix));
+    if (!adjusted)
+        return NULL;
+    memcpy(adjusted, output_path, path_length);
+    memcpy(adjusted + path_length, suffix, sizeof(suffix));
+    return adjusted;
+}
+
+static void run_observe_response_name(BxFetchRun* run,
+                                      const char* original_path,
+                                      const char* candidate_path,
+                                      BxFetchRunResponseNameDecision decision,
+                                      int error_number) {
+    if (!run || !run->frontend.on_response_name)
+        return;
+    BxFetchRunResponseNameObservation observation = {
+        .original_path = original_path,
+        .candidate_path = candidate_path,
+        .decision = decision,
+        .error_number = error_number,
+    };
+    run->frontend.on_response_name(run->frontend.userdata, &observation);
+}
+
+static int run_apply_response_name(BxFetchRun* run,
+                                   const BxFetchResponse* response,
+                                   BxFetchWriter* writer) {
+    const char* original_path = bx_fetch_writer_get_path(writer);
+    errno = 0;
+    char* candidate_path = run_adjusted_response_path(run, response, original_path);
+    if (!candidate_path) {
+        if (errno != 0) {
+            int error_number = errno;
+            run_observe_response_name(
+                run, original_path, NULL, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
+            errno = error_number;
+            return -1;
+        }
+        return 0;
+    }
+
+    /*
+     * Retargeting replaces the writer-owned path. Preserve the original for
+     * the borrowed observation until after the transition is complete.
+     */
+    char* original_path_copy = strdup(original_path);
+    if (!original_path_copy) {
+        int error_number = errno ? errno : ENOMEM;
+        run_observe_response_name(
+            run, original_path, candidate_path, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
+        free(candidate_path);
+        errno = error_number;
+        return -1;
+    }
+
+    if (run->cfg->download.no_clobber) {
+        BxFetchWriterPathPresence presence = BX_FETCH_WRITER_PATH_ABSENT;
+        if (bx_fetch_writer_path_presence(candidate_path, &presence) != 0) {
+            int error_number = errno ? errno : EIO;
+            run_observe_response_name(
+                run, original_path_copy, candidate_path, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
+            free(original_path_copy);
+            free(candidate_path);
+            errno = error_number;
+            return -1;
+        }
+        if (presence == BX_FETCH_WRITER_PATH_PRESENT) {
+            run_observe_response_name(
+                run, original_path_copy, candidate_path, BX_FETCH_RUN_RESPONSE_NAME_KEEP_NO_CLOBBER, 0);
+            free(original_path_copy);
+            free(candidate_path);
+            return 0;
+        }
+    }
+
+    if (bx_fetch_writer_set_final_path_exclusive(writer, candidate_path) != 0) {
+        int error_number = errno ? errno : EIO;
+        BxFetchRunResponseNameDecision decision =
+            error_number == EEXIST ? BX_FETCH_RUN_RESPONSE_NAME_KEEP_EXISTING : BX_FETCH_RUN_RESPONSE_NAME_FAILED;
+        run_observe_response_name(run, original_path_copy, candidate_path, decision, error_number);
+        free(original_path_copy);
+        free(candidate_path);
+        if (decision == BX_FETCH_RUN_RESPONSE_NAME_KEEP_EXISTING)
+            return 0;
+        errno = error_number;
+        return -1;
+    }
+
+    run_observe_response_name(
+        run, original_path_copy, candidate_path, BX_FETCH_RUN_RESPONSE_NAME_ADJUSTED, 0);
+    free(original_path_copy);
+    free(candidate_path);
+    return 0;
+}
+
 static int run_response_headers(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
     RunTransfer* transfer = userdata;
     BxFetchRun* run = transfer ? transfer->run : NULL;
@@ -251,9 +382,11 @@ static int run_response_headers(void* userdata, const BxFetchRequest* request, c
         errno = EINVAL;
         return -1;
     }
-    if (!run->frontend.on_response_headers)
-        return 0;
-    return run->frontend.on_response_headers(run->frontend.userdata, request, response, writer);
+    if (run_apply_response_name(run, response, writer) != 0)
+        return -1;
+    if (run->frontend.on_response_headers)
+        return run->frontend.on_response_headers(run->frontend.userdata, request, response, writer);
+    return 0;
 }
 
 static void run_transfer_complete(void* userdata, const BxFetchTransferCompletion* completion) {

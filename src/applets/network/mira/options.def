@@ -64,7 +64,7 @@ MIRA_OPTION("cut-dirs", required_argument, MIRA_OPT_CUT_DIRS, "", NULL, "NUMBER"
 MIRA_OPTION("http-user", required_argument, MIRA_OPT_HTTP_USER, "", NULL, "USER", "set HTTP username", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("http-password", required_argument, MIRA_OPT_HTTP_PASSWORD, "", NULL, "PASS", "set HTTP password", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("default-page", required_argument, MIRA_OPT_DEFAULT_PAGE, "", NULL, "NAME", "name directory URL outputs", MIRA_OPTION_CATEGORY_HTTP, true)
-MIRA_OPTION("adjust-extension", no_argument, 'E', "E", NULL, NULL, "adjust extension from response type", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("adjust-extension", no_argument, 'E', "E", NULL, NULL, "add .html for text/html content", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("header", required_argument, MIRA_OPT_HEADER, "", NULL, "FIELD: VALUE", "add a validated non-authority header", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("max-redirect", required_argument, MIRA_OPT_MAX_REDIRECT, "", NULL, "NUMBER", "bound redirect count", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("redirect-method", required_argument, MIRA_OPT_REDIRECT_METHOD, "", NULL, "legacy|strict", "select redirect method policy", MIRA_OPTION_CATEGORY_HTTP, true)
