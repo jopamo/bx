@@ -4,8 +4,6 @@ int buf_get_signattrs(win_T *wp, linenr_T lnum, sign_attrs_T *sattr);
 linenr_T buf_delsign(buf_T *buf, linenr_T atlnum, int id, char_u *group);
 int buf_findsign(buf_T *buf, int id, char_u *group);
 int buf_findsign_id(buf_T *buf, linenr_T lnum, char_u *groupname);
-int buf_findsigntype_id(buf_T *buf, linenr_T lnum, int typenr);
-int buf_signcount(buf_T *buf, linenr_T lnum);
 void buf_delete_signs(buf_T *buf, char_u *group);
 void sign_mark_adjust(linenr_T line1, linenr_T line2, long amount, long amount_after);
 int sign_define_by_name(char_u *name, char_u *icon, char_u *linehl, char_u *text, char_u *texthl, char_u *culhl, char_u *numhl, int prio);

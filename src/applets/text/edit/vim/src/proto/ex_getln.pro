@@ -14,7 +14,6 @@ char_u *getexline(int c, void *cookie, int indent, getline_opt_T options);
 char_u *getexmodeline(int promptc, void *cookie, int indent, getline_opt_T options);
 int cmdline_overstrike(void);
 int cmdline_at_end(void);
-colnr_T cmdline_getvcol_cursor(void);
 int realloc_cmdbuff(int len);
 void free_arshape_buf(void);
 void putcmdline(int c, int shift);
