@@ -746,7 +746,7 @@ static int xioopen_socket_datagram(
 #endif /* WITH_GENERICSOCKET */
 
 /* EINTR not handled specially */
-int xiogetpacketinfo(struct single *sfd, int fd)
+static int xiogetpacketinfo(struct single *sfd, int fd)
 {
 #if defined(MSG_ERRQUEUE)
    int _errno = errno;
@@ -1656,7 +1656,7 @@ int xiodopacketinfo(
 
 /* check if peer address is within permitted range.
    return >= 0 if so. */
-int xiocheckrange(union sockaddr_union *sa, struct xiorange *range) {
+static int xiocheckrange(union sockaddr_union *sa, struct xiorange *range) {
    switch (sa->soa.sa_family) {
 #if WITH_IP4
    case PF_INET:

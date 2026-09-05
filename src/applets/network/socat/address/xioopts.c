@@ -3504,7 +3504,7 @@ int retropt_bind_gai(struct opt *opts,
 #endif /* _WITH_SOCKET */
 
 
-int applyopt_seek32(
+static int applyopt_seek32(
 	int fd,
 	struct opt *opt)
 {
@@ -3532,7 +3532,7 @@ int applyopt_seek64(
 }
 #endif /* HAVE_LSEEK64 */
 
-int applyopt_fcntl(
+static int applyopt_fcntl(
 	int fd,
 	struct opt *opt)
 {
@@ -3570,7 +3570,7 @@ int applyopt_fcntl(
 	return 0;
 }
 
-int applyopt_ioctl(
+static int applyopt_ioctl(
 	int fd,
 	struct opt *opt)
 {
@@ -3582,7 +3582,7 @@ int applyopt_ioctl(
 	return 0;
 }
 
-int applyopt_ioctl_mask_long(
+static int applyopt_ioctl_mask_long(
 	int fd,
 	struct opt *opt)
 {
@@ -3607,7 +3607,7 @@ int applyopt_ioctl_mask_long(
 	return 0;
 }
 
-int applyopt_ioctl_generic(
+static int applyopt_ioctl_generic(
 	int fd,
 	struct opt *opt)
 {
@@ -3657,7 +3657,7 @@ int applyopt_ioctl_generic(
 
 #if _WITH_SOCKET
 
-int applyopt_sockopt(
+static int applyopt_sockopt(
 	int fd,
 	struct opt *opt)
 {
@@ -3826,7 +3826,7 @@ int applyopt_sockopt(
 /* Appends the provided data to the current value of this sockopt.
    Used (e.g.) for IP_OPTIONS.
 */
-int applyopt_sockopt_append(
+static int applyopt_sockopt_append(
 	int fd,
 	struct opt *opt)
 {
@@ -3863,7 +3863,7 @@ int applyopt_sockopt_append(
 	return 0;
 }
 
-int applyopt_sockopt_generic(
+static int applyopt_sockopt_generic(
 	int fd,
 	struct opt *opt)
 {
@@ -3908,7 +3908,7 @@ int applyopt_sockopt_generic(
 #endif /* _WITH_SOCKET */
 
 #if HAVE_FLOCK
-int applyopt_flock(
+static int applyopt_flock(
 	int fd,
 	struct opt *opt)
 {
@@ -3928,7 +3928,7 @@ int applyopt_flock(
    returns -1 if a problem occurred (caller has to ODESC_ERROR);
    returns 1 if the instance has to be kept, this happens when the option desc has
    been overwritten to, e.g., undo the option in a later phase. */
-int applyopt_spec(
+static int applyopt_spec(
 	struct single *sfd,
 	int fd,
 	struct opt *opt)

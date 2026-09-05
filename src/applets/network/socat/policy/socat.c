@@ -86,6 +86,8 @@ const char copyright_ssleay[] = "This product includes software written by Tim H
 
 bool havelock;
 
+int main(int argc, const char *argv[]);
+
 int main(int argc, const char *argv[]) {
    const char **arg1, *a;
    char *mainwaitstring;
@@ -862,7 +864,7 @@ int socat(const char *address1, const char *address2) {
    returns 0 if no child or not yet died or died without data (sets eof);
    returns >0 if child died and left data
 */
-int childleftdata(xiofile_t *xfd) {
+static int childleftdata(xiofile_t *xfd) {
    struct pollfd in;
    int retval;
 
@@ -1347,7 +1349,7 @@ int _socat(void) {
 /* prints the timestamp to the buffer and terminates it with '\0'. This buffer
    should be at least MAXTIMESTAMPLEN bytes long.
    returns 0 on success or -1 if an error occurred */
-int gettimestamp(char *timestamp) {
+static int gettimestamp(char *timestamp) {
 #if HAVE_CLOCK_GETTIME
    struct timespec now;
 #elif HAVE_PROTOTYPE_LIB_gettimeofday

@@ -153,7 +153,7 @@ int xioinit_ip(
 
 #if HAVE_RESOLV_H
 
-int Res_init(void) {
+static int Res_init(void) {
    int result;
    Debug("res_init()");
    result = res_init();
@@ -452,7 +452,7 @@ static int xioip_freeaddrinfo_devtests(
  res: a pointer to an uninitialized ptr var for the resulting socket address
  returns: STAT_OK, STAT_RETRYLATER, STAT_NORETRY, prints message
 */
-int _xiogetaddrinfo(const char *node, const char *service,
+static int _xiogetaddrinfo(const char *node, const char *service,
 		   int family, int socktype, int protocol,
 		   struct addrinfo **res, const int ai_flags[2]) {
    char *numnode = NULL;
@@ -829,7 +829,7 @@ int xiogetaddrinfo(const char *node, const char *service,
    return 0;
 }
 
-void _xiofreeaddrinfo(struct addrinfo *res) {
+static void _xiofreeaddrinfo(struct addrinfo *res) {
 #if WITH_DEVTESTS
    if (!xioip_freeaddrinfo_devtests(res)) {
       return;

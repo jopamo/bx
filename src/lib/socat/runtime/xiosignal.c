@@ -14,6 +14,7 @@
 #include "error.h"
 
 #include "sycls.h"
+#include "xio.h"
 
 
 #define SOCAT_MAXPIDS 4
@@ -48,7 +49,7 @@ static struct socat_sig_desc *socat_get_sig_desc(int signum) {
 }
 
 /* a signal handler that possibly passes the signal to sub processes */
-void socatsignalpass(int sig) {
+static void socatsignalpass(int sig) {
    int i;
    struct socat_sig_desc *sigdesc;
    int _errno;

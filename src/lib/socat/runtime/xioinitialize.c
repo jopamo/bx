@@ -125,7 +125,7 @@ int xioinitialize2(void) {
    it is called in the child process after fork
    it drops the locks of the xiofile's so only the parent owns them
  */
-void xiodroplocks(void) {
+static void xiodroplocks(void) {
    int i;
 
    for (i = 0; i < XIO_MAXSOCK; ++i) {

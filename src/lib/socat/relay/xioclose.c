@@ -12,7 +12,7 @@
 
 
 /* close the xio fd; must be valid and "simple" (not dual) */
-int xioclose1(struct single *pipe) {
+static int xioclose1(struct single *pipe) {
 
    if (pipe->tag == XIO_TAG_INVALID) {
       Notice("xioclose1(): invalid file descriptor");
