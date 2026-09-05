@@ -67,7 +67,6 @@ extern int _stricoll(char *a, char *b);
 # include "charset.pro"
 # include "cindent.pro"
 # include "clientserver.pro"
-# include "clipboard.pro"
 # include "cmdexpand.pro"
 # include "cmdhist.pro"
 # include "if_cscope.pro"
@@ -97,7 +96,6 @@ extern int _stricoll(char *a, char *b);
 # include "getchar.pro"
 # include "gc.pro"
 # include "gui_xim.pro"
-# include "hardcopy.pro"
 # include "hashtab.pro"
 # include "help.pro"
 # include "highlight.pro"
@@ -193,10 +191,6 @@ void mbyte_im_set_active(int active_arg);
 # ifdef FEAT_SIGNS
 #  include "sign.pro"
 # endif
-# include "sound.pro"
-# include "spell.pro"
-# include "spellfile.pro"
-# include "spellsuggest.pro"
 # include "strings.pro"
 # include "syntax.pro"
 # include "tag.pro"
