@@ -43,6 +43,9 @@
 #ifdef FEAT_CLIENTSERVER
 # undef FEAT_CLIENTSERVER
 #endif
+#ifdef FEAT_CSCOPE
+# undef FEAT_CSCOPE
+#endif
 #ifdef FEAT_JOB_CHANNEL
 # undef FEAT_JOB_CHANNEL
 #endif
