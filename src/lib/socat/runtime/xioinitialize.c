@@ -179,12 +179,9 @@ static int xio_nokill(xiofile_t *sock) {
    returns 0 on success or != 0 if an error occurred */
 int xio_forked_inchild(void) {
    int result = 0;
-   int i;
 
    diag_fork();
-   for (i=0; i<NUMUNKNOWN; ++i) {
-      diedunknown[i] = 0;
-   }
+   xio_child_reset();
    num_child = 0;
    xiodroplocks();
 #if WITH_FIPS
@@ -221,6 +218,7 @@ pid_t xio_fork(bool subchild,
    const char *forkwaitstring;
    int forkwaitsecs = 0;
 
+   xio_child_reap();
    if ((pid = Fork()) < 0) {
       Msg1(level, "fork(): %s", strerror(errno));
       return pid;

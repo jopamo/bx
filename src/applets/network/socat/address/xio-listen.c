@@ -270,33 +270,16 @@ int _xioopen_accept_fd(
 			    sfd->para.socket.accept_timeout.tv_sec, sfd->para.socket.accept_timeout.tv_usec,
 			    strerror(errno));
 		  }
+		  xio_child_reap_pending();
 	       } else {
 		  break;
 	       }
 	    }
 	    if (!FD_ISSET(sfd->fd, &rfd)) {
-	       struct sigaction act;
-
 	       Warn1("accept: %s", strerror(ETIMEDOUT));
 	       Close(sfd->fd);
 	       Notice("Waiting for child processes to terminate");
-	       memset(&act, 0, sizeof(struct sigaction));
-	       act.sa_flags   = SA_NOCLDSTOP/*|SA_RESTART*/
-#ifdef SA_SIGINFO /* not on Linux 2.0(.33) */
-		  |SA_SIGINFO
-#endif
-#ifdef SA_NOMASK
-		  |SA_NOMASK
-#endif
-		  ;
-#if HAVE_STRUCT_SIGACTION_SA_SIGACTION && defined(SA_SIGINFO)
-	       act.sa_sigaction = 0;
-#else /* Linux 2.0(.33) does not have sigaction.sa_sigaction */
-	       act.sa_handler = 0;
-#endif
-	       sigemptyset(&act.sa_mask);
-	       Sigaction(SIGCHLD, &act, NULL);
-	       wait(NULL);
+	       xio_child_wait_general();
 	       Exit(0);
 	    }
 	 }
@@ -307,6 +290,7 @@ int _xioopen_accept_fd(
 	    break;	/* success, break out of loop */
 	 }
 	 if (errno == EINTR) {
+	    xio_child_reap_pending();
 	    continue;
 	 }
 	 if (errno == ECONNABORTED) {
@@ -399,11 +383,13 @@ int _xioopen_accept_fd(
 
 
 	 while (maxchildren) {
+	    xio_child_reap();
 	    if (num_child < maxchildren) break;
 	    Notice("maxchildren are active, waiting");
 	    /* UINT_MAX would even be nicer, but Openindiana works only
 	       with 31 bits */
-	    while (!Sleep(INT_MAX)) ;	/* any signal lets us continue */
+	    Sleep(INT_MAX);
+	    xio_child_reap_pending();
 	 }
 	 Info("still listening");
       } else {

@@ -789,29 +789,6 @@ int socat(const char *address1, const char *address2) {
       }
       xiosetsigchild(sock1, socat_sigchild);
    }
-#if 1	/*! */
-   if (XIO_READABLE(sock1) &&
-       (XIO_RDSTREAM(sock1)->howtoend == END_KILL ||
-	XIO_RDSTREAM(sock1)->howtoend == END_CLOSE_KILL ||
-	XIO_RDSTREAM(sock1)->howtoend == END_SHUTDOWN_KILL)) {
-      int i;
-      for (i = 0; i < NUMUNKNOWN; ++i) {
-	 if (XIO_RDSTREAM(sock1)->para.exec.pid == diedunknown[i]) {
-	    /* Child has already died... but it might have put regular data into
-	       the communication channel, so continue */
-	    Info2("child "F_pid" has already died with status %d",
-		  XIO_RDSTREAM(sock1)->para.exec.pid, statunknown[i]);
-	    if (statunknown[i] != 0) {
-	       return 1;
-	    }
-	    diedunknown[i] = 0;
-	    XIO_RDSTREAM(sock1)->para.exec.pid = 0;
-	    /* return STAT_RETRYLATER; */
-	 }
-      }
-   }
-#endif
-
    mayexec = (sock1->common.flags&XIO_DOESCONVERT ? 0 : XIO_MAYEXEC);
    if (XIO_WRITABLE(sock1)) {
       if (XIO_READABLE(sock1)) {
@@ -831,29 +808,6 @@ int socat(const char *address1, const char *address2) {
       }
       xiosetsigchild(sock2, socat_sigchild);
    }
-#if 1	/*! */
-   if (XIO_READABLE(sock2) &&
-       (XIO_RDSTREAM(sock2)->howtoend == END_KILL ||
-	XIO_RDSTREAM(sock2)->howtoend == END_CLOSE_KILL ||
-	XIO_RDSTREAM(sock2)->howtoend == END_SHUTDOWN_KILL)) {
-      int i;
-      for (i = 0; i < NUMUNKNOWN; ++i) {
-	 if (XIO_RDSTREAM(sock2)->para.exec.pid == diedunknown[i]) {
-	    /* Child has already died... but it might have put regular data into
-	       the communication channel, so continue */
-	    Info2("child "F_pid" has already died with status %d",
-		  XIO_RDSTREAM(sock2)->para.exec.pid, statunknown[i]);
-	    if (statunknown[i] != 0) {
-	       return 1;
-	    }
-	    diedunknown[i] = 0;
-	    XIO_RDSTREAM(sock2)->para.exec.pid = 0;
-	    /* return STAT_RETRYLATER; */
-	 }
-      }
-   }
-#endif
-
    Info("resolved and opened all sock addresses");
    return _socat();	/* nsocks, sockets are visible outside function */
 }
@@ -868,6 +822,7 @@ static int childleftdata(xiofile_t *xfd) {
    struct pollfd in;
    int retval;
 
+   xio_child_reap();
    /* have to check if a child process died before, but left read data */
    if (XIO_READABLE(xfd) &&
        (XIO_RDSTREAM(xfd)->howtoend == END_KILL ||
@@ -1337,6 +1292,8 @@ int _socat(void) {
    }
 
    /* close everything that's still open */
+   xio_child_drain(sock1, &socat_opts.closwait);
+   xio_child_drain(sock2, &socat_opts.closwait);
    xioclose(sock1);
    xioclose(sock2);
 
