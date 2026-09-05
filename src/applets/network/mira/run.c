@@ -105,6 +105,10 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
     if (!*output_path_out)
         return -1;
 
+    if (frontend->config->logging.debug_trace) {
+        bx_mira_debug_trace_enqueued(
+            &frontend->debug_trace, bx_fetch_prepared_url_display(target), *output_path_out, depth);
+    }
     if (frontend->config->download.dry_run) {
         while (frontend->next_plan_index < frontend->dry_run_record_count && frontend->dry_run_records[frontend->next_plan_index].status != BX_FETCH_CRAWL_ENQUEUED) {
             frontend->next_plan_index++;
@@ -124,7 +128,6 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
             errno = ENOMEM;
             return -1;
         }
-        bx_mira_debug_trace_dry_run_enqueued(&frontend->debug_trace, record->display_url, record->output_path, depth);
         bx_mira_debug_trace_dry_run_decision(&frontend->debug_trace, record->display_url, record->output_path);
     }
     return 0;
@@ -145,13 +148,14 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     MiraRunFrontend* frontend = userdata;
     if (!frontend || !completion || !completion->transfer)
         return -1;
-    if (completion->retry_scheduled)
-        return 0;
     if (frontend->progress_line_active) {
         fputc('\n', frontend->diagnostics);
         frontend->progress_line_active = false;
     }
     frontend->last_progress_percent = -1;
+    bx_mira_debug_trace_completion(&frontend->debug_trace, frontend->config, completion);
+    if (completion->retry_scheduled)
+        return 0;
     if (completion->transfer->result == BX_FETCH_OK) {
         if (frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_VERBOSE && !frontend->config->download.spider) {
             fprintf(frontend->diagnostics, "mira: saved %s\n", completion->transfer->output_path);
@@ -169,21 +173,33 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     }
     if (frontend->config->logging.structured_errors) {
         const BxFetchRequest* request = completion->transfer->request;
+        char summary[64];
+        const char* error_summary = "transfer failed";
+        if (status >= 400 && status < 600) {
+            snprintf(summary, sizeof(summary), "HTTP status %d", status);
+            error_summary = summary;
+        }
         BxFetchStructuredError error = {
             .class_id = bx_fetch_error_class_for_exit_code(exit_code),
-            .summary = "transfer failed",
+            .summary = error_summary,
             .url = request ? bx_fetch_request_url_for_display(request) : NULL,
             .path = completion->transfer->output_path,
             .http_status = status > 0 ? status : -1,
             .curl_code = response && response->error_code != 0 ? response->error_code : -1,
             .error_number = response && response->error_number > 0 ? response->error_number : -1,
-            .retryable = completion->transfer->retryable_hint,
+            .retryable = completion->transfer->retryable_hint && completion->attempt < completion->max_attempts,
             .attempt = completion->attempt,
             .max_attempts = completion->max_attempts,
         };
         bx_fetch_error_emit_structured(frontend->diagnostics, &error);
     }
     return 0;
+}
+
+static void mira_transfer_observation(void* userdata, const BxFetchRunTransferObservation* observation) {
+    MiraRunFrontend* frontend = userdata;
+    if (frontend)
+        bx_mira_debug_trace_transfer_observation(&frontend->debug_trace, observation);
 }
 
 static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* observation) {
@@ -518,6 +534,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_document_error = mira_document_error,
         .on_link_conversion = mira_link_conversion,
         .on_seed_result = mira_seed_result,
+        .on_transfer_observation = config->logging.debug_trace ? mira_transfer_observation : NULL,
         .transport_observer =
             {
                 .on_response_header = mira_response_header,

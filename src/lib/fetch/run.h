@@ -23,11 +23,13 @@
 #include "net.h"
 #include "publication.h"
 #include "transfer_prepare.h"
+#include <stdint.h>
 
 typedef struct BxFetchRun BxFetchRun;
 
 typedef struct {
     const BxFetchTransferCompletion* transfer;
+    uint64_t transfer_id;
     int depth;
     int attempt;
     int max_attempts;
@@ -35,6 +37,34 @@ typedef struct {
     bool document_queued;
     bool retry_scheduled;
 } BxFetchRunCompletion;
+
+typedef enum {
+    BX_FETCH_RUN_TRANSFER_DISPATCH = 0,
+    BX_FETCH_RUN_TRANSFER_SUBMIT,
+    BX_FETCH_RUN_TRANSFER_SUBMITTED,
+    BX_FETCH_RUN_TRANSFER_SUBMIT_FAILED,
+} BxFetchRunTransferEvent;
+
+typedef enum {
+    BX_FETCH_RUN_SUBMIT_FAILURE_NONE = 0,
+    BX_FETCH_RUN_SUBMIT_FAILURE_PREPARE,
+    BX_FETCH_RUN_SUBMIT_FAILURE_STATE,
+    BX_FETCH_RUN_SUBMIT_FAILURE_ENGINE,
+} BxFetchRunSubmitFailure;
+
+typedef struct {
+    BxFetchRunTransferEvent event;
+    uint64_t transfer_id;
+    const BxFetchPreparedUrl* target;
+    const char* output_path;
+    int depth;
+    int attempt;
+    int max_attempts;
+    BxFetchRunSubmitFailure failure;
+    BxFetchPrepareFailureKind prepare_failure;
+} BxFetchRunTransferObservation;
+
+typedef void (*BxFetchRunTransferObservationFn)(void* userdata, const BxFetchRunTransferObservation* observation);
 
 typedef void (*BxFetchRunPrepareErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchPrepareError* error);
 typedef void (*BxFetchRunSubmitErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error);
@@ -93,6 +123,7 @@ typedef struct {
     BxFetchRunDocumentErrorFn on_document_error;
     BxFetchRunLinkConversionFn on_link_conversion;
     BxFetchRunSeedResultFn on_seed_result;
+    BxFetchRunTransferObservationFn on_transfer_observation;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
     void* userdata;

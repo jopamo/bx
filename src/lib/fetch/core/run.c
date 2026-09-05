@@ -17,6 +17,7 @@ struct BxFetchRun {
     struct RunDocumentTask* document_tail;
     size_t document_count;
     size_t document_bytes;
+    uint64_t next_transfer_id;
     int deferred_error;
     bool publication_loaded;
 };
@@ -37,7 +38,34 @@ typedef struct {
     int depth;
     int attempt;
     int max_attempts;
+    uint64_t transfer_id;
 } RunTransfer;
+
+static void run_observe_transfer(BxFetchRun* run,
+                                 BxFetchRunTransferEvent event,
+                                 uint64_t transfer_id,
+                                 const BxFetchPreparedUrl* target,
+                                 const char* output_path,
+                                 int depth,
+                                 int attempt,
+                                 int max_attempts,
+                                 BxFetchRunSubmitFailure failure,
+                                 BxFetchPrepareFailureKind prepare_failure) {
+    if (!run || !run->frontend.on_transfer_observation)
+        return;
+    BxFetchRunTransferObservation observation = {
+        .event = event,
+        .transfer_id = transfer_id,
+        .target = target,
+        .output_path = output_path,
+        .depth = depth,
+        .attempt = attempt,
+        .max_attempts = max_attempts,
+        .failure = failure,
+        .prepare_failure = prepare_failure,
+    };
+    run->frontend.on_transfer_observation(run->frontend.userdata, &observation);
+}
 
 static void run_defer_failure(BxFetchRun* run, int error_number) {
     if (run && !run->deferred_error)
@@ -221,6 +249,7 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
 
     BxFetchRunCompletion observation = {
         .transfer = completion,
+        .transfer_id = transfer->transfer_id,
         .depth = transfer->depth,
         .attempt = transfer->attempt,
         .max_attempts = transfer->max_attempts,
@@ -261,9 +290,20 @@ run_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* outpu
     if (run->cfg->download.dry_run)
         return 1;
 
+    uint64_t transfer_id = ++run->next_transfer_id;
     BxFetchPrepareError prepare_error = {0};
     BxFetchTransferCandidate* candidate = bx_fetch_transfer_candidate_prepare(run->cfg, target, output_path, &prepare_error);
     if (!candidate) {
+        run_observe_transfer(run,
+                             BX_FETCH_RUN_TRANSFER_SUBMIT_FAILED,
+                             transfer_id,
+                             target,
+                             output_path,
+                             depth,
+                             attempt,
+                             max_attempts,
+                             BX_FETCH_RUN_SUBMIT_FAILURE_PREPARE,
+                             prepare_error.kind);
         if (run->frontend.on_prepare_error) {
             run->frontend.on_prepare_error(run->frontend.userdata, target, output_path, &prepare_error);
         }
@@ -272,6 +312,16 @@ run_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* outpu
 
     RunTransfer* transfer = calloc(1, sizeof(*transfer));
     if (!transfer) {
+        run_observe_transfer(run,
+                             BX_FETCH_RUN_TRANSFER_SUBMIT_FAILED,
+                             transfer_id,
+                             target,
+                             output_path,
+                             depth,
+                             attempt,
+                             max_attempts,
+                             BX_FETCH_RUN_SUBMIT_FAILURE_STATE,
+                             BX_FETCH_PREPARE_FAILURE_NONE);
         bx_fetch_transfer_candidate_abort(candidate);
         return -1;
     }
@@ -281,15 +331,57 @@ run_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* outpu
     transfer->depth = depth;
     transfer->attempt = attempt;
     transfer->max_attempts = max_attempts;
+    transfer->transfer_id = transfer_id;
+
+    run_observe_transfer(run,
+                         BX_FETCH_RUN_TRANSFER_DISPATCH,
+                         transfer_id,
+                         target,
+                         output_path,
+                         depth,
+                         attempt,
+                         max_attempts,
+                         BX_FETCH_RUN_SUBMIT_FAILURE_NONE,
+                         BX_FETCH_PREPARE_FAILURE_NONE);
+    run_observe_transfer(run,
+                         BX_FETCH_RUN_TRANSFER_SUBMIT,
+                         transfer_id,
+                         target,
+                         output_path,
+                         depth,
+                         attempt,
+                         max_attempts,
+                         BX_FETCH_RUN_SUBMIT_FAILURE_NONE,
+                         BX_FETCH_PREPARE_FAILURE_NONE);
 
     BxFetchNetSetupError setup_error = {0};
     if (bx_fetch_transfer_candidate_submit(candidate, run->engine, run_response_headers, run_transfer_complete, transfer, run_redirect_allowed, transfer, &setup_error) != 0) {
+        run_observe_transfer(run,
+                             BX_FETCH_RUN_TRANSFER_SUBMIT_FAILED,
+                             transfer_id,
+                             target,
+                             output_path,
+                             depth,
+                             attempt,
+                             max_attempts,
+                             BX_FETCH_RUN_SUBMIT_FAILURE_ENGINE,
+                             BX_FETCH_PREPARE_FAILURE_NONE);
         if (run->frontend.on_submit_error) {
             run->frontend.on_submit_error(run->frontend.userdata, target, output_path, &setup_error);
         }
         free(transfer);
         return -1;
     }
+    run_observe_transfer(run,
+                         BX_FETCH_RUN_TRANSFER_SUBMITTED,
+                         transfer_id,
+                         target,
+                         output_path,
+                         depth,
+                         attempt,
+                         max_attempts,
+                         BX_FETCH_RUN_SUBMIT_FAILURE_NONE,
+                         BX_FETCH_PREPARE_FAILURE_NONE);
     return 0;
 }
 
