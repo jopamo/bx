@@ -157,14 +157,7 @@ typedef struct
     guicolor_T	sg_gui_bg;	// GUI background color handle
     guicolor_T	sg_gui_sp;	// GUI special color handle
 #endif
-#ifdef FEAT_GUI
-    GuiFont	sg_font;	// GUI font handle
-# ifdef FEAT_XFONTSET
-    GuiFontset	sg_fontset;	// GUI fontset handle
-# endif
-    char_u	*sg_font_name;  // GUI font or fontset name
-    int		sg_gui_attr;    // Screen attr for GUI mode
-#endif
+#line 168
 #if defined(FEAT_GUI) || defined(FEAT_EVAL)
 // Store the sp color name for the GUI or synIDattr()
     int		sg_gui;		// "gui=" highlighting attributes
@@ -240,10 +233,7 @@ static void highlight_clear(int idx);
 #if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
 static void gui_do_one_color(int idx, int do_menu, int do_tooltip);
 #endif
-#ifdef FEAT_GUI
-static int  set_group_colors(char_u *name, guicolor_T *fgp, guicolor_T *bgp, int do_menu, int use_norm, int do_tooltip);
-static void hl_do_font(int idx, char_u *arg, int do_normal, int do_menu, int do_tooltip, int free_font);
-#endif
+#line 247
 
 /*
  * The default highlight groups.  These are compiled-in for fast startup and
@@ -274,10 +264,7 @@ static char *(highlight_init_both[]) = {
     CENT("VertSplit term=reverse cterm=reverse",
 	 "VertSplit term=reverse cterm=reverse gui=reverse"),
     "default link VertSplitNC VertSplit",
-#ifdef FEAT_CLIPBOARD
-    CENT("VisualNOS term=underline,bold cterm=underline,bold",
-	 "VisualNOS term=underline,bold cterm=underline,bold gui=underline,bold"),
-#endif
+#line 281
 #ifdef FEAT_DIFF
     CENT("DiffText term=reverse cterm=bold ctermbg=Red",
 	 "DiffText term=reverse cterm=bold ctermbg=Red gui=bold guibg=Red"),
@@ -292,14 +279,7 @@ static char *(highlight_init_both[]) = {
     "default link TabPanel TabLine",
     "default link TabPanelSel TabLineSel",
     "default link TabPanelFill TabLineFill",
-#ifdef FEAT_GUI
-    "Cursor guibg=fg guifg=bg",
-    "lCursor guibg=fg guifg=bg", // should be different, but what?
-#endif
-#ifdef FEAT_GUI_MSWIN
-    "TitleBar guibg=bg guifg=fg",
-    "TitleBarNC guibg=NONE guifg=NONE",
-#endif
+#line 303
     "default link QuickFixLine Search",
     "default link CursorLineSign SignColumn",
     "default link CursorLineFold FoldColumn",
@@ -333,16 +313,7 @@ static char *(highlight_init_light[]) = {
 	 "Question term=standout ctermfg=DarkGreen gui=bold guifg=SeaGreen"),
     CENT("Search term=reverse ctermbg=Yellow ctermfg=NONE",
 	 "Search term=reverse ctermbg=Yellow ctermfg=NONE guibg=Yellow guifg=NONE"),
-#ifdef FEAT_SPELL
-    CENT("SpellBad term=reverse ctermbg=LightRed",
-	 "SpellBad term=reverse ctermbg=LightRed guisp=Red gui=undercurl"),
-    CENT("SpellCap term=reverse ctermbg=LightBlue",
-	 "SpellCap term=reverse ctermbg=LightBlue guisp=Blue gui=undercurl"),
-    CENT("SpellRare term=reverse ctermbg=LightMagenta",
-	 "SpellRare term=reverse ctermbg=LightMagenta guisp=Magenta gui=undercurl"),
-    CENT("SpellLocal term=underline ctermbg=Cyan",
-	 "SpellLocal term=underline ctermbg=Cyan guisp=DarkCyan gui=undercurl"),
-#endif
+#line 346
     CENT("PmenuThumb ctermbg=Black",
 	 "PmenuThumb ctermbg=Black guibg=Black"),
     CENT("PmenuShadow ctermbg=Black ctermfg=DarkGrey",
@@ -359,12 +330,7 @@ static char *(highlight_init_light[]) = {
 	 "WarningMsg term=standout ctermfg=DarkRed guifg=Red"),
     CENT("WildMenu term=standout ctermbg=Yellow ctermfg=Black",
 	 "WildMenu term=standout ctermbg=Yellow ctermfg=Black guibg=Yellow guifg=Black"),
-#ifdef FEAT_FOLDING
-    CENT("Folded term=standout ctermbg=Grey ctermfg=DarkBlue",
-	 "Folded term=standout ctermbg=Grey ctermfg=DarkBlue guibg=LightGrey guifg=DarkBlue"),
-    CENT("FoldColumn term=standout ctermbg=Grey ctermfg=DarkBlue",
-	 "FoldColumn term=standout ctermbg=Grey ctermfg=DarkBlue guibg=Grey guifg=DarkBlue"),
-#endif
+#line 368
 #ifdef FEAT_SIGNS
     CENT("SignColumn term=standout ctermbg=Grey ctermfg=DarkBlue",
 	 "SignColumn term=standout ctermbg=Grey ctermfg=DarkBlue guibg=Grey guifg=DarkBlue"),
@@ -389,24 +355,10 @@ static char *(highlight_init_light[]) = {
     CENT("ColorColumn term=reverse ctermbg=LightRed",
 	 "ColorColumn term=reverse ctermbg=LightRed guibg=LightRed"),
 #endif
-#ifdef FEAT_CONCEAL
-    CENT("Conceal ctermbg=DarkGrey ctermfg=LightGrey",
-	 "Conceal ctermbg=DarkGrey ctermfg=LightGrey guibg=DarkGrey guifg=LightGrey"),
-#endif
+#line 396
     CENT("MatchParen term=reverse ctermbg=Cyan",
 	 "MatchParen term=reverse ctermbg=Cyan guibg=Cyan"),
-#ifdef FEAT_TERMINAL
-    CENT("StatusLineTerm term=reverse,bold cterm=bold ctermfg=White ctermbg=DarkGreen",
-	 "StatusLineTerm term=reverse,bold cterm=bold ctermfg=White ctermbg=DarkGreen gui=bold guifg=bg guibg=DarkGreen"),
-    CENT("StatusLineTermNC term=reverse ctermfg=White ctermbg=DarkGreen",
-	 "StatusLineTermNC term=reverse ctermfg=White ctermbg=DarkGreen guifg=bg guibg=DarkGreen"),
-#endif
-#ifdef FEAT_MENU
-    CENT("ToolbarLine term=underline ctermbg=LightGrey",
-	 "ToolbarLine term=underline ctermbg=LightGrey guibg=LightGrey"),
-    CENT("ToolbarButton cterm=bold ctermfg=White ctermbg=DarkGrey",
-	 "ToolbarButton cterm=bold ctermfg=White ctermbg=DarkGrey gui=bold guifg=White guibg=Grey40"),
-#endif
+#line 410
     NULL
 };
 
@@ -426,16 +378,7 @@ static char *(highlight_init_dark[]) = {
 	 "Search term=reverse ctermbg=Yellow ctermfg=Black guibg=Yellow guifg=Black"),
     CENT("SpecialKey term=bold ctermfg=LightBlue",
 	 "SpecialKey term=bold ctermfg=LightBlue guifg=Cyan"),
-#ifdef FEAT_SPELL
-    CENT("SpellBad term=reverse ctermbg=Red",
-	 "SpellBad term=reverse ctermbg=Red guisp=Red gui=undercurl"),
-    CENT("SpellCap term=reverse ctermbg=Blue",
-	 "SpellCap term=reverse ctermbg=Blue guisp=Blue gui=undercurl"),
-    CENT("SpellRare term=reverse ctermbg=Magenta",
-	 "SpellRare term=reverse ctermbg=Magenta guisp=Magenta gui=undercurl"),
-    CENT("SpellLocal term=underline ctermbg=Cyan",
-	 "SpellLocal term=underline ctermbg=Cyan guisp=Cyan gui=undercurl"),
-#endif
+#line 439
     CENT("PmenuThumb ctermbg=White",
 	 "PmenuThumb ctermbg=White guibg=White"),
     CENT("PmenuShadow ctermbg=Black ctermfg=DarkGrey",
@@ -450,12 +393,7 @@ static char *(highlight_init_dark[]) = {
 	 "WarningMsg term=standout ctermfg=LightRed guifg=Red"),
     CENT("WildMenu term=standout ctermbg=Yellow ctermfg=Black",
 	 "WildMenu term=standout ctermbg=Yellow ctermfg=Black guibg=Yellow guifg=Black"),
-#ifdef FEAT_FOLDING
-    CENT("Folded term=standout ctermbg=DarkGrey ctermfg=Cyan",
-	 "Folded term=standout ctermbg=DarkGrey ctermfg=Cyan guibg=DarkGrey guifg=Cyan"),
-    CENT("FoldColumn term=standout ctermbg=DarkGrey ctermfg=Cyan",
-	 "FoldColumn term=standout ctermbg=DarkGrey ctermfg=Cyan guibg=Grey guifg=Cyan"),
-#endif
+#line 459
 #ifdef FEAT_SIGNS
     CENT("SignColumn term=standout ctermbg=DarkGrey ctermfg=Cyan",
 	 "SignColumn term=standout ctermbg=DarkGrey ctermfg=Cyan guibg=Grey guifg=Cyan"),
@@ -482,22 +420,7 @@ static char *(highlight_init_dark[]) = {
 #endif
     CENT("MatchParen term=reverse ctermbg=DarkCyan",
 	 "MatchParen term=reverse ctermbg=DarkCyan guibg=DarkCyan"),
-#ifdef FEAT_CONCEAL
-    CENT("Conceal ctermbg=DarkGrey ctermfg=LightGrey",
-	 "Conceal ctermbg=DarkGrey ctermfg=LightGrey guibg=DarkGrey guifg=LightGrey"),
-#endif
-#ifdef FEAT_TERMINAL
-    CENT("StatusLineTerm term=reverse,bold cterm=bold ctermfg=Black ctermbg=LightGreen",
-	 "StatusLineTerm term=reverse,bold cterm=bold ctermfg=Black ctermbg=LightGreen gui=bold guifg=bg guibg=LightGreen"),
-    CENT("StatusLineTermNC term=reverse ctermfg=Black ctermbg=LightGreen",
-	 "StatusLineTermNC term=reverse ctermfg=Black ctermbg=LightGreen guifg=bg guibg=LightGreen"),
-#endif
-#ifdef FEAT_MENU
-    CENT("ToolbarLine term=underline ctermbg=DarkGrey",
-	 "ToolbarLine term=underline ctermbg=DarkGrey guibg=Grey50"),
-    CENT("ToolbarButton cterm=bold ctermfg=Black ctermbg=LightGrey",
-	 "ToolbarButton cterm=bold ctermfg=Black ctermbg=LightGrey gui=bold guifg=Black guibg=LightGrey"),
-#endif
+#line 501
     NULL
 };
 
@@ -852,51 +775,7 @@ highlight_reset_all(void)
 {
     int		idx;
 
-#ifdef FEAT_GUI
-    // First, we do not destroy the old values, but allocate the new
-    // ones and update the display. THEN we destroy the old values.
-    // If we destroy the old values first, then the old values
-    // (such as GuiFont's or GuiFontset's) will still be displayed but
-    // invalid because they were free'd.
-    if (gui.in_use)
-    {
-# ifdef FEAT_BEVAL_TIP
-	gui_init_tooltip_font();
-# endif
-# if defined(FEAT_MENU) && defined(FEAT_GUI_MOTIF)
-	gui_init_menu_font();
-# endif
-    }
-# if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_X11)
-    gui_mch_def_colors();
-# endif
-# ifdef FEAT_GUI_MSWIN
-    if (gui.in_use)
-	gui_mch_set_titlebar_colors();
-# endif
-# ifdef FEAT_GUI_X11
-#  ifdef FEAT_MENU
-
-    // This only needs to be done when there is no Menu highlight
-    // group defined by default, which IS currently the case.
-    gui_mch_new_menu_colors();
-#  endif
-    if (gui.in_use)
-    {
-	gui_new_scrollbar_colors();
-#  ifdef FEAT_BEVAL_GUI
-	gui_mch_new_tooltip_colors();
-#  endif
-#  ifdef FEAT_MENU
-	gui_mch_new_menu_font();
-#  endif
-    }
-# endif
-
-    // Ok, we're done allocating the new default graphics items.
-    // The screen should already be refreshed at this point.
-    // It is now Ok to clear out the old data.
-#endif
+#line 900
 #ifdef FEAT_EVAL
     do_unlet((char_u *)"g:colors_name", TRUE);
 #endif
@@ -986,86 +865,7 @@ highlight_set_termgui_attr(int idx, char_u *key, char_u *arg, int init)
     return TRUE;
 }
 
-#ifdef FEAT_GUI
-/*
- * Set the font for the highlight group at 'idx'.
- * 'arg' is the font name.
- * Returns TRUE if the font is changed.
- */
-    static int
-highlight_set_font(
-	int	idx,
-	char_u	*arg,
-	int	is_normal_group,
-	int	is_menu_group,
-	int	is_tooltip_group)
-{
-    int		did_change = FALSE;
-
-    // in non-GUI fonts are simply ignored
-    if (HL_TABLE()[idx].sg_font_name != NULL
-	    && STRCMP(HL_TABLE()[idx].sg_font_name, arg) == 0)
-    {
-	// Font name didn't change, ignore.
-    }
-    else if (!gui.shell_created)
-    {
-	// GUI not started yet, always accept the name.
-	vim_free(HL_TABLE()[idx].sg_font_name);
-	HL_TABLE()[idx].sg_font_name = vim_strsave(arg);
-	did_change = TRUE;
-    }
-    else
-    {
-	GuiFont temp_sg_font = HL_TABLE()[idx].sg_font;
-# ifdef FEAT_XFONTSET
-	GuiFontset temp_sg_fontset = HL_TABLE()[idx].sg_fontset;
-# endif
-	// First, save the current font/fontset.
-	// Then try to allocate the font/fontset.
-	// If the allocation fails, HL_TABLE()[idx].sg_font OR
-	// sg_fontset will be set to NOFONT or NOFONTSET respectively.
-
-	HL_TABLE()[idx].sg_font = NOFONT;
-# ifdef FEAT_XFONTSET
-	HL_TABLE()[idx].sg_fontset = NOFONTSET;
-# endif
-	hl_do_font(idx, arg, is_normal_group, is_menu_group,
-		is_tooltip_group, FALSE);
-
-# ifdef FEAT_XFONTSET
-	if (HL_TABLE()[idx].sg_fontset != NOFONTSET)
-	{
-	    // New fontset was accepted. Free the old one, if there
-	    // was one.
-	    gui_mch_free_fontset(temp_sg_fontset);
-	    did_change = TRUE;
-	}
-	else
-	    HL_TABLE()[idx].sg_fontset = temp_sg_fontset;
-# endif
-	if (HL_TABLE()[idx].sg_font != NOFONT)
-	{
-	    // New font was accepted. Free the old one, if there was
-	    // one.
-	    gui_mch_free_font(temp_sg_font);
-	    did_change = TRUE;
-	}
-	else
-	    HL_TABLE()[idx].sg_font = temp_sg_font;
-	// Update sg_font_name once here, after both font and fontset results
-	// are known.
-	if (did_change)
-	{
-	    vim_free(HL_TABLE()[idx].sg_font_name);
-	    HL_TABLE()[idx].sg_font_name = vim_strsave(arg);
-	}
-    }
-
-    return did_change;
-}
-#endif
-
+#line 1069
 /*
  * Set the cterm foreground color for the Normal highlight group to "color" and
  * the bold attribute to "bold".
@@ -1075,10 +875,7 @@ hl_set_ctermfg_normal_group(int color, int bold)
 {
     cterm_normal_fg_color = color + 1;
     cterm_normal_fg_bold = bold;
-#ifdef FEAT_GUI
-    // Don't do this if the GUI is used.
-    if (!gui.in_use && !gui.starting)
-#endif
+#line 1082
     {
 	set_must_redraw(UPD_CLEAR);
 	if (termcap_active && color >= 0)
@@ -1105,10 +902,7 @@ highlight_set_ctermfg(int idx, int color, int is_normal_group)
 hl_set_ctermbg_normal_group(int color)
 {
     cterm_normal_bg_color = color + 1;
-#ifdef FEAT_GUI
-    // Don't mess with 'background' if the GUI is used.
-    if (!gui.in_use && !gui.starting)
-#endif
+#line 1112
     {
 	set_must_redraw(UPD_CLEAR);
 	if (color >= 0)
@@ -1154,10 +948,7 @@ highlight_set_ctermbg(int idx, int color, int is_normal_group)
 hl_set_ctermul_normal_group(int color)
 {
     cterm_normal_ul_color = color + 1;
-#ifdef FEAT_GUI
-    // Don't do this if the GUI is used.
-    if (!gui.in_use && !gui.starting)
-#endif
+#line 1161
     {
 	set_must_redraw(UPD_CLEAR);
 	if (termcap_active && color >= 0)
@@ -1367,18 +1158,7 @@ highlight_set_guifg(
 	    did_change = TRUE;
 	}
 # if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
-#  ifdef FEAT_GUI_MSWIN
-	if (is_titlebar_group && gui.title_fg_pixel != i)
-	{
-	    gui.title_fg_pixel = i;
-	    *do_colors = TRUE;
-	}
-	if (is_titlebarnc_group && gui.titlenc_fg_pixel != i)
-	{
-	    gui.titlenc_fg_pixel = i;
-	    *do_colors = TRUE;
-	}
-#  endif
+#line 1382
 #  ifdef FEAT_GUI_X11
 	if (is_menu_group && gui.menu_fg_pixel != i)
 	{
@@ -1450,18 +1230,7 @@ highlight_set_guibg(
 	    did_change = TRUE;
 	}
 # if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
-#  ifdef FEAT_GUI_MSWIN
-	if (is_titlebar_group && gui.title_bg_pixel != i)
-	{
-	    gui.title_bg_pixel = i;
-	    *do_colors = TRUE;
-	}
-	if (is_titlebarnc_group && gui.titlenc_bg_pixel != i)
-	{
-	    gui.titlenc_bg_pixel = i;
-	    *do_colors = TRUE;
-	}
-#  endif
+#line 1465
 #  ifdef FEAT_GUI_X11
 	if (is_menu_group && gui.menu_bg_pixel != i)
 	{
@@ -1639,13 +1408,10 @@ do_highlight(
     int		dolink = FALSE;
     int		error = FALSE;
     int		is_normal_group = FALSE;	// "Normal" group
-#ifdef FEAT_GUI_MSWIN
-    int		is_titlebar_group = FALSE;	// "TitleBar" group
-    int		is_titlebarnc_group = FALSE;	// "TitleBarNC" group
-#else
+#line 1646
 # define is_titlebar_group 0
 # define is_titlebarnc_group 0
-#endif
+#line 1649
 #ifdef FEAT_GUI_X11
     int		is_menu_group = FALSE;		// "Menu" group
     int		is_scrollbar_group = FALSE;	// "Scrollbar" group
@@ -1763,12 +1529,7 @@ do_highlight(
 
     if (STRCMP(HL_TABLE()[idx].sg_name_u, "NORMAL") == 0)
 	is_normal_group = TRUE;
-#ifdef FEAT_GUI_MSWIN
-    else if (STRCMP(HL_TABLE()[idx].sg_name_u, "TITLEBAR") == 0)
-	is_titlebar_group = TRUE;
-    else if (STRCMP(HL_TABLE()[idx].sg_name_u, "TITLEBARNC") == 0)
-	is_titlebarnc_group = TRUE;
-#endif
+#line 1772
 #ifdef FEAT_GUI_X11
     else if (STRCMP(HL_TABLE()[idx].sg_name_u, "MENU") == 0)
 	is_menu_group = TRUE;
@@ -1880,11 +1641,7 @@ do_highlight(
 	    else if (STRCMP(key, "FONT") == 0)
 	    {
 		// in non-GUI fonts are simply ignored
-#ifdef FEAT_GUI
-		if (highlight_set_font(idx, arg, is_normal_group,
-					      is_menu_group, is_tooltip_group))
-		    did_change = TRUE;
-#endif
+#line 1888
 	    }
 	    else if (STRCMP(key, "CTERMFG") == 0
 		    || STRCMP(key, "CTERMBG") == 0
@@ -1965,11 +1722,7 @@ do_highlight(
 	{
 	    HL_TABLE()[idx].sg_term_attr = 0;
 	    HL_TABLE()[idx].sg_cterm_attr = 0;
-#ifdef FEAT_GUI
-	    HL_TABLE()[idx].sg_gui_attr = 0;
-	    // Need to update all groups, because they might be using "bg"
-	    // and/or "fg", which have been changed now.
-#endif
+#line 1973
 #if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
 	    if (USE_24BIT)
 	    {
@@ -1982,26 +1735,9 @@ do_highlight(
 	    control_console_color_rgb();
 #endif
 	}
-#ifdef FEAT_GUI_MSWIN
-	else if (is_titlebar_group)
-	{
-	    if (gui.in_use && do_colors)
-		gui_mch_set_titlebar_colors();
-	}
-	else if (is_titlebarnc_group)
-	{
-	    if (gui.in_use && do_colors)
-		gui_mch_set_titlebar_colors();
-	}
-#endif
+#line 1997
 #ifdef FEAT_GUI_X11
-# ifdef FEAT_MENU
-	else if (is_menu_group)
-	{
-	    if (gui.in_use && do_colors)
-		gui_mch_new_menu_colors();
-	}
-# endif
+#line 2005
 	else if (is_scrollbar_group)
 	{
 	    if (gui.in_use && do_colors)
@@ -2108,13 +1844,7 @@ hl_has_settings(int idx, int check_link)
 	    || HL_TABLE()[idx].sg_cterm_fg != 0
 	    || HL_TABLE()[idx].sg_cterm_bg != 0
 	    || HL_TABLE()[idx].sg_cterm_font != 0
-#ifdef FEAT_GUI
-	    || HL_TABLE()[idx].sg_gui_attr != 0
-	    || HL_TABLE()[idx].sg_gui_fg_name != NULL
-	    || HL_TABLE()[idx].sg_gui_bg_name != NULL
-	    || HL_TABLE()[idx].sg_gui_sp_name != NULL
-	    || HL_TABLE()[idx].sg_font_name != NULL
-#endif
+#line 2118
 	    || (check_link && (HL_TABLE()[idx].sg_set & SG_LINK)));
 }
 
@@ -2147,16 +1877,7 @@ highlight_clear(int idx)
     HL_TABLE()[idx].sg_gui_bg = INVALCOLOR;
     HL_TABLE()[idx].sg_gui_sp = INVALCOLOR;
 #endif
-#ifdef FEAT_GUI
-    gui_mch_free_font(HL_TABLE()[idx].sg_font);
-    HL_TABLE()[idx].sg_font = NOFONT;
-# ifdef FEAT_XFONTSET
-    gui_mch_free_fontset(HL_TABLE()[idx].sg_fontset);
-    HL_TABLE()[idx].sg_fontset = NOFONTSET;
-# endif
-    VIM_CLEAR(HL_TABLE()[idx].sg_font_name);
-    HL_TABLE()[idx].sg_gui_attr = 0;
-#endif
+#line 2160
     // Restore default link and context if they exist. Otherwise clears.
     HL_TABLE()[idx].sg_link = HL_TABLE()[idx].sg_deflink;
 #ifdef FEAT_EVAL
@@ -2175,69 +1896,9 @@ highlight_clear(int idx)
     void
 set_normal_colors(void)
 {
-# ifdef FEAT_GUI
-#  ifdef FEAT_TERMGUICOLORS
-    if (gui.in_use)
-#  endif
-    {
-	if (set_group_colors((char_u *)"Normal",
-				 &gui.norm_pixel, &gui.back_pixel,
-				 FALSE, TRUE, FALSE))
-	{
-	    gui_mch_new_colors();
-	    set_must_redraw(UPD_CLEAR);
-	}
-#  ifdef FEAT_GUI_MSWIN
-	if (set_group_colors((char_u *)"TitleBar",
-				 &gui.title_fg_pixel, &gui.title_bg_pixel,
-				 FALSE, FALSE, FALSE))
-	{
-	    gui_mch_set_titlebar_colors();
-	    set_must_redraw(UPD_CLEAR);
-	}
-	if (set_group_colors((char_u *)"TitleBarNC",
-				 &gui.titlenc_fg_pixel, &gui.titlenc_bg_pixel,
-				 FALSE, FALSE, FALSE))
-	{
-	    gui_mch_set_titlebar_colors();
-	    set_must_redraw(UPD_CLEAR);
-	}
-#  endif
-#  ifdef FEAT_GUI_X11
-	if (set_group_colors((char_u *)"Menu",
-			     &gui.menu_fg_pixel, &gui.menu_bg_pixel,
-			     TRUE, FALSE, FALSE))
-	{
-#   ifdef FEAT_MENU
-	    gui_mch_new_menu_colors();
-#   endif
-	    set_must_redraw(UPD_CLEAR);
-	}
-#   ifdef FEAT_BEVAL_GUI
-	if (set_group_colors((char_u *)"Tooltip",
-			     &gui.tooltip_fg_pixel, &gui.tooltip_bg_pixel,
-			     FALSE, FALSE, TRUE))
-	{
-#    ifdef FEAT_TOOLBAR
-	    gui_mch_new_tooltip_colors();
-#    endif
-	    set_must_redraw(UPD_CLEAR);
-	}
-#   endif
-	if (set_group_colors((char_u *)"Scrollbar",
-			&gui.scroll_fg_pixel, &gui.scroll_bg_pixel,
-			FALSE, FALSE, FALSE))
-	{
-	    gui_new_scrollbar_colors();
-	    set_must_redraw(UPD_CLEAR);
-	}
-#  endif
-    }
-# endif
+#line 2237
 # ifdef FEAT_TERMGUICOLORS
-#  ifdef FEAT_GUI
-    else
-#  endif
+#line 2241
     {
 	int		idx;
 
@@ -2263,240 +1924,7 @@ set_normal_colors(void)
 }
 #endif
 
-#if defined(FEAT_GUI)
-/*
- * Set the colors for "Normal", "Menu", "TitleBar", "TitleBarNC", "Tooltip" or
- * "Scrollbar".
- */
-    static int
-set_group_colors(
-    char_u	*name,
-    guicolor_T	*fgp,
-    guicolor_T	*bgp,
-    int		do_menu,
-    int		use_norm,
-    int		do_tooltip)
-{
-    int		idx;
-
-    idx = syn_name2id(name) - 1;
-    if (idx < 0)
-	return FALSE;
-
-    gui_do_one_color(idx, do_menu, do_tooltip);
-
-    if (HL_TABLE()[idx].sg_gui_fg != INVALCOLOR)
-	*fgp = HL_TABLE()[idx].sg_gui_fg;
-    else if (use_norm)
-	*fgp = gui.def_norm_pixel;
-    if (HL_TABLE()[idx].sg_gui_bg != INVALCOLOR)
-	*bgp = HL_TABLE()[idx].sg_gui_bg;
-    else if (use_norm)
-	*bgp = gui.def_back_pixel;
-    return TRUE;
-}
-
-/*
- * Get the font of the "Normal" group.
- * Returns "" when it's not found or not set.
- */
-    char_u *
-hl_get_font_name(void)
-{
-    int		id;
-    char_u	*s;
-
-    id = syn_name2id((char_u *)"Normal");
-    if (id > 0)
-    {
-	s = HL_TABLE()[id - 1].sg_font_name;
-	if (s != NULL)
-	    return s;
-    }
-    return (char_u *)"";
-}
-
-/*
- * Set font for "Normal" group.  Called by gui_mch_init_font() when a font has
- * actually chosen to be used.
- */
-    void
-hl_set_font_name(char_u *font_name)
-{
-    int	    id;
-
-    id = syn_name2id((char_u *)"Normal");
-    if (id <= 0)
-	return;
-
-    vim_free(HL_TABLE()[id - 1].sg_font_name);
-    HL_TABLE()[id - 1].sg_font_name = vim_strsave(font_name);
-}
-
-/*
- * Set background color for "Normal" group.  Called by gui_set_bg_color()
- * when the color is known.
- */
-    void
-hl_set_bg_color_name(
-    char_u  *name)	    // must have been allocated
-{
-    int	    id;
-
-    if (name == NULL)
-	return;
-
-    id = syn_name2id((char_u *)"Normal");
-    if (id <= 0)
-	return;
-
-    vim_free(HL_TABLE()[id - 1].sg_gui_bg_name);
-    HL_TABLE()[id - 1].sg_gui_bg_name = name;
-}
-
-/*
- * Set foreground color for "Normal" group.  Called by gui_set_fg_color()
- * when the color is known.
- */
-    void
-hl_set_fg_color_name(
-    char_u  *name)	    // must have been allocated
-{
-    int	    id;
-
-    if (name == NULL)
-	return;
-
-    id = syn_name2id((char_u *)"Normal");
-    if (id <= 0)
-	return;
-
-    vim_free(HL_TABLE()[id - 1].sg_gui_fg_name);
-    HL_TABLE()[id - 1].sg_gui_fg_name = name;
-}
-
-/*
- * Return the handle for a font name.
- * Returns NOFONT when failed.
- */
-    static GuiFont
-font_name2handle(char_u *name)
-{
-    if (STRCMP(name, "NONE") == 0)
-	return NOFONT;
-
-    return gui_mch_get_font(name, TRUE);
-}
-
-# ifdef FEAT_XFONTSET
-/*
- * Return the handle for a fontset name.
- * Returns NOFONTSET when failed.
- */
-    static GuiFontset
-fontset_name2handle(char_u *name, int fixed_width)
-{
-    if (STRCMP(name, "NONE") == 0)
-	return NOFONTSET;
-
-    return gui_mch_get_fontset(name, TRUE, fixed_width);
-}
-# endif
-
-/*
- * Get the font or fontset for one highlight group.
- */
-    static void
-hl_do_font(
-    int		idx,
-    char_u	*arg,
-    int		do_normal,		// set normal font
-    int		do_menu UNUSED,		// set menu font
-    int		do_tooltip UNUSED,	// set tooltip font
-    int		free_font)		// free current font/fontset
-{
-# ifdef FEAT_XFONTSET
-    // If 'guifontset' is not empty, first try using the name as a
-    // fontset.  If that doesn't work, use it as a font name.
-    if (*p_guifontset != NUL
-#  ifdef FONTSET_ALWAYS
-	|| do_menu
-#  endif
-#  ifdef FEAT_BEVAL_TIP
-	// In Motif, the Tooltip highlight group is always a fontset
-	|| do_tooltip
-#  endif
-	    )
-    {
-	if (free_font)
-	    gui_mch_free_fontset(HL_TABLE()[idx].sg_fontset);
-	HL_TABLE()[idx].sg_fontset = fontset_name2handle(arg, 0
-#  ifdef FONTSET_ALWAYS
-		|| do_menu
-#  endif
-#  ifdef FEAT_BEVAL_TIP
-		|| do_tooltip
-#  endif
-		);
-    }
-    if (HL_TABLE()[idx].sg_fontset != NOFONTSET)
-    {
-	// If it worked and it's the Normal group, use it as the normal
-	// fontset.  Same for the Menu group.
-	if (do_normal)
-	    gui_init_font(arg, TRUE);
-#  if defined(FEAT_GUI_MOTIF) && defined(FEAT_MENU)
-	if (do_menu)
-	{
-#   ifdef FONTSET_ALWAYS
-	    gui.menu_fontset = HL_TABLE()[idx].sg_fontset;
-#   else
-	    // YIKES!  This is a bug waiting to crash the program
-	    gui.menu_font = HL_TABLE()[idx].sg_fontset;
-#   endif
-	    gui_mch_new_menu_font();
-	}
-#   ifdef FEAT_BEVAL_GUI
-	if (do_tooltip)
-	{
-	    // The Athena widget set could not handle switching between
-	    // displaying a single font and a fontset.
-	    // If the XtNinternational resource is set to True at widget
-	    // creation, then a fontset is always used, otherwise an
-	    // XFontStruct is used.
-	    gui.tooltip_fontset = (XFontSet)HL_TABLE()[idx].sg_fontset;
-	    gui_mch_new_tooltip_font();
-	}
-#   endif
-#  endif
-    }
-    else
-# endif
-    {
-	if (free_font)
-	    gui_mch_free_font(HL_TABLE()[idx].sg_font);
-	HL_TABLE()[idx].sg_font = font_name2handle(arg);
-	// If it worked and it's the Normal group, use it as the
-	// normal font.  Same for the Menu group.
-	if (HL_TABLE()[idx].sg_font != NOFONT)
-	{
-	    if (do_normal)
-		gui_init_font(arg, FALSE);
-# ifndef FONTSET_ALWAYS
-#  if defined(FEAT_GUI_MOTIF) && defined(FEAT_MENU)
-	    if (do_menu)
-	    {
-		gui.menu_font = HL_TABLE()[idx].sg_font;
-		gui_mch_new_menu_font();
-	    }
-#  endif
-# endif
-	}
-    }
-}
-
-#endif // FEAT_GUI
-
+#line 2500
 #if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
 /*
  * Return the handle for a color name.
@@ -2510,12 +1938,7 @@ color_name2handle(char_u *name)
 
     if (STRICMP(name, "fg") == 0 || STRICMP(name, "foreground") == 0)
     {
-# if defined(FEAT_TERMGUICOLORS) && defined(FEAT_GUI)
-	if (gui.in_use)
-# endif
-# ifdef FEAT_GUI
-	    return gui.norm_pixel;
-# endif
+#line 2519
 # ifdef FEAT_TERMGUICOLORS
 	if (cterm_normal_fg_gui_color != INVALCOLOR)
 	    return cterm_normal_fg_gui_color;
@@ -2525,12 +1948,7 @@ color_name2handle(char_u *name)
     }
     if (STRICMP(name, "bg") == 0 || STRICMP(name, "background") == 0)
     {
-# if defined(FEAT_TERMGUICOLORS) && defined(FEAT_GUI)
-	if (gui.in_use)
-# endif
-# ifdef FEAT_GUI
-	    return gui.back_pixel;
-# endif
+#line 2534
 # ifdef FEAT_TERMGUICOLORS
 	if (cterm_normal_bg_gui_color != INVALCOLOR)
 	    return cterm_normal_bg_gui_color;
@@ -2740,12 +2158,7 @@ static garray_T	cterm_attr_table = {0, 0, 0, 0, NULL};
 
 #define CTERM_ATTR_ENTRY(idx) ((attrentry_T *)cterm_attr_table.ga_data)[idx]
 
-#ifdef FEAT_GUI
-static garray_T	gui_attr_table = {0, 0, 0, 0, NULL};
-
-# define GUI_ATTR_ENTRY(idx) ((attrentry_T *)gui_attr_table.ga_data)[idx]
-#endif
-
+#line 2749
 /*
  * Return the attr number for a set of colors and font.
  * Add a new entry to the term_attr_table, cterm_attr_table or gui_attr_table
@@ -2769,20 +2182,7 @@ get_attr_entry(garray_T *table, attrentry_T *aep)
 	taep = &(((attrentry_T *)table->ga_data)[i]);
 	if (	   aep->ae_attr == taep->ae_attr
 		&& (
-#ifdef FEAT_GUI
-		       (table == &gui_attr_table
-			&& (aep->ae_u.gui.fg_color == taep->ae_u.gui.fg_color
-			    && aep->ae_u.gui.bg_color
-						    == taep->ae_u.gui.bg_color
-			    && aep->ae_u.gui.sp_color
-						    == taep->ae_u.gui.sp_color
-			    && aep->ae_u.gui.font == taep->ae_u.gui.font
-# ifdef FEAT_XFONTSET
-			    && aep->ae_u.gui.fontset == taep->ae_u.gui.fontset
-# endif
-			    ))
-		    ||
-#endif
+#line 2786
 		       (table == &term_attr_table
 			&& (aep->ae_u.term.start == NULL)
 					    == (taep->ae_u.term.start == NULL)
@@ -2845,18 +2245,7 @@ get_attr_entry(garray_T *table, attrentry_T *aep)
     taep = &(((attrentry_T *)table->ga_data)[table->ga_len]);
     CLEAR_POINTER(taep);
     taep->ae_attr = aep->ae_attr;
-#ifdef FEAT_GUI
-    if (table == &gui_attr_table)
-    {
-	taep->ae_u.gui.fg_color = aep->ae_u.gui.fg_color;
-	taep->ae_u.gui.bg_color = aep->ae_u.gui.bg_color;
-	taep->ae_u.gui.sp_color = aep->ae_u.gui.sp_color;
-	taep->ae_u.gui.font = aep->ae_u.gui.font;
-# ifdef FEAT_XFONTSET
-	taep->ae_u.gui.fontset = aep->ae_u.gui.fontset;
-# endif
-    }
-#endif
+#line 2860
     if (table == &term_attr_table)
     {
 	if (aep->ae_u.term.start == NULL)
@@ -2884,78 +2273,7 @@ get_attr_entry(garray_T *table, attrentry_T *aep)
     return (table->ga_len - 1 + ATTR_OFF);
 }
 
-#if defined(FEAT_TERMINAL)
-/*
- * Get an attribute index for a cterm entry.
- * Uses an existing entry when possible or adds one when needed.
- */
-    int
-get_cterm_attr_idx(int attr, int fg, int bg)
-{
-    attrentry_T		at_en;
-
-    CLEAR_FIELD(at_en);
-# ifdef FEAT_TERMGUICOLORS
-    at_en.ae_u.cterm.fg_rgb = INVALCOLOR;
-    at_en.ae_u.cterm.bg_rgb = INVALCOLOR;
-    at_en.ae_u.cterm.ul_rgb = INVALCOLOR;
-# endif
-    at_en.ae_attr = attr;
-    at_en.ae_u.cterm.fg_color = fg;
-    at_en.ae_u.cterm.bg_color = bg;
-    at_en.ae_u.cterm.ul_color = 0;
-    at_en.ae_u.cterm.font = 0;
-    return get_attr_entry(&cterm_attr_table, &at_en);
-}
-#endif
-
-#if defined(FEAT_TERMINAL) && defined(FEAT_TERMGUICOLORS)
-/*
- * Get an attribute index for a 'termguicolors' entry.
- * Uses an existing entry when possible or adds one when needed.
- */
-    int
-get_tgc_attr_idx(int attr, guicolor_T fg, guicolor_T bg)
-{
-    attrentry_T		at_en;
-
-    CLEAR_FIELD(at_en);
-    at_en.ae_attr = attr;
-    if (fg == INVALCOLOR && bg == INVALCOLOR)
-    {
-	// If both GUI colors are not set fall back to the cterm colors.  Helps
-	// if the GUI only has an attribute, such as undercurl.
-	at_en.ae_u.cterm.fg_rgb = CTERMCOLOR;
-	at_en.ae_u.cterm.bg_rgb = CTERMCOLOR;
-    }
-    else
-    {
-	at_en.ae_u.cterm.fg_rgb = fg;
-	at_en.ae_u.cterm.bg_rgb = bg;
-    }
-    at_en.ae_u.cterm.ul_rgb = INVALCOLOR;
-    return get_attr_entry(&cterm_attr_table, &at_en);
-}
-#endif
-
-#if defined(FEAT_TERMINAL) && defined(FEAT_GUI)
-/*
- * Get an attribute index for a cterm entry.
- * Uses an existing entry when possible or adds one when needed.
- */
-    int
-get_gui_attr_idx(int attr, guicolor_T fg, guicolor_T bg)
-{
-    attrentry_T		at_en;
-
-    CLEAR_FIELD(at_en);
-    at_en.ae_attr = attr;
-    at_en.ae_u.gui.fg_color = fg;
-    at_en.ae_u.gui.bg_color = bg;
-    return get_attr_entry(&gui_attr_table, &at_en);
-}
-#endif
-
+#line 2959
 /*
  * Clear all highlight tables.
  */
@@ -2965,9 +2283,7 @@ clear_hl_tables(void)
     int		i;
     attrentry_T	*taep;
 
-#ifdef FEAT_GUI
-    ga_clear(&gui_attr_table);
-#endif
+#line 2971
     for (i = 0; i < term_attr_table.ga_len; ++i)
     {
 	taep = &(((attrentry_T *)term_attr_table.ga_data)[i]);
@@ -2998,49 +2314,7 @@ hl_combine_attr(int char_attr, int prim_attr)
 	return prim_attr;
     if (char_attr <= HL_ALL && prim_attr <= HL_ALL)
 	return ATTR_COMBINE(char_attr, prim_attr);
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	if (char_attr > HL_ALL)
-	    char_aep = syn_gui_attr2entry(char_attr);
-	if (char_aep != NULL)
-	    new_en = *char_aep;
-	else
-	{
-	    CLEAR_FIELD(new_en);
-	    new_en.ae_u.gui.fg_color = INVALCOLOR;
-	    new_en.ae_u.gui.bg_color = INVALCOLOR;
-	    new_en.ae_u.gui.sp_color = INVALCOLOR;
-	    if (char_attr <= HL_ALL)
-		new_en.ae_attr = char_attr;
-	}
-
-	if (prim_attr <= HL_ALL)
-	    new_en.ae_attr = ATTR_COMBINE(new_en.ae_attr, prim_attr);
-	else
-	{
-	    prim_aep = syn_gui_attr2entry(prim_attr);
-	    if (prim_aep != NULL)
-	    {
-		new_en.ae_attr = ATTR_COMBINE(new_en.ae_attr,
-							   prim_aep->ae_attr);
-		if (prim_aep->ae_u.gui.fg_color != INVALCOLOR)
-		    new_en.ae_u.gui.fg_color = prim_aep->ae_u.gui.fg_color;
-		if (prim_aep->ae_u.gui.bg_color != INVALCOLOR)
-		    new_en.ae_u.gui.bg_color = prim_aep->ae_u.gui.bg_color;
-		if (prim_aep->ae_u.gui.sp_color != INVALCOLOR)
-		    new_en.ae_u.gui.sp_color = prim_aep->ae_u.gui.sp_color;
-		if (prim_aep->ae_u.gui.font != NOFONT)
-		    new_en.ae_u.gui.font = prim_aep->ae_u.gui.font;
-# ifdef FEAT_XFONTSET
-		if (prim_aep->ae_u.gui.fontset != NOFONTSET)
-		    new_en.ae_u.gui.fontset = prim_aep->ae_u.gui.fontset;
-# endif
-	    }
-	}
-	return get_attr_entry(&gui_attr_table, &new_en);
-    }
-#endif
+#line 3044
 
     if (IS_CTERM)
     {
@@ -3368,68 +2642,7 @@ hl_blend_attr(int char_attr, int popup_attr, int blend, int blend_fg UNUSED)
     if (blend >= 100 && blend_fg)
 	return char_attr;  // Fully transparent for both fg and bg
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	if (char_attr > HL_ALL)
-	    char_aep = syn_gui_attr2entry(char_attr);
-	if (char_aep != NULL)
-	    new_en = *char_aep;
-	else
-	{
-	    CLEAR_FIELD(new_en);
-	    new_en.ae_u.gui.fg_color = INVALCOLOR;
-	    new_en.ae_u.gui.bg_color = INVALCOLOR;
-	    new_en.ae_u.gui.sp_color = INVALCOLOR;
-	    if (char_attr <= HL_ALL)
-		new_en.ae_attr = char_attr;
-	}
-
-	if (popup_attr > HL_ALL)
-	{
-	    popup_aep = syn_gui_attr2entry(popup_attr);
-	    if (popup_aep != NULL)
-	    {
-		if (blend_fg)
-		{
-		    // blend_fg=TRUE: fade underlying text toward popup bg.
-		    if (popup_aep->ae_u.gui.bg_color != INVALCOLOR)
-		    {
-			int base_fg = 0xFFFFFF;
-			if (char_aep != NULL
-				&& char_aep->ae_u.gui.fg_color != INVALCOLOR)
-			    base_fg = char_aep->ae_u.gui.fg_color;
-			new_en.ae_u.gui.fg_color = blend_colors(
-				base_fg, popup_aep->ae_u.gui.bg_color, blend);
-		    }
-		}
-		else
-		{
-		    // blend_fg=FALSE: popup text is opaque.  Replace the
-		    // underlying cell's attribute flags, fg and special
-		    // color with the popup's, so the underlying syntax
-		    // highlighting and any decoration (textprop undercurl,
-		    // ...) do not bleed through.
-		    new_en.ae_attr = popup_aep->ae_attr;
-		    new_en.ae_u.gui.fg_color = popup_aep->ae_u.gui.fg_color;
-		    new_en.ae_u.gui.sp_color = popup_aep->ae_u.gui.sp_color;
-		}
-		// Blend background color: blend popup bg toward underlying bg
-		if (popup_aep->ae_u.gui.bg_color != INVALCOLOR)
-		{
-		    guicolor_T underlying_bg = INVALCOLOR;
-		    if (char_aep != NULL)
-			underlying_bg = char_aep->ae_u.gui.bg_color;
-		    new_en.ae_u.gui.bg_color = blend_colors(
-			    popup_aep->ae_u.gui.bg_color,
-			    underlying_bg, blend);
-		}
-	    }
-	}
-	return get_attr_entry(&gui_attr_table, &new_en);
-    }
-#endif
-
+#line 3433
     if (IS_CTERM)
     {
 	if (char_attr > HL_ALL)
@@ -3603,55 +2816,7 @@ hl_pum_blend_attr(int char_attr, int popup_attr, int blend UNUSED)
     attrentry_T *popup_aep;
     attrentry_T new_en;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	if (char_attr > HL_ALL)
-	    char_aep = syn_gui_attr2entry(char_attr);
-	if (char_aep != NULL)
-	    new_en = *char_aep;
-	else
-	{
-	    CLEAR_FIELD(new_en);
-	    new_en.ae_u.gui.fg_color = INVALCOLOR;
-	    new_en.ae_u.gui.bg_color = INVALCOLOR;
-	    new_en.ae_u.gui.sp_color = INVALCOLOR;
-	    if (char_attr <= HL_ALL)
-		new_en.ae_attr = char_attr;
-	}
-	if (popup_attr > HL_ALL)
-	{
-	    popup_aep = syn_gui_attr2entry(popup_attr);
-	    if (popup_aep != NULL)
-	    {
-		// Blend fg: pum_bg toward underlying_fg.
-		// blend=0 (opaque): fg = pum_bg (text hidden)
-		// blend=100 (transparent): fg = underlying_fg (text visible)
-		if (popup_aep->ae_u.gui.bg_color != INVALCOLOR)
-		{
-		    int base_fg = 0xFFFFFF;
-		    if (char_aep != NULL
-			    && char_aep->ae_u.gui.fg_color != INVALCOLOR)
-			base_fg = char_aep->ae_u.gui.fg_color;
-		    new_en.ae_u.gui.fg_color = blend_colors(
-			    popup_aep->ae_u.gui.bg_color, base_fg, blend);
-		}
-		// Blend bg: popup bg toward underlying bg.
-		if (popup_aep->ae_u.gui.bg_color != INVALCOLOR)
-		{
-		    guicolor_T underlying_bg = INVALCOLOR;
-		    if (char_aep != NULL)
-			underlying_bg = char_aep->ae_u.gui.bg_color;
-		    new_en.ae_u.gui.bg_color = blend_colors(
-			    popup_aep->ae_u.gui.bg_color,
-			    underlying_bg, blend);
-		}
-	    }
-	}
-	return get_attr_entry(&gui_attr_table, &new_en);
-    }
-#endif
-
+#line 3655
     if (IS_CTERM)
     {
 	if (char_attr > HL_ALL)
@@ -3751,17 +2916,7 @@ hl_pum_blend_attr(int char_attr, int popup_attr, int blend UNUSED)
     return get_attr_entry(&term_attr_table, &new_en);
 }
 
-#ifdef FEAT_GUI
-    attrentry_T *
-syn_gui_attr2entry(int attr)
-{
-    attr -= ATTR_OFF;
-    if (attr >= gui_attr_table.ga_len)	    // did ":syntax clear"
-	return NULL;
-    return &(GUI_ATTR_ENTRY(attr));
-}
-#endif
-
+#line 3765
 /*
  * Get the highlight attributes (HL_BOLD etc.) from an attribute nr.
  * Only to be used when "attr" > HL_ALL.
@@ -3771,11 +2926,7 @@ syn_attr2attr(int attr)
 {
     attrentry_T	*aep;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	aep = syn_gui_attr2entry(attr);
-    else
-#endif
+#line 3779
 	if (IS_CTERM)
 	    aep = syn_cterm_attr2entry(attr);
 	else
@@ -3849,10 +3000,7 @@ highlight_list_one(int id)
     didh = highlight_list_arg(id, didh, LIST_STRING,
 				    0, sgp->sg_gui_sp_name, "guisp");
 #endif
-#ifdef FEAT_GUI
-    didh = highlight_list_arg(id, didh, LIST_STRING,
-				    0, sgp->sg_font_name, "font");
-#endif
+#line 3856
 
     if (sgp->sg_link && !got_int)
     {
@@ -4009,11 +3157,7 @@ highlight_color(
     if (modec == 'g')
     {
 # if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
-#  ifdef FEAT_GUI
-	// return font name
-	if (font)
-	    return HL_TABLE()[id - 1].sg_font_name;
-#  endif
+#line 4017
 
 	// return #RRGGBB form (only possible when GUI is running)
 	if ((USE_24BIT) && what[2] == '#')
@@ -4163,33 +3307,7 @@ set_hl_attr(
     if (sgp->sg_name_u != NULL && STRCMP(sgp->sg_name_u, "NORMAL") == 0)
 	return;
 
-#ifdef FEAT_GUI
-    // For the GUI mode: If there are other than "normal" highlighting
-    // attributes, need to allocate an attr number.
-    if (sgp->sg_gui_fg == INVALCOLOR
-	    && sgp->sg_gui_bg == INVALCOLOR
-	    && sgp->sg_gui_sp == INVALCOLOR
-	    && sgp->sg_font == NOFONT
-# ifdef FEAT_XFONTSET
-	    && sgp->sg_fontset == NOFONTSET
-# endif
-	    )
-    {
-	sgp->sg_gui_attr = sgp->sg_gui;
-    }
-    else
-    {
-	at_en.ae_attr = sgp->sg_gui;
-	at_en.ae_u.gui.fg_color = sgp->sg_gui_fg;
-	at_en.ae_u.gui.bg_color = sgp->sg_gui_bg;
-	at_en.ae_u.gui.sp_color = sgp->sg_gui_sp;
-	at_en.ae_u.gui.font = sgp->sg_font;
-# ifdef FEAT_XFONTSET
-	at_en.ae_u.gui.fontset = sgp->sg_fontset;
-# endif
-	sgp->sg_gui_attr = get_attr_entry(&gui_attr_table, &at_en);
-    }
-#endif
+#line 4193
     // For the term mode: If there are other than "normal" highlighting
     // attributes, need to allocate an attr number.
     if (sgp->sg_start == NULL && sgp->sg_stop == NULL)
@@ -4482,12 +3600,7 @@ syn_id2attr(int hl_id)
     assert(hl_id > 0);
     sgp = &HL_TABLE()[hl_id - 1];	    // index is ID minus one
 
-#ifdef FEAT_GUI
-    // Only use GUI attr when the GUI is being used.
-    if (gui.in_use)
-	attr = sgp->sg_gui_attr;
-    else
-#endif
+#line 4491
 	if (IS_CTERM)
 	    attr = sgp->sg_cterm_attr;
 	else
@@ -4596,17 +3709,7 @@ gui_do_one_color(
 {
     int		didit = FALSE;
 
-# ifdef FEAT_GUI
-#  ifdef FEAT_TERMGUICOLORS
-    if (gui.in_use)
-#  endif
-	if (HL_TABLE()[idx].sg_font_name != NULL)
-	{
-	    hl_do_font(idx, HL_TABLE()[idx].sg_font_name, FALSE, do_menu,
-							    do_tooltip, TRUE);
-	    didit = TRUE;
-	}
-# endif
+#line 4610
     if (HL_TABLE()[idx].sg_gui_fg_name != NULL)
     {
 	HL_TABLE()[idx].sg_gui_fg =
@@ -4679,20 +3782,7 @@ combine_stl_hlt(
     hlt[hlcnt + i].sg_gui ^=
 	hlt[id - 1].sg_gui ^ hlt[id_S - 1].sg_gui;
 # endif
-# ifdef FEAT_GUI
-    if (hlt[id - 1].sg_gui_fg != hlt[id_S - 1].sg_gui_fg)
-	hlt[hlcnt + i].sg_gui_fg = hlt[id - 1].sg_gui_fg;
-    if (hlt[id - 1].sg_gui_bg != hlt[id_S - 1].sg_gui_bg)
-	hlt[hlcnt + i].sg_gui_bg = hlt[id - 1].sg_gui_bg;
-    if (hlt[id - 1].sg_gui_sp != hlt[id_S - 1].sg_gui_sp)
-	hlt[hlcnt + i].sg_gui_sp = hlt[id - 1].sg_gui_sp;
-    if (hlt[id - 1].sg_font != hlt[id_S - 1].sg_font)
-	hlt[hlcnt + i].sg_font = hlt[id - 1].sg_font;
-#  ifdef FEAT_XFONTSET
-    if (hlt[id - 1].sg_fontset != hlt[id_S - 1].sg_fontset)
-	hlt[hlcnt + i].sg_fontset = hlt[id - 1].sg_fontset;
-#  endif
-# endif
+#line 4696
     highlight_ga.ga_len = hlcnt + i + 1;
     set_hl_attr(hlcnt + i);	// At long last we can apply
     table[i] = syn_id2attr(hlcnt + i + 1);
@@ -4722,10 +3812,7 @@ highlight_changed(void)
 # ifdef FEAT_STL_OPT
     int		id_S = -1;
     int		id_SNC = 0;
-#  ifdef FEAT_TERMINAL
-    int		id_ST = 0;
-    int		id_STNC = 0;
-#  endif
+#line 4729
     int		hlcnt;
 # endif
 #endif
@@ -4733,11 +3820,7 @@ highlight_changed(void)
 
     need_highlight_changed = FALSE;
 
-#ifdef FEAT_TERMINAL
-    term_update_colors_all();
-    term_update_hlfwin_all();
-#endif
-
+#line 4741
     // Clear all attributes.
     for (hlf = 0; hlf < (int)HLF_COUNT; ++hlf)
     {
@@ -4826,12 +3909,7 @@ highlight_changed(void)
 #if defined(FEAT_STL_OPT) && defined(USER_HIGHLIGHT)
 				if (hlf == (int)HLF_SNC)
 				    id_SNC = syn_get_final_id(id);
-# ifdef FEAT_TERMINAL
-				else if (hlf == (int)HLF_ST)
-				    id_ST = syn_get_final_id(id);
-				else if (hlf == (int)HLF_STNC)
-				    id_STNC = syn_get_final_id(id);
-# endif
+#line 4835
 				else if (hlf == (int)HLF_S)
 				    id_S = syn_get_final_id(id);
 #endif
@@ -4856,10 +3934,7 @@ highlight_changed(void)
 	    emsg(_(errmsg));
     }
 
-#ifdef FEAT_TERMINAL
-    term_update_hlfwin_all();
-#endif
-
+#line 4863
 #ifdef USER_HIGHLIGHT
     // Setup the user highlights
     //
@@ -4892,10 +3967,7 @@ highlight_changed(void)
 	    highlight_user[i] = 0;
 # ifdef FEAT_STL_OPT
 	    highlight_stlnc[i] = 0;
-#  ifdef FEAT_TERMINAL
-	    highlight_stlterm[i] = 0;
-	    highlight_stltermnc[i] = 0;
-#  endif
+#line 4899
 # endif
 	}
 	else
@@ -4904,12 +3976,7 @@ highlight_changed(void)
 # ifdef FEAT_STL_OPT
 	    combine_stl_hlt(id, id_S, id_SNC, hlcnt, i,
 						     HLF_SNC, highlight_stlnc);
-#  ifdef FEAT_TERMINAL
-	    combine_stl_hlt(id, id_S, id_ST, hlcnt + 9, i,
-						    HLF_ST, highlight_stlterm);
-	    combine_stl_hlt(id, id_S, id_STNC, hlcnt + 18, i,
-						HLF_STNC, highlight_stltermnc);
-#  endif
+#line 4913
 # endif
 	}
     }
@@ -5216,9 +4283,7 @@ get_highlight_group_key(expand_T *xp UNUSED, int idx)
 	"guibg=",
 	"guisp=",
 #endif
-#ifdef FEAT_GUI
-	"font=",
-#endif
+#line 5222
 	"NONE",
     };
 
@@ -5406,38 +4471,7 @@ expand_highlight_group(
 	    -1);
 }
 
-#if defined(FEAT_GUI)
-/*
- * Free all the highlight group fonts.
- * Used when quitting for systems which need it.
- */
-    void
-free_highlight_fonts(void)
-{
-    int	    idx;
-
-    for (idx = 0; idx < highlight_ga.ga_len; ++idx)
-    {
-	gui_mch_free_font(HL_TABLE()[idx].sg_font);
-	HL_TABLE()[idx].sg_font = NOFONT;
-# ifdef FEAT_XFONTSET
-	gui_mch_free_fontset(HL_TABLE()[idx].sg_fontset);
-	HL_TABLE()[idx].sg_fontset = NOFONTSET;
-# endif
-    }
-
-    gui_mch_free_font(gui.norm_font);
-# ifdef FEAT_XFONTSET
-    gui_mch_free_fontset(gui.fontset);
-# endif
-# ifndef FEAT_GUI_GTK
-    gui_mch_free_font(gui.bold_font);
-    gui_mch_free_font(gui.ital_font);
-    gui_mch_free_font(gui.boldital_font);
-# endif
-}
-#endif
-
+#line 5441
 #if defined(FEAT_EVAL)
 /*
  * Convert each of the highlight attribute bits (bold, standout, underline,
@@ -5559,11 +4593,7 @@ highlight_get_info(int hl_idx, int resolve_link)
 	if (dict_add_string(dict, "guisp",
 			highlight_color(hlgid, (char_u *)"sp", 'g')) == FAIL)
 	    goto error;
-# ifdef FEAT_GUI
-    if (sgp->sg_font_name != NULL)
-	if (dict_add_string(dict, "font", sgp->sg_font_name) == FAIL)
-	    goto error;
-# endif
+#line 5567
     if (sgp->sg_link)
     {
 	char_u	*link;
@@ -5787,9 +4817,7 @@ hlg_add_or_update(dict_T *dict)
     char_u	*guifg;
     char_u	*guibg;
     char_u	*guisp;
-# ifdef FEAT_GUI
-    char_u	*font;
-# endif
+#line 5793
     int		forceit = FALSE;
     int		dodefault = FALSE;
     int		done = FALSE;
@@ -5887,19 +4915,12 @@ hlg_add_or_update(dict_T *dict)
     if (error)
 	return FALSE;
 
-# ifdef FEAT_GUI
-    font = hldict_get_string(dict, (char_u *)"font", &error);
-    if (error)
-	return FALSE;
-# endif
-
+#line 5896
     // If none of the attributes are specified, then do nothing.
     if (term_attr[0] == NUL && start == NULL && stop == NULL
 	    && cterm_attr[0] == NUL && ctermfg == NULL && ctermbg == NULL
 	    && ctermul == NULL && ctermfont == NULL && gui_attr[0] == NUL
-# ifdef FEAT_GUI
-	    && font == NULL
-# endif
+#line 5903
 	    && guifg == NULL && guibg == NULL && guisp == NULL
 	    )
 	return TRUE;
@@ -5918,9 +4939,7 @@ hlg_add_or_update(dict_T *dict)
     p = add_attr_and_value(p, (char_u *)" ctermul=", 9, ctermul);
     p = add_attr_and_value(p, (char_u *)" ctermfont=", 11, ctermfont);
     p = add_attr_and_value(p, (char_u *)" gui=", 5, gui_attr);
-# ifdef FEAT_GUI
-    p = add_attr_and_value(p, (char_u *)" font=", 6, font);
-# endif
+#line 5924
     p = add_attr_and_value(p, (char_u *)" guifg=", 7, guifg);
     p = add_attr_and_value(p, (char_u *)" guibg=", 7, guibg);
     (void)add_attr_and_value(p, (char_u *)" guisp=", 7, guisp);
@@ -6281,24 +5300,7 @@ update_winhighlight(win_T *wp, char_u *opt)
 
     wp->w_hlfwin_id = hlf_get_id(wp, HLF_WIN);
 
-#ifdef FEAT_TERMINAL
-    term_update_hlfwin(wp);
-#endif
-
-#ifdef FEAT_TERMINAL
-    // May be NULL (such as in after_copy_winopt())
-    if (wp->w_buffer != NULL)
-    {
-	// Make sure terminal highlighting is updated
-	bool ret = push_highlight_overrides(wp->w_hl, wp->w_hl_len);
-
-	if (wp->w_buffer->b_term != NULL)
-	    term_init_default_colors(wp->w_buffer->b_term);
-	if (ret)
-	    pop_highlight_overrides();
-    }
-#endif
-
+#line 6302
     return NULL;
 }
 
