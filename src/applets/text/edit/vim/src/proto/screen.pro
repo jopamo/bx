@@ -3,7 +3,6 @@ int get_win_attr(win_T *wp);
 void win_draw_end(win_T *wp, int c1, int c2, int draw_margin, int row, int endrow, hlf_T hl);
 void reset_screen_attr(void);
 void screen_line(win_T *wp, int row, int coloff, int endcol, int clear_width, colnr_T last_vcol, int flags);
-void rl_mirror(char_u *str);
 void draw_vsep_win(win_T *wp, int row);
 int stl_connected(win_T *wp);
 int get_keymap_str(win_T *wp, char_u *fmt, char_u *buf, int len);

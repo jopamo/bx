@@ -229,9 +229,6 @@ check_buf_options(buf_T *buf)
     check_string_option(&buf->b_p_inde);
     check_string_option(&buf->b_p_indk);
 #endif
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-    check_string_option(&buf->b_p_bexpr);
-#endif
 #line 310
     check_string_option(&buf->b_p_fp);
 #if defined(FEAT_EVAL)
@@ -2714,34 +2711,7 @@ did_set_renderoptions(optset_T *args UNUSED)
 }
 #endif
 
-#if defined(FEAT_RIGHTLEFT)
-/*
- * The 'rightleftcmd' option is changed.
- */
-    char *
-did_set_rightleftcmd(optset_T *args)
-{
-    char_u	**varp = (char_u **)args->os_varp;
-
-    // Currently only "search" is a supported value.
-    if (**varp != NUL && STRCMP(*varp, "search") != 0)
-	return e_invalid_argument;
-
-    return NULL;
-}
-
-    int
-expand_set_rightleftcmd(optexpand_T *args, int *numMatches, char_u ***matches)
-{
-    static char *(p_rlc_values[]) = {"search", NULL};
-    return expand_set_opt_string(
-	    args,
-	    p_rlc_values,
-	    ARRAY_LENGTH(p_rlc_values) - 1,
-	    numMatches,
-	    matches);
-}
-#endif
+#line 2745
 
 #define PUM_BORDER_CLEAR()   \
     do {                     \

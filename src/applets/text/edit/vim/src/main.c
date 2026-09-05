@@ -1569,8 +1569,6 @@ early_arg_scan(mparm_T *parmp UNUSED)
     {
 	if (STRCMP(argv[i], "--") == 0)
 	    break;
-#line 1932
-
 #line 1965
 	else if (strncmp(argv[i], "-nb", (size_t)3) == 0)
 	{
@@ -1856,12 +1854,10 @@ command_line_scan(mparm_T *parmp)
 		break;
 
 	    case 'A':		// "-A" start in Arabic mode
-# ifdef FEAT_ARABIC
-		set_option_value_give_err((char_u *)"arabic", 1L, NULL, 0);
-# else
+#line 1862
 		mch_errmsg(_(e_arabic_cannot_be_used_not_enabled_at_compile_time));
 		mch_exit(2);
-# endif
+#line 1865
 		break;
 
 	    case 'b':		// "-b" binary mode
@@ -1909,13 +1905,10 @@ command_line_scan(mparm_T *parmp)
 		break;
 
 	    case 'H':		// "-H" start in Hebrew mode: rl + hkmap set
-# ifdef FEAT_RIGHTLEFT
-		p_hkmap = TRUE;
-		set_option_value_give_err((char_u *)"rl", 1L, NULL, 0);
-# else
+#line 1916
 		mch_errmsg(_(e_hebrew_cannot_be_used_not_enabled_at_compile_time));
 		mch_exit(2);
-# endif
+#line 1919
 		break;
 
 	    case 'l':		// "-l" lisp mode, 'lisp' and 'showmatch' on
@@ -3220,12 +3213,7 @@ usage(void)
     main_msg(_("-f\t\t\tDon't use newcli to open window"));
     main_msg(_("-dev <device>\t\tUse <device> for I/O"));
 # endif
-# ifdef FEAT_ARABIC
-    main_msg(_("-A\t\t\tStart in Arabic mode"));
-# endif
-# ifdef FEAT_RIGHTLEFT
-    main_msg(_("-H\t\t\tStart in Hebrew mode"));
-# endif
+#line 3229
     main_msg(_("-T <terminal>\tSet terminal type to <terminal>"));
     main_msg(_("--not-a-term\t\tSkip warning for input/output not being a terminal"));
 #line 3722

@@ -1957,14 +1957,10 @@ utf_iscomposinglike_char(int c1, int c2)
 {
     if (utf_iscomposing(c2))
 	return TRUE;
-#ifdef FEAT_ARABIC
-    if (!arabic_maycombine(c2))
-	return FALSE;
-    return arabic_combine(c1, c2);
-#else
+#line 1965
     (void)c1;
     return FALSE;
-#endif
+#line 1968
 }
 
 /*
@@ -2071,25 +2067,7 @@ mb_cptr2char_adv(char_u **pp)
     return c;
 }
 
-#if defined(FEAT_ARABIC)
-/*
- * Check if the character pointed to by "p2" is a composing character when it
- * comes after "p1".  For Arabic sometimes "ab" is replaced with "c", which
- * behaves like a composing character.
- */
-    int
-utf_composinglike(char_u *p1, char_u *p2)
-{
-    int		c2;
-
-    c2 = utf_ptr2char(p2);
-    if (utf_iscomposing(c2))
-	return TRUE;
-    if (!arabic_maycombine(c2))
-	return FALSE;
-    return arabic_combine(utf_ptr2char(p1), c2);
-}
-#endif
+#line 2093
 
 /*
  * Convert a UTF-8 byte string to a wide character.  Also get up to MAX_MCO
@@ -4093,9 +4071,7 @@ utf_head_off(const char_u *base, const char_u *p)
     const char_u	*s;
     int		c;
     int		len;
-#ifdef FEAT_ARABIC
-    const char_u	*j;
-#endif
+#line 4099
 
     if (*p < 0x80)		// be quick for ASCII
 	return 0;
@@ -4123,19 +4099,7 @@ utf_head_off(const char_u *base, const char_u *p)
 	if (utf_iscomposing(c))
 	    continue;
 
-#ifdef FEAT_ARABIC
-	if (arabic_maycombine(c))
-	{
-	    // Advance to get a sneak-peak at the next char
-	    j = q;
-	    --j;
-	    // Move j to the first byte of this char.
-	    while (j > base && (*j & 0xc0) == 0x80)
-		--j;
-	    if (arabic_combine(utf_ptr2char(j), c))
-		continue;
-	}
-#endif
+#line 4139
 	break;
     }
 

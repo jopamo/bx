@@ -184,9 +184,7 @@ EXTERN hlf_T	edit_submode_highl;	// highl. method for extra info
  * Functions for putting characters in the command line,
  * while keeping ScreenLines[] updated.
  */
-#ifdef FEAT_RIGHTLEFT
-EXTERN int	cmdmsg_rl INIT(= FALSE);    // cmdline is drawn right to left
-#endif
+#line 190
 EXTERN int	msg_col;
 EXTERN int	msg_row;
 EXTERN int	msg_scrolled;	// Number of screen lines that windows have
@@ -1602,11 +1600,7 @@ EXTERN char_u	wim_flags[4];
 EXTERN int      stl_syntax INIT(= 0);
 #endif
 
-#if defined(FEAT_BEVAL) && !defined(NO_X11_INCLUDES)
-EXTERN BalloonEval	*balloonEval INIT(= NULL);
-EXTERN int		balloonEvalForTerm INIT(= FALSE);
-#line 1808
-#endif
+#line 1610
 
 #ifdef CURSOR_SHAPE
 // the table is in misc2.c, because of initializations
@@ -1724,10 +1718,7 @@ EXTERN int  input_busy INIT(= 0);   // when inside get_user_input() then > 0
 EXTERN lval_root_T	*lval_root INIT(= NULL);
 #endif
 
-#ifdef FEAT_BEVAL_TERM
-EXTERN int  bevalexpr_due_set INIT(= FALSE);
-EXTERN proftime_T bevalexpr_due;
-#endif
+#line 1731
 
 #ifdef FEAT_EVAL
 EXTERN time_T time_for_testing INIT(= 0);

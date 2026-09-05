@@ -496,11 +496,7 @@ normal_cmd_get_more_chars(
 
 	    // adjust chars > 127, except after "tTfFr" commands
 	    LANGMAP_ADJUST(*cp, !lang);
-#ifdef FEAT_RIGHTLEFT
-	    // adjust Hebrew mapped char
-	    if (p_hkmap && lang && KeyTyped)
-		*cp = hkmap(*cp);
-#endif
+#line 504
 	}
 
 	// When the next character is CTRL-\ a following CTRL-N means the
@@ -865,29 +861,7 @@ normal_cmd(
 	}
     }
 
-#ifdef FEAT_RIGHTLEFT
-    if (curwin->w_p_rl && KeyTyped && !KeyStuffed
-					  && (nv_cmds[idx].cmd_flags & NV_RL))
-    {
-	// Invert horizontal movements and operations.  Only when typed by the
-	// user directly, not when the result of a mapping or "x" translated
-	// to "dl".
-	switch (ca.cmdchar)
-	{
-	    case 'l':	    ca.cmdchar = 'h'; break;
-	    case K_RIGHT:   ca.cmdchar = K_LEFT; break;
-	    case K_S_RIGHT: ca.cmdchar = K_S_LEFT; break;
-	    case K_C_RIGHT: ca.cmdchar = K_C_LEFT; break;
-	    case 'h':	    ca.cmdchar = 'l'; break;
-	    case K_LEFT:    ca.cmdchar = K_RIGHT; break;
-	    case K_S_LEFT:  ca.cmdchar = K_S_RIGHT; break;
-	    case K_C_LEFT:  ca.cmdchar = K_C_RIGHT; break;
-	    case '>':	    ca.cmdchar = '<'; break;
-	    case '<':	    ca.cmdchar = '>'; break;
-	}
-	idx = find_command(ca.cmdchar);
-    }
-#endif
+#line 891
 
     // Get additional characters if we need them.
     if (normal_cmd_needs_more_chars(&ca, nv_cmds[idx].cmd_flags))
@@ -2660,8 +2634,6 @@ nv_zet(cmdarg_T *cap)
 		// "zy" Yank without trailing spaces
     case 'y':  nv_operator(cap);
 	       break;
-#line 2979
-
 #line 2996
     default:	clearopbeep(cap->oap);
     }

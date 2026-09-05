@@ -206,17 +206,9 @@
 
 #define REPLACE_NORMAL(s) (((s) & REPLACE_FLAG) && !((s) & VREPLACE_FLAG))
 
-#ifdef FEAT_ARABIC
-# define ARABIC_CHAR(ch)	    (((ch) & 0xFF00) == 0x0600)
-# define UTF_COMPOSINGLIKE(p1, p2)  utf_composinglike((p1), (p2))
-#else
+#line 213
 # define UTF_COMPOSINGLIKE(p1, p2)  utf_iscomposing(utf_ptr2char(p2))
-#endif
-
-#ifdef FEAT_RIGHTLEFT
-    // Whether to draw the vertical bar on the right side of the cell.
-# define CURSOR_BAR_RIGHT (curwin->w_p_rl && (!(State & MODE_CMDLINE) || cmdmsg_rl))
-#endif
+#line 220
 
 /*
  * MB_PTR_ADV(): advance a pointer to the next character, taking care of

@@ -108,10 +108,6 @@ extern int _stricoll(char *a, char *b);
 # include "match.pro"
 # include "memfile.pro"
 # include "memline.pro"
-#line 118
-# ifdef FEAT_ARABIC
-#  include "arabic.pro"
-# endif
 #line 119
 
 // These prototypes cannot be produced automatically.
@@ -241,12 +237,9 @@ void mbyte_im_set_active(int active_arg);
 
 // Ugly solution for "BalloonEval" not being defined while it's used in some
 // .pro files.
-# ifndef FEAT_BEVAL
+#line 245
 #  define BalloonEval int
-# endif
-# if defined(FEAT_BEVAL) || defined(FEAT_PROP_POPUP)
-#  include "beval.pro"
-# endif
+#line 247
 
 #line 275
 # ifdef FEAT_EVAL

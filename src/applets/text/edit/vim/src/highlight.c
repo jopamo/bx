@@ -1170,13 +1170,7 @@ highlight_set_guifg(
 	    gui.scroll_fg_pixel = i;
 	    *do_colors = TRUE;
 	}
-#   ifdef FEAT_BEVAL_GUI
-	if (is_tooltip_group && gui.tooltip_fg_pixel != i)
-	{
-	    gui.tooltip_fg_pixel = i;
-	    *do_colors = TRUE;
-	}
-#   endif
+#line 1180
 #  endif
     }
 # endif
@@ -1242,13 +1236,7 @@ highlight_set_guibg(
 	    gui.scroll_bg_pixel = i;
 	    *do_colors = TRUE;
 	}
-#   ifdef FEAT_BEVAL_GUI
-	if (is_tooltip_group && gui.tooltip_bg_pixel != i)
-	{
-	    gui.tooltip_bg_pixel = i;
-	    *do_colors = TRUE;
-	}
-#   endif
+#line 1252
 #  endif
     }
 # endif
@@ -1745,13 +1733,7 @@ do_highlight(
 	    else
 		set_hl_attr(idx);
 	}
-# ifdef FEAT_BEVAL_GUI
-	else if (is_tooltip_group)
-	{
-	    if (gui.in_use && do_colors)
-		gui_mch_new_tooltip_colors();
-	}
-# endif
+#line 1755
 #endif
 	else
 	    set_hl_attr(idx);

@@ -72,9 +72,7 @@
 #define PV_EP		OPT_BOTH(OPT_BUF(BV_EP))
 #define PV_ET		OPT_BUF(BV_ET)
 #define PV_FENC		OPT_BUF(BV_FENC)
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-# define PV_BEXPR	OPT_BOTH(OPT_BUF(BV_BEXPR))
-#endif
+#line 78
 #define PV_FP		OPT_BOTH(OPT_BUF(BV_FP))
 #ifdef FEAT_EVAL
 # define PV_FEX		OPT_BUF(BV_FEX)
@@ -149,9 +147,7 @@
 // Definition of the PV_ values for window-local options.
 // The WV_ values are defined in option.h.
 #define PV_LIST		OPT_WIN(WV_LIST)
-#ifdef FEAT_ARABIC
-# define PV_ARAB	OPT_WIN(WV_ARAB)
-#endif
+#line 155
 #ifdef FEAT_LINEBREAK
 # define PV_BRI		OPT_WIN(WV_BRI)
 # define PV_BRIOPT	OPT_WIN(WV_BRIOPT)
@@ -177,10 +173,7 @@
 # define PV_PVW		OPT_WIN(WV_PVW)
 # define PV_LHI         OPT_WIN(WV_LHI)
 #endif
-#ifdef FEAT_RIGHTLEFT
-# define PV_RL		OPT_WIN(WV_RL)
-# define PV_RLC		OPT_WIN(WV_RLC)
-#endif
+#line 184
 #define PV_SCBIND	OPT_WIN(WV_SCBIND)
 #define PV_SCROLL	OPT_WIN(WV_SCROLL)
 #define PV_SMS		OPT_WIN(WV_SMS)
@@ -305,11 +298,9 @@ struct vimoption
 static struct vimoption options[] =
 {
     {"aleph",	    "al",   P_NUM|P_VI_DEF|P_CURSWANT,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)&p_aleph, PV_NONE,
-#else
+#line 311
 			    (char_u *)NULL, PV_NONE,
-#endif
+#line 313
 			    NULL, NULL,
 			    {
 #if defined(MSWIN) && !defined(FEAT_GUI_MSWIN)
@@ -319,11 +310,9 @@ static struct vimoption options[] =
 #endif
 					    (char_u *)0L} SCTX_INIT},
     {"allowrevins", "ari",  P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)&p_ari, PV_NONE, NULL, NULL,
-#else
+#line 325
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 327
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"altkeymap",   "akm",  P_BOOL|P_VI_DEF,
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
@@ -337,18 +326,14 @@ static struct vimoption options[] =
 			    {(char_u *)FALSE, (char_u *)FALSE}
 			    SCTX_INIT},
     {"arabic",	    "arab", P_BOOL|P_VI_DEF|P_VIM|P_CURSWANT,
-#ifdef FEAT_ARABIC
-			    (char_u *)VAR_WIN, PV_ARAB, did_set_arabic, NULL,
-#else
+#line 343
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 345
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"arabicshape", "arshape", P_BOOL|P_VI_DEF|P_VIM|P_RCLR,
-#ifdef FEAT_ARABIC
-			    (char_u *)&p_arshape, PV_NONE, NULL, NULL,
-#else
+#line 350
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 352
 			    {(char_u *)TRUE, (char_u *)0L} SCTX_INIT},
     {"autochdir",  "acd",   P_BOOL|P_VI_DEF,
 #ifdef FEAT_AUTOCHDIR
@@ -436,41 +421,28 @@ static struct vimoption options[] =
 			    {(char_u *)"", (char_u *)0L}
 			    SCTX_INIT},
     {"balloondelay","bdlay",P_NUM|P_VI_DEF,
-#ifdef FEAT_BEVAL
-			    (char_u *)&p_bdlay, PV_NONE, NULL, NULL,
-			    {(char_u *)600L, (char_u *)0L}
-#else
+#line 443
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L}
-#endif
+#line 446
 			    SCTX_INIT},
     {"ballooneval", "beval",P_BOOL|P_VI_DEF|P_NO_MKRC,
-#ifdef FEAT_BEVAL_GUI
-			    (char_u *)&p_beval, PV_NONE, did_set_ballooneval, NULL,
-			    {(char_u *)FALSE, (char_u *)0L}
-#else
+#line 452
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L}
-#endif
+#line 455
 			    SCTX_INIT},
     {"balloonevalterm", "bevalterm",P_BOOL|P_VI_DEF|P_NO_MKRC,
-#ifdef FEAT_BEVAL_TERM
-			    (char_u *)&p_bevalterm, PV_NONE,
-			    did_set_balloonevalterm, NULL,
-			    {(char_u *)FALSE, (char_u *)0L}
-#else
+#line 462
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L}
-#endif
+#line 465
 			    SCTX_INIT},
     {"balloonexpr", "bexpr", P_STRING|P_ALLOCED|P_VI_DEF|P_VIM|P_MLE,
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-			    (char_u *)&p_bexpr, PV_BEXPR, did_set_optexpr, NULL,
-			    {(char_u *)"", (char_u *)0L}
-#else
+#line 471
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L}
-#endif
+#line 474
 			    SCTX_INIT},
     {"beautify",    "bf",   P_BOOL|P_VI_DEF,
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
@@ -1218,18 +1190,14 @@ static struct vimoption options[] =
 			    (char_u *)&p_hi, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)200L} SCTX_INIT},
     {"hkmap",	    "hk",   P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)&p_hkmap, PV_NONE, NULL, NULL,
-#else
+#line 1224
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 1226
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"hkmapp",	    "hkp",  P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)&p_hkmapp, PV_NONE, NULL, NULL,
-#else
+#line 1231
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 1233
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"hlsearch",    "hls",  P_BOOL|P_VI_DEF|P_VIM|P_RALL|P_HLONLY,
 #if defined(FEAT_SEARCH_EXTRA)
@@ -1981,27 +1949,20 @@ static struct vimoption options[] =
 #endif
 			    {(char_u *)TRUE, (char_u *)0L} SCTX_INIT},
     {"revins",	    "ri",   P_BOOL|P_VI_DEF|P_VIM,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)&p_ri, PV_NONE, NULL, NULL,
-#else
+#line 1987
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 1989
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"rightleft",   "rl",   P_BOOL|P_VI_DEF|P_RWIN,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)VAR_WIN, PV_RL, NULL, NULL,
-#else
+#line 1994
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 1996
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"rightleftcmd", "rlc", P_STRING|P_ALLOCED|P_VI_DEF|P_RWIN,
-#ifdef FEAT_RIGHTLEFT
-			    (char_u *)VAR_WIN, PV_RLC, did_set_rightleftcmd, expand_set_rightleftcmd,
-			    {(char_u *)"search", (char_u *)NULL}
-#else
+#line 2002
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
 			    {(char_u *)NULL, (char_u *)0L}
-#endif
+#line 2005
 			    SCTX_INIT},
     {"rubydll",     NULL,   P_STRING|P_EXPAND|P_VI_DEF|P_SECURE,
 #if defined(DYNAMIC_RUBY)
@@ -2395,11 +2356,9 @@ static struct vimoption options[] =
 			    (char_u *)&T_NAME, PV_NONE, did_set_term, NULL,
 			    {(char_u *)"", (char_u *)0L} SCTX_INIT},
     {"termbidi", "tbidi",   P_BOOL|P_VI_DEF,
-#ifdef FEAT_ARABIC
-			    (char_u *)&p_tbidi, PV_NONE, NULL, NULL,
-#else
+#line 2401
 			    (char_u *)NULL, PV_NONE, NULL, NULL,
-#endif
+#line 2403
 			    {(char_u *)FALSE, (char_u *)0L} SCTX_INIT},
     {"termencoding", "tenc", P_STRING|P_VI_DEF|P_RCLR,
 			    (char_u *)&p_tenc, PV_NONE, did_set_encoding, expand_set_encoding,

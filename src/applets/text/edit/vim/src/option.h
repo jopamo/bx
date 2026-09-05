@@ -406,9 +406,7 @@ typedef enum {
  * The following are actual variables for the options
  */
 
-#ifdef FEAT_RIGHTLEFT
-EXTERN long	p_aleph;	// 'aleph'
-#endif
+#line 412
 EXTERN char_u	*p_ambw;	// 'ambiwidth'
 #ifdef FEAT_AUTOCHDIR
 EXTERN int	p_acd;		// 'autochdir'
@@ -472,19 +470,7 @@ EXTERN unsigned	bo_flags;
 #define BO_WILD		0x80000
 
 EXTERN char_u	*p_bsk;		// 'backupskip'
-#line 480
-#ifdef FEAT_BEVAL
-# ifdef FEAT_BEVAL_GUI
-EXTERN int	p_beval;	// 'ballooneval'
-# endif
-EXTERN long	p_bdlay;	// 'balloondelay'
-# ifdef FEAT_EVAL
-EXTERN char_u	*p_bexpr;
-# endif
-# ifdef FEAT_BEVAL_TERM
-EXTERN int	p_bevalterm;	// 'balloonevalterm'
-# endif
-#endif
+#line 488
 #ifdef FEAT_BROWSE
 EXTERN char_u	*p_bsdir;	// 'browsedir'
 #endif
@@ -645,13 +631,7 @@ EXTERN int	p_hid;		// 'hidden'
 EXTERN char_u	*p_hl;		// 'highlight'
 EXTERN int	p_hls;		// 'hlsearch'
 EXTERN long	p_hi;		// 'history'
-#ifdef FEAT_RIGHTLEFT
-EXTERN int	p_hkmap;	// 'hkmap'
-EXTERN int	p_hkmapp;	// 'hkmapp'
-# ifdef FEAT_ARABIC
-EXTERN int	p_arshape;	// 'arabicshape'
-# endif
-#endif
+#line 655
 EXTERN int	p_icon;		// 'icon'
 EXTERN char_u	*p_iconstring;	// 'iconstring'
 EXTERN int	p_ic;		// 'ignorecase'
@@ -787,10 +767,7 @@ EXTERN long     p_chi;          // 'chistory'
 #ifdef MSWIN
 EXTERN int	p_rs;		// 'restorescreen'
 #endif
-#ifdef FEAT_RIGHTLEFT
-EXTERN int	p_ari;		// 'allowrevins'
-EXTERN int	p_ri;		// 'revins'
-#endif
+#line 794
 #if defined(DYNAMIC_RUBY)
 EXTERN char_u	*p_rubydll;	// 'rubydll'
 #endif
@@ -906,9 +883,7 @@ EXTERN int	p_tgst;		// 'tagstack'
 #if defined(DYNAMIC_TCL)
 EXTERN char_u	*p_tcldll;	// 'tcldll'
 #endif
-#ifdef FEAT_ARABIC
-EXTERN int	p_tbidi;	// 'termbidi'
-#endif
+#line 912
 EXTERN char_u	*p_tenc;	// 'termencoding'
 #ifdef FEAT_TERMGUICOLORS
 EXTERN int	p_tgc;		// 'termguicolors'
@@ -1149,9 +1124,6 @@ enum
     WV_LIST = 0
     , WV_LCS
     , WV_FCS
-#ifdef FEAT_ARABIC
-    , WV_ARAB
-#endif
 #line 1335
     , WV_CRBIND
 #ifdef FEAT_LINEBREAK
@@ -1177,10 +1149,7 @@ enum
     , WV_PVW
     , WV_LHI
 #endif
-#ifdef FEAT_RIGHTLEFT
-    , WV_RL
-    , WV_RLC
-#endif
+#line 1184
     , WV_SCBIND
     , WV_SCROLL
     , WV_SMS

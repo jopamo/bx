@@ -379,10 +379,6 @@ free_all_mem(void)
     if (!ONE_WINDOW)
 	do_cmdline_cmd((char_u *)"only!");
 
-#line 387
-# if defined(FEAT_BEVAL_TERM)
-    ui_remove_balloon();
-# endif
 #line 394
 
     // Clear user commands (before deleting buffers).
@@ -482,9 +478,7 @@ free_all_mem(void)
 	    buf = firstbuf;
     }
 
-# ifdef FEAT_ARABIC
-    free_arshape_buf();
-# endif
+#line 488
 
     // Clear registers.
     clear_registers();

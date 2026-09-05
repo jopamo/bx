@@ -385,23 +385,7 @@ handle_lnum_col(
 		  for (wlv->p_extra = wlv->extra; *wlv->p_extra == ' ';
 			  ++wlv->p_extra)
 		      *wlv->p_extra = '-';
-#ifdef FEAT_RIGHTLEFT
-	      if (wp->w_p_rl)		    // reverse line numbers
-	      {
-		  char_u    *p1, *p2;
-		  int	    t;
-
-		  // like rl_mirror(), but keep the space at the end
-		  p2 = skipwhite(wlv->extra);
-		  p2 = skiptowhite(p2) - 1;
-		  for (p1 = skipwhite(wlv->extra); p1 < p2; ++p1, --p2)
-		  {
-		      t = *p1;
-		      *p1 = *p2;
-		      *p2 = t;
-		  }
-	      }
-#endif
+#line 405
 	      wlv->p_extra = wlv->extra;
 	      wlv->c_extra = NUL;
 	      wlv->c_final = NUL;
@@ -522,11 +506,7 @@ handle_showbreak_and_filler(win_T *wp, winlinevars_T *wlv)
 	    wlv->c_extra = wp->w_fill_chars.diff;
 	    wlv->c_final = NUL;
 	}
-#  ifdef FEAT_RIGHTLEFT
-	if (wp->w_p_rl)
-	    wlv->n_extra = wlv->col + 1;
-	else
-#  endif
+#line 530
 	    wlv->n_extra = wp->w_width - wlv->col;
 	wlv->char_attr = HL_ATTR(HLF_DED);
     }
@@ -635,9 +615,7 @@ draw_screen_line(win_T *wp, winlinevars_T *wlv)
 	v = wp->w_leftcol;
 
     wcol =
-# ifdef FEAT_RIGHTLEFT
-	wp->w_p_rl ? wp->w_width - wlv->col - 1 :
-# endif
+#line 641
 	wlv->col;
     // check if line ends before left margin
     if (wlv->vcol < v + wcol - win_col_off(wp))
@@ -672,9 +650,7 @@ draw_screen_line(win_T *wp, winlinevars_T *wlv)
 		    rightmost_vcol = wlv->color_cols[i];
 
 	while (
-# ifdef FEAT_RIGHTLEFT
-		wp->w_p_rl ? (wlv->col >= 0) :
-# endif
+#line 678
 		(wlv->col < wp->w_width))
 	{
 	    ScreenLines[wlv->off] = ' ';
@@ -697,14 +673,7 @@ draw_screen_line(win_T *wp, winlinevars_T *wlv)
 		attr = hl_combine_attr(attr, HL_ATTR(HLF_MC));
 	    ScreenAttrs[wlv->off] = attr;
 	    ScreenCols[wlv->off] = wlv->vcol;
-# ifdef FEAT_RIGHTLEFT
-	    if (wp->w_p_rl)
-	    {
-		--wlv->off;
-		--wlv->col;
-	    }
-	    else
-# endif
+#line 708
 	    {
 		++wlv->off;
 		++wlv->col;
@@ -744,17 +713,7 @@ win_line_start(win_T *wp UNUSED, winlinevars_T *wlv, int save_extra)
     wlv->need_lbr = FALSE;
 #endif
 
-#ifdef FEAT_RIGHTLEFT
-    if (wp->w_p_rl)
-    {
-	// Rightleft window: process the text in the normal direction, but put
-	// it in current_ScreenLine[] from right to left.  Start at the
-	// rightmost column of the window.
-	wlv->col = wp->w_width - 1;
-	wlv->off += wlv->col;
-	wlv->screen_line_flags |= SLF_RIGHTLEFT;
-    }
-#endif
+#line 758
     if (save_extra)
     {
 	// reset the drawing state for the start of a wrapped line
@@ -931,10 +890,7 @@ win_line(
 #endif
     int		sign_present = FALSE;
     int		num_attr = 0;		// attribute for the number column
-#ifdef FEAT_ARABIC
-    int		prev_c = 0;		// previous Arabic character
-    int		prev_c1 = 0;		// first composing char for prev_c
-#endif
+#line 938
 #if defined(LINE_ATTR)
     int		did_line_attr = 0;
 #endif
@@ -1788,9 +1744,7 @@ win_line(
 		    // If a double-width char doesn't fit display a '>' in the
 		    // last column.
 		    if ((
-#ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? (wlv.col <= 0) :
-#endif
+#line 1794
 				    (wlv.col >= wp->w_width - 1))
 			    && (*mb_char2cells)(mb_c) == 2)
 		    {
@@ -1885,10 +1839,7 @@ win_line(
 			// Illegal UTF-8 byte: display as <xx>.
 			// Non-BMP character : display as ? or fullwidth ?.
 			transchar_hex(wlv.extra, mb_c);
-#ifdef FEAT_RIGHTLEFT
-			if (wp->w_p_rl)		// reverse
-			    rl_mirror(wlv.extra);
-#endif
+#line 1892
 			wlv.p_extra = wlv.extra;
 			c = *wlv.p_extra;
 			mb_c = mb_ptr2char_adv(&wlv.p_extra);
@@ -1906,35 +1857,7 @@ win_line(
 		    }
 		    else if (mb_l == 0)  // at the NUL at end-of-line
 			mb_l = 1;
-#ifdef FEAT_ARABIC
-		    else if (p_arshape && !p_tbidi && ARABIC_CHAR(mb_c))
-		    {
-			// Do Arabic shaping.
-			int	pc, pc1, nc;
-			int	pcc[MAX_MCO];
-
-			// The idea of what is the previous and next
-			// character depends on 'rightleft'.
-			if (wp->w_p_rl)
-			{
-			    pc = prev_c;
-			    pc1 = prev_c1;
-			    nc = utf_ptr2char(ptr + mb_l);
-			    prev_c1 = u8cc[0];
-			}
-			else
-			{
-			    pc = utfc_ptr2char(ptr + mb_l, pcc);
-			    nc = prev_c;
-			    pc1 = pcc[0];
-			}
-			prev_c = mb_c;
-
-			mb_c = arabic_shape(mb_c, &c, &u8cc[0], pc, pc1, nc);
-		    }
-		    else
-			prev_c = mb_c;
-#endif
+#line 1938
 		}
 		else	// enc_dbcs
 		{
@@ -1983,9 +1906,7 @@ win_line(
 		// last column; the character is displayed at the start of the
 		// next line.
 		if ((
-#ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? (wlv.col <= 0) :
-#endif
+#line 1989
 				(wlv.col >= wp->w_width - 1))
 			&& (*mb_char2cells)(mb_c) == 2)
 		{
@@ -2321,9 +2242,7 @@ win_line(
 				&& wlv.tocol > wlv.vcol
 				&& VIsual_mode != Ctrl_V
 				&& (
-#ifdef FEAT_RIGHTLEFT
-				    wp->w_p_rl ? (wlv.col >= 0) :
-#endif
+#line 2327
 				    (wlv.col < wp->w_width))
 				&& !(noinvcur
 				    && lnum == wp->w_cursor.lnum
@@ -2383,10 +2302,7 @@ win_line(
 		    wlv.p_extra = transchar_buf(wp->w_buffer, c);
 		    if (wlv.n_extra == 0)
 			wlv.n_extra = byte2cells(c) - 1;
-#ifdef FEAT_RIGHTLEFT
-		    if ((dy_flags & DY_UHEX) && wp->w_p_rl)
-			rl_mirror(wlv.p_extra);	// reverse "<12>"
-#endif
+#line 2390
 		    wlv.c_extra = NUL;
 		    wlv.c_final = NUL;
 #ifdef FEAT_LINEBREAK
@@ -2431,9 +2347,7 @@ win_line(
 			 && wlv.tocol != MAXCOL
 			 && wlv.vcol < wlv.tocol
 			 && (
-#ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? (wlv.col >= 0) :
-#endif
+#line 2437
 			    (wlv.col < wp->w_width)))
 		{
 		    c = ' ';
@@ -2447,9 +2361,7 @@ win_line(
 #line 3628
 			    wlv.line_attr != 0
 			) && (
-# ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? (wlv.col >= 0) :
-# endif
+#line 2453
 			    (wlv.col
 #line 3637
 					    < wp->w_width)))
@@ -2605,14 +2517,7 @@ win_line(
 	    {
 		int n = 0;
 
-#ifdef FEAT_RIGHTLEFT
-		if (wp->w_p_rl)
-		{
-		    if (wlv.col < 0)
-			n = 1;
-		}
-		else
-#endif
+#line 2616
 		{
 		    if (wlv.col >= wp->w_width)
 			n = -1;
@@ -2642,14 +2547,7 @@ win_line(
 #endif
 		ScreenAttrs[wlv.off] = wlv.char_attr;
 		ScreenCols[wlv.off] = wlv.vcol;
-#ifdef FEAT_RIGHTLEFT
-		if (wp->w_p_rl)
-		{
-		    --wlv.col;
-		    --wlv.off;
-		}
-		else
-#endif
+#line 2653
 		{
 		    ++wlv.col;
 		    ++wlv.off;
@@ -2687,9 +2585,7 @@ win_line(
 		&& wlv.filler_todo <= 0
 #endif
 		&& (
-#ifdef FEAT_RIGHTLEFT
-		    wp->w_p_rl ? wlv.col == 0 :
-#endif
+#line 2693
 		    wlv.col == wp->w_width - 1)
 		&& (*ptr != NUL
 		    || lcs_eol_one > 0
@@ -2757,14 +2653,7 @@ win_line(
 	if (wlv.draw_state < WL_LINE || skip_cells <= 0)
 	{
 	    // Store the character.
-#if defined(FEAT_RIGHTLEFT)
-	    if (has_mbyte && wp->w_p_rl && (*mb_char2cells)(mb_c) > 1)
-	    {
-		// A double-wide character is: put first half in left cell.
-		--wlv.off;
-		--wlv.col;
-	    }
-#endif
+#line 2768
 	    ScreenLines[wlv.off] = c;
 	    if (enc_dbcs == DBCS_JPNU)
 	    {
@@ -2834,23 +2723,9 @@ win_line(
 		if (wlv.tocol == wlv.vcol)
 		    ++wlv.tocol;
 
-#ifdef FEAT_RIGHTLEFT
-		if (wp->w_p_rl)
-		{
-		    // now it's time to backup one cell
-		    --wlv.off;
-		    --wlv.col;
-		}
-#endif
+#line 2845
 	    }
-#ifdef FEAT_RIGHTLEFT
-	    if (wp->w_p_rl)
-	    {
-		--wlv.off;
-		--wlv.col;
-	    }
-	    else
-#endif
+#line 2854
 	    {
 		++wlv.off;
 		++wlv.col;
@@ -2894,9 +2769,7 @@ win_line(
 	// At end of screen line and there is more to come: Display the line
 	// so far.  If there is no more to display it is caught above.
 	if ((
-#ifdef FEAT_RIGHTLEFT
-	    wp->w_p_rl ? (wlv.col < 0) :
-#endif
+#line 2900
 				    (wlv.col >= wp->w_width))
 		&& (wlv.draw_state != WL_LINE
 		    || *ptr != NUL

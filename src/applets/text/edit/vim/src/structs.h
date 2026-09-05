@@ -180,10 +180,7 @@ typedef struct taggy
  */
 typedef struct
 {
-#ifdef FEAT_ARABIC
-    int		wo_arab;
-# define w_p_arab w_onebuf_opt.wo_arab	// 'arabic'
-#endif
+#line 187
 #ifdef FEAT_LINEBREAK
     int		wo_bri;
 # define w_p_bri w_onebuf_opt.wo_bri	// 'breakindent'
@@ -233,12 +230,7 @@ typedef struct
     long        wo_lhi;
 # define w_p_lhi w_onebuf_opt.wo_lhi    // 'lhistory'
 #endif
-#ifdef FEAT_RIGHTLEFT
-    int		wo_rl;
-# define w_p_rl w_onebuf_opt.wo_rl	// 'rightleft'
-    char_u	*wo_rlc;
-# define w_p_rlc w_onebuf_opt.wo_rlc	// 'rightleftcmd'
-#endif
+#line 242
     long	wo_scr;
 #define w_p_scr w_onebuf_opt.wo_scr	// 'scroll'
     int		wo_sms;
@@ -3326,12 +3318,6 @@ struct file_buffer
     listener_T	*b_listener;       // Listeners accepting buffered reports.
     listener_T	*b_sync_listener;  // Listeners requiring unbuffered reports.
     list_T	*b_recorded_changes;
-#endif
-#line 3635
-
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-    char_u	*b_p_bexpr;	// 'balloonexpr' local value
-    long_u	b_p_bexpr_flags;// flags for 'balloonexpr'
 #endif
 #line 3643
 

@@ -73,9 +73,7 @@ static void compatible_set(void);
 static char *(p_bin_dep_opts[])    = {"textwidth", "wrapmargin", "modeline", "expandtab", NULL};
 static char *(p_paste_dep_opts[])  = {"autoindent", "expandtab", "ruler", "showmatch", "smarttab",
     "softtabstop", "textwidth", "wrapmargin",
-# ifdef FEAT_RIGHTLEFT
-    "hkmap", "revins",
-# endif
+#line 79
 # ifdef FEAT_VARTABS
     "varsofttabstop",
 # endif
@@ -683,15 +681,7 @@ set_init_1(int clean_arg)
 
     save_file_ff(curbuf);	// Buffer is unchanged
 
-#if defined(FEAT_ARABIC)
-    // Detect use of mlterm.
-    // Mlterm is a terminal emulator akin to xterm that has some special
-    // abilities (bidi namely).
-    // NOTE: mlterm's author is being asked to 'set' a variable
-    //       instead of an environment variable due to inheritance.
-    if (mch_getenv((char_u *)"MLTERM") != NULL)
-	set_option_value_give_err((char_u *)"tbidi", 1L, NULL, 0);
-#endif
+#line 695
 
     didset_options2();
 
@@ -3259,10 +3249,7 @@ insecure_flag(win_T *wp, int opt_idx, int opt_flags)
 	    case PV_STL:	return &wp->w_p_stl_flags;
 # endif
 # ifdef FEAT_EVAL
-#line 3421
-#  ifdef FEAT_BEVAL
-	    case PV_BEXPR:	return &wp->w_buffer->b_p_bexpr_flags;
-#  endif
+#line 3266
 	    case PV_INDE:	return &wp->w_buffer->b_p_inde_flags;
 	    case PV_FEX:	return &wp->w_buffer->b_p_fex_flags;
 #  ifdef FEAT_FIND_ID
@@ -3449,78 +3436,7 @@ apply_optionset_autocmd(
 }
 #endif
 
-#if defined(FEAT_ARABIC)
-/*
- * Process the updated 'arabic' option value.
- */
-    char *
-did_set_arabic(optset_T *args UNUSED)
-{
-    char *errmsg = NULL;
-
-    if (curwin->w_p_arab)
-    {
-	// 'arabic' is set, handle various sub-settings.
-	if (!p_tbidi)
-	{
-	    // set rightleft mode
-	    if (!curwin->w_p_rl)
-	    {
-		curwin->w_p_rl = TRUE;
-		changed_window_setting();
-	    }
-
-	    // Enable Arabic shaping (major part of what Arabic requires)
-	    if (!p_arshape)
-	    {
-		p_arshape = TRUE;
-		redraw_later_clear();
-	    }
-	}
-
-	// Arabic requires a utf-8 encoding, inform the user if it's not
-	// set.
-	if (STRCMP(p_enc, "utf-8") != 0)
-	{
-	    static char *w_arabic = N_("W17: Arabic requires UTF-8, do ':set encoding=utf-8'");
-
-	    msg_source(HL_ATTR(HLF_W));
-	    msg_attr(_(w_arabic), HL_ATTR(HLF_W));
-# ifdef FEAT_EVAL
-	    set_vim_var_string(VV_WARNINGMSG, (char_u *)_(w_arabic), -1);
-# endif
-	}
-
-	// set 'delcombine'
-	p_deco = TRUE;
-
-#line 3665
-    }
-    else
-    {
-	// 'arabic' is reset, handle various sub-settings.
-	if (!p_tbidi)
-	{
-	    // reset rightleft mode
-	    if (curwin->w_p_rl)
-	    {
-		curwin->w_p_rl = FALSE;
-		changed_window_setting();
-	    }
-
-	    // 'arabicshape' isn't reset, it is a global option and
-	    // another window may still need it "on".
-	}
-
-	// 'delcombine' isn't reset, it is a global option and another
-	// window may still want it "on".
-
-#line 3690
-    }
-
-    return errmsg;
-}
-#endif
+#line 3524
 
 #if defined(FEAT_AUTOCHDIR)
 /*
@@ -3535,36 +3451,7 @@ did_set_autochdir(optset_T *args UNUSED)
 }
 #endif
 
-#if defined(FEAT_BEVAL_GUI)
-/*
- * Process the updated 'ballooneval' option value.
- */
-    char *
-did_set_ballooneval(optset_T *args)
-{
-    if (balloonEvalForTerm)
-	return NULL;
-
-    if (p_beval && !args->os_oldval.boolean)
-	gui_mch_enable_beval_area(balloonEval);
-    else if (!p_beval && args->os_oldval.boolean)
-	gui_mch_disable_beval_area(balloonEval);
-
-    return NULL;
-}
-#endif
-
-#if defined(FEAT_BEVAL_TERM)
-/*
- * Process the updated 'balloonevalterm' option value.
- */
-    char *
-did_set_balloonevalterm(optset_T *args UNUSED)
-{
-    mch_bevalterm_changed();
-    return NULL;
-}
-#endif
+#line 3568
 
 /*
  * Process the updated 'binary' option value.
@@ -3918,10 +3805,7 @@ did_set_paste(optset_T *args UNUSED)
     static int	save_sm = 0;
     static int	save_sta = 0;
     static int	save_ru = 0;
-#ifdef FEAT_RIGHTLEFT
-    static int	save_ri = 0;
-    static int	save_hkmap = 0;
-#endif
+#line 3925
     buf_T	*buf;
 
     if (p_paste)
@@ -3951,10 +3835,7 @@ did_set_paste(optset_T *args UNUSED)
 	    save_sm = p_sm;
 	    save_sta = p_sta;
 	    save_ru = p_ru;
-#ifdef FEAT_RIGHTLEFT
-	    save_ri = p_ri;
-	    save_hkmap = p_hkmap;
-#endif
+#line 3958
 	    // save global values for local buffer options
 	    p_ai_nopaste = p_ai;
 	    p_et_nopaste = p_et;
@@ -3992,10 +3873,7 @@ did_set_paste(optset_T *args UNUSED)
 	if (p_ru)
 	    status_redraw_all();    // redraw to remove the ruler
 	p_ru = 0;		    // no ruler
-#ifdef FEAT_RIGHTLEFT
-	p_ri = 0;		    // no reverse insert
-	p_hkmap = 0;		    // no Hebrew keyboard
-#endif
+#line 3999
 	// set global values for local buffer options
 	p_tw = 0;
 	p_wm = 0;
@@ -4039,10 +3917,7 @@ did_set_paste(optset_T *args UNUSED)
 	if (p_ru != save_ru)
 	    status_redraw_all();    // redraw to draw the ruler
 	p_ru = save_ru;
-#ifdef FEAT_RIGHTLEFT
-	p_ri = save_ri;
-	p_hkmap = save_hkmap;
-#endif
+#line 4046
 	// set global values for local buffer options
 	p_ai = p_ai_nopaste;
 	p_et = p_et_nopaste;
@@ -6416,11 +6291,6 @@ unset_global_local_option(char_u *name, void *from)
 	    clear_string_option(&buf->b_p_mp);
 	    break;
 # endif
-# if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-	case PV_BEXPR:
-	    clear_string_option(&buf->b_p_bexpr);
-	    break;
-# endif
 #line 6898
 # ifdef FEAT_LINEBREAK
 	case PV_SBR:
@@ -6516,9 +6386,6 @@ get_varp_scope(struct vimoption *p, int scope)
 	    case PV_TSR:  return (char_u *)&(curbuf->b_p_tsr);
 #ifdef FEAT_COMPL_FUNC
 	    case PV_TSRFU: return (char_u *)&(curbuf->b_p_tsrfu);
-#endif
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-	    case PV_BEXPR: return (char_u *)&(curbuf->b_p_bexpr);
 #endif
 #line 6999
 #ifdef FEAT_LINEBREAK
@@ -6629,10 +6496,6 @@ get_varp(struct vimoption *p)
 	case PV_MP:	return *curbuf->b_p_mp != NUL
 				    ? (char_u *)&(curbuf->b_p_mp) : p->var;
 #endif
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-	case PV_BEXPR:	return *curbuf->b_p_bexpr != NUL
-				    ? (char_u *)&(curbuf->b_p_bexpr) : p->var;
-#endif
 #line 7115
 #ifdef FEAT_LINEBREAK
 	case PV_SBR:	return *curwin->w_p_sbr != NUL
@@ -6650,9 +6513,7 @@ get_varp(struct vimoption *p)
 				    ? (char_u *)&(curbuf->b_p_lw) : p->var;
 	case PV_MENC:	return *curbuf->b_p_menc != NUL
 				    ? (char_u *)&(curbuf->b_p_menc) : p->var;
-#ifdef FEAT_ARABIC
-	case PV_ARAB:	return (char_u *)&(curwin->w_p_arab);
-#endif
+#line 6656
 	case PV_LIST:	return (char_u *)&(curwin->w_p_list);
 	case PV_LCS:	return *curwin->w_p_lcs != NUL
 				    ? (char_u *)&(curwin->w_p_lcs) : p->var;
@@ -6684,10 +6545,7 @@ get_varp(struct vimoption *p)
 	case PV_PVW:	return (char_u *)&(curwin->w_p_pvw);
 	case PV_LHI:	return (char_u *)&(curwin->w_p_lhi);
 #endif
-#ifdef FEAT_RIGHTLEFT
-	case PV_RL:	return (char_u *)&(curwin->w_p_rl);
-	case PV_RLC:	return (char_u *)&(curwin->w_p_rlc);
-#endif
+#line 6691
 	case PV_SCROLL:	return (char_u *)&(curwin->w_p_scr);
 	case PV_SMS:	return (char_u *)&(curwin->w_p_sms);
 	case PV_WRAP:	return (char_u *)&(curwin->w_p_wrap);
@@ -6912,9 +6770,7 @@ copy_option_val(char_u *val)
     void
 copy_winopt(winopt_T *from, winopt_T *to)
 {
-#ifdef FEAT_ARABIC
-    to->wo_arab = from->wo_arab;
-#endif
+#line 6918
     to->wo_list = from->wo_list;
     to->wo_lcs = copy_option_val(from->wo_lcs);
     to->wo_fcs = copy_option_val(from->wo_fcs);
@@ -6925,10 +6781,7 @@ copy_winopt(winopt_T *from, winopt_T *to)
 #ifdef FEAT_LINEBREAK
     to->wo_nuw = from->wo_nuw;
 #endif
-#ifdef FEAT_RIGHTLEFT
-    to->wo_rl  = from->wo_rl;
-    to->wo_rlc = copy_option_val(from->wo_rlc);
-#endif
+#line 6932
 #ifdef FEAT_LINEBREAK
     to->wo_sbr = copy_option_val(from->wo_sbr);
 #endif
@@ -7015,9 +6868,7 @@ check_winopt(winopt_T *wop UNUSED)
 #ifdef FEAT_SIGNS
     check_string_option(&wop->wo_scl);
 #endif
-#ifdef FEAT_RIGHTLEFT
-    check_string_option(&wop->wo_rlc);
-#endif
+#line 7021
 #ifdef FEAT_LINEBREAK
     check_string_option(&wop->wo_sbr);
 #endif
@@ -7055,9 +6906,7 @@ clear_winopt(winopt_T *wop UNUSED)
     clear_string_option(&wop->wo_briopt);
 #endif
     clear_string_option(&wop->wo_wcr);
-#ifdef FEAT_RIGHTLEFT
-    clear_string_option(&wop->wo_rlc);
-#endif
+#line 7061
 #ifdef FEAT_LINEBREAK
     clear_string_option(&wop->wo_sbr);
 #endif
@@ -7368,9 +7217,6 @@ buf_copy_options(buf_T *buf, int flags)
 #endif
 	    buf->b_p_qe = vim_strsave(p_qe);
 	    COPY_OPT_SCTX(buf, BV_QE);
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-	    buf->b_p_bexpr = empty_option;
-#endif
 #line 7966
 #ifdef FEAT_PERSISTENT_UNDO
 	    buf->b_p_udf = p_udf;

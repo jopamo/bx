@@ -38,9 +38,7 @@ static void ins_reg(void);
 static void ins_ctrl_g(void);
 static void ins_ctrl_hat(void);
 static int  ins_esc(long *count, int cmdchar, int nomove);
-#ifdef FEAT_RIGHTLEFT
-static void ins_ctrl_(void);
-#endif
+#line 44
 static int ins_start_select(int c);
 static void ins_insert(int replaceState);
 static void ins_ctrl_o(void);
@@ -84,12 +82,7 @@ static int	did_restart_edit;	// "restart_edit" when calling edit()
 
 static int	can_cindent;		// may do cindenting on this line
 
-#ifdef FEAT_RIGHTLEFT
-static int	revins_on;		// reverse insert mode on
-static int	revins_chars;		// how much to skip after edit
-static int	revins_legal;		// was the last char 'legal'?
-static int	revins_scol;		// start column of revins session
-#endif
+#line 93
 
 static int	ins_need_undo;		// call u_save() before inserting a
 					// char.  Set when edit() is called.
@@ -312,15 +305,7 @@ edit(
 
     setmouse();
     clear_showcmd();
-#ifdef FEAT_RIGHTLEFT
-    // there is no reverse replace mode
-    revins_on = (State == MODE_INSERT && p_ri);
-    if (revins_on)
-	undisplay_dollar();
-    revins_chars = 0;
-    revins_legal = 0;
-    revins_scol = -1;
-#endif
+#line 324
     if (!p_ek)
     {
 	MAY_WANT_TO_LOG_THIS;
@@ -423,12 +408,7 @@ edit(
      */
     for (;;)
     {
-#ifdef FEAT_RIGHTLEFT
-	if (!revins_legal)
-	    revins_scol = -1;	    // reset on illegal motions
-	else
-	    revins_legal = 0;
-#endif
+#line 432
 	if (arrow_used)	    // don't repeat insert when arrow key used
 	    count = 0;
 
@@ -576,10 +556,7 @@ edit(
 		    {
 			ins_compl_enable_autocomplete();
 			ins_compl_init_get_longest();
-#ifdef FEAT_RIGHTLEFT
-			if (p_hkmap)
-			    c = hkmap(c);		// Hebrew mode mapping
-#endif
+#line 583
 			goto docomplete;
 		    }
 		}
@@ -615,10 +592,7 @@ edit(
 	// Don't want K_CURSORHOLD for the second key, e.g., after CTRL-V.
 	did_cursorhold = TRUE;
 
-#ifdef FEAT_RIGHTLEFT
-	if (p_hkmap && KeyTyped)
-	    c = hkmap(c);		// Hebrew mode mapping
-#endif
+#line 622
 
 	// If the window was made so small that nothing shows, make it at least
 	// one line and one column when typing.
@@ -764,18 +738,7 @@ edit(
 		do_c_expr_indent();
 	}
 
-#ifdef FEAT_RIGHTLEFT
-	if (curwin->w_p_rl)
-	    switch (c)
-	    {
-		case K_LEFT:	c = K_RIGHT; break;
-		case K_S_LEFT:	c = K_S_RIGHT; break;
-		case K_C_LEFT:	c = K_C_RIGHT; break;
-		case K_RIGHT:	c = K_LEFT; break;
-		case K_S_RIGHT: c = K_S_LEFT; break;
-		case K_C_RIGHT: c = K_C_LEFT; break;
-	    }
-#endif
+#line 779
 
 	/*
 	 * If 'keymodel' contains "startsel", may start selection.  If it
@@ -921,13 +884,7 @@ doESCkey:
 	    ins_ctrl_hat();
 	    break;
 
-#ifdef FEAT_RIGHTLEFT
-	case Ctrl__:	// switch between languages
-	    if (!p_ari)
-		goto normalchar;
-	    ins_ctrl_();
-	    break;
-#endif
+#line 931
 
 	case Ctrl_D:	// Make indent one shiftwidth smaller.
 #if defined(FEAT_FIND_ID)
@@ -1333,10 +1290,7 @@ normalchar:
 			&& c != Ctrl_RSB))
 	    {
 		insert_special(c, FALSE, FALSE);
-#ifdef FEAT_RIGHTLEFT
-		revins_legal++;
-		revins_chars++;
-#endif
+#line 1340
 	    }
 
 	    auto_format(FALSE, TRUE);
@@ -1523,10 +1477,7 @@ ins_ctrl_v(void)
     clear_showcmd();
 
     insert_special(c, FALSE, TRUE);
-#ifdef FEAT_RIGHTLEFT
-    revins_chars++;
-    revins_legal++;
-#endif
+#line 1530
 }
 
 /*
@@ -1619,24 +1570,7 @@ edit_putchar(int c, int highlight)
     pc_row = W_WINROW(curwin) + curwin->w_wrow;
     pc_col = curwin->w_wincol;
     pc_status = PC_STATUS_UNSET;
-#ifdef FEAT_RIGHTLEFT
-    if (curwin->w_p_rl)
-    {
-	pc_col += curwin->w_width - 1 - curwin->w_wcol;
-	if (has_mbyte)
-	{
-	    int fix_col = mb_fix_col(pc_col, pc_row);
-
-	    if (fix_col != pc_col)
-	    {
-		screen_putchar(' ', pc_row, fix_col, attr);
-		--curwin->w_wcol;
-		pc_status = PC_STATUS_RIGHT;
-	    }
-	}
-    }
-    else
-#endif
+#line 1640
     {
 	pc_col += curwin->w_wcol;
 	if (mb_lefthalve(pc_row, pc_col))
@@ -2118,9 +2052,7 @@ insertchar(
 	    && vpeekc() != NUL
 	    && !(State & REPLACE_FLAG)
 	    && !cindent_on()
-#ifdef FEAT_RIGHTLEFT
-	    && !p_ri
-#endif
+#line 2124
 	   )
     {
 #define INPUT_BUFLEN 100
@@ -2148,14 +2080,9 @@ insertchar(
 		    || (virtcol += byte2cells(buf[i - 1])) < (colnr_T)textwidth)
 		&& !(!no_abbr && !vim_iswordc(c) && vim_iswordc(buf[i - 1])))
 	{
-#ifdef FEAT_RIGHTLEFT
-	    c = vgetc();
-	    if (p_hkmap && KeyTyped)
-		c = hkmap(c);		    // Hebrew mode mapping
-	    buf[i++] = c;
-#else
+#line 2157
 	    buf[i++] = vgetc();
-#endif
+#line 2159
 	}
 
 #ifdef FEAT_DIGRAPHS
@@ -3139,79 +3066,7 @@ replace_do_bs(int limit_col)
 	(void)del_char_after_col(limit_col);
 }
 
-#if defined(FEAT_RIGHTLEFT)
-/*
- * Map Hebrew keyboard when in hkmap mode.
- */
-    int
-hkmap(int c)
-{
-    if (p_hkmapp)   // phonetic mapping, by Ilya Dogolazky
-    {
-	enum {hALEF=0, BET, GIMEL, DALET, HEI, VAV, ZAIN, HET, TET, IUD,
-	    KAFsofit, hKAF, LAMED, MEMsofit, MEM, NUNsofit, NUN, SAMEH, AIN,
-	    PEIsofit, PEI, ZADIsofit, ZADI, KOF, RESH, hSHIN, TAV};
-	static char_u map[26] =
-	    {(char_u)hALEF/*a*/, (char_u)BET  /*b*/, (char_u)hKAF    /*c*/,
-	     (char_u)DALET/*d*/, (char_u)-1   /*e*/, (char_u)PEIsofit/*f*/,
-	     (char_u)GIMEL/*g*/, (char_u)HEI  /*h*/, (char_u)IUD     /*i*/,
-	     (char_u)HET  /*j*/, (char_u)KOF  /*k*/, (char_u)LAMED   /*l*/,
-	     (char_u)MEM  /*m*/, (char_u)NUN  /*n*/, (char_u)SAMEH   /*o*/,
-	     (char_u)PEI  /*p*/, (char_u)-1   /*q*/, (char_u)RESH    /*r*/,
-	     (char_u)ZAIN /*s*/, (char_u)TAV  /*t*/, (char_u)TET     /*u*/,
-	     (char_u)VAV  /*v*/, (char_u)hSHIN/*w*/, (char_u)-1      /*x*/,
-	     (char_u)AIN  /*y*/, (char_u)ZADI /*z*/};
-
-	if (c == 'N' || c == 'M' || c == 'P' || c == 'C' || c == 'Z')
-	    return (int)(map[CharOrd(c)] - 1 + p_aleph);
-							    // '-1'='sofit'
-	else if (c == 'x')
-	    return 'X';
-	else if (c == 'q')
-	    return '\''; // {geresh}={'}
-	else if (c == 246)
-	    return ' ';  // \"o --> ' ' for a german keyboard
-	else if (c == 228)
-	    return ' ';  // \"a --> ' '      -- / --
-	else if (c == 252)
-	    return ' ';  // \"u --> ' '      -- / --
-	// NOTE: islower() does not do the right thing for us on Linux so we
-	// do this the same was as 5.7 and previous, so it works correctly on
-	// all systems.  Specifically, the e.g. Delete and Arrow keys are
-	// munged and won't work if e.g. searching for Hebrew text.
-	else if (c >= 'a' && c <= 'z')
-	    return (int)(map[CharOrdLow(c)] + p_aleph);
-	else
-	    return c;
-    }
-    else
-    {
-	switch (c)
-	{
-	    case '`':	return ';';
-	    case '/':	return '.';
-	    case '\'':	return ',';
-	    case 'q':	return '/';
-	    case 'w':	return '\'';
-
-			// Hebrew letters - set offset from 'a'
-	    case ',':	c = '{'; break;
-	    case '.':	c = 'v'; break;
-	    case ';':	c = 't'; break;
-	    default: {
-			 static char str[] = "zqbcxlsjphmkwonu ydafe rig";
-
-			 if (c < 'a' || c > 'z')
-			     return c;
-			 c = str[CharOrdLow(c)];
-			 break;
-		     }
-	}
-
-	return (int)(CharOrdLow(c) + p_aleph);
-    }
-}
-#endif
+#line 3215
 
     static void
 ins_reg(void)
@@ -3447,8 +3302,6 @@ ins_esc(
 {
     int		temp;
     static int	disabled_redraw = FALSE;
-#line 3754
-
 #line 3759
     temp = curwin->w_cursor.col;
     if (disabled_redraw)
@@ -3516,9 +3369,7 @@ ins_esc(
 		|| curwin->w_cursor.coladd > 0)
 	    && (restart_edit == NUL
 		   || (gchar_cursor() == NUL && !VIsual_active))
-#ifdef FEAT_RIGHTLEFT
-	    && !revins_on
-#endif
+#line 3522
 				      )
     {
 	if (curwin->w_cursor.coladd > 0 || get_ve_flags() == VE_ALL)
@@ -3581,34 +3432,7 @@ ins_esc(
     return TRUE;	    // exit Insert mode
 }
 
-#ifdef FEAT_RIGHTLEFT
-/*
- * Toggle language: hkmap and revins_on.
- * Move to end of reverse inserted text.
- */
-    static void
-ins_ctrl_(void)
-{
-    if (revins_on && revins_chars && revins_scol >= 0)
-    {
-	while (gchar_cursor() != NUL && revins_chars--)
-	    ++curwin->w_cursor.col;
-    }
-    p_ri = !p_ri;
-    revins_on = (State == MODE_INSERT && p_ri);
-    if (revins_on)
-    {
-	revins_scol = curwin->w_cursor.col;
-	revins_legal++;
-	revins_chars = 0;
-	undisplay_dollar();
-    }
-    else
-	revins_scol = -1;
-    p_hkmap = curwin->w_p_rl ^ p_ri;    // be consistent!
-    showmode();
-}
-#endif
+#line 3612
 
 /*
  * If 'keymodel' contains "startsel", may start selection.
@@ -3830,9 +3654,7 @@ ins_bs(
      */
     if (       BUFEMPTY()
 	    || (
-#ifdef FEAT_RIGHTLEFT
-		!revins_on &&
-#endif
+#line 3836
 		((curwin->w_cursor.lnum == 1 && curwin->w_cursor.col == 0)
 		    || (!can_bs(BS_START)
 			&& ((arrow_used
@@ -3853,10 +3675,7 @@ ins_bs(
     if (in_indent)
 	can_cindent = FALSE;
     end_comment_pending = NUL;	// After BS, don't auto-end comment
-#ifdef FEAT_RIGHTLEFT
-    if (revins_on)	    // put cursor after last inserted char
-	inc_cursor();
-#endif
+#line 3860
 
     // Virtualedit:
     //	BACKSPACE_CHAR eats a virtual space
@@ -3884,9 +3703,7 @@ ins_bs(
     {
 	lnum = Insstart.lnum;
 	if (curwin->w_cursor.lnum == lnum
-#ifdef FEAT_RIGHTLEFT
-			|| revins_on
-#endif
+#line 3890
 				    )
 	{
 	    if (u_save((linenr_T)(curwin->w_cursor.lnum - 2),
@@ -3996,17 +3813,12 @@ ins_bs(
 	/*
 	 * Delete character(s) before the cursor.
 	 */
-#ifdef FEAT_RIGHTLEFT
-	if (revins_on)		// put cursor on last inserted char
-	    dec_cursor();
-#endif
+#line 4003
 	mincol = 0;
 						// keep indent
 	if (mode == BACKSPACE_LINE
 		&& (curbuf->b_p_ai || cindent_on())
-#ifdef FEAT_RIGHTLEFT
-		&& !revins_on
-#endif
+#line 4010
 			    )
 	{
 	    save_col = curwin->w_cursor.col;
@@ -4127,9 +3939,7 @@ ins_bs(
 		cclass = mb_get_class(ml_get_cursor());
 	    do
 	    {
-#ifdef FEAT_RIGHTLEFT
-		if (!revins_on) // put cursor on char to be deleted
-#endif
+#line 4133
 		    dec_cursor();
 
 		cc = gchar_cursor();
@@ -4151,14 +3961,9 @@ ins_bs(
 			&& ((vim_isspace(cc) || vim_iswordc(cc) != temp)
 			|| prev_cclass != cclass))
 		{
-#ifdef FEAT_RIGHTLEFT
-		    if (!revins_on)
-#endif
+#line 4157
 			inc_cursor();
-#ifdef FEAT_RIGHTLEFT
-		    else if (State & REPLACE_FLAG)
-			dec_cursor();
-#endif
+#line 4162
 		    break;
 		}
 		if (State & REPLACE_FLAG)
@@ -4175,23 +3980,13 @@ ins_bs(
 		     */
 		    if (enc_utf8 && p_deco && cpc[0] != NUL)
 			inc_cursor();
-#ifdef FEAT_RIGHTLEFT
-		    if (revins_chars)
-		    {
-			revins_chars--;
-			revins_legal++;
-		    }
-		    if (revins_on && gchar_cursor() == NUL)
-			break;
-#endif
+#line 4187
 		}
 		// Just a single backspace?:
 		if (mode == BACKSPACE_CHAR)
 		    break;
 	    } while (
-#ifdef FEAT_RIGHTLEFT
-		    revins_on ||
-#endif
+#line 4195
 		    (curwin->w_cursor.col > mincol
 		    &&  (can_bs(BS_NOSTOP)
 			|| (curwin->w_cursor.lnum != Insstart_orig.lnum
@@ -4381,12 +4176,7 @@ ins_left(void)
 	    if (!end_change)
 		AppendCharToRedobuff(K_LEFT);
 	}
-#ifdef FEAT_RIGHTLEFT
-	// If exit reversed string, position is fixed
-	if (revins_scol != -1 && (int)curwin->w_cursor.col >= revins_scol)
-	    revins_legal++;
-	revins_chars++;
-#endif
+#line 4390
     }
 
     /*
@@ -4480,11 +4270,7 @@ ins_right(void)
 		++curwin->w_cursor.col;
 	}
 
-#ifdef FEAT_RIGHTLEFT
-	revins_legal++;
-	if (revins_chars)
-	    revins_chars--;
-#endif
+#line 4488
     }
     // if 'whichwrap' set for cursor in insert mode, may move the
     // cursor to the next line
@@ -4924,12 +4710,7 @@ ins_eol(int c)
     if (virtual_active() && curwin->w_cursor.coladd > 0)
 	coladvance(getviscol());
 
-#ifdef FEAT_RIGHTLEFT
-    // NL in reverse insert will always start in the end of
-    // current line.
-    if (revins_on)
-	curwin->w_cursor.col += ml_get_cursor_len();
-#endif
+#line 4933
 
     AppendToRedobuff(NL_STR);
     i = open_line(FORWARD,
@@ -5099,10 +4880,7 @@ ins_ctrl_ey(int tc)
 	    curbuf->b_p_tw = -1;
 	    insert_special(c, TRUE, FALSE);
 	    curbuf->b_p_tw = tw_save;
-#ifdef FEAT_RIGHTLEFT
-	    revins_chars++;
-	    revins_legal++;
-#endif
+#line 5106
 	    c = Ctrl_V;	// pretend CTRL-V is last character
 	    auto_format(FALSE, TRUE);
 	}

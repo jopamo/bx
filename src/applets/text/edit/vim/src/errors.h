@@ -67,10 +67,8 @@ EXTERN char e_no_such_abbreviation[]
 EXTERN char e_gui_cannot_be_used_not_enabled_at_compile_time[]
 	INIT(= N_("E25: GUI cannot be used: Not enabled at compile time"));
 #endif
-#ifndef FEAT_RIGHTLEFT
 EXTERN char e_hebrew_cannot_be_used_not_enabled_at_compile_time[]
 	INIT(= N_("E26: Hebrew cannot be used: Not enabled at compile time\n"));
-#endif
 EXTERN char e_farsi_support_has_been_removed[]
 	INIT(= N_("E27: Farsi support has been removed\n"));
 #if defined(FEAT_SEARCH_EXTRA) || defined(FEAT_SYN_HL)
@@ -530,19 +528,6 @@ EXTERN char e_mapping_already_exists_for_str[]
 	INIT(= N_("E227: Mapping already exists for %s"));
 EXTERN char e_makemap_illegal_mode[]
 	INIT(= "E228: makemap: Illegal mode");
-#ifdef FEAT_GUI
-# ifdef FEAT_BEVAL_GUI
-# endif
-# if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_X11)
-# endif
-# if defined(FEAT_XFONTSET)
-# endif
-# if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK) \
-	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_HAIKU)
-# endif
-# if defined(FEAT_GUI_X11) && !defined(FEAT_GUI_GTK)
-# endif
-#endif
 #ifdef MSWIN
 #endif
 #ifdef FEAT_SIGNS
@@ -1657,10 +1642,8 @@ EXTERN char e_id_is_reserved_for_match_nr[]
 EXTERN char e_invalid_id_nr_must_be_greater_than_or_equal_to_one_1[]
 	INIT(= N_("E799: Invalid ID: %d (must be greater than or equal to 1)"));
 #endif
-#ifndef FEAT_ARABIC
 EXTERN char e_arabic_cannot_be_used_not_enabled_at_compile_time[]
 	INIT(= N_("E800: Arabic cannot be used: Not enabled at compile time\n"));
-#endif
 #ifdef FEAT_SEARCH_EXTRA
 EXTERN char e_id_already_taken_nr[]
 	INIT(= N_("E801: ID already taken: %d"));

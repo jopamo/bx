@@ -178,11 +178,7 @@ search_regcomp(
 	*used_pat = pat;
 
     vim_free(mr_pattern);
-#ifdef FEAT_RIGHTLEFT
-    if (curwin->w_p_rl && *curwin->w_p_rlc == 's')
-	mr_pattern = reverse_text(pat);
-    else
-#endif
+#line 186
 	mr_pattern = vim_strnsave(pat, patlen);
     if (mr_pattern == NULL)
 	mr_patternlen = 0;
@@ -1549,35 +1545,7 @@ do_search(
 			msgbuflen = STRLEN(msgbuf);
 		    }
 
-#ifdef FEAT_RIGHTLEFT
-		    // The search pattern could be shown on the right in
-		    // rightleft mode, but the 'ruler' and 'showcmd' area use
-		    // it too, thus it would be blanked out again very soon.
-		    // Show it on the left, but do reverse the text.
-		    if (curwin->w_p_rl && *curwin->w_p_rlc == 's')
-		    {
-			char_u *r;
-			size_t pat_len;
-
-			r = reverse_text(msgbuf);
-			if (r != NULL)
-			{
-			    vim_free(msgbuf);
-			    msgbuf = r;
-			    msgbuflen = STRLEN(msgbuf);
-			    // move reversed text to beginning of buffer
-			    while (*r != NUL && *r == ' ')
-				r++;
-			    pat_len = msgbuf + msgbuflen - r;
-			    mch_memmove(msgbuf, r, pat_len);
-			    // overwrite old text
-			    if ((size_t)(r - msgbuf) >= pat_len)
-				vim_memset(r, ' ', pat_len);
-			    else
-				vim_memset(msgbuf + pat_len, ' ', r - msgbuf);
-			}
-		    }
-#endif
+#line 1581
 		    msg_outtrans(msgbuf);
 		    msg_clr_eos();
 		    msg_check();
@@ -2391,12 +2359,7 @@ findmatchlimit(
 	}
     }
 
-#ifdef FEAT_RIGHTLEFT
-    // This is just guessing: when 'rightleft' is set, search for a matching
-    // paren/brace in the other direction.
-    if (curwin->w_p_rl && vim_strchr((char_u *)"()[]{}<>", initc) != NULL)
-	backwards = !backwards;
-#endif
+#line 2400
 
     do_quotes = -1;
     start_in_quotes = MAYBE;
@@ -2893,15 +2856,10 @@ showmatch(
     // 'matchpairs' is "x:y,x:y"
     for (p = curbuf->b_p_mps; *p != NUL; ++p)
     {
-#ifdef FEAT_RIGHTLEFT
-	if (PTR2CHAR(p) == c && (curwin->w_p_rl ^ p_ri))
-	    break;
-#endif
+#line 2900
 	p += mb_ptr2len(p) + 1;
 	if (PTR2CHAR(p) == c
-#ifdef FEAT_RIGHTLEFT
-		&& !(curwin->w_p_rl ^ p_ri)
-#endif
+#line 2905
 	   )
 	    break;
 	p += mb_ptr2len(p);
@@ -3235,23 +3193,7 @@ cmdline_search_stat(
     char	t[SEARCH_STAT_BUF_LEN];
     size_t	len;
 
-#ifdef FEAT_RIGHTLEFT
-    if (curwin->w_p_rl && *curwin->w_p_rlc == 's')
-    {
-	if (stat.incomplete == 1)
-	    len = vim_snprintf(t, SEARCH_STAT_BUF_LEN, "[?/??]");
-	else if (stat.cnt > maxcount && stat.cur > maxcount)
-	    len = vim_snprintf(t, SEARCH_STAT_BUF_LEN, "[>%d/>%d]",
-		    maxcount, maxcount);
-	else if (stat.cnt > maxcount)
-	    len = vim_snprintf(t, SEARCH_STAT_BUF_LEN, "[>%d/%d]",
-		    maxcount, stat.cur);
-	else
-	    len = vim_snprintf(t, SEARCH_STAT_BUF_LEN, "[%d/%d]",
-		    stat.cnt, stat.cur);
-    }
-    else
-#endif
+#line 3255
     {
 	if (stat.incomplete == 1)
 	    len = vim_snprintf(t, SEARCH_STAT_BUF_LEN, "[?/??]");
