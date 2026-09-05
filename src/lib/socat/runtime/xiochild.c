@@ -37,6 +37,7 @@ struct xio_general_child {
 static struct xio_child children[XIO_CHILD_CAPACITY];
 static struct xio_general_child *general_children;
 static volatile sig_atomic_t child_reap_pending;
+int num_child;
 int engine_result = EXIT_SUCCESS;
 
 
@@ -145,6 +146,7 @@ void xio_child_reset(void) {
    memset(children, 0, sizeof(children));
    general_children = NULL;
    child_reap_pending = 0;
+   num_child = 0;
 }
 
 int xio_child_reserve(struct single *stream) {
@@ -240,6 +242,8 @@ static int xio_child_publish_general(pid_t pid) {
       if (child->state == XIO_CHILD_RESERVED) {
 	 child->pid = pid;
 	 child->state = XIO_CHILD_RUNNING;
+	 ++num_child;
+	 Info1("number of children increased to %d", num_child);
 	 return 0;
       }
    }
