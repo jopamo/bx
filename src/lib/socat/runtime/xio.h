@@ -509,6 +509,7 @@ extern int xio_child_reserve(struct single *stream);
 extern void xio_child_cancel_reservation(struct single *stream);
 extern int xio_child_publish_pid(struct single *stream, pid_t pid);
 extern void xio_child_abort_launch(struct single *stream, pid_t pid);
+extern pid_t xio_child_fork(bool track_general);
 extern void xio_child_reap(void);
 extern void xio_child_reap_pending(void);
 extern void xio_child_wait_general(void);

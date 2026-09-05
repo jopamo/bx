@@ -28,7 +28,14 @@ struct xio_child {
    int wait_status;
 };
 
+struct xio_general_child {
+   enum xio_child_state state;
+   pid_t pid;
+   struct xio_general_child *next;
+};
+
 static struct xio_child children[XIO_CHILD_CAPACITY];
+static struct xio_general_child *general_children;
 static volatile sig_atomic_t child_reap_pending;
 int engine_result = EXIT_SUCCESS;
 
@@ -57,6 +64,30 @@ static struct xio_child *xio_child_by_stream(struct single *stream) {
       }
    }
    return NULL;
+}
+
+static struct xio_general_child *xio_general_child_by_pid(pid_t pid) {
+   struct xio_general_child *child;
+
+   for (child = general_children; child != NULL; child = child->next) {
+      if (child->state == XIO_CHILD_RUNNING && child->pid == pid) {
+	 return child;
+      }
+   }
+   return NULL;
+}
+
+static void xio_general_child_remove(struct xio_general_child *child) {
+   struct xio_general_child **link = &general_children;
+
+   while (*link != NULL && *link != child) {
+      link = &(*link)->next;
+   }
+   if (*link == child) {
+      *link = child->next;
+      child->state = XIO_CHILD_CONSUMED;
+      free(child);
+   }
 }
 
 static void xio_child_record_exit(struct xio_child *child, int status) {
@@ -104,7 +135,15 @@ static void xio_child_publish_lost(struct xio_child *child) {
 }
 
 void xio_child_reset(void) {
+   struct xio_general_child *child = general_children;
+
+   while (child != NULL) {
+      struct xio_general_child *next = child->next;
+      free(child);
+      child = next;
+   }
    memset(children, 0, sizeof(children));
+   general_children = NULL;
    child_reap_pending = 0;
 }
 
@@ -165,21 +204,116 @@ void xio_child_abort_launch(struct single *stream, pid_t pid) {
    }
 }
 
+static int xio_child_reserve_general(void) {
+   struct xio_general_child *child = malloc(sizeof(*child));
+
+   if (child == NULL) {
+      return -1;
+   }
+   child->state = XIO_CHILD_RESERVED;
+   child->pid = 0;
+   child->next = general_children;
+   general_children = child;
+   return 0;
+}
+
+static void xio_child_cancel_general(void) {
+   struct xio_general_child *child;
+
+   for (child = general_children; child != NULL; child = child->next) {
+      if (child->state == XIO_CHILD_RESERVED) {
+	 xio_general_child_remove(child);
+	 return;
+      }
+   }
+}
+
+static int xio_child_publish_general(pid_t pid) {
+   struct xio_general_child *child;
+
+   if (pid <= 0 || xio_child_by_pid(pid) != NULL ||
+       xio_general_child_by_pid(pid) != NULL) {
+      errno = EINVAL;
+      return -1;
+   }
+   for (child = general_children; child != NULL; child = child->next) {
+      if (child->state == XIO_CHILD_RESERVED) {
+	 child->pid = pid;
+	 child->state = XIO_CHILD_RUNNING;
+	 return 0;
+      }
+   }
+   errno = EINVAL;
+   return -1;
+}
+
+static void xio_child_abort_general(pid_t pid) {
+   struct xio_general_child *child;
+
+   for (child = general_children; child != NULL; child = child->next) {
+      if (child->state == XIO_CHILD_RESERVED) {
+	 int status;
+
+	 child->pid = pid;
+	 child->state = XIO_CHILD_TERMINATING;
+	 if (Kill(pid, SIGKILL) < 0 && errno != ESRCH) {
+	    Warn2("kill("F_pid", SIGKILL): %s", pid, strerror(errno));
+	 }
+	 while (Waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+	 }
+	 xio_general_child_remove(child);
+	 return;
+      }
+   }
+}
+
+pid_t xio_child_fork(bool track_general) {
+   pid_t pid;
+
+   if (!track_general) {
+      return Fork();
+   }
+   if (xio_child_reserve_general() < 0) {
+      return -1;
+   }
+   pid = Fork();
+   if (pid < 0) {
+      xio_child_cancel_general();
+      return -1;
+   }
+   if (pid > 0 && xio_child_publish_general(pid) < 0) {
+      int saved_errno = errno;
+
+      xio_child_abort_general(pid);
+      errno = saved_errno;
+      return -1;
+   }
+   return pid;
+}
+
 /* Reaping, diagnostics, callbacks, and status publication all happen in
    ordinary control flow. The physical signal handler only wakes that flow. */
 static void xio_child_observe(pid_t pid, int status) {
    struct xio_child *child = xio_child_by_pid(pid);
+   struct xio_general_child *general_child;
 
    if (child != NULL) {
       xio_child_record_exit(child, status);
       return;
    }
 
-   Info1("general child "F_pid" terminated", pid);
-   if (num_child > 0) {
-      --num_child;
-      Info1("number of children decreased to %d", num_child);
+   general_child = xio_general_child_by_pid(pid);
+   if (general_child != NULL) {
+      Info1("general child "F_pid" terminated", pid);
+      xio_general_child_remove(general_child);
+      if (num_child > 0) {
+	 --num_child;
+	 Info1("number of children decreased to %d", num_child);
+      }
+      return;
    }
+
+   Warn1("reaped untracked child "F_pid, pid);
 }
 
 void xio_child_reap(void) {
@@ -221,6 +355,10 @@ void xio_child_wait_general(void) {
       } else if (pid < 0 && errno == EINTR) {
 	 continue;
       } else if (pid < 0 && errno == ECHILD) {
+	 Warn("child registry was nonempty after waitpid reported ECHILD");
+	 while (general_children != NULL) {
+	    xio_general_child_remove(general_children);
+	 }
 	 num_child = 0;
       } else if (pid < 0) {
 	 Warn1("waitpid(-1, {}, 0): "F_strerror, status);
