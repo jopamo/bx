@@ -2171,6 +2171,9 @@ int xiobind(
 	 }
 
 	 do {	/* loop over tempnam bind() attempts */
+	    size_t pathoff = abstract ? 1 : 0;
+	    size_t socknamelen;
+
 	    sockname = xio_tempnam(usrname, abstract);
 	    if (sockname == NULL) {
 	       int _errno = errno;
@@ -2179,9 +2182,11 @@ int xiobind(
 	       errno = _errno;
 	       return -1;
 	    }
-	    strncpy(us->un.sun_path+(abstract?1:0), sockname, sizeof(us->un.sun_path));
-	    uslen = sizeof(&((struct sockaddr_un *)0)->sun_path) +
-	       Min(strlen(sockname), sizeof(us->un.sun_path)); /*?*/
+	    socknamelen =
+	       Min(strlen(sockname), sizeof(us->un.sun_path)-pathoff);
+	    memcpy(us->un.sun_path+pathoff, sockname, socknamelen);
+	    uslen = sizeof(struct sockaddr_un)-sizeof(us->un.sun_path) +
+	       pathoff+socknamelen;
 	    free(sockname);
 
 	    if (Bind(sfd->fd, (struct sockaddr *)us, uslen) < 0) {
