@@ -523,19 +523,19 @@ int xioapply_ipv6_join_group(
 
 #if HAVE_STRUCT_GROUP_SOURCE_REQ
 int xiotype_ip6_join_source_group(
-	char *token, const struct optname *ent, struct opt *opt)
+	const char *token, const struct optname *ent, struct opt *opt)
 {
    /* We do not resolve the addresses here because we do not yet know
       if we are coping with an IPv4 or IPv6 socat address */
    const char *ends[] = { ":", NULL };
    const char *nests[] = { "[","]", NULL };
    char buff[512], *buffp=buff; size_t bufspc = sizeof(buff)-1;
-   char *tokp = token;
+   const char *tokp = token;
    int parsres;
 
    /* Parse first IP address (mcast group), expect ':' */
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {
@@ -560,7 +560,7 @@ int xiotype_ip6_join_source_group(
    /* Parse interface name/index, expect ':' or '\0'' */
    buffp = buff;
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {
@@ -586,7 +586,7 @@ int xiotype_ip6_join_source_group(
    /* Parse second IP address (source address), expect ':' or '\0'' */
    buffp = buff;
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {

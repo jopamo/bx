@@ -86,10 +86,10 @@ const char copyright_ssleay[] = "This product includes software written by Tim H
 
 bool havelock;
 
-int main(int argc, const char *argv[]);
+int main(int argc, char *argv[]);
 
-int main(int argc, const char *argv[]) {
-   const char **arg1, *a;
+int main(int argc, char *argv[]) {
+   char **arg1, *a;
    char *mainwaitstring;
    char buff[10];
    double rto;
@@ -235,7 +235,7 @@ int main(int argc, const char *argv[]) {
 	       Exit(1);
 	    }
 	 }
-	 xioparms.bufsiz = Strtoul(a, (char **)&a, 0, "-b");
+	 xioparms.bufsiz = Strtoul(a, &a, 0, "-b");
 	 break;
       case 's':  if (arg1[0][2])  { socat_opt_hint(stderr, arg1[0][1], arg1[0][2]); Exit(1); }
 	 diag_set_int('e', E_FATAL); break;
@@ -249,7 +249,7 @@ int main(int argc, const char *argv[]) {
 	       Exit(1);
 	    }
 	 }
-	 socat_opts.log_sigs = Strtoul(a, (char **)&a, 0, "-S");
+	 socat_opts.log_sigs = Strtoul(a, &a, 0, "-S");
 	 break;
       case 't': if (arg1[0][2]) {
 	    a = *arg1+2;
@@ -260,7 +260,7 @@ int main(int argc, const char *argv[]) {
 	       Exit(1);
 	    }
 	 }
-	 rto = Strtod(a, (char **)&a, "-t");
+	 rto = Strtod(a, &a, "-t");
 	 socat_opts.closwait.tv_sec = rto;
 	 socat_opts.closwait.tv_usec =
 	    (rto-socat_opts.closwait.tv_sec) * 1000000;
@@ -274,7 +274,7 @@ int main(int argc, const char *argv[]) {
 	       Exit(1);
 	    }
 	 }
-	 rto = Strtod(a, (char **)&a, "-T");
+	 rto = Strtod(a, &a, "-T");
 	 if (rto < 0) {
 	    socat_opts.total_timeout.tv_sec = 0; 	/* infinite */
 	    socat_opts.total_timeout.tv_usec = 1000000;	/* by invalid */

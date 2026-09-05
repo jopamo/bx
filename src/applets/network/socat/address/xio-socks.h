@@ -28,8 +28,8 @@ extern const struct optdesc opt_sockspass;
 extern const struct addrdesc xioaddr_socks4_connect;
 extern const struct addrdesc xioaddr_socks4a_connect;
 
-extern int _xioopen_opt_socksport(struct opt *opts, char **socksport);
-extern int _xioopen_socks4_init(const char *targetport, struct opt *opts, char **socksport, struct socks4u *sockhead, size_t *headlen);
+extern int _xioopen_opt_socksport(struct opt *opts, const char **socksport);
+extern int _xioopen_socks4_init(const char *targetport, struct opt *opts, const char **socksport, struct socks4u *sockhead, size_t *headlen);
 extern int _xioopen_socks4_prepare(struct single *xfd, const char *hostname, int socks4a, struct socks4u *sockhead, ssize_t *headlen, int level);
 extern int _xioopen_socks4_connect(struct single *xfd, struct socks4u *sockhead, size_t headlen, int level);
 

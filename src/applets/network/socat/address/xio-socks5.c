@@ -661,7 +661,7 @@ static int xioopen_socks5(
 	if (result != STAT_OK)
 		return result;
 
-	if (_xioopen_opt_socksport(opts, (char **)&socks_port) < 0) {
+	if (_xioopen_opt_socksport(opts, &socks_port) < 0) {
 		return STAT_NORETRY;
 	}
 	/*! possible memory leak */

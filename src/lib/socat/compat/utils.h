@@ -22,7 +22,7 @@ extern char *strndup(const char *s, size_t n);
 extern int setenv(const char *name, const char *value, int overwrite);
 #endif /* !HAVE_SETENV */
 
-extern const struct wordent *keyw(const struct wordent *keywds, const char *name, unsigned int nkeys);
+extern const void *keyw(const void *keywds, const char *name, unsigned int nkeys);
 
 
 #define XIOSAN_ZERO_MASK                  0x000f

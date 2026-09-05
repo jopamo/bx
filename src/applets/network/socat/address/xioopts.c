@@ -2145,8 +2145,7 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
       }
       *tokp = '\0';
 
-      ent = (struct optname *)
-	 keyw((struct wordent *)optionnames, token, optionnum);
+      ent = keyw(optionnames, token, optionnum);
       if (ent == NULL) {
 	 Error1("parseopts_table(): unknown option \"%s\"", token);
 	 continue;
@@ -2750,9 +2749,9 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	    const char *nests[] = { "[","]", NULL };
 	    char buff[512], *buffp=buff; size_t bufspc = sizeof(buff)-1;
 
-	    tokp = token;
+	    const char *inputp = token;
 	    parsres =
-	    nestlex((const char **)&tokp, &buffp, &bufspc,
+	    nestlex(&inputp, &buffp, &bufspc,
 		    ends, NULL, NULL, nests,
 		    true, false, false);
 	    if (parsres < 0) {
@@ -2762,7 +2761,7 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	       Error1("syntax error in \"%s\"", *a);
 	       return -1;
 	    }
-	    if (*tokp != '\0') {
+	    if (*inputp != '\0') {
 	       Error1("trailing data in option \"%s\"", token);
 	    }
 	    *buffp = '\0';
@@ -2781,12 +2780,13 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	    const char portsep[] = ":";
 	    const char *ends[] = { portsep, NULL };
 	    const char *nests[] = { "[","]", NULL };
-	    char hostname[512], *hostp = hostname, *portp = NULL;
+	    char hostname[512], *hostp = hostname;
+	    const char *portp = NULL;
 	    size_t hostlen = sizeof(hostname)-1;
 
-	    tokp = token;
+	    const char *inputp = token;
 	    parsres =
-	    nestlex((const char **)&tokp, &hostp, &hostlen,
+	    nestlex(&inputp, &hostp, &hostlen,
 		    ends, NULL, NULL, nests,
 		    true, false, false);
 	    if (parsres < 0) {
@@ -2797,8 +2797,8 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	       return -1;
 	    }
 	    *hostp++ = '\0';
-	    if (!strncmp(tokp, portsep, strlen(portsep))) {
-	       portp = tokp + strlen(portsep);
+	    if (!strncmp(inputp, portsep, strlen(portsep))) {
+	       portp = inputp + strlen(portsep);
 	    }
 	    if (xioresolve(hostname, portp, AF_INET, SOCK_DGRAM, IPPROTO_IP,
 			   (union sockaddr_union *)&sa, &salen, 0)
@@ -3332,8 +3332,10 @@ int retropt_bind(struct opt *opts,
    const char *ends[] = { portsep, NULL };
    const char *nests[] = { "[", "]", NULL };
    bool portallowed;
-   char *bindname, *bindp;
-   char hostname[512], *hostp = hostname, *portp = NULL;
+   char *bindname;
+   const char *bindp;
+   char hostname[512], *hostp = hostname;
+   const char *portp = NULL;
    size_t hostlen = sizeof(hostname)-1;
    int parsres;
    int ai_flags2[2];

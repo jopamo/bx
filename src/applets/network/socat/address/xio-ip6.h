@@ -47,7 +47,7 @@ xiosetsockaddrenv_ip6(int idx, char *namebuff, size_t namelen,
 		      struct sockaddr_in6 *sa, int ipproto);
 extern int xioapply_ipv6_join_group(xiosingle_t *xfd, struct opt *opt);
 
-extern int xiotype_ip6_join_source_group(char* token, const struct optname *ent, struct opt *opt);
+extern int xiotype_ip6_join_source_group(const char *token, const struct optname *ent, struct opt *opt);
 extern int xioapply_ip6_join_source_group(struct single *xfd, struct opt *opt);
 
 #endif /* WITH_IP6 */

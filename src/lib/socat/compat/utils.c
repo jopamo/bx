@@ -58,7 +58,8 @@ char *strndup(
 /* search the keyword-table for a match of the leading part of name. */
 /* returns the pointer to the matching field of the keyword or NULL if no
    keyword was found. */
-const struct wordent *keyw(const struct wordent *keywds, const char *name, unsigned int nkeys) {
+const void *keyw(const void *table, const char *name, unsigned int nkeys) {
+   const struct wordent *keywds = table;
    unsigned int lower, upper, mid;
    int r;
 

@@ -185,8 +185,10 @@ int retropt_bind_ip(
    const char *ends[] = { portsep, NULL };
    const char *nests[] = { "[", "]", NULL };
    bool portallowed;
-   char *bindname, *bindp;
-   char hostname[512], *hostp = hostname, *portp = NULL;
+   char *bindname;
+   const char *bindp;
+   char hostname[512], *hostp = hostname;
+   const char *portp = NULL;
    size_t hostlen = sizeof(hostname)-1;
    int parsres;
    int ai_flags2[2];
@@ -1140,7 +1142,7 @@ int xiolog_ancillary_ip(
 
 #if defined(HAVE_STRUCT_IP_MREQ) || defined (HAVE_STRUCT_IP_MREQN)
 int xiotype_ip_add_membership(
-	char *tokp,
+		const char *tokp,
 	const struct optname *ent,
 	struct opt *opt)
 {
@@ -1154,7 +1156,7 @@ int xiotype_ip_add_membership(
 	/* parse first IP address, expect ':' */
 	/*! result= */
 	parsres =
-		nestlex((const char **)&tokp, &buffp, &bufspc,
+		nestlex(&tokp, &buffp, &bufspc,
 			ends, NULL, NULL, nests,
 			true, false, false);
 	if (parsres < 0) {
@@ -1178,7 +1180,7 @@ int xiotype_ip_add_membership(
 	buffp = buff;
 	/*! result= */
 	parsres =
-		nestlex((const char **)&tokp, &buffp, &bufspc,
+		nestlex(&tokp, &buffp, &bufspc,
 			ends, NULL, NULL, nests,
 			true, false, false);
 	if (parsres < 0) {
@@ -1339,18 +1341,18 @@ mc:addr
 
 
 #if HAVE_STRUCT_IP_MREQ_SOURCE
-int xiotype_ip_add_source_membership(char *token, const struct optname *ent, struct opt *opt) {
+int xiotype_ip_add_source_membership(const char *token, const struct optname *ent, struct opt *opt) {
    /* we do not resolve the addresses here because we do not yet know
       if we are coping with an IPv4 or IPv6 socat address */
    const char *ends[] = { ":", NULL };
    const char *nests[] = { "[","]", NULL };
    char buff[512], *buffp=buff; size_t bufspc = sizeof(buff)-1;
-   char *tokp = token;
+   const char *tokp = token;
    int parsres;
 
    /* parse first IP address, expect ':' */
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {
@@ -1374,7 +1376,7 @@ int xiotype_ip_add_source_membership(char *token, const struct optname *ent, str
    buffp = buff;
    /*! result= */
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {
@@ -1399,7 +1401,7 @@ int xiotype_ip_add_source_membership(char *token, const struct optname *ent, str
    buffp = buff;
    /*! result= */
    parsres =
-      nestlex((const char **)&tokp, &buffp, &bufspc,
+      nestlex(&tokp, &buffp, &bufspc,
 	      ends, NULL, NULL, nests,
 	      true, false, false);
    if (parsres < 0) {
