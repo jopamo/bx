@@ -2446,7 +2446,7 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	    char *rest;
 	    val = Strtod(token, &rest, a0);
 	    if (val == HUGE_VAL || val == -HUGE_VAL ||
-		val == 0.0 && errno == ERANGE) {
+	    (val == 0.0 && errno == ERANGE)) {
 	       Error2("strtod(\"%s\", NULL): %s", token, strerror(errno));
 	       val = 0.0;
 	    }
@@ -2466,7 +2466,7 @@ int parseopts_table(const char **a, groups_t groups, struct opt **opts,
 	    char *rest;
 	    val = Strtod(token, &rest, a0);
 	    if (val == HUGE_VAL || val == -HUGE_VAL ||
-		val == 0.0 && errno == ERANGE) {
+	    (val == 0.0 && errno == ERANGE)) {
 	       Error2("strtod(\"%s\", NULL): %s", token, strerror(errno));
 	       val = 0.0;
 	    }

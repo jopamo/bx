@@ -1216,8 +1216,8 @@ int _xioopen_dgram_recvfrom(struct single *sfd, int xioflags,
 #ifdef IPPROTO_UDPLITE
    case IPPROTO_UDPLITE:
 #endif
-      if (pf == PF_INET && ((struct sockaddr_in *)us)->sin_port == 0 ||
-	  pf == PF_INET6 && ((struct sockaddr_in6 *)us)->sin6_port == 0) {
+      if ((pf == PF_INET && ((struct sockaddr_in *)us)->sin_port == 0) ||
+	  (pf == PF_INET6 && ((struct sockaddr_in6 *)us)->sin6_port == 0)) {
 	 struct sockaddr_storage bound;
 	 socklen_t bndlen = sizeof(bound);
 	 char sockbuff[256];
@@ -1441,8 +1441,8 @@ int _xioopen_dgram_recv(struct single *sfd, int xioflags,
    case IPPROTO_UDPLITE:
 #endif
       if (us != NULL /* happens to be NULL with IP_RECV:17 */ &&
-	  (pf == PF_INET && ((struct sockaddr_in *)us)->sin_port == 0 ||
-	   pf == PF_INET6 && ((struct sockaddr_in6 *)us)->sin6_port == 0)) {
+	  ((pf == PF_INET && ((struct sockaddr_in *)us)->sin_port == 0) ||
+	   (pf == PF_INET6 && ((struct sockaddr_in6 *)us)->sin6_port == 0))) {
 	 struct sockaddr_storage bound;
 	 socklen_t bndlen = sizeof(bound);
 	 char sockbuff[256];

@@ -33,7 +33,7 @@ int xioparsenetwork_ip4(
       return STAT_RETRYLATER;
    }
 
-   if (delimpos = strchr(rangename1, '/')) {
+   if ((delimpos = strchr(rangename1, '/')) != NULL) {
       char *endptr;
       bits = strtoul(delimpos+1, &endptr, 10);
       if (! ((*(delimpos+1) != '\0') && (*endptr == '\0'))) {
@@ -48,7 +48,7 @@ int xioparsenetwork_ip4(
       } else {
 	 netmask_in->s_addr = htonl((0xffffffff << (32-bits)));
       }
-   } else if (delimpos = strchr(rangename1, ':')) {
+   } else if ((delimpos = strchr(rangename1, ':')) != NULL) {
       if ((rc = xioresolve(delimpos+1, NULL, PF_INET, 0, 0,
 			   &sau, &socklen, ai_flags))
 	  != STAT_OK) {
