@@ -71,6 +71,38 @@ int bx_fetch_writer_open_existing_file(const char* path) {
     return bx_fetch_secure_path_open_existing_file(path);
 }
 
+int bx_fetch_writer_path_presence(const char* path, BxFetchWriterPathPresence* presence_out) {
+    if (!path || !presence_out || path[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    *presence_out = BX_FETCH_WRITER_PATH_ABSENT;
+
+    char* basename = NULL;
+    int parent_fd = bx_fetch_secure_path_open_parent_directory(path, false, &basename);
+    if (parent_fd == -1) {
+        if (errno == ENOENT)
+            return 0;
+        return -1;
+    }
+
+    struct stat status;
+    int result = fstatat(parent_fd, basename, &status, AT_SYMLINK_NOFOLLOW);
+    int error_number = errno;
+    free(basename);
+    if (close(parent_fd) != 0 && result == 0) {
+        return -1;
+    }
+    if (result == 0) {
+        *presence_out = BX_FETCH_WRITER_PATH_PRESENT;
+        return 0;
+    }
+    if (error_number == ENOENT)
+        return 0;
+    errno = error_number;
+    return -1;
+}
+
 static char* parent_path_for_output_path(const char* path) {
     char* parent = NULL;
     char* basename = NULL;

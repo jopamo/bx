@@ -24,6 +24,17 @@ typedef struct {
     bool read_timeout;
 } MiraTimeoutPresence;
 
+typedef struct {
+    const char* output_document;
+    const char* input_file;
+    const char* force_html;
+    const char* base;
+    const char* no_clobber;
+    const char* continue_download;
+    const char* unlink;
+    const char* backups;
+} MiraOptionPresence;
+
 void bx_mira_emit_parse_error(const struct bx_fetch_config* config, const char* summary) {
     fprintf(stderr, "mira: %s\n", summary);
     if (!config || config->logging.structured_errors)
@@ -178,11 +189,13 @@ static bool mira_configured_method_is_get(const struct bx_fetch_config* config) 
     return strcasecmp(method, "GET") == 0;
 }
 
-static int mira_validate_config(struct bx_fetch_config* config,
-                                const char* output_document_token,
-                                const char* input_file_token,
-                                const char* force_html_token,
-                                const char* base_token) {
+static int mira_conflicting_tokens(struct bx_fetch_config* config, const char* left, const char* right) {
+    mira_parse_errorf(config, "conflicting option tokens: %s and %s", left, right);
+    errno = EINVAL;
+    return -1;
+}
+
+static int mira_validate_config(struct bx_fetch_config* config, const MiraOptionPresence* presence) {
     if (config->http.post_data && config->http.post_file) {
         bx_mira_emit_parse_error(config, "conflicting option tokens: --post-data and --post-file");
         errno = EINVAL;
@@ -195,25 +208,25 @@ static int mira_validate_config(struct bx_fetch_config* config,
         return -1;
     }
     if (config->input.force_html && !config->input.input_file) {
-        mira_parse_errorf(config, "option token requires --input-file: %s", force_html_token ? force_html_token : "--force-html");
+        mira_parse_errorf(config, "option token requires --input-file: %s", presence->force_html ? presence->force_html : "--force-html");
         errno = EINVAL;
         return -1;
     }
     if (config->input.base_url && !config->input.input_file) {
-        mira_parse_errorf(config, "option token requires --input-file: %s", base_token ? base_token : "--base");
+        mira_parse_errorf(config, "option token requires --input-file: %s", presence->base ? presence->base : "--base");
         errno = EINVAL;
         return -1;
     }
     if (config->input.base_url && !config->input.force_html) {
-        mira_parse_errorf(config, "option token requires --force-html: %s", base_token ? base_token : "--base");
+        mira_parse_errorf(config, "option token requires --force-html: %s", presence->base ? presence->base : "--base");
         errno = EINVAL;
         return -1;
     }
     if (config->download.output_document && config->input.input_file) {
         mira_parse_errorf(config,
                           "conflicting option tokens: %s and %s",
-                          output_document_token ? output_document_token : "--output-document",
-                          input_file_token ? input_file_token : "--input-file");
+                          presence->output_document ? presence->output_document : "--output-document",
+                          presence->input_file ? presence->input_file : "--input-file");
         errno = EINVAL;
         return -1;
     }
@@ -222,7 +235,27 @@ static int mira_validate_config(struct bx_fetch_config* config,
         errno = EINVAL;
         return -1;
     }
+    if (config->download.continue_download && config->download.no_clobber) {
+        return mira_conflicting_tokens(config,
+                                       presence->continue_download ? presence->continue_download : "--continue",
+                                       presence->no_clobber ? presence->no_clobber : "--no-clobber");
+    }
+    if (config->download.no_clobber && config->download.unlink) {
+        return mira_conflicting_tokens(config,
+                                       presence->no_clobber ? presence->no_clobber : "--no-clobber",
+                                       presence->unlink ? presence->unlink : "--unlink");
+    }
+    if (config->download.no_clobber && config->recursive.backups > 0) {
+        return mira_conflicting_tokens(config,
+                                       presence->no_clobber ? presence->no_clobber : "--no-clobber",
+                                       presence->backups ? presence->backups : "--backups");
+    }
     bool stdout_mode = config->download.output_document && strcmp(config->download.output_document, "-") == 0;
+    if (stdout_mode && config->download.no_clobber) {
+        return mira_conflicting_tokens(config,
+                                       presence->output_document ? presence->output_document : "--output-document=-",
+                                       presence->no_clobber ? presence->no_clobber : "--no-clobber");
+    }
     if (stdout_mode && (config->download.continue_download || config->download.timestamping || config->download.unlink || config->recursive.backups > 0 || config->download.xattr)) {
         bx_mira_emit_parse_error(config, "--output-document=- conflicts with file-state options");
         errno = EINVAL;
@@ -281,10 +314,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
     config->download.metadata_sidecars = true;
 
     MiraTimeoutPresence timeout_presence = {0};
-    const char* output_document_token = NULL;
-    const char* input_file_token = NULL;
-    const char* force_html_token = NULL;
-    const char* base_token = NULL;
+    MiraOptionPresence presence = {0};
     int timeout_value = 0;
     opterr = 0;
     optind = 0;
@@ -336,15 +366,19 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                     goto parse_failure;
                 }
                 MIRA_SET_STRING(config->input.input_file);
-                input_file_token = mira_current_token(argc, argv);
+                presence.input_file = mira_current_token(argc, argv);
                 break;
             case 'F':
                 config->input.force_html = true;
-                force_html_token = mira_current_token(argc, argv);
+                presence.force_html = mira_current_token(argc, argv);
                 break;
             case 'B':
                 MIRA_SET_STRING(config->input.base_url);
-                base_token = mira_current_token(argc, argv);
+                presence.base = mira_current_token(argc, argv);
+                break;
+            case MIRA_OPT_NO_CLOBBER:
+                config->download.no_clobber = true;
+                presence.no_clobber = mira_current_token(argc, argv);
                 break;
             case 'n': {
                 const char* token = mira_current_token(argc, argv);
@@ -357,8 +391,8 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                     config->download.show_progress = false;
                 }
                 else if (token && strcmp(token, "-nc") == 0) {
-                    bx_mira_emit_parse_error(config, "unsupported option token: --no-clobber");
-                    goto parse_failure;
+                    config->download.no_clobber = true;
+                    presence.no_clobber = token;
                 }
                 else if (token && strcmp(token, "-np") == 0)
                     config->recursive.no_parent = true;
@@ -383,10 +417,11 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case 'O':
                 MIRA_SET_STRING(config->download.output_document);
-                output_document_token = mira_current_token(argc, argv);
+                presence.output_document = mira_current_token(argc, argv);
                 break;
             case 'c':
                 config->download.continue_download = true;
+                presence.continue_download = mira_current_token(argc, argv);
                 break;
             case MIRA_OPT_PROGRESS:
                 if (strcasecmp(optarg, "bar") == 0)
@@ -518,6 +553,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_UNLINK:
                 config->download.unlink = true;
+                presence.unlink = mira_current_token(argc, argv);
                 break;
             case MIRA_OPT_XATTR:
                 config->download.xattr = true;
@@ -659,6 +695,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_BACKUPS:
                 MIRA_PARSE_INT(config->recursive.backups, 0, "backups");
+                presence.backups = mira_current_token(argc, argv);
                 break;
             case 'K':
                 config->recursive.backup_converted = true;
@@ -734,7 +771,7 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         goto parse_failure;
     }
     errno = 0;
-    if (mira_validate_config(config, output_document_token, input_file_token, force_html_token, base_token) != 0) {
+    if (mira_validate_config(config, &presence) != 0) {
         if (errno == ENOMEM)
             goto allocation_failure;
         goto parse_failure;
