@@ -1295,6 +1295,7 @@ int _xioopen_dgram_recvfrom(struct single *sfd, int xioflags,
 	 }
 
 	 if (errno == EINTR) {
+	    xio_child_reap_pending();
 	    continue;
 	 }
 

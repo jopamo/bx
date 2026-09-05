@@ -498,23 +498,25 @@ extern xiofile_t *xioopen(const char *args, int flags);
 extern int xioopensingle(char *addr, struct single *xfd, int xioflags);
 extern int xioopenhelp(FILE *of, int level);
 
-/* must be outside function for use by childdied handler */
+/* applet-visible descriptors */
 extern xiofile_t *sock1, *sock2;
 extern int sniffleft, sniffright;
 
-#define NUMUNKNOWN 4
-extern pid_t diedunknown[NUMUNKNOWN];	/* child died before it is registered */
-#define diedunknown1 (diedunknown[0])
-#define diedunknown2 (diedunknown[1])
-#define diedunknown3 (diedunknown[2])
-#define diedunknown4 (diedunknown[3])
-extern int   statunknown[NUMUNKNOWN]; 	/* exit state of unknown dead child */
-extern int engine_result; 		/* here signal handler overrides OK */
+extern int engine_result;
 
+extern void xio_child_reset(void);
+extern int xio_child_reserve(struct single *stream);
+extern void xio_child_cancel_reservation(struct single *stream);
+extern int xio_child_publish_pid(struct single *stream, pid_t pid);
+extern void xio_child_abort_launch(struct single *stream, pid_t pid);
+extern void xio_child_reap(void);
+extern void xio_child_reap_pending(void);
+extern void xio_child_wait_general(void);
+extern void xio_child_drain(xiofile_t *xfd, const struct timeval *timeout);
+extern void xio_child_close(struct single *stream);
 extern int xiosetsigchild(xiofile_t *xfd, int (*callback)(struct single *));
 extern int xiosetchilddied(void);
 extern int xio_opt_signal(pid_t pid, int signum);
-extern void childdied(int signum);
 
 extern ssize_t xioread(xiofile_t *sock1, void *buff, size_t bufsiz);
 extern ssize_t xiopending(xiofile_t *sock1);

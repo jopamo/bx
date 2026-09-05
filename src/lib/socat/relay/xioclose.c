@@ -71,22 +71,6 @@ static int xioclose1(struct single *pipe) {
 #endif /* WITH_POSIXMQ */
    if (pipe->fd >= 0) {
       switch (pipe->howtoend) {
-      case END_KILL: case END_SHUTDOWN_KILL: case END_CLOSE_KILL:
-	 if (pipe->para.exec.pid > 0) {
-	    pid_t pid;
-
-	    /* first unregister child pid, so our sigchld handler will not throw an error */
-	    pid = pipe->para.exec.pid;
-	    pipe->para.exec.pid = 0;
-	    if (Kill(pid, SIGTERM) < 0) {
-	       Msg2(errno==ESRCH?E_INFO:E_WARN, "kill(%d, SIGTERM): %s",
-		    pid, strerror(errno));
-	    }
-	 }
-      default:
-	 break;
-      }
-      switch (pipe->howtoend) {
       case END_CLOSE: case END_CLOSE_KILL:
 	 if (Close(pipe->fd) < 0) {
 	 Info2("close(%d): %s", pipe->fd, strerror(errno)); } break;
@@ -110,6 +94,15 @@ static int xioclose1(struct single *pipe) {
 #endif /* WITH_INTERFACE */
       case END_NONE: default: break;
       }
+   }
+   switch (pipe->howtoend) {
+   case END_KILL:
+   case END_SHUTDOWN_KILL:
+   case END_CLOSE_KILL:
+      xio_child_close(pipe);
+      break;
+   default:
+      break;
    }
 
    /* unlock */

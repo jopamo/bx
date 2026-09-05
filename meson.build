@@ -815,7 +815,7 @@ socat_sources = files(
   'src/applets/network/socat/address/xioopen.c',
   'src/applets/network/socat/address/xioopts.c',
   'src/lib/socat/runtime/xiosignal.c',
-  'src/lib/socat/runtime/xiosigchld.c',
+  'src/lib/socat/runtime/xiochild.c',
   'src/lib/socat/relay/xioread.c',
   'src/lib/socat/relay/xiowrite.c',
   'src/lib/socat/relay/xiolayer.c',

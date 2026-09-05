@@ -9,19 +9,6 @@
 #include "xioopen.h"
 
 
-
-static pid_t socat_kill_pid;	/* here we pass the pid to be killed in sighandler */
-
-static void signal_kill_pid(int dummy) {
-   int _errno;
-   _errno = errno;
-   diag_in_handler = 1;
-   Notice("SIGALRM while waiting for wo child process to die, killing it now");
-   Kill(socat_kill_pid, SIGTERM);
-   diag_in_handler = 0;
-   errno = _errno;
-}
-
 int xioshutdown(xiofile_t *sock, int how) {
    int result = 0;
 
@@ -125,42 +112,6 @@ int xioshutdown(xiofile_t *sock, int how) {
       if ((result = Shutdown(sock->stream.fd, how)) < 0) {
 	 Info3("shutdown(%d, %d): %s",
 	       sock->stream.fd, how, strerror(errno));
-      }
-      if ((sock->stream.flags&XIO_ACCMODE) == XIO_WRONLY) {
-	 pid_t pid;
-	 int level;
-
-	 /* the child process might want to flush some data before terminating
-	    */
-	 int status = 0;
-
-	 /* we wait for the child process to die, but to prevent timeout
-	    we raise an alarm after some time.
-	    NOTE: the alarm does not terminate waitpid() on Linux/glibc (BUG?),
-	    therefore we have to do the kill in the signal handler */
-	 {
-	    struct sigaction act;
-	    sigfillset(&act.sa_mask);
-	    act.sa_flags = 0;
-	    act.sa_handler = signal_kill_pid;
-	    Sigaction(SIGALRM, &act, NULL);
-	 }
-	 socat_kill_pid = sock->stream.para.exec.pid;
-#if HAVE_SETITIMER
-	 /*! with next feature release, we get usec resolution and an option */
-#else
-	 Alarm(1 /*! sock->stream.para.exec.waitdie */);
-#endif /* !HAVE_SETITIMER */
-	 pid = Waitpid(sock->stream.para.exec.pid, &status, 0);
-	 if (pid < 0) {
-	    if (errno == EINTR)
-	       level = E_INFO;
-	    else
-	       level = E_WARN;
-	    Msg3(level, "waitpid("F_pid", %p, 0): %s",
-		 sock->stream.para.exec.pid, &status, strerror(errno));
-	 }
-	 Alarm(0);
       }
    } else if ((sock->stream.dtype & XIODATA_MASK) ==
 	      (XIODATA_RECVFROM & XIODATA_MASK)) {

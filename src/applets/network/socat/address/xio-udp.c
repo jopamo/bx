@@ -222,11 +222,13 @@ int _xioopen_ipdgram_listen(struct single *sfd,
 	 }
 
 	 while (maxchildren) {
+	    xio_child_reap();
 	    if (num_child < maxchildren) break;
 	    Notice("maxchildren are active, waiting");
 	    /* UINT_MAX would even be nicer, but Openindiana works only
 	       with 31 bits */
-	    while (!Sleep(INT_MAX)) ;	/* any signal lets us continue */
+	    Sleep(INT_MAX);
+	    xio_child_reap_pending();
 	 }
 	 Info("still listening");
 	 continue;

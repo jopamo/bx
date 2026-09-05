@@ -840,6 +840,7 @@ static int xioopen_socks5(
 			while (maxchildren > 0 && num_child >= maxchildren) {
 				Info1("all %d allowed children are active, waiting", maxchildren);
 				Nanosleep(&sfd->intervall, NULL);
+				xio_child_reap_pending();
 			}
 			freeopts(opts);
 			continue;

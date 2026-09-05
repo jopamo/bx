@@ -420,9 +420,21 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
    xiosetchilddied();	/* set SIGCHLD handler */
 
    if (withfork) {
-      Socketpair(PF_UNIX, SOCK_STREAM, 0, trigger);
+      if (Socketpair(PF_UNIX, SOCK_STREAM, 0, trigger) < 0) {
+	 Error1("socketpair(): %s", strerror(errno));
+	 return -1;
+      }
+      if (xio_child_reserve(sfd) < 0) {
+	 Error1("cannot reserve child process state: %s", strerror(errno));
+	 Close(trigger[0]);
+	 Close(trigger[1]);
+	 return -1;
+      }
       pid = xio_fork(true, E_ERROR, 0);
       if (pid < 0) {
+	 xio_child_cancel_reservation(sfd);
+	 Close(trigger[0]);
+	 Close(trigger[1]);
 	 return -1;
       }
    }
@@ -609,6 +621,11 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
    /* for parent (this is our socat process) */
    Notice1("forked off child process "F_pid, pid);
    Close(trigger[1]); 	/* in parent */
+   if (xio_child_publish_pid(sfd, pid) < 0) {
+      Error2("cannot publish child process "F_pid": %s", pid, strerror(errno));
+      xio_child_abort_launch(sfd, pid);
+      return -1;
+   }
 
 #if HAVE_PTY
    if (usepty) {
@@ -625,8 +642,6 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
    } else {
       Close(sv[1]);
    }
-   sfd->para.exec.pid = pid;
-
    if (applyopts_single(sfd, popts, PH_LATE) < 0)  return -1;
    applyopts(sfd, -1, popts, PH_LATE);
    applyopts(sfd, -1, popts, PH_LATE2);
