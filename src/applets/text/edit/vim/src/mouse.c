@@ -245,9 +245,7 @@ do_mouse(
 #endif
     int		in_sep_line;	// mouse in vertical separator line
     int		c1, c2;
-#if defined(FEAT_FOLDING)
-    pos_T	save_cursor;
-#endif
+#line 251
     win_T	*old_curwin = curwin;
     static pos_T orig_cursor;
     colnr_T	leftcol, rightcol;
@@ -257,10 +255,7 @@ do_mouse(
     int		old_mode = VIsual_mode;
     int		regname;
 
-#if defined(FEAT_FOLDING)
-    save_cursor = curwin->w_cursor;
-#endif
-
+#line 264
     // When GUI is active, always recognize mouse events, otherwise:
     // - Ignore mouse event in normal mode if 'mouse' doesn't include 'n'.
     // - Ignore mouse event in visual mode if 'mouse' doesn't include 'v'.
@@ -269,9 +264,7 @@ do_mouse(
     if (do_always)
 	do_always = FALSE;
     else
-#ifdef FEAT_GUI
-	if (!gui.in_use)
-#endif
+#line 275
 	{
 	    if (VIsual_active)
 	    {
@@ -322,9 +315,7 @@ do_mouse(
 	    bevalexpr_due_set = TRUE;
 	}
 #endif
-#ifdef FEAT_PROP_POPUP
-	popup_handle_mouse_moved();
-#endif
+#line 328
 	return FALSE;
     }
 
@@ -477,10 +468,7 @@ do_mouse(
 		insert_reg(regname, TRUE);
 	    else
 	    {
-#ifdef FEAT_CLIPBOARD
-		if (clip_star.available && regname == 0)
-		    regname = '*';
-#endif
+#line 484
 		if ((State & REPLACE_FLAG) && !yank_register_mline(regname))
 		    insert_reg(regname, TRUE);
 		else
@@ -655,33 +643,7 @@ do_mouse(
 			    && !(mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL)))
 	{
 #ifdef USE_POPUP_SETPOS
-# ifdef FEAT_GUI
-	    if (gui.in_use)
-	    {
-#  if defined(FEAT_GUI_MOTIF) || defined(FEAT_GUI_GTK) \
-			  || defined(FEAT_GUI_PHOTON)
-		if (!is_click)
-		    // Ignore right button release events, only shows the popup
-		    // menu on the button down event.
-		    return FALSE;
-#  endif
-#  if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_HAIKU)
-		if (is_click || is_drag)
-		    // Ignore right button down and drag mouse events.  Windows
-		    // only shows the popup menu on the button up event.
-		    return FALSE;
-#  endif
-	    }
-# endif
-# if defined(FEAT_GUI) && defined(FEAT_TERM_POPUP_MENU)
-	    else
-# endif
-# if defined(FEAT_TERM_POPUP_MENU)
-	    if (!is_click)
-		// Ignore right button release events, only shows the popup
-		// menu on the button down event.
-		return FALSE;
-# endif
+#line 685
 
 	    jump_flags = 0;
 	    if (STRCMP(p_mousem, "popup_setpos") == 0)
@@ -744,10 +706,7 @@ do_mouse(
 		setcursor();
 		out_flush();    // Update before showing popup menu
 	    }
-# ifdef FEAT_MENU
-	    show_popupmenu();
-	    got_click = FALSE;	// ignore release events
-# endif
+#line 751
 	    return (jump_flags & CURSOR_MOVED) != 0;
 #else
 	    return FALSE;
@@ -815,11 +774,7 @@ do_mouse(
     jump_flags = jump_to_mouse(jump_flags,
 			oap == NULL ? NULL : &(oap->inclusive), which_button);
 
-#ifdef FEAT_MENU
-    // A click in the window toolbar has no side effects.
-    if (jump_flags & MOUSE_WINBAR)
-	return FALSE;
-#endif
+#line 823
     moved = (jump_flags & CURSOR_MOVED);
     in_status_line = (jump_flags & IN_STATUS_LINE);
     in_sep_line = (jump_flags & IN_SEP_LINE);
@@ -840,49 +795,13 @@ do_mouse(
 	return FALSE;
     }
 
-#ifdef FEAT_NETBEANS_INTG
-    if (isNetbeansBuffer(curbuf)
-			    && !(jump_flags & (IN_STATUS_LINE | IN_SEP_LINE)))
-    {
-	int key = KEY2TERMCAP1(c);
-
-	if (key == (int)KE_LEFTRELEASE || key == (int)KE_MIDDLERELEASE
-					       || key == (int)KE_RIGHTRELEASE)
-	    netbeans_button_release(which_button);
-    }
-#endif
-
+#line 855
     // When jumping to another window, clear a pending operator.  That's a bit
     // friendlier than beeping and not jumping to that window.
     if (curwin != old_curwin && oap != NULL && oap->op_type != OP_NOP)
 	clearop(oap);
 
-#ifdef FEAT_FOLDING
-    if (mod_mask == 0
-	    && !is_drag
-	    && (jump_flags & (MOUSE_FOLD_CLOSE | MOUSE_FOLD_OPEN))
-	    && which_button == MOUSE_LEFT)
-    {
-	// open or close a fold at this line
-	if (jump_flags & MOUSE_FOLD_OPEN)
-	    openFold(curwin->w_cursor.lnum, 1L);
-	else
-	    closeFold(curwin->w_cursor.lnum, 1L);
-	// don't move the cursor if still in the same window
-	if (curwin == old_curwin)
-	    curwin->w_cursor = save_cursor;
-    }
-#endif
-
-#if defined(FEAT_CLIPBOARD)
-    if ((jump_flags & IN_OTHER_WIN) && !VIsual_active &&
-	    (clip_star.available || clip_plus.available))
-    {
-	clip_modeless(which_button, is_click, is_drag);
-	return FALSE;
-    }
-#endif
-
+#line 886
     // Set global flag that we are extending the Visual area with mouse
     // dragging; temporarily minimize 'scrolloff'.
     if (VIsual_active && is_drag && get_scrolloff_value())
@@ -978,10 +897,7 @@ do_mouse(
     // Middle mouse click: Put text before cursor.
     if (which_button == MOUSE_MIDDLE)
     {
-#ifdef FEAT_CLIPBOARD
-	if (clip_star.available && regname == 0)
-	    regname = '*';
-#endif
+#line 985
 	if (yank_register_mline(regname))
 	{
 	    if (mouse_past_bottom)
@@ -1099,11 +1015,7 @@ do_mouse(
 		VIsual_mode = 'V';
 	    else if ((mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_4CLICK)
 		VIsual_mode = Ctrl_V;
-#ifdef FEAT_CLIPBOARD
-	    // Make sure the clipboard gets updated.  Needed because start and
-	    // end may still be the same, and the selection needs to be owned
-	    clip_star.vmode = NUL;
-#endif
+#line 1107
 	}
 	// A double click selects a word or a block.
 	if ((mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_2CLICK)
@@ -1186,10 +1098,7 @@ ins_mouse(int c)
     pos_T	tpos;
     win_T	*old_curwin = curwin;
 
-#ifdef FEAT_GUI
-    // When GUI is active, also move/paste when 'mouse' is empty
-    if (!gui.in_use)
-#endif
+#line 1193
 	if (!mouse_has(MOUSE_INSERT))
 	    return;
 
@@ -1205,11 +1114,7 @@ ins_mouse(int c)
 	    // previous one to stop insert there properly.
 	    curwin = old_curwin;
 	    curbuf = curwin->w_buffer;
-#ifdef FEAT_JOB_CHANNEL
-	    if (bt_prompt(curbuf))
-		// Restart Insert mode when re-entering the prompt buffer.
-		curbuf->b_prompt_insert = 'A';
-#endif
+#line 1213
 	}
 	start_arrow(curwin == old_curwin ? &tpos : NULL);
 	if (curwin != new_curwin && win_valid(new_curwin))
@@ -1241,13 +1146,7 @@ do_mousescroll(cmdarg_T *cap)
 {
     int shift_or_ctrl = mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL);
 
-#ifdef FEAT_TERMINAL
-    if (term_use_loop())
-	// This window is a terminal window, send the mouse event there.
-	// Set "typed" to FALSE to avoid an endless loop.
-	send_keys_to_term(curbuf->b_term, cap->cmdchar, mod_mask, FALSE);
-    else
-#endif
+#line 1251
     if (cap->arg == MSCR_UP || cap->arg == MSCR_DOWN)
     {
 	// Vertical scrolling
@@ -1278,10 +1177,7 @@ do_mousescroll(cmdarg_T *cap)
 	    nv_scroll_line(cap);
 	}
 
-#ifdef FEAT_PROP_POPUP
-	if (WIN_IS_POPUP(curwin))
-	    popup_set_firstline(curwin);
-#endif
+#line 1285
     }
     else
     {
@@ -1435,14 +1331,10 @@ static struct mousetable
 } mouse_table[] =
 {
     {(int)KE_LEFTMOUSE,		MOUSE_LEFT,	TRUE,	FALSE},
-#ifdef FEAT_GUI
-    {(int)KE_LEFTMOUSE_NM,	MOUSE_LEFT,	TRUE,	FALSE},
-#endif
+#line 1441
     {(int)KE_LEFTDRAG,		MOUSE_LEFT,	FALSE,	TRUE},
     {(int)KE_LEFTRELEASE,	MOUSE_LEFT,	FALSE,	FALSE},
-#ifdef FEAT_GUI
-    {(int)KE_LEFTRELEASE_NM,	MOUSE_LEFT,	FALSE,	FALSE},
-#endif
+#line 1446
     {(int)KE_MIDDLEMOUSE,	MOUSE_MIDDLE,	TRUE,	FALSE},
     {(int)KE_MIDDLEDRAG,	MOUSE_MIDDLE,	FALSE,	TRUE},
     {(int)KE_MIDDLERELEASE,	MOUSE_MIDDLE,	FALSE,	FALSE},
@@ -1499,22 +1391,7 @@ get_pseudo_mouse_code(
 	    && is_click == mouse_table[i].is_click
 	    && is_drag == mouse_table[i].is_drag)
 	{
-#ifdef FEAT_GUI
-	    // Trick: a non mappable left click and release has mouse_col -1
-	    // or added MOUSE_COLOFF.  Used for 'mousefocus' in
-	    // gui_mouse_moved()
-	    if (mouse_col < 0 || mouse_col > MOUSE_COLOFF)
-	    {
-		if (mouse_col < 0)
-		    mouse_col = 0;
-		else
-		    mouse_col -= MOUSE_COLOFF;
-		if (mouse_table[i].pseudo_code == (int)KE_LEFTMOUSE)
-		    return (int)KE_LEFTMOUSE_NM;
-		if (mouse_table[i].pseudo_code == (int)KE_LEFTRELEASE)
-		    return (int)KE_LEFTRELEASE_NM;
-	    }
-#endif
+#line 1518
 	    return mouse_table[i].pseudo_code;
 	}
     return (int)KE_IGNORE;	    // not recognized, ignore it
@@ -1641,11 +1518,7 @@ setmouse(void)
 #endif
 
     // Should be outside proc, but may break MOUSESHAPE
-#ifdef FEAT_GUI
-    // In the GUI the mouse is always enabled.
-    if (gui.in_use)
-	return;
-#endif
+#line 1649
     // be quick when mouse is off
     if (*p_mouse == NUL || has_mouse_termcode == 0)
 	return;
@@ -1906,13 +1779,7 @@ jump_to_mouse(
 {
     static int	on_status_line = 0;	// #lines below bottom of window
     static int	on_sep_line = 0;	// on separator right of window
-#ifdef FEAT_MENU
-    static int  in_winbar = FALSE;
-#endif
-#ifdef FEAT_PROP_POPUP
-    static int   in_popup_win = FALSE;
-    static win_T *click_in_popup_win = NULL;
-#endif
+#line 1916
     static int	prev_row = -1;
     static int	prev_col = -1;
     static int	did_drag = FALSE;	// drag was noticed
@@ -1924,9 +1791,7 @@ jump_to_mouse(
     int		row = mouse_row;
     int		col = mouse_col;
     colnr_T	col_from_screen = -1;
-#ifdef FEAT_FOLDING
-    int		mouse_char = ' ';
-#endif
+#line 1930
 
     mouse_past_bottom = FALSE;
     mouse_past_eol = FALSE;
@@ -1939,13 +1804,7 @@ jump_to_mouse(
 	    flags &= ~(MOUSE_FOCUS | MOUSE_DID_MOVE);
 	dragwin = NULL;
 	did_drag = FALSE;
-#ifdef FEAT_PROP_POPUP
-	if (click_in_popup_win != NULL && popup_dragwin == NULL)
-	    popup_close_for_mouse_click(click_in_popup_win);
-
-	popup_dragwin = NULL;
-	click_in_popup_win = NULL;
-#endif
+#line 1949
     }
 
     if ((flags & MOUSE_DID_MOVE)
@@ -1959,45 +1818,13 @@ retnomove:
 	    return IN_STATUS_LINE;
 	if (on_sep_line)
 	    return IN_SEP_LINE;
-#ifdef FEAT_MENU
-	if (in_winbar)
-	{
-	    // A quick second click may arrive as a double-click, but we use it
-	    // as a second click in the WinBar.
-	    if ((mod_mask & MOD_MASK_MULTI_CLICK) && !(flags & MOUSE_RELEASED))
-	    {
-		wp = mouse_find_win(&row, &col, FAIL_POPUP);
-		if (wp == NULL)
-		    return IN_UNKNOWN;
-		winbar_click(wp, col);
-	    }
-	    return IN_OTHER_WIN | MOUSE_WINBAR;
-	}
-#endif
+#line 1977
 	if (flags & MOUSE_MAY_STOP_VIS)
 	{
 	    end_visual_mode_keep_button();
 	    redraw_curbuf_later(UPD_INVERTED);	// delete the inversion
 	}
-#if defined(FEAT_CLIPBOARD)
-	// Continue a modeless selection in another window.
-	if (cmdwin_type != 0 && row < cmdwin_win->w_winrow)
-	    return IN_OTHER_WIN;
-#endif
-#ifdef FEAT_PROP_POPUP
-	// Continue a modeless selection in a popup window or dragging it.
-	if (in_popup_win)
-	{
-	    click_in_popup_win = NULL;  // don't close it on release
-	    if (popup_dragwin != NULL)
-	    {
-		// dragging a popup window
-		popup_drag(popup_dragwin);
-		return IN_UNKNOWN;
-	    }
-	    return IN_OTHER_WIN;
-	}
-#endif
+#line 2001
 	return IN_BUFFER;
     }
 
@@ -2022,57 +1849,7 @@ retnomove:
 	    return IN_UNKNOWN;
 	dragwin = NULL;
 
-#ifdef FEAT_PROP_POPUP
-	// Click in a popup window may start dragging or modeless selection,
-	// but not much else.
-	if (WIN_IS_POPUP(wp))
-	{
-	    on_sep_line = 0;
-	    on_status_line = 0;
-	    in_popup_win = TRUE;
-	    if (which_button == MOUSE_LEFT && popup_close_if_on_X(wp, row, col))
-	    {
-		return IN_UNKNOWN;
-	    }
-	    else if (((wp->w_popup_flags & (POPF_DRAG | POPF_RESIZE))
-					      && popup_on_border(wp, row, col))
-				       || (wp->w_popup_flags & POPF_DRAGALL))
-	    {
-		popup_dragwin = wp;
-		popup_start_drag(wp, row, col);
-		return IN_UNKNOWN;
-	    }
-	    // Only close on release, otherwise it's not possible to drag or do
-	    // modeless selection.
-	    else if (wp->w_popup_close == POPCLOSE_CLICK
-		    && which_button == MOUSE_LEFT)
-	    {
-		click_in_popup_win = wp;
-	    }
-	    else if (which_button == MOUSE_LEFT)
-		// If the click is in the scrollbar, may scroll up/down.
-		popup_handle_scrollbar_click(wp, row, col);
-# ifdef FEAT_CLIPBOARD
-	    return IN_OTHER_WIN;
-# else
-	    return IN_UNKNOWN;
-# endif
-	}
-	in_popup_win = FALSE;
-	popup_dragwin = NULL;
-#endif
-#ifdef FEAT_MENU
-	if (row == -1)
-	{
-	    // A click in the window toolbar does not enter another window or
-	    // change Visual highlighting.
-	    winbar_click(wp, col);
-	    in_winbar = TRUE;
-	    return IN_OTHER_WIN | MOUSE_WINBAR;
-	}
-	in_winbar = FALSE;
-#endif
-
+#line 2076
 	// winpos and height may change in win_enter()!
 	if (row >= wp->w_height)		// In (or below) status line
 	{
@@ -2104,14 +1881,7 @@ retnomove:
 	if (VIsual_active
 		&& (wp->w_buffer != curwin->w_buffer
 		    || (!on_status_line && !on_sep_line
-#ifdef FEAT_FOLDING
-			&& (
-# ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? col < wp->w_width - wp->w_p_fdc :
-# endif
-			    col >= wp->w_p_fdc + (wp != cmdwin_win ? 0 : 1)
-			    )
-#endif
+#line 2115
 			&& (flags & MOUSE_MAY_STOP_VIS))))
 	{
 	    end_visual_mode_keep_button();
@@ -2122,21 +1892,13 @@ retnomove:
 	    // A click outside the command-line window: Use modeless
 	    // selection if possible.  Allow dragging the status lines.
 	    on_sep_line = 0;
-#ifdef FEAT_CLIPBOARD
-	    if (on_status_line)
-		return IN_STATUS_LINE;
-	    return IN_OTHER_WIN;
-#else
+#line 2130
 	    row = 0;
 	    col += wp->w_wincol;
 	    wp = cmdwin_win;
-#endif
+#line 2134
 	}
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_TERMINAL)
-	if (popup_is_popup(curwin) && curbuf->b_term != NULL)
-	    // terminal in popup window: don't jump to another window
-	    return IN_OTHER_WIN;
-#endif
+#line 2140
 	// Only change window focus when not clicking on or dragging the
 	// status line.  Do change focus when releasing the mouse button
 	// (MOUSE_FOCUS was set above if we dragged first).
@@ -2149,10 +1911,7 @@ retnomove:
 	    // set topline, to be able to check for double click ourselves
 	    set_mouse_topline(curwin);
 #endif
-#ifdef FEAT_TERMINAL
-	    // when entering a terminal window may change state
-	    term_win_entered();
-#endif
+#line 2156
 	}
 	if (on_status_line)			// In (or below) status line
 	{
@@ -2172,13 +1931,7 @@ retnomove:
 	}
 
 	curwin->w_cursor.lnum = curwin->w_topline;
-#ifdef FEAT_GUI
-	// remember topline, needed for double click
-	gui_prev_topline = curwin->w_topline;
-# ifdef FEAT_DIFF
-	gui_prev_topfill = curwin->w_topfill;
-# endif
-#endif
+#line 2182
     }
     else if (on_status_line && which_button == MOUSE_LEFT)
     {
@@ -2204,13 +1957,7 @@ retnomove:
 	}
 	return IN_SEP_LINE;			// Cursor didn't move
     }
-#ifdef FEAT_MENU
-    else if (in_winbar)
-    {
-	// After a click on the window toolbar don't start Visual mode.
-	return IN_OTHER_WIN | MOUSE_WINBAR;
-    }
-#endif
+#line 2214
     else // keep_window_focus must be TRUE
     {
 	// before moving the cursor for a left click, stop Visual mode
@@ -2220,26 +1967,7 @@ retnomove:
 	    redraw_curbuf_later(UPD_INVERTED);	// delete the inversion
 	}
 
-#if defined(FEAT_CLIPBOARD)
-	// Continue a modeless selection in another window.
-	if (cmdwin_type != 0 && row < cmdwin_win->w_winrow)
-	    return IN_OTHER_WIN;
-#endif
-#ifdef FEAT_PROP_POPUP
-	if (in_popup_win)
-	{
-	    if (popup_dragwin != NULL)
-	    {
-		// dragging a popup window
-		popup_drag(popup_dragwin);
-		return IN_UNKNOWN;
-	    }
-	    // continue a modeless selection in a popup window
-	    click_in_popup_win = NULL;
-	    return IN_OTHER_WIN;
-	}
-#endif
-
+#line 2243
 	row -= W_WINROW(curwin);
 	col -= curwin->w_wincol;
 
@@ -2259,9 +1987,7 @@ retnomove:
 		if (!first && count > -row)
 		    break;
 		first = FALSE;
-#ifdef FEAT_FOLDING
-		(void)hasFolding(curwin->w_topline, &curwin->w_topline, NULL);
-#endif
+#line 2265
 #ifdef FEAT_DIFF
 		if (curwin->w_topfill < diff_check_fill(curwin, curwin->w_topline))
 		    ++curwin->w_topfill;
@@ -2296,11 +2022,7 @@ retnomove:
 		if (!first && count > row - curwin->w_height + 1)
 		    break;
 		first = FALSE;
-#ifdef FEAT_FOLDING
-		if (hasFolding(curwin->w_topline, NULL, &curwin->w_topline)
-			&& curwin->w_topline == curbuf->b_ml.ml_line_count)
-		    break;
-#endif
+#line 2304
 #ifdef FEAT_DIFF
 		if (curwin->w_topfill > 0)
 		    --curwin->w_topfill;
@@ -2347,25 +2069,10 @@ retnomove:
 	// Do not use when 'virtualedit' is active.
 	if (curwin->w_redr_type <= UPD_VALID_NO_UPDATE)
 	    col_from_screen = ScreenCols[off];
-#ifdef FEAT_FOLDING
-	// Remember the character under the mouse, it might be a '-' or '+' in
-	// the fold column.
-	mouse_char = enc_utf8 && ScreenLinesUC[off] != 0
-				       ? ScreenLinesUC[off] : ScreenLines[off];
-#endif
+#line 2356
     }
 
-#ifdef FEAT_FOLDING
-    // Check for position outside of the fold column.
-    if (
-# ifdef FEAT_RIGHTLEFT
-	    curwin->w_p_rl ? col < curwin->w_width - curwin->w_p_fdc :
-# endif
-	    col >= curwin->w_p_fdc + (cmdwin_win != curwin ? 0 : 1)
-       )
-	mouse_char = ' ';
-#endif
-
+#line 2369
     // compute the position in the buffer line from the posn on the screen
     if (mouse_comp_pos(curwin, &row, &col, &curwin->w_cursor.lnum, NULL))
 	mouse_past_bottom = TRUE;
@@ -2407,13 +2114,7 @@ retnomove:
 	    || curwin->w_cursor.col != old_cursor.col)
 	count |= CURSOR_MOVED;		// Cursor has moved
 
-#ifdef FEAT_FOLDING
-    if (mouse_char == curwin->w_fill_chars.foldclosed)
-	count |= MOUSE_FOLD_OPEN;
-    else if (mouse_char != ' ')
-	count |= MOUSE_FOLD_CLOSE;
-#endif
-
+#line 2417
     return count;
 }
 
@@ -2433,9 +2134,7 @@ do_mousescroll_horiz(long_u leftcol)
     // When the line of the cursor is too short, move the cursor to the
     // longest visible line.
     if (
-#ifdef FEAT_GUI
-	    (!gui.in_use || vim_strchr(p_go, GO_HORSCROLL) == NULL) &&
-#endif
+#line 2439
 		    !virtual_active()
 	    && (long)leftcol > scroll_line_len(curwin->w_cursor.lnum))
     {
@@ -2479,14 +2178,7 @@ nv_mousescroll(cmdarg_T *cap)
 	    return;
 	}
 
-#ifdef FEAT_PROP_POPUP
-	if (WIN_IS_POPUP(curwin) && !curwin->w_has_scrollbar)
-	{
-	    // cannot scroll this popup window
-	    curwin = old_curwin;
-	    return;
-	}
-#endif
+#line 2490
 	curbuf = curwin->w_buffer;
     }
 
@@ -2592,9 +2284,7 @@ check_termcode_mouse(
 	    // and column.  Allows for more than 223 columns.
 # if defined(FEAT_GUI) || defined(MSWIN)
 	    if (TRUE
-#  if defined(FEAT_GUI) && !defined(MSWIN)
-		&& gui.in_use
-#  endif
+#line 2598
 		)
 	    {
 		num_bytes = get_bytes_from_buf(tp + *slen, bytes, 5);
@@ -2621,21 +2311,13 @@ check_termcode_mouse(
 	    // If the following bytes is also a mouse code and it has the same
 	    // code, dump this one and get the next.  This makes dragging a
 	    // whole lot faster.
-# ifdef FEAT_GUI
-	    if (gui.in_use)
-		j = 3;
-	    else
-# endif
+#line 2629
 		j = get_termcode_len(idx);
 	    if (STRNCMP(tp, tp + *slen, (size_t)j) == 0
 		    && tp[*slen + j] == mouse_code
 		    && tp[*slen + j + 1] != NUL
 		    && tp[*slen + j + 2] != NUL
-# ifdef FEAT_GUI
-		    && (!gui.in_use
-			|| (tp[*slen + j + 3] != NUL
-			    && tp[*slen + j + 4] != NUL))
-# endif
+#line 2639
 	       )
 		*slen += j;
 	    else
@@ -2728,9 +2410,7 @@ check_termcode_mouse(
 	 * (multi-clicks use >= 0x60).
 	 */
 	if (mouse_code >= MOUSEWHEEL_LOW && mouse_code < MOUSESIDEBUTTONS_LOW
-#  ifdef FEAT_GUI
-		&& !gui.in_use
-#  endif
+#line 2734
 #  ifdef FEAT_MOUSE_GPM
 		&& key_name[0] != KS_GPM_MOUSE
 #  endif
@@ -2748,9 +2428,7 @@ check_termcode_mouse(
 	}
 #  ifdef FEAT_MOUSE_XTERM
 	else if (held_button == MOUSE_RELEASE
-#   ifdef FEAT_GUI
-		&& !gui.in_use
-#   endif
+#line 2754
 		&& (mouse_code == 0x23 || mouse_code == 0x24
 		    || mouse_code == 0x40 || mouse_code == 0x41))
 	{
@@ -2768,15 +2446,7 @@ check_termcode_mouse(
 		mouse_code |= MOUSE_DRAG;
 	}
 #  endif
-#  ifdef FEAT_XCLIPBOARD
-	else if (!(mouse_code & MOUSE_DRAG & ~MOUSE_CLICK_MASK))
-	{
-	    if (is_release)
-		stop_xterm_trace();
-	    else
-		start_xterm_trace(mouse_code);
-	}
-#  endif
+#line 2780
 # endif
     }
 #endif // !UNIX || FEAT_MOUSE_XTERM
@@ -3152,15 +2822,11 @@ check_termcode_mouse(
 	 * Only for Unix, when GUI not active, we handle multi-clicks here, but
 	 * not for GPM mouse events.
 	 */
-#  ifdef FEAT_GUI
-	if (key_name[0] != KS_GPM_MOUSE && !gui.in_use)
-#  else
+#line 3158
 	    if (key_name[0] != KS_GPM_MOUSE)
-#  endif
+#line 3160
 # else
-#  ifdef FEAT_GUI
-		if (!gui.in_use)
-#  endif
+#line 3164
 # endif
 		{
 		    /*
@@ -3316,9 +2982,7 @@ mouse_comp_pos(
 #ifdef FEAT_DIFF
 	    // Don't include filler lines in "count"
 	    if (win->w_p_diff
-# ifdef FEAT_FOLDING
-		    && !hasFoldingWin(win, lnum, NULL, NULL, TRUE, NULL)
-# endif
+#line 3322
 		    )
 	    {
 		if (lnum == win->w_topline)
@@ -3356,9 +3020,7 @@ mouse_comp_pos(
 
 	if (count > row)
 	    break;	// Position is in this buffer line.
-#ifdef FEAT_FOLDING
-	(void)hasFoldingWin(win, lnum, NULL, &lnum, TRUE, NULL);
-#endif
+#line 3362
 	if (lnum == win->w_buffer->b_ml.ml_line_count)
 	{
 	    retval = TRUE;
@@ -3388,11 +3050,7 @@ mouse_comp_pos(
     col -= win_col_off(win);
     if (col <= 0)
     {
-#ifdef FEAT_NETBEANS_INTG
-	// if mouse is clicked on the gutter, then inform the netbeans server
-	if (*colp < win_col_off(win))
-	    netbeans_gutter_click(lnum);
-#endif
+#line 3396
 	col = 0;
     }
 
@@ -3416,30 +3074,7 @@ mouse_find_win(int *rowp, int *colp, mouse_find_T popup UNUSED)
     frame_T	*fp;
     win_T	*wp;
 
-#ifdef FEAT_PROP_POPUP
-    win_T	*pwp = NULL;
-
-    if (popup != IGNORE_POPUP)
-    {
-	popup_reset_handled(POPUP_HANDLED_1);
-	while ((wp = find_next_popup(TRUE, POPUP_HANDLED_1)) != NULL)
-	{
-	    if (*rowp >= wp->w_winrow && *rowp < wp->w_winrow + popup_height(wp)
-		    && *colp >= wp->w_wincol
-				    && *colp < wp->w_wincol + popup_width(wp))
-		pwp = wp;
-	}
-	if (pwp != NULL)
-	{
-	    if (popup == FAIL_POPUP)
-		return NULL;
-	    *rowp -= pwp->w_winrow;
-	    *colp -= pwp->w_wincol;
-	    return pwp;
-	}
-    }
-#endif
-
+#line 3443
     fp = topframe;
 
     if (*colp < firstwin->w_wincol
@@ -3477,9 +3112,7 @@ mouse_find_win(int *rowp, int *colp, mouse_find_T popup UNUSED)
     FOR_ALL_WINDOWS(wp)
 	if (wp == fp->fr_win)
 	{
-#ifdef FEAT_MENU
-	    *rowp -= wp->w_winbar_height;
-#endif
+#line 3483
 	    return wp;
 	}
     return NULL;
@@ -3548,14 +3181,7 @@ f_getmousepos(typval_T *argvars UNUSED, typval_T *rettv)
 	int	left_off = 0;
 	int	height = wp->w_height + wp->w_status_height;
 
-# ifdef FEAT_PROP_POPUP
-	if (WIN_IS_POPUP(wp))
-	{
-	    top_off = popup_top_extra(wp);
-	    left_off = popup_left_extra(wp);
-	    height = popup_height(wp);
-	}
-# endif
+#line 3559
 	if (row < height)
 	{
 	    winid = wp->w_id;

@@ -33,27 +33,10 @@ static int	stuff_yank(int, char_u *);
 static void	put_reedit_in_typebuf(int silent);
 static int	put_in_typebuf(char_u *s, int esc, int colon, int silent);
 static int	yank_copy_line(struct block_def *bd, long y_idx, int exclude_trailing_space);
-#ifdef HAVE_CLIPMETHOD
-static void	copy_yank_reg(yankreg_T *reg);
-#endif
+#line 39
 static void	dis_msg(char_u *p, int skip_esc);
 
-#if defined(FEAT_VIMINFO)
-    yankreg_T *
-get_y_regs(void)
-{
-    return y_regs;
-}
-#endif
-
-#if defined(FEAT_CLIPBOARD) || defined(FEAT_CLIPBOARD_PROVIDER)
-    yankreg_T *
-get_y_register(int reg)
-{
-    return &y_regs[reg];
-}
-#endif
-
+#line 57
     yankreg_T *
 get_y_current(void)
 {
@@ -190,24 +173,13 @@ valid_yank_reg(
 	    || regname == '"'
 	    || regname == '-'
 	    || regname == '_'
-#if defined(FEAT_CLIPBOARD) // If +clipboard is enabled, then these registers
-			    // always exist.
-	    || regname == '*'
-	    || regname == '+'
-#elif defined(FEAT_CLIPBOARD_PROVIDER)
-	    || ( // If -clipboard, then these registers only exist when
-		 // clipmethod is set to provider.
-	     clipmethod == CLIPMETHOD_PROVIDER && (
-		 regname == '*'
-		 || regname == '+'
-	    ))
-#endif
+#line 205
 #ifdef FEAT_DND
 	    || (!writing && regname == '~')
 #endif
 							)
 	return TRUE;
-#ifndef FEAT_CLIPBOARD
+#line 211
     // clipboard support not enabled in this build
     else if (regname == '*' || regname == '+')
     {
@@ -215,7 +187,7 @@ valid_yank_reg(
 	msg_warn_missing_clipboard();
 	return FALSE;
     }
-#endif
+#line 219
     return FALSE;
 }
 
@@ -254,38 +226,7 @@ get_yank_register(int regname, int writing)
     }
     else if (regname == '-')
 	i = DELETION_REGISTER;
-#ifdef FEAT_CLIPBOARD
-    // When selection is not available, use register 0 instead of '*'
-    else if (clip_star.available && regname == '*')
-    {
-	i = STAR_REGISTER;
-	ret = TRUE;
-    }
-    // When clipboard is not available, use register 0 instead of '+'
-    else if (clip_plus.available && regname == '+')
-    {
-# ifdef FEAT_CLIPBOARD_PROVIDER
-	// We want to use the actual + register, since PLUS_REGISTER may be
-	// pointing to STAR_REGISTER.
-	if (clipmethod == CLIPMETHOD_PROVIDER)
-	    i = REAL_PLUS_REGISTER;
-	else
-# endif
-	    i = PLUS_REGISTER;
-	ret = TRUE;
-    }
-#elif defined(FEAT_CLIPBOARD_PROVIDER)
-    else if (regname == '*')
-    {
-	i = STAR_REGISTER;
-	ret = TRUE;
-    }
-    else if (regname == '+')
-    {
-	i = REAL_PLUS_REGISTER;
-	ret = TRUE;
-    }
-#endif
+#line 289
 #ifdef FEAT_DND
     else if (!writing && regname == '~')
 	i = TILDE_REGISTER;
@@ -310,29 +251,7 @@ get_register(
     yankreg_T	*reg;
     int		i;
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(name);
-#endif
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-    {
-	// When Visual area changed, may have to update selection.  Obtain the
-	// selection too.
-	if (name == '*' && clip_star.available)
-	{
-	    if (clip_isautosel_star())
-		clip_update_selection(&clip_star);
-	    may_get_selection(name);
-	}
-	if (name == '+' && clip_plus.available)
-	{
-	    if (clip_isautosel_plus())
-		clip_update_selection(&clip_plus);
-	    may_get_selection(name);
-	}
-    }
-#endif
-
+#line 336
     get_yank_register(name, 0);
     reg = ALLOC_ONE(yankreg_T);
     if (reg == NULL)
@@ -382,26 +301,10 @@ put_register(int name, void *reg)
     *y_current = *(yankreg_T *)reg;
     vim_free(reg);
 
-#ifdef FEAT_CLIPBOARD
-    // Send text written to clipboard register to the clipboard.
-    may_set_selection();
-#endif
+#line 389
 }
 
-#if defined(FEAT_CLIPBOARD)
-    void
-free_register(void *reg)
-{
-    yankreg_T tmp;
-
-    tmp = *y_current;
-    *y_current = *(yankreg_T *)reg;
-    free_yank_all();
-    vim_free(reg);
-    *y_current = tmp;
-}
-#endif
-
+#line 405
 /*
  * return TRUE if the current yank register has type MLINE
  */
@@ -529,9 +432,7 @@ stuff_yank(int regname, char_u *p)
 	y_current->y_array[0].length = plen;
 	y_current->y_size = 1;
 	y_current->y_type = MCHAR;  // used to be MLINE, why?
-#ifdef FEAT_VIMINFO
-	y_current->y_time_set = vim_time();
-#endif
+#line 535
     }
     return OK;
 }
@@ -541,20 +442,7 @@ stuff_yank(int regname, char_u *p)
  */
 static int execreg_lastc = NUL;
 
-#if defined(FEAT_VIMINFO)
-    int
-get_execreg_lastc(void)
-{
-    return execreg_lastc;
-}
-
-    void
-set_execreg_lastc(int lastc)
-{
-    execreg_lastc = lastc;
-}
-#endif
-
+#line 558
 /*
  * When executing a register as a series of ex-commands, if the
  * line-continuation character is used for a line, then join it with one or
@@ -662,14 +550,7 @@ do_execreg(
     }
     execreg_lastc = regname;
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(regname);
-#endif
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-	regname = may_get_selection(regname);
-#endif
-
+#line 673
     // black hole: don't stuff anything
     if (regname == '_')
 	return OK;
@@ -870,14 +751,7 @@ insert_reg(
     if (regname != NUL && !valid_yank_reg(regname, FALSE))
 	return FAIL;
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(regname);
-#endif
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-	regname = may_get_selection(regname);
-#endif
-
+#line 881
     if (regname == '.')			// insert last inserted text
 	retval = stuff_inserted(NUL, 1L, TRUE);
     else if (get_spec_reg(regname, &arg, &allocated, TRUE))
@@ -1331,15 +1205,7 @@ op_yank(oparg_T *oap, int deleting, int mess)
     if (oap->regname == '_')	    // black hole: nothing to do
 	return OK;
 
-#ifdef FEAT_CLIPBOARD
-    if ((!clip_star.available && oap->regname == '*') ||
-	(!clip_plus.available && oap->regname == '+'))
-    {
-	oap->regname = 0;
-	msg_warn_missing_clipboard();
-    }
-#endif
-
+#line 1343
     if (!deleting)		    // op_delete() already set y_current
 	get_yank_register(oap->regname, TRUE);
 
@@ -1374,9 +1240,7 @@ op_yank(oparg_T *oap, int deleting, int mess)
 	y_current = curr;
 	return FAIL;
     }
-#ifdef FEAT_VIMINFO
-    y_current->y_time_set = vim_time();
-#endif
+#line 1380
 
     y_idx = 0;
     lnum = oap->start.lnum;
@@ -1443,9 +1307,7 @@ op_yank(oparg_T *oap, int deleting, int mess)
 	    new_ptr[j] = curr->y_array[j];
 	vim_free(curr->y_array);
 	curr->y_array = new_ptr;
-#ifdef FEAT_VIMINFO
-	curr->y_time_set = vim_time();
-#endif
+#line 1449
 
 	if (yanktype == MLINE)	// MLINE overrides MCHAR and MBLOCK
 	    curr->y_type = MLINE;
@@ -1529,69 +1391,12 @@ op_yank(oparg_T *oap, int deleting, int mess)
 	    decl(&curbuf->b_op_end);
     }
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    inc_clip_provider();
-    if (curr == &y_regs[REAL_PLUS_REGISTER] || (!deleting && oap->regname == 0
-		&& (clip_unnamed & CLIP_UNNAMED_PLUS)))
-    {
-	if (curr != &(y_regs[REAL_PLUS_REGISTER]))
-	    copy_yank_reg(&(y_regs[REAL_PLUS_REGISTER]));
-	call_clip_provider_set('+');
-    }
-    if (curr == &y_regs[STAR_REGISTER] || (!deleting && oap->regname == 0
-		&& (clip_unnamed & CLIP_UNNAMED)))
-    {
-	if (curr != &(y_regs[STAR_REGISTER]))
-	    copy_yank_reg(&(y_regs[STAR_REGISTER]));
-	call_clip_provider_set('*');
-    }
-#endif
-
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-    {
-	// If we were yanking to the '*' register, send result to clipboard. If
-	// no register was specified, and "unnamed" in 'clipboard', make a copy
-	// to the '*' register.
-	if (clip_star.available
-		&& (curr == &(y_regs[STAR_REGISTER])
-		    || (!deleting && oap->regname == 0
-			&& ((clip_unnamed | clip_unnamed_saved) & CLIP_UNNAMED))))
-	{
-	    if (curr != &(y_regs[STAR_REGISTER]))
-		// Copy the text from register 0 to the clipboard register.
-		copy_yank_reg(&(y_regs[STAR_REGISTER]));
-
-	    clip_own_selection(&clip_star);
-	    clip_gen_set_selection(&clip_star);
-	}
-
-# if defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD)
-	// If we were yanking to the '+' register, send result to selection.
-	if (clip_plus.available
-		&& (curr == &(y_regs[PLUS_REGISTER])
-		    || (!deleting && oap->regname == 0
-			&& ((clip_unnamed | clip_unnamed_saved) &
-			    CLIP_UNNAMED_PLUS))))
-	{
-	    if (curr != &(y_regs[PLUS_REGISTER]))
-		// Copy the text from register 0 to the clipboard register.
-		copy_yank_reg(&(y_regs[PLUS_REGISTER]));
-
-	    clip_own_selection(&clip_plus);
-	    clip_gen_set_selection(&clip_plus);
-	}
-# endif
-    }
-#endif
-
+#line 1588
 #if defined(FEAT_EVAL)
     if (!deleting && has_textyankpost())
 	yank_do_autocmd(oap, y_current);
 #endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    dec_clip_provider();
-#endif
+#line 1595
     return OK;
 
 fail:		// free the allocated lines
@@ -1638,39 +1443,7 @@ yank_copy_line(struct block_def *bd, long y_idx, int exclude_trailing_space)
     return OK;
 }
 
-#ifdef HAVE_CLIPMETHOD
-/*
- * Make a copy of the y_current register to register "reg".
- */
-    static void
-copy_yank_reg(yankreg_T *reg)
-{
-    yankreg_T	*curr = y_current;
-    long	j;
-
-    y_current = reg;
-    free_yank_all();
-    *y_current = *curr;
-    y_current->y_array = lalloc_clear(
-				    sizeof(string_T) * y_current->y_size, TRUE);
-    if (y_current->y_array == NULL)
-	y_current->y_size = 0;
-    else
-	for (j = 0; j < y_current->y_size; ++j)
-	{
-	    if ((y_current->y_array[j].string = vim_strnsave(curr->y_array[j].string,
-						curr->y_array[j].length)) == NULL)
-	    {
-		free_yank(j);
-		y_current->y_size = 0;
-		break;
-	    }
-	    y_current->y_array[j].length = curr->y_array[j].length;
-	}
-    y_current = curr;
-}
-#endif
-
+#line 1674
 /*
  * Put contents of register "regname" into the text.
  * Caller must check "regname" to be valid!
@@ -1709,18 +1482,7 @@ do_put(
     pos_T	orig_end = curbuf->b_op_end;
     unsigned int cur_ve_flags = get_ve_flags();
 
-#ifdef HAVE_CLIPMETHOD
-    adjust_clip_reg(&regname);
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(regname);
-#endif
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-	// Adjust register name for "unnamed" in 'clipboard'.
-	(void)may_get_selection(regname);
-#endif
-
+#line 1724
     // Remove any preinserted text (issue #19329)
     if (ins_compl_preinsert_effect())
 	ins_compl_delete();
@@ -1928,27 +1690,14 @@ do_put(
     else if (y_type == MLINE)
     {
 	lnum = curwin->w_cursor.lnum;
-#ifdef FEAT_FOLDING
-	// Correct line number for closed fold.  Don't move the cursor yet,
-	// u_save() uses it.
-	if (dir == BACKWARD)
-	    (void)hasFolding(lnum, &lnum, NULL);
-	else
-	    (void)hasFolding(lnum, NULL, &lnum);
-#endif
+#line 1939
 	if (dir == FORWARD)
 	    ++lnum;
 	// In an empty buffer the empty line is going to be replaced, include
 	// it in the saved lines.
 	if ((BUFEMPTY() ? u_save(0, 2) : u_save(lnum - 1, lnum)) == FAIL)
 	    goto end;
-#ifdef FEAT_FOLDING
-	if (dir == FORWARD)
-	    curwin->w_cursor.lnum = lnum - 1;
-	else
-	    curwin->w_cursor.lnum = lnum;
-	curbuf->b_op_start = curwin->w_cursor;	// for mark_adjust()
-#endif
+#line 1952
     }
     else if (u_save_cursor() == FAIL)
 	goto end;
@@ -2554,18 +2303,7 @@ get_register_name(int num)
 	return num + '0';
     else if (num == DELETION_REGISTER)
 	return '-';
-#if defined(FEAT_CLIPBOARD) || defined(FEAT_CLIPBOARD_PROVIDER)
-    else if (num == STAR_REGISTER)
-	return '*';
-    // If there is only one clipboard, we only want the plus register to point
-    // to the star register if the clipboard provider is not being used. If the
-    // clipboard provider is being used, then both registers should be available
-    // no matter the platform
-    else if (clipmethod == CLIPMETHOD_PROVIDER && num == REAL_PLUS_REGISTER)
-	return '+';
-    else if (clipmethod != CLIPMETHOD_PROVIDER && num == PLUS_REGISTER)
-	return '+';
-#endif
+#line 2569
     else
 	return num + 'a' - 10;
 }
@@ -2603,10 +2341,7 @@ ex_display(exarg_T *eap)
 	arg = NULL;
     attr = HL_ATTR(HLF_8);
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    inc_clip_provider();
-#endif
-
+#line 2610
     // Highlight title
     msg_puts_title(_("\nType Name Content"));
     for (i = -1; i < NUM_REGISTERS && !got_int; ++i)
@@ -2626,20 +2361,7 @@ ex_display(exarg_T *eap)
 		)
 	    continue;	    // did not ask for this register
 
-#ifdef HAVE_CLIPMETHOD
-	adjust_clip_reg(&name);
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	call_clip_provider_request(name);
-#endif
-#ifdef FEAT_CLIPBOARD
-	if (clipmethod != CLIPMETHOD_PROVIDER)
-	    // Adjust register name for "unnamed" in 'clipboard'.
-	    // When it's a clipboard register, fill it with the current contents
-	    // of the clipboard.
-	    (void)may_get_selection(name);
-#endif
-
+#line 2643
 	if (i == -1)
 	{
 	    if (y_previous != NULL)
@@ -2759,9 +2481,7 @@ ex_display(exarg_T *eap)
     }
 #endif
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    dec_clip_provider();
-#endif
+#line 2765
     silence_w23_w24_msg--;
 }
 
@@ -2835,14 +2555,7 @@ get_reg_type(int regname, long *reglen)
 	    return MCHAR;
     }
 
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(regname);
-#endif
-#ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-	regname = may_get_selection(regname);
-#endif
-
+#line 2846
     if (regname != NUL && !valid_yank_reg(regname, FALSE))
 	return MAUTO;
 
@@ -2918,14 +2631,7 @@ get_reg_contents(int regname, int flags)
     if (regname != NUL && !valid_yank_reg(regname, FALSE))
 	return NULL;
 
-# ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_request(regname);
-# endif
-# ifdef FEAT_CLIPBOARD
-    if (clipmethod != CLIPMETHOD_PROVIDER)
-	regname = may_get_selection(regname);
-# endif
-
+#line 2929
     if (get_spec_reg(regname, &retval, &allocated, FALSE))
     {
 	if (retval == NULL)
@@ -3020,10 +2726,7 @@ finish_write_reg(
     yankreg_T	*old_y_previous,
     yankreg_T	*old_y_current)
 {
-# ifdef FEAT_CLIPBOARD
-    // Send text of clipboard register to the clipboard.
-    may_set_selection();
-# endif
+#line 3027
 
     // ':let @" = "val"' should change the meaning of the "" register
     if (name != '"')
@@ -3089,9 +2792,7 @@ write_reg_contents_lst(
 
     finish_write_reg(name, old_y_previous, old_y_current);
 
-# ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_set(name);
-# endif
+#line 3095
 }
 
     void
@@ -3167,9 +2868,7 @@ write_reg_contents_ex(
 
     finish_write_reg(name, old_y_previous, old_y_current);
 
-# ifdef FEAT_CLIPBOARD_PROVIDER
-    call_clip_provider_set(name);
-# endif
+#line 3173
 }
 #endif	// FEAT_EVAL
 
@@ -3325,8 +3024,6 @@ str_to_reg(
 	y_ptr->y_width = (blocklen < 0 ? maxlen - 1 : blocklen);
     else
 	y_ptr->y_width = 0;
-# ifdef FEAT_VIMINFO
-    y_ptr->y_time_set = vim_time();
-# endif
+#line 3331
 }
 #endif // FEAT_CLIPBOARD || FEAT_EVAL

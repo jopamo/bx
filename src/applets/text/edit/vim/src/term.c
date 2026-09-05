@@ -131,16 +131,7 @@ static termrequest_T u7_status = TERMREQUEST_INIT;
 static termrequest_T xcc_status = TERMREQUEST_INIT;
 
 #ifdef FEAT_TERMRESPONSE
-# ifdef FEAT_TERMINAL
-// Request foreground color report:
-static termrequest_T rfg_status = TERMREQUEST_INIT;
-static int fg_r = 0;
-static int fg_g = 0;
-static int fg_b = 0;
-static int bg_r = 255;
-static int bg_g = 255;
-static int bg_b = 255;
-# endif
+#line 144
 
 // Request background color report:
 static termrequest_T rbg_status = TERMREQUEST_INIT;
@@ -161,9 +152,7 @@ static termrequest_T *all_termrequests[] = {
     &crv_status,
     &u7_status,
     &xcc_status,
-# ifdef FEAT_TERMINAL
-    &rfg_status,
-# endif
+#line 167
     &rbg_status,
     &rbm_status,
     &rcs_status,
@@ -1054,61 +1043,7 @@ static tcap_entry_T builtin_win32[] = {
     {(int)KS_NAME,	NULL}  // end marker
 };
 
-#if defined(FEAT_GUI)
-/*
- * GUI uses made-up codes, only used inside Vim.
- */
-static tcap_entry_T builtin_gui[] = {
-    {(int)KS_CE,	"\033|$"},
-    {(int)KS_AL,	"\033|i"},
-# ifdef TERMINFO
-    {(int)KS_CAL,	"\033|%p1%dI"},
-# else
-    {(int)KS_CAL,	"\033|%dI"},
-# endif
-    {(int)KS_DL,	"\033|d"},
-# ifdef TERMINFO
-    {(int)KS_CDL,	"\033|%p1%dD"},
-    {(int)KS_CS,	"\033|%p1%d;%p2%dR"},
-    {(int)KS_CSV,	"\033|%p1%d;%p2%dV"},
-# else
-    {(int)KS_CDL,	"\033|%dD"},
-    {(int)KS_CS,	"\033|%d;%dR"},
-    {(int)KS_CSV,	"\033|%d;%dV"},
-# endif
-    {(int)KS_CL,	"\033|C"},
-			// attributes switched on with 'h', off with * 'H'
-    {(int)KS_ME,	"\033|31H"}, // HL_ALL
-    {(int)KS_MR,	"\033|1h"},   // HL_INVERSE
-    {(int)KS_MD,	"\033|2h"},   // HL_BOLD
-    {(int)KS_SE,	"\033|16H"}, // HL_STANDOUT
-    {(int)KS_SO,	"\033|16h"}, // HL_STANDOUT
-    {(int)KS_UE,	"\033|8H"},   // HL_UNDERLINE
-    {(int)KS_US,	"\033|8h"},   // HL_UNDERLINE
-    {(int)KS_UCE,	"\033|8C"},   // HL_UNDERCURL
-    {(int)KS_UCS,	"\033|8c"},   // HL_UNDERCURL
-    {(int)KS_STE,	"\033|4C"},   // HL_STRIKETHROUGH
-    {(int)KS_STS,	"\033|4c"},   // HL_STRIKETHROUGH
-    {(int)KS_CZR,	"\033|4H"},   // HL_ITALIC
-    {(int)KS_CZH,	"\033|4h"},   // HL_ITALIC
-    {(int)KS_VB,	"\033|f"},
-    {(int)KS_MS,	"y"},
-    {(int)KS_UT,	"y"},
-    {(int)KS_XN,	"y"},
-    {(int)KS_LE,	"\b"},		// cursor-left = BS
-    {(int)KS_ND,	"\014"},	// cursor-right = CTRL-L
-# ifdef TERMINFO
-    {(int)KS_CM,	"\033|%p1%d;%p2%dM"},
-# else
-    {(int)KS_CM,	"\033|%d;%dM"},
-# endif
-	// there are no key sequences here, the GUI sequences are recognized
-	// in check_termcode()
-
-    {(int)KS_NAME,	NULL}  // end marker
-};
-#endif
-
+#line 1112
 /*
  * Amiga console window, default for Amiga.
  */
@@ -1436,9 +1371,7 @@ builtin_tcap_T builtin_terminals[] = {
     {"win32",	    builtin_win32},
 
     // Other systems
-#if defined(FEAT_GUI)
-    {"gui",	    builtin_gui},
-#endif
+#line 1442
     {"amiga",	    builtin_amiga},
     {"dumb",	    builtin_dumb},
     {"debug",	    builtin_debug},
@@ -2181,28 +2114,13 @@ set_termname(char_u *term)
 #endif
 	    parse_builtin_tcap(term);
 
-#ifdef FEAT_GUI
-	    if (term_is_gui(term))
-	    {
-		out_flush();
-		gui_init();
-		// If starting the GUI failed, don't do any of the other
-		// things for this terminal
-		if (!gui.in_use)
-		    return FAIL;
-# ifdef HAVE_TGETENT
-		break;		// don't try using external termcap
-# endif
-	    }
-#endif // FEAT_GUI
+#line 2198
 	}
 #ifdef HAVE_TGETENT
     }
 #endif
 
-#ifdef FEAT_GUI
-    if (!gui.in_use)
-#endif
+#line 2206
     {
 	// Use the 'keyprotocol' option to adjust the t_TE and t_TI
 	// termcap entries if there is an entry matching "term".
@@ -2251,9 +2169,7 @@ set_termname(char_u *term)
  * is being used.
  * Don't do this when the GUI is active, it uses "t_kb" and "t_kD" directly.
  */
-# ifdef FEAT_GUI
-    if (!gui.in_use)
-# endif
+#line 2257
 	get_stty();
 #endif
 
@@ -2265,9 +2181,7 @@ set_termname(char_u *term)
  * bytes.  Don't do this when the GUI is active, it uses "t_kb" and "t_kD"
  * directly.
  */
-#ifdef FEAT_GUI
-    if (!gui.in_use)
-#endif
+#line 2271
     {
 	bs_p = find_termcode((char_u *)"kb");
 	del_p = find_termcode((char_u *)"kD");
@@ -2328,9 +2242,7 @@ set_termname(char_u *term)
 	    reset_option_was_set((char_u *)"ttym");
 	}
 	if (p == NULL
-# ifdef FEAT_GUI
-		|| gui.in_use
-# endif
+#line 2334
 		)
 	    check_mouse_termcode();	// set mouse termcode anyway
     }
@@ -2580,10 +2492,7 @@ add_termcap_entry(char_u *name, int force)
  * If the GUI is running or will start in a moment, we only support the keys
  * that the GUI can produce.
  */
-#ifdef FEAT_GUI
-    if (gui.in_use || gui.starting)
-	return gui_mch_haskey(name);
-#endif
+#line 2587
 
     if (!force && find_termcode(name) != NULL)	    // it's already there
 	return OK;
@@ -2706,14 +2615,7 @@ term_7to8bit(char_u *p)
     return 0;
 }
 
-#if defined(FEAT_GUI)
-    int
-term_is_gui(char_u *name)
-{
-    return (STRCMP(name, "builtin_gui") == 0 || STRCMP(name, "gui") == 0);
-}
-#endif
-
+#line 2717
 #if !defined(HAVE_TGETENT) || defined(AMIGA)
 
     char_u *
@@ -2849,9 +2751,7 @@ out_flush(void)
     {
 	out_buf[len] = NUL;
 	ch_log(NULL, "raw %s output: \"%s\"",
-# ifdef FEAT_GUI
-		(gui.in_use && !gui.dying && !gui.starting) ? "GUI" :
-# endif
+#line 2855
 		"terminal",
 		out_buf);
 	if (ch_log_output == TRUE)
@@ -2872,13 +2772,7 @@ out_flush_cursor(
     mch_disable_flush();
     out_flush();
     mch_enable_flush();
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_update_cursor(force, clear_selection);
-	gui_may_flush();
-    }
-#endif
+#line 2882
 }
 
 
@@ -2893,17 +2787,7 @@ out_flush_check(void)
 	out_flush();
 }
 
-#ifdef FEAT_GUI
-/*
- * out_trash(): Throw away the contents of the output buffer
- */
-    void
-out_trash(void)
-{
-    out_pos = 0;
-}
-#endif
-
+#line 2907
 /*
  * out_char(c): put a byte into the output buffer.
  *		Flush it if it becomes full.
@@ -2978,14 +2862,7 @@ out_str_cf(char_u *s)
     char_u *p;
 #endif
 
-#ifdef FEAT_GUI
-    // Don't use tputs() when GUI is used, ncurses crashes.
-    if (gui.in_use)
-    {
-	out_str_nf(s);
-	return;
-    }
-#endif
+#line 2989
     if (out_pos > OUT_SIZE - MAX_ESC_SEQ_LEN)
 	out_flush();
 #ifdef HAVE_TGETENT
@@ -3045,14 +2922,7 @@ out_str(char_u *s)
     if (s == NULL || *s == NUL)
 	return;
 
-#ifdef FEAT_GUI
-    // Don't use tputs() when GUI is used, ncurses crashes.
-    if (gui.in_use)
-    {
-	out_str_nf(s);
-	return;
-    }
-#endif
+#line 3056
     // avoid terminal strings being split up
     if (out_pos > OUT_SIZE - MAX_ESC_SEQ_LEN)
 	out_flush();
@@ -3552,9 +3422,7 @@ ttest(int pairs)
     // Set t_colors to the value of $COLORS or t_Co.  Ignore $COLORS in the
     // GUI.
     t_colors = atoi((char *)T_CCO);
-#ifdef FEAT_GUI
-    if (!gui.in_use)
-#endif
+#line 3558
     {
 	env_colors = mch_getenv((char_u *)"COLORS");
 	if (env_colors != NULL && SAFE_isdigit(*env_colors))
@@ -3567,53 +3435,7 @@ ttest(int pairs)
     }
 }
 
-#if defined(FEAT_GUI) && (defined(FEAT_MENU) || !defined(USE_ON_FLY_SCROLL))
-/*
- * Represent the given long_u as individual bytes, with the most significant
- * byte first, and store them in dst.
- */
-    void
-add_long_to_buf(long_u val, char_u *dst)
-{
-    int	    i;
-    int	    shift;
-
-    for (i = 1; i <= (int)sizeof(long_u); i++)
-    {
-	shift = 8 * (sizeof(long_u) - i);
-	dst[i - 1] = (char_u) ((val >> shift) & 0xff);
-    }
-}
-
-/*
- * Interpret the next string of bytes in buf as a long integer, with the most
- * significant byte first.  Note that it is assumed that buf has been through
- * inchar(), so that NUL and K_SPECIAL will be represented as three bytes each.
- * Puts result in val, and returns the number of bytes read from buf
- * (between sizeof(long_u) and 2 * sizeof(long_u)), or -1 if not enough bytes
- * were present.
- */
-    static int
-get_long_from_buf(char_u *buf, long_u *val)
-{
-    int	    len;
-    char_u  bytes[sizeof(long_u)];
-    int	    i;
-    int	    shift;
-
-    *val = 0;
-    len = get_bytes_from_buf(buf, bytes, (int)sizeof(long_u));
-    if (len == -1)
-	return -1;
-    for (i = 0; i < (int)sizeof(long_u); i++)
-    {
-	shift = 8 * (sizeof(long_u) - 1 - i);
-	*val += (long_u)bytes[i] << shift;
-    }
-    return len;
-}
-#endif
-
+#line 3617
 /*
  * Read the next num_bytes bytes from buf, and store them in bytes.  Assume
  * that buf has been through inchar().	Returns the actual number of bytes used
@@ -3738,11 +3560,7 @@ shell_resized_check(void)
     int		old_Columns = Columns;
 
     if (exiting
-#ifdef FEAT_GUI
-	    // Do not get the size when executing a shell command during
-	    // startup.
-	    || gui.starting
-#endif
+#line 3746
 	    )
 	return;
 
@@ -3976,11 +3794,7 @@ may_send_t_RK(void)
     void
 settmode(tmode_T tmode)
 {
-#ifdef FEAT_GUI
-    // don't set the term where gvim was started to any mode
-    if (gui.in_use)
-	return;
-#endif
+#line 3984
 
     if (!full_screen)
 	return;
@@ -3996,9 +3810,7 @@ settmode(tmode_T tmode)
     if (tmode != cur_tmode)
     {
 #ifdef FEAT_TERMRESPONSE
-# ifdef FEAT_GUI
-	if (!gui.in_use && !gui.starting)
-# endif
+#line 4002
 	{
 	    // May need to check for T_CRV response and termcodes, it
 	    // doesn't work in Cooked mode, an external program may get
@@ -4066,9 +3878,7 @@ starttermcap(void)
     termcap_active = TRUE;
     screen_start();			// don't know where cursor is now
 #ifdef FEAT_TERMRESPONSE
-# ifdef FEAT_GUI
-    if (!gui.in_use && !gui.starting)
-# endif
+#line 4072
     {
 	may_req_termresponse();
 	// Immediately check for a response.  If t_Co changes, we don't
@@ -4089,9 +3899,7 @@ stoptermcap(void)
 	return;
 
 #ifdef FEAT_TERMRESPONSE
-# ifdef FEAT_GUI
-    if (!gui.in_use && !gui.starting)
-# endif
+#line 4095
     {
 	// May need to discard T_CRV, T_U7 or T_RBG response.
 	if (termrequest_any_pending())
@@ -4282,18 +4090,7 @@ may_req_bg_color(void)
     {
 	int didit = FALSE;
 
-# ifdef FEAT_TERMINAL
-	// Only request foreground if t_RF is set.
-	if (rfg_status.tr_progress == STATUS_GET && *T_RFG != NUL)
-	{
-	    MAY_WANT_TO_LOG_THIS;
-	    LOG_TR1("Sending FG request");
-	    out_str(T_RFG);
-	    termrequest_sent(&rfg_status);
-	    didit = TRUE;
-	}
-# endif
-
+#line 4297
 	// Only request background if t_RB is set.
 	if (rbg_status.tr_progress == STATUS_GET && *T_RBG != NUL)
 	{
@@ -4382,17 +4179,7 @@ cursor_off(void)
     }
 }
 
-#ifdef FEAT_GUI
-/*
- * Check whether the cursor is invisible due to an ongoing cursor-less sleep
- */
-    int
-cursor_is_sleeping(void)
-{
-    return cursor_is_asleep;
-}
-#endif
-
+#line 4396
 /*
  * Disable the cursor and mark it disabled by cursor-less sleep
  */
@@ -4465,20 +4252,7 @@ term_cursor_mode(int forced)
     }
 }
 
-# if defined(FEAT_TERMINAL)
-    void
-term_cursor_color(char_u *color)
-{
-    if (*T_CSC == NUL)
-	return;
-
-    out_str(T_CSC);		// set cursor color start
-    out_str_nf(color);
-    out_str(T_CEC);		// set cursor color end
-    out_flush();
-}
-# endif
-
+#line 4482
     int
 blink_state_is_inverted(void)
 {
@@ -5987,13 +5761,7 @@ check_for_color_response(char_u *resp, int len)
 		    char_u *tp_r = resp + j + 7;
 		    char_u *tp_g = resp + j + (is_4digit ? 12 : 10);
 		    char_u *tp_b = resp + j + (is_4digit ? 17 : 13);
-#if defined(FEAT_TERMRESPONSE) && defined(FEAT_TERMINAL)
-		    int rval, gval, bval;
-
-		    rval = hexhex2nr(tp_r);
-		    gval = hexhex2nr(tp_g);
-		    bval = hexhex2nr(tp_b);
-#endif
+#line 5997
 		    if (is_bg)
 		    {
 			char *new_bg_val = (3 * '6' < *tp_r + *tp_g +
@@ -6002,11 +5770,7 @@ check_for_color_response(char_u *resp, int len)
 			LOG_TRN("Received RBG response: %s", tp);
 #ifdef FEAT_TERMRESPONSE
 			rbg_status.tr_progress = STATUS_GOT;
-# ifdef FEAT_TERMINAL
-			bg_r = rval;
-			bg_g = gval;
-			bg_b = bval;
-# endif
+#line 6010
 #endif
 			if (!option_was_set((char_u *)"bg")
 				      && STRCMP(p_bg, new_bg_val) != 0)
@@ -6018,16 +5782,7 @@ check_for_color_response(char_u *resp, int len)
 			    redraw_asap(UPD_CLEAR);
 			}
 		    }
-#if defined(FEAT_TERMRESPONSE) && defined(FEAT_TERMINAL)
-		    else
-		    {
-			LOG_TRN("Received RFG response: %s", tp);
-			rfg_status.tr_progress = STATUS_GOT;
-			fg_r = rval;
-			fg_g = gval;
-			fg_b = bval;
-		    }
-#endif
+#line 6031
 		}
 
 #ifdef FEAT_EVAL
@@ -6367,23 +6122,7 @@ check_termcode(
 	key_name[1] = NUL;	// no key name found yet
 	modifiers = 0;		// no modifiers yet
 
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	{
-	    /*
-	     * GUI special key codes are all of the form [CSI xx].
-	     */
-	    if (*tp == CSI)	    // Special key from GUI
-	    {
-		if (len < 3)
-		    return -1;	    // Shouldn't happen
-		slen = 3;
-		key_name[0] = tp[1];
-		key_name[1] = tp[2];
-	    }
-	}
-	else
-#endif // FEAT_GUI
+#line 6387
 #ifdef MSWIN
 	    if (len >= 3 && tp[0] == CSI && tp[1] == KS_EXTRA
 		    && (tp[2] == KE_MOUSEUP
@@ -6670,9 +6409,7 @@ handle_osc:
 	 * pointer coordinates so that we know which window to scroll later.
 	 */
 	if (TRUE
-# if defined(FEAT_GUI) && !defined(MSWIN)
-		&& gui.in_use
-# endif
+#line 6676
 		&& key_name[0] == (int)KS_EXTRA
 		&& (key_name[1] == (int)KE_X1MOUSE
 		    || key_name[1] == (int)KE_X2MOUSE
@@ -6726,136 +6463,14 @@ handle_osc:
 		return -1;
 	}
 
-#ifdef FEAT_GUI
-	/*
-	 * If using the GUI, then we get menu and scrollbar events.
-	 *
-	 * A menu event is encoded as K_SPECIAL, KS_MENU, KE_FILLER followed by
-	 * four bytes which are to be taken as a pointer to the vimmenu_T
-	 * structure.
-	 *
-	 * A tab line event is encoded as K_SPECIAL KS_TABLINE nr, where "nr"
-	 * is one byte with the tab index.
-	 *
-	 * A scrollbar event is K_SPECIAL, KS_VER_SCROLLBAR, KE_FILLER followed
-	 * by one byte representing the scrollbar number, and then four bytes
-	 * representing a long_u which is the new value of the scrollbar.
-	 *
-	 * A horizontal scrollbar event is K_SPECIAL, KS_HOR_SCROLLBAR,
-	 * KE_FILLER followed by four bytes representing a long_u which is the
-	 * new value of the scrollbar.
-	 */
-# ifdef FEAT_MENU
-	else if (key_name[0] == (int)KS_MENU)
-	{
-	    long_u	val;
-	    int		num_bytes = get_long_from_buf(tp + slen, &val);
-
-	    if (num_bytes == -1)
-		return -1;
-	    current_menu = (vimmenu_T *)val;
-	    slen += num_bytes;
-
-	    // The menu may have been deleted right after it was used, check
-	    // for that.
-	    if (check_menu_pointer(root_menu, current_menu) == FAIL)
-	    {
-		key_name[0] = KS_EXTRA;
-		key_name[1] = (int)KE_IGNORE;
-	    }
-	}
-# endif
-# ifdef FEAT_GUI_TABLINE
-	else if (key_name[0] == (int)KS_TABLINE)
-	{
-	    // Selecting tabline tab or using its menu.
-	    char_u	bytes[6];
-	    int		num_bytes = get_bytes_from_buf(tp + slen, bytes, 1);
-
-	    if (num_bytes == -1)
-		return -1;
-	    current_tab = (int)bytes[0];
-	    if (current_tab == 255)	// -1 in a byte gives 255
-		current_tab = -1;
-	    slen += num_bytes;
-	}
-	else if (key_name[0] == (int)KS_TABMENU)
-	{
-	    // Selecting tabline tab or using its menu.
-	    char_u	bytes[6];
-	    int		num_bytes = get_bytes_from_buf(tp + slen, bytes, 2);
-
-	    if (num_bytes == -1)
-		return -1;
-	    current_tab = (int)bytes[0];
-	    current_tabmenu = (int)bytes[1];
-	    slen += num_bytes;
-	}
-# endif
-# ifndef USE_ON_FLY_SCROLL
-	else if (key_name[0] == (int)KS_VER_SCROLLBAR)
-	{
-	    long_u	val;
-	    char_u	bytes[6];
-	    int		num_bytes;
-
-	    // Get the last scrollbar event in the queue of the same type
-	    j = 0;
-	    for (i = 0; tp[j] == CSI && tp[j + 1] == KS_VER_SCROLLBAR
-						     && tp[j + 2] != NUL; ++i)
-	    {
-		j += 3;
-		num_bytes = get_bytes_from_buf(tp + j, bytes, 1);
-		if (num_bytes == -1)
-		    break;
-		if (i == 0)
-		    current_scrollbar = (int)bytes[0];
-		else if (current_scrollbar != (int)bytes[0])
-		    break;
-		j += num_bytes;
-		num_bytes = get_long_from_buf(tp + j, &val);
-		if (num_bytes == -1)
-		    break;
-		scrollbar_value = val;
-		j += num_bytes;
-		slen = j;
-	    }
-	    if (i == 0)		// not enough characters to make one
-		return -1;
-	}
-	else if (key_name[0] == (int)KS_HOR_SCROLLBAR)
-	{
-	    long_u	val;
-	    int		num_bytes;
-
-	    // Get the last horiz. scrollbar event in the queue
-	    j = 0;
-	    for (i = 0; tp[j] == CSI && tp[j + 1] == KS_HOR_SCROLLBAR
-						     && tp[j + 2] != NUL; ++i)
-	    {
-		j += 3;
-		num_bytes = get_long_from_buf(tp + j, &val);
-		if (num_bytes == -1)
-		    break;
-		scrollbar_value = val;
-		j += num_bytes;
-		slen = j;
-	    }
-	    if (i == 0)		// not enough characters to make one
-		return -1;
-	}
-# endif // !USE_ON_FLY_SCROLL
-#endif // FEAT_GUI
-
+#line 6850
 #if defined(UNIX) || defined(VMS)
 	/*
 	 * Handle FocusIn/FocusOut event sequences reported by XTerm.
 	 * (CSI I/CSI O)
 	 */
 	if (key_name[0] == KS_EXTRA
-# ifdef FEAT_GUI
-		&& !gui.in_use
-# endif
+#line 6859
 	    )
 	{
 	    if (key_name[1] == KE_FOCUSGAINED)
@@ -6928,36 +6543,7 @@ handle_osc:
     return 0;			    // no match found
 }
 
-#if defined(FEAT_TERMINAL) && defined(FEAT_TERMRESPONSE)
-/*
- * Get the text foreground color, if known.
- */
-    void
-term_get_fg_color(char_u *r, char_u *g, char_u *b)
-{
-    if (rfg_status.tr_progress != STATUS_GOT)
-	return;
-
-    *r = fg_r;
-    *g = fg_g;
-    *b = fg_b;
-}
-
-/*
- * Get the text background color, if known.
- */
-    void
-term_get_bg_color(char_u *r, char_u *g, char_u *b)
-{
-    if (rbg_status.tr_progress != STATUS_GOT)
-	return;
-
-    *r = bg_r;
-    *g = bg_g;
-    *b = bg_b;
-}
-#endif
-
+#line 6961
 /*
  * Replace any terminal code strings in from[] with the equivalent internal
  * vim representation.	This is used for the "from" and "to" part of a
@@ -7215,14 +6801,7 @@ replace_termcodes(
 		result[dlen++] = KS_SPECIAL;
 		result[dlen++] = KE_FILLER;
 	    }
-#ifdef FEAT_GUI
-	    else if (*src == CSI)
-	    {
-		result[dlen++] = K_SPECIAL;
-		result[dlen++] = KS_EXTRA;
-		result[dlen++] = (int)KE_CSI;
-	    }
-#endif
+#line 7226
 	    else
 		result[dlen++] = *src;
 	    ++src;
@@ -7346,10 +6925,7 @@ gather_termleader(void)
     int	    i;
     int	    len = 0;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	termleader[len++] = CSI;    // the GUI codes are not in termcodes[]
-#endif
+#line 7353
 #ifdef FEAT_TERMRESPONSE
     if (check_for_codes || *T_CRS != NUL)
 	termleader[len++] = DCS;    // the termcode response starts with DCS
@@ -8058,12 +7634,7 @@ term_disable_dec(void)
     void
 term_set_win_resize(bool state)
 {
-# ifdef FEAT_GUI
-    bool    in_gui = gui.in_use;
-
-    if (state && in_gui)
-	return;
-# endif
+#line 8067
 
     if (!state || win_resize_setting == 0 || win_resize_setting == 4)
     {
@@ -8093,10 +7664,7 @@ term_set_win_resize(bool state)
     int
 sync_output_active(void)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	return TRUE;
-#endif
+#line 8100
     return p_tsy && (sync_output_setting == 1 || sync_output_setting == 2)
 	&& *T_BSU != NUL && *T_ESU != NUL;
 }
@@ -8118,11 +7686,9 @@ sync_output_active(void)
 term_set_sync_output(int flags)
 {
     bool    allowed;
-#ifdef FEAT_GUI
-    bool    in_gui = gui.in_use;
-#else
+#line 8124
     bool    in_gui = false;
-#endif
+#line 8126
 
     allowed = p_tsy && (sync_output_setting == 1 || sync_output_setting == 2);
 

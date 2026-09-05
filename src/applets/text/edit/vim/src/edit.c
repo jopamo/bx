@@ -27,9 +27,7 @@ static void ins_ctrl_v(void);
 static void insert_special(int, int, int);
 static void redo_literal(int c);
 static void start_arrow_common(pos_T *end_insert_pos, int change);
-#ifdef FEAT_SPELL
-static void check_spell_redraw(void);
-#endif
+#line 33
 static void stop_insert(pos_T *end_insert_pos, int esc, int nomove);
 static int  echeck_abbr(int);
 static void mb_replace_pop_ins(int cc);
@@ -159,12 +157,7 @@ edit(
     int		inserted_space = FALSE;     // just inserted a space
     int		replaceState = MODE_REPLACE;
     int		nomove = FALSE;		    // don't move cursor on return
-#ifdef FEAT_JOB_CHANNEL
-    int		cmdchar_todo = cmdchar;
-#endif
-#ifdef FEAT_CONCEAL
-    int		cursor_line_was_concealed;
-#endif
+#line 168
     int		ins_just_started = TRUE;
 
     // Remember whether editing was restarted after CTRL-O.
@@ -239,12 +232,7 @@ edit(
 	}
     }
 
-#ifdef FEAT_CONCEAL
-    // Check if the cursor line was concealed before changing State.
-    cursor_line_was_concealed = curwin->w_p_cole > 0
-						&& conceal_cursor_line(curwin);
-#endif
-
+#line 248
     /*
      * When doing a paste with the middle mouse button, Insstart is set to
      * where the paste started.
@@ -302,18 +290,11 @@ edit(
     may_trigger_modechanged();
     stop_insert_mode = FALSE;
 
-#ifdef FEAT_CONCEAL
-    // Check if the cursor line needs redrawing after changing State.  If
-    // 'concealcursor' is "n" it needs to be redrawn without concealing.
-    conceal_check_cursor_line(cursor_line_was_concealed);
-#endif
-
+#line 311
     // Need to position cursor again when on a TAB and when on a char with
     // virtual text.
     if (gchar_cursor() == TAB
-#ifdef FEAT_PROP_POPUP
-	    || curbuf->b_has_textprop
-#endif
+#line 317
        )
 	curwin->w_valid &= ~(VALID_WROW|VALID_WCOL|VALID_VIRTCOL);
 
@@ -405,12 +386,7 @@ edit(
 
     where_paste_started.lnum = 0;
     can_cindent = TRUE;
-#ifdef FEAT_FOLDING
-    // The cursor line is not in a closed fold, unless 'insertmode' is set or
-    // restarting.
-    if (!p_im && did_restart_edit == 0)
-	foldOpenCursor();
-#endif
+#line 414
 
     /*
      * If 'showmode' is set, show the current (insert/replace/..) mode.
@@ -484,31 +460,7 @@ edit(
 	 */
 	msg_scroll = FALSE;
 
-#ifdef FEAT_GUI
-	// When 'mousefocus' is set a mouse movement may have taken us to
-	// another window.  "need_mouse_correct" may then be set because of an
-	// autocommand.
-	if (need_mouse_correct)
-	    gui_mouse_correct();
-#endif
-
-#ifdef FEAT_FOLDING
-	// Open fold at the cursor line, according to 'foldopen'.
-	if (fdo_flags & FDO_INSERT)
-	    foldOpenCursor();
-	// Close folds where the cursor isn't, according to 'foldclose'
-	if (!char_avail())
-	    foldCheckClose();
-#endif
-
-#ifdef FEAT_JOB_CHANNEL
-	if (bt_prompt(curbuf))
-	{
-	    init_prompt(cmdchar_todo);
-	    cmdchar_todo = NUL;
-	}
-#endif
-
+#line 512
 	/*
 	 * If we inserted a character at the last position of the last line in
 	 * the window, scroll the window one line up. This avoids an extra
@@ -556,11 +508,7 @@ edit(
 		    --curwin->w_topfill;
 		else
 #endif
-#ifdef FEAT_FOLDING
-		if (hasFolding(curwin->w_topline, NULL, &old_topline))
-		    set_topline(curwin, old_topline + 1);
-		else
-#endif
+#line 564
 		    set_topline(curwin, curwin->w_topline + 1);
 	    }
 	}
@@ -642,9 +590,7 @@ edit(
 		c = safe_vgetc();
 
 		if (stop_insert_mode
-#ifdef FEAT_TERMINAL
-			|| (c == K_IGNORE && term_use_loop())
-#endif
+#line 648
 		   )
 		{
 		    // Insert mode ended, possibly from a callback, or a timer
@@ -654,9 +600,7 @@ edit(
 		    count = 0;
 
 		    if (!bt_prompt(curwin->w_buffer)
-#ifdef FEAT_TERMINAL
-			    && !bt_terminal(curwin->w_buffer)
-#endif
+#line 660
 			    && stop_insert_mode)
 			// :stopinsert command via callback or via server command
 			nomove = FALSE;
@@ -860,19 +804,7 @@ edit(
 		nomove = TRUE;
 		goto doESCkey;
 	    }
-#ifdef FEAT_JOB_CHANNEL
-	    if (c == Ctrl_C && bt_prompt(curbuf))
-	    {
-		if (invoke_prompt_interrupt())
-		{
-		    if (!bt_prompt(curbuf))
-			// buffer changed to a non-prompt buffer, get out of
-			// Insert mode
-			goto doESCkey;
-		    break;
-		}
-	    }
-#endif
+#line 876
 
 #ifdef UNIX
 do_intr:
@@ -961,15 +893,7 @@ doESCkey:
 		need_start_insertmode = TRUE;
 	    goto doESCkey;
 
-#ifdef FEAT_NETBEANS_INTG
-	case K_F21:	// NetBeans command
-	    ++no_mapping;		// don't map the next key hits
-	    i = plain_vgetc();
-	    --no_mapping;
-	    netbeans_keycommand(i);
-	    break;
-#endif
-
+#line 973
 	case K_ZERO:	// Insert the previously inserted text.
 	case NUL:
 	case Ctrl_A:
@@ -1041,18 +965,7 @@ doESCkey:
 	    break;
 
 	case Ctrl_W:	// delete word before the cursor
-#ifdef FEAT_JOB_CHANNEL
-	    if (bt_prompt(curbuf) && (mod_mask & MOD_MASK_SHIFT) == 0)
-	    {
-		// In a prompt window CTRL-W is used for window commands.
-		// Use Shift-CTRL-W to delete a word.
-		stuffcharReadbuff(Ctrl_W);
-		restart_edit = 'A';
-		nomove = TRUE;
-		count = 0;
-		goto doESCkey;
-	    }
-#endif
+#line 1056
 	    did_backspace = ins_bs(c, BACKSPACE_WORD, &inserted_space);
 	    auto_format(FALSE, TRUE);
 	    if (did_backspace)
@@ -1138,11 +1051,7 @@ doESCkey:
 		set_bufref(&save_curbuf, curbuf);
 		do_cmdkey_command(c, 0);
 
-#ifdef FEAT_TERMINAL
-		if (term_use_loop())
-		    // Started a terminal that gets the input, exit Insert mode.
-		    goto doESCkey;
-#endif
+#line 1146
 		if (curbuf->b_u_synced
 			|| (bufref_valid(&save_curbuf)
 			    && curbuf == save_curbuf.br_buf
@@ -1163,25 +1072,7 @@ doESCkey:
 		dont_sync_undo = MAYBE;
 	    break;
 
-#ifdef FEAT_GUI_MSWIN
-	    // On MS-Windows ignore <M-F4>, we get it when closing the window
-	    // was cancelled.
-	case K_F4:
-	    if (mod_mask != MOD_MASK_ALT)
-		goto normalchar;
-	    break;
-#endif
-
-#ifdef FEAT_GUI
-	case K_VER_SCROLLBAR:
-	    ins_scroll();
-	    break;
-
-	case K_HOR_SCROLLBAR:
-	    ins_horscroll();
-	    break;
-#endif
-
+#line 1185
 	case K_HOME:	// <Home>
 	case K_KHOME:
 	case K_S_HOME:
@@ -1298,17 +1189,7 @@ doESCkey:
 		cmdwin_result = CAR;
 		goto doESCkey;
 	    }
-#ifdef FEAT_JOB_CHANNEL
-	    if (bt_prompt(curbuf))
-	    {
-		invoke_prompt_callback();
-		if (!bt_prompt(curbuf))
-		    // buffer changed to a non-prompt buffer, get out of
-		    // Insert mode
-		    goto doESCkey;
-		break;
-	    }
-#endif
+#line 1312
 	    if (ins_eol(c) == FAIL && !p_im)
 		goto doESCkey;	    // out of memory
 	    auto_format(FALSE, FALSE);
@@ -1374,14 +1255,10 @@ doESCkey:
 
 docomplete:
 	    compl_busy = TRUE;
-#ifdef FEAT_FOLDING
-	    disable_fold_update++;  // don't redraw folds here
-#endif
+#line 1380
 	    if (ins_complete(c, TRUE) == FAIL)
 		compl_status_clear();
-#ifdef FEAT_FOLDING
-	    disable_fold_update--;
-#endif
+#line 1385
 	    compl_busy = FALSE;
 	    can_si = may_do_si(); // allow smartindenting
 	    break;
@@ -1464,11 +1341,7 @@ normalchar:
 
 	    auto_format(FALSE, TRUE);
 
-#ifdef FEAT_FOLDING
-	    // When inserting a character the cursor line must never be in a
-	    // closed fold.
-	    foldOpenCursor();
-#endif
+#line 1472
 	    // Trigger autocompletion
 	    if (ins_compl_has_autocomplete() && !char_avail()
 		    && vim_isprintc(c))
@@ -1529,11 +1402,7 @@ ins_need_undo_get(void)
     void
 ins_redraw(int ready)	    // not busy with something
 {
-#ifdef FEAT_CONCEAL
-    linenr_T	conceal_old_cursor_line = 0;
-    linenr_T	conceal_new_cursor_line = 0;
-    int		conceal_update_lines = FALSE;
-#endif
+#line 1537
 
     if (char_avail())
 	return;
@@ -1541,12 +1410,7 @@ ins_redraw(int ready)	    // not busy with something
     // Trigger CursorMoved if the cursor moved.  Not when the popup menu is
     // visible, the command might delete it.
     if (ready && (has_cursormovedI()
-#ifdef FEAT_PROP_POPUP
-		|| popup_visible
-#endif
-#if defined(FEAT_CONCEAL)
-		|| curwin->w_p_cole > 0
-#endif
+#line 1550
 		)
 	    && !EQUAL_POS(last_cursormoved, curwin->w_cursor)
 	    && !pum_visible())
@@ -1566,18 +1430,7 @@ ins_redraw(int ready)	    // not busy with something
 	    update_curswant();
 	    ins_apply_autocmds(EVENT_CURSORMOVEDI);
 	}
-#ifdef FEAT_PROP_POPUP
-	if (popup_visible)
-	    popup_check_cursor_pos();
-#endif
-#ifdef FEAT_CONCEAL
-	if (curwin->w_p_cole > 0)
-	{
-	    conceal_old_cursor_line = last_cursormoved.lnum;
-	    conceal_new_cursor_line = curwin->w_cursor.lnum;
-	    conceal_update_lines = TRUE;
-	}
-#endif
+#line 1581
 	last_cursormoved = curwin->w_cursor;
     }
 
@@ -1629,20 +1482,7 @@ ins_redraw(int ready)	    // not busy with something
 	    && !ins_compl_active()
 	    && !pum_visible());
 
-#if defined(FEAT_CONCEAL)
-    if ((conceal_update_lines
-	    && (conceal_old_cursor_line != conceal_new_cursor_line
-		|| conceal_cursor_line(curwin)))
-	    || need_cursor_line_redraw)
-    {
-	if (conceal_old_cursor_line != conceal_new_cursor_line)
-	    redrawWinline(curwin, conceal_old_cursor_line);
-	redrawWinline(curwin, conceal_new_cursor_line == 0
-			    ? curwin->w_cursor.lnum : conceal_new_cursor_line);
-	curwin->w_valid &= ~VALID_CROW;
-	need_cursor_line_redraw = FALSE;
-    }
-#endif
+#line 1646
     if (must_redraw)
 	update_screen(0);
     else if (clear_cmdline || redraw_cmdline)
@@ -1812,22 +1652,7 @@ edit_putchar(int c, int highlight)
     screen_putchar(c, pc_row, pc_col, attr);
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-/*
- * Set the insert start position for when using a prompt buffer.
- */
-    void
-set_insstart(linenr_T lnum, int col)
-{
-    Insstart.lnum = lnum;
-    Insstart.col = col;
-    Insstart_orig = Insstart;
-    Insstart_textlen = Insstart.col;
-    Insstart_blank_vcol = MAXCOL;
-    arrow_used = FALSE;
-}
-#endif
-
+#line 1831
 /*
  * Undo the previous edit_putchar().
  */
@@ -1984,20 +1809,7 @@ get_literal(int noReduceKeys)
     if (got_int)
 	return Ctrl_C;
 
-#ifdef FEAT_GUI
-    /*
-     * In GUI there is no point inserting the internal code for a special key.
-     * It is more useful to insert the string "<KEY>" instead.	This would
-     * probably be useful in a text window too, but it would not be
-     * vi-compatible (maybe there should be an option for it?) -- webb
-     */
-    if (gui.in_use)
-    {
-	++allow_keys;
-	if (noReduceKeys)
-	    ++no_reduce_keys;
-    }
-#endif
+#line 2001
 #ifdef USE_ON_FLY_SCROLL
     dont_scroll = TRUE;		// disallow scrolling here
 #endif
@@ -2085,14 +1897,7 @@ get_literal(int noReduceKeys)
 			// second byte will cause trouble!
 
     --no_mapping;
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	--allow_keys;
-	if (noReduceKeys)
-	    --no_reduce_keys;
-    }
-#endif
+#line 2096
     if (nc)
     {
 	vungetc(nc);
@@ -2451,30 +2256,10 @@ start_arrow_common(
 	stop_insert(end_insert_pos, FALSE, FALSE);
 	arrow_used = TRUE;	// this means we stopped the current insert
     }
-#ifdef FEAT_SPELL
-    check_spell_redraw();
-#endif
+#line 2457
 }
 
-#ifdef FEAT_SPELL
-/*
- * If we skipped highlighting word at cursor, do it now.
- * It may be skipped again, thus reset spell_redraw_lnum first.
- */
-    static void
-check_spell_redraw(void)
-{
-    if (spell_redraw_lnum != 0)
-    {
-	linenr_T	lnum = spell_redraw_lnum;
-
-	spell_redraw_lnum = 0;
-	redrawWinline(curwin, lnum);
-    }
-}
-
-#endif
-
+#line 2478
 /*
  * stop_arrow() is called before a change is made in insert mode.
  * If an arrow key has been used, start a new insertion.
@@ -2521,11 +2306,7 @@ stop_arrow(void)
 	}
     }
 
-#ifdef FEAT_FOLDING
-    // Always open fold at the cursor line when inserting something.
-    foldOpenCursor();
-#endif
-
+#line 2529
     return (arrow_used || ins_need_undo ? FAIL : OK);
 }
 
@@ -2717,14 +2498,7 @@ add_char2buf(int c, char_u *s)
 	    *s++ = KS_SPECIAL;
 	    *s++ = KE_FILLER;
 	}
-#ifdef FEAT_GUI
-	else if (c == CSI)
-	{
-	    *s++ = CSI;
-	    *s++ = KS_EXTRA;
-	    *s++ = (int)KE_CSI;
-	}
-#endif
+#line 2728
 	else
 	    *s++ = c;
     }
@@ -2883,32 +2657,7 @@ cursor_up_inner(win_T *wp, long n)
     if (n >= lnum)
 	lnum = 1;
     else
-#ifdef FEAT_FOLDING
-	if (hasAnyFolding(wp))
-    {
-	/*
-	 * Count each sequence of folded lines as one logical line.
-	 */
-	// go to the start of the current fold
-	(void)hasFoldingWin(wp, lnum, &lnum, NULL, TRUE, NULL);
-
-	while (n--)
-	{
-	    // move up one line
-	    --lnum;
-	    if (lnum <= 1)
-		break;
-	    // If we entered a fold, move to the beginning, unless in
-	    // Insert mode or when 'foldopen' contains "all": it will open
-	    // in a moment.
-	    if (n > 0 || !((State & MODE_INSERT) || (fdo_flags & FDO_ALL)))
-		(void)hasFoldingWin(wp, lnum, &lnum, NULL, TRUE, NULL);
-	}
-	if (lnum < 1)
-	    lnum = 1;
-    }
-    else
-#endif
+#line 2912
 	lnum -= n;
 
     wp->w_cursor.lnum = lnum;
@@ -2949,26 +2698,7 @@ cursor_down_inner(win_T *wp, long n)
     if (lnum + n >= line_count)
 	lnum = line_count;
     else
-#ifdef FEAT_FOLDING
-	if (hasAnyFolding(wp))
-    {
-	linenr_T	last;
-
-	// count each sequence of folded lines as one logical line
-	while (n--)
-	{
-	    if (hasFoldingWin(wp, lnum, NULL, &last, TRUE, NULL))
-		lnum = last + 1;
-	    else
-		++lnum;
-	    if (lnum >= line_count)
-		break;
-	}
-	if (lnum > line_count)
-	    lnum = line_count;
-    }
-    else
-#endif
+#line 2972
 	lnum += n;
 
     wp->w_cursor.lnum = lnum;
@@ -2986,9 +2716,7 @@ cursor_down(
     linenr_T	line_count = curwin->w_buffer->b_ml.ml_line_count;
     // This fails if the cursor is already in the last (folded) line, or would
     // move beyond the last line and '-' is in 'cpoptions'.
-#ifdef FEAT_FOLDING
-    hasFoldingWin(curwin, lnum, NULL, &lnum, TRUE, NULL);
-#endif
+#line 2992
     if (n > 0
 	    && (lnum >= line_count
 		|| (lnum + n > line_count
@@ -3355,17 +3083,7 @@ replace_do_bs(int limit_col)
     cc = replace_pop();
     if (cc > 0)
     {
-#ifdef FEAT_PROP_POPUP
-	size_t	len_before = 0;  // init to shut up GCC
-
-	if (curbuf->b_has_textprop)
-	{
-	    // Do not adjust text properties for individual delete and insert
-	    // operations, do it afterwards on the resulting text.
-	    len_before = ml_get_curline_len();
-	    ++text_prop_frozen;
-	}
-#endif
+#line 3369
 	if (State & VREPLACE_FLAG)
 	{
 	    // Get the number of screen cells used by the character we are
@@ -3415,16 +3133,7 @@ replace_do_bs(int limit_col)
 	// mark the buffer as changed and prepare for displaying
 	changed_bytes(curwin->w_cursor.lnum, curwin->w_cursor.col);
 
-#ifdef FEAT_PROP_POPUP
-	if (curbuf->b_has_textprop)
-	{
-	    size_t len_now = ml_get_curline_len();
-
-	    --text_prop_frozen;
-	    adjust_prop_columns(curwin->w_cursor.lnum, curwin->w_cursor.col,
-					   (int)(len_now - len_before), 0);
-	}
-#endif
+#line 3428
     }
     else if (cc == 0)
 	(void)del_char_after_col(limit_col);
@@ -3722,15 +3431,7 @@ ins_ctrl_hat(void)
 #endif
     set_iminsert_global();
     showmode();
-#ifdef FEAT_GUI
-    // may show different cursor shape or color
-    if (gui.in_use)
-	gui_update_cursor(TRUE, FALSE);
-#endif
-#if defined(FEAT_KEYMAP)
-    // Show/unshow value of 'keymap' in status lines.
-    status_redraw_curbuf();
-#endif
+#line 3734
 }
 
 /*
@@ -3746,16 +3447,9 @@ ins_esc(
 {
     int		temp;
     static int	disabled_redraw = FALSE;
-#ifdef FEAT_CONCEAL
-    // Remember if the cursor line was concealed before changing State.
-    int		cursor_line_was_concealed = curwin->w_p_cole > 0
-						&& conceal_cursor_line(curwin);
-#endif
+#line 3754
 
-#ifdef FEAT_SPELL
-    check_spell_redraw();
-#endif
-
+#line 3759
     temp = curwin->w_cursor.col;
     if (disabled_redraw)
     {
@@ -3857,9 +3551,7 @@ ins_esc(
     // need to position cursor again when on a TAB and when on a char with
     // virtual text.
     if (gchar_cursor() == TAB
-#ifdef FEAT_PROP_POPUP
-	    || curbuf->b_has_textprop
-#endif
+#line 3863
        )
 	curwin->w_valid &= ~(VALID_WROW|VALID_WCOL|VALID_VIRTCOL);
 
@@ -3877,11 +3569,7 @@ ins_esc(
 	// Re-enable modifyOtherKeys.
 	out_str_t_TI();
     }
-#ifdef FEAT_CONCEAL
-    // Check if the cursor line needs redrawing after changing State.  If
-    // 'concealcursor' is "i" it needs to be redrawn without concealing.
-    conceal_check_cursor_line(cursor_line_was_concealed);
-#endif
+#line 3885
 
     // When recording or for CTRL-O, need to display the new mode.
     // Otherwise remove the mode message.
@@ -4148,9 +3836,7 @@ ins_bs(
 		((curwin->w_cursor.lnum == 1 && curwin->w_cursor.col == 0)
 		    || (!can_bs(BS_START)
 			&& ((arrow_used
-#ifdef FEAT_JOB_CHANNEL
-				&& !bt_prompt(curbuf)
-#endif
+#line 4154
 			) || (curwin->w_cursor.lnum == Insstart_orig.lnum
 				&& curwin->w_cursor.col <= Insstart_orig.col)))
 		    || (!can_bs(BS_INDENT) && !arrow_used && ai_col > 0
@@ -4545,14 +4231,7 @@ ins_bs(
     if (vim_strchr(p_cpo, CPO_BACKSPACE) != NULL && dollar_vcol == -1)
 	dollar_vcol = curwin->w_virtcol;
 
-#ifdef FEAT_FOLDING
-    // When deleting a char the cursor line must never be in a closed fold.
-    // E.g., when 'foldmethod' is indent and deleting the first non-white
-    // char before a Tab.
-    if (did_backspace)
-	foldOpenCursor();
-#endif
-
+#line 4556
     return did_backspace;
 }
 
@@ -4684,55 +4363,19 @@ ins_tabline(int c)
 }
 #endif
 
-#if defined(FEAT_GUI)
-    void
-ins_scroll(void)
-{
-    pos_T	tpos;
-
-    undisplay_dollar();
-    tpos = curwin->w_cursor;
-    if (gui_do_scroll())
-    {
-	start_arrow(&tpos);
-	can_cindent = TRUE;
-    }
-}
-
-    void
-ins_horscroll(void)
-{
-    pos_T	tpos;
-
-    undisplay_dollar();
-    tpos = curwin->w_cursor;
-    if (do_mousescroll_horiz(scrollbar_value))
-    {
-	start_arrow(&tpos);
-	can_cindent = TRUE;
-    }
-}
-#endif
-
+#line 4717
     static void
 ins_left(void)
 {
     pos_T	tpos;
     int		end_change = dont_sync_undo == FALSE; // end undoable change
 
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4727
     undisplay_dollar();
     tpos = curwin->w_cursor;
     if (oneleft() == OK)
     {
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-	// Only call start_arrow() when not busy with preediting, it will
-	// break undo.  K_LEFT is inserted in im_correct_cursor().
-	if (p_imst == IM_OVER_THE_SPOT || !im_is_preediting())
-#endif
+#line 4736
 	{
 	    start_arrow_with_change(&tpos, end_change);
 	    if (!end_change)
@@ -4768,10 +4411,7 @@ ins_home(int c)
 {
     pos_T	tpos;
 
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4775
     undisplay_dollar();
     tpos = curwin->w_cursor;
     if (c == K_C_HOME)
@@ -4787,10 +4427,7 @@ ins_end(int c)
 {
     pos_T	tpos;
 
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4794
     undisplay_dollar();
     tpos = curwin->w_cursor;
     if (c == K_C_END)
@@ -4805,10 +4442,7 @@ ins_end(int c)
 ins_s_left(void)
 {
     int end_change = dont_sync_undo == FALSE; // end undoable change
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4812
     undisplay_dollar();
     if (curwin->w_cursor.lnum > 1 || curwin->w_cursor.col > 0)
     {
@@ -4828,10 +4462,7 @@ ins_right(void)
 {
     int end_change = dont_sync_undo == FALSE; // end undoable change
 
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4835
     undisplay_dollar();
     if (gchar_cursor() != NUL || virtual_active())
     {
@@ -4874,10 +4505,7 @@ ins_right(void)
 ins_s_right(void)
 {
     int end_change = dont_sync_undo == FALSE; // end undoable change
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_HOR) && KeyTyped)
-	foldOpenCursor();
-#endif
+#line 4881
     undisplay_dollar();
     if (curwin->w_cursor.lnum < curbuf->b_ml.ml_line_count
 	    || gchar_cursor() != NUL)
@@ -5226,46 +4854,14 @@ ins_tab(void)
 	    i = cursor->col - fpos.col;
 	    if (i > 0)
 	    {
-#ifdef FEAT_PROP_POPUP
-		if (!(State & VREPLACE_FLAG))
-		{
-		    char_u  *newp;
-		    int	    col;
-
-		    newp = alloc(curbuf->b_ml.ml_line_len - i);
-		    if (newp == NULL)
-			return FALSE;
-
-		    col = ptr - curbuf->b_ml.ml_line_ptr;
-		    if (col > 0)
-			mch_memmove(newp, ptr - col, col);
-		    mch_memmove(newp + col, ptr + i,
-					   curbuf->b_ml.ml_line_len - col - i);
-
-		    if (curbuf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED))
-			vim_free(curbuf->b_ml.ml_line_ptr);
-		    curbuf->b_ml.ml_line_ptr = newp;
-		    curbuf->b_ml.ml_line_len -= i;
-		    curbuf->b_ml.ml_line_textlen = 0;
-		    curbuf->b_ml.ml_flags =
-			   (curbuf->b_ml.ml_flags | ML_LINE_DIRTY) & ~ML_EMPTY;
-		}
-		else
-#endif
+#line 5255
 		    STRMOVE(ptr, ptr + i);
 		// correct replace stack.
 		if ((State & REPLACE_FLAG) && !(State & VREPLACE_FLAG))
 		    for (temp = i; --temp >= 0; )
 			replace_join(repl_off);
 	    }
-#ifdef FEAT_NETBEANS_INTG
-	    if (netbeans_active())
-	    {
-		netbeans_removed(curbuf, fpos.lnum, cursor->col, (long)(i + 1));
-		netbeans_inserted(curbuf, fpos.lnum, cursor->col,
-							   (char_u *)"\t", 1);
-	    }
-#endif
+#line 5269
 	    cursor->col -= i;
 
 	    /*
@@ -5341,10 +4937,7 @@ ins_eol(int c)
 	    NULL);
     old_indent = 0;
     can_cindent = TRUE;
-#ifdef FEAT_FOLDING
-    // When inserting a line the cursor line must never be in a closed fold.
-    foldOpenCursor();
-#endif
+#line 5348
 
     return i;
 }

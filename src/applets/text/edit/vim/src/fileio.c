@@ -40,9 +40,7 @@ static char_u *next_fenc(char_u **pp, int *alloced);
 #ifdef FEAT_EVAL
 static char_u *readfile_charconvert(char_u *fname, char_u *fenc, int *fdp);
 #endif
-#ifdef FEAT_CRYPT
-static char_u *check_for_cryptkey(char_u *cryptkey, char_u *ptr, long *sizep, off_T *filesizep, int newfile, char_u *fname, int *did_ask);
-#endif
+#line 46
 static linenr_T readfile_linenr(linenr_T linecnt, char_u *p, char_u *endp);
 static char_u *check_for_bom(char_u *p, long size, int *lenp, int flags);
 
@@ -159,12 +157,7 @@ readfile(
     char_u	*p;
     off_T	filesize = 0;
     int		skip_read = FALSE;
-#ifdef FEAT_CRYPT
-    off_T       filesize_disk = 0;      // file size read from disk
-    off_T       filesize_count = 0;     // counter
-    char_u	*cryptkey = NULL;
-    int		did_ask_for_key = FALSE;
-#endif
+#line 168
 #ifdef FEAT_PERSISTENT_UNDO
     context_sha256_T sha_ctx;
     int		read_undo_file = FALSE;
@@ -228,12 +221,7 @@ readfile(
     int		using_b_ffname;
     int		using_b_fname;
     static char *msg_is_a_directory = N_("is a directory");
-#ifdef FEAT_CRYPT
-    int		eof = FALSE;
-#endif
-#ifdef FEAT_SODIUM
-    int		may_need_lseek = FALSE;
-#endif
+#line 237
     size_t	fnamelen = 0;
 
     curbuf->b_au_did_filetype = false; // reset before triggering any autocommands
@@ -439,9 +427,7 @@ readfile(
 	    buf_store_time(curbuf, &st, fname);
 	    curbuf->b_mtime_read = curbuf->b_mtime;
 	    curbuf->b_mtime_read_ns = curbuf->b_mtime_ns;
-#ifdef FEAT_CRYPT
-	    filesize_disk = st.st_size;
-#endif
+#line 445
 #ifdef UNIX
 	    /*
 	     * Use the protection bits of the original file for the swap file.
@@ -567,11 +553,7 @@ readfile(
 		    else
 			filemess(curbuf, sfname,
 					   (char_u *)_("[New DIRECTORY]"), 0);
-#ifdef FEAT_VIMINFO
-		    // Even though this is a new file, it might have been
-		    // edited before and deleted.  Get the old marks.
-		    check_marks_read();
-#endif
+#line 575
 		    // Set forced 'fileencoding'.
 		    if (eap != NULL)
 			set_forced_fenc(eap);
@@ -786,21 +768,7 @@ readfile(
 # endif
 		    mch_msg(_("Vim: Reading from stdin...\n"));
 #endif
-#ifdef FEAT_GUI
-		// Also write a message in the GUI window, if there is one.
-		if (gui.in_use && !gui.dying && !gui.starting)
-		{
-		    size_t  plen = STRLEN(_("Reading from stdin..."));
-
-		    // make a copy, gui_write() may try to change it
-		    p = vim_strnsave((char_u *)_("Reading from stdin..."), plen);
-		    if (p != NULL)
-		    {
-			gui_write(p, (int)plen);
-			vim_free(p);
-		    }
-		}
-#endif
+#line 804
 	    }
 	}
 	else if (!read_buffer)
@@ -1123,9 +1091,7 @@ retry:
     {
 	linerest = 0;
 	filesize = 0;
-#ifdef FEAT_CRYPT
-	filesize_count = 0;
-#endif
+#line 1129
 	skip_count = lines_to_skip;
 	read_count = lines_to_read;
 	conv_restlen = 0;
@@ -1140,15 +1106,7 @@ retry:
 	if (read_undo_file)
 	    sha256_start(&sha_ctx);
 #endif
-#ifdef FEAT_CRYPT
-	if (curbuf->b_cryptstate != NULL)
-	{
-	    // Need to free the state, but keep the key, don't want to ask for
-	    // it again.
-	    crypt_free_state(curbuf->b_cryptstate);
-	    curbuf->b_cryptstate = NULL;
-	}
-#endif
+#line 1152
     }
 
     while (!error && !got_int)
@@ -1302,9 +1260,7 @@ retry:
 				if (!curbuf->b_p_eol)
 				    --tlen;
 				size = tlen;
-#ifdef FEAT_CRYPT
-				eof = TRUE;
-#endif
+#line 1308
 				break;
 			    }
 			}
@@ -1315,149 +1271,13 @@ retry:
 		    /*
 		     * Read bytes from the file.
 		     */
-#ifdef FEAT_SODIUM
-		    // Let the crypt layer work with a buffer size of 8192
-		    //
-		    // Sodium encryption requires a fixed block size to
-		    // successfully decrypt. However, unfortunately the file
-		    // header size changes between xchacha20 and xchacha20v2 by
-		    // 'add_len' bytes.
-		    // So we will now read the maximum header size + encryption
-		    // metadata, but after determining to read an xchacha20
-		    // encrypted file, we have to rewind the file descriptor by
-		    // 'add_len' bytes in the second round.
-		    //
-		    // Be careful with changing it, it needs to stay the same
-		    // for reading back previously encrypted files!
-		    if (filesize == 0)
-		    {
-			// set size to 8K + Sodium Crypt Metadata
-			size = WRITEBUFSIZE + crypt_get_max_header_len()
-			    + crypto_secretstream_xchacha20poly1305_HEADERBYTES
-				+ crypto_secretstream_xchacha20poly1305_ABYTES;
-			may_need_lseek = TRUE;
-		    }
-
-		    else if (filesize > 0 && (curbuf->b_cryptstate != NULL
-				&& crypt_method_is_sodium(
-					     curbuf->b_cryptstate->method_nr)))
-		    {
-			size = WRITEBUFSIZE + crypto_secretstream_xchacha20poly1305_ABYTES;
-			// need to rewind by - add_len from CRYPT_M_SOD2 (see
-			// description above)
-			if (curbuf->b_cryptstate->method_nr == CRYPT_M_SOD
-						     && !eof && may_need_lseek)
-			{
-			    lseek(fd, crypt_get_header_len(
-					       curbuf->b_cryptstate->method_nr)
-				       - crypt_get_max_header_len(), SEEK_CUR);
-			    may_need_lseek = FALSE;
-			}
-		    }
-#endif
+#line 1358
 		    long read_size = size;
 		    size = read_eintr(fd, ptr, read_size);
-#ifdef FEAT_CRYPT
-		    // Did we reach end of file?
-		    filesize_count += size;
-		    eof = (size < read_size || filesize_count == filesize_disk);
-#endif
+#line 1365
 		}
 
-#ifdef FEAT_CRYPT
-		/*
-		 * At start of file: Check for magic number of encryption.
-		 */
-		if (filesize == 0 && size > 0)
-		{
-		    cryptkey = check_for_cryptkey(cryptkey, ptr, &size,
-						  &filesize, newfile, sfname,
-						  &did_ask_for_key);
-# if defined(CRYPT_NOT_INPLACE) && defined(FEAT_PERSISTENT_UNDO)
-		    if (curbuf->b_cryptstate != NULL
-				 && !crypt_works_inplace(curbuf->b_cryptstate))
-			// reading undo file requires crypt_decode_inplace()
-			read_undo_file = FALSE;
-# endif
-		}
-		/*
-		 * Decrypt the read bytes.  This is done before checking for
-		 * EOF because the crypt layer may be buffering.
-		 */
-		if (cryptkey != NULL && curbuf->b_cryptstate != NULL
-								   && size > 0)
-		{
-# ifdef CRYPT_NOT_INPLACE
-		    if (crypt_works_inplace(curbuf->b_cryptstate))
-		    {
-# endif
-			crypt_decode_inplace(curbuf->b_cryptstate, ptr,
-								    size, eof);
-# ifdef CRYPT_NOT_INPLACE
-		    }
-		    else
-		    {
-			char_u	*newptr = NULL;
-			int	decrypted_size;
-
-			decrypted_size = crypt_decode_alloc(
-				    curbuf->b_cryptstate, ptr, size,
-								 &newptr, eof);
-
-			if (decrypted_size < 0)
-			{
-			    // error message already given
-			    error = TRUE;
-			    vim_free(newptr);
-			    break;
-			}
-			// If the crypt layer is buffering, not producing
-			// anything yet, need to read more.
-			if (decrypted_size == 0)
-			    continue;
-
-			if (linerest == 0)
-			{
-			    // Simple case: reuse returned buffer (may be
-			    // NULL, checked later).
-			    new_buffer = newptr;
-			}
-			else
-			{
-			    long_u	new_size;
-
-			    // Need new buffer to add bytes carried over.
-			    new_size = (long_u)(decrypted_size + linerest + 1);
-			    new_buffer = lalloc(new_size, FALSE);
-			    if (new_buffer == NULL)
-			    {
-				do_outofmem_msg(new_size);
-				error = TRUE;
-				break;
-			    }
-
-			    mch_memmove(new_buffer, buffer, linerest + conv_restlen);
-			    if (newptr != NULL)
-				mch_memmove(new_buffer + linerest + conv_restlen,
-					newptr, decrypted_size);
-			    vim_free(newptr);
-			}
-
-			if (new_buffer != NULL)
-			{
-			    vim_free(buffer);
-			    buffer = new_buffer;
-			    new_buffer = NULL;
-			    line_start = buffer;
-			    ptr = buffer + linerest + conv_restlen;
-			    real_size = size;
-			}
-			size = decrypted_size;
-		    }
-# endif
-		}
-#endif
-
+#line 1461
 		if (size <= 0)
 		{
 		    if (size < 0)		    // read error
@@ -1530,11 +1350,7 @@ retry:
 	     * found.
 	     */
 	    if ((filesize == 0
-#ifdef FEAT_CRYPT
-		   || (cryptkey != NULL
-			&& filesize == crypt_get_header_len(
-						 crypt_get_method_nr(curbuf)))
-#endif
+#line 1538
 		       )
 		    && (fio_flags == FIO_UCSBOM
 			|| (!curbuf->b_p_bomb
@@ -2426,18 +2242,7 @@ failed:
     if (set_options)
 	save_file_ff(curbuf);		// remember the current file format
 
-#ifdef FEAT_CRYPT
-    if (curbuf->b_cryptstate != NULL)
-    {
-	crypt_free_state(curbuf->b_cryptstate);
-	curbuf->b_cryptstate = NULL;
-    }
-    if (cryptkey != NULL && cryptkey != curbuf->b_p_key)
-	crypt_free_key(cryptkey);
-    // Don't set cryptkey to NULL, it's used below as a flag that
-    // encryption was used.
-#endif
-
+#line 2441
     // If editing a new file: set 'fenc' for the current buffer.
     // Also for ":read ++edit file".
     if (set_options)
@@ -2487,13 +2292,9 @@ failed:
 	// need to delete the last line, which comes from the empty buffer
 	if (newfile && wasempty && !(curbuf->b_ml.ml_flags & ML_EMPTY))
 	{
-#ifdef FEAT_NETBEANS_INTG
-	    netbeansFireChanges = 0;
-#endif
+#line 2493
 	    ml_delete(curbuf->b_ml.ml_line_count);
-#ifdef FEAT_NETBEANS_INTG
-	    netbeansFireChanges = 1;
-#endif
+#line 2497
 	    --linecnt;
 	}
 	linecnt = curbuf->b_ml.ml_line_count - linecnt;
@@ -2507,11 +2308,7 @@ failed:
 	    // be updated.
 	    diff_invalidate(curbuf);
 #endif
-#ifdef FEAT_FOLDING
-	    // All folds in the window are invalid now.  Mark them for update
-	    // before triggering autocommands.
-	    foldUpdateAll(curwin);
-#endif
+#line 2515
 	}
 	else if (linecnt)		// appended at least one line
 	    appended_lines_mark(from, linecnt);
@@ -2539,9 +2336,7 @@ failed:
 		    curbuf->b_p_ro = TRUE;	// must use "w!" now
 	    }
 	    msg_scroll = msg_save;
-#ifdef FEAT_VIMINFO
-	    check_marks_read();
-#endif
+#line 2545
 	    retval = OK;	// an interrupt isn't really an error
 	    goto theend;
 	}
@@ -2611,13 +2406,7 @@ failed:
 			_("[converted]"));
 		c = TRUE;
 	    }
-#ifdef FEAT_CRYPT
-	    if (cryptkey != NULL)
-	    {
-		crypt_append_msg(curbuf);
-		c = TRUE;
-	    }
-#endif
+#line 2621
 	    if (conv_error != 0)
 	    {
 		vim_snprintf((char *)IObuff + buflen, IOSIZE - buflen,
@@ -2638,12 +2427,7 @@ failed:
 	    }
 	    if (msg_add_fileformat(fileformat))
 		c = TRUE;
-#ifdef FEAT_CRYPT
-	    if (cryptkey != NULL)
-		msg_add_lines(c, (long)linecnt, filesize
-			 - crypt_get_header_len(crypt_get_method_nr(curbuf)));
-	    else
-#endif
+#line 2647
 		msg_add_lines(c, (long)linecnt, filesize);
 
 	    VIM_CLEAR(keep_msg);
@@ -2719,13 +2503,7 @@ failed:
     }
     msg_scroll = msg_save;
 
-#ifdef FEAT_VIMINFO
-    /*
-     * Get the marks before executing autocommands, so they can be used there.
-     */
-    check_marks_read();
-#endif
-
+#line 2729
     /*
      * We remember if the last line of the read didn't have
      * an eol even when 'binary' is off, to support turning 'fixeol' off,
@@ -3011,98 +2789,7 @@ readfile_charconvert(
 }
 #endif
 
-#if defined(FEAT_CRYPT)
-/*
- * Check for magic number used for encryption.  Applies to the current buffer.
- * If found, the magic number is removed from ptr[*sizep] and *sizep and
- * *filesizep are updated.
- * Return the (new) encryption key, NULL for no encryption.
- */
-    static char_u *
-check_for_cryptkey(
-    char_u	*cryptkey,	// previous encryption key or NULL
-    char_u	*ptr,		// pointer to read bytes
-    long	*sizep,		// length of read bytes
-    off_T	*filesizep,	// nr of bytes used from file
-    int		newfile,	// editing a new buffer
-    char_u	*fname,		// file name to display
-    int		*did_ask)	// flag: whether already asked for key
-{
-    int method = crypt_method_nr_from_magic((char *)ptr, *sizep);
-    int b_p_ro = curbuf->b_p_ro;
-
-    if (method >= 0)
-    {
-	// Mark the buffer as read-only until the decryption has taken place.
-	// Avoids accidentally overwriting the file with garbage.
-	curbuf->b_p_ro = TRUE;
-
-	// Set the cryptmethod local to the buffer.
-	crypt_set_cm_option(curbuf, method);
-	if (cryptkey == NULL && !*did_ask)
-	{
-	    if (*curbuf->b_p_key)
-	    {
-		cryptkey = curbuf->b_p_key;
-		crypt_check_swapfile_curbuf();
-	    }
-	    else
-	    {
-		// When newfile is TRUE, store the typed key in the 'key'
-		// option and don't free it.  bf needs hash of the key saved.
-		// Don't ask for the key again when first time Enter was hit.
-		// Happens when retrying to detect encoding.
-		smsg(_(need_key_msg), fname);
-		msg_scroll = TRUE;
-		crypt_check_method(method);
-		cryptkey = crypt_get_key(newfile, FALSE);
-		*did_ask = TRUE;
-
-		// check if empty key entered
-		if (cryptkey != NULL && *cryptkey == NUL)
-		{
-		    if (cryptkey != curbuf->b_p_key)
-			vim_free(cryptkey);
-		    cryptkey = NULL;
-		}
-	    }
-	}
-
-	if (cryptkey != NULL)
-	{
-	    int header_len;
-
-	    header_len = crypt_get_header_len(method);
-	    if (*sizep < header_len)
-	    {
-		// invalid header, buffer can't be encrypted
-		if (cryptkey != curbuf->b_p_key)
-		    vim_free(cryptkey);
-		return NULL;
-	    }
-
-	    curbuf->b_cryptstate = crypt_create_from_header(
-							method, cryptkey, ptr);
-	    crypt_set_cm_option(curbuf, method);
-
-	    // Remove cryptmethod specific header from the text.
-	    *filesizep += header_len;
-	    *sizep -= header_len;
-	    mch_memmove(ptr, ptr + header_len, (size_t)*sizep);
-
-	    // Restore the read-only flag.
-	    curbuf->b_p_ro = b_p_ro;
-	}
-    }
-    // When starting to edit a new file which does not have encryption, clear
-    // the 'key' option, except when starting up (called with -x argument)
-    else if (newfile && *curbuf->b_p_key != NUL && !starting)
-	set_option_value_give_err((char_u *)"key", 0L, (char_u *)"", OPT_LOCAL);
-
-    return cryptkey;
-}
-#endif  // FEAT_CRYPT
-
+#line 3106
 /*
  * Return TRUE if a file appears to be read-only from the file permissions.
  */
@@ -3600,9 +3287,7 @@ shorten_fnames(int force)
 #if defined(FEAT_TABPANEL)
     redraw_tabpanel = TRUE;
 #endif
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-    popup_update_preview_title();
-#endif
+#line 3606
 }
 
 #if (defined(FEAT_DND) && defined(FEAT_GUI_GTK)) \
@@ -4262,9 +3947,7 @@ buf_check_timestamp(
 #endif
     off_T	orig_size = buf->b_orig_size;
     int		orig_mode = buf->b_orig_mode;
-#ifdef FEAT_GUI
-    int		save_mouse_correct = need_mouse_correct;
-#endif
+#line 4268
     static int	busy = FALSE;
     int		n;
     bufref_T	bufref;
@@ -4279,12 +3962,7 @@ buf_check_timestamp(
 	    || !bt_normal(buf)
 	    || buf->b_saving
 	    || busy
-#ifdef FEAT_NETBEANS_INTG
-	    || isNetbeansBuffer(buf)
-#endif
-#ifdef FEAT_TERMINAL
-	    || buf->b_term != NULL
-#endif
+#line 4288
 	    )
 	return 0;
 
@@ -4526,9 +4204,7 @@ buf_check_timestamp(
 			if (emsg_silent == 0 && !in_assert_fails)
 			{
 			    out_flush();
-#ifdef FEAT_GUI
-			    if (!focus)
-#endif
+#line 4532
 				// give the user some time to think about it
 				ui_delay(1004L, TRUE);
 
@@ -4568,11 +4244,7 @@ buf_check_timestamp(
     if (bufref_valid(&bufref) && retval != 0)
 	(void)apply_autocmds(EVENT_FILECHANGEDSHELLPOST,
 				      buf->b_fname, buf->b_fname, FALSE, buf);
-#ifdef FEAT_GUI
-    // restore this in case an autocommand has set it; it would break
-    // 'mousefocus'
-    need_mouse_correct = save_mouse_correct;
-#endif
+#line 4576
 
     return retval;
 }
@@ -4722,18 +4394,7 @@ buf_reload(buf_T *buf, int orig_mode, int reload_options)
 	check_cursor();
 	update_topline();
 	curbuf->b_keep_filetype = false;
-#ifdef FEAT_FOLDING
-	{
-	    win_T	*wp;
-	    tabpage_T	*tp;
-
-	    // Update folds unless they are defined manually.
-	    FOR_ALL_TAB_WINDOWS(tp, wp)
-		if (wp->w_buffer == curwin->w_buffer
-			&& !foldmethodIsManual(wp))
-		    foldUpdateAll(wp);
-	}
-#endif
+#line 4737
 	// If the mode didn't change and 'readonly' was set, keep the old
 	// value; the user probably used the ":view" command.  But don't
 	// reset it, might have had a read error.

@@ -49,9 +49,7 @@ typedef struct syn_pattern
     short	 sp_off_flags;		// see below
     int		 sp_offsets[SPO_COUNT];	// offsets
     int		 sp_flags;		// see HL_ defines below
-#ifdef FEAT_CONCEAL
-    int		 sp_cchar;		// conceal substitute character
-#endif
+#line 55
     int		 sp_ic;			// ignore-case flag for sp_prog
     int		 sp_sync_idx;		// sync item index (syncing only)
     int		 sp_line_id;		// ID of last line where tried
@@ -61,9 +59,7 @@ typedef struct syn_pattern
     struct sp_syn sp_syn;		// struct passed to in_id_list()
     char_u	*sp_pattern;		// regexp to match, pattern
     regprog_T	*sp_prog;		// regexp to match, program
-#ifdef FEAT_PROFILE
-    syn_time_T	 sp_time;
-#endif
+#line 67
 } synpat_T;
 
 // The sp_off_flags are computed like this:
@@ -99,11 +95,7 @@ static int current_attr = 0;	    // attr of current syntax word
 static int current_id = 0;	    // ID of current char for syn_get_id()
 static int current_trans_id = 0;    // idem, transparency removed
 #endif
-#ifdef FEAT_CONCEAL
-static int current_flags = 0;
-static int current_seqnr = 0;
-static int current_sub_char = 0;
-#endif
+#line 107
 
 typedef struct syn_cluster_S
 {
@@ -195,10 +187,7 @@ typedef struct state_item
     int		si_attr;		// attributes in this state
     long	si_flags;		// HL_HAS_EOL flag in this state, and
 					// HL_SKIP* for si_next_list
-#ifdef FEAT_CONCEAL
-    int		si_seqnr;		// sequence number
-    int		si_cchar;		// substitution character for conceal
-#endif
+#line 202
     short	*si_cont_list;		// list of contained groups
     short	*si_next_list;		// nextgroup IDs after this item ends
     reg_extmatch_T *si_extmatch;	// \z(...\) matches from start
@@ -209,10 +198,7 @@ typedef struct state_item
 #define ID_LIST_ALL	((short *)-1) // valid of si_cont_list for containing all
 				    // but contained groups
 
-#ifdef FEAT_CONCEAL
-static int next_seqnr = 1;		// value to use for si_seqnr
-#endif
-
+#line 216
 /*
  * Struct to reduce the number of arguments to get_syn_options(), it's used
  * very often.
@@ -302,16 +288,10 @@ static short *copy_id_list(short *list);
 static int in_id_list(stateitem_T *item, short *cont_list, struct sp_syn *ssp, int flags);
 static int push_current_state(int idx);
 static void pop_current_state(void);
-#ifdef FEAT_PROFILE
-static void syn_clear_time(syn_time_T *tt);
-static void syntime_clear(void);
-static void syntime_report(void);
-static int syn_time_on = FALSE;
-# define IF_SYN_TIME(p) (p)
-#else
+#line 312
 # define IF_SYN_TIME(p) NULL
 typedef int syn_time_T;
-#endif
+#line 315
 
 static void syn_stack_apply_changes_block(synblock_T *block, buf_T *buf);
 static void find_endpos(int idx, lpos_T *startpos, lpos_T *m_endpos, lpos_T *hl_endpos, long *flagsp, lpos_T *end_endpos, int *end_idx, reg_extmatch_T *start_ext);
@@ -365,10 +345,7 @@ syntax_start(win_T *wp, linenr_T lnum)
     int		dist;
     static varnumber_T changedtick = 0;	// remember the last change ID
 
-#ifdef FEAT_CONCEAL
-    current_sub_char = NUL;
-#endif
-
+#line 372
     /*
      * After switching buffers, invalidate current_state.
      * Also do this when a change was made, the current state may be invalid
@@ -913,9 +890,7 @@ syn_start_line(void)
 
     next_match_idx = -1;
     ++current_line_id;
-#ifdef FEAT_CONCEAL
-    next_seqnr = 1;
-#endif
+#line 919
 }
 
 /*
@@ -1043,20 +1018,11 @@ syn_stack_free_block(synblock_T *block)
     void
 syn_stack_free_all(synblock_T *block)
 {
-#ifdef FEAT_FOLDING
-    win_T	*wp;
-#endif
+#line 1049
 
     syn_stack_free_block(block);
 
-#ifdef FEAT_FOLDING
-    // When using "syntax" fold method, must update all folds.
-    FOR_ALL_WINDOWS(wp)
-    {
-	if (wp->w_s == block && foldmethodIsSyntax(wp))
-	    foldUpdateAll(wp);
-    }
-#endif
+#line 1060
 }
 
 /*
@@ -1409,10 +1375,7 @@ store_current_state(void)
 	{
 	    bp[i].bs_idx = CUR_STATE(i).si_idx;
 	    bp[i].bs_flags = CUR_STATE(i).si_flags;
-#ifdef FEAT_CONCEAL
-	    bp[i].bs_seqnr = CUR_STATE(i).si_seqnr;
-	    bp[i].bs_cchar = CUR_STATE(i).si_cchar;
-#endif
+#line 1416
 	    bp[i].bs_extmatch = ref_extmatch(CUR_STATE(i).si_extmatch);
 	}
 	sp->sst_next_flags = current_next_flags;
@@ -1447,10 +1410,7 @@ load_current_state(synstate_T *from)
 	{
 	    CUR_STATE(i).si_idx = bp[i].bs_idx;
 	    CUR_STATE(i).si_flags = bp[i].bs_flags;
-#ifdef FEAT_CONCEAL
-	    CUR_STATE(i).si_seqnr = bp[i].bs_seqnr;
-	    CUR_STATE(i).si_cchar = bp[i].bs_cchar;
-#endif
+#line 1454
 	    CUR_STATE(i).si_extmatch = ref_extmatch(bp[i].bs_extmatch);
 	    if (keepend_level < 0 && (CUR_STATE(i).si_flags & HL_KEEPEND))
 		keepend_level = i;
@@ -1700,10 +1660,7 @@ get_syntax_attr(
 	current_id = 0;
 	current_trans_id = 0;
 #endif
-#ifdef FEAT_CONCEAL
-	current_flags = 0;
-	current_seqnr = 0;
-#endif
+#line 1707
 	return 0;
     }
 
@@ -1873,14 +1830,7 @@ syn_current_attr(
 			cur_si->si_ends = TRUE;
 			cur_si->si_end_idx = 0;
 			cur_si->si_flags = flags;
-#ifdef FEAT_CONCEAL
-			cur_si->si_seqnr = next_seqnr++;
-			cur_si->si_cchar = cchar;
-			if (current_state.ga_len > 1)
-			    cur_si->si_flags |=
-				  CUR_STATE(current_state.ga_len - 2).si_flags
-								 & HL_CONCEAL;
-#endif
+#line 1884
 			cur_si->si_id = syn_id;
 			cur_si->si_trans_id = syn_id;
 			if (flags & HL_TRANSP)
@@ -2187,10 +2137,7 @@ syn_current_attr(
     current_id = 0;
     current_trans_id = 0;
 #endif
-#ifdef FEAT_CONCEAL
-    current_flags = 0;
-    current_seqnr = 0;
-#endif
+#line 2194
     if (cur_si != NULL)
     {
 #ifndef FEAT_EVAL
@@ -2212,11 +2159,7 @@ syn_current_attr(
 		current_id = sip->si_id;
 #endif
 		current_trans_id = sip->si_trans_id;
-#ifdef FEAT_CONCEAL
-		current_flags = sip->si_flags;
-		current_seqnr = sip->si_seqnr;
-		current_sub_char = sip->si_cchar;
-#endif
+#line 2220
 		break;
 	    }
 	}
@@ -2346,9 +2289,7 @@ did_match_already(int idx, garray_T *gap)
 push_next_match(stateitem_T *cur_si)
 {
     synpat_T	*spp;
-#ifdef FEAT_CONCEAL
-    int		 save_flags;
-#endif
+#line 2352
 
     spp = &(SYN_ITEMS(syn_block)[next_match_idx]);
 
@@ -2366,13 +2307,7 @@ push_next_match(stateitem_T *cur_si)
 	cur_si->si_m_startcol = current_col;
 	cur_si->si_m_lnum = current_lnum;
 	cur_si->si_flags = spp->sp_flags;
-#ifdef FEAT_CONCEAL
-	cur_si->si_seqnr = next_seqnr++;
-	cur_si->si_cchar = spp->sp_cchar;
-	if (current_state.ga_len > 1)
-	    cur_si->si_flags |=
-		    CUR_STATE(current_state.ga_len - 2).si_flags & HL_CONCEAL;
-#endif
+#line 2376
 	cur_si->si_next_list = spp->sp_next_list;
 	cur_si->si_extmatch = ref_extmatch(next_match_extmatch);
 	if (spp->sp_type == SPTYPE_START && !(spp->sp_flags & HL_ONELINE))
@@ -2395,9 +2330,7 @@ push_next_match(stateitem_T *cur_si)
 	check_keepend();
 	update_si_attr(current_state.ga_len - 1);
 
-#ifdef FEAT_CONCEAL
-	save_flags = cur_si->si_flags & (HL_CONCEAL | HL_CONCEALENDS);
-#endif
+#line 2401
 	/*
 	 * If the start pattern has another highlight group, push another item
 	 * on the stack for the start pattern.
@@ -2415,12 +2348,7 @@ push_next_match(stateitem_T *cur_si)
 	    cur_si->si_ends = TRUE;
 	    cur_si->si_end_idx = 0;
 	    cur_si->si_flags = HL_MATCH;
-#ifdef FEAT_CONCEAL
-	    cur_si->si_seqnr = next_seqnr++;
-	    cur_si->si_flags |= save_flags;
-	    if (cur_si->si_flags & HL_CONCEALENDS)
-		cur_si->si_flags |= HL_CONCEAL;
-#endif
+#line 2424
 	    cur_si->si_next_list = NULL;
 	    check_keepend();
 	    update_si_attr(current_state.ga_len - 1);
@@ -2465,11 +2393,7 @@ check_state_ends(void)
 		cur_si->si_m_endpos = cur_si->si_eoe_pos;
 		cur_si->si_h_endpos = cur_si->si_eoe_pos;
 		cur_si->si_flags |= HL_MATCH;
-#ifdef FEAT_CONCEAL
-		cur_si->si_seqnr = next_seqnr++;
-		if (cur_si->si_flags & HL_CONCEALENDS)
-		    cur_si->si_flags |= HL_CONCEAL;
-#endif
+#line 2473
 		update_si_attr(current_state.ga_len - 1);
 
 		// nextgroup= should not match in the end pattern
@@ -3150,12 +3074,7 @@ syn_regexec(
 {
     int		r;
     int		timed_out = FALSE;
-#ifdef FEAT_PROFILE
-    proftime_T	pt;
-
-    if (syn_time_on)
-	profile_start(&pt);
-#endif
+#line 3159
 
     if (rmp->regprog == NULL)
 	// This can happen if a previous call to vim_regexec_multi() tried to
@@ -3166,18 +3085,7 @@ syn_regexec(
     rmp->rmm_maxcol = syn_buf->b_p_smc;
     r = vim_regexec_multi(rmp, syn_win, syn_buf, lnum, col, &timed_out);
 
-#ifdef FEAT_PROFILE
-    if (syn_time_on)
-    {
-	profile_end(&pt);
-	profile_add(&st->total, &pt);
-	if (profile_cmp(&pt, &st->slowest) < 0)
-	    st->slowest = pt;
-	++st->count;
-	if (r > 0)
-	    ++st->match;
-    }
-#endif
+#line 3181
 #ifdef FEAT_RELTIME
     if (timed_out && redrawtime_limit_set && !syn_win->w_s->b_syn_slow)
     {
@@ -3274,9 +3182,7 @@ check_keyword_id(
 		    *endcolp = startcol + kwlen;
 		    *flagsp = kp->flags;
 		    *next_listp = kp->next_list;
-#ifdef FEAT_CONCEAL
-		    *ccharp = kp->k_char;
-#endif
+#line 3280
 		    return kp->k_syn.id;
 		}
 	    }
@@ -3290,29 +3196,7 @@ check_keyword_id(
     static void
 syn_cmd_conceal(exarg_T *eap UNUSED, int syncing UNUSED)
 {
-#ifdef FEAT_CONCEAL
-    char_u	*arg = eap->arg;
-    char_u	*next;
-
-    eap->nextcmd = find_nextcmd(arg);
-    if (eap->skip)
-	return;
-
-    next = skiptowhite(arg);
-    if (*arg == NUL)
-    {
-	if (curwin->w_s->b_syn_conceal)
-	    msg("syntax conceal on");
-	else
-	    msg("syntax conceal off");
-    }
-    else if (STRNICMP(arg, "on", 2) == 0 && next - arg == 2)
-	curwin->w_s->b_syn_conceal = TRUE;
-    else if (STRNICMP(arg, "off", 3) == 0 && next - arg == 3)
-	curwin->w_s->b_syn_conceal = FALSE;
-    else
-	semsg(_(e_illegal_argument_str_2), arg);
-#endif
+#line 3316
 }
 
 /*
@@ -3492,9 +3376,7 @@ syntax_clear(synblock_T *block)
     block->b_syn_foldlevel = SYNFLD_START;
     block->b_syn_spell = SYNSPL_DEFAULT; // default spell checking
     block->b_syn_containedin = FALSE;
-#ifdef FEAT_CONCEAL
-    block->b_syn_conceal = FALSE;
-#endif
+#line 3498
 
     // free the keywords
     clear_keywtab(&block->b_keywtab);
@@ -3520,9 +3402,7 @@ syntax_clear(synblock_T *block)
     vim_regfree(block->b_syn_linecont_prog);
     block->b_syn_linecont_prog = NULL;
     VIM_CLEAR(block->b_syn_linecont_pat);
-#ifdef FEAT_FOLDING
-    block->b_syn_folditems = 0;
-#endif
+#line 3526
     clear_string_option(&block->b_syn_isk);
 
     // free the stored states
@@ -3584,10 +3464,7 @@ syn_remove_pattern(
     synpat_T	*spp;
 
     spp = &(SYN_ITEMS(block)[idx]);
-#ifdef FEAT_FOLDING
-    if (spp->sp_flags & HL_FOLD)
-	--block->b_syn_folditems;
-#endif
+#line 3591
     syn_clear_pattern(block, idx);
     mch_memmove(spp, spp + 1,
 		   sizeof(synpat_T) * (block->b_syn_patterns.ga_len - idx - 1));
@@ -3968,11 +3845,7 @@ syn_list_one(
 		    KEYVALUE_ENTRY(HL_EXCLUDENL, "excludenl"),
 		    KEYVALUE_ENTRY(HL_TRANSP, "transparent"),
 		    KEYVALUE_ENTRY(HL_FOLD, "fold")
-#ifdef FEAT_CONCEAL
-		    ,
-		    KEYVALUE_ENTRY(HL_CONCEAL, "conceal"),
-		    KEYVALUE_ENTRY(HL_CONCEALENDS, "concealends")
-#endif
+#line 3976
 		};
     static keyvalue_T namelist2[] =
 		{
@@ -4530,11 +4403,7 @@ get_syn_options(
     if (arg == NULL)		// already detected error
 	return NULL;
 
-#ifdef FEAT_CONCEAL
-    if (curwin->w_s->b_syn_conceal)
-	opt->flags |= HL_CONCEAL;
-#endif
-
+#line 4538
     for (;;)
     {
 	/*
@@ -4593,26 +4462,16 @@ get_syn_options(
 	    // cchar=?
 	    if (has_mbyte)
 	    {
-#ifdef FEAT_CONCEAL
-		*conceal_char = mb_ptr2char(arg + 6);
-#endif
+#line 4599
 		arg += mb_ptr2len(arg + 6) - 1;
 	    }
 	    else
 	    {
-#ifdef FEAT_CONCEAL
-		*conceal_char = arg[6];
-#else
+#line 4606
 		;
-#endif
+#line 4608
 	    }
-#ifdef FEAT_CONCEAL
-	    if (!vim_isprintc_strict(*conceal_char))
-	    {
-		emsg(_(e_invalid_cchar_value));
-		return NULL;
-	    }
-#endif
+#line 4616
 	    arg = skipwhite(arg + 7);
 	}
 	else
@@ -4659,12 +4518,7 @@ get_syn_options(
 		vim_free(gname);
 		arg = skipwhite(arg);
 	    }
-#ifdef FEAT_FOLDING
-	    else if (flagtab[fidx].flags == HL_FOLD
-						&& foldmethodIsSyntax(curwin))
-		// Need to update folds later.
-		foldUpdateAll(curwin);
-#endif
+#line 4668
 	}
     }
 
@@ -4980,9 +4834,7 @@ syn_cmd_match(
 	    SYN_ITEMS(curwin->w_s)[idx].sp_cont_list = syn_opt_arg.cont_list;
 	    SYN_ITEMS(curwin->w_s)[idx].sp_syn.cont_in_list =
 						     syn_opt_arg.cont_in_list;
-#ifdef FEAT_CONCEAL
-	    SYN_ITEMS(curwin->w_s)[idx].sp_cchar = conceal_char;
-#endif
+#line 4986
 	    if (syn_opt_arg.cont_in_list != NULL)
 		curwin->w_s->b_syn_containedin = TRUE;
 	    SYN_ITEMS(curwin->w_s)[idx].sp_next_list = syn_opt_arg.next_list;
@@ -4991,10 +4843,7 @@ syn_cmd_match(
 	    // remember that we found a match for syncing on
 	    if (syn_opt_arg.flags & (HL_SYNC_HERE|HL_SYNC_THERE))
 		curwin->w_s->b_syn_sync_flags |= SF_MATCH;
-#ifdef FEAT_FOLDING
-	    if (syn_opt_arg.flags & HL_FOLD)
-		++curwin->w_s->b_syn_folditems;
-#endif
+#line 4998
 
 	    redraw_curbuf_later(UPD_SOME_VALID);
 	    syn_stack_free_all(curwin->w_s);	// Need to recompute all syntax.
@@ -5225,9 +5074,7 @@ syn_cmd_region(
 							  current_syn_inc_tag;
 		    SYN_ITEMS(curwin->w_s)[idx].sp_syn_match_id =
 							ppp->pp_matchgroup_id;
-#ifdef FEAT_CONCEAL
-		    SYN_ITEMS(curwin->w_s)[idx].sp_cchar = conceal_char;
-#endif
+#line 5231
 		    if (item == ITEM_START)
 		    {
 			SYN_ITEMS(curwin->w_s)[idx].sp_cont_list =
@@ -5241,10 +5088,7 @@ syn_cmd_region(
 		    }
 		    ++curwin->w_s->b_syn_patterns.ga_len;
 		    ++idx;
-#ifdef FEAT_FOLDING
-		    if (syn_opt_arg.flags & HL_FOLD)
-			++curwin->w_s->b_syn_folditems;
-#endif
+#line 5248
 		}
 	    }
 
@@ -5657,9 +5501,7 @@ get_syn_pattern(char_u *arg, synpat_T *ci)
     if (ci->sp_prog == NULL)
 	return NULL;
     ci->sp_ic = curwin->w_s->b_syn_ic;
-#ifdef FEAT_PROFILE
-    syn_clear_time(&ci->sp_time);
-#endif
+#line 5663
 
     /*
      * Check for a match, highlight or region offset.
@@ -5842,9 +5684,7 @@ syn_cmd_sync(exarg_T *eap, int syncing UNUSED)
 		curwin->w_s->b_syn_linecont_prog =
 		       vim_regcomp(curwin->w_s->b_syn_linecont_pat, RE_MAGIC);
 		p_cpo = cpo_save;
-#ifdef FEAT_PROFILE
-		syn_clear_time(&curwin->w_s->b_syn_linecont_time);
-#endif
+#line 5848
 
 		if (curwin->w_s->b_syn_linecont_prog == NULL)
 		{
@@ -6306,15 +6146,7 @@ ex_ownsyntax(exarg_T *eap)
 	CLEAR_POINTER(curwin->w_s);
 	hash_init(&curwin->w_s->b_keywtab);
 	hash_init(&curwin->w_s->b_keywtab_ic);
-#ifdef FEAT_SPELL
-	// TODO: keep the spell checking as it was.
-	curwin->w_p_spell = FALSE;	// No spell checking
-	// make sure option values are "empty_option" instead of NULL
-	clear_string_option(&curwin->w_s->b_p_spc);
-	clear_string_option(&curwin->w_s->b_p_spf);
-	clear_string_option(&curwin->w_s->b_p_spl);
-	clear_string_option(&curwin->w_s->b_p_spo);
-#endif
+#line 6318
 	clear_string_option(&curwin->w_s->b_syn_isk);
     }
 
@@ -6511,30 +6343,7 @@ syn_get_id(
     return (trans ? current_trans_id : current_id);
 }
 
-#if defined(FEAT_CONCEAL)
-/*
- * Get extra information about the syntax item.  Must be called right after
- * get_syntax_attr().
- * Stores the current item sequence nr in "*seqnrp".
- * Returns the current flags.
- */
-    int
-get_syntax_info(int *seqnrp)
-{
-    *seqnrp = current_seqnr;
-    return current_flags;
-}
-
-/*
- * Return conceal substitution character
- */
-    int
-syn_get_sub_char(void)
-{
-    return current_sub_char;
-}
-#endif
-
+#line 6538
 #if defined(FEAT_EVAL)
 /*
  * Return the syntax ID at position "i" in the current stack.
@@ -6556,255 +6365,5 @@ syn_get_stack_item(int i)
 }
 #endif
 
-#if defined(FEAT_FOLDING)
-    static int
-syn_cur_foldlevel(void)
-{
-    int		level = 0;
-    int		i;
-
-    for (i = 0; i < current_state.ga_len; ++i)
-	if (CUR_STATE(i).si_flags & HL_FOLD)
-	    ++level;
-    return level;
-}
-
-/*
- * Function called to get folding level for line "lnum" in window "wp".
- */
-    int
-syn_get_foldlevel(win_T *wp, long lnum)
-{
-    int		level = 0;
-    int		low_level;
-    int		cur_level;
-
-    // Return quickly when there are no fold items at all.
-    if (wp->w_s->b_syn_folditems != 0
-	    && !wp->w_s->b_syn_error
-# ifdef SYN_TIME_LIMIT
-	    && !wp->w_s->b_syn_slow
-# endif
-	    )
-    {
-	syntax_start(wp, lnum);
-
-	// Start with the fold level at the start of the line.
-	level = syn_cur_foldlevel();
-
-	if (wp->w_s->b_syn_foldlevel == SYNFLD_MINIMUM)
-	{
-	    // Find the lowest fold level that is followed by a higher one.
-	    cur_level = level;
-	    low_level = cur_level;
-	    while (!current_finished)
-	    {
-		(void)syn_current_attr(FALSE, FALSE, NULL, FALSE);
-		cur_level = syn_cur_foldlevel();
-		if (cur_level < low_level)
-		    low_level = cur_level;
-		else if (cur_level > low_level)
-		    level = low_level;
-		++current_col;
-	    }
-	}
-    }
-    if (level > wp->w_p_fdn)
-    {
-	level = wp->w_p_fdn;
-	if (level < 0)
-	    level = 0;
-    }
-    return level;
-}
-#endif
-
-#if defined(FEAT_PROFILE)
-/*
- * ":syntime".
- */
-    void
-ex_syntime(exarg_T *eap)
-{
-    if (STRCMP(eap->arg, "on") == 0)
-	syn_time_on = TRUE;
-    else if (STRCMP(eap->arg, "off") == 0)
-	syn_time_on = FALSE;
-    else if (STRCMP(eap->arg, "clear") == 0)
-	syntime_clear();
-    else if (STRCMP(eap->arg, "report") == 0)
-	syntime_report();
-    else
-	semsg(_(e_invalid_argument_str), eap->arg);
-}
-
-    static void
-syn_clear_time(syn_time_T *st)
-{
-    profile_zero(&st->total);
-    profile_zero(&st->slowest);
-    st->count = 0;
-    st->match = 0;
-}
-
-/*
- * Clear the syntax timing for the current buffer.
- */
-    static void
-syntime_clear(void)
-{
-    int		idx;
-    synpat_T	*spp;
-
-    if (!syntax_present(curwin))
-    {
-	msg(_(msg_no_items));
-	return;
-    }
-    for (idx = 0; idx < curwin->w_s->b_syn_patterns.ga_len; ++idx)
-    {
-	spp = &(SYN_ITEMS(curwin->w_s)[idx]);
-	syn_clear_time(&spp->sp_time);
-    }
-}
-
-/*
- * Function given to ExpandGeneric() to obtain the possible arguments of the
- * ":syntime {on,off,clear,report}" command.
- */
-    char_u *
-get_syntime_arg(expand_T *xp UNUSED, int idx)
-{
-    switch (idx)
-    {
-	case 0: return (char_u *)"on";
-	case 1: return (char_u *)"off";
-	case 2: return (char_u *)"clear";
-	case 3: return (char_u *)"report";
-    }
-    return NULL;
-}
-
-typedef struct
-{
-    proftime_T	total;
-    int		count;
-    int		match;
-    proftime_T	slowest;
-    proftime_T	average;
-    int		id;
-    char_u	*pattern;
-} time_entry_T;
-
-    static int
-syn_compare_syntime(const void *v1, const void *v2)
-{
-    const time_entry_T	*s1 = v1;
-    const time_entry_T	*s2 = v2;
-
-    return profile_cmp(&s1->total, &s2->total);
-}
-
-/*
- * Clear the syntax timing for the current buffer.
- */
-    static void
-syntime_report(void)
-{
-    int		idx;
-    synpat_T	*spp;
-# if defined(FEAT_RELTIME)
-    proftime_T	tm;
-# endif
-    int		len;
-    int		patlen;
-    proftime_T	total_total;
-    int		total_count = 0;
-    garray_T    ga;
-    time_entry_T *p;
-
-    if (!syntax_present(curwin))
-    {
-	msg(_(msg_no_items));
-	return;
-    }
-
-    ga_init2(&ga, sizeof(time_entry_T), 50);
-    profile_zero(&total_total);
-    for (idx = 0; idx < curwin->w_s->b_syn_patterns.ga_len; ++idx)
-    {
-	spp = &(SYN_ITEMS(curwin->w_s)[idx]);
-	if (spp->sp_time.count > 0)
-	{
-	    (void)ga_grow(&ga, 1);
-	    p = ((time_entry_T *)ga.ga_data) + ga.ga_len;
-	    p->total = spp->sp_time.total;
-	    profile_add(&total_total, &spp->sp_time.total);
-	    p->count = spp->sp_time.count;
-	    p->match = spp->sp_time.match;
-	    total_count += spp->sp_time.count;
-	    p->slowest = spp->sp_time.slowest;
-# if defined(FEAT_RELTIME)
-	    profile_divide(&spp->sp_time.total, spp->sp_time.count, &tm);
-	    p->average = tm;
-# endif
-	    p->id = spp->sp_syn.id;
-	    p->pattern = spp->sp_pattern;
-	    ++ga.ga_len;
-	}
-    }
-
-    // Sort on total time. Skip if there are no items to avoid passing NULL
-    // pointer to qsort().
-    if (ga.ga_len > 1)
-	qsort(ga.ga_data, (size_t)ga.ga_len, sizeof(time_entry_T),
-							 syn_compare_syntime);
-
-    msg_puts_title(_("  TOTAL      COUNT  MATCH   SLOWEST     AVERAGE   NAME               PATTERN"));
-    msg_puts("\n");
-    for (idx = 0; idx < ga.ga_len && !got_int; ++idx)
-    {
-	p = ((time_entry_T *)ga.ga_data) + idx;
-
-	msg_puts(profile_msg(&p->total));
-	msg_puts(" "); // make sure there is always a separating space
-	msg_advance(13);
-	msg_outnum(p->count);
-	msg_puts(" ");
-	msg_advance(20);
-	msg_outnum(p->match);
-	msg_puts(" ");
-	msg_advance(26);
-	msg_puts(profile_msg(&p->slowest));
-	msg_puts(" ");
-	msg_advance(38);
-	msg_puts(profile_msg(&p->average));
-	msg_puts(" ");
-	msg_advance(50);
-	msg_outtrans(highlight_group_name(p->id - 1));
-	msg_puts(" ");
-
-	msg_advance(69);
-	if (Columns < 80)
-	    len = 20; // will wrap anyway
-	else
-	    len = Columns - 70;
-	patlen = (int)STRLEN(p->pattern);
-	if (len > patlen)
-	    len = patlen;
-	msg_outtrans_len(p->pattern, len);
-	msg_puts("\n");
-    }
-    ga_clear(&ga);
-    if (!got_int)
-    {
-	msg_puts("\n");
-	msg_puts(profile_msg(&total_total));
-	msg_advance(13);
-	msg_outnum(total_count);
-	msg_puts("\n");
-    }
-}
-#endif
-
+#line 6810
 #endif // FEAT_SYN_HL
