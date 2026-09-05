@@ -1097,7 +1097,8 @@ static int extract_or_test_entry(ZContext* ctx,
             int dir_rc = zu_extract_ensure_dir(dir_path);
             if (dir_rc == ZU_STATUS_OK) {
                 if (ef.has_uid || ef.has_gid) {
-                    (void)lchown(dir_path, ef.has_uid ? (uid_t)ef.uid : (uid_t)-1, ef.has_gid ? (gid_t)ef.gid : (gid_t)-1);
+                    int owner_rc = lchown(dir_path, ef.has_uid ? (uid_t)ef.uid : (uid_t)-1, ef.has_gid ? (gid_t)ef.gid : (gid_t)-1);
+                    (void)owner_rc; /* Ownership restoration is best-effort. */
                 }
                 if (ctx->d_flag == 0) {
                     time_t mtime = ef.has_mtime ? ef.mtime : dos_to_unix_time(hdr->mod_date, hdr->mod_time);
@@ -1501,7 +1502,8 @@ static int extract_or_test_entry(ZContext* ctx,
 
         if (rc == ZU_STATUS_OK) {
             if (ef.has_uid || ef.has_gid) {
-                (void)lchown(out_path, ef.has_uid ? (uid_t)ef.uid : (uid_t)-1, ef.has_gid ? (gid_t)ef.gid : (gid_t)-1);
+                int owner_rc = lchown(out_path, ef.has_uid ? (uid_t)ef.uid : (uid_t)-1, ef.has_gid ? (gid_t)ef.gid : (gid_t)-1);
+                (void)owner_rc; /* Ownership restoration is best-effort. */
             }
 
             mode_t mode = (mode_t)((hdr->ext_attr >> 16) & 0xffff);
