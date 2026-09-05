@@ -123,32 +123,9 @@
 // Returns empty string if it is NULL.
 #define EMPTY_IF_NULL(x) ((x) ? (x) : (char_u *)"")
 
-#ifdef FEAT_LANGMAP
-/*
- * Adjust chars in a language according to 'langmap' option.
- * NOTE that there is no noticeable overhead if 'langmap' is not set.
- * When set the overhead for characters < 256 is small.
- * Don't apply 'langmap' if the character comes from the Stuff buffer or from
- * a mapping and the langnoremap option was set.
- * The do-while is just to ignore a ';' after the macro.
- */
-# define LANGMAP_ADJUST(c, condition) \
-    do { \
-	if (*p_langmap \
-		&& (condition) \
-		&& (p_lrm || (!p_lrm && KeyTyped)) \
-		&& !KeyStuffed \
-		&& (c) >= 0) \
-	{ \
-	    if ((c) < 256) \
-		c = langmap_mapchar[c]; \
-	    else \
-		c = langmap_adjust_mb(c); \
-	} \
-    } while (0)
-#else
+#line 150
 # define LANGMAP_ADJUST(c, condition) // nop
-#endif
+#line 152
 
 /*
  * VIM_ISBREAK() is used very often if 'linebreak' is set, use a macro to make
@@ -281,10 +258,7 @@
 # define PLINES_WIN_NOFILL(w, l, h) plines_win((w), (l), (h))
 #endif
 
-#if defined(FEAT_JOB_CHANNEL) || defined(FEAT_CLIENTSERVER)
-# define MESSAGE_QUEUE
-#endif
-
+#line 288
 #include <float.h>
 #if defined(HAVE_MATH_H)
   // for isnan() and isinf()
@@ -347,13 +321,10 @@
 /*
  * Flush control functions.
  */
-#ifdef FEAT_GUI
-# define mch_enable_flush()	gui_enable_flush()
-# define mch_disable_flush()	gui_disable_flush()
-#else
+#line 354
 # define mch_enable_flush()
 # define mch_disable_flush()
-#endif
+#line 357
 
 /*
  * Like vim_free(), and also set the pointer to NULL.
@@ -386,20 +357,13 @@
 #define IS_USER_CMDIDX(idx) ((int)(idx) < 0)
 
 // Give an error in curwin is a popup window and evaluate to TRUE.
-#ifdef FEAT_PROP_POPUP
-# define WIN_IS_POPUP(wp) ((wp)->w_popup_flags != 0)
-# define ERROR_IF_POPUP_WINDOW error_if_popup_window(FALSE)
-# define ERROR_IF_ANY_POPUP_WINDOW error_if_popup_window(TRUE)
-#else
+#line 394
 # define WIN_IS_POPUP(wp) 0
 # define ERROR_IF_POPUP_WINDOW 0
 # define ERROR_IF_ANY_POPUP_WINDOW 0
-#endif
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_TERMINAL)
-# define ERROR_IF_TERM_POPUP_WINDOW error_if_term_popup_window()
-#else
+#line 401
 # define ERROR_IF_TERM_POPUP_WINDOW 0
-#endif
+#line 403
 
 
 #ifdef ABORT_ON_INTERNAL_ERROR
@@ -445,13 +409,7 @@
 // Length of the array.
 #define ARRAY_LENGTH(a) (sizeof(a) / sizeof((a)[0]))
 
-#ifdef FEAT_MENU
-# define FOR_ALL_MENUS(m) \
-    for ((m) = root_menu; (m) != NULL; (m) = (m)->next)
-# define FOR_ALL_CHILD_MENUS(p, c) \
-    for ((c) = (p)->children; (c) != NULL; (c) = (c)->next)
-#endif
-
+#line 455
 #define FOR_ALL_WINDOWS(wp) \
     for ((wp) = firstwin; (wp) != NULL; (wp) = (wp)->w_next)
 #define FOR_ALL_FRAMES(frp, first_frame) \
@@ -485,11 +443,7 @@
 #define FOR_ALL_SIGNS_IN_BUF(buf, sign) \
     for ((sign) = (buf)->b_signlist; (sign) != NULL; (sign) = (sign)->se_next)
 
-#ifdef FEAT_SPELL
-# define FOR_ALL_SPELL_LANGS(slang) \
-    for ((slang) = first_lang; (slang) != NULL; (slang) = (slang)->sl_next)
-#endif
-
+#line 493
 // Iterate over all the items in a List
 #define FOR_ALL_LIST_ITEMS(l, li) \
     for ((li) = (l) == NULL ? NULL : (l)->lv_first; (li) != NULL; (li) = (li)->li_next)

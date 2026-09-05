@@ -84,10 +84,7 @@ typedef int			scid_T;		// script ID
 typedef struct file_buffer	buf_T;		// forward declaration
 typedef struct terminal_S	term_T;
 
-#ifdef FEAT_MENU
-typedef struct VimMenu vimmenu_T;
-#endif
-
+#line 91
 // maximum value for sc_version
 #define SCRIPT_VERSION_MAX 4
 // value for sc_version in a Vim9 script file
@@ -131,27 +128,15 @@ typedef struct {
  * This is here because gui.h needs the pos_T and win_T, and win_T needs gui.h
  * for scrollbar_T.
  */
-#ifdef FEAT_GUI
-# include "gui.h"
-#else
-# ifdef FEAT_XCLIPBOARD
-#  include <X11/Intrinsic.h>
-# endif
+#line 140
 # define guicolor_T long
 # define INVALCOLOR ((guicolor_T)0x1ffffff)
     // only used for cterm.bg_rgb and cterm.fg_rgb: use cterm color
 # define CTERMCOLOR ((guicolor_T)0x1fffffe)
-#endif
+#line 145
 #define COLOR_INVALID(x) ((x) == INVALCOLOR || (x) == CTERMCOLOR)
 
-#ifdef FEAT_TERMINAL
-# include "libvterm/include/vterm.h"
-typedef struct {
-    VTermColor	fg;
-    VTermColor	bg;
-} termcellcolor_T;
-#endif
-
+#line 155
 /*
  * marks: positions in a file
  * (a normal mark is a lnum/col pair, the same as a file position)
@@ -173,9 +158,7 @@ typedef struct xfilemark
 {
     fmark_T	fmark;
     char_u	*fname;		// file name, used when fnum == 0
-#ifdef FEAT_VIMINFO
-    time_T	time_set;
-#endif
+#line 179
 } xfmark_T;
 
 /*
@@ -215,38 +198,7 @@ typedef struct
 #endif
     char_u	*wo_eiw;
 #define w_p_eiw w_onebuf_opt.wo_eiw	// 'eventignorewin'
-#ifdef FEAT_FOLDING
-    long	wo_fdc;
-# define w_p_fdc w_onebuf_opt.wo_fdc	// 'foldcolumn'
-    int		wo_fdc_save;
-# define w_p_fdc_save w_onebuf_opt.wo_fdc_save	// 'foldenable' saved for diff mode
-    int		wo_fen;
-# define w_p_fen w_onebuf_opt.wo_fen	// 'foldenable'
-    int		wo_fen_save;
-# define w_p_fen_save w_onebuf_opt.wo_fen_save	// 'foldenable' saved for diff mode
-    char_u	*wo_fdi;
-# define w_p_fdi w_onebuf_opt.wo_fdi	// 'foldignore'
-    long	wo_fdl;
-# define w_p_fdl w_onebuf_opt.wo_fdl	// 'foldlevel'
-    int		wo_fdl_save;
-# define w_p_fdl_save w_onebuf_opt.wo_fdl_save	// 'foldlevel' state saved for diff mode
-    char_u	*wo_fdm;
-# define w_p_fdm w_onebuf_opt.wo_fdm	// 'foldmethod'
-    char_u	*wo_fdm_save;
-# define w_p_fdm_save w_onebuf_opt.wo_fdm_save	// 'fdm' saved for diff mode
-    long	wo_fml;
-# define w_p_fml w_onebuf_opt.wo_fml	// 'foldminlines'
-    long	wo_fdn;
-# define w_p_fdn w_onebuf_opt.wo_fdn	// 'foldnestmax'
-# ifdef FEAT_EVAL
-    char_u	*wo_fde;
-#  define w_p_fde w_onebuf_opt.wo_fde	// 'foldexpr'
-    char_u	*wo_fdt;
-#  define w_p_fdt w_onebuf_opt.wo_fdt	// 'foldtext'
-# endif
-    char_u	*wo_fmr;
-# define w_p_fmr w_onebuf_opt.wo_fmr	// 'foldmarker'
-#endif
+#line 250
 #ifdef FEAT_LINEBREAK
     int		wo_lbr;
 # define w_p_lbr w_onebuf_opt.wo_lbr	// 'linebreak'
@@ -291,10 +243,7 @@ typedef struct
 #define w_p_scr w_onebuf_opt.wo_scr	// 'scroll'
     int		wo_sms;
 #define w_p_sms w_onebuf_opt.wo_sms	// 'smoothscroll'
-#ifdef FEAT_SPELL
-    int		wo_spell;
-# define w_p_spell w_onebuf_opt.wo_spell // 'spell'
-#endif
+#line 298
 #if defined(FEAT_SYN_HL) || defined(FEAT_FOLDING) || defined(FEAT_DIFF)
     int		wo_cuc;
 # define w_p_cuc w_onebuf_opt.wo_cuc	// 'cursorcolumn'
@@ -331,12 +280,7 @@ typedef struct
     int		wo_wrap_save;	// 'wrap' state saved for diff mode
 # define w_p_wrap_save w_onebuf_opt.wo_wrap_save
 #endif
-#ifdef FEAT_CONCEAL
-    char_u	*wo_cocu;		// 'concealcursor'
-# define w_p_cocu w_onebuf_opt.wo_cocu
-    long	wo_cole;		// 'conceallevel'
-# define w_p_cole w_onebuf_opt.wo_cole
-#endif
+#line 340
     int		wo_crb;
 #define w_p_crb w_onebuf_opt.wo_crb	// 'cursorbind'
     int		wo_crb_save;	// 'cursorbind' state saved for diff mode
@@ -351,12 +295,7 @@ typedef struct
 #define w_p_so w_onebuf_opt.wo_so	// 'scrolloff' local value
     long	wo_sop;
 #define w_p_sop w_onebuf_opt.wo_sop  // 'scrolloffpad' local value
-#ifdef FEAT_TERMINAL
-    char_u	*wo_twk;
-# define w_p_twk w_onebuf_opt.wo_twk	// 'termwinkey'
-    char_u	*wo_tws;
-# define w_p_tws w_onebuf_opt.wo_tws	// 'termwinsize'
-#endif
+#line 360
 
     // A few options have local flags for P_INSECURE.
     long_u	wo_wrap_flags;		// flags for 'wrap'
@@ -398,10 +337,7 @@ struct wininfo_S
     pos_T	wi_fpos;	// last cursor position in the file
     winopt_T	wi_opt;		// local window options
     int		wi_optset;	// TRUE when wi_opt has useful values
-#ifdef FEAT_FOLDING
-    int		wi_fold_manual;	// copy of w_fold_manual
-    garray_T	wi_folds;	// clone of w_folds
-#endif
+#line 405
     int		wi_changelistidx; // copy of w_changelistidx
 };
 
@@ -807,16 +743,7 @@ struct memfile
     blocknr_T	mf_infile_count;	// number of pages in the file
     unsigned	mf_page_size;		// number of bytes in a page
     mfdirty_T	mf_dirty;
-#ifdef FEAT_CRYPT
-    buf_T	*mf_buffer;		// buffer this memfile is for
-    char_u	mf_seed[MF_SEED_LEN];	// seed for encryption
-
-    // Values for key, method and seed used for reading data blocks when
-    // updating for a newly set key or method. Only when mf_old_key != NULL.
-    char_u	*mf_old_key;
-    int		mf_old_cm;
-    char_u	mf_old_seed[MF_SEED_LEN];
-#endif
+#line 820
 };
 
 /*
@@ -1246,10 +1173,7 @@ typedef struct buf_state
 {
     int		    bs_idx;	 // index of pattern
     int		    bs_flags;	 // flags for pattern
-# ifdef FEAT_CONCEAL
-    int		    bs_seqnr;	 // stores si_seqnr
-    int		    bs_cchar;	 // stores si_cchar
-# endif
+#line 1253
     reg_extmatch_T *bs_extmatch; // external matches from start pattern
 } bufstate_T;
 
@@ -1306,18 +1230,7 @@ typedef struct attr_entry
 	    guicolor_T	    ul_rgb;	// underline color RGB
 #endif
 	} cterm;
-#ifdef FEAT_GUI
-	struct
-	{
-	    guicolor_T	    fg_color;	// foreground color handle
-	    guicolor_T	    bg_color;	// background color handle
-	    guicolor_T	    sp_color;	// special color handle
-	    GuiFont	    font;	// font handle
-# ifdef FEAT_XFONTSET
-	    GuiFontset	    fontset;	// fontset handle
-# endif
-	} gui;
-#endif
+#line 1321
     } ae_u;
 } attrentry_T;
 
@@ -1777,10 +1690,7 @@ struct typval_S
 	list_T		*v_list;	// list value (can be NULL)
 	dict_T		*v_dict;	// dict value (can be NULL)
 	partial_T	*v_partial;	// closure: function with args
-#ifdef FEAT_JOB_CHANNEL
-	job_T		*v_job;		// job value (can be NULL)
-	channel_T	*v_channel;	// channel value (can be NULL)
-#endif
+#line 1784
 	blob_T		*v_blob;	// blob value (can be NULL)
 	instr_T		*v_instr;	// instructions to execute
 	class_T		*v_class;	// class value (can be NULL)
@@ -2068,25 +1978,7 @@ struct ufunc_S
 				// function.
     int		uf_has_breakpoint;  // TRUE when a breakpoint has been set in
 				    // this function.
-# ifdef FEAT_PROFILE
-    int		uf_profiling;	// TRUE when func is being profiled
-    int		uf_prof_initialized;
-    hash_T	uf_hash;	// hash for uf_name when profiling
-    // profiling the function as a whole
-    int		uf_tm_count;	// nr of calls
-    proftime_T	uf_tm_total;	// time spent in function + children
-    proftime_T	uf_tm_self;	// time spent in function itself
-    proftime_T	uf_tm_children;	// time spent in children this call
-    // profiling the function per line
-    int		*uf_tml_count;	// nr of times line was executed
-    proftime_T	*uf_tml_total;	// time spent in a line + children
-    proftime_T	*uf_tml_self;	// time spent in a line itself
-    proftime_T	uf_tml_start;	// start time for current line
-    proftime_T	uf_tml_children; // time spent in children for this line
-    proftime_T	uf_tml_wait;	// start wait time for current line
-    int		uf_tml_idx;	// index of line being timed; -1 if none
-    int		uf_tml_execed;	// line being timed was executed
-# endif
+#line 2090
     sctx_T	uf_script_ctx;	// SCTX where function was defined,
 				// used for s: variables; sc_version changed
 				// for :function
@@ -2161,9 +2053,7 @@ struct funccall_S
     ectx_T	*fc_ectx;	// execution context for :def function, NULL
 				// otherwise
 
-# ifdef FEAT_PROFILE
-    proftime_T	fc_prof_child;	// time spent in a child
-# endif
+#line 2167
     funccall_T	*fc_caller;	// calling function or NULL; or next funccal in
 				// list pointed to by previous_funccal.
 
@@ -2317,25 +2207,7 @@ typedef struct
     // For "../autoload/script.vim" sn_autoload_prefix is also set.
     int		sn_import_autoload;
 
-# ifdef FEAT_PROFILE
-    int		sn_prof_on;	// TRUE when script is/was profiled
-    int		sn_pr_force;	// forceit: profile functions in this script
-    proftime_T	sn_pr_child;	// time set when going into first child
-    int		sn_pr_nest;	// nesting for sn_pr_child
-    // profiling the script as a whole
-    int		sn_pr_count;	// nr of times sourced
-    proftime_T	sn_pr_total;	// time spent in script + children
-    proftime_T	sn_pr_self;	// time spent in script itself
-    proftime_T	sn_pr_start;	// time at script start
-    proftime_T	sn_pr_children; // time in children after script start
-    // profiling the script per line
-    garray_T	sn_prl_ga;	// things stored for every line
-    proftime_T	sn_prl_start;	// start time for current line
-    proftime_T	sn_prl_children; // time spent in children for this line
-    proftime_T	sn_prl_wait;	// wait start time for current line
-    int		sn_prl_idx;	// index of line being timed; -1 if none
-    int		sn_prl_execed;	// line being timed was executed
-# endif
+#line 2339
 } scriptitem_T;
 
 # define SN_STATE_NEW		0   // newly loaded script, nothing done
@@ -2385,31 +2257,12 @@ typedef struct {
 // Flag for expression evaluation.
 # define EVAL_EVALUATE	    1	    // when missing don't actually evaluate
 
-# ifdef FEAT_PROFILE
-/*
- * Struct used in sn_prl_ga for every line of a script.
- */
-typedef struct sn_prl_S
-{
-    int		snp_count;	// nr of times line was executed
-    proftime_T	sn_prl_total;	// time spent in a line + children
-    proftime_T	sn_prl_self;	// time spent in a line itself
-} sn_prl_T;
-
-#  define PRL_ITEM(si, idx)	(((sn_prl_T *)(si)->sn_prl_ga.ga_data)[(idx)])
-
-typedef struct {
-    int		pi_started_profiling;
-    proftime_T	pi_wait_start;
-    proftime_T	pi_call_start;
-} profinfo_T;
-
-# else
+#line 2408
 typedef struct
 {
     int	    dummy;
 } profinfo_T;
-# endif
+#line 2413
 #else
 // dummy typedefs for use in function prototypes
 struct ufunc_S
@@ -2710,14 +2563,7 @@ typedef enum {
 typedef enum {
     PART_SOCK = 0,
 #define CH_SOCK_FD	CH_PART_FD(PART_SOCK)
-#ifdef FEAT_JOB_CHANNEL
-    PART_OUT,
-# define CH_OUT_FD	CH_PART_FD(PART_OUT)
-    PART_ERR,
-# define CH_ERR_FD	CH_PART_FD(PART_ERR)
-    PART_IN,
-# define CH_IN_FD	CH_PART_FD(PART_IN)
-#endif
+#line 2721
     PART_COUNT,
 } ch_part_T;
 
@@ -2734,9 +2580,7 @@ typedef struct {
 #ifdef FEAT_GUI_X11
     XtInputId	ch_inputHandler; // Cookie for input
 #endif
-#ifdef FEAT_GUI_GTK
-    gint	ch_inputHandler; // Cookie for input
-#endif
+#line 2740
 
     ch_mode_T	ch_mode;
     job_io_T	ch_io;
@@ -2932,33 +2776,7 @@ typedef struct
     char_u	jo_cwd_buf[NUMBUFLEN];
     char_u	*jo_cwd;
 
-#ifdef FEAT_TERMINAL
-    // when non-zero run the job in a terminal window of this size
-    int		jo_term_rows;
-    int		jo_term_cols;
-    int		jo_vertical;
-    int		jo_curwin;
-    buf_T	*jo_bufnr_buf;
-    int		jo_hidden;
-    int		jo_term_norestore;
-    char_u	jo_term_name_buf[NUMBUFLEN];
-    char_u	*jo_term_name;
-    char_u	jo_term_opencmd_buf[NUMBUFLEN];
-    char_u	*jo_term_opencmd;
-    int		jo_term_finish;
-    char_u	jo_eof_chars_buf[NUMBUFLEN];
-    char_u	*jo_eof_chars;
-    char_u	jo_term_kill_buf[NUMBUFLEN];
-    char_u	*jo_term_kill;
-# if defined(FEAT_GUI) || defined(FEAT_TERMGUICOLORS)
-    long_u	jo_ansi_colors[16];
-# endif
-    char_u	jo_term_highlight_buf[NUMBUFLEN];
-    char_u	*jo_term_highlight;
-    int		jo_tty_type;	    // first character of "tty_type"
-    char_u	jo_term_api_buf[NUMBUFLEN];
-    char_u	*jo_term_api;
-#endif
+#line 2962
 } jobopt_T;
 
 #ifdef FEAT_EVAL
@@ -3034,102 +2852,21 @@ typedef struct
 #define SYNFLD_MINIMUM	1	// use lowest local minimum level on line
 
 // avoid #ifdefs for when b_spell is not available
-#ifdef FEAT_SPELL
-# define B_SPELL(buf)  ((buf)->b_spell)
-#else
+#line 3040
 # define B_SPELL(buf)  (0)
-#endif
+#line 3042
 
 typedef struct qf_info_S qf_info_T;
 
-#ifdef FEAT_PROFILE
-/*
- * Used for :syntime: timing of executing a syntax pattern.
- */
-typedef struct {
-    proftime_T	total;		// total time used
-    proftime_T	slowest;	// time of slowest call
-    long	count;		// nr of times used
-    long	match;		// nr of times matched
-} syn_time_T;
-#endif
-
+#line 3057
 typedef struct timer_S timer_T;
 struct timer_S
 {
     long	tr_id;
-#ifdef FEAT_TIMERS
-    timer_T	*tr_next;
-    timer_T	*tr_prev;
-    proftime_T	tr_due;		    // when the callback is to be invoked
-    char	tr_firing;	    // when TRUE callback is being called
-    char	tr_paused;	    // when TRUE callback is not invoked
-    char	tr_keep;	    // when TRUE keep timer after it fired
-    int		tr_repeat;	    // number of times to repeat, -1 forever
-    long	tr_interval;	    // msec
-    callback_T	tr_callback;
-    int		tr_emsg_count;
-#endif
+#line 3073
 };
 
-#ifdef FEAT_CRYPT
-/*
- * Structure to hold the type of encryption and the state of encryption or
- * decryption.
- */
-typedef struct {
-    int	    method_nr;
-    void    *method_state;  // method-specific state information
-} cryptstate_T;
-
-// values for method_nr
-# define CRYPT_M_ZIP	0
-# define CRYPT_M_BF	1
-# define CRYPT_M_BF2	2
-# define CRYPT_M_SOD    3
-# define CRYPT_M_SOD2   4
-# define CRYPT_M_COUNT	5 // number of crypt methods
-
-// Currently all crypt methods work inplace.  If one is added that isn't then
-// define this.
-# define CRYPT_NOT_INPLACE 1
-
-// Struct for passing arguments down to the crypt_init functions
-typedef struct {
-    char_u	*cat_salt;
-    int		cat_salt_len;
-    char_u	*cat_seed;
-    int		cat_seed_len;
-    char_u	*cat_add;
-    int		cat_add_len;
-    int		cat_init_from_file;
-} crypt_arg_T;
-
-#endif
-
-#ifdef FEAT_PROP_POPUP
-typedef enum {
-    POPPOS_BOTLEFT,
-    POPPOS_TOPLEFT,
-    POPPOS_BOTRIGHT,
-    POPPOS_TOPRIGHT,
-    POPPOS_CENTER,
-    POPPOS_BOTTOM,	// bottom of popup just above the command line
-    POPPOS_NONE
-} poppos_T;
-
-typedef enum {
-    POPCLOSE_NONE,
-    POPCLOSE_BUTTON,
-    POPCLOSE_CLICK
-} popclose_T;
-
-# define POPUPWIN_DEFAULT_ZINDEX	 50
-# define POPUPMENU_ZINDEX		100
-# define POPUPWIN_DIALOG_ZINDEX		200
-# define POPUPWIN_NOTIFICATION_ZINDEX   300
-#endif
-
+#line 3133
 /*
  * These are items normally related to a buffer.  But when using ":ownsyntax"
  * a window may have its own instance.
@@ -3158,18 +2895,10 @@ typedef struct {
     long	b_syn_sync_linebreaks;	// offset for multi-line pattern
     char_u	*b_syn_linecont_pat;	// line continuation pattern
     regprog_T	*b_syn_linecont_prog;	// line continuation program
-# ifdef FEAT_PROFILE
-    syn_time_T  b_syn_linecont_time;
-# endif
+#line 3164
     int		b_syn_linecont_ic;	// ignore-case flag for above
     int		b_syn_topgrp;		// for ":syntax include"
-# ifdef FEAT_CONCEAL
-    int		b_syn_conceal;		// auto-conceal for :syn cmds
-# endif
-# ifdef FEAT_FOLDING
-    int		b_syn_folditems;	// number of patterns with the HL_FOLD
-					// flag set
-# endif
+#line 3173
     /*
      * b_sst_array[] contains the state stack for a number of lines, for the
      * start of that line (col == 0).  This avoids having to recompute the
@@ -3193,18 +2922,7 @@ typedef struct {
     short_u	b_sst_lasttick;	// last display tick
 #endif // FEAT_SYN_HL
 
-#ifdef FEAT_SPELL
-    // for spell checking
-    garray_T	b_langp;	    // list of pointers to slang_T, see spell.c
-    char_u	b_spell_ismw[256];  // flags: is midword char
-    char_u	*b_spell_ismw_mb;   // multi-byte midword chars
-    char_u	*b_p_spc;	    // 'spellcapcheck'
-    regprog_T	*b_cap_prog;	    // program for 'spellcapcheck'
-    char_u	*b_p_spf;	    // 'spellfile'
-    char_u	*b_p_spl;	    // 'spelllang'
-    char_u	*b_p_spo;	    // 'spelloptions'
-    int		b_cjk;		    // all CJK letters as OK
-#endif
+#line 3208
 #if !defined(FEAT_SYN_HL) && !defined(FEAT_SPELL)
     int		dummy;
 #endif
@@ -3299,10 +3017,7 @@ struct file_buffer
     long	b_mtime_read_ns;  // nanoseconds of last read time
     off_T	b_orig_size;	// size of original file in bytes
     int		b_orig_mode;	// mode of original file
-#ifdef FEAT_VIMINFO
-    time_T	b_last_used;	// time when the buffer was last used; used
-				// for viminfo
-#endif
+#line 3306
 
     pos_T	b_namedm[NMARKS]; // current named marks (mark.c)
 
@@ -3343,10 +3058,7 @@ struct file_buffer
     pos_T	b_op_start_orig;  // used for Insstart_orig
     pos_T	b_op_end;
 
-#ifdef FEAT_VIMINFO
-    bool	b_marks_read;	// Have we read viminfo marks yet?
-#endif
-
+#line 3350
     bool	b_modified_was_set;	// did ":set modified"
     bool	b_did_filetype;		// FileType event found
     bool	b_keep_filetype;	// value for did_filetype when starting
@@ -3393,13 +3105,7 @@ struct file_buffer
 #define B_IMODE_IM 2		//	Input via input method
 #define B_IMODE_LAST 2
 
-#ifdef FEAT_KEYMAP
-    short	b_kmap_state;	// using "lmap" mappings
-# define KEYMAP_INIT	1	// 'keymap' was set, call keymap_init()
-# define KEYMAP_LOADED	2	// 'keymap' mappings have been loaded
-    garray_T	b_kmap_ga;	// the keymap table
-#endif
-
+#line 3403
     /*
      * Options local to a buffer.
      * They are here because their value depends on the type of file
@@ -3488,9 +3194,7 @@ struct file_buffer
 #ifdef HAVE_FSYNC
     int		b_p_fs;		// 'fsync'
 #endif
-#ifdef FEAT_CRYPT
-    char_u	*b_p_key;	// 'key'
-#endif
+#line 3494
     char_u	*b_p_kp;	// 'keywordprg'
     int		b_p_lisp;	// 'lisp'
     char_u	*b_p_lop;	// 'lispoptions'
@@ -3529,9 +3233,7 @@ struct file_buffer
     char_u	*b_p_vts;	// 'vartabstop'
     int		*b_p_vts_array;	// 'vartabstop' in internal format
 #endif
-#ifdef FEAT_KEYMAP
-    char_u	*b_p_keymap;	// 'keymap'
-#endif
+#line 3535
 
     /*
      * local values for options which are normally global
@@ -3562,9 +3264,7 @@ struct file_buffer
     int		b_p_udf;	// 'undofile'
 #endif
     char_u	*b_p_lw;	// 'lispwords' local value
-#ifdef FEAT_TERMINAL
-    long	b_p_twsl;	// 'termwinscroll'
-#endif
+#line 3568
 
     /*
      * end of buffer options
@@ -3627,19 +3327,13 @@ struct file_buffer
     listener_T	*b_sync_listener;  // Listeners requiring unbuffered reports.
     list_T	*b_recorded_changes;
 #endif
-#ifdef FEAT_PROP_POPUP
-    bool	b_has_textprop;	// true when text props were added
-    hashtab_T	*b_proptypes;	// text property types local to buffer
-    proptype_T	**b_proparray;	// entries of b_proptypes sorted on tp_id
-#endif
+#line 3635
 
 #if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
     char_u	*b_p_bexpr;	// 'balloonexpr' local value
     long_u	b_p_bexpr_flags;// flags for 'balloonexpr'
 #endif
-#ifdef FEAT_CRYPT
-    char_u	*b_p_cm;	// 'cryptmethod'
-#endif
+#line 3643
 
     // When a buffer is created, it starts without a swap file.  b_may_swap is
     // then set to indicate that a swap file may be opened later.  It is reset
@@ -3654,21 +3348,11 @@ struct file_buffer
     //		      file name.
     bool	b_help;		// true for help file buffer (when set b_p_bt
 				// is "help")
-#ifdef FEAT_SPELL
-    bool	b_spell;	// true for a spell file buffer, most fields
-				// are not used!  Use the B_SPELL macro to
-				// access b_spell without #ifdef.
-#endif
+#line 3662
 
     bool	b_shortname;	// this file has an 8.3 file name
 
-#ifdef FEAT_JOB_CHANNEL
-    char_u	*b_prompt_text;		// set by prompt_setprompt()
-    callback_T	b_prompt_callback;	// set by prompt_setcallback()
-    callback_T	b_prompt_interrupt;	// set by prompt_setinterrupt()
-    int		b_prompt_insert;	// value for restart_edit when entering
-					// a prompt buffer window.
-#endif
+#line 3672
 #ifdef FEAT_MZSCHEME
     void	*b_mzscheme_ref; // The MzScheme reference to this buffer
 #endif
@@ -3701,32 +3385,13 @@ struct file_buffer
 
 #ifdef FEAT_SIGNS
     sign_entry_T *b_signlist;	   // list of placed signs
-# ifdef FEAT_NETBEANS_INTG
-    bool	b_has_sign_column; // Flag that is set when a first sign is
-				   // added and remains set until the end of
-				   // the netbeans session.
-# endif
+#line 3709
 #endif
 
-#ifdef FEAT_NETBEANS_INTG
-    bool	b_netbeans_file;    // true when buffer is owned by NetBeans
-    bool	b_was_netbeans_file;// true if b_netbeans_file was once set
-#endif
-#ifdef FEAT_JOB_CHANNEL
-    bool	b_write_to_channel; // true when appended lines are written to
-				    // a channel.
-#endif
-
-#ifdef FEAT_CRYPT
-    cryptstate_T *b_cryptstate;	// Encryption state while reading or writing
-				// the file. NULL when not using encryption.
-#endif
+#line 3724
     int		b_mapped_ctrl_c; // modes where CTRL-C is mapped
 
-#ifdef FEAT_TERMINAL
-    term_T	*b_term;	// When not NULL this buffer is for a terminal
-				// window.
-#endif
+#line 3730
 #ifdef FEAT_DIFF
     bool	b_diff_failed;	// internal diff failed for this buffer
 #endif
@@ -3823,19 +3488,14 @@ struct tabpage_S
     win_T	    *tp_prevwin;    // previous window in this Tab page
     win_T	    *tp_firstwin;   // first window in this Tab page
     win_T	    *tp_lastwin;    // last window in this Tab page
-#ifdef FEAT_PROP_POPUP
-    win_T	    *tp_first_popupwin; // first popup window in this Tab page
-#endif
+#line 3829
     long	    tp_old_Rows;    // Rows when Tab page was left
     long	    tp_old_Columns; // Columns when Tab page was left, -1 when
 				    // calling shell_new_columns() postponed
     int		    tp_old_coloff;  // Column offset when Tab page was left
     long	    tp_ch_used;	    // value of 'cmdheight' when frame size
 				    // was set
-#ifdef FEAT_GUI
-    int		    tp_prev_which_scrollbars[3];
-				    // previous value of which_scrollbars
-#endif
+#line 3839
     int		    tp_did_tabclosedpre;  // whether TabClosedPre was triggered
 
     char_u	    *tp_localdir;	// absolute path of local directory or
@@ -3880,10 +3540,7 @@ typedef struct w_line
     linenr_T	wl_lnum;	// buffer line number for logical line
     short_u	wl_size;	// height in screen lines
     char	wl_valid;	// TRUE values are valid for text in buffer
-#ifdef FEAT_FOLDING
-    char	wl_folded;	// TRUE when this is a range of folded lines
-    linenr_T	wl_lastlnum;	// last buffer line number for logical line
-#endif
+#line 3887
 } wline_T;
 
 /*
@@ -3969,9 +3626,7 @@ struct matchitem
 
     match_T	mit_hl;		// struct for doing the actual highlighting
     int		mit_hlg_id;	// highlight group ID
-#ifdef FEAT_CONCEAL
-    int		mit_conceal_char; // cchar for Conceal highlighting
-#endif
+#line 3975
 };
 
 // Structure to store last cursor position and topline.  Used by check_lnums()
@@ -3984,14 +3639,7 @@ typedef struct
     pos_T	w_cursor_corr;	// corrected cursor position
 } pos_save_T;
 
-#ifdef FEAT_MENU
-typedef struct {
-    int		wb_startcol;
-    int		wb_endcol;
-    vimmenu_T	*wb_menu;
-} winbar_item_T;
-#endif
-
+#line 3995
 /*
  * Characters from the 'listchars' option
  */
@@ -4012,9 +3660,7 @@ typedef struct
     int		leadtab3;
     int		*multispace;
     int		*leadmultispace;
-#ifdef FEAT_CONCEAL
-    int		conceal;
-#endif
+#line 4018
 } lcs_chars_T;
 
 /*
@@ -4170,94 +3816,7 @@ struct window_S
     pos_save_T	w_save_cursor;	    // backup of cursor pos and topline
     bool	w_do_win_fix_cursor;// if true cursor may be invalid
 
-#ifdef FEAT_PROP_POPUP
-    int		w_popup_flags;	    // POPF_ values
-    int		w_popup_blend;	    // 0-100: transparency level for popup with opacitys
-    int		w_popup_handled;    // POPUP_HANDLE[0-9] flags
-    char_u	*w_popup_title;
-    poppos_T	w_popup_pos;
-    bool	w_popup_fixed;	    // do not shift popup to fit on screen
-    int		w_popup_prop_type;  // when not zero: textprop type ID
-    win_T	*w_popup_prop_win;  // window to search for textprop
-    int		w_popup_prop_id;    // when not zero: textprop ID
-    int		w_zindex;
-    int		w_minheight;	    // "minheight" for popup window
-    int		w_minwidth;	    // "minwidth" for popup window
-    int		w_maxheight;	    // "maxheight" for popup window
-    int		w_maxwidth;	    // "maxwidth" for popup window
-    int		w_maxwidth_opt;	    // maxwidth from option
-    int		w_wantline;	    // "line" for popup window
-    int		w_wantcol;	    // "col" for popup window
-    int		w_firstline;	    // "firstline" for popup window
-    int		w_want_scrollbar;   // when zero don't use a scrollbar
-    bool	w_has_scrollbar;    // true if scrollbar displayed
-    char_u	*w_scrollbar_highlight; // "scrollbarhighlight"
-    char_u	*w_thumb_highlight; // "thumbhighlight"
-    int		w_popup_padding[4]; // popup padding top/right/bot/left
-    int		w_popup_border[4];  // popup border top/right/bot/left
-    char_u	*w_border_highlight[4];  // popup border highlight
-    bool	w_border_highlight_isset; // borderhighlight was explicitly set
-    int		w_border_char[8];   // popup border characters
-    int		w_popup_shadow;     // popup shadow (right and bottom edges)
-
-    int		w_popup_leftoff;    // columns left of the screen
-    int		w_popup_rightoff;   // columns right of the screen
-    int		w_popup_topoff;	    // rows above the host window's top
-				    // when "clipwindow" is set
-    int		w_popup_bottomoff;  // rows below the host window's bottom
-				    // when "clipwindow" is set
-    int		w_popup_leftclip;   // columns left of the host window's left
-				    // when "clipwindow" is set
-    int		w_popup_rightclip;  // columns right of the host window's right
-				    // when "clipwindow" is set
-    varnumber_T	w_popup_last_changedtick; // b:changedtick of popup buffer
-					  // when position was computed
-    varnumber_T	w_popup_prop_changedtick; // b:changedtick of buffer with
-					  // w_popup_prop_type when position
-					  // was computed
-    int		w_popup_prop_topline; // w_topline of window with
-				      // w_popup_prop_type when position was
-				      // computed
-    int		w_popup_prop_winrow;  // w_winrow of host window when
-				      // position was computed
-    int		w_popup_prop_wincol;  // w_wincol of host window when
-				      // position was computed
-    int		w_popup_prop_width;   // w_width of host window when
-				      // position was computed
-    int		w_popup_prop_winheight; // w_height of host window when
-				      // position was computed
-    linenr_T	w_popup_last_curline; // last known w_cursor.lnum of window
-				      // with "cursorline" set
-    callback_T	w_close_cb;	    // popup close callback
-    callback_T	w_filter_cb;	    // popup filter callback
-    int		w_filter_errors;    // popup filter error count
-    int		w_filter_mode;	    // mode when filter callback is used
-
-    win_T	*w_popup_curwin;    // close popup if curwin differs
-    linenr_T	w_popup_lnum;	    // close popup if cursor not on this line
-    colnr_T	w_popup_mincol;	    // close popup if cursor before this col
-    colnr_T	w_popup_maxcol;	    // close popup if cursor after this col
-    int		w_popup_mouse_row;  // close popup if mouse moves away
-    int		w_popup_mouse_mincol;  // close popup if mouse moves away
-    int		w_popup_mouse_maxcol;  // close popup if mouse moves away
-    popclose_T	w_popup_close;	    // allow closing the popup with the mouse
-
-    list_T	*w_popup_mask;	     // list of lists for "mask"
-    char_u	*w_popup_mask_cells; // cached mask cells
-    int		w_popup_mask_height; // height of w_popup_mask_cells
-    int		w_popup_mask_width;  // width of w_popup_mask_cells
-# if defined(FEAT_TIMERS)
-    timer_T	*w_popup_timer;	    // timer for closing popup window
-# endif
-
-    int		w_flags;	    // WFLAG_ flags
-
-# define WFLAG_WCOL_OFF_ADDED	1   // popup border and padding were added to
-				    // w_wcol
-# define WFLAG_WROW_OFF_ADDED	2   // popup border and padding were added to
-				    // w_wrow
-#endif
-
+#line 4261
     /*
      * === start of cached values ====
      */
@@ -4278,9 +3837,7 @@ struct window_S
      * that the cursor is on.  We use this to avoid extra calls to plines().
      */
     int		w_cline_height;	    // current size of cursor line
-#ifdef FEAT_FOLDING
-    bool	w_cline_folded;	    // cursor line is folded
-#endif
+#line 4284
 
     int		w_cline_row;	    // starting row of the cursor line
 
@@ -4291,11 +3848,7 @@ struct window_S
 				    // more than one screen line or when
 				    // w_leftcol is non-zero
 
-#ifdef FEAT_PROP_POPUP
-    colnr_T	w_virtcol_first_char;	// offset for w_virtcol when there are
-					// virtual text properties above the
-					// line
-#endif
+#line 4299
     /*
      * w_wrow and w_wcol specify the cursor position in the window.
      * This is related to positions in the window, not in the display or
@@ -4316,20 +3869,12 @@ struct window_S
     int		w_lines_valid;	    // number of valid entries
     wline_T	*w_lines;
 
-#ifdef FEAT_FOLDING
-    garray_T	w_folds;	    // array of nested folds
-    bool	w_fold_manual;	    // when true: some folds are opened/closed
-				    // manually
-    bool	w_foldinvalid;	    // when true: folding needs to be
-				    // recomputed
-#endif
+#line 4326
 #ifdef FEAT_LINEBREAK
     int		w_nrwidth;	    // width of 'number' and 'relativenumber'
 				    // column being used
 #endif
-#ifdef FEAT_TERMINAL
-    termcellcolor_T w_term_hlfwin;  // cache for term color of HLF_WIN
-#endif
+#line 4333
 
     /*
      * === end of cached values ===
@@ -4362,11 +3907,7 @@ struct window_S
     char_u	*w_localdir;	    // absolute path of local directory or
 				    // NULL
     char_u	*w_prevdir;	    // previous directory
-#ifdef FEAT_MENU
-    vimmenu_T	*w_winbar;	    // The root of the WinBar menu hierarchy.
-    winbar_item_T *w_winbar_items;  // list of items in the WinBar
-    int		w_winbar_height;    // 1 if there is a window toolbar
-#endif
+#line 4370
 
     /*
      * Options local to a window.
@@ -4441,9 +3982,7 @@ struct window_S
     int		w_fraction;
     int		w_prev_fraction_row;
 
-#ifdef FEAT_GUI
-    scrollbar_T	w_scrollbars[2];	// vert. Scrollbars for this window
-#endif
+#line 4447
 #ifdef FEAT_LINEBREAK
     linenr_T	w_nrwidth_line_count;	// line count when ml_nrwidth_width
 					// was computed.
@@ -4596,107 +4135,11 @@ typedef struct cursor_entry
 } cursorentry_T;
 #endif // CURSOR_SHAPE
 
-#ifdef FEAT_MENU
-
-// Indices into vimmenu_T->strings[] and vimmenu_T->noremap[] for each mode
-# define MENU_INDEX_INVALID	-1
-# define MENU_INDEX_NORMAL	0
-# define MENU_INDEX_VISUAL	1
-# define MENU_INDEX_SELECT	2
-# define MENU_INDEX_OP_PENDING	3
-# define MENU_INDEX_INSERT	4
-# define MENU_INDEX_CMDLINE	5
-# define MENU_INDEX_TERMINAL	6
-# define MENU_INDEX_TIP		7
-# define MENU_MODES		8
-
-// Menu modes
-# define MENU_NORMAL_MODE	(1 << MENU_INDEX_NORMAL)
-# define MENU_VISUAL_MODE	(1 << MENU_INDEX_VISUAL)
-# define MENU_SELECT_MODE	(1 << MENU_INDEX_SELECT)
-# define MENU_OP_PENDING_MODE	(1 << MENU_INDEX_OP_PENDING)
-# define MENU_INSERT_MODE	(1 << MENU_INDEX_INSERT)
-# define MENU_CMDLINE_MODE	(1 << MENU_INDEX_CMDLINE)
-# define MENU_TERMINAL_MODE	(1 << MENU_INDEX_TERMINAL)
-# define MENU_TIP_MODE		(1 << MENU_INDEX_TIP)
-# define MENU_ALL_MODES		((1 << MENU_INDEX_TIP) - 1)
-// note MENU_INDEX_TIP is not a 'real' mode
-
-// Start a menu name with this to not include it on the main menu bar
-# define MNU_HIDDEN_CHAR		']'
-
-struct VimMenu
-{
-    int		modes;		    // Which modes is this menu visible for?
-    int		enabled;	    // for which modes the menu is enabled
-    char_u	*name;		    // Name of menu, possibly translated
-    char_u	*dname;		    // Displayed Name ("name" without '&')
-# ifdef FEAT_MULTI_LANG
-    char_u	*en_name;	    // "name" untranslated, NULL when "name"
-				    // was not translated
-    char_u	*en_dname;	    // "dname" untranslated, NULL when "dname"
-				    // was not translated
-# endif
-    char_u	*actext;	    // accelerator text (after TAB)
-    int		mnemonic;	    // mnemonic key (after '&')
-    int		priority;	    // Menu order priority
-# ifdef FEAT_GUI
-    void	(*cb)(vimmenu_T *); // Call-back function
-# endif
-# ifdef FEAT_TOOLBAR
-    char_u	*iconfile;	    // name of file for icon or NULL
-    int		iconidx;	    // icon index (-1 if not set)
-    int		icon_builtin;	    // icon names is BuiltIn{nr}
-# endif
-    char_u	*strings[MENU_MODES]; // Mapped string for each mode
-    int		noremap[MENU_MODES]; // A REMAP_ flag for each mode
-    char	silent[MENU_MODES]; // A silent flag for each mode
-    vimmenu_T	*children;	    // Children of sub-menu
-    vimmenu_T	*parent;	    // Parent of menu
-    vimmenu_T	*next;		    // Next item in menu
-# ifdef FEAT_GUI_X11
-    Widget	id;		    // Manage this to enable item
-    Widget	submenu_id;	    // If this is submenu, add children here
-# endif
-# ifdef FEAT_GUI_GTK
-    GtkWidget	*id;		    // Manage this to enable item
-    GtkWidget	*submenu_id;	    // If this is submenu, add children here
-#  if defined(GTK_CHECK_VERSION) && !GTK_CHECK_VERSION(3,4,0)
-    GtkWidget	*tearoff_handle;
-#  endif
-    GtkWidget   *label;		    // Used by "set wak=" code.
-# endif
-# ifdef FEAT_GUI_MOTIF
-    int		sensitive;	    // turn button on/off
-    char	**xpm;		    // pixmap data
-    char	*xpm_fname;	    // file with pixmap data
-# endif
-# ifdef FEAT_BEVAL_TIP
-    BalloonEval *tip;		    // tooltip for this menu item
-# endif
-# ifdef FEAT_GUI_MSWIN
-    UINT	id;		    // Id of menu item
-    HMENU	submenu_id;	    // If this is submenu, add children here
-    HWND	tearoff_handle;	    // hWnd of tearoff if created
-# endif
-# ifdef FEAT_GUI_HAIKU
-    BMenuItem  *id;		    // Id of menu item
-    BMenu  *submenu_id;		    // If this is submenu, add children here
-#  ifdef FEAT_TOOLBAR
-    BPictureButton *button;
-#  endif
-# endif
-# ifdef FEAT_GUI_PHOTON
-    PtWidget_t	*id;
-    PtWidget_t	*submenu_id;
-# endif
-};
-#else
+#line 4695
 // For generating prototypes when FEAT_MENU isn't defined.
 typedef int vimmenu_T;
 
-#endif // FEAT_MENU
-
+#line 4700
 /*
  * Struct to save values in before executing autocommands for a buffer that is
  * not the current buffer.
@@ -4711,9 +4154,7 @@ typedef struct
     char_u	*tp_localdir;	    // saved value of tp_localdir
     char_u	*globaldir;	    // saved value of globaldir
     int		save_VIsual_active; // saved VIsual_active
-#ifdef FEAT_JOB_CHANNEL
-    int		save_prompt_insert; // saved b_prompt_insert
-#endif
+#line 4717
 } aco_save_T;
 
 /*
@@ -4760,10 +4201,7 @@ typedef struct
 #endif
     int		user_abort;
     char_u	*jobname;
-#ifdef FEAT_POSTSCRIPT
-    char_u	*outfile;
-    char_u	*arguments;
-#endif
+#line 4767
 } prt_settings_T;
 
 #define PRINT_NUMBER_WIDTH 8
@@ -4879,14 +4317,10 @@ typedef struct
 
     int		want_full_screen;
     int		not_a_term;		// no warning for missing term?
-#ifdef FEAT_GUI
-    char_u	*gui_dialog_file;	// file to write dialog text in
-#endif
+#line 4885
     int		tty_fail;		// exit if not a tty
     char_u	*term;			// specified terminal name
-#ifdef FEAT_CRYPT
-    int		ask_for_key;		// -x argument
-#endif
+#line 4890
     int		no_swap_file;		// "-n" argument used
 #ifdef FEAT_EVAL
     int		use_debug_break_level;
@@ -4894,13 +4328,7 @@ typedef struct
     int		window_count;		// number of windows to use
     int		window_layout;		// 0, WIN_HOR, WIN_VER or WIN_TABS
 
-#ifdef FEAT_CLIENTSERVER
-    int		serverArg;		// TRUE when argument for a server
-    char_u	*serverName_arg;	// cmdline arg for server name
-    char_u	*serverStr;		// remote server command
-    char_u	*serverStrEnc;		// encoding of serverStr
-    char_u	*servername;		// allocated name for our server
-#endif
+#line 4904
 #if !defined(UNIX)
 # define EXPAND_FILENAMES
     int		literal;		// don't expand file names
@@ -5041,39 +4469,14 @@ typedef enum {
 
 // Symbolic names for some registers.
 #define DELETION_REGISTER	36
-#if defined(FEAT_CLIPBOARD) || defined(HAVE_CLIPMETHOD)
-# define STAR_REGISTER		37
-# if defined(FEAT_X11) || defined(FEAT_WAYLAND)
-#  define PLUS_REGISTER	38
-#  define REAL_PLUS_REGISTER	PLUS_REGISTER
-# else
-#  define PLUS_REGISTER	STAR_REGISTER	    // there is only one
-#  ifdef FEAT_EVAL
-// Make it so that if clipmethod is "none", the plus register is not available,
-// but if clipmethod is a provider, then expose the plus register for use.
-#   define REAL_PLUS_REGISTER	38
-#  else
-#   define REAL_PLUS_REGISTER	STAR_REGISTER
-#  endif
-# endif
-#endif
+#line 5060
 #ifdef FEAT_DND
 # define TILDE_REGISTER		(PLUS_REGISTER + 1)
 #endif
 
-#ifdef FEAT_CLIPBOARD
-# ifdef FEAT_DND
-#  define NUM_REGISTERS		(TILDE_REGISTER + 1)
-# else
-#  define NUM_REGISTERS		(REAL_PLUS_REGISTER + 1)
-# endif
-#else
-# ifdef HAVE_CLIPMETHOD
-#  define NUM_REGISTERS		(REAL_PLUS_REGISTER + 1)
-# else
+#line 5074
 #  define NUM_REGISTERS		37
-# endif
-#endif
+#line 5077
 
 // structure used by block_prep, op_delete and op_yank for blockwise operators
 // also op_change, op_shift, op_insert, op_replace - AKelly
@@ -5102,9 +4505,7 @@ typedef struct
     linenr_T	y_size;		// number of lines in y_array
     char_u	y_type;		// MLINE, MCHAR or MBLOCK
     colnr_T	y_width;	// only set if y_type == MBLOCK
-#ifdef FEAT_VIMINFO
-    time_t	y_time_set;
-#endif
+#line 5108
 } yankreg_T;
 
 // The offset for a search command is store in a soff struct
@@ -5279,18 +4680,7 @@ typedef struct {
     int		cts_bri_size;		// cached size of 'breakindent', or -1
 					// if not computed yet
 #endif
-#ifdef FEAT_PROP_POPUP
-    int		cts_text_prop_count;	// number of text props; when zero
-					// cts_text_props is not used
-    textprop_T	*cts_text_props;	// text props (allocated)
-    char	cts_has_prop_with_text;	// TRUE if a property inserts text
-    int		cts_cur_text_width;	// width of current inserted text
-    int		cts_prop_lines;		// nr of properties above or below
-    int		cts_first_char;		// width text props above the line
-    int		cts_with_trailing;	// include size of trailing props with
-					// last character
-    int		cts_start_incl;		// prop has true "start_incl" arg
-#endif
+#line 5294
     int		cts_vcol;		// virtual column at current position
     int		cts_max_head_vcol;	// see win_lbr_chartabsize()
 } chartabsize_T;
@@ -5381,14 +4771,7 @@ typedef struct
  */
 typedef struct {
     int		spv_has_spell;	    // drawn window has spell checking
-#ifdef FEAT_SPELL
-    int		spv_unchanged;	    // not updating for changed text
-    int		spv_checked_col;    // column in "checked_lnum" up to
-				    // which there are no spell errors
-    linenr_T	spv_checked_lnum;   // line number for "checked_col"
-    int		spv_cap_col;	    // column to check for Cap word
-    linenr_T	spv_capcol_lnum;    // line number for "cap_col"
-#endif
+#line 5392
 } spellvars_T;
 
 // Return the length of a string literal

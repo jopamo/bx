@@ -32,9 +32,7 @@
 // On AIX 4.2 there is a conflicting prototype for ioctl() in stropts.h and
 // unistd.h.  This hack should fix that (suggested by Jeff George).
 // But on AIX 4.3 it's alright (suggested by Jake Hamby).
-#if defined(FEAT_GUI) && defined(_AIX) && !defined(_AIX43) && !defined(_NO_PROTO)
-# define _NO_PROTO
-#endif
+#line 38
 
 #ifdef HAVE_UNISTD_H
 # include <unistd.h>
@@ -170,10 +168,7 @@ typedef void (*sighandler_T) SIGPROTOARG;
 # include <libdef.h>
 # include <libdtdef.h>
 
-# if defined(FEAT_GUI_MOTIF)
-#  define XFree XFREE
-#  define XmRepTypeInstallTearOffModelCon XMREPTYPEINSTALLTEAROFFMODELCON
-# endif
+#line 177
 #endif // VMS
 
 #ifdef HAVE_FLOCK
@@ -275,19 +270,7 @@ typedef struct dsc$descriptor   DESC;
 # define EVIM_FILE	"$VIMRUNTIME/evim.vim"
 #endif
 
-#ifdef FEAT_VIMINFO
-# ifndef VIMINFO_FILE
-#  ifdef VMS
-#   define VIMINFO_FILE  "sys$login:.viminfo"
-#  else
-#   define VIMINFO_FILE "$HOME/.viminfo"
-#  endif
-# endif
-# if !defined(VIMINFO_FILE2) && defined(VMS)
-#  define VIMINFO_FILE2 "sys$login:_viminfo"
-# endif
-#endif
-
+#line 291
 #ifndef EXRC_FILE
 # define EXRC_FILE	".exrc"
 #endif
@@ -296,12 +279,7 @@ typedef struct dsc$descriptor   DESC;
 # define VIMRC_FILE	".vimrc"
 #endif
 
-#ifdef FEAT_GUI
-# ifndef GVIMRC_FILE
-#  define GVIMRC_FILE	".gvimrc"
-# endif
-#endif
-
+#line 305
 #ifndef SYNTAX_FNAME
 # define SYNTAX_FNAME	"$VIMRUNTIME/syntax/%s.vim"
 #endif
@@ -468,4 +446,3 @@ int mch_rename(const char *src, const char *dest);
 
 // We have three kinds of ACL support.
 #define HAVE_ACL (HAVE_POSIX_ACL || HAVE_SOLARIS_ACL || HAVE_AIX_ACL)
-

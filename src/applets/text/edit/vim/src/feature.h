@@ -367,9 +367,7 @@
 /*
  * libsodium - add advanced cryptography support
  */
-#if defined(HAVE_SODIUM) && defined(FEAT_CRYPT)
-# define FEAT_SODIUM
-#endif
+#line 373
 
 /*
  * +mksession		":mksession" command.
@@ -396,9 +394,7 @@
  * +multi_byte_ime	Win32 IME input method.  Only for far-east Windows, so
  *			IME can be used to input chars.  Not tested much!
  */
-#if defined(FEAT_GUI_MSWIN) && !defined(FEAT_MBYTE_IME)
-// #define FEAT_MBYTE_IME
-#endif
+#line 402
 
 #if defined(FEAT_HUGE) && defined(FEAT_GUI_HAIKU) && !defined(FEAT_MBYTE_IME)
 # define FEAT_MBYTE_IME
@@ -418,10 +414,7 @@
 // #define FEAT_XIM
 #endif
 
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-# define USE_XIM 1		// needed for GTK include files
-#endif
-
+#line 425
 #if defined(FEAT_XIM)
 // # define X_LOCALE			// for OS with incomplete locale
 					// support, like old linux versions.
@@ -455,17 +448,13 @@
  */
 #ifdef FEAT_NORMAL
 # define FEAT_MENU
-# ifdef FEAT_GUI_MSWIN
-#  define FEAT_TEAROFF
-# endif
+#line 461
 #endif
 
 /*
  * popup menu in a terminal
  */
-#if defined(FEAT_MENU) && !defined(ALWAYS_USE_GUI)
-# define FEAT_TERM_POPUP_MENU
-#endif
+#line 469
 
 /*
  * sound
@@ -473,9 +462,7 @@
 #if !defined(FEAT_SOUND) && defined(HAVE_CANBERRA)
 # define FEAT_SOUND
 #endif
-#if defined(FEAT_SOUND) && defined(HAVE_CANBERRA)
-# define FEAT_SOUND_CANBERRA
-#endif
+#line 479
 
 // There are two ways to use XPM.
 #if (defined(HAVE_XM_XPMP_H) && defined(FEAT_GUI_MOTIF)) \
@@ -498,16 +485,11 @@
 #endif
 
 
-#if defined(FEAT_TOOLBAR) && !defined(FEAT_MENU)
-# define FEAT_MENU
-#endif
-
+#line 505
 /*
  * GUI dark theme variant
  */
-#if (defined(FEAT_GUI_GTK) && defined(USE_GTK3)) || defined(FEAT_GUI_MSWIN)
-# define FEAT_GUI_DARKTHEME
-#endif
+#line 511
 
 /*
  * GUI tabline
@@ -544,9 +526,7 @@
  * there is no terminal version, and on Windows we can't figure out how to
  * fork one off with :gui.
  */
-#if defined(FEAT_GUI_MSWIN) && !defined(VIMDLL)
-# define ALWAYS_USE_GUI
-#endif
+#line 550
 
 /*
  * +dialog_gui		Use GUI dialog.
@@ -902,41 +882,30 @@
 # define FEAT_CLIPBOARD
 #endif
 
-#ifdef FEAT_GUI
-# ifndef FEAT_CLIPBOARD
-#  define FEAT_CLIPBOARD
-# endif
-#endif
-
+#line 912
 #if defined(FEAT_NORMAL) \
 	&& (defined(UNIX) || defined(VMS)) \
 	&& defined(WANT_X11) && defined(HAVE_X11)
 # define FEAT_XCLIPBOARD
-# ifndef FEAT_CLIPBOARD
+#line 916
 #  define FEAT_CLIPBOARD
-# endif
+#line 918
 #endif
 
 #if defined(FEAT_NORMAL) && defined(UNIX) \
     && defined(HAVE_WAYLAND) && defined(WANT_WAYLAND)
 # define FEAT_WAYLAND_CLIPBOARD
-# ifndef FEAT_CLIPBOARD
+#line 924
 #  define FEAT_CLIPBOARD
-# endif
+#line 926
 #endif
 
 /*
  * +dnd		Drag'n'drop support.  Always used for the GTK+ GUI.
  */
-#if defined(FEAT_CLIPBOARD) && defined(FEAT_GUI_GTK)
-# define FEAT_DND
-#endif
+#line 934
 
-#if defined(FEAT_GUI_MSWIN)
-# define MSWIN_FIND_REPLACE	// include code for find/replace dialog
-# define MSWIN_FR_BUFSIZE 256
-#endif
-
+#line 941
 #if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_MOTIF) \
 	|| defined(MSWIN_FIND_REPLACE)
 # define FIND_REPLACE_DIALOG 1
@@ -962,15 +931,7 @@
  * +autoservername	Automatically generate a servername for clientserver
  *			when --servername is not passed on the command line.
  */
-#if defined(FEAT_CLIENTSERVER) && !defined(FEAT_AUTOSERVERNAME)
-# ifdef MSWIN
-    // Always enabled on MS-Windows.
-#  define FEAT_AUTOSERVERNAME
-# else
-    // Enable here if you don't use configure.
-// # define FEAT_AUTOSERVERNAME
-# endif
-#endif
+#line 974
 
 /*
  * +termresponse	send t_RV to obtain terminal response.  Used for xterm
@@ -1047,38 +1008,23 @@
 /*
  * The +channel feature requires +eval.
  */
-#if !defined(FEAT_EVAL) && defined(FEAT_JOB_CHANNEL)
-# undef FEAT_JOB_CHANNEL
-#endif
+#line 1053
 
 /*
  * The Netbeans feature requires +eval and +job_channel
  */
-#if (!defined(FEAT_EVAL) || !defined(FEAT_JOB_CHANNEL)) && defined(FEAT_NETBEANS_INTG)
-# undef FEAT_NETBEANS_INTG
-#endif
+#line 1060
 
 /*
  * +terminal		":terminal" command.  Runs a terminal in a window.
  *			requires +channel
  */
-#if defined(FEAT_TERMINAL) && !defined(FEAT_JOB_CHANNEL)
-# undef FEAT_TERMINAL
-#endif
-#if defined(FEAT_TERMINAL) && !defined(CURSOR_SHAPE)
-# define CURSOR_SHAPE
-#endif
-#if defined(FEAT_TERMINAL) && !defined(FEAT_SYN_HL)
-// simplify the code a bit by enabling +syntax when +terminal is enabled
-# define FEAT_SYN_HL
-#endif
+#line 1075
 
 /*
  * +autoshelldir	    'autoshelldir' option.
  */
-#if defined(FEAT_TERMINAL)
-# define FEAT_AUTOSHELLDIR
-#endif
+#line 1082
 /*
  * +textprop and +popupwin	Text PROPerties and POPUP windows
  */
@@ -1089,9 +1035,7 @@
 /*
  * +message_window	use a popup for messages when 'cmdheight' is zero
  */
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_TIMERS)
-# define HAS_MESSAGE_WINDOW
-#endif
+#line 1095
 
 #if defined(FEAT_SYN_HL) && defined(FEAT_RELTIME)
 // Can limit syntax highlight time to 'redrawtime'.
@@ -1129,10 +1073,7 @@
 # endif
 #endif
 
-#if defined(FEAT_BEVAL_GUI) && defined(FEAT_GUI_MOTIF)
-# define FEAT_BEVAL_TIP		// balloon eval used for toolbar tooltip
-#endif
-
+#line 1136
 /*
  * +balloon_eval_term	Allow balloon expression evaluation in the terminal.
  */
@@ -1147,17 +1088,9 @@
 #endif
 
 // Motif is X11
-#if defined(FEAT_GUI_MOTIF)
-# define FEAT_GUI_X11
-#endif
+#line 1153
 
-#if defined(FEAT_NETBEANS_INTG)
-// NetBeans uses menus.
-# if !defined(FEAT_MENU)
-#  define FEAT_MENU
-# endif
-#endif
-
+#line 1161
 /*
  * +autochdir		'autochdir' option.
  */

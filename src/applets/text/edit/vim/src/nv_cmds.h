@@ -28,13 +28,10 @@
 # define NVCMD(a, b, c, d) \
 	{a, b, c, d}
 
-# ifdef FEAT_GUI
-#  define NV_VER_SCROLLBAR	nv_ver_scrollbar
-#  define NV_HOR_SCROLLBAR	nv_hor_scrollbar
-# else
+#line 35
 #  define NV_VER_SCROLLBAR nv_error
 #  define NV_HOR_SCROLLBAR nv_error
-# endif
+#line 38
 
 # ifdef FEAT_GUI_TABLINE
 #  define NV_TABLINE	nv_tabline
@@ -44,11 +41,9 @@
 #  define NV_TABMENU	nv_error
 # endif
 
-# ifdef FEAT_NETBEANS_INTG
-#  define NV_NBCMD	nv_nbcmd
-# else
+#line 50
 #  define NV_NBCMD	nv_error
-# endif
+#line 52
 
 # ifdef FEAT_DND
 #  define NV_DROP		nv_drop

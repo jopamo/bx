@@ -605,10 +605,7 @@ struct dfunc_S {
     int		df_instr_count;	    // size of "df_instr"
     int		df_instr_debug_count; // size of "df_instr_debug"
     isn_T	*df_instr_debug;      // like "df_instr" with debugging
-#ifdef FEAT_PROFILE
-    isn_T	*df_instr_prof;	     // like "df_instr" with profiling
-    int		df_instr_prof_count; // size of "df_instr_prof"
-#endif
+#line 612
 
     int		df_varcount;	    // number of local variables
     int		df_has_closure;	    // one if a closure was created
@@ -642,19 +639,12 @@ extern garray_T def_functions;
 #define LNUM_VARIABLE_RANGE_ABOVE (-888)
 
 // Keep in sync with get_compile_type()
-#ifdef FEAT_PROFILE
-# define INSTRUCTIONS(dfunc) \
-	(debug_break_level > 0 || may_break_in_function(dfunc->df_ufunc) \
-	    ? (dfunc)->df_instr_debug \
-	    : ((do_profiling == PROF_YES && (dfunc->df_ufunc)->uf_profiling) \
-		? (dfunc)->df_instr_prof \
-		: (dfunc)->df_instr))
-#else
+#line 653
 # define INSTRUCTIONS(dfunc) \
 	(debug_break_level > 0 || may_break_in_function((dfunc)->df_ufunc) \
 		? (dfunc)->df_instr_debug \
 		: (dfunc)->df_instr)
-#endif
+#line 658
 
 // Structure passed between the compile_expr* functions to keep track of
 // constants that have been parsed but for which no code was produced yet.  If
