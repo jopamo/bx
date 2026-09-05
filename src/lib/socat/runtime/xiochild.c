@@ -334,7 +334,7 @@ void xio_child_reap(void) {
 	    continue;
 	 }
 	 if (errno != ECHILD) {
-	    Warn1("waitpid(-1, {}, WNOHANG): "F_strerror, status);
+	    Warn1("waitpid(-1, {}, WNOHANG): %s", strerror(errno));
 	 }
 	 return;
       }
@@ -365,7 +365,7 @@ void xio_child_wait_general(void) {
 	 }
 	 num_child = 0;
       } else if (pid < 0) {
-	 Warn1("waitpid(-1, {}, 0): "F_strerror, status);
+	 Warn1("waitpid(-1, {}, 0): %s", strerror(errno));
 	 break;
       }
    }
@@ -388,13 +388,16 @@ static int64_t xio_child_timeout_msec(const struct timeval *timeout) {
       return INT64_MAX;
    }
    return (int64_t)timeout->tv_sec * 1000 +
-      (timeout->tv_usec + 999) / 1000;
+      ((int64_t)timeout->tv_usec + 999) / 1000;
 }
 
 static bool xio_child_wait(struct xio_child *child, int64_t timeout_msec) {
    int64_t start = xio_child_now_msec();
    struct timespec pause = { 0, XIO_CHILD_POLL_NSEC };
 
+   if (timeout_msec > 0 && start < 0) {
+      return false;
+   }
    while (child->state == XIO_CHILD_RUNNING ||
 	  child->state == XIO_CHILD_TERMINATING) {
       int status;
@@ -414,7 +417,7 @@ static bool xio_child_wait(struct xio_child *child, int64_t timeout_msec) {
 	    Warn2("waitpid("F_pid", {}, WNOHANG): %s",
 		  child->pid, strerror(errno));
 	 }
-	 return true;
+	 return child->state == XIO_CHILD_EXITED;
       }
       if (timeout_msec <= 0) {
 	 return false;
