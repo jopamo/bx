@@ -69,91 +69,91 @@ const struct addrdesc xioaddr_socket_recv    = { "SOCKET-RECV",        1+XIO_RDO
 
 /* the following options apply not only to generic socket addresses but to all
    addresses that have anything to do with sockets */
-const struct optdesc opt_so_debug    = { "so-debug",    "debug", OPT_SO_DEBUG,    GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_DEBUG };
+const struct optdesc opt_so_debug    = { "so-debug",    "debug", OPT_SO_DEBUG,    GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_DEBUG, 0 };
 #ifdef SO_ACCEPTCONN /* AIX433 */
-const struct optdesc opt_so_acceptconn={ "so-acceptconn","acceptconn",OPT_SO_ACCEPTCONN,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_ACCEPTCONN};
+const struct optdesc opt_so_acceptconn={ "so-acceptconn","acceptconn",OPT_SO_ACCEPTCONN,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_ACCEPTCONN, 0 };
 #endif /* SO_ACCEPTCONN */
-const struct optdesc opt_so_broadcast= { "so-broadcast", "broadcast", OPT_SO_BROADCAST,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_BROADCAST};
-const struct optdesc opt_so_reuseaddr= { "so-reuseaddr", "reuseaddr", OPT_SO_REUSEADDR,GROUP_SOCKET, PH_PREBIND, TYPE_INT_NULL,  OFUNC_SOCKOPT, SOL_SOCKET, SO_REUSEADDR};
-const struct optdesc opt_so_keepalive= { "so-keepalive", "keepalive", OPT_SO_KEEPALIVE,GROUP_SOCKET, PH_FD, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_KEEPALIVE};
+const struct optdesc opt_so_broadcast= { "so-broadcast", "broadcast", OPT_SO_BROADCAST,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_BROADCAST, 0 };
+const struct optdesc opt_so_reuseaddr= { "so-reuseaddr", "reuseaddr", OPT_SO_REUSEADDR,GROUP_SOCKET, PH_PREBIND, TYPE_INT_NULL,  OFUNC_SOCKOPT, SOL_SOCKET, SO_REUSEADDR, 0 };
+const struct optdesc opt_so_keepalive= { "so-keepalive", "keepalive", OPT_SO_KEEPALIVE,GROUP_SOCKET, PH_FD, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_KEEPALIVE, 0 };
 #if HAVE_STRUCT_LINGER
-const struct optdesc opt_so_linger   = { "so-linger",    "linger",    OPT_SO_LINGER,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_LINGER,OFUNC_SOCKOPT,SOL_SOCKET, SO_LINGER };
+const struct optdesc opt_so_linger   = { "so-linger",    "linger",    OPT_SO_LINGER,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_LINGER,OFUNC_SOCKOPT,SOL_SOCKET, SO_LINGER, 0 };
 #else /* !HAVE_STRUCT_LINGER */
 const struct optdesc opt_so_linger   = { "so-linger",    "linger",    OPT_SO_LINGER,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_LINGER };
 #endif /* !HAVE_STRUCT_LINGER */
-const struct optdesc opt_so_oobinline= { "so-oobinline", "oobinline", OPT_SO_OOBINLINE,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_OOBINLINE};
-const struct optdesc opt_so_sndbuf   = { "so-sndbuf",    "sndbuf",    OPT_SO_SNDBUF,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDBUF};
-const struct optdesc opt_so_sndbuf_late={ "so-sndbuf-late","sndbuf-late",OPT_SO_SNDBUF_LATE,GROUP_SOCKET,PH_LATE,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SNDBUF };
-const struct optdesc opt_so_rcvbuf   = { "so-rcvbuf",    "rcvbuf",    OPT_SO_RCVBUF,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVBUF};
-const struct optdesc opt_so_rcvbuf_late={"so-rcvbuf-late","rcvbuf-late",OPT_SO_RCVBUF_LATE,GROUP_SOCKET,PH_LATE,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_RCVBUF };
-const struct optdesc opt_so_error    = { "so-error",     "error",     OPT_SO_ERROR,    GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_ERROR};
-const struct optdesc opt_so_type     = { "so-type",      "type",      OPT_SO_TYPE,     GROUP_SOCKET, PH_SOCKET,     TYPE_INT,  OFUNC_SPEC,    SOL_SOCKET, SO_TYPE };
-const struct optdesc opt_so_dontroute= { "so-dontroute", "dontroute", OPT_SO_DONTROUTE,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_DONTROUTE };
+const struct optdesc opt_so_oobinline= { "so-oobinline", "oobinline", OPT_SO_OOBINLINE,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_OOBINLINE, 0 };
+const struct optdesc opt_so_sndbuf   = { "so-sndbuf",    "sndbuf",    OPT_SO_SNDBUF,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDBUF, 0 };
+const struct optdesc opt_so_sndbuf_late={ "so-sndbuf-late","sndbuf-late",OPT_SO_SNDBUF_LATE,GROUP_SOCKET,PH_LATE,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SNDBUF, 0 };
+const struct optdesc opt_so_rcvbuf   = { "so-rcvbuf",    "rcvbuf",    OPT_SO_RCVBUF,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVBUF, 0 };
+const struct optdesc opt_so_rcvbuf_late={"so-rcvbuf-late","rcvbuf-late",OPT_SO_RCVBUF_LATE,GROUP_SOCKET,PH_LATE,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_RCVBUF, 0 };
+const struct optdesc opt_so_error    = { "so-error",     "error",     OPT_SO_ERROR,    GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_ERROR, 0 };
+const struct optdesc opt_so_type     = { "so-type",      "type",      OPT_SO_TYPE,     GROUP_SOCKET, PH_SOCKET,     TYPE_INT,  OFUNC_SPEC,    SOL_SOCKET, SO_TYPE, 0 };
+const struct optdesc opt_so_dontroute= { "so-dontroute", "dontroute", OPT_SO_DONTROUTE,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_DONTROUTE, 0 };
 #ifdef SO_RCVLOWAT
-const struct optdesc opt_so_rcvlowat = { "so-rcvlowat",  "rcvlowat", OPT_SO_RCVLOWAT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVLOWAT };
+const struct optdesc opt_so_rcvlowat = { "so-rcvlowat",  "rcvlowat", OPT_SO_RCVLOWAT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVLOWAT, 0 };
 #endif
 #ifdef SO_SNDLOWAT
-const struct optdesc opt_so_sndlowat = { "so-sndlowat",  "sndlowat", OPT_SO_SNDLOWAT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDLOWAT };
+const struct optdesc opt_so_sndlowat = { "so-sndlowat",  "sndlowat", OPT_SO_SNDLOWAT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDLOWAT, 0 };
 #endif
 /* end of setsockopt options of UNIX98 standard */
 
 #ifdef SO_RCVTIMEO
-const struct optdesc opt_so_rcvtimeo = { "so-rcvtimeo",  "rcvtimeo", OPT_SO_RCVTIMEO, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVTIMEO };
+const struct optdesc opt_so_rcvtimeo = { "so-rcvtimeo",  "rcvtimeo", OPT_SO_RCVTIMEO, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_SOCKOPT, SOL_SOCKET, SO_RCVTIMEO, 0 };
 #endif
 #ifdef SO_SNDTIMEO
-const struct optdesc opt_so_sndtimeo = { "so-sndtimeo",  "sndtimeo", OPT_SO_SNDTIMEO, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDTIMEO };
+const struct optdesc opt_so_sndtimeo = { "so-sndtimeo",  "sndtimeo", OPT_SO_SNDTIMEO, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_SOCKOPT, SOL_SOCKET, SO_SNDTIMEO, 0 };
 #endif
 
 #ifdef SO_AUDIT	/* AIX 4.3.3 */
 const struct optdesc opt_so_audit    = { "so-audit",     "audit",    OPT_SO_AUDIT,    GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_AUDIT };
 #endif /* SO_AUDIT */
 #ifdef SO_ATTACH_FILTER
-const struct optdesc opt_so_attach_filter={"so-attach-filter","attachfilter",OPT_SO_ATTACH_FILTER,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_ATTACH_FILTER};
+const struct optdesc opt_so_attach_filter={"so-attach-filter","attachfilter",OPT_SO_ATTACH_FILTER,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_ATTACH_FILTER, 0 };
 #endif
 #ifdef SO_DETACH_FILTER
-const struct optdesc opt_so_detach_filter={"so-detach-filter","detachfilter",OPT_SO_DETACH_FILTER,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_DETACH_FILTER};
+const struct optdesc opt_so_detach_filter={"so-detach-filter","detachfilter",OPT_SO_DETACH_FILTER,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_DETACH_FILTER, 0 };
 #endif
 #ifdef SO_BINDTODEVICE	/* Linux: man 7 socket */
-const struct optdesc opt_so_bindtodevice={"so-bindtodevice","if",OPT_SO_BINDTODEVICE,GROUP_SOCKET,PH_PASTSOCKET,TYPE_NAME,OFUNC_SOCKOPT,SOL_SOCKET,SO_BINDTODEVICE};
+const struct optdesc opt_so_bindtodevice={"so-bindtodevice","if",OPT_SO_BINDTODEVICE,GROUP_SOCKET,PH_PASTSOCKET,TYPE_NAME,OFUNC_SOCKOPT,SOL_SOCKET,SO_BINDTODEVICE, 0 };
 #endif
 #ifdef SO_BSDCOMPAT
-const struct optdesc opt_so_bsdcompat= { "so-bsdcompat","bsdcompat",OPT_SO_BSDCOMPAT,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_BSDCOMPAT };
+const struct optdesc opt_so_bsdcompat= { "so-bsdcompat","bsdcompat",OPT_SO_BSDCOMPAT,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_BSDCOMPAT, 0 };
 #endif
 #ifdef SO_CKSUMRECV
 const struct optdesc opt_so_cksumrecv= { "so-cksumrecv","cksumrecv",OPT_SO_CKSUMRECV,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_CKSUMRECV };
 #endif /* SO_CKSUMRECV */
 #ifdef SO_TIMESTAMP
-const struct optdesc opt_so_timestamp= { "so-timestamp","timestamp",OPT_SO_TIMESTAMP,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_TIMESTAMP };
+const struct optdesc opt_so_timestamp= { "so-timestamp","timestamp",OPT_SO_TIMESTAMP,GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_TIMESTAMP, 0 };
 #endif
 #ifdef SO_KERNACCEPT	/* AIX 4.3.3 */
 const struct optdesc opt_so_kernaccept={ "so-kernaccept","kernaccept",OPT_SO_KERNACCEPT,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_KERNACCEPT};
 #endif /* SO_KERNACCEPT */
 #ifdef SO_NO_CHECK
-const struct optdesc opt_so_no_check = { "so-no-check", "nocheck",OPT_SO_NO_CHECK, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_NO_CHECK };
+const struct optdesc opt_so_no_check = { "so-no-check", "nocheck",OPT_SO_NO_CHECK, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_NO_CHECK, 0 };
 #endif
 #ifdef SO_NOREUSEADDR	/* AIX 4.3.3 */
 const struct optdesc opt_so_noreuseaddr={"so-noreuseaddr","noreuseaddr",OPT_SO_NOREUSEADDR,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET, SO_NOREUSEADDR};
 #endif /* SO_NOREUSEADDR */
 #ifdef SO_PASSCRED
-const struct optdesc opt_so_passcred = { "so-passcred", "passcred", OPT_SO_PASSCRED, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_PASSCRED};
+const struct optdesc opt_so_passcred = { "so-passcred", "passcred", OPT_SO_PASSCRED, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_PASSCRED, 0 };
 #endif
 #ifdef SO_PEERCRED
-const struct optdesc opt_so_peercred = { "so-peercred", "peercred", OPT_SO_PEERCRED, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT3,OFUNC_SOCKOPT, SOL_SOCKET, SO_PEERCRED};
+const struct optdesc opt_so_peercred = { "so-peercred", "peercred", OPT_SO_PEERCRED, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT3,OFUNC_SOCKOPT, SOL_SOCKET, SO_PEERCRED, 0 };
 #endif
 #ifdef SO_PRIORITY
-const struct optdesc opt_so_priority = { "so-priority", "priority", OPT_SO_PRIORITY, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_PRIORITY};
+const struct optdesc opt_so_priority = { "so-priority", "priority", OPT_SO_PRIORITY, GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_PRIORITY, 0 };
 #endif
 #ifdef SO_REUSEPORT	/* AIX 4.3.3, BSD, HP-UX, Linux >=3.9 */
-const struct optdesc opt_so_reuseport = { "so-reuseport","reuseport",OPT_SO_REUSEPORT,GROUP_SOCKET, PH_PREBIND, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_REUSEPORT };
+const struct optdesc opt_so_reuseport = { "so-reuseport","reuseport",OPT_SO_REUSEPORT,GROUP_SOCKET, PH_PREBIND, TYPE_INT, OFUNC_SOCKOPT, SOL_SOCKET, SO_REUSEPORT, 0 };
 #endif /* defined(SO_REUSEPORT) */
 #ifdef SO_SECURITY_AUTHENTICATION
-const struct optdesc opt_so_security_authentication={"so-security-authentication","securityauthentication",OPT_SO_SECURITY_AUTHENTICATION,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_AUTHENTICATION};
+const struct optdesc opt_so_security_authentication={"so-security-authentication","securityauthentication",OPT_SO_SECURITY_AUTHENTICATION,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_AUTHENTICATION, 0 };
 #endif
 #ifdef SO_SECURITY_ENCRYPTION_NETWORK
-const struct optdesc opt_so_security_encryption_network= { "so-security-encryption-network","securityencryptionnetwork",OPT_SO_SECURITY_ENCRYPTION_NETWORK,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_ENCRYPTION_NETWORK};
+const struct optdesc opt_so_security_encryption_network= { "so-security-encryption-network","securityencryptionnetwork",OPT_SO_SECURITY_ENCRYPTION_NETWORK,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_ENCRYPTION_NETWORK, 0 };
 #endif
 #ifdef SO_SECURITY_ENCRYPTION_TRANSPORT
-const struct optdesc opt_so_security_encryption_transport= { "so-security-encryption-transport","securityencryptiontransport",OPT_SO_SECURITY_ENCRYPTION_TRANSPORT,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_ENCRYPTION_TRANSPORT};
+const struct optdesc opt_so_security_encryption_transport= { "so-security-encryption-transport","securityencryptiontransport",OPT_SO_SECURITY_ENCRYPTION_TRANSPORT,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,OFUNC_SOCKOPT,SOL_SOCKET,SO_SECURITY_ENCRYPTION_TRANSPORT, 0 };
 #endif
 #ifdef SO_USE_IFBUFS
 const struct optdesc opt_so_use_ifbufs= { "so-use-ifbufs","useifbufs",OPT_SO_USE_IFBUFS,GROUP_SOCKET,PH_PASTSOCKET,TYPE_INT,  OFUNC_SOCKOPT, SOL_SOCKET, SO_USE_IFBUFS};
@@ -169,27 +169,27 @@ const struct optdesc opt_so_dontlinger = { "so-dontlinger", "dontlinger",  OPT_S
 #endif
 /* the SO_PROTOTYPE is OS defined on Solaris, HP-UX; we lend this for a more
    general purpose */
-const struct optdesc opt_so_prototype  = { "so-protocol",  "protocol",   OPT_SO_PROTOTYPE,   GROUP_SOCKET,PH_SOCKET,    TYPE_INT,OFUNC_SPEC,   SOL_SOCKET,SO_PROTOCOL };
+const struct optdesc opt_so_prototype  = { "so-protocol",  "protocol",   OPT_SO_PROTOTYPE,   GROUP_SOCKET,PH_SOCKET,    TYPE_INT,OFUNC_SPEC,   SOL_SOCKET,SO_PROTOCOL, 0 };
 #ifdef FIOSETOWN
-const struct optdesc opt_fiosetown   = { "fiosetown", NULL, OPT_FIOSETOWN,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_IOCTL,  FIOSETOWN };
+const struct optdesc opt_fiosetown   = { "fiosetown", NULL, OPT_FIOSETOWN,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_IOCTL,  FIOSETOWN, 0, 0 };
 #endif
 #ifdef SIOCSPGRP
-const struct optdesc opt_siocspgrp   = { "siocspgrp", NULL, OPT_SIOCSPGRP,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_IOCTL,  SIOCSPGRP };
+const struct optdesc opt_siocspgrp   = { "siocspgrp", NULL, OPT_SIOCSPGRP,   GROUP_SOCKET, PH_PASTSOCKET, TYPE_INT,  OFUNC_IOCTL,  SIOCSPGRP, 0, 0 };
 #endif
-const struct optdesc opt_bind        = { "bind",      NULL, OPT_BIND,        GROUP_SOCKET, PH_BIND, TYPE_STRING,OFUNC_SPEC };
-const struct optdesc opt_connect_timeout = { "connect-timeout", NULL, OPT_CONNECT_TIMEOUT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.connect_timeout) };
-const struct optdesc opt_protocol_family = { "protocol-family", "pf", OPT_PROTOCOL_FAMILY, GROUP_SOCKET, PH_PRESOCKET,  TYPE_STRING,  OFUNC_SPEC };
+const struct optdesc opt_bind        = { "bind",      NULL, OPT_BIND,        GROUP_SOCKET, PH_BIND, TYPE_STRING,OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_connect_timeout = { "connect-timeout", NULL, OPT_CONNECT_TIMEOUT, GROUP_SOCKET, PH_PASTSOCKET, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.connect_timeout), 0, 0 };
+const struct optdesc opt_protocol_family = { "protocol-family", "pf", OPT_PROTOCOL_FAMILY, GROUP_SOCKET, PH_PRESOCKET,  TYPE_STRING,  OFUNC_SPEC, 0, 0, 0 };
 
 /* generic setsockopt() options */
-const struct optdesc opt_setsockopt        = { "setsockopt",        "sockopt",        OPT_SETSOCKOPT_BIN,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_int    = { "setsockopt-int",    "sockopt-int",    OPT_SETSOCKOPT_INT,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_INT,     OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_bin    = { "setsockopt-bin",    "sockopt-bin",    OPT_SETSOCKOPT_BIN,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_string = { "setsockopt-string", "sockopt-string", OPT_SETSOCKOPT_STRING,     GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_STRING,  OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_listen = { "setsockopt-listen", "sockopt-listen", OPT_SETSOCKOPT_LISTEN,     GROUP_SOCKET,PH_PREBIND,   TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_socket    = { "setsockopt-socket",    "sockopt-sock", OPT_SETSOCKOPT_SOCKET,    GROUP_SOCKET,PH_PASTSOCKET, TYPE_INT_INT_BIN,    OFUNC_SOCKOPT_GENERIC, 0, 0 };
-const struct optdesc opt_setsockopt_connected = { "setsockopt-connected", "sockopt-conn", OPT_SETSOCKOPT_CONNECTED, GROUP_SOCKET,PH_CONNECTED,  TYPE_INT_INT_BIN,    OFUNC_SOCKOPT_GENERIC, 0, 0 };
+const struct optdesc opt_setsockopt        = { "setsockopt",        "sockopt",        OPT_SETSOCKOPT_BIN,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_int    = { "setsockopt-int",    "sockopt-int",    OPT_SETSOCKOPT_INT,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_INT,     OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_bin    = { "setsockopt-bin",    "sockopt-bin",    OPT_SETSOCKOPT_BIN,        GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_string = { "setsockopt-string", "sockopt-string", OPT_SETSOCKOPT_STRING,     GROUP_SOCKET,PH_CONNECTED, TYPE_INT_INT_STRING,  OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_listen = { "setsockopt-listen", "sockopt-listen", OPT_SETSOCKOPT_LISTEN,     GROUP_SOCKET,PH_PREBIND,   TYPE_INT_INT_BIN,     OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_socket    = { "setsockopt-socket",    "sockopt-sock", OPT_SETSOCKOPT_SOCKET,    GROUP_SOCKET,PH_PASTSOCKET, TYPE_INT_INT_BIN,    OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
+const struct optdesc opt_setsockopt_connected = { "setsockopt-connected", "sockopt-conn", OPT_SETSOCKOPT_CONNECTED, GROUP_SOCKET,PH_CONNECTED,  TYPE_INT_INT_BIN,    OFUNC_SOCKOPT_GENERIC, 0, 0, 0 };
 
-const struct optdesc opt_null_eof = { "null-eof", NULL, OPT_NULL_EOF, GROUP_SOCKET, PH_OFFSET, TYPE_BOOL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.null_eof) };
+const struct optdesc opt_null_eof = { "null-eof", NULL, OPT_NULL_EOF, GROUP_SOCKET, PH_OFFSET, TYPE_BOOL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.null_eof), 0, 0 };
 
 
 #if WITH_GENERICSOCKET

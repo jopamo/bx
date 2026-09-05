@@ -17,23 +17,23 @@ static int xioopen_open(int argc, const char *argv[], struct opt *opts, int xiof
 #if WITH_OPEN
 
 /****** OPEN addresses ******/
-const struct optdesc opt_o_rdonly    = { "o-rdonly",    "rdonly", OPT_O_RDONLY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_RDONLY, O_ACCMODE };
-const struct optdesc opt_o_wronly    = { "o-wronly",    "wronly", OPT_O_WRONLY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_WRONLY, O_ACCMODE };
-const struct optdesc opt_o_rdwr      = { "o-rdwr",      "rdwr",   OPT_O_RDWR,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_RDWR,   O_ACCMODE };
-const struct optdesc opt_o_creat     = { "o-creat",     "creat",  OPT_O_CREAT,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_CREAT };
-const struct optdesc opt_o_excl      = { "o-excl",      "excl",   OPT_O_EXCL,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_EXCL };
-const struct optdesc opt_o_noctty    = { "o-noctty",    "noctty", OPT_O_NOCTTY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_NOCTTY };
+const struct optdesc opt_o_rdonly    = { "o-rdonly",    "rdonly", OPT_O_RDONLY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_RDONLY, O_ACCMODE, 0 };
+const struct optdesc opt_o_wronly    = { "o-wronly",    "wronly", OPT_O_WRONLY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_WRONLY, O_ACCMODE, 0 };
+const struct optdesc opt_o_rdwr      = { "o-rdwr",      "rdwr",   OPT_O_RDWR,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG_PATTERN, O_RDWR,   O_ACCMODE, 0 };
+const struct optdesc opt_o_creat     = { "o-creat",     "creat",  OPT_O_CREAT,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_CREAT, 0, 0 };
+const struct optdesc opt_o_excl      = { "o-excl",      "excl",   OPT_O_EXCL,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_EXCL, 0, 0 };
+const struct optdesc opt_o_noctty    = { "o-noctty",    "noctty", OPT_O_NOCTTY,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_NOCTTY, 0, 0 };
 #ifdef O_SYNC
-const struct optdesc opt_o_sync      = { "o-sync",      "sync",   OPT_O_SYNC,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_SYNC };
+const struct optdesc opt_o_sync      = { "o-sync",      "sync",   OPT_O_SYNC,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_SYNC, 0, 0 };
 #endif
 #ifdef O_NOFOLLOW
-const struct optdesc opt_o_nofollow  = { "o-nofollow",  "nofollow",OPT_O_NOFOLLOW, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_NOFOLLOW };
+const struct optdesc opt_o_nofollow  = { "o-nofollow",  "nofollow",OPT_O_NOFOLLOW, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_NOFOLLOW, 0, 0 };
 #endif
 #ifdef O_DIRECTORY
-const struct optdesc opt_o_directory = { "o-directory", "directory",OPT_O_DIRECTORY, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DIRECTORY };
+const struct optdesc opt_o_directory = { "o-directory", "directory",OPT_O_DIRECTORY, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DIRECTORY, 0, 0 };
 #endif
 #ifdef O_LARGEFILE
-const struct optdesc opt_o_largefile = { "o-largefile", "largefile",OPT_O_LARGEFILE, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_LARGEFILE };
+const struct optdesc opt_o_largefile = { "o-largefile", "largefile",OPT_O_LARGEFILE, GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_LARGEFILE, 0, 0 };
 #endif
 #ifdef O_NSHARE
 const struct optdesc opt_o_nshare    = { "o-nshare",    "nshare", OPT_O_NSHARE,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_NSHARE };
@@ -45,13 +45,13 @@ const struct optdesc opt_o_rshare    = { "o-rshare",    "rshare", OPT_O_RSHARE, 
 const struct optdesc opt_o_defer     = { "o-defer",     "defer",  OPT_O_DEFER,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DEFER };
 #endif
 #ifdef O_DIRECT
-const struct optdesc opt_o_direct    = { "o-direct",    "direct", OPT_O_DIRECT,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DIRECT };
+const struct optdesc opt_o_direct    = { "o-direct",    "direct", OPT_O_DIRECT,    GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DIRECT, 0, 0 };
 #endif
 #ifdef O_DSYNC
-const struct optdesc opt_o_dsync     = { "o-dsync",     "dsync",  OPT_O_DSYNC,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DSYNC };
+const struct optdesc opt_o_dsync     = { "o-dsync",     "dsync",  OPT_O_DSYNC,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DSYNC, 0, 0 };
 #endif
 #ifdef O_RSYNC
-const struct optdesc opt_o_rsync     = { "o-rsync",     "rsync",  OPT_O_RSYNC,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_RSYNC };
+const struct optdesc opt_o_rsync     = { "o-rsync",     "rsync",  OPT_O_RSYNC,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_RSYNC, 0, 0 };
 #endif
 #ifdef O_DELAY
 const struct optdesc opt_o_delay     = { "o-delay",     "delay",  OPT_O_DELAY,     GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_DELAY };
@@ -59,7 +59,7 @@ const struct optdesc opt_o_delay     = { "o-delay",     "delay",  OPT_O_DELAY,  
 #ifdef O_PRIV
 const struct optdesc opt_o_priv      = { "o-priv",      "priv",   OPT_O_PRIV,      GROUP_OPEN, PH_OPEN, TYPE_BOOL, OFUNC_FLAG, O_PRIV };
 #endif
-const struct optdesc opt_o_trunc     = { "o-trunc",     "trunc",  OPT_O_TRUNC,     GROUP_OPEN, PH_LATE, TYPE_BOOL, OFUNC_FLAG, O_TRUNC };
+const struct optdesc opt_o_trunc     = { "o-trunc",     "trunc",  OPT_O_TRUNC,     GROUP_OPEN, PH_LATE, TYPE_BOOL, OFUNC_FLAG, O_TRUNC, 0, 0 };
 
 #endif /* WITH_OPEN */
 

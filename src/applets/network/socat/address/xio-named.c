@@ -13,14 +13,14 @@
 
 
 #if WITH_NAMED
-const struct optdesc opt_group_early = { "group-early", NULL, OPT_GROUP_EARLY, GROUP_NAMED, PH_PREOPEN, TYPE_GIDT, OFUNC_SPEC };
-const struct optdesc opt_perm_early  = { "perm-early",  NULL, OPT_PERM_EARLY,  GROUP_NAMED, PH_PREOPEN, TYPE_MODET,OFUNC_SPEC };
-const struct optdesc opt_user_early  = { "user-early",  NULL, OPT_USER_EARLY,  GROUP_NAMED, PH_PREOPEN, TYPE_UIDT, OFUNC_SPEC };
+const struct optdesc opt_group_early = { "group-early", NULL, OPT_GROUP_EARLY, GROUP_NAMED, PH_PREOPEN, TYPE_GIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_perm_early  = { "perm-early",  NULL, OPT_PERM_EARLY,  GROUP_NAMED, PH_PREOPEN, TYPE_MODET,OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_user_early  = { "user-early",  NULL, OPT_USER_EARLY,  GROUP_NAMED, PH_PREOPEN, TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
 /*0 const struct optdesc opt_force       = { "force",       NULL, OPT_FORCE,       GROUP_NAMED, PH_???,    TYPE_BOOL, OFUNC_SPEC };*/
-const struct optdesc opt_unlink      = { "unlink",      NULL, OPT_UNLINK,      GROUP_NAMED, PH_PREOPEN,  TYPE_BOOL, OFUNC_SPEC };
-const struct optdesc opt_unlink_early= { "unlink-early",NULL, OPT_UNLINK_EARLY,GROUP_NAMED, PH_EARLY,    TYPE_BOOL, OFUNC_SPEC };
-const struct optdesc opt_unlink_late = { "unlink-late", NULL, OPT_UNLINK_LATE, GROUP_NAMED, PH_PASTOPEN, TYPE_BOOL, OFUNC_SPEC };
-const struct optdesc opt_unlink_close  = { "unlink-close", NULL, OPT_UNLINK_CLOSE, GROUP_NAMED, PH_LATE,  TYPE_BOOL, OFUNC_SPEC };
+const struct optdesc opt_unlink      = { "unlink",      NULL, OPT_UNLINK,      GROUP_NAMED, PH_PREOPEN,  TYPE_BOOL, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_unlink_early= { "unlink-early",NULL, OPT_UNLINK_EARLY,GROUP_NAMED, PH_EARLY,    TYPE_BOOL, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_unlink_late = { "unlink-late", NULL, OPT_UNLINK_LATE, GROUP_NAMED, PH_PASTOPEN, TYPE_BOOL, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_unlink_close  = { "unlink-close", NULL, OPT_UNLINK_CLOSE, GROUP_NAMED, PH_LATE,  TYPE_BOOL, OFUNC_SPEC, 0, 0, 0 };
 #endif /* WITH_NAMED */
 
 /* applies to filesystem entry all options belonging to phase */

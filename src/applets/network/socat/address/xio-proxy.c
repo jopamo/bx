@@ -22,12 +22,12 @@
 
 static int xioopen_proxy_connect(int argc, const char *argv[], struct opt *opts, int xioflags, xiofile_t *fd, const struct addrdesc *addrdesc);
 
-const struct optdesc opt_proxyport = { "proxyport", NULL, OPT_PROXYPORT, GROUP_HTTP, PH_LATE, TYPE_STRING, OFUNC_SPEC };
-const struct optdesc opt_ignorecr  = { "ignorecr",  NULL, OPT_IGNORECR,  GROUP_HTTP, PH_LATE, TYPE_BOOL,  OFUNC_SPEC };
-const struct optdesc opt_http_version              = { "http-version",              NULL,            OPT_HTTP_VERSION,              GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC };
-const struct optdesc opt_proxy_resolve   = { "proxy-resolve",   "resolve", OPT_PROXY_RESOLVE,   GROUP_HTTP, PH_LATE, TYPE_BOOL,  OFUNC_SPEC };
-const struct optdesc opt_proxy_authorization  = { "proxy-authorization",  "proxyauth", OPT_PROXY_AUTHORIZATION,  GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC };
-const struct optdesc opt_proxy_authorization_file  = { "proxy-authorization-file",  "proxyauthfile", OPT_PROXY_AUTHORIZATION_FILE,  GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC };
+const struct optdesc opt_proxyport = { "proxyport", NULL, OPT_PROXYPORT, GROUP_HTTP, PH_LATE, TYPE_STRING, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_ignorecr  = { "ignorecr",  NULL, OPT_IGNORECR,  GROUP_HTTP, PH_LATE, TYPE_BOOL,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_http_version              = { "http-version",              NULL,            OPT_HTTP_VERSION,              GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_proxy_resolve   = { "proxy-resolve",   "resolve", OPT_PROXY_RESOLVE,   GROUP_HTTP, PH_LATE, TYPE_BOOL,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_proxy_authorization  = { "proxy-authorization",  "proxyauth", OPT_PROXY_AUTHORIZATION,  GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_proxy_authorization_file  = { "proxy-authorization-file",  "proxyauthfile", OPT_PROXY_AUTHORIZATION_FILE,  GROUP_HTTP, PH_LATE, TYPE_STRING,  OFUNC_SPEC, 0, 0, 0 };
 
 const struct addrdesc xioaddr_proxy_connect = { "PROXY", 3, xioopen_proxy_connect, GROUP_FD|GROUP_SOCKET|GROUP_SOCK_IP4|GROUP_SOCK_IP6|GROUP_IP_TCP|GROUP_HTTP|GROUP_CHILD|GROUP_RETRY, 0, 0, 0 HELP(":<proxy-server>:<host>:<port>") };
 

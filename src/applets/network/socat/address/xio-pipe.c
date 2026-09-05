@@ -21,7 +21,7 @@ static int xioopen_fifo_unnamed(xiofile_t *sock, struct opt *opts);
 const struct addrdesc xioaddr_pipe   = { "PIPE",   3, xioopen_fifo,  GROUP_FD|GROUP_NAMED|GROUP_OPEN|GROUP_FIFO, 0, 0, 0 HELP("[:<filename>]") };
 
 #if defined(F_SETPIPE_SZ)
-const struct optdesc opt_f_setpipe_sz = { "f-setpipe-sz", "pipesz", OPT_F_SETPIPE_SZ, GROUP_FIFO, PH_FD, TYPE_INT, OFUNC_FCNTL, F_SETPIPE_SZ, 0 };
+const struct optdesc opt_f_setpipe_sz = { "f-setpipe-sz", "pipesz", OPT_F_SETPIPE_SZ, GROUP_FIFO, PH_FD, TYPE_INT, OFUNC_FCNTL, F_SETPIPE_SZ, 0, 0 };
 #endif
 
 /* process an unnamed bidirectional "pipe" or "fifo" or "echo" argument with

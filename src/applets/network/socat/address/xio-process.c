@@ -10,19 +10,19 @@
 #include "xio-process.h"
 
 /****** process related options ******/
-const struct optdesc opt_setgid_early= { "setgid-early",NULL,  OPT_SETGID_EARLY,GROUP_PROCESS, PH_EARLY,   TYPE_GIDT, OFUNC_SPEC };
-const struct optdesc opt_setgid      = { "setgid",      NULL,  OPT_SETGID,      GROUP_PROCESS, PH_LATE2,    TYPE_GIDT, OFUNC_SPEC };
-const struct optdesc opt_setuid_early= { "setuid-early",NULL,  OPT_SETUID_EARLY,GROUP_PROCESS, PH_EARLY,   TYPE_UIDT, OFUNC_SPEC };
-const struct optdesc opt_setuid      = { "setuid",      NULL,  OPT_SETUID,      GROUP_PROCESS, PH_LATE2,    TYPE_UIDT, OFUNC_SPEC };
-const struct optdesc opt_substuser_early   = { "substuser-early", "su-e",  OPT_SUBSTUSER_EARLY,   GROUP_PROCESS, PH_EARLY,  TYPE_UIDT, OFUNC_SPEC };
-const struct optdesc opt_substuser   = { "substuser", "su",  OPT_SUBSTUSER,   GROUP_PROCESS, PH_LATE2,  TYPE_UIDT, OFUNC_SPEC };
+const struct optdesc opt_setgid_early= { "setgid-early",NULL,  OPT_SETGID_EARLY,GROUP_PROCESS, PH_EARLY,   TYPE_GIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_setgid      = { "setgid",      NULL,  OPT_SETGID,      GROUP_PROCESS, PH_LATE2,    TYPE_GIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_setuid_early= { "setuid-early",NULL,  OPT_SETUID_EARLY,GROUP_PROCESS, PH_EARLY,   TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_setuid      = { "setuid",      NULL,  OPT_SETUID,      GROUP_PROCESS, PH_LATE2,    TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_substuser_early   = { "substuser-early", "su-e",  OPT_SUBSTUSER_EARLY,   GROUP_PROCESS, PH_EARLY,  TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_substuser   = { "substuser", "su",  OPT_SUBSTUSER,   GROUP_PROCESS, PH_LATE2,  TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
 #if defined(HAVE_SETGRENT) && defined(HAVE_GETGRENT) && defined(HAVE_ENDGRENT)
-const struct optdesc opt_substuser_delayed = { "substuser-delayed", "su-d", OPT_SUBSTUSER_DELAYED,   GROUP_PROCESS, PH_INIT,  TYPE_UIDT, OFUNC_SPEC };
+const struct optdesc opt_substuser_delayed = { "substuser-delayed", "su-d", OPT_SUBSTUSER_DELAYED,   GROUP_PROCESS, PH_INIT,  TYPE_UIDT, OFUNC_SPEC, 0, 0, 0 };
 #endif
-const struct optdesc opt_chroot_early = { "chroot-early", NULL, OPT_CHROOT_EARLY, GROUP_PROCESS, PH_EARLY, TYPE_STRING, OFUNC_SPEC };
-const struct optdesc opt_chroot       = { "chroot",       NULL, OPT_CHROOT,       GROUP_PROCESS, PH_LATE, TYPE_STRING, OFUNC_SPEC };
-const struct optdesc opt_setsid  = { "setsid",    "sid", OPT_SETSID,     GROUP_PROCESS,   PH_LATE, TYPE_BOOL,     OFUNC_SPEC };
-const struct optdesc opt_setpgid = { "setpgid",   "pgid",OPT_SETPGID,    GROUP_FORK,   PH_LATE, TYPE_INT,      OFUNC_SPEC };
+const struct optdesc opt_chroot_early = { "chroot-early", NULL, OPT_CHROOT_EARLY, GROUP_PROCESS, PH_EARLY, TYPE_STRING, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_chroot       = { "chroot",       NULL, OPT_CHROOT,       GROUP_PROCESS, PH_LATE, TYPE_STRING, OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_setsid  = { "setsid",    "sid", OPT_SETSID,     GROUP_PROCESS,   PH_LATE, TYPE_BOOL,     OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_setpgid = { "setpgid",   "pgid",OPT_SETPGID,    GROUP_FORK,   PH_LATE, TYPE_INT,      OFUNC_SPEC, 0, 0, 0 };
 
 
 /* for option substuser-delayed, save info for later application */

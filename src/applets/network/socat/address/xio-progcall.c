@@ -16,12 +16,12 @@
 
 /* these options are used by address pty too */
 #if HAVE_OPENPTY
-const struct optdesc opt_openpty = { "openpty",   NULL, OPT_OPENPTY,     GROUP_PTY,   PH_BIGEN, TYPE_BOOL, 	OFUNC_SPEC };
+const struct optdesc opt_openpty = { "openpty",   NULL, OPT_OPENPTY,     GROUP_PTY,   PH_BIGEN, TYPE_BOOL, 	OFUNC_SPEC, 0, 0, 0 };
 #endif /* HAVE_OPENPTY */
 #if HAVE_DEV_PTMX || HAVE_DEV_PTC
-const struct optdesc opt_ptmx    = { "ptmx",      NULL, OPT_PTMX,        GROUP_PTY,   PH_BIGEN, TYPE_BOOL, 	OFUNC_SPEC };
+const struct optdesc opt_ptmx    = { "ptmx",      NULL, OPT_PTMX,        GROUP_PTY,   PH_BIGEN, TYPE_BOOL, 	OFUNC_SPEC, 0, 0, 0 };
 #endif
-const struct optdesc opt_sitout_eio = { "sitout-eio", NULL, OPT_SITOUT_EIO, GROUP_PTY, PH_OFFSET, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.exec.sitout_eio), XIO_SIZEOF(para.exec.sitout_eio) };
+const struct optdesc opt_sitout_eio = { "sitout-eio", NULL, OPT_SITOUT_EIO, GROUP_PTY, PH_OFFSET, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.exec.sitout_eio), XIO_SIZEOF(para.exec.sitout_eio), 0 };
 
 #if WITH_EXEC || WITH_SYSTEM || WITH_SHELL
 

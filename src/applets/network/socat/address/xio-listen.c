@@ -16,15 +16,15 @@
 #include "xio-listen.h"
 
 /***** LISTEN options *****/
-const struct optdesc opt_backlog = { "backlog",   NULL, OPT_BACKLOG,     GROUP_LISTEN, PH_LISTEN, TYPE_INT,    OFUNC_SPEC };
-const struct optdesc opt_fork    = { "fork",      NULL, OPT_FORK,        GROUP_CHILD,   PH_PASTACCEPT, TYPE_BOOL,  OFUNC_SPEC };
-const struct optdesc opt_max_children = { "max-children", NULL, OPT_MAX_CHILDREN, GROUP_CHILD,   PH_PASTACCEPT, TYPE_INT,  OFUNC_SPEC };
-const struct optdesc opt_children_shutup = { "children-shutup", "child-shutup", OPT_CHILDREN_SHUTUP, GROUP_CHILD, PH_PASTACCEPT, TYPE_INT, OFUNC_OFFSET, XIO_OFFSETOF(shutup) };
+const struct optdesc opt_backlog = { "backlog",   NULL, OPT_BACKLOG,     GROUP_LISTEN, PH_LISTEN, TYPE_INT,    OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_fork    = { "fork",      NULL, OPT_FORK,        GROUP_CHILD,   PH_PASTACCEPT, TYPE_BOOL,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_max_children = { "max-children", NULL, OPT_MAX_CHILDREN, GROUP_CHILD,   PH_PASTACCEPT, TYPE_INT,  OFUNC_SPEC, 0, 0, 0 };
+const struct optdesc opt_children_shutup = { "children-shutup", "child-shutup", OPT_CHILDREN_SHUTUP, GROUP_CHILD, PH_PASTACCEPT, TYPE_INT, OFUNC_OFFSET, XIO_OFFSETOF(shutup), 0, 0 };
 /**/
 #if (WITH_UDP || WITH_TCP)
-const struct optdesc opt_range   = { "range",     NULL, OPT_RANGE,       GROUP_RANGE,  PH_ACCEPT, TYPE_STRING, OFUNC_SPEC };
+const struct optdesc opt_range   = { "range",     NULL, OPT_RANGE,       GROUP_RANGE,  PH_ACCEPT, TYPE_STRING, OFUNC_SPEC, 0, 0, 0 };
 #endif
-const struct optdesc opt_accept_timeout = { "accept-timeout", "listen-timeout", OPT_ACCEPT_TIMEOUT, GROUP_LISTEN, PH_LISTEN, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.accept_timeout) };
+const struct optdesc opt_accept_timeout = { "accept-timeout", "listen-timeout", OPT_ACCEPT_TIMEOUT, GROUP_LISTEN, PH_LISTEN, TYPE_TIMEVAL, OFUNC_OFFSET, XIO_OFFSETOF(para.socket.accept_timeout), 0, 0 };
 
 /*
    applies and consumes the following option:

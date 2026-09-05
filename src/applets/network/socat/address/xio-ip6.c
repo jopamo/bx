@@ -21,65 +21,65 @@ static char *inet6addr_info(const struct in6_addr *sa, char *buff, size_t blen);
 
 
 #ifdef IPV6_V6ONLY
-const struct optdesc opt_ipv6_v6only = { "ipv6-v6only", "ipv6only", OPT_IPV6_V6ONLY, GROUP_SOCK_IP6, PH_PREBIND, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_V6ONLY };
+const struct optdesc opt_ipv6_v6only = { "ipv6-v6only", "ipv6only", OPT_IPV6_V6ONLY, GROUP_SOCK_IP6, PH_PREBIND, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_V6ONLY, 0 };
 #endif
 #if defined(HAVE_STRUCT_IP_MREQ) || defined(HAVE_STRUCT_IP_MREQN)
-const struct optdesc opt_ipv6_join_group = { "ipv6-join-group", "join-group", OPT_IPV6_JOIN_GROUP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_IP_MREQN, OFUNC_SPEC, SOL_IPV6, IPV6_JOIN_GROUP };
+const struct optdesc opt_ipv6_join_group = { "ipv6-join-group", "join-group", OPT_IPV6_JOIN_GROUP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_IP_MREQN, OFUNC_SPEC, SOL_IPV6, IPV6_JOIN_GROUP, 0 };
 #endif
 #ifdef MCAST_JOIN_SOURCE_GROUP
-const struct optdesc opt_ipv6_join_source_group = { "ipv6-join-source-group", "join-source-group", OPT_IPV6_JOIN_SOURCE_GROUP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_GROUP_SOURCE_REQ, OFUNC_SPEC, SOL_IPV6, MCAST_JOIN_SOURCE_GROUP };
+const struct optdesc opt_ipv6_join_source_group = { "ipv6-join-source-group", "join-source-group", OPT_IPV6_JOIN_SOURCE_GROUP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_GROUP_SOURCE_REQ, OFUNC_SPEC, SOL_IPV6, MCAST_JOIN_SOURCE_GROUP, 0 };
 #endif
 #ifdef IPV6_PKTINFO
-const struct optdesc opt_ipv6_pktinfo = { "ipv6-pktinfo", "pktinfo", OPT_IPV6_PKTINFO, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_PKTINFO };
+const struct optdesc opt_ipv6_pktinfo = { "ipv6-pktinfo", "pktinfo", OPT_IPV6_PKTINFO, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_PKTINFO, 0 };
 #endif
 #ifdef IPV6_RECVPKTINFO
-const struct optdesc opt_ipv6_recvpktinfo = { "ipv6-recvpktinfo", "recvpktinfo", OPT_IPV6_RECVPKTINFO, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVPKTINFO };
+const struct optdesc opt_ipv6_recvpktinfo = { "ipv6-recvpktinfo", "recvpktinfo", OPT_IPV6_RECVPKTINFO, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVPKTINFO, 0 };
 #endif
 #ifdef IPV6_RTHDR
-const struct optdesc opt_ipv6_rthdr   = { "ipv6-rthdr",   "rthdr",   OPT_IPV6_RTHDR,   GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RTHDR };
+const struct optdesc opt_ipv6_rthdr   = { "ipv6-rthdr",   "rthdr",   OPT_IPV6_RTHDR,   GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RTHDR, 0 };
 #endif
 #ifdef IPV6_RECVRTHDR
-const struct optdesc opt_ipv6_recvrthdr   = { "ipv6-recvrthdr",   "recvrthdr",   OPT_IPV6_RECVRTHDR,   GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVRTHDR };
+const struct optdesc opt_ipv6_recvrthdr   = { "ipv6-recvrthdr",   "recvrthdr",   OPT_IPV6_RECVRTHDR,   GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVRTHDR, 0 };
 #endif
 #ifdef IPV6_AUTHHDR
-const struct optdesc opt_ipv6_authhdr = { "ipv6-authhdr", "authhdr", OPT_IPV6_AUTHHDR, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_AUTHHDR };
+const struct optdesc opt_ipv6_authhdr = { "ipv6-authhdr", "authhdr", OPT_IPV6_AUTHHDR, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_AUTHHDR, 0 };
 #endif
 #ifdef IPV6_DSTOPTS
-const struct optdesc opt_ipv6_dstopts = { "ipv6-dstopts", "dstopts", OPT_IPV6_DSTOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_DSTOPTS };
+const struct optdesc opt_ipv6_dstopts = { "ipv6-dstopts", "dstopts", OPT_IPV6_DSTOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_DSTOPTS, 0 };
 #endif
 #ifdef IPV6_RECVDSTOPTS
-const struct optdesc opt_ipv6_recvdstopts = { "ipv6-recvdstopts", "recvdstopts", OPT_IPV6_RECVDSTOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVDSTOPTS };
+const struct optdesc opt_ipv6_recvdstopts = { "ipv6-recvdstopts", "recvdstopts", OPT_IPV6_RECVDSTOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVDSTOPTS, 0 };
 #endif
 #ifdef IPV6_HOPOPTS
-const struct optdesc opt_ipv6_hopopts = { "ipv6-hopopts", "hopopts", OPT_IPV6_HOPOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_HOPOPTS };
+const struct optdesc opt_ipv6_hopopts = { "ipv6-hopopts", "hopopts", OPT_IPV6_HOPOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_HOPOPTS, 0 };
 #endif
 #ifdef IPV6_RECVHOPOPTS
-const struct optdesc opt_ipv6_recvhopopts = { "ipv6-recvhopopts", "recvhopopts", OPT_IPV6_RECVHOPOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVHOPOPTS };
+const struct optdesc opt_ipv6_recvhopopts = { "ipv6-recvhopopts", "recvhopopts", OPT_IPV6_RECVHOPOPTS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVHOPOPTS, 0 };
 #endif
 #ifdef IPV6_FLOWINFO /* is in linux/in6.h */
 const struct optdesc opt_ipv6_flowinfo= { "ipv6-flowinfo","flowinfo",OPT_IPV6_FLOWINFO,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_FLOWINFO };
 #endif
 #ifdef IPV6_HOPLIMIT
-const struct optdesc opt_ipv6_hoplimit= { "ipv6-hoplimit","hoplimit",OPT_IPV6_HOPLIMIT,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_HOPLIMIT };
+const struct optdesc opt_ipv6_hoplimit= { "ipv6-hoplimit","hoplimit",OPT_IPV6_HOPLIMIT,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_HOPLIMIT, 0 };
 #endif
-const struct optdesc opt_ipv6_unicast_hops= { "ipv6-unicast-hops","unicast-hops",OPT_IPV6_UNICAST_HOPS,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_UNICAST_HOPS };
+const struct optdesc opt_ipv6_unicast_hops= { "ipv6-unicast-hops","unicast-hops",OPT_IPV6_UNICAST_HOPS,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_UNICAST_HOPS, 0 };
 #ifdef IPV6_RECVHOPLIMIT
-const struct optdesc opt_ipv6_recvhoplimit= { "ipv6-recvhoplimit","recvhoplimit",OPT_IPV6_RECVHOPLIMIT,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVHOPLIMIT };
+const struct optdesc opt_ipv6_recvhoplimit= { "ipv6-recvhoplimit","recvhoplimit",OPT_IPV6_RECVHOPLIMIT,GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVHOPLIMIT, 0 };
 #endif
 #ifdef IPV6_RECVERR
-const struct optdesc opt_ipv6_recverr = { "ipv6-recverr", "recverr", OPT_IPV6_RECVERR, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVERR };
+const struct optdesc opt_ipv6_recverr = { "ipv6-recverr", "recverr", OPT_IPV6_RECVERR, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVERR, 0 };
 #endif
 #ifdef IPV6_TCLASS
-const struct optdesc opt_ipv6_tclass     = { "ipv6-tclass",     "tclass",     OPT_IPV6_TCLASS,     GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_IPV6, IPV6_TCLASS };
+const struct optdesc opt_ipv6_tclass     = { "ipv6-tclass",     "tclass",     OPT_IPV6_TCLASS,     GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT,  OFUNC_SOCKOPT, SOL_IPV6, IPV6_TCLASS, 0 };
 #endif
 #ifdef IPV6_RECVTCLASS
-const struct optdesc opt_ipv6_recvtclass = { "ipv6-recvtclass", "recvtclass", OPT_IPV6_RECVTCLASS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVTCLASS };
+const struct optdesc opt_ipv6_recvtclass = { "ipv6-recvtclass", "recvtclass", OPT_IPV6_RECVTCLASS, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVTCLASS, 0 };
 #endif
 #ifdef IPV6_RECVPATHMTU
-const struct optdesc opt_ipv6_recvpathmtu = { "ipv6-recvpathmtu", "recvpathmtu", OPT_IPV6_RECVPATHMTU, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVPATHMTU };
+const struct optdesc opt_ipv6_recvpathmtu = { "ipv6-recvpathmtu", "recvpathmtu", OPT_IPV6_RECVPATHMTU, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_RECVPATHMTU, 0 };
 #endif
 #ifdef IPV6_MULTICAST_LOOP
-const struct optdesc opt_ipv6_multicast_loop = { "ipv6-multicast-loop", "mcloop6", OPT_IPV6_MULTICAST_LOOP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_MULTICAST_LOOP };
+const struct optdesc opt_ipv6_multicast_loop = { "ipv6-multicast-loop", "mcloop6", OPT_IPV6_MULTICAST_LOOP, GROUP_SOCK_IP6, PH_PASTSOCKET, TYPE_INT, OFUNC_SOCKOPT, SOL_IPV6, IPV6_MULTICAST_LOOP, 0 };
 #endif
 
 /* Returns canonical form of IPv6 address.
