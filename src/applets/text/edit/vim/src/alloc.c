@@ -379,18 +379,11 @@ free_all_mem(void)
     if (!ONE_WINDOW)
 	do_cmdline_cmd((char_u *)"only!");
 
-# if defined(FEAT_SPELL)
-    // Free all spell info.
-    spell_free_all();
-# endif
-
+#line 387
 # if defined(FEAT_BEVAL_TERM)
     ui_remove_balloon();
 # endif
-# ifdef FEAT_PROP_POPUP
-    if (curwin != NULL)
-	close_all_popups(TRUE);
-# endif
+#line 394
 
     // Clear user commands (before deleting buffers).
     ex_comclear(NULL);
@@ -399,14 +392,7 @@ free_all_mem(void)
     // and not much else.
     if (curbuf != NULL)
     {
-# ifdef FEAT_MENU
-	// Clear menus.
-	do_cmdline_cmd((char_u *)"aunmenu *");
-	do_cmdline_cmd((char_u *)"tlunmenu *");
-#  ifdef FEAT_MULTI_LANG
-	do_cmdline_cmd((char_u *)"menutranslate clear");
-#  endif
-# endif
+#line 410
 	// Clear mappings, abbreviations, breakpoints.
 	do_cmdline_cmd((char_u *)"lmapclear");
 	do_cmdline_cmd((char_u *)"xmapclear");
@@ -416,12 +402,7 @@ free_all_mem(void)
 # if defined(FEAT_EVAL)
 	do_cmdline_cmd((char_u *)"breakdel *");
 # endif
-# if defined(FEAT_PROFILE)
-	do_cmdline_cmd((char_u *)"profdel *");
-# endif
-# if defined(FEAT_KEYMAP)
-	do_cmdline_cmd((char_u *)"set keymap=");
-# endif
+#line 425
     }
 
     free_titles();
@@ -457,9 +438,7 @@ free_all_mem(void)
 
     // Free some global vars.
     free_username();
-# ifdef FEAT_CLIPBOARD
-    vim_regfree(clip_exclude_prog);
-# endif
+#line 463
     vim_free(last_cmdline);
     vim_free(new_last_cmdline);
     set_keep_msg(NULL, 0);
@@ -467,9 +446,7 @@ free_all_mem(void)
     // Clear cmdline history.
     p_hi = 0;
     init_history();
-# ifdef FEAT_PROP_POPUP
-    clear_global_prop_types();
-# endif
+#line 473
 
 # ifdef FEAT_QUICKFIX
     free_quickfix();
@@ -514,10 +491,7 @@ free_all_mem(void)
     ResetRedobuff();
     ResetRedobuff();
 
-# if defined(FEAT_CLIENTSERVER) && defined(FEAT_X11)
-    vim_free(serverDelayedStartName);
-# endif
-
+#line 521
     // highlight info
     free_highlight();
 
@@ -539,20 +513,12 @@ free_all_mem(void)
 	if (delete_first_msg() == FAIL)
 	    break;
 
-# ifdef FEAT_JOB_CHANNEL
-    channel_free_all();
-# endif
-# ifdef FEAT_TIMERS
-    timer_free_all();
-# endif
+#line 548
 # ifdef FEAT_EVAL
     // must be after channel_free_all() with unrefs partials
     eval_clear();
 # endif
-# ifdef FEAT_JOB_CHANNEL
-    // must be after eval_clear() with unrefs jobs
-    job_free_all();
-# endif
+#line 556
 
     free_termoptions();
     free_cur_term();
@@ -560,15 +526,11 @@ free_all_mem(void)
     // screenlines (can't display anything now!)
     free_screenlines();
 
-# if defined(FEAT_SOUND)
-    sound_free();
-# endif
+#line 566
 # if defined(USE_XSMP)
     xsmp_close();
 # endif
-# ifdef FEAT_GUI_GTK
-    gui_mch_free_all();
-# endif
+#line 572
 # ifdef FEAT_TCL
     vim_tcl_finalize();
 # endif
@@ -898,4 +860,3 @@ append_ga_line(garray_T *gap)
     gap->ga_len = 0;
 }
 #endif
-

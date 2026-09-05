@@ -90,11 +90,7 @@ struct ectx_S {
     where_T	ec_where;
 };
 
-#ifdef FEAT_PROFILE
-// stack of profinfo_T used when profiling.
-static garray_T profile_info_ga = {0, 0, sizeof(profinfo_T), 20, NULL};
-#endif
-
+#line 98
 // Get pointer to item in the stack.
 #define STACK_TV(idx) (((typval_T *)ectx->ec_stack.ga_data) + idx)
 
@@ -531,22 +527,7 @@ call_dfunc(
 	return FAIL;
     }
 
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-    {
-	if (GA_GROW_OK(&profile_info_ga, 1))
-	{
-	    profinfo_T *info = ((profinfo_T *)profile_info_ga.ga_data)
-						      + profile_info_ga.ga_len;
-	    ++profile_info_ga.ga_len;
-	    CLEAR_POINTER(info);
-	    profile_may_start_func(info, ufunc,
-			(((dfunc_T *)def_functions.ga_data)
-					      + ectx->ec_dfunc_idx)->df_ufunc);
-	}
-    }
-#endif
-
+#line 550
     // When debugging and using "cont" switches to the not-debugged
     // instructions, may need to still compile them.
     compile_type = get_compile_type(ufunc);
@@ -1272,23 +1253,7 @@ func_return(ectx_T *ectx)
     int		prev_dfunc_idx = STACK_TV(ectx->ec_frame_idx
 					+ STACK_FRAME_FUNC_OFF)->vval.v_number;
     funclocal_T	*floc;
-#ifdef FEAT_PROFILE
-    dfunc_T	*prev_dfunc = ((dfunc_T *)def_functions.ga_data)
-							      + prev_dfunc_idx;
-
-    if (do_profiling == PROF_YES)
-    {
-	ufunc_T *caller = prev_dfunc->df_ufunc;
-
-	if (dfunc->df_ufunc->uf_profiling
-				   || (caller != NULL && caller->uf_profiling))
-	{
-	    profile_may_end_func(((profinfo_T *)profile_info_ga.ga_data)
-			+ profile_info_ga.ga_len - 1, dfunc->df_ufunc, caller);
-	    --profile_info_ga.ga_len;
-	}
-    }
-#endif
+#line 1292
 
     if (dfunc->df_defer_var_idx > 0)
 	invoke_defer_funcs(ectx);
@@ -4104,15 +4069,7 @@ exec_instructions(ectx_T *ectx)
 				msg_attr(ga.ga_data, echo_attr);
 				out_flush();
 			    }
-#ifdef HAS_MESSAGE_WINDOW
-			    else if (iptr->isn_type == ISN_ECHOWINDOW)
-			    {
-				start_echowindow(
-					      iptr->isn_arg.echowin.ewin_time);
-				msg_attr(ga.ga_data, echo_attr);
-				end_echowindow();
-			    }
-#endif
+#line 4116
 			    else if (iptr->isn_type == ISN_ECHOCONSOLE)
 			    {
 				ui_write(ga.ga_data, (int)STRLEN(ga.ga_data),
@@ -4732,16 +4689,10 @@ exec_instructions(ectx_T *ectx)
 					     vim_strsave(iptr->isn_arg.string);
 			break;
 		    case ISN_PUSHCHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-			tv->v_type = VAR_CHANNEL;
-			tv->vval.v_channel = NULL;
-#endif
+#line 4739
 			break;
 		    case ISN_PUSHJOB:
-#ifdef FEAT_JOB_CHANNEL
-			tv->v_type = VAR_JOB;
-			tv->vval.v_job = NULL;
-#endif
+#line 4745
 			break;
 		    case ISN_PUSHOBJ:
 			tv->v_type = VAR_OBJECT;
@@ -6435,22 +6386,7 @@ exec_instructions(ectx_T *ectx)
 	    case ISN_PROF_START:
 	    case ISN_PROF_END:
 		{
-#ifdef FEAT_PROFILE
-		    funccall_T	cookie;
-		    ufunc_T	*cur_ufunc =
-				    (((dfunc_T *)def_functions.ga_data)
-					       + ectx->ec_dfunc_idx)->df_ufunc;
-
-		    cookie.fc_func = cur_ufunc;
-		    if (iptr->isn_type == ISN_PROF_START)
-		    {
-			func_line_start(&cookie, iptr->isn_lnum);
-			// if we get here the instruction is executed
-			func_line_exec(&cookie);
-		    }
-		    else
-			func_line_end(&cookie);
-#endif
+#line 6454
 		}
 		break;
 
@@ -7465,14 +7401,10 @@ list_instructions(char *pfx, isn_T *instr, int instr_count, ufunc_T *ufunc)
 		}
 		break;
 	    case ISN_PUSHCHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-		smsg("%s%4d PUSHCHANNEL 0", pfx, current);
-#endif
+#line 7471
 		break;
 	    case ISN_PUSHJOB:
-#ifdef FEAT_JOB_CHANNEL
-		smsg("%s%4d PUSHJOB \"no process\"", pfx, current);
-#endif
+#line 7476
 		break;
 	    case ISN_PUSHOBJ:
 		smsg("%s%4d PUSHOBJ null", pfx, current);
@@ -8120,11 +8052,7 @@ ex_disassemble(exarg_T *eap)
     switch (compile_type)
     {
 	case CT_PROFILE:
-#ifdef FEAT_PROFILE
-	    instr = dfunc->df_instr_prof;
-	    instr_count = dfunc->df_instr_prof_count;
-	    break;
-#endif
+#line 8128
 	    // FALLTHROUGH
 	case CT_NONE:
 	    instr = dfunc->df_instr;
@@ -8169,17 +8097,13 @@ tv2bool(typval_T *tv)
 	case VAR_SPECIAL:
 	    return tv->vval.v_number == VVAL_TRUE ? TRUE : FALSE;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    return tv->vval.v_job != NULL;
-#else
+#line 8175
 	    break;
-#endif
+#line 8177
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    return tv->vval.v_channel != NULL;
-#else
+#line 8181
 	    break;
-#endif
+#line 8183
 	case VAR_BLOB:
 	    return tv->vval.v_blob != NULL && tv->vval.v_blob->bv_ga.ga_len > 0;
 

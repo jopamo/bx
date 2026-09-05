@@ -86,12 +86,7 @@ check_changed(buf_T *buf, int flags)
 #if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
 	if ((p_confirm || (cmdmod.cmod_flags & CMOD_CONFIRM)) && p_write)
 	{
-# ifdef FEAT_TERMINAL
-	    if (term_job_running(buf->b_term))
-	    {
-		return term_confirm_stop(buf) == FAIL;
-	    }
-# endif
+#line 95
 
 	    buf_T	*buf2;
 	    int		count = 0;
@@ -346,14 +341,7 @@ check_changed_any(
 	    bufref_T bufref;
 
 	    set_bufref(&bufref, buf);
-#ifdef FEAT_TERMINAL
-	    if (term_job_running(buf->b_term))
-	    {
-		if (term_try_stop_job(buf) == FAIL)
-		    break;
-	    }
-	    else
-#endif
+#line 357
 	    // Try auto-writing the buffer.  If this fails but the buffer no
 	    // longer exists it's not changed, that's OK.
 	    if (check_changed(buf, (p_awa ? CCGD_AW : 0)
@@ -387,11 +375,7 @@ check_changed_any(
 	    msg_didout = FALSE;
 	}
 	if (
-#ifdef FEAT_TERMINAL
-		term_job_running(buf->b_term)
-		    ? semsg(_(e_job_still_running_in_buffer_str), buf->b_fname)
-		    :
-#endif
+#line 395
 		semsg(_(e_no_write_since_last_change_for_buffer_str),
 		    buf_spname(buf) != NULL ? buf_spname(buf) : buf->b_fname))
 	{
@@ -536,12 +520,7 @@ ex_listdo(exarg_T *eap)
 	buf = curbuf;
     }
 #endif
-#ifdef FEAT_CLIPBOARD
-    start_global_changes();
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    inc_clip_provider();
-#endif
+#line 545
 
     if (eap->cmdidx == CMD_windo
 	    || eap->cmdidx == CMD_tabdo
@@ -763,12 +742,7 @@ ex_listdo(exarg_T *eap)
 	}
     }
 #endif
-#ifdef FEAT_CLIPBOARD
-    end_global_changes();
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-    dec_clip_provider();
-#endif
+#line 772
 }
 
 #ifdef FEAT_EVAL

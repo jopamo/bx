@@ -1410,21 +1410,7 @@ do_search(
 #endif
     }
 
-#ifdef FEAT_FOLDING
-    // If the cursor is in a closed fold, don't find another match in the same
-    // fold.
-    if (dirc == '/')
-    {
-	if (hasFolding(pos.lnum, NULL, &pos.lnum))
-	    pos.col = MAXCOL - 2;	// avoid overflow when adding 1
-    }
-    else
-    {
-	if (hasFolding(pos.lnum, &pos.lnum, NULL))
-	    pos.col = 0;
-    }
-#endif
-
+#line 1428
 #ifdef FEAT_SEARCH_EXTRA
     /*
      * Turn 'hlsearch' highlighting back on.
@@ -1723,11 +1709,7 @@ do_search(
 	     cmdline_search_stat(dirc, &pos, &curwin->w_cursor,
 				show_top_bot_msg, msgbuf, msgbuflen,
 				(count != 1 || has_offset
-#ifdef FEAT_FOLDING
-				 || (!(fdo_flags & FDO_SEARCH)
-				     && hasFolding(curwin->w_cursor.lnum,
-								   NULL, NULL))
-#endif
+#line 1731
 				),
 				p_msc,
 				SEARCH_STAT_DEF_TIMEOUT);
@@ -3215,18 +3197,10 @@ current_search(
 	    inc(&VIsual);
     }
 
-#ifdef FEAT_FOLDING
-    if (fdo_flags & FDO_SEARCH && KeyTyped)
-	foldOpenCursor();
-#endif
-
+#line 3223
     may_start_select('c');
     setmouse();
-#ifdef FEAT_CLIPBOARD
-    // Make sure the clipboard gets updated.  Needed because start and
-    // end are still the same, and the selection needs to be owned
-    clip_star.vmode = NUL;
-#endif
+#line 3230
     redraw_curbuf_later(UPD_INVERTED);
     showmode();
 
@@ -3999,9 +3973,7 @@ search_line:
 		}
 		else
 		{
-# ifdef FEAT_GUI
-		    need_mouse_correct = TRUE;
-# endif
+#line 4005
 # if defined(FEAT_QUICKFIX)
 		    // ":psearch" uses the preview window
 		    if (g_do_tagpreview != 0)
@@ -4061,11 +4033,7 @@ search_line:
 		    redraw_later(UPD_VALID);
 		    win_enter(curwin_save, TRUE);
 		}
-#  ifdef FEAT_PROP_POPUP
-		else if (WIN_IS_POPUP(curwin))
-		    // can't keep focus in popup window
-		    win_enter(firstwin, TRUE);
-#  endif
+#line 4069
 # endif
 		break;
 	    }
@@ -4230,26 +4198,7 @@ show_pat_in_path(
 }
 #endif
 
-#ifdef FEAT_VIMINFO
-/*
- * Return the last used search pattern at "idx".
- */
-    spat_T *
-get_spat(int idx)
-{
-    return &spats[idx];
-}
-
-/*
- * Return the last used search pattern index.
- */
-    int
-get_spat_last_idx(void)
-{
-    return last_idx;
-}
-#endif
-
+#line 4253
 #if defined(FEAT_EVAL) || defined(FEAT_PROTO)
 /*
  * "searchcount()" function

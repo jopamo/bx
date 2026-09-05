@@ -1630,10 +1630,7 @@ aucmd_prepbuf(
 
     aco->save_curwin_id = curwin->w_id;
     aco->save_prevwin_id = prevwin == NULL ? 0 : prevwin->w_id;
-#ifdef FEAT_JOB_CHANNEL
-    if (bt_prompt(curbuf))
-	aco->save_prompt_insert = curbuf->b_prompt_insert;
-#endif
+#line 1637
 
     if (win != NULL)
     {
@@ -1753,12 +1750,7 @@ win_found:
 	    // Hmm, original window disappeared.  Just use the first one.
 	    curwin = firstwin;
 	curbuf = curwin->w_buffer;
-#ifdef FEAT_JOB_CHANNEL
-	// May need to restore insert mode for a prompt buffer.
-	entering_window(curwin);
-	if (bt_prompt(curbuf))
-	    curbuf->b_prompt_insert = aco->save_prompt_insert;
-#endif
+#line 1762
 	prevwin = win_find_by_id(aco->save_prevwin_id);
 #ifdef FEAT_EVAL
 	vars_clear(&awp->w_vars->dv_hashtab);  // free all w: variables
@@ -1783,15 +1775,7 @@ win_found:
 	    curwin->w_topfill = 0;
 #endif
 	}
-#if defined(FEAT_GUI)
-	if (gui.in_use)
-	{
-	    // Hide the scrollbars from the "awp" and update.
-	    gui_mch_enable_scrollbar(&awp->w_scrollbars[SBAR_LEFT], FALSE);
-	    gui_mch_enable_scrollbar(&awp->w_scrollbars[SBAR_RIGHT], FALSE);
-	    gui_may_update_scrollbars();
-	}
-#endif
+#line 1795
     }
     else
     {
@@ -2112,9 +2096,7 @@ apply_autocmds_group(
     long	save_cmdbang;
 #endif
     static int	filechangeshell_busy = FALSE;
-#ifdef FEAT_PROFILE
-    proftime_T	wait_time;
-#endif
+#line 2118
     int		did_save_redobuff = FALSE;
     save_redo_T	save_redo;
     int		save_KeyTyped = KeyTyped;
@@ -2355,10 +2337,7 @@ apply_autocmds_group(
     save_current_sctx = current_sctx;
 
 #ifdef FEAT_EVAL
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_enter(&wait_time); // doesn't count for the caller itself
-# endif
+#line 2362
 
     // Don't use local function variables, if called from a function.
     save_funccal(&funccal_entry);
@@ -2476,10 +2455,7 @@ apply_autocmds_group(
     current_sctx = save_current_sctx;
 #ifdef FEAT_EVAL
     restore_funccal();
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_exit(&wait_time);
-# endif
+#line 2483
 #endif
     KeyTyped = save_KeyTyped;
     vim_free(fname);

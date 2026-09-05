@@ -78,17 +78,7 @@ change_warning(int col)
     void
 changed(void)
 {
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-    if (p_imst == IM_ON_THE_SPOT)
-    {
-	// The text of the preediting area is inserted, but this doesn't
-	// mean a change of the buffer yet.  That is delayed until the
-	// text is committed. (this means preedit becomes empty)
-	if (im_is_preediting() && !xim_changed_while_preediting)
-	    return;
-	xim_changed_while_preediting = FALSE;
-    }
-#endif
+#line 92
 
     if (!curbuf->b_changed)
     {
@@ -768,32 +758,7 @@ changed_common(
 
 	    // Check if a change in the buffer has invalidated the cached
 	    // values for the cursor.
-#ifdef FEAT_FOLDING
-	    // Update the folds for this window.  Can't postpone this, because
-	    // a following operator might work on the whole fold: ">>dd".
-	    foldUpdate(wp, lnum, last);
-
-	    // The change may cause lines above or below the change to become
-	    // included in a fold.  Set lnum/lnume to the first/last line that
-	    // might be displayed differently.
-	    // Set w_cline_folded here as an efficient way to update it when
-	    // inserting lines just above a closed fold.
-	    i = hasFoldingWin(wp, lnum, &lnum, NULL, FALSE, NULL);
-	    if (wp->w_cursor.lnum == lnum)
-		wp->w_cline_folded = i;
-	    i = hasFoldingWin(wp, last, NULL, &last, FALSE, NULL);
-	    if (wp->w_cursor.lnum == last)
-		wp->w_cline_folded = i;
-
-	    // If the changed line is in a range of previously folded lines,
-	    // compare with the first line in that range.
-	    if (wp->w_cursor.lnum <= lnum)
-	    {
-		i = find_wl_entry(wp, lnum);
-		if (i >= 0 && wp->w_cursor.lnum > wp->w_lines[i].wl_lnum)
-		    changed_line_abv_curs_win(wp);
-	    }
-#endif
+#line 797
 	    if (wp->w_cursor.lnum > lnum)
 		changed_line_abv_curs_win(wp);
 	    else if (wp->w_cursor.lnum == lnum && wp->w_cursor.col >= col)
@@ -828,27 +793,13 @@ changed_common(
 			{
 			    // line below change
 			    wp->w_lines[i].wl_lnum += xtra;
-#ifdef FEAT_FOLDING
-			    wp->w_lines[i].wl_lastlnum += xtra;
-#endif
+#line 834
 			}
 		    }
-#ifdef FEAT_FOLDING
-		    else if (wp->w_lines[i].wl_lastlnum >= lnum)
-		    {
-			// change somewhere inside this range of folded lines,
-			// may need to be redrawn
-			wp->w_lines[i].wl_valid = FALSE;
-		    }
-#endif
+#line 844
 		}
 
-#ifdef FEAT_FOLDING
-	    // Take care of side effects for setting w_topline when folds have
-	    // changed.  Esp. when the buffer was changed in another window.
-	    if (hasAnyFolding(wp))
-		set_topline(wp, wp->w_topline);
-#endif
+#line 852
 	    // If lines have been added or removed, relative numbering always
 	    // requires an update even if cursor didn't move.
 	    if (wp->w_p_rnu && xtra != 0)
@@ -917,16 +868,7 @@ changed_bytes(linenr_T lnum, colnr_T col)
     changedOneline(curbuf, lnum);
     changed_common(lnum, col, lnum + 1, 0L);
 
-#ifdef FEAT_SPELL
-    // When text has been changed at the end of the line, possibly the start of
-    // the next line may have SpellCap that should be removed or it needs to be
-    // displayed.  Schedule the next line for redrawing just in case.
-    // Don't do this when displaying '$' at the end of changed text.
-    if (spell_check_window(curwin)
-	    && lnum < curbuf->b_ml.ml_line_count
-	    && vim_strchr(p_cpo, CPO_DOLLAR) == NULL)
-	redrawWinline(curwin, lnum + 1);
-#endif
+#line 930
 #ifdef FEAT_DIFF
     // Diff highlighting in other diff windows may need to be updated too.
     if (curwin->w_p_diff)
@@ -953,10 +895,7 @@ changed_bytes(linenr_T lnum, colnr_T col)
     void
 inserted_bytes(linenr_T lnum, colnr_T col, int added UNUSED)
 {
-#ifdef FEAT_PROP_POPUP
-    if (curbuf->b_has_textprop && added != 0)
-	adjust_prop_columns(lnum, col, added, 0);
-#endif
+#line 960
 
     changed_bytes(lnum, col);
 }
@@ -1112,9 +1051,7 @@ unchanged(buf_T *buf, int ff, int always_inc_changedtick)
     }
     else if (always_inc_changedtick)
 	++CHANGEDTICK(buf);
-#ifdef FEAT_NETBEANS_INTG
-    netbeans_unmodified(buf);
-#endif
+#line 1118
 }
 
 /*
@@ -1336,11 +1273,7 @@ ins_char_bytes(char_u *buf, int charlen)
 
     // mark the buffer as changed and prepare for displaying
     changed_bytes(lnum, col);
-#ifdef FEAT_PROP_POPUP
-    if (curbuf->b_has_textprop && newlen != oldlen)
-	adjust_prop_columns(lnum, col, newlen - oldlen,
-				    State & REPLACE_FLAG ? APC_SUBSTITUTE : 0);
-#endif
+#line 1344
 
     // If we're in Insert or Replace mode and 'showmatch' is set, then briefly
     // show the match for right parens and braces.
@@ -1528,11 +1461,7 @@ del_bytes(
     // Can't do this when using Netbeans, because we would need to invoke
     // netbeans_removed(), which deallocates the line.	Let ml_replace() take
     // care of notifying Netbeans.
-#ifdef FEAT_NETBEANS_INTG
-    if (netbeans_active())
-	alloc_newp = TRUE;
-    else
-#endif
+#line 1536
 	alloc_newp = !ml_line_alloced();    // check if oldp was allocated
     if (!alloc_newp)
 	newp = oldp;			    // use same allocated memory
@@ -1548,12 +1477,7 @@ del_bytes(
 	ml_replace(lnum, newp, FALSE);
     else
     {
-#ifdef FEAT_PROP_POPUP
-	// Also move any following text properties.
-	if (oldlen + 1 < curbuf->b_ml.ml_line_len)
-	    mch_memmove(newp + newlen + 1, oldp + oldlen + 1,
-			       (size_t)curbuf->b_ml.ml_line_len - oldlen - 1);
-#endif
+#line 1557
 	curbuf->b_ml.ml_line_len -= count;
 	curbuf->b_ml.ml_line_textlen = 0;
     }
@@ -1623,19 +1547,14 @@ open_line(
     int		vreplace_mode;
     int		did_append;		// appended a new line
     int		saved_pi = curbuf->b_p_pi; // copy of preserveindent setting
-#ifdef FEAT_PROP_POPUP
-    int		at_eol;			// cursor after last character
-#endif
+#line 1629
 
     // make a copy of the current line so we can mess with it
     saved_line = vim_strnsave(ml_get_curline(), ml_get_curline_len());
     if (saved_line == NULL)	    // out of memory!
 	return FALSE;
 
-#ifdef FEAT_PROP_POPUP
-    at_eol = curwin->w_cursor.col >= (int)ml_get_curline_len();
-#endif
-
+#line 1639
     if (State & VREPLACE_FLAG)
     {
 	// With MODE_VREPLACE we make a copy of the next line, which we will be
@@ -2352,12 +2271,7 @@ open_line(
 	// with markers.
 	mark_adjust(curwin->w_cursor.lnum + 1, (linenr_T)MAXLNUM, 1L, 0L);
 	did_append = TRUE;
-#ifdef FEAT_PROP_POPUP
-	if ((State & MODE_INSERT) && (State & VREPLACE_FLAG) == 0)
-	    // Properties after the split move to the next line.
-	    adjust_props_for_split(curwin->w_cursor.lnum, curwin->w_cursor.lnum,
-		    curwin->w_cursor.col + 1, 0, at_eol);
-#endif
+#line 2361
     }
     else
     {
@@ -2443,12 +2357,7 @@ open_line(
 		    mark_col_adjust(curwin->w_cursor.lnum,
 					 curwin->w_cursor.col + less_cols_off,
 						      1L, (long)-less_cols, 0);
-#ifdef FEAT_PROP_POPUP
-		// Keep into account the deleted blanks on the new line.
-		if (curbuf->b_has_textprop && less_cols_off != 0)
-		    adjust_prop_columns(curwin->w_cursor.lnum + 1, 0,
-							    -less_cols_off, 0);
-#endif
+#line 2452
 	    }
 	    else
 		changed_bytes(curwin->w_cursor.lnum, curwin->w_cursor.col);

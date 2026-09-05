@@ -101,11 +101,7 @@ match_add(
     m->mit_match.regprog = regprog;
     m->mit_match.rmm_ic = FALSE;
     m->mit_match.rmm_maxcol = 0;
-# if defined(FEAT_CONCEAL)
-    m->mit_conceal_char = 0;
-    if (conceal_char != NULL)
-	m->mit_conceal_char = (*mb_ptr2char)(conceal_char);
-# endif
+#line 109
 
     // Set up position matches
     if (pos_list != NULL)
@@ -552,15 +548,9 @@ prepare_search_hl(win_T *wp, match_T *search_hl, linenr_T lnum)
 	{
 	    if (shl->first_lnum == 0)
 	    {
-# ifdef FEAT_FOLDING
-		for (shl->first_lnum = lnum;
-			   shl->first_lnum > wp->w_topline; --shl->first_lnum)
-		    if (hasFoldingWin(wp, shl->first_lnum - 1,
-						      NULL, NULL, TRUE, NULL))
-			break;
-# else
+#line 562
 		shl->first_lnum = wp->w_topline;
-# endif
+#line 564
 	    }
 	    if (cur != NULL)
 		cur->mit_pos_cur = 0;
@@ -757,19 +747,7 @@ update_search_hl(
 		if (shl->endcol < next_col)
 		    shl->endcol = next_col;
 		shl->attr_cur = shl->attr;
-# ifdef FEAT_CONCEAL
-		// Match with the "Conceal" group results in hiding
-		// the match.
-		if (cur != NULL
-			&& shl != search_hl
-			&& syn_name2id((char_u *)"Conceal") == cur->mit_hlg_id)
-		{
-		    *has_match_conc = col == shl->startcol ? 2 : 1;
-		    *match_conc = cur->mit_conceal_char;
-		}
-		else
-		    *has_match_conc = 0;
-# endif
+#line 773
 		// Highlight the match were the cursor is using the CurSearch
 		// group.
 		if (shl == search_hl && shl->has_cursor)
@@ -869,12 +847,7 @@ get_prevcol_hl_flag(win_T *wp, match_T *search_hl, long curcol)
     int		prevcol_hl_flag = FALSE;
     matchitem_T *cur;			// points to the match list
 
-# if defined(FEAT_PROP_POPUP)
-    // don't do this in a popup window
-    if (popup_is_popup(wp))
-	return FALSE;
-# endif
-
+#line 878
     // we're not really at that column when skipping some text
     if ((long)(wp->w_p_wrap ? wp->w_skipcol : wp->w_leftcol) > prevcol)
 	++prevcol;
@@ -1045,17 +1018,7 @@ f_getmatches(typval_T *argvars UNUSED, typval_T *rettv UNUSED)
 	dict_add_string(dict, "group", syn_id2name(cur->mit_hlg_id));
 	dict_add_number(dict, "priority", (long)cur->mit_priority);
 	dict_add_number(dict, "id", (long)cur->mit_id);
-#  if defined(FEAT_CONCEAL)
-	if (cur->mit_conceal_char)
-	{
-	    char_u  buf[MB_MAXBYTES + 1];
-	    int	    buflen;
-
-	    buflen = (*mb_char2bytes)(cur->mit_conceal_char, buf);
-	    buf[buflen] = NUL;
-	    dict_add_string_len(dict, "conceal", (char_u *)&buf, buflen);
-	}
-#  endif
+#line 1059
 	list_append_dict(rettv->vval.v_list, dict);
 	cur = cur->mit_next;
     }

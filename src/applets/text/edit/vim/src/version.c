@@ -140,46 +140,28 @@ static char *(features[]) =
 #else
 	"-byte_offset",
 #endif
-#ifdef FEAT_JOB_CHANNEL
-	"+channel",
-#else
+#line 146
 	"-channel",
-#endif
+#line 148
 	"+cindent",
-#ifdef FEAT_CLIENTSERVER
-	"+clientserver",
-#else
+#line 152
 	"-clientserver",
-#endif
-#ifdef FEAT_CLIPBOARD
-	"+clipboard",
-#else
+#line 157
 	"-clipboard",
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	"+clipboard_provider",
-#else
+#line 162
 	"-clipboard_provider",
-#endif
+#line 164
 	"+cmdline_compl",
 	"+cmdline_hist",
 	"+cmdline_info",
 	"+comments",
-#ifdef FEAT_CONCEAL
-	"+conceal",
-#else
+#line 171
 	"-conceal",
-#endif
-#ifdef FEAT_CRYPT
-	"+cryptv",
-#else
+#line 176
 	"-cryptv",
-#endif
-#ifdef FEAT_CSCOPE
-	"+cscope",
-#else
+#line 181
 	"-cscope",
-#endif
+#line 183
 	"+cursorbind",
 #ifdef CURSOR_SHAPE
 	"+cursorshape",
@@ -209,13 +191,7 @@ static char *(features[]) =
 #else
 	"-digraphs",
 #endif
-#ifdef FEAT_GUI_MSWIN
-# ifdef FEAT_DIRECTX
-	"+directx",
-# else
-	"-directx",
-# endif
-#endif
+#line 219
 #ifdef FEAT_DND
 	"+dnd",
 #else
@@ -246,11 +222,9 @@ static char *(features[]) =
 	"-find_in_path",
 #endif
 	"+float",
-#ifdef FEAT_FOLDING
-	"+folding",
-#else
+#line 252
 	"-folding",
-#endif
+#line 254
 	"-footer",
 	// only interesting on Unix systems
 #if !defined(USE_SYSTEM) && defined(UNIX)
@@ -281,32 +255,23 @@ static char *(features[]) =
 #else
 	"-ipv6",
 #endif
-#ifdef FEAT_JOB_CHANNEL
-	"+job",
-#else
+#line 287
 	"-job",
-#endif
+#line 289
 	"+jumplist",
-#ifdef FEAT_KEYMAP
-	"+keymap",
-#else
+#line 293
 	"-keymap",
-#endif
+#line 295
 #ifdef FEAT_EVAL
 	"+lambda",
 #else
 	"-lambda",
 #endif
-#ifdef FEAT_LANGMAP
-	"+langmap",
-#else
+#line 303
 	"-langmap",
-#endif
-#ifdef FEAT_LIBCALL
-	"+libcall",
-#else
+#line 308
 	"-libcall",
-#endif
+#line 310
 #ifdef FEAT_LINEBREAK
 	"+linebreak",
 #else
@@ -324,16 +289,11 @@ static char *(features[]) =
 #else
 	"-lua",
 #endif
-#ifdef FEAT_MENU
-	"+menu",
-#else
+#line 330
 	"-menu",
-#endif
-#ifdef FEAT_SESSION
-	"+mksession",
-#else
+#line 335
 	"-mksession",
-#endif
+#line 337
 	"+modify_fname",
 	"+mouse",
 #ifdef FEAT_MOUSESHAPE
@@ -401,11 +361,9 @@ static char *(features[]) =
 #else
 	"+multi_byte",
 #endif
-#ifdef FEAT_MULTI_LANG
-	"+multi_lang",
-#else
+#line 407
 	"-multi_lang",
-#endif
+#line 409
 #ifdef FEAT_MZSCHEME
 # ifdef DYNAMIC_MZSCHEME
 	"+mzscheme/dyn",
@@ -415,19 +373,11 @@ static char *(features[]) =
 #else
 	"-mzscheme",
 #endif
-#ifdef FEAT_NETBEANS_INTG
-	"+netbeans_intg",
-#else
+#line 421
 	"-netbeans_intg",
-#endif
+#line 423
 	"+num64",
-#ifdef FEAT_GUI_MSWIN
-# ifdef FEAT_OLE
-	"+ole",
-# else
-	"-ole",
-# endif
-#endif
+#line 431
 #if defined(FEAT_EVAL) && !defined(BX_VIM_NO_PACKAGES)
 	"+packages",
 #else
@@ -448,26 +398,13 @@ static char *(features[]) =
 #else
 	"-persistent_undo",
 #endif
-#ifdef FEAT_PROP_POPUP
-	"+popupwin",
-#else
+#line 454
 	"-popupwin",
-#endif
-#ifdef FEAT_PRINTER
-# ifdef FEAT_POSTSCRIPT
-	"+postscript",
-# else
-	"-postscript",
-# endif
-	"+printer",
-#else
+#line 464
 	"-printer",
-#endif
-#ifdef FEAT_PROFILE
-	"+profile",
-#else
+#line 469
 	"-profile",
-#endif
+#line 471
 #ifdef FEAT_PYTHON
 # ifdef DYNAMIC_PYTHON
 	"+python/dyn",
@@ -521,30 +458,15 @@ static char *(features[]) =
 	"-signs",
 #endif
 	"+smartindent",
-#ifdef FEAT_SOCKETSERVER
-	"+socketserver",
-#else
+#line 527
 	"-socketserver",
-#endif
-#ifdef FEAT_SODIUM
-# ifdef DYNAMIC_SODIUM
-	"+sodium/dyn",
-# else
-	"+sodium",
-# endif
-#else
+#line 536
 	"-sodium",
-#endif
-#ifdef FEAT_SOUND
-	"+sound",
-#else
+#line 541
 	"-sound",
-#endif
-#ifdef FEAT_SPELL
-	"+spell",
-#else
+#line 546
 	"-spell",
-#endif
+#line 548
 #ifdef STARTUPTIME
 	"+startuptime",
 #else
@@ -587,11 +509,9 @@ static char *(features[]) =
 #else
 	"-termguicolors",
 #endif
-#ifdef FEAT_TERMINAL
-	"+terminal",
-#else
+#line 593
 	"-terminal",
-#endif
+#line 595
 #if defined(UNIX)
 // only Unix can have terminfo instead of termcap
 # ifdef TERMINFO
@@ -606,11 +526,9 @@ static char *(features[]) =
 	"-termresponse",
 #endif
 	"+textobjects",
-#ifdef FEAT_PROP_POPUP
-	"+textprop",
-#else
+#line 612
 	"-textprop",
-#endif
+#line 614
 #if !defined(UNIX)
 // unix always includes termcap support
 # ifdef HAVE_TGETENT
@@ -619,17 +537,13 @@ static char *(features[]) =
 	"-tgetent",
 # endif
 #endif
-#ifdef FEAT_TIMERS
-	"+timers",
-#else
+#line 625
 	"-timers",
-#endif
+#line 627
 	"+title",
-#ifdef FEAT_TOOLBAR
-	"+toolbar",
-#else
+#line 631
 	"-toolbar",
-#endif
+#line 633
 	"+user_commands",
 #ifdef FEAT_VARTABS
 	"+vartabs",
@@ -638,11 +552,9 @@ static char *(features[]) =
 #endif
 	"+vertsplit",
 	"+vim9script",
-#ifdef FEAT_VIMINFO
-	"+viminfo",
-#else
+#line 644
 	"-viminfo",
-#endif
+#line 646
 	"+virtualedit",
 	"+visual",
 	"+visualextra",
@@ -713,11 +625,9 @@ static char *(features[]) =
 # else
 	"-xsmp",
 # endif
-# ifdef FEAT_XCLIPBOARD
-	"+xterm_clipboard",
-# else
+#line 719
 	"-xterm_clipboard",
-# endif
+#line 721
 #endif
 #ifdef FEAT_XTERM_SAVE
 	"+xterm_save",
@@ -1901,32 +1811,7 @@ list_version(void)
     init_longVersion();
     msg(longVersion);
 #ifdef MSWIN
-# ifdef FEAT_GUI_MSWIN
-#  ifdef VIMDLL
-#   ifdef _WIN64
-#    if defined(_M_ARM64) || defined(_M_ARM64EC)
-     msg_puts(_("\nMS-Windows ARM64 GUI/console version"));
-#    else
-     msg_puts(_("\nMS-Windows 64-bit GUI/console version"));
-#    endif
-#   else
-    msg_puts(_("\nMS-Windows 32-bit GUI/console version"));
-#   endif
-#  else
-#   ifdef _WIN64
-#    if defined(_M_ARM64) || defined(_M_ARM64EC)
-     msg_puts(_("\nMS-Windows ARM64 GUI version"));
-#    else
-     msg_puts(_("\nMS-Windows 64-bit GUI version"));
-#    endif
-#   else
-    msg_puts(_("\nMS-Windows 32-bit GUI version"));
-#   endif
-#  endif
-#  ifdef FEAT_OLE
-    msg_puts(_(" with OLE support"));
-#  endif
-# else
+#line 1930
 #  ifdef _WIN64
 #   if defined(_M_ARM64) || defined(_M_ARM64EC)
     msg_puts(_("\nMS-Windows ARM64 console version"));
@@ -1936,7 +1821,7 @@ list_version(void)
 #  else
     msg_puts(_("\nMS-Windows 32-bit console version"));
 #  endif
-# endif
+#line 1940
 #endif
 #if defined(MACOS_X)
 # if defined(MACOS_X_DARWIN)
@@ -2038,25 +1923,9 @@ list_version(void)
 #else
     msg_puts(_("\nTiny version "));
 #endif
-#if !defined(FEAT_GUI)
+#line 2042
     msg_puts(_("without GUI."));
-#elif defined(FEAT_GUI_GTK)
-# if defined(USE_GTK3)
-    msg_puts(_("with GTK3 GUI."));
-# elif defined(FEAT_GUI_GNOME)
-    msg_puts(_("with GTK2-GNOME GUI."));
-# else
-    msg_puts(_("with GTK2 GUI."));
-# endif
-#elif defined(FEAT_GUI_MOTIF)
-    msg_puts(_("with X11-Motif GUI."));
-#elif defined(FEAT_GUI_HAIKU)
-    msg_puts(_("with Haiku GUI."));
-#elif defined(FEAT_GUI_PHOTON)
-    msg_puts(_("with Photon GUI."));
-#elif defined(MSWIN)
-    msg_puts(_("with GUI."));
-#endif
+#line 2060
     version_msg(_("  Features included (+) or not (-):\n"));
 
     list_features();
@@ -2104,36 +1973,11 @@ list_version(void)
     version_msg(USR_EXRC_FILE2);
     version_msg("\"\n");
 #endif
-#ifdef FEAT_GUI
-# ifdef SYS_GVIMRC_FILE
-    version_msg(_("  system gvimrc file: \""));
-    version_msg(SYS_GVIMRC_FILE);
-    version_msg("\"\n");
-# endif
-    version_msg(_("    user gvimrc file: \""));
-    version_msg(USR_GVIMRC_FILE);
-    version_msg("\"\n");
-# ifdef USR_GVIMRC_FILE2
-    version_msg(_("2nd user gvimrc file: \""));
-    version_msg(USR_GVIMRC_FILE2);
-    version_msg("\"\n");
-# endif
-# ifdef USR_GVIMRC_FILE3
-    version_msg(_("3rd user gvimrc file: \""));
-    version_msg(USR_GVIMRC_FILE3);
-    version_msg("\"\n");
-# endif
-#endif
+#line 2127
     version_msg(_("       defaults file: \""));
     version_msg(VIM_DEFAULTS_FILE);
     version_msg("\"\n");
-#ifdef FEAT_GUI
-# ifdef SYS_MENU_FILE
-    version_msg(_("    system menu file: \""));
-    version_msg(SYS_MENU_FILE);
-    version_msg("\"\n");
-# endif
-#endif
+#line 2137
 #ifdef HAVE_PATHDEF
     if (*default_vim_dir != NUL)
     {
@@ -2220,31 +2064,7 @@ intro_message(
 	N_("type  :set nocp<Enter>        for Vim defaults"),
 	N_("type  :help cp-default<Enter> for info on this"),
     };
-#ifdef FEAT_GUI
-    static char	*(gui_lines[]) =
-    {
-	NULL,
-	NULL,
-	NULL,
-	NULL,
-# ifdef MODIFIED_BY
-	NULL,
-# endif
-	NULL,
-	NULL,
-	NULL,
-	N_("menu  Help->Orphans           for information    "),
-	NULL,
-	N_("Running modeless, typed text is inserted"),
-	N_("menu  Edit->Global Settings->Toggle Insert Mode  "),
-	N_("                              for two modes      "),
-	NULL,
-	NULL,
-	NULL,
-	N_("menu  Edit->Global Settings->Toggle Vi Compatible"),
-	N_("                              for Vim defaults   "),
-    };
-#endif
+#line 2248
 
     // blanklines = screen height - # message lines
     blanklines = (int)Rows - (ARRAY_LENGTH(lines) - 1);
@@ -2268,10 +2088,7 @@ intro_message(
 	for (i = 0; i < (int)ARRAY_LENGTH(lines); ++i)
 	{
 	    p = lines[i];
-#ifdef FEAT_GUI
-	    if (p_im && gui.in_use && gui_lines[i] != NULL)
-		p = gui_lines[i];
-#endif
+#line 2275
 	    if (p == NULL)
 	    {
 		if (!p_cp)

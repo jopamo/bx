@@ -837,9 +837,7 @@ comp_textwidth(
 	textwidth = curwin->w_width - curbuf->b_p_wm;
 	if (curbuf == cmdwin_buf)
 	    textwidth -= 1;
-#ifdef FEAT_FOLDING
-	textwidth -= curwin->w_p_fdc;
-#endif
+#line 843
 #ifdef FEAT_SIGNS
 	if (signcolumn_on(curwin))
 	    textwidth -= 1;

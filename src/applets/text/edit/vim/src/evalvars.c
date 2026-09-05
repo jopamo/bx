@@ -412,36 +412,7 @@ eval_charconvert(
     return OK;
 }
 
-#if defined(FEAT_POSTSCRIPT)
-    int
-eval_printexpr(char_u *fname, char_u *args)
-{
-    int		err = FALSE;
-    sctx_T	saved_sctx = current_sctx;
-    sctx_T	*ctx;
-
-    set_vim_var_string(VV_FNAME_IN, fname, -1);
-    set_vim_var_string(VV_CMDARG, args, -1);
-    ctx = get_option_sctx("printexpr");
-    if (ctx != NULL)
-	current_sctx = *ctx;
-
-    if (eval_to_bool(p_pexpr, &err, NULL, FALSE, TRUE))
-	err = TRUE;
-
-    set_vim_var_string(VV_FNAME_IN, NULL, -1);
-    set_vim_var_string(VV_CMDARG, NULL, -1);
-    current_sctx = saved_sctx;
-
-    if (err)
-    {
-	mch_remove(fname);
-	return FAIL;
-    }
-    return OK;
-}
-#endif
-
+#line 445
 #if defined(FEAT_DIFF)
     void
 eval_diff(
@@ -500,75 +471,7 @@ eval_patch(
 }
 #endif
 
-#if defined(FEAT_SPELL)
-/*
- * Evaluate an expression to a list with suggestions.
- * For the "expr:" part of 'spellsuggest'.
- * Returns NULL when there is an error.
- */
-    list_T *
-eval_spell_expr(char_u *badword, char_u *expr)
-{
-    typval_T	save_val;
-    typval_T	rettv;
-    list_T	*list = NULL;
-    char_u	*p = skipwhite(expr);
-    sctx_T	saved_sctx = current_sctx;
-    sctx_T	*ctx;
-    int		r;
-
-    // Set "v:val" to the bad word.
-    prepare_vimvar(VV_VAL, &save_val);
-    set_vim_var_string(VV_VAL, badword, -1);
-    if (p_verbose == 0)
-	++emsg_off;
-    ctx = get_option_sctx("spellsuggest");
-    if (ctx != NULL)
-	current_sctx = *ctx;
-
-    r = may_call_simple_func(p, &rettv);
-    if (r == NOTDONE)
-	r = eval1(&p, &rettv, &EVALARG_EVALUATE);
-    if (r == OK)
-    {
-	if (rettv.v_type != VAR_LIST)
-	    clear_tv(&rettv);
-	else
-	    list = rettv.vval.v_list;
-    }
-
-    if (p_verbose == 0)
-	--emsg_off;
-    clear_tv(get_vim_var_tv(VV_VAL));
-    restore_vimvar(VV_VAL, &save_val);
-    current_sctx = saved_sctx;
-
-    return list;
-}
-
-/*
- * "list" is supposed to contain two items: a word and a number.  Return the
- * word in "pp" and the number as the return value.
- * Return -1 if anything isn't right.
- * Used to get the good word and score from the eval_spell_expr() result.
- */
-    int
-get_spellword(list_T *list, char_u **pp)
-{
-    listitem_T	*li;
-
-    li = list->lv_first;
-    if (li == NULL)
-	return -1;
-    *pp = tv_get_string(&li->li_tv);
-
-    li = li->li_next;
-    if (li == NULL)
-	return -1;
-    return (int)tv_get_number(&li->li_tv);
-}
-#endif
-
+#line 572
 /*
  * Prepare v: variable "idx" to be used.
  * Save the current typeval in "save_tv" and clear it.
@@ -2524,31 +2427,7 @@ item_lock(typval_T *tv, int deep, int lock, int check_refcount)
     --recurse;
 }
 
-#if defined(FEAT_MENU) && defined(FEAT_MULTI_LANG)
-/*
- * Delete all "menutrans_" variables.
- */
-    void
-del_menutrans_vars(void)
-{
-    hashitem_T	*hi;
-    int		todo;
-
-    hash_lock(&globvarht);
-    todo = (int)globvarht.ht_used;
-    for (hi = globvarht.ht_array; todo > 0 && !got_int; ++hi)
-    {
-	if (!HASHITEM_EMPTY(hi))
-	{
-	    --todo;
-	    if (STRNCMP(HI2DI(hi)->di_key, "menutrans_", 10) == 0)
-		delete_var(&globvarht, hi);
-	}
-    }
-    hash_unlock(&globvarht);
-}
-#endif
-
+#line 2552
 /*
  * Local string buffer for the next two functions to store a variable name
  * with its prefix. Allocated in cat_prefix_varname(), freed later in
@@ -2989,9 +2868,7 @@ reset_reg_var(void)
 
     // Adjust the register according to 'clipboard', so that when
     // "unnamed" is present it becomes '*' or '+' instead of '"'.
-#ifdef HAVE_CLIPMETHOD
-    adjust_clip_reg(&regname);
-#endif
+#line 2995
     set_reg_var(regname);
 }
 

@@ -83,18 +83,10 @@
 # ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 # endif
-# if defined(FEAT_GUI) || defined(FEAT_XCLIPBOARD)
-#  ifdef __CYGWIN__
-    // ControlMask from <X11/X.h> (included in "vim.h") is conflicting with
-    // <w32api/windows.h> (included in <X11/Xwindows.h>).
-#   undef ControlMask
-#  endif
-#  include <X11/Xwindows.h>
-#  define WINBYTE wBYTE
-# else
+#line 95
 #  include <windows.h>
 #  define WINBYTE BYTE
-# endif
+#line 98
 # ifdef WIN32
 #  undef WIN32	    // Some windows.h define WIN32, we don't want that here.
 # endif
@@ -754,11 +746,7 @@ codepage_invalid:
     // after Vim has been setup for the new encoding.
     apply_autocmds(EVENT_ENCODINGCHANGED, NULL, (char_u *)"", FALSE, curbuf);
 
-#ifdef FEAT_SPELL
-    // Need to reload spell dictionaries
-    spell_reload();
-#endif
-
+#line 762
     return NULL;
 }
 
@@ -1349,19 +1337,7 @@ static struct interval ambiguous[] =
     {0x100000, 0x10fffd}
 };
 
-#if defined(FEAT_TERMINAL)
-/*
- * utf_char2cells() with different argument type for libvterm.
- */
-    int
-utf_uint2cells(UINT32_T c)
-{
-    if (c >= 0x100 && utf_iscomposing((int)c))
-	return 0;
-    return utf_char2cells((int)c);
-}
-#endif
-
+#line 1365
 /*
  * For UTF-8 character "c" return 2 for a double-width character, 1 for others.
  * Returns 4 or 6 for an unprintable character.
@@ -2453,17 +2429,7 @@ utf_char2bytes(int c, char_u *buf)
     return 6;
 }
 
-#if defined(FEAT_TERMINAL)
-/*
- * utf_iscomposing() with different argument type for libvterm.
- */
-    int
-utf_iscomposing_uint(UINT32_T c)
-{
-    return utf_iscomposing((int)c);
-}
-#endif
-
+#line 2467
 /*
  * Return TRUE if "c" is a composing UTF-8 character.  This means it will be
  * drawn on top of the preceding character.
@@ -4505,27 +4471,7 @@ utf_valid_string(char_u *s, char_u *end)
 }
 #endif
 
-#if defined(FEAT_GUI)
-/*
- * Special version of mb_tail_off() for use in ScreenLines[].
- */
-    int
-dbcs_screen_tail_off(char_u *base, char_u *p)
-{
-    // It can't be the first byte if a double-byte when not using DBCS, at the
-    // end of the string or the byte can't start a double-byte.
-    // For euc-jp an 0x8e byte always means we have a lead byte in the current
-    // cell.
-    if (*p == NUL || p[1] == NUL
-	    || (enc_dbcs == DBCS_JPNU && *p == 0x8e)
-	    || MB_BYTE2LEN(*p) == 1)
-	return 0;
-
-    // Return 1 when on the lead byte, 0 when on the tail byte.
-    return 1 - dbcs_screen_head_off(base, p);
-}
-#endif
-
+#line 4529
 /*
  * If the cursor moves on an trail byte, set the cursor on the lead byte.
  * Thus it moves left if necessary.
@@ -4638,9 +4584,7 @@ mb_unescape(char_u **pp)
 	    n += 2;
 	}
 	else if ((str[n] == K_SPECIAL
-#ifdef FEAT_GUI
-		    || str[n] == CSI
-#endif
+#line 4644
 		 )
 		&& str[n + 1] == KS_EXTRA
 		&& str[n + 2] == (int)KE_CSI)
@@ -4649,9 +4593,7 @@ mb_unescape(char_u **pp)
 	    n += 2;
 	}
 	else if (str[n] == K_SPECIAL
-#ifdef FEAT_GUI
-		|| str[n] == CSI
-#endif
+#line 4655
 		)
 	    break;		// a special key can't be a multibyte char
 	else
@@ -4826,7 +4768,7 @@ enc_alias_search(char_u *name)
 # include <langinfo.h>
 #endif
 
-#if !defined(FEAT_GUI_MSWIN) || defined(VIMDLL)
+#line 4830
 /*
  * Get the canonicalized encoding from the specified locale string "locale"
  * or from the environment variables LC_ALL, LC_CTYPE and LANG.
@@ -4883,7 +4825,7 @@ enc_locale_env(char *locale)
 
     return enc_canonize((char_u *)buf);
 }
-#endif
+#line 4887
 
 /*
  * Get the canonicalized encoding of the current locale.

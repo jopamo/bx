@@ -373,19 +373,10 @@ plines_win_nofill(
     if (wp->w_width == 0)
 	return 1;
 
-#ifdef FEAT_FOLDING
-    // Folded lines are handled just like an empty line.
-    // NOTE: Caller must handle lines that are MAYBE folded.
-    if (lineFolded(wp, lnum) == TRUE)
-	return 1;
-#endif
-
+#line 383
     if (!wp->w_p_wrap)
 	lines = 1
-#ifdef FEAT_PROP_POPUP
-	    // add a line for each "above" and "below" aligned text property
-	    + prop_count_above_below(wp->w_buffer, lnum)
-#endif
+#line 389
 	;
     else
 	lines = plines_win_nofold(wp, lnum);
@@ -410,9 +401,7 @@ plines_win_nofold(win_T *wp, linenr_T lnum)
     s = ml_get_buf(wp->w_buffer, lnum, FALSE);
     init_chartabsize_arg(&cts, wp, lnum, 0, s, s);
     if (*s == NUL
-#ifdef FEAT_PROP_POPUP
-	    && !cts.cts_has_prop_with_text
-#endif
+#line 416
 	    )
 	return 1; // be quick for an empty line
     win_linetabsize_cts(&cts, (colnr_T)MAXCOL);
@@ -509,19 +498,7 @@ plines_m_win(win_T *wp, linenr_T first, linenr_T last, int max)
 
     while (first <= last && count < max)
     {
-#ifdef FEAT_FOLDING
-	int	x;
-
-	// Check if there are any really folded lines, but also included lines
-	// that are maybe folded.
-	x = foldedCount(wp, first, NULL);
-	if (x > 0)
-	{
-	    ++count;	    // count 1 for "+-- folded" line
-	    first += x;
-	}
-	else
-#endif
+#line 525
 	{
 #ifdef FEAT_DIFF
 	    if (first == wp->w_topline)
@@ -694,14 +671,7 @@ get_mode(char_u *buf)
 	buf[i++] = 'x';
 	buf[i++] = '!';
     }
-# ifdef FEAT_TERMINAL
-    else if (term_use_loop())
-    {
-	if (State & MODE_CMDLINE)
-	    buf[i++] = 'c';
-	buf[i++] = 't';
-    }
-# endif
+#line 705
     else if (State == MODE_HITRETURN || State == MODE_ASKMORE
 						      || State == MODE_SETWSIZE
 		|| State == MODE_CONFIRM)
@@ -771,10 +741,7 @@ get_mode(char_u *buf)
 	    buf[i++] = 'i';
 	    buf[i++] = restart_edit;
 	}
-# ifdef FEAT_TERMINAL
-	else if (term_in_normal_mode(curbuf))
-	    buf[i++] = 't';
-# endif
+#line 778
     }
 
     buf[i] = NUL;
@@ -835,10 +802,7 @@ f_state(typval_T *argvars, typval_T *rettv)
     if (ins_compl_active())
 	may_add_state_char(&ga, include, 'a');
 
-# ifdef FEAT_JOB_CHANNEL
-    if (channel_in_blocking_wait())
-	may_add_state_char(&ga, include, 'w');
-# endif
+#line 842
     if (!get_was_safe_state())
 	may_add_state_char(&ga, include, 'S');
     for (i = 0; i < get_callback_depth() && i < 3; ++i)
@@ -944,10 +908,7 @@ get_keystroke(void)
 	    if (buf[1] == KS_MODIFIER
 		    || n == K_IGNORE
 		    || (is_mouse_key(n) && n != K_LEFTMOUSE)
-#ifdef FEAT_GUI
-		    || n == K_VER_SCROLLBAR
-		    || n == K_HOR_SCROLLBAR
-#endif
+#line 951
 	       )
 	    {
 		if (buf[1] == KS_MODIFIER)
@@ -1189,11 +1150,7 @@ vim_beep(unsigned val)
 	    ELAPSED_INIT(start_tv);
 #endif
 	    if (p_vb
-#ifdef FEAT_GUI
-		    // While the GUI is starting up the termcap is set for
-		    // the GUI but the output still goes to a terminal.
-		    && !(gui.in_use && gui.starting)
-#endif
+#line 1197
 	       )
 	    {
 		out_str_cf(T_VB);
@@ -2283,14 +2240,7 @@ prepare_to_exit(void)
     mch_signal(SIGHUP, SIG_IGN);
 #endif
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui.dying = true;
-	out_trash();	// trash any pending output
-    }
-    else
-#endif
+#line 2294
     {
 	windgoto((int)Rows - 1, cmdline_col_off);
 
@@ -2382,21 +2332,7 @@ fast_breakcheck(void)
     }
 }
 
-#if defined(FEAT_SPELL)
-/*
- * Like line_breakcheck() but check 100 times less often.
- */
-    void
-veryfast_breakcheck(void)
-{
-    if (++breakcheck_count >= BREAKCHECK_SKIP * 100)
-    {
-	breakcheck_count = 0;
-	ui_breakcheck();
-    }
-}
-#endif
-
+#line 2400
 #if defined(FEAT_EVAL) || (defined(HAVE_LOCALE_H) || defined(X_LOCALE))
 
 # ifndef SEEK_SET
@@ -2954,4 +2890,3 @@ trim_to_int(vimlong_T x)
 {
     return x > INT_MAX ? INT_MAX : x < INT_MIN ? INT_MIN : x;
 }
-

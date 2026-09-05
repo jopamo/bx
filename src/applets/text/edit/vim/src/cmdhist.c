@@ -37,28 +37,14 @@ get_histentry(int hist_type)
     return history[hist_type];
 }
 
-#if defined(FEAT_VIMINFO)
-    void
-set_histentry(int hist_type, histentry_T *entry)
-{
-    history[hist_type] = entry;
-}
-#endif
-
+#line 48
     int *
 get_hisidx(int hist_type)
 {
     return &hisidx[hist_type];
 }
 
-#if defined(FEAT_VIMINFO)
-    int *
-get_hisnum(int hist_type)
-{
-    return &hisnum[hist_type];
-}
-#endif
-
+#line 62
 /*
  * Translate a history character to the associated type number.
  */
@@ -668,49 +654,7 @@ f_histnr(typval_T *argvars UNUSED, typval_T *rettv)
 }
 #endif // FEAT_EVAL
 
-#if defined(FEAT_CRYPT)
-/*
- * Very specific function to remove the value in ":set key=val" from the
- * history.
- */
-    void
-remove_key_from_history(void)
-{
-    char_u	*p_start;
-    char_u	*p_end;
-    char_u	*p;
-    int		i;
-
-    i = hisidx[HIST_CMD];
-    if (i < 0)
-	return;
-    p_start = history[HIST_CMD][i].hisstr;
-    if (p_start == NULL)
-	return;
-
-    p_end = p_start + history[HIST_CMD][i].hisstrlen;
-    for (p = p_start; *p; ++p)
-    {
-	if (STRNCMP(p, "key", 3) == 0 && !SAFE_isalpha(p[3]))
-	{
-	    p = vim_strchr(p + 3, '=');
-	    if (p == NULL)
-		break;
-	    ++p;
-	    for (i = 0; p[i] && !VIM_ISWHITE(p[i]); ++i)
-		if (p[i] == '\\' && p[i + 1])
-		    ++i;
-
-	    mch_memmove(p, p + i, (p_end - (p + i)) + 1);	    // +1 for the NUL
-	    p_end -= i;						    // adjust p_end for shortened string
-	    --p;
-	}
-    }
-
-    history[HIST_CMD][i].hisstrlen = (size_t)(p_end - p_start);
-}
-#endif
-
+#line 714
 /*
  * :history command - print a history
  */

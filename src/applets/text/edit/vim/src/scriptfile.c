@@ -483,9 +483,7 @@ get_new_scriptitem(int *error)
 	hash_init(&si->sn_all_vars.dv_hashtab);
 	ga_init2(&si->sn_imports, sizeof(imported_T), 10);
 	ga_init2(&si->sn_type_list, sizeof(type_T), 10);
-# ifdef FEAT_PROFILE
-	si->sn_prof_on = FALSE;
-# endif
+#line 489
     }
 
     // "si" can't be NULL, check only to avoid a compiler warning
@@ -1647,9 +1645,7 @@ do_source_ext(
     struct timeval	    tv_rel;
     struct timeval	    tv_start;
 #endif
-#ifdef FEAT_PROFILE
-    proftime_T		    wait_start;
-#endif
+#line 1653
     int			    save_sticky_cmdmod_flags = sticky_cmdmod_flags;
     int			    trigger_source_post = FALSE;
 #ifdef FEAT_EVAL
@@ -1816,11 +1812,7 @@ do_source_ext(
 #ifdef FEAT_EVAL
     current_sctx.sc_lnum = 0;
 
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_enter(&wait_start);		// entering a child now
-# endif
-
+#line 1824
     // Don't use local function variables, if called from a function.
     // Also starts profiling timer for nested script.
     save_funccal(&funccalp_entry);
@@ -1901,25 +1893,7 @@ do_source_ext(
     estack_push(ETYPE_SCRIPT, si->sn_name, 0);
     ESTACK_CHECK_SETUP;
 
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-    {
-	int	forceit;
-
-	// Check if we do profiling for this script.
-	if (!si->sn_prof_on && has_profiling(TRUE, si->sn_name, &forceit, NULL))
-	{
-	    script_do_profile(si);
-	    si->sn_pr_force = forceit;
-	}
-	if (si->sn_prof_on)
-	{
-	    ++si->sn_pr_count;
-	    profile_start(&si->sn_pr_start);
-	    profile_zero(&si->sn_pr_children);
-	}
-    }
-# endif
+#line 1923
 #else
     // Keep the sourcing name/lnum, for recursive calls.
     estack_push(ETYPE_SCRIPT, fname_exp, 0);
@@ -1949,22 +1923,7 @@ do_source_ext(
 				     DOCMD_VERBOSE|DOCMD_NOWAIT|DOCMD_REPEAT);
     retval = OK;
 
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-    {
-	// Get "si" again, "script_items" may have been reallocated.
-	si = SCRIPT_ITEM(sid);
-	if (si->sn_prof_on)
-	{
-	    profile_end(&si->sn_pr_start);
-	    profile_sub_wait(&wait_start, &si->sn_pr_start);
-	    profile_add(&si->sn_pr_total, &si->sn_pr_start);
-	    profile_self(&si->sn_pr_self, &si->sn_pr_start,
-							 &si->sn_pr_children);
-	}
-    }
-#endif
-
+#line 1968
     if (got_int)
 	emsg(_(e_interrupted));
 #ifdef FEAT_EVAL
@@ -2040,10 +1999,7 @@ almosttheend:
     VIM_CLEAR(si->sn_save_cpo);
 
     restore_funccal();
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_exit(&wait_start);		// leaving a child now
-# endif
+#line 2047
 
     KeyTyped = save_KeyTyped;
 #endif
@@ -2206,9 +2162,7 @@ free_scriptnames(void)
 	vim_free(si->sn_name);
 	free_imports_and_script_vars(i);
 	free_string_option(si->sn_save_cpo);
-#  ifdef FEAT_PROFILE
-	ga_clear(&si->sn_prl_ga);
-#  endif
+#line 2212
 	vim_free(si->sn_autoload_prefix);
 	vim_free(si);
     }
@@ -2521,10 +2475,7 @@ getsourceline(
 	sp->breakpoint = dbg_find_breakpoint(TRUE, sp->fname, SOURCING_LNUM);
 	sp->dbg_tick = debug_tick;
     }
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	script_line_end();
-# endif
+#line 2528
 #endif
 
     // Set the current sourcing line number.
@@ -2542,10 +2493,7 @@ getsourceline(
 	sp->nextline = NULL;
 	++sp->sourcing_lnum;
     }
-#ifdef FEAT_PROFILE
-    if (line != NULL && do_profiling == PROF_YES)
-	script_line_start();
-#endif
+#line 2549
 
     // Only concatenate lines starting with a \ when 'cpoptions' doesn't
     // contain the 'C' flag.

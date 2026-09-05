@@ -1254,10 +1254,7 @@ cmdline_toggle_langmap(long *b_im_ptr)
 #ifdef CURSOR_SHAPE
     ui_cursor_shape();	// may show different cursor shape
 #endif
-#if defined(FEAT_KEYMAP)
-    // Show/unshow value of 'keymap' in status lines later.
-    status_redraw_curbuf();
-#endif
+#line 1261
 }
 
 /*
@@ -1308,10 +1305,7 @@ cmdline_insert_reg(int *gotesc UNUSED)
     if (c != ESC)	    // use ESC to cancel inserting register
     {
 	literally = i == Ctrl_R
-#ifdef FEAT_CLIPBOARD
-			|| (clip_star.available && c == '*')
-			|| (clip_plus.available && c == '+')
-#endif
+#line 1315
 			;
 	cmdline_paste(c, literally, FALSE);
 
@@ -1359,33 +1353,10 @@ cmdline_left_right_mouse(int c, int *ignore_drag_release)
 	*ignore_drag_release = TRUE;
     else
 	*ignore_drag_release = FALSE;
-#ifdef FEAT_GUI
-    // When GUI is active, also move when 'mouse' is empty
-    if (!gui.in_use)
-#endif
+#line 1366
 	if (!mouse_has(MOUSE_COMMAND))
 	    return;
-#ifdef FEAT_CLIPBOARD
-    if (mouse_row < cmdline_row && (clip_star.available || clip_plus.available))
-    {
-	int	    button, is_click, is_drag;
-
-	/*
-	 * Handle modeless selection.
-	 */
-	button = get_mouse_button(KEY2TERMCAP1(c),
-		&is_click, &is_drag);
-	if (mouse_model_popup() && button == MOUSE_LEFT
-		&& (mod_mask & MOD_MASK_SHIFT))
-	{
-	    // Translate shift-left to right button.
-	    button = MOUSE_RIGHT;
-	    mod_mask &= ~MOD_MASK_SHIFT;
-	}
-	clip_modeless(button, is_click, is_drag);
-	return;
-    }
-#endif
+#line 1389
 
     set_cmdspos();
     for (ccline.cmdpos = 0; ccline.cmdpos < ccline.cmdlen;
@@ -2271,18 +2242,7 @@ getcmdline_int(
 		redrawcmd();
 		goto cmdline_changed;
 
-#ifdef FEAT_CLIPBOARD
-	case Ctrl_Y:
-		// Copy the modeless selection, if there is one.
-		if (clip_star.state != SELECT_CLEARED)
-		{
-		    if (clip_star.state == SELECT_DONE)
-			clip_copy_modeless_selection(TRUE);
-		    goto cmdline_not_changed;
-		}
-		break;
-#endif
-
+#line 2286
 	case ESC:	// get here if p_wc != ESC or when ESC typed twice
 	case Ctrl_C:
 		// In exmode it doesn't make sense to return.  Except when
@@ -2360,34 +2320,16 @@ getcmdline_int(
 		// Ignore mouse event or open_cmdwin() result.
 		goto cmdline_not_changed;
 
-#ifdef FEAT_GUI_MSWIN
-	    // On MS-Windows ignore <M-F4>, we get it when closing the window
-	    // was cancelled.
-	case K_F4:
-	    if (mod_mask == MOD_MASK_ALT)
-	    {
-		redrawcmd();	    // somehow the cmdline is cleared
-		goto cmdline_not_changed;
-	    }
-	    break;
-#endif
-
+#line 2375
 	case K_MIDDLEDRAG:
 	case K_MIDDLERELEASE:
 		goto cmdline_not_changed;	// Ignore mouse
 
 	case K_MIDDLEMOUSE:
-#ifdef FEAT_GUI
-		// When GUI is active, also paste when 'mouse' is empty
-		if (!gui.in_use)
-#endif
+#line 2384
 		    if (!mouse_has(MOUSE_COMMAND))
 			goto cmdline_not_changed;   // Ignore mouse
-#ifdef FEAT_CLIPBOARD
-		if (clip_star.available)
-		    cmdline_paste('*', TRUE, TRUE);
-		else
-#endif
+#line 2391
 		    cmdline_paste(0, TRUE, TRUE);
 		redrawcmd();
 		goto cmdline_changed;
@@ -2428,27 +2370,7 @@ getcmdline_int(
 	case K_MOUSEMOVE:
 		goto cmdline_not_changed;
 
-#ifdef FEAT_GUI
-	case K_LEFTMOUSE_NM:	// mousefocus click, ignored
-	case K_LEFTRELEASE_NM:
-		goto cmdline_not_changed;
-
-	case K_VER_SCROLLBAR:
-		if (msg_scrolled == 0)
-		{
-		    gui_do_scroll();
-		    redrawcmd();
-		}
-		goto cmdline_not_changed;
-
-	case K_HOR_SCROLLBAR:
-		if (msg_scrolled == 0)
-		{
-		    do_mousescroll_horiz(scrollbar_value);
-		    redrawcmd();
-		}
-		goto cmdline_not_changed;
-#endif
+#line 2452
 #ifdef FEAT_GUI_TABLINE
 	case K_TABLINE:
 	case K_TABMENU:
@@ -2698,14 +2620,7 @@ cmdline_changed:
 			STRCMP(prev_cmdbuff, ccline.cmdbuff) != 0)))
 	{
 	    trigger_cmd_autocmd(cmdline_type, EVENT_CMDLINECHANGED);
-#ifdef FEAT_PROP_POPUP
-	    // Show popup updates from the autocmd without a manual :redraw.
-	    if (popup_need_redraw())
-	    {
-		update_screen(0);
-		redrawcmd();
-	    }
-#endif
+#line 2709
 	}
 
 	// Trigger CursorMovedC autocommands.
@@ -3413,100 +3328,7 @@ cmdline_at_end(void)
 }
 #endif
 
-#if defined(FEAT_XIM) && (defined(FEAT_GUI_GTK))
-/*
- * Return the virtual column number at the current cursor position.
- * This is used by the IM code to obtain the start of the preedit string.
- */
-    colnr_T
-cmdline_getvcol_cursor(void)
-{
-    if (ccline.cmdbuff == NULL || ccline.cmdpos > ccline.cmdlen)
-	return MAXCOL;
-
-    if (has_mbyte)
-    {
-	colnr_T	col;
-	int	i = 0;
-
-	for (col = 0; i < ccline.cmdpos; ++col)
-	    i += (*mb_ptr2len)(ccline.cmdbuff + i);
-
-	return col;
-    }
-    else
-	return ccline.cmdpos;
-}
-#endif
-
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-/*
- * If part of the command line is an IM preedit string, redraw it with
- * IM feedback attributes.  The cursor position is restored after drawing.
- */
-    static void
-redrawcmd_preedit(void)
-{
-    if ((State & MODE_CMDLINE)
-	    && xic != NULL
-	    // && im_get_status()  doesn't work when using SCIM
-	    && !p_imdisable
-	    && im_is_preediting())
-    {
-	int	cmdpos = 0;
-	int	cmdspos;
-	int	old_row;
-	int	old_col;
-	colnr_T	col;
-
-	old_row = msg_row;
-	old_col = msg_col;
-	cmdspos = ((ccline.cmdfirstc != NUL) ? 1 : 0) + ccline.cmdindent;
-
-	if (has_mbyte)
-	{
-	    for (col = 0; col < preedit_start_col
-			  && cmdpos < ccline.cmdlen; ++col)
-	    {
-		cmdspos += (*mb_ptr2cells)(ccline.cmdbuff + cmdpos);
-		cmdpos  += (*mb_ptr2len)(ccline.cmdbuff + cmdpos);
-	    }
-	}
-	else
-	{
-	    cmdspos += preedit_start_col;
-	    cmdpos  += preedit_start_col;
-	}
-
-	msg_row = cmdline_row + (cmdspos / cmdline_width);
-	msg_col = cmdspos % cmdline_width;
-	if (msg_row >= Rows)
-	    msg_row = Rows - 1;
-
-	for (col = 0; cmdpos < ccline.cmdlen; ++col)
-	{
-	    int char_len;
-	    int char_attr;
-
-	    char_attr = im_get_feedback_attr(col);
-	    if (char_attr < 0)
-		break; // end of preedit string
-
-	    if (has_mbyte)
-		char_len = (*mb_ptr2len)(ccline.cmdbuff + cmdpos);
-	    else
-		char_len = 1;
-
-	    msg_outtrans_len_attr(ccline.cmdbuff + cmdpos, char_len, char_attr);
-	    cmdpos += char_len;
-	}
-
-	msg_row = old_row;
-	msg_col = old_col;
-    }
-}
-#endif // FEAT_XIM && FEAT_GUI_GTK
-
+#line 3510
 /*
  * Deallocate a command line buffer, updating the buffer size and length.
  */
@@ -3970,10 +3792,7 @@ cmdline_paste(
     if (got_int)
 	return FAIL;
 
-#ifdef FEAT_CLIPBOARD
-    regname = may_get_selection(regname);
-#endif
-
+#line 3977
     // Need to set "textlock" to avoid nasty things like going to another
     // buffer when evaluating an expression.
     ++textlock;
@@ -4194,10 +4013,7 @@ cursorcmd(void)
     }
 
     windgoto(msg_row, cmdline_col_off + msg_col);
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-    if (p_imst == IM_ON_THE_SPOT)
-	redrawcmd_preedit();
-#endif
+#line 4201
 #ifdef MCH_CURSOR_SHAPE
     mch_update_cursor();
 #endif
@@ -4746,9 +4562,7 @@ open_cmdwin(void)
 #ifdef FEAT_RIGHTLEFT
     int			save_cmdmsg_rl = cmdmsg_rl;
 #endif
-#ifdef FEAT_FOLDING
-    int			save_KeyTyped;
-#endif
+#line 4752
     int			newbuf_status;
     int			cmdwin_valid;
 
@@ -4831,9 +4645,7 @@ open_cmdwin(void)
     set_option_value_give_err((char_u *)"bt",
 					    0L, (char_u *)"nofile", OPT_LOCAL);
     curbuf->b_p_ma = TRUE;
-#ifdef FEAT_FOLDING
-    curwin->w_p_fen = FALSE;
-#endif
+#line 4837
 #ifdef FEAT_RIGHTLEFT
     curwin->w_p_rl = cmdmsg_rl;
     cmdmsg_rl = FALSE;
@@ -4922,18 +4734,11 @@ open_cmdwin(void)
 
     RedrawingDisabled = save_RedrawingDisabled;
 
-#ifdef FEAT_FOLDING
-    save_KeyTyped = KeyTyped;
-#endif
-
+#line 4929
     // Trigger CmdwinLeave autocommands.
     trigger_cmd_autocmd(cmdwin_type, EVENT_CMDWINLEAVE);
 
-#ifdef FEAT_FOLDING
-    // Restore KeyTyped in case it is modified by autocommands
-    KeyTyped = save_KeyTyped;
-#endif
-
+#line 4937
     cmdwin_type = 0;
     cmdwin_buf = NULL;
     cmdwin_win = NULL;
@@ -5015,10 +4820,7 @@ open_cmdwin(void)
 		ccline.cmdpos = ccline.cmdlen;
 	}
 
-#ifdef FEAT_CONCEAL
-	// Avoid command-line window first character being concealed.
-	curwin->w_p_cole = 0;
-#endif
+#line 5022
 	// First go back to the original window.
 	wp = curwin;
 	set_bufref(&bufref, curbuf);

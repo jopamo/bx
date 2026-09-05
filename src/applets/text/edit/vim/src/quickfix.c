@@ -3826,10 +3826,7 @@ qf_jump_to_buffer(
     qf_jump_goto_line(qf_ptr->qf_lnum, qf_ptr->qf_col, qf_ptr->qf_viscol,
 	    qf_ptr->qf_pattern);
 
-# ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_QUICKFIX) && openfold)
-	foldOpenCursor();
-# endif
+#line 3833
     if (print_message)
 	qf_jump_print_msg(qi, qf_index, qf_ptr, old_curbuf, old_lnum);
 
@@ -4615,10 +4612,7 @@ qf_set_cwindow_options(void)
 # ifdef FEAT_DIFF
     curwin->w_p_diff = FALSE;
 # endif
-# ifdef FEAT_FOLDING
-    set_option_value_give_err((char_u *)"fdm", 0L, (char_u *)"manual",
-	    OPT_LOCAL);
-# endif
+#line 4622
 }
 
 /*
@@ -4727,9 +4721,7 @@ ex_copen(exarg_T *eap)
 	height = QF_WINHEIGHT;
 
     reset_VIsual_and_resel();			// stop Visual mode
-# ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-# endif
+#line 4733
 
     // Find an existing quickfix window, or open a new one.
     if (cmdmod.cmod_tab == 0)
@@ -6951,11 +6943,9 @@ ex_vimgrep(exarg_T *eap)
     // may have messed up things, need to redraw and recompute folds.
     if (redraw_for_dummy)
     {
-# ifdef FEAT_FOLDING
-	foldUpdateAll(curwin);
-# else
+#line 6957
 	redraw_later(UPD_NOT_VALID);
-# endif
+#line 6959
     }
 
 theend:
@@ -8831,9 +8821,7 @@ hgr_search_files_in_dir(
 	char_u *dirname,
 	regmatch_T *p_regmatch,
 	vimconv_T *p_vc
-# ifdef FEAT_MULTI_LANG
-	, char_u *lang
-# endif
+#line 8837
 	)
 {
     int		fcount;
@@ -8849,16 +8837,7 @@ hgr_search_files_in_dir(
     {
 	for (fi = 0; fi < fcount && !got_int; ++fi)
 	{
-# ifdef FEAT_MULTI_LANG
-	    // Skip files for a different language.
-	    if (lang != NULL
-		    && STRNICMP(lang, fnames[fi]
-				    + STRLEN(fnames[fi]) - 3, 2) != 0
-		    && !(STRNICMP(lang, "en", 2) == 0
-			&& STRNICMP("txt", fnames[fi]
-			    + STRLEN(fnames[fi]) - 3, 3) == 0))
-		continue;
-# endif
+#line 8862
 
 	    hgr_search_file(qfl, fnames[fi], p_vc, p_regmatch);
 	}
@@ -8892,9 +8871,7 @@ hgr_search_in_rtp(qf_list_T *qfl, regmatch_T *p_regmatch, char_u *lang)
 	copy_option_part(&p, NameBuff, MAXPATHL, ",");
 
 	hgr_search_files_in_dir(qfl, NameBuff, p_regmatch, &vc
-# ifdef FEAT_MULTI_LANG
-		, lang
-# endif
+#line 8898
 		);
     }
 
@@ -8951,10 +8928,7 @@ ex_helpgrep(exarg_T *eap)
 
     incr_quickfix_busy();
 
-# ifdef FEAT_MULTI_LANG
-    // Check for a specified language
-    lang = check_help_lang(eap->arg);
-# endif
+#line 8958
     regmatch.regprog = vim_regcomp(eap->arg, RE_MAGIC + RE_STRING);
     regmatch.rm_ic = FALSE;
     if (regmatch.regprog != NULL)

@@ -180,9 +180,7 @@ coladvance2(
 	init_chartabsize_arg(&cts, curwin, pos->lnum, 0, line, line);
 	while (cts.cts_vcol <= wcol && *cts.cts_ptr != NUL)
 	{
-#ifdef FEAT_PROP_POPUP
-	    int at_start = cts.cts_ptr == cts.cts_line;
-#endif
+#line 186
 	    // Count a tab for what it's worth (if list mode not on)
 #ifdef FEAT_LINEBREAK
 	    csize = win_lbr_chartabsize(&cts, &head, NULL);
@@ -191,11 +189,7 @@ coladvance2(
 	    csize = lbr_chartabsize_adv(&cts);
 #endif
 	    cts.cts_vcol += csize;
-#ifdef FEAT_PROP_POPUP
-	    if (at_start)
-		// do not count the columns for virtual text above
-		cts.cts_vcol -= cts.cts_first_char;
-#endif
+#line 199
 	}
 	col = cts.cts_vcol;
 	idx = (int)(cts.cts_ptr - line);
@@ -466,38 +460,7 @@ get_cursor_rel_lnum(
     linenr_T	cursor = wp->w_cursor.lnum;
     linenr_T	retval = 0;
 
-#ifdef FEAT_FOLDING
-    if (hasAnyFolding(wp))
-    {
-	if (lnum > cursor)
-	{
-	    while (lnum > cursor)
-	    {
-		(void)hasFoldingWin(wp, lnum, &lnum, NULL, TRUE, NULL);
-		// if lnum and cursor are in the same fold,
-		// now lnum <= cursor
-		if (lnum > cursor)
-		    retval++;
-		lnum--;
-	    }
-	}
-	else if (lnum < cursor)
-	{
-	    while (lnum < cursor)
-	    {
-		(void)hasFoldingWin(wp, lnum, NULL, &lnum, TRUE, NULL);
-		// if lnum and cursor are in the same fold,
-		// now lnum >= cursor
-		if (lnum < cursor)
-		    retval--;
-		lnum++;
-	    }
-	}
-	// else if (lnum == cursor)
-	//     retval = 0;
-    }
-    else
-#endif
+#line 501
 	retval = lnum - cursor;
 
     return retval;
@@ -531,12 +494,7 @@ check_cursor_lnum(void)
 {
     if (curwin->w_cursor.lnum > curbuf->b_ml.ml_line_count)
     {
-#ifdef FEAT_FOLDING
-	// If there is a closed fold at the end of the file, put the cursor in
-	// its first line.  Otherwise in the last line.
-	if (!hasFolding(curbuf->b_ml.ml_line_count,
-						&curwin->w_cursor.lnum, NULL))
-#endif
+#line 540
 	    curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
     }
     if (curwin->w_cursor.lnum <= 0)
@@ -1565,9 +1523,7 @@ may_adjust_key_for_ctrl(int modifiers, int key)
 
     if (ASCII_ISALPHA(key))
     {
-#ifdef FEAT_TERMINAL
-	check_no_reduce_keys();  // may update the no_reduce_keys flag
-#endif
+#line 1571
 	return no_reduce_keys == 0 ? TOUPPER_ASC(key) : key;
     }
     if (key == '2')
@@ -1599,9 +1555,7 @@ may_remove_shift_modifier(int modifiers, int key)
 {
     if ((modifiers == MOD_MASK_SHIFT
 		|| modifiers == (MOD_MASK_SHIFT | MOD_MASK_ALT)
-#ifdef FEAT_GUI_GTK
-		|| modifiers == (MOD_MASK_SHIFT | MOD_MASK_CMD)
-#endif
+#line 1605
 		|| modifiers == (MOD_MASK_SHIFT | MOD_MASK_META))
 	    && ((key >= '!' && key <= '/')
 		|| (key >= ':' && key <= 'Z')
@@ -1902,9 +1856,7 @@ default_fileformat(void)
 call_shell(char_u *cmd, int opt)
 {
     int		retval;
-#ifdef FEAT_PROFILE
-    proftime_T	wait_time;
-#endif
+#line 1908
 
     if (p_verbose > 3)
     {
@@ -1915,11 +1867,7 @@ call_shell(char_u *cmd, int opt)
 	verbose_leave();
     }
 
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_enter(&wait_time);
-#endif
-
+#line 1923
     if (*p_sh == NUL)
     {
 	emsg(_(e_shell_option_is_empty));
@@ -1927,13 +1875,7 @@ call_shell(char_u *cmd, int opt)
     }
     else
     {
-#ifdef FEAT_GUI_MSWIN
-	// Don't hide the pointer while executing a shell command.
-	gui_mch_mousehide(FALSE);
-#endif
-#ifdef FEAT_GUI
-	++hold_gui_events;
-#endif
+#line 1937
 	// The external command may update a tags file, clear cached tags.
 	tag_freematch();
 
@@ -1968,9 +1910,7 @@ call_shell(char_u *cmd, int opt)
 	    if (ecmd != cmd)
 		vim_free(ecmd);
 	}
-#ifdef FEAT_GUI
-	--hold_gui_events;
-#endif
+#line 1974
 	/*
 	 * Check the window size, in case it changed while executing the
 	 * external command.
@@ -1980,10 +1920,7 @@ call_shell(char_u *cmd, int opt)
 
 #ifdef FEAT_EVAL
     set_vim_var_nr(VV_SHELL_ERROR, (long)retval);
-# ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	prof_child_exit(&wait_time);
-# endif
+#line 1987
 #endif
 
     return retval;
@@ -2428,12 +2365,7 @@ get_shape_idx(int mouse)
 #  ifdef FEAT_MOUSESHAPE
     if (mouse && (State == MODE_HITRETURN || State == MODE_ASKMORE))
     {
-#   ifdef FEAT_GUI
-	int x, y;
-	gui_mch_getmouse(&x, &y);
-	if (Y_2_ROW(y) == Rows - 1)
-	    return SHAPE_IDX_MOREL;
-#   endif
+#line 2437
 	return SHAPE_IDX_MORE;
     }
     if (mouse && drag_status_line)

@@ -34,13 +34,7 @@ current_instr_idx(cctx_T *cctx)
 	    --idx;
 	    continue;
 	}
-#ifdef FEAT_PROFILE
-	if (((isn_T *)instr->ga_data)[idx - 1].isn_type == ISN_PROF_START)
-	{
-	    --idx;
-	    continue;
-	}
-#endif
+#line 44
 	if (((isn_T *)instr->ga_data)[idx - 1].isn_type == ISN_DEBUG)
 	{
 	    --idx;
@@ -565,18 +559,7 @@ compile_if(char_u *arg, cctx_T *cctx)
     else
 	scope->se_u.se_if.is_if_label = -1;
 
-#ifdef FEAT_PROFILE
-    if (cctx->ctx_compile_type == CT_PROFILE && cctx->ctx_skip == SKIP_YES
-						      && skip_save != SKIP_YES)
-    {
-	// generated a profile start, need to generate a profile end, since it
-	// won't be done after returning
-	cctx->ctx_skip = SKIP_NOT;
-	generate_instr(cctx, ISN_PROF_END);
-	cctx->ctx_skip = SKIP_YES;
-    }
-#endif
-
+#line 580
     return p;
 }
 
@@ -683,11 +666,7 @@ compile_elseif(char_u *arg, cctx_T *cctx)
     if (cctx->ctx_skip == SKIP_YES)
     {
 	cctx->ctx_skip = SKIP_UNKNOWN;
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE)
-	    // the previous block was skipped, need to profile this line
-	    generate_instr(cctx, ISN_PROF_START);
-#endif
+#line 691
 	if (cctx->ctx_compile_type == CT_DEBUG)
 	    // the previous block was skipped, may want to debug this line
 	    generate_instr_debug(cctx);
@@ -769,27 +748,7 @@ compile_else(char_u *arg, cctx_T *cctx)
 	scope->se_u.se_if.is_had_return = FALSE;
     scope->se_u.se_if.is_seen_else = TRUE;
 
-#ifdef FEAT_PROFILE
-    if (cctx->ctx_compile_type == CT_PROFILE)
-    {
-	if (cctx->ctx_skip == SKIP_NOT
-		&& ((isn_T *)instr->ga_data)[instr->ga_len - 1]
-						   .isn_type == ISN_PROF_START)
-	    // the previous block was executed, do not count "else" for
-	    // profiling
-	    --instr->ga_len;
-	if (cctx->ctx_skip == SKIP_YES && !scope->se_u.se_if.is_seen_skip_not)
-	{
-	    // the previous block was not executed, this one will, do count the
-	    // "else" for profiling
-	    cctx->ctx_skip = SKIP_NOT;
-	    generate_instr(cctx, ISN_PROF_END);
-	    generate_instr(cctx, ISN_PROF_START);
-	    cctx->ctx_skip = SKIP_YES;
-	}
-    }
-#endif
-
+#line 793
     if (!scope->se_u.se_if.is_seen_skip_not && scope->se_skip_save != SKIP_YES)
     {
 	// jump from previous block to the end, unless the else block is empty
@@ -851,16 +810,7 @@ compile_endif(char_u *arg, cctx_T *cctx)
     // Fill in the "end" label in jumps at the end of the blocks.
     compile_fill_jump_to_end(&ifscope->is_end_label, instr->ga_len, cctx);
 
-#ifdef FEAT_PROFILE
-    // even when skipping we count the endif as executed, unless the block it's
-    // in is skipped
-    if (cctx->ctx_compile_type == CT_PROFILE && cctx->ctx_skip == SKIP_YES
-					    && scope->se_skip_save != SKIP_YES)
-    {
-	cctx->ctx_skip = SKIP_NOT;
-	generate_instr(cctx, ISN_PROF_START);
-    }
-#endif
+#line 864
     cctx->ctx_skip = scope->se_skip_save;
 
     // If all the blocks end in :return and there is an :else then the
@@ -1393,11 +1343,7 @@ compile_endwhile(char_u *arg, cctx_T *cctx)
 
 	unwind_locals(cctx, scope->se_local_count, TRUE);
 
-#ifdef FEAT_PROFILE
-	// count the endwhile before jumping
-	may_generate_prof_end(cctx, cctx->ctx_lnum);
-#endif
-
+#line 1401
 	// At end of ":for" scope jump back to the FOR instruction.
 	generate_JUMP(cctx, JUMP_ALWAYS, scope->se_u.se_while.ws_top_label);
 
@@ -1728,14 +1674,7 @@ compile_catch(char_u *arg, cctx_T *cctx)
 
     if (cctx->ctx_skip != SKIP_YES)
     {
-#ifdef FEAT_PROFILE
-	// the profile-start should be after the jump
-	if (cctx->ctx_compile_type == CT_PROFILE
-		&& instr->ga_len > 0
-		&& ((isn_T *)instr->ga_data)[instr->ga_len - 1]
-						   .isn_type == ISN_PROF_START)
-	    --instr->ga_len;
-#endif
+#line 1739
 	// Jump from end of previous block to :finally or :endtry
 	if (compile_jump_to_end(&scope->se_u.se_try.ts_end_label,
 						 JUMP_ALWAYS, 0, cctx) == FAIL)
@@ -1751,15 +1690,7 @@ compile_catch(char_u *arg, cctx_T *cctx)
 	    isn = ((isn_T *)instr->ga_data) + scope->se_u.se_try.ts_catch_label;
 	    isn->isn_arg.jump.jump_where = instr->ga_len;
 	}
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE)
-	{
-	    // a "throw" that jumps here needs to be counted
-	    generate_instr(cctx, ISN_PROF_END);
-	    // the "catch" is also counted
-	    generate_instr(cctx, ISN_PROF_START);
-	}
-#endif
+#line 1763
 	if (cctx->ctx_compile_type == CT_DEBUG)
 	    generate_instr_debug(cctx);
     }
@@ -1850,20 +1781,7 @@ compile_finally(char_u *arg, cctx_T *cctx)
 	}
 
 	this_instr = instr->ga_len;
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE
-		&& ((isn_T *)instr->ga_data)[this_instr - 1]
-						   .isn_type == ISN_PROF_START)
-	{
-	    // jump to the profile start of the "finally"
-	    --this_instr;
-
-	    // jump to the profile end above it
-	    if (this_instr > 0 && ((isn_T *)instr->ga_data)[this_instr - 1]
-						     .isn_type == ISN_PROF_END)
-		--this_instr;
-	}
-#endif
+#line 1867
 
 	// Fill in the "end" label in jumps at the end of the blocks.
 	compile_fill_jump_to_end(&scope->se_u.se_try.ts_end_label,
@@ -1927,15 +1845,7 @@ compile_endtry(char_u *arg, cctx_T *cctx)
 	    return NULL;
 	}
 
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE
-		&& ((isn_T *)instr->ga_data)[instr->ga_len - 1]
-						.isn_type == ISN_PROF_START)
-	    // move the profile start after "endtry" so that it's not counted when
-	    // the exception is rethrown.
-	    --instr->ga_len;
-#endif
-
+#line 1939
 	// Fill in the "end" label in jumps at the end of the blocks, if not
 	// done by ":finally".
 	compile_fill_jump_to_end(&scope->se_u.se_try.ts_end_label,
@@ -1967,10 +1877,7 @@ compile_endtry(char_u *arg, cctx_T *cctx)
 	try_isn->isn_arg.tryref.try_ref->try_endtry = instr->ga_len;
 	if (generate_instr(cctx, ISN_ENDTRY) == NULL)
 	    return NULL;
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE)
-	    generate_instr(cctx, ISN_PROF_START);
-#endif
+#line 1974
     }
     return arg;
 }
@@ -2193,10 +2100,7 @@ compile_mult_expr(
 	    r = generate_MULT_EXPR(cctx, ISN_EXECUTE, count);
 	else if (cmdidx == CMD_echomsg)
 	    r = generate_MULT_EXPR(cctx, ISN_ECHOMSG, count);
-#ifdef HAS_MESSAGE_WINDOW
-	else if (cmdidx == CMD_echowindow)
-	    r = generate_ECHOWINDOW(cctx, count, cmd_count);
-#endif
+#line 2200
 	else if (cmdidx == CMD_echoconsole)
 	    r = generate_MULT_EXPR(cctx, ISN_ECHOCONSOLE, count);
 	else

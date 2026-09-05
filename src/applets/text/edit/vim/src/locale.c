@@ -91,52 +91,7 @@ gettext_lang(char_u *name)
 }
 #endif
 
-#if defined(FEAT_MULTI_LANG)
-/*
- * Return TRUE when "lang" starts with a valid language name.
- * Rejects NULL, empty string, "C", "C.UTF-8" and others.
- */
-    static int
-is_valid_mess_lang(char_u *lang)
-{
-    return lang != NULL && ASCII_ISALPHA(lang[0]) && ASCII_ISALPHA(lang[1]);
-}
-
-/*
- * Obtain the current messages language.  Used to set the default for
- * 'helplang'.  May return NULL or an empty string.
- */
-    char_u *
-get_mess_lang(void)
-{
-    char_u *p;
-
-# ifdef HAVE_GET_LOCALE_VAL
-#  if defined(LC_MESSAGES)
-    p = get_locale_val(LC_MESSAGES);
-#  else
-    // This is necessary for Win32, where LC_MESSAGES is not defined and $LANG
-    // may be set to the LCID number.  LC_COLLATE is the best guess, LC_TIME
-    // and LC_MONETARY may be set differently for a Japanese working in the
-    // US.
-    p = get_locale_val(LC_COLLATE);
-#  endif
-# else
-    p = mch_getenv((char_u *)"LC_ALL");
-    if (!is_valid_mess_lang(p))
-    {
-	p = mch_getenv((char_u *)"LC_MESSAGES");
-	if (!is_valid_mess_lang(p))
-	    p = mch_getenv((char_u *)"LANG");
-    }
-# endif
-# ifdef MSWIN
-    p = gettext_lang(p);
-# endif
-    return is_valid_mess_lang(p) ? p : NULL;
-}
-#endif
-
+#line 140
 // Complicated #if; matches with where get_mess_env() is used below.
 #if (defined(FEAT_EVAL) && !((defined(HAVE_LOCALE_H) || defined(X_LOCALE)) \
 	    && defined(LC_MESSAGES))) \
@@ -221,10 +176,7 @@ init_locale(void)
 {
     setlocale(LC_ALL, "");
 
-# ifdef FEAT_GUI_GTK
-    // Tell Gtk not to change our locale settings.
-    gtk_disable_setlocale();
-# endif
+#line 228
 # if defined(LC_NUMERIC)
     // Make sure strtod() uses a decimal point, not a comma.
     setlocale(LC_NUMERIC, "C");
@@ -380,9 +332,7 @@ ex_language(exarg_T *eap)
 		    mname = name;
 # endif
 		    vim_setenv((char_u *)"LC_MESSAGES", mname);
-# ifdef FEAT_MULTI_LANG
-		    set_helplang_default(mname);
-# endif
+#line 386
 		}
 	    }
 

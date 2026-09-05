@@ -1006,66 +1006,7 @@ call_func_retlist(
     return rettv.vval.v_list;
 }
 
-#if defined(FEAT_FOLDING)
-/*
- * Evaluate "arg", which is 'foldexpr'.
- * Note: caller must set "curwin" to match "arg".
- * Returns the foldlevel, and any character preceding it in "*cp".  Doesn't
- * give error messages.
- */
-    int
-eval_foldexpr(win_T *wp, int *cp)
-{
-    char_u	*arg;
-    typval_T	tv;
-    varnumber_T	retval;
-    char_u	*s;
-    sctx_T	saved_sctx = current_sctx;
-    int		use_sandbox = was_set_insecurely(wp, (char_u *)"foldexpr",
-								    OPT_LOCAL);
-
-    arg = skipwhite(wp->w_p_fde);
-    current_sctx = wp->w_p_script_ctx[WV_FDE];
-
-    ++emsg_off;
-    if (use_sandbox)
-	++sandbox;
-    ++textlock;
-    *cp = NUL;
-
-    // Evaluate the expression.  If the expression is "FuncName()" call the
-    // function directly.
-    if (eval0_simple_funccal(arg, &tv, NULL, &EVALARG_EVALUATE) == FAIL)
-	retval = 0;
-    else
-    {
-	// If the result is a number, just return the number.
-	if (tv.v_type == VAR_NUMBER)
-	    retval = tv.vval.v_number;
-	else if (tv.v_type != VAR_STRING || tv.vval.v_string == NULL)
-	    retval = 0;
-	else
-	{
-	    // If the result is a string, check if there is a non-digit before
-	    // the number.
-	    s = tv.vval.v_string;
-	    if (*s != NUL && !VIM_ISDIGIT(*s) && *s != '-')
-		*cp = *s++;
-	    retval = atol((char *)s);
-	}
-	clear_tv(&tv);
-    }
-    --emsg_off;
-    if (use_sandbox)
-	--sandbox;
-    --textlock;
-    clear_evalarg(&EVALARG_EVALUATE, NULL);
-    current_sctx = saved_sctx;
-
-    return (int)retval;
-}
-#endif
-
+#line 1069
 #ifdef LOG_LOCKVAR
 typedef struct flag_string_S
 {
@@ -4943,13 +4884,10 @@ handle_predefined(char_u *s, int len, typval_T *rettv)
 		break;
 	case 8: if (STRNCMP(s, "null_job", 8) == 0)
 		{
-#ifdef FEAT_JOB_CHANNEL
-		    rettv->v_type = VAR_JOB;
-		    rettv->vval.v_job = NULL;
-#else
+#line 4950
 		    rettv->v_type = VAR_SPECIAL;
 		    rettv->vval.v_number = VVAL_NULL;
-#endif
+#line 4953
 		    return OK;
 		}
 		break;
@@ -5011,13 +4949,10 @@ handle_predefined(char_u *s, int len, typval_T *rettv)
 	case 12:
 		if (STRNCMP(s, "null_channel", 12) == 0)
 		{
-#ifdef FEAT_JOB_CHANNEL
-		    rettv->v_type = VAR_CHANNEL;
-		    rettv->vval.v_channel = NULL;
-#else
+#line 5018
 		    rettv->v_type = VAR_SPECIAL;
 		    rettv->vval.v_number = VVAL_NULL;
-#endif
+#line 5021
 		    return OK;
 		}
 		if (STRNCMP(s, "null_partial", 12) == 0)
@@ -6542,21 +6477,7 @@ jobchan_tv2string(
 {
     char_u	*r = NULL;
 
-#ifdef FEAT_JOB_CHANNEL
-    *tofree = NULL;
-
-    if (tv->v_type == VAR_JOB)
-	r = job_to_string_buf(tv, numbuf);
-    else
-	r = channel_to_string_buf(tv, numbuf);
-
-    if (composite_val)
-    {
-	*tofree = string_quote(r, FALSE);
-	r = *tofree;
-    }
-#endif
-
+#line 6560
     return r;
 }
 
@@ -6977,12 +6898,7 @@ var2fpos(
 	pos.col = 0;
 	if (name[1] == '0')		// "w0": first visible line
 	{
-#ifdef FEAT_TERMINAL
-	    if (bt_terminal(curwin->w_buffer)
-				    && curwin->w_buffer->b_term != NULL
-				    && !term_in_normal_mode(curwin->w_buffer))
-		may_move_terminal_to_buffer(curwin->w_buffer->b_term, TRUE);
-#endif
+#line 6986
 	    update_topline();
 	    // In silent Ex mode topline is zero, but that's not a valid line
 	    // number; use one instead.
@@ -6991,12 +6907,7 @@ var2fpos(
 	}
 	else if (name[1] == '$')	// "w$": last visible line
 	{
-#ifdef FEAT_TERMINAL
-	    if (bt_terminal(curwin->w_buffer)
-				    && curwin->w_buffer->b_term != NULL
-				    && !term_in_normal_mode(curwin->w_buffer))
-		may_move_terminal_to_buffer(curwin->w_buffer->b_term, TRUE);
-#endif
+#line 7000
 	    validate_botline();
 	    // In silent Ex mode botline is zero, return zero then.
 	    pos.lnum = curwin->w_botline > 0 ? curwin->w_botline - 1 : 0;
@@ -7974,13 +7885,9 @@ ex_execute(exarg_T *eap)
 	}
 	else if (eap->cmdidx == CMD_echowindow)
 	{
-#ifdef HAS_MESSAGE_WINDOW
-	    start_echowindow(eap->addr_count > 0 ? eap->line2 : 0);
-#endif
+#line 7980
 	    msg_attr(ga.ga_data, echo_attr);
-#ifdef HAS_MESSAGE_WINDOW
-	    end_echowindow();
-#endif
+#line 7984
 	}
 	else if (eap->cmdidx == CMD_echoconsole)
 	{

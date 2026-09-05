@@ -104,24 +104,7 @@ win_id2wp_tp(int id, tabpage_T **tpp)
 		*tpp = tp;
 	    return wp;
 	}
-# ifdef FEAT_PROP_POPUP
-    // popup windows are in separate lists
-    FOR_ALL_TABPAGES(tp)
-	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-	     if (wp->w_id == id)
-	     {
-		 if (tpp != NULL)
-		     *tpp = tp;
-		 return wp;
-	     }
-    FOR_ALL_POPUPWINS(wp)
-	if (wp->w_id == id)
-	{
-	    if (tpp != NULL)
-		*tpp = curtab;  // any tabpage would do
-	    return wp;
-	}
-# endif
+#line 125
 
     return NULL;
 }
@@ -184,17 +167,7 @@ find_win_by_nr(
     }
     if (nr >= LOWEST_WIN_ID)
     {
-# ifdef FEAT_PROP_POPUP
-	// check tab-local popup windows
-	for (wp = (tp == NULL ? curtab : tp)->tp_first_popupwin;
-						   wp != NULL; wp = wp->w_next)
-	    if (wp->w_id == nr)
-		return wp;
-	// check global popup windows
-	FOR_ALL_POPUPWINS(wp)
-	    if (wp->w_id == nr)
-		return wp;
-# endif
+#line 198
 	return NULL;
     }
     return wp;
@@ -422,18 +395,14 @@ get_win_info(win_T *wp, short tpnr, short winnr)
     dict_add_number(dict, "winrow", wp->w_winrow + 1);
     dict_add_number(dict, "topline", wp->w_topline);
     dict_add_number(dict, "botline", wp->w_botline - 1);
-# ifdef FEAT_MENU
-    dict_add_number(dict, "winbar", wp->w_winbar_height);
-# endif
+#line 428
     dict_add_number(dict, "width", wp->w_width);
     dict_add_number(dict, "wincol", wp->w_wincol + 1);
     dict_add_number(dict, "textoff", win_col_off(wp));
     dict_add_number(dict, "bufnr", wp->w_buffer->b_fnum);
     dict_add_number(dict, "leftcol", wp->w_leftcol);
 
-# ifdef FEAT_TERMINAL
-    dict_add_number(dict, "terminal", bt_terminal(wp->w_buffer));
-# endif
+#line 437
 # ifdef FEAT_QUICKFIX
     dict_add_number(dict, "quickfix", bt_quickfix(wp->w_buffer));
     dict_add_number(dict, "loclist",
@@ -558,23 +527,7 @@ f_getwininfo(typval_T *argvars, typval_T *rettv)
 		return;
 	}
     }
-# ifdef FEAT_PROP_POPUP
-    if (wparg != NULL)
-    {
-	tabnr = 0;
-	FOR_ALL_TABPAGES(tp)
-	{
-	    tabnr++;
-	    FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-		if (wp == wparg)
-		    goto found;
-	}
-found:
-	d = get_win_info(wparg, tp == NULL ? 0 : tabnr, 0);
-	if (d != NULL)
-	    list_append_dict(rettv->vval.v_list, d);
-    }
-# endif
+#line 578
 }
 
 /*
@@ -854,13 +807,7 @@ f_win_gotoid(typval_T *argvars, typval_T *rettv)
 
     if (text_or_buf_locked())
 	return;
-# if defined(FEAT_PROP_POPUP) && defined(FEAT_TERMINAL)
-    if (popup_is_popup(curwin) && curbuf->b_term != NULL)
-    {
-	emsg(_(e_not_allowed_for_terminal_in_popup_window));
-	return;
-    }
-# endif
+#line 864
     FOR_ALL_TAB_WINDOWS(tp, wp)
 	if (wp->w_id == id)
 	{
@@ -1071,10 +1018,7 @@ f_win_gettype(typval_T *argvars, typval_T *rettv)
     else if (wp->w_p_pvw)
 	rettv->vval.v_string = vim_strsave((char_u *)"preview");
 # endif
-# ifdef FEAT_PROP_POPUP
-    else if (WIN_IS_POPUP(wp))
-	rettv->vval.v_string = vim_strsave((char_u *)"popup");
-# endif
+#line 1078
     else if (wp == cmdwin_win)
 	rettv->vval.v_string = vim_strsave((char_u *)"command");
 # ifdef FEAT_QUICKFIX
@@ -1433,11 +1377,6 @@ restore_win_noblock(
 	curwin = switchwin->sw_curwin;
 	curbuf = curwin->w_buffer;
     }
-# ifdef FEAT_PROP_POPUP
-    else if (WIN_IS_POPUP(curwin))
-	// original window was closed and now we're in a popup window: Go
-	// to the first valid window.
-	win_goto(firstwin);
-# endif
+#line 1442
 }
 #endif

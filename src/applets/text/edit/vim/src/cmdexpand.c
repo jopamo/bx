@@ -545,11 +545,7 @@ skip_status_match_char(expand_T *xp, char_u *s)
 {
     if ((rem_backslash(s) && xp->xp_context != EXPAND_HELP
 		&& xp->xp_context != EXPAND_PATTERN_IN_BUF)
-#ifdef FEAT_MENU
-	    || ((xp->xp_context == EXPAND_MENUS
-		    || xp->xp_context == EXPAND_MENUNAMES)
-			  && (s[0] == '\t' || (s[0] == '\\' && s[1] != NUL)))
-#endif
+#line 553
 	   )
     {
 #ifndef BACKSLASH_IN_FILENAME
@@ -569,15 +565,7 @@ status_match_len(expand_T *xp, char_u *s)
 {
     int	len = 0;
 
-#ifdef FEAT_MENU
-    int emenu = xp->xp_context == EXPAND_MENUS
-	     || xp->xp_context == EXPAND_MENUNAMES;
-
-    // Check for menu separators - replace with '|'.
-    if (emenu && menu_is_separator(s))
-	return 1;
-#endif
-
+#line 581
     while (*s != NUL)
     {
 	s += skip_status_match_char(xp, s);
@@ -617,9 +605,7 @@ win_redr_status_matches(
     static int	first_match = 0;
     int		add_left = FALSE;
     char_u	*s;
-#ifdef FEAT_MENU
-    int		emenu;
-#endif
+#line 623
     int		l;
 
     if (matches == NULL)	// interrupted completion?
@@ -704,18 +690,7 @@ win_redr_status_matches(
 
 	s = SHOW_MATCH(i);
 	// Check for menu separators - replace with '|'
-#ifdef FEAT_MENU
-	emenu = (xp->xp_context == EXPAND_MENUS
-		|| xp->xp_context == EXPAND_MENUNAMES);
-	if (emenu && menu_is_separator(s))
-	{
-	    STRCPY(buf + len, transchar('|'));
-	    l = (int)STRLEN(buf + len);
-	    len += l;
-	    clen += l;
-	}
-	else
-#endif
+#line 719
 	for ( ; *s != NUL; ++s)
 	{
 	    s += skip_status_match_char(xp, s);
@@ -1976,26 +1951,7 @@ set_context_in_argopt(expand_T *xp, char_u *arg)
     return NULL;
 }
 
-#ifdef FEAT_TERMINAL
-/*
- * Set the completion context for :terminal's [options].  Always returns NULL.
- */
-    static char_u *
-set_context_in_terminalopt(expand_T *xp, char_u *arg)
-{
-    char_u	*p;
-
-    p = vim_strchr(arg, '=');
-    if (p == NULL)
-	xp->xp_pattern = arg;
-    else
-	xp->xp_pattern = p + 1;
-
-    xp->xp_context = EXPAND_TERMINALOPT;
-    return NULL;
-}
-#endif
-
+#line 1999
 /*
  * Set the completion context for the :filter command. Returns a pointer to the
  * next command after the :filter command.
@@ -2566,13 +2522,7 @@ set_context_by_cmdname(
 	case CMD_highlight:
 	    set_context_in_highlight_cmd(xp, arg);
 	    break;
-#ifdef FEAT_CSCOPE
-	case CMD_cscope:
-	case CMD_lcscope:
-	case CMD_scscope:
-	    set_context_in_cscope_cmd(xp, arg, cmdidx);
-	    break;
-#endif
+#line 2576
 #ifdef FEAT_SIGNS
 	case CMD_sign:
 	    set_context_in_sign_cmd(xp, arg);
@@ -2653,19 +2603,7 @@ set_context_by_cmdname(
 	case CMD_iunabbrev:
 	    return set_context_in_map_cmd(xp, cmd, arg, forceit,
 						       TRUE, TRUE, cmdidx);
-#ifdef FEAT_MENU
-	case CMD_menu:	    case CMD_noremenu:	    case CMD_unmenu:
-	case CMD_amenu:	    case CMD_anoremenu:	    case CMD_aunmenu:
-	case CMD_nmenu:	    case CMD_nnoremenu:	    case CMD_nunmenu:
-	case CMD_vmenu:	    case CMD_vnoremenu:	    case CMD_vunmenu:
-	case CMD_omenu:	    case CMD_onoremenu:	    case CMD_ounmenu:
-	case CMD_imenu:	    case CMD_inoremenu:	    case CMD_iunmenu:
-	case CMD_cmenu:	    case CMD_cnoremenu:	    case CMD_cunmenu:
-	case CMD_tlmenu:    case CMD_tlnoremenu:    case CMD_tlunmenu:
-	case CMD_tmenu:				    case CMD_tunmenu:
-	case CMD_popup:	    case CMD_tearoff:	    case CMD_emenu:
-	    return set_context_in_menu_cmd(xp, cmd, arg, forceit);
-#endif
+#line 2669
 
 	case CMD_colorscheme:
 	    xp->xp_context = EXPAND_COLORS;
@@ -2700,11 +2638,7 @@ set_context_by_cmdname(
 	case CMD_language:
 	    return set_context_in_lang_cmd(xp, arg);
 #endif
-#if defined(FEAT_PROFILE)
-	case CMD_profile:
-	    set_context_in_profile_cmd(xp, arg);
-	    break;
-#endif
+#line 2708
 	case CMD_behave:
 	    xp->xp_context = EXPAND_BEHAVE;
 	    xp->xp_pattern = arg;
@@ -2724,12 +2658,7 @@ set_context_by_cmdname(
 	    xp->xp_context = EXPAND_HISTORY;
 	    xp->xp_pattern = arg;
 	    break;
-#if defined(FEAT_PROFILE)
-	case CMD_syntime:
-	    xp->xp_context = EXPAND_SYNTIME;
-	    xp->xp_pattern = arg;
-	    break;
-#endif
+#line 2733
 
 	case CMD_argdelete:
 	    while ((xp->xp_pattern = vim_strchr(arg, ' ')) != NULL)
@@ -2842,10 +2771,7 @@ set_one_cmd_context(
 	    {
 		if (ea.argt & EX_ARGOPT)
 		    return set_context_in_argopt(xp, arg + 2);
-#ifdef FEAT_TERMINAL
-		if (ea.cmdidx == CMD_terminal)
-		    return set_context_in_terminalopt(xp, arg + 2);
-#endif
+#line 2849
 	    }
 
 	    arg = skipwhite(p);
@@ -3366,28 +3292,19 @@ ExpandOther(
 	{EXPAND_DISASSEMBLE, get_disassemble_argument, FALSE, TRUE},
 	{EXPAND_EXPRESSION, get_expr_name, FALSE, TRUE},
 #endif
-#ifdef FEAT_MENU
-	{EXPAND_MENUS, get_menu_name, FALSE, TRUE},
-	{EXPAND_MENUNAMES, get_menu_names, FALSE, TRUE},
-#endif
+#line 3373
 #ifdef FEAT_SYN_HL
 	{EXPAND_SYNTAX, get_syntax_name, TRUE, TRUE},
 #endif
-#ifdef FEAT_PROFILE
-	{EXPAND_SYNTIME, get_syntime_arg, TRUE, TRUE},
-#endif
+#line 3379
 	{EXPAND_HIGHLIGHT, get_highlight_name, TRUE, TRUE},
 	{EXPAND_EVENTS, get_event_name, TRUE, FALSE},
 	{EXPAND_AUGROUP, get_augroup_name, TRUE, FALSE},
-#ifdef FEAT_CSCOPE
-	{EXPAND_CSCOPE, get_cscope_name, TRUE, TRUE},
-#endif
+#line 3385
 #ifdef FEAT_SIGNS
 	{EXPAND_SIGN, get_sign_name, TRUE, TRUE},
 #endif
-#ifdef FEAT_PROFILE
-	{EXPAND_PROFILE, get_profile_name, TRUE, TRUE},
-#endif
+#line 3391
 #if defined(HAVE_LOCALE_H) || defined(X_LOCALE)
 	{EXPAND_LANGUAGE, get_lang_arg, TRUE, FALSE},
 	{EXPAND_LOCALES, get_locales, TRUE, FALSE},
@@ -3483,9 +3400,7 @@ ExpandFromContext(
 	if (find_help_tags(*pat == NUL ? (char_u *)"help" : pat,
 					numMatches, matches, FALSE) == OK)
 	{
-#ifdef FEAT_MULTI_LANG
-	    cleanup_help_tags(*numMatches, *matches);
-#endif
+#line 3489
 	    return OK;
 	}
 	return FAIL;
@@ -3527,13 +3442,7 @@ ExpandFromContext(
 	char *directories[] = {"syntax", "indent", "ftplugin", NULL};
 	return ExpandRTDir(pat, 0, numMatches, matches, directories);
     }
-#ifdef FEAT_KEYMAP
-    if (xp->xp_context == EXPAND_KEYMAP)
-    {
-	char *directories[] = {"keymap", NULL};
-	return ExpandRTDir(pat, 0, numMatches, matches, directories);
-    }
-#endif
+#line 3537
 #if defined(FEAT_EVAL)
     if (xp->xp_context == EXPAND_USER_LIST)
 	return ExpandUserList(xp, matches, numMatches);
@@ -3586,10 +3495,7 @@ ExpandFromContext(
 	ret = expand_argopt(pat, xp, &regmatch, matches, numMatches);
     else if (xp->xp_context == EXPAND_HIGHLIGHT_GROUP)
 	ret = expand_highlight_group(pat, xp, &regmatch, matches, numMatches);
-#if defined(FEAT_TERMINAL)
-    else if (xp->xp_context == EXPAND_TERMINALOPT)
-	ret = expand_terminal_opt(pat, xp, &regmatch, matches, numMatches);
-#endif
+#line 3593
 #if defined(FEAT_EVAL)
     else if (xp->xp_context == EXPAND_USER_DEFINED)
 	ret = ExpandUserDefined(pat, xp, &regmatch, matches, numMatches);
@@ -3722,16 +3628,7 @@ ExpandGenericExt(
 	else
 	    ((char_u **)ga.ga_data)[ga.ga_len] = str;
 
-#ifdef FEAT_MENU
-	if (func == get_menu_names)
-	{
-	    // test for separator added by get_menu_names()
-	    str += STRLEN(str) - 1;
-	    if (*str == '\001')
-		*str = '.';
-	}
-#endif
-
+#line 3735
 	if (sortStartIdx >= 0 && i >= sortStartIdx && sortStartMatchIdx == -1)
 	{
 	    // Found first item to start sorting from. This is usually 0.
@@ -4738,20 +4635,7 @@ f_getcompletion(typval_T *argvars, typval_T *rettv)
 	    xpc.xp_arg = type + 11;
 	    break;
 
-# if defined(FEAT_MENU)
-	case EXPAND_MENUS:
-	    set_context_in_menu_cmd(&xpc, (char_u *)"menu", xpc.xp_pattern, FALSE);
-	    xpc.xp_pattern_len -= (int)(xpc.xp_pattern - pattern_start);
-	    break;
-# endif
-
-# ifdef FEAT_CSCOPE
-	case EXPAND_CSCOPE:
-	    set_context_in_cscope_cmd(&xpc, xpc.xp_pattern, CMD_cscope);
-	    xpc.xp_pattern_len -= (int)(xpc.xp_pattern - pattern_start);
-	    break;
-# endif
-
+#line 4755
 # ifdef FEAT_SIGNS
 	case EXPAND_SIGN:
 	    set_context_in_sign_cmd(&xpc, xpc.xp_pattern);

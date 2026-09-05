@@ -1001,9 +1001,7 @@ func_needs_compiling(ufunc_T *ufunc, compiletype_T compile_type)
 	    switch (compile_type)
 	    {
 		case CT_PROFILE:
-#ifdef FEAT_PROFILE
-		    return dfunc->df_instr_prof == NULL;
-#endif
+#line 1007
 		case CT_NONE:
 		    return dfunc->df_instr == NULL;
 		case CT_DEBUG:
@@ -1177,12 +1175,7 @@ compile_nested_function(exarg_T *eap, cctx_T *cctx, garray_T *lines_to_free)
     }
 
     compile_type = get_compile_type(ufunc);
-#ifdef FEAT_PROFILE
-    // If the outer function is profiled, also compile the nested function for
-    // profiling.
-    if (cctx->ctx_compile_type == CT_PROFILE)
-	compile_type = CT_PROFILE;
-#endif
+#line 1186
     if (func_needs_compiling(ufunc, compile_type)
 	    && compile_def_function(ufunc, TRUE, compile_type, cctx) == FAIL)
     {
@@ -1193,13 +1186,7 @@ compile_nested_function(exarg_T *eap, cctx_T *cctx, garray_T *lines_to_free)
 	goto theend;
     }
 
-#ifdef FEAT_PROFILE
-    // When the outer function is compiled for profiling, the nested function
-    // may be called without profiling.  Compile it here in the right context.
-    if (compile_type == CT_PROFILE && func_needs_compiling(ufunc, CT_NONE))
-	compile_def_function(ufunc, FALSE, CT_NONE, cctx);
-#endif
-
+#line 1203
     // If a FUNCREF instruction was generated, set the index after compiling.
     if (funcref_isn_idx != -1 && ufunc->uf_def_status == UF_COMPILED)
     {
@@ -3882,35 +3869,7 @@ check_args_shadowing(ufunc_T *ufunc, cctx_T *cctx)
     return r;
 }
 
-#ifdef HAS_MESSAGE_WINDOW
-/*
- * Get a count before a command.  Can only be a number.
- * Returns zero if there is no count.
- * Returns -1 if there is something wrong.
- */
-    static long
-get_cmd_count(char_u *line, exarg_T *eap)
-{
-    char_u *p;
-
-    // skip over colons and white space
-    for (p = line; *p == ':' || VIM_ISWHITE(*p); ++p)
-	;
-    if (!SAFE_isdigit(*p))
-    {
-	// The command or modifiers must be following.  Assume a lower case
-	// character means there is a modifier.
-	if (p < eap->cmd && !vim_islower(*p))
-	{
-	    emsg(_(e_invalid_range));
-	    return -1;
-	}
-	return 0;
-    }
-    return atol((char *)p);
-}
-#endif
-
+#line 3914
 /*
  * Get the compilation type that should be used for "ufunc".
  * Keep in sync with INSTRUCTIONS().
@@ -3923,16 +3882,7 @@ get_compile_type(ufunc_T *ufunc)
 
     if (debug_break_level > 0 || may_break_in_function(ufunc))
 	return CT_DEBUG;
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-    {
-	if (!ufunc->uf_profiling && has_profiling(FALSE, ufunc->uf_name, NULL,
-							    &ufunc->uf_hash))
-	    func_do_profile(ufunc);
-	if (ufunc->uf_profiling)
-	    return CT_PROFILE;
-    }
-#endif
+#line 3936
     return CT_NONE;
 }
 
@@ -3952,9 +3902,7 @@ clear_def_function(ufunc_T *ufunc, compiletype_T compile_type)
     switch (compile_type)
     {
 	case CT_PROFILE:
-#ifdef FEAT_PROFILE
-	    instr_dest = dfunc->df_instr_prof; break;
-#endif
+#line 3958
 	case CT_NONE:   instr_dest = dfunc->df_instr; break;
 	case CT_DEBUG:  instr_dest = dfunc->df_instr_debug; break;
     }
@@ -4265,9 +4213,7 @@ compile_def_function_body(
     char_u	*line = NULL;
     char_u	*p;
     int		did_emsg_before = did_emsg;
-#ifdef FEAT_PROFILE
-    int		prof_lnum = -1;
-#endif
+#line 4271
     int		debug_lnum = -1;
 
     for (;;)
@@ -4300,10 +4246,7 @@ compile_def_function_body(
 	    if (cctx->ctx_lnum >= last_func_lnum)
 	    {
 		// beyond the last line
-#ifdef FEAT_PROFILE
-		if (cctx->ctx_skip != SKIP_YES)
-		    may_generate_prof_end(cctx, prof_lnum);
-#endif
+#line 4307
 		break;
 	    }
 	    // Make a copy, splitting off nextcmd and removing trailing spaces
@@ -4330,16 +4273,7 @@ compile_def_function_body(
 	    continue;
 	}
 
-#ifdef FEAT_PROFILE
-	if (cctx->ctx_compile_type == CT_PROFILE && cctx->ctx_lnum != prof_lnum
-						  && cctx->ctx_skip != SKIP_YES)
-	{
-	    may_generate_prof_end(cctx, prof_lnum);
-
-	    prof_lnum = cctx->ctx_lnum;
-	    generate_instr(cctx, ISN_PROF_START);
-	}
-#endif
+#line 4343
 	if (cctx->ctx_compile_type == CT_DEBUG && cctx->ctx_lnum != debug_lnum
 						  && cctx->ctx_skip != SKIP_YES)
 	{
@@ -4680,18 +4614,7 @@ compile_def_function_body(
 		    line = compile_defer(p, cctx);
 		    break;
 
-#ifdef HAS_MESSAGE_WINDOW
-	    case CMD_echowindow:
-		    {
-			long cmd_count = get_cmd_count(line, &ea);
-			if (cmd_count < 0)
-			    line = NULL;
-			else
-			    line = compile_mult_expr(p, ea.cmdidx,
-							     cmd_count, cctx);
-		    }
-		    break;
-#endif
+#line 4695
 	    case CMD_echo:
 	    case CMD_echon:
 	    case CMD_echoconsole:
@@ -4923,14 +4846,7 @@ compile_dfunc_epilogue(
     dfunc->df_deleted = FALSE;
     dfunc->df_script_seq = current_sctx.sc_seq;
 
-#ifdef FEAT_PROFILE
-    if (cctx->ctx_compile_type == CT_PROFILE)
-    {
-	dfunc->df_instr_prof = instr->ga_data;
-	dfunc->df_instr_prof_count = instr->ga_len;
-    }
-    else
-#endif
+#line 4934
 	if (cctx->ctx_compile_type == CT_DEBUG)
 	{
 	    dfunc->df_instr_debug = instr->ga_data;
@@ -5206,14 +5122,7 @@ delete_def_function_contents(dfunc_T *dfunc, int mark_deleted)
 	    delete_instr(dfunc->df_instr_debug + idx);
 	VIM_CLEAR(dfunc->df_instr_debug);
     }
-#ifdef FEAT_PROFILE
-    if (dfunc->df_instr_prof != NULL)
-    {
-	for (idx = 0; idx < dfunc->df_instr_prof_count; ++idx)
-	    delete_instr(dfunc->df_instr_prof + idx);
-	VIM_CLEAR(dfunc->df_instr_prof);
-    }
-#endif
+#line 5217
 
     if (mark_deleted)
 	dfunc->df_deleted = TRUE;

@@ -269,9 +269,7 @@ do_tag(
     int		error_cur_match = 0;
     int		save_pos = FALSE;
     fmark_T	saved_fmark;
-#ifdef FEAT_CSCOPE
-    int		jumped_to_tag = FALSE;
-#endif
+#line 275
     int		new_num_matches;
     char_u	**new_matches;
     int		use_tagstack;
@@ -292,9 +290,7 @@ do_tag(
     {
 	// remove the list of matches
 	FreeWild(num_matches, matches);
-# ifdef FEAT_CSCOPE
-	cs_free_tags();
-# endif
+#line 298
 	num_matches = 0;
 	return FALSE;
     }
@@ -356,9 +352,7 @@ do_tag(
 #ifdef FEAT_QUICKFIX
 		    || type == DT_LTAG
 #endif
-#ifdef FEAT_CSCOPE
-		    || type == DT_CSCOPE
-#endif
+#line 362
 		    ))
 	{
 #if defined(FEAT_QUICKFIX)
@@ -429,9 +423,7 @@ do_tag(
 
 	    if (type == DT_POP)		// go to older position
 	    {
-#ifdef FEAT_FOLDING
-		int	old_KeyTyped = KeyTyped;
-#endif
+#line 435
 		if ((tagstackidx -= count) < 0)
 		{
 		    emsg(_(e_at_bottom_of_tag_stack));
@@ -478,16 +470,11 @@ do_tag(
 		curwin->w_cursor.col = saved_fmark.mark.col;
 		curwin->w_set_curswant = true;
 		check_cursor();
-#ifdef FEAT_FOLDING
-		if ((fdo_flags & FDO_TAG) && old_KeyTyped)
-		    foldOpenCursor();
-#endif
+#line 485
 
 		// remove the old list of matches
 		FreeWild(num_matches, matches);
-#ifdef FEAT_CSCOPE
-		cs_free_tags();
-#endif
+#line 491
 		num_matches = 0;
 		tag_freematch();
 		goto end_do_tag;
@@ -556,9 +543,7 @@ do_tag(
 		    case DT_FIRST: cur_match = count - 1; break;
 		    case DT_SELECT:
 		    case DT_JUMP:
-#ifdef FEAT_CSCOPE
-		    case DT_CSCOPE:
-#endif
+#line 562
 		    case DT_LAST:  cur_match = MAXCOL - 1; break;
 		    case DT_NEXT:  cur_match += count; break;
 		    case DT_PREV:  cur_match -= count; break;
@@ -675,10 +660,7 @@ do_tag(
 	    else
 		flags = TAG_NOIC;
 
-#ifdef FEAT_CSCOPE
-	    if (type == DT_CSCOPE)
-		flags = TAG_CSCOPE;
-#endif
+#line 682
 	    if (verbose)
 		flags |= TAG_VERBOSE;
 
@@ -749,14 +731,7 @@ do_tag(
 	    size_t  IObufflen;
 #endif
 
-#ifdef FEAT_CSCOPE
-	    if (type == DT_CSCOPE && num_matches > 1)
-	    {
-		cs_print_tags();
-		ask_for_selection = TRUE;
-	    }
-	    else
-#endif
+#line 760
 	    if (type == DT_TAG && *tag != NUL)
 		// If a count is supplied to the ":tag <name>" command, then
 		// jump to count'th matching tag.
@@ -789,10 +764,7 @@ do_tag(
 			tagstack[tagstackidx].fmark = saved_fmark;
 			tagstackidx = prevtagstackidx;
 		    }
-#ifdef FEAT_CSCOPE
-		    cs_free_tags();
-		    jumped_to_tag = TRUE;
-#endif
+#line 796
 		    break;
 		}
 		cur_match = i - 1;
@@ -850,9 +822,7 @@ do_tag(
 
 	    ic = (matches[cur_match][0] & MT_IC_OFF);
 	    if (type != DT_TAG && type != DT_SELECT && type != DT_JUMP
-#ifdef FEAT_CSCOPE
-		&& type != DT_CSCOPE
-#endif
+#line 856
 		&& (num_matches > 1 || ic)
 		&& !skip_msg)
 	    {
@@ -925,9 +895,7 @@ do_tag(
 		// tagstackidx is still valid.
 		if (use_tagstack && tagstackidx > curwin->w_tagstacklen)
 		    tagstackidx = curwin->w_tagstackidx;
-#ifdef FEAT_CSCOPE
-		jumped_to_tag = TRUE;
-#endif
+#line 931
 	    }
 	}
 	break;
@@ -943,11 +911,9 @@ end_do_tag:
 #endif
 
     vim_free(tofree);
-#ifdef FEAT_CSCOPE
-    return jumped_to_tag;
-#else
+#line 949
     return FALSE;
-#endif
+#line 951
 }
 
 /*
@@ -1683,12 +1649,7 @@ typedef struct
     int		is_etag;		// current file is emacs style
     char_u	*ebuf;			// additional buffer for etag fname
 #endif
-#ifdef FEAT_MULTI_LANG
-    char_u	help_lang[3];		// lang of current tags file
-    int		help_pri;		// help language priority
-    char_u	*help_lang_find;	// lang to be found
-    int		is_txt;			// flag of file extension
-#endif
+#line 1692
     int		match_count;		// number of matches found
     garray_T	ga_match[MT_COUNT];	// stores matches in sequence
     hashtab_T	ht_match[MT_COUNT];	// stores matches by key
@@ -1717,12 +1678,7 @@ findtags_state_init(
     st->tag_file_sorted = NUL;
     st->help_only = (flags & TAG_HELP);
     st->get_searchpat = FALSE;
-#ifdef FEAT_MULTI_LANG
-    st->help_lang[0] = NUL;
-    st->help_pri = 0;
-    st->help_lang_find = NULL;
-    st->is_txt = FALSE;
-#endif
+#line 1726
     st->did_open = FALSE;
     st->mincount = mincount;
     st->lbuf_size = LSIZE;
@@ -1766,72 +1722,7 @@ findtags_state_free(findtags_state_T *st)
 #endif
 }
 
-#ifdef FEAT_MULTI_LANG
-/*
- * Initialize the language and priority used for searching tags in a Vim help
- * file.
- * Returns TRUE to process the help file for tags and FALSE to skip the file.
- */
-    static int
-findtags_in_help_init(findtags_state_T *st)
-{
-    int		i;
-    char_u	*s;
-
-    // Keep "en" as the language if the file extension is ".txt"
-    if (st->is_txt)
-	STRCPY(st->help_lang, "en");
-    else
-    {
-	// Prefer help tags according to 'helplang'.  Put the two-letter
-	// language name in help_lang[].
-	i = (int)STRLEN(st->tag_fname);
-	if (i > 3 && st->tag_fname[i - 3] == '-')
-	    vim_strncpy(st->help_lang, st->tag_fname + i - 2, 2);
-	else
-	    STRCPY(st->help_lang, "en");
-    }
-    // When searching for a specific language skip tags files for other
-    // languages.
-    if (st->help_lang_find != NULL
-	    && STRICMP(st->help_lang, st->help_lang_find) != 0)
-	return FALSE;
-
-    // For CTRL-] in a help file prefer a match with the same language.
-    if ((st->flags & TAG_KEEP_LANG)
-	    && st->help_lang_find == NULL
-	    && curbuf->b_fname != NULL
-	    && (i = (int)STRLEN(curbuf->b_fname)) > 4
-	    && curbuf->b_fname[i - 1] == 'x'
-	    && curbuf->b_fname[i - 4] == '.'
-	    && STRNICMP(curbuf->b_fname + i - 3, st->help_lang, 2) == 0)
-	st->help_pri = 0;
-    else
-    {
-	// search for the language in 'helplang'
-	st->help_pri = 1;
-	for (s = p_hlg; *s != NUL; ++s)
-	{
-	    if (STRNICMP(s, st->help_lang, 2) == 0)
-		break;
-	    ++st->help_pri;
-	    if ((s = vim_strchr(s, ',')) == NULL)
-		break;
-	}
-	if (s == NULL || *s == NUL)
-	{
-	    // Language not in 'helplang': use last, prefer English, unless
-	    // found already.
-	    ++st->help_pri;
-	    if (STRICMP(st->help_lang, "en") != 0)
-		++st->help_pri;
-	}
-    }
-
-    return TRUE;
-}
-#endif
-
+#line 1835
 #ifdef FEAT_EVAL
 /*
  * Use the function set in 'tagfunc' (if configured and enabled) to get the
@@ -2119,11 +2010,7 @@ findtags_get_next_line(findtags_state_T *st, tagsearch_info_T *sinfo_p)
 	// skip empty and blank lines
 	do
 	{
-#ifdef FEAT_CSCOPE
-	    if (st->flags & TAG_CSCOPE)
-		eof = cs_fgets(st->lbuf, st->lbuf_size);
-	    else
-#endif
+#line 2127
 		eof = vim_fgets(st->lbuf, st->lbuf_size, st->fp);
 	} while (!eof && vim_isblankline(st->lbuf));
 
@@ -2187,9 +2074,7 @@ findtags_start_state_handler(
     int			*sortic,
     tagsearch_info_T	*sinfo_p)
 {
-#ifdef FEAT_CSCOPE
-    int		use_cscope = (st->flags & TAG_CSCOPE);
-#endif
+#line 2193
     int		noic = (st->flags & TAG_NOIC);
     off_T	filesize;
 
@@ -2208,11 +2093,9 @@ findtags_start_state_handler(
     // When "!_TAG_FILE_SORTED" found: start binary search if
     // flag set.
     // For cscope, it's always linear.
-#ifdef FEAT_CSCOPE
-    if (st->linear || use_cscope)
-#else
+#line 2214
     if (st->linear)
-#endif
+#line 2216
 	st->state = TS_LINEAR;
     else if (st->tag_file_sorted == NUL)
 	st->state = TS_BINARY;
@@ -2550,9 +2433,7 @@ findtags_add_match(
     char_u		*buf_ffname,
     hash_T		*hash)
 {
-#ifdef FEAT_CSCOPE
-    int		use_cscope = (st->flags & TAG_CSCOPE);
-#endif
+#line 2556
     int		name_only = (st->flags & TAG_NAMES);
     int		mtt;
     int		len = 0;
@@ -2562,14 +2443,7 @@ findtags_add_match(
     char_u	*p;
     char_u	*s;
 
-#ifdef FEAT_CSCOPE
-    if (use_cscope)
-    {
-	// Don't change the ordering, always use the same table.
-	mtt = MT_GL_OTH;
-    }
-    else
-#endif
+#line 2573
     {
 	// Decide in which array to store this match.
 	is_current = test_for_current(
@@ -2610,11 +2484,9 @@ findtags_add_match(
     // tags we are dealing with.
     if (st->help_only)
     {
-#ifdef FEAT_MULTI_LANG
-# define ML_EXTRA 3
-#else
+#line 2616
 # define ML_EXTRA 0
-#endif
+#line 2618
 	// Append the help-heuristic number after the tagname, for
 	// sorting it later.  The heuristic is ignored for
 	// detecting duplicates.
@@ -2628,17 +2500,12 @@ findtags_add_match(
 
 	    p = mfp;
 	    STRCPY(p, tagpp->tagname);
-#ifdef FEAT_MULTI_LANG
-	    p[len] = '@';
-	    STRCPY(p + len + 1, st->help_lang);
-#endif
+#line 2635
 
 	    heuristic = help_heuristic(tagpp->tagname,
 				margs->match_re ? margs->matchoff : 0,
 				!margs->match_no_ic);
-#ifdef FEAT_MULTI_LANG
-	    heuristic += st->help_pri;
-#endif
+#line 2642
 	    sprintf((char *)p + len + 1 + ML_EXTRA, "%06d",
 		    heuristic);
 	}
@@ -2741,11 +2608,7 @@ findtags_add_match(
 	// the part that matters for comparing, more bytes may
 	// follow after it.  E.g. help tags store the priority
 	// after the NUL.
-#ifdef FEAT_CSCOPE
-	if (use_cscope)
-	    ++*hash;
-	else
-#endif
+#line 2749
 	    *hash = hash_hash(mfp);
 	hi = hash_lookup(&st->ht_match[mtt], mfp, *hash);
 	if (HASHITEM_EMPTY(hi))
@@ -2783,9 +2646,7 @@ findtags_get_all_tags(
     tagptrs_T		tagp;
     tagsearch_info_T	search_info;
     int			retval;
-#ifdef FEAT_CSCOPE
-    int			use_cscope = (st->flags & TAG_CSCOPE);
-#endif
+#line 2789
     hash_T		hash = 0;
 
     // This is only to avoid a compiler warning for using search_info
@@ -2833,9 +2694,7 @@ line_read_in:
 	// The file name is followed by a ','.
 	// Remember etag file name in ebuf.
 	if (*st->lbuf == Ctrl_L
-# ifdef FEAT_CSCOPE
-		&& !use_cscope
-# endif
+#line 2839
 	   )
 	{
 	    st->is_etag = TRUE;		// in case at the start
@@ -2858,9 +2717,7 @@ line_read_in:
 	// Has been reported for Mozilla JS with extremely long names.
 	// In that case we need to increase lbuf_size.
 	if (st->lbuf[st->lbuf_size - 2] != NUL
-#ifdef FEAT_CSCOPE
-		&& !use_cscope
-#endif
+#line 2864
 	   )
 	{
 	    st->lbuf_size *= 2;
@@ -2893,9 +2750,7 @@ line_read_in:
 	if (retval == TAG_MATCH_FAIL)
 	{
 	    semsg(_(e_format_error_in_tags_file_str), st->tag_fname);
-#ifdef FEAT_CSCOPE
-	    if (!use_cscope)
-#endif
+#line 2899
 		semsg(_("Before byte %ld"), (long)vim_ftell(st->fp));
 	    st->stop_searching = TRUE;
 	    return;
@@ -2921,9 +2776,7 @@ line_read_in:
 findtags_in_file(findtags_state_T *st, char_u *buf_ffname)
 {
     findtags_match_args_T margs;
-#ifdef FEAT_CSCOPE
-    int		use_cscope = (st->flags & TAG_CSCOPE);
-#endif
+#line 2927
 
     st->vimconv.vc_type = CONV_NONE;
     st->tag_file_sorted = NUL;
@@ -2932,19 +2785,9 @@ findtags_in_file(findtags_state_T *st, char_u *buf_ffname)
 
     // A file that doesn't exist is silently ignored.  Only when not a
     // single file is found, an error message is given (further on).
-#ifdef FEAT_CSCOPE
-    if (use_cscope)
-	st->fp = NULL;	    // avoid GCC warning
-    else
-#endif
+#line 2940
     {
-#ifdef FEAT_MULTI_LANG
-	if (curbuf->b_help)
-	{
-	    if (!findtags_in_help_init(st))
-		return;
-	}
-#endif
+#line 2948
 
 	st->fp = mch_fopen((char *)st->tag_fname, "r");
 	if (st->fp == NULL)
@@ -3081,18 +2924,13 @@ find_tags(
     int		save_emsg_off;
 
     bool	help_save;
-#ifdef FEAT_MULTI_LANG
-    int		i;
-    char_u	*saved_pat = NULL;		// copy of pat[]
-#endif
+#line 3088
 
     int		findall = (mincount == MAXCOL || mincount == TAG_MANY);
 						// find all matching tags
     int		has_re = (flags & TAG_REGEXP);	// regexp used
     int		noic = (flags & TAG_NOIC);
-#ifdef FEAT_CSCOPE
-    int		use_cscope = (flags & TAG_CSCOPE);
-#endif
+#line 3096
     int		verbose = (flags & TAG_VERBOSE);
     int		save_p_ic = p_ic;
 
@@ -3114,43 +2952,15 @@ find_tags(
     if (findtags_state_init(&st, pat, flags, mincount) == FAIL)
 	goto findtag_end;
 
-#ifdef FEAT_CSCOPE
-    STRCPY(st.tag_fname, "from cscope");	// for error messages
-#endif
-
+#line 3121
     /*
      * Initialize a few variables
      */
     if (st.help_only)				// want tags from help file
 	curbuf->b_help = true;			// will be restored later
-#ifdef FEAT_CSCOPE
-    else if (use_cscope)
-    {
-	// Make sure we don't mix help and cscope, confuses Coverity.
-	st.help_only = FALSE;
-	curbuf->b_help = false;
-    }
-#endif
+#line 3134
 
-#ifdef FEAT_MULTI_LANG
-    if (curbuf->b_help)
-    {
-	// When "@ab" is specified use only the "ab" language, otherwise
-	// search all languages.
-	if (st.orgpat->len > 3 && pat[st.orgpat->len - 3] == '@'
-				&& ASCII_ISALPHA(pat[st.orgpat->len - 2])
-				&& ASCII_ISALPHA(pat[st.orgpat->len - 1]))
-	{
-	    saved_pat = vim_strnsave(pat, st.orgpat->len - 3);
-	    if (saved_pat != NULL)
-	    {
-		st.help_lang_find = &pat[st.orgpat->len - 2];
-		st.orgpat->pat = saved_pat;
-		st.orgpat->len -= 3;
-	    }
-	}
-    }
-#endif
+#line 3154
     if (p_tl != 0 && st.orgpat->len > p_tl)	// adjust for 'taglength'
 	st.orgpat->len = p_tl;
 
@@ -3170,16 +2980,7 @@ find_tags(
     retval = FAIL;
 #endif
 
-#ifdef FEAT_MULTI_LANG
-    // Set a flag if the file extension is .txt
-    if ((flags & TAG_KEEP_LANG)
-	    && st.help_lang_find == NULL
-	    && curbuf->b_fname != NULL
-	    && (i = (int)STRLEN(curbuf->b_fname)) > 4
-	    && STRICMP(curbuf->b_fname + i - 4, ".txt") == 0)
-	st.is_txt = TRUE;
-#endif
-
+#line 3183
     /*
      * When finding a specified number of matches, first try with matching
      * case, so binary search can be used, and try ignore-case matches in a
@@ -3200,17 +3001,13 @@ find_tags(
        * Try tag file names from tags option one by one.
        */
       for (first_file = TRUE;
-#ifdef FEAT_CSCOPE
-	    use_cscope ||
-#endif
+#line 3206
 		get_tagfname(&tn, first_file, st.tag_fname) == OK;
 							   first_file = FALSE)
       {
 	  findtags_in_file(&st, buf_ffname);
 	  if (st.stop_searching
-#ifdef FEAT_CSCOPE
-		  || use_cscope
-#endif
+#line 3214
 	     )
 	  {
 	      retval = OK;
@@ -3218,9 +3015,7 @@ find_tags(
 	  }
       } // end of for-each-file loop
 
-#ifdef FEAT_CSCOPE
-	if (!use_cscope)
-#endif
+#line 3224
 	    tagname_free(&tn);
 
 	// stop searching when already did a linear search, or when TAG_NOIC
@@ -3228,10 +3023,7 @@ find_tags(
 	if (st.stop_searching || st.linear || (!p_ic && noic) ||
 						st.orgpat->regmatch.rm_ic)
 	    break;
-#ifdef FEAT_CSCOPE
-	if (use_cscope)
-	    break;
-#endif
+#line 3235
 
 	// try another time while ignoring case
 	st.orgpat->regmatch.rm_ic = TRUE;
@@ -3257,9 +3049,7 @@ findtag_end:
     *num_matches = findtags_copy_matches(&st, matchesp);
 
     curbuf->b_help = help_save;
-#ifdef FEAT_MULTI_LANG
-    vim_free(saved_pat);
-#endif
+#line 3263
 
     p_ic = save_p_ic;
 
@@ -3333,19 +3123,9 @@ get_tagfname(
 	    ga_clear_strings(&tag_fnames);
 	    ga_init2(&tag_fnames, sizeof(char_u *), 10);
 	    do_in_runtimepath((char_u *)
-#ifdef FEAT_MULTI_LANG
-# ifdef VMS
-		    // Functions decc$to_vms() and decc$translate_vms() crash
-		    // on some VMS systems with wildcards "??".  Seems ECO
-		    // patches do fix the problem in C RTL, but we can't use
-		    // an #ifdef for that.
-		    "doc/tags doc/tags-*"
-# else
-		    "doc/tags doc/tags-??"
-# endif
-#else
+#line 3347
 		    "doc/tags"
-#endif
+#line 3349
 					   , DIP_ALL, found_tagfile_cb, NULL);
 	}
 
@@ -3717,9 +3497,7 @@ jumpto_tag(
     win_T	*curwin_save = NULL;
 #endif
     char_u	*full_fname = NULL;
-#ifdef FEAT_FOLDING
-    int		old_KeyTyped = KeyTyped;    // getting the file may reset it
-#endif
+#line 3723
     size_t	len;
     char_u	*lbuf;
     int		isdigit = FALSE;
@@ -3812,10 +3590,7 @@ jumpto_tag(
 
     ++RedrawingDisabled;
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 3819
 #if defined(FEAT_QUICKFIX)
     if (g_do_tagpreview != 0)
     {
@@ -3907,11 +3682,7 @@ jumpto_tag(
 	// Save value of no_hlsearch, jumping to a tag is not a real search
 	save_no_hlsearch = no_hlsearch;
 #endif
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-	// getfile() may have cleared options, apply 'previewpopup' again.
-	if (g_do_tagpreview != 0 && *p_pvp != NUL)
-	    parse_previewpopup(curwin);
-#endif
+#line 3915
 
 	/*
 	 * If 'cpoptions' contains 't', store the search pattern for the "n"
@@ -4061,10 +3832,7 @@ jumpto_tag(
 	     */
 	    if (curbuf->b_help)
 		set_topline(curwin, curwin->w_cursor.lnum);
-#ifdef FEAT_FOLDING
-	    if ((fdo_flags & FDO_TAG) && old_KeyTyped)
-		foldOpenCursor();
-#endif
+#line 4068
 	}
 
 #if defined(FEAT_QUICKFIX)
@@ -4092,22 +3860,9 @@ jumpto_tag(
 	    win_close(curwin, FALSE);
 	    postponed_split = 0;
 	}
-#if defined(FEAT_QUICKFIX) && defined(FEAT_PROP_POPUP)
-	else if (WIN_IS_POPUP(curwin))
-	{
-	    win_T   *wp = curwin;
-
-	    if (win_valid(curwin_save))
-		win_enter(curwin_save, TRUE);
-	    popup_close(wp->w_id, FALSE);
-	}
-#endif
+#line 4105
     }
-#if defined(FEAT_QUICKFIX) && defined(FEAT_PROP_POPUP)
-    if (WIN_IS_POPUP(curwin))
-	// something went wrong, still in popup, but it can't have focus
-	win_enter(firstwin, TRUE);
-#endif
+#line 4111
 
 erret:
 #if defined(FEAT_QUICKFIX)
