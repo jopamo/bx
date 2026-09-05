@@ -4364,7 +4364,7 @@ static int applyopt_offset(struct single *sfd, struct opt *opt) {
 	 *(char **)ptr = NULL;
 	 break;
       }
-      /* PASSTHROUGH */
+      /* fall through */
    case TYPE_STRING:
       if ((*(char **)ptr = strdup(opt->value.u_string)) == NULL) {
 	 Error1("strdup("F_Zu"): out of memory",

@@ -1561,8 +1561,6 @@ int xiotransfer(xiofile_t *inpipe, xiofile_t *outpipe,
 	       xioprintblockheader(stderr, bytes, righttoleft);
 	       while (i < (size_t)bytes) {
 		  int c = buff[i];
-		  if (i > 0 && buff[i-1] == '\n')
-		     /*! prefix? */;
 		  switch (c) {
 		  case '\a' : fputs("\\a", stderr); break;
 		  case '\b' : fputs("\\b", stderr); break;
@@ -1701,6 +1699,7 @@ void socat_signal(int signum) {
    switch (signum) {
    default:
       diag_immediate_exit = 1;
+      /* fall through */
    case SIGQUIT:
    case SIGPIPE:
       diag_set_int('x', 128+signum);	/* in case Error exits for us */

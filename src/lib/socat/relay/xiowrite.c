@@ -64,7 +64,7 @@ ssize_t xiowrite(xiofile_t *file, const void *buff, size_t bytes) {
 		       pipe->fd, buff, bytes, strerror(_errno));
 	       break;
 	    }
-	    /*PASSTRHOUGH*/
+	    /* fall through */
 	 default:
 	    Error4("write(%d, %p, "F_Zu"): %s",
 		   pipe->fd, buff, bytes, strerror(_errno));

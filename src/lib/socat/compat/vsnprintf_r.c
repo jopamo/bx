@@ -415,7 +415,10 @@ int vsnprintf_r(char *str, size_t size, const char *format, va_list ap) {
 	 switch (c) {
 	    /* not handled: 'q' 'j' 't' */
 	    /* handled: 'h' 'hh'->'H' 'z' 'Z'->'z' 'l' 'll'->'L' 'L' */
-	 case 'Z': c = 'z'; /* fall through */
+	 case 'Z':
+	    lengthmod = 'z';
+	    c = *format++;
+	    break;
 #if HAVE_TYPE_LONGLONG
 	 case 'L':
 #endif

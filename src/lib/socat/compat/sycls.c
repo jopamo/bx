@@ -1742,7 +1742,7 @@ int Atexit(void (*func)(void)) {
 
 #endif /* WITH_SYCLS */
 
-void Exit(int status) {
+_Noreturn void Exit(int status) {
    if (!diag_in_handler) diag_flush();
 #if WITH_SYCLS
    Debug1("exit(%d)", status);

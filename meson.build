@@ -864,7 +864,7 @@ socat_c_args = cc.get_supported_arguments([
   '-D_GNU_SOURCE',
   '-Dmain=bx_socat_main_impl',
   '-Dmsg=bx_socat_msg',
-  '-Wno-error',
+  '-Werror',
   '-Wno-pedantic',
   '-Wno-shadow',
   '-Wno-sign-compare',
