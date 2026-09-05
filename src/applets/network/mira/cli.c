@@ -183,11 +183,6 @@ static int mira_validate_config(struct bx_fetch_config* config,
                                 const char* input_file_token,
                                 const char* force_html_token,
                                 const char* base_token) {
-    if (config->logging.debug_trace && !config->download.dry_run && !config->startup.show_help && !config->startup.show_version) {
-        bx_mira_emit_parse_error(config, "--debug currently requires --dry-run");
-        errno = EINVAL;
-        return -1;
-    }
     if (config->http.post_data && config->http.post_file) {
         bx_mira_emit_parse_error(config, "conflicting option tokens: --post-data and --post-file");
         errno = EINVAL;
