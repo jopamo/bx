@@ -16,6 +16,7 @@
 #include <utime.h>
 #include <time.h>
 #include <unistd.h>
+#include <bzlib.h>
 #include <zlib.h>
 #include <fnmatch.h>
 #include <fcntl.h>
@@ -33,7 +34,6 @@
 #include "publish.h"
 #include "zip_headers.h"
 #include "zipcrypto.h"
-#include "bzip2_shim.h"
 #include "zlib_shim.h"
 #include "lib/path_ops.h"
 #include "lib/size_parse.h"
