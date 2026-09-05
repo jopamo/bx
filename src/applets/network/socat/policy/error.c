@@ -63,7 +63,7 @@ static void _msg(int level, const char *buff, const char *syslp);
 
 volatile sig_atomic_t diag_in_handler;	/* !=0 indicates to msg() that in signal handler */
 volatile sig_atomic_t diag_immediate_msg;	/* !=0 prints messages even from within signal handler instead of deferring them */
-volatile sig_atomic_t diag_immediate_exit;	/* !=0 calls exit() from diag_exit() even when in signal handler. For system() */
+volatile sig_atomic_t diag_immediate_exit;	/* !=0 permits diag_exit() to exit from a signal handler */
 
 static struct wordent facilitynames[] = {
    {"auth",     (void *)LOG_AUTH},
