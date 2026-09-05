@@ -13,7 +13,7 @@ MIRA_OPTION("debug", no_argument, MIRA_OPT_DEBUG, "", NULL, NULL, "emit structur
 MIRA_OPTION("input-file", required_argument, 'i', "i:", NULL, "FILE", "read bounded URL lines from FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("force-html", no_argument, 'F', "F", NULL, NULL, "treat input file as HTML", MIRA_OPTION_CATEGORY_STARTUP, true)
 MIRA_OPTION("base", required_argument, 'B', "B:", NULL, "URL", "resolve HTML input-file links relative to URL", MIRA_OPTION_CATEGORY_STARTUP, true)
-MIRA_OPTION("rejected-log", required_argument, MIRA_OPT_REJECTED_LOG, "", NULL, "FILE", "log rejected URLs to FILE", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("rejected-log", required_argument, MIRA_OPT_REJECTED_LOG, "", NULL, "FILE", "log rejected URLs to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 
 MIRA_OPTION("tries", required_argument, 't', "t:", NULL, "NUMBER", "bound transfer attempts", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("retry-connrefused", no_argument, MIRA_OPT_RETRY_CONNREFUSED, "", NULL, NULL, "retry connection-refused failures", MIRA_OPTION_CATEGORY_DOWNLOAD, true)

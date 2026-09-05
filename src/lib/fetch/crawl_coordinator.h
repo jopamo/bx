@@ -67,6 +67,17 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawl
                                                                     BxFetchHtmlLinkKind kind,
                                                                     int parent_depth);
 /*
+ * As above, but returns the single resolved target used for admission.
+ * target_out receives owned state when resolution succeeds, including filter
+ * rejection. Kind/depth skips and unresolvable references leave it NULL.
+ */
+BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered_observed(BxFetchCrawlCoordinator* coordinator,
+                                                                             const BxFetchPreparedUrl* base,
+                                                                             const char* reference,
+                                                                             BxFetchHtmlLinkKind kind,
+                                                                             int parent_depth,
+                                                                             BxFetchPreparedUrl** target_out);
+/*
  * Evaluates an already prepared redirect/target against the same filter and
  * seed policy that owns crawl admission. Returns 0 with a typed decision.
  */

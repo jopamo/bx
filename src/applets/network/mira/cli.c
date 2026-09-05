@@ -327,6 +327,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_DEBUG:
                 config->logging.debug_trace = true;
                 break;
+            case MIRA_OPT_REJECTED_LOG:
+                MIRA_SET_STRING(config->logging.rejected_log);
+                break;
             case 'i':
                 if (!optarg || optarg[0] == '\0') {
                     bx_mira_emit_parse_error(config, "--input-file requires a non-empty path");

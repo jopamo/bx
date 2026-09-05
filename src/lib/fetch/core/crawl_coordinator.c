@@ -168,11 +168,14 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_seed(BxFetchCrawlCoordi
     return bx_fetch_crawl_coordinator_add_seed_observed(coordinator, url, NULL);
 }
 
-BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawlCoordinator* coordinator,
-                                                                    const BxFetchPreparedUrl* base,
-                                                                    const char* reference,
-                                                                    BxFetchHtmlLinkKind kind,
-                                                                    int parent_depth) {
+BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered_observed(BxFetchCrawlCoordinator* coordinator,
+                                                                             const BxFetchPreparedUrl* base,
+                                                                             const char* reference,
+                                                                             BxFetchHtmlLinkKind kind,
+                                                                             int parent_depth,
+                                                                             BxFetchPreparedUrl** target_out) {
+    if (target_out)
+        *target_out = NULL;
     if (!coordinator || !base || !reference || parent_depth < 0 || parent_depth == INT_MAX) {
         errno = EINVAL;
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
@@ -197,8 +200,19 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawl
         return enqueue_result(BX_FETCH_CRAWL_ERROR, FILTER_DECISION_ACCEPT);
     }
     BxFetchCrawlEnqueueResult result = add_prepared(coordinator, target, parent_depth + 1, false);
-    bx_fetch_prepared_url_free(target);
+    if (target_out)
+        *target_out = target;
+    else
+        bx_fetch_prepared_url_free(target);
     return result;
+}
+
+BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered(BxFetchCrawlCoordinator* coordinator,
+                                                                    const BxFetchPreparedUrl* base,
+                                                                    const char* reference,
+                                                                    BxFetchHtmlLinkKind kind,
+                                                                    int parent_depth) {
+    return bx_fetch_crawl_coordinator_add_discovered_observed(coordinator, base, reference, kind, parent_depth, NULL);
 }
 
 int bx_fetch_crawl_coordinator_evaluate_target(const BxFetchCrawlCoordinator* coordinator, const BxFetchPreparedUrl* target, BxFetchFilterDecision* decision_out) {
