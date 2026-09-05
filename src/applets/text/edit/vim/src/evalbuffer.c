@@ -29,12 +29,7 @@ set_ref_in_buffers(int copyID)
 
 	for (lnr = bp->b_listener; !abort && lnr != NULL; lnr = lnr->lr_next)
 	    abort = abort || set_ref_in_callback(&lnr->lr_callback, copyID);
-# ifdef FEAT_JOB_CHANNEL
-	if (!abort)
-	    abort = abort || set_ref_in_callback(&bp->b_prompt_callback, copyID);
-	if (!abort)
-	    abort = abort || set_ref_in_callback(&bp->b_prompt_interrupt, copyID);
-# endif
+#line 38
 # ifdef FEAT_COMPL_FUNC
 	if (!abort)
 	    abort = abort || set_ref_in_callback(&bp->b_cfu_cb, copyID);
@@ -673,23 +668,7 @@ get_buffer_info(buf_T *buf)
 	dict_add_list(dict, "windows", windows);
     }
 
-# ifdef FEAT_PROP_POPUP
-    // List of popup windows displaying this buffer
-    windows = list_alloc();
-    if (windows != NULL)
-    {
-	FOR_ALL_POPUPWINS(wp)
-	    if (wp->w_buffer == buf)
-		list_append_number(windows, (varnumber_T)wp->w_id);
-	FOR_ALL_TABPAGES(tp)
-	    FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-		if (wp->w_buffer == buf)
-		    list_append_number(windows, (varnumber_T)wp->w_id);
-
-	dict_add_list(dict, "popups", windows);
-    }
-# endif
-
+#line 693
 # ifdef FEAT_SIGNS
     if (buf->b_signlist != NULL)
     {
@@ -703,10 +682,7 @@ get_buffer_info(buf_T *buf)
     }
 # endif
 
-# ifdef FEAT_VIMINFO
-    dict_add_number(dict, "lastused", buf->b_last_used);
-# endif
-
+#line 710
     return dict;
 }
 
@@ -945,9 +921,7 @@ f_setline(typval_T *argvars, typval_T *rettv)
 switch_buffer(bufref_T *save_curbuf, buf_T *buf)
 {
     block_autocmds();
-# ifdef FEAT_FOLDING
-    ++disable_fold_update;
-# endif
+#line 951
     set_bufref(save_curbuf, curbuf);
     --curbuf->b_nwindows;
     curbuf = buf;
@@ -962,9 +936,7 @@ switch_buffer(bufref_T *save_curbuf, buf_T *buf)
 restore_buffer(bufref_T *save_curbuf)
 {
     unblock_autocmds();
-# ifdef FEAT_FOLDING
-    --disable_fold_update;
-# endif
+#line 968
     // Check for valid buffer, just in case.
     if (bufref_valid(save_curbuf))
     {

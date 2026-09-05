@@ -55,66 +55,7 @@ json_encode(typval_T *val, int options)
     return ga.ga_data;
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-/*
- * Encode ["nr", "val"] into a JSON format string in allocated memory.
- * "options" can contain JSON_JS, JSON_NO_NONE and JSON_NL.
- * Returns NULL when out of memory.
- */
-    char_u *
-json_encode_nr_expr(int nr, typval_T *val, int options)
-{
-    typval_T	listtv;
-    typval_T	nrtv;
-    garray_T	ga;
-
-    nrtv.v_type = VAR_NUMBER;
-    nrtv.vval.v_number = nr;
-    if (rettv_list_alloc(&listtv) == FAIL)
-	return NULL;
-    if (list_append_tv(listtv.vval.v_list, &nrtv) == FAIL
-	    || list_append_tv(listtv.vval.v_list, val) == FAIL)
-    {
-	list_unref(listtv.vval.v_list);
-	return NULL;
-    }
-
-    ga_init2(&ga, 1, 4000);
-    if (json_encode_gap(&ga, &listtv, options) == OK && (options & JSON_NL))
-	ga_append(&ga, '\n');
-    list_unref(listtv.vval.v_list);
-    ga_append(&ga, NUL);
-    return ga.ga_data;
-}
-
-/*
- * Encode "val" into a JSON format string prefixed by the LSP HTTP header.
- * Returns NULL when out of memory.
- */
-    char_u *
-json_encode_lsp_msg(typval_T *val)
-{
-    garray_T	ga;
-    garray_T	lspga;
-    size_t	IObufflen;
-
-    ga_init2(&ga, 1, 4000);
-    if (json_encode_gap(&ga, val, 0) == FAIL)
-	return NULL;
-    ga_append(&ga, NUL);
-
-    ga_init2(&lspga, 1, 4000);
-    // Header according to LSP specification.
-    IObufflen = vim_snprintf_safelen((char *)IObuff, IOSIZE,
-	    "Content-Length: %u\r\n\r\n",
-	    ga.ga_len - 1);
-    ga_concat_len(&lspga, IObuff, IObufflen);
-    ga_concat_len(&lspga, ga.ga_data, ga.ga_len);
-    ga_clear(&ga);
-    return lspga.ga_data;
-}
-#endif
-
+#line 118
 /*
  * Lookup table to quickly know if the given ASCII character must be escaped.
  */
@@ -1468,29 +1409,7 @@ json_decode_all(js_read_T *reader, typval_T *res, int options)
     return OK;
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-/*
- * Decode the JSON from "reader" and store the result in "res".
- * "options" can be JSON_JS or zero;
- * Return FAIL for a decoding error.
- * Return MAYBE for an incomplete message.
- * Consumes the message anyway.
- */
-    int
-json_decode(js_read_T *reader, typval_T *res, int options)
-{
-    int ret;
-
-    // We find the end once, to avoid calling strlen() many times.
-    reader->js_end = reader->js_buf + STRLEN(reader->js_buf);
-    json_skip_white(reader);
-    ret = json_decode_item(reader, res, options);
-    json_skip_white(reader);
-
-    return ret;
-}
-#endif
-
+#line 1494
 /*
  * Decode the JSON from "reader" to find the end of the message.
  * "options" can be JSON_JS or zero.

@@ -79,15 +79,9 @@ free_tv(typval_T *varp)
 	    dict_unref(varp->vval.v_dict);
 	    break;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    job_unref(varp->vval.v_job);
-	    break;
-#endif
+#line 86
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    channel_unref(varp->vval.v_channel);
-	    break;
-#endif
+#line 91
 	case VAR_CLASS:
 	    class_unref(varp->vval.v_class);
 	    break;
@@ -158,16 +152,10 @@ clear_tv(typval_T *varp)
 	    varp->vval.v_float = 0.0;
 	    break;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    job_unref(varp->vval.v_job);
-	    varp->vval.v_job = NULL;
-#endif
+#line 165
 	    break;
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    channel_unref(varp->vval.v_channel);
-	    varp->vval.v_channel = NULL;
-#endif
+#line 171
 	    break;
 	case VAR_INSTR:
 	    VIM_CLEAR(varp->vval.v_instr);
@@ -259,15 +247,9 @@ tv_get_bool_or_number_chk(
 	    }
 	    return varp->vval.v_number == VVAL_TRUE ? 1 : 0;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    emsg(_(e_using_job_as_number));
-	    break;
-#endif
+#line 266
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    emsg(_(e_using_channel_as_number));
-	    break;
-#endif
+#line 271
 	case VAR_BLOB:
 	    emsg(_(e_using_blob_as_number));
 	    break;
@@ -391,15 +373,9 @@ tv_get_float_chk(typval_T *varp, int *error)
 	    emsg(_(e_using_special_value_as_float));
 	    break;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    emsg(_(e_using_job_as_float));
-	    break;
-#endif
+#line 398
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    emsg(_(e_using_channel_as_float));
-	    break;
-#endif
+#line 403
 	case VAR_BLOB:
 	    emsg(_(e_using_blob_as_float));
 	    break;
@@ -697,56 +673,7 @@ check_for_opt_nonnull_dict_arg(typval_T *args, int idx)
 	    || check_for_nonnull_dict_arg(args, idx) != FAIL) ? OK : FAIL;
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-/*
- * Give an error and return FAIL unless "args[idx]" is a channel or a job.
- */
-    int
-check_for_chan_or_job_arg(typval_T *args, int idx)
-{
-    if (args[idx].v_type != VAR_CHANNEL && args[idx].v_type != VAR_JOB)
-    {
-	semsg(_(e_chan_or_job_required_for_argument_nr), idx + 1);
-	return FAIL;
-    }
-    return OK;
-}
-
-/*
- * Give an error and return FAIL unless "args[idx]" is an optional channel or a
- * job.
- */
-    int
-check_for_opt_chan_or_job_arg(typval_T *args, int idx)
-{
-    return (args[idx].v_type == VAR_UNKNOWN
-	    || check_for_chan_or_job_arg(args, idx) != FAIL) ? OK : FAIL;
-}
-
-/*
- * Give an error and return FAIL unless "args[idx]" is a job.
- */
-    int
-check_for_job_arg(typval_T *args, int idx)
-{
-    if (args[idx].v_type != VAR_JOB)
-    {
-	semsg(_(e_job_required_for_argument_nr), idx + 1);
-	return FAIL;
-    }
-    return OK;
-}
-
-/*
- * Check for an optional job argument at 'idx'.
- */
-    int
-check_for_opt_job_arg(typval_T *args, int idx)
-{
-    return (args[idx].v_type == VAR_UNKNOWN
-	    || check_for_job_arg(args, idx) != FAIL) ? OK : FAIL;
-}
-#else
+#line 750
 /*
  * Give an error and return FAIL unless "args[idx]" is an optional channel or a
  * job.  Used without the +channel feature, thus only VAR_UNKNOWN is accepted.
@@ -756,7 +683,7 @@ check_for_opt_chan_or_job_arg(typval_T *args, int idx)
 {
     return args[idx].v_type == VAR_UNKNOWN ? OK : FAIL;
 }
-#endif
+#line 760
 
 /*
  * Give an error and return FAIL unless "args[idx]" is a string or
@@ -1255,24 +1182,10 @@ tv_get_string_buf_chk_strict(typval_T *varp, char_u *buf, int strict)
 	    }
 	    break;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    if (in_vim9script())
-	    {
-		semsg(_(e_using_invalid_value_as_string_str), "job");
-		break;
-	    }
-	    return job_to_string_buf(varp, buf);
-#endif
+#line 1266
 	    break;
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    if (in_vim9script())
-	    {
-		semsg(_(e_using_invalid_value_as_string_str), "channel");
-		break;
-	    }
-	    return channel_to_string_buf(varp, buf);
-#endif
+#line 1276
 	    break;
 	case VAR_VOID:
 	    emsg(_(e_cannot_use_void_value));
@@ -1373,19 +1286,9 @@ copy_tv(typval_T *from, typval_T *to)
 	    to->vval.v_float = from->vval.v_float;
 	    break;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    to->vval.v_job = from->vval.v_job;
-	    if (to->vval.v_job != NULL)
-		++to->vval.v_job->jv_refcount;
-	    break;
-#endif
+#line 1382
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    to->vval.v_channel = from->vval.v_channel;
-	    if (to->vval.v_channel != NULL)
-		++to->vval.v_channel->ch_refcount;
-	    break;
-#endif
+#line 1389
 	case VAR_INSTR:
 	    to->vval.v_instr = from->vval.v_instr;
 	    break;
@@ -1630,20 +1533,7 @@ typval_compare2(
 	}
 	*res = n1;
     }
-#ifdef FEAT_JOB_CHANNEL
-    else if (tv1->v_type == tv2->v_type
-	    && (tv1->v_type == VAR_CHANNEL || tv1->v_type == VAR_JOB)
-	    && (type == EXPR_NEQUAL || type == EXPR_EQUAL))
-    {
-	if (tv1->v_type == VAR_CHANNEL)
-	    n1 = tv1->vval.v_channel == tv2->vval.v_channel;
-	else
-	    n1 = tv1->vval.v_job == tv2->vval.v_job;
-	if (type == EXPR_NEQUAL)
-	    n1 = !n1;
-	*res = n1;
-    }
-#endif
+#line 1647
     else
     {
 	if (typval_compare_string(tv1, tv2, type, ic, res) == FAIL)
@@ -1783,16 +1673,12 @@ typval_compare_null(typval_T *tv1, typval_T *tv2)
 	switch (tv->v_type)
 	{
 	    case VAR_BLOB: return tv->vval.v_blob == NULL;
-#ifdef FEAT_JOB_CHANNEL
-	    case VAR_CHANNEL: return tv->vval.v_channel == NULL;
-#endif
+#line 1789
 	    // TODO: null_class handling
 	    // case VAR_CLASS: return tv->vval.v_class == NULL;
 	    case VAR_DICT: return tv->vval.v_dict == NULL;
 	    case VAR_FUNC: return tv->vval.v_string == NULL;
-#ifdef FEAT_JOB_CHANNEL
-	    case VAR_JOB: return tv->vval.v_job == NULL;
-#endif
+#line 1796
 	    case VAR_LIST: return tv->vval.v_list == NULL;
 	    case VAR_TUPLE: return tv->vval.v_tuple == NULL;
 	    case VAR_OBJECT: return tv->vval.v_object == NULL;
@@ -2235,13 +2121,9 @@ tv_equal(
 	case VAR_FLOAT:
 	    return tv1->vval.v_float == tv2->vval.v_float;
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    return tv1->vval.v_job == tv2->vval.v_job;
-#endif
+#line 2241
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    return tv1->vval.v_channel == tv2->vval.v_channel;
-#endif
+#line 2245
 	case VAR_INSTR:
 	    return tv1->vval.v_instr == tv2->vval.v_instr;
 

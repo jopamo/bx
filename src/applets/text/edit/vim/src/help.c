@@ -31,13 +31,7 @@ ex_help(exarg_T *eap)
     int		empty_fnum = 0;
     int		alt_fnum = 0;
     buf_T	*buf;
-#ifdef FEAT_MULTI_LANG
-    int		len;
-    char_u	*lang;
-#endif
-#ifdef FEAT_FOLDING
-    int		old_KeyTyped = KeyTyped;
-#endif
+#line 41
 
     if (ERROR_IF_ANY_POPUP_WINDOW)
 	return;
@@ -75,11 +69,7 @@ ex_help(exarg_T *eap)
     while (p > arg && VIM_ISWHITE(*p) && p[-1] != '\\')
 	*p-- = NUL;
 
-#ifdef FEAT_MULTI_LANG
-    // Check for a specified language
-    lang = check_help_lang(arg);
-#endif
-
+#line 83
     // When no argument given go to the index.
     if (*arg == NUL)
 	arg = (char_u *)"help.txt";
@@ -89,24 +79,10 @@ ex_help(exarg_T *eap)
 						 eap != NULL && eap->forceit);
 
     i = 0;
-#ifdef FEAT_MULTI_LANG
-    if (n != FAIL && lang != NULL)
-	// Find first item with the requested language.
-	for (i = 0; i < num_matches; ++i)
-	{
-	    len = (int)STRLEN(matches[i]);
-	    if (len > 3 && matches[i][len - 3] == '@'
-				  && STRICMP(matches[i] + len - 2, lang) == 0)
-		break;
-	}
-#endif
+#line 103
     if (i >= num_matches || n == FAIL)
     {
-#ifdef FEAT_MULTI_LANG
-	if (lang != NULL)
-	    semsg(_(e_sorry_no_str_help_for_str), lang, arg);
-	else
-#endif
+#line 110
 	    semsg(_(e_sorry_no_help_for_str), arg);
 	if (n != FAIL)
 	    FreeWild(num_matches, matches);
@@ -117,10 +93,7 @@ ex_help(exarg_T *eap)
     tag = vim_strsave(matches[i]);
     FreeWild(num_matches, matches);
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 124
     // Re-use an existing help window or open a new one.
     // Always open a new one for ":tab help".
     if (!bt_help(curwin->w_buffer) || cmdmod.cmod_tab != 0)
@@ -173,12 +146,7 @@ ex_help(exarg_T *eap)
     if (!p_im)
 	restart_edit = 0;	    // don't want insert mode in help file
 
-#ifdef FEAT_FOLDING
-    // Restore KeyTyped, setting 'filetype=help' may reset it.
-    // It is needed for do_tag top open folds under the cursor.
-    KeyTyped = old_KeyTyped;
-#endif
-
+#line 182
     if (tag != NULL)
 	do_tag(tag, DT_HELP, 1, FALSE, TRUE);
 
@@ -219,27 +187,7 @@ ex_helpclose(exarg_T *eap UNUSED)
     }
 }
 
-#if defined(FEAT_MULTI_LANG)
-/*
- * In an argument search for a language specifiers in the form "@xx".
- * Changes the "@" to NUL if found, and returns a pointer to "xx".
- * Returns NULL if not found.
- */
-    char_u *
-check_help_lang(char_u *arg)
-{
-    int len = (int)STRLEN(arg);
-
-    if (len >= 3 && arg[len - 3] == '@' && ASCII_ISALPHA(arg[len - 2])
-					       && ASCII_ISALPHA(arg[len - 1]))
-    {
-	arg[len - 3] = NUL;		// remove the '@'
-	return arg + len - 2;
-    }
-    return NULL;
-}
-#endif
-
+#line 243
 /*
  * Return a heuristic indicating how well the given string matches.  The
  * smaller the number, the better the match.  This is the order of priorities,
@@ -572,62 +520,7 @@ find_help_tags(
     return OK;
 }
 
-#ifdef FEAT_MULTI_LANG
-/*
- * Cleanup matches for help tags:
- * Remove "@ab" if the top of 'helplang' is "ab" and the language of the first
- * tag matches it.  Otherwise remove "@en" if "en" is the only language.
- */
-    void
-cleanup_help_tags(int num_file, char_u **file)
-{
-    int		i, j;
-    int		len;
-    char_u	buf[4];
-    char_u	*p = buf;
-
-    if (p_hlg[0] != NUL && (p_hlg[0] != 'e' || p_hlg[1] != 'n'))
-    {
-	*p++ = '@';
-	*p++ = p_hlg[0];
-	*p++ = p_hlg[1];
-    }
-    *p = NUL;
-
-    for (i = 0; i < num_file; ++i)
-    {
-	len = (int)STRLEN(file[i]) - 3;
-	if (len <= 0)
-	    continue;
-	if (STRCMP(file[i] + len, "@en") == 0)
-	{
-	    // Sorting on priority means the same item in another language may
-	    // be anywhere.  Search all items for a match up to the "@en".
-	    for (j = 0; j < num_file; ++j)
-		if (j != i && (int)STRLEN(file[j]) == len + 3
-			   && STRNCMP(file[i], file[j], len + 1) == 0)
-		    break;
-	    if (j == num_file)
-		// item only exists with @en, remove it
-		file[i][len] = NUL;
-	}
-    }
-
-    if (*buf != NUL)
-	for (i = 0; i < num_file; ++i)
-	{
-	    len = (int)STRLEN(file[i]) - 3;
-	    if (len <= 0)
-		continue;
-	    if (STRCMP(file[i] + len, buf) == 0)
-	    {
-		// remove the default language
-		file[i][len] = NUL;
-	    }
-	}
-}
-#endif
-
+#line 631
 /*
  * Called when starting to edit a buffer for a help file.
  */
@@ -657,12 +550,7 @@ prepare_help_buffer(void)
 	(void)buf_init_chartab(curbuf, FALSE);
     }
 
-#ifdef FEAT_FOLDING
-    // Don't use the global foldmethod.
-    set_string_option_direct((char_u *)"fdm", -1, (char_u *)"manual",
-						       OPT_FREE|OPT_LOCAL, 0);
-#endif
-
+#line 666
     curbuf->b_p_ts = 8;		// 'tabstop' is 8
     curwin->w_p_list = FALSE;	// no list mode
 
@@ -677,15 +565,11 @@ prepare_help_buffer(void)
 #ifdef FEAT_RIGHTLEFT
     curwin->w_p_rl  = FALSE;	// help window is left-to-right
 #endif
-#ifdef FEAT_FOLDING
-    curwin->w_p_fen = FALSE;	// No folding in the help window
-#endif
+#line 683
 #ifdef FEAT_DIFF
     curwin->w_p_diff = FALSE;	// No 'diff'
 #endif
-#ifdef FEAT_SPELL
-    curwin->w_p_spell = FALSE;	// No spell checking
-#endif
+#line 689
 
     set_buflisted(FALSE);
 }
@@ -757,13 +641,7 @@ fix_help_buffer(void)
     // files.  This uses the very first line in the help file.
     fname = gettail(curbuf->b_fname);
     if (fnamecmp(fname, "help.txt") == 0
-#ifdef FEAT_MULTI_LANG
-	|| (fnamencmp(fname, "help.", 5) == 0
-	    && ASCII_ISALPHA(fname[5])
-	    && ASCII_ISALPHA(fname[6])
-	    && TOLOWER_ASC(fname[7]) == 'x'
-	    && fname[8] == NUL)
-#endif
+#line 767
 	)
     {
 	for (lnum = 1; lnum < curbuf->b_ml.ml_line_count; ++lnum)
@@ -799,57 +677,14 @@ fix_help_buffer(void)
 			STRCPY(NameBuff + NameBufflen, PATHSEPSTR);
 			NameBufflen += STRLEN_LITERAL(PATHSEPSTR);
 		    }
-#ifdef FEAT_MULTI_LANG
-		    STRCPY(NameBuff + NameBufflen, "doc/*.??[tx]");
-#else
+#line 805
 		    STRCPY(NameBuff + NameBufflen, "doc/*.txt");
-#endif
+#line 807
 		    if (gen_expand_wildcards(1, &NameBuff, &fcount,
 					 &fnames, EW_FILE|EW_SILENT) == OK
 			    && fcount > 0)
 		    {
-#ifdef FEAT_MULTI_LANG
-			int	i1, i2;
-			char_u	*f1, *f2;
-			char_u	*t1, *t2;
-			char_u	*e1, *e2;
-
-			// If foo.abx is found use it instead of foo.txt in
-			// the same directory.
-			for (i1 = 0; i1 < fcount; ++i1)
-			{
-			    f1 = fnames[i1];
-			    t1 = gettail(f1);
-			    e1 = vim_strrchr(t1, '.');
-			    if (e1 == NULL)
-				continue;
-			    if (fnamecmp(e1, ".txt") != 0
-					       && fnamecmp(e1, fname + 4) != 0)
-			    {
-				// Not .txt and not .abx, remove it.
-				VIM_CLEAR(fnames[i1]);
-				continue;
-			    }
-
-			    for (i2 = i1 + 1; i2 < fcount; ++i2)
-			    {
-				f2 = fnames[i2];
-				if (f2 == NULL)
-				    continue;
-				t2 = gettail(f2);
-				e2 = vim_strrchr(t2, '.');
-				if (e2 == NULL)
-				    continue;
-				if (e1 - f1 != e2 - f2
-					    || fnamencmp(f1, f2, e1 - f1) != 0)
-				    continue;
-				if (fnamecmp(e1, ".txt") == 0
-					       && fnamecmp(e2, fname + 4) == 0)
-				    // use .abx instead of .txt
-				    VIM_CLEAR(fnames[i1]);
-			    }
-			}
-#endif
+#line 853
 			for (fi = 0; fi < fcount; ++fi)
 			{
 			    if (fnames[fi] == NULL)
@@ -1209,99 +1044,11 @@ helptags_one(
     static void
 do_helptags(char_u *dirname, int add_help_tags, int ignore_writeerr)
 {
-#ifdef FEAT_MULTI_LANG
-    int		len;
-    int		i, j;
-    garray_T	ga;
-    char_u	lang[2];
-    char_u	ext[5];
-    char_u	fname[8];
-    int		filecount;
-    char_u	**files;
-
-    // Get a list of all files in the help directory and in subdirectories.
-    STRCPY(NameBuff, dirname);
-    add_pathsep(NameBuff);
-    STRCAT(NameBuff, "**");
-    if (gen_expand_wildcards(1, &NameBuff, &filecount, &files,
-						    EW_FILE|EW_SILENT) == FAIL
-	    || filecount == 0)
-    {
-	semsg(_(e_no_match_str_1), NameBuff);
-	return;
-    }
-
-    // Go over all files in the directory to find out what languages are
-    // present.
-    ga_init2(&ga, 1, 10);
-    for (i = 0; i < filecount; ++i)
-    {
-	len = (int)STRLEN(files[i]);
-	if (len <= 4)
-	    continue;
-
-	if (STRICMP(files[i] + len - 4, ".txt") == 0)
-	{
-	    // ".txt" -> language "en"
-	    lang[0] = 'e';
-	    lang[1] = 'n';
-	}
-	else if (files[i][len - 4] == '.'
-		&& ASCII_ISALPHA(files[i][len - 3])
-		&& ASCII_ISALPHA(files[i][len - 2])
-		&& TOLOWER_ASC(files[i][len - 1]) == 'x')
-	{
-	    // ".abx" -> language "ab"
-	    lang[0] = TOLOWER_ASC(files[i][len - 3]);
-	    lang[1] = TOLOWER_ASC(files[i][len - 2]);
-	}
-	else
-	    continue;
-
-	// Did we find this language already?
-	for (j = 0; j < ga.ga_len; j += 2)
-	    if (STRNCMP(lang, ((char_u *)ga.ga_data) + j, 2) == 0)
-		break;
-	if (j == ga.ga_len)
-	{
-	    // New language, add it.
-	    if (ga_grow(&ga, 2) == FAIL)
-		break;
-	    ((char_u *)ga.ga_data)[ga.ga_len++] = lang[0];
-	    ((char_u *)ga.ga_data)[ga.ga_len++] = lang[1];
-	}
-    }
-
-    // Loop over the found languages to generate a tags file for each one.
-    for (j = 0; j < ga.ga_len; j += 2)
-    {
-	STRCPY(fname, "tags-xx");
-	fname[5] = ((char_u *)ga.ga_data)[j];
-	fname[6] = ((char_u *)ga.ga_data)[j + 1];
-	if (fname[5] == 'e' && fname[6] == 'n')
-	{
-	    // English is an exception: use ".txt" and "tags".
-	    fname[4] = NUL;
-	    STRCPY(ext, ".txt");
-	}
-	else
-	{
-	    // Language "ab" uses ".abx" and "tags-ab".
-	    STRCPY(ext, ".xxx");
-	    ext[1] = fname[5];
-	    ext[2] = fname[6];
-	}
-	helptags_one(dirname, ext, fname, add_help_tags, ignore_writeerr);
-    }
-
-    ga_clear(&ga);
-    FreeWild(filecount, files);
-
-#else
+#line 1301
     // No language support, just use "*.txt" and "tags".
     helptags_one(dirname, (char_u *)".txt", (char_u *)"tags", add_help_tags,
 							    ignore_writeerr);
-#endif
+#line 1305
 }
 
     static void

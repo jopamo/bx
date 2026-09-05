@@ -295,11 +295,7 @@ static void ins_compl_longest_insert(char_u *prefix);
 static void ins_compl_make_linear(void);
 static int ins_compl_make_cyclic(void);
 
-#ifdef FEAT_SPELL
-static void spell_back_to_badword(void);
-static int  spell_bad_len = 0;	// length of located bad word
-#endif
-
+#line 303
 /*
  * CTRL-X pressed in Insert mode.
  */
@@ -457,9 +453,7 @@ compl_shows_dir_backward(void)
 has_compl_option(int dict_opt)
 {
     if (dict_opt ? (*curbuf->b_p_dict == NUL && *p_dict == NUL
-#ifdef FEAT_SPELL
-							&& !curwin->w_p_spell
-#endif
+#line 463
 							)
 		 : (*curbuf->b_p_tsr == NUL && *p_tsr == NUL
 #ifdef FEAT_COMPL_FUNC
@@ -1336,9 +1330,7 @@ pum_wanted(void)
 
     // The display looks bad on a B&W display.
     if (t_colors < 8
-#ifdef FEAT_GUI
-	    && !gui.in_use
-#endif
+#line 1342
 	    )
 	return FALSE;
     return TRUE;
@@ -1906,13 +1898,7 @@ ins_compl_dictionaries(
 
     if (*dict == NUL)
     {
-#ifdef FEAT_SPELL
-	// When 'dictionary' is empty and spell checking is enabled use
-	// "spell".
-	if (!thesaurus && curwin->w_p_spell)
-	    dict = (char_u *)"spell";
-	else
-#endif
+#line 1916
 	    return;
     }
 
@@ -1970,30 +1956,14 @@ ins_compl_dictionaries(
 	    // backticks (for security, the 'dict' option may have been set in
 	    // a modeline).
 	    copy_option_part(&dict, buf, LSIZE, ",");
-#ifdef FEAT_SPELL
-	    if (!thesaurus && STRCMP(buf, "spell") == 0)
-		count = -1;
-	    else
-#endif
+#line 1978
 		if (vim_strchr(buf, '`') != NULL
 		    || expand_wildcards(1, &buf, &count, &files,
 						     EW_FILE|EW_SILENT) != OK)
 		count = 0;
 	}
 
-#ifdef FEAT_SPELL
-	if (count == -1)
-	{
-	    // Complete from active spelling.  Skip "\<" in the pattern, we
-	    // don't use it as a RE.
-	    if (pat[0] == '\\' && pat[1] == '<')
-		ptr = pat + 2;
-	    else
-		ptr = pat;
-	    spell_dump_compl(ptr, regmatch.rm_ic, &dir, 0);
-	}
-	else
-#endif
+#line 1997
 	    if (count > 0)	// avoid warning for using "files" uninit
 	{
 	    ins_compl_files(count, files, thesaurus, flags, &regmatch, buf,
@@ -2547,21 +2517,12 @@ ins_compl_new_leader(void)
     }
     else
     {
-#ifdef FEAT_SPELL
-	spell_bad_len = 0;	// need to redetect bad word
-#endif
+#line 2553
 	// Matches were cleared, need to search for them now.  Before drawing
 	// the popup menu display the changed text before the cursor.  Set
 	// "compl_restarting" to avoid that the first match is inserted.
 	pum_call_update_screen();
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	{
-	    // Show the cursor after the match, not after the redrawn text.
-	    setcursor();
-	    out_flush_cursor(FALSE, FALSE);
-	}
-#endif
+#line 2565
 	save_w_wrow = curwin->w_wrow;
 	save_w_leftcol = curwin->w_leftcol;
 	compl_restarting = TRUE;
@@ -2810,11 +2771,7 @@ set_ctrl_x_mode(int c)
 	case Ctrl_S:
 	    // complete spelling suggestions
 	    ctrl_x_mode = CTRL_X_SPELL;
-#ifdef FEAT_SPELL
-	    ++emsg_off;	// Avoid getting the E756 error twice.
-	    spell_back_to_badword();
-	    --emsg_off;
-#endif
+#line 2818
 	    break;
 	case Ctrl_RSB:
 	    // complete tag names
@@ -3087,36 +3044,7 @@ ins_compl_prep(int c)
 	    || c == K_COMMAND || c == K_SCRIPT_COMMAND)
 	return retval;
 
-#ifdef FEAT_PROP_POPUP
-    // Ignore mouse events in a popup window
-    if (is_mouse_key(c))
-    {
-	// Ignore drag and release events, the position does not need to be in
-	// the popup and it may have just closed.
-	if (c == K_LEFTRELEASE
-		|| c == K_LEFTRELEASE_NM
-		|| c == K_MIDDLERELEASE
-		|| c == K_RIGHTRELEASE
-		|| c == K_X1RELEASE
-		|| c == K_X2RELEASE
-		|| c == K_LEFTDRAG
-		|| c == K_MIDDLEDRAG
-		|| c == K_RIGHTDRAG
-		|| c == K_X1DRAG
-		|| c == K_X2DRAG)
-	    return retval;
-	if (popup_visible)
-	{
-	    int	    row = mouse_row;
-	    int	    col = mouse_col;
-	    win_T   *wp = mouse_find_win(&row, &col, FIND_POPUP);
-
-	    if (wp != NULL && WIN_IS_POPUP(wp))
-		return retval;
-	}
-    }
-#endif
-
+#line 3120
     if (ctrl_x_mode == CTRL_X_CMDLINE_CTRL_X && c != Ctrl_X)
     {
 	if (c == Ctrl_V || c == Ctrl_Q || c == Ctrl_Z || ins_compl_pum_key(c)
@@ -4839,16 +4767,7 @@ get_next_cmdline_completion(void)
     static void
 get_next_spell_completion(linenr_T lnum UNUSED)
 {
-#ifdef FEAT_SPELL
-    char_u	**matches;
-    int		num_matches;
-
-    num_matches = expand_spelling(lnum, compl_pattern.string, &matches);
-    if (num_matches > 0)
-	ins_compl_add_matches(num_matches, matches, p_ic);
-    else
-	vim_free(matches);
-#endif
+#line 4852
 }
 
 /*
@@ -5136,12 +5055,7 @@ get_register_completion(void)
 	    regname = '0' + i;
 	else if (i == DELETION_REGISTER)
 	    regname = '-';
-#ifdef FEAT_CLIPBOARD
-	else if (i == STAR_REGISTER)
-	    regname = '*';
-	else if (i == PLUS_REGISTER)
-	    regname = '+';
-#endif
+#line 5145
 	else
 	    regname = 'a' + i - 10;
 
@@ -6270,14 +6184,7 @@ ins_compl_next(
 	{
 	    // display the updated popup menu
 	    ins_compl_show_pum();
-#ifdef FEAT_GUI
-	    if (gui.in_use)
-	    {
-		// Show the cursor after the match, not after the redrawn text.
-		setcursor();
-		out_flush_cursor(FALSE, FALSE);
-	    }
-#endif
+#line 6281
 	}
 
 	// Delete old text to be replaced, since we're still searching and
@@ -6879,36 +6786,7 @@ get_userdefined_compl_info(
 get_spell_compl_info(int startcol UNUSED, colnr_T curs_col UNUSED)
 {
     int		ret = FAIL;
-#ifdef FEAT_SPELL
-    char_u	*line = NULL;
-
-    if (spell_bad_len > 0)
-	compl_col = curs_col - spell_bad_len;
-    else
-	compl_col = spell_word_start(startcol);
-
-    if (compl_col >= (colnr_T)startcol)
-    {
-	compl_length = 0;
-	compl_col = curs_col;
-    }
-    else
-    {
-	spell_expand_check_cap(compl_col);
-	compl_length = (int)curs_col - compl_col;
-    }
-    // Need to obtain "line" again, it may have become invalid.
-    line = ml_get(curwin->w_cursor.lnum);
-    compl_pattern.string = vim_strnsave(line + compl_col, (size_t)compl_length);
-    if (compl_pattern.string == NULL)
-    {
-	compl_pattern.length = 0;
-	return FAIL;
-    }
-
-    compl_pattern.length = (size_t)compl_length;
-    ret = OK;
-#endif
+#line 6912
 
     return ret;
 }
@@ -7483,22 +7361,7 @@ free_insexpand_stuff(void)
 }
 #endif
 
-#ifdef FEAT_SPELL
-/*
- * Called when starting CTRL_X_SPELL mode: Move backwards to a previous badly
- * spelled word, if there is one.
- */
-    static void
-spell_back_to_badword(void)
-{
-    pos_T	tpos = curwin->w_cursor;
-
-    spell_bad_len = spell_move_to(curwin, BACKWARD, SMT_ALL, TRUE, NULL);
-    if (curwin->w_cursor.col != tpos.col)
-	start_arrow(&tpos);
-}
-#endif
-
+#line 7502
 /*
  * Reset the info associated with completion sources.
  */

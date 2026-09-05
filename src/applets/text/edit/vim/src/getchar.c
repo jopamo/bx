@@ -340,17 +340,7 @@ add_char_buff(buffheader_T *buf, int c)
 	    temp[3] = NUL;
 	    templen = 3;
 	}
-#ifdef FEAT_GUI
-	else if (c == CSI)
-	{
-	    // Translate a CSI to a CSI - KS_EXTRA - KE_CSI sequence
-	    temp[0] = CSI;
-	    temp[1] = KS_EXTRA;
-	    temp[2] = (int)KE_CSI;
-	    temp[3] = NUL;
-	    templen = 3;
-	}
-#endif
+#line 354
 	else
 	{
 	    temp[0] = c;
@@ -852,10 +842,7 @@ read_redo(int init, int old_redo)
 		c = TO_SPECIAL(p[1], p[2]);
 		p += 2;
 	    }
-#ifdef FEAT_GUI
-	    if (c == CSI)	// escaped CSI
-		p += 2;
-#endif
+#line 859
 	    if (*++p == NUL && bp->b_next != NULL)
 	    {
 		bp = bp->b_next;
@@ -1358,9 +1345,7 @@ gotchars_add_byte(gotchars_state_T *state, char_u byte)
     if (in_special)
 	state->pending_special--;
     else if (c == K_SPECIAL
-#ifdef FEAT_GUI
-		|| c == CSI
-#endif
+#line 1364
 	    )
 	// When receiving a special key sequence, store it until we have all
 	// the bytes and we can decide what to do with it.
@@ -1789,20 +1774,7 @@ merge_modifyOtherKeys(int c_arg, int *modifiers)
 	else if (c == '6')
 	    // CTRL-6 is equivalent to CTRL-^
 	    c = 0x1e;
-#ifdef FEAT_GUI_GTK
-	// These mappings look arbitrary at the first glance, but in fact
-	// resemble quite exactly the behaviour of the GTK+ 1.2 GUI on my
-	// machine.  The only difference is BS vs. DEL for CTRL-8 (makes
-	// more sense and is consistent with usual terminal behaviour).
-	else if (c == '2')
-	    c = NUL;
-	else if (c >= '3' && c <= '7')
-	    c = c ^ 0x28;
-	else if (c == '8')
-	    c = BS;
-	else if (c == '?')
-	    c = DEL;
-#endif
+#line 1806
 	if (c != c_arg)
 	    *modifiers &= ~MOD_MASK_CTRL;
     }
@@ -1943,12 +1915,7 @@ vgetc(void)
 	    // No mapping after modifier has been read, using an input method
 	    // and when a popup window has disabled mapping.
 	    if (mod_mask
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-		    || im_is_preediting()
-#endif
-#if defined(FEAT_PROP_POPUP)
-		    || popup_no_mapping()
-#endif
+#line 1952
 		    )
 	    {
 		++no_mapping;
@@ -1965,9 +1932,7 @@ vgetc(void)
 
 	    // Get two extra bytes for special keys, handle modifiers.
 	    if (c == K_SPECIAL
-#ifdef FEAT_GUI
-		    || c == CSI
-#endif
+#line 1971
 	       )
 	    {
 		int	    save_allow_keys = allow_keys;
@@ -1994,56 +1959,7 @@ vgetc(void)
 		if (c == K_ESC)
 		    c = ESC;
 
-#if defined(FEAT_GUI_MSWIN) && defined(FEAT_MENU) && defined(FEAT_TEAROFF)
-		// Handle K_TEAROFF here, the caller of vgetc() doesn't need to
-		// know that a menu was torn off
-		if (
-# ifdef VIMDLL
-		    gui.in_use &&
-# endif
-		    c == K_TEAROFF)
-		{
-		    char_u	name[200];
-		    int		j;
-
-		    // get menu path, it ends with a <CR>
-		    for (j = 0; (c = vgetorpeek(TRUE)) != '\r'; )
-		    {
-			name[j] = c;
-			if (j < 199)
-			    ++j;
-		    }
-		    name[j] = NUL;
-		    gui_make_tearoff(name);
-		    continue;
-		}
-#endif
-#if defined(FEAT_GUI) && defined(FEAT_GUI_GTK) && defined(FEAT_MENU)
-		// GTK: <F10> normally selects the menu, but it's passed until
-		// here to allow mapping it.  Intercept and invoke the GTK
-		// behavior if it's not mapped.
-		if (c == K_F10 && gui.menubar != NULL)
-		{
-		    gtk_menu_shell_select_first(
-					   GTK_MENU_SHELL(gui.menubar), FALSE);
-		    continue;
-		}
-#endif
-#ifdef FEAT_GUI
-		// Handle focus event here, so that the caller doesn't need to
-		// know about it.  Return K_IGNORE so that we loop once (needed
-		// if 'lazyredraw' is set).
-		if (c == K_FOCUSGAINED || c == K_FOCUSLOST)
-		{
-		    ui_focus_change(c == K_FOCUSGAINED);
-		    c = K_IGNORE;
-		}
-
-		// Translate K_CSI to CSI.  The special key is only used to
-		// avoid it being recognized as the start of a special key.
-		if (c == K_CSI)
-		    c = CSI;
-#endif
+#line 2047
 #ifdef FEAT_EVAL
 		if (c == K_SID)
 		{
@@ -2070,9 +1986,7 @@ vgetc(void)
 		{
 		    buf[i] = vgetorpeek(TRUE);
 		    if (buf[i] == K_SPECIAL
-#ifdef FEAT_GUI
-			    || (buf[i] == CSI)
-#endif
+#line 2076
 			    )
 		    {
 			// Must be a K_SPECIAL - KS_SPECIAL - KE_FILLER
@@ -2182,16 +2096,7 @@ vgetc(void)
 	ui_remove_balloon();
     }
 #endif
-#ifdef FEAT_PROP_POPUP
-    // Only filter keys that do not come from ":normal".  Keys from feedkeys()
-    // are filtered.
-    if ((!ex_normal_busy || in_feedkeys) && popup_do_filter(c))
-    {
-	if (c == Ctrl_C)
-	    got_int = FALSE;  // avoid looping
-	c = K_IGNORE;
-    }
-#endif
+#line 2195
 
 #ifdef FEAT_EVAL
     c = do_key_input_pre(c);
@@ -2548,11 +2453,7 @@ getchar_common(typval_T *argvars, typval_T *rettv, int allow_number)
 		if (win == NULL)
 		    return;
 		(void)mouse_comp_pos(win, &row, &col, &lnum, NULL);
-# ifdef FEAT_PROP_POPUP
-		if (WIN_IS_POPUP(win))
-		    winnr = 0;
-		else
-# endif
+#line 2556
 		    for (wp = firstwin; wp != win && wp != NULL;
 							       wp = wp->w_next)
 			++winnr;
@@ -2642,42 +2543,13 @@ parse_queued_messages(void)
     for (i = 0; i < MAX_REPEAT_PARSE; ++i)
     {
 	// For Win32 mch_breakcheck() does not check for input, do it here.
-# if (defined(MSWIN) || defined(__HAIKU__)) && defined(FEAT_JOB_CHANNEL)
-	channel_handle_events(FALSE);
-# endif
+#line 2648
 
-# ifdef FEAT_NETBEANS_INTG
-	// Process the queued netbeans messages.
-	netbeans_parse_messages();
-# endif
-# ifdef FEAT_JOB_CHANNEL
-	// Write any buffer lines still to be written.
-	channel_write_any_lines();
-
-	// Process the messages queued on channels.
-	channel_parse_messages();
-# endif
-# if defined(FEAT_CLIENTSERVER) && defined(FEAT_X11)
-	// Process the queued clientserver messages.
-	server_parse_messages();
-# endif
-# ifdef FEAT_JOB_CHANNEL
-	// Check if any jobs have ended.  If so, repeat the above to handle
-	// changes, e.g. stdin may have been closed.
-	if (job_check_ended())
-	    continue;
-# endif
-# ifdef FEAT_TERMINAL
-	free_unused_terminals();
-# endif
-
+#line 2674
 # ifdef FEAT_SOUND_MACOSX
 	process_cfrunloop();
 # endif
-# ifdef FEAT_SOUND_CANBERRA
-	if (has_sound_callback_in_queue())
-	    invoke_sound_callback();
-# endif
+#line 2681
 # ifdef SIGUSR1
 	if (got_sigusr1)
 	{
@@ -2836,9 +2708,7 @@ handle_mapping(
     int		want_termcode = 0;  // 1 if termcode expected after max_mlen
     int		tb_c1;
     int		mlen;
-#ifdef FEAT_LANGMAP
-    int		nolmaplen;
-#endif
+#line 2842
     int		keylen = *keylenp;
     int		i;
     int		local_State = get_real_state();
@@ -2882,25 +2752,7 @@ handle_mapping(
 	    && State != MODE_CONFIRM
 	    && !at_ins_compl_key())
     {
-#ifdef FEAT_GUI
-	if (gui.in_use && tb_c1 == CSI && typebuf.tb_len >= 2
-		&& typebuf.tb_buf[typebuf.tb_off + 1] == KS_MODIFIER)
-	{
-	    // The GUI code sends CSI KS_MODIFIER {flags}, but mappings expect
-	    // K_SPECIAL KS_MODIFIER {flags}.
-	    tb_c1 = K_SPECIAL;
-	}
-#endif
-#ifdef FEAT_LANGMAP
-	if (tb_c1 == K_SPECIAL)
-	    nolmaplen = 2;
-	else
-	{
-	    LANGMAP_ADJUST(tb_c1, (State & (MODE_CMDLINE | MODE_INSERT)) == 0
-					   && get_real_state() != MODE_SELECT);
-	    nolmaplen = 0;
-	}
-#endif
+#line 2904
 	// First try buffer-local mappings.
 	mp = get_buf_maphash_list(local_State, tb_c1);
 	mp2 = get_maphash_list(local_State, tb_c1);
@@ -2933,36 +2785,12 @@ handle_mapping(
 		    && ((mp->m_mode & MODE_LANGMAP) == 0
 						    || typebuf.tb_maplen == 0))
 	    {
-#ifdef FEAT_LANGMAP
-		int	nomap = nolmaplen;
-		int	modifiers = 0;
-#endif
+#line 2940
 		// find the match length of this mapping
 		for (mlen = 1; mlen < typebuf.tb_len; ++mlen)
 		{
 		    int	c2 = typebuf.tb_buf[typebuf.tb_off + mlen];
-#ifdef FEAT_LANGMAP
-		    if (nomap > 0)
-		    {
-			if (nomap == 2 && c2 == KS_MODIFIER)
-			    modifiers = 1;
-			else if (nomap == 1 && modifiers == 1)
-			    modifiers = c2;
-			--nomap;
-		    }
-		    else
-		    {
-			if (c2 == K_SPECIAL)
-			    nomap = 2;
-			else if (merge_modifyOtherKeys(c2, &modifiers) == c2)
-			    // Only apply 'langmap' if merging modifiers into
-			    // the key will not result in another character,
-			    // so that 'langmap' behaves consistently in
-			    // different terminals and GUIs.
-			    LANGMAP_ADJUST(c2, TRUE);
-			modifiers = 0;
-		    }
-#endif
+#line 2966
 		    if (mp->m_keys[mlen] != c2)
 			break;
 		}
@@ -3130,9 +2958,7 @@ handle_mapping(
 
 	    // If no termcode matched, try to include the modifier into the
 	    // key.  This is for when modifyOtherKeys is working.
-#ifdef FEAT_TERMINAL
-	    check_no_reduce_keys();  // may update the no_reduce_keys flag
-#endif
+#line 3136
 	    if (keylen == 0 && !no_reduce_keys)
 	    {
 		keylen = check_simplify_modifier(max_mlen + 1);
@@ -3191,37 +3017,7 @@ handle_mapping(
 
 	if (keylen > 0)	    // full matching terminal code
 	{
-#if defined(FEAT_GUI) && defined(FEAT_MENU)
-	    if (typebuf.tb_len >= 2
-		    && typebuf.tb_buf[typebuf.tb_off] == K_SPECIAL
-			      && typebuf.tb_buf[typebuf.tb_off + 1] == KS_MENU)
-	    {
-		int	idx;
-
-		// Using a menu may cause a break in undo!  It's like using
-		// gotchars(), but without recording or writing to a script
-		// file.
-		may_sync_undo();
-		del_typebuf(3, 0);
-		idx = get_menu_index(current_menu, local_State);
-		if (idx != MENU_INDEX_INVALID)
-		{
-		    // In Select mode and a Visual mode menu is used:  Switch
-		    // to Visual mode temporarily.  Append K_SELECT to switch
-		    // back to Select mode.
-		    if (VIsual_active && VIsual_select
-					&& (current_menu->modes & MODE_VISUAL))
-		    {
-			VIsual_select = FALSE;
-			(void)ins_typebuf(K_SELECT_STRING,
-						   REMAP_NONE, 0, TRUE, FALSE);
-		    }
-		    ins_typebuf(current_menu->strings[idx],
-				current_menu->noremap[idx],
-				0, TRUE, current_menu->silent[idx]);
-		}
-	    }
-#endif // FEAT_GUI && FEAT_MENU
+#line 3225
 	    *keylenp = keylen;
 	    return map_result_retry;	// try mapping again
 	}
@@ -3480,9 +3276,7 @@ vgetorpeek(int advance)
     int		mapdepth = 0;		// check for recursive mapping
     int		mode_deleted = FALSE;   // set when mode has been deleted
     int		new_wcol, new_wrow;
-#ifdef FEAT_GUI
-    int		shape_changed = FALSE;  // adjusted cursor shape
-#endif
+#line 3486
     int		n;
     int		old_wcol, old_wrow;
     int		wait_tb_len;
@@ -3671,19 +3465,7 @@ vgetorpeek(int advance)
 			unshowmode(TRUE);
 			mode_deleted = TRUE;
 		    }
-#ifdef FEAT_GUI
-		    // may show a different cursor shape
-		    if (gui.in_use && State != MODE_NORMAL && !cmd_silent)
-		    {
-			int	    save_State;
-
-			save_State = State;
-			State = MODE_NORMAL;
-			gui_update_cursor(TRUE, FALSE);
-			State = save_State;
-			shape_changed = TRUE;
-		    }
-#endif
+#line 3687
 		    validate_cursor();
 		    old_wcol = curwin->w_wcol;
 		    old_wrow = curwin->w_wrow;
@@ -3791,10 +3573,7 @@ vgetorpeek(int advance)
 		    // cmdline window.
 		    if (p_im && (State & MODE_INSERT))
 			c = Ctrl_L;
-#ifdef FEAT_TERMINAL
-		    else if (terminal_is_active())
-			c = K_CANCEL;
-#endif
+#line 3798
 		    else if ((State & MODE_CMDLINE)
 					     || (cmdwin_type > 0 && tc == ESC))
 			c = Ctrl_C;
@@ -3980,11 +3759,7 @@ vgetorpeek(int advance)
 		showmode();
 	}
     }
-#ifdef FEAT_GUI
-    // may unshow different cursor shape
-    if (gui.in_use && shape_changed)
-	gui_update_cursor(TRUE, FALSE);
-#endif
+#line 3988
     if (timedout && c == ESC)
     {
 	// When recording there will be no timeout.  Add an <Ignore> after the
@@ -4035,10 +3810,7 @@ inchar(
     {
 	cursor_on();
 	out_flush_cursor(FALSE, FALSE);
-#if defined(FEAT_GUI) && defined(FEAT_MOUSESHAPE)
-	if (gui.in_use && postponed_mouseshape)
-	    update_mouseshape(-1);
-#endif
+#line 4042
     }
 
     /*
@@ -4163,28 +3935,7 @@ fix_input_buffer(char_u *buf, int len)
      */
     for (i = len; --i >= 0; ++p)
     {
-#ifdef FEAT_GUI
-	// When the GUI is used any character can come after a CSI, don't
-	// escape it.
-	if (gui.in_use && p[0] == CSI && i >= 2)
-	{
-	    p += 2;
-	    i -= 2;
-	}
-# ifndef MSWIN
-	// When not on MS-Windows and the GUI is not used CSI needs to be
-	// escaped.
-	else if (!gui.in_use && p[0] == CSI)
-	{
-	    mch_memmove(p + 3, p + 1, (size_t)i);
-	    *p++ = K_SPECIAL;
-	    *p++ = KS_EXTRA;
-	    *p = (int)KE_CSI;
-	    len += 2;
-	}
-# endif
-	else
-#endif
+#line 4188
 	if (p[0] == NUL || (p[0] == K_SPECIAL
 		    // timeout may generate K_CURSORHOLD
 		    && (i < 2 || p[1] != KS_EXTRA || p[2] != (int)KE_CURSORHOLD)
@@ -4289,12 +4040,7 @@ getcmdkeycmd(
 	    if (c1 == K_ESC)
 		c1 = ESC;
 
-#ifdef FEAT_GUI
-	    // Translate K_CSI to CSI.  The special key is only used to
-	    // avoid it being recognized as the start of a special key.
-	    if (c1 == K_CSI)
-		c1 = CSI;
-#endif
+#line 4298
 	}
 
 	if (got_int)

@@ -105,17 +105,7 @@ op_on_lines(int op)
     return opchars[op][2] & OPF_LINES;
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-/*
- * Return TRUE if operator "op" changes text.
- */
-    int
-op_is_change(int op)
-{
-    return opchars[op][2] & OPF_CHANGE;
-}
-#endif
-
+#line 119
 /*
  * Get first operator command character.
  * Returns 'g' or 'z' if there is another command character.
@@ -181,11 +171,7 @@ op_shift(oparg_T *oap, int curs_top, int amount)
     else
 	--curwin->w_cursor.lnum;	// put cursor on last line, for ":>"
 
-#ifdef FEAT_FOLDING
-    // The cursor line is not in a closed fold
-    foldOpenCursor();
-#endif
-
+#line 189
 
     if (oap->line_count > p_report)
     {
@@ -800,10 +786,7 @@ op_delete(oparg_T *oap)
 	// use register given with CTRL_R, defaults to zero
 	oap->regname = VIsual_select_reg;
 
-#ifdef HAVE_CLIPMETHOD
-    adjust_clip_reg(&oap->regname);
-#endif
-
+#line 807
     if (has_mbyte)
 	mb_adjust_opend(oap);
 
@@ -857,18 +840,14 @@ op_delete(oparg_T *oap)
      */
     if (oap->regname != '_')
     {
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	inc_clip_provider();
-#endif
+#line 863
 	if (oap->regname != 0)
 	{
 	    // check for read-only register
 	    if (!valid_yank_reg(oap->regname, TRUE))
 	    {
 		beep_flush();
-#ifdef FEAT_CLIPBOARD_PROVIDER
-		dec_clip_provider();
-#endif
+#line 872
 		return OK;
 	    }
 	    get_yank_register(oap->regname, TRUE); // yank into specif'd reg.
@@ -894,10 +873,7 @@ op_delete(oparg_T *oap)
 	// Yank into small delete register when no named register specified
 	// and the delete is within one line.
 	if ((
-#ifdef HAVE_CLIPMETHOD
-	    ((clip_unnamed & CLIP_UNNAMED) && oap->regname == '*') ||
-	    ((clip_unnamed & CLIP_UNNAMED_PLUS) && oap->regname == '+') ||
-#endif
+#line 901
 	    oap->regname == 0) && oap->motion_type != MLINE
 						      && oap->line_count == 1)
 	{
@@ -924,9 +900,7 @@ op_delete(oparg_T *oap)
 	    if (n != 'y')
 	    {
 		emsg(_(e_command_aborted));
-#ifdef FEAT_CLIPBOARD_PROVIDER
-		dec_clip_provider();
-#endif
+#line 930
 		return FAIL;
 	    }
 	}
@@ -935,9 +909,7 @@ op_delete(oparg_T *oap)
 	if (did_yank && has_textyankpost())
 	    yank_do_autocmd(oap, get_y_current());
 #endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	dec_clip_provider();
-#endif
+#line 941
     }
 
     /*
@@ -981,10 +953,7 @@ op_delete(oparg_T *oap)
 	    // replace the line
 	    ml_replace(lnum, newp, FALSE);
 
-#ifdef FEAT_PROP_POPUP
-	    if (curbuf->b_has_textprop && n != 0)
-		adjust_prop_columns(lnum, bd.textcol, -n, 0);
-#endif
+#line 988
 	}
 
 	check_cursor_col();
@@ -1468,19 +1437,7 @@ op_tilde(oparg_T *oap)
 	    one_change = swapchars(oap->op_type, &pos, bd.textlen);
 	    did_change |= one_change;
 
-#ifdef FEAT_NETBEANS_INTG
-	    if (netbeans_active() && one_change)
-	    {
-		char_u *ptr;
-
-		netbeans_removed(curbuf, pos.lnum, bd.textcol,
-							    (long)bd.textlen);
-		// get the line now, it may have been flushed
-		ptr = ml_get_buf(curbuf, pos.lnum, FALSE);
-		netbeans_inserted(curbuf, pos.lnum, bd.textcol,
-						&ptr[bd.textcol], bd.textlen);
-	    }
-#endif
+#line 1484
 	}
 	if (did_change)
 	    changed_lines(oap->start.lnum, 0, oap->end.lnum + 1, 0L);
@@ -1514,33 +1471,7 @@ op_tilde(oparg_T *oap)
 	{
 	    changed_lines(oap->start.lnum, oap->start.col, oap->end.lnum + 1,
 									  0L);
-#ifdef FEAT_NETBEANS_INTG
-	    if (netbeans_active())
-	    {
-		char_u *ptr;
-		int count;
-
-		pos = oap->start;
-		while (pos.lnum < oap->end.lnum)
-		{
-		    ptr = ml_get_buf(curbuf, pos.lnum, FALSE);
-		    count = ml_get_buf_len(curbuf, pos.lnum) - pos.col;
-		    netbeans_removed(curbuf, pos.lnum, pos.col, (long)count);
-		    // get the line again, it may have been flushed
-		    ptr = ml_get_buf(curbuf, pos.lnum, FALSE);
-		    netbeans_inserted(curbuf, pos.lnum, pos.col,
-							&ptr[pos.col], count);
-		    pos.col = 0;
-		    pos.lnum++;
-		}
-		count = oap->end.col - pos.col + 1;
-		netbeans_removed(curbuf, pos.lnum, pos.col, (long)count);
-		// get the line again, it may have been flushed
-		ptr = ml_get_buf(curbuf, pos.lnum, FALSE);
-		netbeans_inserted(curbuf, pos.lnum, pos.col,
-							&ptr[pos.col], count);
-	    }
-#endif
+#line 1544
 	}
     }
 
@@ -2019,12 +1950,7 @@ op_change(oparg_T *oap)
 			mch_memmove(newp + newlen, ins_text, ins_len);
 			STRCPY(newp + newlen + ins_len, oldp + bd.textcol);
 			ml_replace(linenr, newp, FALSE);
-#ifdef FEAT_PROP_POPUP
-			// Shift the properties for linenr as edit() would do.
-			if (curbuf->b_has_textprop)
-			    adjust_prop_columns(linenr, bd.textcol,
-						     vpos.coladd + (int)ins_len, 0);
-#endif
+#line 2028
 		    }
 		}
 		check_cursor();
@@ -2304,15 +2230,7 @@ do_join(
      * column.  This is not Vi compatible, but Vi deletes the marks, thus that
      * should not really be a problem.
      */
-#ifdef FEAT_PROP_POPUP
-    unpacked_memline_T um = um_open_at_no_props(
-				curwin->w_buffer, curwin->w_cursor.lnum, 0);
-    // um_open_at_no_props may have invalidated "curr".
-    int curr_off = (int)(curr - curr_start);
-
-    curr = curr_start = ml_get((linenr_T)(curwin->w_cursor.lnum + count - 1));
-    curr += curr_off;
-#endif
+#line 2316
 
     for (t = count - 1; ; --t)
     {
@@ -2333,10 +2251,7 @@ do_join(
 
 	mark_col_adjust(curwin->w_cursor.lnum + t, (colnr_T)0, -t,
 			 (long)(cend - newp - spaces_removed), spaces_removed);
-#ifdef FEAT_PROP_POPUP
-	prepend_joined_props(&um, curwin->w_cursor.lnum + t,
-		t == count - 1, (long)(cend - newp), spaces_removed);
-#endif
+#line 2340
 	if (t == 0)
 	    break;
 	curr = curr_start = ml_get((linenr_T)(curwin->w_cursor.lnum + t - 1));
@@ -2347,16 +2262,7 @@ do_join(
 	currsize = (int)STRLEN(curr);
     }
 
-#ifdef FEAT_PROP_POPUP
-    if (um.buf != NULL)
-    {
-	um_set_text(&um, newp);
-	um_reverse_props(&um);
-	um_close(&um);
-	newp = NULL;  // um_set_text took ownership
-    }
-    else
-#endif
+#line 2360
     ml_replace_len(curwin->w_cursor.lnum, newp, (colnr_T)newp_len, TRUE, FALSE);
 
     if (setmark && (cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0)
@@ -2693,24 +2599,18 @@ op_addsub(
     // do_addsub() might trigger re-evaluation of 'foldexpr' halfway, when the
     // buffer is not completely updated yet. Postpone updating folds until before
     // the call to changed_lines().
-#ifdef FEAT_FOLDING
-    disable_fold_update++;
-#endif
+#line 2699
 
     if (!VIsual_active)
     {
 	pos = curwin->w_cursor;
 	if (u_save_cursor() == FAIL)
 	{
-#ifdef FEAT_FOLDING
-	    disable_fold_update--;
-#endif
+#line 2708
 	    return;
 	}
 	change_cnt = do_addsub(oap->op_type, &pos, 0, amount);
-#ifdef FEAT_FOLDING
-	disable_fold_update--;
-#endif
+#line 2714
 	if (change_cnt)
 	    changed_lines(pos.lnum, 0, pos.lnum + 1, 0L);
     }
@@ -2723,9 +2623,7 @@ op_addsub(
 	if (u_save((linenr_T)(oap->start.lnum - 1),
 					(linenr_T)(oap->end.lnum + 1)) == FAIL)
 	{
-#ifdef FEAT_FOLDING
-	    disable_fold_update--;
-#endif
+#line 2729
 	    return;
 	}
 
@@ -2772,24 +2670,12 @@ op_addsub(
 		++change_cnt;
 	    }
 
-#ifdef FEAT_NETBEANS_INTG
-	    if (netbeans_active() && one_change)
-	    {
-		char_u *ptr;
-
-		netbeans_removed(curbuf, pos.lnum, pos.col, (long)length);
-		ptr = ml_get_buf(curbuf, pos.lnum, FALSE);
-		netbeans_inserted(curbuf, pos.lnum, pos.col,
-						&ptr[pos.col], length);
-	    }
-#endif
+#line 2786
 	    if (g_cmd && one_change)
 		amount += Prenum1;
 	}
 
-#ifdef FEAT_FOLDING
-	disable_fold_update--;
-#endif
+#line 2793
 	if (change_cnt)
 	    changed_lines(oap->start.lnum, 0, oap->end.lnum + 1, 0L);
 
@@ -3629,16 +3515,9 @@ op_colon(oparg_T *oap)
 	else
 	    stuffnumReadbuff((long)oap->start.lnum);
 
-#ifdef FEAT_FOLDING
-	// When using !! on a closed fold the range ".!" works best to operate
-	// on, it will be made the whole closed fold later.
-	linenr_T endOfStartFold = oap->start.lnum;
-	(void)hasFolding(oap->start.lnum, NULL, &endOfStartFold);
-#endif
+#line 3638
 	if (oap->end.lnum != oap->start.lnum
-#ifdef FEAT_FOLDING
-		&& oap->end.lnum != endOfStartFold
-#endif
+#line 3642
 	   )
 	{
 	    // Make it a range with the end line.
@@ -3648,11 +3527,7 @@ op_colon(oparg_T *oap)
 	    else if (oap->end.lnum == curbuf->b_ml.ml_line_count)
 		stuffcharReadbuff('$');
 	    else if (oap->start.lnum == curwin->w_cursor.lnum
-#ifdef FEAT_FOLDING
-		    // do not use ".+number" for a closed fold, it would count
-		    // folded lines twice
-		    && !hasFolding(oap->end.lnum, NULL, NULL)
-#endif
+#line 3656
 		    )
 	    {
 		stuffReadbuff((char_u *)".+");
@@ -3891,20 +3766,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 
     int		    include_line_break = FALSE;
 
-#if defined(FEAT_CLIPBOARD)
-    // Yank the visual area into the GUI selection register before we operate
-    // on it and lose it forever.
-    // Don't do it if a specific register was specified, so that ""x"*P works.
-    // This could call do_pending_operator() recursively, but that's OK
-    // because gui_yank will be TRUE for the nested call.
-    if ((clip_star.available || clip_plus.available)
-	    && oap->op_type != OP_NOP
-	    && !gui_yank
-	    && VIsual_active
-	    && !redo_VIsual_busy
-	    && oap->regname == 0)
-	clip_auto_select();
-#endif
+#line 3908
     old_cursor = curwin->w_cursor;
 
     // If an operation is pending, handle it...
@@ -3953,15 +3815,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 		    || (VIsual_active
 			    && is_ex_cmdchar(cap) && oap->op_type != OP_COLON))
 		&& cap->cmdchar != 'D'
-#ifdef FEAT_FOLDING
-		&& oap->op_type != OP_FOLD
-		&& oap->op_type != OP_FOLDOPEN
-		&& oap->op_type != OP_FOLDOPENREC
-		&& oap->op_type != OP_FOLDCLOSE
-		&& oap->op_type != OP_FOLDCLOSEREC
-		&& oap->op_type != OP_FOLDDEL
-		&& oap->op_type != OP_FOLDDELREC
-#endif
+#line 3965
 		)
 	{
 	    prep_redo(oap->regname, cap->count0,
@@ -4078,19 +3932,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	// to the end of the operated text.  w_cursor is equal to oap->start.
 	if (LT_POS(oap->start, curwin->w_cursor))
 	{
-#ifdef FEAT_FOLDING
-	    // Include folded lines completely.
-	    if (!VIsual_active)
-	    {
-		if (hasFolding(oap->start.lnum, &oap->start.lnum, NULL))
-		    oap->start.col = 0;
-		if ((curwin->w_cursor.col > 0 || oap->inclusive
-						  || oap->motion_type == MLINE)
-			&& hasFolding(curwin->w_cursor.lnum, NULL,
-						      &curwin->w_cursor.lnum))
-		    curwin->w_cursor.col = ml_get_curline_len();
-	    }
-#endif
+#line 4094
 	    oap->end = curwin->w_cursor;
 	    curwin->w_cursor = oap->start;
 
@@ -4101,17 +3943,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	}
 	else
 	{
-#ifdef FEAT_FOLDING
-	    // Include folded lines completely.
-	    if (!VIsual_active && oap->motion_type == MLINE)
-	    {
-		if (hasFolding(curwin->w_cursor.lnum, &curwin->w_cursor.lnum,
-									NULL))
-		    curwin->w_cursor.col = 0;
-		if (hasFolding(oap->start.lnum, NULL, &oap->start.lnum))
-		    oap->start.col = ml_get_len(oap->start.lnum);
-	    }
-#endif
+#line 4115
 	    oap->end = oap->start;
 	    oap->start = curwin->w_cursor;
 	}
@@ -4155,15 +3987,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	    // can't redo yank (unless 'y' is in 'cpoptions') and ":"
 	    if ((redo_yank || oap->op_type != OP_YANK)
 		    && oap->op_type != OP_COLON
-#ifdef FEAT_FOLDING
-		    && oap->op_type != OP_FOLD
-		    && oap->op_type != OP_FOLDOPEN
-		    && oap->op_type != OP_FOLDOPENREC
-		    && oap->op_type != OP_FOLDCLOSE
-		    && oap->op_type != OP_FOLDCLOSEREC
-		    && oap->op_type != OP_FOLDDEL
-		    && oap->op_type != OP_FOLDDELREC
-#endif
+#line 4167
 		    && oap->motion_force == NUL
 		    )
 	    {
@@ -4288,9 +4112,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	// Force a redraw when operating on an empty Visual region, when
 	// 'modifiable is off or creating a fold.
 	if (oap->is_VIsual && (oap->empty || !curbuf->b_p_ma
-#ifdef FEAT_FOLDING
-		    || oap->op_type == OP_FOLD
-#endif
+#line 4294
 		    ))
 	{
 #ifdef FEAT_LINEBREAK
@@ -4564,32 +4386,7 @@ do_pending_operator(cmdarg_T *cap, int old_col, int gui_yank)
 	    }
 	    break;
 
-#ifdef FEAT_FOLDING
-	case OP_FOLD:
-	    VIsual_reselect = FALSE;	// don't reselect now
-	    foldCreate(oap->start.lnum, oap->end.lnum);
-	    break;
-
-	case OP_FOLDOPEN:
-	case OP_FOLDOPENREC:
-	case OP_FOLDCLOSE:
-	case OP_FOLDCLOSEREC:
-	    VIsual_reselect = FALSE;	// don't reselect now
-	    opFoldRange(oap->start.lnum, oap->end.lnum,
-		    oap->op_type == OP_FOLDOPEN
-					    || oap->op_type == OP_FOLDOPENREC,
-		    oap->op_type == OP_FOLDOPENREC
-					  || oap->op_type == OP_FOLDCLOSEREC,
-					  oap->is_VIsual);
-	    break;
-
-	case OP_FOLDDEL:
-	case OP_FOLDDELREC:
-	    VIsual_reselect = FALSE;	// don't reselect now
-	    deleteFold(oap->start.lnum, oap->end.lnum,
-			       oap->op_type == OP_FOLDDELREC, oap->is_VIsual);
-	    break;
-#endif
+#line 4593
 	case OP_NR_ADD:
 	case OP_NR_SUB:
 	    if (empty_region_error)

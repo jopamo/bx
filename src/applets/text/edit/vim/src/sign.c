@@ -252,10 +252,7 @@ insert_sign(buf_T *buf, // buffer to store sign in
 
         // first sign in signlist
         buf->b_signlist = newsign;
-# ifdef FEAT_NETBEANS_INTG
-        if (netbeans_active())
-            buf->b_has_sign_column = true;
-# endif
+#line 259
     }
     else
     {
@@ -487,9 +484,7 @@ buf_get_signattrs(win_T *wp, linenr_T lnum, sign_attrs_T *sattr)
             break;
 
         if (sign->se_lnum == lnum
-# ifdef FEAT_PROP_POPUP
-            && sign_group_for_window(sign, wp)
-# endif
+#line 493
         )
         {
             sattr->sat_typenr = sign->se_typenr;
@@ -676,55 +671,7 @@ buf_findsign_id(buf_T *buf, // buffer whose sign we are searching for
     return 0;
 }
 
-# if defined(FEAT_NETBEANS_INTG)
-/*
- * See if a given type of sign exists on a specific line.
- */
-int
-buf_findsigntype_id(buf_T *buf, // buffer whose sign we are searching for
-                    linenr_T lnum, // line number of sign
-                    int typenr) // sign type number
-{
-    sign_entry_T *sign = NULL; // a sign in the signlist
-    FOR_ALL_SIGNS_IN_BUF(buf, sign)
-    {
-        // Signs are sorted by line number in the buffer. No need to check
-        // for signs after the specified line number 'lnum'.
-        if (sign->se_lnum > lnum)
-            break;
-
-        if (sign->se_lnum == lnum && sign->se_typenr == typenr)
-            return sign->se_id;
-    }
-
-    return 0;
-}
-
-#  if defined(FEAT_SIGN_ICONS)
-/*
- * Return the number of icons on the given line.
- */
-int
-buf_signcount(buf_T *buf, linenr_T lnum)
-{
-    int count = 0;
-    sign_entry_T *sign = NULL; // a sign in the signlist
-    FOR_ALL_SIGNS_IN_BUF(buf, sign)
-    {
-        // Signs are sorted by line number in the buffer. No need to check
-        // for signs after the specified line number 'lnum'.
-        if (sign->se_lnum > lnum)
-            break;
-
-        if (sign->se_lnum == lnum && sign_get_image(sign->se_typenr) != NULL)
-            count++;
-    }
-
-    return count;
-}
-#  endif // FEAT_SIGN_ICONS
-# endif // FEAT_NETBEANS_INTG
-
+#line 728
 /*
  * Delete signs in group 'group' in buffer "buf". If 'group' is '*', then
  * delete all the signs.
@@ -1321,9 +1268,7 @@ sign_jump(int sign_id, char_u *sign_group, buf_T *buf)
         do_cmdline_cmd(cmd);
         vim_free(cmd);
     }
-# ifdef FEAT_FOLDING
-    foldOpenCursor();
-# endif
+#line 1327
 
     return lnum;
 }
@@ -2875,10 +2820,7 @@ get_first_valid_sign(win_T *wp)
 {
     sign_entry_T *sign = wp->w_buffer->b_signlist;
 
-# ifdef FEAT_PROP_POPUP
-    while (sign != NULL && !sign_group_for_window(sign, wp))
-        sign = sign->se_next;
-# endif
+#line 2882
     return sign;
 }
 
@@ -2901,9 +2843,7 @@ signcolumn_on(win_T *wp)
         return TRUE;
 
     return (get_first_valid_sign(wp) != NULL
-# ifdef FEAT_NETBEANS_INTG
-            || wp->w_buffer->b_has_sign_column
-# endif
+#line 2907
     );
 }
 

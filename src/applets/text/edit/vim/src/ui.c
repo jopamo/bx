@@ -20,19 +20,7 @@
     void
 ui_write(char_u *s, int len, int console UNUSED)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use && !gui.dying && !gui.starting
-# ifndef NO_CONSOLE
-	    && !console
-# endif
-	    )
-    {
-	gui_write(s, len);
-	if (p_wd)
-	    gui_wait_for_chars(p_wd, typebuf.tb_change_cnt);
-	return;
-    }
-#endif
+#line 36
 #ifndef NO_CONSOLE
     // Don't output anything in silent mode ("ex -s") unless 'verbose' set
     if (!(silent_mode && p_verbose == 0))
@@ -122,29 +110,7 @@ ui_inchar(
 {
     int		retval = 0;
 
-#if defined(FEAT_GUI) && (defined(UNIX) || defined(VMS))
-    /*
-     * Use the typeahead if there is any.
-     */
-    if (ta_str != NULL)
-    {
-	if (maxlen >= ta_len - ta_off)
-	{
-	    mch_memmove(buf, ta_str + ta_off, (size_t)ta_len);
-	    VIM_CLEAR(ta_str);
-	    return ta_len;
-	}
-	mch_memmove(buf, ta_str + ta_off, (size_t)maxlen);
-	ta_off += maxlen;
-	return maxlen;
-    }
-#endif
-
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES && wtime != 0)
-	prof_inchar_enter();
-#endif
-
+#line 148
 #ifdef NO_CONSOLE_INPUT
     // Don't wait for character input when the window hasn't been opened yet.
     // Do try reading, this works when redirecting stdin from a file.
@@ -221,14 +187,9 @@ ui_inchar(
      *
      */
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	retval = gui_inchar(buf, maxlen, wtime, tb_change_cnt);
-#endif
+#line 228
 #ifndef NO_CONSOLE
-# ifdef FEAT_GUI
-    else
-# endif
+#line 232
 	retval = mch_inchar(buf, maxlen, wtime, tb_change_cnt);
 #endif
 
@@ -241,10 +202,7 @@ ui_inchar(
 #ifdef NO_CONSOLE_INPUT
 theend:
 #endif
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES && wtime != 0)
-	prof_inchar_exit();
-#endif
+#line 248
     return retval;
 }
 
@@ -357,20 +315,7 @@ inchar_loop(
 	    }
 	}
 
-# ifdef FEAT_JOB_CHANNEL
-	if (wait_time < 0 || wait_time > 100L)
-	{
-	    // Checking if a job ended requires polling.  Do this at least
-	    // every 100 msec.
-	    if (has_pending_job())
-		wait_time = 100L;
-
-	    // If there is readahead then parse_queued_messages() timed out and
-	    // we should call it again soon.
-	    if (channel_any_readahead())
-		wait_time = 10L;
-	}
-# endif
+#line 374
 # ifdef FEAT_BEVAL_GUI
 	if (p_beval && wait_time > 100L)
 	    // The 'balloonexpr' may indirectly invoke a callback while waiting
@@ -406,21 +351,7 @@ inchar_loop(
 # endif
 
 	if ((resize_func != NULL && resize_func(TRUE))
-# if defined(FEAT_CLIENTSERVER) && defined(UNIX)
-		|| (
-#  ifdef FEAT_X11
-		    (clientserver_method == CLIENTSERVER_METHOD_X11 &&
-		    server_waiting())
-#  endif
-#  if defined(FEAT_X11) && defined(FEAT_SOCKETSERVER)
-		    ||
-#  endif
-#  ifdef FEAT_SOCKETSERVER
-		    (clientserver_method == CLIENTSERVER_METHOD_SOCKET &&
-		     socket_server_waiting_accept())
-#  endif
-		)
-# endif
+#line 424
 # ifdef MESSAGE_QUEUE
 		|| interrupted
 # endif
@@ -436,97 +367,14 @@ inchar_loop(
 }
 #endif
 
-#if defined(FEAT_TIMERS)
-/*
- * Wait for a timer to fire or "wait_func" to return non-zero.
- * Returns OK when something was read.
- * Returns FAIL when it timed out or was interrupted.
- */
-    int
-ui_wait_for_chars_or_timer(
-    long    wtime,
-    int	    (*wait_func)(long wtime, int *interrupted, int ignore_input),
-    int	    *interrupted,
-    int	    ignore_input)
-{
-    int	    due_time;
-    long    remaining = wtime;
-    int	    tb_change_cnt = typebuf.tb_change_cnt;
-# ifdef FEAT_JOB_CHANNEL
-    int	    brief_wait = FALSE;
-# endif
-
-    // When waiting very briefly don't trigger timers.
-    if (wtime >= 0 && wtime < 10L)
-	return wait_func(wtime, NULL, ignore_input);
-
-    while (wtime < 0 || remaining > 0)
-    {
-	// Trigger timers and then get the time in wtime until the next one is
-	// due.  Wait up to that time.
-	due_time = check_due_timer();
-	if (typebuf.tb_change_cnt != tb_change_cnt)
-	{
-	    // timer may have used feedkeys()
-	    return FAIL;
-	}
-	if (due_time <= 0 || (wtime > 0 && due_time > remaining))
-	    due_time = remaining;
-# if defined(FEAT_JOB_CHANNEL) || defined(FEAT_SOUND_CANBERRA) || defined(FEAT_SOUND_MACOSX)
-	if ((due_time < 0 || due_time > 10L) && (
-#  if defined(FEAT_JOB_CHANNEL)
-		(
-#   if defined(FEAT_GUI)
-		!gui.in_use &&
-#   endif
-		(has_pending_job() || channel_any_readahead()))
-#   if defined(FEAT_SOUND_CANBERRA) || defined(FEAT_SOUND_MACOSX)
-		||
-#   endif
-#  endif
-#  if defined(FEAT_SOUND_CANBERRA) ||  defined(FEAT_SOUND_MACOSX)
-		    has_any_sound_callback()
-#  endif
-		    ))
-	{
-	    // There is a pending job or channel, should return soon in order
-	    // to handle them ASAP.  Do check for input briefly.
-	    due_time = 10L;
-#  ifdef FEAT_JOB_CHANNEL
-	    brief_wait = TRUE;
-#  endif
-	}
-# endif
-	if (wait_func(due_time, interrupted, ignore_input))
-	    return OK;
-	if ((interrupted != NULL && *interrupted)
-# ifdef FEAT_JOB_CHANNEL
-		|| brief_wait
-# endif
-		)
-	    // Nothing available, but need to return so that side effects get
-	    // handled, such as handling a message on a channel.
-	    return FAIL;
-	if (wtime > 0)
-	    remaining -= due_time;
-    }
-    return FAIL;
-}
-#endif
-
+#line 517
 /*
  * Return non-zero if a character is available.
  */
     int
 ui_char_avail(void)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_mch_update();
-	return input_available();
-    }
-#endif
+#line 530
 #ifndef NO_CONSOLE
 # ifdef NO_CONSOLE_INPUT
     if (no_console_input())
@@ -552,11 +400,7 @@ ui_delay(long msec_arg, int ignoreinput)
 	msec = ui_delay_for_testing;
     ch_log(NULL, "ui_delay(%ld)", msec);
 #endif
-#ifdef FEAT_GUI
-    if (gui.in_use && !ignoreinput)
-	gui_wait_for_chars(msec, typebuf.tb_change_cnt);
-    else
-#endif
+#line 560
 	mch_delay(msec, ignoreinput ? MCH_DELAY_IGNOREINPUT : 0);
 }
 
@@ -568,13 +412,7 @@ ui_delay(long msec_arg, int ignoreinput)
     void
 ui_suspend(void)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_mch_iconify();
-	return;
-    }
-#endif
+#line 578
     mch_suspend();
 }
 
@@ -606,11 +444,7 @@ ui_get_shellsize(void)
 {
     int	    retval;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	retval = gui_get_shellsize();
-    else
-#endif
+#line 614
 	retval = mch_get_shellsize();
 
     check_shellsize();
@@ -633,11 +467,7 @@ ui_get_shellsize(void)
 ui_set_shellsize(
     int		mustset UNUSED)	// set by the user
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	gui_set_shellsize(mustset, TRUE, RESIZE_BOTH);
-    else
-#endif
+#line 641
 	mch_set_shellsize();
 }
 
@@ -650,11 +480,7 @@ ui_new_shellsize(void)
 {
     if (full_screen && !exiting)
     {
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	    gui_new_shellsize();
-	else
-#endif
+#line 658
 	    mch_new_shellsize();
     }
 }
@@ -670,10 +496,7 @@ ui_new_shellsize(void)
     int
 ui_get_winpos(int *x, int *y, varnumber_T timeout UNUSED)
 {
-# ifdef FEAT_GUI
-    if (gui.in_use)
-	return gui_mch_get_winpos(x, y);
-# endif
+#line 677
 # if defined(MSWIN) && (!defined(FEAT_GUI) || defined(VIMDLL))
     return mch_get_winpos(x, y);
 # else
@@ -712,11 +535,7 @@ ui_breakcheck_force(int force)
     // We do not want gui_resize_shell() to redraw the screen here.
     ++updating_screen;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	gui_mch_update();
-    else
-#endif
+#line 720
 	mch_breakcheck(force);
 
     if (save_updating_screen)
@@ -745,16 +564,9 @@ ui_breakcheck_force(int force)
  * descriptions which would otherwise overflow.  The buffer is considered full
  * when only this extra space (or part of it) remains.
  */
-# if defined(FEAT_JOB_CHANNEL) || defined(FEAT_CLIENTSERVER)
-   /*
-    * NetBeans stuffs debugger commands into the input buffer.
-    * This requires a larger buffer...
-    * (Madsen) Go with this for remote input as well ...
-    */
-#  define INBUFLEN 4096
-# else
+#line 756
 #  define INBUFLEN 250
-# endif
+#line 758
 
 static char_u	inbuf[INBUFLEN + MAX_KEY_CODE_LEN];
 static int	inbufcount = 0;	    // number of chars in inbuf[]
@@ -785,14 +597,7 @@ vim_free_in_input_buf(void)
 }
 # endif
 
-# if defined(FEAT_GUI_GTK)
-    int
-vim_used_in_input_buf(void)
-{
-    return inbufcount;
-}
-# endif
-
+#line 796
 /*
  * Return the current contents of the input buffer and make it empty.
  * The returned pointer must be passed to set_input_buf() later.
@@ -924,19 +729,7 @@ fill_input_buf(int exit_on_error UNUSED)
     int		unconverted;
 # endif
 
-# ifdef FEAT_GUI
-    if (gui.in_use
-#  ifdef NO_CONSOLE_INPUT
-    // Don't use the GUI input when the window hasn't been opened yet.
-    // We get here from ui_inchar() when we should try reading from stdin.
-	    && !no_console_input()
-#  endif
-       )
-    {
-	gui_mch_update();
-	return;
-    }
-# endif
+#line 940
 # if defined(UNIX) || defined(VMS) || defined(MACOS_X)
     if (vim_is_input_buf_full())
 	return;
@@ -1089,20 +882,14 @@ read_error_exit(void)
     void
 ui_cursor_shape_forced(int forced)
 {
-# ifdef FEAT_GUI
-    if (gui.in_use)
-	gui_update_cursor_later();
-    else
-# endif
+#line 1097
 	term_cursor_mode(forced);
 
 # ifdef MCH_CURSOR_SHAPE
     mch_update_cursor();
 # endif
 
-# ifdef FEAT_CONCEAL
-    conceal_check_cursor_line(FALSE);
-# endif
+#line 1106
 }
 
     void
@@ -1173,9 +960,7 @@ ui_find_longest_lnum(void)
     // line numbers, topline and botline can be invalid when displaying is
     // postponed.
     if (
-#ifdef FEAT_GUI
-	    (!gui.in_use || vim_strchr(p_go, GO_HORSCROLL) == NULL) &&
-#endif
+#line 1179
 	    curwin->w_topline <= curwin->w_cursor.lnum
 	    && curwin->w_botline > curwin->w_cursor.lnum
 	    && curwin->w_botline <= curbuf->b_ml.ml_line_count + 1)
@@ -1224,19 +1009,14 @@ ui_focus_change(
     if (in_focus && last_time + 2 < time(NULL))
     {
 	need_redraw = check_timestamps(
-#ifdef FEAT_GUI
-		gui.in_use
-#else
+#line 1230
 		FALSE
-#endif
+#line 1232
 		);
 	last_time = time(NULL);
     }
 
-#ifdef FEAT_TERMINAL
-    term_focus_change(in_focus);
-#endif
-
+#line 1240
     /*
      * Fire the focus gained/lost autocommand.
      */
@@ -1269,9 +1049,7 @@ im_save_status(long *psave)
 # ifdef FEAT_XIM
 	    && xic != NULL
 # endif
-# ifdef FEAT_GUI
-	    && (!gui.in_use || gui.in_focus)
-# endif
+#line 1275
 	)
     {
 	// Do save when IM is on, or IM is off and saved status is on.

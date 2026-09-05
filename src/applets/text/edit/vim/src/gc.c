@@ -136,15 +136,7 @@ garbage_collect(int testing)
 	if (aucmd_win[i].auc_win != NULL)
 	    abort = abort || set_ref_in_item(
 		    &aucmd_win[i].auc_win->w_winvar.di_tv, copyID, NULL, NULL, NULL);
-#ifdef FEAT_PROP_POPUP
-    FOR_ALL_POPUPWINS(wp)
-	abort = abort || set_ref_in_item(&wp->w_winvar.di_tv, copyID,
-								  NULL, NULL, NULL);
-    FOR_ALL_TABPAGES(tp)
-	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-		abort = abort || set_ref_in_item(&wp->w_winvar.di_tv, copyID,
-								  NULL, NULL, NULL);
-#endif
+#line 148
 
     // tabpage-local variables
     FOR_ALL_TABPAGES(tp)
@@ -201,30 +193,12 @@ garbage_collect(int testing)
     abort = abort || set_ref_in_python3(copyID);
 #endif
 
-#ifdef FEAT_JOB_CHANNEL
-    abort = abort || set_ref_in_channel(copyID);
-    abort = abort || set_ref_in_job(copyID);
-#endif
-#ifdef FEAT_NETBEANS_INTG
-    abort = abort || set_ref_in_nb_channel(copyID);
-#endif
-
-#ifdef FEAT_TIMERS
-    abort = abort || set_ref_in_timer(copyID);
-#endif
-
+#line 216
 #ifdef FEAT_QUICKFIX
     abort = abort || set_ref_in_quickfix(copyID);
 #endif
 
-#ifdef FEAT_TERMINAL
-    abort = abort || set_ref_in_term(copyID);
-#endif
-
-#ifdef FEAT_PROP_POPUP
-    abort = abort || set_ref_in_popups(copyID);
-#endif
-
+#line 228
     abort = abort || set_ref_in_classes(copyID);
 
     if (!abort)
@@ -281,16 +255,7 @@ free_unref_items(int copyID)
     // Go through the list of classes and free items without this copyID.
     did_free |= class_free_nonref(copyID);
 
-#ifdef FEAT_JOB_CHANNEL
-    // Go through the list of jobs and free items without the copyID. This
-    // must happen before doing channels, because jobs refer to channels, but
-    // the reference from the channel to the job isn't tracked.
-    did_free |= free_unused_jobs_contents(copyID, COPYID_MASK);
-
-    // Go through the list of channels and free items without the copyID.
-    did_free |= free_unused_channels_contents(copyID, COPYID_MASK);
-#endif
-
+#line 294
     /*
      * PASS 2: free the items themselves.
      */
@@ -299,16 +264,7 @@ free_unref_items(int copyID)
     list_free_items(copyID);
     tuple_free_items(copyID);
 
-#ifdef FEAT_JOB_CHANNEL
-    // Go through the list of jobs and free items without the copyID. This
-    // must happen before doing channels, because jobs refer to channels, but
-    // the reference from the channel to the job isn't tracked.
-    free_unused_jobs(copyID, COPYID_MASK);
-
-    // Go through the list of channels and free items without the copyID.
-    free_unused_channels(copyID, COPYID_MASK);
-#endif
-
+#line 312
     in_free_unref_items = FALSE;
 
     return did_free;
@@ -655,96 +611,7 @@ set_ref_in_item_partial(
     return abort;
 }
 
-#ifdef FEAT_JOB_CHANNEL
-/*
- * Mark the job "pt" with "copyID".
- * Also see set_ref_in_item().
- */
-    static int
-set_ref_in_item_job(
-    job_T		*job,
-    int			copyID,
-    ht_stack_T		**ht_stack,
-    list_stack_T	**list_stack,
-    tuple_stack_T	**tuple_stack)
-{
-    typval_T    dtv;
-
-    if (job == NULL || job->jv_copyID == copyID)
-	return FALSE;
-
-    job->jv_copyID = copyID;
-    if (job->jv_channel != NULL)
-    {
-	dtv.v_type = VAR_CHANNEL;
-	dtv.vval.v_channel = job->jv_channel;
-	set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-    }
-    if (job->jv_exit_cb.cb_partial != NULL)
-    {
-	dtv.v_type = VAR_PARTIAL;
-	dtv.vval.v_partial = job->jv_exit_cb.cb_partial;
-	set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-    }
-
-    return FALSE;
-}
-
-/*
- * Mark the channel "ch" with "copyID".
- * Also see set_ref_in_item().
- */
-    static int
-set_ref_in_item_channel(
-    channel_T		*ch,
-    int			copyID,
-    ht_stack_T		**ht_stack,
-    list_stack_T	**list_stack,
-    tuple_stack_T	**tuple_stack)
-{
-    typval_T    dtv;
-
-    if (ch == NULL || ch->ch_copyID == copyID)
-	return FALSE;
-
-    ch->ch_copyID = copyID;
-    for (ch_part_T part = PART_SOCK; part < PART_COUNT; ++part)
-    {
-	for (jsonq_T *jq = ch->ch_part[part].ch_json_head.jq_next;
-		jq != NULL; jq = jq->jq_next)
-	    set_ref_in_item(jq->jq_value, copyID, ht_stack, list_stack, tuple_stack);
-	for (cbq_T *cq = ch->ch_part[part].ch_cb_head.cq_next; cq != NULL;
-		cq = cq->cq_next)
-	    if (cq->cq_callback.cb_partial != NULL)
-	    {
-		dtv.v_type = VAR_PARTIAL;
-		dtv.vval.v_partial = cq->cq_callback.cb_partial;
-		set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-	    }
-	if (ch->ch_part[part].ch_callback.cb_partial != NULL)
-	{
-	    dtv.v_type = VAR_PARTIAL;
-	    dtv.vval.v_partial = ch->ch_part[part].ch_callback.cb_partial;
-	    set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-	}
-    }
-    if (ch->ch_callback.cb_partial != NULL)
-    {
-	dtv.v_type = VAR_PARTIAL;
-	dtv.vval.v_partial = ch->ch_callback.cb_partial;
-	set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-    }
-    if (ch->ch_close_cb.cb_partial != NULL)
-    {
-	dtv.v_type = VAR_PARTIAL;
-	dtv.vval.v_partial = ch->ch_close_cb.cb_partial;
-	set_ref_in_item(&dtv, copyID, ht_stack, list_stack, tuple_stack);
-    }
-
-    return FALSE;
-}
-#endif
-
+#line 748
 /*
  * Mark the class "cl" with "copyID".
  * Also see set_ref_in_item().
@@ -855,20 +722,14 @@ set_ref_in_item(
 					ht_stack, list_stack, tuple_stack);
 
 	case VAR_JOB:
-#ifdef FEAT_JOB_CHANNEL
-	    return set_ref_in_item_job(tv->vval.v_job, copyID,
-					ht_stack, list_stack, tuple_stack);
-#else
+#line 862
 	    break;
-#endif
+#line 864
 
 	case VAR_CHANNEL:
-#ifdef FEAT_JOB_CHANNEL
-	    return set_ref_in_item_channel(tv->vval.v_channel, copyID,
-					ht_stack, list_stack, tuple_stack);
-#else
+#line 870
 	    break;
-#endif
+#line 872
 
 	case VAR_CLASS:
 	    return set_ref_in_item_class(tv->vval.v_class, copyID,

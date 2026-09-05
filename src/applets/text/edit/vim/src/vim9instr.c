@@ -819,18 +819,7 @@ generate_tv_PUSH(cctx_T *cctx, typval_T *tv)
 		iemsg("non-empty dict constant not supported");
 	    generate_NEWDICT(cctx, 0, TRUE);
 	    break;
-#ifdef FEAT_JOB_CHANNEL
-	case VAR_JOB:
-	    if (tv->vval.v_job != NULL)
-		iemsg("non-null job constant not supported");
-	    generate_PUSHJOB(cctx);
-	    break;
-	case VAR_CHANNEL:
-	    if (tv->vval.v_channel != NULL)
-		iemsg("non-null channel constant not supported");
-	    generate_PUSHCHANNEL(cctx);
-	    break;
-#endif
+#line 834
 	case VAR_FUNC:
 	    if (tv->vval.v_string != NULL)
 		iemsg("non-null function constant not supported");
@@ -969,14 +958,10 @@ generate_PUSHS(cctx_T *cctx, char_u **str)
 generate_PUSHCHANNEL(cctx_T *cctx)
 {
     RETURN_OK_IF_SKIP(cctx);
-#ifdef FEAT_JOB_CHANNEL
-    if (generate_instr_type(cctx, ISN_PUSHCHANNEL, &t_channel) == NULL)
-	return FAIL;
-    return OK;
-#else
+#line 977
     emsg(_(e_channel_job_feature_not_available));
     return FAIL;
-#endif
+#line 980
 }
 
 /*
@@ -986,14 +971,10 @@ generate_PUSHCHANNEL(cctx_T *cctx)
 generate_PUSHJOB(cctx_T *cctx)
 {
     RETURN_OK_IF_SKIP(cctx);
-#ifdef FEAT_JOB_CHANNEL
-    if (generate_instr_type(cctx, ISN_PUSHJOB, &t_job) == NULL)
-	return FAIL;
-    return OK;
-#else
+#line 994
     emsg(_(e_channel_job_feature_not_available));
     return FAIL;
-#endif
+#line 997
 }
 
 /*
@@ -2667,15 +2648,7 @@ generate_SCRIPTCTX_SET(cctx_T *cctx, sctx_T new_sctx)
     return OK;
 }
 
-#if defined(FEAT_PROFILE)
-    void
-may_generate_prof_end(cctx_T *cctx, int prof_lnum)
-{
-    if (cctx->ctx_compile_type == CT_PROFILE && prof_lnum >= 0)
-	generate_instr(cctx, ISN_PROF_END);
-}
-#endif
-
+#line 2679
 
 /*
  * Delete an instruction, free what it contains.

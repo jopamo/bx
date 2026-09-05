@@ -1842,9 +1842,7 @@ compile_lambda(char_u **arg, cctx_T *cctx)
     // lambda may be called without profiling or debugging.  Compile it here in
     // the right context.
     if (cctx->ctx_compile_type == CT_DEBUG
-#ifdef FEAT_PROFILE
-	    || cctx->ctx_compile_type == CT_PROFILE
-#endif
+#line 1848
        )
 	compile_def_function(ufunc, FALSE, CT_NONE, cctx);
 

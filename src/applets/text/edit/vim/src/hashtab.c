@@ -95,31 +95,7 @@ hash_clear(hashtab_T *ht)
 	vim_free(ht->ht_array);
 }
 
-#if defined(FEAT_SPELL) || defined(FEAT_TERMINAL)
-/*
- * Free the array of a hash table and all the keys it contains.  The keys must
- * have been allocated.  "off" is the offset from the start of the allocate
- * memory to the location of the key (it's always positive).
- */
-    void
-hash_clear_all(hashtab_T *ht, int off)
-{
-    long	todo;
-    hashitem_T	*hi;
-
-    todo = (long)ht->ht_used;
-    FOR_ALL_HASHTAB_ITEMS(ht, hi, todo)
-    {
-	if (!HASHITEM_EMPTY(hi))
-	{
-	    vim_free(hi->hi_key - off);
-	    --todo;
-	}
-    }
-    hash_clear(ht);
-}
-#endif
-
+#line 123
 /*
  * Find "key" in hashtable "ht".  "key" must not be NULL.
  * Always returns a pointer to a hashitem.  If the item was not found then
@@ -309,20 +285,7 @@ hash_lock(hashtab_T *ht)
     ++ht->ht_locked;
 }
 
-#if defined(FEAT_PROP_POPUP)
-/*
- * Lock a hashtable at the specified number of entries.
- * Caller must make sure no more than "size" entries will be added.
- * Must call hash_unlock() later.
- */
-    void
-hash_lock_size(hashtab_T *ht, int size)
-{
-    (void)hash_may_resize(ht, size);
-    ++ht->ht_locked;
-}
-#endif
-
+#line 326
 /*
  * Unlock a hashtable: allow ht_array changes again.
  * Table will be resized (shrink) when necessary.

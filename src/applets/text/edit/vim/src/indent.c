@@ -428,23 +428,7 @@ get_indent_lnum(linenr_T lnum)
 #endif
 }
 
-#if defined(FEAT_FOLDING)
-/*
- * Count the size (in window cells) of the indent in line "lnum" of buffer
- * "buf".
- */
-    int
-get_indent_buf(buf_T *buf, linenr_T lnum)
-{
-# ifdef FEAT_VARTABS
-    return get_indent_str_vtab(ml_get_buf(buf, lnum, FALSE),
-			       (int)buf->b_p_ts, buf->b_p_vts_array, FALSE);
-# else
-    return get_indent_str(ml_get_buf(buf, lnum, FALSE), (int)buf->b_p_ts, FALSE);
-# endif
-}
-#endif
-
+#line 448
 /*
  * count the size (in window cells) of the indent in line "ptr", with
  * 'tabstop' at "ts"
@@ -805,18 +789,7 @@ set_indent(
 		// at the start of the indent (replacing spaces with TAB)
 		saved_cursor.col = new_offset;
 	}
-#ifdef FEAT_PROP_POPUP
-	{
-	    int added = ind_len - old_offset;
-
-	    // When increasing indent this behaves like spaces were inserted at
-	    // the old indent, when decreasing indent it behaves like spaces
-	    // were deleted at the new indent.
-	    adjust_prop_columns(curwin->w_cursor.lnum,
-				  added > 0 ? old_offset : (colnr_T)ind_len,
-				  added, APC_INDENT);
-	}
-#endif
+#line 820
 	retval = TRUE;
     }
     else
@@ -1340,9 +1313,7 @@ change_indent(
     // for the following tricks we don't want list mode
     save_p_list = curwin->w_p_list;
     curwin->w_p_list = FALSE;
-#ifdef FEAT_PROP_POPUP
-    ignore_text_props = TRUE;
-#endif
+#line 1346
     vc = getvcol_nolist(&curwin->w_cursor);
     vcol = vc;
 
@@ -1496,9 +1467,7 @@ change_indent(
 	    ++start_col;
 	}
     }
-#ifdef FEAT_PROP_POPUP
-    ignore_text_props = FALSE;
-#endif
+#line 1502
 
     // For MODE_VREPLACE state, we also have to fix the replace stack.  In this
     // case it is always possible because we backspace over the whole line and

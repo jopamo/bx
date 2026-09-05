@@ -175,12 +175,7 @@ findpar(
     int		did_skip;   // TRUE after separating lines have been skipped
     int		first;	    // TRUE on first line
     int		posix = (vim_strchr(p_cpo, CPO_PARA) != NULL);
-#ifdef FEAT_FOLDING
-    linenr_T	fold_first;	// first line of a closed fold
-    linenr_T	fold_last;	// last line of a closed fold
-    int		fold_skipped;	// TRUE if a closed fold was skipped this
-				// iteration
-#endif
+#line 184
 
     curr = curwin->w_cursor.lnum;
 
@@ -192,16 +187,7 @@ findpar(
 	    if (*ml_get(curr) != NUL)
 		did_skip = TRUE;
 
-#ifdef FEAT_FOLDING
-	    // skip folded lines
-	    fold_skipped = FALSE;
-	    if (first && hasFolding(curr, &fold_first, &fold_last))
-	    {
-		curr = ((dir > 0) ? fold_last : fold_first) + dir;
-		fold_skipped = TRUE;
-	    }
-#endif
-
+#line 205
 	    // POSIX has its own ideas of what a paragraph boundary is and it
 	    // doesn't match historical Vi: It also stops at a "{" in the
 	    // first column and at an empty line.
@@ -209,10 +195,7 @@ findpar(
 			   || (posix && what == NUL && *ml_get(curr) == '{')))
 		break;
 
-#ifdef FEAT_FOLDING
-	    if (fold_skipped)
-		curr -= dir;
-#endif
+#line 216
 	    if ((curr += dir) < 1 || curr > curbuf->b_ml.ml_line_count)
 	    {
 		if (count)
@@ -371,12 +354,7 @@ fwd_word(
     cls_bigword = bigword;
     while (--count >= 0)
     {
-#ifdef FEAT_FOLDING
-	// When inside a range of folded lines, move to the last char of the
-	// last line.
-	if (hasFolding(curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum))
-	    coladvance((colnr_T)MAXCOL);
-#endif
+#line 380
 	sclass = cls();
 
 	/*
@@ -436,12 +414,7 @@ bck_word(long count, int bigword, int stop)
     cls_bigword = bigword;
     while (--count >= 0)
     {
-#ifdef FEAT_FOLDING
-	// When inside a range of folded lines, move to the first char of the
-	// first line.
-	if (hasFolding(curwin->w_cursor.lnum, &curwin->w_cursor.lnum, NULL))
-	    curwin->w_cursor.col = 0;
-#endif
+#line 445
 	sclass = cls();
 	if (dec_cursor() == -1)		// started at start of file
 	    return FAIL;
@@ -510,12 +483,7 @@ end_word(
 
     while (--count >= 0)
     {
-#ifdef FEAT_FOLDING
-	// When inside a range of folded lines, move to the last char of the
-	// last line.
-	if (hasFolding(curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum))
-	    coladvance((colnr_T)MAXCOL);
-#endif
+#line 519
 	sclass = cls();
 	if (inc_cursor() == -1)
 	    return FAIL;

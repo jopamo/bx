@@ -55,9 +55,7 @@ static keyvalue_T command_complete_tab[] =
     KEYVALUE_ENTRY(EXPAND_COLORS, "color"),
     KEYVALUE_ENTRY(EXPAND_COMMANDS, "command"),
     KEYVALUE_ENTRY(EXPAND_COMPILER, "compiler"),
-#if defined(FEAT_CSCOPE)
-    KEYVALUE_ENTRY(EXPAND_CSCOPE, "cscope"),
-#endif
+#line 61
 #if defined(FEAT_EVAL)
     KEYVALUE_ENTRY(EXPAND_USER_DEFINED, "custom"),
     KEYVALUE_ENTRY(EXPAND_USER_LIST, "customlist"),
@@ -76,9 +74,7 @@ static keyvalue_T command_complete_tab[] =
     KEYVALUE_ENTRY(EXPAND_HELP, "help"),
     KEYVALUE_ENTRY(EXPAND_HIGHLIGHT, "highlight"),
     KEYVALUE_ENTRY(EXPAND_HISTORY, "history"),
-#if defined(FEAT_KEYMAP)
-    KEYVALUE_ENTRY(EXPAND_KEYMAP, "keymap"),
-#endif
+#line 82
 #if defined(HAVE_LOCALE_H) || defined(X_LOCALE)
     KEYVALUE_ENTRY(EXPAND_LOCALES, "locale"),
 #endif
@@ -99,9 +95,7 @@ static keyvalue_T command_complete_tab[] =
     KEYVALUE_ENTRY(EXPAND_SIGN, "sign"),
 #endif
     KEYVALUE_ENTRY(EXPAND_OWNSYNTAX, "syntax"),
-#if defined(FEAT_PROFILE)
-    KEYVALUE_ENTRY(EXPAND_SYNTIME, "syntime"),
-#endif
+#line 105
     KEYVALUE_ENTRY(EXPAND_TAGS, "tag"),
     KEYVALUE_ENTRY(EXPAND_TAGS_LISTFILES, "tag_listfiles"),
     KEYVALUE_ENTRY(EXPAND_USER, "user"),
@@ -334,10 +328,7 @@ set_context_in_user_cmdarg(
 	return NULL;
     }
 
-#ifdef FEAT_MENU
-    if (context == EXPAND_MENUS)
-	return set_context_in_menu_cmd(xp, cmd, arg, forceit);
-#endif
+#line 341
     if (context == EXPAND_COMMANDS)
 	return arg;
     if (context == EXPAND_MAPPINGS)
@@ -1997,9 +1988,7 @@ do_ucmd(exarg_T *eap)
 		if (*ksp == K_SPECIAL
 			&& (start == NULL || ksp < start || end == NULL)
 			&& ((ksp[1] == KS_SPECIAL && ksp[2] == KE_FILLER)
-#ifdef FEAT_GUI
-			    || (ksp[1] == KS_EXTRA && ksp[2] == (int)KE_CSI)
-#endif
+#line 2003
 			    ))
 		{
 		    // K_SPECIAL has been put in the buffer as K_SPECIAL

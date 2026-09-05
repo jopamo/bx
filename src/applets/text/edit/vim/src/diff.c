@@ -112,9 +112,7 @@ static int check_external_diff(diffio_T *diffio);
 static int diff_file(diffio_T *diffio);
 static int diff_equal_entry(diff_T *dp, int idx1, int idx2);
 static int diff_cmp(char_u *s1, char_u *s2);
-# ifdef FEAT_FOLDING
-static void diff_fold_update(diff_T *dp, int skip_idx);
-# endif
+#line 118
 static void diff_read(int idx_orig, int idx_new, diffio_T *dio);
 static void diff_copy_entry(diff_T *dprev, diff_T *dp, int idx_orig, int idx_new);
 static diff_T *diff_alloc_new(tabpage_T *tp, diff_T *dprev, diff_T *dp);
@@ -736,10 +734,7 @@ diff_redraw(
 	redraw_win_later(wp, UPD_SOME_VALID);
 	if (wp != curwin)
 	    wp_other = wp;
-# ifdef FEAT_FOLDING
-	if (dofold && foldmethodIsDiff(wp))
-	    foldUpdateAll(wp);
-# endif
+#line 743
 	// A change may have made filler lines invalid, need to take care of
 	// that for other windows.
 	n = diff_check_fill(wp, wp->w_topline);
@@ -1560,9 +1555,7 @@ ex_diffpatch(exarg_T *eap)
 		STRCAT(newname, ".new");
 	}
 
-# ifdef FEAT_GUI
-	need_mouse_correct = TRUE;
-# endif
+#line 1566
 	// don't use a new tab page, each tab page has its own diffs
 	cmdmod.cmod_tab = 0;
 
@@ -1624,9 +1617,7 @@ ex_diffsplit(exarg_T *eap)
     bufref_T	old_curbuf;
 
     set_bufref(&old_curbuf, curbuf);
-# ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-# endif
+#line 1630
     // Need to compute w_fraction when no redraw happened yet.
     validate_cursor();
     set_fraction(curwin);
@@ -1693,14 +1684,7 @@ diff_win_options(
     win_T	*wp,
     int		addbuf)		// Add buffer to diff.
 {
-# ifdef FEAT_FOLDING
-    win_T *old_curwin = curwin;
-
-    // close the manually opened folds
-    curwin = wp;
-    newFoldLevel();
-    curwin = old_curwin;
-# endif
+#line 1704
 
     // Use 'scrollbind' and 'cursorbind' when available
     if (!wp->w_p_diff)
@@ -1716,28 +1700,7 @@ diff_win_options(
 	wp->w_p_wrap = FALSE;
 	wp->w_skipcol = 0;
     }
-# ifdef FEAT_FOLDING
-    if (!wp->w_p_diff)
-    {
-	if (wp->w_p_diff_saved)
-	    free_string_option(wp->w_p_fdm_save);
-	wp->w_p_fdm_save = vim_strsave(wp->w_p_fdm);
-    }
-    set_string_option_direct_in_win(wp, (char_u *)"fdm", -1, (char_u *)"diff",
-						       OPT_LOCAL|OPT_FREE, 0);
-    if (!wp->w_p_diff)
-    {
-	wp->w_p_fdc_save = wp->w_p_fdc;
-	wp->w_p_fen_save = wp->w_p_fen;
-	wp->w_p_fdl_save = wp->w_p_fdl;
-    }
-    wp->w_p_fdc = diff_foldcolumn;
-    wp->w_p_fen = TRUE;
-    wp->w_p_fdl = 0;
-    foldUpdateAll(wp);
-    // make sure topline is not halfway a fold
-    changed_window_setting_win(wp);
-# endif
+#line 1741
     if (vim_strchr(p_sbo, 'h') == NULL)
 	do_cmdline_cmd((char_u *)"set sbo+=hor");
     // Save the current values, to be restored in ex_diffoff().
@@ -1784,24 +1747,7 @@ ex_diffoff(exarg_T *eap)
 			wp->w_leftcol = 0;
 		    }
 		}
-# ifdef FEAT_FOLDING
-		free_string_option(wp->w_p_fdm);
-		wp->w_p_fdm = vim_strsave(
-		    *wp->w_p_fdm_save ? wp->w_p_fdm_save : (char_u*)"manual");
-
-		if (wp->w_p_fdc == diff_foldcolumn)
-		    wp->w_p_fdc = wp->w_p_fdc_save;
-		if (wp->w_p_fdl == 0)
-		    wp->w_p_fdl = wp->w_p_fdl_save;
-
-		// Only restore 'foldenable' when 'foldmethod' is not
-		// "manual", otherwise we continue to show the diff folds.
-		if (wp->w_p_fen)
-		    wp->w_p_fen = foldmethodIsManual(wp) ? FALSE
-							 : wp->w_p_fen_save;
-
-		foldUpdateAll(wp);
-# endif
+#line 1805
 	    }
 	    // remove filler lines
 	    wp->w_topfill = 0;
@@ -2481,12 +2427,7 @@ diff_check_with_linestatus(win_T *wp, linenr_T lnum, int *linestatus)
     if (idx == DB_COUNT)
 	return 0;		// no diffs for buffer "buf"
 
-# ifdef FEAT_FOLDING
-    // A closed fold never has filler lines.
-    if (hasFoldingWin(wp, lnum, NULL, NULL, TRUE, NULL))
-	return 0;
-# endif
-
+#line 2490
     // search for a change that includes "lnum" in the list of diffblocks.
     FOR_ALL_DIFFBLOCKS_IN_TAB(curtab, dp)
 	if (lnum <= dp->df_lnum[idx] + dp->df_count[idx])
@@ -2778,10 +2719,7 @@ diff_set_topline(win_T *fromwin, win_T *towin)
     changed_line_abv_curs_win(towin);
 
     check_topfill(towin, FALSE);
-# ifdef FEAT_FOLDING
-    (void)hasFoldingWin(towin, towin->w_topline, &towin->w_topline,
-							    NULL, TRUE, NULL);
-# endif
+#line 2785
 }
 
 /*
@@ -3986,56 +3924,7 @@ diff_find_change(
     return added;
 }
 
-# if defined(FEAT_FOLDING)
-/*
- * Return TRUE if line "lnum" is not close to a diff block, this line should
- * be in a fold.
- * Return FALSE if there are no diff blocks at all in this window.
- */
-    int
-diff_infold(win_T *wp, linenr_T lnum)
-{
-    int		i;
-    int		idx = -1;
-    int		other = FALSE;
-    diff_T	*dp;
-
-    // Return if 'diff' isn't set.
-    if (!wp->w_p_diff)
-	return FALSE;
-
-    for (i = 0; i < DB_COUNT; ++i)
-    {
-	if (curtab->tp_diffbuf[i] == wp->w_buffer)
-	    idx = i;
-	else if (curtab->tp_diffbuf[i] != NULL)
-	    other = TRUE;
-    }
-
-    // return here if there are no diffs in the window
-    if (idx == -1 || !other)
-	return FALSE;
-
-    if (curtab->tp_diff_invalid)
-	ex_diffupdate(NULL);		// update after a big change
-
-    // Return if there are no diff blocks.  All lines will be folded.
-    if (curtab->tp_first_diff == NULL)
-	return TRUE;
-
-    FOR_ALL_DIFFBLOCKS_IN_TAB(curtab, dp)
-    {
-	// If this change is below the line there can't be any further match.
-	if (dp->df_lnum[idx] - diff_context > lnum)
-	    break;
-	// If this change ends before the line we have a match.
-	if (dp->df_lnum[idx] + dp->df_count[idx] + diff_context > lnum)
-	    return FALSE;
-    }
-    return TRUE;
-}
-# endif
-
+#line 4039
 /*
  * "dp" and "do" commands.
  */
@@ -4045,13 +3934,7 @@ nv_diffgetput(int put, long count)
     exarg_T	ea;
     char_u	buf[30];
 
-# ifdef FEAT_JOB_CHANNEL
-    if (bt_prompt(curbuf))
-    {
-	vim_beep(BO_OPER);
-	return;
-    }
-# endif
+#line 4055
     if (count == 0)
 	ea.arg = (char_u *)"";
     else
@@ -4387,9 +4270,7 @@ ex_diffgetput(exarg_T *eap)
 	    if (dfree != NULL)
 	    {
 		// Diff is deleted, update folds in other windows.
-# ifdef FEAT_FOLDING
-		diff_fold_update(dfree, idx_to);
-# endif
+#line 4393
 		clear_diffblock(dfree);
 	    }
 
@@ -4437,18 +4318,7 @@ theend:
     check_cursor();
     changed_line_abv_curs();
 
-# ifdef FEAT_FOLDING
-    // If all diffs are gone, update folds in all diff windows.
-    if (curtab->tp_first_diff == NULL)
-    {
-	win_T	*wp;
-
-	FOR_ALL_WINDOWS_IN_TAB(curtab, wp)
-	    if (wp->w_p_diff && wp->w_p_fdm[0] == 'd' && wp->w_p_fen)
-		foldUpdateAll(wp);
-    }
-# endif
-
+#line 4452
     if (diff_need_update)
 	// redraw already done by ex_diffupdate()
 	diff_need_update = FALSE;
@@ -4460,26 +4330,7 @@ theend:
     }
 }
 
-# ifdef FEAT_FOLDING
-/*
- * Update folds for all diff buffers for entry "dp".
- * Skip buffer with index "skip_idx".
- * When there are no diffs, all folds are removed.
- */
-    static void
-diff_fold_update(diff_T *dp, int skip_idx)
-{
-    int		i;
-    win_T	*wp;
-
-    FOR_ALL_WINDOWS(wp)
-	for (i = 0; i < DB_COUNT; ++i)
-	    if (curtab->tp_diffbuf[i] == wp->w_buffer && i != skip_idx)
-		foldUpdate(wp, dp->df_lnum[i],
-					    dp->df_lnum[i] + dp->df_count[i]);
-}
-# endif
-
+#line 4483
 /*
  * Return TRUE if buffer "buf" is in diff-mode.
  */

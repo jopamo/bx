@@ -121,9 +121,7 @@ setmark_pos(int c, pos_T *pos, int fnum)
 	namedfm[i].fmark.mark = *pos;
 	namedfm[i].fmark.fnum = fnum;
 	VIM_CLEAR(namedfm[i].fname);
-#ifdef FEAT_VIMINFO
-	namedfm[i].time_set = vim_time();
-#endif
+#line 127
 	return OK;
     }
     return FAIL;
@@ -202,9 +200,7 @@ setpcmark(void)
     fm->fmark.mark = curwin->w_pcmark;
     fm->fmark.fnum = curbuf->b_fnum;
     fm->fname = NULL;
-#ifdef FEAT_VIMINFO
-    fm->time_set = vim_time();
-#endif
+#line 208
 }
 
 /*
@@ -642,9 +638,7 @@ clrallmarks(buf_T *buf)
 	{
 	    namedfm[i].fmark.mark.lnum = 0;
 	    namedfm[i].fname = NULL;
-#ifdef FEAT_VIMINFO
-	    namedfm[i].time_set = 0;
-#endif
+#line 648
 	}
 
     for (i = 0; i < NMARKS; i++)
@@ -876,9 +870,7 @@ ex_delmarks(exarg_T *eap)
 			namedfm[n].fmark.mark.lnum = 0;
 			namedfm[n].fmark.fnum = 0;
 			VIM_CLEAR(namedfm[n].fname);
-#ifdef FEAT_VIMINFO
-			namedfm[n].time_set = digit ? 0 : vim_time();
-#endif
+#line 882
 		    }
 		}
 	    }
@@ -1215,11 +1207,7 @@ mark_adjust_internal(
 		one_adjust_cursor(&(win->w_cursor));
 	    }
 
-#ifdef FEAT_FOLDING
-	    // adjust folds
-	    if (adjust_folds)
-		foldMarkAdjust(win, line1, line2, amount, amount_after);
-#endif
+#line 1223
 	}
     }
 
@@ -1438,17 +1426,7 @@ free_all_marks(void)
 }
 #endif
 
-#if defined(FEAT_VIMINFO)
-/*
- * Return a pointer to the named file marks.
- */
-    xfmark_T *
-get_namedfm(void)
-{
-    return namedfm;
-}
-#endif
-
+#line 1452
 #if defined(FEAT_EVAL)
 /*
  * Add information about mark 'mname' to list 'l'

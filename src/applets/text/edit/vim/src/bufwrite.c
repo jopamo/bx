@@ -28,10 +28,7 @@ struct bw_info
     char_u	*bw_buf;	// buffer with data to be written
     int		bw_len;		// length of data
     int		bw_flags;	// FIO_ flags
-#ifdef FEAT_CRYPT
-    buf_T	*bw_buffer;	// buffer being written
-    int		bw_finish;	// finish encrypting
-#endif
+#line 35
     char_u	bw_rest[CONV_RESTLEN]; // not converted bytes
     int		bw_restlen;	// nr of bytes in bw_rest[]
     int		bw_first;	// first write call
@@ -495,35 +492,7 @@ buf_write_bytes(struct bw_info *ip)
 	// Only checking conversion, which is OK if we get here.
 	return OK;
 
-#ifdef FEAT_CRYPT
-    if (flags & FIO_ENCRYPTED)
-    {
-	// Encrypt the data. Do it in-place if possible, otherwise use an
-	// allocated buffer.
-# ifdef CRYPT_NOT_INPLACE
-	if (crypt_works_inplace(ip->bw_buffer->b_cryptstate))
-	{
-# endif
-	    crypt_encode_inplace(ip->bw_buffer->b_cryptstate, buf, len,
-								ip->bw_finish);
-# ifdef CRYPT_NOT_INPLACE
-	}
-	else
-	{
-	    char_u *outbuf;
-
-	    len = crypt_encode_alloc(curbuf->b_cryptstate, buf, len, &outbuf,
-								ip->bw_finish);
-	    if (len == 0)
-		return OK;  // Crypt layer is buffering, will flush later.
-	    wlen = write_eintr(ip->bw_fd, outbuf, len);
-	    vim_free(outbuf);
-	    return (wlen < len) ? FAIL : OK;
-	}
-# endif
-    }
-#endif
-
+#line 527
     wlen = write_eintr(ip->bw_fd, buf, len);
     return (wlen < len) ? FAIL : OK;
 }
@@ -730,10 +699,7 @@ buf_write(
 #ifdef USE_ICONV
     write_info.bw_iconv_fd = (iconv_t)-1;
 #endif
-#ifdef FEAT_CRYPT
-    write_info.bw_buffer = buf;
-    write_info.bw_finish = FALSE;
-#endif
+#line 737
 
     // After writing a file changedtick changes but we don't want to display
     // the line.
@@ -983,38 +949,7 @@ buf_write(
 	buf->b_op_end = orig_end;
     }
 
-#ifdef FEAT_NETBEANS_INTG
-    if (netbeans_active() && isNetbeansBuffer(buf))
-    {
-	if (whole)
-	{
-	    // b_changed can be 0 after an undo, but we still need to write
-	    // the buffer to NetBeans.
-	    if (buf->b_changed || isNetbeansModified(buf))
-	    {
-		--no_wait_return;		// may wait for return now
-		msg_scroll = msg_save;
-		netbeans_save_buffer(buf);	// no error checking...
-		return retval;
-	    }
-	    else
-	    {
-		errnum = (char_u *)"E656: ";
-		errmsg = (char_u *)_(e_netbeans_disallows_writes_of_unmodified_buffers);
-		buffer = NULL;
-		goto fail;
-	    }
-	}
-	else
-	{
-	    errnum = (char_u *)"E657: ";
-	    errmsg = (char_u *)_(e_partial_writes_disallowed_for_netbeans_buffers);
-	    buffer = NULL;
-	    goto fail;
-	}
-    }
-#endif
-
+#line 1018
     if (shortmess(SHM_OVER) && !exiting)
 	msg_scroll = FALSE;	    // overwrite previous file message
     else
@@ -1952,31 +1887,7 @@ restore_backup:
 	    }
 #endif
 
-#ifdef FEAT_CRYPT
-	    if (*buf->b_p_key != NUL && !filtering)
-	    {
-		char_u		*header;
-		int		header_len;
-
-		buf->b_cryptstate = crypt_create_for_writing(
-						      crypt_get_method_nr(buf),
-					   buf->b_p_key, &header, &header_len);
-		if (buf->b_cryptstate == NULL || header == NULL)
-		    end = 0;
-		else
-		{
-		    // Write magic number, so that Vim knows how this file is
-		    // encrypted when reading it back.
-		    write_info.bw_buf = header;
-		    write_info.bw_len = header_len;
-		    write_info.bw_flags = FIO_NOCONVERT;
-		    if (buf_write_bytes(&write_info) == FAIL)
-			end = 0;
-		    wb_flags |= FIO_ENCRYPTED;
-		    vim_free(header);
-		}
-	    }
-#endif
+#line 1980
 	}
 	errmsg = NULL;
 
@@ -2062,13 +1973,7 @@ restore_backup:
 		++s;
 		if (++len != bufsize)
 		    continue;
-#ifdef FEAT_CRYPT
-		if (write_info.bw_fd > 0 && lnum == end
-			&& (write_info.bw_flags & FIO_ENCRYPTED)
-			&& *buf->b_p_key != NUL && !filtering
-			&& *ptr == NUL)
-		    write_info.bw_finish = TRUE;
-#endif
+#line 2072
 		if (buf_write_bytes(&write_info) == FAIL)
 		{
 		    end = 0;		// write error: break loop
@@ -2172,12 +2077,7 @@ restore_backup:
 	if (len > 0 && end > 0)
 	{
 	    write_info.bw_len = len;
-#ifdef FEAT_CRYPT
-	    if (write_info.bw_fd > 0 && lnum >= end
-		    && (write_info.bw_flags & FIO_ENCRYPTED)
-		    && *buf->b_p_key != NUL && !filtering)
-		write_info.bw_finish = TRUE;
-#endif
+#line 2181
 	    if (buf_write_bytes(&write_info) == FAIL)
 		end = 0;		    // write error
 	    nchars += len;
@@ -2292,13 +2192,7 @@ restore_backup:
 # endif
 	    mch_set_acl(wfname, acl);
 #endif
-#ifdef FEAT_CRYPT
-	if (buf->b_cryptstate != NULL)
-	{
-	    crypt_free_state(buf->b_cryptstate);
-	    buf->b_cryptstate = NULL;
-	}
-#endif
+#line 2302
 
 #if defined(FEAT_EVAL)
 	if (wfname != fname)
@@ -2439,13 +2333,7 @@ restore_backup:
 	// may add [unix/dos/mac]
 	if (msg_add_fileformat(fileformat))
 	    c = TRUE;
-#ifdef FEAT_CRYPT
-	if (wb_flags & FIO_ENCRYPTED)
-	{
-	    crypt_append_msg(buf);
-	    c = TRUE;
-	}
-#endif
+#line 2449
 	msg_add_lines(c, (long)lnum, nchars);	// add line/char count
 	if (!shortmess(SHM_WRITE))
 	{
@@ -2658,12 +2546,7 @@ nofail:
 #endif
     }
 
-#ifdef FEAT_VIMINFO
-    // Make sure marks will be written out to the viminfo file later, even when
-    // the file is new.
-    curbuf->b_marks_read = true;
-#endif
-
+#line 2667
     got_int |= prev_got_int;
 
     return retval;

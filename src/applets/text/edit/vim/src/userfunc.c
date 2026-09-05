@@ -1873,10 +1873,7 @@ get_lambda_tv(
 		goto errret;
 	}
 
-#ifdef FEAT_PROFILE
-	if (prof_def_func())
-	    func_do_profile(fp);
-#endif
+#line 1880
 	if (sandbox)
 	    flags |= FC_SANDBOX;
 	// In legacy script a lambda can be called with more args than
@@ -2744,11 +2741,7 @@ func_clear_items(ufunc_T *fp)
     fp->uf_cb_state = NULL;
     fp->uf_cb = NULL;
 #endif
-#ifdef FEAT_PROFILE
-    VIM_CLEAR(fp->uf_tml_count);
-    VIM_CLEAR(fp->uf_tml_total);
-    VIM_CLEAR(fp->uf_tml_self);
-#endif
+#line 2752
 }
 
 /*
@@ -3008,15 +3001,10 @@ call_user_func(
     size_t	namelen;
     typval_T	*tv_to_free[MAX_FUNC_ARGS];
     int		tv_to_free_len = 0;
-#ifdef FEAT_PROFILE
-    profinfo_T	profile_info;
-#endif
+#line 3014
     ESTACK_CHECK_DECLARATION;
 
-#ifdef FEAT_PROFILE
-    CLEAR_FIELD(profile_info);
-#endif
-
+#line 3020
     // If depth of calling is getting too high, don't execute the function.
     if (funcdepth_increment() == FAIL)
     {
@@ -3044,14 +3032,9 @@ call_user_func(
 	    using_sandbox = TRUE;
 	    ++sandbox;
 	}
-#ifdef FEAT_PROFILE
-	ufunc_T *caller = fc->fc_caller == NULL ? NULL : fc->fc_caller->fc_func;
-#endif
+#line 3050
 	// Execute the function, possibly compiling it first.
-#ifdef FEAT_PROFILE
-	if (do_profiling == PROF_YES)
-	    profile_may_start_func(&profile_info, fp, caller);
-#endif
+#line 3055
 	sticky_cmdmod_flags = 0;
 	if (call_def_function(fp, argcount, argvars, 0,
 		   funcexe->fe_partial, funcexe->fe_object, fc, rettv) == FAIL)
@@ -3059,11 +3042,7 @@ call_user_func(
 	if (using_sandbox)
 	    --sandbox;
 	funcdepth_decrement();
-#ifdef FEAT_PROFILE
-	if (do_profiling == PROF_YES && (fp->uf_profiling
-				  || (caller != NULL && caller->uf_profiling)))
-	    profile_may_end_func(&profile_info, fp, caller);
-#endif
+#line 3067
 	remove_funccal();
 	sticky_cmdmod_flags = save_sticky_cmdmod_flags;
 	return retval;
@@ -3284,11 +3263,7 @@ call_user_func(
 	verbose_leave_scroll();
 	--no_wait_return;
     }
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	profile_may_start_func(&profile_info, fp,
-			fc->fc_caller == NULL ? NULL : fc->fc_caller->fc_func);
-#endif
+#line 3292
 
     // "legacy" does not apply to commands in the function
     sticky_cmdmod_flags = 0;
@@ -3342,16 +3317,7 @@ call_user_func(
 	    retval = FCERR_FAILED;
     }
 
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-    {
-	ufunc_T *caller = fc->fc_caller == NULL ? NULL : fc->fc_caller->fc_func;
-
-	if (fp->uf_profiling || (caller != NULL && caller->uf_profiling))
-	    profile_may_end_func(&profile_info, fp, caller);
-    }
-#endif
-
+#line 3355
     // when being verbose, mention the return value
     if (p_verbose >= 12)
     {
@@ -3398,10 +3364,7 @@ call_user_func(
     current_sctx = save_current_sctx;
     restore_current_ectx(save_current_ectx);
 
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	script_prof_restore(&profile_info.pi_wait_start);
-#endif
+#line 3405
     if (using_sandbox)
 	--sandbox;
     sticky_cmdmod_flags = save_sticky_cmdmod_flags;
@@ -5563,10 +5526,7 @@ define_function(
 		func_clear_items(fp);
 		fp->uf_name_exp = exp_name;
 		fp->uf_flags &= ~FC_DEAD;
-#ifdef FEAT_PROFILE
-		fp->uf_profiling = FALSE;
-		fp->uf_prof_initialized = FALSE;
-#endif
+#line 5570
 		fp->uf_def_status = UF_NOT_COMPILED;
 	    }
 	}
@@ -5725,10 +5685,7 @@ define_function(
     else
 	fp->uf_scoped = NULL;
 
-#ifdef FEAT_PROFILE
-    if (prof_def_func())
-	func_do_profile(fp);
-#endif
+#line 5732
     fp->uf_varargs = varargs;
     if (sandbox)
 	flags |= FC_SANDBOX;
@@ -7063,10 +7020,7 @@ get_func_line(
 							       SOURCING_LNUM);
 	fcp->fc_dbg_tick = debug_tick;
     }
-#ifdef FEAT_PROFILE
-    if (do_profiling == PROF_YES)
-	func_line_end(cookie);
-#endif
+#line 7070
 
     gap = &fp->uf_lines;
     if (((fp->uf_flags & FC_ABORT) && did_emsg && !aborted_in_try())
@@ -7084,10 +7038,7 @@ get_func_line(
 	{
 	    retval = vim_strsave(((char_u **)(gap->ga_data))[fcp->fc_linenr++]);
 	    SOURCING_LNUM = fcp->fc_linenr;
-#ifdef FEAT_PROFILE
-	    if (do_profiling == PROF_YES)
-		func_line_start(cookie, SOURCING_LNUM);
-#endif
+#line 7091
 	}
     }
 

@@ -714,9 +714,7 @@ do_argfile(exarg_T *eap, int argn)
 	return;
 
     setpcmark();
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 720
 
     // split window or create new tab page first
     if (is_split_cmd || cmdmod.cmod_tab != 0)
@@ -1256,10 +1254,7 @@ do_arg_all(
     ++aall.alist->al_refcount;
     arglist_locked = TRUE;
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 1263
     tabpage_T *new_lu_tp = curtab;
 
     // Stop Visual mode, the cursor and "VIsual" may very well be invalid after

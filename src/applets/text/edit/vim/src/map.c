@@ -1876,9 +1876,7 @@ vim_strsave_escape_csi(char_u *p)
     for (s = p; *s != NUL; )
     {
 	if ((s[0] == K_SPECIAL
-#ifdef FEAT_GUI
-		    || (gui.in_use && s[0] == CSI)
-#endif
+#line 1882
 	    ) && s[1] != NUL && s[2] != NUL)
 	{
 	    // Copy special key unmodified.
@@ -2879,22 +2877,7 @@ struct initmap
     int		mode;
 };
 
-# ifdef FEAT_GUI_MSWIN
-// Use the Windows (CUA) keybindings. (GUI)
-static struct initmap initmappings[] =
-{
-	// paste, copy and cut
-	{(char_u *)"<S-Insert> \"*P", MODE_NORMAL},
-	{(char_u *)"<S-Insert> \"-d\"*P", VIS_SEL},
-	{(char_u *)"<S-Insert> <C-R><C-O>*", MODE_INSERT | MODE_CMDLINE},
-	{(char_u *)"<C-Insert> \"*y", VIS_SEL},
-	{(char_u *)"<S-Del> \"*d", VIS_SEL},
-	{(char_u *)"<C-Del> \"*d", VIS_SEL},
-	{(char_u *)"<C-X> \"*d", VIS_SEL},
-	// Missing: CTRL-C (cancel) and CTRL-V (block selection)
-};
-# endif
-
+#line 2898
 # if defined(MSWIN) && (!defined(FEAT_GUI) || defined(VIMDLL))
 // Use the Windows (CUA) keybindings. (Console)
 static struct initmap cinitmappings[] =
@@ -2905,22 +2888,14 @@ static struct initmap cinitmappings[] =
 	{(char_u *)"\316u <C-End>", MODE_INSERT | MODE_CMDLINE},
 
 	// paste, copy and cut
-#  ifdef FEAT_CLIPBOARD
-	{(char_u *)"\316\324 \"*P", MODE_NORMAL},   // SHIFT-Insert is "*P
-	{(char_u *)"\316\324 \"-d\"*P", VIS_SEL},   // SHIFT-Insert is "-d"*P
-	{(char_u *)"\316\324 \022\017*", MODE_INSERT},  // SHIFT-Insert is ^R^O*
-	{(char_u *)"\316\325 \"*y", VIS_SEL},	    // CTRL-Insert is "*y
-	{(char_u *)"\316\327 \"*d", VIS_SEL},	    // SHIFT-Del is "*d
-	{(char_u *)"\316\330 \"*d", VIS_SEL},	    // CTRL-Del is "*d
-	{(char_u *)"\030 \"*d", VIS_SEL},	    // CTRL-X is "*d
-#  else
+#line 2917
 	{(char_u *)"\316\324 P", MODE_NORMAL},	    // SHIFT-Insert is P
 	{(char_u *)"\316\324 \"-dP", VIS_SEL},	    // SHIFT-Insert is "-dP
 	{(char_u *)"\316\324 \022\017\"", MODE_INSERT}, // SHIFT-Insert is ^R^O"
 	{(char_u *)"\316\325 y", VIS_SEL},	    // CTRL-Insert is y
 	{(char_u *)"\316\327 d", VIS_SEL},	    // SHIFT-Del is d
 	{(char_u *)"\316\330 d", VIS_SEL},	    // CTRL-Del is d
-#  endif
+#line 2924
 };
 # endif
 
@@ -2987,202 +2962,7 @@ add_map(char_u *map, int mode, int nore)
     p_cpo = cpo_save;
 }
 
-#if defined(FEAT_LANGMAP)
-/*
- * Any character has an equivalent 'langmap' character.  This is used for
- * keyboards that have a special language mode that sends characters above
- * 128 (although other characters can be translated too).  The "to" field is a
- * Vim command character.  This avoids having to switch the keyboard back to
- * ASCII mode when leaving Insert mode.
- *
- * langmap_mapchar[] maps any of 256 chars to an ASCII char used for Vim
- * commands.
- * langmap_mapga.ga_data is a sorted table of langmap_entry_T.  This does the
- * same as langmap_mapchar[] for characters >= 256.
- *
- * Use growarray for 'langmap' chars >= 256
- */
-typedef struct
-{
-    int	    from;
-    int     to;
-} langmap_entry_T;
-
-static garray_T langmap_mapga;
-
-/*
- * Search for an entry in "langmap_mapga" for "from".  If found set the "to"
- * field.  If not found insert a new entry at the appropriate location.
- */
-    static void
-langmap_set_entry(int from, int to)
-{
-    langmap_entry_T *entries = (langmap_entry_T *)(langmap_mapga.ga_data);
-    int		    a = 0;
-    int		    b = langmap_mapga.ga_len;
-
-    // Do a binary search for an existing entry.
-    while (a != b)
-    {
-	int i = (a + b) / 2;
-	int d = entries[i].from - from;
-
-	if (d == 0)
-	{
-	    entries[i].to = to;
-	    return;
-	}
-	if (d < 0)
-	    a = i + 1;
-	else
-	    b = i;
-    }
-
-    if (ga_grow(&langmap_mapga, 1) == FAIL)
-	return;  // out of memory
-
-    // insert new entry at position "a"
-    entries = (langmap_entry_T *)(langmap_mapga.ga_data) + a;
-    mch_memmove(entries + 1, entries,
-			(langmap_mapga.ga_len - a) * sizeof(langmap_entry_T));
-    ++langmap_mapga.ga_len;
-    entries[0].from = from;
-    entries[0].to = to;
-}
-
-/*
- * Apply 'langmap' to multi-byte character "c" and return the result.
- */
-    int
-langmap_adjust_mb(int c)
-{
-    langmap_entry_T *entries = (langmap_entry_T *)(langmap_mapga.ga_data);
-    int a = 0;
-    int b = langmap_mapga.ga_len;
-
-    while (a != b)
-    {
-	int i = (a + b) / 2;
-	int d = entries[i].from - c;
-
-	if (d == 0)
-	    return entries[i].to;  // found matching entry
-	if (d < 0)
-	    a = i + 1;
-	else
-	    b = i;
-    }
-    return c;  // no entry found, return "c" unmodified
-}
-
-    void
-langmap_init(void)
-{
-    int i;
-
-    for (i = 0; i < 256; i++)
-	langmap_mapchar[i] = i;	 // we init with a one-to-one map
-    ga_init2(&langmap_mapga, sizeof(langmap_entry_T), 8);
-}
-
-/*
- * Called when langmap option is set; the language map can be
- * changed at any time!
- */
-    char *
-did_set_langmap(optset_T *args UNUSED)
-{
-    char_u  *p;
-    char_u  *p2;
-    int	    from, to;
-
-    ga_clear(&langmap_mapga);		    // clear the previous map first
-    langmap_init();			    // back to one-to-one map
-
-    for (p = p_langmap; p[0] != NUL; )
-    {
-	for (p2 = p; p2[0] != NUL && p2[0] != ',' && p2[0] != ';';
-							       MB_PTR_ADV(p2))
-	{
-	    if (p2[0] == '\\' && p2[1] != NUL)
-		++p2;
-	}
-	if (p2[0] == ';')
-	    ++p2;	    // abcd;ABCD form, p2 points to A
-	else
-	    p2 = NULL;	    // aAbBcCdD form, p2 is NULL
-	while (p[0])
-	{
-	    if (p[0] == ',')
-	    {
-		++p;
-		break;
-	    }
-	    if (p[0] == '\\' && p[1] != NUL)
-		++p;
-	    from = (*mb_ptr2char)(p);
-	    to = NUL;
-	    if (p2 == NULL)
-	    {
-		MB_PTR_ADV(p);
-		if (p[0] != ',')
-		{
-		    if (p[0] == '\\')
-			++p;
-		    to = (*mb_ptr2char)(p);
-		}
-	    }
-	    else
-	    {
-		if (p2[0] != ',')
-		{
-		    if (p2[0] == '\\')
-			++p2;
-		    to = (*mb_ptr2char)(p2);
-		}
-	    }
-	    if (to == NUL)
-	    {
-		sprintf(args->os_errbuf,
-			_(e_langmap_matching_character_missing_for_str),
-			transchar(from));
-		return args->os_errbuf;
-	    }
-
-	    if (from >= 256)
-		langmap_set_entry(from, to);
-	    else
-		langmap_mapchar[from & 255] = to;
-
-	    // Advance to next pair
-	    MB_PTR_ADV(p);
-	    if (p2 != NULL)
-	    {
-		MB_PTR_ADV(p2);
-		if (*p == ';')
-		{
-		    p = p2;
-		    if (p[0] != NUL)
-		    {
-			if (p[0] != ',')
-			{
-			    vim_snprintf(args->os_errbuf, args->os_errbuflen,
-				    _(e_langmap_extra_characters_after_semicolon_str),
-				    p);
-			    return args->os_errbuf;
-			}
-			++p;
-		    }
-		    break;
-		}
-	    }
-	}
-    }
-
-    return NULL;
-}
-#endif
-
+#line 3186
     static void
 do_exmap(exarg_T *eap, int isabbrev)
 {
