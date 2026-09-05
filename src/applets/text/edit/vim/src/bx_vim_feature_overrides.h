@@ -28,6 +28,21 @@
 #ifdef FEAT_GUI_MSWIN
 # undef FEAT_GUI_MSWIN
 #endif
+#ifdef FEAT_ARABIC
+# undef FEAT_ARABIC
+#endif
+#ifdef FEAT_RIGHTLEFT
+# undef FEAT_RIGHTLEFT
+#endif
+#ifdef FEAT_BEVAL
+# undef FEAT_BEVAL
+#endif
+#ifdef FEAT_BEVAL_GUI
+# undef FEAT_BEVAL_GUI
+#endif
+#ifdef FEAT_BEVAL_TERM
+# undef FEAT_BEVAL_TERM
+#endif
 #ifdef FEAT_CLIPBOARD
 # undef FEAT_CLIPBOARD
 #endif

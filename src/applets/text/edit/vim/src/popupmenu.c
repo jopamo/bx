@@ -26,9 +26,7 @@ static int pum_base_width;		// width of pum items base
 static int pum_kind_width;		// width of pum items kind column
 static int pum_extra_width;		// width of extra stuff
 static int pum_scrollbar;		// TRUE when scrollbar present
-#ifdef FEAT_RIGHTLEFT
-static int pum_rl;			// TRUE when pum is drawn 'rightleft'
-#endif
+#line 32
 
 static int pum_row;			// top row of pum
 static int pum_col;			// left column of pum
@@ -227,16 +225,7 @@ pum_compute_horizontal_placement(int cursor_col)
     int trailing_overhead = pum_scrollbar + pum_border
 	+ (pum_margin && pum_border ? 1 : 0) + (pum_shadow ? 2 : 0);
 
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	col_offset = pum_border && (cursor_col >= Columns - 2)
-	    ? (3 - Columns + cursor_col) : 0;
-	available_width = cursor_col + 1;
-	pum_col = cursor_col - col_offset;
-    }
-    else
-#endif
+#line 240
     {
 	col_offset = pum_border && (cursor_col <= 1) ? (2 - cursor_col) : 0;
 	available_width = Columns - cursor_col;
@@ -261,21 +250,13 @@ pum_compute_horizontal_placement(int cursor_col)
     if (available_width > p_pw)
     {
 	pum_width = p_pw;  // Truncate beyond 'pum_width'
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    pum_col = pum_width + trailing_overhead;
-	else
-#endif
+#line 269
 	    pum_col = Columns - pum_width - trailing_overhead;
 	return;
     }
 
     // Case 3: Not enough room anywhere, use what we have
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-	pum_col = Columns - 1 - col_offset;
-    else
-#endif
+#line 279
 	pum_col = col_offset;
     pum_width = Columns - trailing_overhead;
 }
@@ -301,9 +282,7 @@ pum_display(
     win_T   *pvwin;
 #endif
 
-#ifdef FEAT_RIGHTLEFT
-    pum_rl = (State & MODE_CMDLINE) == 0 && curwin->w_p_rl;
-#endif
+#line 307
 
     do
     {
@@ -361,11 +340,7 @@ pum_display(
 	{
 	    // w_wcol includes virtual text "above"
 	    int wcol = curwin->w_wcol % curwin->w_width;
-#ifdef FEAT_RIGHTLEFT
-	    if (pum_rl)
-		cursor_col = curwin->w_wincol + curwin->w_width - wcol - 1;
-	    else
-#endif
+#line 369
 		cursor_col = curwin->w_wincol + wcol;
 	}
 
@@ -540,11 +515,7 @@ pum_screen_puts_with_attrs(
     while (*ptr != NUL && ptr < text + textlen)
     {
 	char_len = mb_ptr2len(ptr);
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    attr = attrs[col_start + cells - col - 1];
-	else
-#endif
+#line 548
 	    attr = attrs[col - col_start];
 	screen_puts_len(ptr, char_len, row, col, attr);
 	col += mb_ptr2cells(ptr);
@@ -575,108 +546,7 @@ pum_user_attr_combine(int idx, int type, int attr)
     return user_attr[type] > 0 ? hl_combine_attr(attr, user_attr[type]) : attr;
 }
 
-#ifdef FEAT_RIGHTLEFT
-/*
- * Display RTL text with proper attributes in the popup menu.
- * Returns the adjusted column position after drawing.
- */
-    static int
-pum_display_rtl_text(
-	int	row,
-	int     col,
-	char_u  *st,
-	int     attr,
-	int     *attrs,
-	int     width,
-	int     width_limit,
-	int     totwidth,
-	int     next_isempty,
-	int	selected)
-{
-    char_u  *rt = NULL;
-    int     cells = 0;
-    int     over_cell = 0;
-    int     truncated = FALSE;
-    int     pad = next_isempty ? 0 : 2;
-    int     remaining = 0;
-    int	    trunc_attr = highlight_attr[selected ? HLF_PSI : HLF_PNI];
-    int	    truncrl = curwin->w_fill_chars.truncrl != NUL
-					? curwin->w_fill_chars.truncrl : '<';
-
-    if (st == NULL)
-	return col;
-
-    rt = reverse_text(st);
-    if (rt == NULL)
-    {
-	VIM_CLEAR(st);
-	return col;
-    }
-
-    char_u *rt_start = rt;
-    cells = mb_string2cells(rt, -1);
-    truncated = width_limit - totwidth < cells + pad;
-
-    // only draw the text that fits
-    if (cells > width_limit)
-    {
-	do
-	{
-	    cells -= has_mbyte ? (*mb_ptr2cells)(rt) : 1;
-	    MB_PTR_ADV(rt);
-	} while (cells > width_limit);
-
-	if (cells < width_limit)
-	{
-	    // Most left character requires 2-cells
-	    // but only 1 cell is available on screen.
-	    // Put a '<' on the left of the pum item.
-	    *(--rt) = '<';
-	    cells++;
-	}
-    }
-
-    if (truncated)
-    {
-	char_u  *orig_rt = rt;
-	int     size = 0;
-
-	remaining = width_limit - totwidth - 1;
-	cells = mb_string2cells(rt, -1);
-	if (cells > remaining)
-	{
-	    while (cells > remaining)
-	    {
-		MB_PTR_ADV(orig_rt);
-		cells -= has_mbyte ? (*mb_ptr2cells)(orig_rt) : 1;
-	    }
-	}
-	size = (int)STRLEN(orig_rt);
-	if (cells < remaining)
-	    over_cell = remaining - cells;
-
-	cells = mb_string2cells(orig_rt, size);
-	width = cells + over_cell + 1;
-	rt = orig_rt;
-
-	screen_putchar(truncrl, row, col - width + 1, trunc_attr);
-
-	if (over_cell > 0)
-	    screen_fill(row, row + 1, col - width + 2,
-		    col - width + 2 + over_cell, ' ', ' ', attr);
-    }
-
-    if (attrs == NULL)
-	screen_puts_len(rt, (int)STRLEN(rt), row, col - cells + 1, attr);
-    else
-	pum_screen_puts_with_attrs(row, col - cells + 1, cells, rt,
-		(int)STRLEN(rt), attrs);
-
-    vim_free(rt_start);
-    VIM_CLEAR(st);
-    return col - width;
-}
-#endif
+#line 680
 
 /*
  * Display LTR text with proper attributes in the popup menu.
@@ -815,12 +685,7 @@ pum_process_item(
 	if (item_type == CPT_ABBR)
 	    attrs = pum_compute_text_attrs(st, hlf,
 		      pum_array[idx].pum_user_abbr_hlattr);
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    col = pum_display_rtl_text(row, col, st, attr, attrs,
-		    width, pum_width, *totwidth_ptr, next_isempty, selected);
-	else
-#endif
+#line 824
 	    col = pum_display_ltr_text(row, col, st, attr, attrs,
 		    width, pum_width, *totwidth_ptr, next_isempty, selected);
 
@@ -831,14 +696,7 @@ pum_process_item(
 	    break;
 
 	// Display two spaces for a Tab.
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	{
-	    screen_puts_len((char_u *)"  ", 2, row, col - 1, attr);
-	    col -= 2;
-	}
-	else
-#endif
+#line 842
 	{
 	    screen_puts_len((char_u *)"  ", 2, row, col, attr);
 	    col += 2;
@@ -867,11 +725,7 @@ pum_draw_scrollbar(
     int attr = (i >= thumb_pos && i < thumb_pos + thumb_height) ?
 			highlight_attr[HLF_PST] : highlight_attr[HLF_PSB];
 
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-	screen_putchar(' ', row, pum_col - pum_width, attr);
-    else
-#endif
+#line 875
 	screen_putchar(' ', row, pum_col + pum_width, attr);
 }
 
@@ -1098,15 +952,7 @@ pum_redraw(void)
 	attr = highlight_attr[hlf];
 
 	// prepend a space if there is room
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	{
-	    if (pum_col < curwin->w_wincol + curwin->w_width - 1
-							    - pum_border)
-		screen_putchar(' ', row, pum_col + 1, attr);
-	}
-	else
-#endif
+#line 1110
 	    if (pum_col > pum_border)
 		screen_putchar(' ', row, pum_col - 1, attr);
 
@@ -1148,15 +994,7 @@ pum_redraw(void)
 				&& pum_get_item(idx, order[j + 2]) == NULL)))
 		    || basic_width + n >= pum_width)
 		break;
-#ifdef FEAT_RIGHTLEFT
-	    if (pum_rl)
-	    {
-		screen_fill(row, row + 1, pum_col - basic_width - n + 1,
-						col + 1, ' ', ' ', orig_attr);
-		col = pum_col - basic_width - n;
-	    }
-	    else
-#endif
+#line 1160
 	    {
 		screen_fill(row, row + 1, col, pum_col + basic_width + n,
 							' ', ' ', orig_attr);
@@ -1165,12 +1003,7 @@ pum_redraw(void)
 	    totwidth = basic_width + n;
 	}
 
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    screen_fill(row, row + 1, pum_col - pum_width + 1, col + 1,
-							    ' ', ' ', orig_attr);
-	else
-#endif
+#line 1174
 	    screen_fill(row, row + 1, col, pum_col + pum_width, ' ', ' ',
 								orig_attr);
 	pum_draw_scrollbar(row, i, thumb_pos, thumb_height);
@@ -1580,311 +1413,6 @@ pum_set_event_info(dict_T *dict)
 }
 #endif
 
-#if defined(FEAT_BEVAL_TERM) || defined(FEAT_TERM_POPUP_MENU)
-    static void
-pum_position_at_mouse(int min_width)
-{
-    int extra_height = pum_border * 2 + pum_shadow;
-    int extra_offset = pum_border + pum_shadow;
-    int trailing_overhead = 0;
-    int col_offset = 0;
-    int available_width;
-
-    if (Rows - mouse_row - extra_height > pum_size
-	    || Rows - mouse_row > mouse_row)
-    {
-	// Enough space below the mouse row,
-	// or there is more space below the mouse row than above.
-	pum_row = mouse_row + 1 + pum_border;
-	if (pum_height > Rows - pum_row - extra_height)
-	    pum_height = Rows - pum_row - extra_height;
-	if (pum_row + pum_height + extra_offset >= cmdline_row)
-	    pum_in_cmdline = TRUE;
-    }
-    else
-    {
-	// Show above the mouse row, reduce height if it does not fit.
-	pum_row = mouse_row - pum_size - extra_offset;
-	if (pum_row < pum_border)
-	{
-	    pum_height += pum_row - pum_border;
-	    pum_row = pum_border;
-	}
-    }
-
-    trailing_overhead = pum_scrollbar + pum_border
-	+ (pum_margin && pum_border ? 1 : 0) + (pum_shadow ? 2 : 0);
-
-# ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	col_offset = (mouse_col == Columns - 1) && pum_border;
-	available_width = mouse_col + 1 - trailing_overhead - col_offset;
-	if (available_width >= pum_base_width || available_width > min_width)
-	    // Enough space to show at mouse column.
-	    pum_col = mouse_col - col_offset;
-	else
-	    // Not enough space, left align with window.
-	    pum_col = MIN(pum_base_width, min_width) - 1 + trailing_overhead;
-	pum_width = pum_col + 1 - trailing_overhead;
-    }
-    else
-# endif
-    {
-	col_offset = (mouse_col == 0) && pum_border;
-	available_width = Columns - mouse_col - trailing_overhead - col_offset;
-	if (available_width >= pum_base_width || available_width > min_width)
-	    // Enough space to show at mouse column.
-	    pum_col = mouse_col + col_offset;
-	else
-	    // Not enough space, right align with window.
-	    pum_col = Columns - MIN(pum_base_width, min_width)
-		- trailing_overhead;
-	pum_width = Columns - pum_col - trailing_overhead;
-    }
-
-    pum_width = MIN(pum_width, pum_base_width + 1);
-    // Do not redraw at cursor position.
-    pum_window = NULL;
-}
-
-#endif
-
-#if defined(FEAT_BEVAL_TERM)
-static pumitem_T *balloon_array = NULL;
-static int balloon_arraysize;
-
-# define BALLOON_MIN_WIDTH 50
-# define BALLOON_MIN_HEIGHT 10
-
-typedef struct {
-    char_u	*start;
-    int		bytelen;
-    int		cells;
-    int		indent;
-} balpart_T;
-
-/*
- * Split a string into parts to display in the balloon.
- * Aimed at output from gdb.  Attempts to split at white space, preserve quoted
- * strings and make a struct look good.
- * Resulting array is stored in "array" and returns the size of the array.
- */
-    int
-split_message(char_u *mesg, pumitem_T **array)
-{
-    garray_T	ga;
-    char_u	*p;
-    balpart_T	*item;
-    int		quoted = FALSE;
-    int		height;
-    int		line;
-    int		item_idx;
-    int		indent = 0;
-    int		max_cells = 0;
-    int		max_height = Rows / 2 - 1;
-    int		long_item_count = 0;
-    int		split_long_items = FALSE;
-
-    ga_init2(&ga, sizeof(balpart_T), 20);
-    p = mesg;
-
-    while (*p != NUL)
-    {
-	if (ga_grow(&ga, 1) == FAIL)
-	    goto failed;
-	item = ((balpart_T *)ga.ga_data) + ga.ga_len;
-	item->start = p;
-	item->indent = indent;
-	item->cells = indent * 2;
-	++ga.ga_len;
-	while (*p != NUL)
-	{
-	    if (*p == '"')
-		quoted = !quoted;
-	    else if (*p == '\n')
-		break;
-	    else if (*p == '\\' && p[1] != NUL)
-		++p;
-	    else if (!quoted)
-	    {
-		if ((*p == ',' && p[1] == ' ') || *p == '{' || *p == '}')
-		{
-		    // Looks like a good point to break.
-		    if (*p == '{')
-			++indent;
-		    else if (*p == '}' && indent > 0)
-			--indent;
-		    ++item->cells;
-		    p = skipwhite(p + 1);
-		    break;
-		}
-	    }
-	    item->cells += ptr2cells(p);
-	    p += mb_ptr2len(p);
-	}
-	item->bytelen = p - item->start;
-	if (*p == '\n')
-	    ++p;
-	if (item->cells > max_cells)
-	    max_cells = item->cells;
-	long_item_count += (item->cells - 1) / BALLOON_MIN_WIDTH;
-    }
-
-    height = 2 + ga.ga_len;
-
-    // If there are long items and the height is below the limit: split lines
-    if (long_item_count > 0 && height + long_item_count <= max_height)
-    {
-	split_long_items = TRUE;
-	height += long_item_count;
-    }
-
-    // Limit to half the window height, it has to fit above or below the mouse
-    // position.
-    if (height > max_height)
-	height = max_height;
-    *array = ALLOC_CLEAR_MULT(pumitem_T, height);
-    if (*array == NULL)
-	goto failed;
-
-    // Add an empty line above and below, looks better.
-    (*array)->pum_text = vim_strsave((char_u *)"");
-    (*array + height - 1)->pum_text = vim_strsave((char_u *)"");
-
-    for (line = 1, item_idx = 0; line < height - 1; ++item_idx)
-    {
-	int	skip;
-	int	thislen;
-	int	copylen;
-	int	ind;
-	int	cells;
-
-	item = ((balpart_T *)ga.ga_data) + item_idx;
-	if (item->bytelen == 0)
-	    (*array)[line++].pum_text = vim_strsave((char_u *)"");
-	else
-	    for (skip = 0; skip < item->bytelen; skip += thislen)
-	    {
-		if (split_long_items && item->cells >= BALLOON_MIN_WIDTH)
-		{
-		    cells = item->indent * 2;
-		    for (p = item->start + skip;
-			    p < item->start + item->bytelen;
-							    p += mb_ptr2len(p))
-			if ((cells += ptr2cells(p)) > BALLOON_MIN_WIDTH)
-			    break;
-		    thislen = p - (item->start + skip);
-		}
-		else
-		    thislen = item->bytelen;
-
-		// put indent at the start
-		p = alloc(thislen + item->indent * 2 + 1);
-		if (p == NULL)
-		{
-		    for (line = 0; line <= height - 1; ++line)
-			vim_free((*array)[line].pum_text);
-		    vim_free(*array);
-		    goto failed;
-		}
-		for (ind = 0; ind < item->indent * 2; ++ind)
-		    p[ind] = ' ';
-
-		// exclude spaces at the end of the string
-		for (copylen = thislen; copylen > 0; --copylen)
-		    if (item->start[skip + copylen - 1] != ' ')
-			break;
-
-		vim_strncpy(p + ind, item->start + skip, copylen);
-		(*array)[line].pum_text = p;
-		item->indent = 0;  // wrapped line has no indent
-		++line;
-	    }
-    }
-    ga_clear(&ga);
-    return height;
-
-failed:
-    ga_clear(&ga);
-    return 0;
-}
-
-    void
-ui_remove_balloon(void)
-{
-    if (balloon_array == NULL)
-	return;
-
-    pum_undisplay();
-    while (balloon_arraysize > 0)
-	vim_free(balloon_array[--balloon_arraysize].pum_text);
-    VIM_CLEAR(balloon_array);
-}
-
-/*
- * Terminal version of a balloon, uses the popup menu code.
- */
-    void
-ui_post_balloon(char_u *mesg, list_T *list)
-{
-    ui_remove_balloon();
-
-    if (mesg == NULL && list == NULL)
-    {
-	pum_undisplay();
-	return;
-    }
-    if (list != NULL)
-    {
-	listitem_T  *li;
-	int	    idx;
-
-	balloon_arraysize = list->lv_len;
-	balloon_array = ALLOC_CLEAR_MULT(pumitem_T, list->lv_len);
-	if (balloon_array == NULL)
-	    return;
-	CHECK_LIST_MATERIALIZE(list);
-	for (idx = 0, li = list->lv_first; li != NULL; li = li->li_next, ++idx)
-	{
-	    char_u *text = tv_get_string_chk(&li->li_tv);
-
-	    balloon_array[idx].pum_text = vim_strsave(
-					   text == NULL ? (char_u *)"" : text);
-	}
-    }
-    else
-	balloon_arraysize = split_message(mesg, &balloon_array);
-
-    if (balloon_arraysize <= 0)
-	return;
-
-    pum_array = balloon_array;
-    pum_size = balloon_arraysize;
-    pum_compute_size();
-    pum_scrollbar = 0;
-    pum_height = balloon_arraysize;
-# ifdef FEAT_RIGHTLEFT
-    pum_rl = curwin->w_p_rl;
-# endif
-
-    pum_position_at_mouse(BALLOON_MIN_WIDTH);
-    pum_selected = -1;
-    pum_first = 0;
-    pum_redraw();
-}
-
-/*
- * Called when the mouse moved, may remove any displayed balloon.
- */
-    void
-ui_may_remove_balloon(void)
-{
-    // For now: remove the balloon whenever the mouse moves to another screen
-    // cell.
-    ui_remove_balloon();
-}
-#endif
 
 #line 2213
     static int
@@ -1935,14 +1463,7 @@ compute_margins(int *right_margin, int *left_margin, int *left_padding)
 {
     *right_margin = pum_margin && pum_border;
 
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	*left_padding = (pum_col < Columns - 1 - pum_border);
-	*left_margin = *right_margin && (pum_col < Columns - 3);
-	return;
-    }
-#endif
+#line 1946
     *left_padding = (pum_col > pum_border);
     *left_margin = *right_margin && (pum_col > 2);
 }
@@ -1968,26 +1489,11 @@ pum_draw_border(void)
     inner_width = pum_width + pum_scrollbar + left_padding;
 
     // Draw border left to right or right to left (for RTL)
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-	col = pum_col + left_padding + 1;
-    else
-#endif
+#line 1976
 	col = pum_col - left_padding - 1;
 
     // left corners (right corners for RTL)
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	screen_putchar(pum_border_chars.top_right, top_row, col, attr);
-	if (left_margin)
-	    screen_putchar(' ', top_row, col + 1, attr);
-	screen_putchar(pum_border_chars.bottom_right, bottom_row, col, attr);
-	if (left_margin)
-	    screen_putchar(' ', bottom_row, col + 1, attr);
-    }
-    else
-#endif
+#line 1991
     {
 	screen_putchar(pum_border_chars.top_left, top_row, col, attr);
 	if (left_margin)
@@ -2001,31 +1507,14 @@ pum_draw_border(void)
     for (int i = 0; i < inner_width; i++)
     {
 	int cur_col;
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    cur_col = col - 1 - i;
-	else
-#endif
+#line 2009
 	    cur_col = col + 1 + i;
 	screen_putchar(pum_border_chars.top, top_row, cur_col, attr);
 	screen_putchar(pum_border_chars.bottom, bottom_row, cur_col, attr);
     }
 
     // right corners (left corners for RTL)
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	screen_putchar(pum_border_chars.top_left, top_row,
-		col - inner_width - 1, attr);
-	if (right_margin)
-	    screen_putchar(' ', top_row, col - inner_width - 2, attr);
-	screen_putchar(pum_border_chars.bottom_left, bottom_row,
-		col - inner_width - 1, attr);
-	if (right_margin)
-	    screen_putchar(' ', bottom_row, col - inner_width - 2, attr);
-    }
-    else
-#endif
+#line 2029
     {
 	screen_putchar(pum_border_chars.top_right, top_row,
 		col + inner_width + 1, attr);
@@ -2041,19 +1530,7 @@ pum_draw_border(void)
     for (int i = 0; i < pum_height; i++)
     {
 	int row = pum_row + i;
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	{
-	    screen_putchar(pum_border_chars.left, row, col, attr);
-	    if (left_margin)
-		screen_putchar(' ', row, col + 1, attr);
-	    screen_putchar(pum_border_chars.right, row,
-		    col - inner_width - 1, attr);
-	    if (right_margin)
-		screen_putchar(' ', row, col - inner_width - 2, attr);
-	}
-	else
-#endif
+#line 2057
 	{
 	    screen_putchar(pum_border_chars.left, row, col, attr);
 	    if (left_margin)
@@ -2100,14 +1577,7 @@ pum_draw_shadow(void)
     inner_width = pum_width + pum_scrollbar + pum_border + right_margin;
 
     // Draw right side shadow (left for RTL)
-#ifdef FEAT_RIGHTLEFT
-    if (pum_rl)
-    {
-	col = pum_col - inner_width;
-	next_col = col - 1;
-    }
-    else
-#endif
+#line 2111
     {
 	col = pum_col + inner_width;
 	next_col = col + 1;
@@ -2127,11 +1597,7 @@ pum_draw_shadow(void)
 
     for (int i = 0; i < width; i++)
     {
-#ifdef FEAT_RIGHTLEFT
-	if (pum_rl)
-	    col = pum_col - offset - i;
-	else
-#endif
+#line 2135
 	    col = pum_col + offset + i;
 	put_shadow_char(row, col);
     }

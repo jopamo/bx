@@ -3695,15 +3695,11 @@ static int	mouse_ison = FALSE;
     void
 mch_setmouse(int on)
 {
-#ifdef FEAT_BEVAL_TERM
-    static int	bevalterm_ison = FALSE;
-#endif
+#line 3701
     int		xterm_mouse_vers;
 
     if (on == mouse_ison
-#ifdef FEAT_BEVAL_TERM
-	    && p_bevalterm == bevalterm_ison
-#endif
+#line 3707
 	    )
 	// return quickly if nothing to do
 	return;
@@ -3729,15 +3725,7 @@ mch_setmouse(int on)
 	mouse_ison = on;
     }
 
-#ifdef FEAT_BEVAL_TERM
-    if (bevalterm_ison != (p_bevalterm && on))
-    {
-	bevalterm_ison = (p_bevalterm && on);
-	if (xterm_mouse_vers > 1 && !bevalterm_ison)
-	    // disable mouse movement events, enabling is below
-	    out_str_nf((char_u *)("\033[?1003l"));
-    }
-#endif
+#line 3741
 
     if (xterm_mouse_vers > 0)
     {
@@ -3745,9 +3733,7 @@ mch_setmouse(int on)
 	    out_str_nf((char_u *)
 		       (xterm_mouse_vers > 1
 			? (
-#ifdef FEAT_BEVAL_TERM
-			    bevalterm_ison ? "\033[?1003h" :
-#endif
+#line 3751
 			      "\033[?1002h")
 			: "\033[?1000h"));
 	else	// disable mouse events, could probably always send the same
@@ -3846,16 +3832,7 @@ mch_setmouse(int on)
 #endif
 }
 
-#if defined(FEAT_BEVAL_TERM)
-/*
- * Called when 'balloonevalterm' changed.
- */
-    void
-mch_bevalterm_changed(void)
-{
-    mch_setmouse(mouse_ison);
-}
-#endif
+#line 3859
 
 /*
  * Set the mouse termcode, depending on the 'term' and 'ttymouse' options.

@@ -140,16 +140,7 @@ ex_align(exarg_T *eap)
     int		has_tab;
     int		width;
 
-#ifdef FEAT_RIGHTLEFT
-    if (curwin->w_p_rl)
-    {
-	// switch left and right aligning
-	if (eap->cmdidx == CMD_right)
-	    eap->cmdidx = CMD_left;
-	else if (eap->cmdidx == CMD_left)
-	    eap->cmdidx = CMD_right;
-    }
-#endif
+#line 153
 
     width = atoi((char *)eap->arg);
     save_curpos = curwin->w_cursor;

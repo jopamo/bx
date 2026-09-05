@@ -15,7 +15,6 @@ char_u *getexmodeline(int promptc, void *cookie, int indent, getline_opt_T optio
 int cmdline_overstrike(void);
 int cmdline_at_end(void);
 int realloc_cmdbuff(int len);
-void free_arshape_buf(void);
 void putcmdline(int c, int shift);
 void unputcmdline(void);
 int put_on_cmdline(char_u *str, int len, int redraw);

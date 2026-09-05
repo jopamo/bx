@@ -2292,9 +2292,6 @@ free_buf_options(
     clear_string_option(&buf->b_p_inde);
     clear_string_option(&buf->b_p_indk);
 #endif
-#if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
-    clear_string_option(&buf->b_p_bexpr);
-#endif
 #line 2453
     clear_string_option(&buf->b_p_fp);
 #if defined(FEAT_EVAL)
@@ -3197,8 +3194,6 @@ buflist_list(exarg_T *eap)
     int		i;
     int		ro_char;
     int		changed_char;
-#line 3434
-
 #line 3460
     for (buf = firstbuf; buf != NULL && !got_int; buf = buf->b_next)
 #line 3462

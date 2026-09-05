@@ -103,11 +103,9 @@ static char *(features[]) =
 	"-ARP",
 # endif
 #endif
-#ifdef FEAT_ARABIC
-	"+arabic",
-#else
+#line 109
 	"-arabic",
-#endif
+#line 111
 	"+autocmd",
 #ifdef FEAT_AUTOCHDIR
        "+autochdir",
@@ -119,16 +117,11 @@ static char *(features[]) =
 #else
 	"-autoservername",
 #endif
-#ifdef FEAT_BEVAL_GUI
-	"+balloon_eval",
-#else
+#line 125
 	"-balloon_eval",
-#endif
-#ifdef FEAT_BEVAL_TERM
-	"+balloon_eval_term",
-#else
+#line 130
 	"-balloon_eval_term",
-#endif
+#line 132
 #ifdef FEAT_BROWSE
 	"+browse",
 #else
@@ -437,11 +430,9 @@ static char *(features[]) =
 #else
 	"-reltime",
 #endif
-#ifdef FEAT_RIGHTLEFT
-	"+rightleft",
-#else
+#line 443
 	"-rightleft",
-#endif
+#line 445
 #ifdef FEAT_RUBY
 # ifdef DYNAMIC_RUBY
 	"+ruby/dyn",

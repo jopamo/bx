@@ -416,11 +416,7 @@ shift_block(oparg_T *oap, int amount)
     int			added;
     size_t		new_line_len;	// the length of the line after the
 					// block shift
-#ifdef FEAT_RIGHTLEFT
-    int			old_p_ri = p_ri;
-
-    p_ri = 0;			// don't want revins in indent
-#endif
+#line 424
 
     State = MODE_INSERT;	// don't want MODE_REPLACE for State
     block_prep(oap, &bd, curwin->w_cursor.lnum, TRUE);
@@ -617,9 +613,7 @@ shift_block(oparg_T *oap, int amount)
     inserted_bytes(curwin->w_cursor.lnum, bd.textcol, added);
     State = oldstate;
     curwin->w_cursor.col = oldcol;
-#ifdef FEAT_RIGHTLEFT
-    p_ri = old_p_ri;
-#endif
+#line 623
 }
 
 /*

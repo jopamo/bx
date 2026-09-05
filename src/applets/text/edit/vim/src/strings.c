@@ -800,7 +800,7 @@ concat_str(char_u *str1, char_u *str2)
     return dest;
 }
 
-#if defined(FEAT_EVAL) || defined(FEAT_RIGHTLEFT)
+#ifdef FEAT_EVAL
 /*
  * Reverse text into allocated memory.
  * Returns the allocated string, NULL when out of memory.

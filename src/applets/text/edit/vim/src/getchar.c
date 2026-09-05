@@ -2088,14 +2088,6 @@ vgetc(void)
     may_garbage_collect = FALSE;
 #endif
 
-#ifdef FEAT_BEVAL_TERM
-    if (c != K_MOUSEMOVE && c != K_IGNORE && c != K_CURSORHOLD)
-    {
-	// Don't trigger 'balloonexpr' unless only the mouse was moved.
-	bevalexpr_due_set = FALSE;
-	ui_remove_balloon();
-    }
-#endif
 #line 2195
 
 #ifdef FEAT_EVAL
@@ -2543,8 +2535,6 @@ parse_queued_messages(void)
     for (i = 0; i < MAX_REPEAT_PARSE; ++i)
     {
 	// For Win32 mch_breakcheck() does not check for input, do it here.
-#line 2648
-
 #line 2674
 # ifdef FEAT_SOUND_MACOSX
 	process_cfrunloop();

@@ -21,13 +21,7 @@
 #endif
 
 static void f_and(typval_T *argvars, typval_T *rettv);
-#ifdef FEAT_BEVAL
-static void f_balloon_gettext(typval_T *argvars, typval_T *rettv);
-static void f_balloon_show(typval_T *argvars, typval_T *rettv);
-# if defined(FEAT_BEVAL_TERM)
-static void f_balloon_split(typval_T *argvars, typval_T *rettv);
-# endif
-#endif
+#line 31
 static void f_base64_encode(typval_T *argvars, typval_T *rettv);
 static void f_base64_decode(typval_T *argvars, typval_T *rettv);
 static void f_bindtextdomain(typval_T *argvars, typval_T *rettv);
@@ -1984,27 +1978,21 @@ static const funcentry_T global_functions[] =
 			ret_list_dict_any,  f_autocmd_get},
     {"balloon_gettext",	0, 0, 0,	    NULL,
 			ret_string,
-#ifdef FEAT_BEVAL
-	    f_balloon_gettext
-#else
+#line 1990
 	    NULL
-#endif
+#line 1992
 			},
     {"balloon_show",	1, 1, FEARG_1,	    arg1_string_or_list_any,
 			ret_void,
-#ifdef FEAT_BEVAL
-	    f_balloon_show
-#else
+#line 1998
 	    NULL
-#endif
+#line 2000
 			},
     {"balloon_split",	1, 1, FEARG_1,	    arg1_string,
 			ret_list_string,
-#if defined(FEAT_BEVAL_TERM)
-	    f_balloon_split
-#else
+#line 2006
 	    NULL
-#endif
+#line 2008
 			},
     {"base64_decode",	1, 1, FEARG_1,	    arg1_string,
 			ret_blob,	    f_base64_decode},
@@ -3609,81 +3597,7 @@ f_and(typval_T *argvars, typval_T *rettv)
 /*
  * "balloon_show()" function
  */
-#ifdef FEAT_BEVAL
-    static void
-f_balloon_gettext(typval_T *argvars UNUSED, typval_T *rettv)
-{
-    rettv->v_type = VAR_STRING;
-    if (balloonEval == NULL)
-	return;
-
-    if (balloonEval->msg == NULL)
-	rettv->vval.v_string = NULL;
-    else
-	rettv->vval.v_string = vim_strsave(balloonEval->msg);
-}
-
-    static void
-f_balloon_show(typval_T *argvars, typval_T *rettv UNUSED)
-{
-    if (balloonEval == NULL)
-	return;
-
-    if (in_vim9script()
-	    && check_for_string_or_list_arg(argvars, 0) == FAIL)
-	return;
-
-    if (argvars[0].v_type == VAR_LIST
-#line 3666
-       )
-    {
-	list_T *l = argvars[0].vval.v_list;
-
-	// empty list removes the balloon
-	post_balloon(balloonEval, NULL,
-		l == NULL || l->lv_len == 0 ? NULL : l);
-    }
-    else
-    {
-	char_u *mesg;
-
-	if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
-	    return;
-
-	mesg = tv_get_string_chk(&argvars[0]);
-	if (mesg != NULL)
-	    // empty string removes the balloon
-	    post_balloon(balloonEval, *mesg == NUL ? NULL : mesg, NULL);
-    }
-}
-
-# if defined(FEAT_BEVAL_TERM)
-    static void
-f_balloon_split(typval_T *argvars, typval_T *rettv UNUSED)
-{
-    if (rettv_list_alloc(rettv) != OK)
-	return;
-
-    char_u *msg;
-
-    if (in_vim9script() && check_for_string_arg(argvars, 0) == FAIL)
-	return;
-    msg = tv_get_string_chk(&argvars[0]);
-    if (msg != NULL)
-    {
-	pumitem_T	*array;
-	int		size = split_message(msg, &array);
-
-	// Skip the first and last item, they are always empty.
-	for (int i = 1; i < size - 1; ++i)
-	    list_append_string(rettv->vval.v_list, array[i].pum_text, -1);
-	while (size > 0)
-	    vim_free(array[--size].pum_text);
-	vim_free(array);
-    }
-}
-# endif
-#endif
+#line 3687
 
 // Base64 character set
 static const char_u base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -6767,11 +6681,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"arabic",
-#ifdef FEAT_ARABIC
-		1
-#else
+#line 6773
 		0
-#endif
+#line 6775
 		},
 	{"autocmd", 1},
 	{"autochdir",
@@ -6794,25 +6706,19 @@ f_has(typval_T *argvars, typval_T *rettv)
 #line 6875
 		},
 	{"balloon_eval",
-#ifdef FEAT_BEVAL_GUI
-		1
-#else
+#line 6800
 		0
-#endif
+#line 6802
 		},
 	{"balloon_multiline",
-#ifdef FEAT_BEVAL_GUI
-		1
-#else
+#line 6807
 		0
-#endif
+#line 6809
 		},
 	{"balloon_eval_term",
-#ifdef FEAT_BEVAL_TERM
-		1
-#else
+#line 6814
 		0
-#endif
+#line 6816
 		},
 	{"builtin_terms", 1},
 	{"all_builtin_terms", 1},
@@ -7349,11 +7255,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"rightleft",
-#ifdef FEAT_RIGHTLEFT
-		1
-#else
+#line 7355
 		0
-#endif
+#line 7357
 		},
 	{"ruby",
 #if defined(FEAT_RUBY) && !defined(DYNAMIC_RUBY)

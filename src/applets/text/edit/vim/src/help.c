@@ -559,12 +559,6 @@ prepare_help_buffer(void)
     curwin->w_p_nu = 0;		// no line numbers
     curwin->w_p_rnu = 0;	// no relative line numbers
     RESET_BINDING(curwin);	// no scroll or cursor binding
-#ifdef FEAT_ARABIC
-    curwin->w_p_arab = FALSE;	// no arabic mode
-#endif
-#ifdef FEAT_RIGHTLEFT
-    curwin->w_p_rl  = FALSE;	// help window is left-to-right
-#endif
 #line 683
 #ifdef FEAT_DIFF
     curwin->w_p_diff = FALSE;	// No 'diff'

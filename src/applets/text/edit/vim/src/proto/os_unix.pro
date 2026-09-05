@@ -53,7 +53,6 @@ void mch_settmode(tmode_T tmode);
 void get_stty(void);
 int get_tty_info(int fd, ttyinfo_T *info);
 void mch_setmouse(int on);
-void mch_bevalterm_changed(void);
 void check_mouse_termcode(void);
 int mch_get_shellsize(void);
 void mch_calc_cell_size(struct cellsize *cs_out);

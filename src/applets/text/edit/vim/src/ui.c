@@ -315,13 +315,7 @@ inchar_loop(
 	    }
 	}
 
-#line 374
-# ifdef FEAT_BEVAL_GUI
-	if (p_beval && wait_time > 100L)
-	    // The 'balloonexpr' may indirectly invoke a callback while waiting
-	    // for a character, need to check often.
-	    wait_time = 100L;
-# endif
+#line 325
 
 	// Wait for a character to be typed or another event, such as the winch
 	// signal or an event on the monitored file descriptors.

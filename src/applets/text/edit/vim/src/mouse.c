@@ -294,14 +294,6 @@ do_mouse(
     if (c == K_MOUSEMOVE)
     {
 	// Mouse moved without a button pressed.
-#ifdef FEAT_BEVAL_TERM
-	ui_may_remove_balloon();
-	if (p_bevalterm)
-	{
-	    profile_setlimit(p_bdlay, &bevalexpr_due);
-	    bevalexpr_due_set = TRUE;
-	}
-#endif
 #line 328
 	return FALSE;
     }
@@ -2864,10 +2856,7 @@ mouse_comp_pos(
     int		off;
     int		count;
 
-#ifdef FEAT_RIGHTLEFT
-    if (win->w_p_rl)
-	col = win->w_width - 1 - col;
-#endif
+#line 2871
 
     lnum = win->w_topline;
 
@@ -3021,8 +3010,7 @@ mouse_find_win(int *rowp, int *colp, mouse_find_T popup UNUSED)
     return NULL;
 }
 
-#if defined(NEED_VCOL2COL) || defined(FEAT_BEVAL) || defined(FEAT_PROP_POPUP) \
-	|| defined(FEAT_EVAL)
+#if defined(NEED_VCOL2COL) || defined(FEAT_EVAL)
 /*
  * Convert a virtual (screen) column to a character column.
  * The first column is zero.

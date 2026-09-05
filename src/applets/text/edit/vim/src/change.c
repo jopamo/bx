@@ -1283,9 +1283,7 @@ ins_char_bytes(char_u *buf, int charlen)
 	    showmatch(c);
     }
 
-#ifdef FEAT_RIGHTLEFT
-    if (!p_ri || (State & REPLACE_FLAG))
-#endif
+#line 1289
     {
 	// Normal insert: move cursor right
 	curwin->w_cursor.col += charlen;

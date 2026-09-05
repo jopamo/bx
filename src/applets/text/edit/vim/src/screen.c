@@ -104,15 +104,7 @@ screen_fill_end(
 
     if (nn > wp->w_width)
 	nn = wp->w_width;
-#ifdef FEAT_RIGHTLEFT
-    if (wp->w_p_rl)
-    {
-	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + endrow,
-		W_ENDCOL(wp) - nn, (int)W_ENDCOL(wp) - off,
-		c1, c2, attr);
-    }
-    else
-#endif
+#line 116
 	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + endrow,
 		wp->w_wincol + off, (int)wp->w_wincol + nn,
 		c1, c2, attr);
@@ -158,16 +150,7 @@ win_draw_end(
 		       row, endrow, hl_combine_attr(win_attr, HL_ATTR(HLF_N)));
     }
 
-#ifdef FEAT_RIGHTLEFT
-    if (wp->w_p_rl)
-    {
-	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + endrow,
-		wp->w_wincol, W_ENDCOL(wp) - 1 - n, c2, c2, attr);
-	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + endrow,
-		W_ENDCOL(wp) - 1 - n, W_ENDCOL(wp) - n, c1, c2, attr);
-    }
-    else
-#endif
+#line 171
     {
 	screen_fill(W_WINROW(wp) + row, W_WINROW(wp) + endrow,
 		wp->w_wincol + n, (int)W_ENDCOL(wp), c1, c2, attr);
@@ -323,36 +306,6 @@ screen_line(
     off_to = LineOffset[row] + coloff;
     max_off_from = off_from + screen_Columns;
     max_off_to = LineOffset[row] + screen_Columns;
-
-#ifdef FEAT_RIGHTLEFT
-    if (flags & SLF_RIGHTLEFT)
-    {
-	// Clear rest first, because it's left of the text.
-	if (clear_width > 0)
-	{
-	    int clear_start = col;
-
-	    while (col <= endcol && ScreenLines[off_to] == ' '
-		    && ScreenAttrs[off_to] == 0
-				  && (!enc_utf8 || ScreenLinesUC[off_to] == 0))
-	    {
-		++off_to;
-		++col;
-	    }
-	    if (col <= endcol)
-		screen_fill(row, row + 1, col + coloff,
-					    endcol + coloff + 1, ' ', ' ', 0);
-
-	    for (int i = endcol; i >= clear_start; i--)
-		ScreenCols[off_to + (i - col)] =
-		    (flags & SLF_INC_VCOL) ? ++last_vcol : last_vcol;
-	}
-	col = endcol + 1;
-	off_to = LineOffset[row] + col + coloff;
-	off_from += col;
-	endcol = (clear_width > 0 ? clear_width : -clear_width);
-    }
-#endif // FEAT_RIGHTLEFT
 
 #line 683
     redraw_next = char_needs_redraw(off_from, off_to, endcol - col);
@@ -558,9 +511,7 @@ screen_line(
     }
 
     if (clear_width > 0
-#ifdef FEAT_RIGHTLEFT
-		    && !(flags & SLF_RIGHTLEFT)
-#endif
+#line 564
 				   )
     {
 #line 1078
@@ -631,25 +582,7 @@ screen_line(
 	pop_highlight_overrides();
 }
 
-#if defined(FEAT_RIGHTLEFT)
-/*
- * Mirror text "str" for right-left displaying.
- * Only works for single-byte characters (e.g., numbers).
- */
-    void
-rl_mirror(char_u *str)
-{
-    char_u	*p1, *p2;
-    int		t;
-
-    for (p1 = str, p2 = str + STRLEN(str) - 1; p1 < p2; ++p1, --p2)
-    {
-	t = *p1;
-	*p1 = *p2;
-	*p2 = t;
-    }
-}
-#endif
+#line 653
 
 /*
  * Draw the vertical separator right of window "wp" starting with line "row".
@@ -1190,11 +1123,7 @@ screen_puts_len(
     int		u8c = 0;
     int		u8cc[MAX_MCO];
     int		clear_next_cell = FALSE;
-#ifdef FEAT_ARABIC
-    int		prev_c = 0;		// previous Arabic character
-    int		pc, nc, nc1;
-    int		pcc[MAX_MCO];
-#endif
+#line 1198
     int		force_redraw_this;
     int		force_redraw_next = FALSE;
     int		need_redraw;
@@ -1254,31 +1183,7 @@ screen_puts_len(
 		      ? utfc_ptr2char_len(ptr, u8cc, (int)((text + len) - ptr))
 		      : utfc_ptr2char(ptr, u8cc);
 		mbyte_cells = utf_char2cells(u8c);
-#ifdef FEAT_ARABIC
-		if (p_arshape && !p_tbidi && ARABIC_CHAR(u8c))
-		{
-		    // Do Arabic shaping.
-		    if (len >= 0 && (int)(ptr - text) + mbyte_blen >= len)
-		    {
-			// Past end of string to be displayed.
-			nc = NUL;
-			nc1 = NUL;
-		    }
-		    else
-		    {
-			nc = len >= 0
-				 ? utfc_ptr2char_len(ptr + mbyte_blen, pcc,
-					(int)((text + len) - ptr - mbyte_blen))
-				 : utfc_ptr2char(ptr + mbyte_blen, pcc);
-			nc1 = pcc[0];
-		    }
-		    pc = prev_c;
-		    prev_c = u8c;
-		    u8c = arabic_shape(u8c, &c, &u8cc[0], nc, nc1, pc);
-		}
-		else
-		    prev_c = u8c;
-#endif
+#line 1282
 		if (col + mbyte_cells > screen_Columns)
 		{
 		    // Only 1 cell left, but character requires 2 cells:
@@ -1836,10 +1741,7 @@ screen_char(unsigned off, int row, int col)
     // mark the character invalid (update it when scrolled up).
     if (*T_XN == NUL
 	    && row == screen_Rows - 1 && col == screen_Columns - 1
-#ifdef FEAT_RIGHTLEFT
-	    // account for first command-line character in rightleft mode
-	    && !cmdmsg_rl
-#endif
+#line 1843
        )
     {
 	ScreenAttrs[off] = (sattr_T)-1;
@@ -3111,14 +3013,7 @@ setcursor_mayforce(int force)
 	validate_cursor();
 	windgoto(W_WINROW(curwin) + curwin->w_wrow,
 		curwin->w_wincol + (
-#ifdef FEAT_RIGHTLEFT
-		// With 'rightleft' set and the cursor on a double-wide
-		// character, position it on the leftmost column.
-		curwin->w_p_rl ? ((int)curwin->w_width - curwin->w_wcol
-		    - ((has_mbyte
-			   && (*mb_ptr2cells)(ml_get_cursor()) == 2
-			   && vim_isprintc(gchar_cursor())) ? 2 : 1)) :
-#endif
+#line 3122
 					    curwin->w_wcol));
     }
 }
@@ -3947,10 +3842,7 @@ showmode(void)
 		    msg_puts_attr(_(" REPLACE"), attr);
 		else if (State & MODE_INSERT)
 		{
-#ifdef FEAT_RIGHTLEFT
-		    if (p_ri)
-			msg_puts_attr(_(" REVERSE"), attr);
-#endif
+#line 3954
 		    msg_puts_attr(_(" INSERT"), attr);
 		}
 		else if (restart_edit == 'I' || restart_edit == 'i' ||
@@ -3960,10 +3852,6 @@ showmode(void)
 		    msg_puts_attr(_(" (replace)"), attr);
 		else if (restart_edit == 'V')
 		    msg_puts_attr(_(" (vreplace)"), attr);
-#ifdef FEAT_RIGHTLEFT
-		if (p_hkmap)
-		    msg_puts_attr(_(" Hebrew"), attr);
-#endif
 #line 4850
 		if ((State & MODE_INSERT) && p_paste)
 		    msg_puts_attr(_(" (paste)"), attr);
