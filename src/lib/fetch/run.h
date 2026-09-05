@@ -36,6 +36,8 @@ typedef struct {
     BxFetchPublicationResult publication;
     bool document_queued;
     bool retry_scheduled;
+    /* True only when redirect admission intentionally cancelled transport. */
+    bool redirect_rejected;
 } BxFetchRunCompletion;
 
 typedef enum {
@@ -79,7 +81,20 @@ typedef int (*BxFetchRunCompletionFn)(void* userdata, BxFetchRun* run, const BxF
  * may further restrict accepted targets, but cannot override a shared reject.
  */
 typedef bool (*BxFetchRunRedirectFn)(void* userdata, const BxFetchPreparedUrl* target, BxFetchFilterDecision shared_decision);
-typedef void (*BxFetchRunDiscoveredLinkFn)(void* userdata, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind, int parent_depth, BxFetchCrawlEnqueueResult result);
+typedef struct {
+    const BxFetchPreparedUrl* base;
+    const char* reference;
+    BxFetchHtmlLinkKind kind;
+    int parent_depth;
+    BxFetchCrawlEnqueueResult result;
+    /*
+     * Borrowed resolved target used for admission. NULL for kind/depth skips
+     * and references that could not be represented as an allowed protocol.
+     */
+    const BxFetchPreparedUrl* target;
+} BxFetchRunDiscoveredLinkObservation;
+
+typedef void (*BxFetchRunDiscoveredLinkFn)(void* userdata, const BxFetchRunDiscoveredLinkObservation* observation);
 /*
  * Returns true to continue after a document failure; the frontend then owns
  * any nonzero exit policy. Returning false (or omitting the callback)

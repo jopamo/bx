@@ -34,6 +34,7 @@ typedef struct {
     size_t next_plan_index;
     int deferred_error;
     FILE* diagnostics;
+    FILE* rejected_log;
     MiraDebugTrace debug_trace;
 } MiraRunFrontend;
 
@@ -162,6 +163,13 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
         }
         return 0;
     }
+    /*
+     * A rejected redirect is represented as transport cancellation so no body
+     * can be committed. Policy was already observed at the redirect boundary;
+     * it is not a transfer error and must not produce a second diagnostic.
+     */
+    if (completion->redirect_rejected && completion->transfer->result == BX_FETCH_ERROR_CANCELLED)
+        return 0;
 
     const BxFetchResponse* response = completion->transfer->response;
     int status = response ? response->status_code : 0;
@@ -200,6 +208,19 @@ static void mira_transfer_observation(void* userdata, const BxFetchRunTransferOb
     MiraRunFrontend* frontend = userdata;
     if (frontend)
         bx_mira_debug_trace_transfer_observation(&frontend->debug_trace, observation);
+}
+
+static void mira_log_rejected_target(MiraRunFrontend* frontend,
+                                     const BxFetchPreparedUrl* target,
+                                     BxFetchFilterDecision decision) {
+    if (!frontend || !frontend->rejected_log || decision == FILTER_DECISION_ACCEPT)
+        return;
+    const char* reason = bx_fetch_filter_decision_reason(decision);
+    fprintf(frontend->rejected_log,
+            "%s\t%s\n",
+            target ? bx_fetch_prepared_url_display(target) : BX_FETCH_URL_DISPLAY_REDACTED,
+            reason ? reason : "unspecified");
+    fflush(frontend->rejected_log);
 }
 
 static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* observation) {
@@ -250,6 +271,7 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
     }
     if (observation->result.status != BX_FETCH_CRAWL_REJECTED)
         return false;
+    mira_log_rejected_target(frontend, observation->target, observation->result.filter_decision);
     if (!observation->target) {
         bool unsupported = observation->result.filter_decision == FILTER_DECISION_UNSUPPORTED_PROTOCOL;
         const char* summary = unsupported ? "initial URL uses an unsupported protocol" : "invalid initial URL";
@@ -271,6 +293,19 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
     if (!frontend->config->download.dry_run && frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
         fprintf(frontend->diagnostics, "mira: URL rejected by fetch policy: %s\n", reason ? reason : "unspecified");
     }
+    return true;
+}
+
+static void mira_discovered_link(void* userdata, const BxFetchRunDiscoveredLinkObservation* observation) {
+    MiraRunFrontend* frontend = userdata;
+    if (!frontend || !observation || observation->result.status != BX_FETCH_CRAWL_REJECTED)
+        return;
+    mira_log_rejected_target(frontend, observation->target, observation->result.filter_decision);
+}
+
+static bool mira_redirect(void* userdata, const BxFetchPreparedUrl* target, BxFetchFilterDecision shared_decision) {
+    MiraRunFrontend* frontend = userdata;
+    mira_log_rejected_target(frontend, target, shared_decision);
     return true;
 }
 
@@ -510,10 +545,14 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
     FILE* diagnostics = bx_mira_diagnostics_open(config);
     if (!diagnostics)
         return BX_FETCH_EXIT_FILE_IO;
+    FILE* rejected_log = NULL;
+    if (bx_mira_rejected_log_open(config, &rejected_log) != 0)
+        return bx_mira_diagnostics_finish(config, diagnostics, BX_FETCH_EXIT_FILE_IO);
     MiraRunFrontend frontend_state = {
         .config = config,
         .last_progress_percent = -1,
         .diagnostics = diagnostics,
+        .rejected_log = rejected_log,
     };
     bx_mira_debug_trace_init(&frontend_state.debug_trace, diagnostics, config);
     bx_mira_debug_trace_parse_complete(&frontend_state.debug_trace, config);
@@ -523,7 +562,8 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         frontend_state.dry_run_records = calloc(frontend_state.dry_run_record_count, sizeof(*frontend_state.dry_run_records));
         if (!frontend_state.dry_run_records) {
             mira_run_record_error(&frontend_state, BX_FETCH_ERROR_CLASS_INTERNAL, "failed to allocate dry-run plan", NULL, NULL, ENOMEM);
-            return bx_mira_diagnostics_finish(config, diagnostics, frontend_state.exit_code);
+            int exit_code = bx_mira_rejected_log_finish(config, rejected_log, frontend_state.exit_code);
+            return bx_mira_diagnostics_finish(config, diagnostics, exit_code);
         }
     }
     BxFetchRunFrontend frontend = {
@@ -531,6 +571,8 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_prepare_error = mira_prepare_error,
         .on_submit_error = mira_submit_error,
         .on_completion = mira_completion,
+        .allow_redirect = mira_redirect,
+        .on_discovered_link = mira_discovered_link,
         .on_document_error = mira_document_error,
         .on_link_conversion = mira_link_conversion,
         .on_seed_result = mira_seed_result,
@@ -566,5 +608,6 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
     }
     int exit_code = frontend_state.exit_code;
     mira_dry_run_records_free(&frontend_state);
+    exit_code = bx_mira_rejected_log_finish(config, rejected_log, exit_code);
     return bx_mira_diagnostics_finish(config, diagnostics, exit_code);
 }

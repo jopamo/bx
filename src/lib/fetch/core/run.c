@@ -39,6 +39,7 @@ typedef struct {
     int attempt;
     int max_attempts;
     uint64_t transfer_id;
+    bool redirect_rejected;
 } RunTransfer;
 
 static void run_observe_transfer(BxFetchRun* run,
@@ -156,10 +157,21 @@ typedef struct {
 
 static int run_add_document_link(void* userdata, const char* reference, BxFetchHtmlLinkKind kind) {
     RunDocumentLinks* links = userdata;
-    BxFetchCrawlEnqueueResult result = bx_fetch_run_add_discovered(links->run, links->task->base, reference, kind, links->task->depth);
+    BxFetchPreparedUrl* target = NULL;
+    BxFetchCrawlEnqueueResult result = bx_fetch_crawl_coordinator_add_discovered_observed(
+        links->run->coordinator, links->task->base, reference, kind, links->task->depth, &target);
     if (links->run->frontend.on_discovered_link) {
-        links->run->frontend.on_discovered_link(links->run->frontend.userdata, links->task->base, reference, kind, links->task->depth, result);
+        BxFetchRunDiscoveredLinkObservation observation = {
+            .base = links->task->base,
+            .reference = reference,
+            .kind = kind,
+            .parent_depth = links->task->depth,
+            .result = result,
+            .target = target,
+        };
+        links->run->frontend.on_discovered_link(links->run->frontend.userdata, &observation);
     }
+    bx_fetch_prepared_url_free(target);
     if (result.status == BX_FETCH_CRAWL_ERROR)
         return -1;
     return 0;
@@ -256,6 +268,7 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         .publication = publication,
         .document_queued = document_queued,
         .retry_scheduled = retry_scheduled,
+        .redirect_rejected = transfer->redirect_rejected,
     };
     if (run->frontend.on_completion && run->frontend.on_completion(run->frontend.userdata, run, &observation) != 0) {
         run_defer_failure(run, errno);
@@ -273,7 +286,10 @@ static bool run_redirect_allowed(void* userdata, const BxFetchPreparedUrl* targe
     }
 
     bool frontend_allowed = !run->frontend.allow_redirect || run->frontend.allow_redirect(run->frontend.userdata, target, decision);
-    return decision == FILTER_DECISION_ACCEPT && frontend_allowed;
+    bool accepted = decision == FILTER_DECISION_ACCEPT && frontend_allowed;
+    if (!accepted)
+        transfer->redirect_rejected = true;
+    return accepted;
 }
 
 static int
