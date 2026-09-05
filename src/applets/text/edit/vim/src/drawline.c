@@ -111,11 +111,7 @@ typedef struct {
 
     long	vcol;		// virtual column, before wrapping
     int		col;		// visual column on screen, after wrapping
-#ifdef FEAT_CONCEAL
-    int		boguscols;	// nonexistent columns added to "col" to force
-				// wrapping
-    int		vcol_off_co;	// offset for concealed characters
-#endif
+#line 119
     int		vcol_off_tp;	// offset for virtual text
 #ifdef FEAT_SYN_HL
     int		draw_color_col;	// highlight colorcolumn
@@ -144,9 +140,7 @@ typedef struct {
     int		need_showbreak;	    // overlong line, skipping first x chars
     int		dont_use_showbreak; // do not use 'showbreak'
 #endif
-#ifdef FEAT_PROP_POPUP
-    int		text_prop_above_count;
-#endif
+#line 150
 
     // TRUE when 'cursorlineopt' has "screenline" and cursor is in this line
     int		cul_screenline;
@@ -198,11 +192,9 @@ typedef struct {
 // draw_state values for items that are drawn in sequence:
 #define WL_START	0		// nothing done yet, must be zero
 #define WL_CMDLINE	(WL_START + 1)	// cmdline window column
-#ifdef FEAT_FOLDING
-# define WL_FOLD	(WL_CMDLINE + 1)	// 'foldcolumn'
-#else
+#line 204
 # define WL_FOLD	WL_CMDLINE
-#endif
+#line 206
 #ifdef FEAT_SIGNS
 # define WL_SIGN	(WL_FOLD + 1)	// column for signs
 #else
@@ -235,37 +227,7 @@ use_cursor_line_highlight(win_T *wp, linenr_T lnum)
 #endif
 
 
-#ifdef FEAT_FOLDING
-/*
- * Setup for drawing the 'foldcolumn', if there is one.
- */
-    static void
-handle_foldcolumn(win_T *wp, winlinevars_T *wlv)
-{
-    int fdc = compute_foldcolumn(wp, 0);
-
-    if (fdc <= 0)
-	return;
-
-    // Allocate a buffer, "wlv->extra[]" may already be in use.
-    vim_free(wlv->p_extra_free);
-    wlv->p_extra_free = alloc(MAX_MCO * fdc + 1);
-    if (wlv->p_extra_free == NULL)
-	return;
-
-    wlv->n_extra = (int)fill_foldcolumn(wlv->p_extra_free,
-							 wp, FALSE, wlv->lnum);
-    wlv->p_extra_free[wlv->n_extra] = NUL;
-    wlv->p_extra = wlv->p_extra_free;
-    wlv->c_extra = NUL;
-    wlv->c_final = NUL;
-    if (use_cursor_line_highlight(wp, wlv->lnum))
-	wlv->char_attr = hl_combine_attr(get_win_attr(wp), HL_ATTR(HLF_CLF));
-    else
-	wlv->char_attr = hl_combine_attr(get_win_attr(wp), HL_ATTR(HLF_FC));
-}
-#endif
-
+#line 269
 #ifdef FEAT_SIGNS
 /*
  * Get information needed to display the sign in line "wlv->lnum" in window
@@ -319,21 +281,7 @@ get_sign_display_info(
 	    }
 	    else
 		wlv->c_extra = SIGN_BYTE;
-#  ifdef FEAT_NETBEANS_INTG
-	    if (netbeans_active() && (buf_signcount(wp->w_buffer, wlv->lnum)
-									  > 1))
-	    {
-		if (nrcol)
-		{
-		    wlv->c_extra = NUL;
-		    wlv->n_extra = vim_snprintf((char *)wlv->extra, sizeof(wlv->extra),
-						"%-*c ", number_width(wp), MULTISIGN_BYTE);
-		    wlv->p_extra = wlv->extra;
-		}
-		else
-		    wlv->c_extra = MULTISIGN_BYTE;
-	    }
-#  endif
+#line 337
 	    wlv->c_final = NUL;
 	    wlv->char_attr = icon_sign;
 	}
@@ -384,9 +332,7 @@ handle_lnum_col(
 {
     int has_cpo_n = vim_strchr(p_cpo, CPO_NUMCOL) != NULL;
     int lnum_row = wlv->startrow + wlv->filler_lines
-#ifdef FEAT_PROP_POPUP
-		      + wlv->text_prop_above_count
-#endif
+#line 390
 		      ;
 
     if ((wp->w_p_nu || wp->w_p_rnu)
@@ -520,9 +466,7 @@ handle_breakindent(win_T *wp, winlinevars_T *wlv)
 		    + wlv->filler_lines
 # endif
 		    || wlv->need_showbreak)
-# ifdef FEAT_PROP_POPUP
-		&& !wlv->dont_use_showbreak
-# endif
+#line 526
 	   )
 	{
 	    wlv->char_attr = 0;
@@ -623,242 +567,7 @@ handle_showbreak_and_filler(win_T *wp, winlinevars_T *wlv)
 }
 #endif
 
-#if defined(FEAT_PROP_POPUP)
-/*
- * Return the cell size of virtual text after truncation.
- */
-    static int
-textprop_size_after_trunc(
-	win_T	*wp,
-	int	flags,	    // TP_FLAG_ALIGN_*
-	int	added,
-	int	padding,
-	char_u	*text,
-	int	*n_used_ptr)
-{
-    int	space = (flags & (TP_FLAG_ALIGN_BELOW | TP_FLAG_ALIGN_ABOVE))
-				       ? wp->w_width - win_col_off(wp) : added;
-    int strsize = 0;
-    char_u *p;
-
-    // if the remaining size is too small and 'wrap' is set we wrap anyway and
-    // use the next line
-    if (space < PROP_TEXT_MIN_CELLS && wp->w_p_wrap)
-	space += wp->w_width;
-    if (flags & (TP_FLAG_ALIGN_BELOW | TP_FLAG_ALIGN_ABOVE))
-	space -= padding;
-
-    for (p = text; *p != NUL; p += (*mb_ptr2len)(p))
-    {
-	int clen = ptr2cells(p);
-
-	if (strsize + clen > space)
-	    break;
-	strsize += clen;
-    }
-    *n_used_ptr = (int)(p - text);
-
-    return strsize;
-}
-
-/*
- * Take care of padding, right-align and truncation of virtual text after a
- * line.
- * if "n_attr" is not NULL then "n_extra" and "p_extra" are adjusted for any
- * padding, right-align and truncation.  Otherwise only the size is computed.
- * When "n_attr" is NULL returns the number of screen cells used.
- * Otherwise returns TRUE when drawing continues on the next line.
- */
-    int
-text_prop_position(
-	win_T	    *wp,
-	textprop_T  *tp,
-	int	    vcol,	    // current text column
-	int	    scr_col,	    // current screen column
-	int	    *n_extra,	    // nr of bytes for virtual text
-	char_u	    **p_extra,	    // virtual text
-	int	    *n_attr,	    // attribute cells, NULL if not used
-	int	    *n_attr_skip,   // cells to skip attr, NULL if not used
-	int	    do_skip)	    // skip_cells is not zero
-{
-    int	    right = (tp->tp_flags & TP_FLAG_ALIGN_RIGHT);
-    int	    above = (tp->tp_flags & TP_FLAG_ALIGN_ABOVE);
-    int	    below = (tp->tp_flags & TP_FLAG_ALIGN_BELOW);
-    int	    wrap = tp->tp_col < MAXCOL || (tp->tp_flags & TP_FLAG_WRAP);
-    int	    padding = tp->tp_col == MAXCOL ? tp->tp_padleft : 0;
-    int	    col_with_padding = scr_col + (below ? 0 : padding);
-    int	    room = wp->w_width - col_with_padding;
-    int	    before = room;	// spaces before the text
-    int	    after = 0;		// spaces after the text
-    int	    n_used = *n_extra;
-    char_u  *l = NULL;
-    int	    strsize = vim_strsize(*p_extra);
-    int	    cells = wrap ? strsize : textprop_size_after_trunc(wp,
-			     tp->tp_flags, before, padding, *p_extra, &n_used);
-
-    if (wrap || right || above || below || padding > 0 || n_used < *n_extra)
-    {
-	int	    col_off = win_col_off(wp) - win_col_off2(wp);
-
-	if (above)
-	{
-	    before = 0;
-	    after = wp->w_width - cells - win_col_off(wp) - padding;
-	    if (after < 0)
-	    {
-		// text "above" has too much padding to fit
-		padding += after;
-		after = 0;
-	    }
-	}
-	else
-	{
-	    // Right-align: fill with before
-	    if (right)
-		before -= cells;
-
-	    // Below-align: empty line add one character
-	    if (below && vcol == 0 && col_with_padding == col_off
-					    && wp->w_width - col_off == before)
-		col_with_padding += 1;
-
-	    if (before < 0
-		    || !(right || below)
-		    || (below ? (col_with_padding <= col_off || !wp->w_p_wrap)
-			      : (n_used < *n_extra)))
-	    {
-		if (right && (wrap
-			      || (room < PROP_TEXT_MIN_CELLS && wp->w_p_wrap)))
-		{
-		    // right-align on next line instead of wrapping if possible
-		    before = wp->w_width - col_off - strsize + room;
-		    if (before < 0)
-			before = 0;
-		    else
-			n_used = *n_extra;
-		}
-		else if (below && before > vcol && do_skip)
-		    before -= vcol;
-		else
-		    before = 0;
-	    }
-	}
-
-	// With 'nowrap' add one to show the "extends" character if needed (it
-	// doesn't show if the text just fits).
-	if (n_used < *n_extra && get_lcs_ext(wp) != NUL)
-	    ++n_used;
-
-	// add 1 for NUL, 2 for when '…' is used
-	if (n_attr != NULL)
-	    l = alloc(n_used + before + after + (padding > 0 ? padding : 0) + 3);
-	if (n_attr == NULL || l != NULL)
-	{
-	    int off = 0;
-
-	    if (n_attr != NULL)
-	    {
-		vim_memset(l, ' ', before);
-		off += before;
-		if (padding > 0)
-		{
-		    vim_memset(l + off, ' ', padding);
-		    off += padding;
-		}
-		vim_strncpy(l + off, *p_extra, n_used);
-		off += n_used;
-	    }
-	    else
-	    {
-		off = before + after + padding + n_used;
-		cells += before + after + padding;
-	    }
-	    if (n_attr != NULL)
-	    {
-		if (n_used < *n_extra && wp->w_p_wrap)
-		{
-		    char_u *lp = l + off - 1;
-
-		    if (has_mbyte)
-		    {
-			char_u	buf[MB_MAXBYTES + 1];
-			char_u	*cp = buf;
-
-			// change the last character to '…', converted to the
-			// current 'encoding'
-			STRCPY(buf, "…");
-			if (!enc_utf8)
-			{
-			    vimconv_T	vc;
-
-			    vc.vc_type = CONV_NONE;
-			    convert_setup(&vc, (char_u *)"utf-8", p_enc);
-			    if (vc.vc_type != CONV_NONE)
-			    {
-				cp = string_convert(&vc, buf, NULL);
-				if (cp == NULL)
-				{
-				    // when conversion fails use '>'
-				    cp = buf;
-				    STRCPY(buf, ">");
-				}
-				convert_setup(&vc, NULL, NULL);
-			    }
-			}
-
-			lp -= (*mb_ptr2cells)(cp) - 1;
-			lp -= (*mb_head_off)(l, lp);
-			STRCPY(lp, cp);
-			n_used = lp - l + 3 - before - padding;
-			if (cp != buf)
-			    vim_free(cp);
-		    }
-		    else
-			// change last character to '>'
-			*lp = '>';
-		}
-		else if (after > 0)
-		{
-		    vim_memset(l + off, ' ', after);
-		    l[off + after] = NUL;
-		}
-
-		*p_extra = l;
-		*n_extra = n_used + before + after + padding;
-		*n_attr = mb_charlen(*p_extra);
-		// n_attr_skip will not be decremented before draw_state is
-		// WL_LINE
-		*n_attr_skip = before + (padding > 0 ? padding : 0);
-		*n_attr -= *n_attr_skip;
-		if (above)
-		    *n_attr -= after;
-	    }
-	}
-    }
-
-    if (n_attr == NULL)
-	return cells;
-    return (below && col_with_padding > win_col_off(wp) && !wp->w_p_wrap);
-}
-
-# if defined(FEAT_LINEBREAK) || defined(PROTO)
-/*
- * no 'showbreak' before "below" text property
- * or after "above" or "right" text property
- */
-    int
-text_prop_no_showbreak(textprop_T *tp)
-{
-    int	    right = (tp->tp_flags & TP_FLAG_ALIGN_RIGHT);
-    int	    above = (tp->tp_flags & TP_FLAG_ALIGN_ABOVE);
-    int	    below = (tp->tp_flags & TP_FLAG_ALIGN_BELOW);
-    int	    wrap = tp->tp_col < MAXCOL || (tp->tp_flags & TP_FLAG_WRAP);
-
-    return (right || above || below || !wrap);
-}
-# endif
-#endif
-
+#line 862
 /*
  * Call screen_line() using values from "wlv".
  * Also takes care of putting "<<<" on the first line for 'smoothscroll'
@@ -933,15 +642,9 @@ draw_screen_line(win_T *wp, winlinevars_T *wlv)
     // check if line ends before left margin
     if (wlv->vcol < v + wcol - win_col_off(wp))
 	wlv->vcol = v + wcol - win_col_off(wp);
-# ifdef FEAT_CONCEAL
-    // Get rid of the boguscols now, we want to draw until the right
-    // edge for 'cursorcolumn'.
-    wlv->col -= wlv->boguscols;
-    wlv->boguscols = 0;
-#  define VCOL_HLC (wlv->vcol - wlv->vcol_off_co - wlv->vcol_off_tp)
-# else
+#line 943
 #  define VCOL_HLC (wlv->vcol - wlv->vcol_off_tp)
-# endif
+#line 945
 
     if (wlv->draw_color_col)
 	wlv->draw_color_col = advance_color_col(VCOL_HLC, &wlv->color_cols);
@@ -1170,12 +873,7 @@ win_line(
     char_u	*ptr;			// current position in "line"
     int		in_curline = wp == curwin && lnum == curwin->w_cursor.lnum;
 
-#ifdef FEAT_PROP_POPUP
-    char_u	*p_extra_free2 = NULL;   // another p_extra to be freed
-#endif
-#if defined(FEAT_LINEBREAK) && defined(FEAT_PROP_POPUP)
-    int		in_linebreak = FALSE;	// n_extra set for showing linebreak
-#endif
+#line 1179
     int		lcs_eol_one = wp->w_lcs_chars.eol; // eol until it's been used
     int		lcs_prec_todo = wp->w_lcs_chars.prec;
 					// prec until it's been used
@@ -1211,44 +909,7 @@ win_line(
     int		has_syntax = FALSE;	// this buffer has syntax highl.
     int		save_did_emsg;
 #endif
-#ifdef FEAT_PROP_POPUP
-# define WIN_LINE_TEXT_PROP_STACK_LEN 32
-    int		did_line = FALSE;	// set to TRUE when line text done
-    int		text_prop_count;
-    int		last_textprop_text_idx = -1;
-    int		text_prop_next = 0;	// next text property to use
-    textprop_T	text_props_buf[WIN_LINE_TEXT_PROP_STACK_LEN];
-    int		text_prop_idxs_buf[WIN_LINE_TEXT_PROP_STACK_LEN];
-    char_u	text_prop_suffix_flags_buf[WIN_LINE_TEXT_PROP_STACK_LEN + 1];
-    textprop_T	*text_props = NULL;
-    int		*text_prop_idxs = NULL;
-    char_u	*text_prop_suffix_flags = NULL;
-    int		text_props_active = 0;
-    int		text_props_need_sort = FALSE;
-    proptype_T  *text_prop_type = NULL;
-    int		text_prop_attr = 0;
-    int		text_prop_attr_comb = 0;  // text_prop_attr combined with
-					  // syntax_attr
-    int		text_prop_id = 0;	// active property ID
-    int		text_prop_flags = 0;
-    int		text_prop_above = FALSE;  // first doing virtual text above
-    int		text_prop_follows = FALSE;  // another text prop to display
-    int		saved_search_attr = 0;	// search_attr to be used when n_extra
-					// goes to zero
-    int		saved_area_attr = 0;	// idem for area_attr
-    int		reset_extra_attr = FALSE;
-#endif
-#ifdef FEAT_SPELL
-    int		can_spell = FALSE;
-# define SPWORDLEN 150
-    char_u	nextline[SPWORDLEN * 2];// text with start of the next line
-    int		nextlinecol = 0;	// column where nextline[] starts
-    int		nextline_idx = 0;	// index in nextline[] where next line
-					// starts
-    int		spell_attr = 0;		// attributes desired by spelling
-    int		word_end = 0;		// last byte with same spell_attr
-    int		cur_checked_col = 0;	// checked column for current line
-#endif
+#line 1252
     int		extra_check = FALSE;	// has extra highlighting
     int		multi_attr = 0;		// attributes desired by multibyte
     int		mb_l = 1;		// multi-byte byte length
@@ -1277,9 +938,7 @@ win_line(
 #if defined(LINE_ATTR)
     int		did_line_attr = 0;
 #endif
-#ifdef FEAT_TERMINAL
-    int		get_term_attr = FALSE;
-#endif
+#line 1283
 
 #if defined(FEAT_SYN_HL) || defined(FEAT_DIFF)
     // margin columns for the screen line, needed for when 'cursorlineopt'
@@ -1288,38 +947,16 @@ win_line(
     int		right_curline_col = 0;
 #endif
 
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-    int		feedback_col = 0;
-    int		feedback_old_attr = -1;
-#endif
-
+#line 1296
 #if defined(FEAT_CONCEAL) || defined(FEAT_SEARCH_EXTRA)
     int		match_conc	= 0;	// cchar for match functions
 #endif
 #if defined(FEAT_CONCEAL) || defined(FEAT_SEARCH_EXTRA) || defined(FEAT_LINEBREAK)
     int		on_last_col     = FALSE;
 #endif
-#ifdef FEAT_CONCEAL
-    int		syntax_flags	= 0;
-    int		syntax_seqnr	= 0;
-    int		prev_syntax_id	= 0;
-    int		conceal_attr	= HL_ATTR(HLF_CONCEAL);
-    int		is_concealing	= FALSE;
-    int		did_wcol	= FALSE;
-    int		old_boguscols   = 0;
-# define VCOL_HLC (wlv.vcol - wlv.vcol_off_co - wlv.vcol_off_tp)
-# define FIX_FOR_BOGUSCOLS \
-    { \
-	wlv.n_extra += wlv.vcol_off_co; \
-	wlv.vcol -= wlv.vcol_off_co; \
-	wlv.vcol_off_co = 0; \
-	wlv.col -= wlv.boguscols; \
-	old_boguscols = wlv.boguscols; \
-	wlv.boguscols = 0; \
-    }
-#else
+#line 1321
 # define VCOL_HLC (wlv.vcol - wlv.vcol_off_tp)
-#endif
+#line 1323
 
     if (startrow > endrow)		// past the end already!
 	return startrow;
@@ -1376,15 +1013,7 @@ win_line(
 	    wlv.draw_color_col = advance_color_col(VCOL_HLC, &wlv.color_cols);
 #endif
 
-#ifdef FEAT_TERMINAL
-	if (term_show_buffer(wp->w_buffer))
-	{
-	    extra_check = TRUE;
-	    get_term_attr = TRUE;
-	    wlv.win_attr = term_get_attr(wp, lnum, -1);
-	}
-#endif
-
+#line 1388
 	// handle Visual active in this window
 	if (VIsual_active && wp->w_buffer == curwin->w_buffer)
 	{
@@ -1453,9 +1082,7 @@ win_line(
 
 	    // Check if the character under the cursor should not be inverted
 	    if (!highlight_match && in_curline
-#ifdef FEAT_GUI
-		    && !gui.in_use
-#endif
+#line 1459
 		    )
 		noinvcur = TRUE;
 
@@ -1464,13 +1091,7 @@ win_line(
 	    {
 		area_highlighting = TRUE;
 		vi_attr = HL_ATTR(HLF_V);
-#if defined(FEAT_CLIPBOARD) && (defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD))
-		if ((clip_star.available && !clip_star.owned
-						    && clip_isautosel_star())
-			|| (clip_plus.available && !clip_plus.owned
-						    && clip_isautosel_plus()))
-		    vi_attr = HL_ATTR(HLF_VNC);
-#endif
+#line 1474
 	    }
 	}
 
@@ -1571,76 +1192,7 @@ win_line(
 	area_highlighting = TRUE;
 #endif
 
-#ifdef FEAT_SPELL
-    if (spv->spv_has_spell && number_only == 0)
-    {
-	// Prepare for spell checking.
-	extra_check = TRUE;
-
-	// When a word wrapped from the previous line the start of the
-	// current line is valid.
-	if (lnum == spv->spv_checked_lnum)
-	    cur_checked_col = spv->spv_checked_col;
-	// Previous line was not spell checked, check for capital. This happens
-	// for the first line in an updated region or after a closed fold.
-	if (spv->spv_capcol_lnum == 0 && check_need_cap(wp, lnum, 0))
-	    spv->spv_cap_col = 0;
-	else if (lnum != spv->spv_capcol_lnum)
-	    spv->spv_cap_col = -1;
-	spv->spv_checked_lnum = 0;
-
-	// Get the start of the next line, so that words that wrap to the
-	// next line are found too: "et<line-break>al.".
-	// Trick: skip a few chars for C/shell/Vim comments
-	nextline[SPWORDLEN] = NUL;
-	if (lnum < wp->w_buffer->b_ml.ml_line_count)
-	{
-	    line = ml_get_buf(wp->w_buffer, lnum + 1, FALSE);
-	    spell_cat_line(nextline + SPWORDLEN, line, SPWORDLEN);
-	}
-	line = ml_get_buf(wp->w_buffer, lnum, FALSE);
-
-	// If current line is empty, check first word in next line for capital.
-	ptr = skipwhite(line);
-	if (*ptr == NUL)
-	{
-	    spv->spv_cap_col = 0;
-	    spv->spv_capcol_lnum = lnum + 1;
-	}
-	// For checking first word with a capital skip white space.
-	else if (spv->spv_cap_col == 0)
-	    spv->spv_cap_col = ptr - line;
-
-	// Copy the end of the current line into nextline[].
-	if (nextline[SPWORDLEN] == NUL)
-	{
-	    // No next line or it is empty.
-	    nextlinecol = MAXCOL;
-	    nextline_idx = 0;
-	}
-	else
-	{
-	    v = ml_get_buf_len(wp->w_buffer, lnum);
-	    if (v < SPWORDLEN)
-	    {
-		// Short line, use it completely and append the start of the
-		// next line.
-		nextlinecol = 0;
-		mch_memmove(nextline, line, (size_t)v);
-		STRMOVE(nextline + v, nextline + SPWORDLEN);
-		nextline_idx = v + 1;
-	    }
-	    else
-	    {
-		// Long line, use only the last SPWORDLEN bytes.
-		nextlinecol = v - SPWORDLEN;
-		mch_memmove(nextline, line + nextlinecol, SPWORDLEN);
-		nextline_idx = SPWORDLEN + 1;
-	    }
-	}
-    }
-#endif
-
+#line 1644
     line = ml_get_buf(wp->w_buffer, lnum, FALSE);
     ptr = line;
 
@@ -1688,150 +1240,7 @@ win_line(
     // text, then this much of the virtual text is skipped.
     int skipcol_in_text_prop_above = 0;
 
-#ifdef FEAT_PROP_POPUP
-    if (WIN_IS_POPUP(wp))
-	wlv.screen_line_flags |= SLF_POPUP;
-
-    char_u *prop_start;
-    text_prop_count = get_text_props(wp->w_buffer, lnum, &prop_start, FALSE);
-    if (text_prop_count > 0)
-    {
-	// Make a copy of the properties, so that they are properly
-	// aligned.
-	if (text_prop_count <= WIN_LINE_TEXT_PROP_STACK_LEN)
-	    text_props = text_props_buf;
-	else
-	    text_props = ALLOC_MULT(textprop_T, text_prop_count);
-	if (text_props != NULL)
-	{
-	    mch_memmove(text_props, prop_start,
-				     text_prop_count * sizeof(textprop_T));
-
-	    // Convert tp_text_offset to tp_text pointer for virtual
-	    // text properties.  prop_start points into the memline
-	    // after the prop_count field.
-	    char_u *count_ptr = prop_start - PROP_COUNT_SIZE;
-
-	    for (int i = 0; i < text_prop_count; ++i)
-	    {
-		if (text_props[i].tp_id < 0
-				&& text_props[i].u.tp_text_offset > 0)
-		{
-		    text_props[i].u.tp_text =
-			    count_ptr + text_props[i].u.tp_text_offset;
-		    text_props[i].tp_flags |= TP_FLAG_VTEXT_PTR;
-		}
-		else
-		    text_props[i].u.tp_text = NULL;
-	    }
-	}
-
-	// Allocate an array for the indexes.
-	if (text_prop_count <= WIN_LINE_TEXT_PROP_STACK_LEN)
-	    text_prop_idxs = text_prop_idxs_buf;
-	else
-	    text_prop_idxs = ALLOC_MULT(int, text_prop_count);
-	if (text_prop_idxs == NULL)
-	{
-	    if (text_props != text_props_buf)
-		VIM_CLEAR(text_props);
-	    else
-		text_props = NULL;
-	}
-	if (text_prop_count <= WIN_LINE_TEXT_PROP_STACK_LEN)
-	    text_prop_suffix_flags = text_prop_suffix_flags_buf;
-	else
-	    text_prop_suffix_flags = ALLOC_MULT(char_u, text_prop_count + 1);
-	if (text_prop_suffix_flags == NULL)
-	{
-	    if (text_prop_idxs != text_prop_idxs_buf)
-		vim_free(text_prop_idxs);
-	    text_prop_idxs = NULL;
-	    if (text_props != text_props_buf)
-		VIM_CLEAR(text_props);
-	    else
-		text_props = NULL;
-	}
-
-	if (text_props != NULL)
-	{
-	    area_highlighting = TRUE;
-	    extra_check = TRUE;
-
-	    /* Find the last text property that inserts text. */
-	    for (int i = 0; i < text_prop_count; ++i)
-		if (text_props[i].tp_id < 0)
-		    last_textprop_text_idx = i;
-
-	    // Text props "above" move the line number down to where the text
-	    // is.  Only count the ones that are visible, not those that are
-	    // skipped because of w_skipcol.
-	    int text_width = wp->w_width - win_col_off(wp);
-	    for (int i = text_prop_count - 1; i >= 0; --i)
-		if (text_props[i].tp_flags & TP_FLAG_ALIGN_ABOVE)
-		{
-		    if (lnum == wp->w_topline
-			    && wp->w_skipcol - skipcol_in_text_prop_above
-								 >= text_width)
-		    {
-			// This virtual text above is skipped, remove it from
-			// the array.
-			skipcol_in_text_prop_above += text_width;
-			for (int j = i + 1; j < text_prop_count; ++j)
-			    text_props[j - 1] = text_props[j];
-			++i;
-			--text_prop_count;
-		    }
-		    else
-			++wlv.text_prop_above_count;
-		}
-
-	    text_prop_suffix_flags[text_prop_count] = 0;
-	    for (int i = text_prop_count - 1; i >= 0; --i)
-	    {
-		int flags = text_prop_suffix_flags[i + 1];
-
-		if (text_props[i].tp_col == MAXCOL)
-		{
-		    flags |= 1;
-		    if (text_props[i].tp_flags & TP_FLAG_ALIGN_BELOW)
-			flags |= 2;
-		}
-		text_prop_suffix_flags[i] = flags;
-	    }
-	}
-    }
-
-    if (number_only > 0)
-    {
-	// skip over rows only used for virtual text above
-	wlv.row += wlv.text_prop_above_count;
-	if (wlv.row >= endrow)
-	{
-	    if (text_props != text_props_buf)
-		vim_free(text_props);
-	    if (text_prop_idxs != text_prop_idxs_buf)
-		vim_free(text_prop_idxs);
-	    if (text_prop_suffix_flags != text_prop_suffix_flags_buf)
-		vim_free(text_prop_suffix_flags);
-	    return wlv.row;
-	}
-	wlv.screen_row += wlv.text_prop_above_count;
-    }
-#endif
-
-#if defined(FEAT_LINEBREAK) && defined(FEAT_PROP_POPUP)
-    colnr_T vcol_first_char = 0;
-    if (wp->w_p_lbr && number_only == 0)
-    {
-	chartabsize_T cts;
-	init_chartabsize_arg(&cts, wp, lnum, 0, line, line);
-	(void)win_lbr_chartabsize(&cts, NULL, NULL);
-	vcol_first_char = cts.cts_first_char;
-	clear_chartabsize_arg(&cts);
-    }
-#endif
-
+#line 1835
     // 'nowrap' or 'wrap' and a single line that doesn't fit: Advance to the
     // first character to be displayed.
     if (wp->w_p_wrap)
@@ -1918,49 +1327,7 @@ win_line(
 	if (wp->w_p_wrap)
 	    wlv.need_showbreak = TRUE;
 #endif
-#ifdef FEAT_SPELL
-	// When spell checking a word we need to figure out the start of the
-	// word and if it's badly spelled or not.
-	if (spv->spv_has_spell)
-	{
-	    int		len;
-	    colnr_T	linecol = (colnr_T)(ptr - line);
-	    hlf_T	spell_hlf = HLF_COUNT;
-
-	    pos = wp->w_cursor;
-	    wp->w_cursor.lnum = lnum;
-	    wp->w_cursor.col = linecol;
-	    len = spell_move_to(wp, FORWARD, SMT_ALL, TRUE, &spell_hlf);
-
-	    // spell_move_to() may call ml_get() and make "line" invalid
-	    line = ml_get_buf(wp->w_buffer, lnum, FALSE);
-	    ptr = line + linecol;
-
-	    if (len == 0 || (int)wp->w_cursor.col > linecol)
-	    {
-		// no bad word found at line start, don't check until end of a
-		// word
-		spell_hlf = HLF_COUNT;
-		word_end = (int)(spell_to_word_end(ptr, wp) - line + 1);
-	    }
-	    else
-	    {
-		// bad word found, use attributes until end of word
-		word_end = wp->w_cursor.col + len + 1;
-
-		// Turn index into actual attributes.
-		if (spell_hlf != HLF_COUNT)
-		    spell_attr = highlight_attr[spell_hlf];
-	    }
-	    wp->w_cursor = pos;
-
-# ifdef FEAT_SYN_HL
-	    // Need to restart syntax highlighting for this line.
-	    if (has_syntax)
-		syntax_start(wp, lnum);
-# endif
-	}
-#endif
+#line 1964
     }
 
     // Correct highlighting for cursor that can't be disabled.
@@ -2033,9 +1400,7 @@ win_line(
 #if defined(FEAT_CONCEAL) || defined(FEAT_SEARCH_EXTRA)
 	int	has_match_conc = 0;	// match wants to conceal
 #endif
-#ifdef FEAT_CONCEAL
-	int	did_decrement_ptr = FALSE;
-#endif
+#line 2039
 
 	// Skip this quickly when working on the text.
 	if (wlv.draw_state != WL_LINE)
@@ -2067,13 +1432,7 @@ win_line(
 		    }
 		}
 	    }
-#ifdef FEAT_FOLDING
-	    if (wlv.draw_state == WL_FOLD - 1 && wlv.n_extra == 0)
-	    {
-		wlv.draw_state = WL_FOLD;
-		handle_foldcolumn(wp, &wlv);
-	    }
-#endif
+#line 2077
 #ifdef FEAT_SIGNS
 	    if (wlv.draw_state == WL_SIGN - 1 && wlv.n_extra == 0)
 	    {
@@ -2165,344 +1524,10 @@ win_line(
 
 	if (wlv.draw_state == WL_LINE && (area_highlighting || extra_check))
 	{
-#ifdef FEAT_PROP_POPUP
-	    if (text_props != NULL)
-	    {
-		int pi;
-		int bcol = (int)(ptr - line);
-
-		if (wlv.n_extra > 0
-# ifdef FEAT_LINEBREAK
-			&& !in_linebreak
-# endif
-			)
-		    --bcol;  // still working on the previous char, e.g. Tab
-
-		// Check if any active property ends.
-		for (pi = 0; pi < text_props_active; ++pi)
-		{
-		    int		tpi = text_prop_idxs[pi];
-		    textprop_T  *tp = &text_props[tpi];
-
-		    // An inline property ends when after the start column plus
-		    // length. An "above" property ends when used and n_extra
-		    // is zero.
-		    if ((tp->tp_col != MAXCOL
-				       && bcol >= tp->tp_col - 1 + tp->tp_len))
-		    {
-			if (pi + 1 < text_props_active)
-			    mch_memmove(text_prop_idxs + pi,
-					text_prop_idxs + pi + 1,
-					sizeof(int)
-					     * (text_props_active - (pi + 1)));
-			--text_props_active;
-			text_props_need_sort = TRUE;
-			--pi;
-# ifdef FEAT_LINEBREAK
-			// not exactly right but should work in most cases
-			if (in_linebreak && syntax_attr == text_prop_attr_comb)
-			    syntax_attr = 0;
-# endif
-		    }
-		}
-
-# ifdef FEAT_LINEBREAK
-		if (wlv.n_extra > 0 && in_linebreak)
-		    // not on the next char yet, don't start another prop
-		    --bcol;
-# endif
-		// Add any text property that starts in this column.
-		while (text_prop_next < text_prop_count)
-		{
-		    int active;
-		    textprop_T *tp = &text_props[text_prop_next];
-		    if (tp->tp_col == MAXCOL)
-		    {
-			if (bcol == 0 && (tp->tp_flags & TP_FLAG_ALIGN_ABOVE))
-			    active = TRUE;
-			else if (*ptr != NUL)
-			    break;
-			else
-			{
-			    // With 'nowrap' and not in the first screen line only "below"
-			    // text prop can show.
-			    active = wp->w_p_wrap
-				  || wlv.row == startrow
-				  || (tp->tp_flags & TP_FLAG_ALIGN_BELOW);
-			}
-		    }
-		    else
-		    {
-			if (bcol < tp->tp_col - 1)
-			    break;
-			active = bcol <= tp->tp_col - 1 + tp->tp_len;
-		    }
-
-		    if (active)
-		    {
-			text_prop_idxs[text_props_active++] = text_prop_next;
-			text_props_need_sort = TRUE;
-		    }
-		    ++text_prop_next;
-		}
-
-		if (wlv.n_extra == 0 ||
-			(!wlv.extra_for_textprop
-			 && !(text_prop_type != NULL &&
-			     text_prop_flags & PT_FLAG_OVERRIDE)
-		    ))
-		{
-		    text_prop_attr = 0;
-		    text_prop_attr_comb = 0;
-		    text_prop_flags = 0;
-		    text_prop_type = NULL;
-		    text_prop_id = 0;
-		    reset_extra_attr = FALSE;
-		}
-		if (text_props_active > 0 && wlv.n_extra == 0)
-		{
-		    int used_tpi = -1;
-		    int used_attr = 0;
-		    int other_tpi = -1;
-
-		    text_prop_above = FALSE;
-		    text_prop_follows = FALSE;
-
-		    if (text_props_need_sort)
-		    {
-			// The active set only changes when a property starts
-			// or ends, so avoid sorting again for every column.
-			sort_text_props(wp->w_buffer, text_props,
-					text_prop_idxs, text_props_active);
-			text_props_need_sort = FALSE;
-		    }
-
-		    for (pi = 0; pi < text_props_active; ++pi)
-		    {
-			int	    tpi = text_prop_idxs[pi];
-			textprop_T  *tp = &text_props[tpi];
-			proptype_T  *pt = text_prop_type_by_id(
-						    wp->w_buffer, tp->tp_type);
-
-			// Only use a text property that can be displayed.
-			// Skip "after" properties when wrap is off and at the
-			// end of the window.
-			if (pt != NULL
-				&& (pt->pt_hl_id > 0 || tp->tp_id < 0)
-				&& tp->tp_id != -MAXCOL
-				&& !(tp->tp_id < 0
-				    && !wp->w_p_wrap
-				    && (tp->tp_flags & (TP_FLAG_ALIGN_RIGHT
-						| TP_FLAG_ALIGN_ABOVE
-						| TP_FLAG_ALIGN_BELOW)) == 0
-				    && wlv.col >= wp->w_width))
-			{
-			    if (tp->tp_col == MAXCOL
-				     && *ptr == NUL
-				     && ((wp->w_p_list && lcs_eol_one > 0
-					     && (tp->tp_flags
-						   & TP_FLAG_ALIGN_ABOVE) == 0)
-					 || (ptr == line
-						&& !did_line
-						&& (tp->tp_flags
-						      & TP_FLAG_ALIGN_BELOW))))
-			    {
-				// skip this prop, first display the '$' after
-				// the line or display an empty line
-				text_prop_follows = TRUE;
-				continue;
-			    }
-
-			    if (pt->pt_hl_id > 0)
-				used_attr = syn_id2attr(pt->pt_hl_id);
-			    text_prop_type = pt;
-			    text_prop_attr =
-				   hl_combine_attr(text_prop_attr, used_attr);
-			    if (used_tpi >= 0 && text_props[used_tpi].tp_id < 0)
-				other_tpi = used_tpi;
-			    text_prop_flags = pt->pt_flags;
-			    text_prop_id = tp->tp_id;
-			    used_tpi = tpi;
-			}
-		    }
-		    if (text_prop_id < 0 && used_tpi >= 0
-				 && text_props[used_tpi].u.tp_text != NULL)
-		    {
-			textprop_T  *tp = &text_props[used_tpi];
-			char_u	    *p = tp->u.tp_text;
-			int	    above = (tp->tp_flags
-							& TP_FLAG_ALIGN_ABOVE);
-			int	    bail_out = FALSE;
-
-			// reset the ID in the copy to avoid it being used
-			// again
-			tp->tp_id = -MAXCOL;
-
-			if (p != NULL)
-			{
-			    int	    right = (tp->tp_flags
-							& TP_FLAG_ALIGN_RIGHT);
-			    int	    below = (tp->tp_flags
-							& TP_FLAG_ALIGN_BELOW);
-			    int	    wrap = tp->tp_col < MAXCOL
-					      || (tp->tp_flags & TP_FLAG_WRAP);
-			    int	    padding = tp->tp_col == MAXCOL
-							  ? tp->tp_padleft : 0;
-
-			    // Insert virtual text before the current
-			    // character, or add after the end of the line.
-			    wlv.p_extra = p;
-			    wlv.c_extra = NUL;
-			    wlv.c_final = NUL;
-			    wlv.n_extra = (int)STRLEN(p);
-			    wlv.extra_for_textprop = TRUE;
-			    wlv.start_extra_for_textprop = TRUE;
-			    wlv.extra_attr = hl_combine_attr(wlv.win_attr,
-								    used_attr);
-			    n_attr = mb_charlen(p);
-			    text_prop_attr = 0;
-			    text_prop_attr_comb = 0;
-			    if (*ptr == NUL)
-				// don't combine char attr after EOL
-				text_prop_flags &= ~PT_FLAG_COMBINE;
-# ifdef FEAT_LINEBREAK
-			    if (text_prop_no_showbreak(tp))
-			    {
-				wlv.need_showbreak = FALSE;
-				wlv.dont_use_showbreak = TRUE;
-			    }
-# endif
-			    if ((right || above || below || !wrap
-					    || padding > 0) && wp->w_width > 2)
-			    {
-				char_u	*prev_p_extra = wlv.p_extra;
-				int	start_line;
-
-				// Take care of padding, right-align and
-				// truncation.
-				// Shared with win_lbr_chartabsize(), must do
-				// exactly the same.
-				start_line = text_prop_position(wp, tp,
-						    wlv.vcol,
-# ifdef FEAT_RIGHTLEFT
-						    wp->w_p_rl
-						    ? wp->w_width - wlv.col - 1
-						    :
-# endif
-						    wlv.col,
-						    &wlv.n_extra, &wlv.p_extra,
-						    &n_attr, &wlv.n_attr_skip,
-						    skip_cells > 0);
-				if (wlv.p_extra != prev_p_extra)
-				{
-				    // wlv.p_extra was allocated
-				    vim_free(p_extra_free2);
-				    p_extra_free2 = wlv.p_extra;
-				}
-
-				if (above)
-				    wlv.vcol_off_tp += vim_strsize(wlv.p_extra);
-
-				if (lcs_eol_one < 0
-					&& wp->w_p_wrap
-					&& wlv.col
-					       + wlv.n_extra - 2 > wp->w_width)
-				    // don't bail out at end of line
-				    text_prop_follows = TRUE;
-
-				// When 'wrap' is off then for "below" we need
-				// to start a new line explicitly.
-				if (start_line)
-				{
-				    draw_screen_line(wp, &wlv);
-
-				    // When line got too long for screen break
-				    // here.
-				    if (wlv.row == endrow)
-				    {
-					++wlv.row;
-					break;
-				    }
-				    win_line_start(wp, &wlv, TRUE);
-				    bail_out = TRUE;
-				}
-			    }
-			}
-
-			// If the text didn't reach until the first window
-			// column we need to skip cells.
-			if (skip_cells > 0)
-			{
-			    if (wlv.n_extra > skip_cells)
-			    {
-				wlv.n_extra -= skip_cells;
-				wlv.p_extra += skip_cells;
-				wlv.n_attr_skip -= skip_cells;
-				if (wlv.n_attr_skip < 0)
-				    wlv.n_attr_skip = 0;
-				skipped_cells += skip_cells;
-				skip_cells = 0;
-			    }
-			    else
-			    {
-				// the whole text is left of the window, drop
-				// it and advance to the next one
-				skip_cells -= wlv.n_extra;
-				skipped_cells += wlv.n_extra;
-				wlv.n_extra = 0;
-				wlv.n_attr_skip = 0;
-				bail_out = TRUE;
-			    }
-			}
-
-			// If another text prop follows the condition below at
-			// the last window column must know.
-			// If this is an "above" text prop and 'nowrap' then we
-			// must wrap anyway.
-			text_prop_above = above;
-			text_prop_follows |= other_tpi != -1
-					&& (wp->w_p_wrap
-					     || (text_props[other_tpi].tp_flags
-			       & (TP_FLAG_ALIGN_BELOW | TP_FLAG_ALIGN_RIGHT)));
-
-			if (bail_out)
-			    // starting a new line for "below"
-			    continue;
-		    }
-		}
-		else if (text_prop_next < text_prop_count
-			   && ((*ptr != NUL && ptr[mb_ptr2len(ptr)] == NUL)
-			       || (!wp->w_p_wrap && wlv.col == wp->w_width - 1)))
-		{
-		    // When at last-but-one character and a text property
-		    // follows after it, we may need to flush the line after
-		    // displaying that character.
-		    // Or when not wrapping and at the rightmost column.
-
-		    int only_below_follows = !wp->w_p_wrap && wlv.col == wp->w_width - 1;
-		    int suffix_flags = text_prop_suffix_flags[text_prop_next];
-
-		    text_prop_follows = (suffix_flags
-					& (only_below_follows ? 2 : 1)) != 0;
-		}
-	    }
-
-	    if (wlv.start_extra_for_textprop)
-	    {
-		wlv.start_extra_for_textprop = FALSE;
-		// restore search_attr and area_attr when n_extra
-		// is down to zero
-		saved_search_attr = search_attr;
-		saved_area_attr = area_attr;
-		search_attr = 0;
-		area_attr = 0;
-	    }
-#endif
+#line 2501
 
 	    int *area_attr_p =
-#ifdef FEAT_PROP_POPUP
-		wlv.extra_for_textprop ? &saved_area_attr :
-#endif
+#line 2506
 							    &area_attr;
 
 	    // handle Visual or match highlighting in this line
@@ -2594,10 +1619,7 @@ win_line(
 	    if (extra_check && wlv.n_extra == 0)
 	    {
 		syntax_attr = 0;
-# ifdef FEAT_TERMINAL
-		if (get_term_attr)
-		    syntax_attr = term_get_attr(wp, lnum, wlv.vcol);
-# endif
+#line 2601
 		// Get syntax attribute.
 		if (has_syntax)
 		{
@@ -2612,13 +1634,9 @@ win_line(
 			syntax_attr = prev_syntax_attr;
 		    else
 		    {
-# ifdef FEAT_SPELL
-			can_spell = TRUE;
-# endif
+#line 2618
 			syntax_attr = get_syntax_attr((colnr_T)v,
-# ifdef FEAT_SPELL
-					    spv->spv_has_spell ? &can_spell :
-# endif
+#line 2622
 					    NULL, FALSE);
 			prev_syntax_col = v;
 			prev_syntax_attr = syntax_attr;
@@ -2641,27 +1659,10 @@ win_line(
 		    // have made it invalid.
 		    line = ml_get_buf(wp->w_buffer, lnum, FALSE);
 		    ptr = line + v;
-# ifdef FEAT_CONCEAL
-		    // no concealing past the end of the line, it interferes
-		    // with line highlighting
-		    if (*ptr == NUL)
-			syntax_flags = 0;
-		    else
-			syntax_flags = get_syntax_info(&syntax_seqnr);
-# endif
+#line 2652
 		}
 	    }
-# ifdef FEAT_PROP_POPUP
-	    // Combine text property highlight into syntax highlight.
-	    if (text_prop_type != NULL)
-	    {
-		if (text_prop_flags & PT_FLAG_COMBINE)
-		    syntax_attr = hl_combine_attr(syntax_attr, text_prop_attr);
-		else
-		    syntax_attr = text_prop_attr;
-		text_prop_attr_comb = syntax_attr;
-	    }
-# endif
+#line 2665
 #endif
 
 	    // Decide which of the highlight attributes to use.
@@ -2714,11 +1715,7 @@ win_line(
 		wlv.char_attr = 0;
 #endif
 	    }
-#ifdef FEAT_PROP_POPUP
-	    // override with text property highlight when "override" is TRUE
-	    if (text_prop_type != NULL && (text_prop_flags & PT_FLAG_OVERRIDE))
-		wlv.char_attr = hl_combine_attr(wlv.char_attr, text_prop_attr);
-#endif
+#line 2722
 	}
 
 	// combine attribute with HLF_WIN
@@ -2823,30 +1820,7 @@ win_line(
 		++wlv.p_extra;
 	    }
 	    --wlv.n_extra;
-#if defined(FEAT_PROP_POPUP)
-	    if (wlv.n_extra <= 0)
-	    {
-		// Only restore search_attr and area_attr after "n_extra" in
-		// the next screen line is also done.
-		if (wlv.saved_n_extra <= 0)
-		{
-		    if (search_attr == 0)
-			search_attr = saved_search_attr;
-		    if (area_attr == 0 && *ptr != NUL)
-			area_attr = saved_area_attr;
-
-		    if (wlv.extra_for_textprop)
-			// wlv.extra_attr should be used at this position but
-			// not any further.
-			reset_extra_attr = TRUE;
-		}
-
-		wlv.extra_for_textprop = FALSE;
-# ifdef FEAT_LINEBREAK
-		in_linebreak = FALSE;
-# endif
-	    }
-#endif
+#line 2850
 	}
 	else
 	{
@@ -2862,19 +1836,10 @@ win_line(
 #endif
 	    if (c == NUL)
 	    {
-#ifdef FEAT_PROP_POPUP
-		// text is finished, may display a "below" virtual text
-		did_line = TRUE;
-#endif
+#line 2869
 		// no more cells to skip
 		skip_cells = 0;
-#ifdef FEAT_TERMINAL
-		if (term_show_buffer(wp->w_buffer)
-		    && wlv.vcol == 0
-		    && wlv.win_attr == term_get_attr(wp, lnum, -1))
-		    // reset highlighting attribute
-		    wlv.win_attr = 0;
-#endif
+#line 2878
 	    }
 
 	    if (has_mbyte)
@@ -3032,9 +1997,7 @@ win_line(
 		    // Put pointer back so that the character will be
 		    // displayed at the start of the next line.
 		    --ptr;
-#ifdef FEAT_CONCEAL
-		    did_decrement_ptr = TRUE;
-#endif
+#line 3038
 		}
 		else if (*ptr != NUL)
 		    ptr += mb_l - 1;
@@ -3065,96 +2028,7 @@ win_line(
 
 	    if (extra_check)
 	    {
-#ifdef FEAT_SPELL
-		// Check spelling (unless at the end of the line).
-		// Only do this when there is no syntax highlighting, the
-		// @Spell cluster is not used or the current syntax item
-		// contains the @Spell cluster.
-		v = (long)(ptr - line);
-		if (spv->spv_has_spell && v >= word_end && v > cur_checked_col)
-		{
-		    spell_attr = 0;
-		    // do not calculate cap_col at the end of the line or when
-		    // only white space is following
-		    if (c != 0 && (*skipwhite(prev_ptr) != NUL) && (
-# ifdef FEAT_SYN_HL
-				!has_syntax ||
-# endif
-				can_spell))
-		    {
-			char_u	*p;
-			int	len;
-			hlf_T	spell_hlf = HLF_COUNT;
-
-			if (has_mbyte)
-			    v -= mb_l - 1;
-
-			// Use nextline[] if possible, it has the start of the
-			// next line concatenated.
-			if ((prev_ptr - line) - nextlinecol >= 0)
-			    p = nextline + (prev_ptr - line) - nextlinecol;
-			else
-			    p = prev_ptr;
-			spv->spv_cap_col -= (int)(prev_ptr - line);
-			len = spell_check(wp, p, &spell_hlf, &spv->spv_cap_col,
-							    spv->spv_unchanged);
-			word_end = v + len;
-
-			// In Insert mode only highlight a word that
-			// doesn't touch the cursor.
-			if (spell_hlf != HLF_COUNT
-				&& (State & MODE_INSERT)
-				&& wp->w_cursor.lnum == lnum
-				&& wp->w_cursor.col >=
-						    (colnr_T)(prev_ptr - line)
-				&& wp->w_cursor.col < (colnr_T)word_end)
-			{
-			    spell_hlf = HLF_COUNT;
-			    spell_redraw_lnum = lnum;
-			}
-
-			if (spell_hlf == HLF_COUNT && p != prev_ptr
-				       && (p - nextline) + len > nextline_idx)
-			{
-			    // Remember that the good word continues at the
-			    // start of the next line.
-			    spv->spv_checked_lnum = lnum + 1;
-			    spv->spv_checked_col = (p - nextline) + len
-								- nextline_idx;
-			}
-
-			// Turn index into actual attributes.
-			if (spell_hlf != HLF_COUNT)
-			    spell_attr = highlight_attr[spell_hlf];
-
-			if (spv->spv_cap_col > 0)
-			{
-			    if (p != prev_ptr
-				    && (p - nextline) + spv->spv_cap_col
-								>= nextline_idx)
-			    {
-				// Remember that the word in the next line
-				// must start with a capital.
-				spv->spv_capcol_lnum = lnum + 1;
-				spv->spv_cap_col = ((p - nextline)
-					    + spv->spv_cap_col - nextline_idx);
-			    }
-			    else
-				// Compute the actual column.
-				spv->spv_cap_col += (prev_ptr - line);
-			}
-		    }
-		}
-		if (spell_attr != 0)
-		{
-		    if (!attr_pri)
-			wlv.char_attr = hl_combine_attr(wlv.char_attr,
-								   spell_attr);
-		    else
-			wlv.char_attr = hl_combine_attr(spell_attr,
-								wlv.char_attr);
-		}
-#endif
+#line 3158
 #ifdef FEAT_LINEBREAK
 		// we don't want linebreak to apply for lines that start with
 		// leading spaces, followed by long letters (since it would add
@@ -3178,15 +2052,10 @@ win_line(
 
 
 		    colnr_T init_colnr = wlv.vcol;
-# ifdef FEAT_PROP_POPUP
-		    init_colnr -= vcol_first_char;
-# endif
+#line 3184
 		    init_chartabsize_arg(&cts, wp, lnum, init_colnr, line, p);
 
-# ifdef FEAT_PROP_POPUP
-		    // do not want virtual text counted here
-		    cts.cts_has_prop_with_text = FALSE;
-# endif
+#line 3190
 		    // TODO: consider using "tailp" here
 		    wlv.n_extra = win_lbr_chartabsize(&cts, NULL, NULL) - 1;
 		    clear_chartabsize_arg(&cts);
@@ -3209,17 +2078,10 @@ win_line(
 
 		    wlv.c_extra = mb_off > 0 ? MB_FILLER_CHAR : ' ';
 		    wlv.c_final = NUL;
-# ifdef FEAT_PROP_POPUP
-		    if (wlv.n_extra > 0 && c != TAB)
-			in_linebreak = TRUE;
-# endif
+#line 3216
 		    if (VIM_ISWHITE(c))
 		    {
-# ifdef FEAT_CONCEAL
-			if (c == TAB)
-			    // See "Tab alignment" below.
-			    FIX_FOR_BOGUSCOLS;
-# endif
+#line 3223
 			if (!wp->w_p_list)
 			    c = ' ';
 		    }
@@ -3373,17 +2235,7 @@ win_line(
 			int	i;
 			int	saved_nextra = wlv.n_extra;
 
-# ifdef FEAT_CONCEAL
-			if (wlv.vcol_off_co > 0)
-			    // there are characters to conceal
-			    tab_len += wlv.vcol_off_co;
-
-			// boguscols before FIX_FOR_BOGUSCOLS macro from above
-			if (wp->w_p_list && lcs_tab1 &&
-			    old_boguscols > 0 &&
-			    wlv.n_extra > tab_len)
-			    tab_len += wlv.n_extra - tab_len;
-# endif
+#line 3387
 			if (tab_len > 0)
 			{
 			    // If wlv.n_extra > 0, it gives the number of chars
@@ -3424,37 +2276,12 @@ win_line(
 						  - (saved_nextra > 0 ? 1 : 0);
 				}
 				wlv.p_extra = wlv.p_extra_free;
-# ifdef FEAT_CONCEAL
-				// n_extra will be increased by
-				// FIX_FOX_BOGUSCOLS macro below, so need to
-				// adjust for that here
-				if (wlv.vcol_off_co > 0)
-				    wlv.n_extra -= wlv.vcol_off_co;
-# endif
+#line 3434
 			    }
 			}
 		    }
 #endif
-#ifdef FEAT_CONCEAL
-		    {
-			int vc_saved = wlv.vcol_off_co;
-
-			// Tab alignment should be identical regardless of
-			// 'conceallevel' value. So tab compensates of all
-			// previous concealed characters, and thus resets
-			// vcol_off_co and boguscols accumulated so far in the
-			// line. Note that the tab can be longer than
-			// 'tabstop' when there are concealed characters.
-			FIX_FOR_BOGUSCOLS;
-
-			// Make sure, the highlighting for the tab char will be
-			// correctly set further below (effectively reverts the
-			// FIX_FOR_BOGUSCOLS macro).
-			if (wlv.n_extra == tab_len + vc_saved && wp->w_p_list
-						&& wp->w_lcs_chars.tab1)
-			    tab_len += vc_saved;
-		    }
-#endif
+#line 3458
 		    mb_utf8 = FALSE;	// don't draw as UTF-8
 		    if (wp->w_p_list)
 		    {
@@ -3591,12 +2418,7 @@ win_line(
 			n_attr = wlv.n_extra + 1;
 			wlv.extra_attr = hl_combine_attr(wlv.win_attr,
 							       HL_ATTR(HLF_8));
-#ifdef FEAT_PROP_POPUP
-			if (text_prop_type != NULL &&
-				 text_prop_flags & PT_FLAG_OVERRIDE)
-			    wlv.extra_attr = hl_combine_attr(text_prop_attr,
-							       wlv.extra_attr);
-#endif
+#line 3600
 
 			saved_attr2 = wlv.char_attr; // save current attr
 		    }
@@ -3622,18 +2444,14 @@ win_line(
 # ifdef FEAT_DIFF
 			    wlv.diff_hlf != (hlf_T)0 ||
 # endif
-# ifdef FEAT_TERMINAL
-			    wlv.win_attr != 0 ||
-# endif
+#line 3628
 			    wlv.line_attr != 0
 			) && (
 # ifdef FEAT_RIGHTLEFT
 			    wp->w_p_rl ? (wlv.col >= 0) :
 # endif
 			    (wlv.col
-# ifdef FEAT_CONCEAL
-				- wlv.boguscols
-# endif
+#line 3637
 					    < wp->w_width)))
 		{
 		    // Highlight until the right side of the window
@@ -3673,149 +2491,22 @@ win_line(
 			}
 		    }
 # endif
-# ifdef FEAT_TERMINAL
-		    if (wlv.win_attr != 0)
-		    {
-			wlv.char_attr = wlv.win_attr;
-			if (wp->w_p_cul && lnum == wp->w_cursor.lnum
-				    && wp->w_p_culopt_flags != CULOPT_NBR)
-			{
-			    if (!wlv.cul_screenline
-				    || (wlv.vcol >= left_curline_col
-					     && wlv.vcol <= right_curline_col))
-				wlv.char_attr = hl_combine_attr(
-					      wlv.char_attr, HL_ATTR(HLF_CUL));
-			}
-			else if (wlv.line_attr)
-			    wlv.char_attr = hl_combine_attr(
-						 wlv.char_attr, wlv.line_attr);
-		    }
-# endif
+#line 3694
 		}
 #endif
 	    }
 
-#ifdef FEAT_CONCEAL
-	    if (   wp->w_p_cole > 0
-		&& (wp != curwin || lnum != wp->w_cursor.lnum
-						    || conceal_cursor_line(wp))
-		&& ((syntax_flags & HL_CONCEAL) != 0 || has_match_conc > 0)
-		&& !(lnum_in_visual_area
-				    && vim_strchr(wp->w_p_cocu, 'v') == NULL))
-	    {
-		int syntax_conceal = (syntax_flags & HL_CONCEAL) != 0;
-		wlv.char_attr = conceal_attr;
-		if (((prev_syntax_id != syntax_seqnr && syntax_conceal)
-			    || has_match_conc > 1)
-			&& ((syntax_conceal && syn_get_sub_char() != NUL)
-				|| (has_match_conc && match_conc)
-				|| wp->w_p_cole == 1)
-			&& wp->w_p_cole != 3)
-		{
-		    // First time at this concealed item: display one
-		    // character.
-		    if (has_match_conc && match_conc)
-			c = match_conc;
-		    else if (syntax_conceal && syn_get_sub_char() != NUL)
-			c = syn_get_sub_char();
-		    else if (wp->w_lcs_chars.conceal != NUL)
-			c = wp->w_lcs_chars.conceal;
-		    else
-			c = ' ';
-
-		    if (has_mbyte && (*mb_char2cells)(mb_c) > 1)
-			// When the first char to be concealed is double-width,
-			// need to advance one more virtual column.
-			wlv.n_extra++;
-
-		    mb_c = c;
-		    if (enc_utf8 && utf_char2len(c) > 1)
-		    {
-			mb_utf8 = TRUE;
-			u8cc[0] = 0;
-			c = 0xc0;
-		    }
-		    else
-			mb_utf8 = FALSE;	// don't draw as UTF-8
-
-		    prev_syntax_id = syntax_seqnr;
-
-		    if (wlv.n_extra > 0)
-			wlv.vcol_off_co += wlv.n_extra;
-		    wlv.vcol += wlv.n_extra;
-		    if (wp->w_p_wrap && wlv.n_extra > 0)
-		    {
-# ifdef FEAT_RIGHTLEFT
-			if (wp->w_p_rl)
-			{
-			    wlv.col -= wlv.n_extra;
-			    wlv.boguscols -= wlv.n_extra;
-			}
-			else
-# endif
-			{
-			    wlv.boguscols += wlv.n_extra;
-			    wlv.col += wlv.n_extra;
-			}
-		    }
-		    wlv.n_extra = 0;
-		    n_attr = 0;
-		}
-		else if (skip_cells == 0)
-		{
-		    is_concealing = TRUE;
-		    skip_cells = 1;
-		}
-	    }
-	    else
-	    {
-		prev_syntax_id = 0;
-		is_concealing = FALSE;
-	    }
-
-	    if (skip_cells > 0 && did_decrement_ptr)
-		// not showing the '>', put pointer back to avoid getting stuck
-		++ptr;
-
-#endif // FEAT_CONCEAL
+#line 3781
 	}
 
-#ifdef FEAT_CONCEAL
-	// In the cursor line and we may be concealing characters: correct
-	// the cursor column when we reach its position.
-	// With 'virtualedit' we may never reach cursor position, but we still
-	// need to correct the cursor column, so do that at end of line.
-	if (!did_wcol && wlv.draw_state == WL_LINE
-		&& in_curline && conceal_cursor_line(wp)
-		&& (wlv.vcol + skip_cells >= wp->w_virtcol || c == NUL))
-	{
-# ifdef FEAT_RIGHTLEFT
-	    if (wp->w_p_rl)
-		wp->w_wcol = wp->w_width - wlv.col + wlv.boguscols - 1;
-	    else
-# endif
-		wp->w_wcol = wlv.col - wlv.boguscols;
-	    if (wlv.vcol + skip_cells < wp->w_virtcol)
-		// Cursor beyond end of the line with 'virtualedit'.
-		wp->w_wcol += wp->w_virtcol - wlv.vcol - skip_cells;
-	    wp->w_wrow = wlv.row;
-	    did_wcol = TRUE;
-	    curwin->w_valid |= VALID_WCOL|VALID_WROW|VALID_VIRTCOL;
-# ifdef FEAT_PROP_POPUP
-	    curwin->w_flags &= ~(WFLAG_WCOL_OFF_ADDED | WFLAG_WROW_OFF_ADDED);
-# endif
-	}
-#endif
-
+#line 3810
 	// Use "wlv.extra_attr", but don't override visual selection
 	// highlighting, unless text property overrides.
 	// Don't use "wlv.extra_attr" until wlv.n_attr_skip is zero.
 	if (wlv.n_attr_skip == 0 && n_attr > 0
 		&& wlv.draw_state == WL_LINE
 		&& (!attr_pri
-#ifdef FEAT_PROP_POPUP
-		    || (text_prop_flags & PT_FLAG_OVERRIDE)
-#endif
+#line 3819
 		   ))
 	{
 #ifdef LINE_ATTR
@@ -3824,53 +2515,10 @@ win_line(
 	    else
 #endif
 		wlv.char_attr = wlv.extra_attr;
-#ifdef FEAT_PROP_POPUP
-	    if (reset_extra_attr)
-	    {
-		reset_extra_attr = FALSE;
-		wlv.extra_attr = 0;
-	    }
-#endif
+#line 3834
 	}
 
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-	// XIM don't send preedit_start and preedit_end, but they send
-	// preedit_changed and commit.  Thus Vim can't set "im_is_active", use
-	// im_is_preediting() here.
-	if (p_imst == IM_ON_THE_SPOT
-		&& xic != NULL
-		&& lnum == wp->w_cursor.lnum
-		&& (State & MODE_INSERT)
-		&& !p_imdisable
-		&& im_is_preediting()
-		&& wlv.draw_state == WL_LINE)
-	{
-	    colnr_T tcol;
-
-	    if (preedit_end_col == MAXCOL)
-		getvcol(curwin, &(wp->w_cursor), &tcol, NULL, NULL, 0);
-	    else
-		tcol = preedit_end_col;
-	    if ((long)preedit_start_col <= wlv.vcol && wlv.vcol < (long)tcol)
-	    {
-		if (feedback_old_attr < 0)
-		{
-		    feedback_col = 0;
-		    feedback_old_attr = wlv.char_attr;
-		}
-		wlv.char_attr = im_get_feedback_attr(feedback_col);
-		if (wlv.char_attr < 0)
-		    wlv.char_attr = feedback_old_attr;
-		feedback_col++;
-	    }
-	    else if (feedback_old_attr >= 0)
-	    {
-		wlv.char_attr = feedback_old_attr;
-		feedback_old_attr = -1;
-		feedback_col = 0;
-	    }
-	}
-#endif
+#line 3874
 	// Handle the case where we are in column 0 but not on the first
 	// character of the line and the user wants us to show us a
 	// special character (via 'listchars' option "precedes:<char>").
@@ -4014,15 +2662,7 @@ win_line(
 	// At end of the text line.
 	if (c == NUL)
 	{
-#ifdef FEAT_PROP_POPUP
-	    if (text_prop_follows)
-	    {
-		// Put the pointer back to the NUL.
-		--ptr;
-		c = ' ';
-	    }
-	    else
-#endif
+#line 4026
 	    {
 		draw_screen_line(wp, &wlv);
 
@@ -4032,9 +2672,7 @@ win_line(
 		{
 		    curwin->w_cline_row = startrow;
 		    curwin->w_cline_height = wlv.row - startrow;
-#ifdef FEAT_FOLDING
-		    curwin->w_cline_folded = false;
-#endif
+#line 4038
 		    curwin->w_valid |= (VALID_CHEIGHT|VALID_CROW);
 		}
 		break;
@@ -4057,9 +2695,7 @@ win_line(
 		    || lcs_eol_one > 0
 		    || (wlv.n_extra > 0 && (wlv.c_extra != NUL
 						     || *wlv.p_extra != NUL))
-#ifdef FEAT_PROP_POPUP
-		    || text_prop_next <= last_textprop_text_idx
-#endif
+#line 4063
 		   ))
 	{
 	    c = lcs_ext;
@@ -4220,124 +2856,7 @@ win_line(
 		++wlv.col;
 	    }
 	}
-#ifdef FEAT_CONCEAL
-	else if (wp->w_p_cole > 0 && is_concealing)
-	{
-	    int concealed_wide = has_mbyte && (*mb_char2cells)(mb_c) > 1;
-
-	    --skip_cells;
-	    ++wlv.vcol_off_co;
-	    if (concealed_wide)
-	    {
-		// When a double-width char is concealed,
-		// need to advance one more virtual column.
-		++wlv.vcol;
-		++wlv.vcol_off_co;
-	    }
-
-	    if (wlv.n_extra > 0)
-		wlv.vcol_off_co += wlv.n_extra;
-
-	    if (wp->w_p_wrap)
-	    {
-		// Special voodoo required if 'wrap' is on.
-		//
-		// Advance the column indicator to force the line
-		// drawing to wrap early. This will make the line
-		// take up the same screen space when parts are concealed,
-		// so that cursor line computations aren't messed up.
-		//
-		// To avoid the fictitious advance of 'wlv.col' causing
-		// trailing junk to be written out of the screen line
-		// we are building, 'boguscols' keeps track of the number
-		// of bad columns we have advanced.
-		//
-		// For popup windows with fixed width, don't advance col
-		// to allow full text to be displayed.
-# ifdef FEAT_PROP_POPUP
-		int adjust_col = !WIN_IS_POPUP(wp);
-# else
-		int adjust_col = TRUE;
-# endif
-		if (wlv.n_extra > 0)
-		{
-		    wlv.vcol += wlv.n_extra;
-# ifdef FEAT_RIGHTLEFT
-		    if (wp->w_p_rl)
-		    {
-			if (adjust_col)
-			{
-			    wlv.col -= wlv.n_extra;
-			    wlv.boguscols -= wlv.n_extra;
-			}
-		    }
-		    else
-# endif
-		    {
-			if (adjust_col)
-			{
-			    wlv.col += wlv.n_extra;
-			    wlv.boguscols += wlv.n_extra;
-			}
-		    }
-		    wlv.n_extra = 0;
-		    n_attr = 0;
-		}
-
-		if (concealed_wide)
-		{
-		    // Need to fill two screen columns.
-# ifdef FEAT_RIGHTLEFT
-		    if (wp->w_p_rl)
-		    {
-			if (adjust_col)
-			{
-			    --wlv.boguscols;
-			    --wlv.col;
-			}
-		    }
-		    else
-# endif
-		    {
-			if (adjust_col)
-			{
-			    ++wlv.boguscols;
-			    ++wlv.col;
-			}
-		    }
-		}
-
-# ifdef FEAT_RIGHTLEFT
-		if (wp->w_p_rl)
-		{
-		    if (adjust_col)
-		    {
-			--wlv.boguscols;
-			--wlv.col;
-		    }
-		}
-		else
-# endif
-		{
-		    if (adjust_col)
-		    {
-			++wlv.boguscols;
-			++wlv.col;
-		    }
-		}
-	    }
-	    else
-	    {
-		if (wlv.n_extra > 0)
-		{
-		    wlv.vcol += wlv.n_extra;
-		    wlv.n_extra = 0;
-		    n_attr = 0;
-		}
-	    }
-
-	}
-#endif // FEAT_CONCEAL
+#line 4341
 	else
 	    --skip_cells;
 
@@ -4384,66 +2903,16 @@ win_line(
 #ifdef FEAT_DIFF
 		    || wlv.filler_todo > 0
 #endif
-#ifdef FEAT_PROP_POPUP
-		    || text_prop_above || text_prop_follows
-		    || text_prop_next <= last_textprop_text_idx
-#endif
+#line 4391
 		    || (wp->w_p_list && wp->w_lcs_chars.eol != NUL
 						&& lcs_eol_one != -1)
 		    || (wlv.n_extra != 0 && (wlv.c_extra != NUL
 						      || *wlv.p_extra != NUL)))
 		)
 	{
-#ifdef FEAT_CONCEAL
-	    wlv.col -= wlv.boguscols;
-	    // Apply 'cursorline' and HLF_WIN highlight.
-	    if (wlv.boguscols != 0 && (
-# ifdef LINE_ATTR
-			wlv.line_attr != 0 ||
-# endif
-			wlv.win_attr != 0
-			)
-	       )
-	    {
-		int attr = wlv.win_attr;
-# ifdef LINE_ATTR
-		if (wlv.line_attr != 0)
-		    attr = hl_combine_attr(attr, wlv.line_attr);
-# endif
-		while ((
-# ifdef FEAT_RIGHTLEFT
-			    wp->w_p_rl ? wlv.col >= 0 :
-# endif
-			    wlv.col < wp->w_width))
-		{
-		    ScreenLines[wlv.off] = ' ';
-		    if (enc_utf8)
-			ScreenLinesUC[wlv.off] = 0;
-		    ScreenAttrs[wlv.off] = attr;
-		    ScreenCols[wlv.off] = wlv.vcol - 1;
-# ifdef FEAT_RIGHTLEFT
-		    if (wp->w_p_rl)
-		    {
-			wlv.off--;
-			wlv.col--;
-			wlv.boguscols++;
-		    }
-		    else
-# endif
-		    {
-			wlv.off++;
-			wlv.col++;
-			wlv.boguscols--;
-		    }
-		}
-	    }
+#line 4445
 	    wlv_screen_line(wp, &wlv, TRUE);
-	    wlv.col += wlv.boguscols;
-	    wlv.boguscols = 0;
-	    wlv.vcol_off_co = 0;
-#else
-	    wlv_screen_line(wp, &wlv, TRUE);
-#endif
+#line 4447
 	    ++wlv.row;
 	    ++wlv.screen_row;
 
@@ -4452,22 +2921,10 @@ win_line(
 #ifdef FEAT_DIFF
 			&& wlv.filler_todo <= 0
 #endif
-#ifdef FEAT_PROP_POPUP
-			&& !text_prop_above
-			&& !text_prop_follows
-#endif
+#line 4459
 		       )
 		break;
-#ifdef FEAT_PROP_POPUP
-	    if (!wp->w_p_wrap && text_prop_follows && !text_prop_above)
-	    {
-		// do not output more of the line, only the "below" prop
-		ptr = line + (size_t)ml_get_buf_len(wp->w_buffer, lnum);
-# ifdef FEAT_LINEBREAK
-		wlv.dont_use_showbreak = TRUE;
-# endif
-	    }
-#endif
+#line 4471
 
 	    // When the window is too narrow draw all "@" lines.
 	    if (wlv.draw_state != WL_LINE
@@ -4492,9 +2949,7 @@ win_line(
 #ifdef FEAT_DIFF
 		     && wlv.filler_todo <= 0
 #endif
-#ifdef FEAT_PROP_POPUP
-		     && !text_prop_above && !text_prop_follows
-#endif
+#line 4498
 		     && wp->w_width == Columns)
 	    {
 		// Remember that the line wraps, used for modeless copy.
@@ -4511,9 +2966,7 @@ win_line(
 		// Don't do this for double-width characters.
 		// Don't do this for a window not at the right screen border.
 		if (p_tf
-#ifdef FEAT_GUI
-			 && !gui.in_use
-#endif
+#line 4517
 			 && !(has_mbyte
 			     && ((*mb_off2cells)(LineOffset[wlv.screen_row],
 				   LineOffset[wlv.screen_row] + screen_Columns)
@@ -4568,15 +3021,7 @@ win_line(
 	}
 
     }	// for every character in the line
-#ifdef FEAT_PROP_POPUP
-    if (text_props != text_props_buf)
-	vim_free(text_props);
-    if (text_prop_idxs != text_prop_idxs_buf)
-	vim_free(text_prop_idxs);
-    if (text_prop_suffix_flags != text_prop_suffix_flags_buf)
-	vim_free(text_prop_suffix_flags);
-    vim_free(p_extra_free2);
-#endif
+#line 4580
 
     vim_free(wlv.p_extra_free);
     vim_free(wlv.saved_p_extra_free);

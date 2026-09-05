@@ -59,57 +59,7 @@ static void recording_mode(int attr);
 // Ugly global: overrule attribute used by screen_char()
 static int screen_char_attr = 0;
 
-#if defined(FEAT_CONCEAL)
-/*
- * Return TRUE if the cursor line in window "wp" may be concealed, according
- * to the 'concealcursor' option.
- */
-    int
-conceal_cursor_line(win_T *wp)
-{
-    int		c;
-
-    if (*wp->w_p_cocu == NUL)
-	return FALSE;
-    if (get_real_state() & MODE_VISUAL)
-	c = 'v';
-    else if (State & MODE_INSERT)
-	c = 'i';
-    else if (State & MODE_NORMAL)
-	c = 'n';
-    else if (State & MODE_CMDLINE)
-	c = 'c';
-    else
-	return FALSE;
-    return vim_strchr(wp->w_p_cocu, c) != NULL;
-}
-
-/*
- * Check if the cursor line needs to be redrawn because of 'concealcursor'.
- * To be called after changing the state, "was_concealed" is the value of
- * "conceal_cursor_line()" before the change.
- * "
- */
-    void
-conceal_check_cursor_line(int was_concealed)
-{
-    if (curwin->w_p_cole <= 0 || conceal_cursor_line(curwin) == was_concealed)
-	return;
-
-    int wcol = curwin->w_wcol;
-
-    need_cursor_line_redraw = TRUE;
-    // Need to recompute cursor column, e.g., when starting Visual mode
-    // without concealing.
-    curs_columns(TRUE);
-
-    // When concealing now w_wcol will be computed wrong, keep the previous
-    // value, it will be updated in win_line().
-    if (!was_concealed)
-	curwin->w_wcol = wcol;
-}
-#endif
-
+#line 113
 /*
  * Get HLF_WIN attribute for window "wp".  If not set and "wp" is a popup window
  * then get the "Pmenu" highlight attribute.
@@ -128,15 +78,7 @@ get_win_attr(win_T *wp)
 	else
 	    win_attr = 0;
     }
-#ifdef FEAT_PROP_POPUP
-    else if (WIN_IS_POPUP(wp))
-    {
-	if (wp->w_popup_flags & POPF_INFO)
-	    win_attr = HL_ATTR(HLF_PSI);    // PmenuSel
-	else
-	    win_attr = HL_ATTR(HLF_PNI);    // Pmenu
-    }
-#endif
+#line 140
 
     if (override_success)
 	pop_highlight_overrides();
@@ -202,14 +144,7 @@ win_draw_end(
 
     if (draw_margin)
     {
-#ifdef FEAT_FOLDING
-	int	fdc = compute_foldcolumn(wp, 0);
-
-	if (fdc > 0)
-	    // draw the fold column
-	    n = screen_fill_end(wp, ' ', ' ', n, fdc,
-		      row, endrow, hl_combine_attr(win_attr, HL_ATTR(HLF_FC)));
-#endif
+#line 213
 #ifdef FEAT_SIGNS
 	if (signcolumn_on(wp))
 	    // draw the sign column
@@ -244,99 +179,7 @@ win_draw_end(
 	pop_highlight_overrides();
 }
 
-#if defined(FEAT_FOLDING)
-/*
- * Compute the width of the foldcolumn.  Based on 'foldcolumn' and how much
- * space is available for window "wp", minus "col".
- */
-    int
-compute_foldcolumn(win_T *wp, int col)
-{
-    int wmw = wp == curwin && p_wmw == 0 ? 1 : p_wmw;
-    int n = wp->w_width - (col + wmw);
-
-    return MIN(wp->w_p_fdc, n);
-}
-
-/*
- * Fill the foldcolumn at "p" for window "wp".
- * Only to be called when 'foldcolumn' > 0.
- * Returns the number of bytes stored in 'p'. When non-multibyte characters are
- * used for the fold column markers, this is equal to 'fdc' setting. Otherwise,
- * this will be greater than 'fdc'.
- */
-    size_t
-fill_foldcolumn(
-    char_u	*p,
-    win_T	*wp,
-    int		closed,		// TRUE of FALSE
-    linenr_T	lnum)		// current line number
-{
-    int		i = 0;
-    int		level;
-    int		first_level;
-    int		empty;
-    int		fdc = compute_foldcolumn(wp, 0);
-    size_t	byte_counter = 0;
-    int		symbol = 0;
-    int		len = 0;
-    int		n;
-
-    // Init to all spaces.
-    vim_memset(p, ' ', MAX_MCO * fdc + 1);
-
-    level = win_foldinfo.fi_level;
-    empty = (fdc == 1) ? 0 : 1;
-
-    // If the column is too narrow, we start at the lowest level that
-    // fits and use numbers to indicate the depth.
-    first_level = level - fdc - closed + 1 + empty;
-    if (first_level < 1)
-	first_level = 1;
-
-    n = MIN(fdc, level);		// evaluate this once
-    for (i = 0; i < n; i++)
-    {
-	if (win_foldinfo.fi_lnum == lnum
-		&& first_level + i >= win_foldinfo.fi_low_level)
-	    symbol = wp->w_fill_chars.foldopen;
-	else if (first_level == 1)
-	    symbol = wp->w_fill_chars.foldsep;
-	else if (wp->w_fill_chars.foldinner != NUL)
-	    symbol = wp->w_fill_chars.foldinner;
-	else if (first_level + i <= 9)
-	    symbol = '0' + first_level + i;
-	else
-	    symbol = '>';
-
-	len = utf_char2bytes(symbol, &p[byte_counter]);
-	byte_counter += len;
-	if (first_level + i >= level)
-	{
-	    i++;
-	    break;
-	}
-    }
-
-    if (closed)
-    {
-	if (symbol != 0)
-	{
-	    // rollback length and the character
-	    byte_counter -= len;
-	    if (len > 1)
-		// for a multibyte character, erase all the bytes
-		vim_memset(p + byte_counter, ' ', len);
-	}
-	symbol = wp->w_fill_chars.foldclosed;
-	len = utf_char2bytes(symbol, &p[byte_counter]);
-	byte_counter += len;
-    }
-
-    return MAX(byte_counter + (fdc - i), (size_t)fdc);
-}
-#endif // FEAT_FOLDING
-
+#line 340
 /*
  * Return if the composing characters at "off_from" and "off_to" differ.
  * Only to be used when ScreenLinesUC[off_from] != 0.
@@ -386,47 +229,14 @@ char_needs_redraw(int off_from, int off_to, int cols)
     return FALSE;
 }
 
-#if defined(FEAT_TERMINAL)
-/*
- * Return the index in ScreenLines[] for the current screen line.
- */
-    int
-screen_get_current_line_off(void)
-{
-    return (int)(current_ScreenLine - ScreenLines);
-}
-#endif
-
-#ifdef FEAT_PROP_POPUP
-/*
- * Return TRUE if this position has a higher level popup or this cell is
- * transparent in the current popup.
- */
-    static int
-blocked_by_popup(int row, int col)
-{
-    int off;
-
-    if (!popup_visible)
-	return FALSE;
-    off = row * screen_Columns + col;
-    return popup_mask[off] > screen_zindex || popup_transparent[off];
-}
-#endif
-
+#line 417
 /*
  * Reset the highlighting.  Used before clearing the screen.
  */
     void
 reset_screen_attr(void)
 {
-#ifdef FEAT_GUI
-    if (gui.in_use)
-	// Use a code that will reset gui.highlight_mask in
-	// gui_stop_highlight().
-	screen_attr = HL_ALL + 1;
-    else
-#endif
+#line 430
 	// Use attributes that is very unlikely to appear in text.
 	screen_attr = HL_BOLD | HL_UNDERLINE | HL_INVERSE | HL_STRIKETHROUGH;
 }
@@ -440,121 +250,22 @@ skip_for_popup(int row, int col)
 {
     // Popup windows with zindex higher than POPUPMENU_ZINDEX go on top.
     if (pum_under_menu(row, col, TRUE)
-#ifdef FEAT_PROP_POPUP
-	    && screen_zindex <= POPUPMENU_ZINDEX
-#endif
+#line 446
 	    )
 	return TRUE;
     // Protect cells under the pum from background draws (vsep, status line).
     // Excluded for wildmenu pum (MODE_CMDLINE): pum_row can be stale while
     // the cmdline grows.
-#ifdef FEAT_PROP_POPUP
-    if (screen_zindex < POPUPMENU_ZINDEX
-	    && pum_visible()
-	    && (State & MODE_CMDLINE) == 0
-	    && pum_under_menu(row, col, FALSE))
-	return TRUE;
-#else
+#line 458
     if (pum_visible()
 	    && (State & MODE_CMDLINE) == 0
 	    && pum_under_menu(row, col, FALSE))
 	return TRUE;
-#endif
-#ifdef FEAT_PROP_POPUP
-    if (blocked_by_popup(row, col))
-	return TRUE;
-#endif
+#line 467
     return FALSE;
 }
 
-#ifdef FEAT_PROP_POPUP
-/*
- * Cached attributes of the current opacity popup, computed once per
- * screen_line() to avoid recomputing them inside the per-cell loop.
- */
-typedef struct {
-    int		popup_attr;	// get_win_attr(screen_opacity_popup)
-    int		blend;		// screen_opacity_popup->w_popup_blend
-} popup_opacity_T;
-
-    static inline void
-popup_opacity_init(popup_opacity_T *po)
-{
-    po->popup_attr = get_win_attr(screen_opacity_popup);
-    po->blend = screen_opacity_popup->w_popup_blend;
-}
-
-/*
- * Read the underlying base screen attribute at (row, col), falling back
- * to "fallback" when the position is outside base_screenattrs.
- */
-    static inline int
-popup_base_attr_or(int row, int col, int fallback)
-{
-    int		base = fallback;
-
-    popup_get_base_screen_cell(row, col, NULL, &base, NULL);
-    return base;
-}
-
-/*
- * Blend "char_attr" through the cached opacity popup over "base_attr".
- * "blend_fg" is TRUE when both fg and bg should blend (space cells), FALSE
- * when only bg should blend so the popup fg is preserved (text cells).
- */
-    static inline int
-popup_blend_with_base(
-	const popup_opacity_T	*po,
-	int			char_attr,
-	int			base_attr,
-	int			blend_fg)
-{
-    int		combined = hl_combine_attr(po->popup_attr, char_attr);
-
-    return hl_blend_attr(base_attr, combined, po->blend, blend_fg);
-}
-
-/*
- * For a double-wide character at a popup boundary with opacity:0
- * (blend==100), the two cells may have different underlying attrs.
- * Pick the one without a background color to prevent color leaking.
- */
-    static void
-resolve_wide_char_opacity_attrs(
-	int row, int col1, int col2,
-	sattr_T *attr1, sattr_T *attr2)
-{
-    int		bg1, bg2;
-    int		base1 = 0;
-    int		base2 = 0;
-    attrentry_T	*ae;
-
-    if (*attr1 == *attr2)
-	return;
-
-    popup_get_base_screen_cell(row, col1, NULL, &base1, NULL);
-    ae = syn_cterm_attr2entry(base1);
-# ifdef FEAT_TERMGUICOLORS
-    bg1 = (ae != NULL && !COLOR_INVALID(ae->ae_u.cterm.bg_rgb));
-# else
-    bg1 = (ae != NULL && ae->ae_u.cterm.bg_color != 0);
-# endif
-
-    popup_get_base_screen_cell(row, col2, NULL, &base2, NULL);
-    ae = syn_cterm_attr2entry(base2);
-# ifdef FEAT_TERMGUICOLORS
-    bg2 = (ae != NULL && !COLOR_INVALID(ae->ae_u.cterm.bg_rgb));
-# else
-    bg2 = (ae != NULL && ae->ae_u.cterm.bg_color != 0);
-# endif
-
-    if (bg1 && !bg2)
-	*attr1 = *attr2;
-    else if (!bg1 && bg2)
-	*attr2 = *attr1;
-}
-#endif
-
+#line 558
 /*
  * Move one "cooked" screen line to the screen, but only the characters that
  * have actually changed.  Handle insert/delete character.
@@ -590,29 +301,16 @@ screen_line(
     int		    hl;
     int		    force = FALSE;	// force update rest of the line
     int		    redraw_this		// bool: does character need redraw?
-#ifdef FEAT_GUI
-				= TRUE	// For GUI when while-loop empty
-#endif
+#line 596
 				;
     int		    redraw_next;	// redraw_this for next character
-#ifdef FEAT_GUI_MSWIN
-    int		    changed_this;	// TRUE if character changed
-    int		    changed_next;	// TRUE if next character changed
-#endif
+#line 602
     int		    clear_next = FALSE;
     int		    char_cells;		// 1: normal char
 					// 2: occupies two display cells
     bool	    override_success =
 	push_highlight_overrides(wp->w_hl, wp->w_hl_len);
-#ifdef FEAT_PROP_POPUP
-    popup_opacity_T po;			// cached when drawing an opacity popup
-    int		    drawing_opacity_popup =
-				screen_opacity_popup != NULL
-				&& (flags & SLF_POPUP);
-    CLEAR_FIELD(po);
-    if (drawing_opacity_popup)
-	popup_opacity_init(&po);
-#endif
+#line 616
 
     // Check for illegal row and col, just in case.
     if (row >= Rows)
@@ -620,10 +318,7 @@ screen_line(
     if (endcol > Columns)
 	endcol = Columns;
 
-#ifdef FEAT_CLIPBOARD
-    clip_may_clear_selection(row, row);
-#endif
-
+#line 627
     off_from = (unsigned)(current_ScreenLine - ScreenLines);
     off_to = LineOffset[row] + coloff;
     max_off_from = off_from + screen_Columns;
@@ -659,31 +354,9 @@ screen_line(
     }
 #endif // FEAT_RIGHTLEFT
 
-#ifdef FEAT_PROP_POPUP
-    // First char of a popup window may go on top of the right half of a
-    // double-wide character. Clear the left half to avoid it getting the popup
-    // window background color.
-    if (coloff > 0 && enc_utf8
-		   && ScreenLines[off_to] == 0
-		   && ScreenLinesUC[off_to - 1] != 0
-		   && (*mb_char2cells)(ScreenLinesUC[off_to - 1]) > 1)
-    {
-	ScreenLines[off_to - 1] = ' ';
-	ScreenLinesUC[off_to - 1] = 0;
-	// Skip screen output when drawing an opacity popup: the
-	// background draw already output this cell, and outputting
-	// a space here would briefly erase it causing flicker.
-# ifdef FEAT_PROP_POPUP
-	if (screen_opacity_popup == NULL)
-# endif
-	    screen_char(off_to - 1, row, col + coloff - 1);
-    }
-#endif
-
+#line 683
     redraw_next = char_needs_redraw(off_from, off_to, endcol - col);
-#ifdef FEAT_GUI_MSWIN
-    changed_next = redraw_next;
-#endif
+#line 687
 
     while (col < endcol)
     {
@@ -696,28 +369,7 @@ screen_line(
 	redraw_next = force || char_needs_redraw(off_from + char_cells,
 			      off_to + char_cells, endcol - col - char_cells);
 
-#ifdef FEAT_GUI
-# ifdef FEAT_GUI_MSWIN
-	changed_this = changed_next;
-	changed_next = redraw_next;
-# endif
-	// If the next character was bold, then redraw the current character to
-	// remove any pixels that might have spilt over into us.  This only
-	// happens in the GUI.
-	// With MS-Windows antialiasing may also cause pixels to spill over
-	// from a previous character, no matter attributes, always redraw if a
-	// character changed.
-	if (redraw_next && gui.in_use)
-	{
-# ifndef FEAT_GUI_MSWIN
-	    hl = ScreenAttrs[off_to + char_cells];
-	    if (hl > HL_ALL)
-		hl = syn_attr2attr(hl);
-	    if (hl & HL_BOLD)
-# endif
-		redraw_this = TRUE;
-	}
-#endif
+#line 721
 	// skip the second cell for double-width characters.
 	if (redraw_this && char_cells == 2 && skip_for_popup(row, col + coloff + 1))
 	    redraw_this = FALSE;
@@ -725,108 +377,7 @@ screen_line(
 	if (redraw_this && skip_for_popup(row, col + coloff))
 	    redraw_this = FALSE;
 
-#ifdef FEAT_PROP_POPUP
-	// For popup with opacity windows: if drawing a space, show the
-	// underlying character with the popup's attributes blended in.
-	int opacity_blank = FALSE;
-	// Popup with opacity: when drawing a space, blend the popup attrs
-	// onto whatever is underneath instead of overwriting it.
-	if (drawing_opacity_popup
-		&& ScreenLines[off_from] == ' '
-		&& (!enc_utf8 || ScreenLinesUC[off_from] == 0))
-	{
-	    int popup_src_attr = ScreenAttrs[off_from];
-	    int bg_is_empty = ScreenLines[off_to] == 0
-				&& (!enc_utf8 || ScreenLinesUC[off_to] == 0);
-
-	    // Case A: target cell is the second half of a wide char from a
-	    // previous draw.  Don't overwrite it.
-	    if (bg_is_empty
-		    && off_to > 0
-		    && enc_utf8 && ScreenLinesUC[off_to - 1] != 0
-		    && utf_char2cells(ScreenLinesUC[off_to - 1]) == 2)
-	    {
-		opacity_blank = TRUE;
-		redraw_this = FALSE;
-	    }
-	    // Case B: target cell holds a real character — blend popup attrs
-	    // over it, preserving the underlying glyph.
-	    else if (ScreenLines[off_to] != 0
-		    || (enc_utf8 && ScreenLinesUC[off_to] != 0))
-	    {
-		int bg_char_cells = (enc_utf8 && ScreenLinesUC[off_to] != 0)
-				? utf_char2cells(ScreenLinesUC[off_to]) : 1;
-
-		if (bg_char_cells == 2)
-		{
-		    if (col + 1 >= endcol || off_from + 1 >= max_off_from
-						       || off_to + 1 >= max_off_to)
-		    {
-			// Wide char doesn't fit at the edge.  Replace with a
-			// blended space so opacity is still applied.
-			int base_attr;
-			ScreenLines[off_to] = ' ';
-			if (enc_utf8)
-			    ScreenLinesUC[off_to] = 0;
-			base_attr = popup_base_attr_or(row, col + coloff,
-							     ScreenAttrs[off_to]);
-			ScreenAttrs[off_to] = popup_blend_with_base(&po,
-					    popup_src_attr, base_attr, TRUE);
-			screen_char(off_to, row, col + coloff);
-			opacity_blank = TRUE;
-			redraw_this = FALSE;
-			goto skip_opacity;
-		    }
-		    // Wide bg char must be followed by a popup space, otherwise
-		    // a popup glyph would corrupt its right half.
-		    if (!(ScreenLines[off_from + 1] == ' '
-			    && (!enc_utf8 || ScreenLinesUC[off_from + 1] == 0)))
-			goto skip_opacity;
-		}
-
-		// Keep the underlying character and blend the popup attrs over
-		// it.  blend_fg=TRUE because we're drawing a space, so the
-		// foreground (the underlying glyph) should also blend.
-		opacity_blank = TRUE;
-		int base_attr = popup_base_attr_or(row, col + coloff,
-							     ScreenAttrs[off_to]);
-		ScreenAttrs[off_to] = popup_blend_with_base(&po,
-					    popup_src_attr, base_attr, TRUE);
-		screen_char(off_to, row, col + coloff);
-		// For wide bg char also blend the second cell; its base may be
-		// outside the popup area.
-		if (bg_char_cells == 2)
-		{
-		    int base_attr2 = popup_base_attr_or(row, col + coloff + 1,
-							 ScreenAttrs[off_to + 1]);
-		    ScreenAttrs[off_to + 1] = popup_blend_with_base(&po,
-					    popup_src_attr, base_attr2, TRUE);
-		    if (po.blend == 100)
-			resolve_wide_char_opacity_attrs(row,
-				col + coloff, col + coloff + 1,
-				&ScreenAttrs[off_to], &ScreenAttrs[off_to + 1]);
-		}
-		redraw_this = FALSE;
-	    }
-	    // Case C: popup space overlaps the second half of a destroyed wide
-	    // character.  Blend so the cell matches its neighbors instead of
-	    // appearing as a solid-colored gap.
-	    else if (bg_is_empty)
-	    {
-		int base_attr;
-		ScreenLines[off_to] = ' ';
-		base_attr = popup_base_attr_or(row, col + coloff,
-							     ScreenAttrs[off_to]);
-		ScreenAttrs[off_to] = popup_blend_with_base(&po,
-					    popup_src_attr, base_attr, TRUE);
-		screen_char(off_to, row, col + coloff);
-		opacity_blank = TRUE;
-		redraw_this = FALSE;
-	    }
-	}
-skip_opacity:
-#endif
-
+#line 830
 	if (redraw_this)
 	{
 	    /*
@@ -843,9 +394,7 @@ skip_opacity:
 	     */
 	    if (       p_wiv
 		    && !force
-#ifdef FEAT_GUI
-		    && !gui.in_use
-#endif
+#line 849
 		    && ScreenAttrs[off_to] != 0
 		    && ScreenAttrs[off_from] != ScreenAttrs[off_to])
 	    {
@@ -939,12 +488,7 @@ skip_opacity:
 	    // character should be redrawn too.  This happens for our own GUI
 	    // and for some xterms.
 	    if (
-# ifdef FEAT_GUI
-		    gui.in_use
-# endif
-# if defined(FEAT_GUI) && defined(UNIX)
-		    ||
-# endif
+#line 948
 # ifdef UNIX
 		    term_is_xterm
 # endif
@@ -957,57 +501,10 @@ skip_opacity:
 		    redraw_next = TRUE;
 	    }
 #endif
-#ifdef FEAT_GUI_MSWIN
-	    // MS-Windows antialiasing may spill over to the next character,
-	    // redraw that one if this one changed, no matter attributes.
-	    if (gui.in_use && changed_this)
-		redraw_next = TRUE;
-# ifdef FEAT_DIRECTX
-	    // DirectWrite subpixel rendering (especially with CFF/OTF
-	    // fonts) can extend pixels beyond cell boundaries to the
-	    // left.  Redraw the current character if the previous one
-	    // changed.
-	    if (gui.directx_enabled && changed_this)
-		redraw_this = TRUE;
-# endif
-#endif
+#line 974
 
 	    ScreenAttrs[off_to] = ScreenAttrs[off_from];
-#ifdef FEAT_PROP_POPUP
-	    // For popup with opacity text: blend popup attrs over the underlying
-	    // base.  blend_fg=FALSE so the popup foreground (the real glyph) is
-	    // preserved while only the background blends.
-	    if (drawing_opacity_popup && po.blend > 0)
-	    {
-		int popup_src_attr = ScreenAttrs[off_from];
-		int scol1 = col + coloff;
-		int base1 = popup_base_attr_or(row, scol1, 0);
-
-		if (char_cells == 2)
-		{
-		    int base2 = popup_base_attr_or(row, scol1 + 1, 0);
-
-		    // Terminals can't render different bg colors for the two
-		    // halves of a wide char.  If one half is over a lower
-		    // opacity popup and the other isn't, use the non-popup
-		    // side for both halves to avoid color leaking.
-		    int over1 = popup_is_over_opacity(row, scol1);
-		    int over2 = popup_is_over_opacity(row, scol1 + 1);
-		    if (over1 != over2)
-		    {
-			if (over1)
-			    base1 = base2;
-			else
-			    base2 = base1;
-		    }
-		    ScreenAttrs[off_to + 1] = popup_blend_with_base(&po,
-					    popup_src_attr, base2, FALSE);
-		}
-		ScreenAttrs[off_to] = popup_blend_with_base(&po,
-					    popup_src_attr, base1, FALSE);
-	    }
-	    else
-#endif
+#line 1011
 	    // For simplicity set the attributes of second half of a
 	    // double-wide character equal to the first half.
 	    if (char_cells == 2)
@@ -1019,9 +516,7 @@ skip_opacity:
 		screen_char(off_to, row, col + coloff);
 	}
 	else if (  p_wiv
-#ifdef FEAT_GUI
-		&& !gui.in_use
-#endif
+#line 1025
 		&& col + coloff > 0 && off_to > 0)
 	{
 	    if (ScreenAttrs[off_to] == ScreenAttrs[off_to - 1])
@@ -1036,9 +531,7 @@ skip_opacity:
 		screen_stop_highlight();
 	}
 
-#ifdef FEAT_PROP_POPUP
-	if (!opacity_blank)
-#endif
+#line 1042
 	{
 	    ScreenCols[off_to] = ScreenCols[off_from];
 	    if (char_cells == 2)
@@ -1060,9 +553,7 @@ skip_opacity:
 	// Skip screen output when drawing an opacity popup: the
 	// background already has this cell, outputting a space here
 	// would briefly erase it causing flicker.
-#ifdef FEAT_PROP_POPUP
-	if (screen_opacity_popup == NULL)
-#endif
+#line 1066
 	    screen_char(off_to, row, col + coloff);
     }
 
@@ -1072,9 +563,7 @@ skip_opacity:
 #endif
 				   )
     {
-#ifdef FEAT_GUI
-	int startCol = col;
-#endif
+#line 1078
 
 	// blank out the rest of the line
 	while (col < clear_width && ScreenLines[off_to] == ' '
@@ -1088,51 +577,7 @@ skip_opacity:
 	}
 	if (col < clear_width)
 	{
-#ifdef FEAT_GUI
-	    /*
-	     * In the GUI, clearing the rest of the line may leave pixels
-	     * behind if the first character cleared was bold.  Some bold
-	     * fonts spill over the left.  In this case we redraw the previous
-	     * character too.  If we didn't skip any blanks above, then we
-	     * only redraw if the character wasn't already redrawn anyway.
-	     */
-	    if (gui.in_use && (col > startCol || !redraw_this))
-	    {
-		hl = ScreenAttrs[off_to];
-		if (hl > HL_ALL || (hl & HL_BOLD))
-		{
-		    int prev_cells = 1;
-
-		    if (enc_utf8)
-			// for utf-8, ScreenLines[char_offset + 1] == 0 means
-			// that its width is 2.
-			prev_cells = ScreenLines[off_to - 1] == 0 ? 2 : 1;
-		    else if (enc_dbcs != 0)
-		    {
-			// find previous character by counting from first
-			// column and get its width.
-			unsigned off = LineOffset[row];
-			unsigned max_off = LineOffset[row] + screen_Columns;
-
-			while (off < off_to)
-			{
-			    prev_cells = (*mb_off2cells)(off, max_off);
-			    off += prev_cells;
-			}
-		    }
-
-		    if (!skip_for_popup(row, col + coloff - prev_cells))
-		    {
-			if (enc_dbcs != 0 && prev_cells > 1)
-			    screen_char_2(off_to - prev_cells, row,
-						   col + coloff - prev_cells);
-			else
-			    screen_char(off_to - prev_cells, row,
-						   col + coloff - prev_cells);
-		    }
-		}
-	    }
-#endif
+#line 1136
 	    screen_fill(row, row + 1, col + coloff, clear_width + coloff,
 								 ' ', ' ', 0);
 	    while (col < clear_width)
@@ -1145,9 +590,7 @@ skip_opacity:
     }
 
     if (clear_width > 0
-#ifdef FEAT_PROP_POPUP
-	    && !(flags & SLF_POPUP)  // no separator for popup window
-#endif
+#line 1151
 	    )
     {
 	// For a window that has a right neighbor, draw the separator char
@@ -1307,11 +750,7 @@ get_keymap_str(
     if (p == NULL || *p == NUL)
 #endif
     {
-#ifdef FEAT_KEYMAP
-	if (wp->w_buffer->b_kmap_state & KEYMAP_LOADED)
-	    p = wp->w_buffer->b_p_keymap;
-	else
-#endif
+#line 1315
 	    p = (char_u *)"lang";
     }
     plen = vim_snprintf((char *)buf, len, (char *)fmt, p);
@@ -1525,14 +964,7 @@ win_redr_custom(
 		curattr = attr;
 	    else if (hltab[n].userhl < 0)
 		curattr = syn_id2attr(-hltab[n].userhl);
-# ifdef FEAT_TERMINAL
-	    else if (wp != NULL && wp != curwin && bt_terminal(wp->w_buffer)
-						    && wp->w_status_height != 0)
-		curattr = highlight_stltermnc[hltab[n].userhl - 1];
-	    else if (wp != NULL && bt_terminal(wp->w_buffer)
-						    && wp->w_status_height != 0)
-		curattr = highlight_stlterm[hltab[n].userhl - 1];
-# endif
+#line 1536
 	    else if (wp != NULL && wp != curwin && wp->w_status_height != 0)
 		curattr = highlight_stlnc[hltab[n].userhl - 1];
 	    else
@@ -1778,9 +1210,7 @@ screen_puts_len(
     // When drawing over the right half of a double-wide char clear out the
     // left half.  Only needed in a terminal.
     if (has_mbyte && col > 0 && col < screen_Columns
-#ifdef FEAT_GUI
-	    && !gui.in_use
-#endif
+#line 1784
 	    && mb_fix_col(col, row) != col)
     {
 	// Keep the original attribute to preserve background color
@@ -1899,12 +1329,7 @@ screen_puts_len(
 	    // character should be redrawn too.  This happens for our own GUI
 	    // and for some xterms.
 	    if (need_redraw && ScreenLines[off] != ' ' && (
-# ifdef FEAT_GUI
-		    gui.in_use
-# endif
-# if defined(FEAT_GUI) && defined(UNIX)
-		    ||
-# endif
+#line 1908
 # ifdef UNIX
 		    term_is_xterm
 # endif
@@ -2067,18 +1492,7 @@ screen_start_highlight(int attr)
        )
 	return;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	char	buf[20];
-
-	// The GUI handles this internally.
-	sprintf(buf, "\033|%dh", attr);
-	OUT_STR(buf);
-	return;
-    }
-#endif
-
+#line 2082
     if (attr > HL_ALL)				// special HL attr.
     {
 	if (IS_CTERM)
@@ -2226,17 +1640,7 @@ screen_stop_highlight(void)
 #endif
 					   )
     {
-#ifdef FEAT_GUI
-	if (gui.in_use)
-	{
-	    char	buf[20];
-
-	    // use internal GUI code
-	    sprintf(buf, "\033|%dH", screen_attr);
-	    OUT_STR(buf);
-	}
-	else
-#endif
+#line 2240
 	{
 	    int is_under;
 
@@ -2426,40 +1830,7 @@ screen_char(unsigned off, int row, int col)
     if (row >= screen_Rows || col >= screen_Columns)
 	return;
 
-#ifdef FEAT_PROP_POPUP
-    // If this cell is under a higher-zindex opacity popup, suppress
-    // output to prevent flicker.  The higher popup's redraw will
-    // output the final blended result.
-    // Also suppress if this is a wide character whose second cell
-    // is under an opacity popup.
-    if (popup_is_under_opacity(row, col))
-    {
-	// If this is a wide character whose left half is under an opacity
-	// popup but right half is not, clear the right half so the old
-	// blended value doesn't remain as a ghost after popup_move().
-	if (enc_utf8 && ScreenLinesUC[off] != 0
-		&& utf_char2cells(ScreenLinesUC[off]) == 2
-		&& col + 1 < screen_Columns
-		&& !popup_is_under_opacity(row, col + 1))
-	{
-	    int off2 = off + 1;
-	    ScreenLines[off2] = ' ';
-	    ScreenLinesUC[off2] = 0;
-	    screen_char(off2, row, col + 1);
-	}
-	screen_cur_col = 9999;
-	return;
-    }
-    if (enc_utf8 && ScreenLinesUC[off] != 0
-	    && utf_char2cells(ScreenLinesUC[off]) == 2
-	    && col + 1 < screen_Columns
-	    && popup_is_under_opacity(row, col + 1))
-    {
-	screen_cur_col = 9999;
-	return;
-    }
-#endif
-
+#line 2463
     // Outputting a character in the last cell on the screen may scroll the
     // screen up.  Only do it when the "xn" termcap property is set, otherwise
     // mark the character invalid (update it when scrolled up).
@@ -2496,9 +1867,7 @@ screen_char(unsigned off, int row, int col)
 	char_u	    buf[MB_MAXBYTES + 1];
 
 	if (
-#ifdef FEAT_GUI
-	    !gui.in_use &&
-#endif
+#line 2502
 	    get_cellwidth(ScreenLinesUC[off]) > 1
 	    )
 	{
@@ -2512,9 +1881,7 @@ screen_char(unsigned off, int row, int col)
 	else if (utf_ambiguous_width(ScreenLinesUC[off]))
 	{
 	    if (*p_ambw == 'd'
-#ifdef FEAT_GUI
-		    && !gui.in_use
-#endif
+#line 2518
 		    )
 	    {
 		// Clear the two screen cells. If the character is actually
@@ -2567,15 +1934,7 @@ screen_char_2(unsigned off, int row, int col)
 	return;
     }
 
-#ifdef FEAT_PROP_POPUP
-    // If under a higher-zindex opacity popup, suppress output.
-    if (popup_is_under_opacity(row, col))
-    {
-	screen_cur_col = 9999;
-	return;
-    }
-#endif
-
+#line 2579
     // Output the first byte normally (positions the cursor), then write the
     // second byte directly.
     screen_char(off, row, col);
@@ -2638,10 +1997,7 @@ redraw_block(int row, int end, win_T *wp)
     int		col;
     int		width;
 
-#ifdef FEAT_CLIPBOARD
-    clip_may_clear_selection(row, end - 1);
-#endif
-
+#line 2645
     if (wp == NULL)
     {
 	col = firstwin->w_wincol;
@@ -2703,16 +2059,12 @@ screen_fill(
 
     // it's a "normal" terminal when not in a GUI or cterm
     norm_term = (
-#ifdef FEAT_GUI
-	    !gui.in_use &&
-#endif
+#line 2709
 	    !IS_CTERM);
     for (row = start_row; row < end_row; ++row)
     {
 	if (has_mbyte
-#ifdef FEAT_GUI
-		&& !gui.in_use
-#endif
+#line 2716
 	   )
 	{
 	    // When drawing over the right half of a double-wide char clear
@@ -2745,13 +2097,7 @@ screen_fill(
 		    || (norm_term
 			&& attr <= HL_ALL
 			&& ((attr & ~(HL_BOLD | HL_ITALIC)) == 0)))
-#ifdef FEAT_PROP_POPUP
-		// Do not use T_CE optimization if any cell in the
-		// range is under an opacity popup.  The clear-to-eol
-		// command would erase the popup area on screen.
-		&& !popup_is_under_opacity_range(row,
-						start_col, end_col)
-#endif
+#line 2755
 		)
 	{
 	    /*
@@ -2806,51 +2152,7 @@ screen_fill(
 		    // Skip if under a(nother) popup.
 		    && !skip_for_popup(row, col))
 	    {
-#ifdef FEAT_PROP_POPUP
-		// For popup with opacity: show underlying character with
-		// popup's background color applied.
-		if (screen_opacity_popup != NULL && c == ' ')
-		{
-		    // Skip if background is the second cell of a wide character.
-		    // Check if previous cell is a wide character.
-		    if (ScreenLines[off] == 0
-			    && off > 0
-			    && enc_utf8 && ScreenLinesUC[off - 1] != 0
-			    && utf_char2cells(ScreenLinesUC[off - 1]) == 2)
-			goto next_col;
-		}
-		if (screen_opacity_popup != NULL && c == ' '
-						       && ScreenLines[off] != 0)
-		{
-		    int bg_char_cells = 1;
-		    if (enc_utf8 && ScreenLinesUC[off] != 0)
-			bg_char_cells = utf_char2cells(ScreenLinesUC[off]);
-
-		    // For wide background character, check if the next cell
-		    // is also being filled with space.  If not, the wide char
-		    // would be partially covered, so don't show it.
-		    if (bg_char_cells == 2)
-		    {
-			if (col + 1 >= end_col)
-			    // At the edge, skip wide char.
-			    goto skip_opacity_fill;
-			// In screen_fill, we're filling with 'c' which is ' '.
-			// The next cell will also be filled with c2 (usually ' ').
-			// If c2 is not space, skip the wide char.
-			if (c2 != ' ')
-			    goto skip_opacity_fill;
-		    }
-
-		    int popup_attr = get_win_attr(screen_opacity_popup);
-		    int blend = screen_opacity_popup->w_popup_blend;
-		    // Blend both foreground and background for padding area
-		    ScreenAttrs[off] = hl_blend_attr(ScreenAttrs[off],
-							popup_attr, blend, TRUE);
-		    screen_char(off, row, col);
-		    goto next_col;
-		}
-skip_opacity_fill:
-#endif
+#line 2854
 		// For pum opacity: blend pum background with underlying.
 		// Only for space cells; text cells are handled normally.
 		if (screen_pum_blend > 0 && c == ' '
@@ -2935,12 +2237,7 @@ skip_opacity_fill:
 		// next character should be redrawn too.  This happens for our
 		// own GUI and for some xterms.
 		if (
-# ifdef FEAT_GUI
-			gui.in_use
-# endif
-# if defined(FEAT_GUI) && defined(UNIX)
-			||
-# endif
+#line 2944
 # ifdef UNIX
 			term_is_xterm
 # endif
@@ -2994,9 +2291,7 @@ next_col:
 			|| (start_col == cmdline_col_off
 			&& end_col == cmdline_col_off + cmdline_width))
 		    && c1 == ' ' && c2 == ' ' && attr == 0
-#ifdef FEAT_PROP_POPUP
-		    && !popup_overlaps_cmdline()
-#endif
+#line 3000
 		    )
 		clear_cmdline = FALSE;	// command line has been cleared
 	    if (start_col == 0 || start_col == cmdline_col_off)
@@ -3064,9 +2359,7 @@ screen_valid(int doclear)
 screenalloc(int doclear)
 {
     int		    new_row, old_row;
-#ifdef FEAT_GUI
-    int		    old_Rows;
-#endif
+#line 3070
     win_T	    *wp;
     int		    outofmem = FALSE;
     int		    len;
@@ -3079,11 +2372,7 @@ screenalloc(int doclear)
     unsigned	    *new_LineOffset;
     char_u	    *new_LineWraps;
     short	    *new_TabPageIdxs;
-#ifdef FEAT_PROP_POPUP
-    short	    *new_popup_mask;
-    short	    *new_popup_mask_next;
-    char	    *new_popup_transparent;
-#endif
+#line 3087
     tabpage_T	    *tp;
     static int	    entered = FALSE;		// avoid recursiveness
     static int	    done_outofmem_msg = FALSE;	// did outofmem message
@@ -3146,15 +2435,7 @@ retry:
     for (int i = 0; i < AUCMD_WIN_COUNT; ++i)
 	if (aucmd_win[i].auc_win != NULL)
 	    win_free_lsize(aucmd_win[i].auc_win);
-#ifdef FEAT_PROP_POPUP
-    // global popup windows
-    FOR_ALL_POPUPWINS(wp)
-	win_free_lsize(wp);
-    // tab-local popup windows
-    FOR_ALL_TABPAGES(tp)
-	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-	    win_free_lsize(wp);
-#endif
+#line 3158
 
     new_ScreenLines = LALLOC_MULT(schar_T, (Rows + 1) * Columns);
     vim_memset(new_ScreenLinesC, 0, sizeof(u8char_T *) * MAX_MCO);
@@ -3174,11 +2455,7 @@ retry:
     new_LineOffset = LALLOC_MULT(unsigned, Rows);
     new_LineWraps = LALLOC_MULT(char_u, Rows);
     new_TabPageIdxs = LALLOC_MULT(short, Columns);
-#ifdef FEAT_PROP_POPUP
-    new_popup_mask = LALLOC_MULT(short, Rows * Columns);
-    new_popup_mask_next = LALLOC_MULT(short, Rows * Columns);
-    new_popup_transparent = LALLOC_MULT(char, Rows * Columns);
-#endif
+#line 3182
 
     FOR_ALL_TAB_WINDOWS(tp, wp)
     {
@@ -3196,23 +2473,7 @@ retry:
 	    outofmem = TRUE;
 	    break;
 	}
-#ifdef FEAT_PROP_POPUP
-    // global popup windows
-    FOR_ALL_POPUPWINS(wp)
-	if (win_alloc_lines(wp) == FAIL)
-	{
-	    outofmem = TRUE;
-	    goto give_up;
-	}
-    // tab-local popup windows
-    FOR_ALL_TABPAGES(tp)
-	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-	    if (win_alloc_lines(wp) == FAIL)
-	    {
-		outofmem = TRUE;
-		goto give_up;
-	    }
-#endif
+#line 3216
 
 give_up:
     found_null = FALSE;
@@ -3230,11 +2491,7 @@ give_up:
 	    || new_LineOffset == NULL
 	    || new_LineWraps == NULL
 	    || new_TabPageIdxs == NULL
-#ifdef FEAT_PROP_POPUP
-	    || new_popup_mask == NULL
-	    || new_popup_mask_next == NULL
-	    || new_popup_transparent == NULL
-#endif
+#line 3238
 	    || outofmem)
     {
 	if (ScreenLines != NULL || !done_outofmem_msg)
@@ -3256,11 +2513,7 @@ give_up:
 	VIM_CLEAR(new_LineOffset);
 	VIM_CLEAR(new_LineWraps);
 	VIM_CLEAR(new_TabPageIdxs);
-#ifdef FEAT_PROP_POPUP
-	VIM_CLEAR(new_popup_mask);
-	VIM_CLEAR(new_popup_mask_next);
-	VIM_CLEAR(new_popup_transparent);
-#endif
+#line 3264
     }
     else
     {
@@ -3340,10 +2593,7 @@ give_up:
 	// Use the last line of the screen for the current line.
 	current_ScreenLine = new_ScreenLines + Rows * Columns;
 
-#ifdef FEAT_PROP_POPUP
-	vim_memset(new_popup_mask, 0, Rows * Columns * sizeof(short));
-	vim_memset(new_popup_transparent, 0, Rows * Columns * sizeof(char));
-#endif
+#line 3347
     }
 
     free_screenlines();
@@ -3360,42 +2610,18 @@ give_up:
     LineOffset = new_LineOffset;
     LineWraps = new_LineWraps;
     TabPageIdxs = new_TabPageIdxs;
-#ifdef FEAT_PROP_POPUP
-    popup_mask = new_popup_mask;
-    popup_mask_next = new_popup_mask_next;
-    popup_transparent = new_popup_transparent;
-    popup_mask_refresh = TRUE;
-#endif
+#line 3369
 
     // It's important that screen_Rows and screen_Columns reflect the actual
     // size of ScreenLines[].  Set them before calling anything.
-#ifdef FEAT_GUI
-    old_Rows = screen_Rows;
-#endif
+#line 3375
     screen_Rows = Rows;
     screen_Columns = Columns;
 
     set_must_redraw(UPD_CLEAR);	// need to clear the screen later
     if (doclear)
 	screenclear2(TRUE);
-#ifdef FEAT_GUI
-    else if (gui.in_use
-	    && !gui.starting
-	    && ScreenLines != NULL
-	    && old_Rows != Rows)
-    {
-	gui_redraw_block(0, 0, (int)Rows - 1, (int)Columns - 1, 0);
-
-	// Adjust the position of the cursor, for when executing an external
-	// command.
-	if (msg_row >= Rows)		// Rows got smaller
-	    msg_row = Rows - 1;		// put cursor at last row
-	else if (Rows > old_Rows)	// Rows got bigger
-	    msg_row += Rows - old_Rows; // put cursor in same place
-	if (msg_col >= cmdline_width)	// cmdline_width got smaller
-	    msg_col = cmdline_width - 1;    // put cursor at last cmdline column
-    }
-#endif
+#line 3399
     clear_TabPageIdxs();
 
 #ifdef FEAT_GUI_HAIKU
@@ -3434,11 +2660,7 @@ free_screenlines(void)
     VIM_CLEAR(LineOffset);
     VIM_CLEAR(LineWraps);
     VIM_CLEAR(TabPageIdxs);
-#ifdef FEAT_PROP_POPUP
-    VIM_CLEAR(popup_mask);
-    VIM_CLEAR(popup_mask_next);
-    VIM_CLEAR(popup_transparent);
-#endif
+#line 3442
 }
 
 /*
@@ -3472,23 +2694,15 @@ screenclear2(int doclear)
     int	    did_clear = FALSE;
 
     if (starting == NO_SCREEN || ScreenLines == NULL
-#ifdef FEAT_GUI
-	    || (gui.in_use && gui.starting)
-#endif
+#line 3478
 	    )
 	return FALSE;
 
-#ifdef FEAT_GUI
-    if (!gui.in_use)
-#endif
+#line 3484
 	screen_attr = -1;	// force setting the Normal colors
     screen_stop_highlight();	// don't want highlighting here
 
-#ifdef FEAT_CLIPBOARD
-    // disable selection without redrawing it
-    clip_scroll_selection(9999);
-#endif
-
+#line 3492
     // blank out ScreenLines
     for (i = 0; i < Rows; ++i)
     {
@@ -3523,9 +2737,7 @@ screenclear2(int doclear)
 	must_redraw = UPD_NOT_VALID;
     msg_scrolled = 0;		// compute_cmdrow() uses this
     compute_cmdrow();
-#ifdef FEAT_PROP_POPUP
-    popup_redraw_all();		// redraw all popup windows
-#endif
+#line 3529
     msg_row = cmdline_row;	// put cursor on last line for messages
     msg_col = 0;
     screen_start();		// don't know where cursor is now
@@ -3609,9 +2821,7 @@ linecopy(int to, int from, win_T *wp)
 can_clear(char_u *p)
 {
     return (*p != NUL && (t_colors <= 1
-#ifdef FEAT_GUI
-		|| gui.in_use
-#endif
+#line 3615
 #ifdef FEAT_TERMGUICOLORS
 		|| (p_tgc && cterm_normal_bg_gui_color == INVALCOLOR)
 		|| (!p_tgc && cterm_normal_bg_color == 0)
@@ -3619,9 +2829,7 @@ can_clear(char_u *p)
 		|| cterm_normal_bg_color == 0
 #endif
 		|| *T_UT != NUL)
-#ifdef FEAT_PROP_POPUP
-	    && !(p == T_CE && popup_visible)
-#endif
+#line 3625
 	    );
 }
 
@@ -3797,17 +3005,7 @@ windgoto(int row, int col)
 			break;
 		    }
 	    }
-#ifdef FEAT_PROP_POPUP
-	    // Don't output characters over opacity popup cells, it
-	    // would show unblended background values.
-	    if (cost < 999)
-		for (i = wouldbe_col; i < col; ++i)
-		    if (popup_is_under_opacity(row, i))
-		    {
-			cost = 999;
-			break;
-		    }
-#endif
+#line 3811
 	}
 
 	/*
@@ -4098,12 +3296,7 @@ win_do_lines(
 	return FAIL;
     }
 
-#ifdef FEAT_PROP_POPUP
-    // this doesn't work when there are popups visible
-    if (popup_visible)
-	return FAIL;
-#endif
-
+#line 4107
     // Delete all remaining lines
     if (row + line_count >= wp->w_height)
     {
@@ -4235,13 +3428,7 @@ screen_ins_lines(
     if (!screen_valid(TRUE)
 	     || line_count <= 0 || line_count > p_ttyscroll
 	     || end > Rows
-#ifdef FEAT_CLIPBOARD
-	     || (clip_star.state != SELECT_CLEARED
-						 && redrawing_for_callback > 0)
-#endif
-#ifdef FEAT_PROP_POPUP
-	     || popup_visible
-#endif
+#line 4245
 	     )
 	return FAIL;
 
@@ -4314,25 +3501,12 @@ screen_ins_lines(
     if (*T_DB)
 	screen_del_lines(off, end - line_count, line_count, end, FALSE, 0, wp);
 
-#ifdef FEAT_CLIPBOARD
-    // Remove a modeless selection when inserting lines halfway the screen
-    // or not the full width of the screen.
-    if (off + row > 0 || (wp != NULL && wp->w_width != topframe->fr_width))
-	clip_clear_selection(&clip_star);
-    else
-	clip_scroll_selection(-line_count);
-#endif
-
+#line 4326
 #ifdef FEAT_GUI_HAIKU
     vim_lock_screen();
 #endif
 
-#ifdef FEAT_GUI
-    // Don't update the GUI cursor here, ScreenLines[] is invalid until the
-    // scrolling is actually carried out.
-    gui_dont_update_cursor(row + off <= gui.cursor_row);
-#endif
-
+#line 4336
     if (wp != NULL && wp->w_wincol != 0 && *T_CSV != NUL && *T_CCS == NUL)
 	cursor_col = wp->w_wincol;
 
@@ -4432,11 +3606,7 @@ screen_ins_lines(
     redraw_tabpanel = TRUE;
 #endif
 
-#ifdef FEAT_GUI
-    gui_can_update_cursor();
-    if (gui.in_use)
-	out_flush();	// always flush after a scroll
-#endif
+#line 4440
     return OK;
 }
 
@@ -4481,9 +3651,7 @@ screen_del_lines(
 	    || line_count <= 0
 	    || (!force && line_count > p_ttyscroll)
 	    || end > Rows
-#ifdef FEAT_CLIPBOARD
-	    || (clip_star.state != SELECT_CLEARED && redrawing_for_callback > 0)
-#endif
+#line 4487
        )
 	return FAIL;
 
@@ -4542,26 +3710,12 @@ screen_del_lines(
     else
 	return FAIL;
 
-#ifdef FEAT_CLIPBOARD
-    // Remove a modeless selection when deleting lines halfway the screen or
-    // not the full width of the screen.
-    if (off + row > 0 || (wp != NULL && wp->w_width != topframe->fr_width))
-	clip_clear_selection(&clip_star);
-    else
-	clip_scroll_selection(line_count);
-#endif
-
+#line 4554
 #ifdef FEAT_GUI_HAIKU
     vim_lock_screen();
 #endif
 
-#ifdef FEAT_GUI
-    // Don't update the GUI cursor here, ScreenLines[] is invalid until the
-    // scrolling is actually carried out.
-    gui_dont_update_cursor(gui.cursor_row >= row + off
-						&& gui.cursor_row < end + off);
-#endif
-
+#line 4565
     if (wp != NULL && wp->w_wincol != 0 && *T_CSV != NUL && *T_CCS == NUL)
 	cursor_col = wp->w_wincol;
 
@@ -4688,12 +3842,7 @@ screen_del_lines(
     redraw_tabpanel = TRUE;
 #endif
 
-#ifdef FEAT_GUI
-    gui_can_update_cursor();
-    if (gui.in_use)
-	out_flush();	// always flush after a scroll
-#endif
-
+#line 4697
     return OK;
 }
 
@@ -4768,17 +3917,13 @@ showmode(void)
 	    msg_puts_attr("--", attr);
 #if defined(FEAT_XIM)
 	    if (
-# ifdef FEAT_GUI_GTK
-		    preedit_get_status()
-# else
+#line 4774
 		    im_get_status()
-# endif
+#line 4776
 	       )
-# ifdef FEAT_GUI_GTK // most of the time, it's not XIM being used
-		msg_puts_attr(" IM", attr);
-# else
+#line 4780
 		msg_puts_attr(" XIM", attr);
-# endif
+#line 4782
 #endif
 	    // CTRL-X in Insert mode
 	    if (edit_submode != NULL && !shortmess(SHM_COMPLETIONMENU))
@@ -4834,19 +3979,7 @@ showmode(void)
 		if (p_hkmap)
 		    msg_puts_attr(_(" Hebrew"), attr);
 #endif
-#ifdef FEAT_KEYMAP
-		if (State & MODE_LANGMAP)
-		{
-# ifdef FEAT_ARABIC
-		    if (curwin->w_p_arab)
-			msg_puts_attr(_(" Arabic"), attr);
-		    else
-# endif
-			if (get_keymap_str(curwin, (char_u *)" (%s)",
-							   NameBuff, MAXPATHL) > 0)
-			    msg_puts_attr((char *)NameBuff, attr);
-		}
-#endif
+#line 4850
 		if ((State & MODE_INSERT) && p_paste)
 		    msg_puts_attr(_(" (paste)"), attr);
 
@@ -5010,9 +4143,7 @@ draw_tabline(void)
     char_u	*p;
     int		room;
     int		use_sep_chars = (t_colors < 8
-#ifdef FEAT_GUI
-					    && !gui.in_use
-#endif
+#line 5016
 #ifdef FEAT_TERMGUICOLORS
 					    && !p_tgc
 #endif
@@ -5210,22 +4341,7 @@ fillchar_status(int *attr, win_T *wp)
     bool    override_success =
 	push_highlight_overrides(wp->w_hl, wp->w_hl_len);
 
-#ifdef FEAT_TERMINAL
-    if (bt_terminal(wp->w_buffer))
-    {
-	if (wp == curwin)
-	{
-	    *attr = HL_ATTR(HLF_ST);
-	    fill = wp->w_fill_chars.stl;
-	}
-	else
-	{
-	    *attr = HL_ATTR(HLF_STNC);
-	    fill = wp->w_fill_chars.stlnc;
-	}
-    }
-    else
-#endif
+#line 5229
     if (wp == curwin)
     {
 	*attr = HL_ATTR(HLF_S);
@@ -5499,11 +4615,9 @@ static struct charstab lcstab[] =
     CHARSTAB_ENTRY(&lcs_chars.leadtab2,	    "leadtab"),
     CHARSTAB_ENTRY(&lcs_chars.trail,	    "trail"),
     CHARSTAB_ENTRY(&lcs_chars.lead,	    "lead"),
-#ifdef FEAT_CONCEAL
-    CHARSTAB_ENTRY(&lcs_chars.conceal,	    "conceal"),
-#else
+#line 5505
     CHARSTAB_ENTRY(NULL,		    "conceal"),
-#endif
+#line 5507
     CHARSTAB_ENTRY(NULL,		    "multispace"),
     CHARSTAB_ENTRY(NULL,		    "leadmultispace")
 };
