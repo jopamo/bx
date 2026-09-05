@@ -574,13 +574,12 @@ int xiotype_ip6_join_source_group(
       Error1("syntax in option %s: missing ':'", token);
    }
    *buffp++ = '\0';
-   if ((opt->value2.u_string/*ifindex*/ = Malloc(IF_NAMESIZE)) == NULL) {
+   if ((opt->value2.u_string/*ifindex*/ = strdup(buff)) == NULL) {
       int _errno = errno;
       free(opt->value.u_string);
       errno = _errno;
       return -1;
    }
-   strncpy(opt->value2.u_string/*ifindex*/, buff, IF_NAMESIZE);
 
    ++tokp;
    /* Parse second IP address (source address), expect ':' or '\0'' */

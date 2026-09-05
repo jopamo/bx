@@ -98,7 +98,7 @@ xiosetunix(int pf,
       Warn2("unix socket address "F_Zu" characters long, truncating to "F_Zu"",
 	    pathlen, sizeof(saun->sun_path));
    }
-   strncpy(saun->sun_path, path, sizeof(saun->sun_path));	/* ok */
+   memcpy(saun->sun_path, path, MIN(pathlen, sizeof(saun->sun_path)));
    if (tight) {
       len = sizeof(struct sockaddr_un)-sizeof(saun->sun_path)+
 	 MIN(pathlen, sizeof(saun->sun_path));
