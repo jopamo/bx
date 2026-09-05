@@ -32,7 +32,6 @@
 #include "xio-socks5.h"
 #include "xio-proxy.h"
 #endif /* _WITH_SOCKET */
-#include "xio-progcall.h"
 #include "xio-fs.h"
 #include "xio-streams.h"
 
