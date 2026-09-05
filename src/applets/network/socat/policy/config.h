@@ -766,9 +766,9 @@
 /* #undef WITH_VSOCK */
 /* #undef WITH_NAMESPACES */
 #define WITH_PROXY 1
-/* #undef WITH_EXEC */
-/* #undef WITH_SYSTEM */
-/* #undef WITH_SHELL */
+#define WITH_EXEC 1
+#define WITH_SYSTEM 1
+#define WITH_SHELL 1
 /* #undef WITH_READLINE */
 /* #undef WITH_TUN */
 /* #undef WITH_PTY */

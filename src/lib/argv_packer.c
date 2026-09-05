@@ -63,7 +63,7 @@ size_t bx_argv_environment_bytes(void) {
     return env_bytes;
 }
 
-size_t bx_argv_bytes(char **argv) {
+size_t bx_argv_bytes(char *const *argv) {
     size_t total = 0;
     if (!argv)
         return 0;

@@ -103,9 +103,7 @@ int Sigprocmask(int how, const sigset_t *set, sigset_t *oset);
 unsigned int Alarm(unsigned int seconds);
 int Kill(pid_t pid, int sig);
 int Link(const char *oldpath, const char *newpath);
-int Execvp(const char *file, char *const argv[]);
 #endif /* WITH_SYCLS */
-int System(const char *string);
 #if WITH_SYCLS
 int Socketpair(int d, int type, int protocol, int sv[2]);
 #endif /* WITH_SYCLS */
@@ -244,7 +242,6 @@ void Add_history(const char *string);
 #define Alarm(s) alarm(s)
 #define Kill(p,s) kill(p,s)
 #define Link(o,n) link(o,n)
-#define Execvp(f,a) execvp(f,a)
 #define Socketpair(d,t,p,s) socketpair(d,t,p,s)
 #define Socket(d,t,p) socket(d,t,p)
 #define Bind(s,m,a) bind(s,m,a)
