@@ -2730,9 +2730,7 @@ screenclear2(int doclear)
     win_rest_invalid(firstwin);	// redraw all regular windows
     redraw_cmdline = TRUE;
     redraw_tabline = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 2736
     if (must_redraw == UPD_CLEAR)	// no need to clear again
 	must_redraw = UPD_NOT_VALID;
     msg_scrolled = 0;		// compute_cmdrow() uses this
@@ -3313,12 +3311,7 @@ win_do_lines(
     if (!no_win_do_lines_ins)
 	clear_cmdline = TRUE;
 
-#if defined(FEAT_TABPANEL)
-    // Terminal scroll operations affect the full screen width, which would
-    // corrupt the vertical tabpanel area and cause flicker.
-    if (tabpanel_width() > 0)
-	return FAIL;
-#endif
+#line 3322
 
     /*
      * If the terminal can set a scroll region, use that.
@@ -3602,10 +3595,6 @@ screen_ins_lines(
 	}
     }
 
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
-
 #line 4440
     return OK;
 }
@@ -3837,10 +3826,6 @@ screen_del_lines(
 	    screen_start();		// don't know where cursor is now
 	}
     }
-
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
 
 #line 4697
     return OK;
@@ -4150,9 +4135,7 @@ draw_tabline(void)
 					    );
     bool	override_success;
 
-#if defined(FEAT_TABPANEL)
-    col = firstwin->w_wincol;
-#endif
+#line 4156
 
     if (ScreenLines == NULL)
 	return;
@@ -4597,9 +4580,7 @@ static struct charstab filltab[] =
     CHARSTAB_ENTRY(&fill_chars.diff,	    "diff"),
     CHARSTAB_ENTRY(&fill_chars.eob,	    "eob"),
     CHARSTAB_ENTRY(&fill_chars.lastline,    "lastline"),
-#if defined(FEAT_TABPANEL)
-    CHARSTAB_ENTRY(&fill_chars.tpl_vert,    "tpl_vert"),
-#endif
+#line 4603
     CHARSTAB_ENTRY(&fill_chars.trunc,	    "trunc"),
     CHARSTAB_ENTRY(&fill_chars.truncrl,	    "truncrl"),
 };
@@ -4719,9 +4700,7 @@ set_chars_option(win_T *wp, char_u *value, int is_listchars, int apply,
 		fill_chars.diff = '-';
 		fill_chars.eob = '~';
 		fill_chars.lastline = '@';
-#if defined(FEAT_TABPANEL)
-		fill_chars.tpl_vert = '|';
-#endif
+#line 4725
 		fill_chars.trunc = '>';
 		fill_chars.truncrl = '<';
 	    }

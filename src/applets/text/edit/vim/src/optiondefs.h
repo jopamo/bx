@@ -2188,11 +2188,7 @@ static struct vimoption options[] =
     {"showtabline", "stal", P_NUM|P_VI_DEF|P_RALL,
 			    (char_u *)&p_stal, PV_NONE, did_set_showtabline, NULL,
 			    {(char_u *)1L, (char_u *)0L} SCTX_INIT},
-#if defined(FEAT_TABPANEL)
-    {"showtabpanel", "stpl", P_NUM|P_RALL,
-			    (char_u *)&p_stpl, PV_NONE, did_set_showtabpanel, NULL,
-			    {(char_u *)0L, (char_u *)0L} SCTX_INIT},
-#endif
+#line 2196
     {"sidescroll",  "ss",   P_NUM|P_VI_DEF,
 			    (char_u *)&p_ss, PV_NONE, NULL, NULL,
 			    {(char_u *)0L, (char_u *)0L} SCTX_INIT},
@@ -2343,17 +2339,7 @@ static struct vimoption options[] =
     {"tabpagemax",  "tpm",  P_NUM|P_VI_DEF,
 			    (char_u *)&p_tpm, PV_NONE, NULL, NULL,
 			    {(char_u *)10L, (char_u *)0L} SCTX_INIT},
-#if defined(FEAT_TABPANEL)
-    {"tabpanel",  "tpl",    P_STRING|P_VI_DEF|P_RALL|P_MLE,
-			    (char_u *)&p_tpl, PV_NONE, NULL, NULL,
-			    {(char_u *)"", (char_u *)0L} SCTX_INIT},
-    {"tabpanelopt","tplo",  P_STRING|P_ALLOCED|P_VI_DEF|P_ONECOMMA|P_COLON
-								    |P_NODUP,
-			    (char_u *)&p_tplo, PV_NONE, did_set_tabpanelopt,
-			    expand_set_tabpanelopt,
-			    {(char_u *)"", (char_u *)0L}
-			    SCTX_INIT},
-#endif
+#line 2357
     {"tabstop",	    "ts",   P_NUM|P_VI_DEF|P_RBUF,
 			    (char_u *)&p_ts, PV_TS,
 			    did_set_shiftwidth_tabstop, NULL,

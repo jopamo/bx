@@ -2554,10 +2554,7 @@ close_last_window_tabpage(
     // Since goto_tabpage_tp above did not trigger *Enter autocommands, do
     // that now.
     apply_autocmds(EVENT_TABCLOSED, NULL, NULL, FALSE, curbuf);
-#if defined(FEAT_TABPANEL)
-    if (p_stpl > 0)
-	shell_new_columns();
-#endif
+#line 2561
     apply_autocmds(EVENT_WINENTER, NULL, NULL, FALSE, curbuf);
     apply_autocmds(EVENT_TABENTER, NULL, NULL, FALSE, curbuf);
     if (old_curbuf != curbuf)
@@ -4629,9 +4626,7 @@ free_tabpage(tabpage_T *tp)
 
     if (tp == lastused_tabpage)
 	lastused_tabpage = NULL;
-#ifdef FEAT_TABPANEL
-    tabpanel_forget_tabpage(tp);
-#endif
+#line 4635
 
     vim_free(tp->tp_localdir);
     vim_free(tp->tp_prevdir);
@@ -4666,9 +4661,7 @@ win_new_tabpage(int after)
     tabpage_T	*prev_tp = curtab;
     tabpage_T	*newtp;
     int		n;
-#if defined(FEAT_TABPANEL)
-    int prev_columns = COLUMNS_WITHOUT_TPL();
-#endif
+#line 4672
 
     if (cmdwin_type != 0)
     {
@@ -4728,25 +4721,7 @@ win_new_tabpage(int after)
 
 	lastused_tabpage = prev_tp;
 
-#line 4894
-#if defined(FEAT_TABPANEL)
-	if (prev_columns != COLUMNS_WITHOUT_TPL())
-	{
-	    tabpage_T	*tp2;
-	    int		w = COLUMNS_WITHOUT_TPL();
-
-	    shell_new_columns();
-	    // shell_new_columns() only updates the current tab page; fix up
-	    // all others.
-	    FOR_ALL_TABPAGES(tp2)
-		if (tp2 != curtab)
-		{
-		    frame_new_width(tp2->tp_topframe, w, FALSE, TRUE);
-		    if (!frame_check_width(tp2->tp_topframe, w))
-			frame_new_width(tp2->tp_topframe, w, FALSE, FALSE);
-		}
-	}
-#endif
+#line 4750
 	redraw_all_later(UPD_NOT_VALID);
 	apply_autocmds(EVENT_WINNEW, NULL, NULL, FALSE, curbuf);
 	apply_autocmds(EVENT_WINENTER, NULL, NULL, FALSE, curbuf);
@@ -5229,9 +5204,7 @@ tabpage_move(int nr)
 
     // Need to redraw the tabline.  Tab page contents doesn't change.
     redraw_tabline = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 5235
 }
 
 
@@ -5246,8 +5219,6 @@ tabpage_move(int nr)
     void
 win_goto(win_T *wp)
 {
-#line 5425
-
 #line 5435
     if (text_or_buf_locked())
     {
@@ -5614,9 +5585,7 @@ win_enter_ext(win_T *wp, int flags)
 #line 5830
     redraw_tabline = TRUE;
     redraw_vseps = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 5620
     // Need to schedule a redraw so that the vertical separator highlight is
     // updated for the new current window.  The status line redraw of curwin
     // is already requested via "curwin->w_redr_status".
@@ -6070,9 +6039,7 @@ shell_new_rows(void)
 	win_fix_scroll(TRUE);
 
     redraw_tabline = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 6076
 #if 0
     // Disabled: don't want making the screen smaller make a window larger.
     if (p_ea)
@@ -6089,11 +6056,7 @@ shell_new_columns(void)
     if (firstwin == NULL)	// not initialized yet
 	return;
 
-#if defined(FEAT_TABPANEL)
-    static int prev_tp_width;
-    static int prev_wincol;
-    static int prev_fr_width;
-#endif
+#line 6097
     int w = COLUMNS_WITHOUT_TPL();
 
     // First try setting the widths of windows with 'winfixwidth'.  If that
@@ -6104,23 +6067,7 @@ shell_new_columns(void)
 
     win_comp_pos();		// recompute w_winrow and w_wincol
 
-#if defined(FEAT_TABPANEL)
-    int tp_width = tabpanel_width();
-    int tp_width_changed = tp_width != prev_tp_width;
-    // tabpanel width changed
-    if (tp_width_changed && p_ea)
-	win_equal(curwin, FALSE, 0);
-    // tabpanel layout changed
-    if (tp_width_changed
-	    || (tp_width > 0 && (firstwin->w_wincol != prev_wincol
-		    || topframe->fr_width != prev_fr_width)))
-    {
-	screen_fill(cmdline_row, (int)Rows, 0, (int)Columns, ' ', ' ', 0);
-    }
-    prev_tp_width = tabpanel_width();
-    prev_wincol = firstwin->w_wincol;
-    prev_fr_width = topframe->fr_width;
-#endif
+#line 6124
     // Adjust offset for command line start column
     cmdline_col_off = firstwin->w_wincol;
     cmdline_width = topframe->fr_width;
@@ -6129,9 +6076,7 @@ shell_new_columns(void)
 	win_fix_scroll(TRUE);
 
     redraw_tabline = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 6135
 #if 0
     // Disabled: don't want making the screen smaller make a window larger.
     if (p_ea)

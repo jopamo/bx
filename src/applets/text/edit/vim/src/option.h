@@ -881,11 +881,7 @@ EXTERN unsigned	swb_flags;
 
 EXTERN char_u	*p_spk;		// 'splitkeep'
 
-#if defined(FEAT_TABPANEL)
-EXTERN char_u	*p_tpl;		// 'tabpanel'
-EXTERN long	p_stpl;		// 'showtabpanel'
-EXTERN char_u	*p_tplo;	// 'tabpanelopt'
-#endif
+#line 889
 
 #ifdef FEAT_SYN_HL
 EXTERN char_u	*p_syn;		// 'syntax'

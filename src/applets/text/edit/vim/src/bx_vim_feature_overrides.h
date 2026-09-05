@@ -64,6 +64,9 @@
 #ifdef FEAT_FOLDING
 # undef FEAT_FOLDING
 #endif
+#ifdef FEAT_TABPANEL
+# undef FEAT_TABPANEL
+#endif
 #ifdef FEAT_SESSION
 # undef FEAT_SESSION
 #endif

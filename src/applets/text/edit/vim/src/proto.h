@@ -112,10 +112,7 @@ extern int _stricoll(char *a, char *b);
 # ifdef FEAT_ARABIC
 #  include "arabic.pro"
 # endif
-#line 124
-# ifdef FEAT_TABPANEL
-#  include "tabpanel.pro"
-# endif
+#line 119
 
 // These prototypes cannot be produced automatically.
 int smsg(const char *, ...) ATTRIBUTE_COLD ATTRIBUTE_FORMAT_PRINTF(1, 2);
