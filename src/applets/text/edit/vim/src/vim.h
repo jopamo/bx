@@ -928,13 +928,10 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define FINDFILE_DIR	1	// only directories
 #define FINDFILE_BOTH	2	// files and directories
 
-#if defined(FEAT_TABPANEL)
-# define COLUMNS_WITHOUT_TPL()		(Columns - tabpanel_width())
-# define TPL_LCOL()			tabpanel_leftcol()
-#else
+#line 935
 # define COLUMNS_WITHOUT_TPL()		Columns
 # define TPL_LCOL()			0
-#endif
+#line 938
 
 #define W_ENDCOL(wp)	((wp)->w_wincol + (wp)->w_width)
 #line 959
@@ -2568,8 +2565,6 @@ typedef int (*opt_expand_cb_T)(optexpand_T *args, int *numMatches, char_u ***mat
 
 #line 2718
 # define X_DISPLAY	(Display *)NULL
-#line 2720
-
 #line 2787
 # undef NBDEBUG
 #line 2789

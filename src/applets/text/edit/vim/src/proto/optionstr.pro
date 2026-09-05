@@ -105,8 +105,6 @@ int expand_set_pumopt(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_pumborder(optset_T *args);
 int expand_set_pumborder(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_rulerformat(optset_T *args);
-char *did_set_tabpanelopt(optset_T *args);
-int expand_set_tabpanelopt(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_scrollopt(optset_T *args);
 int expand_set_scrollopt(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_selection(optset_T *args);

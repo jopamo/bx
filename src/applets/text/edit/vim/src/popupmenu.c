@@ -1458,9 +1458,7 @@ pum_undisplay(void)
     pum_array = NULL;
     redraw_all_later(UPD_NOT_VALID);
     redraw_tabline = TRUE;
-#if defined(FEAT_TABPANEL)
-    redraw_tabpanel = TRUE;
-#endif
+#line 1464
     if (pum_in_cmdline)
     {
 	clear_cmdline = TRUE;

@@ -352,8 +352,6 @@ static void	ex_nohlsearch(exarg_T *eap);
 # define ex_nbclose		ex_ni
 # define ex_nbkey		ex_ni
 # define ex_nbstart		ex_ni
-#line 371
-
 #line 373
 # define ex_profile		ex_ni
 #line 376
@@ -7689,8 +7687,6 @@ ex_nogui(exarg_T *eap)
 {
     eap->errmsg = _(e_gui_cannot_be_used_not_enabled_at_compile_time);
 }
-#line 7823
-
 #line 7832
 #if (defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_GTK) \
 	|| defined(FEAT_TERM_POPUP_MENU)) && defined(FEAT_MENU)
@@ -8877,11 +8873,9 @@ ex_redrawtabpanel(exarg_T *eap UNUSED)
     int save_p_lz = p_lz;
     p_lz = FALSE;
 
-#if defined(FEAT_TABPANEL)
-    draw_tabpanel();
-#else
+#line 8883
     emsg(_(e_cannot_not_support_redrawtabpanel));
-#endif
+#line 8885
 
     RedrawingDisabled = save_RedrawingDisabled;
     p_lz = save_p_lz;

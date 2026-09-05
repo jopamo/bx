@@ -28,11 +28,7 @@ static char *(p_bo_values[]) = {"all", "backspace", "cursor", "complete",
 // Note: Keep this in sync with briopt_check()
 static char *(p_briopt_values[]) = {"shift:", "min:", "sbr", "list:", "column:", NULL};
 #endif
-#if defined(FEAT_TABPANEL)
-// Note: Keep this in sync with tabpanelopt_changed()
-static char *(p_tplo_values[]) = {"align:", "columns:", "scrollbar", "vert", NULL};
-static char *(p_tplo_align_values[]) = {"left", "right", NULL};
-#endif
+#line 36
 #if defined(FEAT_DIFF)
 // Note: Keep this in sync with diffopt_changed()
 static char *(p_dip_values[]) = {"filler", "anchor", "context:", "iblank", "icase", "iwhite", "iwhiteall", "iwhiteeol", "horizontal", "vertical", "closeoff", "hiddenoff", "foldcolumn:", "followwrap", "internal", "indent-heuristic", "algorithm:", "inline:", "linematch:", NULL};
@@ -3032,49 +3028,7 @@ did_set_rulerformat(optset_T *args)
 }
 #endif
 
-#if defined(FEAT_TABPANEL)
-/*
- * Process the new 'tabpanelopt' option value.
- */
-    char *
-did_set_tabpanelopt(optset_T *args UNUSED)
-{
-    if (tabpanelopt_changed() == FAIL)
-	return e_invalid_argument;
-
-    return NULL;
-}
-
-    int
-expand_set_tabpanelopt(optexpand_T *args, int *numMatches, char_u ***matches)
-{
-    expand_T *xp = args->oe_xp;
-
-    if (xp->xp_pattern > args->oe_set_arg && *(xp->xp_pattern-1) == ':')
-    {
-	// Within "align:", we have a subgroup of possible options.
-	int align_len = (int)STRLEN("align:");
-	if (xp->xp_pattern - args->oe_set_arg >= align_len &&
-		STRNCMP(xp->xp_pattern - align_len, "align:", align_len) == 0)
-	{
-	    return expand_set_opt_string(
-		    args,
-		    p_tplo_align_values,
-		    ARRAY_LENGTH(p_tplo_align_values) - 1,
-		    numMatches,
-		    matches);
-	}
-	return FAIL;
-    }
-
-    return expand_set_opt_string(
-	    args,
-	    p_tplo_values,
-	    ARRAY_LENGTH(p_tplo_values) - 1,
-	    numMatches,
-	    matches);
-}
-#endif
+#line 3078
 
 /*
  * The 'scrollopt' option is changed.

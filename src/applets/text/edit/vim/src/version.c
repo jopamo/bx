@@ -487,11 +487,9 @@ static char *(features[]) =
 #if defined(USE_SYSTEM) && defined(UNIX)
 	"+system()",
 #endif
-#if defined(FEAT_TABPANEL)
-	"+tabpanel",
-#else
+#line 493
 	"-tabpanel",
-#endif
+#line 495
 	"+tag_binary",
 	"-tag_old_static",
 	"-tag_any_white",
@@ -2195,9 +2193,7 @@ do_intro_line(
 ex_intro(exarg_T *eap UNUSED)
 {
     screenclear();
-#if defined(FEAT_TABPANEL)
-    draw_tabpanel();
-#endif
+#line 2201
     intro_message(TRUE);
     wait_return(TRUE);
 }

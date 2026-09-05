@@ -229,10 +229,7 @@ do_mouse(
     int		moved;		// Has cursor moved?
     int		in_status_line;	// mouse in status line
     static int	in_tab_line = FALSE; // mouse clicked in tab line
-    static int	in_tabpanel = FALSE; // mouse clicked in tabpanel
-#ifdef FEAT_TABPANEL
-    static bool	in_tabpanel_scrollbar = false; // dragging tabpanel scrollbar
-#endif
+#line 236
     int		in_sep_line;	// mouse in vertical separator line
     int		c1, c2;
 #line 251
@@ -329,10 +326,7 @@ do_mouse(
     {
 	got_click = TRUE;
 	in_tab_line = FALSE;
-	in_tabpanel = FALSE;
-#ifdef FEAT_TABPANEL
-	in_tabpanel_scrollbar = false;
-#endif
+#line 336
     }
     else
     {
@@ -341,30 +335,15 @@ do_mouse(
 	if (!is_drag)			// release, reset got_click
 	{
 	    got_click = FALSE;
-	    if (in_tab_line || in_tabpanel
-#ifdef FEAT_TABPANEL
-		    || in_tabpanel_scrollbar
-#endif
-		    )
+	    if (in_tab_line)
 	    {
 		in_tab_line = FALSE;
-		in_tabpanel = FALSE;
-#ifdef FEAT_TABPANEL
-		in_tabpanel_scrollbar = false;
-#endif
 		return FALSE;
 	    }
 	}
     }
 
-#ifdef FEAT_TABPANEL
-    // Continue a scrollbar drag before any tab-selection handling.
-    if (is_drag && in_tabpanel_scrollbar)
-    {
-	tabpanel_drag_scrollbar(mouse_row);
-	return FALSE;
-    }
-#endif
+#line 368
 
     // CTRL right mouse button does CTRL-T
     if (is_click && (mod_mask & MOD_MASK_CTRL) && which_button == MOUSE_RIGHT)
@@ -483,47 +462,13 @@ do_mouse(
     start_visual.lnum = 0;
 
     struct tabpage_label_info {
-	bool is_panel;	    // label type. true: tabpanel, false: tab line
 	bool just_in;	    // just in tabpage label area
 	bool just_click;    // just click tabpage label area
 	int nr;		    // tabpage number
-    } tp_label = { false, false, false, 0 };
+    } tp_label = { false, false, 0 };
 
     // Check for clicking in the tab page panel.
-#if defined(FEAT_TABPANEL)
-    if (mouse_col < firstwin->w_wincol
-		|| mouse_col >= firstwin->w_wincol + topframe->fr_width)
-    {
-	// A click on the scrollbar column starts a drag interaction and
-	// preempts tab-selection.
-	if (is_click && !is_drag && mouse_on_tabpanel_scrollbar())
-	{
-	    in_tabpanel_scrollbar = TRUE;
-	    tabpanel_drag_scrollbar(mouse_row);
-	    return FALSE;
-	}
-
-	// Dispatch 'tabpanel' %[FuncName] click regions before falling through
-	// to tab-page selection.  On drag events fall through to the normal
-	// tab-drag handling.
-	if (is_click && !is_drag
-		&& stl_click_handler_regions(tabpanel_stl_click,
-					    tabpanel_stl_click_count,
-					    0, (char_u *)"tabpanel",
-					    mouse_row, mouse_col,
-					    which_button, mod_mask))
-	    return FALSE;
-
-	tp_label.is_panel = true;
-	tp_label.just_in = true;
-	tp_label.nr = get_tabpagenr_on_tabpanel();
-
-	// click in a tab selects that tab page
-	if (is_click && cmdwin_type == 0)
-	    tp_label.just_click = true;
-    }
-    else
-#endif
+#line 527
     // Check for clicking in the tab page line.
     if (TabPageIdxs != NULL && mouse_row == 0 && firstwin->w_winrow > 0)
     {
@@ -551,7 +496,7 @@ do_mouse(
     {
 	if (is_drag)
 	{
-	    if (in_tabpanel || in_tab_line)
+	    if (in_tab_line)
 	    {
 		c1 = tp_label.nr;
 		tabpage_move(c1 <= 0 ? 9999 : c1 < tabpage_index(curtab)
@@ -562,20 +507,13 @@ do_mouse(
 
 	if (tp_label.just_click)
 	{
-	    if (tp_label.is_panel)
-		in_tabpanel = TRUE;
-	    else
-		in_tab_line = TRUE;
+	    in_tab_line = TRUE;
 	    c1 = tp_label.nr;
 	    if (c1 >= 0)
 	    {
-		if ((mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_2CLICK
-						    && !tp_label.is_panel)
+		if ((mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_2CLICK)
 		{
 		    // Double-click on the tabline opens a new, empty tab page.
-		    // The tabpanel has no "empty area" (every row maps to a tab)
-		    // and this behavior is not documented for tabpanel, so fall
-		    // through to the regular tab-switch path there.
 		    end_visual_mode_keep_button();
 		    tabpage_new();
 		    tabpage_move(c1 == 0 ? 9999 : c1 - 1);
@@ -611,13 +549,9 @@ do_mouse(
 	}
 	return TRUE;
     }
-    else if (is_drag && (in_tabpanel || (in_tab_line && TabPageIdxs != NULL)))
+    else if (is_drag && in_tab_line && TabPageIdxs != NULL)
     {
-#if defined(FEAT_TABPANEL)
-	if (in_tabpanel)
-	    c1 = get_tabpagenr_on_tabpanel();
-	else
-#endif
+#line 621
 	    c1 = TabPageIdxs[mouse_col];
 	tabpage_move(c1 <= 0 ? 9999 : c1 - 1);
 	return FALSE;
@@ -1197,16 +1131,7 @@ ins_mousescroll(int dir)
     cap.oap = &oa;
     cap.arg = dir;
 
-#ifdef FEAT_TABPANEL
-    if (mouse_row >= 0 && mouse_col >= 0
-	    && (dir == MSCR_UP || dir == MSCR_DOWN)
-	    && mouse_on_tabpanel())
-    {
-	(void)tabpanel_scroll(dir == MSCR_UP ? 1 : -1,
-		mouse_vert_step > 0 ? mouse_vert_step : 3);
-	return;
-    }
-#endif
+#line 1210
 
     switch (dir)
     {
@@ -1689,10 +1614,7 @@ stl_click_handler_regions(
 	// refreshed.
 	if (winid == 0)
 	    redraw_tabline = TRUE;
-# ifdef FEAT_TABPANEL
-	if (STRCMP(area_name, "tabpanel") == 0)
-	    redraw_all_later(UPD_NOT_VALID);
-# endif
+#line 1696
 	redraw_statuslines();
     }
 
@@ -2144,16 +2066,7 @@ nv_mousescroll(cmdarg_T *cap)
 {
     win_T   *old_curwin = curwin;
 
-#ifdef FEAT_TABPANEL
-    if (mouse_row >= 0 && mouse_col >= 0
-	    && (cap->arg == MSCR_UP || cap->arg == MSCR_DOWN)
-	    && mouse_on_tabpanel())
-    {
-	(void)tabpanel_scroll(cap->arg == MSCR_UP ? 1 : -1,
-		mouse_vert_step > 0 ? mouse_vert_step : 3);
-	return;
-    }
-#endif
+#line 2157
 
     if (mouse_row >= 0 && mouse_col >= 0)
     {

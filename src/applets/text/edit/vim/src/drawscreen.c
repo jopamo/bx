@@ -211,9 +211,7 @@ update_screen(int type_arg)
 		    redraw_cmdline = TRUE;
 		redraw_tabline = TRUE;
 	    }
-#if defined(FEAT_TABPANEL)
-	    redraw_tabpanel = TRUE;
-#endif
+#line 217
 	}
 	msg_scrolled = 0;
 	need_wait_return = FALSE;
@@ -274,10 +272,7 @@ update_screen(int type_arg)
     if (redraw_tabline || type >= UPD_NOT_VALID)
 	draw_tabline();
 
-#if defined(FEAT_TABPANEL)
-    if (redraw_tabpanel || type >= UPD_NOT_VALID)
-	draw_tabpanel();
-#endif
+#line 281
 
 #ifdef FEAT_SYN_HL
     // Correct stored syntax highlighting info for changes in each displayed
@@ -608,10 +603,7 @@ showruler(int always)
     if (redraw_tabline)
 	draw_tabline();
 
-#if defined(FEAT_TABPANEL)
-    if (redraw_tabpanel)
-	draw_tabpanel();
-#endif
+#line 615
 }
 
     void
@@ -1512,8 +1504,6 @@ win_update(win_T *wp)
     redrawtime_limit_set = TRUE;
     init_regexp_timeout(p_rdt);
 #endif
-#line 2252
-
 #line 2260
     lnum = wp->w_topline;   // first line shown in window
 
@@ -2425,10 +2415,7 @@ redraw_statuslines(void)
     if (redraw_tabline)
 	draw_tabline();
 
-#if defined(FEAT_TABPANEL)
-    if (redraw_tabpanel)
-	draw_tabpanel();
-#endif
+#line 2432
 }
 
 /*

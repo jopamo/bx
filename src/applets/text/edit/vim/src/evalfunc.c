@@ -1918,12 +1918,9 @@ typedef struct
 # define SOUND_FUNC(name) NULL
 #line 1935
 # define TERM_FUNC(name) NULL
-#line 1937
-#ifdef FEAT_TABPANEL
-# define TABPANEL_FUNC(name) name
-#else
+#line 1925
 # define TABPANEL_FUNC(name) NULL
-#endif
+#line 1927
 
 static const funcentry_T global_functions[] =
 {
@@ -7432,11 +7429,9 @@ f_has(typval_T *argvars, typval_T *rettv)
 #endif
 		},
 	{"tabpanel",
-#if defined(FEAT_TABPANEL)
-		1,
-#else
+#line 7438
 		0,
-#endif
+#line 7440
 	},
 	{"tag_binary", 1},	// graduated feature
 	{"tcl",
