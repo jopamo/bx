@@ -141,11 +141,7 @@
 #endif
 
 // Check support for rendering options
-#ifdef FEAT_GUI
-# if defined(FEAT_DIRECTX)
-#  define FEAT_RENDER_OPTIONS
-# endif
-#endif
+#line 149
 
 /*
  * VIM_SIZEOF_INT is used in feature.h, and the system-specific included files
@@ -157,13 +153,13 @@
 
 #ifdef AMIGA
   // Be conservative about sizeof(int). It could be 4 too.
-# ifndef FEAT_GUI_GTK	// avoid problems when generating prototypes
+#line 161
 #  ifdef __GNUC__
 #   define VIM_SIZEOF_INT	4
 #  else
 #   define VIM_SIZEOF_INT	2
 #  endif
-# endif
+#line 167
 #endif
 #if defined(MACOS_X) && !defined(HAVE_CONFIG_H)
 # define VIM_SIZEOF_INT __SIZEOF_INT__
@@ -197,9 +193,7 @@
 	defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
 #  define FEAT_SOUND
 # endif
-# if defined(FEAT_SOUND)
-#  define FEAT_SOUND_MACOSX
-# endif
+#line 203
 #endif
 
 // +x11 is only enabled when it's both available and wanted.
@@ -220,24 +214,14 @@
 # ifdef FEAT_GUI_X11
 #  undef FEAT_GUI_X11
 # endif
-# ifdef FEAT_XCLIPBOARD
-#  undef FEAT_XCLIPBOARD
-# endif
-# ifdef FEAT_GUI_MOTIF
-#  undef FEAT_GUI_MOTIF
-# endif
-# ifdef FEAT_GUI_GTK
-#  undef FEAT_GUI_GTK
-# endif
+#line 232
 # ifdef FEAT_BEVAL_TIP
 #  undef FEAT_BEVAL_TIP
 # endif
 # ifdef FEAT_XIM
 #  undef FEAT_XIM
 # endif
-# ifdef FEAT_CLIENTSERVER
-#  undef FEAT_CLIENTSERVER
-# endif
+#line 241
 #endif
 
 // The Mac conversion stuff doesn't work under X11.
@@ -953,11 +937,9 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #endif
 
 #define W_ENDCOL(wp)	((wp)->w_wincol + (wp)->w_width)
-#ifdef FEAT_MENU
-# define W_WINROW(wp)	((wp)->w_winrow + (wp)->w_winbar_height)
-#else
+#line 959
 # define W_WINROW(wp)	(wp->w_winrow)
-#endif
+#line 961
 
 // Values for the find_pattern_in_path() function args 'type' and 'action':
 #define FIND_ANY	1
@@ -1267,9 +1249,7 @@ extern int (*dyn_libintl_wputenv)(const wchar_t *envstring);
 #define TAG_NAMES	2	// only return name of tag
 #define	TAG_REGEXP	4	// use tag pattern as regexp
 #define	TAG_NOIC	8	// don't always ignore case
-#ifdef FEAT_CSCOPE
-# define TAG_CSCOPE	16	// cscope tag
-#endif
+#line 1273
 #define TAG_VERBOSE	32	// message verbosity
 #define TAG_INS_COMP	64	// Currently doing insert completion
 #define TAG_KEEP_LANG	128	// keep current language
@@ -1627,14 +1607,10 @@ typedef enum
 
 #define LOG_ALWAYS 9	    // must be different from TRUE and FALSE
 
-#ifdef FEAT_JOB_CHANNEL
-// If "--log logfile" was used or ch_logfile() was called then log some or all
-// terminal output.
-# define MAY_WANT_TO_LOG_THIS if (ch_log_output == FALSE) ch_log_output = TRUE;
-#else
+#line 1635
 // no logging support
 # define MAY_WANT_TO_LOG_THIS
-#endif
+#line 1638
 
 #ifndef UINT32_T
 typedef UINT32_TYPEDEF UINT32_T;
@@ -1693,13 +1669,10 @@ typedef UINT32_TYPEDEF UINT32_T;
 #define MIN_CMDHEIGHT	1	// minimal height for command line
 #define STATUS_HEIGHT	1	// default height of a status line under a
 				// window
-#ifdef FEAT_MENU		// height of a status line under a window
-# define WINBAR_HEIGHT(wp)	(wp)->w_winbar_height
-# define VISIBLE_HEIGHT(wp)	((wp)->w_height + (wp)->w_winbar_height)
-#else
+#line 1700
 # define WINBAR_HEIGHT(wp)	0
 # define VISIBLE_HEIGHT(wp)	(wp)->w_height
-#endif
+#line 1703
 #define QF_WINHEIGHT	10	// default height for quickfix window
 
 /*
@@ -1851,29 +1824,13 @@ void *vim_memset(void *, int, size_t);
 #define OUT_STR(s)		    out_str((char_u *)(s))
 #define OUT_STR_NF(s)		    out_str_nf((char_u *)(s))
 
-#ifdef FEAT_GUI
-# ifdef FEAT_TERMGUICOLORS
-#  define GUI_FUNCTION(f)	    (gui.in_use ? gui_##f : termgui_##f)
-#  define GUI_FUNCTION2(f, pixel)   (gui.in_use \
-				    ?  ((pixel) != INVALCOLOR \
-					? gui_##f((pixel)) \
-					: INVALCOLOR) \
-				    : termgui_##f((pixel)))
-#  define USE_24BIT		    (gui.in_use || p_tgc)
-# else
-#  define GUI_FUNCTION(f)	    gui_##f
-#  define GUI_FUNCTION2(f,pixel)    ((pixel) != INVALCOLOR \
-				     ? gui_##f((pixel)) \
-				     : INVALCOLOR)
-#  define USE_24BIT		    gui.in_use
-# endif
-#else
+#line 1871
 # ifdef FEAT_TERMGUICOLORS
 #  define GUI_FUNCTION(f)	    termgui_##f
 #  define GUI_FUNCTION2(f, pixel)   termgui_##f((pixel))
 #  define USE_24BIT		    p_tgc
 # endif
-#endif
+#line 1877
 #ifdef FEAT_TERMGUICOLORS
 # define IS_CTERM		    (t_colors > 1 || p_tgc)
 #else
@@ -2051,21 +2008,13 @@ typedef int sock_T;
 # define HAVE_CLIPMETHOD
 #endif
 
-#if defined(HAVE_CLIPMETHOD) && defined(FEAT_EVAL)
-# define FEAT_CLIPBOARD_PROVIDER
-#endif
-
+#line 2058
 /*
  * FEAT_EVAL reintroduces clipmethod/provider support later in vim.h.
  * Trim it again here, before option.h and the rest of the runtime-dependent
  * declarations see those symbols.
  */
-#ifdef HAVE_CLIPMETHOD
-# undef HAVE_CLIPMETHOD
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-# undef FEAT_CLIPBOARD_PROVIDER
-#endif
+#line 2069
 
 // Include option.h before structs.h, because the number of window-local and
 // buffer-local options is used there.
@@ -2316,85 +2265,9 @@ typedef int sock_T;
 
 #define TABSTOP_MAX 9999
 
-#ifdef HAVE_CLIPMETHOD
-typedef enum {
-    CLIPMETHOD_FAIL,
-    CLIPMETHOD_NONE,
-    CLIPMETHOD_WAYLAND,
-    CLIPMETHOD_X11,
-    CLIPMETHOD_PROVIDER
-} clipmethod_T;
-#endif
-
-#ifdef FEAT_CLIPBOARD
-
-// VIM_ATOM_NAME is the older Vim-specific selection type for X11.  Still
-// supported for when a mix of Vim versions is used. VIMENC_ATOM_NAME includes
-// the encoding to support Vims using different 'encoding' values.
-# define VIM_ATOM_NAME "_VIM_TEXT"
-# define VIMENC_ATOM_NAME "_VIMENC_TEXT"
-
-// Selection states for modeless selection
-# define SELECT_CLEARED		0
-# define SELECT_IN_PROGRESS	1
-# define SELECT_DONE		2
-
-# define SELECT_MODE_CHAR	0
-# define SELECT_MODE_WORD	1
-# define SELECT_MODE_LINE	2
-
-# ifdef FEAT_GUI_MSWIN
-#  ifdef FEAT_OLE
-#   define WM_OLE (WM_APP+0)
-#  endif
-# endif
-
-// Info about selected text
-typedef struct
-{
-    int		available;	// Is clipboard available?
-    int		owned;		// Flag: do we own the selection?
-    pos_T	start;		// Start of selected area
-    pos_T	end;		// End of selected area
-    int		vmode;		// Visual mode character
-
-    // Fields for selection that doesn't use Visual mode
-    short_u	origin_row;
-    short_u	origin_start_col;
-    short_u	origin_end_col;
-    short_u	word_start_col;
-    short_u	word_end_col;
-# ifdef FEAT_PROP_POPUP
-    // limits for selection inside a popup window
-    short_u	min_col;
-    short_u	max_col;
-    short_u	min_row;
-    short_u	max_row;
-# endif
-
-    pos_T	prev;		// Previous position
-    short_u	state;		// Current selection state
-    short_u	mode;		// Select by char, word, or line.
-
-# if defined(FEAT_GUI_X11) || defined(FEAT_XCLIPBOARD)
-    Atom	sel_atom;	// PRIMARY/CLIPBOARD selection ID
-# endif
-
-# ifdef FEAT_GUI_GTK
-    GdkAtom     gtk_sel_atom;	// PRIMARY/CLIPBOARD selection ID
-# endif
-
-# if defined(MSWIN) || defined(FEAT_CYGWIN_WIN32_CLIPBOARD)
-    int_u	format;		// Vim's own special clipboard format
-    int_u	format_raw;	// Vim's raw text clipboard format
-# endif
-# ifdef FEAT_GUI_HAIKU
-    // No clipboard at the moment. TODO?
-# endif
-} Clipboard_T;
-#else
+#line 2396
 typedef int Clipboard_T;	// This is required for the prototypes.
-#endif
+#line 2398
 
 // Use 64-bit stat structure on MS-Windows.
 #ifdef MSWIN
@@ -2693,99 +2566,13 @@ typedef int (*opt_expand_cb_T)(optexpand_T *args, int *numMatches, char_u ***mat
 #define SIGN_BYTE 1	    // byte value used where sign is displayed;
 			    // attribute value is sign type
 
-#ifdef FEAT_NETBEANS_INTG
-# define MULTISIGN_BYTE 2   // byte value used where sign is displayed if
-			    // multiple signs exist on the line
-#endif
-
-#if defined(FEAT_GUI) && defined(FEAT_XCLIPBOARD)
-# ifdef FEAT_GUI_GTK
-   // Avoid using a global variable for the X display.  It's ugly
-   // and is likely to cause trouble in multihead environments.
-#  define X_DISPLAY	((gui.in_use) ? gui_mch_get_display() : xterm_dpy)
-# else
-#  define X_DISPLAY	(gui.in_use ? gui.dpy : xterm_dpy)
-# endif
-#elif defined(FEAT_GUI)
-# ifdef FEAT_GUI_GTK
-#  define X_DISPLAY	((gui.in_use) ? gui_mch_get_display() : (Display *)NULL)
-# else
-#  define X_DISPLAY	gui.dpy
-# endif
-#elif defined(FEAT_XCLIPBOARD)
-# define X_DISPLAY	xterm_dpy
-#else
+#line 2718
 # define X_DISPLAY	(Display *)NULL
-#endif
+#line 2720
 
-#ifdef FEAT_GUI_GTK
-# if !GTK_CHECK_VERSION(2,14,0)
-#  define gtk_widget_get_window(wid)	((wid)->window)
-#  define gtk_plug_get_socket_window(wid)	((wid)->socket_window)
-#  define gtk_selection_data_get_data(sel)	((sel)->data)
-#  define gtk_selection_data_get_data_type(sel)	((sel)->type)
-#  define gtk_selection_data_get_format(sel)	((sel)->format)
-#  define gtk_selection_data_get_length(sel)	((sel)->length)
-#  define gtk_adjustment_set_lower(adj, low) \
-    do { (adj)->lower = low; } while (0)
-#  define gtk_adjustment_set_upper(adj, up) \
-    do { (adj)->upper = up; } while (0)
-#  define gtk_adjustment_set_page_size(adj, size) \
-    do { (adj)->page_size = size; } while (0)
-#  define gtk_adjustment_set_page_increment(adj, inc) \
-    do { (adj)->page_increment = inc; } while (0)
-#  define gtk_adjustment_set_step_increment(adj, inc) \
-    do { (adj)->step_increment = inc; } while (0)
-# endif
-# if !GTK_CHECK_VERSION(2,16,0)
-#  define gtk_selection_data_get_selection(sel)	((sel)->selection)
-# endif
-# if !GTK_CHECK_VERSION(2,18,0)
-#  define gtk_widget_get_allocation(wid, alloc) \
-    do { *(alloc) = (wid)->allocation; } while (0)
-#  define gtk_widget_set_allocation(wid, alloc) \
-    do { (wid)->allocation = *(alloc); } while (0)
-#  define gtk_widget_get_has_window(wid)	!GTK_WIDGET_NO_WINDOW(wid)
-#  define gtk_widget_get_sensitive(wid)	GTK_WIDGET_SENSITIVE(wid)
-#  define gtk_widget_get_visible(wid)	GTK_WIDGET_VISIBLE(wid)
-#  define gtk_widget_has_focus(wid)	GTK_WIDGET_HAS_FOCUS(wid)
-#  define gtk_widget_set_window(wid, win) \
-    do { (wid)->window = (win); } while (0)
-#  define gtk_widget_set_can_default(wid, can) \
-    do { if (can) \
-	    { GTK_WIDGET_SET_FLAGS(wid, GTK_CAN_DEFAULT); } \
-	else \
-	    { GTK_WIDGET_UNSET_FLAGS(wid, GTK_CAN_DEFAULT); } } while (0)
-#  define gtk_widget_set_can_focus(wid, can) \
-    do { if (can) \
-	    { GTK_WIDGET_SET_FLAGS(wid, GTK_CAN_FOCUS); } \
-	else \
-	    { GTK_WIDGET_UNSET_FLAGS(wid, GTK_CAN_FOCUS); } } while (0)
-#  define gtk_widget_set_visible(wid, vis) \
-    do { if (vis) \
-	    { gtk_widget_show(wid); } \
-	else \
-	    { gtk_widget_hide(wid); } } while (0)
-# endif
-# if !GTK_CHECK_VERSION(2,20,0)
-#  define gtk_widget_get_mapped(wid)	GTK_WIDGET_MAPPED(wid)
-#  define gtk_widget_get_realized(wid)	GTK_WIDGET_REALIZED(wid)
-#  define gtk_widget_set_mapped(wid, map) \
-    do { if (map) \
-	    { GTK_WIDGET_SET_FLAGS(wid, GTK_MAPPED); } \
-	else \
-	    { GTK_WIDGET_UNSET_FLAGS(wid, GTK_MAPPED); } } while (0)
-#  define gtk_widget_set_realized(wid, rea) \
-    do { if (rea) \
-	    { GTK_WIDGET_SET_FLAGS(wid, GTK_REALIZED); } \
-	else \
-	    { GTK_WIDGET_UNSET_FLAGS(wid, GTK_REALIZED); } } while (0)
-# endif
-#endif
-
-#ifndef FEAT_NETBEANS_INTG
+#line 2787
 # undef NBDEBUG
-#endif
+#line 2789
 #ifdef NBDEBUG // Netbeans debugging.
 # include "nbdebug.h"
 #else
@@ -2902,11 +2689,9 @@ typedef int (*opt_expand_cb_T)(optexpand_T *args, int *numMatches, char_u ***mat
 // Character used as separated in autoload function/variable names.
 #define AUTOLOAD_CHAR '#'
 
-#ifdef FEAT_JOB_CHANNEL
-# define MAX_OPEN_CHANNELS 10
-#else
+#line 2908
 # define MAX_OPEN_CHANNELS 0
-#endif
+#line 2910
 
 #if defined(MSWIN)
 # define MAX_NAMED_PIPE_SIZE 65535

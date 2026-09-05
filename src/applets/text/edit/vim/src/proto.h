@@ -24,10 +24,10 @@
 #  define Display int
 #  define Widget int
 # endif
-# ifndef FEAT_GUI_GTK
+#line 28
 #  define GdkEvent int
 #  define GdkEventKey int
-# endif
+#line 31
 # ifndef FEAT_X11
 #  define XImage int
 # endif
@@ -53,11 +53,7 @@ extern int _stricoll(char *a, char *b);
 #  include "os_qnx.pro"
 # endif
 
-# ifdef FEAT_CRYPT
-#  include "blowfish.pro"
-#  include "crypt.pro"
-#  include "crypt_zip.pro"
-# endif
+#line 61
 # include "alloc.pro"
 # include "arglist.pro"
 # include "autocmd.pro"
@@ -112,15 +108,11 @@ extern int _stricoll(char *a, char *b);
 # include "match.pro"
 # include "memfile.pro"
 # include "memline.pro"
-# ifdef FEAT_MENU
-#  include "menu.pro"
-# endif
+#line 118
 # ifdef FEAT_ARABIC
 #  include "arabic.pro"
 # endif
-# ifdef FEAT_VIMINFO
-#  include "viminfo.pro"
-# endif
+#line 124
 # ifdef FEAT_TABPANEL
 #  include "tabpanel.pro"
 # endif
@@ -195,16 +187,11 @@ void mbyte_im_set_active(int active_arg);
 # include "syntax.pro"
 # include "tag.pro"
 # include "term.pro"
-# ifdef FEAT_TERMINAL
-#  include "terminal.pro"
-# endif
+#line 201
 # if defined(HAVE_TGETENT) && (defined(AMIGA) || defined(VMS))
 #  include "termlib.pro"
 # endif
-# ifdef FEAT_PROP_POPUP
-#  include "popupwin.pro"
-#  include "textprop.pro"
-# endif
+#line 208
 # include "testing.pro"
 # include "textobject.pro"
 # include "textformat.pro"
@@ -264,62 +251,18 @@ void mbyte_im_set_active(int active_arg);
 #  include "beval.pro"
 # endif
 
-# ifdef FEAT_NETBEANS_INTG
-#  include "netbeans.pro"
-# endif
-# ifdef FEAT_JOB_CHANNEL
-#  include "job.pro"
-#  include "channel.pro"
-# endif
-
+#line 275
 # ifdef FEAT_EVAL
 // Not generated automatically so that we can add an extra attribute.
 void ch_log(channel_T *ch, const char *fmt, ...) ATTRIBUTE_FORMAT_PRINTF(2, 3);
 void ch_error(channel_T *ch, const char *fmt, ...) ATTRIBUTE_FORMAT_PRINTF(2, 3);
 # endif
 
-# if defined(FEAT_GUI) || defined(FEAT_JOB_CHANNEL)
-#  if defined(UNIX) || defined(MACOS_X) || defined(VMS)
-#   include "pty.pro"
-#  endif
-# endif
-
-# ifdef FEAT_GUI
-#  include "gui.pro"
-#  if !defined(HAVE_SETENV) && !defined(HAVE_PUTENV) && !defined(VMS)
-extern int putenv(const char *string);			// in misc2.c
-#   ifdef USE_VIMPTY_GETENV
-extern char_u *vimpty_getenv(const char_u *string);	// in misc2.c
-#   endif
-#  endif
-#  ifdef FEAT_GUI_MSWIN
-#   include "gui_w32.pro"
-#  endif
-#  ifdef FEAT_GUI_GTK
-#   include "gui_gtk.pro"
-#   include "gui_gtk_x11.pro"
-#  endif
-#  ifdef FEAT_GUI_MOTIF
-#   include "gui_motif.pro"
-#   include "gui_xmdlg.pro"
-#  endif
-#  ifdef FEAT_GUI_HAIKU
-#   include "gui_haiku.pro"
-#  endif
-#  ifdef FEAT_GUI_X11
-#   include "gui_x11.pro"
-#  endif
-#  ifdef FEAT_GUI_PHOTON
-#   include "gui_photon.pro"
-#  endif
-# endif	// FEAT_GUI
-
+#line 317
 # ifdef FEAT_OLE
 #  include "if_ole.pro"
 # endif
-# if defined(FEAT_CLIENTSERVER) && defined(FEAT_X11)
-#  include "if_xcmdsrv.pro"
-# endif
+#line 323
 
 /*
  * The perl include files pollute the namespace, therefore proto.h must be
@@ -339,11 +282,5 @@ extern char_u *vimpty_getenv(const char_u *string);	// in misc2.c
 # ifdef MACOS_X
 #  include "os_macosx.pro"
 # endif
-# if defined(MACOS_X_DARWIN) && defined(FEAT_CLIPBOARD) && !defined(FEAT_GUI)
-// functions in os_macosx.m
-void clip_mch_lose_selection(Clipboard_T *cbd);
-int clip_mch_own_selection(Clipboard_T *cbd);
-void clip_mch_request_selection(Clipboard_T *cbd);
-void clip_mch_set_selection(Clipboard_T *cbd);
-# endif
+#line 349
 #endif // !PROTO && !NOPROTO

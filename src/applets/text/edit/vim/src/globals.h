@@ -87,10 +87,7 @@ EXTERN linenr_T search_hl_has_cursor_lnum INIT(= 0);
 EXTERN int	no_hlsearch INIT(= FALSE);
 #endif
 
-#ifdef FEAT_FOLDING
-EXTERN foldinfo_T win_foldinfo;	// info for 'foldcolumn'
-#endif
-
+#line 94
 // Flag that is set when drawing for a callback, not from the main command
 // loop.
 EXTERN int redrawing_for_callback INIT(= 0);
@@ -112,27 +109,7 @@ EXTERN int	tabline_stl_click_count INIT(= 0);
 EXTERN stl_click_region_T *tabpanel_stl_click INIT(= NULL);
 EXTERN int	tabpanel_stl_click_count INIT(= 0);
 
-#ifdef FEAT_PROP_POPUP
-// Array with size Rows x Columns containing zindex of popups.
-EXTERN short	*popup_mask INIT(= NULL);
-EXTERN short	*popup_mask_next INIT(= NULL);
-// Array with flags for transparent cells of current popup.
-EXTERN char	*popup_transparent INIT(= NULL);
-
-// Flag set to TRUE when popup_mask needs to be updated.
-EXTERN int	popup_mask_refresh INIT(= TRUE);
-
-// Tab that was used to fill popup_mask.
-EXTERN tabpage_T *popup_mask_tab INIT(= NULL);
-
-// Zindex in for screen_char(): if lower than the value in "popup_mask"
-// drawing the character is skipped.
-EXTERN int	screen_zindex INIT(= 0);
-
-// Currently drawing popup with opacity window, or NULL.
-EXTERN win_T	*screen_opacity_popup INIT(= NULL);
-#endif
-
+#line 136
 // Pum opacity level (0 = fully transparent, 100 = fully opaque).
 // Set via 'pumopt' opacity: key.
 EXTERN long	p_po INIT(= 100);
@@ -284,11 +261,7 @@ EXTERN int	intr_char INIT(= 0);	    // extra interrupt character
 #endif
 #if (defined(UNIX) || defined(VMS)) && defined(FEAT_X11)
 EXTERN int	x_no_connect INIT(= FALSE); // don't connect to X server
-# if defined(FEAT_CLIENTSERVER)
-EXTERN int	x_force_connect INIT(= FALSE);	// Do connect to X server.
-						// Overrules x_no_connect and
-						// "exclude" in 'clipboard'.
-# endif
+#line 292
 #endif
 EXTERN int	ex_keep_indent INIT(= FALSE); // getexmodeline(): keep indent
 EXTERN int	vgetc_busy INIT(= 0);	      // when inside vgetc() then > 0
@@ -332,9 +305,7 @@ EXTERN int	debug_break_level INIT(= -1);	// break below this level
 EXTERN int	debug_did_msg INIT(= FALSE);	// did "debug mode" message
 EXTERN int	debug_tick INIT(= 0);		// breakpoint change count
 EXTERN int	debug_backtrace_level INIT(= 0); // breakpoint backtrace level
-# ifdef FEAT_PROFILE
-EXTERN int	do_profiling INIT(= PROF_NONE);	// PROF_ values
-# endif
+#line 338
 EXTERN garray_T script_items INIT5(0, 0, sizeof(scriptitem_T *), 20, NULL);
 # define SCRIPT_ITEM(id)    (((scriptitem_T **)script_items.ga_data)[(id) - 1])
 # define SCRIPT_ID_VALID(id)    ((id) > 0 && (id) <= script_items.ga_len)
@@ -830,20 +801,10 @@ EXTERN int	highlight_attr[HLF_COUNT];  // Highl. attr for each context.
 EXTERN int	highlight_user[9];		// User[1-9] attributes
 # ifdef FEAT_STL_OPT
 EXTERN int	highlight_stlnc[9];		// On top of user
-#  ifdef FEAT_TERMINAL
-EXTERN int	highlight_stlterm[9];		// On top of user
-EXTERN int	highlight_stltermnc[9];		// On top of user
-#  endif
+#line 837
 # endif
 #endif
-#ifdef FEAT_TERMINAL
-		// When TRUE skip calling terminal_loop() once.  Used when
-		// typing ':' at the more prompt.
-EXTERN int	skip_term_loop INIT(= FALSE);
-#endif
-#ifdef FEAT_GUI
-EXTERN char_u	*use_gvimrc INIT(= NULL);	// "-U" cmdline argument
-#endif
+#line 847
 EXTERN int	cterm_normal_fg_color INIT(= 0);
 EXTERN int	cterm_normal_fg_bold INIT(= 0);
 EXTERN int	cterm_normal_bg_color INIT(= 0);
@@ -890,19 +851,7 @@ EXTERN int	mouse_dragging INIT(= 0);	// extending Visual area with
 EXTERN int	WantQueryMouse INIT(= FALSE);
 #endif
 
-#ifdef FEAT_GUI
-// When the window layout is about to be changed, need_mouse_correct is set,
-// so that gui_mouse_correct() is called afterwards, to correct the mouse
-// pointer when focus-follow-mouse is being used.
-EXTERN int	need_mouse_correct INIT(= FALSE);
-
-// When double clicking, topline must be the same
-EXTERN linenr_T gui_prev_topline INIT(= 0);
-# ifdef FEAT_DIFF
-EXTERN int	gui_prev_topfill INIT(= 0);
-# endif
-#endif
-
+#line 906
 #ifdef FEAT_MOUSESHAPE
 EXTERN int	drag_status_line INIT(= FALSE);	// dragging the status line
 EXTERN int	postponed_mouseshape INIT(= FALSE); // postponed updating the
@@ -933,102 +882,7 @@ EXTERN int	redraw_not_allowed INIT(= FALSE);
 EXTERN int	dont_parse_messages INIT(= FALSE);
 #endif
 
-#ifdef FEAT_MENU
-// The root of the menu hierarchy.
-EXTERN vimmenu_T	*root_menu INIT(= NULL);
-/*
- * While defining the system menu, sys_menu is TRUE.  This avoids
- * overruling of menus that the user already defined.
- */
-EXTERN int	sys_menu INIT(= FALSE);
-#endif
-
-#ifdef FEAT_GUI
-# ifdef FEAT_MENU
-// Menu item just selected, set by check_termcode()
-EXTERN vimmenu_T	*current_menu;
-
-// Set to TRUE after adding/removing menus to ensure they are updated
-EXTERN int force_menu_update INIT(= FALSE);
-# endif
-# ifdef FEAT_GUI_TABLINE
-// Tab in tab pages line just selected, set by check_termcode()
-EXTERN int	    current_tab;
-
-// Menu entry in tab pages line menu just selected, set by check_termcode()
-EXTERN int	    current_tabmenu;
-#  define TABLINE_MENU_CLOSE	1
-#  define TABLINE_MENU_NEW	2
-#  define TABLINE_MENU_OPEN	3
-# endif
-
-// Scrollbar moved and new value, set by check_termcode()
-EXTERN int	current_scrollbar;
-EXTERN long_u	scrollbar_value;
-
-// found "-rv" or "-reverse" in command line args
-EXTERN int	found_reverse_arg INIT(= FALSE);
-
-// "-fn" or "-font" command line argument
-EXTERN char	*font_argument INIT(= NULL);
-
-# ifdef FEAT_GUI_GTK
-// "-bg" or "-background" command line argument
-EXTERN char	*background_argument INIT(= NULL);
-
-// "-fg" or "-foreground" command line argument
-EXTERN char	*foreground_argument INIT(= NULL);
-# endif
-
-/*
- * While executing external commands or in Ex mode, should not insert GUI
- * events in the input buffer: Set hold_gui_events to non-zero.
- *
- * volatile because it is used in signal handler sig_sysmouse().
- */
-EXTERN volatile sig_atomic_t hold_gui_events INIT(= 0);
-
-/*
- * When resizing the shell is postponed, remember the new size, and call
- * gui_resize_shell() later.
- */
-EXTERN int	new_pixel_width INIT(= 0);
-EXTERN int	new_pixel_height INIT(= 0);
-
-// Window position from ":winpos", to be used when opening the GUI window.
-EXTERN int	gui_win_x INIT(= -1);
-EXTERN int	gui_win_y INIT(= -1);
-#endif
-
-#ifdef FEAT_CLIPBOARD
-EXTERN Clipboard_T clip_star;	// PRIMARY selection in X11/Wayland
-# if defined(FEAT_X11) || defined(FEAT_WAYLAND_CLIPBOARD)
-EXTERN Clipboard_T clip_plus;	// CLIPBOARD selection in X11/Wayland
-# else
-#  define clip_plus clip_star	// there is only one clipboard
-#  define ONE_CLIPBOARD
-# endif
-#endif
-
-#ifdef HAVE_CLIPMETHOD
-# define CLIP_UNNAMED      1
-# define CLIP_UNNAMED_PLUS 2
-EXTERN int	clip_unnamed INIT(= 0); // above two values or'ed
-
-# ifdef FEAT_CLIPBOARD
-EXTERN int	clip_autoselect_star INIT(= FALSE);
-EXTERN int	clip_autoselect_plus INIT(= FALSE);
-EXTERN int	clip_autoselectml INIT(= FALSE);
-EXTERN int	clip_html INIT(= FALSE);
-EXTERN regprog_T *clip_exclude_prog INIT(= NULL);
-EXTERN int	clip_unnamed_saved INIT(= 0);
-# endif
-#endif
-
-#ifdef FEAT_CLIPBOARD_PROVIDER
-EXTERN char_u	*clip_provider INIT(= NULL);
-#endif
-
+#line 1032
 
 /*
  * All regular windows are linked in a list. "firstwin" points to the first
@@ -1059,22 +913,7 @@ typedef struct {
 
 EXTERN aucmdwin_T aucmd_win[AUCMD_WIN_COUNT];
 
-#ifdef FEAT_PROP_POPUP
-EXTERN win_T    *first_popupwin;		// first global popup window
-EXTERN win_T	*popup_dragwin INIT(= NULL);	// popup window being dragged
-
-// Set to TRUE if there is any visible popup window.
-EXTERN int	popup_visible INIT(= FALSE);
-
-// Set to TRUE if a visible popup window may use a MOUSE_MOVE event
-EXTERN int	popup_uses_mouse_move INIT(= FALSE);
-
-EXTERN int	text_prop_frozen INIT(= 0);
-
-// when TRUE computing the cursor position ignores text properties.
-EXTERN int	ignore_text_props INIT(= FALSE);
-#endif
-
+#line 1078
 // When set the popup menu will redraw soon using the pum_win_ values. Do not
 // draw over the poup menu area to avoid flicker.
 EXTERN int	pum_will_redraw INIT(= FALSE);
@@ -1304,11 +1143,7 @@ EXTERN pos_T	Insstart_orig;
 EXTERN int	orig_line_count INIT(= 0);  // Line count when "gR" started
 EXTERN int	vr_lines_changed INIT(= 0); // #Lines changed by "gR" so far
 
-#if defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)
-// argument to SETJMP() for handling X IO errors
-EXTERN JMP_BUF x_jump_env;
-#endif
-
+#line 1312
 /*
  * These flags are set based upon 'fileencoding'.
  * Note that "enc_utf8" is also set for "unicode", because the characters are
@@ -1391,28 +1226,9 @@ EXTERN int* (*iconv_errno) (void);
 
 
 #ifdef FEAT_XIM
-# ifdef FEAT_GUI_GTK
-EXTERN GtkIMContext	*xic INIT(= NULL);
-/*
- * Start and end column of the preedit area in virtual columns from the start
- * of the text line.  When there is no preedit area they are set to MAXCOL.
- * "preedit_end_col" is needed for coloring the preedited string.  Drawing the
- * color between "preedit_start_col" and curpos did not work, because some XIM
- * set the cursor position to the first char of the string.
- */
-EXTERN colnr_T		preedit_start_col INIT(= MAXCOL);
-EXTERN colnr_T		preedit_end_col INIT(= MAXCOL);
-
-// "xim_changed_while_preediting" is set when changed() can set the 'modified'
-// flag even while preediting.
-EXTERN int		xim_changed_while_preediting INIT(= FALSE);
-# else
+#line 1410
 EXTERN XIC		xic INIT(= NULL);
-# endif
-# ifdef FEAT_GUI
-EXTERN guicolor_T	xim_fg_color INIT(= INVALCOLOR);
-EXTERN guicolor_T	xim_bg_color INIT(= INVALCOLOR);
-# endif
+#line 1416
 #endif
 
 /*
@@ -1694,10 +1510,7 @@ EXTERN int  redir_vname INIT(= 0);	// message redirection variable
 EXTERN int  redir_execute INIT(= 0);	// execute() redirection
 #endif
 
-#ifdef FEAT_LANGMAP
-EXTERN char_u	langmap_mapchar[256];	// mapping for language keys
-#endif
-
+#line 1701
 EXTERN int  save_p_ls INIT(= -1);	// Save 'laststatus' setting
 EXTERN int  save_p_wmh INIT(= -1);	// Save 'winminheight' setting
 EXTERN int  wild_menu_showing INIT(= 0);
@@ -1747,10 +1560,7 @@ EXTERN char_u	*homedir INIT(= NULL);
 // directory is not a local directory, globaldir is NULL.
 EXTERN char_u	*globaldir INIT(= NULL);
 
-#ifdef FEAT_FOLDING
-EXTERN int	disable_fold_update INIT(= 0);
-#endif
-
+#line 1754
 // Whether 'keymodel' contains "stopsel" and "startsel".
 EXTERN int	km_stopsel INIT(= FALSE);
 EXTERN int	km_startsel INIT(= FALSE);
@@ -1801,10 +1611,7 @@ EXTERN int      stl_syntax INIT(= 0);
 #if defined(FEAT_BEVAL) && !defined(NO_X11_INCLUDES)
 EXTERN BalloonEval	*balloonEval INIT(= NULL);
 EXTERN int		balloonEvalForTerm INIT(= FALSE);
-# if defined(FEAT_NETBEANS_INTG)
-EXTERN int bevalServers INIT(= 0);
-#  define BEVAL_NETBEANS		0x01
-# endif
+#line 1808
 #endif
 
 #ifdef CURSOR_SHAPE
@@ -1812,107 +1619,25 @@ EXTERN int bevalServers INIT(= 0);
 extern cursorentry_T shape_table[SHAPE_IDX_COUNT];
 #endif
 
-#ifdef FEAT_PRINTER
-/*
- * Printer stuff shared between hardcopy.c and machine-specific printing code.
- */
-# define OPT_PRINT_TOP		0
-# define OPT_PRINT_BOT		1
-# define OPT_PRINT_LEFT		2
-# define OPT_PRINT_RIGHT	3
-# define OPT_PRINT_HEADERHEIGHT	4
-# define OPT_PRINT_SYNTAX	5
-# define OPT_PRINT_NUMBER	6
-# define OPT_PRINT_WRAP		7
-# define OPT_PRINT_DUPLEX	8
-# define OPT_PRINT_PORTRAIT	9
-# define OPT_PRINT_PAPER	10
-# define OPT_PRINT_COLLATE	11
-# define OPT_PRINT_JOBSPLIT	12
-# define OPT_PRINT_FORMFEED	13
-
-# define OPT_PRINT_NUM_OPTIONS	14
-
-EXTERN option_table_T printer_opts[OPT_PRINT_NUM_OPTIONS]
-# ifdef DO_INIT
-    = {
-	{"top",	TRUE, 0, NULL, 0, FALSE},
-	{"bottom",	TRUE, 0, NULL, 0, FALSE},
-	{"left",	TRUE, 0, NULL, 0, FALSE},
-	{"right",	TRUE, 0, NULL, 0, FALSE},
-	{"header",	TRUE, 0, NULL, 0, FALSE},
-	{"syntax",	FALSE, 0, NULL, 0, FALSE},
-	{"number",	FALSE, 0, NULL, 0, FALSE},
-	{"wrap",	FALSE, 0, NULL, 0, FALSE},
-	{"duplex",	FALSE, 0, NULL, 0, FALSE},
-	{"portrait", FALSE, 0, NULL, 0, FALSE},
-	{"paper",	FALSE, 0, NULL, 0, FALSE},
-	{"collate",	FALSE, 0, NULL, 0, FALSE},
-	{"jobsplit", FALSE, 0, NULL, 0, FALSE},
-	{"formfeed", FALSE, 0, NULL, 0, FALSE},
-    }
-# endif
-    ;
-
-// For prt_get_unit().
-# define PRT_UNIT_NONE	-1
-# define PRT_UNIT_PERC	0
-# define PRT_UNIT_INCH	1
-# define PRT_UNIT_MM	2
-# define PRT_UNIT_POINT	3
-# define PRT_UNIT_NAMES {"pc", "in", "mm", "pt"}
-#endif
-
+#line 1867
 #if (defined(FEAT_PRINTER) && defined(FEAT_STL_OPT)) \
 	    || defined(FEAT_GUI_TABLINE)
 // Page number used for %N in 'pageheader' and 'guitablabel'.
 EXTERN linenr_T printer_page_num;
 #endif
 
-#ifdef FEAT_XCLIPBOARD
-// xterm display name
-EXTERN char	*xterm_display INIT(= NULL);
-
-// whether xterm_display was allocated, when FALSE it points into argv[]
-EXTERN int	xterm_display_allocated INIT(= FALSE);
-
-// xterm display pointer
-EXTERN Display	*xterm_dpy INIT(= NULL);
-#endif
+#line 1882
 #if defined(FEAT_XCLIPBOARD) || defined(FEAT_GUI_X11)
 EXTERN XtAppContext app_context INIT(= (XtAppContext)NULL);
 #endif
 
-#ifdef FEAT_GUI_GTK
-EXTERN guint32	gtk_socket_id INIT(= 0);
-EXTERN int	echo_wid_arg INIT(= FALSE);	// --echo-wid argument
-#endif
-
-#ifdef FEAT_GUI_MSWIN
-/*
- * The value of the --windowid argument.
- * For embedding gvim inside another application.
- */
-EXTERN long_u	win_socket_id INIT(= 0);
-#endif
-
+#line 1899
 #if defined(FEAT_CLIENTSERVER) || defined(FEAT_EVAL)
 EXTERN int	typebuf_was_filled INIT(= FALSE); // received text from client
 						  // or from feedkeys()
 #endif
 
-#ifdef FEAT_CLIENTSERVER
-EXTERN char_u	*serverName INIT(= NULL);	// name of the server
-# ifdef FEAT_X11
-EXTERN Window	commWindow INIT(= None);
-EXTERN Window	clientWindow INIT(= None);
-EXTERN Atom	commProperty INIT(= None);
-EXTERN char_u	*serverDelayedStartName INIT(= NULL);
-# elif defined(MSWIN)
-EXTERN HWND	clientWindow INIT(= 0);
-# endif
-#endif
-
+#line 1916
 #if defined(UNIX) || defined(VMS)
 EXTERN int	term_is_xterm INIT(= FALSE);	// xterm-like 'term'
 #endif
@@ -1933,17 +1658,7 @@ EXTERN int	virtual_op INIT(= MAYBE);
 EXTERN disptick_T	display_tick INIT(= 0);
 #endif
 
-#ifdef FEAT_SPELL
-// Line in which spell checking wasn't highlighted because it touched the
-// cursor position in Insert mode.
-EXTERN linenr_T		spell_redraw_lnum INIT(= 0);
-#endif
-
-#ifdef FEAT_CONCEAL
-// Set when the cursor line needs to be redrawn.
-EXTERN int		need_cursor_line_redraw INIT(= FALSE);
-#endif
-
+#line 1947
 #ifdef USE_MCH_ERRMSG
 // Grow array to collect error messages in until they can be displayed.
 EXTERN garray_T error_ga
@@ -1953,14 +1668,7 @@ EXTERN garray_T error_ga
 		    ;
 #endif
 
-#ifdef FEAT_NETBEANS_INTG
-EXTERN char *netbeansArg INIT(= NULL);	// the -nb[:host:port:passwd] arg
-EXTERN int netbeansFireChanges INIT(= 1); // send buffer changes if != 0
-EXTERN int netbeansForcedQuit INIT(= 0);// don't write modified files
-EXTERN int netbeansReadFile INIT(= 1);	// OK to read from disk if != 0
-EXTERN int netbeansSuppressNoLines INIT(= 0); // skip "No lines in buffer"
-#endif
-
+#line 1964
 /*
  * Some messages that can be shared are included here.
  */
@@ -1969,10 +1677,7 @@ EXTERN char bot_top_msg[]   INIT(= N_("search hit BOTTOM, continuing at TOP"));
 
 EXTERN char line_msg[]	    INIT(= N_(" line "));
 
-#ifdef FEAT_CRYPT
-EXTERN char need_key_msg[]  INIT(= N_("Need encryption key for \"%s\""));
-#endif
-
+#line 1976
 /*
  * Comms. with the session manager (XSMP)
  */
@@ -2018,10 +1723,7 @@ EXTERN int  ignore_unreachable_code_for_testing INIT(= FALSE);
 EXTERN int  in_free_unref_items INIT(= FALSE);
 #endif
 
-#ifdef FEAT_TIMERS
-EXTERN int  did_add_timer INIT(= FALSE);
-EXTERN int  timer_busy INIT(= 0);   // when timer is inside vgetc() then > 0
-#endif
+#line 2025
 #ifdef FEAT_EVAL
 EXTERN int  input_busy INIT(= 0);   // when inside get_user_input() then > 0
 
@@ -2065,17 +1767,7 @@ EXTERN HINSTANCE g_hinst INIT(= NULL);
 #endif
 
 
-#if defined(FEAT_JOB_CHANNEL)
-EXTERN char *ch_part_names[]
-# ifdef DO_INIT
-		= {"sock", "out", "err", "in"}
-# endif
-		;
-
-// Whether a redraw is needed for appending a line to a buffer.
-EXTERN int channel_need_redraw INIT(= FALSE);
-#endif
-
+#line 2079
 #ifdef FEAT_EVAL
 // This flag is set when outputting a terminal control code and reset in
 // out_flush() when characters have been written.
@@ -2108,10 +1800,7 @@ EXTERN int	p_tgc_set INIT(= FALSE);
 // If we've already warned about missing/unavailable clipboard
 EXTERN bool did_warn_clipboard INIT(= FALSE);
 
-#ifdef HAVE_CLIPMETHOD
-EXTERN clipmethod_T clipmethod INIT(= CLIPMETHOD_NONE);
-#endif
-
+#line 2115
 #ifdef FEAT_WAYLAND
 
 // Wayland display name for global connection (ex. wayland-0). Can be NULL
@@ -2122,38 +1811,7 @@ EXTERN int wayland_no_connect INIT(= FALSE);
 
 #endif
 
-#if defined(FEAT_CLIENTSERVER) && !defined(MSWIN)
-
-// Backend for clientserver functionality
-typedef enum {
-    CLIENTSERVER_METHOD_NONE,
-    CLIENTSERVER_METHOD_X11,
-    CLIENTSERVER_METHOD_SOCKET
-} clientserver_method_T;
-
-// Default to X11 if compiled with support for it, else use socket server.
-# if defined(FEAT_X11) && defined(FEAT_SOCKETSERVER)
-EXTERN clientserver_method_T clientserver_method
-# else
-// Since we aren't going to be changing clientserver_method, make it constant to
-// allow compiler optimizations.
-EXTERN const clientserver_method_T clientserver_method
-# endif
-# ifdef FEAT_X11
-INIT(= CLIENTSERVER_METHOD_X11);
-# elif defined(FEAT_SOCKETSERVER)
-INIT(= CLIENTSERVER_METHOD_SOCKET);
-# else
-INIT(= CLIENTSERVER_METHOD_NONE);
-# endif
-
-#endif
-
-#ifdef FEAT_SOCKETSERVER
-// Path to socket of last client that communicated with us
-EXTERN char_u *client_socket INIT(= NULL);
-#endif
-
+#line 2157
 // If the <xOSC> key should be propagated from vgetc()
 EXTERN int allow_osc_key INIT(= 0);
 
