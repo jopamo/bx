@@ -2228,16 +2228,6 @@ utf_byte2len(int b)
     return utf8len_tab[b];
 }
 
-/*
- * Return length of UTF-8 character, obtained from the first byte.
- * "b" must be between 0 and 255!
- * Returns 0 for an invalid first byte value.
- */
-    int
-utf_byte2len_zero(int b)
-{
-    return utf8len_tab_zero[b];
-}
 
 /*
  * Get the length of UTF-8 byte sequence "p[size]".  Does not include any
@@ -4541,20 +4531,6 @@ mb_charlen(char_u *str)
     return count;
 }
 
-/*
- * Like mb_charlen() but for a string with specified length.
- */
-    int
-mb_charlen_len(char_u *str, int len)
-{
-    char_u	*p = str;
-    int		count;
-
-    for (count = 0; *p != NUL && p < str + len; count++)
-	p += (*mb_ptr2len)(p);
-
-    return count;
-}
 
 /*
  * Try to un-escape a multi-byte character.

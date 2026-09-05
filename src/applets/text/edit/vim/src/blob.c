@@ -338,40 +338,6 @@ blob2items(typval_T *argvars, typval_T *rettv)
     }
 }
 
-/*
- * Convert a string variable, in the format of blob2string(), to a blob.
- * Return NULL when conversion failed.
- */
-    blob_T *
-string2blob(char_u *str)
-{
-    blob_T  *blob = blob_alloc();
-    char_u  *s = str;
-
-    if (blob == NULL)
-	return NULL;
-    if (s[0] != '0' || (s[1] != 'z' && s[1] != 'Z'))
-	goto failed;
-    s += 2;
-    while (vim_isxdigit(*s))
-    {
-	if (!vim_isxdigit(s[1]))
-	    goto failed;
-	ga_append(&blob->bv_ga, (hex2nr(s[0]) << 4) + hex2nr(s[1]));
-	s += 2;
-	if (*s == '.' && vim_isxdigit(s[1]))
-	    ++s;
-    }
-    if (*skipwhite(s) != NUL)
-	goto failed;  // text after final digit
-
-    ++blob->bv_refcount;
-    return blob;
-
-failed:
-    blob_free(blob);
-    return NULL;
-}
 
 /*
  * Returns a slice of 'blob' from index 'n1' to 'n2' in 'rettv'.  The length of

@@ -396,20 +396,6 @@ set_ref_in_list_items(
     return abort;
 }
 
-/*
- * Mark a tuple and its items with "copyID".
- * Returns TRUE if setting references failed somehow.
- */
-    int
-set_ref_in_tuple(tuple_T *tuple, int copyID)
-{
-    if (tuple != NULL && tuple->tv_copyID != copyID)
-    {
-	tuple->tv_copyID = copyID;
-	return set_ref_in_tuple_items(tuple, copyID, NULL, NULL);
-    }
-    return FALSE;
-}
 
 /*
  * Mark all lists and dicts referenced through tuple "t" with "copyID".

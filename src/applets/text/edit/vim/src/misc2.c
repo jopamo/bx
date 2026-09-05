@@ -2791,24 +2791,6 @@ get2c(FILE *fd)
     return (n << 8) + c;
 }
 
-/*
- * Read 3 bytes from "fd" and turn them into an int, MSB first.
- * Returns -1 when encountering EOF.
- */
-    int
-get3c(FILE *fd)
-{
-    int		c, n;
-
-    n = getc(fd);
-    if (n == EOF) return -1;
-    c = getc(fd);
-    if (c == EOF) return -1;
-    n = (n << 8) + c;
-    c = getc(fd);
-    if (c == EOF) return -1;
-    return (n << 8) + c;
-}
 
 /*
  * Read 4 bytes from "fd" and turn them into an int, MSB first.
@@ -2837,50 +2819,7 @@ get4c(FILE *fd)
     return (int)n;
 }
 
-/*
- * Read a string of length "cnt" from "fd" into allocated memory.
- * Returns NULL when out of memory or unable to read that many bytes.
- */
-    char_u *
-read_string(FILE *fd, int cnt)
-{
-    char_u	*str;
-    int		i;
-    int		c;
 
-    // allocate memory
-    str = alloc(cnt + 1);
-    if (str == NULL)
-	return NULL;
-
-    // Read the string.  Quit when running into the EOF.
-    for (i = 0; i < cnt; ++i)
-    {
-	c = getc(fd);
-	if (c == EOF)
-	{
-	    vim_free(str);
-	    return NULL;
-	}
-	str[i] = c;
-    }
-    str[i] = NUL;
-    return str;
-}
-
-/*
- * Write a number to file "fd", MSB first, in "len" bytes.
- */
-    int
-put_bytes(FILE *fd, long_u nr, int len)
-{
-    int	    i;
-
-    for (i = len - 1; i >= 0; --i)
-	if (putc((int)(nr >> (i * 8)), fd) == EOF)
-	    return FAIL;
-    return OK;
-}
 
 #endif
 
@@ -2997,31 +2936,6 @@ mch_parse_cmd(char_u *cmd, int use_shcf, char ***argv, int *argc)
     return OK;
 }
 
-/*
- * Build "argv[argc]" from the string "cmd".
- * "argv[argc]" is set to NULL;
- * Return FAIL when out of memory.
- */
-    int
-build_argv_from_string(char_u *cmd, char ***argv, int *argc)
-{
-    char_u	*cmd_copy;
-    int		i;
-
-    // Make a copy, parsing will modify "cmd".
-    cmd_copy = vim_strsave(cmd);
-    if (cmd_copy == NULL
-	    || mch_parse_cmd(cmd_copy, FALSE, argv, argc) == FAIL)
-    {
-	vim_free(cmd_copy);
-	return FAIL;
-    }
-    for (i = 0; i < *argc; i++)
-	(*argv)[i] = (char *)vim_strsave((char_u *)(*argv)[i]);
-    (*argv)[*argc] = NULL;
-    vim_free(cmd_copy);
-    return OK;
-}
 
 #endif
 
@@ -3062,24 +2976,6 @@ build_argv_from_list(list_T *l, char ***argv, int *argc)
 }
 #endif
 
-/*
- * Change the behavior of vterm.
- * 0: As usual.
- * 1: Windows 10 version 1809
- *      The bug causes unstable handling of ambiguous width character.
- * 2: Windows 10 version 1903 & 1909
- *      Use the wrong result because each result is different.
- * 3: Windows 10 insider preview (current latest logic)
- */
-    int
-get_special_pty_type(void)
-{
-#ifdef MSWIN
-    return get_conpty_type();
-#else
-    return 0;
-#endif
-}
 
 // compare two keyvalue_T structs by case sensitive value
     int

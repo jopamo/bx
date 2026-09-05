@@ -19,8 +19,6 @@ int source_in_path(char_u *path, char_u *name, int flags, int *ret_sid);
 int find_script_in_rtp(char_u *name);
 void add_pack_start_dirs(void);
 void load_start_packages(void);
-void ex_packloadall(exarg_T *eap);
-void ex_packadd(exarg_T *eap);
 void remove_duplicates(garray_T *gap);
 int ExpandRTDir(char_u *pat, int flags, int *num_file, char_u ***file, char *dirnames[]);
 int expand_runtime_cmd(char_u *pat, int *numMatches, char_u ***matches);

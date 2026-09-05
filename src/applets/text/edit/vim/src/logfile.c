@@ -109,22 +109,6 @@ ch_log(channel_T *ch, const char *fmt, ...)
     did_repeated_msg = 0;
 }
 
-    void
-ch_error(channel_T *ch, const char *fmt, ...)
-{
-    if (log_fd == NULL)
-	return;
-
-    va_list ap;
-
-    ch_log_lead("ERR ", ch, PART_COUNT);
-    va_start(ap, fmt);
-    vfprintf(log_fd, fmt, ap);
-    va_end(ap);
-    fputc('\n', log_fd);
-    fflush(log_fd);
-    did_repeated_msg = 0;
-}
 #endif
 
 #line 160

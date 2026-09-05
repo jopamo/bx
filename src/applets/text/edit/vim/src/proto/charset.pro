@@ -49,8 +49,6 @@ char_u *skipwhite_and_nl(char_u *q);
 int getwhitecols_curline(void);
 int getwhitecols(char_u *p);
 char_u *skipdigits(char_u *q);
-char_u *skipbin(char_u *q);
-char_u *skiphex(char_u *q);
 char_u *skiptobin(char_u *q);
 char_u *skiptodigit(char_u *q);
 char_u *skiptohex(char_u *q);

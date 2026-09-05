@@ -1063,14 +1063,6 @@ sign_define_by_name(char_u *name,
     return OK;
 }
 
-/*
- * Return TRUE if sign "name" exists.
- */
-int
-sign_exists_by_name(char_u *name)
-{
-    return sign_find(name, NULL) != NULL;
-}
 
 /*
  * Free the sign specified by 'name'.

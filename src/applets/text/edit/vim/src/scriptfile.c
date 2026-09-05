@@ -1034,7 +1034,6 @@ theend:
 // used for "cookie" of add_pack_plugin()
 static int APP_ADD_DIR;
 static int APP_LOAD;
-static int APP_BOTH;
 
     static void
 add_pack_plugin(char_u *fname, void *cookie)
@@ -1089,55 +1088,6 @@ load_start_packages(void)
 						  add_pack_plugin, &APP_LOAD);
 }
 
-/*
- * ":packloadall"
- * Find plugins in the package directories and source them.
- */
-    void
-ex_packloadall(exarg_T *eap)
-{
-    if (!did_source_packages || eap->forceit)
-    {
-	// First do a round to add all directories to 'runtimepath', then load
-	// the plugins. This allows for plugins to use an autoload directory
-	// of another plugin.
-	add_pack_start_dirs();
-	load_start_packages();
-    }
-}
-
-/*
- * ":packadd[!] {name}"
- */
-    void
-ex_packadd(exarg_T *eap)
-{
-    static char *plugpat = "pack/*/%s/%s";
-    int		len;
-    char	*pat;
-    int		round;
-    int		res = OK;
-
-    // Round 1: use "start", round 2: use "opt".
-    for (round = 1; round <= 2; ++round)
-    {
-	// Only look under "start" when loading packages wasn't done yet.
-	if (round == 1 && did_source_packages)
-	    continue;
-
-	len = (int)STRLEN(plugpat) + (int)STRLEN(eap->arg) + 5;
-	pat = alloc(len);
-	if (pat == NULL)
-	    return;
-	vim_snprintf(pat, len, plugpat, round == 1 ? "start" : "opt", eap->arg);
-	// The first round don't give a "not found" error, in the second round
-	// only when nothing was found in the first round.
-	res = do_in_path(p_pp, "", (char_u *)pat,
-		DIP_ALL + DIP_DIR + (round == 2 && res == FAIL ? DIP_ERR : 0),
-		add_pack_plugin, eap->forceit ? &APP_ADD_DIR : &APP_BOTH);
-	vim_free(pat);
-    }
-}
 #endif
 
 /*

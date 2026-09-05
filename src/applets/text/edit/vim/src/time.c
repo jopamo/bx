@@ -519,18 +519,6 @@ get8ctime(FILE *fd)
     return n;
 }
 
-/*
- * Write time_T to file "fd" in 8 bytes.
- * Returns FAIL when the write failed.
- */
-    int
-put_time(FILE *fd, time_T the_time)
-{
-    char_u	buf[8];
-
-    time_to_bytes(the_time, buf);
-    return fwrite(buf, (size_t)8, (size_t)1, fd) == 1 ? OK : FAIL;
-}
 
 /*
  * Write time_T to "buf[8]".

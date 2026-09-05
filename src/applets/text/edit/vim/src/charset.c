@@ -1708,34 +1708,6 @@ skipdigits(char_u *q)
     return p;
 }
 
-#if defined(FEAT_SYN_HL) || defined(FEAT_SPELL)
-/*
- * skip over binary digits
- */
-    char_u *
-skipbin(char_u *q)
-{
-    char_u	*p = q;
-
-    while (vim_isbdigit(*p))	// skip to next non-digit
-	++p;
-    return p;
-}
-
-/*
- * skip over digits and hex characters
- */
-    char_u *
-skiphex(char_u *q)
-{
-    char_u	*p = q;
-
-    while (vim_isxdigit(*p))	// skip to next non-digit
-	++p;
-    return p;
-}
-#endif
-
 /*
  * skip to bin digit (or NUL after the string)
  */

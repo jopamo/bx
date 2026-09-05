@@ -109,7 +109,6 @@ char *did_set_tabpanelopt(optset_T *args);
 int expand_set_tabpanelopt(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_scrollopt(optset_T *args);
 int expand_set_scrollopt(optexpand_T *args, int *numMatches, char_u ***matches);
-char *did_set_wlseat(optset_T *args);
 char *did_set_selection(optset_T *args);
 int expand_set_selection(optexpand_T *args, int *numMatches, char_u ***matches);
 char *did_set_selectmode(optset_T *args);

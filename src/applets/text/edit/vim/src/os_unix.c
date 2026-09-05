@@ -7049,18 +7049,6 @@ start_timeout(long msec)
     return &timeout_flag;
 }
 
-/*
- * To be used before fork/exec: delete any created timer.
- */
-    void
-delete_timer(void)
-{
-    if (!timer_created)
-	return;
-
-    timer_delete(timer_id);
-    timer_created = FALSE;
-}
 
 # else // PROF_NSEC
 
@@ -7189,44 +7177,3 @@ start_timeout(long msec)
 }
 # endif // PROF_NSEC
 #endif  // FEAT_RELTIME
-
-/*
- * Create an anonymous/temporary file/object and return its file descriptor.
- * Returns -1 on error.
- */
-    int
-mch_create_anon_file(void)
-{
-    int fd = -1;
-#ifdef HAVE_SHM_OPEN
-    char template[] = "/vimXXXXXX";
-
-    for (int i = 0; i < 100; i++)
-    {
-	mch_get_random((char_u*)template + 4, 6);
-
-	errno = 0;
-	fd = shm_open(template, O_CREAT | O_RDWR | O_EXCL, 0600);
-
-	if (fd >= 0 || errno != EEXIST)
-	    break;
-    }
-    // Remove object name from namespace
-    shm_unlink(template);
-#endif
-    // Last resort
-    if (fd == -1)
-    {
-	char_u	*tempname;
-	// get a name for the temp file
-	if ((tempname = vim_tempname('w', FALSE)) == NULL)
-	{
-	    emsg(_(e_cant_get_temp_file_name));
-	    return -1;
-	}
-	fd = mch_open((char *)tempname, O_CREAT | O_RDWR | O_EXCL, 0600);
-	mch_remove(tempname);
-	vim_free(tempname);
-    }
-    return fd;
-}
