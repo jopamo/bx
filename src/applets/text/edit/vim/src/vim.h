@@ -2071,8 +2071,6 @@ typedef int sock_T;
 // buffer-local options is used there.
 #include "option.h"	// options and default values
 
-#include "beval.h"	// BalloonEval
-
 // Note that gui.h is included by structs.h
 
 #include "structs.h"	// defines many structures
@@ -2546,7 +2544,6 @@ typedef int (*opt_expand_cb_T)(optexpand_T *args, int *numMatches, char_u ***mat
 #define ASSIGN_COMPOUND_OP 0x200  // compound operator e.g. "+="
 
 #include "ex_cmds.h"	    // Ex command defines
-#include "spell.h"	    // spell checking stuff
 
 #include "proto.h"	    // function prototypes
 
