@@ -91,12 +91,7 @@
 typedef struct {
     buf_T	*bi_buf;
     FILE	*bi_fp;
-#ifdef FEAT_CRYPT
-    cryptstate_T *bi_state;
-    char_u	*bi_buffer; // CRYPT_BUF_SIZE, NULL when not buffering
-    size_t	bi_used;    // bytes written to/read from bi_buffer
-    size_t	bi_avail;   // bytes available in bi_buffer
-#endif
+#line 100
 } bufinfo_T;
 
 
@@ -111,9 +106,7 @@ static void u_freebranch(buf_T *buf, u_header_T *uhp, u_header_T **uhpp);
 static void u_freeentries(buf_T *buf, u_header_T *uhp, u_header_T **uhpp);
 static void u_freeentry(u_entry_T *, long);
 #ifdef FEAT_PERSISTENT_UNDO
-# ifdef FEAT_CRYPT
-static int undo_flush(bufinfo_T *bi);
-# endif
+#line 117
 static int undo_read(bufinfo_T *bi, char_u *buffer, size_t size);
 static int serialize_uep(bufinfo_T *bi, u_entry_T *uep);
 static u_entry_T *unserialize_uep(bufinfo_T *bi, int *error, char_u *file_name);
@@ -377,29 +370,7 @@ u_save_line(undoline_T *ul, linenr_T lnum)
     return ul->ul_line == NULL ? FAIL : OK;
 }
 
-#ifdef FEAT_PROP_POPUP
-/*
- * return TRUE if line "lnum" has text property "flags".
- */
-    static int
-has_prop_w_flags(linenr_T lnum, int flags)
-{
-    char_u  *props;
-    int	    i;
-    int	    proplen = get_text_props(curbuf, lnum, &props, FALSE);
-
-    for (i = 0; i < proplen; ++i)
-    {
-	textprop_T prop;
-
-	mch_memmove(&prop, props + i * sizeof prop, sizeof prop);
-	if (prop.tp_flags & flags)
-	    return TRUE;
-    }
-    return FALSE;
-}
-#endif
-
+#line 403
 /*
  * Common code for various ways to save text before a change.
  * "top" is the line above the first changed line.
@@ -431,30 +402,7 @@ u_savecommon(
 	if (!undo_allowed())
 	    return FAIL;
 
-#ifdef FEAT_NETBEANS_INTG
-	/*
-	 * Netbeans defines areas that cannot be modified.  Bail out here when
-	 * trying to change text in a guarded area.
-	 */
-	if (netbeans_active())
-	{
-	    if (netbeans_is_guarded(top, bot))
-	    {
-		emsg(_(e_region_is_guarded_cannot_modify));
-		return FAIL;
-	    }
-	    if (curbuf->b_p_ro)
-	    {
-		emsg(_(e_netbeans_does_not_allow_changes_in_read_only_files));
-		return FAIL;
-	    }
-	}
-#endif
-#ifdef FEAT_TERMINAL
-	// A change in a terminal buffer removes the highlighting.
-	term_change_in_curbuf();
-#endif
-
+#line 458
 	/*
 	 * Saving text for undo means we are going to make a change.  Give a
 	 * warning for a read-only file before making the change, so that the
@@ -475,23 +423,7 @@ u_savecommon(
     u_check(FALSE);
 #endif
 
-#ifdef FEAT_PROP_POPUP
-    // Include the line above if a text property continues from it.
-    // Include the line below if a text property continues to it.
-    if (bot - top > 1)
-    {
-	if (top > 0 && has_prop_w_flags(top + 1, TP_FLAG_CONT_PREV))
-	    --top;
-	if (bot <= curbuf->b_ml.ml_line_count
-			       && has_prop_w_flags(bot - 1, TP_FLAG_CONT_NEXT))
-	{
-	    ++bot;
-	    if (newbot != 0)
-		++newbot;
-	}
-    }
-#endif
-
+#line 495
     size = bot - top - 1;
 
     /*
@@ -920,53 +852,13 @@ u_free_uhp(u_header_T *uhp)
     static int
 undo_write(bufinfo_T *bi, char_u *ptr, size_t len)
 {
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	size_t	len_todo = len;
-	char_u  *p = ptr;
-
-	while (bi->bi_used + len_todo >= CRYPT_BUF_SIZE)
-	{
-	    size_t	n = CRYPT_BUF_SIZE - bi->bi_used;
-
-	    mch_memmove(bi->bi_buffer + bi->bi_used, p, n);
-	    len_todo -= n;
-	    p += n;
-	    bi->bi_used = CRYPT_BUF_SIZE;
-	    if (undo_flush(bi) == FAIL)
-		return FAIL;
-	}
-	if (len_todo > 0)
-	{
-	    mch_memmove(bi->bi_buffer + bi->bi_used, p, len_todo);
-	    bi->bi_used += len_todo;
-	}
-	return OK;
-    }
-# endif
+#line 948
     if (fwrite(ptr, len, (size_t)1, bi->bi_fp) != 1)
 	return FAIL;
     return OK;
 }
 
-# ifdef FEAT_CRYPT
-    static int
-undo_flush(bufinfo_T *bi)
-{
-    if (bi->bi_buffer != NULL && bi->bi_state != NULL && bi->bi_used > 0)
-    {
-	// Last parameter is only used for sodium encryption and that
-	// explicitly disables encryption of undofiles.
-	crypt_encode_inplace(bi->bi_state, bi->bi_buffer, bi->bi_used, FALSE);
-	if (fwrite(bi->bi_buffer, bi->bi_used, (size_t)1, bi->bi_fp) != 1)
-	    return FAIL;
-	bi->bi_used = 0;
-    }
-    return OK;
-}
-# endif
-
+#line 970
 /*
  * Write "ptr[len]" and crypt the bytes when needed.
  * Returns OK or FAIL.
@@ -974,31 +866,7 @@ undo_flush(bufinfo_T *bi)
     static int
 fwrite_crypt(bufinfo_T *bi, char_u *ptr, size_t len)
 {
-# ifdef FEAT_CRYPT
-    char_u  *copy;
-    char_u  small_buf[100];
-    size_t  i;
-
-    if (bi->bi_state != NULL && bi->bi_buffer == NULL)
-    {
-	// crypting every piece of text separately
-	if (len < 100)
-	    copy = small_buf;  // no malloc()/free() for short strings
-	else
-	{
-	    copy = lalloc(len, FALSE);
-	    if (copy == NULL)
-		return 0;
-	}
-	// Last parameter is only used for sodium encryption and that
-	// explicitly disables encryption of undofiles.
-	crypt_encode(bi->bi_state, ptr, len, copy, TRUE);
-	i = fwrite(copy, len, (size_t)1, bi->bi_fp);
-	if (copy != small_buf)
-	    vim_free(copy);
-	return i == 1 ? OK : FAIL;
-    }
-# endif
+#line 1002
     return undo_write(bi, ptr, len);
 }
 
@@ -1032,68 +900,28 @@ put_header_ptr(bufinfo_T *bi, u_header_T *uhp)
     static int
 undo_read_4c(bufinfo_T *bi)
 {
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	char_u  buf[4];
-	int	n;
-
-	undo_read(bi, buf, (size_t)4);
-	n = ((unsigned)buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
-	return n;
-    }
-# endif
+#line 1046
     return get4c(bi->bi_fp);
 }
 
     static int
 undo_read_2c(bufinfo_T *bi)
 {
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	char_u  buf[2];
-	int	n;
-
-	undo_read(bi, buf, (size_t)2);
-	n = (buf[0] << 8) + buf[1];
-	return n;
-    }
-# endif
+#line 1063
     return get2c(bi->bi_fp);
 }
 
     static int
 undo_read_byte(bufinfo_T *bi)
 {
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	char_u  buf[1];
-
-	undo_read(bi, buf, (size_t)1);
-	return buf[0];
-    }
-# endif
+#line 1078
     return getc(bi->bi_fp);
 }
 
     static time_t
 undo_read_time(bufinfo_T *bi)
 {
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	char_u  buf[8];
-	time_t	n = 0;
-	int	i;
-
-	undo_read(bi, buf, (size_t)8);
-	for (i = 0; i < 8; ++i)
-	    n = (n << 8) + buf[i];
-	return n;
-    }
-# endif
+#line 1097
     return get8ctime(bi->bi_fp);
 }
 
@@ -1106,39 +934,7 @@ undo_read(bufinfo_T *bi, char_u *buffer, size_t size)
 {
     int retval = OK;
 
-# ifdef FEAT_CRYPT
-    if (bi->bi_buffer != NULL)
-    {
-	int	size_todo = (int)size;
-	char_u	*p = buffer;
-
-	while (size_todo > 0)
-	{
-	    size_t n;
-
-	    if (bi->bi_used >= bi->bi_avail)
-	    {
-		n = fread(bi->bi_buffer, 1, (size_t)CRYPT_BUF_SIZE, bi->bi_fp);
-		if (n == 0)
-		{
-		    retval = FAIL;
-		    break;
-		}
-		bi->bi_avail = n;
-		bi->bi_used = 0;
-		crypt_decode_inplace(bi->bi_state, bi->bi_buffer, bi->bi_avail, FALSE);
-	    }
-	    n = size_todo;
-	    if (n > bi->bi_avail - bi->bi_used)
-		n = bi->bi_avail - bi->bi_used;
-	    mch_memmove(p, bi->bi_buffer + bi->bi_used, n);
-	    bi->bi_used += n;
-	    size_todo -= (int)n;
-	    p += n;
-	}
-    }
-    else
-# endif
+#line 1142
     if (fread(buffer, size, 1, bi->bi_fp) != 1)
 	retval = FAIL;
 
@@ -1172,10 +968,7 @@ read_string_decrypt(bufinfo_T *bi, int len)
     // In case there are text properties there already is a NUL, but
     // checking for that is more expensive than just adding a dummy byte.
     ptr[len] = NUL;
-# ifdef FEAT_CRYPT
-    if (bi->bi_state != NULL && bi->bi_buffer == NULL)
-	crypt_decode_inplace(bi->bi_state, ptr, len, FALSE);
-# endif
+#line 1179
     return ptr;
 }
 
@@ -1195,41 +988,7 @@ serialize_header(bufinfo_T *bi, char_u *hash)
 
     // If the buffer is encrypted then all text bytes following will be
     // encrypted.  Numbers and other info is not crypted.
-# ifdef FEAT_CRYPT
-    if (*buf->b_p_key != NUL)
-    {
-	char_u *header;
-	int    header_len;
-	long	len;
-
-	undo_write_bytes(bi, (long_u)UF_VERSION_CRYPT, 2);
-	bi->bi_state = crypt_create_for_writing(crypt_get_method_nr(buf),
-					  buf->b_p_key, &header, &header_len);
-	if (bi->bi_state == NULL)
-	    return FAIL;
-	len = (long)fwrite(header, (size_t)header_len, (size_t)1, fp);
-	vim_free(header);
-	if (len != 1)
-	{
-	    crypt_free_state(bi->bi_state);
-	    bi->bi_state = NULL;
-	    return FAIL;
-	}
-
-	if (crypt_whole_undofile(crypt_get_method_nr(buf)))
-	{
-	    bi->bi_buffer = alloc(CRYPT_BUF_SIZE);
-	    if (bi->bi_buffer == NULL)
-	    {
-		crypt_free_state(bi->bi_state);
-		bi->bi_state = NULL;
-		return FAIL;
-	    }
-	    bi->bi_used = 0;
-	}
-    }
-    else
-# endif
+#line 1233
 	undo_write_bytes(bi, (long_u)UF_VERSION, 2);
 
 
@@ -1772,11 +1531,7 @@ u_write_undo(
     }
 # endif
 
-# ifdef FEAT_CRYPT
-    if (bi.bi_state != NULL && undo_flush(&bi) == FAIL)
-	write_ok = FALSE;
-# endif
-
+#line 1780
 # if defined(UNIX) && defined(HAVE_FSYNC)
     if ((buf->b_p_fs >= 0 ? buf->b_p_fs : p_fs) && fflush(fp) == 0
 	    && vim_fsync(fd) != 0)
@@ -1807,11 +1562,7 @@ write_error:
 # endif
 
 theend:
-# ifdef FEAT_CRYPT
-    if (bi.bi_state != NULL)
-	crypt_free_state(bi.bi_state);
-    vim_free(bi.bi_buffer);
-# endif
+#line 1815
     if (file_name != name)
 	vim_free(file_name);
 }
@@ -1917,35 +1668,10 @@ u_read_undo(char_u *name, char_u *hash, char_u *orig_name UNUSED)
     version = get2c(fp);
     if (version == UF_VERSION_CRYPT)
     {
-# ifdef FEAT_CRYPT
-	if (*curbuf->b_p_key == NUL)
-	{
-	    semsg(_(e_non_encrypted_file_has_encrypted_undo_file_str),
-								    file_name);
-	    goto error;
-	}
-	bi.bi_state = crypt_create_from_file(fp, curbuf->b_p_key);
-	if (bi.bi_state == NULL)
-	{
-	    semsg(_(e_undo_file_decryption_failed), file_name);
-	    goto error;
-	}
-	if (crypt_whole_undofile(bi.bi_state->method_nr))
-	{
-	    bi.bi_buffer = alloc(CRYPT_BUF_SIZE);
-	    if (bi.bi_buffer == NULL)
-	    {
-		crypt_free_state(bi.bi_state);
-		bi.bi_state = NULL;
-		goto error;
-	    }
-	    bi.bi_avail = 0;
-	    bi.bi_used = 0;
-	}
-# else
+#line 1946
 	semsg(_(e_undo_file_is_encrypted_str), file_name);
 	goto error;
-# endif
+#line 1949
     }
     else if (version != UF_VERSION)
     {
@@ -2188,11 +1914,7 @@ error:
     }
 
 theend:
-# ifdef FEAT_CRYPT
-    if (bi.bi_state != NULL)
-	crypt_free_state(bi.bi_state);
-    vim_free(bi.bi_buffer);
-# endif
+#line 2196
     if (fp != NULL)
 	fclose(fp);
     if (file_name != name)
@@ -2859,13 +2581,7 @@ u_undoredo(int undo)
 	if (oldsize > 0 || newsize > 0)
 	{
 	    changed_lines(top + 1, 0, bot, newsize - oldsize);
-#ifdef FEAT_SPELL
-	    // When text has been changed, possibly the start of the next line
-	    // may have SpellCap that should be removed or it needs to be
-	    // displayed.  Schedule the next line for redrawing just in case.
-	    if (spell_check_window(curwin) && bot <= curbuf->b_ml.ml_line_count)
-		redrawWinline(curwin, bot);
-#endif
+#line 2869
 	}
 
 	// Set the '[ mark.
@@ -2908,10 +2624,7 @@ u_undoredo(int undo)
     if (old_flags & UH_CHANGED)
 	changed();
     else
-#ifdef FEAT_NETBEANS_INTG
-	// per netbeans undo rules, keep it as modified
-	if (!isNetbeansModified(curbuf))
-#endif
+#line 2915
 	unchanged(curbuf, FALSE, TRUE);
 
     /*
@@ -3011,11 +2724,7 @@ u_undo_end(
     u_header_T	*uhp;
     char_u	msgbuf[80];
 
-#ifdef FEAT_FOLDING
-    if ((fdo_flags & FDO_UNDO) && KeyTyped)
-	foldOpenCursor();
-#endif
-
+#line 3019
     if (global_busy	    // no messages now, wait until global is finished
 	    || !messaging() // 'lazyredraw' set, don't do messages now
 	    || shortmess(SHM_UNDO))
@@ -3063,17 +2772,7 @@ u_undo_end(
     else
 	add_time(msgbuf, sizeof(msgbuf), uhp->uh_time);
 
-#ifdef FEAT_CONCEAL
-    {
-	win_T	*wp;
-
-	FOR_ALL_WINDOWS(wp)
-	{
-	    if (wp->w_buffer == curbuf && wp->w_p_cole > 0)
-		redraw_win_later(wp, UPD_NOT_VALID);
-	}
-    }
-#endif
+#line 3077
     if (VIsual_active)
 	check_pos(curbuf, &VIsual);
 
@@ -3095,10 +2794,7 @@ u_sync(
     // Skip it when already synced or syncing is disabled.
     if (curbuf->b_u_synced || (!force && no_u_sync > 0))
 	return;
-#if defined(FEAT_XIM) && defined(FEAT_GUI_GTK)
-    if (p_imst == IM_ON_THE_SPOT && im_is_preediting())
-	return;		    // XIM is busy, don't break an undo sequence
-#endif
+#line 3102
     if (get_undolevel() < 0)
 	curbuf->b_u_synced = true;  // no entries, nothing to do
     else
@@ -3624,10 +3320,7 @@ u_undoline(void)
     int
 bufIsChanged(buf_T *buf)
 {
-#ifdef FEAT_TERMINAL
-    if (term_job_running_not_none(buf->b_term))
-	return TRUE;
-#endif
+#line 3631
     return bufIsChangedNotTerm(buf);
 }
 

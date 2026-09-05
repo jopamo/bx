@@ -15,9 +15,9 @@
 
 static int	quitmore = 0;
 static int	ex_pressedreturn = FALSE;
-#ifndef FEAT_PRINTER
+#line 19
 # define ex_hardcopy	ex_ni
-#endif
+#line 21
 
 #ifdef FEAT_EVAL
 static char_u	*do_one_cmd(char_u **, int, cstack_T *, char_u *(*fgetline)(int, void *, int, getline_opt_T), void *cookie);
@@ -27,11 +27,11 @@ static int	if_level = 0;		// depth in :if
 #endif
 static void	append_command(char_u *cmd);
 
-#ifndef FEAT_MENU
+#line 31
 # define ex_emenu		ex_ni
 # define ex_menu		ex_ni
 # define ex_menutranslate	ex_ni
-#endif
+#line 35
 static void	ex_autocmd(exarg_T *eap);
 static void	ex_doautocmd(exarg_T *eap);
 static void	ex_bunload(exarg_T *eap);
@@ -126,50 +126,43 @@ static void	ex_wrongmodifier(exarg_T *eap);
 static void	ex_find(exarg_T *eap);
 static void	ex_open(exarg_T *eap);
 static void	ex_edit(exarg_T *eap);
-#ifndef FEAT_GUI
+#line 130
 # define ex_gui			ex_nogui
 static void	ex_nogui(exarg_T *eap);
-#endif
-#if defined(FEAT_GUI_MSWIN) && defined(FEAT_MENU) && defined(FEAT_TEAROFF)
-static void	ex_tearoff(exarg_T *eap);
-#else
+#line 136
 # define ex_tearoff		ex_ni
-#endif
+#line 138
 #if (defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_GTK) \
 	|| defined(FEAT_TERM_POPUP_MENU)) && defined(FEAT_MENU)
 static void	ex_popup(exarg_T *eap);
 #else
 # define ex_popup		ex_ni
 #endif
-#ifndef FEAT_GUI_MSWIN
+#line 145
 # define ex_simalt		ex_ni
-#endif
-#if !defined(FEAT_GUI_MSWIN) && !defined(FEAT_GUI_GTK) && !defined(FEAT_GUI_MOTIF)
+#line 148
 # define gui_mch_find_dialog	ex_ni
 # define gui_mch_replace_dialog ex_ni
-#endif
-#if !defined(FEAT_GUI_GTK)
+#line 152
 # define ex_helpfind		ex_ni
-#endif
-#ifndef FEAT_CSCOPE
+#line 155
 # define ex_cscope		ex_ni
 # define ex_scscope		ex_ni
 # define ex_cstag		ex_ni
-#endif
+#line 159
 #ifndef FEAT_SYN_HL
 # define ex_syntax		ex_ni
 # define ex_ownsyntax		ex_ni
 #endif
-#if !defined(FEAT_SYN_HL) || !defined(FEAT_PROFILE)
+#line 164
 # define ex_syntime		ex_ni
-#endif
-#ifndef FEAT_SPELL
+#line 167
 # define ex_spell		ex_ni
 # define ex_mkspell		ex_ni
 # define ex_spelldump		ex_ni
 # define ex_spellinfo		ex_ni
 # define ex_spellrepall		ex_ni
-#endif
+#line 173
 #ifndef FEAT_PERSISTENT_UNDO
 # define ex_rundo		ex_ni
 # define ex_wundo		ex_ni
@@ -212,9 +205,9 @@ static void	ex_popup(exarg_T *eap);
 # define ex_rubydo		ex_ni
 # define ex_rubyfile		ex_ni
 #endif
-#ifndef FEAT_KEYMAP
+#line 216
 # define ex_loadkeymap		ex_ni
-#endif
+#line 218
 static void	ex_swapname(exarg_T *eap);
 static void	ex_syncbind(exarg_T *eap);
 static void	ex_read(exarg_T *eap);
@@ -319,12 +312,11 @@ static void	ex_tag_cmd(exarg_T *eap, char_u *name);
 # define ex_packadd		ex_ni
 # define ex_packloadall		ex_ni
 #endif
-#ifndef FEAT_SESSION
+#line 323
 # define ex_loadview		ex_ni
-#endif
-#ifndef FEAT_VIMINFO
+#line 326
 # define ex_viminfo		ex_ni
-#endif
+#line 328
 static void	ex_behave(exarg_T *eap);
 static void	ex_filetype(exarg_T *eap);
 static void	ex_setfiletype(exarg_T *eap);
@@ -343,50 +335,40 @@ static void	ex_nohlsearch(exarg_T *eap);
 # define ex_nohlsearch		ex_ni
 # define ex_match		ex_ni
 #endif
-#ifdef FEAT_CRYPT
-static void	ex_X(exarg_T *eap);
-#else
+#line 349
 # define ex_X			ex_ni
-#endif
-#ifdef FEAT_FOLDING
-static void	ex_fold(exarg_T *eap);
-static void	ex_foldopen(exarg_T *eap);
-static void	ex_folddo(exarg_T *eap);
-#else
+#line 356
 # define ex_fold		ex_ni
 # define ex_foldopen		ex_ni
 # define ex_folddo		ex_ni
-#endif
+#line 360
 #if !(defined(HAVE_LOCALE_H) || defined(X_LOCALE))
 # define ex_language		ex_ni
 #endif
 #ifndef FEAT_SIGNS
 # define ex_sign		ex_ni
 #endif
-#ifndef FEAT_NETBEANS_INTG
+#line 367
 # define ex_nbclose		ex_ni
 # define ex_nbkey		ex_ni
 # define ex_nbstart		ex_ni
-#endif
+#line 371
 
-#ifndef FEAT_PROFILE
+#line 373
 # define ex_profile		ex_ni
-#endif
-#ifndef FEAT_TERMINAL
+#line 376
 # define ex_terminal		ex_ni
-#endif
-#if !defined(FEAT_X11) || !defined(FEAT_XCLIPBOARD)
+#line 379
 # define ex_xrestore		ex_ni
-#endif
+#line 381
 #if !defined(FEAT_WAYLAND)
 # define ex_wlrestore		ex_ni
 #endif
-#if !defined(HAVE_CLIPMETHOD)
+#line 385
 # define ex_clipreset		ex_ni
-#endif
-#if !defined(FEAT_PROP_POPUP)
+#line 388
 # define ex_popupclear		ex_ni
-#endif
+#line 390
 
 /*
  * Declare cmdnames[].
@@ -541,10 +523,7 @@ do_exmode(
     save_msg_scroll = msg_scroll;
     ++RedrawingDisabled;	    // don't redisplay the window
     ++no_wait_return;		    // don't wait for return
-#ifdef FEAT_GUI
-    // Ignore scrollbar and mouse events in Ex mode
-    ++hold_gui_events;
-#endif
+#line 548
 
     msg(_("Entering Ex mode.  Type \"visual\" to go to Normal mode."));
     while (exmode_active)
@@ -600,9 +579,7 @@ do_exmode(
 	}
     }
 
-#ifdef FEAT_GUI
-    --hold_gui_events;
-#endif
+#line 606
     if (RedrawingDisabled > 0)
 	--RedrawingDisabled;
     --no_wait_return;
@@ -859,21 +836,14 @@ do_cmdline(
 	    // try conditional, aborted.
 	    if (getline_is_func)
 	    {
-# ifdef FEAT_PROFILE
-		if (do_profiling == PROF_YES)
-		    func_line_end(real_cookie);
-# endif
+#line 866
 		if (func_has_ended(real_cookie))
 		{
 		    retval = FAIL;
 		    break;
 		}
 	    }
-# ifdef FEAT_PROFILE
-	    else if (do_profiling == PROF_YES
-			    && getline_equal(fgetline, cookie, getsourceline))
-		script_line_end();
-# endif
+#line 877
 
 	    // Check if a sourced file hit a ":finish" command.
 	    if (source_finished(fgetline, cookie))
@@ -906,15 +876,7 @@ do_cmdline(
 							fname, SOURCING_LNUM);
 		*dbg_tick = debug_tick;
 	    }
-# ifdef FEAT_PROFILE
-	    if (do_profiling == PROF_YES)
-	    {
-		if (getline_is_func)
-		    func_line_start(real_cookie, SOURCING_LNUM);
-		else if (getline_equal(fgetline, cookie, getsourceline))
-		    script_line_start();
-	    }
-# endif
+#line 918
 	}
 #endif
 
@@ -1918,39 +1880,7 @@ do_one_cmd(
 	p = find_ex_command(&ea, NULL, NULL, NULL);
 
 #ifdef FEAT_EVAL
-# ifdef FEAT_PROFILE
-    // Count this line for profiling if skip is TRUE.
-    if (do_profiling == PROF_YES
-	    && (!ea.skip || cstack->cs_idx == 0 || (cstack->cs_idx > 0
-		     && (cstack->cs_flags[cstack->cs_idx - 1] & CSF_ACTIVE))))
-    {
-	int skip = did_emsg || got_int || did_throw;
-
-	if (ea.cmdidx == CMD_catch)
-	    skip = !skip && !(cstack->cs_idx >= 0
-			  && (cstack->cs_flags[cstack->cs_idx] & CSF_THROWN)
-			  && !(cstack->cs_flags[cstack->cs_idx] & CSF_CAUGHT));
-	else if (ea.cmdidx == CMD_else || ea.cmdidx == CMD_elseif)
-	    skip = skip || !(cstack->cs_idx >= 0
-			  && !(cstack->cs_flags[cstack->cs_idx]
-						  & (CSF_ACTIVE | CSF_TRUE)));
-	else if (ea.cmdidx == CMD_finally)
-	    skip = FALSE;
-	else if (ea.cmdidx != CMD_endif
-		&& ea.cmdidx != CMD_endfor
-		&& ea.cmdidx != CMD_endtry
-		&& ea.cmdidx != CMD_endwhile)
-	    skip = ea.skip;
-
-	if (!skip)
-	{
-	    if (getline_equal(fgetline, cookie, get_func_line))
-		func_line_exec(getline_cookie(fgetline, cookie));
-	    else if (getline_equal(fgetline, cookie, getsourceline))
-		script_line_exec();
-	}
-    }
-# endif
+#line 1954
 #endif
 
     ea.cmd = cmd;
@@ -2234,17 +2164,7 @@ do_one_cmd(
 
     correct_range(&ea);
 
-#ifdef FEAT_FOLDING
-    if (((ea.argt & EX_WHOLEFOLD) || ea.addr_count >= 2) && !global_busy
-	    && ea.addr_type == ADDR_LINES)
-    {
-	// Put the first line at the start of a closed fold, put the last line
-	// at the end of a closed fold.
-	(void)hasFolding(ea.line1, &ea.line1, NULL);
-	(void)hasFolding(ea.line2, NULL, &ea.line2);
-    }
-#endif
-
+#line 2248
 #ifdef FEAT_QUICKFIX
     /*
      * For the ":make" and ":grep" commands we insert the 'makeprg'/'grepprg'
@@ -2378,14 +2298,14 @@ do_one_cmd(
 	    && (!IS_USER_CMDIDX(ea.cmdidx) || *ea.arg != '=')
 	    && !((ea.argt & EX_COUNT) && VIM_ISDIGIT(*ea.arg)))
     {
-#if !defined(FEAT_CLIPBOARD) && !defined(FEAT_CLIPBOARD_PROVIDER)
+#line 2382
 	// check these explicitly for a more specific error message
 	if (*ea.arg == '*' || *ea.arg == '+')
 	{
 	    errormsg = _(e_invalid_register_name);
 	    goto doend;
 	}
-#endif
+#line 2389
 	if (valid_yank_reg(*ea.arg, (!IS_USER_CMDIDX(ea.cmdidx)
 			    && ea.cmdidx != CMD_put && ea.cmdidx != CMD_iput)))
 	{
@@ -4716,13 +4636,7 @@ get_address(
 				    addr_type, lnum, (i == '-') ? -1 * n : n);
 	    else
 	    {
-#ifdef FEAT_FOLDING
-		// Relative line addressing: need to adjust for lines in a
-		// closed fold after the first address.
-		if (addr_type == ADDR_LINES && (i == '-' || i == '+')
-							 && address_count >= 2)
-		    (void)hasFolding(lnum, NULL, &lnum);
-#endif
+#line 4726
 		if (i == '-')
 		    lnum -= n;
 		else
@@ -6142,10 +6056,7 @@ ex_quit(exarg_T *eap)
     if (before_quit_autocmds(wp, FALSE, eap->forceit))
 	return;
 
-#ifdef FEAT_NETBEANS_INTG
-    netbeansForcedQuit = eap->forceit;
-#endif
-
+#line 6149
     int save_exiting = exiting;
     /*
      * If there is only one relevant window we will exit.
@@ -6172,9 +6083,7 @@ ex_quit(exarg_T *eap)
 	if (only_one_window() && (ONE_WINDOW || eap->addr_count == 0))
 	    getout(0);
 	not_exiting(save_exiting);
-#ifdef FEAT_GUI
-	need_mouse_correct = TRUE;
-#endif
+#line 6178
 	// close window; may free buffer
 	win_close(wp, !buf_hide(wp->w_buffer) || eap->forceit);
     }
@@ -6280,10 +6189,7 @@ ex_pclose(exarg_T *eap)
 	    ex_win_close(eap->forceit, win, NULL);
 	    return;
 	}
-# ifdef FEAT_PROP_POPUP
-    // Also when 'previewpopup' is empty, it might have been cleared.
-    popup_close_preview();
-# endif
+#line 6287
 }
 #endif
 
@@ -6315,18 +6221,7 @@ ex_win_close(
 #if defined(FEAT_GUI_DIALOG) || defined(FEAT_CON_DIALOG)
 	if ((p_confirm || (cmdmod.cmod_flags & CMOD_CONFIRM)) && p_write)
 	{
-# ifdef FEAT_TERMINAL
-	    if (term_job_running(buf->b_term))
-	    {
-		if (term_confirm_stop(buf) == FAIL)
-		    return;
-		// Manually kill the terminal here because this command will
-		// hide it otherwise.
-		free_terminal(buf);
-		need_hide = FALSE;
-	    }
-	    else
-# endif
+#line 6330
 	    {
 		bufref_T bufref;
 
@@ -6345,10 +6240,7 @@ ex_win_close(
 	}
     }
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 6352
     // free buffer when not hiding it or when it's a scratch buffer
     if (tp == NULL)
 	win_close(win, !need_hide && !buf_hide(buf));
@@ -6591,9 +6483,7 @@ tabpage_close(int forceit)
 	// When closing the tab page failed, reset tp_did_tabclosedpre so that
 	// TabClosedPre behaves consistently on next :close vs :tabclose.
 	curtab->tp_did_tabclosedpre = FALSE;
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 6597
 }
 
 /*
@@ -6650,9 +6540,7 @@ ex_only(exarg_T *eap)
 {
     if (window_layout_locked(CMD_only))
 	return;
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 6656
     if (eap->addr_count > 0)
     {
 	win_T   *wp;
@@ -6678,9 +6566,7 @@ ex_hide(exarg_T *eap UNUSED)
 
     if (window_layout_locked(CMD_hide))
 	return;
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 6684
     if (eap->addr_count == 0)
 	win_close(curwin, FALSE);	// don't free buffer
     else
@@ -6775,9 +6661,7 @@ ex_exit(exarg_T *eap)
 	if (only_one_window())	    // quit last window, exit Vim
 	    getout(0);
 	not_exiting(save_exiting);
-#ifdef FEAT_GUI
-	need_mouse_correct = TRUE;
-#endif
+#line 6781
 	// Quit current window, may free the buffer.
 	win_close(curwin, !buf_hide(curwin->w_buffer));
     }
@@ -7233,10 +7117,7 @@ ex_splitview(exarg_T *eap)
     if (ERROR_IF_ANY_POPUP_WINDOW)
 	return;
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 7240
 #ifdef FEAT_QUICKFIX
     // A ":split" in the quickfix window works like ":new".  Don't want two
     // quickfix windows.  But it's OK when doing ":tab split".
@@ -7279,9 +7160,7 @@ ex_splitview(exarg_T *eap)
 	    && eap->cmdidx != CMD_new)
     {
 	if (
-# ifdef FEAT_GUI
-	    !gui.in_use &&
-# endif
+#line 7285
 		au_has_group((char_u *)"FileExplorer"))
 	{
 	    // No browsing supported but we do have the file explorer:
@@ -7502,9 +7381,7 @@ ex_resize(exarg_T *eap)
 	    ;
     }
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 7508
     n = atol((char *)eap->arg);
     if (cmdmod.cmod_split & WSP_VERT)
     {
@@ -7681,10 +7558,7 @@ do_exedit(
 		need_wait_return = FALSE;
 		int save_ms = msg_scroll;
 		msg_scroll = 0;
-#ifdef FEAT_GUI
-		int save_he = hold_gui_events;
-		hold_gui_events = 0;
-#endif
+#line 7688
 		set_must_redraw(UPD_CLEAR);
 		pending_exmode_active = TRUE;
 
@@ -7694,9 +7568,7 @@ do_exedit(
 		RedrawingDisabled = save_RedrawingDisabled;
 		no_wait_return = save_nwr;
 		msg_scroll = save_ms;
-#ifdef FEAT_GUI
-		hold_gui_events = save_he;
-#endif
+#line 7700
 	    }
 	    return;
 	}
@@ -7761,9 +7633,7 @@ do_exedit(
 		    // aborting() returns FALSE when closing a window.
 		    enter_cleanup(&cs);
 #endif
-#ifdef FEAT_GUI
-		    need_mouse_correct = TRUE;
-#endif
+#line 7767
 		    win_close(curwin, !need_hide && !buf_hide(curbuf));
 
 #if defined(FEAT_EVAL)
@@ -7810,7 +7680,7 @@ do_exedit(
     ex_no_reprint = TRUE;
 }
 
-#ifndef FEAT_GUI
+#line 7814
 /*
  * ":gui" and ":gvim" when there is no GUI.
  */
@@ -7819,31 +7689,15 @@ ex_nogui(exarg_T *eap)
 {
     eap->errmsg = _(e_gui_cannot_be_used_not_enabled_at_compile_time);
 }
-#endif
+#line 7823
 
-#if defined(FEAT_GUI_MSWIN) && defined(FEAT_MENU) && defined(FEAT_TEAROFF)
-    static void
-ex_tearoff(exarg_T *eap)
-{
-    gui_make_tearoff(eap->arg);
-}
-#endif
-
+#line 7832
 #if (defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_GTK) \
 	|| defined(FEAT_TERM_POPUP_MENU)) && defined(FEAT_MENU)
     static void
 ex_popup(exarg_T *eap)
 {
-# if defined(FEAT_GUI_MSWIN) || defined(FEAT_GUI_GTK)
-    if (gui.in_use)
-	gui_make_popup(eap->arg, eap->forceit);
-#  ifdef FEAT_TERM_POPUP_MENU
-    else
-#  endif
-# endif
-# ifdef FEAT_TERM_POPUP_MENU
-	pum_make_popup(eap->arg, eap->forceit);
-# endif
+#line 7847
 }
 #endif
 
@@ -8327,29 +8181,10 @@ do_sleep(long msec, int hide_cursor)
     while (!got_int && done < msec)
     {
 	wait_now = msec - done > 1000L ? 1000L : msec - done;
-#ifdef FEAT_TIMERS
-	{
-	    long    due_time = check_due_timer();
-
-	    if (due_time > 0 && due_time < wait_now)
-		wait_now = due_time;
-	}
-#endif
-#ifdef FEAT_JOB_CHANNEL
-	if (has_any_channel() && wait_now > 20L)
-	    wait_now = 20L;
-#endif
-#ifdef FEAT_SOUND
-	if (has_any_sound_callback() && wait_now > 20L)
-	    wait_now = 20L;
-#endif
+#line 8346
 	ui_delay(wait_now, TRUE);
 
-#ifdef FEAT_JOB_CHANNEL
-	if (has_any_channel())
-	    ui_breakcheck_force(TRUE);
-	else
-#endif
+#line 8353
 	    ui_breakcheck();
 #ifdef MESSAGE_QUEUE
 	// Process the netbeans and clientserver messages that may have been
@@ -8458,8 +8293,7 @@ ex_winpos(exarg_T *eap)
 #  ifdef VIMDLL
 	if (gui.in_use ? gui_mch_get_winpos(&x, &y) != FAIL :
 		mch_get_winpos(&x, &y) != FAIL)
-#  elif defined(FEAT_GUI)
-	if (gui.in_use && gui_mch_get_winpos(&x, &y) != FAIL)
+#line 8463
 #  else
 	if (mch_get_winpos(&x, &y) != FAIL)
 #  endif
@@ -8482,19 +8316,7 @@ ex_winpos(exarg_T *eap)
 	    emsg(_(e_winpos_requires_two_number_arguments));
 	    return;
 	}
-# ifdef FEAT_GUI
-	if (gui.in_use)
-	    gui_mch_set_winpos(x, y);
-	else if (gui.starting)
-	{
-	    // Remember the coordinates for when the window is opened.
-	    gui_win_x = x;
-	    gui_win_y = y;
-	}
-#  if defined(HAVE_TGETENT) || defined(VIMDLL)
-	else
-#  endif
-# endif
+#line 8498
 # if defined(MSWIN) && (!defined(FEAT_GUI) || defined(VIMDLL))
 	    mch_set_winpos(x, y);
 # endif
@@ -8883,14 +8705,7 @@ ex_redir(exarg_T *eap)
 	    close_redir();
 	    ++arg;
 	    if (ASCII_ISALPHA(*arg)
-# ifdef HAVE_CLIPMETHOD
-		    || (clipmethod == CLIPMETHOD_PROVIDER
-			&& (*arg == '*' || *arg == '+'))
-# endif
-# ifdef FEAT_CLIPBOARD
-		    || *arg == '*'
-		    || *arg == '+'
-# endif
+#line 8894
 		    || *arg == '"')
 	    {
 		redir_reg = *arg++;
@@ -9272,15 +9087,10 @@ ex_normal(exarg_T *eap)
 	// Count the number of characters to be escaped.
 	for (p = eap->arg; *p != NUL; ++p)
 	{
-#ifdef FEAT_GUI
-	    if (*p == CSI)  // leadbyte CSI
-		len += 2;
-#endif
+#line 9279
 	    for (l = (*mb_ptr2len)(p) - 1; l > 0; --l)
 		if (*++p == K_SPECIAL	  // trailbyte K_SPECIAL or CSI
-#ifdef FEAT_GUI
-			|| *p == CSI
-#endif
+#line 9284
 			)
 		    len += 2;
 	}
@@ -9293,13 +9103,7 @@ ex_normal(exarg_T *eap)
 		for (p = eap->arg; *p != NUL; ++p)
 		{
 		    arg[len++] = *p;
-#ifdef FEAT_GUI
-		    if (*p == CSI)
-		    {
-			arg[len++] = KS_EXTRA;
-			arg[len++] = (int)KE_CSI;
-		    }
-#endif
+#line 9303
 		    for (l = (*mb_ptr2len)(p) - 1; l > 0; --l)
 		    {
 			arg[len++] = *++p;
@@ -9308,13 +9112,7 @@ ex_normal(exarg_T *eap)
 			    arg[len++] = KS_SPECIAL;
 			    arg[len++] = KE_FILLER;
 			}
-#ifdef FEAT_GUI
-			else if (*p == CSI)
-			{
-			    arg[len++] = KS_EXTRA;
-			    arg[len++] = (int)KE_CSI;
-			}
-#endif
+#line 9318
 		    }
 		    arg[len] = NUL;
 		}
@@ -9372,11 +9170,7 @@ ex_startinsert(exarg_T *eap)
 	    curwin->w_cursor.lnum = 1;
 	set_cursor_for_append_to_line();
     }
-#ifdef FEAT_TERMINAL
-    // Ignore this when running in an active terminal.
-    if (term_job_running(curbuf->b_term))
-	return;
-#endif
+#line 9380
 
     // Ignore the command when already in Insert mode.  Inserting an
     // expression register that invokes a function can do this.
@@ -9450,19 +9244,7 @@ exec_normal(int was_typed, int use_vpeekc, int may_use_terminal_loop UNUSED)
 	    && !got_int)
     {
 	update_topline_cursor();
-#ifdef FEAT_TERMINAL
-	if (may_use_terminal_loop && term_use_loop()
-		&& oa.op_type == OP_NOP && oa.regname == NUL
-		&& !VIsual_active)
-	{
-	    // If terminal_loop() returns OK we got a key that is handled
-	    // in Normal model.  With FAIL we first need to position the
-	    // cursor and the screen needs to be redrawn.
-	    if (terminal_loop(TRUE) == OK)
-		normal_cmd(&oa, TRUE);
-	}
-	else
-#endif
+#line 9466
 	    // execute a Normal mode cmd
 	    normal_cmd(&oa, TRUE);
     }
@@ -9611,13 +9393,7 @@ back_to_current_window(win_T *curwin_save)
 	redraw_later(UPD_VALID);
 	win_enter(curwin_save, TRUE);
     }
-# ifdef FEAT_PROP_POPUP
-    else if (WIN_IS_POPUP(curwin))
-    {
-	// can't keep focus in popup window
-	win_enter(firstwin, TRUE);
-    }
-# endif
+#line 9621
     g_do_tagpreview = 0;
 }
 #endif
@@ -9670,13 +9446,7 @@ ex_tag_cmd(exarg_T *eap, char_u *name)
 	case 'l': cmd = DT_LAST;	// ":tlast"
 		  break;
 	default:			// ":tag"
-#ifdef FEAT_CSCOPE
-		  if (p_cst && *eap->arg != NUL)
-		  {
-		      ex_cstag(eap);
-		      return;
-		  }
-#endif
+#line 9680
 		  cmd = DT_TAG;
 		  break;
     }
@@ -9711,9 +9481,7 @@ enum {
     SPEC_AMATCH,    // autocommand match name
     SPEC_SFLNUM,    // script file line number
     SPEC_SID	    // script ID: <SNR>123_
-#ifdef FEAT_CLIENTSERVER
-    , SPEC_CLIENT
-#endif
+#line 9717
 };
 
 /*
@@ -9733,9 +9501,7 @@ find_cmdline_var(char_u *src, size_t *usedlen)
 	KEYVALUE_ENTRY(SPEC_CCWORD, "cWORD>"),	    // cursor WORD
 	KEYVALUE_ENTRY(SPEC_CEXPR, "cexpr>"),	    // expr under cursor
 	KEYVALUE_ENTRY(SPEC_CFILE, "cfile>"),	    // cursor path name
-#ifdef FEAT_CLIENTSERVER
-	KEYVALUE_ENTRY(SPEC_CLIENT, "client>"),
-#endif
+#line 9739
 	KEYVALUE_ENTRY(SPEC_CWORD, "cword>"),	    // cursor word
 	KEYVALUE_ENTRY(SPEC_SCRIPT, "script>"),	    // script file name
 	KEYVALUE_ENTRY(SPEC_SFILE, "sfile>"),	    // ":so" file name
@@ -10078,33 +9844,7 @@ eval_vars(
 		break;
 #endif
 
-#ifdef FEAT_CLIENTSERVER
-	case SPEC_CLIENT:	// Source of last submitted input
-# ifdef MSWIN
-		sprintf((char *)strbuf, PRINTF_HEX_LONG_U,
-							(long_u)clientWindow);
-		result = strbuf;
-# else
-#  ifdef FEAT_SOCKETSERVER
-		if (clientserver_method == CLIENTSERVER_METHOD_SOCKET)
-		{
-		    if (client_socket == NULL)
-			result = (char_u *)"";
-		    else
-			result = client_socket;
-		}
-#  endif
-#  ifdef FEAT_X11
-		if (clientserver_method == CLIENTSERVER_METHOD_X11)
-		{
-		    sprintf((char *)strbuf, PRINTF_HEX_LONG_U,
-							(long_u)clientWindow);
-		    result = strbuf;
-		}
-#  endif
-# endif
-		break;
-#endif
+#line 10108
 	}
 
 	resultlen = STRLEN(result);	// length of new string
@@ -10401,62 +10141,7 @@ ex_nohlsearch(exarg_T *eap UNUSED)
 }
 #endif
 
-#ifdef FEAT_CRYPT
-/*
- * ":X": Get crypt key
- */
-    static void
-ex_X(exarg_T *eap UNUSED)
-{
-    crypt_check_current_method();
-    (void)crypt_get_key(TRUE, TRUE);
-}
-#endif
-
-#ifdef FEAT_FOLDING
-    static void
-ex_fold(exarg_T *eap)
-{
-    if (foldManualAllowed(TRUE))
-	foldCreate(eap->line1, eap->line2);
-}
-
-    static void
-ex_foldopen(exarg_T *eap)
-{
-    opFoldRange(eap->line1, eap->line2, eap->cmdidx == CMD_foldopen,
-							 eap->forceit, FALSE);
-}
-
-    static void
-ex_folddo(exarg_T *eap)
-{
-    linenr_T	lnum;
-
-# ifdef FEAT_CLIPBOARD
-    start_global_changes();
-# endif
-# ifdef FEAT_CLIPBOARD_PROVIDER
-    inc_clip_provider();
-# endif
-
-    // First set the marks for all lines closed/open.
-    for (lnum = eap->line1; lnum <= eap->line2; ++lnum)
-	if (hasFolding(lnum, NULL, NULL) == (eap->cmdidx == CMD_folddoclosed))
-	    ml_setmarked(lnum);
-
-    // Execute the command on the marked lines.
-    global_exe(eap->arg);
-    ml_clearmarked();	   // clear rest of the marks
-# ifdef FEAT_CLIPBOARD
-    end_global_changes();
-# endif
-# ifdef FEAT_CLIPBOARD_PROVIDER
-    dec_clip_provider();
-# endif
-}
-#endif
-
+#line 10460
 #if defined(FEAT_QUICKFIX)
 /*
  * Returns TRUE if the supplied Ex cmdidx is for a location list command

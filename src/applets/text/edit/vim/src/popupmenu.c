@@ -1077,12 +1077,7 @@ pum_redraw(void)
 			    + scroll_range / 2) / scroll_range;
     }
 
-#ifdef FEAT_PROP_POPUP
-    // The popup menu is drawn over popup menus with zindex under
-    // POPUPMENU_ZINDEX.
-    screen_zindex = POPUPMENU_ZINDEX;
-#endif
-
+#line 1086
     // Draw border and shadow first if enabled, before setting blend
     // so that border/shadow characters are drawn without opacity.
     if (pum_border)
@@ -1185,81 +1180,14 @@ pum_redraw(void)
 
     screen_pum_blend = 0;
 
-#ifdef FEAT_PROP_POPUP
-    screen_zindex = 0;
-#endif
-
+#line 1192
     if (override_success)
 	pop_highlight_overrides();
 
     term_set_sync_output(TERM_SYNC_OUTPUT_DISABLE);
 }
 
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-/*
- * Position the info popup relative to the popup menu item.
- */
-    void
-pum_position_info_popup(win_T *wp)
-{
-    int col = pum_col + pum_width + pum_scrollbar + 1;
-    int row = pum_row;
-    int botpos = POPPOS_BOTLEFT;
-    int	used_maxwidth_opt = FALSE;
-    int	right_margin, left_margin, dummy;
-    int left_extra_width, right_extra_width;
-
-    (void)compute_margins(&right_margin, &left_margin, &dummy);
-
-    left_extra_width = pum_border + left_margin;
-    right_extra_width = pum_border + right_margin + (pum_shadow ? 2 : 0);
-    col += right_extra_width;
-
-    wp->w_popup_pos = POPPOS_TOPLEFT;
-    if (Columns - col < 20 && Columns - col < pum_col)
-    {
-	col = pum_col - 1 - left_extra_width;
-	wp->w_popup_pos = POPPOS_TOPRIGHT;
-	botpos = POPPOS_BOTRIGHT;
-	wp->w_maxwidth = pum_col - 1 - left_extra_width;
-    }
-    else
-	wp->w_maxwidth = Columns - col + 1;
-    wp->w_maxwidth -= popup_extra_width(wp);
-    if (wp->w_maxwidth_opt > 0 && wp->w_maxwidth > wp->w_maxwidth_opt)
-    {
-	// option value overrules computed value
-	wp->w_maxwidth = wp->w_maxwidth_opt;
-	used_maxwidth_opt = TRUE;
-    }
-
-    row -= popup_top_extra(wp);
-    if (wp->w_popup_flags & POPF_INFO_MENU)
-    {
-	if (pum_row < pum_win_row)
-	{
-	    // menu above cursor line, align with bottom
-	    row += pum_height;
-	    wp->w_popup_pos = botpos;
-	}
-	else
-	    // menu below cursor line, align with top
-	    row += 1;
-    }
-    else
-	// align with the selected item
-	row += pum_selected - pum_first + 1;
-
-    wp->w_popup_flags &= ~POPF_HIDDEN;
-    if (wp->w_maxwidth < 10 && !used_maxwidth_opt)
-	// The popup is not going to fit or will overlap with the cursor
-	// position, hide the popup.
-	wp->w_popup_flags |= POPF_HIDDEN;
-    else
-	popup_set_wantpos_rowcol(wp, row, col);
-}
-#endif
-
+#line 1263
 /*
  * Set the index of the currently selected item.  The menu will scroll when
  * necessary.  When "n" is out of range don't scroll.
@@ -1280,9 +1208,7 @@ pum_set_selected(int n, int repeat UNUSED)
     int	    prev_selected = pum_selected;
     unsigned	cur_cot_flags = get_cot_flags();
 #endif
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-    int	    has_info = FALSE;
-#endif
+#line 1286
 
     pum_selected = n;
     scroll_offset = pum_selected - pum_height;
@@ -1343,24 +1269,9 @@ pum_set_selected(int n, int repeat UNUSED)
 	{
 	    win_T	*curwin_save = curwin;
 	    tabpage_T   *curtab_save = curtab;
-# ifdef FEAT_PROP_POPUP
-	    use_popup_T	use_popup;
-# else
+#line 1349
 #  define use_popup USEPOPUP_NONE
-# endif
-# ifdef FEAT_PROP_POPUP
-	    has_info = TRUE;
-	    if (cur_cot_flags & COT_POPUPHIDDEN)
-		use_popup = USEPOPUP_HIDDEN;
-	    else if (cur_cot_flags & COT_POPUP)
-		use_popup = USEPOPUP_NORMAL;
-	    else
-		use_popup = USEPOPUP_NONE;
-	    if (use_popup != USEPOPUP_NONE)
-		// don't use WinEnter or WinLeave autocommands for the info
-		// popup
-		block_autocmds();
-# endif
+#line 1364
 	    // Open a preview window and set "curwin" to it.
 	    // 3 lines by default, prefer 'previewheight' if set and smaller.
 	    g_do_tagpreview = 3;
@@ -1377,9 +1288,7 @@ pum_set_selected(int n, int repeat UNUSED)
 	    g_do_tagpreview = 0;
 
 	    if (curwin->w_p_pvw
-# ifdef FEAT_PROP_POPUP
-		    || (curwin->w_popup_flags & POPF_INFO)
-# endif
+#line 1383
 		    )
 	    {
 		int	res = OK;
@@ -1453,23 +1362,14 @@ pum_set_selected(int n, int repeat UNUSED)
 		    curbuf->b_p_ma = FALSE;
 		    if (pum_selected != prev_selected)
 		    {
-# ifdef FEAT_PROP_POPUP
-			curwin->w_firstline = 0;
-# endif
+#line 1459
 			curwin->w_topline = 1;
 		    }
 		    else if (curwin->w_topline > curbuf->b_ml.ml_line_count)
 			curwin->w_topline = curbuf->b_ml.ml_line_count;
 		    curwin->w_cursor.lnum = curwin->w_topline;
 		    curwin->w_cursor.col = 0;
-# ifdef FEAT_PROP_POPUP
-		    if (use_popup != USEPOPUP_NONE)
-		    {
-			pum_position_info_popup(curwin);
-			if (win_valid(curwin_save))
-			    redraw_win_later(curwin_save, UPD_SOME_VALID);
-		    }
-# endif
+#line 1473
 		    if ((curwin != curwin_save && win_valid(curwin_save))
 			    || (curtab != curtab_save
 						&& valid_tabpage(curtab_save)))
@@ -1521,16 +1421,11 @@ pum_set_selected(int n, int repeat UNUSED)
 
 			if (!resized && win_valid(curwin_save))
 			{
-# ifdef FEAT_PROP_POPUP
-			    win_T *wp = curwin;
-# endif
+#line 1527
 			    ++no_u_sync;
 			    win_enter(curwin_save, TRUE);
 			    --no_u_sync;
-# ifdef FEAT_PROP_POPUP
-			    if (use_popup == USEPOPUP_HIDDEN && win_valid(wp))
-				popup_hide(wp);
-# endif
+#line 1534
 			}
 
 			// May need to update the screen again when there are
@@ -1544,23 +1439,11 @@ pum_set_selected(int n, int repeat UNUSED)
 		    }
 		}
 	    }
-# if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-	    if (WIN_IS_POPUP(curwin))
-		// can't keep focus in a popup window
-		win_enter(firstwin, TRUE);
-# endif
-# ifdef FEAT_PROP_POPUP
-	    if (use_popup != USEPOPUP_NONE)
-		unblock_autocmds();
-# endif
+#line 1556
 	}
 #endif
     }
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-    if (!has_info)
-	// hide any popup info window
-	popup_hide_info();
-#endif
+#line 1564
 
     return resized;
 }
@@ -1584,10 +1467,7 @@ pum_undisplay(void)
 	pum_in_cmdline = FALSE;
     }
     status_redraw_all();
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-    // hide any popup info window
-    popup_hide_info();
-#endif
+#line 1591
 }
 
 /*
@@ -2008,208 +1888,7 @@ ui_may_remove_balloon(void)
 }
 #endif
 
-#if defined(FEAT_TERM_POPUP_MENU)
-/*
- * Select the pum entry at the mouse position.
- */
-    static void
-pum_select_mouse_pos(void)
-{
-    int idx = mouse_row - pum_row;
-
-    if (idx < 0 || idx >= pum_height)
-	pum_selected = -1;
-    else if (*pum_array[idx].pum_text != NUL)
-	pum_selected = idx;
-}
-
-/*
- * Execute the currently selected popup menu item.
- */
-    static void
-pum_execute_menu(vimmenu_T *menu, int mode)
-{
-    vimmenu_T   *mp;
-    int		idx = 0;
-    exarg_T	ea;
-
-    FOR_ALL_CHILD_MENUS(menu, mp)
-	if ((mp->modes & mp->enabled & mode) && idx++ == pum_selected)
-	{
-	    CLEAR_FIELD(ea);
-	    execute_menu(&ea, mp, -1);
-	    break;
-	}
-}
-
-/*
- * Open the terminal version of the popup menu and don't return until it is
- * closed.
- */
-    void
-pum_show_popupmenu(vimmenu_T *menu)
-{
-    vimmenu_T   *mp;
-    int		idx = 0;
-    pumitem_T	*array;
-# ifdef FEAT_BEVAL_TERM
-    int		save_bevalterm = p_bevalterm;
-# endif
-    int		mode;
-
-    pum_undisplay();
-    pum_size = 0;
-    mode = get_menu_mode_flag();
-
-    FOR_ALL_CHILD_MENUS(menu, mp)
-	if (menu_is_separator(mp->dname)
-		|| (mp->modes & mp->enabled & mode))
-	    ++pum_size;
-
-    // When there are only Terminal mode menus, using "popup Edit" results in
-    // pum_size being zero.
-    if (pum_size <= 0)
-    {
-	emsg(_(e_menu_only_exists_in_another_mode));
-	return;
-    }
-
-    array = ALLOC_CLEAR_MULT(pumitem_T, pum_size);
-    if (array == NULL)
-	return;
-
-    FOR_ALL_CHILD_MENUS(menu, mp)
-    {
-	char_u *s = NULL;
-
-	// Make a copy of the text, the menu may be redefined in a callback.
-	if (menu_is_separator(mp->dname))
-	    s = (char_u *)"";
-	else if (mp->modes & mp->enabled & mode)
-	    s = mp->dname;
-	if (s != NULL)
-	{
-	    s = vim_strsave(s);
-	    if (s != NULL)
-		array[idx++].pum_text = s;
-	}
-    }
-
-    pum_array = array;
-    pum_compute_size();
-    pum_scrollbar = 0;
-    pum_height = pum_size;
-# ifdef FEAT_RIGHTLEFT
-    pum_rl = curwin->w_p_rl;
-# endif
-    pum_position_at_mouse(20);
-
-    pum_selected = -1;
-    pum_first = 0;
-# ifdef FEAT_BEVAL_TERM
-    p_bevalterm = TRUE;  // track mouse movement
-    mch_setmouse(TRUE);
-# endif
-
-    for (;;)
-    {
-	int	c;
-
-	pum_redraw();
-	setcursor_mayforce(TRUE);
-	out_flush();
-
-	c = vgetc();
-
-	// Bail out when typing Esc, CTRL-C or some callback or <expr> mapping
-	// closed the popup menu.
-	if (c == ESC || c == Ctrl_C || pum_array == NULL)
-	    break;
-	else if (c == CAR || c == NL)
-	{
-	    // enter: select current item, if any, and close
-	    pum_execute_menu(menu, mode);
-	    break;
-	}
-	else if (c == 'k' || c == K_UP || c == K_MOUSEUP)
-	{
-	    // cursor up: select previous item
-	    while (pum_selected > 0)
-	    {
-		--pum_selected;
-		if (*array[pum_selected].pum_text != NUL)
-		    break;
-	    }
-	}
-	else if (c == 'j' || c == K_DOWN || c == K_MOUSEDOWN)
-	{
-	    // cursor down: select next item
-	    while (pum_selected < pum_size - 1)
-	    {
-		++pum_selected;
-		if (*array[pum_selected].pum_text != NUL)
-		    break;
-	    }
-	}
-	else if (c == K_RIGHTMOUSE)
-	{
-	    // Right mouse down: reposition the menu.
-	    vungetc(c);
-	    break;
-	}
-	else if (c == K_LEFTDRAG || c == K_RIGHTDRAG || c == K_MOUSEMOVE)
-	{
-	    // mouse moved: select item in the mouse row
-	    pum_select_mouse_pos();
-	}
-	else if (c == K_LEFTMOUSE || c == K_LEFTMOUSE_NM || c == K_RIGHTRELEASE)
-	{
-	    // left mouse click: select clicked item, if any, and close;
-	    // right mouse release: select clicked item, close if any
-	    pum_select_mouse_pos();
-	    if (pum_selected >= 0)
-	    {
-		pum_execute_menu(menu, mode);
-		break;
-	    }
-	    if (c == K_LEFTMOUSE || c == K_LEFTMOUSE_NM)
-		break;
-	}
-    }
-
-    for (idx = 0; idx < pum_size; ++idx)
-	vim_free(array[idx].pum_text);
-    vim_free(array);
-    pum_undisplay();
-# ifdef FEAT_BEVAL_TERM
-    p_bevalterm = save_bevalterm;
-    mch_setmouse(TRUE);
-# endif
-}
-
-    void
-pum_make_popup(char_u *path_name, int use_mouse_pos)
-{
-    vimmenu_T *menu;
-
-    if (!use_mouse_pos)
-    {
-	// Hack: set mouse position at the cursor so that the menu pops up
-	// around there.
-	mouse_row = W_WINROW(curwin) + curwin->w_wrow;
-	mouse_col =
-# ifdef FEAT_RIGHTLEFT
-	    curwin->w_p_rl ? W_ENDCOL(curwin) - curwin->w_wcol - 1 :
-# endif
-	    curwin->w_wincol + curwin->w_wcol;
-    }
-
-    menu = gui_find_menu(path_name);
-    if (menu != NULL)
-	pum_show_popupmenu(menu);
-}
-#endif
-
+#line 2213
     static int
 is_singlewidth(int c)
 {

@@ -294,9 +294,7 @@ do_window(
 		// don't replicate the quickfix buffer.
 		if (bt_quickfix(curbuf))
 		    goto newwindow;
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 300
 		(void)win_split((int)Prenum, 0);
 		break;
 
@@ -309,9 +307,7 @@ do_window(
 		// don't replicate the quickfix buffer.
 		if (bt_quickfix(curbuf))
 		    goto newwindow;
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 315
 		(void)win_split((int)Prenum, WSP_VERT);
 		break;
 
@@ -564,9 +560,7 @@ newwindow:
     case '=':
 		{
 		    int mod = cmdmod.cmod_split & (WSP_VERT | WSP_HOR);
-#ifdef FEAT_GUI
-		    need_mouse_correct = TRUE;
-#endif
+#line 570
 		    win_equal(NULL, FALSE,
 			   mod == WSP_VERT ? 'v' : mod == WSP_HOR ? 'h' : 'b');
 		}
@@ -574,50 +568,38 @@ newwindow:
 
 // increase current window height
     case '+':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 580
 		win_setheight(curwin->w_height + (int)Prenum1);
 		break;
 
 // decrease current window height
     case '-':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 588
 		win_setheight(curwin->w_height - (int)Prenum1);
 		break;
 
 // set current window height
     case Ctrl__:
     case '_':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 597
 		win_setheight(Prenum ? (int)Prenum : 9999);
 		break;
 
 // increase current window width
     case '>':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 605
 		win_setwidth(curwin->w_width + (int)Prenum1);
 		break;
 
 // decrease current window width
     case '<':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 613
 		win_setwidth(curwin->w_width - (int)Prenum1);
 		break;
 
 // set current window width
     case '|':
-#ifdef FEAT_GUI
-		need_mouse_correct = TRUE;
-#endif
+#line 621
 		win_setwidth(Prenum != 0 ? (int)Prenum : 9999);
 		break;
 
@@ -664,9 +646,7 @@ wingotofile:
 		{
 		    tabpage_T	*oldtab = curtab;
 		    win_T	*oldwin = curwin;
-#ifdef FEAT_GUI
-		    need_mouse_correct = TRUE;
-#endif
+#line 670
 		    setpcmark();
 
 		    // If 'switchbuf' is set to 'useopen' or 'usetab' and the
@@ -1050,12 +1030,7 @@ win_split_ins(
 	need_status = statusline_height(oldwin);
     }
 
-#ifdef FEAT_GUI
-    // May be needed for the scrollbars that are going to change.
-    if (gui.in_use)
-	out_flush();
-#endif
-
+#line 1059
     if (flags & WSP_VERT)
     {
 	int	wmw1;
@@ -1508,11 +1483,7 @@ win_split_ins(
 	if (size != 0)
 	    p_wiw = size;
 
-#ifdef FEAT_GUI
-	// When 'guioptions' includes 'L' or 'R' may have to add scrollbars.
-	if (gui.in_use)
-	    gui_init_which_components(NULL);
-#endif
+#line 1516
     }
     else
     {
@@ -1617,22 +1588,10 @@ win_init(win_T *newp, win_T *oldp, int flags UNUSED)
     // Keep same changelist position in new window.
     newp->w_changelistidx = oldp->w_changelistidx;
 
-#ifdef FEAT_FOLDING
-    copyFoldingState(oldp, newp);
-#endif
-
+#line 1624
     win_init_some(newp, oldp);
 
-#ifdef FEAT_TERMINAL
-    {
-	// Make sure to also handle highlight overrides copied over from oldp.
-	bool pushed = push_highlight_overrides(newp->w_hl, newp->w_hl_len);
-	if (newp->w_buffer->b_term != NULL)
-	    term_init_default_colors(newp->w_buffer->b_term);
-	if (pushed)
-	    pop_highlight_overrides();
-    }
-#endif
+#line 1636
 }
 
 /*
@@ -1657,16 +1616,7 @@ win_init_some(win_T *newp, win_T *oldp)
     int
 win_valid_popup(win_T *win UNUSED)
 {
-#ifdef FEAT_PROP_POPUP
-    win_T	*wp;
-
-    FOR_ALL_POPUPWINS(wp)
-	if (wp == win)
-	    return TRUE;
-    FOR_ALL_POPUPWINS_IN_TAB(curtab, wp)
-	if (wp == win)
-	    return TRUE;
-#endif
+#line 1670
     return FALSE;
 }
 
@@ -1699,14 +1649,7 @@ win_find_by_id(int id)
     FOR_ALL_WINDOWS(wp)
 	if (wp->w_id == id)
 	    return wp;
-#ifdef FEAT_PROP_POPUP
-    FOR_ALL_POPUPWINS(wp)
-	if (wp->w_id == id)
-	    return wp;
-    FOR_ALL_POPUPWINS_IN_TAB(curtab, wp)
-	if (wp->w_id == id)
-	    return wp;
-#endif
+#line 1710
     return NULL;
 }
 
@@ -1728,11 +1671,7 @@ win_valid_any_tab(win_T *win)
 	    if (wp == win)
 		return TRUE;
 	}
-#ifdef FEAT_PROP_POPUP
-	FOR_ALL_POPUPWINS_IN_TAB(tp, wp)
-	    if (wp == win)
-		return TRUE;
-#endif
+#line 1736
     }
     return win_valid_popup(win);
 }
@@ -1843,10 +1782,7 @@ win_exchange(long Prenum)
 	return;
     }
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 1850
     /*
      * find window to exchange with
      */
@@ -1935,10 +1871,7 @@ win_rotate(int upwards, int count)
 	return;
     }
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
-
+#line 1942
     // Check if all frames in this row/col have one window.
     FOR_ALL_FRAMES(frp, curwin->w_frame->fr_parent->fr_child)
 	if (frp->fr_win == NULL)
@@ -2048,11 +1981,7 @@ win_splitmove(win_T *wp, int size, int flags)
 	}
     }
 
-#if defined(FEAT_GUI)
-    // When 'guioptions' includes 'L' or 'R' may have to remove or add
-    // scrollbars.  Have to update them anyway.
-    gui_may_update_scrollbars();
-#endif
+#line 2056
     return OK;
 }
 
@@ -2461,55 +2390,7 @@ win_equal_rec(
     }
 }
 
-#if defined(FEAT_JOB_CHANNEL)
-    void
-leaving_window(win_T *win)
-{
-    // Only matters for a prompt window.
-    // Don't do mode changes for a prompt buffer in an autocommand window, as
-    // it's only used temporarily during an autocommand.
-    if (!bt_prompt(win->w_buffer) || is_aucmd_win(win))
-	return;
-
-    // When leaving a prompt window stop Insert mode and perhaps restart
-    // it when entering that window again.
-    win->w_buffer->b_prompt_insert = restart_edit;
-    if (restart_edit != 0 && mode_displayed)
-	clear_cmdline = TRUE;		// unshow mode later
-    restart_edit = NUL;
-
-    // When leaving the window (or closing the window) was done from a
-    // callback we need to break out of the Insert mode loop and restart Insert
-    // mode when entering the window again.
-    if ((State & MODE_INSERT) && !stop_insert_mode)
-    {
-	stop_insert_mode = TRUE;
-	if (win->w_buffer->b_prompt_insert == NUL)
-	    win->w_buffer->b_prompt_insert = 'A';
-    }
-}
-
-    void
-entering_window(win_T *win)
-{
-    // Only matters for a prompt window.
-    // Don't do mode changes for a prompt buffer in an autocommand window, as
-    // it's only used temporarily during an autocommand.
-    if (!bt_prompt(win->w_buffer) || is_aucmd_win(win))
-	return;
-
-    // When switching to a prompt buffer that was in Insert mode, don't stop
-    // Insert mode, it may have been set in leaving_window().
-    if (win->w_buffer->b_prompt_insert != NUL)
-	stop_insert_mode = FALSE;
-
-    // When entering the prompt window restart Insert mode if we were in Insert
-    // mode when we left it and not already in Insert mode.
-    if ((State & MODE_INSERT) == 0)
-	restart_edit = win->w_buffer->b_prompt_insert;
-}
-#endif
-
+#line 2513
     static void
 win_init_empty(win_T *wp)
 {
@@ -2531,9 +2412,7 @@ win_init_empty(win_T *wp)
 #if defined(FEAT_SYN_HL) || defined(FEAT_SPELL)
     wp->w_s = &wp->w_buffer->b_s;
 #endif
-#ifdef FEAT_TERMINAL
-    term_reset_hlfwin(wp);
-#endif
+#line 2537
 }
 
 /*
@@ -2671,9 +2550,7 @@ close_last_window_tabpage(
     // to the other tab page.
     if (valid_tabpage(prev_curtab) && prev_curtab->tp_firstwin == win)
 	win_close_othertab(win, free_buf, prev_curtab);
-#ifdef FEAT_JOB_CHANNEL
-    entering_window(curwin);
-#endif
+#line 2677
     // Since goto_tabpage_tp above did not trigger *Enter autocommands, do
     // that now.
     apply_autocmds(EVENT_TABCLOSED, NULL, NULL, FALSE, curbuf);
@@ -2753,11 +2630,7 @@ win_close(win_T *win, int free_buf)
     int		did_decrement = FALSE;
 #endif
 
-#if defined(FEAT_TERMINAL) && defined(FEAT_PROP_POPUP)
-    // Can close a popup window with a terminal if the job has finished.
-    if (may_close_term_popup() == OK)
-	return OK;
-#endif
+#line 2761
     if (ERROR_IF_ANY_POPUP_WINDOW)
 	return FAIL;
 
@@ -2803,9 +2676,7 @@ win_close(win_T *win, int free_buf)
 
     if (win == curwin)
     {
-#ifdef FEAT_JOB_CHANNEL
-	leaving_window(curwin);
-#endif
+#line 2809
 	/*
 	 * Guess which window is going to be the new current window.
 	 * This may change because of the autocommands (sigh).
@@ -2845,18 +2716,7 @@ win_close(win_T *win, int free_buf)
 #endif
     }
 
-#ifdef FEAT_GUI
-    // Avoid trouble with scrollbars that are going to be deleted in
-    // win_free().
-    if (gui.in_use)
-	out_flush();
-#endif
-
-#ifdef FEAT_PROP_POPUP
-    if (popup_win_closed(win) && !win_valid(win))
-	return FAIL;
-#endif
-
+#line 2860
     // Trigger WinClosed just before starting to free window-related resources.
     trigger_winclosed(win);
     // autocmd may have freed the window already.
@@ -2866,9 +2726,7 @@ win_close(win_T *win, int free_buf)
     win_close_buffer(win, free_buf ? DOBUF_UNLOAD : 0, TRUE);
 
     if (win_valid(win) && win->w_buffer == NULL
-#if defined(FEAT_PROP_POPUP)
-	    && !popup_is_popup(win)
-#endif
+#line 2872
 	    && last_window())
     {
 	// Autocommands have closed all windows, quit now.  Restore
@@ -3026,12 +2884,7 @@ win_close(win_T *win, int free_buf)
     }
 #endif
 
-#if defined(FEAT_GUI)
-    // When 'guioptions' includes 'L' or 'R' may have to remove scrollbars.
-    if (gui.in_use && !win_hasvertsplit())
-	gui_init_which_components(NULL);
-#endif
-
+#line 3035
     redraw_all_later(UPD_NOT_VALID);
     return OK;
 }
@@ -4730,9 +4583,7 @@ win_init_size(void)
 alloc_tabpage(void)
 {
     tabpage_T	*tp;
-#ifdef FEAT_GUI
-    int		i;
-#endif
+#line 4736
 
 
     tp = ALLOC_CLEAR_ONE(tabpage_T);
@@ -4750,10 +4601,7 @@ alloc_tabpage(void)
     init_var_dict(tp->tp_vars, &tp->tp_winvar, VAR_SCOPE);
 #endif
 
-#ifdef FEAT_GUI
-    for (i = 0; i < 3; i++)
-	tp->tp_prev_which_scrollbars[i] = -1;
-#endif
+#line 4757
 #ifdef FEAT_DIFF
     tp->tp_diff_invalid = TRUE;
 #endif
@@ -4770,10 +4618,7 @@ free_tabpage(tabpage_T *tp)
 #ifdef FEAT_DIFF
     diff_clear(tp);
 #endif
-#ifdef FEAT_PROP_POPUP
-    while (tp->tp_first_popupwin != NULL)
-	popup_close_tabpage(tp, tp->tp_first_popupwin->w_id, TRUE);
-#endif
+#line 4777
     for (idx = 0; idx < SNAP_COUNT; ++idx)
 	clear_snapshot(tp, idx);
 #ifdef FEAT_EVAL
@@ -4883,14 +4728,7 @@ win_new_tabpage(int after)
 
 	lastused_tabpage = prev_tp;
 
-#if defined(FEAT_GUI)
-	// When 'guioptions' includes 'L' or 'R' may have to remove or add
-	// scrollbars.  Have to update them anyway.
-	gui_may_update_scrollbars();
-#endif
-#ifdef FEAT_JOB_CHANNEL
-	entering_window(curwin);
-#endif
+#line 4894
 #if defined(FEAT_TABPANEL)
 	if (prev_columns != COLUMNS_WITHOUT_TPL())
 	{
@@ -5084,9 +4922,7 @@ leave_tabpage(
 {
     tabpage_T	*tp = curtab;
 
-#ifdef FEAT_JOB_CHANNEL
-    leaving_window(curwin);
-#endif
+#line 5090
     reset_VIsual_and_resel();	// stop Visual mode
     if (trigger_leave_autocmds)
     {
@@ -5105,11 +4941,7 @@ leave_tabpage(
     }
 
     reset_dragwin();
-#if defined(FEAT_GUI)
-    // Remove the scrollbars.  They may be added back later.
-    if (gui.in_use)
-	gui_remove_scrollbars();
-#endif
+#line 5113
     tp->tp_curwin = curwin;
     tp->tp_prevwin = prevwin;
     tp->tp_firstwin = firstwin;
@@ -5197,12 +5029,7 @@ enter_tabpage(
 
     lastused_tabpage = last_tab;
 
-#if defined(FEAT_GUI)
-    // When 'guioptions' includes 'L' or 'R' may have to remove or add
-    // scrollbars.  Have to update them anyway.
-    gui_may_update_scrollbars();
-#endif
-
+#line 5206
     // Apply autocommands after updating the display, when 'rows' and
     // 'columns' have been set correctly.
     if (trigger_enter_autocmds)
@@ -5419,19 +5246,9 @@ tabpage_move(int nr)
     void
 win_goto(win_T *wp)
 {
-#ifdef FEAT_CONCEAL
-    win_T	*owp = curwin;
-#endif
+#line 5425
 
-#ifdef FEAT_PROP_POPUP
-    if (ERROR_IF_ANY_POPUP_WINDOW)
-	return;
-    if (popup_is_popup(wp))
-    {
-	emsg(_(e_not_allowed_to_enter_popup_window));
-	return;
-    }
-#endif
+#line 5435
     if (text_or_buf_locked())
     {
 	beep_flush();
@@ -5448,18 +5265,10 @@ win_goto(win_T *wp)
     if (!win_valid(wp))
 	return;
 
-#ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-#endif
+#line 5454
     win_enter(wp, TRUE);
 
-#ifdef FEAT_CONCEAL
-    // Conceal cursor line in previous window, unconceal in current window.
-    if (win_valid(owp) && owp->w_p_cole > 0 && !msg_scrolled)
-	redrawWinline(owp, owp->w_cursor.lnum);
-    if (curwin->w_p_cole > 0 && !msg_scrolled)
-	need_cursor_line_redraw = TRUE;
-#endif
+#line 5463
 }
 
 #if defined(FEAT_PERL)
@@ -5508,11 +5317,7 @@ win_vert_neighbor(tabpage_T *tp, win_T *wp, int up, long count)
     frame_T	*nfr;
     frame_T	*foundfr;
 
-#ifdef FEAT_PROP_POPUP
-    if (popup_is_popup(wp))
-	// popups don't have neighbors.
-	return NULL;
-#endif
+#line 5516
     foundfr = wp->w_frame;
     while (count--)
     {
@@ -5573,10 +5378,7 @@ win_goto_ver(
 {
     win_T	*win;
 
-#ifdef FEAT_PROP_POPUP
-    if (ERROR_IF_TERM_POPUP_WINDOW)
-	return;
-#endif
+#line 5580
     win = win_vert_neighbor(curtab, curwin, up, count);
     if (win != NULL)
 	win_goto(win);
@@ -5595,11 +5397,7 @@ win_horz_neighbor(tabpage_T *tp, win_T *wp, int left, long count)
     frame_T	*nfr;
     frame_T	*foundfr;
 
-#ifdef FEAT_PROP_POPUP
-    if (popup_is_popup(wp))
-	// popups don't have neighbors.
-	return NULL;
-#endif
+#line 5603
     foundfr = wp->w_frame;
     while (count--)
     {
@@ -5660,10 +5458,7 @@ win_goto_hor(
 {
     win_T	*win;
 
-#ifdef FEAT_PROP_POPUP
-    if (ERROR_IF_TERM_POPUP_WINDOW)
-	return;
-#endif
+#line 5667
     win = win_horz_neighbor(curtab, curwin, left, count);
     if (win != NULL)
 	win_goto(win);
@@ -5738,11 +5533,7 @@ win_enter_ext(win_T *wp, int flags)
     if (wp == curwin && curwin_invalid == 0)	// nothing to do
 	return FALSE;
 
-#ifdef FEAT_JOB_CHANNEL
-    if (curwin_invalid == 0)
-	leaving_window(curwin);
-#endif
-
+#line 5746
     if (curwin_invalid == 0 && (flags & WEE_TRIGGER_LEAVE_AUTOCMDS))
     {
 	/*
@@ -5807,9 +5598,7 @@ win_enter_ext(win_T *wp, int flags)
 
     win_fix_current_dir();
 
-#ifdef FEAT_JOB_CHANNEL
-    entering_window(curwin);
-#endif
+#line 5813
     // Careful: autocommands may close the window and make "wp" invalid
     if (flags & WEE_TRIGGER_NEW_AUTOCMDS)
 	apply_autocmds(EVENT_WINNEW, NULL, NULL, FALSE, curbuf);
@@ -5822,11 +5611,7 @@ win_enter_ext(win_T *wp, int flags)
 
     maketitle();
     curwin->w_redr_status = true;
-#ifdef FEAT_TERMINAL
-    if (bt_terminal(curwin->w_buffer))
-	// terminal is likely in another mode
-	redraw_mode = TRUE;
-#endif
+#line 5830
     redraw_tabline = TRUE;
     redraw_vseps = TRUE;
 #if defined(FEAT_TABPANEL)
@@ -5841,9 +5626,7 @@ win_enter_ext(win_T *wp, int flags)
 
     // set window height to desired minimal value
     if (curwin->w_height < p_wh && !curwin->w_p_wfh
-#ifdef FEAT_PROP_POPUP
-	    && !popup_is_popup(curwin)
-#endif
+#line 5847
 	    )
 	win_setheight((int)p_wh);
     else if (curwin->w_height == 0)
@@ -5981,18 +5764,7 @@ win_alloc(win_T *after, int hidden)
     new_wp->w_fraction = 0;
     new_wp->w_prev_fraction_row = -1;
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_create_scrollbar(&new_wp->w_scrollbars[SBAR_LEFT],
-		SBAR_LEFT, new_wp);
-	gui_create_scrollbar(&new_wp->w_scrollbars[SBAR_RIGHT],
-		SBAR_RIGHT, new_wp);
-    }
-#endif
-#ifdef FEAT_FOLDING
-    foldInitWin(new_wp);
-#endif
+#line 5996
     unblock_autocmds();
 #ifdef FEAT_SEARCH_EXTRA
     new_wp->w_next_match_id = 1000;  // up to 1000 can be picked by the user
@@ -6012,10 +5784,7 @@ win_free(
     buf_T	*buf;
     wininfo_T	*wip;
 
-#ifdef FEAT_FOLDING
-    clearFolding(wp);
-#endif
-
+#line 6019
     // reduce the reference count to the argument list.
     alist_unlink(wp->w_alist);
 
@@ -6127,29 +5896,7 @@ win_free(
     qf_free_all(wp);
 #endif
 
-#ifdef FEAT_GUI
-    if (gui.in_use)
-    {
-	gui_mch_destroy_scrollbar(&wp->w_scrollbars[SBAR_LEFT]);
-	gui_mch_destroy_scrollbar(&wp->w_scrollbars[SBAR_RIGHT]);
-    }
-#endif // FEAT_GUI
-
-#ifdef FEAT_MENU
-    remove_winbar(wp);
-#endif
-#ifdef FEAT_PROP_POPUP
-    free_callback(&wp->w_close_cb);
-    free_callback(&wp->w_filter_cb);
-    for (i = 0; i < 4; ++i)
-	VIM_CLEAR(wp->w_border_highlight[i]);
-    vim_free(wp->w_scrollbar_highlight);
-    vim_free(wp->w_thumb_highlight);
-    vim_free(wp->w_popup_title);
-    list_unref(wp->w_popup_mask);
-    vim_free(wp->w_popup_mask_cells);
-#endif
-
+#line 6153
 #ifdef FEAT_SYN_HL
     vim_free(wp->w_p_cc_cols);
 #endif
@@ -6177,34 +5924,7 @@ win_unlisted(win_T *wp)
     return is_aucmd_win(wp) || WIN_IS_POPUP(wp);
 }
 
-#if defined(FEAT_PROP_POPUP)
-/*
- * Free a popup window.  This does not take the window out of the window list
- * and assumes there is only one toplevel frame, no split.
- */
-    void
-win_free_popup(win_T *win)
-{
-    if (win->w_buffer != NULL)
-    {
-	if (bt_popup(win->w_buffer))
-	    win_close_buffer(win, DOBUF_WIPE_REUSE, FALSE);
-	else
-	    close_buffer(win, win->w_buffer, 0, FALSE, FALSE, TRUE);
-
-	if (win->w_buffer != NULL)
-	    --win->w_buffer->b_nwindows;
-    }
-# if defined(FEAT_TIMERS)
-    // the timer may have been cleared, making the pointer invalid
-    if (timer_valid(win->w_popup_timer))
-	stop_timer(win->w_popup_timer);
-# endif
-    vim_free(win->w_frame);
-    win_free(win, NULL);
-}
-#endif
-
+#line 6208
 /*
  * Append window "wp" in the window list after window "after".
  */
@@ -7462,16 +7182,7 @@ scroll_to_fraction(win_T *wp, int prev_height)
 	{
 	    while (sline > 0 && lnum > 1)
 	    {
-#ifdef FEAT_FOLDING
-		hasFoldingWin(wp, lnum, &lnum, NULL, TRUE, NULL);
-		if (lnum == 1)
-		{
-		    // first line in buffer is folded
-		    line_size = 1;
-		    --sline;
-		    break;
-		}
-#endif
+#line 7475
 		--lnum;
 #ifdef FEAT_DIFF
 		if (lnum == wp->w_topline)
@@ -7489,9 +7200,7 @@ scroll_to_fraction(win_T *wp, int prev_height)
 		 * Line we want at top would go off top of screen.  Use next
 		 * line instead.
 		 */
-#ifdef FEAT_FOLDING
-		hasFoldingWin(wp, lnum, NULL, &lnum, TRUE, NULL);
-#endif
+#line 7495
 		lnum++;
 		wp->w_wrow -= line_size + sline;
 	    }
@@ -8092,12 +7801,7 @@ only_one_window(void)
     int		count = 0;
     win_T	*wp;
 
-#if defined(FEAT_PROP_POPUP)
-    // If the current window is a popup then there always is another window.
-    if (popup_is_popup(curwin))
-	return FALSE;
-#endif
-
+#line 8101
     // If there is another tab page there always is another window.
     if (first_tabpage->tp_next != NULL)
 	return FALSE;
@@ -8385,27 +8089,7 @@ restore_snapshot_rec(frame_T *sn, frame_T *fr)
     return wp;
 }
 
-#if defined(FEAT_GUI)
-/*
- * Return TRUE if there is any vertically split window.
- */
-    int
-win_hasvertsplit(void)
-{
-    frame_T	*fr;
-
-    if (topframe->fr_layout == FR_ROW)
-	return TRUE;
-
-    if (topframe->fr_layout == FR_COL)
-	FOR_ALL_FRAMES(fr, topframe->fr_child)
-	    if (fr->fr_layout == FR_ROW)
-		return TRUE;
-
-    return FALSE;
-}
-#endif
-
+#line 8409
 #if defined(FEAT_PYTHON) || defined(FEAT_PYTHON3)
     int
 get_win_number(win_T *wp, win_T *first_win)

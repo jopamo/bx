@@ -886,10 +886,7 @@ do_move(linenr_T line1, linenr_T line2, linenr_T dest)
     linenr_T	extra;	    // Num lines added before line1
     linenr_T	num_lines;  // Num lines moved
     linenr_T	last_line;  // Last line in file after adding new text
-#ifdef FEAT_FOLDING
-    win_T	*win;
-    tabpage_T	*tp;
-#endif
+#line 893
 
     if (dest >= line1 && dest < line2)
     {
@@ -951,13 +948,7 @@ do_move(linenr_T line1, linenr_T line2, linenr_T dest)
     if (dest >= line2)
     {
 	mark_adjust_nofold(line2 + 1, dest, -num_lines, 0L);
-#ifdef FEAT_FOLDING
-	FOR_ALL_TAB_WINDOWS(tp, win)
-	{
-	    if (win->w_buffer == curbuf)
-		foldMoveRange(&win->w_folds, line1, line2, dest);
-	}
-#endif
+#line 961
 	if ((cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0)
 	{
 	    curbuf->b_op_start.lnum = dest - num_lines + 1;
@@ -967,13 +958,7 @@ do_move(linenr_T line1, linenr_T line2, linenr_T dest)
     else
     {
 	mark_adjust_nofold(dest + 1, line1 - 1, num_lines, 0L);
-#ifdef FEAT_FOLDING
-	FOR_ALL_TAB_WINDOWS(tp, win)
-	{
-	    if (win->w_buffer == curbuf)
-		foldMoveRange(&win->w_folds, dest + 1, line1 - 1, line2);
-	}
-#endif
+#line 977
 	if ((cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0)
 	{
 	    curbuf->b_op_start.lnum = dest + 1;
@@ -1525,9 +1510,7 @@ do_filter(
 	    curbuf->b_op_end.lnum -= linecount;		// adjust ']
 	    write_lnum_adjust(-linecount);		// adjust last line
 							// for next write
-#ifdef FEAT_FOLDING
-	    foldUpdate(curwin, curbuf->b_op_start.lnum, curbuf->b_op_end.lnum);
-#endif
+#line 1531
 	}
 	else
 	{
@@ -1596,9 +1579,9 @@ do_shell(
     int		flags)	// may be SHELL_DOOUT when output is redirected
 {
     buf_T	*buf;
-#if !defined(FEAT_GUI_MSWIN) || defined(VIMDLL)
+#line 1600
     int		save_nwr;
-#endif
+#line 1602
 #ifdef MSWIN
     int		winstart = FALSE;
 #endif
@@ -1622,11 +1605,7 @@ do_shell(
     if (cmd != NULL)
 	keep_termcap = winstart = (STRNICMP(cmd, "start ", 6) == 0);
 
-# if defined(FEAT_GUI) && defined(FEAT_TERMINAL)
-    // Don't stop termcap mode when using a terminal window for the shell.
-    if (gui.in_use && vim_strchr(p_go, GO_TERMINAL) != NULL)
-	keep_termcap = TRUE;
-# endif
+#line 1630
 #endif
 
     /*
@@ -1649,15 +1628,9 @@ do_shell(
 	FOR_ALL_BUFFERS(buf)
 	    if (bufIsChangedNotTerm(buf))
 	    {
-#ifdef FEAT_GUI_MSWIN
-		if (!keep_termcap)
-		    starttermcap();	// don't want a message box here
-#endif
+#line 1656
 		msg_puts(_("[No write since last change]\n"));
-#ifdef FEAT_GUI_MSWIN
-		if (!keep_termcap)
-		    stoptermcap();
-#endif
+#line 1661
 		break;
 	    }
 
@@ -1693,7 +1666,7 @@ do_shell(
 	 * Otherwise there is probably text on the screen that the user wants
 	 * to read before redrawing, so call wait_return().
 	 */
-#if !defined(FEAT_GUI_MSWIN) || defined(VIMDLL)
+#line 1697
 # ifdef VIMDLL
 	if (!gui.in_use)
 # endif
@@ -1725,7 +1698,7 @@ do_shell(
 		no_wait_return = save_nwr;
 	    }
 	}
-#endif // FEAT_GUI_MSWIN
+#line 1729
 
 	if (!keep_termcap)	// if keep_termcap is TRUE didn't stop termcap
 	    starttermcap();	// start termcap if not done by wait_return()
@@ -2517,14 +2490,7 @@ do_wqall(exarg_T *eap)
 
     FOR_ALL_BUFFERS(buf)
     {
-#ifdef FEAT_TERMINAL
-	if (exiting && !eap->forceit && term_job_running(buf->b_term))
-	{
-	    no_write_message_buf(buf);
-	    ++error;
-	}
-	else
-#endif
+#line 2528
 	if (bufIsChanged(buf) && !bt_dontwrite(buf))
 	{
 	    /*
@@ -2792,18 +2758,12 @@ do_ecmd(
     int		solcol = -1;
     pos_T	*pos;
     char_u	*command = NULL;
-#ifdef FEAT_SPELL
-    int		did_get_winopts = FALSE;
-#endif
+#line 2798
     int		readfile_flags = 0;
     int		did_inc_redrawing_disabled = FALSE;
     long	*so_ptr = curwin->w_p_so >= 0 ? &curwin->w_p_so : &p_so;
 
-#ifdef FEAT_PROP_POPUP
-    if (ERROR_IF_TERM_POPUP_WINDOW)
-	return FAIL;
-#endif
-
+#line 2807
     if (eap != NULL)
 	command = eap->do_ecmd_cmd;
     set_bufref(&old_curbuf, curbuf);
@@ -2820,9 +2780,7 @@ do_ecmd(
 	if ((cmdmod.cmod_flags & CMOD_BROWSE) && !exiting)
 	{
 	    if (
-# ifdef FEAT_GUI
-		!gui.in_use &&
-# endif
+#line 2826
 		    au_has_group((char_u *)"FileExplorer"))
 	    {
 		// No browsing supported but we do have the file explorer:
@@ -3039,6 +2997,7 @@ do_ecmd(
 	    // Should only be possible to get here if the cmdwin is closed, or
 	    // if it's opening and its buffer hasn't been set yet (the new
 	    // buffer is for it).
+#line 3042
 	    assert(cmdwin_buf == NULL);
 
 	    // BufLeave applies to the old buffer.
@@ -3161,9 +3120,7 @@ do_ecmd(
 		// before, reset the local window options to the global
 		// values.  Also restores old folding stuff.
 		get_winopts(curbuf);
-#ifdef FEAT_SPELL
-		did_get_winopts = TRUE;
-#endif
+#line 3167
 	    }
 	    vim_free(new_name);
 	    au_new_curbuf = save_au_new_curbuf;
@@ -3305,19 +3262,7 @@ do_ecmd(
 	 */
 	curwin_init();
 
-#ifdef FEAT_FOLDING
-	// It's possible that all lines in the buffer changed.  Need to update
-	// automatic folding for all windows where it's used.
-	{
-	    win_T	    *win;
-	    tabpage_T	    *tp;
-
-	    FOR_ALL_TAB_WINDOWS(tp, win)
-		if (win->w_buffer == curbuf)
-		    foldUpdateAll(win);
-	}
-#endif
-
+#line 3321
 	// Change directories when the 'acd' option is set.
 	DO_AUTOCHDIR;
 
@@ -3329,12 +3274,7 @@ do_ecmd(
 	topline = curwin->w_topline;
 	if (!oldbuf)			    // need to read the file
 	{
-#ifdef FEAT_PROP_POPUP
-	    // Don't use the swap-exists dialog for a popup window, can't edit
-	    // the buffer.
-	    if (WIN_IS_POPUP(curwin))
-		curbuf->b_flags |= BF_NO_SEA;
-#endif
+#line 3338
 	    swap_exists_action = SEA_DIALOG;
 	    curbuf->b_flags |= BF_CHECK_RO; // set/reset 'ro' flag
 
@@ -3350,9 +3290,7 @@ do_ecmd(
 	    (void)open_buffer(FALSE, eap, readfile_flags);
 #endif
 
-#ifdef FEAT_PROP_POPUP
-	    curbuf->b_flags &= ~BF_NO_SEA;
-#endif
+#line 3356
 	    if (swap_exists_action == SEA_QUIT)
 		retval = FAIL;
 	    handle_swap_exists(&old_curbuf);
@@ -3393,10 +3331,7 @@ do_ecmd(
 	changed_line_abv_curs();
 
 	maketitle();
-#if defined(FEAT_PROP_POPUP) && defined(FEAT_QUICKFIX)
-	if (WIN_IS_POPUP(curwin) && curwin->w_p_pvw && retval != FAIL)
-	    popup_set_title(curwin);
-#endif
+#line 3400
     }
 
 #ifdef FEAT_DIFF
@@ -3410,13 +3345,7 @@ do_ecmd(
     }
 #endif
 
-#ifdef FEAT_SPELL
-    // If the window options were changed may need to set the spell language.
-    // Can only do this after the buffer has been properly setup.
-    if (did_get_winopts && curwin->w_p_spell && *curwin->w_s->b_p_spl != NUL)
-	(void)parse_spelllang(curwin);
-#endif
-
+#line 3420
     if (command == NULL)
     {
 	if (newcol >= 0)	// position set by autocommands
@@ -3475,18 +3404,11 @@ do_ecmd(
 	msg_scrolled_ign = FALSE;
     }
 
-#ifdef FEAT_VIMINFO
-    curbuf->b_last_used = vim_time();
-#endif
-
+#line 3482
     if (command != NULL)
 	do_cmdline(command, NULL, NULL, DOCMD_VERBOSE|DOCMD_RANGEOK);
 
-#ifdef FEAT_KEYMAP
-    if (curbuf->b_kmap_state & KEYMAP_INIT)
-	(void)keymap_init();
-#endif
-
+#line 3490
     if (RedrawingDisabled > 0)
 	--RedrawingDisabled;
     did_inc_redrawing_disabled = FALSE;
@@ -3521,16 +3443,7 @@ do_ecmd(
     }
 #endif
 
-#if defined(FEAT_NETBEANS_INTG)
-    if (curbuf->b_ffname != NULL)
-    {
-# ifdef FEAT_NETBEANS_INTG
-	if ((flags & ECMD_SET_HELP) != ECMD_SET_HELP)
-	    netbeans_file_opened(curbuf);
-# endif
-    }
-#endif
-
+#line 3534
 theend:
     if (did_inc_redrawing_disabled && RedrawingDisabled > 0)
 	--RedrawingDisabled;
@@ -4031,9 +3944,7 @@ ex_substitute(exarg_T *eap)
     int		save_ma = 0;
     int		save_sandbox = 0;
 #endif
-#ifdef FEAT_PROP_POPUP
-    textprop_T	*text_props = NULL;
-#endif
+#line 4037
 
     cmd = eap->arg;
     if (!global_busy)
@@ -4400,11 +4311,7 @@ ex_substitute(exarg_T *eap)
 	    int		do_again;	// do it again after joining lines
 	    int		skip_match = FALSE;
 	    linenr_T	sub_firstlnum;	// nr of first sub line
-#ifdef FEAT_PROP_POPUP
-	    int		apc_flags = APC_SAVE_FOR_UNDO | APC_SUBSTITUTE;
-	    colnr_T	total_added =  0;
-	    int		text_prop_count = 0;
-#endif
+#line 4408
 
 	    /*
 	     * The new text is build up step by step, to avoid too much
@@ -4627,11 +4534,7 @@ ex_substitute(exarg_T *eap)
 			    char_u *orig_line = NULL;
 			    int    len_change = 0;
 			    int	   save_p_lz = p_lz;
-#ifdef FEAT_FOLDING
-			    int save_p_fen = curwin->w_p_fen;
-
-			    curwin->w_p_fen = FALSE;
-#endif
+#line 4635
 			    // Invert the matched string.
 			    // Remove the inversion afterwards.
 			    int save_RedrawingDisabled = RedrawingDisabled;
@@ -4687,9 +4590,7 @@ ex_substitute(exarg_T *eap)
 			    highlight_match = FALSE;
 			    redraw_later(UPD_SOME_VALID);
 
-#ifdef FEAT_FOLDING
-			    curwin->w_p_fen = save_p_fen;
-#endif
+#line 4693
 			    if (msg_row == Rows - 1)
 				msg_didout = FALSE;	// avoid a scroll-up
 			    msg_starthere();
@@ -4847,91 +4748,15 @@ ex_substitute(exarg_T *eap)
 		if (nmatch == 1)
 		{
 		    p1 = sub_firstline;
-#ifdef FEAT_PROP_POPUP
-		    if (curbuf->b_has_textprop)
-		    {
-			int bytes_added = sublen - 1 - (regmatch.endpos[0].col
-						   - regmatch.startpos[0].col);
-
-			// When text properties are changed, need to save for
-			// undo first, unless done already.
-			if (adjust_prop_columns(lnum,
-					total_added + regmatch.startpos[0].col,
-						       bytes_added, apc_flags))
-			    apc_flags &= ~APC_SAVE_FOR_UNDO;
-			// Offset for column byte number of the text property
-			// in the resulting buffer afterwards.
-			total_added += bytes_added;
-		    }
-#endif
+#line 4867
 		}
 		else
 		{
 		    linenr_T	lastlnum = sub_firstlnum + nmatch - 1;
-#ifdef FEAT_PROP_POPUP
-		    if (curbuf->b_has_textprop)
-		    {
-			char_u	*prop_start;
-
-			// Props in the first line may be shortened or deleted
-			if (adjust_prop_columns(lnum,
-					total_added + regmatch.startpos[0].col,
-						       -MAXCOL, apc_flags))
-			    apc_flags &= ~APC_SAVE_FOR_UNDO;
-			total_added -= (colnr_T)STRLEN(
-				     sub_firstline + regmatch.startpos[0].col);
-
-			// Props in the last line may be moved or deleted
-			if (adjust_prop_columns(lastlnum,
-					0, -regmatch.endpos[0].col, apc_flags))
-			    // When text properties are changed, need to save
-			    // for undo first, unless done already.
-			    apc_flags &= ~APC_SAVE_FOR_UNDO;
-
-			// Copy the text props of the last line, they will be
-			// later appended to the changed line.
-			text_prop_count = get_text_props(curbuf, lastlnum,
-							   &prop_start, FALSE);
-			if (text_prop_count > 0)
-			{
-			    // TODO: what when we already did this?
-			    vim_free(text_props);
-			    text_props = ALLOC_MULT(textprop_T,
-							      text_prop_count);
-			    if (text_props != NULL)
-			    {
-				mch_memmove(text_props, prop_start,
-					 text_prop_count * sizeof(textprop_T));
-				// Filter out virtual text and continuation
-				// properties from deleted lines, convert
-				// offsets to pointers, and adjust columns.
-				int wi = 0;
-				for (int pi = 0; pi < text_prop_count; ++pi)
-				{
-				    // Skip virtual text and continuation
-				    // properties from the deleted line.
-				    if (text_props[pi].tp_id < 0
-					    || (text_props[pi].tp_flags
-							& TP_FLAG_CONT_PREV))
-					continue;
-				    text_props[wi] = text_props[pi];
-				    text_props[wi].tp_col +=
-					regmatch.startpos[0].col + sublen - 1;
-				    text_props[wi].u.tp_text = NULL;
-				    ++wi;
-				}
-				text_prop_count = wi;
-			    }
-			}
-		    }
-#endif
+#line 4928
 		    p1 = ml_get(lastlnum);
 		    nmatch_tl += nmatch - 1;
-#ifdef FEAT_PROP_POPUP
-		    if (curbuf->b_has_textprop)
-			total_added += (colnr_T)STRLEN(
-						  p1 + regmatch.endpos[0].col);
-#endif
+#line 4935
 		}
 		copy_len = regmatch.startpos[0].col - copycol;
 		needed_len = copy_len + ((unsigned)STRLEN(p1)
@@ -5040,17 +4865,7 @@ ex_substitute(exarg_T *eap)
 		    if (p1[0] == '\\' && p1[1] != NUL)  // remove backslash
 		    {
 			STRMOVE(p1, p1 + 1);
-#ifdef FEAT_PROP_POPUP
-			if (curbuf->b_has_textprop)
-			{
-			    // When text properties are changed, need to save
-			    // for undo first, unless done already.
-			    if (adjust_prop_columns(lnum,
-					(colnr_T)(p1 - new_start), -1,
-					apc_flags))
-				apc_flags &= ~APC_SAVE_FOR_UNDO;
-			}
-#endif
+#line 5054
 		    }
 		    else if (*p1 == CAR)
 		    {
@@ -5069,10 +4884,7 @@ ex_substitute(exarg_T *eap)
 				    first_line = lnum;
 				last_line = lnum + 1;
 			    }
-#ifdef FEAT_PROP_POPUP
-			    adjust_props_for_split(lnum + 1, lnum,
-							       plen, 1, FALSE);
-#endif
+#line 5076
 			    // all line numbers increase
 			    ++sub_firstlnum;
 			    ++lnum;
@@ -5142,10 +4954,7 @@ skip:
 			if (u_savesub(lnum) != OK)
 			    break;
 			ml_replace(lnum, new_start, TRUE);
-#ifdef FEAT_PROP_POPUP
-			if (text_props != NULL)
-			    add_text_props(lnum, text_props, text_prop_count);
-#endif
+#line 5149
 			if (nmatch_tl > 0)
 			{
 			    /*
@@ -5237,10 +5046,7 @@ skip:
 outofmem:
     vim_free(sub_firstline); // may have to free allocated copy of the line
 
-#ifdef FEAT_PROP_POPUP
-    vim_free(text_props);
-#endif
-
+#line 5244
     // ":s/pat//n" doesn't move the cursor
     if (subflags.do_count)
 	curwin->w_cursor = old_cursor;
@@ -5284,12 +5090,7 @@ outofmem:
 	    semsg(_(e_pattern_not_found_str), get_search_pat());
     }
 
-#ifdef FEAT_FOLDING
-    if (subflags.do_ask && hasAnyFolding(curwin))
-	// Cursor position may require updating
-	changed_window_setting();
-#endif
-
+#line 5293
     vim_regfree(regmatch.regprog);
     vim_free(sub);
 
@@ -5518,19 +5319,9 @@ ex_global(exarg_T *eap)
 	}
 	else
 	{
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	    inc_clip_provider();
-#endif
-#ifdef FEAT_CLIPBOARD
-	    start_global_changes();
-#endif
+#line 5527
 	    global_exe(cmd);
-#ifdef FEAT_CLIPBOARD
-	    end_global_changes();
-#endif
-#ifdef FEAT_CLIPBOARD_PROVIDER
-	    dec_clip_provider();
-#endif
+#line 5534
 	}
 
 	ml_clearmarked();	   // clear rest of the marks
@@ -5593,27 +5384,7 @@ global_exe(char_u *cmd)
 	msgmore(curbuf->b_ml.ml_line_count - old_lcount);
 }
 
-#ifdef FEAT_VIMINFO
-/*
- * Get the previous substitute pattern.
- */
-    char_u *
-get_old_sub(void)
-{
-    return old_sub;
-}
-
-/*
- * Set the previous substitute pattern.  "val" must be allocated.
- */
-    void
-set_old_sub(char_u *val)
-{
-    vim_free(old_sub);
-    old_sub = val;
-}
-#endif // FEAT_VIMINFO
-
+#line 5617
 #if defined(EXITFREE)
     void
 free_old_sub(void)
@@ -5636,39 +5407,14 @@ prepare_tagpreview(
 {
     win_T	*wp;
 
-# ifdef FEAT_GUI
-    need_mouse_correct = TRUE;
-# endif
-
+#line 5643
     if (curwin->w_p_pvw)
 	return FALSE;
 
     /*
      * If there is already a preview window open, use that one.
      */
-# ifdef FEAT_PROP_POPUP
-    if (use_previewpopup && *p_pvp != NUL)
-    {
-	wp = popup_find_preview_window();
-	if (wp != NULL)
-	    popup_set_wantpos_cursor(wp, wp->w_minwidth, NULL);
-    }
-    else if (use_popup != USEPOPUP_NONE)
-    {
-	wp = popup_find_info_window();
-	if (wp != NULL)
-	{
-	    if (use_popup == USEPOPUP_NORMAL)
-		popup_show(wp);
-	    else
-		popup_hide(wp);
-	    // When the popup moves or resizes it may reveal part of
-	    // another window.  TODO: can this be done more efficiently?
-	    redraw_all_later(UPD_NOT_VALID);
-	}
-    }
-    else
-# endif
+#line 5672
     {
 	FOR_ALL_WINDOWS(wp)
 	    if (wp->w_p_pvw)
@@ -5683,11 +5429,7 @@ prepare_tagpreview(
     /*
      * There is no preview window open yet.  Create one.
      */
-# ifdef FEAT_PROP_POPUP
-    if ((use_previewpopup && *p_pvp != NUL)
-	    || use_popup != USEPOPUP_NONE)
-	return popup_create_preview_window(use_popup != USEPOPUP_NONE);
-# endif
+#line 5691
     if (win_split(g_do_tagpreview > 0 ? g_do_tagpreview : 0, 0) == FAIL)
 	return FALSE;
     curwin->w_p_pvw = TRUE;
@@ -5697,9 +5439,7 @@ prepare_tagpreview(
 # ifdef FEAT_DIFF
     curwin->w_p_diff = FALSE;	    // no 'diff'
 # endif
-# ifdef FEAT_FOLDING
-    curwin->w_p_fdc = 0;	    // no 'foldcolumn'
-# endif
+#line 5703
     return TRUE;
 }
 
