@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/response.h"
+#include <ctype.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,31 @@ const char* bx_fetch_response_header_value(const BxFetchResponse* response, cons
             return header->value;
     }
     return NULL;
+}
+
+bool bx_fetch_content_type_equals(const char* content_type, const char* expected) {
+    if (!content_type || !expected)
+        return false;
+
+    size_t content_length = strnlen(content_type, BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES + 1u);
+    size_t expected_length = strnlen(expected, BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES + 1u);
+    if (content_length > BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES ||
+        expected_length == 0 ||
+        expected_length > BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES) {
+        return false;
+    }
+
+    while (content_length > 0 && isspace((unsigned char)*content_type)) {
+        content_type++;
+        content_length--;
+    }
+    const char* parameters = memchr(content_type, ';', content_length);
+    size_t media_type_length = parameters ? (size_t)(parameters - content_type) : content_length;
+    while (media_type_length > 0 && isspace((unsigned char)content_type[media_type_length - 1u]))
+        media_type_length--;
+
+    return media_type_length == expected_length &&
+           strncasecmp(content_type, expected, media_type_length) == 0;
 }
 
 const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeaderPolicyFailure failure) {

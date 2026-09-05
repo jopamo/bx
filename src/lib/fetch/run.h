@@ -8,8 +8,9 @@
  * Shared run facade for fetch applets.
  *
  * The facade owns transport, crawl scheduling, and committed publication
- * state. Frontends retain policy: CLI parsing, output naming, header-driven
- * path selection, diagnostics, link extraction decisions, and exit mapping.
+ * state. Frontends retain policy: CLI parsing, initial output naming,
+ * diagnostics, link extraction decisions, and exit mapping. Configured
+ * response-name transformations and secure writer retargeting stay shared.
  * The immutable config and all callback userdata must outlive the run.
  * Callbacks must not recursively execute, cancel, or free the run.
  * Committed documents are snapshotted into a bounded queue during terminal
@@ -89,6 +90,26 @@ typedef struct {
  */
 typedef int (*BxFetchRunOutputObservationFn)(void* userdata, const BxFetchRunOutputObservation* observation);
 
+typedef enum {
+    BX_FETCH_RUN_RESPONSE_NAME_ADJUSTED = 0,
+    BX_FETCH_RUN_RESPONSE_NAME_KEEP_NO_CLOBBER,
+    BX_FETCH_RUN_RESPONSE_NAME_KEEP_EXISTING,
+    BX_FETCH_RUN_RESPONSE_NAME_FAILED,
+} BxFetchRunResponseNameDecision;
+
+typedef struct {
+    const char* original_path;
+    const char* candidate_path;
+    BxFetchRunResponseNameDecision decision;
+    int error_number;
+} BxFetchRunResponseNameObservation;
+
+/*
+ * Observes shared response-name policy after the candidate path has either
+ * been staged transactionally or rejected. Both paths are borrowed.
+ */
+typedef void (*BxFetchRunResponseNameFn)(void* userdata, const BxFetchRunResponseNameObservation* observation);
+
 typedef void (*BxFetchRunPrepareErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchPrepareError* error);
 typedef void (*BxFetchRunSubmitErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error);
 /*
@@ -160,6 +181,7 @@ typedef struct {
     BxFetchRunLinkConversionFn on_link_conversion;
     BxFetchRunSeedResultFn on_seed_result;
     BxFetchRunOutputObservationFn on_output_observation;
+    BxFetchRunResponseNameFn on_response_name;
     BxFetchRunTransferObservationFn on_transfer_observation;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;

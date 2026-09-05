@@ -32,26 +32,6 @@ static int document_fail(BxFetchDocumentOutcome* outcome, BxFetchDocumentKind ki
     return -1;
 }
 
-static bool content_type_equals(const char* content_type, const char* expected) {
-    if (!content_type || !expected)
-        return false;
-
-    size_t bounded_length = strnlen(content_type, BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES + 1u);
-    if (bounded_length > BX_FETCH_RESPONSE_HEADER_LINE_MAX_BYTES)
-        return false;
-
-    while (bounded_length > 0 && isspace((unsigned char)*content_type)) {
-        content_type++;
-        bounded_length--;
-    }
-    const char* end = memchr(content_type, ';', bounded_length);
-    size_t length = end ? (size_t)(end - content_type) : bounded_length;
-    while (length > 0 && isspace((unsigned char)content_type[length - 1])) {
-        length--;
-    }
-    return strlen(expected) == length && strncasecmp(content_type, expected, length) == 0;
-}
-
 static bool path_has_extension(const char* path, const char* extension) {
     const char* actual = bx_path_extension_ptr(path);
     return actual && extension && strcasecmp(actual, extension) == 0;
@@ -150,10 +130,11 @@ static bool payload_sniffs_as_html(const unsigned char* data, size_t length) {
 }
 
 static BxFetchDocumentKind classify_document(const char* path, const char* content_type, const unsigned char* data, size_t length) {
-    bool explicit_html = content_type_equals(content_type, "text/html") || content_type_equals(content_type, "application/xhtml+xml");
-    bool explicit_css = content_type_equals(content_type, "text/css");
-    bool ambiguous = !content_type || content_type[0] == '\0' || content_type_equals(content_type, "text/plain") || content_type_equals(content_type, "application/octet-stream") ||
-                     content_type_equals(content_type, "binary/octet-stream");
+    bool explicit_html = bx_fetch_content_type_equals(content_type, "text/html") || bx_fetch_content_type_equals(content_type, "application/xhtml+xml");
+    bool explicit_css = bx_fetch_content_type_equals(content_type, "text/css");
+    bool ambiguous = !content_type || content_type[0] == '\0' || bx_fetch_content_type_equals(content_type, "text/plain") ||
+                     bx_fetch_content_type_equals(content_type, "application/octet-stream") ||
+                     bx_fetch_content_type_equals(content_type, "binary/octet-stream");
     bool sniffed_html = payload_sniffs_as_html(data, length);
 
     if (explicit_css)
