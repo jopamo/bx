@@ -624,7 +624,7 @@ static int xioparse_single(
 	const char **addr) 		/* text from command line incl. ':' */
 {
    const char *addr0 = *addr; 	/* save for error messages */
-   struct addrname *ae;
+   const struct addrname *ae;
    const struct addrdesc *addrdesc = NULL;
    const char *ends[4+1];
    const char *hquotes[] = {
@@ -666,8 +666,7 @@ static int xioparse_single(
       Error1("unexpected end of address \"%s\"", *addr);
    }
    *tokp = '\0';  /*! len? */
-   ae = (struct addrname *)
-      keyw((struct wordent *)&addressnames, token,
+   ae = keyw(addressnames, token,
 	   sizeof(addressnames)/sizeof(struct addrname)-1);
 
    if (ae) {

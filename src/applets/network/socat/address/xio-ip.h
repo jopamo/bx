@@ -56,9 +56,9 @@ extern void xiofreeaddrinfo(struct addrinfo **ai_sorted);
 extern int _xio_sort_ip_addresses(struct addrinfo *themlist, struct addrinfo **ai_sorted);
 extern int xioresolve(const char *node, const char *service, int family, int socktype, int protocol, union sockaddr_union *addr, socklen_t *addrlen, const int ai_flags[2]);
 extern int xiolog_ancillary_ip(struct single *sfd, struct cmsghdr *cmsg, int *num, char *typbuff, int typlen, char *nambuff, int namlen, char *envbuff, int envlen, char *valbuff, int vallen);
-extern int xiotype_ip_add_membership(char *token, const struct optname *ent, struct opt *opt);
+extern int xiotype_ip_add_membership(const char *token, const struct optname *ent, struct opt *opt);
 extern int xioapply_ip_add_membership(xiosingle_t *xfd, struct opt *opt);
-extern int xiotype_ip_add_source_membership(char* token, const struct optname *ent, struct opt *opt);
+extern int xiotype_ip_add_source_membership(const char *token, const struct optname *ent, struct opt *opt);
 extern int xioapply_ip_add_source_membership(struct single *xfd, struct opt *opt);
 
 #if WITH_RESOLVE && HAVE_RESOLV_H

@@ -57,7 +57,8 @@ static int xioopen_socks4_connect(
    struct single *sfd = &xxfd->stream;
    int socks4a = addrdesc->arg1;
    struct opt *opts0 = NULL;
-   const char *sockdname; char *socksport = NULL;
+   const char *sockdname;
+   const char *socksport = NULL;
    const char *targetname, *targetport;
    int pf = PF_UNSPEC;
    int ipproto = IPPROTO_TCP;
@@ -282,24 +283,27 @@ static int xioopen_socks4_connect(
 
 int _xioopen_opt_socksport(
 	struct opt *opts,
-	char **socksport)
+	const char **socksport)
 {
    struct servent *se;
+   char *configured_port = NULL;
 
-   if (retropt_string(opts, OPT_SOCKSPORT, socksport) < 0 &&
-       *socksport == NULL) {
+   if (retropt_string(opts, OPT_SOCKSPORT, &configured_port) >= 0) {
+      *socksport = configured_port;
+   } else if (*socksport == NULL) {
       if ((se = getservbyname("socks", "tcp")) != NULL) {
 	 Debug1("\"socks/tcp\" resolves to %u", ntohs(se->s_port));
-	 if ((*socksport = Malloc(6)) == NULL) {
+	 if ((configured_port = Malloc(6)) == NULL) {
 	    return STAT_NORETRY;
 	 }
-	 sprintf(*socksport, "%u", ntohs(se->s_port));
+	 sprintf(configured_port, "%u", ntohs(se->s_port));
       } else {
 	 Debug1("cannot resolve service \"socks/tcp\", using %s", SOCKSPORT);
-	 if ((*socksport = strdup(SOCKSPORT)) == NULL) {
+	 if ((configured_port = strdup(SOCKSPORT)) == NULL) {
 	    return STAT_NORETRY;
 	 }
       }
+      *socksport = configured_port;
    }
    return 0;
 }
@@ -309,7 +313,7 @@ int _xioopen_opt_socksport(
 int _xioopen_socks4_init(
 	const char *targetport,
 	struct opt *opts,
-	char **socksport,
+	const char **socksport,
 	struct socks4u *sockhead,
 	size_t *headlen)
 {
@@ -514,4 +518,3 @@ int _xioopen_socks4_connect(struct single *sfd,
 #endif /* WITH_SOCKS4 || WITH_SOCKS4A */
 
 #endif /* WITH_SOCKS4 || WITH_SOCKS4A || WITH_SOCKS5 */
-
