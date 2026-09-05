@@ -48,6 +48,16 @@ add_project_arguments('-DBX_STDBUF_INSTALLED_PATH="' + stdbuf_installed_path + '
 add_project_arguments('-DBX_STDBUF_INSTALL_SUBDIR="' + stdbuf_install_subdir + '"', language : 'c')
 
 cc = meson.get_compiler('c')
+if get_option('werror')
+  # Meson's werror option covers compilation; enforce it at link time too.
+  foreach native_build : [false, true]
+    link_cc = meson.get_compiler('c', native : native_build)
+    add_project_link_arguments(link_cc.get_supported_link_arguments([
+      '-Werror',
+      '-Wl,--fatal-warnings',
+    ]), language : 'c', native : native_build)
+  endforeach
+endif
 can_run = meson.can_run_host_binaries()
 have_updwtmpx = cc.has_function(
   'updwtmpx',
@@ -98,18 +108,21 @@ static_link_probe_args = []
 if cc.links(
   static_link_probe_src,
   args : ['-static', '-no-pie'],
+  werror : true,
   name : 'static link with -no-pie',
 )
   static_link_probe_args = ['-static', '-no-pie']
 elif cc.links(
   static_link_probe_src,
   args : ['-static'],
+  werror : true,
   name : 'static link',
 )
   static_link_probe_args = ['-static']
 elif cc.links(
   static_link_probe_src,
   args : ['-static-pie'],
+  werror : true,
   name : 'static pie link',
 )
   static_link_probe_args = ['-static-pie']
@@ -794,7 +807,6 @@ nc_c_args = cc.get_supported_arguments([
   '-D_GNU_SOURCE',
   '-D_DEFAULT_SOURCE',
   '-D__FAVOR_BSD',
-  '-Wno-error',
   '-Wno-pedantic',
 ])
 
@@ -866,7 +878,6 @@ socat_c_args = cc.get_supported_arguments([
   '-D_GNU_SOURCE',
   '-Dmain=bx_socat_main_impl',
   '-Dmsg=bx_socat_msg',
-  '-Werror',
   '-Wno-pedantic',
   '-Wno-shadow',
   '-Wno-sign-compare',
@@ -915,7 +926,6 @@ traceroute_sources = files(
 traceroute_c_args = cc.get_supported_arguments([
   '-D_DEFAULT_SOURCE',
   '-Dmain=bx_traceroute_main',
-  '-Wno-error',
   '-Wno-pedantic',
 ])
 
@@ -981,10 +991,7 @@ if not cc.has_function('crypt')
   endif
 endif
 
-screen_c_args = cc.get_supported_arguments([
-  '-Wno-error',
-])
-screen_c_args += [
+screen_c_args = [
   '-D_GNU_SOURCE',
   '-D_DEFAULT_SOURCE',
   '-Ddflag=screen_dflag',
@@ -1022,7 +1029,6 @@ edit_wrapper_sources = files(
 )
 
 edit_wrapper_c_args = cc.get_supported_arguments([
-  '-Wno-error',
   '-Wno-pedantic',
 ])
 edit_wrapper_c_args += [
@@ -1155,7 +1161,6 @@ if edit_vim_dl_dep.found()
 endif
 
 edit_vim_c_args = cc.get_supported_arguments([
-  '-Wno-error',
   '-Wno-pedantic',
   '-Wno-cast-function-type',
   '-Wno-declaration-after-statement',
@@ -1172,10 +1177,7 @@ edit_vim_lib = static_library('bx_edit_vim',
   c_args : edit_vim_c_args,
 )
 
-xxd_c_args = cc.get_supported_arguments([
-  '-Wno-error',
-])
-xxd_c_args += [
+xxd_c_args = [
   '-DUNIX',
 ]
 
@@ -1225,7 +1227,6 @@ jq_include_dirs = include_directories(
 )
 
 jq_c_args = cc.get_supported_arguments([
-  '-Wno-error',
   '-Wno-pedantic',
   '-Wno-cast-qual',
   '-Wno-declaration-after-statement',
@@ -1419,7 +1420,6 @@ manual_include_dirs = include_directories(
 manual_deps = [zlib_dep, libbz2_dep, liblzma_dep, libzstd_dep]
 
 manual_c_args = cc.get_supported_arguments([
-  '-Wno-error',
   '-Wno-cast-qual',
   '-Wno-declaration-after-statement',
   '-Wno-missing-prototypes',
@@ -1441,15 +1441,10 @@ manual_lib = static_library('bx_manual',
   c_args : manual_c_args,
 )
 
-bc_host_c_args = cc.get_supported_arguments([
-  '-Wno-error',
-])
-
 bc_strgen = executable('bx_bc_strgen',
   'src/applets/base/bc/strgen.c',
   include_directories : include_directories('src/applets/base/bc/include'),
   native : true,
-  c_args : bc_host_c_args,
 )
 
 bc_help_src = custom_target(
