@@ -39,6 +39,11 @@ typedef enum {
     BX_FETCH_WRITER_METADATA_COMMITTED = 1,
 } BxFetchWriterMetadataCommitResult;
 
+typedef enum {
+    BX_FETCH_WRITER_PATH_ABSENT = 0,
+    BX_FETCH_WRITER_PATH_PRESENT,
+} BxFetchWriterPathPresence;
+
 /*
  * Verifies the Linux openat2(2) path-resolution primitive required by every
  * filesystem-backed BxFetchWriter. Returns 0 when available, or -1 with errno set.
@@ -47,6 +52,13 @@ typedef enum {
 int bx_fetch_writer_check_secure_path_resolution(void);
 /* Opens an existing regular file without following any path-component symlink. */
 int bx_fetch_writer_open_existing_file(const char* path);
+/*
+ * Securely observes whether any leaf currently occupies path. Parent
+ * resolution rejects symlinks and mount substitution; a missing parent is an
+ * absent destination. This is only an early policy observation—exclusive
+ * publication must still close the check/commit race.
+ */
+int bx_fetch_writer_path_presence(const char* path, BxFetchWriterPathPresence* presence_out);
 /* Removes a non-directory leaf through a no-symlink parent traversal. */
 int bx_fetch_writer_unlink_file(const char* path);
 BxFetchWriter* bx_fetch_writer_open(const char* path, BxFetchWriterMode mode);

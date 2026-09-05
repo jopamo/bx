@@ -2,6 +2,7 @@
 #include "lib/fetch/run.h"
 #include "lib/fetch/resource_limits.h"
 #include "lib/fetch/response.h"
+#include "lib/fetch/writer.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -207,7 +208,40 @@ static int run_drain_documents(BxFetchRun* run) {
 
 static int run_plan_output(void* userdata, const BxFetchPreparedUrl* target, int depth, char** output_path_out) {
     BxFetchRun* run = userdata;
-    return run->frontend.plan_output(run->frontend.userdata, target, depth, output_path_out);
+    int result = run->frontend.plan_output(run->frontend.userdata, target, depth, output_path_out);
+    if (result != 0)
+        return result;
+    if (!output_path_out || !*output_path_out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    BxFetchRunOutputObservation observation = {
+        .target = target,
+        .output_path = *output_path_out,
+        .depth = depth,
+        .decision = BX_FETCH_RUN_OUTPUT_FETCH,
+    };
+    if (run->cfg->download.no_clobber && !run->cfg->download.spider) {
+        BxFetchWriterPathPresence presence = BX_FETCH_WRITER_PATH_ABSENT;
+        if (bx_fetch_writer_path_presence(*output_path_out, &presence) != 0) {
+            observation.decision = BX_FETCH_RUN_OUTPUT_INSPECTION_ERROR;
+            observation.error_number = errno ? errno : EIO;
+            if (run->frontend.on_output_observation)
+                (void)run->frontend.on_output_observation(run->frontend.userdata, &observation);
+            errno = observation.error_number;
+            return -1;
+        }
+        if (presence == BX_FETCH_WRITER_PATH_PRESENT)
+            observation.decision = BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER;
+    }
+    if (run->frontend.on_output_observation &&
+        run->frontend.on_output_observation(run->frontend.userdata, &observation) != 0) {
+        if (errno == 0)
+            errno = EIO;
+        return -1;
+    }
+    return observation.decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER ? 1 : 0;
 }
 
 static int run_response_headers(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {

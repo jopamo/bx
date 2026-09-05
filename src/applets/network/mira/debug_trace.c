@@ -88,6 +88,17 @@ void bx_mira_debug_trace_dry_run_decision(MiraDebugTrace* trace, const char* dis
     fputs(",\"decision\":\"fetch\",\"reason\":\"dry-run\"}\n", trace->stream);
 }
 
+void bx_mira_debug_trace_no_clobber_decision(MiraDebugTrace* trace, const char* display_url, const char* output_path) {
+    if (!trace || !trace->enabled)
+        return;
+    mira_debug_trace_prefix(trace, "scheduler", "decision");
+    fputs(",\"url\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, display_url);
+    fputs(",\"output_path\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, output_path);
+    fputs(",\"decision\":\"skip\",\"reason\":\"no-clobber\"}\n", trace->stream);
+}
+
 static void mira_debug_trace_transfer_prefix(MiraDebugTrace* trace, const char* layer, const char* action, uint64_t transfer_id, const char* display_url, const char* output_path) {
     mira_debug_trace_prefix(trace, layer, action);
     fprintf(trace->stream, ",\"transfer_id\":%" PRIu64 ",\"url\":", transfer_id);

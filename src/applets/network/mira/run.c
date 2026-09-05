@@ -17,6 +17,7 @@
 typedef struct {
     BxFetchCrawlEnqueueStatus status;
     bool observed;
+    bool no_clobber_skip;
     char* display_url;
     char* normalized_url;
     char* reason;
@@ -88,6 +89,30 @@ static void mira_run_record_error(MiraRunFrontend* frontend, BxFetchErrorClass e
     mira_run_record_error_url(frontend, error_class, summary, target ? bx_fetch_prepared_url_display(target) : NULL, path, error_number);
 }
 
+static MiraDryRunRecord* mira_dry_run_plan_record(MiraRunFrontend* frontend,
+                                                  const BxFetchPreparedUrl* target,
+                                                  const char* output_path) {
+    while (frontend->next_plan_index < frontend->dry_run_record_count &&
+           frontend->dry_run_records[frontend->next_plan_index].status != BX_FETCH_CRAWL_ENQUEUED) {
+        frontend->next_plan_index++;
+    }
+    if (frontend->next_plan_index >= frontend->dry_run_record_count) {
+        errno = EPROTO;
+        return NULL;
+    }
+
+    MiraDryRunRecord* record = &frontend->dry_run_records[frontend->next_plan_index++];
+    record->display_url = strdup(bx_fetch_prepared_url_display(target));
+    record->normalized_url = strdup(bx_fetch_prepared_url_display(target));
+    record->output_path = strdup(output_path);
+    if (!record->display_url || !record->normalized_url || !record->output_path) {
+        frontend->deferred_error = ENOMEM;
+        errno = ENOMEM;
+        return NULL;
+    }
+    return record;
+}
+
 static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, int depth, char** output_path_out) {
     MiraRunFrontend* frontend = userdata;
     if (!frontend || !target || !output_path_out || depth < 0) {
@@ -110,27 +135,51 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
         bx_mira_debug_trace_enqueued(
             &frontend->debug_trace, bx_fetch_prepared_url_display(target), *output_path_out, depth);
     }
-    if (frontend->config->download.dry_run) {
-        while (frontend->next_plan_index < frontend->dry_run_record_count && frontend->dry_run_records[frontend->next_plan_index].status != BX_FETCH_CRAWL_ENQUEUED) {
-            frontend->next_plan_index++;
-        }
-        if (frontend->next_plan_index >= frontend->dry_run_record_count) {
-            free(*output_path_out);
-            *output_path_out = NULL;
-            errno = EPROTO;
-            return -1;
-        }
-        MiraDryRunRecord* record = &frontend->dry_run_records[frontend->next_plan_index++];
-        record->display_url = strdup(bx_fetch_prepared_url_display(target));
-        record->normalized_url = strdup(bx_fetch_prepared_url_display(target));
-        record->output_path = strdup(*output_path_out);
-        if (!record->display_url || !record->normalized_url || !record->output_path) {
-            frontend->deferred_error = ENOMEM;
-            errno = ENOMEM;
-            return -1;
-        }
-        bx_mira_debug_trace_dry_run_decision(&frontend->debug_trace, record->display_url, record->output_path);
+
+    return 0;
+}
+
+static int mira_output_observation(void* userdata, const BxFetchRunOutputObservation* observation) {
+    MiraRunFrontend* frontend = userdata;
+    if (!frontend || !observation)
+        return -1;
+    if (observation->decision == BX_FETCH_RUN_OUTPUT_INSPECTION_ERROR) {
+        frontend->deferred_error = observation->error_number ? observation->error_number : EIO;
+        mira_run_record_error(frontend,
+                              BX_FETCH_ERROR_CLASS_FILESYSTEM,
+                              "failed to inspect no-clobber destination",
+                              observation->target,
+                              observation->output_path,
+                              frontend->deferred_error);
+        return 0;
     }
+
+    MiraDryRunRecord* record = NULL;
+    if (frontend->config->download.dry_run) {
+        record = mira_dry_run_plan_record(frontend, observation->target, observation->output_path);
+        if (!record) {
+            frontend->deferred_error = errno ? errno : ENOMEM;
+            return -1;
+        }
+    }
+    if (observation->decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER) {
+        if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
+            char* quoted = bx_path_quote_dup(observation->output_path, BX_PATH_QUOTE_ESCAPE);
+            fprintf(frontend->diagnostics,
+                    "mira: skipping existing file due to --no-clobber: %s (%s)\n",
+                    quoted ? quoted : "(path unavailable)",
+                    bx_fetch_prepared_url_display(observation->target));
+            free(quoted);
+        }
+        bx_mira_debug_trace_no_clobber_decision(
+            &frontend->debug_trace, bx_fetch_prepared_url_display(observation->target), observation->output_path);
+        if (record)
+            record->no_clobber_skip = true;
+        return 0;
+    }
+
+    if (record)
+        bx_mira_debug_trace_dry_run_decision(&frontend->debug_trace, record->display_url, record->output_path);
     return 0;
 }
 
@@ -417,7 +466,11 @@ static void mira_dry_run_records_emit(const MiraRunFrontend* frontend) {
             bx_mira_json_write_string(stdout, record->normalized_url);
         else
             fputs("null", stdout);
-        if (record->status == BX_FETCH_CRAWL_ENQUEUED) {
+        if (record->no_clobber_skip) {
+            fputs(",\"decision\":\"skip\",\"reason\":\"no-clobber\",\"output_path\":", stdout);
+            bx_mira_json_write_string(stdout, record->output_path);
+        }
+        else if (record->status == BX_FETCH_CRAWL_ENQUEUED) {
             fputs(",\"decision\":\"fetch\",\"reason\":null,\"output_path\":", stdout);
             bx_mira_json_write_string(stdout, record->output_path);
         }
@@ -576,6 +629,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_document_error = mira_document_error,
         .on_link_conversion = mira_link_conversion,
         .on_seed_result = mira_seed_result,
+        .on_output_observation = (config->download.dry_run || config->download.no_clobber) ? mira_output_observation : NULL,
         .on_transfer_observation = config->logging.debug_trace ? mira_transfer_observation : NULL,
         .transport_observer =
             {

@@ -19,7 +19,7 @@ MIRA_OPTION("tries", required_argument, 't', "t:", NULL, "NUMBER", "bound transf
 MIRA_OPTION("retry-connrefused", no_argument, MIRA_OPT_RETRY_CONNREFUSED, "", NULL, NULL, "retry connection-refused failures", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("retry-on-http-error", required_argument, MIRA_OPT_RETRY_ON_HTTP_ERROR, "", NULL, "CODES", "retry comma-separated HTTP statuses", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("output-document", required_argument, 'O', "O:", NULL, "FILE", "write one document to FILE", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
-MIRA_OPTION("no-clobber", no_argument, MIRA_OPT_NO_CLOBBER, "", "-nc", NULL, "skip existing output files", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("no-clobber", no_argument, MIRA_OPT_NO_CLOBBER, "", "-nc", NULL, "skip existing output files", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("continue", no_argument, 'c', "c", NULL, NULL, "resume partial downloads", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("progress", required_argument, MIRA_OPT_PROGRESS, "", NULL, "bar|none", "select progress rendering", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("show-progress", no_argument, MIRA_OPT_SHOW_PROGRESS, "", NULL, NULL, "enable progress rendering", MIRA_OPTION_CATEGORY_DOWNLOAD, true)

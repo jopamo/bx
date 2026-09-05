@@ -68,6 +68,27 @@ typedef struct {
 
 typedef void (*BxFetchRunTransferObservationFn)(void* userdata, const BxFetchRunTransferObservation* observation);
 
+typedef enum {
+    BX_FETCH_RUN_OUTPUT_FETCH = 0,
+    BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER,
+    BX_FETCH_RUN_OUTPUT_INSPECTION_ERROR,
+} BxFetchRunOutputDecision;
+
+typedef struct {
+    const BxFetchPreparedUrl* target;
+    const char* output_path;
+    int depth;
+    BxFetchRunOutputDecision decision;
+    int error_number;
+} BxFetchRunOutputObservation;
+
+/*
+ * Observes the shared post-naming output decision. Returning nonzero aborts
+ * planning; set errno to retain a specific frontend failure. Inspection
+ * errors are already terminal and the callback return value is ignored.
+ */
+typedef int (*BxFetchRunOutputObservationFn)(void* userdata, const BxFetchRunOutputObservation* observation);
+
 typedef void (*BxFetchRunPrepareErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchPrepareError* error);
 typedef void (*BxFetchRunSubmitErrorFn)(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error);
 /*
@@ -138,6 +159,7 @@ typedef struct {
     BxFetchRunDocumentErrorFn on_document_error;
     BxFetchRunLinkConversionFn on_link_conversion;
     BxFetchRunSeedResultFn on_seed_result;
+    BxFetchRunOutputObservationFn on_output_observation;
     BxFetchRunTransferObservationFn on_transfer_observation;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
