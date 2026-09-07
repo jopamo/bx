@@ -82,7 +82,7 @@ MIRA_OPTION("keep-session-cookies", no_argument, MIRA_OPT_KEEP_SESSION_COOKIES, 
 MIRA_OPTION("post-data", required_argument, MIRA_OPT_POST_DATA, "", NULL, "STRING", "send an in-memory request body", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("post-file", required_argument, MIRA_OPT_POST_FILE, "", NULL, "FILE", "stream request body from FILE", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("method", required_argument, MIRA_OPT_METHOD, "", NULL, "METHOD", "set request method", MIRA_OPTION_CATEGORY_HTTP, true)
-MIRA_OPTION("content-disposition", no_argument, MIRA_OPT_CONTENT_DISPOSITION, "", NULL, NULL, "honor server-selected filenames", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("content-disposition", no_argument, MIRA_OPT_CONTENT_DISPOSITION, "", NULL, NULL, "honor server-selected filenames", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("auth-no-challenge", no_argument, MIRA_OPT_AUTH_NO_CHALLENGE, "", NULL, NULL, "send Basic credentials preemptively", MIRA_OPTION_CATEGORY_HTTP, true)
 
 MIRA_OPTION("https-only", no_argument, MIRA_OPT_HTTPS_ONLY, "", NULL, NULL, "reject plaintext and non-HTTPS URLs", MIRA_OPTION_CATEGORY_TLS, true)

@@ -588,6 +588,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case 'E':
                 config->http.adjust_extension = true;
                 break;
+            case MIRA_OPT_CONTENT_DISPOSITION:
+                config->http.content_disposition = true;
+                break;
             case MIRA_OPT_HEADER: {
                 BxFetchHttpHeaderError error = bx_fetch_config_add_http_header(config, optarg);
                 if (error != BX_FETCH_HTTP_HEADER_OK) {

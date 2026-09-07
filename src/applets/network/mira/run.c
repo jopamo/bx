@@ -668,7 +668,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_link_conversion = mira_link_conversion,
         .on_seed_result = mira_seed_result,
         .on_output_observation = (config->download.dry_run || config->download.no_clobber) ? mira_output_observation : NULL,
-        .on_response_name = config->http.adjust_extension ? mira_response_name : NULL,
+        .on_response_name = config->http.adjust_extension || config->http.content_disposition ? mira_response_name : NULL,
         .on_transfer_observation = config->logging.debug_trace ? mira_transfer_observation : NULL,
         .transport_observer =
             {
