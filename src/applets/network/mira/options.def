@@ -115,6 +115,6 @@ MIRA_OPTION("exclude-domains", required_argument, MIRA_OPT_EXCLUDE_DOMAINS, "", 
 MIRA_OPTION("span-hosts", no_argument, 'H', "H", NULL, NULL, "allow foreign-host links", MIRA_OPTION_CATEGORY_RECURSIVE, true)
 MIRA_OPTION("relative", no_argument, 'L', "L", NULL, NULL, "follow relative links only", MIRA_OPTION_CATEGORY_RECURSIVE, true)
 MIRA_OPTION("include-directories", required_argument, 'I', "I:", NULL, "LIST", "allow remote directories", MIRA_OPTION_CATEGORY_RECURSIVE, true)
-MIRA_OPTION("trust-server-names", no_argument, MIRA_OPT_TRUST_SERVER_NAMES, "", NULL, NULL, "name output from redirect targets", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("trust-server-names", no_argument, MIRA_OPT_TRUST_SERVER_NAMES, "", NULL, NULL, "use redirect basenames within the planned directory", MIRA_OPTION_CATEGORY_DIRECTORIES, true)
 MIRA_OPTION("exclude-directories", required_argument, 'X', "X:", NULL, "LIST", "deny remote directories", MIRA_OPTION_CATEGORY_RECURSIVE, true)
 MIRA_OPTION("no-parent", no_argument, MIRA_OPT_NO_PARENT, "", "-np", NULL, "remain below each seed path", MIRA_OPTION_CATEGORY_RECURSIVE, true)

@@ -35,11 +35,15 @@ void bx_mira_print_help(void) {
     size_t count = 0;
     const MiraOptionSpec* specs = bx_mira_option_specs(&count);
     for (MiraOptionCategory category = MIRA_OPTION_CATEGORY_STARTUP; category <= MIRA_OPTION_CATEGORY_UNSUPPORTED; category++) {
-        fprintf(stdout, "\n%s:\n", mira_category_heading(category));
+        bool heading_printed = false;
         for (size_t index = 0; index < count; index++) {
             const MiraOptionSpec* spec = &specs[index];
             if (spec->category != category)
                 continue;
+            if (!heading_printed) {
+                fprintf(stdout, "\n%s:\n", mira_category_heading(category));
+                heading_printed = true;
+            }
 
             char syntax[160];
             int written = 0;

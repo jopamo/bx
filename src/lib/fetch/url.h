@@ -86,6 +86,8 @@ const char* bx_fetch_prepared_url_transport(const BxFetchPreparedUrl* url);
 const char* bx_fetch_prepared_url_display(const BxFetchPreparedUrl* url);
 const char* bx_fetch_prepared_url_scheme(const BxFetchPreparedUrl* url);
 const char* bx_fetch_prepared_url_host(const BxFetchPreparedUrl* url);
+/* Borrowed canonical, percent-encoded path; excludes query and fragment. */
+const char* bx_fetch_prepared_url_path(const BxFetchPreparedUrl* url);
 int bx_fetch_prepared_url_port(const BxFetchPreparedUrl* url);
 BxFetchProtocol bx_fetch_prepared_url_protocol(const BxFetchPreparedUrl* url);
 bool bx_fetch_prepared_url_has_userinfo(const BxFetchPreparedUrl* url);

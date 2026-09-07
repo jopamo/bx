@@ -19,6 +19,7 @@ struct BxFetchPreparedUrl {
     char* display;
     char* scheme;
     char* host;
+    char* path;
     int port;
     BxFetchProtocol protocol;
     bool has_userinfo;
@@ -731,7 +732,7 @@ static BxFetchPreparedUrl* prepared_url_from_owned_canonical(char* canonical_url
     }
 
     BxFetchUrl* parsed = bx_fetch_url_parse(canonical_url);
-    if (!parsed || !parsed->scheme || !parsed->host || parsed->host[0] == '\0') {
+    if (!parsed || !parsed->scheme || !parsed->host || parsed->host[0] == '\0' || !parsed->path) {
         bx_fetch_url_free(parsed);
         free(canonical_url);
         errno = EINVAL;
@@ -770,6 +771,8 @@ static BxFetchPreparedUrl* prepared_url_from_owned_canonical(char* canonical_url
     parsed->scheme = NULL;
     prepared->host = parsed->host;
     parsed->host = NULL;
+    prepared->path = parsed->path;
+    parsed->path = NULL;
     prepared->transport = canonical_url;
     prepared->port = port;
     prepared->protocol = protocol;
@@ -814,7 +817,8 @@ BxFetchPreparedUrl* bx_fetch_prepared_url_clone(const BxFetchPreparedUrl* url) {
     clone->display = strdup(url->display);
     clone->scheme = strdup(url->scheme);
     clone->host = strdup(url->host);
-    if (!clone->transport || !clone->display || !clone->scheme || !clone->host) {
+    clone->path = strdup(url->path);
+    if (!clone->transport || !clone->display || !clone->scheme || !clone->host || !clone->path) {
         bx_fetch_prepared_url_free(clone);
         return NULL;
     }
@@ -831,6 +835,7 @@ void bx_fetch_prepared_url_free(BxFetchPreparedUrl* url) {
     free(url->display);
     free(url->scheme);
     free(url->host);
+    free(url->path);
     free(url);
 }
 
@@ -861,6 +866,10 @@ const char* bx_fetch_prepared_url_scheme(const BxFetchPreparedUrl* url) {
 
 const char* bx_fetch_prepared_url_host(const BxFetchPreparedUrl* url) {
     return url ? url->host : NULL;
+}
+
+const char* bx_fetch_prepared_url_path(const BxFetchPreparedUrl* url) {
+    return url ? url->path : NULL;
 }
 
 int bx_fetch_prepared_url_port(const BxFetchPreparedUrl* url) {

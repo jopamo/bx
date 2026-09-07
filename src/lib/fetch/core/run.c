@@ -303,10 +303,11 @@ static int run_content_disposition_basename(const struct bx_fetch_config* cfg, c
     return 0;
 }
 
-static int run_response_path(const BxFetchRun* run, const BxFetchResponse* response, const char* output_path, char** path_out) {
+static int run_response_path(const BxFetchRun* run, const BxFetchRequest* request, const BxFetchResponse* response, const char* output_path, char** path_out) {
     *path_out = NULL;
-    if (!run || !response || !output_path || (!run->cfg->http.adjust_extension && !run->cfg->http.content_disposition) || run->cfg->download.spider ||
-        (response->status_code != 200 && response->status_code != 206) || strcmp(output_path, "-") == 0 || (run->cfg->download.output_document && run->cfg->download.output_document[0] != '\0')) {
+    if (!run || !response || !output_path || (!run->cfg->http.adjust_extension && !run->cfg->http.content_disposition && !run->cfg->dirs.trust_server_names) || run->cfg->download.spider ||
+        bx_fetch_response_payload(response, bx_fetch_request_target(request)) != BX_FETCH_RESPONSE_PAYLOAD_BODY || strcmp(output_path, "-") == 0 ||
+        (run->cfg->download.output_document && run->cfg->download.output_document[0] != '\0')) {
         return 0;
     }
 
@@ -314,6 +315,15 @@ static int run_response_path(const BxFetchRun* run, const BxFetchResponse* respo
     if (run_content_disposition_basename(run->cfg, response, &server_base) != 0)
         return -1;
     const char* original_base = bx_path_basename_ptr(output_path);
+    if (run->cfg->dirs.trust_server_names && (!server_base || strcmp(server_base, original_base) == 0)) {
+        const BxFetchPreparedUrl* target = bx_fetch_response_effective_target(response);
+        if (!target)
+            target = bx_fetch_request_target(request);
+        free(server_base);
+        server_base = bx_fetch_pathmap_prepared_basename(target, run->cfg);
+        if (!server_base)
+            return -1;
+    }
     const char* base = server_base ? server_base : original_base;
     const char* content_type = response->content_type;
     if (!content_type || content_type[0] == '\0')
@@ -363,12 +373,10 @@ static void run_observe_response_name(BxFetchRun* run,
     run->frontend.on_response_name(run->frontend.userdata, &observation);
 }
 
-static int run_apply_response_name(BxFetchRun* run,
-                                   const BxFetchResponse* response,
-                                   BxFetchWriter* writer) {
+static int run_apply_response_name(BxFetchRun* run, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
     const char* original_path = bx_fetch_writer_get_path(writer);
     char* candidate_path = NULL;
-    if (run_response_path(run, response, original_path, &candidate_path) != 0) {
+    if (run_response_path(run, request, response, original_path, &candidate_path) != 0) {
         int error_number = errno;
         run_observe_response_name(run, original_path, NULL, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
         errno = error_number;
@@ -438,7 +446,7 @@ static int run_response_headers(void* userdata, const BxFetchRequest* request, c
         errno = EINVAL;
         return -1;
     }
-    if (run_apply_response_name(run, response, writer) != 0)
+    if (run_apply_response_name(run, request, response, writer) != 0)
         return -1;
     if (run->frontend.on_response_headers)
         return run->frontend.on_response_headers(run->frontend.userdata, request, response, writer);

@@ -20,8 +20,11 @@
  */
 
 #include "config.h"
+#include "url.h"
 
 char* bx_fetch_pathmap_sanitize_component(const char* component, const struct bx_fetch_config* cfg);
+/* Last nonempty path segment, or index.html for the root; always one safe leaf. */
+char* bx_fetch_pathmap_prepared_basename(const BxFetchPreparedUrl* target, const struct bx_fetch_config* cfg);
 char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_config* cfg);
 char* bx_fetch_pathmap_canonical_url_to_local(const char* canonical_url, const struct bx_fetch_config* cfg);
 
