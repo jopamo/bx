@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "lib/fetch/transfer_prepare.h"
-#include "lib/fetch/output_policy.h"
 #include "lib/fetch/metadata.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -145,7 +144,7 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY, EPROTONOSUPPORT, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }
     BxFetchProtocol protocol = bx_fetch_prepared_url_protocol(target);
-    if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && !bx_fetch_output_ftp_policy_supported(cfg)) {
+    if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && !bx_fetch_config_ftp_output_supported(cfg)) {
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY, ENOTSUP, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }
 

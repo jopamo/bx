@@ -2,7 +2,6 @@
 #include "engine_internal.h"
 #include "credentials.h"
 #include "lib/fetch/http_header.h"
-#include "lib/fetch/output_policy.h"
 #include "lib/fetch/url.h"
 #include <curl/curl.h>
 #include <errno.h>
@@ -212,7 +211,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     if (!req || !request_url)
         return -1;
     BxFetchProtocol protocol = bx_fetch_prepared_url_protocol(req->target);
-    if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && (t->resume_requested || !bx_fetch_output_ftp_policy_supported(engine->cfg))) {
+    if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && (t->resume_requested || !bx_fetch_config_ftp_output_supported(engine->cfg))) {
         if (setup_error) {
             setup_error->present = true;
             setup_error->detail = "FTP resume, timestamping, and saved headers are not supported";

@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool bx_fetch_config_ftp_output_supported(const struct bx_fetch_config* cfg) {
+    return cfg && !cfg->download.continue_download && !cfg->download.timestamping && !cfg->http.save_headers;
+}
+
 struct bx_fetch_config* bx_fetch_config_new(void) {
     struct bx_fetch_config* cfg = calloc(1, sizeof(struct bx_fetch_config));
     if (!cfg)
