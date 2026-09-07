@@ -44,8 +44,9 @@ static void wget_prepare_error(void* userdata, const BxFetchPreparedUrl* target,
     (void)target;
     (void)output_path;
     WgetRunFrontend* frontend = userdata;
-    int exit_code = error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY ? BX_FETCH_EXIT_PROTOCOL : BX_FETCH_EXIT_FILE_IO;
-    wget_record_error(frontend, exit_code, "failed to prepare output");
+    bool output_policy = error && error->kind == BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY;
+    int exit_code = output_policy || (error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY) ? BX_FETCH_EXIT_PROTOCOL : BX_FETCH_EXIT_FILE_IO;
+    wget_record_error(frontend, exit_code, output_policy ? "unsupported output policy for protocol" : "failed to prepare output");
 }
 
 static void wget_submit_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error) {

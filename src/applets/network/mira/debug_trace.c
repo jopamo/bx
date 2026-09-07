@@ -118,6 +118,8 @@ static const char* mira_submit_failure_reason(const BxFetchRunTransferObservatio
                 return "open-writer";
             case BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY:
                 return "protocol-policy";
+            case BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY:
+                return "output-policy";
             case BX_FETCH_PREPARE_FAILURE_REQUEST_HEADER:
                 return "request-header-policy";
             case BX_FETCH_PREPARE_FAILURE_METADATA:
