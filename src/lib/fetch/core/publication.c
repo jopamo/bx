@@ -463,8 +463,9 @@ BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicati
 
     StagedMapping direct = {0};
     StagedMapping redirect = {0};
+    bool has_redirect = strcmp(request_url, effective_url) != 0;
     if (stage_mapping(state, request_url, completion->output_path, BX_FETCH_MAPPING_PRIORITY_DIRECT, &direct) != 0 ||
-        (strcmp(request_url, effective_url) != 0 && stage_mapping(state, effective_url, completion->output_path, BX_FETCH_MAPPING_PRIORITY_REDIRECT, &redirect) != 0)) {
+        (has_redirect && stage_mapping(state, effective_url, completion->output_path, BX_FETCH_MAPPING_PRIORITY_REDIRECT, &redirect) != 0)) {
         staged_mapping_clear(&direct);
         staged_mapping_clear(&redirect);
         free(download->url);
@@ -475,8 +476,7 @@ BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicati
 
     size_t final_mapping_count = 0;
     size_t final_mapping_bytes = 0;
-    if (mapping_reservation(state, &direct, strcmp(request_url, effective_url) != 0 ? &redirect : NULL, &final_mapping_count, &final_mapping_bytes) != 0 ||
-        ensure_mapping_capacity(state, final_mapping_count) != 0) {
+    if (mapping_reservation(state, &direct, has_redirect ? &redirect : NULL, &final_mapping_count, &final_mapping_bytes) != 0 || ensure_mapping_capacity(state, final_mapping_count) != 0) {
         staged_mapping_clear(&direct);
         staged_mapping_clear(&redirect);
         free(download->url);
@@ -486,7 +486,7 @@ BxFetchPublicationResult bx_fetch_publication_record_completion(BxFetchPublicati
     }
 
     commit_staged_mapping(state, &direct);
-    if (strcmp(request_url, effective_url) != 0)
+    if (has_redirect)
         commit_staged_mapping(state, &redirect);
     state->mapping_count = final_mapping_count;
     state->mapping_bytes = final_mapping_bytes;
