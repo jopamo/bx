@@ -7,7 +7,8 @@
 /*
  * Linux path-resolution policy shared by filesystem and persistent-store
  * code. Every open rejects symlinks in all path components; there is no
- * weaker fallback.
+ * weaker fallback. Generic descriptor operations and child-name validation
+ * use bx fd_ops; fetch retains openat2's component and mount restrictions.
  */
 
 #include <stdbool.h>
@@ -16,7 +17,8 @@
 int bx_fetch_secure_path_check_resolution(void);
 /*
  * Opens one leaf relative to dirfd, rejecting symlinks and mount crossings.
- * `path` must be a simple name, not a multi-component path.
+ * Leaf operations require a retained directory descriptor, never AT_FDCWD.
+ * Names must be simple children, not multi-component paths or "."/"..".
  */
 int bx_fetch_secure_path_open_leaf(int dirfd, const char* path, int flags, mode_t mode);
 int bx_fetch_secure_path_rename_leaf_noreplace(int dirfd, const char* old_name, const char* new_name);

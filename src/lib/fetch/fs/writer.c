@@ -2,6 +2,7 @@
 #include "lib/fetch/secure_path.h"
 #include "lib/fetch/writer.h"
 #include "lib/fetch/xattr.h"
+#include "lib/fd_ops.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -460,10 +461,6 @@ static int validate_unlink_replacement_target(const BxFetchWriter* w, bool* shou
     return 0;
 }
 
-static bool basename_is_simple_leaf(const char* basename) {
-    return basename && basename[0] != '\0' && strcmp(basename, ".") != 0 && strcmp(basename, "..") != 0 && strchr(basename, '/') == NULL;
-}
-
 static int set_metadata_string(char** dest, const char* value) {
     char* copy = NULL;
     if (value && value[0] != '\0') {
@@ -851,7 +848,7 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
         }
     }
 
-    if (!basename_is_simple_leaf(new_basename) || strcmp(new_parent, w->parent_path ? w->parent_path : ".") != 0) {
+    if (!bx_fd_at_name_is_child(new_basename) || strcmp(new_parent, w->parent_path ? w->parent_path : ".") != 0) {
         free(new_parent);
         free(new_basename);
         errno = EXDEV;
