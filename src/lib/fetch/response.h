@@ -77,6 +77,21 @@ typedef struct {
     BxFetchOutputState output_state;
 } BxFetchResponse;
 
+typedef enum {
+    BX_FETCH_RESPONSE_PAYLOAD_NONE = 0,
+    BX_FETCH_RESPONSE_PAYLOAD_BODY,
+    BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED,
+} BxFetchResponsePayload;
+
+/*
+ * Classifies protocol status without conflating HTTP and FTP reply codes.
+ * The effective prepared target is authoritative; the request target is used
+ * only before an effective target has been reported. Unknown protocols/statuses
+ * confer no publication authority. Transport success and writer commit must
+ * still be established separately.
+ */
+BxFetchResponsePayload bx_fetch_response_payload(const BxFetchResponse* response, const BxFetchPreparedUrl* request_target);
+
 BxFetchResponse* bx_fetch_response_new(void);
 void bx_fetch_response_free(BxFetchResponse* resp);
 /*

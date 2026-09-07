@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/transfer_prepare.h"
+#include "lib/fetch/output_policy.h"
 #include "lib/fetch/metadata.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -143,6 +144,10 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
     if (protocol_decision != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY, EPROTONOSUPPORT, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }
+    BxFetchProtocol protocol = bx_fetch_prepared_url_protocol(target);
+    if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && !bx_fetch_output_ftp_policy_supported(cfg)) {
+        return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_REQUEST, ENOTSUP, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
+    }
 
     BxFetchTransferCandidate* candidate = calloc(1, sizeof(*candidate));
     if (!candidate) {
@@ -210,7 +215,7 @@ static int candidate_headers_callback(void* userdata, const BxFetchRequest* requ
         errno = EINVAL;
         return -1;
     }
-    if (response->status_code == 304)
+    if (bx_fetch_response_payload(response, bx_fetch_request_target(request)) == BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED)
         return bx_fetch_transfer_stage_not_modified(callbacks->cfg, request, response, writer);
     if (callbacks->headers_callback && callbacks->headers_callback(callbacks->userdata, request, response, writer) != 0)
         return -1;

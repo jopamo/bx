@@ -68,7 +68,7 @@ int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const Bx
     }
     if (cfg->download.spider)
         return 0;
-    if (response->status_code != 200 && response->status_code != 206) {
+    if (bx_fetch_response_payload(response, bx_fetch_request_target(request)) != BX_FETCH_RESPONSE_PAYLOAD_BODY) {
         errno = EINVAL;
         return -1;
     }
@@ -101,7 +101,7 @@ int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const Bx
 }
 
 int bx_fetch_transfer_stage_not_modified(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer) {
-    if (!cfg || !request || !response || !writer || response->status_code != 304) {
+    if (!cfg || !request || !response || !writer || bx_fetch_response_payload(response, bx_fetch_request_target(request)) != BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED) {
         errno = EINVAL;
         return -1;
     }
