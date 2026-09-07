@@ -248,7 +248,7 @@ static bool completion_can_publish(const BxFetchPublicationState* state, const B
         return false;
     if (completion->result != BX_FETCH_OK || state->cfg->download.spider || strcmp(completion->output_path, "-") == 0)
         return false;
-    if (completion->response->status_code != 200 && completion->response->status_code != 206 && completion->response->status_code != 304)
+    if (bx_fetch_response_payload(completion->response, bx_fetch_request_target(completion->request)) == BX_FETCH_RESPONSE_PAYLOAD_NONE)
         return false;
     return completion->response->output_state == BX_FETCH_OUTPUT_STATE_COMMITTED || completion->response->output_state == BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED ||
            completion->response->output_state == BX_FETCH_OUTPUT_STATE_UNCHANGED;

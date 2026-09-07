@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "engine_internal.h"
+#include "lib/fetch/output_policy.h"
 #include "lib/fetch/resume_validation.h"
 #include "lib/fetch/url.h"
 #include <curl/curl.h>
@@ -151,6 +152,32 @@ static bool bx_fetch_transfer_refresh_effective_url(BxFetchTransfer* t) {
     return false;
 }
 
+static bool transfer_uses_ftp(const BxFetchTransfer* transfer) {
+    const BxFetchPreparedUrl* target = transfer->pending_redirect_target ? transfer->pending_redirect_target : transfer->current_target;
+    BxFetchProtocol protocol = bx_fetch_prepared_url_protocol(target);
+    return protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS;
+}
+
+static void advance_redirect_target(BxFetchTransfer* transfer) {
+    if (!transfer->pending_redirect_target)
+        return;
+    bx_fetch_prepared_url_free(transfer->current_target);
+    transfer->current_target = transfer->pending_redirect_target;
+    transfer->pending_redirect_target = NULL;
+}
+
+static void reset_response_state(BxFetchTransfer* transfer) {
+    bx_fetch_response_reset_headers(transfer->resp);
+    save_headers_reset(transfer);
+    transfer->resume_needs_content_range = false;
+    transfer->resume_saw_content_range = false;
+    transfer->discard_body = false;
+    transfer->resume_restart_validation_pending = false;
+    transfer->response_body_bytes = 0;
+    transfer->progress_resume_offset = 0;
+    transfer->response_headers_finalized = false;
+}
+
 size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     BxFetchTransfer* t = userdata;
     if (size != 0 && nmemb > SIZE_MAX / size) {
@@ -159,6 +186,23 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     size_t total = size * nmemb;
     if (!t || total == 0)
         return total;
+
+    /*
+     * FTP control replies are bounded observations, not HTTP headers. In
+     * particular, server text must not acquire HTTP naming, redirect, or
+     * resume authority. FTP staging occurs after the final transfer reply.
+     */
+    if (transfer_uses_ftp(t)) {
+        bool starts_response = t->pending_redirect_target != NULL;
+        advance_redirect_target(t);
+        if (starts_response)
+            reset_response_state(t);
+        if (!account_response_header_line(t, total, starts_response))
+            return 0;
+        if (t->engine && t->engine->observer.on_response_header)
+            t->engine->observer.on_response_header(t->engine->observer.userdata, t->req, t->resp, ptr, total);
+        return total;
+    }
 
     bool capture_headers = t->engine && t->engine->cfg->http.save_headers && !t->engine->cfg->download.spider;
 
@@ -228,18 +272,13 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     if (starts_response) {
-        if (t->pending_redirect_target) {
-            bx_fetch_prepared_url_free(t->current_target);
-            t->current_target = t->pending_redirect_target;
-            t->pending_redirect_target = NULL;
-        }
+        advance_redirect_target(t);
 
         int status = parsed_status;
         if (status > 0) {
             t->resp->status_code = status;
-            bx_fetch_response_reset_headers(t->resp);
+            reset_response_state(t);
             if (capture_headers) {
-                save_headers_reset(t);
                 if (save_headers_append(t, ptr, total) != 0) {
                     int append_error = errno;
                     free(line);
@@ -247,14 +286,6 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
                     return handle_save_headers_append_failure(t);
                 }
             }
-
-            t->resume_needs_content_range = false;
-            t->resume_saw_content_range = false;
-            t->discard_body = false;
-            t->resume_restart_validation_pending = false;
-            t->response_body_bytes = 0;
-            t->progress_resume_offset = 0;
-            t->response_headers_finalized = false;
 
             if (t->resume_requested && status >= 200) {
                 BxFetchResumeAction action = bx_fetch_resume_action_for_status(status);
@@ -641,16 +672,21 @@ static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode
         return BX_FETCH_ERROR_HTTP;
 
     BxFetchError result = bx_fetch_map_curl_result(curl_result);
+    if (result == BX_FETCH_OK && transfer_uses_ftp(transfer) && !transfer->engine->cfg->download.spider &&
+        bx_fetch_response_payload(transfer->resp, bx_fetch_request_target(transfer->req)) != BX_FETCH_RESPONSE_PAYLOAD_BODY)
+        return BX_FETCH_ERROR_NETWORK;
     if (result == BX_FETCH_OK && status >= 400)
         return BX_FETCH_ERROR_HTTP;
     return result;
 }
 
-static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURLcode curl_result, int status) {
+static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURLcode curl_result) {
     bool transport_succeeded = curl_result == CURLE_OK && !transfer->url_canonicalization_failed;
+    BxFetchResponsePayload payload = bx_fetch_response_payload(transfer->resp, bx_fetch_request_target(transfer->req));
+    bool ftp = transfer_uses_ftp(transfer);
     bool commit = false;
 
-    if (transport_succeeded && (status == 200 || status == 206)) {
+    if (transport_succeeded && payload == BX_FETCH_RESPONSE_PAYLOAD_BODY && !(ftp && engine->cfg->download.spider)) {
         if (transfer->resume_restart_validation_pending && !bx_fetch_resume_restart_preserves_verified_prefix(transfer->resume_from, (long long)transfer->response_body_bytes)) {
             transfer->resume_validation_failed = true;
         }
@@ -659,12 +695,32 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
         }
     }
 
-    if (commit && (status == 200 || status == 206) && !transfer->discard_body && !transfer->response_headers_finalized) {
+    if (commit && ftp) {
+        /*
+         * Unlike HTTP, FTP has no pre-body header boundary. The writer is
+         * still private here; run the same staging callback before close.
+         * HTTP Range/conditional handling is not an FTP resume contract.
+         */
+        if (transfer->resume_requested || !bx_fetch_output_ftp_policy_supported(engine->cfg)) {
+            errno = ENOTSUP;
+            bx_fetch_transfer_mark_io_failure(transfer, ENOTSUP);
+            commit = false;
+        }
+        else if (transfer->headers_cb && transfer->headers_cb(transfer->callback_userdata, transfer->req, transfer->resp, transfer->writer) != 0) {
+            bx_fetch_transfer_mark_io_failure(transfer, EIO);
+            commit = false;
+        }
+        else {
+            transfer->response_headers_finalized = true;
+        }
+    }
+
+    if (commit && !transfer->discard_body && !transfer->response_headers_finalized) {
         engine->invariant_failed = true;
         commit = false;
     }
 
-    if (transport_succeeded && status == 304) {
+    if (transport_succeeded && payload == BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED) {
         if (bx_fetch_transfer_close_writer_metadata_only(transfer) != 0)
             bx_fetch_transfer_mark_io_failure(transfer, EIO);
     }
@@ -711,7 +767,7 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         bx_fetch_progress_emit(transfer, total, downloaded);
     }
 
-    if (!finish_writer(engine, transfer, message->data.result, status))
+    if (!finish_writer(engine, transfer, message->data.result))
         invariant_ok = false;
     populate_terminal_response(transfer, message->data.result);
 

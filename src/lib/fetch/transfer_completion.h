@@ -28,8 +28,10 @@ typedef void (*BxFetchTransferCompletionCallback)(void* userdata, const BxFetchT
 
 /*
  * Applies shared response mechanics to the still-private writer after applet
- * header policy has selected its final path. Payload, sidecar metadata, mtime,
- * and xattrs are then committed by one writer close.
+ * response policy has selected its final path. HTTP 200/206 and successful
+ * FTP/FTPS transfer replies share this path; protocol status is classified by
+ * bx_fetch_response_payload(). Payload, sidecar metadata, mtime, and xattrs
+ * are then committed by one writer close.
  */
 int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchWriter* writer);
 /*
