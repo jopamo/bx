@@ -2,6 +2,7 @@
 #include "engine_internal.h"
 #include "lib/fetch/resume_validation.h"
 #include "lib/fetch/url.h"
+#include "lib/time_parse.h"
 #include <curl/curl.h>
 #include <errno.h>
 #include <stdint.h>
@@ -546,8 +547,11 @@ static int timer_callback(CURLM* multi, long timeout_ms, void* userdata) {
 
     struct itimerspec timer = {0};
     if (timeout_ms > 0) {
-        timer.it_value.tv_sec = timeout_ms / 1000;
-        timer.it_value.tv_nsec = (timeout_ms % 1000) * 1000000;
+        if (!bx_time_milliseconds_to_timespec(timeout_ms, &timer.it_value)) {
+            engine->invariant_failed = true;
+            errno = EOVERFLOW;
+            return -1;
+        }
     }
     else if (timeout_ms == 0) {
         /* A zero it_value disarms timerfd, so use its smallest delay. */

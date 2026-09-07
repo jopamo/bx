@@ -14,6 +14,10 @@
  *
  * Preconditions:
  * - Callers should pass CLOCK_MONOTONIC timestamps to preserve refill invariants.
+ *
+ * Refill policy:
+ * - Backward or malformed refill timestamps earn no tokens and do not advance
+ *   the refill anchor; consumption still charges the bucket.
  */
 
 #include <stdbool.h>

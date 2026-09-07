@@ -32,6 +32,7 @@ int bx_fetch_transfer_close_writer(BxFetchTransfer* transfer);
 int bx_fetch_transfer_close_writer_metadata_only(BxFetchTransfer* transfer);
 void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* transfer, BxFetchError result);
 double bx_fetch_monotonic_seconds(void);
+/* Nonpositive delays are no-ops; unrepresentable delays fail with EINVAL. */
 int bx_fetch_sleep_for_seconds(double seconds);
 void bx_fetch_record_downloaded_bytes(BxFetchTransfer* transfer, size_t total);
 void bx_fetch_transfer_mark_io_failure(BxFetchTransfer* transfer, int fallback_error_number);

@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "engine_internal.h"
+#include "lib/time_parse.h"
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -128,21 +129,21 @@ void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* tr
 
 double bx_fetch_monotonic_seconds(void) {
     struct timespec timestamp;
-    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0)
+    double seconds;
+    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0 || !bx_time_timespec_to_seconds_double(&timestamp, &seconds))
         return 0.0;
-    return (double)timestamp.tv_sec + ((double)timestamp.tv_nsec / 1000000000.0);
+    return seconds;
 }
 
 int bx_fetch_sleep_for_seconds(double seconds) {
     if (seconds <= 0.0)
         return 0;
 
-    struct timespec delay = {
-        .tv_sec = (time_t)seconds,
-        .tv_nsec = (long)((seconds - (double)((time_t)seconds)) * 1000000000.0),
-    };
-    if (delay.tv_nsec < 0)
-        delay.tv_nsec = 0;
+    struct timespec delay;
+    if (!bx_time_seconds_to_timespec(seconds, &delay)) {
+        errno = EINVAL;
+        return -1;
+    }
 
     while (nanosleep(&delay, &delay) == -1) {
         if (errno != EINTR)
