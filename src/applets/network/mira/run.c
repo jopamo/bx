@@ -223,8 +223,9 @@ static void mira_response_name(void* userdata, const BxFetchRunResponseNameObser
 
 static void mira_prepare_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchPrepareError* error) {
     MiraRunFrontend* frontend = userdata;
-    BxFetchErrorClass error_class = error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY ? BX_FETCH_ERROR_CLASS_POLICY : BX_FETCH_ERROR_CLASS_FILESYSTEM;
-    mira_run_record_error(frontend, error_class, "failed to prepare transfer", target, output_path, error ? error->error_number : EIO);
+    bool output_policy = error && error->kind == BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY;
+    BxFetchErrorClass error_class = output_policy || (error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY) ? BX_FETCH_ERROR_CLASS_POLICY : BX_FETCH_ERROR_CLASS_FILESYSTEM;
+    mira_run_record_error(frontend, error_class, output_policy ? "unsupported output policy for protocol" : "failed to prepare transfer", target, output_path, error ? error->error_number : EIO);
 }
 
 static void mira_submit_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error) {
