@@ -58,8 +58,8 @@ void bx_mira_print_help(void) {
 
     fputs(
         "\nFTP supports direct downloads and spider checks. FTPS is not yet "
-        "supported. Set --no-proxy when FTP proxy environment variables are "
-        "present; FTP through proxies is not supported.\n"
+        "supported. Set --no-proxy when FTP proxy environment variables or "
+        "proxy credentials are present; FTP through proxies is not supported.\n"
         "FTP credentials override generic and URL credentials as a pair. "
         "An omitted component is empty; empty option values clear that setting.\n"
         "FTP resume, timestamping, and saved HTTP headers are rejected.\n"
