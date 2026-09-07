@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 #include "lib/fetch/run.h"
+#include "lib/fetch/http_header.h"
+#include "lib/fetch/pathmap.h"
 #include "lib/fetch/resource_limits.h"
 #include "lib/fetch/response.h"
 #include "lib/fetch/writer.h"
@@ -254,38 +256,95 @@ static bool run_path_has_html_extension(const char* path) {
             strcasecmp(extension, ".xht") == 0);
 }
 
-static char* run_adjusted_response_path(const BxFetchRun* run,
-                                        const BxFetchResponse* response,
-                                        const char* output_path) {
-    if (!run || !response || !output_path ||
-        !run->cfg->http.adjust_extension ||
-        run->cfg->download.spider ||
-        (response->status_code != 200 && response->status_code != 206) ||
-        (run->cfg->download.output_document && run->cfg->download.output_document[0] != '\0') ||
-        run_path_has_html_extension(output_path)) {
-        return NULL;
+static int run_content_disposition_basename(const struct bx_fetch_config* cfg, const BxFetchResponse* response, char** basename_out) {
+    *basename_out = NULL;
+    if (!cfg->http.content_disposition)
+        return 0;
+
+    const char* value = NULL;
+    for (size_t i = 0; i < response->header_count; i++) {
+        const BxFetchHeader* header = &response->headers[i];
+        if (!header->name || !header->value || strcasecmp(header->name, "Content-Disposition") != 0)
+            continue;
+        /* Ambiguous fields confer no naming authority, even if identical. */
+        if (value)
+            return 0;
+        value = header->value;
+    }
+    if (!value)
+        return 0;
+
+    char* filename = NULL;
+    BxFetchContentDispositionResult result = bx_fetch_http_content_disposition_filename(value, &filename);
+    if (result == BX_FETCH_CONTENT_DISPOSITION_OUT_OF_MEMORY) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (result != BX_FETCH_CONTENT_DISPOSITION_FILENAME)
+        return 0;
+
+    /* A server may select only a leaf within the already planned directory. */
+    const char* base = filename;
+    for (const char* cursor = filename; *cursor; cursor++) {
+        if (*cursor == '/' || *cursor == '\\')
+            base = cursor + 1;
+    }
+    if (*base == '\0' || strcmp(base, ".") == 0 || strcmp(base, "..") == 0) {
+        free(filename);
+        return 0;
+    }
+    *basename_out = bx_fetch_pathmap_sanitize_component(base, cfg);
+    int error_number = errno;
+    free(filename);
+    if (!*basename_out) {
+        errno = error_number ? error_number : ENOMEM;
+        return -1;
+    }
+    return 0;
+}
+
+static int run_response_path(const BxFetchRun* run, const BxFetchResponse* response, const char* output_path, char** path_out) {
+    *path_out = NULL;
+    if (!run || !response || !output_path || (!run->cfg->http.adjust_extension && !run->cfg->http.content_disposition) || run->cfg->download.spider ||
+        (response->status_code != 200 && response->status_code != 206) || strcmp(output_path, "-") == 0 || (run->cfg->download.output_document && run->cfg->download.output_document[0] != '\0')) {
+        return 0;
     }
 
+    char* server_base = NULL;
+    if (run_content_disposition_basename(run->cfg, response, &server_base) != 0)
+        return -1;
+    const char* original_base = bx_path_basename_ptr(output_path);
+    const char* base = server_base ? server_base : original_base;
     const char* content_type = response->content_type;
     if (!content_type || content_type[0] == '\0')
         content_type = bx_fetch_response_header_value(response, "Content-Type");
-    if (!bx_fetch_content_type_equals(content_type, "text/html"))
-        return NULL;
-
-    size_t path_length = 0;
-    static const char suffix[] = ".html";
-    if (!bx_fetch_resource_bounded_strlen(output_path, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &path_length) ||
-        path_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - (sizeof(suffix) - 1u)) {
-        errno = EFBIG;
-        return NULL;
+    const char* suffix = run->cfg->http.adjust_extension && !run_path_has_html_extension(base) && bx_fetch_content_type_equals(content_type, "text/html") ? ".html" : "";
+    if (!*suffix && strcmp(base, original_base) == 0) {
+        free(server_base);
+        return 0;
     }
 
-    char* adjusted = malloc(path_length + sizeof(suffix));
-    if (!adjusted)
-        return NULL;
-    memcpy(adjusted, output_path, path_length);
-    memcpy(adjusted + path_length, suffix, sizeof(suffix));
-    return adjusted;
+    size_t prefix_length = (size_t)(original_base - output_path);
+    size_t base_length = 0;
+    size_t suffix_length = strlen(suffix);
+    if (!bx_fetch_resource_bounded_strlen(base, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &base_length) || base_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - suffix_length ||
+        prefix_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - suffix_length - base_length) {
+        free(server_base);
+        errno = EFBIG;
+        return -1;
+    }
+
+    char* candidate = malloc(prefix_length + base_length + suffix_length + 1u);
+    if (!candidate) {
+        free(server_base);
+        return -1;
+    }
+    memcpy(candidate, output_path, prefix_length);
+    memcpy(candidate + prefix_length, base, base_length);
+    memcpy(candidate + prefix_length + base_length, suffix, suffix_length + 1u);
+    free(server_base);
+    *path_out = candidate;
+    return 0;
 }
 
 static void run_observe_response_name(BxFetchRun* run,
@@ -308,18 +367,15 @@ static int run_apply_response_name(BxFetchRun* run,
                                    const BxFetchResponse* response,
                                    BxFetchWriter* writer) {
     const char* original_path = bx_fetch_writer_get_path(writer);
-    errno = 0;
-    char* candidate_path = run_adjusted_response_path(run, response, original_path);
-    if (!candidate_path) {
-        if (errno != 0) {
-            int error_number = errno;
-            run_observe_response_name(
-                run, original_path, NULL, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
-            errno = error_number;
-            return -1;
-        }
-        return 0;
+    char* candidate_path = NULL;
+    if (run_response_path(run, response, original_path, &candidate_path) != 0) {
+        int error_number = errno;
+        run_observe_response_name(run, original_path, NULL, BX_FETCH_RUN_RESPONSE_NAME_FAILED, error_number);
+        errno = error_number;
+        return -1;
     }
+    if (!candidate_path)
+        return 0;
 
     /*
      * Retargeting replaces the writer-owned path. Preserve the original for

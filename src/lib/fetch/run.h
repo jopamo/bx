@@ -11,6 +11,11 @@
  * state. Frontends retain policy: CLI parsing, initial output naming,
  * diagnostics, link extraction decisions, and exit mapping. Configured
  * response-name transformations and secure writer retargeting stay shared.
+ * Content-Disposition accepts only one unambiguous field, strips directory
+ * components, and uses shared path sanitization before extension adjustment.
+ * Invalid names retain the planned path; internal errors abort the candidate.
+ * Explicit output documents are never renamed, and selected names cannot
+ * overwrite existing payloads or sidecars.
  * The immutable config and all callback userdata must outlive the run.
  * Callbacks must not recursively execute, cancel, or free the run.
  * Committed documents are snapshotted into a bounded queue during terminal
