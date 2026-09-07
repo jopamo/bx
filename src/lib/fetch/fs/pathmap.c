@@ -353,58 +353,38 @@ static char* build_directory_part(const char* path, int cut_dirs, const struct b
     return joined;
 }
 
-static char* extract_filename_from_url(const char* url, const struct bx_fetch_config* cfg) {
-    BxFetchUrl* mu = bx_fetch_url_parse(url);
-    if (!mu)
+static char* path_basename(const char* path, size_t length, const char* default_page, const struct bx_fetch_config* cfg) {
+    const char* slash = path ? memrchr(path, '/', length) : NULL;
+    const char* base = slash ? slash + 1 : path;
+    size_t base_length = base ? length - (size_t)(base - path) : 0;
+    if (base_length == 0)
+        return bx_fetch_pathmap_sanitize_component(default_page, cfg);
+    char* filename = strndup(base, base_length);
+    if (!filename)
         return NULL;
-
-    char* filename = NULL;
-    const char* default_page = default_page_name(cfg);
-    if (mu->path) {
-        // Strip trailing slash if present
-        size_t len = strlen(mu->path);
-        if (len > 0 && mu->path[len - 1] == '/') {
-            filename = strdup(default_page);
-        }
-        else {
-            char* path_copy = strdup(mu->path);
-            if (!path_copy) {
-                bx_fetch_url_free(mu);
-                return NULL;
-            }
-            const char* p = strrchr(path_copy, '/');
-            if (p && *(p + 1) != '\0') {
-                filename = strdup(p + 1);
-            }
-            else if (p == NULL && path_copy[0] != '\0') {
-                // No slash, but path not empty
-                filename = strdup(path_copy);
-            }
-            free(path_copy);
-        }
-    }
-
-    if (!filename) {
-        filename = strdup(default_page);
-    }
-    if (!filename) {
-        bx_fetch_url_free(mu);
-        return NULL;
-    }
-
     char* sanitized = bx_fetch_pathmap_sanitize_component(filename, cfg);
     free(filename);
-    if (!sanitized) {
-        bx_fetch_url_free(mu);
+    if (!sanitized)
         return NULL;
-    }
     if (sanitized[0] == '\0') {
         free(sanitized);
         sanitized = bx_fetch_pathmap_sanitize_component(default_page, cfg);
     }
 
-    bx_fetch_url_free(mu);
     return sanitized;
+}
+
+char* bx_fetch_pathmap_prepared_basename(const BxFetchPreparedUrl* target, const struct bx_fetch_config* cfg) {
+    if (!target || !cfg) {
+        errno = EINVAL;
+        return NULL;
+    }
+    const char* path = bx_fetch_prepared_url_path(target);
+    size_t length = strlen(path);
+    /* Server naming uses the last nonempty segment, even for a directory URL. */
+    while (length > 0 && path[length - 1] == '/')
+        length--;
+    return path_basename(path, length, default_page_name(NULL), cfg);
 }
 
 char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_config* cfg) {
@@ -431,14 +411,14 @@ char* bx_fetch_pathmap_canonical_url_to_local(const char* url, const struct bx_f
     bool flatten_layout = cfg->dirs.no_directories || (!cfg->recursive.recursive && !cfg->dirs.force_directories);
 
     if (flatten_layout) {
-        local_path = extract_filename_from_url(url, cfg);
+        local_path = path_basename(mu->path, mu->path ? strlen(mu->path) : 0, default_page_name(cfg), cfg);
     }
     else {
         // Build the directory structure
         char* host_part = NULL;
         char* proto_part = NULL;
         char* dir_part = NULL;
-        char* file_part = extract_filename_from_url(url, cfg);
+        char* file_part = path_basename(mu->path, mu->path ? strlen(mu->path) : 0, default_page_name(cfg), cfg);
         if (!file_part) {
             bx_fetch_url_free(mu);
             return NULL;

@@ -576,6 +576,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_CUT_DIRS:
                 MIRA_PARSE_INT(config->dirs.cut_dirs, 0, "cut-dirs");
                 break;
+            case MIRA_OPT_TRUST_SERVER_NAMES:
+                config->dirs.trust_server_names = true;
+                break;
             case MIRA_OPT_HTTP_USER:
                 MIRA_SET_STRING(config->http.http_user);
                 break;
