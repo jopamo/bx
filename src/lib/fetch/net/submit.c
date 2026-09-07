@@ -223,6 +223,16 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     if (prepare_bx_fetch_request_headers(engine, t, setup_error) != 0) {
         return -1;
     }
+    BxFetchNetTargetPolicy target_policy = bx_fetch_net_target_policy(engine->cfg, req->target);
+    if (target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
+        if (setup_error) {
+            setup_error->present = true;
+            setup_error->detail = bx_fetch_net_target_policy_reason(target_policy);
+            setup_error->error_number = ENOTSUP;
+        }
+        errno = ENOTSUP;
+        return -1;
+    }
     if (set_protocol_restrictions(curl, engine->cfg->https.https_only, setup_error) != 0) {
         return -1;
     }
@@ -456,17 +466,11 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
             return -1;
     }
 
-    // FTP options
-    BxFetchProtocol request_protocol = bx_fetch_prepared_url_protocol(req->target);
-    if (request_protocol == BX_FETCH_PROTOCOL_FTP || request_protocol == BX_FETCH_PROTOCOL_FTPS) {
-        if (engine->cfg->ftp.no_passive_ftp) {
-            SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTPPORT, "-");  // Default behavior for active
-        }
-        else {
-            // Default is passive, but we can ensure EPSV is on
-            SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTP_USE_EPSV, 1L);
-        }
-    }
+    /* These options must also govern an admitted HTTP-to-FTP redirect. */
+    if (engine->cfg->ftp.no_passive_ftp)
+        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTPPORT, "-");
+    else
+        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTP_USE_EPSV, 1L);
 
     if (engine->cfg->download.spider) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOBODY, 1L);

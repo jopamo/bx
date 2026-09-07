@@ -113,6 +113,12 @@ static BxFetchPreparedUrl* resolve_redirect_target(BxFetchTransfer* t, const cha
         errno = EPROTONOSUPPORT;
         return NULL;
     }
+    t->redirect_target_policy = bx_fetch_net_target_policy(t->engine ? t->engine->cfg : NULL, target);
+    if (t->redirect_target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
+        bx_fetch_prepared_url_free(target);
+        errno = ENOTSUP;
+        return NULL;
+    }
     return target;
 }
 
@@ -393,6 +399,9 @@ size_t bx_fetch_write_callback(char* ptr, size_t size, size_t nmemb, void* userd
     size_t total = size * nmemb;
     if (!t || !t->engine || t->engine->cancelled || !t->writer)
         return 0;
+    /* libcurl sends synthetic FTP NOBODY headers to the write callback too. */
+    if (t->engine->cfg->download.spider)
+        return total;
 
     if (t->engine && t->engine->rate_limiter.rate_bytes_per_sec > 0) {
         struct timespec now;
@@ -641,11 +650,18 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
                                                                                                                : os_error_number;
     transfer->resp->request_body_io_failed = transfer->request_body_io_failed;
     transfer->resp->transport_error_kind = bx_fetch_classify_curl_transport_error(curl_result);
+    if (transfer_uses_ftp(transfer) && transfer->resp->status_code >= 400 && transfer->resp->status_code < 600 &&
+        (transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NONE || transfer->resp->transport_error_kind == BX_FETCH_TRANSPORT_ERROR_NETWORK)) {
+        transfer->resp->transport_error_kind = transfer->resp->status_code == 530 ? BX_FETCH_TRANSPORT_ERROR_AUTH : BX_FETCH_TRANSPORT_ERROR_SERVER;
+    }
 
     free(transfer->resp->transport_error_detail);
     transfer->resp->transport_error_detail = NULL;
     const char* detail = NULL;
-    if (transfer->url_canonicalization_failed) {
+    if (transfer->redirect_target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
+        detail = bx_fetch_net_target_policy_reason(transfer->redirect_target_policy);
+    }
+    else if (transfer->url_canonicalization_failed) {
         detail = transfer->redirect_protocol_unsupported ? "redirect URL uses an unsupported protocol" : "effective or redirect URL failed canonicalization";
     }
     else if (curl_result != CURLE_OK) {

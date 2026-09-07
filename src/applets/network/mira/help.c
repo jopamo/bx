@@ -14,6 +14,8 @@ static const char* mira_category_heading(MiraOptionCategory category) {
             return "HTTP";
         case MIRA_OPTION_CATEGORY_TLS:
             return "HTTPS / TLS";
+        case MIRA_OPTION_CATEGORY_FTP:
+            return "FTP";
         case MIRA_OPTION_CATEGORY_RECURSIVE:
             return "Recursive retrieval";
         case MIRA_OPTION_CATEGORY_UNSUPPORTED:
@@ -55,6 +57,12 @@ void bx_mira_print_help(void) {
     }
 
     fputs(
+        "\nFTP supports direct downloads and spider checks. FTPS is not yet "
+        "supported. Set --no-proxy when FTP proxy environment variables are "
+        "present; FTP through proxies is not supported.\n"
+        "FTP credentials override generic and URL credentials as a pair. "
+        "An omitted component is empty; empty option values clear that setting.\n"
+        "FTP resume, timestamping, and saved HTTP headers are rejected.\n"
         "\nConfiguration compatibility flags such as --config, --no-config, "
         "and --execute are rejected.\n",
         stdout);

@@ -39,7 +39,7 @@ static const BxFetchExitCodeInfo k_exit_code_table[] = {
     {
         .code = BX_FETCH_EXIT_SERVER,
         .label = "server",
-        .description = "HTTP server returned a terminal 4xx/5xx response",
+        .description = "server returned a terminal 4xx/5xx response",
     },
     {
         .code = BX_FETCH_EXIT_POLICY,
@@ -86,6 +86,8 @@ int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_stat
                 return BX_FETCH_EXIT_AUTH;
             }
             return BX_FETCH_EXIT_SERVER;
+        case BX_FETCH_ERROR_CLASS_FTP:
+            return http_status == 530 ? BX_FETCH_EXIT_AUTH : BX_FETCH_EXIT_SERVER;
         case BX_FETCH_ERROR_CLASS_CURL_TRANSPORT:
             return BX_FETCH_EXIT_NETWORK;
         case BX_FETCH_ERROR_CLASS_INTERNAL:
@@ -123,6 +125,10 @@ int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErr
     }
 
     switch (transport_kind) {
+        case BX_FETCH_TRANSPORT_ERROR_AUTH:
+            return BX_FETCH_EXIT_AUTH;
+        case BX_FETCH_TRANSPORT_ERROR_SERVER:
+            return BX_FETCH_EXIT_SERVER;
         case BX_FETCH_TRANSPORT_ERROR_TLS_RETRYABLE:
         case BX_FETCH_TRANSPORT_ERROR_TLS_FATAL:
             return BX_FETCH_EXIT_SSL;

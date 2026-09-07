@@ -217,7 +217,8 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
     int status = response ? response->status_code : 0;
     BxFetchOutputState output_state = response ? response->output_state : BX_FETCH_OUTPUT_STATE_NONE;
     bool committed = output_state == BX_FETCH_OUTPUT_STATE_COMMITTED || output_state == BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED || output_state == BX_FETCH_OUTPUT_STATE_UNCHANGED;
-    if (config->download.metadata_sidecars && output_state == BX_FETCH_OUTPUT_STATE_COMMITTED && (status == 200 || status == 206)) {
+    if (config->download.metadata_sidecars && output_state == BX_FETCH_OUTPUT_STATE_COMMITTED &&
+        bx_fetch_response_payload(response, bx_fetch_request_target(transfer->request)) == BX_FETCH_RESPONSE_PAYLOAD_BODY) {
         mira_debug_trace_transfer_prefix(trace, "commit", "metadata-staged", completion->transfer_id, display_url, transfer->output_path);
         fputs("}\n", trace->stream);
     }

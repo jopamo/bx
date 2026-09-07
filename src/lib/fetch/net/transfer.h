@@ -61,6 +61,7 @@ typedef struct BxFetchTransfer {
     bool redirect_policy_rejected;
     bool url_canonicalization_failed;
     bool redirect_protocol_unsupported;
+    BxFetchNetTargetPolicy redirect_target_policy;
 
     BxFetchTransferHeadersCallback headers_cb;
     BxFetchTransferCallback callback;

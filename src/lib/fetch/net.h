@@ -32,6 +32,21 @@ typedef struct {
     int error_number;
 } BxFetchNetSetupError;
 
+typedef enum {
+    BX_FETCH_NET_TARGET_ALLOWED = 0,
+    BX_FETCH_NET_TARGET_INVALID,
+    BX_FETCH_NET_TARGET_FTPS_UNSUPPORTED,
+    BX_FETCH_NET_TARGET_FTP_PROXY_UNSUPPORTED,
+} BxFetchNetTargetPolicy;
+
+/*
+ * Admission uses prepared protocol state and the same proxy environment
+ * selection as transport setup. Call before candidate creation, submission,
+ * and following redirects. Returned reasons are static, secret-free text.
+ */
+BxFetchNetTargetPolicy bx_fetch_net_target_policy(const struct bx_fetch_config* cfg, const BxFetchPreparedUrl* target);
+const char* bx_fetch_net_target_policy_reason(BxFetchNetTargetPolicy policy);
+
 typedef struct {
     bool total_known;
     int percent;

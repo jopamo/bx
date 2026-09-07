@@ -225,7 +225,8 @@ static void mira_prepare_error(void* userdata, const BxFetchPreparedUrl* target,
     MiraRunFrontend* frontend = userdata;
     bool output_policy = error && error->kind == BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY;
     BxFetchErrorClass error_class = output_policy || (error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY) ? BX_FETCH_ERROR_CLASS_POLICY : BX_FETCH_ERROR_CLASS_FILESYSTEM;
-    mira_run_record_error(frontend, error_class, output_policy ? "unsupported output policy for protocol" : "failed to prepare transfer", target, output_path, error ? error->error_number : EIO);
+    const char* summary = error && error->detail ? error->detail : output_policy ? "unsupported output policy for protocol" : "failed to prepare transfer";
+    mira_run_record_error(frontend, error_class, summary, target, output_path, error ? error->error_number : EIO);
 }
 
 static void mira_submit_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error) {
@@ -260,27 +261,33 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
         return 0;
 
     const BxFetchResponse* response = completion->transfer->response;
+    const BxFetchRequest* request = completion->transfer->request;
+    BxFetchProtocol protocol = bx_fetch_response_protocol(response, bx_fetch_request_target(request));
+    bool http = protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS;
+    bool ftp = protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS;
     int status = response ? response->status_code : 0;
     BxFetchTransportErrorKind transport_kind = response ? response->transport_error_kind : BX_FETCH_TRANSPORT_ERROR_NONE;
-    int exit_code = bx_fetch_exit_code_for_transfer_failure(status, transport_kind, completion->transfer->result);
+    int exit_code = bx_fetch_exit_code_for_transfer_failure(http ? status : -1, transport_kind, completion->transfer->result);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, exit_code);
     if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
         fprintf(frontend->diagnostics, "mira: transfer failed: %s\n", bx_fetch_error_string(completion->transfer->result));
     }
     if (frontend->config->logging.structured_errors) {
-        const BxFetchRequest* request = completion->transfer->request;
         char summary[64];
         const char* error_summary = "transfer failed";
-        if (status >= 400 && status < 600) {
-            snprintf(summary, sizeof(summary), "HTTP status %d", status);
+        if ((http || ftp) && status >= 400 && status < 600) {
+            snprintf(summary, sizeof(summary), "%s status %d", http ? "HTTP" : "FTP", status);
             error_summary = summary;
         }
+        BxFetchErrorClass error_class = bx_fetch_error_class_for_exit_code(exit_code);
+        if (ftp && error_class == BX_FETCH_ERROR_CLASS_HTTP)
+            error_class = BX_FETCH_ERROR_CLASS_FTP;
         BxFetchStructuredError error = {
-            .class_id = bx_fetch_error_class_for_exit_code(exit_code),
+            .class_id = error_class,
             .summary = error_summary,
             .url = request ? bx_fetch_request_url_for_display(request) : NULL,
             .path = completion->transfer->output_path,
-            .http_status = status > 0 ? status : -1,
+            .http_status = http && status > 0 ? status : -1,
             .curl_code = response && response->error_code != 0 ? response->error_code : -1,
             .error_number = response && response->error_number > 0 ? response->error_number : -1,
             .retryable = completion->transfer->retryable_hint && completion->attempt < completion->max_attempts,

@@ -94,9 +94,9 @@ MIRA_OPTION("ca-directory", required_argument, MIRA_OPT_CA_DIRECTORY, "", NULL, 
 MIRA_OPTION("pinnedpubkey", required_argument, MIRA_OPT_PINNEDPUBKEY, "", NULL, "PIN", "require a public-key pin", MIRA_OPTION_CATEGORY_TLS, true)
 MIRA_OPTION("no-hsts", no_argument, MIRA_OPT_NO_HSTS, "", NULL, NULL, "disable HSTS", MIRA_OPTION_CATEGORY_TLS, true)
 MIRA_OPTION("hsts-file", required_argument, MIRA_OPT_HSTS_FILE, "", NULL, "FILE", "use HSTS cache FILE", MIRA_OPTION_CATEGORY_TLS, true)
-MIRA_OPTION("ftp-user", required_argument, MIRA_OPT_FTP_USER, "", NULL, "USER", "set FTP username", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
-MIRA_OPTION("ftp-password", required_argument, MIRA_OPT_FTP_PASSWORD, "", NULL, "PASS", "set FTP password", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
-MIRA_OPTION("no-passive-ftp", no_argument, MIRA_OPT_NO_PASSIVE_FTP, "", NULL, NULL, "disable passive FTP", MIRA_OPTION_CATEGORY_UNSUPPORTED, false)
+MIRA_OPTION("ftp-user", required_argument, MIRA_OPT_FTP_USER, "", NULL, "USER", "set FTP username", MIRA_OPTION_CATEGORY_FTP, true)
+MIRA_OPTION("ftp-password", required_argument, MIRA_OPT_FTP_PASSWORD, "", NULL, "PASS", "set FTP password", MIRA_OPTION_CATEGORY_FTP, true)
+MIRA_OPTION("no-passive-ftp", no_argument, MIRA_OPT_NO_PASSIVE_FTP, "", NULL, NULL, "use active FTP (default: passive)", MIRA_OPTION_CATEGORY_FTP, true)
 
 MIRA_OPTION("recursive", no_argument, 'r', "r", NULL, NULL, "follow navigational links", MIRA_OPTION_CATEGORY_RECURSIVE, true)
 MIRA_OPTION("level", required_argument, 'l', "l:", NULL, "NUMBER", "bound crawl depth; zero is unlimited", MIRA_OPTION_CATEGORY_RECURSIVE, true)

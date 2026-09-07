@@ -42,11 +42,14 @@ const char* bx_fetch_response_effective_url(const BxFetchResponse* response) {
     return response ? bx_fetch_prepared_url_transport(response->effective_target) : NULL;
 }
 
+BxFetchProtocol bx_fetch_response_protocol(const BxFetchResponse* response, const BxFetchPreparedUrl* request_target) {
+    return bx_fetch_prepared_url_protocol(response && response->effective_target ? response->effective_target : request_target);
+}
+
 BxFetchResponsePayload bx_fetch_response_payload(const BxFetchResponse* response, const BxFetchPreparedUrl* request_target) {
     if (!response)
         return BX_FETCH_RESPONSE_PAYLOAD_NONE;
-    const BxFetchPreparedUrl* target = response->effective_target ? response->effective_target : request_target;
-    switch (bx_fetch_prepared_url_protocol(target)) {
+    switch (bx_fetch_response_protocol(response, request_target)) {
         case BX_FETCH_PROTOCOL_HTTP:
         case BX_FETCH_PROTOCOL_HTTPS:
             if (response->status_code == 200 || response->status_code == 206)

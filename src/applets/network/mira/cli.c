@@ -687,6 +687,15 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
             case MIRA_OPT_HSTS_FILE:
                 MIRA_SET_STRING(config->https.hsts_file);
                 break;
+            case MIRA_OPT_FTP_USER:
+                MIRA_SET_STRING(config->ftp.ftp_user);
+                break;
+            case MIRA_OPT_FTP_PASSWORD:
+                MIRA_SET_STRING(config->ftp.ftp_password);
+                break;
+            case MIRA_OPT_NO_PASSIVE_FTP:
+                config->ftp.no_passive_ftp = true;
+                break;
             case 'r':
                 config->recursive.recursive = true;
                 break;

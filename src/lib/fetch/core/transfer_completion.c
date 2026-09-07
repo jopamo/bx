@@ -148,6 +148,10 @@ bool bx_fetch_transfer_retryable_hint(const struct bx_fetch_config* cfg, const B
         case BX_FETCH_ERROR_SSL:
             return transport_kind == BX_FETCH_TRANSPORT_ERROR_TLS_RETRYABLE;
         case BX_FETCH_ERROR_NETWORK:
+            if (transport_kind == BX_FETCH_TRANSPORT_ERROR_AUTH)
+                return false;
+            if (transport_kind == BX_FETCH_TRANSPORT_ERROR_SERVER)
+                return response && response->status_code >= 400 && response->status_code < 500;
             if (error_number == ECONNREFUSED || curl_code == BX_FETCH_CURL_CODE_COULDNT_CONNECT)
                 return cfg && cfg->download.retry_connrefused;
             return true;

@@ -10,6 +10,38 @@
 #define BX_FETCH_HTTP2_ENABLED 0
 #endif
 
+BxFetchNetTargetPolicy bx_fetch_net_target_policy(const struct bx_fetch_config* cfg, const BxFetchPreparedUrl* target) {
+    if (!cfg || !target)
+        return BX_FETCH_NET_TARGET_INVALID;
+    switch (bx_fetch_prepared_url_protocol(target)) {
+        case BX_FETCH_PROTOCOL_HTTP:
+        case BX_FETCH_PROTOCOL_HTTPS:
+            return BX_FETCH_NET_TARGET_ALLOWED;
+        case BX_FETCH_PROTOCOL_FTP:
+            /* Do not guess whether libcurl's NO_PROXY matching will bypass it. */
+            return !cfg->download.no_proxy && bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_FTP) ? BX_FETCH_NET_TARGET_FTP_PROXY_UNSUPPORTED : BX_FETCH_NET_TARGET_ALLOWED;
+        case BX_FETCH_PROTOCOL_FTPS:
+            return BX_FETCH_NET_TARGET_FTPS_UNSUPPORTED;
+        case BX_FETCH_PROTOCOL_NONE:
+            return BX_FETCH_NET_TARGET_INVALID;
+    }
+    return BX_FETCH_NET_TARGET_INVALID;
+}
+
+const char* bx_fetch_net_target_policy_reason(BxFetchNetTargetPolicy policy) {
+    switch (policy) {
+        case BX_FETCH_NET_TARGET_ALLOWED:
+            return NULL;
+        case BX_FETCH_NET_TARGET_FTPS_UNSUPPORTED:
+            return "FTPS transfers are not supported";
+        case BX_FETCH_NET_TARGET_FTP_PROXY_UNSUPPORTED:
+            return "FTP through proxies is not supported; disable proxy use explicitly";
+        case BX_FETCH_NET_TARGET_INVALID:
+            return "invalid transfer protocol";
+    }
+    return "invalid transfer protocol";
+}
+
 static bool configured_string(const char* value) {
     return value && value[0] != '\0';
 }
