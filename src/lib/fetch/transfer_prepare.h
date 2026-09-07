@@ -36,6 +36,7 @@ typedef struct {
     int error_number;
     BxFetchProtocolDecision protocol_decision;
     BxFetchRequestBodyResult body_result;
+    const char* detail; /* Borrowed, static policy diagnostic; never URL text. */
 } BxFetchPrepareError;
 
 BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fetch_config* cfg, const BxFetchPreparedUrl* target, const char* output_path, BxFetchPrepareError* error);

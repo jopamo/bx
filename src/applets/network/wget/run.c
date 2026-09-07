@@ -46,7 +46,7 @@ static void wget_prepare_error(void* userdata, const BxFetchPreparedUrl* target,
     WgetRunFrontend* frontend = userdata;
     bool output_policy = error && error->kind == BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY;
     int exit_code = output_policy || (error && error->kind == BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY) ? BX_FETCH_EXIT_PROTOCOL : BX_FETCH_EXIT_FILE_IO;
-    wget_record_error(frontend, exit_code, output_policy ? "unsupported output policy for protocol" : "failed to prepare output");
+    wget_record_error(frontend, exit_code, error && error->detail ? error->detail : output_policy ? "unsupported output policy for protocol" : "failed to prepare output");
 }
 
 static void wget_submit_error(void* userdata, const BxFetchPreparedUrl* target, const char* output_path, const BxFetchNetSetupError* error) {
@@ -67,12 +67,15 @@ static int wget_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
         return 0;
     if (transfer->result != BX_FETCH_OK) {
         const BxFetchResponse* response = transfer->response;
+        BxFetchProtocol protocol = bx_fetch_response_protocol(response, bx_fetch_request_target(transfer->request));
+        bool http = protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS;
+        bool ftp = protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS;
         int status = response ? response->status_code : 0;
         BxFetchTransportErrorKind transport_kind = response ? response->transport_error_kind : BX_FETCH_TRANSPORT_ERROR_NONE;
-        int exit_code = bx_fetch_exit_code_for_transfer_failure(status, transport_kind, transfer->result);
+        int exit_code = bx_fetch_exit_code_for_transfer_failure(http ? status : -1, transport_kind, transfer->result);
         if (!wget_is_quiet(frontend)) {
-            if (status >= 400 && status < 600)
-                fprintf(stderr, "wget: server returned error: HTTP %d\n", status);
+            if ((http || ftp) && status >= 400 && status < 600)
+                fprintf(stderr, "wget: server returned error: %s %d\n", http ? "HTTP" : "FTP", status);
             else
                 fprintf(stderr, "wget: transfer failed: %s\n", bx_fetch_error_string(transfer->result));
         }

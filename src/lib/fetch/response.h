@@ -83,6 +83,9 @@ typedef enum {
     BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED,
 } BxFetchResponsePayload;
 
+/* Effective protocol is authoritative; use request state only when absent. */
+BxFetchProtocol bx_fetch_response_protocol(const BxFetchResponse* response, const BxFetchPreparedUrl* request_target);
+
 /*
  * Classifies protocol status without conflating HTTP and FTP reply codes.
  * The effective prepared target is authoritative; the request target is used

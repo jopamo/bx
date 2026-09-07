@@ -51,6 +51,8 @@ const char* bx_fetch_error_class_string(BxFetchErrorClass class_id) {
             return "policy";
         case BX_FETCH_ERROR_CLASS_HTTP:
             return "http";
+        case BX_FETCH_ERROR_CLASS_FTP:
+            return "ftp";
         case BX_FETCH_ERROR_CLASS_TLS:
             return "tls";
         case BX_FETCH_ERROR_CLASS_CURL_TRANSPORT:

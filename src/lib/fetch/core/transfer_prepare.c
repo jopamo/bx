@@ -147,6 +147,13 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
     if ((protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS) && !bx_fetch_config_ftp_output_supported(cfg)) {
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_OUTPUT_POLICY, ENOTSUP, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }
+    BxFetchNetTargetPolicy target_policy = bx_fetch_net_target_policy(cfg, target);
+    if (target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
+        prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY, ENOTSUP, BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED, BX_FETCH_REQUEST_BODY_OK);
+        if (error)
+            error->detail = bx_fetch_net_target_policy_reason(target_policy);
+        return NULL;
+    }
 
     BxFetchTransferCandidate* candidate = calloc(1, sizeof(*candidate));
     if (!candidate) {
