@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "engine_internal.h"
-#include "lib/fetch/output_policy.h"
 #include "lib/fetch/resume_validation.h"
 #include "lib/fetch/url.h"
 #include <curl/curl.h>
@@ -701,7 +700,7 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
          * still private here; run the same staging callback before close.
          * HTTP Range/conditional handling is not an FTP resume contract.
          */
-        if (transfer->resume_requested || !bx_fetch_output_ftp_policy_supported(engine->cfg)) {
+        if (transfer->resume_requested || !bx_fetch_config_ftp_output_supported(engine->cfg)) {
             errno = ENOTSUP;
             bx_fetch_transfer_mark_io_failure(transfer, ENOTSUP);
             commit = false;

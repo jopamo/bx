@@ -187,6 +187,12 @@ struct bx_fetch_config {
 /* Allocates a config with default values; caller owns and must free. */
 struct bx_fetch_config* bx_fetch_config_new(void);
 /*
+ * HTTP Range, conditional timestamps, and saved HTTP headers do not define
+ * FTP output semantics. Until those contracts exist, reject them rather than
+ * appending a complete FTP payload or silently ignoring requested behavior.
+ */
+bool bx_fetch_config_ftp_output_supported(const struct bx_fetch_config* config);
+/*
  * Replaces the URL operand list with bounded copies. Existing URLs remain
  * untouched on failure.
  */

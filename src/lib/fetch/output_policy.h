@@ -13,15 +13,6 @@
 
 #include "config.h"
 
-/*
- * HTTP Range, conditional timestamps, and saved HTTP headers do not define
- * FTP output semantics. Until those contracts exist, reject them rather than
- * appending a complete FTP payload or silently ignoring requested behavior.
- */
-static inline bool bx_fetch_output_ftp_policy_supported(const struct bx_fetch_config* cfg) {
-    return cfg && !cfg->download.continue_download && !cfg->download.timestamping && !cfg->http.save_headers;
-}
-
 static inline bool bx_fetch_output_is_quiet(const struct bx_fetch_config* cfg) {
     return cfg && cfg->logging.verbosity == BX_FETCH_VERBOSITY_QUIET;
 }
