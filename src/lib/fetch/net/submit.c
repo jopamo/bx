@@ -466,11 +466,9 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
             return -1;
     }
 
-    /* These options must also govern an admitted HTTP-to-FTP redirect. */
+    /* Passive/EPSV is libcurl's default. Active mode also governs redirects. */
     if (engine->cfg->ftp.no_passive_ftp)
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTPPORT, "-");
-    else
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTP_USE_EPSV, 1L);
 
     if (engine->cfg->download.spider) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOBODY, 1L);

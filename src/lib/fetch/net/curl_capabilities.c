@@ -18,8 +18,14 @@ BxFetchNetTargetPolicy bx_fetch_net_target_policy(const struct bx_fetch_config* 
         case BX_FETCH_PROTOCOL_HTTPS:
             return BX_FETCH_NET_TARGET_ALLOWED;
         case BX_FETCH_PROTOCOL_FTP:
-            /* Do not guess whether libcurl's NO_PROXY matching will bypass it. */
-            return !cfg->download.no_proxy && bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_FTP) ? BX_FETCH_NET_TARGET_FTP_PROXY_UNSUPPORTED : BX_FETCH_NET_TARGET_ALLOWED;
+            /*
+             * Do not guess whether NO_PROXY will bypass a proxy. Explicit
+             * proxy credentials can also pin the initial HTTP proxy across
+             * a redirect, even with no FTP proxy environment value.
+             */
+            return !cfg->download.no_proxy && (cfg->http.proxy_user || cfg->http.proxy_password || bx_fetch_net_proxy_environment_url(BX_FETCH_PROTOCOL_FTP))
+                       ? BX_FETCH_NET_TARGET_FTP_PROXY_UNSUPPORTED
+                       : BX_FETCH_NET_TARGET_ALLOWED;
         case BX_FETCH_PROTOCOL_FTPS:
             return BX_FETCH_NET_TARGET_FTPS_UNSUPPORTED;
         case BX_FETCH_PROTOCOL_NONE:

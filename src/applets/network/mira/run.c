@@ -275,7 +275,10 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     if (frontend->config->logging.structured_errors) {
         char summary[64];
         const char* error_summary = "transfer failed";
-        if ((http || ftp) && status >= 400 && status < 600) {
+        if (completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED && response && response->transport_error_detail) {
+            error_summary = response->transport_error_detail;
+        }
+        else if ((http || ftp) && status >= 400 && status < 600) {
             snprintf(summary, sizeof(summary), "%s status %d", http ? "HTTP" : "FTP", status);
             error_summary = summary;
         }
