@@ -7,6 +7,10 @@
 /*
  * Shared run facade for fetch applets.
  *
+ * Frontends submit typed configuration, never another applet's argv.
+ * The core alone constructs request/writer candidates from admitted prepared
+ * targets; frontend request observations are borrowed and read-only.
+ *
  * The facade owns transport, crawl scheduling, and committed publication
  * state. Frontends retain policy: CLI parsing, initial output naming,
  * diagnostics, link extraction decisions, and exit mapping. Configured
