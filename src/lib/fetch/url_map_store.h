@@ -15,6 +15,9 @@
  * Ownership and lifetime:
  * - bx_fetch_url_map_store_load()/save() borrow `cfg`.
  * - Entry arrays and callback userdata remain caller-owned.
+ * - Directory-prefix/output-parent scope spelling is part of persistent
+ *   identity. Failure to allocate a selected scope or resolve an implicit cwd
+ *   scope aborts before store IO.
  */
 
 #include "lib/fetch/config.h"
