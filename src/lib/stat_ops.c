@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 #include "lib/stat_ops.h"
+#include "lib/time_parse.h"
 
 bool bx_stat_is_dir_path(const char* path) {
     struct stat st;
@@ -35,17 +36,5 @@ int bx_stat_collect_dest_state(const char* path, struct bx_dest_state* state) {
 }
 
 int bx_stat_timespec_compare(const struct timespec* a, const struct timespec* b) {
-    if (a->tv_sec < b->tv_sec) {
-        return -1;
-    }
-    if (a->tv_sec > b->tv_sec) {
-        return 1;
-    }
-    if (a->tv_nsec < b->tv_nsec) {
-        return -1;
-    }
-    if (a->tv_nsec > b->tv_nsec) {
-        return 1;
-    }
-    return 0;
+    return bx_time_timespec_compare(a, b);
 }

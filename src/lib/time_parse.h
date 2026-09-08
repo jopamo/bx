@@ -23,6 +23,21 @@ struct bx_time_duration_parse_result {
     bool infinite;
 };
 
+/* Lexicographic comparison; callers provide normalized timestamps. */
+static inline int bx_time_timespec_compare(const struct timespec* a, const struct timespec* b) {
+    if (a->tv_sec != b->tv_sec)
+        return a->tv_sec < b->tv_sec ? -1 : 1;
+    return (a->tv_nsec > b->tv_nsec) - (a->tv_nsec < b->tv_nsec);
+}
+
+/*
+ * Exact nonnegative, normalized clock arithmetic. Invalid inputs and overflow
+ * leave the output unchanged. Output may alias either input.
+ * Remaining time is zero when the deadline has passed.
+ */
+bool bx_time_timespec_add_nanoseconds(const struct timespec* base, uint64_t nanoseconds, struct timespec* result_out);
+bool bx_time_timespec_remaining(const struct timespec* deadline, const struct timespec* now, struct timespec* remaining_out);
+
 bool bx_time_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out);
 bool bx_time_parse_fractional_nanoseconds(const char** text, long* nsec_out);
 bool bx_time_duration_suffix_multiplier(char suffix, double* multiplier_out);

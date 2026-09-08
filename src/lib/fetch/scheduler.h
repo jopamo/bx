@@ -18,6 +18,8 @@
  *   retry path.
  * - Output path strings and crawl depth are copied into scheduler-owned queue
  *   storage and remain attached through retries.
+ * - Clock/deadline arithmetic is exact and checked. Invalid or overflowing
+ *   deadlines fail before dispatch or retry admission instead of wrapping.
  */
 
 #include "config.h"

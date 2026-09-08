@@ -10,6 +10,49 @@
 #include "lib/checked_math.h"
 #include "lib/time_parse.h"
 
+static bool bx_time_nonnegative_timespec(const struct timespec* ts) {
+    return ts && ts->tv_sec >= 0 && ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000L;
+}
+
+bool bx_time_timespec_add_nanoseconds(const struct timespec* base, uint64_t nanoseconds, struct timespec* result_out) {
+    if (!result_out || !bx_time_nonnegative_timespec(base))
+        return false;
+
+    uintmax_t seconds;
+    long nsec = base->tv_nsec + (long)(nanoseconds % UINT64_C(1000000000));
+    if (!bx_checked_uintmax_add((uintmax_t)base->tv_sec, nanoseconds / UINT64_C(1000000000), &seconds))
+        return false;
+    if (nsec >= 1000000000L) {
+        if (!bx_checked_uintmax_add(seconds, 1, &seconds))
+            return false;
+        nsec -= 1000000000L;
+    }
+
+    struct timespec result = {.tv_nsec = nsec};
+    if (!bx_checked_uintmax_to_time_t(seconds, &result.tv_sec))
+        return false;
+    *result_out = result;
+    return true;
+}
+
+bool bx_time_timespec_remaining(const struct timespec* deadline, const struct timespec* now, struct timespec* remaining_out) {
+    if (!remaining_out || !bx_time_nonnegative_timespec(deadline) || !bx_time_nonnegative_timespec(now))
+        return false;
+
+    struct timespec remaining = {0};
+    if (bx_time_timespec_compare(deadline, now) > 0) {
+        /* Ordered nonnegative seconds can be subtracted without overflow. */
+        remaining.tv_sec = deadline->tv_sec - now->tv_sec;
+        remaining.tv_nsec = deadline->tv_nsec - now->tv_nsec;
+        if (remaining.tv_nsec < 0) {
+            remaining.tv_sec--;
+            remaining.tv_nsec += 1000000000L;
+        }
+    }
+    *remaining_out = remaining;
+    return true;
+}
+
 bool bx_time_parse_fixed_width_int(const char* text, size_t start, size_t width, int* value_out) {
     int value = 0;
     for (size_t i = 0; i < width; i++) {
@@ -281,9 +324,7 @@ bool bx_time_seconds_to_milliseconds_double(double seconds, double* milliseconds
 }
 
 bool bx_time_timespec_to_nanoseconds_u64(const struct timespec* ts, uint64_t* nanoseconds_out) {
-    if (ts == NULL || nanoseconds_out == NULL ||
-        (((time_t)-1 < (time_t)0) && ts->tv_sec < (time_t)0) ||
-        ts->tv_nsec < 0L || ts->tv_nsec >= 1000000000L) {
+    if (nanoseconds_out == NULL || !bx_time_nonnegative_timespec(ts)) {
         return false;
     }
 
