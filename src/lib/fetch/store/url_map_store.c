@@ -43,7 +43,7 @@ static int url_map_store_fail_tmp_file(int error_number, int dirfd, int fd, char
     if (fd != -1)
         close(fd);
     if (dirfd != -1 && tmp_name_inout && *tmp_name_inout) {
-        unlinkat(dirfd, *tmp_name_inout, 0);
+        bx_fd_unlinkat_child(dirfd, *tmp_name_inout, 0);
         free(*tmp_name_inout);
         *tmp_name_inout = NULL;
     }
@@ -296,7 +296,7 @@ static int cleanup_orphan_temp_files(int dirfd, const char* basename, bool* remo
             continue;
         }
 
-        if (unlinkat(dirfd, ent->d_name, 0) != 0 && errno != ENOENT) {
+        if (bx_fd_unlinkat_child(dirfd, ent->d_name, 0) != 0 && errno != ENOENT) {
             rc = -1;
             break;
         }
@@ -626,7 +626,7 @@ int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetch
     }
 
     if (entry_count == 0) {
-        int unlink_rc = unlinkat(dirfd, basename, 0);
+        int unlink_rc = bx_fd_unlinkat_child(dirfd, basename, 0);
         if (unlink_rc != 0 && errno != ENOENT) {
             close(dirfd);
             free(basename);
@@ -683,13 +683,13 @@ int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetch
     if (fclose(f) != 0)
         rc = -1;
 
-    if (rc == 0 && renameat(dirfd, tmp_name, dirfd, basename) != 0) {
+    if (rc == 0 && bx_fd_renameat_child(dirfd, tmp_name, dirfd, basename) != 0) {
         rc = -1;
     }
     if (rc == 0 && bx_fd_fsync(dirfd) != 0)
         rc = -1;
     if (rc != 0)
-        unlinkat(dirfd, tmp_name, 0);
+        bx_fd_unlinkat_child(dirfd, tmp_name, 0);
 
     free(tmp_name);
     entry_refs_free(sorted, entry_count);
