@@ -2,6 +2,7 @@
 #include "lib/fetch/metadata.h"
 #include "lib/fetch/secure_path.h"
 #include "fswalk/walk.h"
+#include "lib/path_ops.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -27,14 +28,10 @@ static char* metadata_recovery_root(const struct bx_fetch_config* cfg) {
         return strdup(cfg->dirs.directory_prefix);
 
     const char* output_document = cfg->download.output_document;
-    if (!output_document || output_document[0] == '\0')
+    if (!output_document)
         return strdup(".");
-    const char* slash = strrchr(output_document, '/');
-    if (!slash)
-        return strdup(".");
-    if (slash == output_document)
-        return strdup("/");
-    return strndup(output_document, (size_t)(slash - output_document));
+    struct bx_path_split parts = bx_path_split(output_document, false);
+    return parts.parent_length != 0 ? strndup(output_document, parts.parent_length) : strdup(".");
 }
 
 static enum bx_walk_action metadata_recovery_fail(MetadataRecovery* recovery, int error_number) {
