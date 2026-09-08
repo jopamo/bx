@@ -498,20 +498,6 @@ static char* sidecar_name_for_basename(const char* basename) {
     return sidecar;
 }
 
-static int stream_flush_and_sync(FILE* f) {
-    if (!f) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (fflush(f) != 0)
-        return -1;
-    int fd = fileno(f);
-    if (fd == -1)
-        return -1;
-    return fsync(fd);
-}
-
 static int write_metadata_temp_file_at(int parent_fd, const char* basename, const BxFetchMetadata* meta, char** temp_name_out) {
     if (parent_fd == -1 || !basename || !meta || !temp_name_out) {
         errno = EINVAL;
@@ -531,7 +517,7 @@ static int write_metadata_temp_file_at(int parent_fd, const char* basename, cons
     if (bx_fetch_metadata_write_stream(f, meta) != 0) {
         rc = -1;
     }
-    else if (stream_flush_and_sync(f) != 0) {
+    else if (bx_fd_stream_flush_sync(f) != 0) {
         rc = -1;
     }
 
@@ -1137,7 +1123,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
         }
     }
 
-    if (should_fsync && fsync(w->fd) == -1) {
+    if (should_fsync && bx_fd_fsync(w->fd) == -1) {
         if (w->fd != -1)
             close(w->fd);
         if (w->temp_name)
@@ -1299,7 +1285,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
         free(w->temp_name);
         w->temp_name = NULL;
 
-        if (fsync(w->parent_fd) == -1) {
+        if (bx_fd_fsync(w->parent_fd) == -1) {
             rc = -1;
         }
 
@@ -1321,7 +1307,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (fsync(w->parent_fd) == -1) {
+        if (bx_fd_fsync(w->parent_fd) == -1) {
             rc = -1;
         }
     }
@@ -1367,7 +1353,7 @@ static void rollback_metadata_exchange(BxFetchWriter* w, const char* sidecar_nam
     else {
         unlink_leaf_if_same_identity(w->parent_fd, sidecar_name, candidate_stat);
     }
-    (void)fsync(w->parent_fd);
+    (void)bx_fd_fsync(w->parent_fd);
 }
 
 BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWriter* w) {
@@ -1512,7 +1498,7 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
         return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
     }
 
-    if (!metadata_candidate_is_published(w, sidecar_name, &candidate_stat) || !current_destination_matches(w) || fsync(w->parent_fd) != 0) {
+    if (!metadata_candidate_is_published(w, sidecar_name, &candidate_stat) || !current_destination_matches(w) || bx_fd_fsync(w->parent_fd) != 0) {
         int error_number = errno ? errno : EIO;
         rollback_metadata_exchange(w, sidecar_name, &sidecar_temp_name, sidecar_existed, &candidate_stat);
         free(sidecar_temp_name);
@@ -1527,7 +1513,7 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
     if (sidecar_existed && unlinkat(w->parent_fd, sidecar_temp_name, 0) != 0 && errno != ENOENT)
         rc = -1;
     free(sidecar_temp_name);
-    if (fsync(w->parent_fd) != 0)
+    if (bx_fd_fsync(w->parent_fd) != 0)
         rc = -1;
 
     int error_number = errno;

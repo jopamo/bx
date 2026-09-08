@@ -306,6 +306,19 @@ int bx_fd_fsync(int fd) {
     return fsync(fd);
 }
 
+int bx_fd_stream_flush_sync(FILE* stream) {
+    if (stream == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (fflush(stream) != 0)
+        return -1;
+    int fd = fileno(stream);
+    if (fd == -1)
+        return -1;
+    return bx_fd_fsync(fd);
+}
+
 int bx_fd_fdatasync(int fd) {
     return fdatasync(fd);
 }
