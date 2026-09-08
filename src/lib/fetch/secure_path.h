@@ -28,7 +28,13 @@ int bx_fetch_secure_path_open_existing_directory(const char* path);
 int bx_fetch_secure_path_open_parent_directory(const char* path, bool create_missing, char** basename_out);
 int bx_fetch_secure_path_unlink_file(const char* path);
 
-/* Splits path into an optional parent and a required non-empty leaf. */
+/*
+ * Allocates an optional parent and a required non-empty leaf using path_ops
+ * lexical splitting with trailing slashes stripped. Earlier separators are
+ * preserved; this does not validate child-name or filesystem authority.
+ * parent_out may be NULL only for paths without a parent. Allocation failure
+ * is recoverable and leaves both supplied outputs NULL.
+ */
 int bx_fetch_secure_path_split(const char* path, char** parent_out, char** basename_out);
 
 #endif
