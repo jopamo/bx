@@ -3,6 +3,7 @@
 #include "lib/fetch/secure_path.h"
 #include "lib/fetch/url_map_store.h"
 #include "lib/fetch/url.h"
+#include "lib/path_ops.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -48,21 +49,6 @@ static int url_map_store_fail_tmp_file(int error_number, int dirfd, int fd, char
     return url_map_store_fail_errno(error_number);
 }
 
-static char* output_document_dir(const struct bx_fetch_config* cfg) {
-    if (!cfg || !cfg->download.output_document || cfg->download.output_document[0] == '\0') {
-        return NULL;
-    }
-
-    const char* output_document = cfg->download.output_document;
-    const char* last_slash = strrchr(output_document, '/');
-    if (!last_slash)
-        return NULL;
-    if (last_slash == output_document)
-        return strdup("/");
-
-    return strndup(output_document, (size_t)(last_slash - output_document));
-}
-
 static char* store_scope_for(const struct bx_fetch_config* cfg) {
     if (!cfg)
         return NULL;
@@ -71,15 +57,16 @@ static char* store_scope_for(const struct bx_fetch_config* cfg) {
         return strdup(cfg->dirs.directory_prefix);
     }
 
-    char* output_dir = output_document_dir(cfg);
-    if (output_dir)
-        return output_dir;
+    if (cfg->download.output_document) {
+        struct bx_path_split parts = bx_path_split(cfg->download.output_document, false);
+        /* Scope hashes retain exact spelling, including terminal separators.
+         * A selected parent must not become a different scope on OOM. */
+        if (parts.parent_length != 0)
+            return strndup(cfg->download.output_document, parts.parent_length);
+    }
 
-    char* cwd = getcwd(NULL, 0);
-    if (cwd)
-        return cwd;
-
-    return strdup("/");
+    /* An unavailable cwd cannot confer the root scope's identity. */
+    return getcwd(NULL, 0);
 }
 
 static uint64_t fnv1a64(const char* value) {
