@@ -3,6 +3,7 @@
 #include "lib/fetch/http_status.h"
 #include "lib/fetch/scheduler.h"
 #include "lib/fetch/url.h"
+#include "lib/time_parse.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -128,35 +129,6 @@ static bool result_counts_as_scheduler_failure(int result) {
     }
 }
 
-static long long timespec_diff_ns(const struct timespec* a, const struct timespec* b) {
-    long long sec = (long long)a->tv_sec - (long long)b->tv_sec;
-    long long nsec = (long long)a->tv_nsec - (long long)b->tv_nsec;
-    return sec * 1000000000LL + nsec;
-}
-
-static struct timespec timespec_from_ns(long long ns) {
-    struct timespec ts = {0};
-    if (ns <= 0)
-        return ts;
-
-    ts.tv_sec = (time_t)(ns / 1000000000LL);
-    ts.tv_nsec = (long)(ns % 1000000000LL);
-    return ts;
-}
-
-static struct timespec timespec_add_ns(struct timespec base, long long ns) {
-    if (ns <= 0)
-        return base;
-
-    base.tv_sec += (time_t)(ns / 1000000000LL);
-    base.tv_nsec += (long)(ns % 1000000000LL);
-    if (base.tv_nsec >= 1000000000L) {
-        base.tv_sec++;
-        base.tv_nsec -= 1000000000L;
-    }
-    return base;
-}
-
 static uint64_t scheduler_random_mix(uint64_t value) {
     value ^= value >> 33;
     value *= 0xff51afd7ed558ccdULL;
@@ -223,63 +195,23 @@ static long long scheduler_sample_host_wait_ns(BxFetchScheduler* s) {
     return min_wait_ns + (long long)jitter_ns;
 }
 
-static bool wait_remaining_for_host(const HostState* hs, const struct timespec* now, struct timespec* remaining) {
-    if (!hs || !hs->has_next_request_time)
-        return false;
+/* -1: invalid clock/deadline, 0: ready, 1: waiting. */
+static int queue_wait_remaining(const QueuedURL* q, const HostState* hs, const struct timespec* now, struct timespec* remaining) {
+    const struct timespec* deadline = hs && hs->has_next_request_time ? &hs->next_request_time : NULL;
+    if (q->has_retry_ready_time && (!deadline || bx_time_timespec_compare(&q->retry_ready_time, deadline) > 0))
+        deadline = &q->retry_ready_time;
+    if (!deadline)
+        return 0;
 
-    long long remaining_ns = timespec_diff_ns(&hs->next_request_time, now);
-    if (remaining_ns <= 0)
-        return false;
-
-    if (remaining) {
-        *remaining = timespec_from_ns(remaining_ns);
-    }
-
-    return true;
+    struct timespec delay;
+    if (!bx_time_timespec_remaining(deadline, now, &delay))
+        return -1;
+    if (remaining)
+        *remaining = delay;
+    return delay.tv_sec > 0 || delay.tv_nsec > 0;
 }
 
-static bool wait_remaining_for_retry(const QueuedURL* q, const struct timespec* now, struct timespec* remaining) {
-    if (!q || !q->has_retry_ready_time)
-        return false;
-
-    long long remaining_ns = timespec_diff_ns(&q->retry_ready_time, now);
-    if (remaining_ns <= 0)
-        return false;
-
-    if (remaining) {
-        remaining->tv_sec = (time_t)(remaining_ns / 1000000000LL);
-        remaining->tv_nsec = (long)(remaining_ns % 1000000000LL);
-    }
-
-    return true;
-}
-
-static bool queue_wait_remaining(const BxFetchScheduler* s, const QueuedURL* q, const struct timespec* now, struct timespec* remaining) {
-    struct timespec host_remaining = {0};
-    struct timespec retry_remaining = {0};
-
-    HostState* hs = get_host_state(s, q ? bx_fetch_prepared_url_host(q->target) : NULL);
-    bool host_wait = wait_remaining_for_host(hs, now, &host_remaining);
-    bool retry_wait = wait_remaining_for_retry(q, now, &retry_remaining);
-    if (!host_wait && !retry_wait)
-        return false;
-
-    if (remaining) {
-        if (!host_wait) {
-            *remaining = retry_remaining;
-        }
-        else if (!retry_wait || timespec_diff_ns(&host_remaining, &retry_remaining) >= 0) {
-            *remaining = host_remaining;
-        }
-        else {
-            *remaining = retry_remaining;
-        }
-    }
-
-    return true;
-}
-
-static bool scheduler_next_wait_duration(BxFetchScheduler* s, const struct timespec* now, struct timespec* min_wait) {
+static int scheduler_next_wait_duration(BxFetchScheduler* s, const struct timespec* now, struct timespec* min_wait) {
     bool found = false;
 
     for (QueuedURL* q = s->queue_head; q; q = q->next) {
@@ -288,10 +220,13 @@ static bool scheduler_next_wait_duration(BxFetchScheduler* s, const struct times
             continue;
 
         struct timespec remaining = {0};
-        if (!queue_wait_remaining(s, q, now, &remaining))
+        int waiting = queue_wait_remaining(q, hs, now, &remaining);
+        if (!scheduler_require(s, waiting >= 0))
+            return -1;
+        if (!waiting)
             continue;
 
-        if (!found || timespec_diff_ns(&remaining, min_wait) < 0) {
+        if (!found || bx_time_timespec_compare(&remaining, min_wait) < 0) {
             *min_wait = remaining;
             found = true;
         }
@@ -459,14 +394,9 @@ static bool host_state_note_dispatch(BxFetchScheduler* s, HostState* hs, const s
     }
 
     long long wait_ns = scheduler_sample_host_wait_ns(s);
-    if (wait_ns <= 0) {
-        hs->has_next_request_time = false;
-        hs->next_request_time = effective_dispatch_time;
-        return true;
-    }
-
-    hs->next_request_time = timespec_add_ns(effective_dispatch_time, wait_ns);
-    hs->has_next_request_time = true;
+    if (!bx_time_timespec_add_nanoseconds(&effective_dispatch_time, (uint64_t)wait_ns, &hs->next_request_time))
+        return false;
+    hs->has_next_request_time = wait_ns > 0;
     return true;
 }
 
@@ -574,8 +504,7 @@ static bool on_transfer_complete(void* userdata, int status, BxFetchError result
             if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &retry_ready_time) == 0)) {
                 s->had_transfer_error = true;
             }
-            else {
-                retry_ready_time.tv_sec += retry_delay;
+            else if (scheduler_require(s, bx_time_timespec_add_nanoseconds(&retry_ready_time, (uint64_t)retry_delay * UINT64_C(1000000000), &retry_ready_time))) {
                 retry_ready_time_ptr = &retry_ready_time;
             }
         }
@@ -750,16 +679,15 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
             const char* host = bx_fetch_prepared_url_host(q->target);
             HostState* hs = get_host_state(s, host);
             int host_active = hs ? hs->count : 0;
-            bool wait_ok = !queue_wait_remaining(s, q, &now, NULL);
+            int waiting = queue_wait_remaining(q, hs, &now, NULL);
+            if (!scheduler_require(s, waiting >= 0))
+                return -1;
 
-            if (host_active < s->max_concurrent_per_host && wait_ok) {
+            if (host_active < s->max_concurrent_per_host && !waiting) {
                 if (!scheduler_require(s, q->tries_done >= 0)) {
                     return -1;
                 }
                 if (s->cfg->download.tries > 0 && !scheduler_require(s, q->tries_done < s->cfg->download.tries)) {
-                    return -1;
-                }
-                if (q->has_retry_ready_time && !scheduler_require(s, !wait_remaining_for_retry(q, &now, NULL))) {
                     return -1;
                 }
 
@@ -836,7 +764,10 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
         }
         else if (!started_any && s->queue_head) {
             struct timespec wait_duration = {0};
-            if (scheduler_next_wait_duration(s, &now, &wait_duration)) {
+            int waiting = scheduler_next_wait_duration(s, &now, &wait_duration);
+            if (waiting < 0)
+                return -1;
+            if (waiting) {
                 if (scheduler_sleep(&wait_duration) != 0)
                     return -1;
                 continue;
