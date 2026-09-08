@@ -2,6 +2,7 @@
 #define BX_COMMON_FD_OPS_H
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -67,6 +68,13 @@ int bx_fd_fchown(int fd, uid_t owner, gid_t group);
 int bx_fd_futimens(int fd, const struct timespec times[2]);
 int bx_fd_ftruncate(int fd, off_t length);
 int bx_fd_fsync(int fd);
+/*
+ * Flush buffered output, then fsync the borrowed stream's descriptor.
+ * Returns -1 with the first failure's errno; never closes the stream, retries
+ * a failed barrier, or substitutes a weaker sync. NULL is rejected with EINVAL.
+ * Streams without descriptors fail after flushing.
+ */
+int bx_fd_stream_flush_sync(FILE* stream);
 int bx_fd_fdatasync(int fd);
 int bx_fd_syncfs(int fd);
 off_t bx_fd_lseek(int fd, off_t offset, int whence);

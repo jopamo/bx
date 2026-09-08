@@ -4,6 +4,7 @@
 #include "lib/fetch/url_map_store.h"
 #include "lib/fetch/url.h"
 #include "lib/path_ops.h"
+#include "lib/fd_ops.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -345,24 +346,6 @@ static FILE* open_unique_tmp_file(int dirfd, const char* basename, char** tmp_na
     return NULL;
 }
 
-static int flush_and_sync_stream(FILE* f) {
-    if (!f) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (fflush(f) != 0) {
-        return -1;
-    }
-
-    int fd = fileno(f);
-    if (fd == -1) {
-        return -1;
-    }
-
-    return fsync(fd);
-}
-
 typedef enum {
     STORE_LINE_OK = 0,
     STORE_LINE_EOF,
@@ -437,7 +420,7 @@ int bx_fetch_url_map_store_load(const struct bx_fetch_config* cfg, BxFetchUrlMap
         free(path);
         return -1;
     }
-    if (removed_orphans && fsync(dirfd) != 0) {
+    if (removed_orphans && bx_fd_fsync(dirfd) != 0) {
         close(dirfd);
         free(basename);
         free(path);
@@ -650,7 +633,7 @@ int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetch
             free(path);
             return -1;
         }
-        if (fsync(dirfd) != 0) {
+        if (bx_fd_fsync(dirfd) != 0) {
             close(dirfd);
             free(basename);
             free(path);
@@ -695,7 +678,7 @@ int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetch
         free(path_hex);
     }
 
-    if (rc == 0 && flush_and_sync_stream(f) != 0)
+    if (rc == 0 && bx_fd_stream_flush_sync(f) != 0)
         rc = -1;
     if (fclose(f) != 0)
         rc = -1;
@@ -703,7 +686,7 @@ int bx_fetch_url_map_store_save(const struct bx_fetch_config* cfg, const BxFetch
     if (rc == 0 && renameat(dirfd, tmp_name, dirfd, basename) != 0) {
         rc = -1;
     }
-    if (rc == 0 && fsync(dirfd) != 0)
+    if (rc == 0 && bx_fd_fsync(dirfd) != 0)
         rc = -1;
     if (rc != 0)
         unlinkat(dirfd, tmp_name, 0);
