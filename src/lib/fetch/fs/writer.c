@@ -3,6 +3,7 @@
 #include "lib/fetch/writer.h"
 #include "lib/fetch/xattr.h"
 #include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -105,16 +106,8 @@ int bx_fetch_writer_path_presence(const char* path, BxFetchWriterPathPresence* p
 }
 
 static char* parent_path_for_output_path(const char* path) {
-    char* parent = NULL;
-    char* basename = NULL;
-    if (bx_fetch_secure_path_split(path, &parent, &basename) != 0) {
-        return NULL;
-    }
-
-    free(basename);
-    if (parent)
-        return parent;
-    return strdup(".");
+    struct bx_path_split parts = bx_path_split(path, true);
+    return parts.parent_length != 0 ? strndup(path, parts.parent_length) : strdup(".");
 }
 
 static int writer_fail_errno(int error_number) {

@@ -16,6 +16,23 @@ struct bx_path_tilde_context {
     const char* previous_directory;
 };
 
+struct bx_path_split {
+    size_t parent_length;
+    const char* basename;
+    size_t basename_length;
+};
+
+/*
+ * Borrows parts of a non-NULL NUL-terminated path without allocating or
+ * accessing the filesystem. parent_length selects a prefix of path (zero
+ * means no parent). Only the final separator is excluded from that prefix,
+ * except that a root parent retains "/"; earlier separators and "."/".."
+ * components are unchanged. Optional trailing-slash stripping retains root.
+ * The basename may be empty and need not be NUL-terminated. Callers own
+ * validation, missing-parent policy, and allocation.
+ */
+struct bx_path_split bx_path_split(const char* path, bool strip_trailing_slashes);
+
 void bx_path_components_push_dup(struct bx_path_components* components, const char* part);
 void bx_path_components_pop(struct bx_path_components* components);
 void bx_path_components_free(struct bx_path_components* components);

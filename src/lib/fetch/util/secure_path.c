@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "lib/fetch/secure_path.h"
 #include "lib/fd_ops.h"
+#include "lib/path_ops.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fs.h>
@@ -149,57 +150,28 @@ int bx_fetch_secure_path_split(const char* path, char** parent_out, char** basen
     if (parent_out)
         *parent_out = NULL;
 
-    char* copy = strdup(path);
-    if (!copy)
-        return -1;
-
-    size_t len = strlen(copy);
-    while (len > 0 && copy[len - 1] == '/') {
-        copy[--len] = '\0';
-    }
-    if (len == 0) {
-        free(copy);
+    struct bx_path_split parts = bx_path_split(path, true);
+    if (parts.basename_length == 0 || (parts.parent_length != 0 && !parent_out)) {
         errno = EINVAL;
         return -1;
     }
 
-    char* slash = strrchr(copy, '/');
-    bool has_parent = slash != NULL;
-    char* basename = NULL;
+    char* basename = strndup(parts.basename, parts.basename_length);
+    if (!basename)
+        return -1;
     char* parent = NULL;
-
-    if (!slash) {
-        basename = strdup(copy);
-    }
-    else if (slash == copy) {
-        basename = strdup(slash + 1);
-        parent = strdup("/");
-    }
-    else {
-        basename = strdup(slash + 1);
-        *slash = '\0';
-        parent = strdup(copy);
-    }
-    free(copy);
-
-    if (!basename || (has_parent && !parent)) {
-        int error_number = errno ? errno : ENOMEM;
-        free(parent);
-        free(basename);
-        errno = error_number;
-        return -1;
-    }
-    if (basename[0] == '\0' || (has_parent && !parent_out)) {
-        free(parent);
-        free(basename);
-        errno = EINVAL;
-        return -1;
+    if (parts.parent_length != 0) {
+        parent = strndup(path, parts.parent_length);
+        if (!parent) {
+            int error_number = errno;
+            free(basename);
+            errno = error_number;
+            return -1;
+        }
     }
 
     if (parent_out)
         *parent_out = parent;
-    else
-        free(parent);
     *basename_out = basename;
     return 0;
 }
