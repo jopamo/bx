@@ -17,6 +17,11 @@
 #include "path_ops.h"
 #include "copy_data.h"
 #include "fd_ops.h"
+#include "same_file.h"
+
+#ifndef RENAME_NOREPLACE
+#define RENAME_NOREPLACE (1 << 0)
+#endif
 
 void bx_backup_get_params(enum bx_backup_mode cmd_mode, const char* cmd_suffix, struct bx_backup_params* out) {
     if (cmd_mode == BX_BACKUP_UNSPECIFIED) {
@@ -142,7 +147,47 @@ static void bx_backup_diag_errno(struct bx_diag_ctx* diag, const char* path, int
     bx_diag(diag, "cannot backup '%s': %s", path, strerror(err));
 }
 
-enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_backup_params* params, struct bx_diag_ctx* diag, char** backup_path_out) {
+static int bx_backup_source_conflict(const char* backup_path, const char* source_path, const struct stat* source_stat) {
+    if (source_path == NULL) {
+        return 0;
+    }
+    char* path = xstrdup(source_path);
+    int result = -1;
+    for (unsigned links = 0; links <= 40; links++) {
+        struct stat st;
+        if (bx_paths_name_same_directory_entry(path, backup_path)) {
+            result = 1;
+            break;
+        }
+        if (lstat(path, &st) != 0) {
+            break;
+        }
+        if (source_stat == NULL || bx_same_file(&st, source_stat)) {
+            result = 0;
+            break;
+        }
+        if (!S_ISLNK(st.st_mode)) {
+            errno = ESTALE;
+            break;
+        }
+        /* Protect each symlink used to reach a dereferenced source, too. */
+        char* target = bx_path_readlink_dup(path);
+        if (target == NULL) {
+            break;
+        }
+        char* parent = bx_path_parent_dir_dup(path);
+        char* next = bx_path_is_absolute(target) ? xstrdup(target) : bx_path_join(parent, target);
+        free(target);
+        free(parent);
+        free(path);
+        path = next;
+        errno = ELOOP;
+    }
+    free(path);
+    return result;
+}
+
+enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_backup_params* params, const char* source_path, const struct stat* source_stat, struct bx_diag_ctx* diag, char** backup_path_out) {
     if (backup_path_out) {
         *backup_path_out = NULL;
     }
@@ -159,8 +204,6 @@ enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_
         bx_backup_diag_errno(diag, path, errno);
         return BX_BACKUP_CREATE_FAILED;
     }
-    (void)st;
-
     bool version_overflow = false;
     char* backup_path = get_backup_path(path, params, NULL, &version_overflow);
     if (backup_path == NULL) {
@@ -168,6 +211,22 @@ enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_
                 "cannot backup '%s': %s",
                 path,
                 version_overflow ? "numbered backup version overflow" : "unsupported backup mode");
+        return BX_BACKUP_CREATE_FAILED;
+    }
+
+    int conflict = bx_backup_source_conflict(backup_path, source_path, source_stat);
+    if (conflict < 0) {
+        bx_backup_diag_errno(diag, path, errno);
+        free(backup_path);
+        return BX_BACKUP_CREATE_FAILED;
+    }
+    if (conflict != 0) {
+        free(backup_path);
+        return BX_BACKUP_CREATE_SOURCE_CONFLICT;
+    }
+    if (bx_paths_name_same_directory_entry(path, backup_path)) {
+        bx_diag(diag, "backup name '%s' is the destination itself", backup_path);
+        free(backup_path);
         return BX_BACKUP_CREATE_FAILED;
     }
 
@@ -185,6 +244,31 @@ enum bx_backup_create_result bx_backup_create(const char* path, const struct bx_
         free(backup_path);
     }
     return BX_BACKUP_CREATE_CREATED;
+}
+
+bool bx_backup_restore(const char* backup_path, const char* dest_path, const struct stat* created_destination, struct bx_diag_ctx* diag) {
+    if (backup_path == NULL) {
+        return true;
+    }
+    struct stat current;
+    if (lstat(dest_path, &current) == 0) {
+        if (created_destination == NULL || !bx_same_file(created_destination, &current)) {
+            return true;
+        }
+        if (unlink(dest_path) != 0) {
+            bx_perror_path(diag, dest_path);
+            return false;
+        }
+    }
+    else if (errno != ENOENT) {
+        bx_perror_path(diag, dest_path);
+        return false;
+    }
+    if (bx_fd_renameat2(AT_FDCWD, backup_path, AT_FDCWD, dest_path, RENAME_NOREPLACE) != 0) {
+        bx_perror_path(diag, dest_path);
+        return false;
+    }
+    return true;
 }
 
 enum bx_backup_create_result bx_backup_create_copy(const char* path, const struct bx_backup_params* params, struct bx_diag_ctx* diag, char** backup_path_out) {

@@ -117,40 +117,6 @@ static bool bx_mv_symlink_source_matches_destination_path(const char* src_path, 
     return same;
 }
 
-static bool bx_mv_parent_dir_stat(const char* path, struct stat* parent_stat_out) {
-    char* parent_path = NULL;
-    bool ok = false;
-
-    parent_path = bx_path_parent_dir_stripped_dup(path);
-    ok = stat(parent_path, parent_stat_out) == 0;
-    free(parent_path);
-    return ok;
-}
-
-static bool bx_mv_paths_name_same_directory_entry(const char* src_path, const char* dest_path) {
-    bool same_entry = true;
-    char* src_base = bx_path_basename_dup(src_path);
-    char* dest_base = bx_path_basename_dup(dest_path);
-
-    if (strcmp(src_base, dest_base) != 0) {
-        same_entry = false;
-        goto out;
-    }
-
-    struct stat src_parent_stat;
-    struct stat dest_parent_stat;
-    if (!bx_mv_parent_dir_stat(src_path, &src_parent_stat) || !bx_mv_parent_dir_stat(dest_path, &dest_parent_stat)) {
-        goto out;
-    }
-
-    same_entry = bx_same_file(&src_parent_stat, &dest_parent_stat);
-
-out:
-    free(dest_base);
-    free(src_base);
-    return same_entry;
-}
-
 static bool bx_mv_paths_are_same_file(const char* src_path, const char* dest_path, const struct stat* src_lstat, const struct stat* dest_lstat) {
     if (bx_same_file(src_lstat, dest_lstat)) {
         return true;
@@ -359,7 +325,14 @@ struct bx_mv_context {
     struct bx_backup_params backup_params;
     struct bx_copy_options cross_device_copy_options;
     struct bx_copy_context cross_device_copy_ctx;
+    struct bx_written_dest* written;
+    const char* target_directory_display;
 };
+
+static char* bx_mv_display_destination(const struct bx_mv_context* ctx, const char* src_path, const char* dest_path) {
+    return ctx->target_directory_display == NULL ? xstrdup(dest_path) :
+        bx_path_build_dest(src_path, ctx->target_directory_display, true, false);
+}
 
 static void bx_mv_init_cross_device_copy_context(struct bx_mv_context* ctx) {
     memset(&ctx->cross_device_copy_options, 0, sizeof(ctx->cross_device_copy_options));
@@ -543,28 +516,6 @@ static bool bx_mv_cross_device_fallback(struct bx_mv_context* ctx, const char* s
     return true;
 }
 
-static bool bx_mv_restore_failed_backup(struct bx_mv_context* ctx, const char* dest_path, const char* backup_path) {
-    struct stat st;
-
-    if (backup_path == NULL) {
-        return true;
-    }
-
-    if (lstat(dest_path, &st) == 0) {
-        return true;
-    }
-    if (errno != ENOENT && errno != ENOTDIR) {
-        bx_perror_path(ctx->diag, dest_path);
-        return false;
-    }
-
-    if (rename(backup_path, dest_path) != 0) {
-        bx_perror_path(ctx->diag, dest_path);
-        return false;
-    }
-    return true;
-}
-
 static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, const char* dest_path) {
     struct stat src_lstat;
     struct bx_dest_state dest_state;
@@ -588,7 +539,7 @@ static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, c
     if (dest_state.exists_lstat) {
         same_file = bx_mv_paths_are_same_file(src_path, dest_path, &src_lstat, &dest_state.lst);
         if (same_file) {
-            same_directory_entry = bx_same_file(&src_lstat, &dest_state.lst) && bx_mv_paths_name_same_directory_entry(src_path, dest_path);
+            same_directory_entry = bx_same_file(&src_lstat, &dest_state.lst) && bx_paths_name_same_directory_entry(src_path, dest_path);
 
             if (ctx->options->no_clobber || ctx->options->update_mode == BX_UPDATE_NONE) {
                 return true;
@@ -611,6 +562,13 @@ static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, c
             return true;
         }
 
+        if (!bx_overwrite_check_written(ctx->written, dest_path, &dest_state.lst, &ctx->backup_params)) {
+            char* display_path = bx_mv_display_destination(ctx, src_path, dest_path);
+            bx_diag(ctx->diag, "will not overwrite just-created '%s' with '%s'", display_path, src_path);
+            free(display_path);
+            return false;
+        }
+
         if (ctx->options->interactive && !ctx->options->force) {
             if (!bx_prompt_overwrite(ctx->options->progname, dest_path)) {
                 ctx->diag->exit_status = 1;
@@ -618,7 +576,7 @@ static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, c
             }
         }
 
-        if (!ctx->options->exchange && !bx_overwrite_backup_existing(dest_path, &ctx->backup_params, ctx->diag, &dest_state, &backup_path)) {
+        if (!ctx->options->exchange && !bx_overwrite_backup_existing(src_path, &src_lstat, true, dest_path, &ctx->backup_params, ctx->diag, &dest_state, &backup_path)) {
             goto finish;
         }
     }
@@ -657,12 +615,22 @@ static bool bx_mv_rename_file(struct bx_mv_context* ctx, const char* src_path, c
         goto finish;
     }
 
-    bx_perror_path(ctx->diag, dest_path);
+    if (errno == ENOTEMPTY || errno == EEXIST) {
+        char* display_path = bx_mv_display_destination(ctx, src_path, dest_path);
+        bx_diag(ctx->diag, "cannot overwrite '%s': %s", display_path, strerror(ENOTEMPTY));
+        free(display_path);
+    }
+    else {
+        bx_perror_path(ctx->diag, dest_path);
+    }
 
 finish:
-    if (!ok && restore_backup_on_failure && !bx_mv_restore_failed_backup(ctx, dest_path, backup_path)) {
+    if (!ok && restore_backup_on_failure && !bx_backup_restore(backup_path, dest_path, NULL, ctx->diag)) {
         free(backup_path);
         return false;
+    }
+    if (ok && !ctx->options->exchange) {
+        ok = bx_overwrite_remember(&ctx->written, dest_path, NULL, ctx->diag);
     }
     free(backup_path);
     return ok;
@@ -763,6 +731,7 @@ int bx_mv_main(int argc, char** argv) {
     }
 
     if (destination_is_directory) {
+        ctx.target_directory_display = destination_root;
         resolved_destination_root = realpath(destination_root, NULL);
         if (resolved_destination_root != NULL) {
             destination_root = resolved_destination_root;
@@ -798,5 +767,6 @@ int bx_mv_main(int argc, char** argv) {
 finish:
     free(resolved_destination_root);
     bx_mv_free_cross_device_copy_context(&ctx);
+    bx_overwrite_free_written(&ctx.written);
     return exit_status;
 }
