@@ -109,7 +109,7 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
         return BX_COPY_DATA_SUCCESS;
     }
     if (src_stat.st_size == 0) {
-        *handled_out = true;
+        /* procfs files can report zero size while still supplying data. */
         return BX_COPY_DATA_SUCCESS;
     }
 
@@ -188,6 +188,8 @@ static int bx_copy_data_sparse_auto(int src_fd, int dest_fd, bool* handled_out) 
 }
 
 int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opts) {
+    enum bx_sparse_mode sparse_mode = opts->sparse_mode;
+
     if (opts->reflink_mode != BX_REFLINK_NEVER) {
         if (ioctl(dest_fd, FICLONE, src_fd) == 0) {
             return BX_COPY_DATA_SUCCESS;
@@ -197,14 +199,24 @@ int bx_copy_data(int src_fd, int dest_fd, const struct bx_copy_data_options* opt
         }
     }
 
-    if (opts->sparse_mode == BX_SPARSE_AUTO) {
+    if (sparse_mode != BX_SPARSE_NEVER) {
+        struct stat dest_stat;
+        if (fstat(dest_fd, &dest_stat) != 0) {
+            return BX_COPY_DATA_WRITE_ERROR;
+        }
+        if (!S_ISREG(dest_stat.st_mode)) {
+            sparse_mode = BX_SPARSE_NEVER;
+        }
+    }
+
+    if (sparse_mode == BX_SPARSE_AUTO) {
         bool handled = false;
         int res = bx_copy_data_sparse_auto(src_fd, dest_fd, &handled);
-        if (handled) {
+        if (handled || res != BX_COPY_DATA_SUCCESS) {
             return res;
         }
         return bx_copy_data_buffered(src_fd, dest_fd, BX_SPARSE_NEVER);
     }
 
-    return bx_copy_data_buffered(src_fd, dest_fd, opts->sparse_mode);
+    return bx_copy_data_buffered(src_fd, dest_fd, sparse_mode);
 }

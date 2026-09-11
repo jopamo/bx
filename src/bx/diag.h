@@ -25,6 +25,8 @@ struct bx_diag_ctx {
  */
 static inline const char* bx_strerror(int errnum) {
     switch (errnum) {
+    case EIO:
+        return "I/O error";
     case ENOMEM:
         return "Out of memory";
     case ESPIPE:

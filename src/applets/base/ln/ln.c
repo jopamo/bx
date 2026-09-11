@@ -364,7 +364,7 @@ static bool bx_ln_remove_destination_for_force(const char* destination_path, str
     return true;
 }
 
-static bool bx_ln_prepare_destination_for_replace(const char* destination_path, const struct bx_backup_params* backup_params, bool backup_enabled, struct bx_diag_ctx* diag) {
+static bool bx_ln_prepare_destination_for_replace(const char* source_path, const struct stat* source_stat, const char* destination_path, const struct bx_backup_params* backup_params, bool backup_enabled, struct bx_diag_ctx* diag) {
     struct stat dest_lstat;
 
     if (lstat(destination_path, &dest_lstat) != 0) {
@@ -381,7 +381,11 @@ static bool bx_ln_prepare_destination_for_replace(const char* destination_path, 
     }
 
     if (backup_enabled) {
-        enum bx_backup_create_result backup_result = bx_backup_create(destination_path, backup_params, diag, NULL);
+        enum bx_backup_create_result backup_result = bx_backup_create(destination_path, backup_params, source_stat != NULL ? source_path : NULL, source_stat, diag, NULL);
+        if (backup_result == BX_BACKUP_CREATE_SOURCE_CONFLICT) {
+            bx_diag(diag, "backing up '%s' might destroy source;  '%s' not linked", destination_path, source_path);
+            return false;
+        }
         return backup_result != BX_BACKUP_CREATE_FAILED;
     }
 
@@ -514,7 +518,7 @@ static bool bx_ln_create_link(const struct bx_ln_options* options, const struct 
         return false;
     }
 
-    if (!bx_ln_prepare_destination_for_replace(destination_path, backup_params, backup_enabled, diag)) {
+    if (!bx_ln_prepare_destination_for_replace(source_path, expected_source_stat_ptr, destination_path, backup_params, backup_enabled, diag)) {
         return false;
     }
 

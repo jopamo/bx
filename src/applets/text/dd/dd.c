@@ -231,15 +231,15 @@ static void bx_dd_diag(const char* progname, const char* fmt, ...) {
 }
 
 static void bx_dd_perror_path(const char* progname, const char* path) {
-    fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errno));
+    fprintf(stderr, "%s: %s: %s\n", progname, path, bx_strerror(errno));
 }
 
 static void bx_dd_perror_with_errno(const char* progname, const char* path, int errnum) {
-    fprintf(stderr, "%s: %s: %s\n", progname, path, strerror(errnum));
+    fprintf(stderr, "%s: %s: %s\n", progname, path, bx_strerror(errnum));
 }
 
 static void bx_dd_perror_setting_flags(const char* progname, const char* path, int errnum) {
-    fprintf(stderr, "%s: setting flags for '%s': %s\n", progname, path, strerror(errnum));
+    fprintf(stderr, "%s: setting flags for '%s': %s\n", progname, path, bx_strerror(errnum));
 }
 
 static bool bx_dd_key_eq(const char* key, size_t key_len, const char* expected) {

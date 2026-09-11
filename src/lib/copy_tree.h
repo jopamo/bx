@@ -8,6 +8,7 @@
 #include "lib/backup_ops.h"
 #include "lib/copy_data.h"
 #include "lib/dir_cycle.h"
+#include "lib/overwrite_ops.h"
 
 enum bx_deref_mode {
     BX_DEREF_DEFAULT = 0,
@@ -71,6 +72,7 @@ struct bx_copy_context {
     struct bx_link_entry* links;
     struct bx_dir_stack* source_dirs;
     struct bx_parent_attr_entry* parent_attrs;
+    struct bx_written_dest* written;
 
     bool dest_root_active;
     dev_t dest_root_dev;
@@ -81,6 +83,7 @@ struct bx_copy_context {
 
     /* Internal state */
     bool stop_current_source;
+    bool top_level_file;
     const char* current_source_root;
     const char* current_dest_root;
     char* current_dest_root_realpath;

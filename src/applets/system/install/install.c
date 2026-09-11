@@ -875,7 +875,11 @@ static bool bx_install_copy_regular_file(const char* src_path,
 
     if (dest_exists) {
         if (bx_args_backup_mode_enabled(backup_params->mode)) {
-            enum bx_backup_create_result backup_result = bx_backup_create(dest_path, backup_params, diag, &backup_path);
+            enum bx_backup_create_result backup_result = bx_backup_create(dest_path, backup_params, src_path, &src_st, diag, &backup_path);
+            if (backup_result == BX_BACKUP_CREATE_SOURCE_CONFLICT) {
+                bx_diag(diag, "backing up '%s' might destroy source;  '%s' not installed", dest_path, src_path);
+                goto fail_keep;
+            }
             if (backup_result == BX_BACKUP_CREATE_FAILED) {
                 goto fail_keep;
             }

@@ -499,5 +499,6 @@ int bx_cp_main(int argc, char** argv) {
     bx_copy_free_links(&copy_ctx);
     bx_copy_free_source_dirs(&copy_ctx);
     bx_copy_free_parent_attrs(&copy_ctx);
+    bx_overwrite_free_written(&copy_ctx.written);
     return diag_ctx.exit_status;
 }
