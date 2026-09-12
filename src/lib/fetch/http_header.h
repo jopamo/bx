@@ -2,7 +2,7 @@
 #define BX_FETCH_HTTP_HEADER_H
 
 /* BX_FETCH_HEADER_OWNER: runtime */
-/* BX_FETCH_HEADER_CONSUMERS: runtime, cli, core, net */
+/* BX_FETCH_HEADER_CONSUMERS: runtime, cli, core, net, fs */
 
 /*
  * Custom request-header policy:
@@ -24,6 +24,7 @@
 #define BX_FETCH_REQUEST_HEADER_LINE_MAX_BYTES ((size_t)64 * 1024u)
 #define BX_FETCH_REQUEST_HEADER_BLOCK_MAX_BYTES ((size_t)256 * 1024u)
 #define BX_FETCH_REQUEST_HEADER_MAX_FIELDS ((size_t)1024)
+#define BX_FETCH_BEARER_TOKEN_MAX_BYTES (BX_FETCH_REQUEST_HEADER_LINE_MAX_BYTES - (sizeof("Authorization: Bearer ") - 1u))
 
 struct bx_fetch_config;
 
@@ -50,6 +51,9 @@ const char* bx_fetch_http_header_error_string(BxFetchHttpHeaderError error);
 
 /* HTTP methods use the same non-empty RFC token grammar as field names. */
 bool bx_fetch_http_method_is_valid(const char* method);
+
+/* Non-empty RFC 6750 b64token, bounded to fit one Authorization header line. */
+bool bx_fetch_http_bearer_token_is_valid(const char* token);
 
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_line(const char* line, char** normalized_out);
 BxFetchHttpHeaderError bx_fetch_http_header_normalize_pair(const char* name, const char* value, char** normalized_name_out, char** normalized_value_out);

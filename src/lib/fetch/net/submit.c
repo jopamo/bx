@@ -233,7 +233,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
         errno = ENOTSUP;
         return -1;
     }
-    if (set_protocol_restrictions(curl, engine->cfg->https.https_only, setup_error) != 0) {
+    if (set_protocol_restrictions(curl, bx_fetch_config_requires_https(engine->cfg), setup_error) != 0) {
         return -1;
     }
 
@@ -400,10 +400,8 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     }
 
     // TLS options
-    if (engine->cfg->https.no_check_certificate) {
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_SSL_VERIFYPEER, 0L);
-        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_SSL_VERIFYHOST, 0L);
-    }
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_SSL_VERIFYPEER, engine->cfg->https.no_check_certificate ? 0L : 1L);
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_SSL_VERIFYHOST, engine->cfg->https.no_check_certificate ? 0L : 2L);
     if (engine->cfg->https.ca_certificate) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_CAINFO, engine->cfg->https.ca_certificate);
     }
@@ -440,7 +438,32 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     if (allow_plaintext_credentials && origin_credentials.username && set_credentials(curl, setup_error, origin_credentials.username, origin_credentials.password) != 0) {
         return -1;
     }
-    if (engine->cfg->http.auth_no_challenge) {
+    if (origin_credentials.source == BX_FETCH_CREDENTIAL_SOURCE_BEARER) {
+        if (!bx_fetch_http_bearer_token_is_valid(origin_credentials.bearer_token)) {
+            if (setup_error) {
+                setup_error->present = true;
+                setup_error->detail = "invalid HTTP Bearer token";
+                setup_error->error_number = EINVAL;
+            }
+            errno = EINVAL;
+            return -1;
+        }
+#ifdef CURLAUTH_BEARER
+        SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HTTPAUTH, CURLAUTH_BEARER);
+        if (allow_plaintext_credentials) {
+            SETOPT_OR_RETURN(curl, setup_error, CURLOPT_XOAUTH2_BEARER, origin_credentials.bearer_token);
+        }
+#else
+        if (setup_error) {
+            setup_error->present = true;
+            setup_error->detail = "HTTP Bearer authentication is not supported";
+            setup_error->error_number = ENOTSUP;
+        }
+        errno = ENOTSUP;
+        return -1;
+#endif
+    }
+    else if (engine->cfg->http.auth_no_challenge) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
     }
     else {
@@ -574,7 +597,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
     if (engine->cfg->http.paranoid && bx_fetch_prepared_url_has_userinfo(req->target)) {
         return -1;
     }
-    if (bx_fetch_prepared_url_policy(req->target, engine->cfg->https.https_only) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+    if (bx_fetch_prepared_url_policy(req->target, bx_fetch_config_requires_https(engine->cfg)) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         return -1;
     }
 

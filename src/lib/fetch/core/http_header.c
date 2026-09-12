@@ -36,6 +36,28 @@ static unsigned char ascii_lower(unsigned char c) {
     return c;
 }
 
+bool bx_fetch_http_bearer_token_is_valid(const char* token) {
+    const size_t maximum = BX_FETCH_BEARER_TOKEN_MAX_BYTES;
+    if (!token || token[0] == '\0')
+        return false;
+    size_t length = strnlen(token, maximum + 1u);
+    if (length > maximum)
+        return false;
+
+    size_t index = 0;
+    for (; index < length; index++) {
+        unsigned char c = (unsigned char)token[index];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              c == '-' || c == '.' || c == '_' || c == '~' || c == '+' || c == '/'))
+            break;
+    }
+    if (index == 0)
+        return false;
+    while (index < length && token[index] == '=')
+        index++;
+    return index == length;
+}
+
 static bool span_equals_case(const char* value, size_t value_len, const char* expected) {
     if (!value || !expected || strlen(expected) != value_len)
         return false;

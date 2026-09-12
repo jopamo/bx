@@ -1520,6 +1520,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/fs/metadata.c',
   'src/lib/fetch/fs/metadata_recovery.c',
   'src/lib/fetch/fs/pathmap.c',
+  'src/lib/fetch/fs/credential_file.c',
   'src/lib/fetch/fs/writer.c',
   'src/lib/fetch/fs/xattr.c',
   'src/lib/fetch/html/parser.c',

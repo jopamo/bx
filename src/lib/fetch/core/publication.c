@@ -303,7 +303,7 @@ static int load_recovered_mapping(BxFetchPublicationState* candidate, const char
             errno = EINVAL;
         return -1;
     }
-    if (bx_fetch_prepared_url_policy(prepared, candidate->cfg->https.https_only) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+    if (bx_fetch_prepared_url_policy(prepared, bx_fetch_config_requires_https(candidate->cfg)) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         bx_fetch_prepared_url_free(prepared);
         errno = EINVAL;
         return -1;

@@ -383,6 +383,10 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
         return false;
     }
     if (observation->result.filter_decision == FILTER_DECISION_HTTPS_ONLY) {
+        if (frontend->config->http.bearer_token) {
+            mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "Bearer authentication requires HTTPS", observation->target, observation->source_path, -1);
+            return false;
+        }
         if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
             fprintf(frontend->diagnostics, "mira: skipping non-HTTPS URL due to --https-only: %s\n", bx_fetch_prepared_url_display(observation->target));
         }

@@ -26,6 +26,11 @@ void bx_fetch_net_select_origin_credentials(const struct bx_fetch_config* cfg, c
     bool is_http = protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS;
     bool is_ftp = protocol == BX_FETCH_PROTOCOL_FTP || protocol == BX_FETCH_PROTOCOL_FTPS;
 
+    if (is_http && cfg->http.bearer_token) {
+        selection->source = BX_FETCH_CREDENTIAL_SOURCE_BEARER;
+        selection->bearer_token = cfg->http.bearer_token;
+        return;
+    }
     if (is_http && pair_is_configured(cfg->http.http_user, cfg->http.http_password)) {
         select_configured_pair(selection, BX_FETCH_CREDENTIAL_SOURCE_HTTP, cfg->http.http_user, cfg->http.http_password);
         return;
