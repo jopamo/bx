@@ -16,7 +16,8 @@
 #define BX_SEARCH_SCANNER_MIN_FILE_SIZE 1u
 
 static bool bx_search_scanner_can_shortcut_file_presence(const struct search_opts *opts) {
-    if (!opts || opts->count_matches)
+    /* Whole-record verification needs recovered record bounds, not chunk bounds. */
+    if (!opts || opts->count_matches || opts->line_regexp)
         return false;
     if (opts->quiet)
         return true;
