@@ -9,6 +9,7 @@ typedef enum {
     BX_FETCH_CREDENTIAL_SOURCE_URL,
     BX_FETCH_CREDENTIAL_SOURCE_GENERIC,
     BX_FETCH_CREDENTIAL_SOURCE_HTTP,
+    BX_FETCH_CREDENTIAL_SOURCE_BEARER,
     BX_FETCH_CREDENTIAL_SOURCE_FTP,
     BX_FETCH_CREDENTIAL_SOURCE_PROXY_CONFIG,
     BX_FETCH_CREDENTIAL_SOURCE_PROXY_INHERITED,
@@ -18,6 +19,7 @@ typedef struct {
     BxFetchCredentialSource source;
     const char* username;
     const char* password;
+    const char* bearer_token;
 } BxFetchCredentialSelection;
 
 /*

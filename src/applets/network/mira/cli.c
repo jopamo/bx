@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "mira.h"
 #include "options.h"
+#include "lib/fetch/credential_file.h"
 #include "lib/fetch/error.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/http_status.h"
@@ -33,6 +34,7 @@ typedef struct {
     const char* continue_download;
     const char* unlink;
     const char* backups;
+    const char* bearer_token_file;
 } MiraOptionPresence;
 
 void bx_mira_emit_parse_error(const struct bx_fetch_config* config, const char* summary) {
@@ -196,6 +198,21 @@ static int mira_conflicting_tokens(struct bx_fetch_config* config, const char* l
 }
 
 static int mira_validate_config(struct bx_fetch_config* config, const MiraOptionPresence* presence) {
+    if (presence->bearer_token_file) {
+        if (config->http.bearer_token)
+            return mira_conflicting_tokens(config, "--bearer-token", "--bearer-token-file");
+        if (bx_fetch_bearer_token_load_file(presence->bearer_token_file, &config->http.bearer_token) != 0) {
+            if (errno == ENOMEM)
+                return -1;
+            mira_parse_errorf(config, "cannot load --bearer-token-file: %s", strerror(errno));
+            return -1;
+        }
+    }
+    if (!bx_fetch_config_tls_policy_valid(config)) {
+        bx_mira_emit_parse_error(config, "Bearer authentication requires certificate verification; --no-check-certificate is not allowed");
+        errno = EINVAL;
+        return -1;
+    }
     if (config->http.post_data && config->http.post_file) {
         bx_mira_emit_parse_error(config, "conflicting option tokens: --post-data and --post-file");
         errno = EINVAL;
@@ -584,6 +601,16 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_HTTP_PASSWORD:
                 MIRA_SET_STRING(config->http.http_password);
+                break;
+            case MIRA_OPT_BEARER_TOKEN:
+                if (!bx_fetch_http_bearer_token_is_valid(optarg)) {
+                    bx_mira_emit_parse_error(config, "invalid value for --bearer-token");
+                    goto parse_failure;
+                }
+                MIRA_SET_STRING(config->http.bearer_token);
+                break;
+            case MIRA_OPT_BEARER_TOKEN_FILE:
+                presence.bearer_token_file = optarg;
                 break;
             case MIRA_OPT_DEFAULT_PAGE:
                 MIRA_SET_STRING(config->http.default_page);

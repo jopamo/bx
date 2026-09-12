@@ -189,7 +189,7 @@ BxFetchCrawlEnqueueResult bx_fetch_crawl_coordinator_add_discovered_observed(BxF
     }
     if (coordinator->cfg->recursive.level != 0 && parent_depth >= coordinator->cfg->recursive.level)
         return enqueue_result(BX_FETCH_CRAWL_SKIPPED_DEPTH, FILTER_DECISION_ACCEPT);
-    if (bx_fetch_url_has_explicit_scheme(reference) && bx_fetch_protocol_policy_evaluate_url(reference, coordinator->cfg->https.https_only) == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
+    if (bx_fetch_url_has_explicit_scheme(reference) && bx_fetch_protocol_policy_evaluate_url(reference, bx_fetch_config_requires_https(coordinator->cfg)) == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
         return enqueue_result(BX_FETCH_CRAWL_REJECTED, FILTER_DECISION_UNSUPPORTED_PROTOCOL);
     }
 

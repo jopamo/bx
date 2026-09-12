@@ -314,7 +314,7 @@ BxFetchFilterDecision bx_fetch_filter_evaluate_url(BxFetchFilter* f, const char*
     if (!f)
         return FILTER_DECISION_ACCEPT;
 
-    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_url(url, f->cfg->https.https_only);
+    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_url(url, bx_fetch_config_requires_https(f->cfg));
     if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }
@@ -334,7 +334,7 @@ static BxFetchFilterDecision evaluate_transport_policy(const BxFetchFilter* f, c
     if (!f || !url)
         return FILTER_DECISION_ACCEPT;
 
-    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_scheme(url->scheme, f->cfg->https.https_only);
+    BxFetchProtocolDecision protocol_decision = bx_fetch_protocol_policy_evaluate_scheme(url->scheme, bx_fetch_config_requires_https(f->cfg));
     if (protocol_decision == BX_FETCH_PROTOCOL_DECISION_UNSUPPORTED || protocol_decision == BX_FETCH_PROTOCOL_DECISION_INVALID_URL) {
         return FILTER_DECISION_UNSUPPORTED_PROTOCOL;
     }

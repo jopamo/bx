@@ -107,6 +107,7 @@ typedef struct {
 typedef struct {
     char* http_user;
     char* http_password;
+    char* bearer_token;  /* HTTP only; takes precedence over username/password sources. */
     char* default_page;
     bool adjust_extension;
     char** headers;
@@ -186,6 +187,9 @@ struct bx_fetch_config {
 
 /* Allocates a config with default values; caller owns and must free. */
 struct bx_fetch_config* bx_fetch_config_new(void);
+/* Bearer authentication narrows every request and redirect to verified HTTPS. */
+bool bx_fetch_config_requires_https(const struct bx_fetch_config* config);
+bool bx_fetch_config_tls_policy_valid(const struct bx_fetch_config* config);
 /*
  * HTTP Range, conditional timestamps, and saved HTTP headers do not define
  * FTP output semantics. Until those contracts exist, reject them rather than

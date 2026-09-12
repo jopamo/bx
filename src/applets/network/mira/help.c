@@ -61,6 +61,14 @@ void bx_mira_print_help(void) {
     }
 
     fputs(
+        "\nBearer tokens require verified HTTPS for every URL and redirect; "
+        "--no-check-certificate is rejected. Tokens are sent preemptively, overriding HTTP, "
+        "generic, and URL username/password credentials, even with "
+        "--auth-no-challenge. Redirects do not forward them to another origin.\n"
+        "Prefer --bearer-token-file to avoid exposing tokens in process arguments. "
+        "It is mutually exclusive with --bearer-token. The file must be owned by "
+        "the effective user, mode 0400 or 0600, regular, single-link, and have no "
+        "symlinks in its path. Supply one token with optional LF or CRLF, no other whitespace.\n"
         "\nFTP supports direct downloads and spider checks. FTPS is not yet "
         "supported. Set --no-proxy when FTP proxy environment variables or "
         "proxy credentials are present; FTP through proxies is not supported.\n"

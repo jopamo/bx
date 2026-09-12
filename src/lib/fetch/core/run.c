@@ -656,7 +656,7 @@ static int run_transport_poll(void* userdata) {
 }
 
 BxFetchRun* bx_fetch_run_new(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend) {
-    if (!cfg || !frontend || !frontend->plan_output) {
+    if (!bx_fetch_config_tls_policy_valid(cfg) || !frontend || !frontend->plan_output) {
         errno = EINVAL;
         return NULL;
     }
@@ -851,7 +851,7 @@ static int run_session_add_seed(BxFetchRun* run, int index, const char* url, con
 int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend, BxFetchRunFailure* failure_out) {
     run_failure_reset(failure_out);
     bool has_input_file = cfg && cfg->input.input_file && cfg->input.input_file[0] != '\0';
-    if (!cfg || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
+    if (!bx_fetch_config_tls_policy_valid(cfg) || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
         (cfg->input.url_count > 0 && !cfg->input.urls) || (cfg->input.force_html && !has_input_file) ||
         (cfg->input.base_url && (!has_input_file || !cfg->input.force_html))) {
         return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL, NULL);

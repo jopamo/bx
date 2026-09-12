@@ -108,7 +108,7 @@ static BxFetchPreparedUrl* resolve_redirect_target(BxFetchTransfer* t, const cha
     if (!target)
         return NULL;
 
-    if (bx_fetch_prepared_url_policy(target, t->engine && t->engine->cfg ? t->engine->cfg->https.https_only : false) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
+    if (bx_fetch_prepared_url_policy(target, bx_fetch_config_requires_https(t->engine ? t->engine->cfg : NULL)) != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         t->redirect_protocol_unsupported = true;
         bx_fetch_prepared_url_free(target);
         errno = EPROTONOSUPPORT;

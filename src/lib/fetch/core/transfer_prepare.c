@@ -139,7 +139,7 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_INVALID_ARGUMENT, EINVAL, BX_FETCH_PROTOCOL_DECISION_INVALID_URL, BX_FETCH_REQUEST_BODY_OK);
     }
 
-    BxFetchProtocolDecision protocol_decision = bx_fetch_prepared_url_policy(target, cfg->https.https_only);
+    BxFetchProtocolDecision protocol_decision = bx_fetch_prepared_url_policy(target, bx_fetch_config_requires_https(cfg));
     if (protocol_decision != BX_FETCH_PROTOCOL_DECISION_ALLOW) {
         return prepare_failure(NULL, error, BX_FETCH_PREPARE_FAILURE_PROTOCOL_POLICY, EPROTONOSUPPORT, protocol_decision, BX_FETCH_REQUEST_BODY_OK);
     }

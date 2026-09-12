@@ -13,6 +13,8 @@
 BxFetchNetTargetPolicy bx_fetch_net_target_policy(const struct bx_fetch_config* cfg, const BxFetchPreparedUrl* target) {
     if (!cfg || !target)
         return BX_FETCH_NET_TARGET_INVALID;
+    if (!bx_fetch_config_tls_policy_valid(cfg))
+        return BX_FETCH_NET_TARGET_TLS_POLICY;
     switch (bx_fetch_prepared_url_protocol(target)) {
         case BX_FETCH_PROTOCOL_HTTP:
         case BX_FETCH_PROTOCOL_HTTPS:
@@ -44,6 +46,8 @@ const char* bx_fetch_net_target_policy_reason(BxFetchNetTargetPolicy policy) {
             return "FTP through proxies is not supported; disable proxy use explicitly";
         case BX_FETCH_NET_TARGET_INVALID:
             return "invalid transfer protocol";
+        case BX_FETCH_NET_TARGET_TLS_POLICY:
+            return "Bearer authentication requires certificate verification";
     }
     return "invalid transfer protocol";
 }

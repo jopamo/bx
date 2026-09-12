@@ -5,6 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool bx_fetch_config_requires_https(const struct bx_fetch_config* cfg) {
+    return cfg && (cfg->https.https_only || cfg->http.bearer_token != NULL);
+}
+
+bool bx_fetch_config_tls_policy_valid(const struct bx_fetch_config* cfg) {
+    return cfg && !(cfg->http.bearer_token && cfg->https.no_check_certificate);
+}
+
 bool bx_fetch_config_ftp_output_supported(const struct bx_fetch_config* cfg) {
     return cfg && !cfg->download.continue_download && !cfg->download.timestamping && !cfg->http.save_headers;
 }
@@ -113,6 +121,7 @@ void bx_fetch_config_free(struct bx_fetch_config* cfg) {
 
     free(cfg->http.http_user);
     free(cfg->http.http_password);
+    free(cfg->http.bearer_token);
     free(cfg->http.default_page);
     for (int i = 0; i < cfg->http.header_count; i++) {
         free(cfg->http.headers[i]);
