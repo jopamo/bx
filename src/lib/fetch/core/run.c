@@ -46,6 +46,19 @@ typedef struct {
     bool redirect_rejected;
 } RunTransfer;
 
+static void run_progress(void* userdata, const BxFetchRequest* request, const BxFetchProgressSample* sample) {
+    RunTransfer* transfer = userdata;
+    BxFetchRun* run = transfer->run;
+    BxFetchRunProgressObservation observation = {
+        .transfer_id = transfer->transfer_id,
+        .attempt = transfer->attempt,
+        .max_attempts = transfer->max_attempts,
+        .request = request,
+        .sample = *sample,
+    };
+    run->frontend.on_progress(run->frontend.userdata, &observation);
+}
+
 static void run_observe_transfer(BxFetchRun* run,
                                  BxFetchRunTransferEvent event,
                                  uint64_t transfer_id,
@@ -602,7 +615,8 @@ run_dispatch(void* userdata, const BxFetchPreparedUrl* target, const char* outpu
                          BX_FETCH_PREPARE_FAILURE_NONE);
 
     BxFetchNetSetupError setup_error = {0};
-    if (bx_fetch_transfer_candidate_submit(candidate, run->engine, run_response_headers, run_transfer_complete, transfer, run_redirect_allowed, transfer, &setup_error) != 0) {
+    if (bx_fetch_transfer_candidate_submit(candidate, run->engine, run_response_headers, run->frontend.on_progress ? run_progress : NULL,
+                                            run_transfer_complete, transfer, run_redirect_allowed, transfer, &setup_error) != 0) {
         run_observe_transfer(run,
                              BX_FETCH_RUN_TRANSFER_SUBMIT_FAILED,
                              transfer_id,

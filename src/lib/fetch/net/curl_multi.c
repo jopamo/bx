@@ -180,7 +180,8 @@ static void reset_response_state(BxFetchTransfer* transfer) {
     transfer->discard_body = false;
     transfer->resume_restart_validation_pending = false;
     transfer->response_body_bytes = 0;
-    transfer->progress_resume_offset = 0;
+    transfer->progress = (BxFetchProgressSample){.generation = transfer->progress.generation + 1};
+    transfer->progress_emitted = false;
     transfer->response_headers_finalized = false;
 }
 
@@ -272,6 +273,8 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
             }
 
             t->response_headers_finalized = true;
+            if (t->resume_needs_content_range)
+                t->progress.accepted_prefix_bytes = (uint64_t)t->resume_from;
         }
         free(line);
         return total;
@@ -306,11 +309,11 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
                 }
                 else if (action == BX_FETCH_RESUME_ACTION_DISCARD) {
                     t->discard_body = true;
-                    t->resume_requested = false;
+                    /* A redirect/auth response does not withdraw Range from
+                     * the next request. Keep validation pending for its body. */
                 }
                 else if (status == 206) {
                     t->resume_needs_content_range = true;
-                    t->progress_resume_offset = (curl_off_t)t->resume_from;
                 }
             }
         }
@@ -378,12 +381,15 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     if (t->resume_needs_content_range && strcasecmp(name, "Content-Range") == 0) {
-        if (!bx_fetch_resume_content_range_matches(value, t->resume_from)) {
+        BxFetchContentRange range;
+        if (bx_fetch_parse_content_range(value, &range) != 0 || range.start != t->resume_from) {
             t->resume_validation_failed = true;
             free(line);
             return 0;
         }
         t->resume_saw_content_range = true;
+        t->progress.total_known = range.complete_length_known;
+        t->progress.total_bytes = range.complete_length_known ? (uint64_t)range.complete_length : 0;
     }
 
     free(line);
@@ -778,12 +784,10 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         transfer->url_canonicalization_failed = true;
     }
 
-    if (engine->observer.on_progress) {
+    if (transfer->progress_cb) {
         curl_off_t total = -1;
-        curl_off_t downloaded = 0;
         (void)curl_easy_getinfo(message->easy_handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &total);
-        (void)curl_easy_getinfo(message->easy_handle, CURLINFO_SIZE_DOWNLOAD_T, &downloaded);
-        bx_fetch_progress_emit(transfer, total, downloaded);
+        bx_fetch_progress_emit(transfer, total, true);
     }
 
     if (!finish_writer(engine, transfer, message->data.result))

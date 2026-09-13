@@ -18,6 +18,7 @@ struct BxFetchTransferCandidate {
 typedef struct {
     const struct bx_fetch_config* cfg;
     BxFetchTransferHeadersCallback headers_callback;
+    BxFetchTransferProgressCallback progress_callback;
     BxFetchTransferCompletionCallback completion_callback;
     void* userdata;
     char* output_path;
@@ -234,6 +235,11 @@ static int candidate_headers_callback(void* userdata, const BxFetchRequest* requ
     return bx_fetch_transfer_stage_response(callbacks->cfg, request, response, writer);
 }
 
+static void candidate_progress_callback(void* userdata, const BxFetchRequest* request, const BxFetchProgressSample* sample) {
+    CandidateCallbacks* callbacks = userdata;
+    callbacks->progress_callback(callbacks->userdata, request, sample);
+}
+
 static void candidate_completion_callback(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, BxFetchError result) {
     CandidateCallbacks* callbacks = userdata;
     if (!callbacks)
@@ -255,6 +261,7 @@ static void candidate_completion_callback(void* userdata, const BxFetchRequest* 
 int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
                                        BxFetchEngine* engine,
                                        BxFetchTransferHeadersCallback headers_cb,
+                                       BxFetchTransferProgressCallback progress_cb,
                                        BxFetchTransferCompletionCallback callback,
                                        void* userdata,
                                        BxFetchRedirectPolicyCallback redirect_cb,
@@ -274,6 +281,7 @@ int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
     }
     callbacks->cfg = candidate->cfg;
     callbacks->headers_callback = headers_cb;
+    callbacks->progress_callback = progress_cb;
     callbacks->completion_callback = callback;
     callbacks->userdata = userdata;
     const char* output_path = bx_fetch_writer_get_path(candidate->writer);
@@ -284,8 +292,9 @@ int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
         return -1;
     }
 
-    int result = bx_fetch_engine_submit_with_setup_error(engine, candidate->request, candidate->writer, candidate_headers_callback, candidate_completion_callback, callbacks, redirect_cb,
-                                                         redirect_userdata, setup_error);
+    int result = bx_fetch_engine_submit_with_setup_error(engine, candidate->request, candidate->writer, candidate_headers_callback,
+                                                         progress_cb ? candidate_progress_callback : NULL, candidate_completion_callback,
+                                                         callbacks, redirect_cb, redirect_userdata, setup_error);
     if (result == 0) {
         candidate->request = NULL;
         candidate->writer = NULL;

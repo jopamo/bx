@@ -54,6 +54,7 @@ void bx_fetch_transfer_candidate_abort(BxFetchTransferCandidate* candidate);
 int bx_fetch_transfer_candidate_submit(BxFetchTransferCandidate* candidate,
                                        BxFetchEngine* engine,
                                        BxFetchTransferHeadersCallback headers_cb,
+                                       BxFetchTransferProgressCallback progress_cb,
                                        BxFetchTransferCompletionCallback callback,
                                        void* userdata,
                                        BxFetchRedirectPolicyCallback redirect_cb,

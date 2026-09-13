@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "debug_trace.h"
 #include "logging.h"
+#include "progress.h"
 #include "mira.h"
 #include "lib/fetch/error.h"
 #include "lib/fetch/exit_code.h"
@@ -27,8 +28,7 @@ typedef struct {
 typedef struct {
     const struct bx_fetch_config* config;
     int exit_code;
-    int last_progress_percent;
-    bool progress_line_active;
+    MiraProgressRenderer progress;
     MiraDryRunRecord* dry_run_records;
     size_t dry_run_record_count;
     size_t dry_run_record_capacity;
@@ -73,6 +73,7 @@ static MiraDryRunRecord* mira_dry_run_record(MiraRunFrontend* frontend, int inde
 static void mira_run_record_error_url(MiraRunFrontend* frontend, BxFetchErrorClass error_class, const char* summary, const char* display_url, const char* path, int error_number) {
     if (!frontend)
         return;
+    bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, bx_fetch_exit_code_for_error_class(error_class, -1));
     if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
         if (display_url)
@@ -132,6 +133,7 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
         return -1;
 
     if (frontend->config->logging.debug_trace) {
+        bx_mira_progress_interrupt(&frontend->progress);
         bx_mira_debug_trace_enqueued(
             &frontend->debug_trace, bx_fetch_prepared_url_display(target), *output_path_out, depth);
     }
@@ -163,6 +165,7 @@ static int mira_output_observation(void* userdata, const BxFetchRunOutputObserva
         }
     }
     if (observation->decision == BX_FETCH_RUN_OUTPUT_SKIP_NO_CLOBBER) {
+        bx_mira_progress_interrupt(&frontend->progress);
         if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
             char* quoted = bx_path_quote_dup(observation->output_path, BX_PATH_QUOTE_ESCAPE);
             fprintf(frontend->diagnostics,
@@ -191,6 +194,7 @@ static void mira_response_name(void* userdata, const BxFetchRunResponseNameObser
         return;
     }
 
+    bx_mira_progress_interrupt(&frontend->progress);
     char* original = observation->original_path ? bx_path_quote_dup(observation->original_path, BX_PATH_QUOTE_ESCAPE) : NULL;
     char* candidate = observation->candidate_path ? bx_path_quote_dup(observation->candidate_path, BX_PATH_QUOTE_ESCAPE) : NULL;
     const char* original_text = original ? original : "(path unavailable)";
@@ -238,18 +242,15 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     MiraRunFrontend* frontend = userdata;
     if (!frontend || !completion || !completion->transfer)
         return -1;
-    if (frontend->progress_line_active) {
-        fputc('\n', frontend->diagnostics);
-        frontend->progress_line_active = false;
-    }
-    frontend->last_progress_percent = -1;
+    bx_mira_progress_interrupt(&frontend->progress);
+    bool report = frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET &&
+                  !frontend->config->download.spider && !completion->redirect_rejected &&
+                  (frontend->config->download.show_progress || frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_VERBOSE);
+    bx_mira_progress_complete(&frontend->progress, completion, report);
     bx_mira_debug_trace_completion(&frontend->debug_trace, frontend->config, completion);
     if (completion->retry_scheduled)
         return 0;
     if (completion->transfer->result == BX_FETCH_OK) {
-        if (frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_VERBOSE && !frontend->config->download.spider) {
-            fprintf(frontend->diagnostics, "mira: saved %s\n", completion->transfer->output_path);
-        }
         return 0;
     }
     /*
@@ -268,6 +269,7 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     int status = response ? response->status_code : 0;
     BxFetchTransportErrorKind transport_kind = response ? response->transport_error_kind : BX_FETCH_TRANSPORT_ERROR_NONE;
     int exit_code = bx_fetch_exit_code_for_transfer_failure(http ? status : -1, transport_kind, completion->transfer->result);
+    bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, exit_code);
     if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
         fprintf(frontend->diagnostics, "mira: transfer failed: %s\n", bx_fetch_error_string(completion->transfer->result));
@@ -304,8 +306,10 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
 
 static void mira_transfer_observation(void* userdata, const BxFetchRunTransferObservation* observation) {
     MiraRunFrontend* frontend = userdata;
-    if (frontend)
+    if (frontend) {
+        bx_mira_progress_interrupt(&frontend->progress);
         bx_mira_debug_trace_transfer_observation(&frontend->debug_trace, observation);
+    }
 }
 
 static void mira_log_rejected_target(MiraRunFrontend* frontend,
@@ -377,6 +381,7 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
         mira_run_record_error_url(frontend, error_class, summary, BX_FETCH_URL_DISPLAY_REDACTED, observation->source_path, -1);
         return true;
     }
+    bx_mira_progress_interrupt(&frontend->progress);
     const char* reason = bx_fetch_filter_decision_reason(observation->result.filter_decision);
     if (observation->result.filter_decision == FILTER_DECISION_URL_CREDENTIALS) {
         mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "URL credentials are disabled by --paranoid", observation->target, observation->source_path, -1);
@@ -489,6 +494,7 @@ static void mira_record_input_failure(MiraRunFrontend* frontend, const BxFetchIn
             break;
     }
 
+    bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, bx_fetch_exit_code_for_error_class(error_class, -1));
     if (emit_text) {
         char* quoted = bx_path_quote_dup(frontend->config->input.input_file, BX_PATH_QUOTE_ESCAPE);
@@ -547,19 +553,13 @@ static void mira_response_header(void* userdata, const BxFetchRequest* request, 
     if (!frontend || !frontend->config->download.server_response || frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET) {
         return;
     }
+    bx_mira_progress_interrupt(&frontend->progress);
     (void)fwrite(raw_header, 1, raw_header_len, frontend->diagnostics);
 }
 
-static void mira_progress(void* userdata, const BxFetchRequest* request, const BxFetchProgress* progress) {
+static void mira_progress(void* userdata, const BxFetchRunProgressObservation* observation) {
     MiraRunFrontend* frontend = userdata;
-    if (!frontend || !request || !progress || !frontend->config->download.show_progress || frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET ||
-        progress->percent == frontend->last_progress_percent) {
-        return;
-    }
-    frontend->last_progress_percent = progress->percent;
-    fprintf(frontend->diagnostics, "\rmira: %3d%% %s", progress->percent, bx_fetch_request_url_for_display(request));
-    fflush(frontend->diagnostics);
-    frontend->progress_line_active = true;
+    bx_mira_progress_sample(&frontend->progress, observation);
 }
 
 static void mira_retry(void* userdata, const BxFetchPreparedUrl* target, int next_attempt, int max_attempts, int delay_seconds) {
@@ -567,10 +567,7 @@ static void mira_retry(void* userdata, const BxFetchPreparedUrl* target, int nex
     if (!frontend || frontend->config->logging.verbosity == BX_FETCH_VERBOSITY_QUIET) {
         return;
     }
-    if (frontend->progress_line_active) {
-        fputc('\n', frontend->diagnostics);
-        frontend->progress_line_active = false;
-    }
+    bx_mira_progress_interrupt(&frontend->progress);
     fprintf(frontend->diagnostics, "mira: retry %d/%d in %d second%s: %s\n", next_attempt, max_attempts, delay_seconds, delay_seconds == 1 ? "" : "s", bx_fetch_prepared_url_display(target));
 }
 
@@ -660,10 +657,12 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         return bx_mira_diagnostics_finish(config, diagnostics, BX_FETCH_EXIT_FILE_IO);
     MiraRunFrontend frontend_state = {
         .config = config,
-        .last_progress_percent = -1,
         .diagnostics = diagnostics,
         .rejected_log = rejected_log,
     };
+    bx_mira_progress_init(&frontend_state.progress, diagnostics,
+                          config->download.show_progress && config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET,
+                          NULL, NULL);
     bx_mira_debug_trace_init(&frontend_state.debug_trace, diagnostics, config);
     bx_mira_debug_trace_parse_complete(&frontend_state.debug_trace, config);
     if (config->download.dry_run && config->input.url_count > 0) {
@@ -681,6 +680,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .on_prepare_error = mira_prepare_error,
         .on_submit_error = mira_submit_error,
         .on_completion = mira_completion,
+        .on_progress = frontend_state.progress.enabled ? mira_progress : NULL,
         .allow_redirect = mira_redirect,
         .on_discovered_link = mira_discovered_link,
         .on_document_error = mira_document_error,
@@ -692,7 +692,6 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         .transport_observer =
             {
                 .on_response_header = mira_response_header,
-                .on_progress = mira_progress,
                 .userdata = &frontend_state,
             },
         .scheduler_observer =
@@ -720,6 +719,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
     }
     int exit_code = frontend_state.exit_code;
     mira_dry_run_records_free(&frontend_state);
+    bx_mira_progress_destroy(&frontend_state.progress);
     exit_code = bx_mira_rejected_log_finish(config, rejected_log, exit_code);
     return bx_mira_diagnostics_finish(config, diagnostics, exit_code);
 }

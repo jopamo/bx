@@ -39,7 +39,7 @@ void bx_fetch_transfer_mark_io_failure(BxFetchTransfer* transfer, int fallback_e
 void bx_fetch_response_reset_headers(BxFetchResponse* response);
 bool bx_fetch_parse_resume_from_request(const BxFetchRequest* request, long long* resume_from);
 
-void bx_fetch_progress_emit(BxFetchTransfer* transfer, curl_off_t download_total, curl_off_t downloaded);
+void bx_fetch_progress_emit(BxFetchTransfer* transfer, curl_off_t download_total, bool authoritative_length);
 int bx_fetch_progress_callback(void* userdata, curl_off_t download_total, curl_off_t downloaded, curl_off_t upload_total, curl_off_t uploaded);
 
 BxFetchError bx_fetch_map_curl_result(CURLcode code);
