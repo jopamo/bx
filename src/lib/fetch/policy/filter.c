@@ -372,9 +372,14 @@ BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, c
     if (decision == FILTER_DECISION_ACCEPT) {
         const bool exact_seed_match = mu->host && host_matches_any(mu->host, f->seed_hosts, f->seed_host_count, false);
         const bool explicit_domain_match = mu->host && host_matches_any(mu->host, f->accept_domains, f->accept_domain_count, true);
+        /* Seed-host scope limits crawl expansion, not a direct download's
+         * redirects to another origin (for example an archive CDN). Explicit
+         * domain restrictions and transport policy apply in both modes. */
+        const bool restrict_to_seeds = (f->cfg->recursive.recursive || f->cfg->recursive.page_requisites) &&
+                                       !f->cfg->recursive.span_hosts && f->seed_host_count > 0;
 
         if (!mu->host || mu->host[0] == '\0') {
-            if (f->reject_domain_count > 0 || f->accept_domain_count > 0 || (!f->cfg->recursive.span_hosts && f->seed_host_count > 0)) {
+            if (f->reject_domain_count > 0 || f->accept_domain_count > 0 || restrict_to_seeds) {
                 decision = FILTER_DECISION_DOMAIN_SCOPE;
             }
         }
@@ -386,7 +391,7 @@ BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, c
                 decision = FILTER_DECISION_DOMAIN_SCOPE;
             }
         }
-        else if (!f->cfg->recursive.span_hosts && f->seed_host_count > 0) {
+        else if (restrict_to_seeds) {
             if (!exact_seed_match) {
                 decision = FILTER_DECISION_DOMAIN_SCOPE;
             }

@@ -417,6 +417,11 @@ static void mira_discovered_link(void* userdata, const BxFetchRunDiscoveredLinkO
 static bool mira_redirect(void* userdata, const BxFetchPreparedUrl* target, BxFetchFilterDecision shared_decision) {
     MiraRunFrontend* frontend = userdata;
     mira_log_rejected_target(frontend, target, shared_decision);
+    if (shared_decision != FILTER_DECISION_ACCEPT) {
+        char summary[128];
+        snprintf(summary, sizeof(summary), "redirect rejected: %s", bx_fetch_filter_decision_reason(shared_decision));
+        mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, summary, target, NULL, -1);
+    }
     return true;
 }
 
