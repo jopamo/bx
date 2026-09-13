@@ -43,13 +43,9 @@ typedef struct BxFetchTransfer {
     size_t save_headers_len;
     size_t save_headers_cap;
 
-    bool progress_started;
-    double progress_start_s;
+    BxFetchProgressSample progress;
+    bool progress_emitted;
     double progress_last_update_s;
-    double progress_last_sample_s;
-    double progress_last_speed_bps;
-    curl_off_t progress_last_bytes;
-    curl_off_t progress_resume_offset;
 
     bool response_headers_finalized;
     bool writer_closed;
@@ -64,6 +60,7 @@ typedef struct BxFetchTransfer {
     BxFetchNetTargetPolicy redirect_target_policy;
 
     BxFetchTransferHeadersCallback headers_cb;
+    BxFetchTransferProgressCallback progress_cb;
     BxFetchTransferCallback callback;
     void* callback_userdata;
     BxFetchRedirectPolicyCallback redirect_cb;

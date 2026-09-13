@@ -272,7 +272,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDSIZE_LARGE, body_length);
     }
 
-    if (engine->observer.on_progress) {
+    if (t->progress_cb) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_XFERINFOFUNCTION, bx_fetch_progress_callback);
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_XFERINFODATA, t);
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOPROGRESS, 0L);
@@ -575,6 +575,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
                                             BxFetchRequest* req,
                                             BxFetchWriter* writer,
                                             BxFetchTransferHeadersCallback headers_cb,
+                                            BxFetchTransferProgressCallback progress_cb,
                                             BxFetchTransferCallback cb,
                                             void* userdata,
                                             BxFetchRedirectPolicyCallback redirect_cb,
@@ -614,6 +615,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
     t->resume_requested = bx_fetch_parse_resume_from_request(req, &t->resume_from);
 
     t->headers_cb = headers_cb;
+    t->progress_cb = progress_cb;
     t->callback = cb;
     t->callback_userdata = userdata;
     t->redirect_cb = redirect_cb;
@@ -643,9 +645,10 @@ int bx_fetch_engine_submit(BxFetchEngine* engine,
                            BxFetchRequest* req,
                            BxFetchWriter* writer,
                            BxFetchTransferHeadersCallback headers_cb,
+                           BxFetchTransferProgressCallback progress_cb,
                            BxFetchTransferCallback cb,
                            void* userdata,
                            BxFetchRedirectPolicyCallback redirect_cb,
                            void* redirect_userdata) {
-    return bx_fetch_engine_submit_with_setup_error(engine, req, writer, headers_cb, cb, userdata, redirect_cb, redirect_userdata, NULL);
+    return bx_fetch_engine_submit_with_setup_error(engine, req, writer, headers_cb, progress_cb, cb, userdata, redirect_cb, redirect_userdata, NULL);
 }

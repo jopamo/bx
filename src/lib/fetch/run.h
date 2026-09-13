@@ -50,6 +50,17 @@ typedef struct {
     bool redirect_rejected;
 } BxFetchRunCompletion;
 
+typedef struct {
+    /* Unique dispatch/attempt instance, shared with completion. */
+    uint64_t transfer_id;
+    int attempt;
+    int max_attempts;
+    const BxFetchRequest* request;
+    BxFetchProgressSample sample;
+} BxFetchRunProgressObservation;
+
+typedef void (*BxFetchRunProgressFn)(void* userdata, const BxFetchRunProgressObservation* observation);
+
 typedef enum {
     BX_FETCH_RUN_TRANSFER_DISPATCH = 0,
     BX_FETCH_RUN_TRANSFER_SUBMIT,
@@ -184,6 +195,7 @@ typedef struct {
     BxFetchRunPrepareErrorFn on_prepare_error;
     BxFetchRunSubmitErrorFn on_submit_error;
     BxFetchRunCompletionFn on_completion;
+    BxFetchRunProgressFn on_progress;
     BxFetchRunRedirectFn allow_redirect;
     BxFetchRunDiscoveredLinkFn on_discovered_link;
     BxFetchRunDocumentErrorFn on_document_error;

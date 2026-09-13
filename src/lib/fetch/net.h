@@ -49,14 +49,21 @@ BxFetchNetTargetPolicy bx_fetch_net_target_policy(const struct bx_fetch_config* 
 const char* bx_fetch_net_target_policy_reason(BxFetchNetTargetPolicy policy);
 
 typedef struct {
+    uint64_t generation;
+    uint64_t received_bytes;
+    uint64_t accepted_prefix_bytes;
     bool total_known;
-    int percent;
-    int64_t downloaded_bytes;
-    int64_t total_bytes;
-    double bytes_per_second;
-    double elapsed_seconds;
-    double eta_seconds;
-} BxFetchProgress;
+    uint64_t total_bytes;
+} BxFetchProgressSample;
+
+/*
+ * Receiving is not writer commit. Counters describe this response body only;
+ * a new response resets generation-local observations. A requested resume
+ * prefix contributes only after response validation.
+ * Uses the submission's userdata and borrowed request, just like completion.
+ * No progress callback occurs after the terminal callback begins.
+ */
+typedef void (*BxFetchTransferProgressCallback)(void* userdata, const BxFetchRequest* request, const BxFetchProgressSample* sample);
 
 /*
  * All values passed to observation callbacks are borrowed and valid only for
@@ -65,7 +72,6 @@ typedef struct {
  */
 typedef struct {
     void (*on_response_header)(void* userdata, const BxFetchRequest* request, const BxFetchResponse* response, const char* raw_header, size_t raw_header_len);
-    void (*on_progress)(void* userdata, const BxFetchRequest* request, const BxFetchProgress* progress);
     void* userdata;
 } BxFetchTransportObserver;
 
@@ -124,6 +130,7 @@ int bx_fetch_engine_submit(BxFetchEngine* engine,
                            BxFetchRequest* req,
                            BxFetchWriter* writer,
                            BxFetchTransferHeadersCallback headers_cb,
+                           BxFetchTransferProgressCallback progress_cb,
                            BxFetchTransferCallback callback,
                            void* userdata,
                            BxFetchRedirectPolicyCallback redirect_cb,
@@ -133,6 +140,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
                                             BxFetchRequest* req,
                                             BxFetchWriter* writer,
                                             BxFetchTransferHeadersCallback headers_cb,
+                                            BxFetchTransferProgressCallback progress_cb,
                                             BxFetchTransferCallback callback,
                                             void* userdata,
                                             BxFetchRedirectPolicyCallback redirect_cb,
