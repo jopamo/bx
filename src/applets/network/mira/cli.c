@@ -35,6 +35,8 @@ typedef struct {
     const char* unlink;
     const char* backups;
     const char* bearer_token_file;
+    const char* http_password_file;
+    bool http_password;
 } MiraOptionPresence;
 
 void bx_mira_emit_parse_error(const struct bx_fetch_config* config, const char* summary) {
@@ -198,6 +200,21 @@ static int mira_conflicting_tokens(struct bx_fetch_config* config, const char* l
 }
 
 static int mira_validate_config(struct bx_fetch_config* config, const MiraOptionPresence* presence) {
+    if (presence->http_password_file) {
+        if (presence->http_password)
+            return mira_conflicting_tokens(config, "--http-password", "--http-password-file");
+        if (config->http.bearer_token || presence->bearer_token_file)
+            return mira_conflicting_tokens(config, "--http-password-file", presence->bearer_token_file ? "--bearer-token-file" : "--bearer-token");
+        config->https.require_verified_https = true;
+        if (!bx_fetch_config_tls_policy_valid(config))
+            return mira_conflicting_tokens(config, "--http-password-file", "--no-check-certificate");
+        if (bx_fetch_http_password_load_file(presence->http_password_file, &config->http.http_password) != 0) {
+            if (errno == ENOMEM)
+                return -1;
+            mira_parse_errorf(config, "cannot load --http-password-file: %s", strerror(errno));
+            return -1;
+        }
+    }
     if (presence->bearer_token_file) {
         if (config->http.bearer_token)
             return mira_conflicting_tokens(config, "--bearer-token", "--bearer-token-file");
@@ -600,7 +617,11 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 MIRA_SET_STRING(config->http.http_user);
                 break;
             case MIRA_OPT_HTTP_PASSWORD:
+                presence.http_password = true;
                 MIRA_SET_STRING(config->http.http_password);
+                break;
+            case MIRA_OPT_HTTP_PASSWORD_FILE:
+                presence.http_password_file = optarg;
                 break;
             case MIRA_OPT_BEARER_TOKEN:
                 if (!bx_fetch_http_bearer_token_is_valid(optarg)) {

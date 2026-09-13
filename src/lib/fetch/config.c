@@ -6,11 +6,11 @@
 #include <string.h>
 
 bool bx_fetch_config_requires_https(const struct bx_fetch_config* cfg) {
-    return cfg && (cfg->https.https_only || cfg->http.bearer_token != NULL);
+    return cfg && (cfg->https.https_only || cfg->https.require_verified_https || cfg->http.bearer_token != NULL);
 }
 
 bool bx_fetch_config_tls_policy_valid(const struct bx_fetch_config* cfg) {
-    return cfg && !(cfg->http.bearer_token && cfg->https.no_check_certificate);
+    return cfg && !((cfg->http.bearer_token || cfg->https.require_verified_https) && cfg->https.no_check_certificate);
 }
 
 bool bx_fetch_config_ftp_output_supported(const struct bx_fetch_config* cfg) {

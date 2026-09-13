@@ -61,6 +61,15 @@ void bx_mira_print_help(void) {
     }
 
     fputs(
+        "\n--http-password-file keeps HTTP passwords out of process arguments. "
+        "It requires verified HTTPS for every URL and redirect and conflicts with "
+        "--http-password, Bearer authentication, and --no-check-certificate. "
+        "Use --http-user and --auth-no-challenge for preemptive Basic authentication. "
+        "The file must be owned by the effective user, mode 0400 or 0600, regular, "
+        "single-link, and have no symlinks in its path. Supply at most 4096 password "
+        "bytes with optional LF or CRLF; spaces and empty passwords are preserved, "
+        "ASCII controls and DEL are rejected. Redirects do not forward credentials "
+        "to another origin. The caller owns file creation and removal.\n"
         "\nBearer tokens require verified HTTPS for every URL and redirect; "
         "--no-check-certificate is rejected. Tokens are sent preemptively, overriding HTTP, "
         "generic, and URL username/password credentials, even with "

@@ -47,7 +47,7 @@ const char* bx_fetch_net_target_policy_reason(BxFetchNetTargetPolicy policy) {
         case BX_FETCH_NET_TARGET_INVALID:
             return "invalid transfer protocol";
         case BX_FETCH_NET_TARGET_TLS_POLICY:
-            return "Bearer authentication requires certificate verification";
+            return "HTTP authentication requires certificate verification";
     }
     return "invalid transfer protocol";
 }

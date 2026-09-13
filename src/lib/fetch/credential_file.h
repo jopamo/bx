@@ -13,4 +13,13 @@
  */
 int bx_fetch_bearer_token_load_file(const char* path, char** token);
 
+#define BX_FETCH_HTTP_PASSWORD_MAX_BYTES 4096u
+
+/*
+ * Same file protection and replacement contract as above. Loads a password
+ * of at most BX_FETCH_HTTP_PASSWORD_MAX_BYTES, stripping one optional LF/CRLF.
+ * Empty passwords and spaces are preserved; ASCII controls and DEL are rejected.
+ */
+int bx_fetch_http_password_load_file(const char* path, char** password);
+
 #endif

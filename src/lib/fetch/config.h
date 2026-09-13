@@ -136,6 +136,7 @@ typedef struct {
 
 typedef struct {
     bool https_only;
+    bool require_verified_https; /* Protected credentials: no plaintext or TLS-verification bypass. */
     bool no_check_certificate;
     char* certificate;
     char* private_key;
@@ -187,7 +188,7 @@ struct bx_fetch_config {
 
 /* Allocates a config with default values; caller owns and must free. */
 struct bx_fetch_config* bx_fetch_config_new(void);
-/* Bearer authentication narrows every request and redirect to verified HTTPS. */
+/* Protected credentials narrow every request and redirect to verified HTTPS. */
 bool bx_fetch_config_requires_https(const struct bx_fetch_config* config);
 bool bx_fetch_config_tls_policy_valid(const struct bx_fetch_config* config);
 /*
