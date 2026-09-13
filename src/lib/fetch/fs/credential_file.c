@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-int bx_fetch_bearer_token_load_file(const char* path, char** token) {
+static int credential_load_file(const char* path, char** token, size_t maximum, bool (*is_valid)(const char*)) {
     if (!path || !path[0] || !token) {
         errno = EINVAL;
         return -1;
@@ -38,7 +38,7 @@ int bx_fetch_bearer_token_load_file(const char* path, char** token) {
         errno = EACCES;
         goto fail;
     }
-    const size_t limit = BX_FETCH_BEARER_TOKEN_MAX_BYTES + 2u; /* optional CRLF */
+    const size_t limit = maximum + 2u; /* optional CRLF */
     if (status.st_size < 0 || (uintmax_t)status.st_size > limit) {
         errno = EFBIG;
         goto fail;
@@ -72,7 +72,7 @@ int bx_fetch_bearer_token_load_file(const char* path, char** token) {
             length--;
     }
     value[length] = '\0';
-    if (!bx_fetch_http_bearer_token_is_valid(value)) {
+    if (length > maximum || !is_valid(value)) {
         errno = EINVAL;
         goto fail;
     }
@@ -90,4 +90,20 @@ fail:
     close(fd);
     errno = error_number;
     return -1;
+}
+
+int bx_fetch_bearer_token_load_file(const char* path, char** token) {
+    return credential_load_file(path, token, BX_FETCH_BEARER_TOKEN_MAX_BYTES, bx_fetch_http_bearer_token_is_valid);
+}
+
+static bool password_is_valid(const char* password) {
+    for (const unsigned char* p = (const unsigned char*)password; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f)
+            return false;
+    }
+    return true;
+}
+
+int bx_fetch_http_password_load_file(const char* path, char** password) {
+    return credential_load_file(path, password, BX_FETCH_HTTP_PASSWORD_MAX_BYTES, password_is_valid);
 }

@@ -387,6 +387,10 @@ static bool mira_seed_result(void* userdata, const BxFetchRunSeedObservation* ob
             mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "Bearer authentication requires HTTPS", observation->target, observation->source_path, -1);
             return false;
         }
+        if (frontend->config->https.require_verified_https) {
+            mira_run_record_error(frontend, BX_FETCH_ERROR_CLASS_POLICY, "HTTP authentication requires HTTPS", observation->target, observation->source_path, -1);
+            return false;
+        }
         if (frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
             fprintf(frontend->diagnostics, "mira: skipping non-HTTPS URL due to --https-only: %s\n", bx_fetch_prepared_url_display(observation->target));
         }

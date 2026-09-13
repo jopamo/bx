@@ -63,6 +63,7 @@ MIRA_OPTION("cut-dirs", required_argument, MIRA_OPT_CUT_DIRS, "", NULL, "NUMBER"
 
 MIRA_OPTION("http-user", required_argument, MIRA_OPT_HTTP_USER, "", NULL, "USER", "set HTTP username", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("http-password", required_argument, MIRA_OPT_HTTP_PASSWORD, "", NULL, "PASS", "set HTTP password", MIRA_OPTION_CATEGORY_HTTP, true)
+MIRA_OPTION("http-password-file", required_argument, MIRA_OPT_HTTP_PASSWORD_FILE, "", NULL, "FILE", "read HTTP password from a protected file (verified HTTPS only)", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("bearer-token", required_argument, MIRA_OPT_BEARER_TOKEN, "", NULL, "TOKEN", "send HTTP Bearer token instead of username/password auth", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("bearer-token-file", required_argument, MIRA_OPT_BEARER_TOKEN_FILE, "", NULL, "FILE", "read Bearer token from a protected file (verified HTTPS only)", MIRA_OPTION_CATEGORY_HTTP, true)
 MIRA_OPTION("default-page", required_argument, MIRA_OPT_DEFAULT_PAGE, "", NULL, "NAME", "name directory URL outputs", MIRA_OPTION_CATEGORY_HTTP, true)
