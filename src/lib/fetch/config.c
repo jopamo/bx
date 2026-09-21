@@ -37,7 +37,7 @@ struct bx_fetch_config* bx_fetch_config_new(void) {
     cfg->recursive.level = 5;  // default recursion depth
     cfg->http.max_redirect = 20;
     cfg->http.redirect_method = strdup("legacy");
-    cfg->http.user_agent = strdup("mira/0.1.0");
+    cfg->http.user_agent = strdup("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36");
     cfg->download.prefer_family = strdup("none");
     if (!cfg->http.redirect_method || !cfg->http.user_agent || !cfg->download.prefer_family) {
         bx_fetch_config_free(cfg);
