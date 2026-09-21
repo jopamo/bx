@@ -44,6 +44,12 @@ typedef enum {
     BX_FETCH_WRITER_PATH_PRESENT,
 } BxFetchWriterPathPresence;
 
+typedef enum {
+    BX_FETCH_WRITER_WRITE_ERROR = -1,
+    BX_FETCH_WRITER_WRITE_OK = 0,
+    BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED = 1,
+} BxFetchWriterWriteResult;
+
 /*
  * Verifies the Linux openat2(2) path-resolution primitive required by every
  * filesystem-backed BxFetchWriter. Returns 0 when available, or -1 with errno set.
@@ -86,7 +92,12 @@ int bx_fetch_writer_preserve_destination_metadata(BxFetchWriter* w);
 int bx_fetch_writer_require_original_identity(BxFetchWriter* w, const struct stat* expected);
 /* Resets write stream for full replacement semantics before additional writes. */
 int bx_fetch_writer_begin_replace(BxFetchWriter* w);
-int bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len);
+/*
+ * A closed stdout pipe is a terminal consumer decision, not a failed
+ * filesystem write. Once reported, the writer remains closeable but accepts
+ * no more payload bytes.
+ */
+BxFetchWriterWriteResult bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len);
 /* Applies mtime to the private candidate before publication. */
 int bx_fetch_writer_set_mtime(BxFetchWriter* w, time_t mtime);
 int bx_fetch_writer_stage_xattrs(BxFetchWriter* w, const char* url, const char* content_type, const char* etag, const char* last_modified);

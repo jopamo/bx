@@ -666,6 +666,7 @@ bx_network_applet_sources = [
   'src/applets/network/dhcp/dhcp.c',
   'src/applets/network/mira/cli.c',
   'src/applets/network/mira/debug_trace.c',
+  'src/applets/network/mira/github.c',
   'src/applets/network/mira/help.c',
   'src/applets/network/mira/logging.c',
   'src/applets/network/mira/mira.c',
@@ -1194,6 +1195,7 @@ xxd_lib = static_library('bx_xxd',
 jq_applet_sources = files(
   'src/applets/text/jq/jq_applet.c',
   'src/applets/text/jq/jq_cli.c',
+  'src/lib/jq/filter.c',
   'src/lib/jq/pcre2_backend.c',
 )
 

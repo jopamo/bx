@@ -38,6 +38,7 @@ extern void jv_tsd_dtoa_ctx_init();
 #include "util.h"
 #include "bx_jq_build_info.h"
 #include "lib/args_common.h"
+#include "lib/jq/filter.h"
 #include "lib/path_ops.h"
 
 int jq_testsuite(jv lib_dirs, int verbose, int argc, char* argv[]);
@@ -173,33 +174,38 @@ enum {
 #define jq_exit_with_status(r)  exit(abs(r))
 #define jq_exit(r)              exit( r > 0 ? r : 0 )
 
-static int process(jq_state *jq, jv value, int flags, int dumpopts, int options) {
-  int ret = JQ_OK_NO_OUTPUT; // No valid results && -e -> exit(4)
-  jq_start(jq, value, flags);
-  jv result;
-  while (jv_is_valid(result = jq_next(jq))) {
+typedef struct {
+  int dumpopts;
+  int options;
+  int ret;
+  jv output_error;
+} BxJqCliOutput;
+
+static int process_output(void *userdata, jv result) {
+    BxJqCliOutput *output = userdata;
+    int dumpopts = output->dumpopts;
+    int options = output->options;
+
     if ((options & RAW_OUTPUT) && jv_get_kind(result) == JV_KIND_STRING) {
       if (options & ASCII_OUTPUT) {
         jv_dumpf(jv_copy(result), stdout, JV_PRINT_ASCII);
       } else if ((options & RAW_OUTPUT0) && strlen(jv_string_value(result)) != (unsigned long)jv_string_length_bytes(jv_copy(result))) {
-        jv_free(result);
-        result = jv_invalid_with_msg(jv_string(
-              "Cannot dump a string containing NUL with --raw-output0 option"));
-        break;
+        output->output_error =
+            jv_string("Cannot dump a string containing NUL with --raw-output0 option");
+        return -1;
       } else {
         priv_fwrite(jv_string_value(result), jv_string_length_bytes(jv_copy(result)),
             stdout, dumpopts & JV_PRINT_ISATTY);
       }
-      ret = JQ_OK;
-      jv_free(result);
+      output->ret = JQ_OK;
     } else {
       if (jv_get_kind(result) == JV_KIND_FALSE || jv_get_kind(result) == JV_KIND_NULL)
-        ret = JQ_OK_NULL_KIND;
+        output->ret = JQ_OK_NULL_KIND;
       else
-        ret = JQ_OK;
+        output->ret = JQ_OK;
       if (options & SEQ)
         priv_fwrite("\036", 1, stdout, dumpopts & JV_PRINT_ISATTY);
-      jv_dump(result, dumpopts);
+      jv_dump(jv_copy(result), dumpopts);
     }
     if (!(options & RAW_NO_LF))
       priv_fwrite("\n", 1, stdout, dumpopts & JV_PRINT_ISATTY);
@@ -207,18 +213,26 @@ static int process(jq_state *jq, jv value, int flags, int dumpopts, int options)
       priv_fwrite("\0", 1, stdout, dumpopts & JV_PRINT_ISATTY);
     if (options & UNBUFFERED_OUTPUT)
       fflush(stdout);
-  }
-  if (jq_halted(jq)) {
+    return 0;
+}
+
+static int process(jq_state *jq, jv value, int flags, int dumpopts, int options) {
+  BxJqCliOutput output = {
+    .dumpopts = dumpopts,
+    .options = options,
+    .ret = JQ_OK_NO_OUTPUT,
+    .output_error = jv_invalid(),
+  };
+  BxJqFilterResult filter_result;
+  bx_jq_filter_result_init(&filter_result);
+  BxJqFilterStatus status =
+      bx_jq_filter_run(jq, value, flags, process_output, &output, &filter_result);
+  int ret = output.ret;
+
+  if (status == BX_JQ_FILTER_HALTED) {
     // jq program invoked `halt` or `halt_error`
-    jv exit_code = jq_get_exit_code(jq);
-    if (!jv_is_valid(exit_code))
-      ret = JQ_OK;
-    else if (jv_get_kind(exit_code) == JV_KIND_NUMBER)
-      ret = jv_number_value(exit_code);
-    else
-      ret = JQ_ERROR_UNKNOWN;
-    jv_free(exit_code);
-    jv error_message = jq_get_error_message(jq);
+    ret = filter_result.halt_code;
+    jv error_message = jv_copy(filter_result.halt_message);
     if (jv_get_kind(error_message) == JV_KIND_STRING) {
       // No prefix should be added to the output of `halt_error`.
       priv_fwrite(jv_string_value(error_message), jv_string_length_bytes(jv_copy(error_message)),
@@ -231,9 +245,12 @@ static int process(jq_state *jq, jv value, int flags, int dumpopts, int options)
     } // else no message on stderr; use --debug-trace to see a message
     fflush(stderr);
     jv_free(error_message);
-  } else if (jv_invalid_has_msg(jv_copy(result))) {
+  } else if (status == BX_JQ_FILTER_RUNTIME_ERROR ||
+             status == BX_JQ_FILTER_OUTPUT_ERROR) {
     // Uncaught jq exception
-    jv msg = jv_invalid_get_msg(jv_copy(result));
+    jv msg = status == BX_JQ_FILTER_OUTPUT_ERROR
+                 ? jv_copy(output.output_error)
+                 : jv_copy(filter_result.error_message);
     jv input_pos = jq_util_input_get_position(jq);
     if (jv_get_kind(msg) == JV_KIND_STRING) {
       fprintf(stderr, "jq: error (at %s): %s\n",
@@ -247,7 +264,8 @@ static int process(jq_state *jq, jv value, int flags, int dumpopts, int options)
     jv_free(input_pos);
     jv_free(msg);
   }
-  jv_free(result);
+  jv_free(output.output_error);
+  bx_jq_filter_result_clear(&filter_result);
   return ret;
 }
 

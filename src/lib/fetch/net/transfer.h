@@ -41,6 +41,7 @@ typedef struct BxFetchTransfer {
     bool resume_validation_failed;
     bool resume_restart_validation_pending;
     bool io_failed;
+    bool downstream_closed;
     bool request_body_io_failed;
     int io_error_number;
     curl_off_t response_body_bytes;

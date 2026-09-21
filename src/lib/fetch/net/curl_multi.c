@@ -236,17 +236,33 @@ static bool write_response_bytes(BxFetchTransfer* transfer,
     if (transfer->engine->cfg->http.save_headers &&
         !ftp && !transfer->save_headers_written &&
         transfer->save_headers_len > 0) {
-        if (bx_fetch_writer_write(transfer->writer,
+        BxFetchWriterWriteResult result =
+            bx_fetch_writer_write(transfer->writer,
                                   transfer->save_headers_buf,
-                                  transfer->save_headers_len) != 0) {
+                                  transfer->save_headers_len);
+        if (result == BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED) {
+            transfer->downstream_closed = true;
+            errno = 0;
+            return false;
+        }
+        if (result != BX_FETCH_WRITER_WRITE_OK) {
             bx_fetch_transfer_mark_io_failure(transfer, EIO);
             return false;
         }
         transfer->save_headers_written = true;
     }
-    if (length > 0 && bx_fetch_writer_write(transfer->writer, data, length) != 0) {
-        bx_fetch_transfer_mark_io_failure(transfer, EIO);
-        return false;
+    if (length > 0) {
+        BxFetchWriterWriteResult result =
+            bx_fetch_writer_write(transfer->writer, data, length);
+        if (result == BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED) {
+            transfer->downstream_closed = true;
+            errno = 0;
+            return false;
+        }
+        if (result != BX_FETCH_WRITER_WRITE_OK) {
+            bx_fetch_transfer_mark_io_failure(transfer, EIO);
+            return false;
+        }
     }
     return true;
 }
@@ -1233,11 +1249,17 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         }
     }
 
-    if (!finish_writer(engine, transfer, message->data.result))
+    CURLcode terminal_result =
+        transfer->downstream_closed ? CURLE_OK : message->data.result;
+    if (!finish_writer(engine, transfer, terminal_result))
         invariant_ok = false;
-    populate_terminal_response(transfer, message->data.result);
+    populate_terminal_response(transfer, terminal_result);
 
-    BxFetchError result = classify_terminal_result(transfer, message->data.result, status, invariant_ok && !engine->invariant_failed);
+    BxFetchError result = classify_terminal_result(
+        transfer,
+        terminal_result,
+        status,
+        invariant_ok && !engine->invariant_failed);
     bx_fetch_engine_dispose_transfer(engine, transfer, result);
     return !engine->invariant_failed;
 }

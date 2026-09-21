@@ -27,9 +27,10 @@ static const char* mira_category_heading(MiraOptionCategory category) {
 void bx_mira_print_help(void) {
     fputs(
         "Usage: mira [OPTION]... [URL]...\n"
+        "       mira github COMMAND [ARGUMENT]...\n"
         "Native bx fetch/crawler frontend over the shared fetch core.\n"
         "Only listed supported behavior is accepted; no configuration files "
-        "are loaded.\n",
+        "are loaded. Use `mira github --help` for native GitHub API access.\n",
         stdout);
 
     size_t count = 0;
