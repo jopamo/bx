@@ -32,6 +32,7 @@ struct BxFetchWriter {
     bool honor_unlink_on_commit;
     bool exclusive_final_path;
     bool to_stdout;
+    bool downstream_closed;
     bool initial_dest_existed;
     dev_t initial_dest_dev;
     ino_t initial_dest_ino;
@@ -1030,9 +1031,11 @@ int bx_fetch_writer_begin_replace(BxFetchWriter* w) {
     return 0;
 }
 
-int bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len) {
+BxFetchWriterWriteResult bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len) {
     if (!w || w->fd == -1 || (!data && len > 0))
-        return -1;
+        return BX_FETCH_WRITER_WRITE_ERROR;
+    if (w->downstream_closed)
+        return BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED;
 
     size_t written = 0;
     while (written < len) {
@@ -1040,13 +1043,19 @@ int bx_fetch_writer_write(BxFetchWriter* w, const void* data, size_t len) {
         if (n == -1) {
             if (errno == EINTR)
                 continue;
-            return -1;
+            if (errno == EPIPE && w->to_stdout) {
+                w->downstream_closed = true;
+                return BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED;
+            }
+            return BX_FETCH_WRITER_WRITE_ERROR;
         }
-        if (n == 0)
-            return -1;
+        if (n == 0) {
+            errno = EIO;
+            return BX_FETCH_WRITER_WRITE_ERROR;
+        }
         written += (size_t)n;
     }
-    return 0;
+    return BX_FETCH_WRITER_WRITE_OK;
 }
 
 int bx_fetch_writer_set_mtime(BxFetchWriter* w, time_t mtime) {

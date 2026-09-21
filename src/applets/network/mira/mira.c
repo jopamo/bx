@@ -1,11 +1,18 @@
 #include "applets.h"
+#include "github.h"
 #include "mira.h"
 #include "lib/fetch/exit_code.h"
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
+#include <string.h>
 
 #define BX_MIRA_VERSION "0.1.0"
 
-int bx_mira_main(int argc, char** argv) {
+static int mira_run_main(int argc, char** argv) {
+    if (argc > 1 && strcmp(argv[1], "github") == 0)
+        return bx_mira_github_main(argc - 1, argv + 1);
+
     struct bx_fetch_config* config = bx_mira_parse_cli(argc, argv);
     if (!config)
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
@@ -23,5 +30,24 @@ int bx_mira_main(int argc, char** argv) {
         result = bx_mira_run_config(config);
 
     bx_fetch_config_free(config);
+    return result;
+}
+
+int bx_mira_main(int argc, char** argv) {
+    struct sigaction previous = {0};
+    struct sigaction ignored = {
+        .sa_handler = SIG_IGN,
+    };
+    sigemptyset(&ignored.sa_mask);
+    if (sigaction(SIGPIPE, &ignored, &previous) != 0) {
+        fprintf(stderr, "mira: cannot configure pipe handling: %s\n", strerror(errno));
+        return BX_FETCH_EXIT_FILE_IO;
+    }
+
+    int result = mira_run_main(argc, argv);
+    if (sigaction(SIGPIPE, &previous, NULL) != 0 && result == BX_FETCH_EXIT_SUCCESS) {
+        fprintf(stderr, "mira: cannot restore pipe handling: %s\n", strerror(errno));
+        result = BX_FETCH_EXIT_FILE_IO;
+    }
     return result;
 }
