@@ -54,7 +54,10 @@ void bx_mira_github_print_help(void) {
         "  --jq=PROGRAM              filter parsed JSON with embedded jq\n"
         "  --json                    select compact JSON for search-issues\n"
         "  --no-proxy                disable proxy use\n"
-        "  -h, --help                display this help\n",
+        "  -h, --help                display this help\n"
+        "\n"
+        "Authentication defaults to the GITHUB_TOKEN environment variable. "
+        "An explicit token file or token argument takes precedence.\n",
         stdout);
 }
 
@@ -306,6 +309,7 @@ static struct bx_fetch_config* github_config(
         return NULL;
 
     config->logging.verbosity = BX_FETCH_VERBOSITY_QUIET;
+    config->logging.suppress_session_banner = true;
     config->download.show_progress = false;
     config->download.metadata_sidecars = false;
     config->download.no_proxy = arguments->no_proxy;
@@ -333,13 +337,20 @@ static struct bx_fetch_config* github_config(
     }
     free(url_operand);
 
-    if (arguments->bearer_token) {
-        if (!bx_fetch_http_bearer_token_is_valid(arguments->bearer_token)) {
+    const char* token = arguments->bearer_token;
+    if (!token && !arguments->bearer_token_file) {
+        const char* environment_token = getenv("GITHUB_TOKEN");
+        if (environment_token && environment_token[0] != '\0')
+            token = environment_token;
+    }
+
+    if (token) {
+        if (!bx_fetch_http_bearer_token_is_valid(token)) {
             errno = EINVAL;
             bx_fetch_config_free(config);
             return NULL;
         }
-        config->http.bearer_token = strdup(arguments->bearer_token);
+        config->http.bearer_token = strdup(token);
         if (!config->http.bearer_token) {
             bx_fetch_config_free(config);
             return NULL;

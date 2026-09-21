@@ -708,9 +708,8 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
     };
 
     bool simple_direct = config->logging.verbosity == BX_FETCH_VERBOSITY_VERBOSE && !config->recursive.recursive && !config->recursive.page_requisites && config->input.url_count == 1;
-    if (!config->download.dry_run &&
-        config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET &&
-        !simple_direct)
+    if (!config->download.dry_run && !simple_direct &&
+        !config->logging.suppress_session_banner)
         fputs("mira: starting downloads\n", frontend_state.diagnostics);
 
     BxFetchRunFailure failure;
