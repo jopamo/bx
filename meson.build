@@ -1169,7 +1169,10 @@ edit_vim_c_args = cc.get_supported_arguments([
   '-Wno-unused-parameter',
   '-Wno-unused-function',
 ])
-edit_vim_c_args += ['-DHAVE_CONFIG_H']
+edit_vim_c_args += [
+  '-D_DEFAULT_SOURCE',
+  '-DHAVE_CONFIG_H',
+]
 
 edit_vim_lib = static_library('bx_edit_vim',
   edit_vim_sources,
