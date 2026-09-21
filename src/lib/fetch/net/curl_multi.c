@@ -5,6 +5,7 @@
 #include "lib/time_parse.h"
 #include <curl/curl.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +184,130 @@ static void reset_response_state(BxFetchTransfer* transfer) {
     transfer->progress = (BxFetchProgressSample){.generation = transfer->progress.generation + 1};
     transfer->progress_emitted = false;
     transfer->response_headers_finalized = false;
+    transfer->anubis_refresh_detected = false;
+}
+
+static bool anubis_probe_eligible(const BxFetchTransfer* transfer) {
+    if (!transfer || !transfer->engine || !transfer->engine->cfg || !transfer->req ||
+        transfer->anubis_phase == BX_FETCH_ANUBIS_PHASE_SUBMIT ||
+        transfer->engine->cfg->http.no_cookies || transfer->engine->cfg->download.spider ||
+        transfer->resume_requested || bx_fetch_request_has_body_file(transfer->req) ||
+        transfer->req->body || !transfer->req->method ||
+        strcasecmp(transfer->req->method, "GET") != 0 ||
+        transfer->resp->status_code != 200) {
+        return false;
+    }
+
+    BxFetchProtocol protocol =
+        bx_fetch_response_protocol(transfer->resp, bx_fetch_request_target(transfer->req));
+    if (protocol != BX_FETCH_PROTOCOL_HTTP && protocol != BX_FETCH_PROTOCOL_HTTPS)
+        return false;
+    const char* content_type =
+        bx_fetch_response_header_value(transfer->resp, "Content-Type");
+    return bx_fetch_content_type_equals(content_type, "text/html") ||
+           bx_fetch_content_type_equals(content_type, "application/xhtml+xml");
+}
+
+static bool finalize_response_headers(BxFetchTransfer* transfer) {
+    if (!transfer || transfer->response_headers_finalized)
+        return transfer && transfer->response_headers_finalized;
+    if (transfer->headers_cb &&
+        transfer->headers_cb(transfer->callback_userdata,
+                             transfer->req,
+                             transfer->resp,
+                             transfer->writer) != 0) {
+        bx_fetch_transfer_mark_io_failure(transfer, EIO);
+        return false;
+    }
+    transfer->response_headers_finalized = true;
+    if (transfer->resume_needs_content_range)
+        transfer->progress.accepted_prefix_bytes = (uint64_t)transfer->resume_from;
+    return true;
+}
+
+static bool write_response_bytes(BxFetchTransfer* transfer,
+                                 const char* data,
+                                 size_t length) {
+    if (!transfer || !transfer->writer || (!data && length > 0))
+        return false;
+    bool ftp = transfer_uses_ftp(transfer);
+    if (!ftp && !finalize_response_headers(transfer))
+        return false;
+    if (transfer->engine->cfg->http.save_headers &&
+        !ftp && !transfer->save_headers_written &&
+        transfer->save_headers_len > 0) {
+        if (bx_fetch_writer_write(transfer->writer,
+                                  transfer->save_headers_buf,
+                                  transfer->save_headers_len) != 0) {
+            bx_fetch_transfer_mark_io_failure(transfer, EIO);
+            return false;
+        }
+        transfer->save_headers_written = true;
+    }
+    if (length > 0 && bx_fetch_writer_write(transfer->writer, data, length) != 0) {
+        bx_fetch_transfer_mark_io_failure(transfer, EIO);
+        return false;
+    }
+    return true;
+}
+
+static void set_anubis_error(BxFetchTransfer* transfer,
+                             int error_number,
+                             const char* detail) {
+    if (!transfer || transfer->anubis_error_number != 0)
+        return;
+    transfer->anubis_error_number = error_number > 0 ? error_number : EPROTO;
+    transfer->anubis_error_detail = detail;
+    transfer->discard_body = true;
+    transfer->anubis_probe_active = false;
+}
+
+static BxFetchAnubisProbeResult probe_anubis(BxFetchTransfer* transfer,
+                                             bool final) {
+    BxFetchAnubisChallenge challenge = {0};
+    BxFetchAnubisProbeResult result =
+        bx_fetch_anubis_probe(transfer->anubis_probe,
+                              transfer->anubis_probe_len,
+                              final,
+                              &challenge);
+    if (result == BX_FETCH_ANUBIS_PROBE_MATCH) {
+        int difficulty_limit =
+            challenge.algorithm_kind == BX_FETCH_ANUBIS_ALGORITHM_SHA256
+                ? BX_FETCH_ANUBIS_SHA256_DEFAULT_MAX_DIFFICULTY
+                : BX_FETCH_ANUBIS_DEFAULT_MAX_DIFFICULTY;
+        if (challenge.difficulty > difficulty_limit) {
+            set_anubis_error(transfer,
+                             EFBIG,
+                             "Anubis challenge difficulty exceeds the supported limit");
+        }
+        else if (transfer->anubis_phase == BX_FETCH_ANUBIS_PHASE_RETRY) {
+            set_anubis_error(transfer,
+                             ELOOP,
+                             "Anubis challenge remained after validation");
+        }
+        else {
+            const BxFetchPreparedUrl* effective =
+                bx_fetch_response_effective_target(transfer->resp);
+            BxFetchPreparedUrl* retry_target =
+                bx_fetch_prepared_url_clone(effective ? effective : transfer->current_target);
+            if (!retry_target) {
+                set_anubis_error(transfer,
+                                 ENOMEM,
+                                 "could not retain the Anubis challenge target");
+                return result;
+            }
+            bx_fetch_prepared_url_free(transfer->anubis_retry_target);
+            transfer->anubis_retry_target = retry_target;
+            transfer->anubis_challenge = challenge;
+            transfer->anubis_challenge_detected = true;
+            transfer->anubis_probe_active = false;
+            transfer->discard_body = true;
+        }
+    }
+    else if (result == BX_FETCH_ANUBIS_PROBE_INVALID) {
+        set_anubis_error(transfer, EPROTO, "malformed or unsupported Anubis challenge");
+    }
+    return result;
 }
 
 size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -266,15 +391,64 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
 
             int status = t->resp ? t->resp->status_code : 0;
             bool callback_eligible = status == 304 || ((status == 200 || status == 206) && !t->discard_body);
-            if (t->headers_cb && callback_eligible && t->headers_cb(t->callback_userdata, t->req, t->resp, t->writer) != 0) {
-                bx_fetch_transfer_mark_io_failure(t, EIO);
+            if (t->anubis_phase == BX_FETCH_ANUBIS_PHASE_SUBMIT) {
+                t->response_headers_finalized = true;
+            }
+            else if (t->anubis_refresh_detected) {
+                int difficulty_limit =
+                    t->anubis_challenge.algorithm_kind ==
+                            BX_FETCH_ANUBIS_ALGORITHM_SHA256
+                        ? BX_FETCH_ANUBIS_SHA256_DEFAULT_MAX_DIFFICULTY
+                        : BX_FETCH_ANUBIS_DEFAULT_MAX_DIFFICULTY;
+                if (t->anubis_challenge.difficulty > difficulty_limit) {
+                    set_anubis_error(
+                        t,
+                        EFBIG,
+                        "Anubis challenge difficulty exceeds the supported limit");
+                }
+                else if (t->anubis_phase == BX_FETCH_ANUBIS_PHASE_RETRY) {
+                    set_anubis_error(
+                        t,
+                        ELOOP,
+                        "Anubis challenge remained after validation");
+                }
+                else {
+                    bx_fetch_prepared_url_free(t->anubis_retry_target);
+                    t->anubis_retry_target =
+                        bx_fetch_prepared_url_clone(t->resp->effective_target);
+                    if (!t->anubis_retry_target) {
+                        set_anubis_error(
+                            t,
+                            ENOMEM,
+                            "could not retain the Anubis challenge target");
+                    }
+                    else {
+                        t->anubis_challenge_detected = true;
+                        t->discard_body = true;
+                    }
+                }
+                t->response_headers_finalized = true;
+            }
+            else if (callback_eligible && anubis_probe_eligible(t)) {
+                if (!t->anubis_probe) {
+                    t->anubis_probe =
+                        malloc(BX_FETCH_ANUBIS_PROBE_LIMIT_BYTES + 1u);
+                    if (!t->anubis_probe) {
+                        bx_fetch_transfer_mark_io_failure(t, ENOMEM);
+                        free(line);
+                        return 0;
+                    }
+                }
+                t->anubis_probe_len = 0;
+                t->anubis_probe_active = true;
+            }
+            else if (callback_eligible && !finalize_response_headers(t)) {
                 free(line);
                 return 0;
             }
-
-            t->response_headers_finalized = true;
-            if (t->resume_needs_content_range)
-                t->progress.accepted_prefix_bytes = (uint64_t)t->resume_from;
+            else if (!callback_eligible) {
+                t->response_headers_finalized = true;
+            }
         }
         free(line);
         return total;
@@ -352,7 +526,29 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
         return 0;
     }
 
-    if (t->engine && t->engine->cfg->http.max_redirect > 0 && status_is_redirect(t->resp->status_code) && strcasecmp(name, "Location") == 0) {
+    if (t->anubis_phase != BX_FETCH_ANUBIS_PHASE_SUBMIT &&
+        !t->engine->cfg->http.no_cookies &&
+        t->resp->status_code == 200 &&
+        strcasecmp(name, "Refresh") == 0 &&
+        strstr(value, BX_FETCH_ANUBIS_PASS_PATH) != NULL) {
+        BxFetchAnubisChallenge challenge = {0};
+        BxFetchAnubisProbeResult result =
+            bx_fetch_anubis_probe_refresh(value, &challenge);
+        if (result == BX_FETCH_ANUBIS_PROBE_MATCH) {
+            t->anubis_challenge = challenge;
+            t->anubis_refresh_detected = true;
+        }
+        else {
+            set_anubis_error(t,
+                             EPROTO,
+                             "malformed Anubis Refresh challenge");
+        }
+    }
+
+    if (t->anubis_phase != BX_FETCH_ANUBIS_PHASE_SUBMIT &&
+        t->engine && t->engine->cfg->http.max_redirect > 0 &&
+        status_is_redirect(t->resp->status_code) &&
+        strcasecmp(name, "Location") == 0) {
         BxFetchPreparedUrl* redirect_target = resolve_redirect_target(t, value);
         if (!redirect_target) {
             t->url_canonicalization_failed = true;
@@ -429,26 +625,45 @@ size_t bx_fetch_write_callback(char* ptr, size_t size, size_t nmemb, void* userd
     }
     t->response_body_bytes += (curl_off_t)total;
 
-    if (t->discard_body) {
+    if (t->anubis_phase == BX_FETCH_ANUBIS_PHASE_SUBMIT || t->discard_body) {
         bx_fetch_record_downloaded_bytes(t, total);
         return total;
     }
 
-    if (t->engine && t->engine->cfg->http.save_headers && !t->save_headers_written && t->save_headers_len > 0) {
-        if (bx_fetch_writer_write(t->writer, t->save_headers_buf, t->save_headers_len) != 0) {
-            bx_fetch_transfer_mark_io_failure(t, EIO);
+    if (t->anubis_probe_active) {
+        size_t available = BX_FETCH_ANUBIS_PROBE_LIMIT_BYTES - t->anubis_probe_len;
+        size_t buffered = total < available ? total : available;
+        if (buffered > 0) {
+            memcpy(t->anubis_probe + t->anubis_probe_len, ptr, buffered);
+            t->anubis_probe_len += buffered;
+            t->anubis_probe[t->anubis_probe_len] = '\0';
+        }
+
+        BxFetchAnubisProbeResult probe_result = probe_anubis(t, false);
+        if (t->anubis_error_number != 0 || t->anubis_challenge_detected) {
+            bx_fetch_record_downloaded_bytes(t, total);
+            return total;
+        }
+        if (probe_result == BX_FETCH_ANUBIS_PROBE_UNDECIDED &&
+            t->anubis_probe_len < BX_FETCH_ANUBIS_PROBE_LIMIT_BYTES) {
+            bx_fetch_record_downloaded_bytes(t, total);
+            return total;
+        }
+
+        t->anubis_probe_active = false;
+        if (!write_response_bytes(t, t->anubis_probe, t->anubis_probe_len) ||
+            (buffered < total &&
+             !write_response_bytes(t, ptr + buffered, total - buffered))) {
             return 0;
         }
-        t->save_headers_written = true;
+        t->anubis_probe_len = 0;
+        bx_fetch_record_downloaded_bytes(t, total);
+        return total;
     }
 
-    if (bx_fetch_writer_write(t->writer, ptr, total) != 0) {
-        bx_fetch_transfer_mark_io_failure(t, EIO);
-        return 0;  // signal error
-    }
-
+    if (!write_response_bytes(t, ptr, total))
+        return 0;
     bx_fetch_record_downloaded_bytes(t, total);
-
     return total;
 }
 
@@ -629,6 +844,195 @@ static void fail_active_transfers(BxFetchEngine* engine, BxFetchError result) {
         bx_fetch_engine_dispose_transfer(engine, engine->active_head, result);
 }
 
+static void reset_response_for_anubis_request(BxFetchTransfer* transfer,
+                                              BxFetchAnubisPhase phase) {
+    BxFetchResponse* response = transfer->resp;
+    reset_response_state(transfer);
+    bx_fetch_prepared_url_free(response->effective_target);
+    response->effective_target = NULL;
+    free(response->content_type);
+    response->content_type = NULL;
+    free(response->transport_error_detail);
+    response->transport_error_detail = NULL;
+    response->status_code = 0;
+    response->content_length = 0;
+    response->error_code = 0;
+    response->error_number = -1;
+    response->transport_error_kind = BX_FETCH_TRANSPORT_ERROR_NONE;
+    response->request_body_io_failed = false;
+    response->header_policy_failure = BX_FETCH_RESPONSE_HEADER_POLICY_OK;
+
+    bx_fetch_prepared_url_free(transfer->pending_redirect_target);
+    transfer->pending_redirect_target = NULL;
+    transfer->redirect_policy_rejected = false;
+    transfer->url_canonicalization_failed = false;
+    transfer->redirect_protocol_unsupported = false;
+    transfer->redirect_target_policy = BX_FETCH_NET_TARGET_ALLOWED;
+    transfer->resume_validation_failed = false;
+    transfer->io_failed = false;
+    transfer->request_body_io_failed = false;
+    transfer->io_error_number = 0;
+    transfer->anubis_probe_len = 0;
+    transfer->anubis_probe_active = false;
+    transfer->anubis_challenge_detected = false;
+    transfer->anubis_phase = phase;
+    transfer->discard_body = phase == BX_FETCH_ANUBIS_PHASE_SUBMIT;
+}
+
+static bool requeue_anubis_request(BxFetchEngine* engine,
+                                   BxFetchTransfer* transfer,
+                                   BxFetchPreparedUrl* target,
+                                   BxFetchAnubisPhase phase) {
+    if (!engine || !transfer || !target || !transfer->multi_attached) {
+        bx_fetch_prepared_url_free(target);
+        set_anubis_error(transfer, EPROTO, "invalid Anubis transfer state");
+        return false;
+    }
+    if (bx_fetch_prepared_url_policy(target,
+                                     bx_fetch_config_requires_https(engine->cfg)) !=
+            BX_FETCH_PROTOCOL_DECISION_ALLOW ||
+        bx_fetch_net_target_policy(engine->cfg, target) !=
+            BX_FETCH_NET_TARGET_ALLOWED) {
+        bx_fetch_prepared_url_free(target);
+        set_anubis_error(transfer,
+                         ENOTSUP,
+                         "Anubis endpoint violates transport policy");
+        return false;
+    }
+
+    CURLMcode remove_result =
+        curl_multi_remove_handle(engine->multi, transfer->easy);
+    if (remove_result != CURLM_OK) {
+        engine->invariant_failed = true;
+        bx_fetch_prepared_url_free(target);
+        set_anubis_error(transfer, EPROTO, "could not suspend Anubis transfer");
+        return false;
+    }
+    transfer->multi_attached = false;
+
+    CURLcode url_result =
+        curl_easy_setopt(transfer->easy,
+                         CURLOPT_URL,
+                         bx_fetch_prepared_url_transport(target));
+    CURLcode follow_result =
+        curl_easy_setopt(transfer->easy,
+                         CURLOPT_FOLLOWLOCATION,
+                         phase == BX_FETCH_ANUBIS_PHASE_SUBMIT
+                             ? 0L
+                             : (engine->cfg->http.max_redirect > 0 ? 1L : 0L));
+    if (url_result != CURLE_OK || follow_result != CURLE_OK) {
+        bx_fetch_prepared_url_free(target);
+        set_anubis_error(transfer,
+                         EIO,
+                         "could not configure Anubis request");
+        return false;
+    }
+
+    bx_fetch_prepared_url_free(transfer->current_target);
+    transfer->current_target = target;
+    reset_response_for_anubis_request(transfer, phase);
+
+    CURLMcode add_result =
+        curl_multi_add_handle(engine->multi, transfer->easy);
+    if (add_result != CURLM_OK) {
+        set_anubis_error(transfer, EIO, "could not dispatch Anubis request");
+        return false;
+    }
+    transfer->multi_attached = true;
+    return true;
+}
+
+static bool begin_anubis_submission(BxFetchEngine* engine,
+                                    BxFetchTransfer* transfer) {
+    double started = bx_fetch_monotonic_seconds();
+    BxFetchAnubisSolution solution;
+    if (bx_fetch_anubis_solve(&transfer->anubis_challenge, &solution) != 0) {
+        int error_number = errno ? errno : EPROTO;
+        set_anubis_error(transfer,
+                         error_number,
+                         "could not solve Anubis challenge");
+        return false;
+    }
+
+    double solved = bx_fetch_monotonic_seconds();
+    double elapsed_seconds =
+        solved >= started && started > 0.0 ? solved - started : 0.0;
+    double minimum_seconds =
+        (double)solution.minimum_wait_milliseconds / 1000.0;
+    if (elapsed_seconds < minimum_seconds &&
+        bx_fetch_sleep_for_seconds(minimum_seconds - elapsed_seconds) != 0) {
+        set_anubis_error(transfer, errno, "Anubis challenge wait failed");
+        return false;
+    }
+    double finished = bx_fetch_monotonic_seconds();
+    elapsed_seconds =
+        finished >= started && started > 0.0 ? finished - started : minimum_seconds;
+    uint64_t elapsed_milliseconds =
+        elapsed_seconds >= (double)UINT64_MAX / 1000.0
+            ? UINT64_MAX
+            : (uint64_t)(elapsed_seconds * 1000.0);
+    char elapsed_text[32];
+    int elapsed_length =
+        snprintf(elapsed_text,
+                 sizeof(elapsed_text),
+                 "%" PRIu64,
+                 elapsed_milliseconds);
+    if (elapsed_length <= 0 || (size_t)elapsed_length >= sizeof(elapsed_text)) {
+        set_anubis_error(transfer, EOVERFLOW, "invalid Anubis elapsed time");
+        return false;
+    }
+
+    char* pass_url =
+        bx_fetch_anubis_pass_url(transfer->anubis_retry_target,
+                                 &transfer->anubis_challenge,
+                                 &solution,
+                                 elapsed_text);
+    if (!pass_url) {
+        set_anubis_error(transfer,
+                         errno,
+                         "could not construct Anubis validation URL");
+        return false;
+    }
+    BxFetchPreparedUrl* pass_target = bx_fetch_url_prepare(pass_url);
+    free(pass_url);
+    if (!pass_target ||
+        !bx_fetch_prepared_url_same_origin(transfer->anubis_retry_target,
+                                           pass_target)) {
+        bx_fetch_prepared_url_free(pass_target);
+        set_anubis_error(transfer,
+                         EPROTO,
+                         "Anubis validation URL changed origin");
+        return false;
+    }
+    return requeue_anubis_request(engine,
+                                  transfer,
+                                  pass_target,
+                                  BX_FETCH_ANUBIS_PHASE_SUBMIT);
+}
+
+static bool begin_anubis_retry(BxFetchEngine* engine,
+                               BxFetchTransfer* transfer,
+                               int status) {
+    if (status < 300 || status >= 400) {
+        set_anubis_error(transfer,
+                         EACCES,
+                         "Anubis validation request was rejected");
+        return false;
+    }
+    BxFetchPreparedUrl* retry_target =
+        bx_fetch_prepared_url_clone(transfer->anubis_retry_target);
+    if (!retry_target) {
+        set_anubis_error(transfer,
+                         ENOMEM,
+                         "could not retain Anubis retry target");
+        return false;
+    }
+    return requeue_anubis_request(engine,
+                                  transfer,
+                                  retry_target,
+                                  BX_FETCH_ANUBIS_PHASE_RETRY);
+}
+
 static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_result) {
     if (!transfer || !transfer->easy || !transfer->resp)
         return;
@@ -656,8 +1060,9 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     }
 #endif
     transfer->resp->error_number = transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK ? EFBIG
-                                   : (transfer->io_failed && transfer->io_error_number > 0)                    ? transfer->io_error_number
-                                                                                                               : os_error_number;
+                                   : transfer->anubis_error_number > 0                                           ? transfer->anubis_error_number
+                                   : (transfer->io_failed && transfer->io_error_number > 0)                       ? transfer->io_error_number
+                                                                                                                  : os_error_number;
     transfer->resp->request_body_io_failed = transfer->request_body_io_failed;
     transfer->resp->transport_error_kind = bx_fetch_classify_curl_transport_error(curl_result);
     if (transfer_uses_ftp(transfer) && transfer->resp->status_code >= 400 && transfer->resp->status_code < 600 &&
@@ -668,7 +1073,10 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     free(transfer->resp->transport_error_detail);
     transfer->resp->transport_error_detail = NULL;
     const char* detail = NULL;
-    if (transfer->redirect_target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
+    if (transfer->anubis_error_detail) {
+        detail = transfer->anubis_error_detail;
+    }
+    else if (transfer->redirect_target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
         detail = bx_fetch_net_target_policy_reason(transfer->redirect_target_policy);
     }
     else if (transfer->url_canonicalization_failed) {
@@ -687,6 +1095,10 @@ static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode
     if (transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK) {
         return BX_FETCH_ERROR_RESOURCE_LIMIT;
     }
+    if (transfer->anubis_error_number == EFBIG)
+        return BX_FETCH_ERROR_RESOURCE_LIMIT;
+    if (transfer->anubis_error_number != 0)
+        return BX_FETCH_ERROR_UNSUPPORTED;
     if (transfer->url_canonicalization_failed)
         return BX_FETCH_ERROR_UNSUPPORTED;
     if (transfer->redirect_policy_rejected)
@@ -711,7 +1123,11 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
     bool ftp = transfer_uses_ftp(transfer);
     bool commit = false;
 
-    if (transport_succeeded && payload == BX_FETCH_RESPONSE_PAYLOAD_BODY && !(ftp && engine->cfg->download.spider)) {
+    if (transport_succeeded && transfer->anubis_error_number == 0 &&
+        !transfer->anubis_challenge_detected &&
+        transfer->anubis_phase != BX_FETCH_ANUBIS_PHASE_SUBMIT &&
+        payload == BX_FETCH_RESPONSE_PAYLOAD_BODY &&
+        !(ftp && engine->cfg->download.spider)) {
         if (transfer->resume_restart_validation_pending && !bx_fetch_resume_restart_preserves_verified_prefix(transfer->resume_from, (long long)transfer->response_body_bytes)) {
             transfer->resume_validation_failed = true;
         }
@@ -788,6 +1204,33 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         curl_off_t total = -1;
         (void)curl_easy_getinfo(message->easy_handle, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &total);
         bx_fetch_progress_emit(transfer, total, true);
+    }
+
+    if (message->data.result == CURLE_OK) {
+        if (transfer->anubis_probe_active) {
+            BxFetchAnubisProbeResult probe_result =
+                probe_anubis(transfer, true);
+            if (probe_result == BX_FETCH_ANUBIS_PROBE_NO_MATCH) {
+                transfer->anubis_probe_active = false;
+                if (!write_response_bytes(transfer,
+                                          transfer->anubis_probe,
+                                          transfer->anubis_probe_len)) {
+                    invariant_ok = false;
+                }
+                transfer->anubis_probe_len = 0;
+            }
+        }
+
+        if (transfer->anubis_challenge_detected &&
+            transfer->anubis_error_number == 0) {
+            if (begin_anubis_submission(engine, transfer))
+                return true;
+        }
+        else if (transfer->anubis_phase == BX_FETCH_ANUBIS_PHASE_SUBMIT &&
+                 transfer->anubis_error_number == 0) {
+            if (begin_anubis_retry(engine, transfer, status))
+                return true;
+        }
     }
 
     if (!finish_writer(engine, transfer, message->data.result))

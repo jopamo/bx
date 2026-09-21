@@ -633,6 +633,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
         bx_fetch_transfer_free(t);
         return -1;
     }
+    t->multi_attached = true;
 
     t->next_active = engine->active_head;
     engine->active_head = t;

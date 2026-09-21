@@ -1526,6 +1526,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/fs/xattr.c',
   'src/lib/fetch/html/parser.c',
   'src/lib/fetch/net/credentials.c',
+  'src/lib/fetch/net/anubis.c',
   'src/lib/fetch/net/curl_capabilities.c',
   'src/lib/fetch/net/curl_global.c',
   'src/lib/fetch/net/curl_multi.c',

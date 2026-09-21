@@ -1,6 +1,7 @@
 #ifndef BX_FETCH_NET_TRANSFER_H
 #define BX_FETCH_NET_TRANSFER_H
 
+#include "lib/fetch/anubis.h"
 #include "lib/fetch/net.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,6 +16,12 @@ typedef enum {
     BX_FETCH_TRANSFER_STATE_FAILED,
 } BxFetchTransferState;
 
+typedef enum {
+    BX_FETCH_ANUBIS_PHASE_NONE = 0,
+    BX_FETCH_ANUBIS_PHASE_SUBMIT,
+    BX_FETCH_ANUBIS_PHASE_RETRY,
+} BxFetchAnubisPhase;
+
 typedef struct BxFetchTransfer {
     CURL* easy;
     BxFetchRequest* req;
@@ -24,6 +31,7 @@ typedef struct BxFetchTransfer {
     struct BxFetchTransfer* next_active;
     struct curl_slist* headers;
     BxFetchTransferState state;
+    bool multi_attached;
 
     bool resume_requested;
     long long resume_from;
@@ -51,6 +59,17 @@ typedef struct BxFetchTransfer {
     bool writer_closed;
     bool writer_aborted;
     bool terminal_callback_invoked;
+
+    char* anubis_probe;
+    size_t anubis_probe_len;
+    bool anubis_probe_active;
+    bool anubis_challenge_detected;
+    bool anubis_refresh_detected;
+    BxFetchAnubisChallenge anubis_challenge;
+    BxFetchAnubisPhase anubis_phase;
+    int anubis_error_number;
+    const char* anubis_error_detail;
+    BxFetchPreparedUrl* anubis_retry_target;
 
     BxFetchPreparedUrl* current_target;
     BxFetchPreparedUrl* pending_redirect_target;
