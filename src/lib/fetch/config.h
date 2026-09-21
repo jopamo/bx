@@ -44,6 +44,7 @@ typedef struct {
     BxFetchVerbosity verbosity;
     bool debug_trace;
     bool structured_errors;
+    bool suppress_session_banner;
     char* rejected_log;
 } BxFetchLoggingConfig;
 
