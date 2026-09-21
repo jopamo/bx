@@ -100,9 +100,10 @@ void bx_fetch_engine_dispose_transfer(BxFetchEngine* engine, BxFetchTransfer* tr
      * inspect engine state, but must never observe this transfer as active
      * after its terminal result is visible.
      */
-    if (engine->multi && transfer->easy) {
+    if (engine->multi && transfer->easy && transfer->multi_attached) {
         CURLMcode remove_result = curl_multi_remove_handle(engine->multi, transfer->easy);
         bx_fetch_net_require(engine, remove_result == CURLM_OK);
+        transfer->multi_attached = false;
     }
     bx_fetch_engine_detach_transfer(engine, transfer);
 
