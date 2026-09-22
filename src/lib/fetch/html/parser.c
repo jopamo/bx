@@ -364,8 +364,7 @@ static size_t parse_css_import_rule(const char* css, size_t len, size_t i, BxFet
     return j;
 }
 
-int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
-    (void)base_url;
+int bx_fetch_css_extract_links(const char* css_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(css_data, len))
@@ -443,20 +442,6 @@ typedef struct {
     const char* name;
     size_t len;
 } LexborAttrSpec;
-
-typedef struct {
-    BxFetchLinkCallback cb;
-    void* userdata;
-} HtmlExtractCompatContext;
-
-static void extract_html_link_compat(void* userdata, const char* url, BxFetchHtmlLinkKind kind) {
-    (void)kind;
-
-    const HtmlExtractCompatContext* ctx = userdata;
-    if (!ctx || !ctx->cb)
-        return;
-    ctx->cb(ctx->userdata, url);
-}
 
 static bool span_ascii_case_equals_bytes(const char* value, size_t len, const char* expected) {
     if (!value || !expected || len != strlen(expected))
@@ -592,8 +577,7 @@ static lxb_status_t serialize_bounded(const lxb_char_t* data, size_t length, voi
     return LXB_STATUS_OK;
 }
 
-int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
-    (void)base_url;
+int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
@@ -621,16 +605,7 @@ int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_dat
     return 0;
 }
 
-int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
-    HtmlExtractCompatContext ctx = {
-        .cb = cb,
-        .userdata = userdata,
-    };
-    return bx_fetch_html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
-}
-
-char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
-    (void)base_url;
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
@@ -678,11 +653,6 @@ typedef struct {
     BxFetchHtmlLinkCallback cb;
     void* userdata;
 } HtmlExtractContext;
-
-typedef struct {
-    BxFetchLinkCallback cb;
-    void* userdata;
-} HtmlExtractCompatContext;
 
 typedef struct {
     size_t start;
@@ -969,15 +939,6 @@ static int scan_html_link_attrs(const char* html_data, size_t len, HtmlAttrVisit
     return 0;
 }
 
-static void extract_html_link_compat(void* userdata, const char* url, BxFetchHtmlLinkKind kind) {
-    (void)kind;
-
-    const HtmlExtractCompatContext* ctx = userdata;
-    if (!ctx || !ctx->cb)
-        return;
-    ctx->cb(ctx->userdata, url);
-}
-
 static int html_extract_visit(void* userdata, const char* html_data, size_t tag_name_start, size_t tag_name_end, size_t attr_name_start, size_t attr_name_end, size_t value_start, size_t value_end) {
     HtmlExtractContext* ctx = userdata;
     if (!ctx || value_end < value_start)
@@ -991,8 +952,7 @@ static int html_extract_visit(void* userdata, const char* html_data, size_t tag_
     return 0;
 }
 
-int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
-    (void)base_url;
+int bx_fetch_html_extract_links(const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))
@@ -1000,14 +960,6 @@ int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_dat
 
     HtmlExtractContext ctx = {cb, userdata};
     return scan_html_link_attrs(html_data, len, html_extract_visit, &ctx);
-}
-
-int bx_fetch_html_extract_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkCallback cb, void* userdata) {
-    HtmlExtractCompatContext ctx = {
-        .cb = cb,
-        .userdata = userdata,
-    };
-    return bx_fetch_html_extract_links_typed(base_url, html_data, len, extract_html_link_compat, &ctx);
 }
 
 static int html_rewrite_add(HtmlRewriteContext* ctx, size_t start, size_t end, char* replacement) {
@@ -1098,8 +1050,7 @@ static int append_buffer(char** buffer, size_t* length, size_t* capacity, const 
     return 0;
 }
 
-char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
-    (void)base_url;
+char* bx_fetch_html_convert_links(const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata) {
     if (!cb)
         errno = EINVAL;
     if (!cb || !document_parser_input_valid(html_data, len))

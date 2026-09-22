@@ -281,9 +281,8 @@ int bx_fetch_document_extract_links(const char* path, const char* content_type, 
         .callback = callback,
         .userdata = userdata,
     };
-    const char* base_url = bx_fetch_prepared_url_transport(base);
-    int parse_result = kind == BX_FETCH_DOCUMENT_HTML ? bx_fetch_html_extract_links_typed(base_url, (const char*)data, length, adapt_html_link, &adapter)
-                                                      : bx_fetch_css_extract_links(base_url, (const char*)data, length, adapt_css_link, &adapter);
+    int parse_result = kind == BX_FETCH_DOCUMENT_HTML ? bx_fetch_html_extract_links((const char*)data, length, adapt_html_link, &adapter)
+                                                      : bx_fetch_css_extract_links((const char*)data, length, adapt_css_link, &adapter);
     int error_number = errno;
     free(data);
 

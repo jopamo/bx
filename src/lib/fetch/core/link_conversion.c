@@ -133,7 +133,7 @@ int bx_fetch_document_convert_download(const struct bx_fetch_config* cfg,
         .base = base,
     };
     errno = 0;
-    char* converted = bx_fetch_html_convert_links(bx_fetch_prepared_url_transport(base), (const char*)original, original_length, rewrite_published_link, &rewrite);
+    char* converted = bx_fetch_html_convert_links((const char*)original, original_length, rewrite_published_link, &rewrite);
     int rewrite_error = errno;
     bx_fetch_prepared_url_free(base);
     if (!converted) {

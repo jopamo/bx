@@ -178,7 +178,8 @@ static bool input_is_data_url(const char* value) {
     return value && strncasecmp(value, prefix, sizeof(prefix) - 1u) == 0;
 }
 
-static void input_html_link(void* userdata, const char* reference) {
+static void input_html_link(void* userdata, const char* reference, BxFetchHtmlLinkKind kind) {
+    (void)kind;
     HtmlInputContext* context = userdata;
     if (!context || context->failed || !reference || reference[0] == '\0')
         return;
@@ -294,7 +295,7 @@ int bx_fetch_input_urls_load_html(const char* path, const char* base_url, size_t
         .reserved_bytes = reserved_bytes,
     };
     errno = 0;
-    if (bx_fetch_html_extract_links(NULL, (const char*)data, length, input_html_link, &context) != 0 && !context.failed)
+    if (bx_fetch_html_extract_links((const char*)data, length, input_html_link, &context) != 0 && !context.failed)
         result = input_fail(outcome_out, BX_FETCH_INPUT_FAILURE_HTML_PARSE, 0, errno ? errno : EINVAL);
     else if (context.failed)
         result = -1;

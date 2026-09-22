@@ -1583,9 +1583,7 @@ if fetch_lexbor_dep.found()
   bx_fetch_core_c_args = ['-DHAVE_LEXBOR=1']
 endif
 
-# This library is the policy-light fetch foundation shared by the future wget
-# compatibility and native mira frontends.  It is intentionally private: the
-# standalone embedding ABI is not carried into bx.
+# Private fetch mechanics shared by the Wget and Mira policy frontends.
 bx_fetch_core_lib = static_library(
   'bx_fetch_core',
   bx_fetch_core_sources,
