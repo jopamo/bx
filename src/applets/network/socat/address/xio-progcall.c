@@ -347,6 +347,7 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
 	    applyopts(NULL, wrpip[1], popts, PH_FD);
 	 applyopts(NULL, wrpip[0], copts, PH_FD);
       }
+      freeopts(popts2);
       if (sfd->howtoend == END_UNSPEC) {
 	 sfd->howtoend = END_CLOSE_KILL;
       }
@@ -421,10 +422,12 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
 
    if (withfork) {
       if (Socketpair(PF_UNIX, SOCK_STREAM, 0, trigger) < 0) {
+	 freeopts(copts);
 	 Error1("socketpair(): %s", strerror(errno));
 	 return -1;
       }
       if (xio_child_reserve(sfd) < 0) {
+	 freeopts(copts);
 	 Error1("cannot reserve child process state: %s", strerror(errno));
 	 Close(trigger[0]);
 	 Close(trigger[1]);
@@ -432,6 +435,7 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
       }
       pid = xio_fork(true, E_ERROR, 0);
       if (pid < 0) {
+	 freeopts(copts);
 	 xio_child_cancel_reservation(sfd);
 	 Close(trigger[0]);
 	 Close(trigger[1]);
@@ -619,6 +623,8 @@ int _xioopen_foxec(int xioflags,	/* XIO_RDONLY etc. */
    }
 
    /* for parent (this is our socat process) */
+   /* The child owns its forked copy; no parent phase consumes this array. */
+   freeopts(copts);
    Notice1("forked off child process "F_pid, pid);
    Close(trigger[1]); 	/* in parent */
    if (xio_child_publish_pid(sfd, pid) < 0) {

@@ -474,7 +474,7 @@ int _xioopen_ipapp_listen_prepare(
       return result;
    }
    *opts0 = copyopts(opts, GROUP_ALL);
-   return STAT_OK;
+   return *opts0 ? STAT_OK : STAT_NORETRY;
 }
 
 
@@ -531,13 +531,11 @@ int xioopen_ipapp_listen(
       return STAT_NORETRY;
    }
 
-   if ((result =
-	xioopen_listen(sfd, xioflags,
+   result = xioopen_listen(sfd, xioflags,
 		       (struct sockaddr *)us, uslen,
-		       opts, opts0, pf, socktype, ipproto))
-       != 0)
-      return result;
-   return 0;
+		       opts, opts0, pf, socktype, ipproto);
+   freeopts(opts0);
+   return result;
 }
 #endif /* WITH_TCP && WITH_LISTEN */
 
