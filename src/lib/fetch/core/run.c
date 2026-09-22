@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/run.h"
+#include "lib/fetch/html.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/pathmap.h"
 #include "lib/fetch/resource_limits.h"
@@ -865,9 +866,12 @@ static int run_session_add_seed(BxFetchRun* run, int index, const char* url, con
 int bx_fetch_run_execute_config(const struct bx_fetch_config* cfg, const BxFetchRunFrontend* frontend, BxFetchRunFailure* failure_out) {
     run_failure_reset(failure_out);
     bool has_input_file = cfg && cfg->input.input_file && cfg->input.input_file[0] != '\0';
+    bool invalid_markdown = cfg && cfg->download.html_to_markdown &&
+                            (!bx_fetch_html_markdown_supported() || cfg->download.continue_download || cfg->http.save_headers || cfg->download.spider ||
+                             cfg->recursive.recursive || cfg->recursive.page_requisites || cfg->recursive.convert_links);
     if (!bx_fetch_config_tls_policy_valid(cfg) || !frontend || !frontend->plan_output || cfg->input.url_count < 0 || (cfg->input.url_count == 0 && !has_input_file) ||
         (cfg->input.url_count > 0 && !cfg->input.urls) || (cfg->input.force_html && !has_input_file) ||
-        (cfg->input.base_url && (!has_input_file || !cfg->input.force_html))) {
+        (cfg->input.base_url && (!has_input_file || !cfg->input.force_html)) || invalid_markdown) {
         return run_session_fail(failure_out, BX_FETCH_RUN_FAILURE_CONFIG, EINVAL, NULL, NULL, NULL);
     }
     size_t direct_url_bytes = 0;
