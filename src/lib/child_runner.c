@@ -366,17 +366,78 @@ static int bx_child_dup_stdio_fd(int source_fd, int target_fd) {
     if (source_fd < 0)
         return EBADF;
     if (source_fd == target_fd)
-        return 0;
+        return bx_fd_set_cloexec(target_fd, false) == 0 ? 0 : errno;
     if (bx_fd_dup2_exact(source_fd, target_fd) < 0)
         return errno != 0 ? errno : EIO;
     return 0;
 }
 
-static void bx_child_close_redirect_fd(int fd, int target_fd,
-                                       int already_closed_1, int already_closed_2) {
-    if (fd < 0 || fd == target_fd || fd == already_closed_1 || fd == already_closed_2)
-        return;
-    close(fd);
+static int bx_child_redirect_stdio(const struct bx_child_runner_opts* opts) {
+    const bool enabled[3] = {
+        opts && opts->use_stdin_fd,
+        opts && opts->use_stdout_fd,
+        opts && opts->use_stderr_fd,
+    };
+    const int original[3] = {
+        opts ? opts->stdin_fd : -1,
+        opts ? opts->stdout_fd : -1,
+        opts ? opts->stderr_fd : -1,
+    };
+    int source[3] = {-1, -1, -1};
+    int error = 0;
+    /* Snapshot standard descriptors before any dup2 or tty replacement.
+     * This preserves cycles and shared sources without closing a new target. */
+    for (int i = 0; i < 3; i++) {
+        if (!enabled[i])
+            continue;
+        source[i] = original[i] <= STDERR_FILENO ? bx_fd_dup_cloexec_min(original[i], 3) : original[i];
+        if (source[i] < 0) {
+            error = errno != 0 ? errno : EBADF;
+            goto done;
+        }
+    }
+    if (opts && opts->reopen_stdin_tty) {
+        int tty = bx_fd_open_cloexec("/dev/tty", O_RDONLY, 0);
+        if (tty < 0) {
+            error = errno;
+            goto done;
+        }
+        error = bx_child_dup_stdio_fd(tty, STDIN_FILENO);
+        if (tty != STDIN_FILENO)
+            close(tty);
+        if (error)
+            goto done;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (enabled[i] && (error = bx_child_dup_stdio_fd(source[i], i)) != 0)
+            break;
+    }
+done:
+    for (int i = 0; i < 3; i++) {
+        if (source[i] > STDERR_FILENO && (i < 1 || source[i] != source[0]) && (i < 2 || source[i] != source[1]))
+            close(source[i]);
+    }
+    return error;
+}
+
+static int bx_child_error_pipe(int pipefd[2]) {
+    if (bx_fd_pipe_cloexec(pipefd) != 0)
+        return -1;
+    for (int i = 0; i < 2; i++) {
+        if (pipefd[i] > STDERR_FILENO)
+            continue;
+        int fd = bx_fd_dup_cloexec_min(pipefd[i], 3);
+        if (fd < 0) {
+            int error = errno;
+            close(pipefd[0]);
+            close(pipefd[1]);
+            errno = error;
+            return -1;
+        }
+        close(pipefd[i]);
+        pipefd[i] = fd;
+    }
+    return 0;
 }
 
 static void bx_child_reset_common_signal_handlers(void) {
@@ -401,8 +462,12 @@ static void bx_child_report_exec_error(
     int fd,
     int errnum,
     const struct bx_child_runner_opts *opts) {
-    if (!opts || !opts->defer_exec_check)
-        (void)!write(fd, &errnum, sizeof(errnum));
+    if (!opts || !opts->defer_exec_check) {
+        ssize_t written;
+        do {
+            written = write(fd, &errnum, sizeof(errnum));
+        } while (written < 0 && errno == EINTR);
+    }
 }
 
 static int bx_child_wait_stdout_foreground(void) {
@@ -444,8 +509,21 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
             return 0;
     }
 
+    if (opts) {
+        const bool enabled[] = {opts->use_stdin_fd, opts->use_stdout_fd, opts->use_stderr_fd};
+        const int sources[] = {opts->stdin_fd, opts->stdout_fd, opts->stderr_fd};
+        for (int i = 0; i < 3; i++) {
+            if (enabled[i] && fcntl(sources[i], F_GETFD) < 0) {
+                if (exec_failed_now)
+                    *exec_failed_now = true;
+                if (exec_errno_now)
+                    *exec_errno_now = errno;
+                return 1;
+            }
+        }
+    }
     int errpipe[2];
-    if (bx_fd_pipe_cloexec(errpipe) != 0) {
+    if (bx_child_error_pipe(errpipe) != 0) {
         if (!opts || !opts->suppress_spawn_diagnostics)
             fprintf(stderr, "%s: pipe failed: %s\n", progname, strerror(errno));
         return 1;
@@ -499,52 +577,11 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
             bx_child_report_exec_error(errpipe[1], errnum, opts);
             _exit(bx_child_failure_status(opts->setup_failure_status));
         }
-        if (opts && opts->reopen_stdin_tty) {
-            int tty_fd = bx_fd_open_cloexec("/dev/tty", O_RDONLY, 0);
-            if (tty_fd < 0) {
-                errnum = errno;
-                bx_child_report_exec_error(errpipe[1], errnum, opts);
-                _exit(127);
-            }
-            if (bx_fd_dup2_exact(tty_fd, STDIN_FILENO) < 0) {
-                errnum = errno;
-                close(tty_fd);
-                bx_child_report_exec_error(errpipe[1], errnum, opts);
-                _exit(127);
-            }
-            if (tty_fd != STDIN_FILENO)
-                close(tty_fd);
+        errnum = bx_child_redirect_stdio(opts);
+        if (errnum != 0) {
+            bx_child_report_exec_error(errpipe[1], errnum, opts);
+            _exit(127);
         }
-        if (opts && opts->use_stdin_fd) {
-            errnum = bx_child_dup_stdio_fd(opts->stdin_fd, STDIN_FILENO);
-            if (errnum != 0) {
-                bx_child_report_exec_error(errpipe[1], errnum, opts);
-                _exit(127);
-            }
-        }
-        if (opts && opts->use_stdout_fd) {
-            errnum = bx_child_dup_stdio_fd(opts->stdout_fd, STDOUT_FILENO);
-            if (errnum != 0) {
-                bx_child_report_exec_error(errpipe[1], errnum, opts);
-                _exit(127);
-            }
-        }
-        if (opts && opts->use_stderr_fd) {
-            errnum = bx_child_dup_stdio_fd(opts->stderr_fd, STDERR_FILENO);
-            if (errnum != 0) {
-                bx_child_report_exec_error(errpipe[1], errnum, opts);
-                _exit(127);
-            }
-        }
-        if (opts && opts->use_stdin_fd)
-            bx_child_close_redirect_fd(opts->stdin_fd, STDIN_FILENO, -1, -1);
-        if (opts && opts->use_stdout_fd)
-            bx_child_close_redirect_fd(opts->stdout_fd, STDOUT_FILENO,
-                                       opts && opts->use_stdin_fd ? opts->stdin_fd : -1, -1);
-        if (opts && opts->use_stderr_fd)
-            bx_child_close_redirect_fd(opts->stderr_fd, STDERR_FILENO,
-                                       opts && opts->use_stdin_fd ? opts->stdin_fd : -1,
-                                       opts && opts->use_stdout_fd ? opts->stdout_fd : -1);
         if (opts && opts->cwd && chdir(opts->cwd) != 0) {
             errnum = errno;
             bx_child_report_exec_error(errpipe[1], errnum, opts);
@@ -598,8 +635,11 @@ int bx_child_spawn_argv(const char *progname, char *const *argv,
 
     int exec_errno = 0;
     ssize_t nread = 0;
-    if (!opts || !opts->defer_exec_check)
-        nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
+    if (!opts || !opts->defer_exec_check) {
+        do {
+            nread = read(errpipe[0], &exec_errno, sizeof(exec_errno));
+        } while (nread < 0 && errno == EINTR);
+    }
     close(errpipe[0]);
 
     if (nread == (ssize_t)sizeof(exec_errno)) {
