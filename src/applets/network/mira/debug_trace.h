@@ -14,6 +14,7 @@ typedef struct {
 } MiraDebugTrace;
 
 void bx_mira_json_write_string(FILE* stream, const char* value);
+const char* bx_mira_recovery_reason(BxFetchRecoveryReason reason);
 void bx_mira_debug_trace_init(MiraDebugTrace* trace, FILE* stream, const struct bx_fetch_config* config);
 void bx_mira_debug_trace_parse_complete(MiraDebugTrace* trace, const struct bx_fetch_config* config);
 void bx_mira_debug_trace_enqueued(MiraDebugTrace* trace, const char* display_url, const char* output_path, int depth);

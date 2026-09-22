@@ -7,10 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum {
-    BX_FETCH_CURL_CODE_COULDNT_CONNECT = 7,
-};
-
 static bool replace_metadata_string(char** destination, const char* value) {
     if (!destination || !value || value[0] == '\0')
         return true;
@@ -119,52 +115,4 @@ int bx_fetch_transfer_stage_not_modified(const struct bx_fetch_config* cfg, cons
         return -1;
     }
     return stage_response_metadata(cfg, request, response, writer);
-}
-
-static bool retryable_io_error_number(int error_number) {
-    if (error_number < 0)
-        return true;
-
-    switch (error_number) {
-        case EINTR:
-        case EAGAIN:
-#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
-        case EWOULDBLOCK:
-#endif
-        case ETIMEDOUT:
-        case ENFILE:
-        case EMFILE:
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool bx_fetch_transfer_retryable_hint(const struct bx_fetch_config* cfg, const BxFetchResponse* response, BxFetchError result) {
-    int curl_code = response ? response->error_code : 0;
-    int error_number = response ? response->error_number : -1;
-    BxFetchTransportErrorKind transport_kind = response ? response->transport_error_kind : BX_FETCH_TRANSPORT_ERROR_NONE;
-
-    switch (result) {
-        case BX_FETCH_ERROR_SSL:
-            return transport_kind == BX_FETCH_TRANSPORT_ERROR_TLS_RETRYABLE;
-        case BX_FETCH_ERROR_NETWORK:
-            if (transport_kind == BX_FETCH_TRANSPORT_ERROR_AUTH)
-                return false;
-            if (transport_kind == BX_FETCH_TRANSPORT_ERROR_SERVER)
-                return response && response->status_code >= 400 && response->status_code < 500;
-            if (error_number == ECONNREFUSED || curl_code == BX_FETCH_CURL_CODE_COULDNT_CONNECT)
-                return cfg && cfg->download.retry_connrefused;
-            return true;
-        case BX_FETCH_ERROR_IO:
-            return retryable_io_error_number(error_number);
-        case BX_FETCH_ERROR_MEMORY:
-        case BX_FETCH_ERROR_INVALID_ARGUMENT:
-        case BX_FETCH_ERROR_UNSUPPORTED:
-        case BX_FETCH_ERROR_RESOURCE_LIMIT:
-        case BX_FETCH_ERROR_INTERNAL:
-            return false;
-        default:
-            return true;
-    }
 }

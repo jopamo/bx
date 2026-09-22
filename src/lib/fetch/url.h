@@ -100,5 +100,8 @@ BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_scheme(const char* sch
 BxFetchProtocolDecision bx_fetch_protocol_policy_evaluate_url(const char* url, bool https_only);
 const char* bx_fetch_protocol_decision_reason(BxFetchProtocolDecision decision);
 bool bx_fetch_protocol_policy_format(bool https_only, char* out, size_t out_size);
+char* bx_fetch_url_encode_component(const char* input, size_t max_bytes);
+bool bx_fetch_url_is_https_root(const char* root);
+char* bx_fetch_url_join_https_root(const char* root, const char* path);
 
 #endif  // BX_FETCH_URL_H

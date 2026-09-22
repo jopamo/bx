@@ -22,6 +22,9 @@ struct BxFetchWriter {
     char* temp_name;
     char* superseded_sidecar_name;
     int fd;
+    int stdout_fd;
+    uint64_t spool_limit;
+    uint64_t spooled_bytes;
     int parent_fd;
     dev_t parent_dev;
     ino_t parent_ino;
@@ -38,6 +41,7 @@ struct BxFetchWriter {
     ino_t initial_dest_ino;
     mode_t initial_dest_mode;
     time_t initial_dest_mtime;
+    struct stat initial_dest_snapshot;
     bool original_snapshot_required;
     struct stat required_original_snapshot;
     BxFetchMetadata pending_metadata;
@@ -318,6 +322,7 @@ static int capture_destination_state_for_basename(BxFetchWriter* w, const char* 
     w->initial_dest_ino = st.st_ino;
     w->initial_dest_mode = st.st_mode;
     w->initial_dest_mtime = st.st_mtime;
+    w->initial_dest_snapshot = st;
     return 0;
 }
 
@@ -745,6 +750,7 @@ BxFetchWriter* bx_fetch_writer_open_with_options(const char* path, BxFetchWriter
         return NULL;
 
     w->fd = -1;
+    w->stdout_fd = -1;
     w->parent_fd = -1;
     w->path = strdup(path);
     if (!w->path) {
@@ -764,7 +770,7 @@ BxFetchWriter* bx_fetch_writer_open_with_options(const char* path, BxFetchWriter
 
     if (strcmp(path, "-") == 0) {
         w->to_stdout = true;
-        w->fd = dup(STDOUT_FILENO);
+        w->fd = bx_fd_dup_cloexec(STDOUT_FILENO);
         if (w->fd == -1) {
             writer_free(w);
             return NULL;
@@ -806,6 +812,22 @@ BxFetchWriter* bx_fetch_writer_open_with_options(const char* path, BxFetchWriter
 
 BxFetchWriter* bx_fetch_writer_open(const char* path, BxFetchWriterMode mode) {
     return bx_fetch_writer_open_with_options(path, mode, 0, false);
+}
+
+int bx_fetch_writer_stage_stdout(BxFetchWriter* w, uint64_t limit) {
+    if (!w || !w->to_stdout || w->fd < 0 || w->stdout_fd >= 0 || limit == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* No pathname ever names the candidate; O_CLOEXEC is set at creation.
+     * If the temporary filesystem cannot provide this, fail before transfer. */
+    int fd = bx_fd_open_cloexec("/tmp", O_RDWR | O_TMPFILE | O_NOFOLLOW, 0600);
+    if (fd < 0)
+        return -1;
+    w->stdout_fd = w->fd;
+    w->fd = fd;
+    w->spool_limit = limit;
+    return 0;
 }
 
 static int ensure_leaf_absent(int parent_fd, const char* name);
@@ -1036,6 +1058,10 @@ BxFetchWriterWriteResult bx_fetch_writer_write(BxFetchWriter* w, const void* dat
         return BX_FETCH_WRITER_WRITE_ERROR;
     if (w->downstream_closed)
         return BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED;
+    if (w->spool_limit && (uint64_t)len > w->spool_limit - w->spooled_bytes) {
+        errno = EFBIG;
+        return BX_FETCH_WRITER_WRITE_ERROR;
+    }
 
     size_t written = 0;
     while (written < len) {
@@ -1054,6 +1080,8 @@ BxFetchWriterWriteResult bx_fetch_writer_write(BxFetchWriter* w, const void* dat
             return BX_FETCH_WRITER_WRITE_ERROR;
         }
         written += (size_t)n;
+        if (w->spool_limit)
+            w->spooled_bytes += (uint64_t)n;
     }
     return BX_FETCH_WRITER_WRITE_OK;
 }
@@ -1105,11 +1133,41 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
 
     if (w->to_stdout) {
         int rc = 0;
+        if (w->stdout_fd >= 0) {
+            BxFetchWriter output = {.fd = w->stdout_fd, .to_stdout = true};
+            char buffer[32768];
+            if (lseek(w->fd, 0, SEEK_SET) < 0)
+                rc = -1;
+            while (rc == 0) {
+                ssize_t n = read(w->fd, buffer, sizeof(buffer));
+                if (n < 0 && errno == EINTR)
+                    continue;
+                if (n <= 0) {
+                    if (n < 0)
+                        rc = -1;
+                    break;
+                }
+                BxFetchWriterWriteResult result = bx_fetch_writer_write(&output, buffer, (size_t)n);
+                if (result != BX_FETCH_WRITER_WRITE_OK) {
+                    if (result != BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED)
+                        rc = -1;
+                    break;
+                }
+            }
+        }
+        int saved = errno;
+        if (w->stdout_fd >= 0 && close(w->stdout_fd) != 0 && rc == 0) {
+            saved = errno;
+            rc = -1;
+        }
         if (w->fd != -1 && close(w->fd) == -1) {
+            if (rc == 0)
+                saved = errno;
             rc = -1;
         }
         w->fd = -1;
         writer_free(w);
+        errno = saved;
         return rc;
     }
 
@@ -1335,7 +1393,7 @@ static bool current_destination_matches(const BxFetchWriter* w) {
     struct stat st;
     if (bx_fd_fstatat_nofollow(w->parent_fd, w->basename, &st) != 0)
         return false;
-    if (!S_ISREG(st.st_mode) || !same_destination_identity(w, &st)) {
+    if (!S_ISREG(st.st_mode) || !same_file_snapshot(&w->initial_dest_snapshot, &st)) {
         errno = EBUSY;
         return false;
     }
@@ -1402,7 +1460,8 @@ BxFetchWriterMetadataCommitResult bx_fetch_writer_close_metadata_only(BxFetchWri
         errno = error_number;
         return BX_FETCH_WRITER_METADATA_COMMIT_ERROR;
     }
-    if (!S_ISREG(original_stat.st_mode) || !same_destination_identity(w, &original_stat)) {
+    /* Metadata describes the captured contents, not merely an inode number. */
+    if (!S_ISREG(original_stat.st_mode) || !same_file_snapshot(&w->initial_dest_snapshot, &original_stat)) {
         close(original_fd);
         bx_fetch_writer_abort(w);
         errno = EBUSY;
@@ -1544,6 +1603,8 @@ void bx_fetch_writer_abort(BxFetchWriter* w) {
 
     if (w->fd != -1)
         close(w->fd);
+    if (w->stdout_fd != -1)
+        close(w->stdout_fd);
     if (w->temp_name)
         bx_fd_unlinkat_child(w->parent_fd, w->temp_name, 0);
 

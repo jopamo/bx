@@ -12,6 +12,7 @@ BxFetchResponse* bx_fetch_response_new(void) {
         return NULL;
 
     resp->error_number = -1;
+    resp->retry_after_seconds = -1;
     return resp;
 }
 

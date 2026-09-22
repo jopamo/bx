@@ -46,6 +46,7 @@ typedef struct {
     BxFetchPublicationResult publication;
     bool document_queued;
     bool retry_scheduled;
+    BxFetchRecoveryDecision recovery;
     /* True only when redirect admission intentionally cancelled transport. */
     bool redirect_rejected;
 } BxFetchRunCompletion;
@@ -206,6 +207,7 @@ typedef struct {
     BxFetchRunTransferObservationFn on_transfer_observation;
     BxFetchTransportObserver transport_observer;
     BxFetchSchedulerObserver scheduler_observer;
+    BxFetchBudget* budget;
     void* userdata;
 } BxFetchRunFrontend;
 

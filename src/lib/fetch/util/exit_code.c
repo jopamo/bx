@@ -97,6 +97,8 @@ int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_stat
 }
 
 int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErrorKind transport_kind, BxFetchError result) {
+    if (result == BX_FETCH_ERROR_REQUEST_BUDGET || result == BX_FETCH_ERROR_TIME_BUDGET)
+        return BX_FETCH_EXIT_POLICY;
     if (http_status == 401 || http_status == 407) {
         return BX_FETCH_EXIT_AUTH;
     }

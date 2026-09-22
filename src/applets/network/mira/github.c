@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "github.h"
-#include "mira.h"
+#include "github_internal.h"
+#include "repository_json.h"
 #include "lib/fetch/credential_file.h"
 #include "lib/fetch/exit_code.h"
 #include "lib/fetch/http_header.h"
@@ -18,24 +19,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MIRA_GITHUB_API_ROOT "https://api.github.com"
 #define MIRA_GITHUB_API_VERSION "2022-11-28"
-#define MIRA_GITHUB_JSON_MAX_BYTES ((size_t)16 * 1024u * 1024u)
 #define MIRA_GITHUB_QUERY_MAX_BYTES ((size_t)4096)
-
-typedef struct {
-    const char* jq_program;
-    const char* bearer_token;
-    const char* bearer_token_file;
-    const char** operands;
-    int operand_count;
-    bool json;
-    bool no_proxy;
-} MiraGithubArguments;
-
-typedef struct {
-    bool downstream_closed;
-} MiraGithubJqOutput;
 
 static void github_parse_error(const char* message) {
     fprintf(stderr, "mira: github: %s\n", message);
@@ -45,6 +30,7 @@ void bx_mira_github_print_help(void) {
     fputs(
         "Usage:\n"
         "  mira github api PATH [KEY=VALUE]... [--jq PROGRAM]\n"
+        "  mira github tree OWNER/REPO REF [--recursive]\n"
         "  mira github search-issues OWNER/REPO QUERY [--jq PROGRAM]\n"
         "\n"
         "Read-only GitHub REST API access through Mira's fetch engine.\n"
@@ -54,6 +40,11 @@ void bx_mira_github_print_help(void) {
         "  --jq=PROGRAM              filter parsed JSON with embedded jq\n"
         "  --json                    select compact JSON for search-issues\n"
         "  --no-proxy                disable proxy use\n"
+        "  --api-root=URL            verified HTTPS API root (custom roots need explicit tokens)\n"
+        "  --ca-certificate=FILE     trust this certificate authority\n"
+        "  --max-requests=N          invocation-wide request limit (default 64)\n"
+        "  --max-retry-time=SECONDS  invocation-wide elapsed budget (default 120)\n"
+        "  --recursive               include descendants of a GitHub tree\n"
         "  -h, --help                display this help\n"
         "\n"
         "Authentication defaults to the GITHUB_TOKEN environment variable. "
@@ -140,6 +131,19 @@ static int parse_github_arguments(int argc,
             arguments->bearer_token = value;
             continue;
         }
+        if (options && strcmp(argument, "--recursive") == 0) {
+            arguments->recursive = true;
+            continue;
+        }
+        if (options) {
+            int parsed = bx_mira_repository_option(&arguments->repository, argc, argv, &index);
+            if (parsed < 0) {
+                github_parse_error("invalid repository option");
+                return -1;
+            }
+            if (parsed > 0)
+                continue;
+        }
         if (options && argument[0] == '-') {
             github_parse_error("unsupported GitHub option");
             return -1;
@@ -155,7 +159,7 @@ static int parse_github_arguments(int argc,
     return 0;
 }
 
-static bool github_repo_is_valid(const char* repository) {
+bool bx_mira_github_repo_is_valid(const char* repository) {
     if (!repository || repository[0] == '\0')
         return false;
     size_t length = strnlen(repository, 257u);
@@ -165,6 +169,11 @@ static bool github_repo_is_valid(const char* repository) {
     const char* slash = strchr(repository, '/');
     if (!slash || slash == repository || slash[1] == '\0' ||
         strchr(slash + 1, '/'))
+        return false;
+    size_t owner_length = (size_t)(slash - repository);
+    if ((owner_length == 1 && repository[0] == '.') ||
+        (owner_length == 2 && repository[0] == '.' && repository[1] == '.') ||
+        strcmp(slash + 1, ".") == 0 || strcmp(slash + 1, "..") == 0)
         return false;
 
     for (const char* cursor = repository; *cursor; cursor++) {
@@ -208,46 +217,19 @@ static bool github_api_path_is_valid(const char* path) {
 }
 
 static char* percent_encode_query_component(const char* input) {
-    if (!input)
-        return NULL;
-    size_t length = strnlen(input, MIRA_GITHUB_QUERY_MAX_BYTES + 1u);
-    if (length > MIRA_GITHUB_QUERY_MAX_BYTES ||
-        length > (SIZE_MAX - 1u) / 3u) {
-        errno = EFBIG;
-        return NULL;
-    }
-
-    static const char hex[] = "0123456789ABCDEF";
-    char* encoded = malloc(length * 3u + 1u);
-    if (!encoded)
-        return NULL;
-    char* output = encoded;
-    for (size_t index = 0; index < length; index++) {
-        unsigned char ch = (unsigned char)input[index];
-        if (isalnum(ch) || ch == '-' || ch == '.' || ch == '_' || ch == '~') {
-            *output++ = (char)ch;
-        }
-        else {
-            *output++ = '%';
-            *output++ = hex[ch >> 4u];
-            *output++ = hex[ch & 0x0fu];
-        }
-    }
-    *output = '\0';
-    return encoded;
+    return bx_fetch_url_encode_component(input, MIRA_GITHUB_QUERY_MAX_BYTES);
 }
 
-static char* github_api_url(const char* path,
+static char* github_api_url(const MiraGithubArguments* arguments, const char* path,
                             const char* const* query,
                             int query_count) {
     if (!github_api_path_is_valid(path) || query_count < 0)
         return NULL;
 
-    size_t capacity = strlen(MIRA_GITHUB_API_ROOT) + strlen(path) + 1u;
-    char* url = malloc(capacity);
+    const char* root = arguments->repository.api_root ? arguments->repository.api_root : MIRA_GITHUB_API_ROOT;
+    char* url = bx_fetch_url_join_https_root(root, path);
     if (!url)
         return NULL;
-    snprintf(url, capacity, "%s%s", MIRA_GITHUB_API_ROOT, path);
     size_t length = strlen(url);
 
     for (int index = 0; index < query_count; index++) {
@@ -300,27 +282,20 @@ static char* github_api_url(const char* path,
     return url;
 }
 
-static struct bx_fetch_config* github_config(
+struct bx_fetch_config* bx_mira_github_config(
     const MiraGithubArguments* arguments,
     const char* url,
     const char* output_path) {
-    struct bx_fetch_config* config = bx_fetch_config_new();
+    MiraRepositoryOptions options = arguments->repository;
+    options.token = arguments->bearer_token;
+    options.token_file = arguments->bearer_token_file;
+    options.no_proxy = arguments->no_proxy;
+    struct bx_fetch_config* config = bx_mira_repository_config(&options, MIRA_GITHUB_API_ROOT, "GITHUB_TOKEN", true);
     if (!config)
         return NULL;
 
-    config->logging.verbosity = BX_FETCH_VERBOSITY_QUIET;
-    config->logging.suppress_session_banner = true;
-    config->download.show_progress = false;
-    config->download.metadata_sidecars = false;
-    config->download.no_proxy = arguments->no_proxy;
-    config->http.paranoid = true;
-    config->https.https_only = true;
-    config->http.max_redirect = 10;
-
     free(config->download.output_document);
     config->download.output_document = strdup(output_path);
-    free(config->http.redirect_method);
-    config->http.redirect_method = strdup("strict");
     char* url_operand = strdup(url);
     if (!config->download.output_document ||
         !config->http.redirect_method || !url_operand ||
@@ -337,35 +312,6 @@ static struct bx_fetch_config* github_config(
     }
     free(url_operand);
 
-    const char* token = arguments->bearer_token;
-    if (!token && !arguments->bearer_token_file) {
-        const char* environment_token = getenv("GITHUB_TOKEN");
-        if (environment_token && environment_token[0] != '\0')
-            token = environment_token;
-    }
-
-    if (token) {
-        if (!bx_fetch_http_bearer_token_is_valid(token)) {
-            errno = EINVAL;
-            bx_fetch_config_free(config);
-            return NULL;
-        }
-        config->http.bearer_token = strdup(token);
-        if (!config->http.bearer_token) {
-            bx_fetch_config_free(config);
-            return NULL;
-        }
-    }
-    else if (arguments->bearer_token_file) {
-        if (bx_fetch_bearer_token_load_file(
-                arguments->bearer_token_file,
-                &config->http.bearer_token) != 0) {
-            bx_fetch_config_free(config);
-            return NULL;
-        }
-    }
-    if (config->http.bearer_token)
-        config->https.require_verified_https = true;
     return config;
 }
 
@@ -373,175 +319,26 @@ static int github_fetch(const MiraGithubArguments* arguments,
                         const char* url,
                         const char* output_path) {
     struct bx_fetch_config* config =
-        github_config(arguments, url, output_path);
+        bx_mira_github_config(arguments, url, output_path);
     if (!config) {
         github_parse_error("could not prepare GitHub request");
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
     }
-    int result = bx_mira_run_config(config);
+    int result = bx_mira_repository_json(config, NULL, url, NULL);
     bx_fetch_config_free(config);
     return result;
 }
 
-static int read_bounded_json(const char* path, char** data_out, size_t* size_out) {
-    *data_out = NULL;
-    *size_out = 0;
-    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd == -1)
-        return -1;
-
-    struct stat status;
-    if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
-        status.st_size < 0 ||
-        (uintmax_t)status.st_size > MIRA_GITHUB_JSON_MAX_BYTES ||
-        (uintmax_t)status.st_size > INT_MAX) {
-        int error_number = errno ? errno : EFBIG;
-        close(fd);
-        errno = error_number;
-        return -1;
-    }
-
-    size_t size = (size_t)status.st_size;
-    char* data = malloc(size + 1u);
-    if (!data) {
-        close(fd);
-        return -1;
-    }
-    size_t offset = 0;
-    while (offset < size) {
-        ssize_t count = read(fd, data + offset, size - offset);
-        if (count < 0 && errno == EINTR)
-            continue;
-        if (count <= 0) {
-            int error_number = count == 0 ? EIO : errno;
-            free(data);
-            close(fd);
-            errno = error_number;
-            return -1;
-        }
-        offset += (size_t)count;
-    }
-    if (close(fd) != 0) {
-        free(data);
-        return -1;
-    }
-    data[size] = '\0';
-    *data_out = data;
-    *size_out = size;
-    return 0;
-}
-
-static int write_stdout(const char* data, size_t length, bool* closed) {
-    size_t offset = 0;
-    while (offset < length) {
-        ssize_t count = write(STDOUT_FILENO, data + offset, length - offset);
-        if (count < 0 && errno == EINTR)
-            continue;
-        if (count < 0 && errno == EPIPE) {
-            *closed = true;
-            return 1;
-        }
-        if (count <= 0)
-            return -1;
-        offset += (size_t)count;
-    }
-    return 0;
-}
-
-static int github_jq_output(void* userdata, jv value) {
-    MiraGithubJqOutput* output = userdata;
-    jv rendered = jv_dump_string(jv_copy(value), 0);
-    if (!jv_is_valid(rendered) || jv_get_kind(rendered) != JV_KIND_STRING) {
-        jv_free(rendered);
-        return -1;
-    }
-    const char* text = jv_string_value(rendered);
-    size_t length = (size_t)jv_string_length_bytes(jv_copy(rendered));
-    int result = write_stdout(text, length, &output->downstream_closed);
-    if (result == 0)
-        result = write_stdout("\n", 1u, &output->downstream_closed);
-    jv_free(rendered);
-    return result;
-}
-
-static int filter_github_json(const char* path, const char* program) {
-    char* data = NULL;
-    size_t size = 0;
-    if (read_bounded_json(path, &data, &size) != 0) {
-        github_parse_error(
-            errno == EFBIG ? "GitHub JSON response exceeds 16 MiB"
-                           : "could not read GitHub JSON response");
-        return BX_FETCH_EXIT_PROTOCOL;
-    }
-
-    jv input = jv_parse_sized(data, (int)size);
-    free(data);
-    if (!jv_is_valid(input)) {
-        jv message = jv_invalid_get_msg(input);
-        fprintf(stderr,
-                "mira: github: invalid JSON response: %s\n",
-                jv_get_kind(message) == JV_KIND_STRING
-                    ? jv_string_value(message)
-                    : "parse error");
-        jv_free(message);
-        return BX_FETCH_EXIT_PROTOCOL;
-    }
-
-    MiraGithubJqOutput output = {0};
-    BxJqFilterResult filter_result;
-    bx_jq_filter_result_init(&filter_result);
-    BxJqFilterStatus status =
-        bx_jq_filter(input, program, github_jq_output, &output, &filter_result);
-    int result = BX_FETCH_EXIT_SUCCESS;
-    if (status == BX_JQ_FILTER_STOPPED && output.downstream_closed) {
-        result = BX_FETCH_EXIT_SUCCESS;
-    }
-    else if (status == BX_JQ_FILTER_COMPILE_ERROR) {
-        github_parse_error("invalid --jq program");
-        result = BX_FETCH_EXIT_PARSE_OR_CONFIG;
-    }
-    else if (status == BX_JQ_FILTER_RUNTIME_ERROR) {
-        fprintf(stderr,
-                "mira: github: jq filter failed: %s\n",
-                jv_get_kind(filter_result.error_message) == JV_KIND_STRING
-                    ? jv_string_value(filter_result.error_message)
-                    : "runtime error");
-        result = BX_FETCH_EXIT_PROTOCOL;
-    }
-    else if (status == BX_JQ_FILTER_HALTED &&
-             filter_result.halt_code != 0) {
-        github_parse_error("jq filter halted with an error");
-        result = BX_FETCH_EXIT_PROTOCOL;
-    }
-    else if (status < 0) {
-        github_parse_error("could not execute jq filter");
-        result = BX_FETCH_EXIT_FILE_IO;
-    }
-    bx_jq_filter_result_clear(&filter_result);
-    return result;
-}
-
-static int fetch_and_filter(const MiraGithubArguments* arguments,
-                            const char* url,
-                            const char* program) {
-    char path[] = "/tmp/mira-github.XXXXXX";
-    int fd = mkstemp(path);
-    if (fd == -1) {
-        github_parse_error("could not create bounded response file");
-        return BX_FETCH_EXIT_FILE_IO;
-    }
-    if (close(fd) != 0) {
-        unlink(path);
-        github_parse_error("could not prepare bounded response file");
-        return BX_FETCH_EXIT_FILE_IO;
-    }
-
-    int result = github_fetch(arguments, url, path);
-    if (result == BX_FETCH_EXIT_SUCCESS)
-        result = filter_github_json(path, program);
-    if (unlink(path) != 0 && errno != ENOENT &&
-        result == BX_FETCH_EXIT_SUCCESS)
-        result = BX_FETCH_EXIT_FILE_IO;
+static int fetch_and_filter(const MiraGithubArguments* arguments, const char* url, const char* program) {
+    struct bx_fetch_config* config = bx_mira_github_config(arguments, url, "-");
+    if (!config)
+        return BX_FETCH_EXIT_PARSE_OR_CONFIG;
+    jv value = jv_invalid();
+    int result = bx_mira_repository_json(config, NULL, url, &value);
+    bx_fetch_config_free(config);
+    if (result == 0 && jv_is_valid(value))
+        return bx_mira_repository_print_json(value, program);
+    jv_free(value);
     return result;
 }
 
@@ -556,7 +353,7 @@ static int github_api(const MiraGithubArguments* arguments) {
     }
 
     char* url = github_api_url(
-        arguments->operands[0],
+        arguments, arguments->operands[0],
         arguments->operands + 1,
         arguments->operand_count - 1);
     if (!url) {
@@ -572,7 +369,7 @@ static int github_api(const MiraGithubArguments* arguments) {
 
 static int github_search_issues(const MiraGithubArguments* arguments) {
     if (arguments->operand_count != 2 ||
-        !github_repo_is_valid(arguments->operands[0])) {
+        !bx_mira_github_repo_is_valid(arguments->operands[0])) {
         github_parse_error(
             "search-issues requires OWNER/REPO and one QUERY argument");
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
@@ -601,7 +398,7 @@ static int github_search_issues(const MiraGithubArguments* arguments) {
         return BX_FETCH_EXIT_FILE_IO;
 
     const char* query_arguments[] = {query};
-    char* url = github_api_url("/search/issues", query_arguments, 1);
+    char* url = github_api_url(arguments, "/search/issues", query_arguments, 1);
     free(query);
     if (!url)
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
@@ -634,7 +431,14 @@ int bx_mira_github_main(int argc, char** argv) {
     }
 
     int result;
-    if (strcmp(argv[1], "api") == 0)
+    if (arguments.recursive && strcmp(argv[1], "tree") != 0) {
+        github_parse_error("--recursive is only valid with tree");
+        free(arguments.operands);
+        return BX_FETCH_EXIT_PARSE_OR_CONFIG;
+    }
+    if (strcmp(argv[1], "tree") == 0)
+        result = bx_mira_github_tree(&arguments);
+    else if (strcmp(argv[1], "api") == 0)
         result = github_api(&arguments);
     else if (strcmp(argv[1], "search-issues") == 0)
         result = github_search_issues(&arguments);

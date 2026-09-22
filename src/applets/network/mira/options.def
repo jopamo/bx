@@ -16,6 +16,12 @@ MIRA_OPTION("base", required_argument, 'B', "B:", NULL, "URL", "resolve HTML inp
 MIRA_OPTION("rejected-log", required_argument, MIRA_OPT_REJECTED_LOG, "", NULL, "FILE", "log rejected URLs to FILE", MIRA_OPTION_CATEGORY_STARTUP, true)
 
 MIRA_OPTION("tries", required_argument, 't', "t:", NULL, "NUMBER", "bound transfer attempts", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("max-attempts", required_argument, 't', "", NULL, "NUMBER", "alias for --tries (includes the initial attempt)", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("no-retry", no_argument, MIRA_OPT_NO_RETRY, "", NULL, NULL, "make only the initial attempt", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("max-retry-time", required_argument, MIRA_OPT_MAX_RETRY_TIME, "", NULL, "SECONDS", "bound elapsed fetch work, including attempts and waits", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("max-requests", required_argument, MIRA_OPT_MAX_REQUESTS, "", NULL, "N", "bound requests across attempts and redirects (default 64)", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("raw", no_argument, MIRA_OPT_RAW, "", NULL, NULL, "with read, emit the complete response without text conversion", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
+MIRA_OPTION("expect", required_argument, MIRA_OPT_EXPECT, "", NULL, "json|archive", "reject obvious wrong-representation responses", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("retry-connrefused", no_argument, MIRA_OPT_RETRY_CONNREFUSED, "", NULL, NULL, "retry connection-refused failures", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("retry-on-http-error", required_argument, MIRA_OPT_RETRY_ON_HTTP_ERROR, "", NULL, "CODES", "retry comma-separated HTTP statuses", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
 MIRA_OPTION("output-document", required_argument, 'O', "O:", NULL, "FILE", "write one document to FILE", MIRA_OPTION_CATEGORY_DOWNLOAD, true)
