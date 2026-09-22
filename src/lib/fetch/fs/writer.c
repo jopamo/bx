@@ -58,7 +58,7 @@ static bool same_file_snapshot(const struct stat* left, const struct stat* right
            left->st_ctim.tv_nsec == right->st_ctim.tv_nsec;
 }
 
-static bool same_captured_file_after_rename(const struct stat* captured, const struct stat* held) {
+static bool same_captured_file_after_hold(const struct stat* captured, const struct stat* held) {
     return captured && held && captured->st_dev == held->st_dev && captured->st_ino == held->st_ino && (captured->st_mode & S_IFMT) == (held->st_mode & S_IFMT) &&
            (captured->st_mode & 07777) == (held->st_mode & 07777) && captured->st_size == held->st_size && captured->st_mtim.tv_sec == held->st_mtim.tv_sec &&
            captured->st_mtim.tv_nsec == held->st_mtim.tv_nsec;
@@ -540,7 +540,7 @@ static int write_metadata_temp_file_at(int parent_fd, const char* basename, cons
     return 0;
 }
 
-static int rename_existing_entry_to_hold(int parent_fd, const char* name, char** hold_name_out) {
+static int link_existing_entry_to_hold(int parent_fd, const char* name, char** hold_name_out) {
     if (parent_fd == -1 || !name || !hold_name_out) {
         errno = EINVAL;
         return -1;
@@ -568,7 +568,10 @@ static int rename_existing_entry_to_hold(int parent_fd, const char* name, char**
         if (!hold_name)
             return -1;
 
-        if (bx_fd_renameat_child(parent_fd, name, parent_fd, hold_name) == 0) {
+        /* Keep the committed name visible until atomic replacement. linkat
+         * reserves the hold without replacing an existing entry and does not
+         * follow a source symlink. Unsupported filesystems fail before commit. */
+        if (bx_fd_linkat_child(parent_fd, name, parent_fd, hold_name, 0) == 0) {
             *hold_name_out = hold_name;
             return 0;
         }
@@ -595,12 +598,16 @@ static void cleanup_temp_entry(int parent_fd, char** name) {
     *name = NULL;
 }
 
-static void restore_hold_entry(int parent_fd, char** hold_name, const char* final_name) {
+static int restore_hold_entry(int parent_fd, char** hold_name, const char* final_name) {
     if (parent_fd == -1 || !hold_name || !*hold_name || !final_name)
-        return;
-    bx_fd_renameat_child(parent_fd, *hold_name, parent_fd, final_name);
+        return writer_fail_errno(EINVAL);
+    /* A failed restoration retains the recovery copy. The caller must report
+     * this failure rather than discard its name as if rollback succeeded. */
+    if (bx_fd_renameat_child(parent_fd, *hold_name, parent_fd, final_name) != 0)
+        return -1;
     free(*hold_name);
     *hold_name = NULL;
+    return 0;
 }
 
 static void writer_free(BxFetchWriter* w) {
@@ -1266,19 +1273,21 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (!w->exclusive_final_path && rename_existing_entry_to_hold(w->parent_fd, w->basename, &payload_hold_name) != 0) {
+        if (!w->exclusive_final_path && link_existing_entry_to_hold(w->parent_fd, w->basename, &payload_hold_name) != 0) {
+            int error_number = errno;
             free(sidecar_name);
             cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
             cleanup_temp_entry(w->parent_fd, &w->temp_name);
             writer_free(w);
+            errno = error_number;
             return -1;
         }
         if (w->original_snapshot_required) {
             struct stat held;
             if (!payload_hold_name || bx_fd_fstatat_nofollow(w->parent_fd, payload_hold_name, &held) != 0 || !S_ISREG(held.st_mode) ||
-                !same_captured_file_after_rename(&w->required_original_snapshot, &held)) {
+                !same_captured_file_after_hold(&w->required_original_snapshot, &held)) {
                 int error_number = EBUSY;
-                restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+                cleanup_temp_entry(w->parent_fd, &payload_hold_name);
                 free(sidecar_name);
                 cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
                 cleanup_temp_entry(w->parent_fd, &w->temp_name);
@@ -1288,12 +1297,14 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (!w->exclusive_final_path && sidecar_name && rename_existing_entry_to_hold(w->parent_fd, sidecar_name, &sidecar_hold_name) != 0) {
-            restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+        if (!w->exclusive_final_path && sidecar_name && link_existing_entry_to_hold(w->parent_fd, sidecar_name, &sidecar_hold_name) != 0) {
+            int error_number = errno;
+            cleanup_temp_entry(w->parent_fd, &payload_hold_name);
             free(sidecar_name);
             cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
             cleanup_temp_entry(w->parent_fd, &w->temp_name);
             writer_free(w);
+            errno = error_number;
             return -1;
         }
 
@@ -1309,24 +1320,28 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
                 have_sidecar_candidate_stat = true;
             }
             else {
-                restore_hold_entry(w->parent_fd, &sidecar_hold_name, sidecar_name);
-                restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+                int error_number = errno;
+                cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
+                cleanup_temp_entry(w->parent_fd, &payload_hold_name);
                 free(sidecar_name);
                 cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
                 cleanup_temp_entry(w->parent_fd, &w->temp_name);
                 writer_free(w);
+                errno = error_number;
                 return -1;
             }
 
             int sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
                                                             : bx_fd_renameat_child(w->parent_fd, sidecar_temp_name, w->parent_fd, sidecar_name);
             if (sidecar_rename_rc != 0) {
-                restore_hold_entry(w->parent_fd, &sidecar_hold_name, sidecar_name);
-                restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+                int error_number = errno;
+                cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
+                cleanup_temp_entry(w->parent_fd, &payload_hold_name);
                 free(sidecar_name);
                 cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
                 cleanup_temp_entry(w->parent_fd, &w->temp_name);
                 writer_free(w);
+                errno = error_number;
                 return -1;
             }
 
@@ -1334,16 +1349,43 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             sidecar_temp_name = NULL;
             sidecar_committed = true;
         }
+        else if (sidecar_hold_name && w->has_pending_metadata) {
+            /* Empty staged metadata withdraws the previous sidecar. Its hold
+             * remains available until the payload publication succeeds. */
+            if (bx_fd_unlinkat_child(w->parent_fd, sidecar_name, 0) != 0) {
+                int error_number = errno;
+                cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
+                cleanup_temp_entry(w->parent_fd, &payload_hold_name);
+                free(sidecar_name);
+                cleanup_temp_entry(w->parent_fd, &w->temp_name);
+                writer_free(w);
+                errno = error_number;
+                return -1;
+            }
+            sidecar_committed = true;
+        }
 
         int payload_rename_rc =
             w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, w->temp_name, w->basename) : bx_fd_renameat_child(w->parent_fd, w->temp_name, w->parent_fd, w->basename);
         if (payload_rename_rc != 0) {
             int error_number = errno;
-            if (sidecar_committed && sidecar_name && have_sidecar_candidate_stat) {
-                unlink_leaf_if_same_identity(w->parent_fd, sidecar_name, &sidecar_candidate_stat);
+            if (sidecar_committed) {
+                if (sidecar_hold_name) {
+                    if (restore_hold_entry(w->parent_fd, &sidecar_hold_name, sidecar_name) != 0) {
+                        error_number = errno;
+                        if (have_sidecar_candidate_stat)
+                            unlink_leaf_if_same_identity(w->parent_fd, sidecar_name, &sidecar_candidate_stat);
+                        free(sidecar_hold_name); /* Keep the recovery file. */
+                    }
+                }
+                else if (have_sidecar_candidate_stat) {
+                    unlink_leaf_if_same_identity(w->parent_fd, sidecar_name, &sidecar_candidate_stat);
+                }
             }
-            restore_hold_entry(w->parent_fd, &sidecar_hold_name, sidecar_name);
-            restore_hold_entry(w->parent_fd, &payload_hold_name, w->basename);
+            else {
+                cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
+            }
+            cleanup_temp_entry(w->parent_fd, &payload_hold_name);
             free(sidecar_name);
             cleanup_temp_entry(w->parent_fd, &w->temp_name);
             writer_free(w);
