@@ -339,11 +339,22 @@ static int run_response_path(const BxFetchRun* run, const BxFetchRequest* reques
             return -1;
     }
     const char* base = server_base ? server_base : original_base;
+    char* markdown_base = NULL;
+    if (run->cfg->download.html_to_markdown) {
+        markdown_base = bx_fetch_pathmap_markdown_path(base);
+        if (!markdown_base) {
+            free(server_base);
+            return -1;
+        }
+        base = markdown_base;
+    }
     const char* content_type = response->content_type;
     if (!content_type || content_type[0] == '\0')
         content_type = bx_fetch_response_header_value(response, "Content-Type");
-    const char* suffix = run->cfg->http.adjust_extension && !run_path_has_html_extension(base) && bx_fetch_content_type_equals(content_type, "text/html") ? ".html" : "";
+    const char* suffix =
+        !run->cfg->download.html_to_markdown && run->cfg->http.adjust_extension && !run_path_has_html_extension(base) && bx_fetch_content_type_equals(content_type, "text/html") ? ".html" : "";
     if (!*suffix && strcmp(base, original_base) == 0) {
+        free(markdown_base);
         free(server_base);
         return 0;
     }
@@ -354,18 +365,21 @@ static int run_response_path(const BxFetchRun* run, const BxFetchRequest* reques
     if (!bx_fetch_resource_bounded_strlen(base, BX_FETCH_URL_MAP_MAX_FIELD_BYTES, &base_length) || base_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - suffix_length ||
         prefix_length > BX_FETCH_URL_MAP_MAX_FIELD_BYTES - suffix_length - base_length) {
         free(server_base);
+        free(markdown_base);
         errno = EFBIG;
         return -1;
     }
 
     char* candidate = malloc(prefix_length + base_length + suffix_length + 1u);
     if (!candidate) {
+        free(markdown_base);
         free(server_base);
         return -1;
     }
     memcpy(candidate, output_path, prefix_length);
     memcpy(candidate + prefix_length, base, base_length);
     memcpy(candidate + prefix_length + base_length, suffix, suffix_length + 1u);
+    free(markdown_base);
     free(server_base);
     *path_out = candidate;
     return 0;

@@ -105,6 +105,7 @@ static bool skip_wikipedia(lxb_dom_element_t* element) {
         "catlinks",
         "metadata",
         "mw-editsection",
+        "mw-cite-backlink",
         "mw-jump-link",
         "mw-valign-text-top",
         "navbox",

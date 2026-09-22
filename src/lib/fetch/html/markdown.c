@@ -317,7 +317,9 @@ static bool render_image(HtmlMarkdownContext* context, lxb_dom_element_t* elemen
         return true;
     size_t alt_length = 0;
     const lxb_char_t* alt = element_attribute(element, "alt", &alt_length);
-    return bx_markdown_writer_raw(context->output, "![", 2u) && (!alt || bx_markdown_writer_text(context->output, (const char*)alt, alt_length)) && bx_markdown_writer_raw(context->output, "](", 2u) &&
+    if (!alt || !text_has_content(alt, alt_length))
+        return true;
+    return bx_markdown_writer_raw(context->output, "![", 2u) && bx_markdown_writer_text(context->output, (const char*)alt, alt_length) && bx_markdown_writer_raw(context->output, "](", 2u) &&
            render_link_destination(context->output, source, source_length) && bx_markdown_writer_raw(context->output, ")", 1u);
 }
 
@@ -628,6 +630,36 @@ static bool render_node(HtmlMarkdownContext* context, lxb_dom_node_t* node) {
     }
 }
 
+static lxb_dom_node_t* find_element(lxb_dom_node_t* node, lxb_tag_id_t tag) {
+    for (lxb_dom_node_t* child = node ? node->first_child : NULL; child; child = child->next) {
+        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT && child->local_name == tag)
+            return child;
+        lxb_dom_node_t* nested = find_element(child, tag);
+        if (nested)
+            return nested;
+    }
+    return NULL;
+}
+
+static bool subtree_has_rendered_h1(HtmlMarkdownContext* context, lxb_dom_node_t* node) {
+    if (!node)
+        return false;
+    if (node->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t* element = lxb_dom_interface_element(node);
+        if (element_is_hidden(element) || element_has_chrome_role(element) || element_has_ignored_tag(node) ||
+            bx_fetch_site_markdown_skip_node(context->site, node) || (context->lore_kernel_org && bx_fetch_lore_markdown_skip_node(node))) {
+            return false;
+        }
+        if (node->local_name == LXB_TAG_H1 && node_has_text(node))
+            return true;
+    }
+    for (lxb_dom_node_t* child = node->first_child; child; child = child->next) {
+        if (subtree_has_rendered_h1(context, child))
+            return true;
+    }
+    return false;
+}
+
 int bx_fetch_html_markdown_supported(void) {
     return 1;
 }
@@ -661,7 +693,15 @@ char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, siz
         .site = bx_fetch_markdown_site_for_url(base_url),
     };
     lxb_html_body_element_t* body = lxb_html_document_body_element(document);
-    bool rendered = render_children(&context, body ? lxb_dom_interface_node(body) : lxb_dom_interface_node(document));
+    lxb_dom_node_t* body_node = body ? lxb_dom_interface_node(body) : lxb_dom_interface_node(document);
+    bool rendered = true;
+    if (!context.lore_kernel_org && !subtree_has_rendered_h1(&context, body_node)) {
+        lxb_html_head_element_t* head = lxb_html_document_head_element(document);
+        lxb_dom_node_t* title = find_element(head ? lxb_dom_interface_node(head) : NULL, LXB_TAG_TITLE);
+        if (title && node_has_text(title))
+            rendered = render_heading(&context, title, 1u);
+    }
+    rendered = rendered && render_children(&context, body_node);
     char* result = rendered ? bx_markdown_writer_take(&output, output_len) : NULL;
     int error_number = errno;
     bx_markdown_writer_clear(&output);

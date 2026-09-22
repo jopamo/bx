@@ -27,5 +27,7 @@ char* bx_fetch_pathmap_sanitize_component(const char* component, const struct bx
 char* bx_fetch_pathmap_prepared_basename(const BxFetchPreparedUrl* target, const struct bx_fetch_config* cfg);
 char* bx_fetch_pathmap_url_to_local(const char* url, const struct bx_fetch_config* cfg);
 char* bx_fetch_pathmap_canonical_url_to_local(const char* canonical_url, const struct bx_fetch_config* cfg);
+/* Returns an owned path whose final component has a Markdown extension. */
+char* bx_fetch_pathmap_markdown_path(const char* path);
 
 #endif  // BX_FETCH_PATHMAP_H
