@@ -2501,11 +2501,15 @@ static bool bx_tar_extract_one_entry(struct bx_tar_extract_state* state,
         if (mkdir_needed
             || (state->options->old_file_mode != BX_TAR_OLD_FILES_KEEP
                 && state->options->old_file_mode != BX_TAR_OLD_FILES_SKIP)) {
-            bx_archive_pending_dirs_record(&state->dirs,
+            if (!bx_archive_pending_dirs_record(&state->dirs,
                                            dest_path,
                                            extract_mode,
                                            !state->options->touch_mtime,
-                                           entry->mtime);
+                                           entry->mtime)) {
+                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+                free(dest_path);
+                return false;
+            }
         }
         if (!bx_tar_extract_apply_path_ownership(dest_path,
                                                  false,

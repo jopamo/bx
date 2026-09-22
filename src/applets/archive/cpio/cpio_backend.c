@@ -919,7 +919,12 @@ static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
                 status = 2;
                 break;
             }
-            bx_archive_pending_dirs_record(&dirs, dest_path, entry->mode & 07777u, options->preserve_mtime, entry->mtime);
+            if (!bx_archive_pending_dirs_record(&dirs, dest_path, entry->mode & 07777u, options->preserve_mtime, entry->mtime)) {
+                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+                free(dest_path);
+                status = 2;
+                break;
+            }
         }
         else {
             struct bx_cpio_hardlink_state* state = NULL;
@@ -1054,7 +1059,12 @@ static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx
                 status = 2;
                 break;
             }
-            bx_archive_pending_dirs_record(&dirs, dest_path, entry->st.st_mode & 07777u, options->preserve_mtime, entry->st.st_mtim);
+            if (!bx_archive_pending_dirs_record(&dirs, dest_path, entry->st.st_mode & 07777u, options->preserve_mtime, entry->st.st_mtim)) {
+                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
+                free(dest_path);
+                status = 2;
+                break;
+            }
         }
         else {
             struct bx_cpio_hardlink_state* state = NULL;
