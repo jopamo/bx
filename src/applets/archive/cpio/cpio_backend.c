@@ -14,6 +14,7 @@
 #include "applets/archive/archive_common.h"
 #include "applets/archive/archive_fs.h"
 #include "applets/archive/cpio/cpio_backend.h"
+#include "applets/archive/cpio/cpio_bounds.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
 #include "lib/fd_ops.h"
@@ -225,7 +226,9 @@ static bool bx_cpio_parse_octal_field(const unsigned char* field, size_t len, si
         if (ch < '0' || ch > '7') {
             return false;
         }
-        value = (value << 3u) + (size_t)(ch - '0');
+        if (!bx_checked_size_mul(value, 8, &value) ||
+            !bx_checked_size_add(value, (size_t)(ch - '0'), &value))
+            return false;
     }
     *value_out = value;
     return true;
@@ -625,7 +628,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
                                        struct bx_cpio_entry_list* entries,
                                        struct bx_diag_ctx* diag) {
     size_t pos = 0u;
-    while (pos + BX_CPIO_NEWC_HEADER_LEN <= archive->len) {
+    while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
         size_t ino, mode, uid, gid, nlink, mtime, size, namesize;
         struct bx_cpio_entry entry;
@@ -646,24 +649,20 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         pos += BX_CPIO_NEWC_HEADER_LEN;
-        if (pos + namesize > archive->len) {
-            bx_diag(diag, "truncated newc archive");
+        struct bx_cpio_member_bounds bounds;
+        if (!bx_cpio_member_bounds(archive->data, archive->len, pos, namesize,
+                                   size, 4, 4, &bounds)) {
+            bx_diag(diag, "invalid or truncated newc member");
             return false;
         }
         entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize - 1u);
-        entry.name[namesize - 1u] = '\0';
-        pos += namesize;
-        while (pos % 4u != 0u) {
-            pos++;
-        }
+        memcpy(entry.name, archive->data + pos, namesize);
+        pos = bounds.data_offset;
         if (strcmp(entry.name, "TRAILER!!!") == 0) {
             bx_cpio_entry_free(&entry);
-            break;
-        }
-        if (pos + size > archive->len) {
-            bx_cpio_entry_free(&entry);
-            bx_diag(diag, "truncated newc archive");
+            if (size == 0)
+                return true;
+            bx_diag(diag, "invalid newc trailer");
             return false;
         }
         entry.ino = (uint32_t)ino;
@@ -692,20 +691,18 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             entry.data = xmalloc(size ? size : 1u);
             memcpy(entry.data, archive->data + pos, size);
         }
-        pos += size;
-        while (pos % 4u != 0u) {
-            pos++;
-        }
+        pos = bounds.next_offset;
         bx_cpio_entry_list_push(entries, &entry);
     }
-    return true;
+    bx_diag(diag, "truncated newc archive");
+    return false;
 }
 
 static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
                                       struct bx_cpio_entry_list* entries,
                                       struct bx_diag_ctx* diag) {
     size_t pos = 0u;
-    while (pos + BX_CPIO_ODC_HEADER_LEN <= archive->len) {
+    while (pos <= archive->len && BX_CPIO_ODC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
         size_t ino, mode, uid, gid, nlink, mtime, namesize, size;
         struct bx_cpio_entry entry;
@@ -726,21 +723,20 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         pos += BX_CPIO_ODC_HEADER_LEN;
-        if (pos + namesize > archive->len) {
-            bx_diag(diag, "truncated odc archive");
+        struct bx_cpio_member_bounds bounds;
+        if (!bx_cpio_member_bounds(archive->data, archive->len, pos, namesize,
+                                   size, 1, 2, &bounds)) {
+            bx_diag(diag, "invalid or truncated odc member");
             return false;
         }
         entry.name = xmalloc(namesize);
-        memcpy(entry.name, archive->data + pos, namesize - 1u);
-        entry.name[namesize - 1u] = '\0';
-        pos += namesize;
+        memcpy(entry.name, archive->data + pos, namesize);
+        pos = bounds.data_offset;
         if (strcmp(entry.name, "TRAILER!!!") == 0) {
             bx_cpio_entry_free(&entry);
-            break;
-        }
-        if (pos + size > archive->len) {
-            bx_cpio_entry_free(&entry);
-            bx_diag(diag, "truncated odc archive");
+            if (size == 0)
+                return true;
+            bx_diag(diag, "invalid odc trailer");
             return false;
         }
         entry.ino = (uint32_t)ino;
@@ -769,13 +765,11 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             entry.data = xmalloc(size ? size : 1u);
             memcpy(entry.data, archive->data + pos, size);
         }
-        pos += size;
-        if (pos % 2u != 0u) {
-            pos++;
-        }
+        pos = bounds.next_offset;
         bx_cpio_entry_list_push(entries, &entry);
     }
-    return true;
+    bx_diag(diag, "truncated odc archive");
+    return false;
 }
 
 static bool bx_cpio_detect_archive_format(const struct bx_archive_buffer* archive,
@@ -1364,12 +1358,14 @@ int bx_cpio_run(int argc, char** argv) {
         }
         if (input_format == BX_CPIO_FORMAT_NEWC) {
             if (!bx_cpio_parse_newc_archive(&archive, &entries, &diag)) {
+                bx_cpio_entry_list_free(&entries);
                 bx_archive_buffer_free(&archive);
                 return 2;
             }
         }
         else {
             if (!bx_cpio_parse_odc_archive(&archive, &entries, &diag)) {
+                bx_cpio_entry_list_free(&entries);
                 bx_archive_buffer_free(&archive);
                 return 2;
             }
