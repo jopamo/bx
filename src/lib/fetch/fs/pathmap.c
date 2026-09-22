@@ -89,6 +89,41 @@ static const char* default_page_name(const struct bx_fetch_config* cfg) {
     return cfg->http.default_page;
 }
 
+static bool path_suffix_case_equals(const char* value, size_t value_length, const char* suffix) {
+    size_t suffix_length = strlen(suffix);
+    return value_length >= suffix_length && strncasecmp(value + value_length - suffix_length, suffix, suffix_length) == 0;
+}
+
+char* bx_fetch_pathmap_markdown_path(const char* path) {
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    size_t length = strlen(path);
+    if (path_suffix_case_equals(path, length, ".md") || path_suffix_case_equals(path, length, ".markdown"))
+        return strdup(path);
+
+    size_t retained = length;
+    if (path_suffix_case_equals(path, length, ".html"))
+        retained -= 5u;
+    else if (path_suffix_case_equals(path, length, ".xhtml"))
+        retained -= 6u;
+    else if (path_suffix_case_equals(path, length, ".htm"))
+        retained -= 4u;
+
+    static const char suffix[] = ".md";
+    if (retained > SIZE_MAX - sizeof(suffix)) {
+        errno = EFBIG;
+        return NULL;
+    }
+    char* result = malloc(retained + sizeof(suffix));
+    if (!result)
+        return NULL;
+    memcpy(result, path, retained);
+    memcpy(result + retained, suffix, sizeof(suffix));
+    return result;
+}
+
 static bool parse_restrict_modes(const struct bx_fetch_config* cfg, RestrictFileNameModes* modes_out) {
     if (!modes_out) {
         errno = EINVAL;

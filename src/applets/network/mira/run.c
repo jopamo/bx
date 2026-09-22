@@ -127,8 +127,14 @@ static int mira_plan_output(void* userdata, const BxFetchPreparedUrl* target, in
 
     if (frontend->config->download.output_document)
         *output_path_out = strdup(frontend->config->download.output_document);
-    else
+    else {
         *output_path_out = bx_fetch_pathmap_canonical_url_to_local(bx_fetch_prepared_url_transport(target), frontend->config);
+        if (*output_path_out && frontend->config->download.html_to_markdown) {
+            char* markdown_path = bx_fetch_pathmap_markdown_path(*output_path_out);
+            free(*output_path_out);
+            *output_path_out = markdown_path;
+        }
+    }
     if (!*output_path_out)
         return -1;
 
