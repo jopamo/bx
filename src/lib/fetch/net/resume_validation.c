@@ -87,23 +87,6 @@ int bx_fetch_parse_content_range(const char* content_range, BxFetchContentRange*
     return 0;
 }
 
-int bx_fetch_parse_content_range_start(const char* content_range, long long* start_out) {
-    if (!content_range || !start_out)
-        return -1;
-
-    BxFetchContentRange parsed = {0};
-    if (bx_fetch_parse_content_range(content_range, &parsed) != 0)
-        return -1;
-
-    *start_out = parsed.start;
-    return 0;
-}
-
-bool bx_fetch_resume_content_range_matches(const char* content_range, long long expected_start) {
-    BxFetchContentRange parsed = {0};
-    return bx_fetch_parse_content_range(content_range, &parsed) == 0 && parsed.start == expected_start;
-}
-
 bool bx_fetch_resume_restart_preserves_verified_prefix(long long verified_prefix_bytes, long long replacement_body_bytes) {
     if (verified_prefix_bytes < 0 || replacement_body_bytes < 0)
         return false;

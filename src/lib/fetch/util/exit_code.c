@@ -66,10 +66,6 @@ const BxFetchExitCodeInfo* bx_fetch_exit_code_info(int code) {
     return NULL;
 }
 
-bool bx_fetch_exit_code_is_assigned(int code) {
-    return bx_fetch_exit_code_info(code) != NULL;
-}
-
 int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_status) {
     switch (class_id) {
         case BX_FETCH_ERROR_CLASS_PARSE:

@@ -167,6 +167,5 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
 int bx_fetch_engine_run(BxFetchEngine* engine);
 bool bx_fetch_engine_is_active(const BxFetchEngine* engine);
 bool bx_fetch_engine_time_exhausted(const BxFetchEngine* engine);
-bool bx_fetch_engine_quota_exhausted(const BxFetchEngine* engine);
 
 #endif  // BX_FETCH_NET_H

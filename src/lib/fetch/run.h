@@ -244,7 +244,6 @@ BxFetchRun* bx_fetch_run_new(const struct bx_fetch_config* cfg, const BxFetchRun
 void bx_fetch_run_free(BxFetchRun* run);
 
 BxFetchCrawlEnqueueResult bx_fetch_run_add_seed(BxFetchRun* run, const char* url);
-BxFetchCrawlEnqueueResult bx_fetch_run_add_discovered(BxFetchRun* run, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind, int parent_depth);
 
 int bx_fetch_run_execute(BxFetchRun* run);
 void bx_fetch_run_cancel(BxFetchRun* run);
