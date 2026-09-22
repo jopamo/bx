@@ -22,10 +22,8 @@ int bx_daemonize(bool chdir_root, bool preserve_stdout) {
     int null_fd = bx_fd_open_cloexec("/dev/null", O_RDWR, 0);
     if (null_fd < 0)
         return -1;
-    if (bx_fd_dup2_exact(null_fd, STDIN_FILENO) < 0 ||
-        (!preserve_stdout &&
-         bx_fd_dup2_exact(null_fd, STDOUT_FILENO) < 0) ||
-        bx_fd_dup2_exact(null_fd, STDERR_FILENO) < 0) {
+    if (bx_fd_dup2_exact(null_fd, STDIN_FILENO) < 0 || (!preserve_stdout && bx_fd_dup2_exact(null_fd, STDOUT_FILENO) < 0) || bx_fd_dup2_exact(null_fd, STDERR_FILENO) < 0 ||
+        bx_fd_set_cloexec(STDIN_FILENO, false) < 0 || (!preserve_stdout && bx_fd_set_cloexec(STDOUT_FILENO, false) < 0) || bx_fd_set_cloexec(STDERR_FILENO, false) < 0) {
         int saved = errno;
         close(null_fd);
         errno = saved;
