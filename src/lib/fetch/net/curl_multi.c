@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "engine_internal.h"
+#include "credentials.h"
 #include "lib/fetch/html.h"
 #include "lib/fetch/resume_validation.h"
 #include "lib/fetch/representation.h"
@@ -493,6 +494,13 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
     }
 
     if (len == 0) {
+        /* Location can precede Set-Cookie. Clear the complete response's
+         * cookie state only at the boundary before libcurl follows it. */
+        if (t->pending_redirect_target && !t->engine->cfg->http.no_cookies && bx_fetch_net_scope_cookies(t->easy, t->current_target, t->pending_redirect_target) != 0) {
+            bx_fetch_transfer_mark_io_failure(t, EIO);
+            free(line);
+            return 0;
+        }
         if (capture_headers && t->save_headers_len > 0 && save_headers_append(t, ptr, total) != 0) {
             int append_error = errno;
             free(line);
