@@ -66,7 +66,7 @@ static size_t reject_response_header(BxFetchTransfer* t, BxFetchResponseHeaderPo
     if (t && t->resp && t->resp->header_policy_failure == BX_FETCH_RESPONSE_HEADER_POLICY_OK) {
         t->resp->header_policy_failure = failure;
     }
-    errno = EFBIG;
+    errno = failure == BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT ? EPROTO : EFBIG;
     return 0;
 }
 
@@ -684,6 +684,10 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
         t->engine && t->engine->cfg->http.max_redirect > 0 &&
         status_is_redirect(t->resp->status_code) &&
         strcasecmp(name, "Location") == 0) {
+        if (t->pending_redirect_target) {
+            free(line);
+            return reject_response_header(t, BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT);
+        }
         BxFetchPreparedUrl* redirect_target = resolve_redirect_target(t, value);
         if (!redirect_target) {
             t->url_canonicalization_failed = true;
@@ -707,7 +711,6 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
             return 0;
         }
 
-        bx_fetch_prepared_url_free(t->pending_redirect_target);
         t->pending_redirect_target = redirect_target;
     }
 
@@ -1246,10 +1249,11 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
         os_error_number = (int)os_errno;
     }
 #endif
-    transfer->resp->error_number = transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK ? EFBIG
-                                   : transfer->anubis_error_number > 0                                           ? transfer->anubis_error_number
-                                   : (transfer->io_failed && transfer->io_error_number > 0)                       ? transfer->io_error_number
-                                                                                                                  : os_error_number;
+    transfer->resp->error_number = transfer->resp->header_policy_failure == BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT ? EPROTO
+                                   : transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK               ? EFBIG
+                                   : transfer->anubis_error_number > 0                                                         ? transfer->anubis_error_number
+                                   : (transfer->io_failed && transfer->io_error_number > 0)                                    ? transfer->io_error_number
+                                                                                                                               : os_error_number;
     transfer->resp->request_body_io_failed = transfer->request_body_io_failed;
     transfer->resp->transport_error_kind = bx_fetch_classify_curl_transport_error(curl_result);
     if (transfer_uses_ftp(transfer) && transfer->resp->status_code >= 400 && transfer->resp->status_code < 600 &&
@@ -1274,6 +1278,9 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     }
     else if (transfer->url_canonicalization_failed) {
         detail = transfer->redirect_protocol_unsupported ? "redirect URL uses an unsupported protocol" : "effective or redirect URL failed canonicalization";
+    }
+    else if (transfer->resp->header_policy_failure == BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT) {
+        detail = bx_fetch_response_header_policy_failure_summary(transfer->resp->header_policy_failure);
     }
     else if (transfer->response_limit_exceeded) {
         detail = "response exceeds the configured byte limit";
@@ -1307,7 +1314,7 @@ static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode
     if (transfer->resp->rate_limited && curl_result == CURLE_OK)
         return BX_FETCH_ERROR_RATE_LIMIT;
     if (transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK) {
-        return BX_FETCH_ERROR_RESOURCE_LIMIT;
+        return transfer->resp->header_policy_failure == BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT ? BX_FETCH_ERROR_UNSUPPORTED : BX_FETCH_ERROR_RESOURCE_LIMIT;
     }
     if (transfer->anubis_error_number == EFBIG)
         return BX_FETCH_ERROR_RESOURCE_LIMIT;

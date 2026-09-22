@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "lib/fd_ops.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/request.h"
 #include "lib/fetch/url.h"
@@ -174,7 +175,7 @@ BxFetchRequestBodyResult bx_fetch_request_set_body_file(BxFetchRequest* req, con
      * O_NONBLOCK makes hostile FIFOs/devices inspectable without allowing the
      * open itself to wait indefinitely. It has no effect on regular-file I/O.
      */
-    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    int fd = bx_fd_open_cloexec(path, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0)
         return BX_FETCH_REQUEST_BODY_IO;
 

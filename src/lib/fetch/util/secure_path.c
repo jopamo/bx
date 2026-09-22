@@ -94,7 +94,8 @@ int bx_fetch_secure_path_open_existing_file(const char* path) {
     if (parent_fd < 0)
         return -1;
 
-    int fd = bx_fetch_secure_path_open_leaf(parent_fd, basename, O_RDONLY | O_CLOEXEC, 0);
+    /* Inspect the opened inode before reading; a FIFO must not block open. */
+    int fd = bx_fetch_secure_path_open_leaf(parent_fd, basename, O_RDONLY | O_CLOEXEC | O_NONBLOCK, 0);
     int open_error_number = errno;
     close(parent_fd);
     free(basename);
