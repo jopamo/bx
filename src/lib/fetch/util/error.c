@@ -1,5 +1,6 @@
 #include "lib/fetch/error.h"
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 static void json_write_escaped_string(FILE* stream, const char* value) {
@@ -110,6 +111,12 @@ const char* bx_fetch_error_string(BxFetchError err) {
             return "Unsupported operation";
         case BX_FETCH_ERROR_RESOURCE_LIMIT:
             return "Resource limit exceeded";
+        case BX_FETCH_ERROR_REQUEST_BUDGET:
+            return "Invocation request budget exhausted";
+        case BX_FETCH_ERROR_TIME_BUDGET:
+            return "Invocation time budget exhausted";
+        case BX_FETCH_ERROR_RATE_LIMIT:
+            return "Provider rate limit exhausted";
         case BX_FETCH_ERROR_INTERNAL:
             return "Internal error";
         default:
@@ -164,5 +171,22 @@ void bx_fetch_error_emit_structured(FILE* stream, const BxFetchStructuredError* 
     json_write_optional_int(stream, error->attempt);
     fputs(",\"max_attempts\":", stream);
     json_write_optional_int(stream, error->max_attempts);
+    if (error->recovery_reason) {
+        fputs(",\"recovery_reason\":", stream);
+        json_write_optional_string(stream, error->recovery_reason);
+        fputs(",\"final_url\":", stream);
+        json_write_optional_string(stream, error->final_url);
+        fputs(",\"retry_after_seconds\":", stream);
+        if (error->retry_after_seconds >= 0)
+            fprintf(stream, "%" PRId64, error->retry_after_seconds);
+        else
+            fputs("null", stream);
+        fprintf(stream, ",\"request_count\":%" PRIu64 ",\"elapsed_ms\":%" PRIu64 ",\"rate_limit_reset\":",
+                error->request_count, error->elapsed_ms);
+        if (error->rate_limit_reset > 0)
+            fprintf(stream, "%" PRId64, error->rate_limit_reset);
+        else
+            fputs("null", stream);
+    }
     fputs("}\n", stream);
 }

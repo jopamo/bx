@@ -19,6 +19,8 @@ struct BxFetchEngine {
     BxFetchTransfer* active_head;
     int64_t quota_limit_bytes;
     uint64_t downloaded_bytes;
+    BxFetchBudget local_budget;
+    BxFetchBudget* budget;
     bool quota_exhausted;
     bool invariant_failed;
     bool cancelled;
@@ -41,6 +43,10 @@ bool bx_fetch_parse_resume_from_request(const BxFetchRequest* request, long long
 
 void bx_fetch_progress_emit(BxFetchTransfer* transfer, curl_off_t download_total, bool authoritative_length);
 int bx_fetch_progress_callback(void* userdata, curl_off_t download_total, curl_off_t downloaded, curl_off_t upload_total, curl_off_t uploaded);
+int bx_fetch_request_budget_callback(void* userdata, char* primary_ip, char* local_ip, int primary_port, int local_port);
+bool bx_fetch_spider_retry_get(BxFetchTransfer* transfer, int status);
+bool bx_fetch_request_budget_check(BxFetchTransfer* transfer);
+long bx_fetch_request_budget_timeout_ms(BxFetchEngine* engine);
 
 BxFetchError bx_fetch_map_curl_result(CURLcode code);
 BxFetchTransportErrorKind bx_fetch_classify_curl_transport_error(CURLcode code);

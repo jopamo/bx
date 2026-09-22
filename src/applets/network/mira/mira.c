@@ -7,11 +7,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#define BX_MIRA_VERSION "0.1.0"
-
 static int mira_run_main(int argc, char** argv) {
     if (argc > 1 && strcmp(argv[1], "github") == 0)
         return bx_mira_github_main(argc - 1, argv + 1);
+    if (argc > 1 && strcmp(argv[1], "gitlab") == 0)
+        return bx_mira_gitlab_main(argc - 1, argv + 1);
 
     struct bx_fetch_config* config = bx_mira_parse_cli(argc, argv);
     if (!config)
@@ -19,7 +19,7 @@ static int mira_run_main(int argc, char** argv) {
 
     int result = BX_FETCH_EXIT_SUCCESS;
     if (config->startup.show_version)
-        printf("mira %s\n", BX_MIRA_VERSION);
+        printf("mira %s\n", BX_VERSION);
     else if (config->startup.show_help)
         bx_mira_print_help();
     else if (config->input.url_count == 0 && !config->input.input_file) {

@@ -18,6 +18,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 typedef enum {
@@ -33,6 +34,9 @@ typedef enum {
     BX_FETCH_ERROR_UNSUPPORTED,
     BX_FETCH_ERROR_INTERNAL,
     BX_FETCH_ERROR_RESOURCE_LIMIT,
+    BX_FETCH_ERROR_REQUEST_BUDGET,
+    BX_FETCH_ERROR_TIME_BUDGET,
+    BX_FETCH_ERROR_RATE_LIMIT,
 } BxFetchError;
 
 const char* bx_fetch_error_string(BxFetchError err);
@@ -70,6 +74,13 @@ typedef struct {
     bool retryable;
     int attempt;
     int max_attempts;
+    /* Optional final recovery context; absent on non-transfer diagnostics. */
+    const char* recovery_reason;
+    const char* final_url;
+    int64_t retry_after_seconds;
+    int64_t rate_limit_reset;
+    uint64_t request_count;
+    uint64_t elapsed_ms;
 } BxFetchStructuredError;
 
 const char* bx_fetch_error_class_string(BxFetchErrorClass class_id);

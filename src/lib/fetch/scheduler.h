@@ -24,17 +24,18 @@
 
 #include "config.h"
 #include "error.h"
+#include "recovery.h"
 #include "url.h"
 
 typedef struct BxFetchScheduler BxFetchScheduler;
 
 /*
- * Return true when the scheduler has queued a retry for this attempt and the caller should
- * suppress terminal bookkeeping for the in-flight failure.
+ * Return RETRY only when the scheduler has queued another attempt. The caller
+ * then suppresses terminal bookkeeping for the in-flight failure.
  *
  * done_userdata remains valid until the callback returns.
  */
-typedef bool (*BxFetchSchedulerTransferDoneFn)(void* userdata, int status, BxFetchError result, bool retryable_hint);
+typedef BxFetchRecoveryDecision (*BxFetchSchedulerTransferDoneFn)(void* userdata, int status, BxFetchError result, bool retryable_hint, int64_t retry_after_seconds);
 /*
  * Return codes:
  *  0: transfer submitted, scheduler tracks it as active

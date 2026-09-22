@@ -69,6 +69,12 @@ int bx_fetch_writer_path_presence(const char* path, BxFetchWriterPathPresence* p
 int bx_fetch_writer_unlink_file(const char* path);
 BxFetchWriter* bx_fetch_writer_open(const char* path, BxFetchWriterMode mode);
 BxFetchWriter* bx_fetch_writer_open_with_options(const char* path, BxFetchWriterMode mode, int backups, bool unlink_existing);
+/*
+ * Replace a fresh stdout writer's stream with a private, unlinked spool.
+ * close publishes only the completed candidate; abort emits nothing.
+ * Publication to a pipe cannot be rolled back and must never be retried.
+ */
+int bx_fetch_writer_stage_stdout(BxFetchWriter* w, uint64_t limit);
 /* Must stay within the same parent directory; updates final commit target name. */
 int bx_fetch_writer_set_final_path(BxFetchWriter* w, const char* path);
 /*

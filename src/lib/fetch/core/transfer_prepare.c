@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "lib/fetch/transfer_prepare.h"
 #include "lib/fetch/metadata.h"
+#include "lib/fetch/recovery.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -181,6 +182,10 @@ BxFetchTransferCandidate* bx_fetch_transfer_candidate_prepare(const struct bx_fe
     if (!candidate->writer) {
         return prepare_failure(candidate, error, BX_FETCH_PREPARE_FAILURE_WRITER, errno ? errno : EIO, protocol_decision, body_result);
     }
+    if (!cfg->download.spider && cfg->download.stdout_spool_limit && strcmp(writer_path, "-") == 0 &&
+        bx_fetch_writer_stage_stdout(candidate->writer, cfg->download.stdout_spool_limit) != 0) {
+        return prepare_failure(candidate, error, BX_FETCH_PREPARE_FAILURE_WRITER, errno ? errno : EIO, protocol_decision, body_result);
+    }
     if (cfg->download.no_clobber && !cfg->download.spider &&
         bx_fetch_writer_set_final_path_exclusive(candidate->writer, writer_path) != 0) {
         return prepare_failure(candidate, error, BX_FETCH_PREPARE_FAILURE_WRITER, errno ? errno : EIO, protocol_decision, body_result);
@@ -250,7 +255,7 @@ static void candidate_completion_callback(void* userdata, const BxFetchRequest* 
         .response = response,
         .output_path = callbacks->output_path,
         .result = result,
-        .retryable_hint = bx_fetch_transfer_retryable_hint(callbacks->cfg, response, result),
+        .retryable_hint = bx_fetch_recovery_retryable_hint(callbacks->cfg, request, response, result),
     };
     if (callbacks->completion_callback)
         callbacks->completion_callback(callbacks->userdata, &completion);

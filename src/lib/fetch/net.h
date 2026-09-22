@@ -22,6 +22,18 @@
 
 typedef struct BxFetchEngine BxFetchEngine;
 
+/* Invocation-owned, single-threaded accounting. A borrowed budget must outlive
+ * all engines using it; new engines never reset its counters or deadline. */
+typedef struct {
+    int max_requests;
+    uint64_t requests_started;
+    double started_at;
+    double deadline;
+} BxFetchBudget;
+
+int bx_fetch_budget_init(BxFetchBudget* budget, int max_requests, int max_seconds);
+uint64_t bx_fetch_budget_elapsed_ms(const BxFetchBudget* budget);
+
 typedef struct {
     bool present;
     const char* setting;
@@ -113,6 +125,7 @@ typedef bool (*BxFetchRedirectPolicyCallback)(void* userdata, const BxFetchPrepa
  * observer table itself is copied and may be temporary.
  */
 BxFetchEngine* bx_fetch_engine_new(const struct bx_fetch_config* cfg, const BxFetchTransportObserver* observer);
+BxFetchEngine* bx_fetch_engine_new_with_budget(const struct bx_fetch_config* cfg, const BxFetchTransportObserver* observer, BxFetchBudget* budget);
 /*
  * Cancels active work, aborts each candidate writer, invokes each terminal
  * callback once with BX_FETCH_ERROR_CANCELLED, and rejects later submissions.
@@ -153,6 +166,7 @@ int bx_fetch_engine_submit_with_setup_error(BxFetchEngine* engine,
  */
 int bx_fetch_engine_run(BxFetchEngine* engine);
 bool bx_fetch_engine_is_active(const BxFetchEngine* engine);
+bool bx_fetch_engine_time_exhausted(const BxFetchEngine* engine);
 bool bx_fetch_engine_quota_exhausted(const BxFetchEngine* engine);
 
 #endif  // BX_FETCH_NET_H

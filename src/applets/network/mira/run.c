@@ -265,8 +265,9 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
                                           ? bx_fetch_prepared_url_display(effective)
                                           : bx_fetch_request_url_for_display(completion->transfer->request);
             fprintf(frontend->diagnostics,
-                    "mira: spider succeeded: %s\n",
-                    display_url ? display_url : BX_FETCH_URL_DISPLAY_REDACTED);
+                    "mira: spider succeeded: %s%s\n",
+                    display_url ? display_url : BX_FETCH_URL_DISPLAY_REDACTED,
+                    response && response->used_spider_get ? " (GET fallback)" : "");
         }
         return 0;
     }
@@ -294,7 +295,8 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     if (frontend->config->logging.structured_errors) {
         char summary[64];
         const char* error_summary = "transfer failed";
-        if (completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED && response && response->transport_error_detail) {
+        if ((completion->transfer->result == BX_FETCH_ERROR_UNSUPPORTED ||
+             completion->transfer->result == BX_FETCH_ERROR_RESOURCE_LIMIT) && response && response->transport_error_detail) {
             error_summary = response->transport_error_detail;
         }
         else if ((http || ftp) && status >= 400 && status < 600) {
@@ -304,8 +306,7 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
         BxFetchErrorClass error_class = bx_fetch_error_class_for_exit_code(exit_code);
         if (ftp && error_class == BX_FETCH_ERROR_CLASS_HTTP)
             error_class = BX_FETCH_ERROR_CLASS_FTP;
-        /* This path is terminal: report the attempts that occurred, not the
-         * transport hint or the unused configured bound. */
+        const BxFetchPreparedUrl* effective = bx_fetch_response_effective_target(response);
         BxFetchStructuredError error = {
             .class_id = error_class,
             .summary = error_summary,
@@ -316,7 +317,13 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
             .error_number = response && response->error_number > 0 ? response->error_number : -1,
             .retryable = completion->retry_scheduled,
             .attempt = completion->attempt,
-            .max_attempts = completion->attempt,
+            .max_attempts = completion->max_attempts,
+            .recovery_reason = bx_mira_recovery_reason(completion->recovery.reason),
+            .final_url = effective ? bx_fetch_prepared_url_display(effective) : NULL,
+            .retry_after_seconds = response ? response->retry_after_seconds : -1,
+            .rate_limit_reset = response ? response->rate_limit_reset : 0,
+            .request_count = response ? response->request_count : 0,
+            .elapsed_ms = response ? response->elapsed_ms : 0,
         };
         bx_fetch_error_emit_structured(frontend->diagnostics, &error);
     }
@@ -667,6 +674,10 @@ static void mira_record_session_failure(MiraRunFrontend* frontend, const BxFetch
 }
 
 int bx_mira_run_config(const struct bx_fetch_config* config) {
+    return bx_mira_run_config_with_budget(config, NULL);
+}
+
+int bx_mira_run_config_with_budget(const struct bx_fetch_config* config, BxFetchBudget* budget) {
     if (!config || (config->input.url_count <= 0 && !config->input.input_file) || (config->input.url_count > 0 && !config->input.urls)) {
         errno = EINVAL;
         return BX_FETCH_EXIT_PARSE_OR_CONFIG;
@@ -700,6 +711,7 @@ int bx_mira_run_config(const struct bx_fetch_config* config) {
         }
     }
     BxFetchRunFrontend frontend = {
+        .budget = budget,
         .plan_output = mira_plan_output,
         .on_prepare_error = mira_prepare_error,
         .on_submit_error = mira_submit_error,

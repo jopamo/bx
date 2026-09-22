@@ -488,7 +488,7 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         if (run)
             run_defer_failure(run, EPROTO);
         if (transfer && transfer->scheduler_done)
-            transfer->scheduler_done(transfer->scheduler_done_userdata, 0, BX_FETCH_ERROR_INTERNAL, false);
+            transfer->scheduler_done(transfer->scheduler_done_userdata, 0, BX_FETCH_ERROR_INTERNAL, false, -1);
         free(transfer);
         return;
     }
@@ -516,7 +516,9 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
     }
 
     int status = completion->response ? completion->response->status_code : 0;
-    bool retry_scheduled = transfer->scheduler_done(transfer->scheduler_done_userdata, status, scheduler_result, retryable_hint);
+    BxFetchRecoveryDecision recovery = transfer->scheduler_done(
+        transfer->scheduler_done_userdata, status, scheduler_result, retryable_hint,
+        completion->response ? completion->response->retry_after_seconds : -1);
 
     BxFetchRunCompletion observation = {
         .transfer = completion,
@@ -526,7 +528,8 @@ static void run_transfer_complete(void* userdata, const BxFetchTransferCompletio
         .max_attempts = transfer->max_attempts,
         .publication = publication,
         .document_queued = document_queued,
-        .retry_scheduled = retry_scheduled,
+        .retry_scheduled = recovery.reason == BX_FETCH_RECOVERY_RETRY,
+        .recovery = recovery,
         .redirect_rejected = transfer->redirect_rejected,
     };
     if (run->frontend.on_completion && run->frontend.on_completion(run->frontend.userdata, run, &observation) != 0) {
@@ -670,6 +673,8 @@ static int run_transport_poll(void* userdata) {
 
     if (bx_fetch_engine_run(run->engine) != 0)
         run_defer_failure(run, errno);
+    if (bx_fetch_engine_time_exhausted(run->engine))
+        run_defer_failure(run, ETIMEDOUT);
     if (!run->deferred_error)
         (void)run_drain_documents(run);
     if (run->deferred_error) {
@@ -700,7 +705,7 @@ BxFetchRun* bx_fetch_run_new(const struct bx_fetch_config* cfg, const BxFetchRun
     if (!run->publication)
         goto fail;
     if (!cfg->download.dry_run) {
-        run->engine = bx_fetch_engine_new(cfg, &frontend->transport_observer);
+        run->engine = bx_fetch_engine_new_with_budget(cfg, &frontend->transport_observer, frontend->budget);
         if (!run->engine)
             goto fail;
     }

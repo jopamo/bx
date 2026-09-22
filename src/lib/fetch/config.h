@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "representation.h"
 
 typedef struct {
     bool show_version;
@@ -58,6 +59,15 @@ typedef struct {
 
 typedef struct {
     int tries;
+    /* Shared elapsed budget, including previous work and waits. Checked by
+     * transport and before publication; zero preserves compatibility timeouts. */
+    int max_retry_time;
+    /* Shared across attempts and redirects in one engine; zero is unlimited. */
+    int max_requests;
+    bool spider_get_fallback;
+    bool retry_transient_http;
+    /* Zero retains streaming compatibility; otherwise spool up to this bound. */
+    uint64_t stdout_spool_limit;
     bool retry_connrefused;
     char* retry_on_http_error;
     char* output_document;
@@ -94,6 +104,10 @@ typedef struct {
     bool xattr;
     bool metadata_sidecars;
     bool html_to_markdown;
+    /* Accept declared text/JSON/XML; convert only HTML to Markdown. */
+    bool text_document;
+    BxFetchExpectedRepresentation expected_representation;
+    uint64_t max_response_bytes;
 } BxFetchDownloadConfig;
 
 typedef struct {
@@ -134,6 +148,7 @@ typedef struct {
     char* method;
     bool content_disposition;
     bool auth_no_challenge;
+    bool provider_rate_limits;
 } BxFetchHttpConfig;
 
 typedef struct {

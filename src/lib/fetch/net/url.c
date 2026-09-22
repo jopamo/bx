@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "lib/fetch/url.h"
+#include "lib/fetch/resource_limits.h"
 #include <ctype.h>
 #include <curl/curl.h>
 #include <errno.h>
@@ -8,6 +9,65 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+
+bool bx_fetch_url_is_https_root(const char* root) {
+    if (!root || !*root || strnlen(root, 4097) > 4096 || strpbrk(root, "?#"))
+        return false;
+    BxFetchPreparedUrl* target = bx_fetch_url_prepare(root);
+    bool valid = target && bx_fetch_prepared_url_protocol(target) == BX_FETCH_PROTOCOL_HTTPS &&
+        !bx_fetch_prepared_url_has_userinfo(target);
+    bx_fetch_prepared_url_free(target);
+    return valid;
+}
+
+char* bx_fetch_url_join_https_root(const char* root, const char* path) {
+    if (!bx_fetch_url_is_https_root(root) || !path || path[0] != '/') {
+        errno = EINVAL;
+        return NULL;
+    }
+    size_t root_length = strlen(root);
+    while (root_length && root[root_length - 1] == '/')
+        root_length--;
+    size_t path_length = strnlen(path, BX_FETCH_URL_MAX_BYTES + 1u);
+    if (root_length > BX_FETCH_URL_MAX_BYTES || path_length > BX_FETCH_URL_MAX_BYTES - root_length) {
+        errno = EFBIG;
+        return NULL;
+    }
+    char* url = malloc(root_length + path_length + 1);
+    if (url) {
+        memcpy(url, root, root_length);
+        memcpy(url + root_length, path, path_length + 1);
+    }
+    return url;
+}
+
+char* bx_fetch_url_encode_component(const char* input, size_t max_bytes) {
+    if (!input || max_bytes == SIZE_MAX)
+        return NULL;
+    size_t length = strnlen(input, max_bytes + 1);
+    if (length > max_bytes || length > (SIZE_MAX - 1) / 3) {
+        errno = EFBIG;
+        return NULL;
+    }
+    static const char hex[] = "0123456789ABCDEF";
+    char* encoded = malloc(length * 3 + 1);
+    if (!encoded)
+        return NULL;
+    char* output = encoded;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)input[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || strchr("-._~", c)) {
+            *output++ = (char)c;
+        } else {
+            *output++ = '%';
+            *output++ = hex[c >> 4];
+            *output++ = hex[c & 15];
+        }
+    }
+    *output = '\0';
+    return encoded;
+}
 
 typedef struct {
     const char* scheme;

@@ -38,6 +38,8 @@ int bx_fetch_progress_callback(void* userdata, curl_off_t download_total, curl_o
     (void)uploaded;
     if (!transfer || transfer->terminal_callback_invoked)
         return 0;
+    if (!bx_fetch_request_budget_check(transfer))
+        return 1;
 
     double now = bx_fetch_monotonic_seconds();
     if (!transfer->progress_emitted || now - transfer->progress_last_update_s >= 0.125) {

@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 #include "lib/fetch/error.h"
-#include "lib/fetch/http_status.h"
 #include "lib/fetch/scheduler.h"
 #include "lib/fetch/url.h"
 #include "lib/time_parse.h"
@@ -53,6 +52,8 @@ struct BxFetchScheduler {
     bool invariant_failed;
     bool cancelled;
     uint64_t random_state;
+    bool started;
+    struct timespec started_at;
 };
 
 typedef struct {
@@ -94,26 +95,6 @@ static bool scheduler_require(BxFetchScheduler* s, bool condition) {
     if (condition)
         return true;
     return scheduler_record_invariant_failure(s);
-}
-
-static bool should_retry_http_status(const BxFetchScheduler* s, int status) {
-    if (!s || !s->cfg->download.retry_on_http_error)
-        return false;
-    return bx_fetch_http_status_list_contains(s->cfg->download.retry_on_http_error, status);
-}
-
-static bool should_retry_result(const BxFetchScheduler* s, int status, int result) {
-    switch ((BxFetchError)result) {
-        case BX_FETCH_OK:
-        case BX_FETCH_ERROR_CANCELLED:
-        case BX_FETCH_ERROR_UNSUPPORTED:
-        case BX_FETCH_ERROR_RESOURCE_LIMIT:
-            return false;
-        case BX_FETCH_ERROR_HTTP:
-            return should_retry_http_status(s, status);
-        default:
-            return result != 0;
-    }
 }
 
 static bool result_counts_as_scheduler_failure(int result) {
@@ -469,14 +450,14 @@ static bool dec_host_active_count(BxFetchScheduler* s, const char* host) {
     return true;
 }
 
-static bool on_transfer_complete(void* userdata, int status, BxFetchError result, bool retryable_hint) {
+static BxFetchRecoveryDecision on_transfer_complete(void* userdata, int status, BxFetchError result, bool retryable_hint, int64_t retry_after_seconds) {
     TransferInfo* ti = userdata;
     BxFetchScheduler* s = ti ? ti->sched : NULL;
+    BxFetchRecoveryDecision decision = {.reason = BX_FETCH_RECOVERY_SCHEDULER_STOPPED};
     if (!ti || !s)
-        return false;
+        return decision;
 
     const char* host = bx_fetch_prepared_url_host(ti->target);
-    bool retried = false;
     bool completion_ok = scheduler_require(s, s->active_total > 0);
     if (completion_ok) {
         s->active_total--;
@@ -490,16 +471,23 @@ static bool on_transfer_complete(void* userdata, int status, BxFetchError result
         s->had_transfer_error = true;
     }
 
-    if (completion_ok && !s->cancelled && retryable_hint && should_retry_result(s, status, result) && ti->tries_done < s->cfg->download.tries) {
+    if (completion_ok && !s->cancelled) {
+        struct timespec now;
+        double elapsed = 0;
+        completion_ok = scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+            bx_time_timespec_elapsed_seconds_double(&s->started_at, &now, &elapsed));
+        if (completion_ok)
+            decision = bx_fetch_recovery_plan(s->cfg, status, result, retryable_hint,
+                                              ti->tries_done, retry_after_seconds, elapsed);
+    }
+    if (decision.reason == BX_FETCH_RECOVERY_RETRY) {
         if (!scheduler_require(s, ti->tries_done > 0)) {
             s->had_transfer_error = true;
         }
         struct timespec retry_ready_time = {0};
         const struct timespec* retry_ready_time_ptr = NULL;
-        int retry_delay = ti->tries_done;
-        if (retry_delay > s->cfg->download.waitretry) {
-            retry_delay = s->cfg->download.waitretry;
-        }
+        int retry_delay = decision.delay_seconds;
+        decision.reason = BX_FETCH_RECOVERY_SCHEDULER_STOPPED;
         if (retry_delay > 0) {
             if (!scheduler_require(s, clock_gettime(CLOCK_MONOTONIC, &retry_ready_time) == 0)) {
                 s->had_transfer_error = true;
@@ -512,7 +500,7 @@ static bool on_transfer_complete(void* userdata, int status, BxFetchError result
             BxFetchPreparedUrl* retry_target = ti->target;
             ti->target = NULL;
             if (scheduler_add_owned_target_with_tries(s, retry_target, ti->output_path, ti->depth, ti->tries_done, retry_ready_time_ptr) == 0) {
-                retried = true;
+                decision.reason = BX_FETCH_RECOVERY_RETRY;
                 if (s->observer.on_retry) {
                     s->observer.on_retry(s->observer.userdata, retry_target, ti->tries_done + 1, s->cfg->download.tries, retry_delay);
                 }
@@ -532,7 +520,7 @@ static bool on_transfer_complete(void* userdata, int status, BxFetchError result
     bx_fetch_prepared_url_free(ti->target);
     free(ti->output_path);
     free(ti);
-    return retried;
+    return decision;
 }
 
 BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg,
@@ -540,7 +528,8 @@ BxFetchScheduler* bx_fetch_scheduler_new(const struct bx_fetch_config* cfg,
                                          BxFetchSchedulerPollFn poll,
                                          void* userdata,
                                          const BxFetchSchedulerObserver* observer) {
-    if (!cfg || !dispatch) {
+    if (!cfg || !dispatch || cfg->download.tries < 1 ||
+        cfg->download.max_retry_time < 0 || cfg->download.waitretry < 0) {
         errno = EINVAL;
         return NULL;
     }
@@ -660,6 +649,11 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
     bool had_dispatch_error = false;
     s->had_transfer_error = false;
     s->invariant_failed = false;
+    if (!s->started) {
+        if (clock_gettime(CLOCK_MONOTONIC, &s->started_at) != 0)
+            return -1;
+        s->started = true;
+    }
 
     while (s->queue_head || s->active_total > 0) {
         if (!scheduler_require(s, scheduler_counts_invariant_holds(s))) {
@@ -768,7 +762,15 @@ int bx_fetch_scheduler_run(BxFetchScheduler* s) {
             if (waiting < 0)
                 return -1;
             if (waiting) {
+                /* Poll delayed work too, so the invocation owner can expire
+                 * its deadline and drain the queue without another request. */
+                if (s->cfg->download.max_retry_time > 0 &&
+                    (wait_duration.tv_sec > 0 || wait_duration.tv_nsec > 100000000L)) {
+                    wait_duration = (struct timespec){.tv_nsec = 100000000L};
+                }
                 if (scheduler_sleep(&wait_duration) != 0)
+                    return -1;
+                if (s->cfg->download.max_retry_time > 0 && s->poll && s->poll(s->userdata) != 0)
                     return -1;
                 continue;
             }

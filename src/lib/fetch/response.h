@@ -69,6 +69,13 @@ typedef struct {
     // Error code if transfer failed
     int error_code;
     int error_number;
+    /* Parsed server minimum wait; -1 when unavailable. */
+    int64_t retry_after_seconds;
+    bool used_spider_get;
+    uint64_t request_count;
+    uint64_t elapsed_ms;
+    int64_t rate_limit_reset;
+    bool rate_limited;
     BxFetchTransportErrorKind transport_error_kind;
     char* transport_error_detail;
     bool request_body_io_failed;

@@ -272,7 +272,22 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTFIELDSIZE_LARGE, body_length);
     }
 
-    if (t->progress_cb) {
+#if LIBCURL_VERSION_NUM >= 0x075000
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_PREREQFUNCTION, bx_fetch_request_budget_callback);
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_PREREQDATA, t);
+#else
+    if (engine->budget->max_requests > 0) {
+        if (setup_error) {
+            setup_error->present = true;
+            setup_error->detail = "request budgets require libcurl 7.80 or newer";
+            setup_error->error_number = ENOTSUP;
+        }
+        errno = ENOTSUP;
+        return -1;
+    }
+#endif
+    SETOPT_OR_RETURN(curl, setup_error, CURLOPT_TIMEOUT_MS, bx_fetch_request_budget_timeout_ms(engine));
+    if (t->progress_cb || engine->budget->deadline > 0) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_XFERINFOFUNCTION, bx_fetch_progress_callback);
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_XFERINFODATA, t);
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOPROGRESS, 0L);
@@ -493,7 +508,7 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     if (engine->cfg->ftp.no_passive_ftp)
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_FTPPORT, "-");
 
-    if (engine->cfg->download.spider) {
+    if (engine->cfg->download.spider || (req->method && strcmp(req->method, "HEAD") == 0)) {
         SETOPT_OR_RETURN(curl, setup_error, CURLOPT_NOBODY, 1L);
     }
 

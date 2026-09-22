@@ -2,6 +2,8 @@
 #include "engine_internal.h"
 #include "lib/fetch/html.h"
 #include "lib/fetch/resume_validation.h"
+#include "lib/fetch/representation.h"
+#include "lib/fetch/rate_limit.h"
 #include "lib/fetch/url.h"
 #include "lib/time_parse.h"
 #include <curl/curl.h>
@@ -183,6 +185,7 @@ static void reset_response_state(BxFetchTransfer* transfer) {
     transfer->resume_restart_validation_pending = false;
     transfer->response_body_bytes = 0;
     transfer->transform_source_len = 0;
+    transfer->representation_prefix_len = 0;
     transfer->transform_failed = false;
     transfer->progress = (BxFetchProgressSample){.generation = transfer->progress.generation + 1};
     transfer->progress_emitted = false;
@@ -252,6 +255,16 @@ static bool anubis_probe_eligible(const BxFetchTransfer* transfer) {
 static bool finalize_response_headers(BxFetchTransfer* transfer) {
     if (!transfer || transfer->response_headers_finalized)
         return transfer && transfer->response_headers_finalized;
+    transfer->convert_html = transfer->engine->cfg->download.html_to_markdown;
+    if (transfer->engine->cfg->download.text_document) {
+        BxFetchTextRepresentation representation = bx_fetch_text_representation(
+            bx_fetch_response_header_value(transfer->resp, "Content-Type"));
+        if (representation == BX_FETCH_REPRESENTATION_UNSUPPORTED) {
+            transfer->representation_failed = true;
+            return false;
+        }
+        transfer->convert_html = representation == BX_FETCH_REPRESENTATION_HTML;
+    }
     if (transfer->headers_cb &&
         transfer->headers_cb(transfer->callback_userdata,
                              transfer->req,
@@ -274,6 +287,16 @@ static bool write_response_bytes(BxFetchTransfer* transfer,
     bool ftp = transfer_uses_ftp(transfer);
     if (!ftp && !finalize_response_headers(transfer))
         return false;
+    size_t available = sizeof(transfer->representation_prefix) - transfer->representation_prefix_len;
+    size_t copy = length < available ? length : available;
+    if (copy) {
+        memcpy(transfer->representation_prefix + transfer->representation_prefix_len, data, copy);
+        transfer->representation_prefix_len += copy;
+    }
+    if (transfer->engine->cfg->download.text_document && length && memchr(data, '\0', length)) {
+        transfer->representation_failed = true;
+        return false;
+    }
     if (transfer->engine->cfg->http.save_headers &&
         !ftp && !transfer->save_headers_written &&
         transfer->save_headers_len > 0) {
@@ -292,7 +315,7 @@ static bool write_response_bytes(BxFetchTransfer* transfer,
         }
         transfer->save_headers_written = true;
     }
-    if (length > 0 && transfer->engine->cfg->download.html_to_markdown) {
+    if (length > 0 && (transfer->convert_html || (ftp && transfer->engine->cfg->download.html_to_markdown))) {
         if (!buffer_transform_source(transfer, data, length))
             return false;
     }
@@ -549,6 +572,12 @@ size_t bx_fetch_header_callback(char* ptr, size_t size, size_t nmemb, void* user
             }
         }
         free(line);
+        if (t->spider_get && t->resp->status_code >= 200 && t->resp->status_code < 300) {
+            /* Existence checks do not require a response body. Stop even when
+             * a server ignores Range and advertises a large representation. */
+            t->spider_verified = true;
+            return 0;
+        }
         return total;
     }
 
@@ -700,6 +729,8 @@ size_t bx_fetch_write_callback(char* ptr, size_t size, size_t nmemb, void* userd
     size_t total = size * nmemb;
     if (!t || !t->engine || t->engine->cancelled || !t->writer)
         return 0;
+    if (!bx_fetch_request_budget_check(t))
+        return 0;
     /* libcurl sends synthetic FTP NOBODY headers to the write callback too. */
     if (t->engine->cfg->download.spider)
         return total;
@@ -711,9 +742,14 @@ size_t bx_fetch_write_callback(char* ptr, size_t size, size_t nmemb, void* userd
         }
 
         double wait_s = bx_fetch_token_bucket_consume(&t->engine->rate_limiter, total, &now);
+        long remaining_ms = bx_fetch_request_budget_timeout_ms(t->engine);
+        if (remaining_ms > 0 && wait_s > remaining_ms / 1000.0)
+            wait_s = remaining_ms / 1000.0;
         if (bx_fetch_sleep_for_seconds(wait_s) != 0) {
             return 0;
         }
+        if (!bx_fetch_request_budget_check(t))
+            return 0;
     }
 
     if ((uint64_t)total > (uint64_t)LLONG_MAX - (uint64_t)t->response_body_bytes) {
@@ -722,6 +758,11 @@ size_t bx_fetch_write_callback(char* ptr, size_t size, size_t nmemb, void* userd
         return 0;
     }
     t->response_body_bytes += (curl_off_t)total;
+    if (t->engine->cfg->download.max_response_bytes > 0 &&
+        (uint64_t)t->response_body_bytes > t->engine->cfg->download.max_response_bytes) {
+        t->response_limit_exceeded = true;
+        return 0;
+    }
 
     if (t->anubis_phase == BX_FETCH_ANUBIS_PHASE_SUBMIT || t->discard_body) {
         bx_fetch_record_downloaded_bytes(t, total);
@@ -781,7 +822,11 @@ static void engine_cleanup(BxFetchEngine* engine) {
 }
 
 BxFetchEngine* bx_fetch_engine_new(const struct bx_fetch_config* cfg, const BxFetchTransportObserver* observer) {
-    if (!cfg) {
+    return bx_fetch_engine_new_with_budget(cfg, observer, NULL);
+}
+
+BxFetchEngine* bx_fetch_engine_new_with_budget(const struct bx_fetch_config* cfg, const BxFetchTransportObserver* observer, BxFetchBudget* budget) {
+    if (!cfg || cfg->download.max_requests < 0 || cfg->download.max_retry_time < 0) {
         errno = EINVAL;
         return NULL;
     }
@@ -790,6 +835,11 @@ BxFetchEngine* bx_fetch_engine_new(const struct bx_fetch_config* cfg, const BxFe
     if (!engine)
         return NULL;
     engine->cfg = cfg;
+    engine->budget = budget ? budget : &engine->local_budget;
+    if (!budget && bx_fetch_budget_init(engine->budget, cfg->download.max_requests, cfg->download.max_retry_time) != 0) {
+        free(engine);
+        return NULL;
+    }
     engine->epoll_fd = -1;
     engine->timer_fd = -1;
     if (observer)
@@ -1134,6 +1184,37 @@ static bool begin_anubis_retry(BxFetchEngine* engine,
 static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_result) {
     if (!transfer || !transfer->easy || !transfer->resp)
         return;
+    transfer->resp->request_count = transfer->engine->budget->requests_started;
+    transfer->resp->elapsed_ms = bx_fetch_budget_elapsed_ms(transfer->engine->budget);
+
+#if LIBCURL_VERSION_NUM >= 0x074200
+    curl_off_t retry_after = 0;
+    if (bx_fetch_response_header_value(transfer->resp, "Retry-After") &&
+        curl_easy_getinfo(transfer->easy, CURLINFO_RETRY_AFTER, &retry_after) == CURLE_OK &&
+        retry_after >= 0)
+        transfer->resp->retry_after_seconds = (int64_t)retry_after;
+#endif
+
+    const char* host = bx_fetch_prepared_url_host(transfer->resp->effective_target);
+    bool provider = transfer->engine->cfg->http.provider_rate_limits ||
+        (host && (strcmp(host, "api.github.com") == 0 || strcmp(host, "gitlab.com") == 0));
+    if (transfer->resp->status_code == 429 || (provider && transfer->resp->status_code == 403)) {
+        int64_t now = (int64_t)time(NULL);
+        const char* remaining[] = {"X-RateLimit-Remaining", "RateLimit-Remaining"};
+        const char* reset[] = {"X-RateLimit-Reset", "RateLimit-Reset"};
+        for (size_t i = 0; i < 2; i++) {
+            int64_t epoch = bx_fetch_rate_limit_reset(
+                bx_fetch_response_header_value(transfer->resp, remaining[i]),
+                bx_fetch_response_header_value(transfer->resp, reset[i]), now);
+            if (epoch < 0)
+                continue;
+            transfer->resp->rate_limited = true;
+            if (epoch > transfer->resp->rate_limit_reset)
+                transfer->resp->rate_limit_reset = epoch;
+            if (epoch - now > transfer->resp->retry_after_seconds)
+                transfer->resp->retry_after_seconds = epoch - now;
+        }
+    }
 
     char* content_type = NULL;
     if (curl_easy_getinfo(transfer->easy, CURLINFO_CONTENT_TYPE, &content_type) == CURLE_OK && content_type) {
@@ -1171,7 +1252,13 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     free(transfer->resp->transport_error_detail);
     transfer->resp->transport_error_detail = NULL;
     const char* detail = NULL;
-    if (transfer->anubis_error_detail) {
+    if (transfer->time_budget_exhausted) {
+        detail = "invocation time budget exhausted";
+    }
+    else if (transfer->request_budget_exhausted) {
+        detail = "invocation request budget exhausted";
+    }
+    else if (transfer->anubis_error_detail) {
         detail = transfer->anubis_error_detail;
     }
     else if (transfer->redirect_target_policy != BX_FETCH_NET_TARGET_ALLOWED) {
@@ -1179,6 +1266,14 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     }
     else if (transfer->url_canonicalization_failed) {
         detail = transfer->redirect_protocol_unsupported ? "redirect URL uses an unsupported protocol" : "effective or redirect URL failed canonicalization";
+    }
+    else if (transfer->response_limit_exceeded) {
+        detail = "response exceeds the configured byte limit";
+    }
+    else if (transfer->representation_failed) {
+        detail = transfer->engine->cfg->download.text_document
+            ? "response is not a supported text document; raw output must be explicitly requested"
+            : "response does not match the expected JSON or archive representation";
     }
     else if (transfer->transform_failed) {
         detail = "failed to convert the HTML response to Markdown";
@@ -1193,6 +1288,16 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
 static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode curl_result, int status, bool invariant_ok) {
     if (!invariant_ok)
         return BX_FETCH_ERROR_INTERNAL;
+    if (transfer->time_budget_exhausted)
+        return BX_FETCH_ERROR_TIME_BUDGET;
+    if (transfer->request_budget_exhausted)
+        return BX_FETCH_ERROR_REQUEST_BUDGET;
+    if (transfer->representation_failed)
+        return BX_FETCH_ERROR_UNSUPPORTED;
+    if (transfer->response_limit_exceeded)
+        return BX_FETCH_ERROR_RESOURCE_LIMIT;
+    if (transfer->resp->rate_limited && curl_result == CURLE_OK)
+        return BX_FETCH_ERROR_RATE_LIMIT;
     if (transfer->resp->header_policy_failure != BX_FETCH_RESPONSE_HEADER_POLICY_OK) {
         return BX_FETCH_ERROR_RESOURCE_LIMIT;
     }
@@ -1226,7 +1331,8 @@ static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode
 }
 
 static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURLcode curl_result) {
-    bool transport_succeeded = curl_result == CURLE_OK && !transfer->url_canonicalization_failed;
+    bool transport_succeeded = bx_fetch_request_budget_check(transfer) && curl_result == CURLE_OK && !transfer->url_canonicalization_failed &&
+        !transfer->io_failed && !transfer->representation_failed && !transfer->transform_failed;
     BxFetchResponsePayload payload = bx_fetch_response_payload(transfer->resp, bx_fetch_request_target(transfer->req));
     bool ftp = transfer_uses_ftp(transfer);
     bool commit = false;
@@ -1268,7 +1374,15 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
         engine->invariant_failed = true;
         commit = false;
     }
-    if (commit && engine->cfg->download.html_to_markdown && !write_markdown_response(transfer))
+    if (commit && !bx_fetch_representation_matches(engine->cfg->download.expected_representation,
+            bx_fetch_response_header_value(transfer->resp, "Content-Type"),
+            transfer->representation_prefix, transfer->representation_prefix_len)) {
+        transfer->representation_failed = true;
+        commit = false;
+    }
+    if (commit && (transfer->convert_html || (ftp && engine->cfg->download.html_to_markdown)) && !write_markdown_response(transfer))
+        commit = false;
+    if (commit && !bx_fetch_request_budget_check(transfer))
         commit = false;
 
     if (transport_succeeded && payload == BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED) {
@@ -1316,17 +1430,14 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         bx_fetch_progress_emit(transfer, total, true);
     }
 
-    if (message->data.result == CURLE_OK) {
+    if (message->data.result == CURLE_OK && bx_fetch_request_budget_check(transfer)) {
         if (transfer->anubis_probe_active) {
             BxFetchAnubisProbeResult probe_result =
                 probe_anubis(transfer, true);
             if (probe_result == BX_FETCH_ANUBIS_PROBE_NO_MATCH) {
                 transfer->anubis_probe_active = false;
-                if (!write_response_bytes(transfer,
-                                          transfer->anubis_probe,
-                                          transfer->anubis_probe_len)) {
-                    invariant_ok = false;
-                }
+                (void)write_response_bytes(transfer, transfer->anubis_probe,
+                                           transfer->anubis_probe_len);
                 transfer->anubis_probe_len = 0;
             }
         }
@@ -1343,8 +1454,11 @@ static bool finish_completed_message(BxFetchEngine* engine, const struct CURLMsg
         }
     }
 
+    if (message->data.result == CURLE_OK && bx_fetch_request_budget_check(transfer) && bx_fetch_spider_retry_get(transfer, status))
+        return true;
+
     CURLcode terminal_result =
-        transfer->downstream_closed ? CURLE_OK : message->data.result;
+        transfer->downstream_closed || transfer->spider_verified ? CURLE_OK : message->data.result;
     if (!finish_writer(engine, transfer, terminal_result))
         invariant_ok = false;
     populate_terminal_response(transfer, terminal_result);
@@ -1367,6 +1481,15 @@ int bx_fetch_engine_run(BxFetchEngine* engine) {
         return engine->invariant_failed ? -1 : 0;
     if (engine->cancelled) {
         fail_active_transfers(engine, BX_FETCH_ERROR_CANCELLED);
+        return 0;
+    }
+    if (bx_fetch_engine_time_exhausted(engine)) {
+        while (engine->active_head) {
+            BxFetchTransfer* transfer = engine->active_head;
+            transfer->time_budget_exhausted = true;
+            populate_terminal_response(transfer, CURLE_OPERATION_TIMEDOUT);
+            bx_fetch_engine_dispose_transfer(engine, transfer, BX_FETCH_ERROR_TIME_BUDGET);
+        }
         return 0;
     }
 

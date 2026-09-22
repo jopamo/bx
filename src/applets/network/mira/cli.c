@@ -360,10 +360,17 @@ static int mira_validate_config(struct bx_fetch_config* config, const MiraOption
     } while (0)
 
 struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
-    struct bx_fetch_config* config = bx_fetch_config_new();
+    struct bx_fetch_config* config = bx_mira_config_new();
     if (!config)
         return NULL;
     config->download.metadata_sidecars = true;
+    bool reading = argc > 1 && strcmp(argv[1], "read") == 0;
+    if (reading) {
+        argc--;
+        argv++;
+        if (bx_mira_apply_read_preset(config) != 0)
+            goto allocation_failure;
+    }
 
     MiraTimeoutPresence timeout_presence = {0};
     MiraOptionPresence presence = {0};
@@ -381,6 +388,23 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         }
 
         switch (option) {
+            case MIRA_OPT_RAW:
+                if (!reading) {
+                    bx_mira_emit_parse_error(config, "--raw is only valid with read");
+                    goto parse_failure;
+                }
+                config->download.text_document = false;
+                break;
+            case MIRA_OPT_EXPECT:
+                if (strcmp(optarg, "json") == 0)
+                    config->download.expected_representation = BX_FETCH_EXPECT_JSON;
+                else if (strcmp(optarg, "archive") == 0)
+                    config->download.expected_representation = BX_FETCH_EXPECT_ARCHIVE;
+                else {
+                    bx_mira_emit_parse_error(config, "--expect requires json or archive");
+                    goto parse_failure;
+                }
+                break;
             case 'V':
                 config->startup.show_version = true;
                 break;
@@ -455,7 +479,16 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             }
             case 't':
-                MIRA_PARSE_INT(config->download.tries, 0, "tries");
+                MIRA_PARSE_INT(config->download.tries, 1, "tries");
+                break;
+            case MIRA_OPT_NO_RETRY:
+                config->download.tries = 1;
+                break;
+            case MIRA_OPT_MAX_RETRY_TIME:
+                MIRA_PARSE_INT(config->download.max_retry_time, 1, "max-retry-time");
+                break;
+            case MIRA_OPT_MAX_REQUESTS:
+                MIRA_PARSE_INT(config->download.max_requests, 1, "max-requests");
                 break;
             case MIRA_OPT_RETRY_CONNREFUSED:
                 config->download.retry_connrefused = true;
@@ -858,6 +891,15 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
         goto parse_failure;
     }
     errno = 0;
+    if (reading && (config->startup.show_help || config->startup.show_version))
+        return config;
+    if (reading && (!config->download.output_document || strcmp(config->download.output_document, "-") != 0 ||
+                    config->download.spider || config->download.continue_download || config->download.timestamping ||
+                    config->http.save_headers || config->http.method || config->http.post_data || config->http.post_file ||
+                    config->https.no_check_certificate || config->download.html_to_markdown)) {
+        bx_mira_emit_parse_error(config, "read requires a verified HTTPS body download to stdout without request bodies, saved headers, or forced conversion");
+        goto parse_failure;
+    }
     if (mira_validate_config(config, &presence) != 0) {
         if (errno == ENOMEM)
             goto allocation_failure;

@@ -1,6 +1,19 @@
 #include "debug_trace.h"
 #include <inttypes.h>
 
+const char* bx_mira_recovery_reason(BxFetchRecoveryReason reason) {
+    switch (reason) {
+        case BX_FETCH_RECOVERY_SUCCESS: return "success";
+        case BX_FETCH_RECOVERY_RETRY: return "retry-scheduled";
+        case BX_FETCH_RECOVERY_ATTEMPTS_EXHAUSTED: return "attempt-limit";
+        case BX_FETCH_RECOVERY_TIME_EXHAUSTED: return "retry-time-limit";
+        case BX_FETCH_RECOVERY_REQUESTS_EXHAUSTED: return "request-limit";
+        case BX_FETCH_RECOVERY_SCHEDULER_STOPPED: return "scheduler-stopped";
+        case BX_FETCH_RECOVERY_TERMINAL: return "terminal";
+    }
+    return "terminal";
+}
+
 void bx_mira_json_write_string(FILE* stream, const char* value) {
     fputc('"', stream);
     for (const unsigned char* cursor = (const unsigned char*)value; *cursor; cursor++) {
@@ -164,6 +177,12 @@ static const char* mira_transfer_result_reason(BxFetchError result) {
             return "unsupported";
         case BX_FETCH_ERROR_RESOURCE_LIMIT:
             return "resource-limit";
+        case BX_FETCH_ERROR_REQUEST_BUDGET:
+            return "request-limit";
+        case BX_FETCH_ERROR_TIME_BUDGET:
+            return "time-limit";
+        case BX_FETCH_ERROR_RATE_LIMIT:
+            return "rate-limit";
         case BX_FETCH_ERROR_CANCELLED:
             return "cancelled";
         case BX_FETCH_OK:
@@ -219,10 +238,9 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
     BxFetchProtocol protocol = bx_fetch_response_protocol(response, bx_fetch_request_target(transfer->request));
     const char* method = config->download.spider &&
                                  (protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS)
-                             ? "HEAD"
+                             ? (response && response->used_spider_get ? "GET" : "HEAD")
                              : transfer->request->method;
     int status = response ? response->status_code : 0;
-    int reported_max_attempts = completion->retry_scheduled ? completion->max_attempts : completion->attempt;
     BxFetchOutputState output_state = response ? response->output_state : BX_FETCH_OUTPUT_STATE_NONE;
     bool committed = !config->download.spider &&
                      (output_state == BX_FETCH_OUTPUT_STATE_COMMITTED ||
@@ -249,6 +267,10 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
     bx_mira_json_write_string(trace->stream, method);
     fputs(",\"user_agent\":", trace->stream);
     bx_mira_json_write_string(trace->stream, config->http.user_agent ? config->http.user_agent : "");
+    fputs(",\"recovery_reason\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, bx_mira_recovery_reason(completion->recovery.reason));
+    fprintf(trace->stream, ",\"request_count\":%" PRIu64 ",\"elapsed_ms\":%" PRIu64,
+            response ? response->request_count : 0, response ? response->elapsed_ms : 0);
     fprintf(trace->stream,
             ",\"bearer_configured\":%s,\"http_credentials_configured\":%s,"
             "\"generic_credentials_configured\":%s,\"url_credentials_present\":%s,"
@@ -267,7 +289,7 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
             config->https.no_check_certificate ? "false" : "true",
             config->download.continue_download ? "true" : "false",
             config->http.header_count,
-            (int)transfer->result, completion->attempt, reported_max_attempts,
+            (int)transfer->result, completion->attempt, completion->max_attempts,
             completion->retry_scheduled ? "true" : "false");
 
     if (completion->retry_scheduled) {

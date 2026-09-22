@@ -27,7 +27,12 @@ static const char* mira_category_heading(MiraOptionCategory category) {
 void bx_mira_print_help(void) {
     fputs(
         "Usage: mira [OPTION]... [URL]...\n"
+        "       mira read URL [--raw]\n"
+        "       mira --spider URL\n"
+        "       mira -O FILE URL\n"
         "       mira github COMMAND [ARGUMENT]...\n"
+        "       mira github tree OWNER/REPO REF [--recursive]\n"
+        "       mira gitlab raw PROJECT REF PATH\n"
         "Native bx fetch/crawler frontend over the shared fetch core.\n"
         "Only listed supported behavior is accepted; no configuration files "
         "are loaded. Use `mira github --help` for native GitHub API access.\n",
@@ -62,6 +67,23 @@ void bx_mira_print_help(void) {
     }
 
     fputs(
+        "\nRecovery: GET/HEAD requests without upload bodies retry transient transport "
+        "failures and HTTP 408/425/429/500/502/503/504. Provider 403s retry only with "
+        "explicit exhausted-rate-limit/reset evidence. Authentication and ordinary "
+        "permission failures are terminal. --retry-on-http-error replaces the default status list. "
+        "--no-retry makes one attempt; --max-attempts includes the first request. "
+        "--max-retry-time defaults to 120 seconds across transport work and waits "
+        "(30 seconds for read). Expired responses are not published. Retry-After "
+        "is never shortened to fit the budget. --max-requests defaults to 64, "
+        "shared across attempts, redirects, and internal requests.\n"
+        "read requires verified HTTPS, stages stdout, converts HTML to Markdown, "
+        "and preserves text/JSON/XML. Missing or unsupported MIME types and NUL "
+        "bytes fail unless --raw is explicit. read takes one URL.\n"
+        "Spider starts with HEAD; on 405/501 it tries a ranged GET and stops after "
+        "successful headers, even if the server ignores Range.\n"
+        "Stdout is staged privately up to 64 MiB and emitted only after a complete "
+        "successful transfer and conversion. Larger documents must use -O FILE. "
+        "Once stdout publication starts it cannot be rolled back or retried.\n"
         "\n--http-password-file keeps HTTP passwords out of process arguments. "
         "It requires verified HTTPS for every URL and redirect and conflicts with "
         "--http-password, Bearer authentication, and --no-check-certificate. "

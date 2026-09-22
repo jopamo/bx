@@ -43,6 +43,10 @@ typedef struct BxFetchTransfer {
     bool io_failed;
     bool downstream_closed;
     bool request_body_io_failed;
+    bool request_budget_exhausted;
+    bool time_budget_exhausted;
+    bool spider_get;
+    bool spider_verified;
     int io_error_number;
     curl_off_t response_body_bytes;
     size_t response_header_bytes;
@@ -50,6 +54,11 @@ typedef struct BxFetchTransfer {
     size_t transform_source_len;
     size_t transform_source_cap;
     bool transform_failed;
+    bool convert_html;
+    bool representation_failed;
+    char representation_prefix[512];
+    size_t representation_prefix_len;
+    bool response_limit_exceeded;
 
     bool save_headers_written;
     char* save_headers_buf;

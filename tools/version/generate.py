@@ -73,7 +73,16 @@ def checkout_version(source_root: Path) -> Optional[str]:
     match = GIT_METADATA_RE.fullmatch(metadata.stdout.strip())
     if match is None:
         return None
-    return normalize_version(match.group(1), match.group(2))
+    status = subprocess.run(
+        [git, "-C", str(source_root), "status", "--porcelain", "--untracked-files=normal"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if status.returncode != 0:
+        return None
+    return normalize_version(match.group(1), match.group(2)) + ("-dirty" if status.stdout else "")
 
 
 def main() -> int:
