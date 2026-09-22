@@ -3,6 +3,7 @@
 
 #include "lib/fetch/config.h"
 #include "lib/fetch/url.h"
+#include <curl/curl.h>
 
 typedef enum {
     BX_FETCH_CREDENTIAL_SOURCE_NONE = 0,
@@ -37,5 +38,8 @@ const char* bx_fetch_net_proxy_environment_url(BxFetchProtocol protocol);
  * when userinfo is present but the proxy URL cannot be represented safely.
  */
 int bx_fetch_net_sanitize_proxy_url_for_explicit_credentials(const char* proxy_url, char** sanitized_out);
+/* Stored cookies use domain/path matching, not origin matching. Discard them
+ * before crossing an origin boundary, after all response headers arrive. */
+int bx_fetch_net_scope_cookies(CURL* easy, const BxFetchPreparedUrl* from, const BxFetchPreparedUrl* to);
 
 #endif

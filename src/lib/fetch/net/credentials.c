@@ -1,9 +1,24 @@
 #include "credentials.h"
 #include "lib/fetch/url.h"
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+int bx_fetch_net_scope_cookies(CURL* easy, const BxFetchPreparedUrl* from, const BxFetchPreparedUrl* to) {
+    if (!easy || !from || !to) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (bx_fetch_prepared_url_same_origin(from, to))
+        return 0;
+    if (curl_easy_setopt(easy, CURLOPT_COOKIELIST, "ALL") != CURLE_OK) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
 
 static bool pair_is_configured(const char* username, const char* password) {
     return username != NULL || password != NULL;

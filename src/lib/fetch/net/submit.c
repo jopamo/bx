@@ -320,8 +320,8 @@ static int setup_easy_handle(BxFetchEngine* engine, BxFetchTransfer* t, BxFetchN
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_POSTREDIR, postredir);
 
     /*
-     * Redirect credentials are always scoped to the initial origin. Libcurl
-     * defines an origin change as a change in scheme, host, or port.
+     * Libcurl scopes HTTP authentication to the initial scheme/host/port.
+     * Stored-cookie isolation is enforced separately at redirect boundaries.
      */
     SETOPT_OR_RETURN(curl, setup_error, CURLOPT_UNRESTRICTED_AUTH, 0L);
 

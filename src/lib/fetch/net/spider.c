@@ -1,4 +1,5 @@
 #include "engine_internal.h"
+#include "credentials.h"
 #include "lib/fetch/recovery.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -15,6 +16,12 @@ bool bx_fetch_spider_retry_get(BxFetchTransfer* transfer, int status) {
         bx_fetch_prepared_url_free(target);
         errno = ENOMEM;
         bx_fetch_transfer_mark_io_failure(transfer, ENOMEM);
+        return false;
+    }
+    if (!engine->cfg->http.no_cookies && bx_fetch_net_scope_cookies(transfer->easy, transfer->current_target, target) != 0) {
+        bx_fetch_response_free(response);
+        bx_fetch_prepared_url_free(target);
+        bx_fetch_transfer_mark_io_failure(transfer, EIO);
         return false;
     }
     if (curl_multi_remove_handle(engine->multi, transfer->easy) != CURLM_OK) {
