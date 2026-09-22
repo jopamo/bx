@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "engine_internal.h"
+#include "lib/fetch/html.h"
 #include "lib/fetch/resume_validation.h"
 #include "lib/fetch/url.h"
 #include "lib/time_parse.h"
@@ -181,10 +182,50 @@ static void reset_response_state(BxFetchTransfer* transfer) {
     transfer->discard_body = false;
     transfer->resume_restart_validation_pending = false;
     transfer->response_body_bytes = 0;
+    transfer->transform_source_len = 0;
+    transfer->transform_failed = false;
     transfer->progress = (BxFetchProgressSample){.generation = transfer->progress.generation + 1};
     transfer->progress_emitted = false;
     transfer->response_headers_finalized = false;
     transfer->anubis_refresh_detected = false;
+}
+
+static bool buffer_transform_source(BxFetchTransfer* transfer, const char* data, size_t length) {
+    if (!transfer || (!data && length > 0)) {
+        errno = EINVAL;
+        return false;
+    }
+    if (length > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES - transfer->transform_source_len) {
+        errno = EFBIG;
+        transfer->transform_failed = true;
+        bx_fetch_transfer_mark_io_failure(transfer, EFBIG);
+        return false;
+    }
+
+    size_t needed = transfer->transform_source_len + length;
+    if (needed > transfer->transform_source_cap) {
+        size_t capacity = transfer->transform_source_cap ? transfer->transform_source_cap : 16384u;
+        while (capacity < needed) {
+            size_t next = capacity * 2u;
+            if (next <= capacity || next > BX_FETCH_DOCUMENT_PARSE_MAX_BYTES) {
+                capacity = BX_FETCH_DOCUMENT_PARSE_MAX_BYTES;
+                break;
+            }
+            capacity = next;
+        }
+        char* grown = realloc(transfer->transform_source, capacity);
+        if (!grown) {
+            transfer->transform_failed = true;
+            bx_fetch_transfer_mark_io_failure(transfer, ENOMEM);
+            return false;
+        }
+        transfer->transform_source = grown;
+        transfer->transform_source_cap = capacity;
+    }
+    if (length > 0)
+        memcpy(transfer->transform_source + transfer->transform_source_len, data, length);
+    transfer->transform_source_len += length;
+    return true;
 }
 
 static bool anubis_probe_eligible(const BxFetchTransfer* transfer) {
@@ -251,7 +292,11 @@ static bool write_response_bytes(BxFetchTransfer* transfer,
         }
         transfer->save_headers_written = true;
     }
-    if (length > 0) {
+    if (length > 0 && transfer->engine->cfg->download.html_to_markdown) {
+        if (!buffer_transform_source(transfer, data, length))
+            return false;
+    }
+    else if (length > 0) {
         BxFetchWriterWriteResult result =
             bx_fetch_writer_write(transfer->writer, data, length);
         if (result == BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED) {
@@ -263,6 +308,43 @@ static bool write_response_bytes(BxFetchTransfer* transfer,
             bx_fetch_transfer_mark_io_failure(transfer, EIO);
             return false;
         }
+    }
+    return true;
+}
+
+static bool write_markdown_response(BxFetchTransfer* transfer) {
+    if (!transfer || !transfer->writer) {
+        errno = EINVAL;
+        return false;
+    }
+    const BxFetchPreparedUrl* effective = bx_fetch_response_effective_target(transfer->resp);
+    if (!effective)
+        effective = bx_fetch_request_target(transfer->req);
+    const char* base_url = effective ? bx_fetch_prepared_url_transport(effective) : NULL;
+    size_t markdown_length = 0;
+    char* markdown = bx_fetch_html_to_markdown(base_url,
+                                               transfer->transform_source ? transfer->transform_source : "",
+                                               transfer->transform_source_len,
+                                               &markdown_length);
+    if (!markdown) {
+        transfer->transform_failed = true;
+        bx_fetch_transfer_mark_io_failure(transfer, errno ? errno : EINVAL);
+        return false;
+    }
+
+    BxFetchWriterWriteResult result = bx_fetch_writer_write(transfer->writer, markdown, markdown_length);
+    int error_number = errno;
+    free(markdown);
+    if (result == BX_FETCH_WRITER_WRITE_DOWNSTREAM_CLOSED) {
+        transfer->downstream_closed = true;
+        errno = 0;
+        return true;
+    }
+    if (result != BX_FETCH_WRITER_WRITE_OK) {
+        errno = error_number ? error_number : EIO;
+        transfer->transform_failed = true;
+        bx_fetch_transfer_mark_io_failure(transfer, error_number ? error_number : EIO);
+        return false;
     }
     return true;
 }
@@ -1098,6 +1180,9 @@ static void populate_terminal_response(BxFetchTransfer* transfer, CURLcode curl_
     else if (transfer->url_canonicalization_failed) {
         detail = transfer->redirect_protocol_unsupported ? "redirect URL uses an unsupported protocol" : "effective or redirect URL failed canonicalization";
     }
+    else if (transfer->transform_failed) {
+        detail = "failed to convert the HTML response to Markdown";
+    }
     else if (curl_result != CURLE_OK) {
         detail = curl_easy_strerror(curl_result);
     }
@@ -1119,6 +1204,13 @@ static BxFetchError classify_terminal_result(BxFetchTransfer* transfer, CURLcode
         return BX_FETCH_ERROR_UNSUPPORTED;
     if (transfer->redirect_policy_rejected)
         return BX_FETCH_ERROR_CANCELLED;
+    if (transfer->transform_failed) {
+        if (transfer->io_error_number == EFBIG)
+            return BX_FETCH_ERROR_RESOURCE_LIMIT;
+        if (transfer->io_error_number == ENOMEM)
+            return BX_FETCH_ERROR_MEMORY;
+        return BX_FETCH_ERROR_UNSUPPORTED;
+    }
     if (transfer->io_failed)
         return BX_FETCH_ERROR_IO;
     if (transfer->resume_validation_failed)
@@ -1176,6 +1268,8 @@ static bool finish_writer(BxFetchEngine* engine, BxFetchTransfer* transfer, CURL
         engine->invariant_failed = true;
         commit = false;
     }
+    if (commit && engine->cfg->download.html_to_markdown && !write_markdown_response(transfer))
+        commit = false;
 
     if (transport_succeeded && payload == BX_FETCH_RESPONSE_PAYLOAD_NOT_MODIFIED) {
         if (bx_fetch_transfer_close_writer_metadata_only(transfer) != 0)

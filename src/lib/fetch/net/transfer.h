@@ -46,6 +46,10 @@ typedef struct BxFetchTransfer {
     int io_error_number;
     curl_off_t response_body_bytes;
     size_t response_header_bytes;
+    char* transform_source;
+    size_t transform_source_len;
+    size_t transform_source_cap;
+    bool transform_failed;
 
     bool save_headers_written;
     char* save_headers_buf;

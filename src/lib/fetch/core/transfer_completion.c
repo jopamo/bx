@@ -86,7 +86,8 @@ int bx_fetch_transfer_stage_response(const struct bx_fetch_config* cfg, const Bx
 
     if (cfg->download.xattr) {
         const char* request_url = bx_fetch_request_url_for_display(request);
-        const char* content_type = response->content_type ? response->content_type : bx_fetch_response_header_value(response, "Content-Type");
+        const char* content_type =
+            cfg->download.html_to_markdown ? "text/markdown; charset=UTF-8" : (response->content_type ? response->content_type : bx_fetch_response_header_value(response, "Content-Type"));
         int xattr_result = bx_fetch_writer_stage_xattrs(writer, request_url, content_type, bx_fetch_response_header_value(response, "ETag"), last_modified);
         if (xattr_result != BX_FETCH_XATTR_OK) {
             if (xattr_result == BX_FETCH_XATTR_UNSUPPORTED)
@@ -159,6 +160,7 @@ bool bx_fetch_transfer_retryable_hint(const struct bx_fetch_config* cfg, const B
             return retryable_io_error_number(error_number);
         case BX_FETCH_ERROR_MEMORY:
         case BX_FETCH_ERROR_INVALID_ARGUMENT:
+        case BX_FETCH_ERROR_UNSUPPORTED:
         case BX_FETCH_ERROR_RESOURCE_LIMIT:
         case BX_FETCH_ERROR_INTERNAL:
             return false;

@@ -3,6 +3,7 @@
 #include "options.h"
 #include "lib/fetch/credential_file.h"
 #include "lib/fetch/error.h"
+#include "lib/fetch/html.h"
 #include "lib/fetch/http_header.h"
 #include "lib/fetch/http_status.h"
 #include "lib/fetch/regex.h"
@@ -305,6 +306,23 @@ static int mira_validate_config(struct bx_fetch_config* config, const MiraOption
         errno = EINVAL;
         return -1;
     }
+    if (config->download.html_to_markdown) {
+        if (!bx_fetch_html_markdown_supported()) {
+            bx_mira_emit_parse_error(config, "--markdown requires a build with Lexbor support");
+            errno = ENOTSUP;
+            return -1;
+        }
+        if (config->download.continue_download || config->http.save_headers) {
+            bx_mira_emit_parse_error(config, "--markdown conflicts with resume and saved-header output");
+            errno = EINVAL;
+            return -1;
+        }
+        if (config->download.spider || config->recursive.recursive || config->recursive.page_requisites || config->recursive.convert_links) {
+            bx_mira_emit_parse_error(config, "--markdown requires a non-recursive body download");
+            errno = EINVAL;
+            return -1;
+        }
+    }
     if (config->http.no_cookies) {
         free(config->http.load_cookies);
         free(config->http.save_cookies);
@@ -591,6 +609,9 @@ struct bx_fetch_config* bx_mira_parse_cli(int argc, char** argv) {
                 break;
             case MIRA_OPT_XATTR:
                 config->download.xattr = true;
+                break;
+            case MIRA_OPT_MARKDOWN:
+                config->download.html_to_markdown = true;
                 break;
             case MIRA_OPT_NO_DIRECTORIES:
                 config->dirs.no_directories = true;

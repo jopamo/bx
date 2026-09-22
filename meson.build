@@ -1507,6 +1507,17 @@ endif
 
 bx_include_dirs = include_directories('src', 'src/dispatch', 'src/applets/base/bc/include')
 
+bx_markdown_lib = static_library(
+  'bx_markdown',
+  files('src/lib/markdown/writer.c'),
+  include_directories : bx_include_dirs,
+)
+
+bx_markdown_dep = declare_dependency(
+  link_with : bx_markdown_lib,
+  include_directories : bx_include_dirs,
+)
+
 bx_fetch_core_sources = files(
   'src/lib/fetch/config.c',
   'src/lib/fetch/input.c',
@@ -1529,6 +1540,9 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/fs/credential_file.c',
   'src/lib/fetch/fs/writer.c',
   'src/lib/fetch/fs/xattr.c',
+  'src/lib/fetch/html/lore_markdown.c',
+  'src/lib/fetch/html/markdown.c',
+  'src/lib/fetch/html/site_markdown.c',
   'src/lib/fetch/html/parser.c',
   'src/lib/fetch/net/credentials.c',
   'src/lib/fetch/net/anubis.c',
@@ -1551,7 +1565,7 @@ bx_fetch_core_sources = files(
   'src/lib/fetch/util/timestamp_policy.c',
 )
 
-bx_fetch_core_deps = [libcurl_dep]
+bx_fetch_core_deps = [libcurl_dep, bx_markdown_dep]
 bx_fetch_core_c_args = ['-DHAVE_LEXBOR=0']
 if fetch_lexbor_dep.found()
   bx_fetch_core_deps += [fetch_lexbor_dep]

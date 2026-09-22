@@ -93,6 +93,7 @@ typedef struct {
     bool unlink;
     bool xattr;
     bool metadata_sidecars;
+    bool html_to_markdown;
 } BxFetchDownloadConfig;
 
 typedef struct {

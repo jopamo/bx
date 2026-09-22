@@ -59,6 +59,7 @@ void bx_fetch_transfer_free(BxFetchTransfer* t) {
     }
 
     free(t->save_headers_buf);
+    free(t->transform_source);
     free(t->anubis_probe);
     bx_fetch_prepared_url_free(t->anubis_retry_target);
     bx_fetch_prepared_url_free(t->current_target);

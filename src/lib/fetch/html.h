@@ -54,6 +54,10 @@ int bx_fetch_html_extract_links(const char* base_url, const char* html_data, siz
 int bx_fetch_html_extract_links_typed(const char* base_url, const char* html_data, size_t len, BxFetchHtmlLinkCallback cb, void* userdata);
 /* Returned document is heap-allocated and must be freed by the caller. */
 char* bx_fetch_html_convert_links(const char* base_url, const char* html_data, size_t len, BxFetchLinkRewriteCallback cb, void* userdata);
+/* Converts one complete HTML document to bounded UTF-8 Markdown. */
+char* bx_fetch_html_to_markdown(const char* base_url, const char* html_data, size_t len, size_t* output_len);
+/* False when bx was built without the Lexbor DOM parser. */
+int bx_fetch_html_markdown_supported(void);
 /* `base_url` is reserved for API compatibility; current extraction is lexical. */
 int bx_fetch_css_extract_links(const char* base_url, const char* css_data, size_t len, BxFetchLinkCallback cb, void* userdata);
 
