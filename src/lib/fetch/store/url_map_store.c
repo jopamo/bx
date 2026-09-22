@@ -260,7 +260,7 @@ static int cleanup_orphan_temp_files(int dirfd, const char* basename, bool* remo
         return -1;
     }
 
-    int scan_fd = dup(dirfd);
+    int scan_fd = bx_fd_dup_cloexec(dirfd);
     if (scan_fd == -1) {
         free(prefix);
         return -1;
@@ -325,7 +325,7 @@ static FILE* open_unique_tmp_file(int dirfd, const char* basename, char** tmp_na
         if (asprintf(&tmp_name, "%s.tmp.%ld.%llu.%u", basename, (long)getpid(), sequence, attempt) == -1) {
             return NULL;
         }
-        int fd = openat(dirfd, tmp_name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        int fd = bx_fd_openat_cloexec(dirfd, tmp_name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
         if (fd == -1) {
             int error_number = errno;
             free(tmp_name);

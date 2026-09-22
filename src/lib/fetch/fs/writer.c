@@ -540,8 +540,8 @@ static int write_metadata_temp_file_at(int parent_fd, const char* basename, cons
     return 0;
 }
 
-static int link_existing_entry_to_hold(int parent_fd, const char* name, char** hold_name_out) {
-    if (parent_fd == -1 || !name || !hold_name_out) {
+static int link_existing_entry_to_hold(int parent_fd, const char* name, const char* hold_basename, char** hold_name_out) {
+    if (parent_fd == -1 || !name || !hold_basename || !hold_name_out) {
         errno = EINVAL;
         return -1;
     }
@@ -562,7 +562,7 @@ static int link_existing_entry_to_hold(int parent_fd, const char* name, char** h
     for (unsigned long long attempt = 0; attempt < 128; attempt++) {
         char* hold_name = NULL;
         unsigned long long serial = (((unsigned long long)getpid()) << 32) | (hold_counter++);
-        if (asprintf(&hold_name, "%s.mira.hold.%016llx%02llx", name, serial, attempt) == -1) {
+        if (asprintf(&hold_name, "%s.mira.hold.%016llx%02llx", hold_basename, serial, attempt) == -1) {
             hold_name = NULL;
         }
         if (!hold_name)
@@ -663,7 +663,7 @@ static int prune_excess_backups_at(int parent_fd, const char* basename, int back
         return -1;
     }
 
-    int scan_fd = dup(parent_fd);
+    int scan_fd = bx_fd_dup_cloexec(parent_fd);
     if (scan_fd == -1)
         return -1;
 
@@ -1236,6 +1236,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
     char* sidecar_temp_name = NULL;
     char* payload_hold_name = NULL;
     char* sidecar_hold_name = NULL;
+    char* sidecar_guard_name = NULL;
     bool sidecar_committed = false;
     struct stat sidecar_candidate_stat = {0};
     bool have_sidecar_candidate_stat = false;
@@ -1273,7 +1274,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (!w->exclusive_final_path && link_existing_entry_to_hold(w->parent_fd, w->basename, &payload_hold_name) != 0) {
+        if (!w->exclusive_final_path && link_existing_entry_to_hold(w->parent_fd, w->basename, w->basename, &payload_hold_name) != 0) {
             int error_number = errno;
             free(sidecar_name);
             cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
@@ -1297,7 +1298,7 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (!w->exclusive_final_path && sidecar_name && link_existing_entry_to_hold(w->parent_fd, sidecar_name, &sidecar_hold_name) != 0) {
+        if (!w->exclusive_final_path && sidecar_name && link_existing_entry_to_hold(w->parent_fd, sidecar_name, sidecar_name, &sidecar_hold_name) != 0) {
             int error_number = errno;
             cleanup_temp_entry(w->parent_fd, &payload_hold_name);
             free(sidecar_name);
@@ -1331,10 +1332,21 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
                 return -1;
             }
 
-            int sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
+            /* Metadata readers reject multiply linked sidecars. Keep that
+             * guard through payload publication and its directory sync. */
+            int guard_rc = link_existing_entry_to_hold(w->parent_fd, sidecar_temp_name, sidecar_name, &sidecar_guard_name);
+            if (guard_rc == 0 && !sidecar_guard_name) {
+                errno = ENOENT;
+                guard_rc = -1;
+            }
+            int sidecar_rename_rc = -1;
+            if (guard_rc == 0) {
+                sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
                                                             : bx_fd_renameat_child(w->parent_fd, sidecar_temp_name, w->parent_fd, sidecar_name);
+            }
             if (sidecar_rename_rc != 0) {
                 int error_number = errno;
+                cleanup_temp_entry(w->parent_fd, &sidecar_guard_name);
                 cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
                 cleanup_temp_entry(w->parent_fd, &payload_hold_name);
                 free(sidecar_name);
@@ -1385,6 +1397,15 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             else {
                 cleanup_temp_entry(w->parent_fd, &sidecar_hold_name);
             }
+            if (sidecar_guard_name) {
+                struct stat current;
+                int stat_rc = bx_fd_fstatat_nofollow(w->parent_fd, sidecar_name, &current);
+                if ((stat_rc != 0 && errno == ENOENT) || (stat_rc == 0 && (current.st_dev != sidecar_candidate_stat.st_dev || current.st_ino != sidecar_candidate_stat.st_ino)))
+                    cleanup_temp_entry(w->parent_fd, &sidecar_guard_name);
+                /* If removal/restoration failed, retain the guard so an
+                 * uncommitted candidate cannot supply validators. */
+                free(sidecar_guard_name);
+            }
             cleanup_temp_entry(w->parent_fd, &payload_hold_name);
             free(sidecar_name);
             cleanup_temp_entry(w->parent_fd, &w->temp_name);
@@ -1398,6 +1419,11 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
 
         if (bx_fd_fsync(w->parent_fd) == -1) {
             rc = -1;
+        }
+        if (sidecar_guard_name) {
+            if (rc == 0 && bx_fd_unlinkat_child(w->parent_fd, sidecar_guard_name, 0) != 0)
+                rc = -1;
+            free(sidecar_guard_name);
         }
 
         if (finalize_payload_hold(w->parent_fd, w->basename, w->backups, w->rotate_backups_on_commit, &payload_hold_name) != 0) {
@@ -1675,7 +1701,7 @@ int bx_fetch_writer_load_original_metadata(const BxFetchWriter* w, BxFetchMetada
     char* sidecar_name = sidecar_name_for_basename(w->basename);
     if (!sidecar_name)
         return -1;
-    int fd = openat(w->parent_fd, sidecar_name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    int fd = bx_fd_openat_cloexec(w->parent_fd, sidecar_name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK, 0);
     int open_error = errno;
     free(sidecar_name);
     if (fd == -1) {
@@ -1683,35 +1709,7 @@ int bx_fetch_writer_load_original_metadata(const BxFetchWriter* w, BxFetchMetada
         return open_error == ENOENT ? 0 : -1;
     }
 
-    struct stat st;
-    if (fstat(fd, &st) != 0) {
-        int error_number = errno;
-        close(fd);
-        errno = error_number;
-        return -1;
-    }
-    if (!S_ISREG(st.st_mode)) {
-        close(fd);
-        errno = EINVAL;
-        return -1;
-    }
-
-    FILE* stream = fdopen(fd, "r");
-    if (!stream) {
-        int error_number = errno;
-        close(fd);
-        errno = error_number;
-        return -1;
-    }
-    int result = bx_fetch_metadata_read_stream(stream, metadata);
-    int error_number = errno;
-    if (fclose(stream) != 0 && result == 0) {
-        result = -1;
-        error_number = errno;
-    }
-    if (result != 0)
-        errno = error_number;
-    return result;
+    return bx_fetch_metadata_load_fd(fd, metadata);
 }
 
 const char* bx_fetch_writer_get_path(const BxFetchWriter* w) {

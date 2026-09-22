@@ -40,6 +40,8 @@ bool bx_fetch_metadata_is_empty(const BxFetchMetadata* meta);
 int bx_fetch_metadata_write_stream(FILE* f, const BxFetchMetadata* meta);
 /* Reads bounded metadata from an already-authorized borrowed stream. */
 int bx_fetch_metadata_read_stream(FILE* f, BxFetchMetadata* meta);
+/* Consumes fd on every path; accepts only regular, singly linked sidecars. */
+int bx_fetch_metadata_load_fd(int fd, BxFetchMetadata* meta);
 int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta);
 int bx_fetch_metadata_save(const char* output_path, const BxFetchMetadata* meta);
 /*

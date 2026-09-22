@@ -203,7 +203,17 @@ int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
         return (open_error_number == ENOENT) ? 0 : -1;
     }
     free(path);
+    return bx_fetch_metadata_load_fd(fd, meta);
+}
 
+int bx_fetch_metadata_load_fd(int fd, BxFetchMetadata* meta) {
+    if (!meta) {
+        if (fd >= 0)
+            close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+    bx_fetch_metadata_clear(meta);
     struct stat sidecar_stat;
     if (fstat(fd, &sidecar_stat) != 0) {
         int validation_error_number = errno;
@@ -211,7 +221,7 @@ int bx_fetch_metadata_load(const char* output_path, BxFetchMetadata* meta) {
         errno = validation_error_number;
         return -1;
     }
-    if (!S_ISREG(sidecar_stat.st_mode) || sidecar_stat.st_nlink > 1) {
+    if (!S_ISREG(sidecar_stat.st_mode) || sidecar_stat.st_nlink != 1) {
         close(fd);
         errno = EINVAL;
         return -1;

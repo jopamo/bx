@@ -176,6 +176,8 @@ const char* bx_fetch_response_header_policy_failure_summary(BxFetchResponseHeade
             return "response header block exceeds " BX_FETCH_RESPONSE_HEADER_BLOCK_LIMIT_TEXT " limit";
         case BX_FETCH_RESPONSE_HEADER_POLICY_TOO_MANY_FIELDS:
             return "response header block exceeds " BX_FETCH_RESPONSE_HEADER_FIELD_LIMIT_TEXT " field limit";
+        case BX_FETCH_RESPONSE_HEADER_POLICY_AMBIGUOUS_REDIRECT:
+            return "response contains multiple redirect locations";
         case BX_FETCH_RESPONSE_HEADER_POLICY_OK:
         default:
             return NULL;
