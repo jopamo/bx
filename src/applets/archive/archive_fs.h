@@ -54,6 +54,7 @@ typedef bool (*bx_archive_fs_visit_fn)(const struct bx_archive_fs_visit_entry* e
 
 struct bx_archive_pending_dir {
     char* path;
+    int fd;
     mode_t mode;
     struct timespec mtime;
     bool set_mtime;
@@ -122,6 +123,10 @@ bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
                                     mode_t mode,
                                     bool set_mtime,
                                     struct timespec mtime);
+/* Borrows fd; retains a CLOEXEC duplicate for deferred metadata. */
+bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
+                                       int fd, const char* path, mode_t mode,
+                                       bool set_mtime, struct timespec mtime);
 bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
                                    struct bx_diag_ctx* diag);
 

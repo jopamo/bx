@@ -10,6 +10,7 @@
 
 #include "applets/archive/archive_fs.h"
 #include "bx/libbx.h"
+#include "lib/fd_ops.h"
 #include "lib/path_ops.h"
 
 struct bx_archive_fs_path_buf {
@@ -742,6 +743,7 @@ bool bx_archive_ensure_parent_dirs_safe(const char* path, struct bx_diag_ctx* di
 void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     size_t i;
     for (i = 0u; i < dirs->len; i++) {
+        close(dirs->entries[i].fd);
         free(dirs->entries[i].path);
     }
     free(dirs->entries);
@@ -750,12 +752,23 @@ void bx_archive_pending_dirs_free(struct bx_archive_pending_dirs* dirs) {
     dirs->cap = 0u;
 }
 
-bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
+static bool bx_archive_pending_dirs_record_owned(struct bx_archive_pending_dirs* dirs,
+                                    int fd,
                                     const char* path,
                                     mode_t mode,
                                     bool set_mtime,
                                     struct timespec mtime) {
     struct bx_archive_pending_dir* entry;
+    struct stat status;
+    if (fd < 0)
+        return false;
+    int stat_rc = fstat(fd, &status);
+    if (stat_rc != 0 || !S_ISDIR(status.st_mode)) {
+        int error = stat_rc != 0 ? errno : ENOTDIR;
+        close(fd);
+        errno = error;
+        return false;
+    }
     if (dirs->len == dirs->cap) {
         size_t next_cap = dirs->cap ? dirs->cap * 2u : 16u;
         dirs->entries = xrealloc(dirs->entries, next_cap * sizeof(*dirs->entries));
@@ -763,10 +776,24 @@ bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
     }
     entry = &dirs->entries[dirs->len++];
     entry->path = xstrdup(path);
+    entry->fd = fd;
     entry->mode = mode;
     entry->mtime = mtime;
     entry->set_mtime = set_mtime;
     return true;
+}
+
+bool bx_archive_pending_dirs_record(struct bx_archive_pending_dirs* dirs,
+                                    const char* path, mode_t mode,
+                                    bool set_mtime, struct timespec mtime) {
+    int fd = bx_fd_open_cloexec(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK, 0);
+    return bx_archive_pending_dirs_record_owned(dirs, fd, path, mode, set_mtime, mtime);
+}
+
+bool bx_archive_pending_dirs_record_fd(struct bx_archive_pending_dirs* dirs,
+                                       int fd, const char* path, mode_t mode,
+                                       bool set_mtime, struct timespec mtime) {
+    return bx_archive_pending_dirs_record_owned(dirs, bx_fd_dup_cloexec(fd), path, mode, set_mtime, mtime);
 }
 
 bool bx_archive_set_path_mtime(const char* path,
@@ -804,15 +831,18 @@ bool bx_archive_pending_dirs_apply(struct bx_archive_pending_dirs* dirs,
                                    struct bx_diag_ctx* diag) {
     while (dirs->len > 0u) {
         struct bx_archive_pending_dir* entry = &dirs->entries[dirs->len - 1u];
-        if (chmod(entry->path, entry->mode & 07777u) != 0) {
+        if (bx_fd_fchmod(entry->fd, entry->mode & 07777u) != 0) {
             bx_diag(diag, "%s: %s", entry->path, strerror(errno));
             return false;
         }
-        if (entry->set_mtime && !bx_archive_set_path_mtime(entry->path, entry->mtime, false, diag)) {
+        if (entry->set_mtime && !bx_archive_set_fd_mtime(entry->fd, entry->path, entry->mtime, diag)) {
             return false;
         }
+        bool closed = bx_fd_close(&entry->fd, entry->path, diag);
         free(entry->path);
         dirs->len--;
+        if (!closed)
+            return false;
     }
     return true;
 }
