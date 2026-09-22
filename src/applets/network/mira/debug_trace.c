@@ -214,10 +214,22 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
     const BxFetchTransferCompletion* transfer = completion->transfer;
     const BxFetchResponse* response = transfer->response;
     const char* display_url = bx_fetch_request_url_for_display(transfer->request);
+    const BxFetchPreparedUrl* effective_target = bx_fetch_response_effective_target(response);
+    const char* effective_url = effective_target ? bx_fetch_prepared_url_display(effective_target) : display_url;
+    BxFetchProtocol protocol = bx_fetch_response_protocol(response, bx_fetch_request_target(transfer->request));
+    const char* method = config->download.spider &&
+                                 (protocol == BX_FETCH_PROTOCOL_HTTP || protocol == BX_FETCH_PROTOCOL_HTTPS)
+                             ? "HEAD"
+                             : transfer->request->method;
     int status = response ? response->status_code : 0;
+    int reported_max_attempts = completion->retry_scheduled ? completion->max_attempts : completion->attempt;
     BxFetchOutputState output_state = response ? response->output_state : BX_FETCH_OUTPUT_STATE_NONE;
-    bool committed = output_state == BX_FETCH_OUTPUT_STATE_COMMITTED || output_state == BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED || output_state == BX_FETCH_OUTPUT_STATE_UNCHANGED;
-    if (config->download.metadata_sidecars && output_state == BX_FETCH_OUTPUT_STATE_COMMITTED &&
+    bool committed = !config->download.spider &&
+                     (output_state == BX_FETCH_OUTPUT_STATE_COMMITTED ||
+                      output_state == BX_FETCH_OUTPUT_STATE_METADATA_COMMITTED ||
+                      output_state == BX_FETCH_OUTPUT_STATE_UNCHANGED);
+    if (!config->download.spider && config->download.metadata_sidecars &&
+        output_state == BX_FETCH_OUTPUT_STATE_COMMITTED &&
         bx_fetch_response_payload(response, bx_fetch_request_target(transfer->request)) == BX_FETCH_RESPONSE_PAYLOAD_BODY) {
         mira_debug_trace_transfer_prefix(trace, "commit", "metadata-staged", completion->transfer_id, display_url, transfer->output_path);
         fputs("}\n", trace->stream);
@@ -231,10 +243,32 @@ void bx_mira_debug_trace_completion(MiraDebugTrace* trace, const struct bx_fetch
         fputs("null", trace->stream);
     fputs(",\"result\":", trace->stream);
     bx_mira_json_write_string(trace->stream, bx_fetch_error_string(transfer->result));
+    fputs(",\"effective_url\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, effective_url);
+    fputs(",\"method\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, method);
+    fputs(",\"user_agent\":", trace->stream);
+    bx_mira_json_write_string(trace->stream, config->http.user_agent ? config->http.user_agent : "");
     fprintf(trace->stream,
-            ",\"result_code\":%d,\"attempt\":%d,\"max_attempts\":%d,"
+            ",\"bearer_configured\":%s,\"http_credentials_configured\":%s,"
+            "\"generic_credentials_configured\":%s,\"url_credentials_present\":%s,"
+            "\"auth_preemptive\":%s,\"proxy_disabled\":%s,"
+            "\"cookies_enabled\":%s,\"tls_verification\":%s,\"resume\":%s,"
+            "\"custom_header_count\":%d,"
+            "\"result_code\":%d,\"attempt\":%d,\"max_attempts\":%d,"
             "\"retry_scheduled\":%s}\n",
-            (int)transfer->result, completion->attempt, completion->max_attempts, completion->retry_scheduled ? "true" : "false");
+            config->http.bearer_token ? "true" : "false",
+            config->http.http_user || config->http.http_password ? "true" : "false",
+            config->download.user || config->download.password ? "true" : "false",
+            bx_fetch_prepared_url_has_userinfo(bx_fetch_request_target(transfer->request)) ? "true" : "false",
+            config->http.auth_no_challenge ? "true" : "false",
+            config->download.no_proxy ? "true" : "false",
+            config->http.no_cookies ? "false" : "true",
+            config->https.no_check_certificate ? "false" : "true",
+            config->download.continue_download ? "true" : "false",
+            config->http.header_count,
+            (int)transfer->result, completion->attempt, reported_max_attempts,
+            completion->retry_scheduled ? "true" : "false");
 
     if (completion->retry_scheduled) {
         mira_debug_trace_transfer_prefix(trace, "retry", "decision", completion->transfer_id, display_url, transfer->output_path);

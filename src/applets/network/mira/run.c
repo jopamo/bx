@@ -257,6 +257,17 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
     if (completion->retry_scheduled)
         return 0;
     if (completion->transfer->result == BX_FETCH_OK) {
+        if (frontend->config->download.spider &&
+            frontend->config->logging.verbosity != BX_FETCH_VERBOSITY_QUIET) {
+            const BxFetchResponse* response = completion->transfer->response;
+            const BxFetchPreparedUrl* effective = bx_fetch_response_effective_target(response);
+            const char* display_url = effective
+                                          ? bx_fetch_prepared_url_display(effective)
+                                          : bx_fetch_request_url_for_display(completion->transfer->request);
+            fprintf(frontend->diagnostics,
+                    "mira: spider succeeded: %s\n",
+                    display_url ? display_url : BX_FETCH_URL_DISPLAY_REDACTED);
+        }
         return 0;
     }
     /*
@@ -293,6 +304,8 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
         BxFetchErrorClass error_class = bx_fetch_error_class_for_exit_code(exit_code);
         if (ftp && error_class == BX_FETCH_ERROR_CLASS_HTTP)
             error_class = BX_FETCH_ERROR_CLASS_FTP;
+        /* This path is terminal: report the attempts that occurred, not the
+         * transport hint or the unused configured bound. */
         BxFetchStructuredError error = {
             .class_id = error_class,
             .summary = error_summary,
@@ -301,9 +314,9 @@ static int mira_completion(void* userdata, BxFetchRun* run, const BxFetchRunComp
             .http_status = http && status > 0 ? status : -1,
             .curl_code = response && response->error_code != 0 ? response->error_code : -1,
             .error_number = response && response->error_number > 0 ? response->error_number : -1,
-            .retryable = completion->transfer->retryable_hint && completion->attempt < completion->max_attempts,
+            .retryable = completion->retry_scheduled,
             .attempt = completion->attempt,
-            .max_attempts = completion->max_attempts,
+            .max_attempts = completion->attempt,
         };
         bx_fetch_error_emit_structured(frontend->diagnostics, &error);
     }
