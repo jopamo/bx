@@ -43,12 +43,10 @@ typedef enum {
 BxFetchFilter* bx_fetch_filter_new(const struct bx_fetch_config* cfg);
 void bx_fetch_filter_free(BxFetchFilter* f);
 
-int bx_fetch_filter_add_seed_url(BxFetchFilter* f, const char* url);
 int bx_fetch_filter_add_canonical_seed_url(BxFetchFilter* f, const char* canonical_url);
 BxFetchFilterDecision bx_fetch_filter_evaluate_url(BxFetchFilter* f, const char* url);
 BxFetchFilterDecision bx_fetch_filter_evaluate_transport_canonical_url(BxFetchFilter* f, const char* canonical_url);
 BxFetchFilterDecision bx_fetch_filter_evaluate_canonical_url(BxFetchFilter* f, const char* canonical_url);
 const char* bx_fetch_filter_decision_reason(BxFetchFilterDecision decision);
-bool bx_fetch_filter_url_accepted(BxFetchFilter* f, const char* url);
 
 #endif  // BX_FETCH_FILTER_H

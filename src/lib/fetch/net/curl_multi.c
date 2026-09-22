@@ -1553,7 +1553,3 @@ engine_failure:
 bool bx_fetch_engine_is_active(const BxFetchEngine* engine) {
     return engine && engine->active_transfers > 0;
 }
-
-bool bx_fetch_engine_quota_exhausted(const BxFetchEngine* engine) {
-    return engine && engine->quota_limit_bytes >= 0 && engine->quota_exhausted;
-}

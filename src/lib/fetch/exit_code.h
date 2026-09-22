@@ -39,7 +39,6 @@ typedef struct {
 
 const BxFetchExitCodeInfo* bx_fetch_exit_code_table(size_t* count);
 const BxFetchExitCodeInfo* bx_fetch_exit_code_info(int code);
-bool bx_fetch_exit_code_is_assigned(int code);
 int bx_fetch_exit_code_for_error_class(BxFetchErrorClass class_id, int http_status);
 int bx_fetch_exit_code_for_transfer_failure(int http_status, BxFetchTransportErrorKind transport_kind, BxFetchError result);
 BxFetchErrorClass bx_fetch_error_class_for_exit_code(int exit_code);

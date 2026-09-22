@@ -249,18 +249,6 @@ void bx_fetch_filter_free(BxFetchFilter* f) {
     free(f);
 }
 
-int bx_fetch_filter_add_seed_url(BxFetchFilter* f, const char* url) {
-    if (!f || !url)
-        return -1;
-
-    char* canonical = bx_fetch_url_canonicalize(url);
-    if (!canonical)
-        return -1;
-    int rc = bx_fetch_filter_add_canonical_seed_url(f, canonical);
-    free(canonical);
-    return rc;
-}
-
 int bx_fetch_filter_add_canonical_seed_url(BxFetchFilter* f, const char* canonical_url) {
     if (!f || !canonical_url)
         return -1;
@@ -466,8 +454,4 @@ const char* bx_fetch_filter_decision_reason(BxFetchFilterDecision decision) {
     }
 
     return "unspecified";
-}
-
-bool bx_fetch_filter_url_accepted(BxFetchFilter* f, const char* url) {
-    return bx_fetch_filter_evaluate_url(f, url) == FILTER_DECISION_ACCEPT;
 }

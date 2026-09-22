@@ -737,10 +737,6 @@ BxFetchCrawlEnqueueResult bx_fetch_run_add_seed(BxFetchRun* run, const char* url
     return bx_fetch_crawl_coordinator_add_seed(run ? run->coordinator : NULL, url);
 }
 
-BxFetchCrawlEnqueueResult bx_fetch_run_add_discovered(BxFetchRun* run, const BxFetchPreparedUrl* base, const char* reference, BxFetchHtmlLinkKind kind, int parent_depth) {
-    return bx_fetch_crawl_coordinator_add_discovered(run ? run->coordinator : NULL, base, reference, kind, parent_depth);
-}
-
 int bx_fetch_run_execute(BxFetchRun* run) {
     if (!run || !run->coordinator || run->deferred_error || bx_fetch_run_phase(run) != BX_FETCH_CRAWL_PHASE_COLLECTING) {
         BxFetchCrawlPhase phase = bx_fetch_run_phase(run);
