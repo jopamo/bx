@@ -12,6 +12,11 @@ struct bx_cpio_member_bounds {
     size_t next_offset;
 };
 
+/* The payload span has already been checked; symlink text is not NUL-padded. */
+static inline bool bx_cpio_symlink_target_valid(const unsigned char* data, size_t size) {
+    return data != NULL && size > 0 && memchr(data, '\0', size) == NULL;
+}
+
 /* Validate the complete member before allocating or copying any field. */
 static inline bool bx_cpio_member_bounds(const unsigned char* data, size_t length,
                                          size_t name_offset, size_t name_size,
