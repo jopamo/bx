@@ -311,6 +311,7 @@ bx_lib_sources = [
   'src/lib/copy_metadata.c',
   'src/lib/copy_tree.c',
   'src/lib/dir_cycle.c',
+  'src/lib/dir_path.c',
   'src/lib/daemon_ops.c',
   'src/lib/env_ops.c',
   'src/lib/fd_ops.c',

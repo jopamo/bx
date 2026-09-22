@@ -17,6 +17,7 @@
 #include "applets/archive/cpio/cpio_bounds.h"
 #include "bx/libbx.h"
 #include "lib/cli_common.h"
+#include "lib/dir_path.h"
 #include "lib/fd_ops.h"
 #include "lib/id_parse.h"
 #include "lib/line_writer.h"
@@ -71,7 +72,8 @@ struct bx_cpio_entry {
     gid_t gid;
     nlink_t nlink;
     struct timespec mtime;
-    uint32_t ino;
+    uint64_t ino;
+    uint64_t device;
     size_t size;
     char* link_target;
     unsigned char* data;
@@ -99,11 +101,10 @@ struct bx_cpio_inode_map_list {
 };
 
 struct bx_cpio_hardlink_state {
-    uint32_t ino;
+    uint64_t ino;
+    uint64_t device;
+    int materialized_fd;
     char* materialized_path;
-    char** deferred_paths;
-    size_t deferred_len;
-    size_t deferred_cap;
 };
 
 struct bx_cpio_hardlink_state_list {
@@ -280,10 +281,12 @@ static bool bx_cpio_read_file(const char* path, struct bx_archive_buffer* buffer
     bx_archive_buffer_init(buffer);
     if (!bx_archive_buffer_read_all(stream, buffer, diag)) {
         fclose(stream);
+        bx_archive_buffer_free(buffer);
         return false;
     }
     if (fclose(stream) != 0) {
         bx_diag(diag, "%s: %s", path, strerror(errno));
+        bx_archive_buffer_free(buffer);
         return false;
     }
     return true;
@@ -363,9 +366,6 @@ static bool bx_cpio_emit_odc_entry(struct bx_archive_buffer* archive,
     }
     if (size != 0u && !bx_archive_buffer_append(archive, data, size)) {
         return false;
-    }
-    if (archive->len % 2u != 0u) {
-        return bx_archive_buffer_append_byte(archive, 0u);
     }
     return true;
 }
@@ -502,6 +502,7 @@ static bool bx_cpio_build_archive(struct bx_archive_buffer* archive,
 
     bx_archive_buffer_init(archive);
     if (!bx_cpio_build_fs_list(&files, names, name_count, diag)) {
+        bx_archive_fs_list_free(&files);
         return false;
     }
     bx_cpio_count_inodes(&files, &maps);
@@ -630,7 +631,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_NEWC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, size, namesize;
+        size_t ino, mode, uid, gid, nlink, mtime, size, namesize, devmajor, devminor;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070701", 6u) != 0) {
@@ -644,6 +645,8 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             || !bx_cpio_parse_hex_field(header + 38, 8u, &nlink)
             || !bx_cpio_parse_hex_field(header + 46, 8u, &mtime)
             || !bx_cpio_parse_hex_field(header + 54, 8u, &size)
+            || !bx_cpio_parse_hex_field(header + 62, 8u, &devmajor)
+            || !bx_cpio_parse_hex_field(header + 70, 8u, &devminor)
             || !bx_cpio_parse_hex_field(header + 94, 8u, &namesize)) {
             bx_diag(diag, "invalid newc header");
             return false;
@@ -666,6 +669,7 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         entry.ino = (uint32_t)ino;
+        entry.device = ((uint64_t)devmajor << 32) | devminor;
         entry.mode = (mode_t)mode;
         entry.uid = (uid_t)uid;
         entry.gid = (gid_t)gid;
@@ -677,6 +681,11 @@ static bool bx_cpio_parse_newc_archive(const struct bx_archive_buffer* archive,
             entry.kind = BX_CPIO_KIND_DIR;
         }
         else if (S_ISLNK(entry.mode)) {
+            if (!bx_cpio_symlink_target_valid(archive->data + pos, size)) {
+                bx_diag(diag, "invalid symlink target");
+                bx_cpio_entry_free(&entry);
+                return false;
+            }
             entry.kind = BX_CPIO_KIND_SYMLINK;
             entry.link_target = xmalloc(size + 1u);
             memcpy(entry.link_target, archive->data + pos, size);
@@ -704,14 +713,15 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
     size_t pos = 0u;
     while (pos <= archive->len && BX_CPIO_ODC_HEADER_LEN <= archive->len - pos) {
         const unsigned char* header = archive->data + pos;
-        size_t ino, mode, uid, gid, nlink, mtime, namesize, size;
+        size_t ino, mode, uid, gid, nlink, mtime, namesize, size, device;
         struct bx_cpio_entry entry;
         memset(&entry, 0, sizeof(entry));
         if (memcmp(header, "070707", 6u) != 0) {
             bx_diag(diag, "invalid odc header");
             return false;
         }
-        if (!bx_cpio_parse_octal_field(header + 12, 6u, &ino)
+        if (!bx_cpio_parse_octal_field(header + 6, 6u, &device)
+            || !bx_cpio_parse_octal_field(header + 12, 6u, &ino)
             || !bx_cpio_parse_octal_field(header + 18, 6u, &mode)
             || !bx_cpio_parse_octal_field(header + 24, 6u, &uid)
             || !bx_cpio_parse_octal_field(header + 30, 6u, &gid)
@@ -725,7 +735,7 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
         pos += BX_CPIO_ODC_HEADER_LEN;
         struct bx_cpio_member_bounds bounds;
         if (!bx_cpio_member_bounds(archive->data, archive->len, pos, namesize,
-                                   size, 1, 2, &bounds)) {
+                                   size, 1, 1, &bounds)) {
             bx_diag(diag, "invalid or truncated odc member");
             return false;
         }
@@ -740,6 +750,7 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             return false;
         }
         entry.ino = (uint32_t)ino;
+        entry.device = device;
         entry.mode = (mode_t)mode;
         entry.uid = (uid_t)uid;
         entry.gid = (gid_t)gid;
@@ -751,6 +762,11 @@ static bool bx_cpio_parse_odc_archive(const struct bx_archive_buffer* archive,
             entry.kind = BX_CPIO_KIND_DIR;
         }
         else if (S_ISLNK(entry.mode)) {
+            if (!bx_cpio_symlink_target_valid(archive->data + pos, size)) {
+                bx_diag(diag, "invalid symlink target");
+                bx_cpio_entry_free(&entry);
+                return false;
+            }
             entry.kind = BX_CPIO_KIND_SYMLINK;
             entry.link_target = xmalloc(size + 1u);
             memcpy(entry.link_target, archive->data + pos, size);
@@ -808,10 +824,10 @@ static bool bx_cpio_entry_selected(const struct bx_cpio_options* options,
 }
 
 static struct bx_cpio_hardlink_state* bx_cpio_get_hardlink_state(struct bx_cpio_hardlink_state_list* list,
-                                                                  uint32_t ino) {
+                                                                  uint64_t device, uint64_t ino) {
     size_t i;
     for (i = 0u; i < list->len; i++) {
-        if (list->items[i].ino == ino) {
+        if (list->items[i].ino == ino && list->items[i].device == device) {
             return &list->items[i];
         }
     }
@@ -822,333 +838,306 @@ static struct bx_cpio_hardlink_state* bx_cpio_get_hardlink_state(struct bx_cpio_
     }
     memset(&list->items[list->len], 0, sizeof(*list->items));
     list->items[list->len].ino = ino;
+    list->items[list->len].device = device;
+    list->items[list->len].materialized_fd = -1;
     return &list->items[list->len++];
 }
 
-static void bx_cpio_hardlink_states_free(struct bx_cpio_hardlink_state_list* list) {
+static bool bx_cpio_hardlink_states_free(struct bx_cpio_hardlink_state_list* list, struct bx_diag_ctx* diag) {
     size_t i;
+    bool ok = true;
     for (i = 0u; i < list->len; i++) {
-        size_t j;
+        if (!bx_fd_close(&list->items[i].materialized_fd, list->items[i].materialized_path, diag))
+            ok = false;
         free(list->items[i].materialized_path);
-        for (j = 0u; j < list->items[i].deferred_len; j++) {
-            free(list->items[i].deferred_paths[j]);
-        }
-        free(list->items[i].deferred_paths);
     }
     free(list->items);
     list->items = NULL;
     list->len = 0u;
     list->cap = 0u;
+    return ok;
 }
 
-static bool bx_cpio_defer_hardlink_path(struct bx_cpio_hardlink_state* state, const char* path) {
-    if (state->deferred_len == state->deferred_cap) {
-        size_t next_cap = state->deferred_cap ? state->deferred_cap * 2u : 4u;
-        state->deferred_paths = xrealloc(state->deferred_paths, next_cap * sizeof(*state->deferred_paths));
-        state->deferred_cap = next_cap;
+/* Link privately, then verify against the retained file before publication.
+ * A later member may have replaced the recorded source name. */
+static bool bx_cpio_link_materialized(int root_fd, const struct bx_cpio_hardlink_state* state, int parent, const char* leaf, struct bx_diag_ctx* diag) {
+    char* source_leaf = NULL;
+    int source_parent = bx_dir_path_open_parent(root_fd, state->materialized_path, false, 0, &source_leaf);
+    if (source_parent < 0)
+        return false;
+    struct stat expected, linked;
+    bool ok = false;
+    if (fstat(state->materialized_fd, &expected) != 0)
+        goto done;
+    static unsigned long serial;
+    char temporary[80];
+    for (unsigned attempt = 0; attempt < 128; attempt++) {
+        snprintf(temporary, sizeof(temporary), ".bx-cpio-link.%ld.%lu", (long)getpid(), serial++);
+        if (strcmp(temporary, leaf) == 0)
+            continue;
+        if (bx_fd_linkat_child(source_parent, source_leaf, parent, temporary, 0) != 0) {
+            if (errno == EEXIST)
+                continue;
+            goto done;
+        }
+        if (bx_fd_fstatat_child_nofollow(parent, temporary, &linked) != 0)
+            goto discard;
+        if (!S_ISREG(linked.st_mode) || linked.st_dev != expected.st_dev || linked.st_ino != expected.st_ino) {
+            errno = ESTALE;
+            goto discard;
+        }
+        if (bx_fd_renameat_child(parent, temporary, parent, leaf) == 0) {
+            /* rename is a no-op when both names already link the same inode. */
+            if (bx_fd_unlinkat_child(parent, temporary, 0) != 0 && errno != ENOENT)
+                goto done;
+            ok = true;
+            goto done;
+        }
+    discard: {
+        int error = errno;
+        if (bx_fd_unlinkat_child(parent, temporary, 0) != 0)
+            bx_diag(diag, "%s: cleanup failed: %s", temporary, strerror(errno));
+        errno = error;
+        goto done;
     }
-    state->deferred_paths[state->deferred_len++] = xstrdup(path);
-    return true;
+    }
+    errno = EEXIST;
+done: {
+    int error = errno;
+    close(source_parent);
+    free(source_leaf);
+    errno = error;
+    return ok;
+}
 }
 
-static int bx_cpio_absolute_name_failure(const char* name, const struct bx_diag_ctx* diag) {
-    char* parent = bx_path_parent_dir_dup(name);
-    fprintf(stderr, "%s: cannot make directory `%s': Read-only file system\n", diag->progname, parent);
-    fprintf(stderr, "%s: %s: Cannot open: No such file or directory\n", diag->progname, name);
-    free(parent);
-    return 2;
+static bool bx_cpio_extract_one(const struct bx_cpio_entry* entry,
+                                const struct bx_cpio_options* options,
+                                int root_fd,
+                                struct bx_archive_pending_dirs* dirs,
+                                struct bx_cpio_hardlink_state_list* hardlinks,
+                                struct bx_diag_ctx* diag) {
+    char* leaf = NULL;
+    int parent = bx_dir_path_open_parent(root_fd, entry->name, true, 0777, &leaf);
+    int fd = -1;
+    bool ok = false;
+    if (parent < 0)
+        goto fail;
+    if (entry->kind == BX_CPIO_KIND_DIR) {
+        if (strcmp(leaf, ".") == 0) {
+            fd = bx_fd_dup_cloexec(parent);
+        }
+        else {
+            if (bx_fd_mkdirat_child(parent, leaf, 0777) != 0 && errno != EEXIST)
+                goto fail;
+            fd = bx_fd_openat_child_nofollow(parent, leaf, O_RDONLY | O_DIRECTORY, 0);
+        }
+        if (fd < 0 || !bx_archive_pending_dirs_record_fd(dirs, fd, entry->name, entry->mode, options->preserve_mtime, entry->mtime))
+            goto fail;
+    }
+    else {
+        if (!bx_fd_at_name_is_child(leaf)) {
+            errno = EINVAL;
+            goto fail;
+        }
+        struct bx_cpio_hardlink_state* state = NULL;
+        if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1)
+            state = bx_cpio_get_hardlink_state(hardlinks, entry->device, entry->ino);
+        if (state != NULL && state->materialized_fd >= 0) {
+            /* Empty members are aliases. A later data member fills the inode
+             * already owned by this group, including its earlier empty aliases. */
+            if (entry->data_len > 0) {
+                if (bx_fd_ftruncate(state->materialized_fd, 0) != 0 || bx_fd_lseek(state->materialized_fd, 0, SEEK_SET) < 0)
+                    goto fail;
+                if (!bx_archive_write_regular_payload(state->materialized_fd, entry->data, entry->data_len, options->sparse, diag))
+                    goto done;
+                if (options->preserve_mtime && !bx_archive_set_fd_mtime(state->materialized_fd, entry->name, entry->mtime, diag))
+                    goto done;
+            }
+            if (!bx_cpio_link_materialized(root_fd, state, parent, leaf, diag))
+                goto fail;
+            free(state->materialized_path);
+            state->materialized_path = xstrdup(entry->name);
+        }
+        else {
+            /* Never truncate an existing inode: it may be a symlink or have
+             * links outside this extraction. Exclusive creation closes the race
+             * between removing the old entry and opening its replacement. */
+            if (bx_fd_unlinkat_child(parent, leaf, 0) != 0 && errno != ENOENT)
+                goto fail;
+            if (entry->kind == BX_CPIO_KIND_REG) {
+                fd = bx_fd_openat_child_nofollow(parent, leaf, O_WRONLY | O_CREAT | O_EXCL, entry->mode & 07777u);
+                if (fd < 0)
+                    goto fail;
+                if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag))
+                    goto done;
+                if (options->preserve_mtime && !bx_archive_set_fd_mtime(fd, entry->name, entry->mtime, diag))
+                    goto done;
+                if (state != NULL) {
+                    state->materialized_fd = fd;
+                    fd = -1;
+                    state->materialized_path = xstrdup(entry->name);
+                }
+            }
+            else if (entry->kind == BX_CPIO_KIND_SYMLINK) {
+                if (bx_fd_symlinkat_child(entry->link_target, parent, leaf) != 0)
+                    goto fail;
+            }
+            else if (entry->kind == BX_CPIO_KIND_FIFO) {
+                if (bx_fd_mkfifoat(parent, leaf, entry->mode & 07777u) != 0)
+                    goto fail;
+                if (options->preserve_mtime) {
+                    fd = bx_fd_openat_child_nofollow(parent, leaf, O_RDONLY | O_NONBLOCK, 0);
+                    struct stat fifo;
+                    if (fd < 0 || fstat(fd, &fifo) != 0)
+                        goto fail;
+                    if (!S_ISFIFO(fifo.st_mode)) {
+                        errno = ESTALE;
+                        goto fail;
+                    }
+                    if (!bx_archive_set_fd_mtime(fd, entry->name, entry->mtime, diag))
+                        goto done;
+                }
+            }
+        }
+    }
+    ok = true;
+    goto done;
+fail:
+    bx_diag(diag, "%s: %s", entry->name, strerror(errno));
+done:
+    if (!bx_fd_close(&fd, entry->name, diag))
+        ok = false;
+    bx_fd_cleanup(&parent);
+    free(leaf);
+    return ok;
 }
 
-static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries,
-                                   const struct bx_cpio_options* options,
-                                   int argc,
-                                   char** argv,
-                                   struct bx_diag_ctx* diag) {
+static int bx_cpio_extract_entries(const struct bx_cpio_entry_list* entries, const struct bx_cpio_options* options, int argc, char** argv, struct bx_diag_ctx* diag) {
     struct bx_archive_pending_dirs dirs = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
     char list_output_buffer[8192];
     struct bx_line_writer list_writer;
-    size_t i;
     int status = 0;
-
-    if (options->list)
-        bx_line_writer_init(&list_writer, STDOUT_FILENO,
-                            list_output_buffer, sizeof(list_output_buffer));
-
-    for (i = 0u; i < entries->len; i++) {
+    int root_fd = -1;
+    if (options->list) {
+        bx_line_writer_init(&list_writer, STDOUT_FILENO, list_output_buffer, sizeof(list_output_buffer));
+    }
+    else if (!options->to_stdout) {
+        root_fd = bx_fd_open_cloexec(".", O_RDONLY | O_DIRECTORY, 0);
+        if (root_fd < 0) {
+            bx_diag(diag, ".: %s", strerror(errno));
+            return 2;
+        }
+    }
+    for (size_t i = 0; i < entries->len; i++) {
         const struct bx_cpio_entry* entry = &entries->items[i];
-        char* dest_path;
-
-        if (!bx_cpio_entry_selected(options, argc, argv, entry->name)) {
+        if (!bx_cpio_entry_selected(options, argc, argv, entry->name))
             continue;
-        }
+        bool ok = true;
         if (options->list) {
-            if (!bx_line_writer_put_line(&list_writer, entry->name)) {
-                bx_diag(diag, "write error: %s", strerror(errno));
-                status = 2;
-                break;
-            }
-            continue;
+            ok = bx_line_writer_put_line(&list_writer, entry->name);
         }
-        if (options->to_stdout) {
-            if (entry->kind == BX_CPIO_KIND_SYMLINK) {
-                if (!bx_xwrite_all(STDOUT_FILENO, entry->link_target, strlen(entry->link_target))) {
-                    bx_diag(diag, "write error: %s", strerror(errno));
-                    status = 2;
-                    break;
-                }
-            }
-            else if (entry->kind == BX_CPIO_KIND_REG) {
-                if (!bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len)) {
-                    bx_diag(diag, "write error: %s", strerror(errno));
-                    status = 2;
-                    break;
-                }
-            }
-            continue;
-        }
-        if (entry->name[0] == '/') {
-            status = bx_cpio_absolute_name_failure(entry->name, diag);
-            continue;
-        }
-        dest_path = xstrdup(entry->name);
-        if (entry->kind == BX_CPIO_KIND_DIR) {
-            if (mkdir(dest_path, 0777u) != 0 && errno != EEXIST) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                status = 2;
-                break;
-            }
-            if (!bx_archive_pending_dirs_record(&dirs, dest_path, entry->mode & 07777u, options->preserve_mtime, entry->mtime)) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                status = 2;
-                break;
-            }
+        else if (options->to_stdout) {
+            if (entry->kind == BX_CPIO_KIND_SYMLINK)
+                ok = bx_xwrite_all(STDOUT_FILENO, entry->link_target, strlen(entry->link_target));
+            else if (entry->kind == BX_CPIO_KIND_REG)
+                ok = bx_xwrite_all(STDOUT_FILENO, entry->data, entry->data_len);
         }
         else {
-            struct bx_cpio_hardlink_state* state = NULL;
-            if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
-                free(dest_path);
+            if (!bx_cpio_extract_one(entry, options, root_fd, &dirs, &hardlinks, diag)) {
                 status = 2;
                 break;
             }
-            if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1u) {
-                state = bx_cpio_get_hardlink_state(&hardlinks, entry->ino);
-            }
-            if (entry->kind == BX_CPIO_KIND_REG && entry->nlink > 1u && entry->data_len == 0u) {
-                if (state->materialized_path != NULL) {
-                    unlink(dest_path);
-                    if (link(state->materialized_path, dest_path) != 0) {
-                        bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                        free(dest_path);
-                        status = 2;
-                        break;
-                    }
-                }
-                else {
-                    bx_cpio_defer_hardlink_path(state, dest_path);
-                }
-            }
-            else if (entry->kind == BX_CPIO_KIND_REG) {
-                int fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->mode & 07777u);
-                if (fd < 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (!bx_archive_write_regular_payload(fd, entry->data, entry->data_len, options->sparse, diag)) {
-                    close(fd);
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (close(fd) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (options->preserve_mtime && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (entry->nlink > 1u) {
-                    size_t j;
-                    free(state->materialized_path);
-                    state->materialized_path = xstrdup(dest_path);
-                    for (j = 0u; j < state->deferred_len; j++) {
-                        unlink(state->deferred_paths[j]);
-                        if (link(dest_path, state->deferred_paths[j]) != 0) {
-                            bx_diag(diag, "%s: %s", state->deferred_paths[j], strerror(errno));
-                            free(dest_path);
-                            status = 2;
-                            break;
-                        }
-                    }
-                    if (status == 2) {
-                        break;
-                    }
-                }
-            }
-            else if (entry->kind == BX_CPIO_KIND_SYMLINK) {
-                unlink(dest_path);
-                if (symlink(entry->link_target, dest_path) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-            }
-            else if (entry->kind == BX_CPIO_KIND_FIFO) {
-                unlink(dest_path);
-                if (mkfifo(dest_path, entry->mode & 07777u) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (options->preserve_mtime && !bx_archive_set_path_mtime(dest_path, entry->mtime, false, diag)) {
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-            }
         }
-        free(dest_path);
+        if (!ok) {
+            bx_diag(diag, "write error: %s", strerror(errno));
+            status = 2;
+            break;
+        }
     }
-
     if (status == 0 && options->list && !bx_line_writer_flush(&list_writer)) {
         bx_diag(diag, "write error: %s", strerror(errno));
         status = 2;
     }
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag)) {
+    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag))
         status = 2;
-    }
     bx_archive_pending_dirs_free(&dirs);
-    bx_cpio_hardlink_states_free(&hardlinks);
+    if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
+        status = 2;
+    bx_fd_cleanup(&root_fd);
     return status;
 }
 
 static int bx_cpio_pass_through(const struct bx_cpio_options* options, struct bx_diag_ctx* diag) {
     char** names = NULL;
-    size_t name_count = 0u;
+    size_t name_count = 0;
     struct bx_archive_fs_list files = {0};
     struct bx_cpio_hardlink_state_list hardlinks = {0};
     struct bx_archive_pending_dirs dirs = {0};
-    int status = 0;
-    size_t i;
-
-    if (!bx_cpio_read_name_list(options, &names, &name_count, diag)) {
+    int status = 2;
+    int root_fd = -1;
+    if (!bx_cpio_read_name_list(options, &names, &name_count, diag))
         return 2;
+    if (!bx_cpio_build_fs_list(&files, names, name_count, diag))
+        goto done;
+    root_fd = bx_fd_open_cloexec(options->pass_dir, O_RDONLY | O_DIRECTORY, 0);
+    if (root_fd < 0) {
+        bx_diag(diag, "%s: %s", options->pass_dir, strerror(errno));
+        goto done;
     }
-    if (!bx_cpio_build_fs_list(&files, names, name_count, diag)) {
-        bx_cpio_free_name_list(names, name_count);
-        return 2;
-    }
-
-    for (i = 0u; i < files.len; i++) {
-        const struct bx_archive_fs_entry* entry = &files.entries[i];
-        char* dest_path = bx_path_join(options->pass_dir, entry->archive_path);
-        if (S_ISDIR(entry->st.st_mode)) {
-            if (mkdir(dest_path, 0777u) != 0 && errno != EEXIST) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
+    status = 0;
+    for (size_t i = 0; i < files.len; i++) {
+        const struct bx_archive_fs_entry* file = &files.entries[i];
+        struct bx_cpio_entry entry = {
+            .name = file->archive_path,
+            .mode = file->st.st_mode,
+            .nlink = file->st.st_nlink,
+            .mtime = file->st.st_mtim,
+            .ino = file->st.st_ino,
+            .device = file->st.st_dev,
+            .link_target = file->link_target,
+        };
+        struct bx_archive_buffer data = {0};
+        if (S_ISDIR(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_DIR;
+        }
+        else if (S_ISLNK(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_SYMLINK;
+        }
+        else if (S_ISFIFO(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_FIFO;
+        }
+        else if (S_ISREG(file->st.st_mode)) {
+            entry.kind = BX_CPIO_KIND_REG;
+            struct bx_cpio_hardlink_state* state = entry.nlink > 1 ? bx_cpio_get_hardlink_state(&hardlinks, entry.device, entry.ino) : NULL;
+            if ((state == NULL || state->materialized_fd < 0) && !bx_cpio_read_file(file->source_path, &data, diag)) {
+                bx_archive_buffer_free(&data);
                 status = 2;
                 break;
             }
-            if (!bx_archive_pending_dirs_record(&dirs, dest_path, entry->st.st_mode & 07777u, options->preserve_mtime, entry->st.st_mtim)) {
-                bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                free(dest_path);
-                status = 2;
-                break;
-            }
+            entry.data = data.data;
+            entry.data_len = data.len;
         }
         else {
-            struct bx_cpio_hardlink_state* state = NULL;
-            if (!bx_archive_ensure_parent_dirs(dest_path, diag)) {
-                free(dest_path);
-                status = 2;
-                break;
-            }
-            if (S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1u) {
-                state = bx_cpio_get_hardlink_state(&hardlinks, (uint32_t)entry->st.st_ino);
-            }
-            if (S_ISREG(entry->st.st_mode) && entry->st.st_nlink > 1u && state->materialized_path != NULL) {
-                unlink(dest_path);
-                if (link(state->materialized_path, dest_path) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-            }
-            else if (S_ISREG(entry->st.st_mode)) {
-                struct bx_archive_buffer data = {0};
-                int fd;
-                if (!bx_cpio_read_file(entry->source_path, &data, diag)) {
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                fd = bx_fd_open_cloexec(dest_path, O_WRONLY | O_CREAT | O_TRUNC, entry->st.st_mode & 07777u);
-                if (fd < 0) {
-                    bx_archive_buffer_free(&data);
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (!bx_archive_write_regular_payload(fd, data.data, data.len, false, diag)) {
-                    close(fd);
-                    bx_archive_buffer_free(&data);
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                close(fd);
-                bx_archive_buffer_free(&data);
-                if (options->preserve_mtime && !bx_archive_set_path_mtime(dest_path, entry->st.st_mtim, false, diag)) {
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-                if (state != NULL) {
-                    free(state->materialized_path);
-                    state->materialized_path = xstrdup(dest_path);
-                }
-            }
-            else if (S_ISLNK(entry->st.st_mode)) {
-                unlink(dest_path);
-                if (symlink(entry->link_target, dest_path) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-            }
-            else if (S_ISFIFO(entry->st.st_mode)) {
-                unlink(dest_path);
-                if (mkfifo(dest_path, entry->st.st_mode & 07777u) != 0) {
-                    bx_diag(diag, "%s: %s", dest_path, strerror(errno));
-                    free(dest_path);
-                    status = 2;
-                    break;
-                }
-            }
+            continue;
         }
-        free(dest_path);
+        bool ok = bx_cpio_extract_one(&entry, options, root_fd, &dirs, &hardlinks, diag);
+        bx_archive_buffer_free(&data);
+        if (!ok) {
+            status = 2;
+            break;
+        }
     }
-
-    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag)) {
+    if (status == 0 && !bx_archive_pending_dirs_apply(&dirs, diag))
         status = 2;
-    }
+done:
     bx_archive_pending_dirs_free(&dirs);
-    bx_cpio_hardlink_states_free(&hardlinks);
+    if (!bx_cpio_hardlink_states_free(&hardlinks, diag))
+        status = 2;
     bx_archive_fs_list_free(&files);
     bx_cpio_free_name_list(names, name_count);
+    bx_fd_cleanup(&root_fd);
     return status;
 }
 
@@ -1343,6 +1332,7 @@ int bx_cpio_run(int argc, char** argv) {
             return 2;
         }
         if (!bx_cpio_build_archive(&archive, &options, names, name_count, &diag)) {
+            bx_archive_buffer_free(&archive);
             bx_cpio_free_name_list(names, name_count);
             return 2;
         }
@@ -1360,6 +1350,7 @@ int bx_cpio_run(int argc, char** argv) {
         enum bx_cpio_format input_format;
         int rc;
         if (!bx_cpio_read_archive_input(&options, &archive, &diag)) {
+            bx_archive_buffer_free(&archive);
             return 2;
         }
         if (!bx_cpio_detect_archive_format(&archive, &input_format, &diag)) {
