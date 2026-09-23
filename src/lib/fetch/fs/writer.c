@@ -34,6 +34,8 @@ struct BxFetchWriter {
     bool rotate_backups_on_commit;
     bool honor_unlink_on_commit;
     bool exclusive_final_path;
+    bool replace_orphan_sidecar;
+    struct stat orphan_sidecar_snapshot;
     bool to_stdout;
     bool downstream_closed;
     bool initial_dest_existed;
@@ -839,7 +841,20 @@ int bx_fetch_writer_stage_stdout(BxFetchWriter* w, uint64_t limit) {
 
 static int ensure_leaf_absent(int parent_fd, const char* name);
 
-static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path, bool exclusive) {
+static int check_exclusive_sidecar(BxFetchWriter* w, const char* name, bool allow_orphan, bool* orphan, struct stat* snapshot) {
+    if (!allow_orphan)
+        return ensure_leaf_absent(w->parent_fd, name);
+    if (bx_fd_fstatat_nofollow(w->parent_fd, name, snapshot) != 0)
+        return errno == ENOENT ? 0 : -1;
+    if (!S_ISREG(snapshot->st_mode) || snapshot->st_nlink != 1) {
+        errno = EEXIST;
+        return -1;
+    }
+    *orphan = true;
+    return 0;
+}
+
+static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path, bool exclusive, bool allow_orphan) {
     if (!w || !path || w->to_stdout) {
         errno = EINVAL;
         return -1;
@@ -847,6 +862,8 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
 
     char* new_parent = NULL;
     char* new_basename = NULL;
+    bool orphan = false;
+    struct stat orphan_snapshot = {0};
     if (bx_fetch_secure_path_split(path, &new_parent, &new_basename) != 0) {
         return -1;
     }
@@ -874,7 +891,8 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
                 free(new_basename);
                 return -1;
             }
-            if (ensure_leaf_absent(w->parent_fd, new_basename) != 0 || ensure_leaf_absent(w->parent_fd, sidecar) != 0) {
+            if (ensure_leaf_absent(w->parent_fd, new_basename) != 0 ||
+                check_exclusive_sidecar(w, sidecar, allow_orphan, &orphan, &orphan_snapshot) != 0) {
                 int error_number = errno;
                 free(sidecar);
                 free(new_parent);
@@ -885,6 +903,8 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
             free(sidecar);
         }
         w->exclusive_final_path = exclusive;
+        w->replace_orphan_sidecar = orphan;
+        w->orphan_sidecar_snapshot = orphan_snapshot;
         free(new_parent);
         free(new_basename);
         return 0;
@@ -897,7 +917,8 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
             free(new_basename);
             return -1;
         }
-        if (ensure_leaf_absent(w->parent_fd, new_basename) != 0 || ensure_leaf_absent(w->parent_fd, new_sidecar) != 0) {
+        if (ensure_leaf_absent(w->parent_fd, new_basename) != 0 ||
+            check_exclusive_sidecar(w, new_sidecar, allow_orphan, &orphan, &orphan_snapshot) != 0) {
             int error_number = errno;
             free(new_sidecar);
             free(new_parent);
@@ -937,17 +958,23 @@ static int writer_set_final_path_with_policy(BxFetchWriter* w, const char* path,
     w->path = new_path;
     w->basename = new_basename;
     w->exclusive_final_path = exclusive;
+    w->replace_orphan_sidecar = orphan;
+    w->orphan_sidecar_snapshot = orphan_snapshot;
 
     free(new_parent);
     return 0;
 }
 
 int bx_fetch_writer_set_final_path(BxFetchWriter* w, const char* path) {
-    return writer_set_final_path_with_policy(w, path, false);
+    return writer_set_final_path_with_policy(w, path, false, false);
 }
 
 int bx_fetch_writer_set_final_path_exclusive(BxFetchWriter* w, const char* path) {
-    return writer_set_final_path_with_policy(w, path, true);
+    return writer_set_final_path_with_policy(w, path, true, false);
+}
+
+int bx_fetch_writer_set_final_path_payload_exclusive(BxFetchWriter* w, const char* path) {
+    return writer_set_final_path_with_policy(w, path, true, true);
 }
 
 int bx_fetch_writer_stage_metadata(BxFetchWriter* w, const BxFetchMetadata* meta) {
@@ -1298,7 +1325,21 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
             }
         }
 
-        if (!w->exclusive_final_path && sidecar_name && link_existing_entry_to_hold(w->parent_fd, sidecar_name, sidecar_name, &sidecar_hold_name) != 0) {
+        if (w->replace_orphan_sidecar) {
+            struct stat current;
+            if (!sidecar_temp_name || ensure_leaf_absent(w->parent_fd, w->basename) != 0 ||
+                bx_fd_fstatat_nofollow(w->parent_fd, sidecar_name, &current) != 0 ||
+                current.st_nlink != 1 || !same_file_snapshot(&w->orphan_sidecar_snapshot, &current)) {
+                cleanup_temp_entry(w->parent_fd, &payload_hold_name);
+                cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+                cleanup_temp_entry(w->parent_fd, &w->temp_name);
+                free(sidecar_name);
+                writer_free(w);
+                errno = EBUSY;
+                return -1;
+            }
+        }
+        if ((!w->exclusive_final_path || w->replace_orphan_sidecar) && sidecar_name && link_existing_entry_to_hold(w->parent_fd, sidecar_name, sidecar_name, &sidecar_hold_name) != 0) {
             int error_number = errno;
             cleanup_temp_entry(w->parent_fd, &payload_hold_name);
             free(sidecar_name);
@@ -1339,10 +1380,42 @@ int bx_fetch_writer_close(BxFetchWriter* w) {
                 errno = ENOENT;
                 guard_rc = -1;
             }
+            if (guard_rc == 0 && w->replace_orphan_sidecar) {
+                struct stat held;
+                if (!sidecar_hold_name || bx_fd_fstatat_nofollow(w->parent_fd, sidecar_hold_name, &held) != 0 ||
+                    !same_captured_file_after_hold(&w->orphan_sidecar_snapshot, &held)) {
+                    errno = EBUSY;
+                    guard_rc = -1;
+                }
+            }
             int sidecar_rename_rc = -1;
             if (guard_rc == 0) {
-                sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
+                if (w->replace_orphan_sidecar) {
+                    sidecar_rename_rc = bx_fetch_secure_path_exchange_leaves(w->parent_fd, sidecar_temp_name, sidecar_name);
+                    if (sidecar_rename_rc == 0) {
+                        struct stat displaced;
+                        if (bx_fd_fstatat_nofollow(w->parent_fd, sidecar_temp_name, &displaced) != 0 ||
+                            !same_captured_file_after_hold(&w->orphan_sidecar_snapshot, &displaced)) {
+                            /* Keep the displaced entry if restoring it fails. */
+                            if (bx_fetch_secure_path_exchange_leaves(w->parent_fd, sidecar_temp_name, sidecar_name) != 0) {
+                                free(sidecar_temp_name);
+                                sidecar_temp_name = NULL;
+                                /* The uncommitted metadata must stay unreadable. */
+                                free(sidecar_guard_name);
+                                sidecar_guard_name = NULL;
+                            }
+                            errno = EBUSY;
+                            sidecar_rename_rc = -1;
+                        }
+                        else {
+                            cleanup_temp_entry(w->parent_fd, &sidecar_temp_name);
+                        }
+                    }
+                }
+                else {
+                    sidecar_rename_rc = w->exclusive_final_path ? bx_fetch_secure_path_rename_leaf_noreplace(w->parent_fd, sidecar_temp_name, sidecar_name)
                                                             : bx_fd_renameat_child(w->parent_fd, sidecar_temp_name, w->parent_fd, sidecar_name);
+                }
             }
             if (sidecar_rename_rc != 0) {
                 int error_number = errno;
