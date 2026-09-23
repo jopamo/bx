@@ -542,7 +542,7 @@ static void mira_record_input_failure(MiraRunFrontend* frontend, const BxFetchIn
 
     bx_mira_progress_interrupt(&frontend->progress);
     frontend->exit_code = bx_fetch_exit_combine(frontend->exit_code, bx_fetch_exit_code_for_error_class(error_class, -1));
-    if (emit_text) {
+    if (emit_text && !frontend->config->logging.json_diagnostics) {
         char* quoted = bx_path_quote_dup(frontend->config->input.input_file, BX_PATH_QUOTE_ESCAPE);
         fprintf(frontend->diagnostics, "mira: %s%s%s\n", summary, quoted ? ": " : "", quoted ? quoted : "");
         free(quoted);

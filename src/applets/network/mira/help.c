@@ -16,6 +16,7 @@ void bx_mira_print_read_help(void) {
         "  --expect=json         require a JSON response\n"
         "  -q, --quiet           suppress progress and session messages (default)\n"
         "  -v, --verbose         show transfer diagnostics\n"
+        "  --json-diagnostics    emit only JSON Lines diagnostics, including events\n"
         "  --ca-certificate=FILE use a PEM CA bundle for TLS verification\n"
         "  --no-retry            make one attempt\n"
         "  --max-attempts=N      bound attempts, including the first request\n"
@@ -93,6 +94,12 @@ void bx_mira_print_help(void) {
     }
 
     fputs(
+        "\n--json-diagnostics emits lifecycle events and errors as JSON Lines only, "
+        "overriding verbosity, progress, and response-header display options. "
+        "It includes --debug events; ordinary --debug keeps human diagnostics. "
+        "Only diagnostics change: response bodies and help still use stdout. "
+        "The mode applies to downloads and read, including parse errors. "
+        "--output-file and --append-output still redirect runtime diagnostics.\n"
         "\nRecovery: GET/HEAD requests without upload bodies retry transient transport "
         "failures and HTTP 408/425/429/500/502/503/504. Provider 403s retry only with "
         "explicit exhausted-rate-limit/reset evidence. Authentication and ordinary "
